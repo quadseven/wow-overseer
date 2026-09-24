@@ -213,7 +213,7 @@ class ATailorsNextStep(unittest.TestCase):
         ready = tailor(
             known=known, carried=(held(14048, 5), held(8170, 2), held(14341, 1))
         )
-        step, _ = step_of(ready)
+        step, _ = step_of(ready, fam=[family("Ugga", (6, 8, 8, 8))])
         self.assertEqual((step.action, step.key, step.repeat), ("craft", 18405, 1))
 
     def test_thread_is_not_bought_before_the_cloth_is_in_hand(self):
@@ -559,12 +559,8 @@ class TheBridgePass(unittest.TestCase):
         )
 
     def test_log_lines_are_unique_to_the_pass(self):
-        self.assertIn('log.info("guild corps: started %d step(s)"', BRIDGE)
+        self.assertIn('log.info("guild corps: started %d step(s)%s"', BRIDGE)
         self.assertIn('"guild corps pass failed; retrying next cycle"', BRIDGE)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TheClassicRuleset(unittest.TestCase):
@@ -608,3 +604,200 @@ class TheClassicRuleset(unittest.TestCase):
             {"map_id": 571, "spell": 51308},
         ]
         self.assertEqual(gc.places_from_rows(rows, "spell"), {1: frozenset({18401})})
+
+
+EASTERN_KINGDOMS = 0
+# Map 0 as measured 2026-09-24: its trainers teach up to Artisan and its
+# vendors sell every thread, but nobody there sells the Runecloth Bag pattern.
+EK_TRAINABLE = TRAINABLE[EVERLOOK]
+EK_VENDORS = frozenset({14341, 2320, 2321, 4291, 8343})
+TRAINABLE_EK = {**TRAINABLE, EASTERN_KINGDOMS: EK_TRAINABLE}
+VENDORS_EK = {**VENDORS, EASTERN_KINGDOMS: EK_VENDORS}
+
+
+class ABagIsPostedTheMomentItIsMade(unittest.TestCase):
+    """Measured on dev 2026-09-24: a Runecloth Bag crafted at 08:09 waited for a
+    post walk that ended in a fight and off the map, and by 09:54 the bag was
+    gone from the realm. A random bot wearing four 24-slot bags reads a 14-slot
+    one as a vendor item and sells it."""
+
+    READY = (held(14048, 5), held(8170, 2), held(14341, 1))
+
+    def test_the_bag_is_crafted_at_a_mailbox_and_posted_by_entry(self):
+        t = tailor(known=KNOWN_300 | {18405}, carried=self.READY)
+        fam = [family("Grug", (14, 14, 16, 16)), family("Ugga", (6, 8, 8, 8))]
+        step, _ = step_of(t, fam=fam)
+        self.assertEqual((step.action, step.key), ("craft", 18405))
+        self.assertEqual(step.walk.command, "walk-to-mailbox max:600")
+        self.assertEqual(step.walk.source, "guildcorps:craft-walk:18405")
+        cast, letter = step.rows
+        self.assertEqual((cast.kind, cast.command), ("cast", "18405"))
+        self.assertEqual(cast.source, "guildcorps:craft:18405")
+        self.assertEqual(letter.kind, "mail")
+        self.assertEqual(letter.command, "send entry:14046 subject:Runecloth Bag")
+        self.assertEqual(letter.target_arg, "Ugga")
+        self.assertEqual(letter.source, "guildcorps:post:14046")
+
+    def test_no_bag_is_crafted_that_nobody_in_the_family_would_wear(self):
+        t = tailor(known=KNOWN_300 | {18405}, carried=self.READY)
+        step, why = step_of(t, fam=[family("Grug", (16, 16, 16, 16))])
+        self.assertIsNone(step)
+        self.assertIn("nobody in the family would wear", why)
+
+    def test_a_bag_already_on_its_way_counts_as_worn(self):
+        t = tailor(known=KNOWN_300 | {18405}, carried=self.READY)
+        ugga = gc.Member(
+            name="Ugga",
+            guild="Cave",
+            family=True,
+            worn_bags=(6, 8, 8, 8),
+            mail=(gc.Letter(9, 99, 14046, 1, False),),
+        )
+        grog = family("Grog", (8, 8, 10, 8))
+        step, _ = step_of(t, fam=[ugga, grog])
+        self.assertEqual(step.rows[1].target_arg, "Grog")
+
+    def test_a_bag_craft_waits_longer_than_a_bolt(self):
+        t = tailor(known=KNOWN_300 | {18405}, carried=self.READY)
+        fam = {"Cave": (family("Ugga", (6, 8, 8, 8)),)}
+        recent = {("Derred", "craft", 18405): 10}
+        plan = gc.plan([t], fam, TRAINABLE, VENDORS, recent, set())
+        self.assertNotIn("craft", [s.action for s in plan.steps])
+        recent = {("Derred", "craft", 18405): gc.BAG_CRAFT_MINUTES}
+        plan = gc.plan([t], fam, TRAINABLE, VENDORS, recent, set())
+        self.assertEqual([s.action for s in plan.steps], ["craft"])
+
+
+class APatternFromAnotherMap(unittest.TestCase):
+    """Measured on dev 2026-09-24: both guilds' tailors stood on the Eastern
+    Kingdoms, where no vendor sells the Runecloth Bag pattern, and every pass
+    ended "no bag its skill allows can be learned and supplied on its map"
+    while guildmates stood in Winterspring beside Qia."""
+
+    def crew(self, **buyer):
+        buyer.setdefault("map_id", EVERLOOK)
+        return [
+            tailor(map_id=EASTERN_KINGDOMS),
+            member(
+                "Alylienne",
+                maintenance=False,
+                map_id=EASTERN_KINGDOMS,
+                carried=(held(14047, 40, 4001),),
+            ),
+            member(
+                "Beerix",
+                maintenance=False,
+                map_id=EASTERN_KINGDOMS,
+                carried=(held(8170, 20, 4003),),
+            ),
+            member("Hebus", maintenance=False, **buyer),
+        ]
+
+    def test_a_guildmate_by_the_vendor_buys_it_and_posts_it_at_once(self):
+        plan = gc.plan(self.crew(), {}, TRAINABLE_EK, VENDORS_EK, {}, set())
+        fetch = [s for s in plan.steps if s.action == "fetch"]
+        self.assertEqual([s.holder for s in fetch], ["Hebus"])
+        step = fetch[0]
+        self.assertEqual(step.walk.command, "walk-to-vendor item:14468")
+        self.assertEqual(step.walk.source, "guildcorps:fetch-walk:14468")
+        buy, walk, letter = step.rows
+        self.assertEqual(
+            (buy.kind, buy.command), ("buy", "entry:14468 count:1 max:15000")
+        )
+        self.assertEqual(walk.command, "walk-to-mailbox max:600")
+        self.assertEqual(
+            letter.command, "send entry:14468 subject:For the guild tailor"
+        )
+        self.assertEqual(letter.target_arg, "Derred")
+        self.assertEqual(letter.source, "guildcorps:supply:14468")
+
+    def test_the_tailor_is_aimed_at_the_runecloth_bag_meanwhile(self):
+        crew = self.crew()
+        by_post = gc.patterns_by_post(crew[0], crew, VENDORS_EK)
+        bag, reach = gc.target_bag(crew[0], crew, EK_TRAINABLE, EK_VENDORS, by_post)
+        self.assertEqual((bag.name, reach), ("Runecloth Bag", "post"))
+        bag, why = gc.target_bag(crew[0], crew, EK_TRAINABLE, EK_VENDORS)
+        self.assertIsNone(bag, "without the post the old dead end stands")
+
+    def test_one_fetch_at_a_time_per_guild(self):
+        recent = {("Hebus", "fetch", 14468): 10}
+        crew = self.crew() + [member("Bytkiz", maintenance=False)]
+        plan = gc.plan(crew, {}, TRAINABLE_EK, VENDORS_EK, recent, set())
+        self.assertFalse([s for s in plan.steps if s.action == "fetch"])
+
+    def test_a_buyer_whose_fetch_failed_is_not_sent_again_soon(self):
+        recent = {("Hebus", "fetch", 14468): gc.FETCH_GUILD_MINUTES + 5}
+        crew = self.crew() + [member("Bytkiz", maintenance=False, level=58)]
+        plan = gc.plan(crew, {}, TRAINABLE_EK, VENDORS_EK, recent, set())
+        self.assertEqual(
+            [s.holder for s in plan.steps if s.action == "fetch"], ["Bytkiz"]
+        )
+
+    def test_no_low_level_or_family_buyer(self):
+        low = self.crew(level=30)
+        plan = gc.plan(low, {}, TRAINABLE_EK, VENDORS_EK, {}, set())
+        self.assertFalse([s for s in plan.steps if s.action == "fetch"])
+        fam = self.crew()
+        fam[3] = member("Og", maintenance=False, family=True)
+        plan = gc.plan(fam, {}, TRAINABLE_EK, VENDORS_EK, {}, set())
+        self.assertFalse([s for s in plan.steps if s.action == "fetch"])
+
+    def test_a_carried_pattern_is_posted_instead_of_bought(self):
+        crew = self.crew(carried=(gc.Held(5150, 14468, 1),))
+        plan = gc.plan(crew, {}, TRAINABLE_EK, VENDORS_EK, {}, set())
+        self.assertFalse([s for s in plan.steps if s.action == "fetch"])
+        letters = [s for s in plan.steps if s.action == "supply" and s.key == 14468]
+        self.assertEqual(
+            letters[0].rows[0].command, "send item:5150 subject:For the guild tailor"
+        )
+
+    def test_a_pattern_in_a_letter_is_collected_then_learned(self):
+        t = tailor(map_id=EASTERN_KINGDOMS, mail=(gc.Letter(70, 5150, 14468, 1),))
+        step, _ = gc.tailor_step(
+            t, [t], (), frozenset(), frozenset(), gc.NEAR, frozenset()
+        )
+        self.assertEqual(step.action, "collect")
+        self.assertEqual(step.rows[0].command, "take-item mail:70 item:5150")
+
+
+class TheTailorWhoKnowsTheBag(unittest.TestCase):
+    def test_the_post_goes_to_the_tailor_who_learned_the_bigger_bag(self):
+        crew = [
+            member("Derred", skills={gc.TAILORING: (300, 375)}, known=KNOWN_300),
+            member("Behodiir", skills={gc.TAILORING: (300, 375)}, known=KNOWN_300),
+            member(
+                "Baldam", skills={gc.TAILORING: (300, 300)}, known=KNOWN_300 | {18405}
+            ),
+        ]
+        posts = gc.plan_corps(crew)["Cave"]
+        self.assertEqual([p.name for p in posts if p.role == "tailor"][0], "Baldam")
+
+
+class EveryFamilysGuild(unittest.TestCase):
+    """Measured on dev 2026-09-24: the pass read only this bridge's family, so
+    Bonkers' corps never planned a step for the Horde family's pouches."""
+
+    def body(self, name):
+        start = BRIDGE.index("def %s(" % name)
+        end = BRIDGE.find("\n    async def ", start + 1)
+        return BRIDGE[start:end]
+
+    def test_the_loop_runs_the_other_families(self):
+        loop = self.body("_guild_corps_loop")
+        self.assertIn(
+            'self._for_other_families("guild corps", self._guild_corps_once)', loop
+        )
+        once = self.body("_guild_corps_once")
+        self.assertIn("_names_of, cohort", once)
+        self.assertLess(
+            once.index("if cohort is not None:"), once.index("self._raid_supply_once(")
+        )
+
+    def test_the_family_letters_are_read(self):
+        fetch = BRIDGE[BRIDGE.index("def _fetch_corps_facts(") :]
+        fetch = fetch[: fetch.index("\ndef ")]
+        self.assertIn("for g in (crew, kin)", fetch)
+
+
+if __name__ == "__main__":
+    unittest.main()

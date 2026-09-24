@@ -40,6 +40,14 @@ WHAT THE CORPS WORKS TOWARD, THEN, is the Runecloth Bag, whose pattern Qia
 sells in Everlook: a far walk on Kalimdor since quadseven/mod-overseer#633,
 mounted, by a flight path the bot knows, and along the travel survey.
 
+WHAT KEPT IT FROM WORKING, measured on dev 2026-09-24. The pass planned only
+this bridge's family's guild, so Bonkers had no corps at all. Both guilds'
+tailors stood on the Eastern Kingdoms, where no vendor sells the pattern, and
+waited for ever; a guildmate in Winterspring now buys it and posts it. And the
+one Runecloth Bag a tailor did make was gone before its post walk arrived,
+sold by its own bot AI; a bag is now crafted at a mailbox and posted in the
+same stand, by entry, to the family member with the smallest bag.
+
 PURE MODULE: rows in, a plan and sentences out. No MySQL, no clock; the bridge
 reads the facts, passes them in, and writes the rows a step names.
 """
@@ -218,7 +226,32 @@ COOLDOWN_MINUTES = {
     "collect": 30,
     "post": 30,
     "supply": 120,
+    "fetch": 180,
 }
+
+# A BAG IS CRAFTED AT A MAILBOX AND POSTED IN THE SAME STAND (2026-09-24).
+# Measured on dev: Baldam crafted a Runecloth Bag at 08:09, its post walk ended
+# in a fight and then off the map, and by 09:54 the bag was gone from the realm.
+# A random bot wearing four 24-slot bags reads a 14-slot one as a vendor item
+# (mod-playerbots ItemUsageValue: ITEM_USAGE_AH), and its own AI sells or
+# destroys it. The character database learns a new item's guid only at the next
+# save (PlayerSaveInterval, 15 minutes), so the letter names the bag by entry
+# (quadseven/mod-overseer `send entry:`). The reagents a bag spends are saved
+# late too, so a bag craft waits longer than a bolt before it is tried again.
+BAG_CRAFT_MINUTES = 20
+BAG_SPELLS = frozenset(r.spell for r in BAGS)
+
+# A PATTERN NO VENDOR ON THE TAILOR'S MAP SELLS IS FETCHED BY A GUILDMATE who
+# stands where one does (2026-09-24). Measured on dev: both guilds' tailors stood
+# on the Eastern Kingdoms, the Runecloth Bag's pattern is sold only by Qia in
+# Everlook on Kalimdor, and five Cave and seven Bonkers members stood in
+# Winterspring. The guildmate buys it, walks to a mailbox and posts it by entry
+# at once: to a guildmate without the trade the pattern is a vendor item too.
+# One fetch per guild at a time, followed for as long as a far walk takes; a
+# buyer whose fetch did not work is left alone for its own cooldown.
+FETCH_GUILD_MINUTES = 45
+# Everlook stands in Winterspring (levels 53 to 60): a lower buyer dies there.
+FETCH_MIN_LEVEL = 55
 
 
 @dataclass(frozen=True)
@@ -293,10 +326,23 @@ class Post:
         )
 
 
+def _best_bag_known(member: Member) -> int:
+    """The slots of the biggest classic bag this member already knows, 0 for none."""
+    return max(
+        (b.slots for b in BAGS if b.spell in member.known and _classic(b)), default=0
+    )
+
+
 def _rank_for(member: Member, skill: int) -> tuple:
-    """Higher is better: the ceiling first (room to grow), then the value."""
+    """Higher is better: the ceiling first (room to grow), then the value.
+
+    A TAILOR WHO KNOWS A BIGGER BAG COMES FIRST (2026-09-24): the post goes to
+    the member who learned the Runecloth Bag, so a trip to Everlook is not
+    bought twice when the lineup reshuffles the maintenance crew.
+    """
     value, cap = member.skill(skill)
-    return (cap, value, 1 if member.online else 0)
+    known = _best_bag_known(member) if skill == TAILORING else 0
+    return (known, cap, value, 1 if member.online else 0)
 
 
 def plan_corps(members) -> dict:
@@ -390,16 +436,27 @@ def _vendor_reagent(entry) -> bool:
 
 
 def _reach(
-    bag: Recipe, tailor: Member, trainable: frozenset, vendors: frozenset
+    bag: Recipe,
+    tailor: Member,
+    trainable: frozenset,
+    vendors: frozenset,
+    by_post: frozenset = frozenset(),
 ) -> str:
-    """How this tailor could come to know this bag: "" when it cannot."""
+    """How this tailor could come to know this bag: "" when it cannot.
+
+    `by_post` holds the patterns the guild can put in its mailbox: one already
+    in a letter to it, one a guildmate carries, or one a guildmate standing on
+    another map's vendor can buy (`patterns_by_post`).
+    """
     if bag.spell in tailor.known:
         return "known"
     if bag.source == "trainer":
         return "trainer" if bag.spell in trainable else ""
     if tailor.count(bag.pattern):
         return "pattern"
-    return "vendor" if bag.pattern in vendors else ""
+    if bag.pattern in vendors:
+        return "vendor"
+    return "post" if bag.pattern in by_post else ""
 
 
 def _bolt_usable(bolt: Recipe, tailor: Member, trainable: frozenset) -> bool:
@@ -435,13 +492,13 @@ def _materials_exist(bag, tailor, members, trainable, vendors) -> bool:
     return True
 
 
-def target_bag(tailor, members, trainable, vendors):
+def target_bag(tailor, members, trainable, vendors, by_post=frozenset()):
     """(bag, reach) the tailor works toward now, or (None, why)."""
     value, _ = tailor.skill(TAILORING)
     for bag in sorted(BAGS, key=lambda r: (r.slots, r.learn_rank), reverse=True):
         if value < bag.learn_rank or not _classic(bag):
             continue
-        reach = _reach(bag, tailor, trainable, vendors)
+        reach = _reach(bag, tailor, trainable, vendors, by_post)
         if reach and _materials_exist(bag, tailor, members, trainable, vendors):
             return bag, reach
     return None, "no bag its skill allows can be learned and supplied on its map"
@@ -480,12 +537,39 @@ def _due_rank(tailor, trainable) -> int:
     return 0
 
 
+# The four bag positions a character wears bags in.
+BAG_POSITIONS = 4
+
+
+def _bags_on_the_way(member) -> list:
+    """Slots of each crafted-ladder bag this member carries loose or has in a
+    letter: it will be worn soon, so it counts as worn already."""
+    out = []
+    for entry, recipe in BAG_ITEMS.items():
+        out.extend([recipe.slots] * (member.count(entry) + member.incoming(entry)))
+    return out
+
+
+def _smallest_soon(member) -> int:
+    """The member's smallest bag once the bags on their way are worn.
+
+    Each bag on its way replaces the smallest worn one it beats, so a second
+    bag is not posted to a member whose first is still in the mailbox.
+    """
+    worn = list(member.worn_bags) + [0] * max(0, BAG_POSITIONS - len(member.worn_bags))
+    for slots in sorted(_bags_on_the_way(member), reverse=True):
+        low = min(worn)
+        if slots > low:
+            worn[worn.index(low)] = slots
+    return min(worn) if worn else 0
+
+
 def _recipient(bag, family):
-    """The family member whose smallest worn bag this bag improves most."""
+    """The family member whose smallest bag, counting the bags already on
+    their way, this bag improves most."""
     best = None
     for member in family or ():
-        worn = list(member.worn_bags) + [0] * max(0, 4 - len(member.worn_bags))
-        smallest = min(worn) if worn else 0
+        smallest = _smallest_soon(member)
         if smallest >= bag.slots:
             continue
         key = (smallest, member.name)
@@ -507,7 +591,7 @@ def _post_step(tailor, family, cap=NEAR):
             "post",
             bag.makes,
             "%s posts the %s it made to %s, whose smallest bag is %d slots"
-            % (tailor.name, bag.name, taker.name, min(list(taker.worn_bags) or [0])),
+            % (tailor.name, bag.name, taker.name, _smallest_soon(taker)),
             rows=(
                 Row(
                     "mail",
@@ -685,13 +769,50 @@ def _thread_step(tailor, bag, vendors, cap=NEAR):
     return None
 
 
-def _bag_steps(tailor, bag, reach, trainable, vendors, cap=NEAR):
-    """The steps toward crafting `bag`, in order; the first that applies wins."""
+def send_by_entry(entry, subject, to, action, key) -> Row:
+    """A letter naming its attachment by entry (quadseven/mod-overseer
+    `send entry:`), for an item made or bought this step, whose guid the
+    character database does not hold yet."""
+    return Row(
+        "mail",
+        "send entry:%d subject:%s" % (int(entry), subject),
+        to,
+        source_for(action, key),
+    )
+
+
+def _craft_and_post(tailor, bag, taker, cap=NEAR) -> Step:
+    """Walk to a mailbox, craft the bag there and post it in the same stand."""
+    return Step(
+        tailor.name,
+        "craft",
+        bag.spell,
+        "%s crafts a %s at a mailbox and posts it to %s, whose smallest bag is %d "
+        "slots" % (tailor.name, bag.name, taker.name, _smallest_soon(taker)),
+        rows=(
+            Row("cast", str(bag.spell), "", source_for("craft", bag.spell)),
+            send_by_entry(bag.makes, bag.name, taker.name, "post", bag.makes),
+        ),
+        walk=_walk_to_mailbox("craft", bag.spell, cap),
+    )
+
+
+def _bag_steps(tailor, bag, reach, trainable, vendors, cap=NEAR, family=()):
+    """The steps toward crafting `bag`, in order; the first that applies wins.
+
+    The bag itself is crafted only for a family member it improves, and only
+    at a mailbox, posted at once (BAG_CRAFT_MINUTES says why). A pattern on its
+    way by post leaves the tailor making the bolts meanwhile.
+    """
     if reach in ("pattern", "vendor"):
         return _pattern_step(tailor, bag, reach, vendors, cap)
-    if _can_make(tailor, bag):
-        return _craft(tailor, bag, 1, "the bag")
-    return _bolt_step(tailor, bag) or _thread_step(tailor, bag, vendors, cap)
+    if reach != "post" and _can_make(tailor, bag):
+        taker = _recipient(bag, family)
+        return _craft_and_post(tailor, bag, taker, cap) if taker else None
+    step = _bolt_step(tailor, bag)
+    if step or reach == "post":
+        return step
+    return _thread_step(tailor, bag, vendors, cap)
 
 
 def _only_thread_missing(tailor, bag) -> bool:
@@ -710,8 +831,19 @@ def _only_thread_missing(tailor, bag) -> bool:
 
 
 def _shortfall(tailor, bag, bolt) -> list:
-    """(entry, count) the tailor still needs by post, most needed first."""
+    """(entry, count) the tailor still needs by post, most needed first.
+
+    A pattern it neither knows, carries nor has in a letter comes first: a
+    guildmate who carries one posts it (`patterns_by_post`).
+    """
     need = []
+    if (
+        bag is not None
+        and bag.source == "pattern"
+        and bag.spell not in tailor.known
+        and not tailor.count(bag.pattern) + tailor.incoming(bag.pattern)
+    ):
+        need.append((int(bag.pattern), 1))
     if bag is not None:
         for entry, count in bag.reagents:
             if _vendor_reagent(entry):
@@ -807,7 +939,9 @@ def supply_steps(
     return steps
 
 
-def tailor_step(tailor, members, family, trainable, vendors, cap=NEAR):
+def tailor_step(
+    tailor, members, family, trainable, vendors, cap=NEAR, by_post=frozenset()
+):
     """(Step or None, note): this tailor's one step this pass, and why."""
     if not tailor.online:
         return None, "%s is offline" % tailor.name
@@ -817,15 +951,22 @@ def tailor_step(tailor, members, family, trainable, vendors, cap=NEAR):
     step = _collect_step(tailor, cap)
     if step:
         return step, ""
-    bag, reach = target_bag(tailor, members, trainable, vendors)
+    bag, reach = target_bag(tailor, members, trainable, vendors, by_post)
     bolt = skillup_bolt(tailor, members, trainable)
     step = _train_step(tailor, bag, bolt, trainable, cap)
     if step:
         return step, ""
     if bag is not None:
-        step = _bag_steps(tailor, bag, reach, trainable, vendors, cap)
+        step = _bag_steps(tailor, bag, reach, trainable, vendors, cap, family)
         if step:
             return step, ""
+        if reach == "post":
+            return None, "%s waits for the %s pattern by post" % (tailor.name, bag.name)
+        if _can_make(tailor, bag):
+            return None, "%s can make a %s and nobody in the family would wear it" % (
+                tailor.name,
+                bag.name,
+            )
     if bolt is not None and bolt.spell in tailor.known:
         cloth, per = _cloth_for(bolt)
         n = min(CRAFT_BATCH, tailor.count(cloth) // per)
@@ -837,8 +978,118 @@ def tailor_step(tailor, members, family, trainable, vendors, cap=NEAR):
 
 def _cooling(step, recent) -> bool:
     minutes = COOLDOWN_MINUTES.get(step.action, 30)
+    if step.action == "craft" and int(step.key) in BAG_SPELLS:
+        minutes = BAG_CRAFT_MINUTES
     age = (recent or {}).get((step.holder, step.action, int(step.key)))
     return age is not None and age < minutes
+
+
+def _may_fetch(member, pattern, vendors_by_map) -> bool:
+    """Could this guildmate buy `pattern` where it stands, for the guild?"""
+    return (
+        not member.family
+        and member.online
+        and int(member.level or 0) >= FETCH_MIN_LEVEL
+        and member.map_id is not None
+        and not classic.is_expansion_map(member.map_id)
+        and int(pattern) in (vendors_by_map or {}).get(member.map_id, ())
+    )
+
+
+def patterns_by_post(tailor, crew, vendors_by_map) -> frozenset:
+    """The patterns the guild can put in this tailor's mailbox.
+
+    One already in a letter to it, one a guildmate outside the family carries,
+    or one sold on the map where a guildmate who could buy it stands.
+    """
+    out = set()
+    for bag in BAGS:
+        if bag.source != "pattern" or not _classic(bag):
+            continue
+        pattern = int(bag.pattern)
+        carried = any(
+            m.count(pattern)
+            for m in crew
+            if m.name != tailor.name
+            and not m.family
+            and not classic.is_expansion_map(m.map_id)
+        )
+        buyable = pattern in PATTERN_PRICE and any(
+            _may_fetch(m, pattern, vendors_by_map)
+            for m in crew
+            if m.name != tailor.name
+        )
+        if tailor.incoming(pattern) or carried or buyable:
+            out.add(pattern)
+    return frozenset(out)
+
+
+def _fetching(crew, pattern, recent) -> bool:
+    """Is a guildmate already on its way to buy this pattern?"""
+    names = {m.name for m in crew}
+    return any(
+        action == "fetch"
+        and int(key) == int(pattern)
+        and holder in names
+        and age < FETCH_GUILD_MINUTES
+        for (holder, action, key), age in (recent or {}).items()
+    )
+
+
+def fetch_step(tailor, bag, crew, vendors_by_map, busy, recent, cap=NEAR):
+    """A guildmate buys the tailor's pattern where it is sold and posts it at
+    once, by entry; None when nobody should go now.
+
+    Nobody goes while the pattern is already carried in the guild, in a letter
+    to the tailor, or on another guildmate's way (FETCH_GUILD_MINUTES). The
+    buyer is the highest-level guildmate who stands on the vendor's map and is
+    free, and one whose fetch did not work waits out its own cooldown.
+    """
+    pattern = int(bag.pattern)
+    if tailor.incoming(pattern) or tailor.count(pattern):
+        return None
+    if any(m.count(pattern) for m in crew if not m.family and m.name != tailor.name):
+        return None
+    if _fetching(crew, pattern, recent):
+        return None
+    buyers = [
+        m
+        for m in crew
+        if m.name != tailor.name
+        and m.name not in busy
+        and _may_fetch(m, pattern, vendors_by_map)
+        and (recent or {}).get((m.name, "fetch", pattern), COOLDOWN_MINUTES["fetch"])
+        >= COOLDOWN_MINUTES["fetch"]
+    ]
+    if not buyers:
+        return None
+    buyer = sorted(buyers, key=lambda m: (-int(m.level or 0), m.name))[0]
+    price = PATTERN_PRICE.get(pattern, 0)
+    return Step(
+        buyer.name,
+        "fetch",
+        pattern,
+        "%s walks to a vendor for the %s pattern and posts it to %s"
+        % (buyer.name, bag.name, tailor.name),
+        rows=(
+            Row(
+                "buy",
+                "entry:%d count:1 max:%d" % (pattern, _ceiling(price)),
+                "",
+                source_for("fetch", pattern),
+            ),
+            _walk_to_mailbox("fetch", pattern, cap),
+            send_by_entry(
+                pattern, "For the guild tailor", tailor.name, "supply", pattern
+            ),
+        ),
+        walk=Row(
+            "buy",
+            "walk-to-vendor item:%d%s" % (pattern, guildroute.errand_cap_word(cap)),
+            "",
+            source_for("fetch-walk", pattern),
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -849,17 +1100,28 @@ class CorpsPlan:
 
 
 def _supply_for(tailor, crew, facts, busy, room, recent, travel) -> list:
-    """Letters the guild posts to a tailor that has no step of its own.
+    """Letters the guild posts to a tailor that has no step of its own, and
+    the guildmate who fetches its pattern when nobody carries one.
 
-    `facts` is (trainable, vendors) on the tailor's map; `travel` is
-    (cap, mailbox_yards) for the walks the letters take.
+    `facts` is (trainable, vendors, by_post, vendors_by_map) for the tailor;
+    `travel` is (cap, mailbox_yards) for the walks the letters take.
     """
-    trainable, vendors = facts
+    trainable, vendors, by_post, vendors_by_map = facts
     cap, near = travel
-    bag, _ = target_bag(tailor, crew, trainable, vendors)
+    bag, reach = target_bag(tailor, crew, trainable, vendors, by_post)
     bolt = skillup_bolt(tailor, crew, trainable)
-    letters = supply_steps(tailor, bag, bolt, crew, busy, room, recent, near, cap)
-    return [s for s in letters if not _cooling(s, recent)]
+    out = []
+    # The pattern gates the bag, so its fetch goes before the cloth letters.
+    if reach == "post" and room > 0:
+        fetch = fetch_step(tailor, bag, crew, vendors_by_map, busy, recent, cap)
+        if fetch is not None:
+            busy.add(fetch.holder)
+            out.append(fetch)
+    left = room - len(out)
+    if left > 0:
+        letters = supply_steps(tailor, bag, bolt, crew, busy, left, recent, near, cap)
+        out.extend(s for s in letters if not _cooling(s, recent))
+    return out
 
 
 def _guild_steps(
@@ -884,7 +1146,10 @@ def _guild_steps(
             continue
         trainable = frozenset((trainable_by_map or {}).get(tailor.map_id, ()))
         vendors = frozenset((vendors_by_map or {}).get(tailor.map_id, ()))
-        step, why = tailor_step(tailor, crew, family, trainable, vendors, travel[0])
+        by_post = patterns_by_post(tailor, crew, vendors_by_map)
+        step, why = tailor_step(
+            tailor, crew, family, trainable, vendors, travel[0], by_post
+        )
         if step is not None and not _cooling(step, recent):
             steps.append(step)
             busy.add(tailor.name)
@@ -896,9 +1161,8 @@ def _guild_steps(
         )
         if tailor.online and letters < SUPPLY_LETTERS_PER_GUILD:
             room = SUPPLY_LETTERS_PER_GUILD - letters
-            sent = _supply_for(
-                tailor, crew, (trainable, vendors), busy, room, recent, travel
-            )
+            facts = (trainable, vendors, by_post, vendors_by_map)
+            sent = _supply_for(tailor, crew, facts, busy, room, recent, travel)
             steps.extend(sent)
             letters += len(sent)
 
