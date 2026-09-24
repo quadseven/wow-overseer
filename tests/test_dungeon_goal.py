@@ -285,7 +285,7 @@ def _load_drive_dungeon(inserted: list, updated: list, warnings: list):
 
     source = "\n\n".join(
         ast.get_source_segment(_bridge_source(), _function(name))
-        for name in ("_withheld", "_drive_dungeon")
+        for name in ("_withheld", "_insert_family_jobs", "_drive_dungeon")
     )
 
     class Cursor:
@@ -317,6 +317,8 @@ def _load_drive_dungeon(inserted: list, updated: list, warnings: list):
             family_town_run_needed=lambda slots: False
         ),
         "_insert_job": lambda name, mode, by: inserted.append((name, mode)),
+        "_hand_to_town": lambda keyword, mode, names: 0,
+        "_town_first": lambda mode, names, free_slots: "",
         "_connect": lambda: contextlib.nullcontext(Conn()),
         "pymysql": types.SimpleNamespace(
             err=types.SimpleNamespace(MySQLError=Exception)

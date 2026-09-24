@@ -206,12 +206,33 @@ class WhatTheBridgeHandsBack(unittest.TestCase):
         )
         self.assertEqual("clearance", got.claimant)
 
-    def test_a_keyword_orphan_at_once(self):
+    def test_a_keyword_orphan_is_left_to_its_writer(self):
+        """mod-overseer's town trip writes `vendor` too (wow-overseer#265):
+        handed back every minute on wow-dev, the Horde head's trip restarted
+        and the coordinator held the run behind each restart."""
         slot = townslot.Slot(releasable=economy)
-        got = slot.campaign_release(
-            leader="Zug", column="vendor", now=0.0, ground=travel.is_ground_aim
+        for now in (0.0, townslot.LEASE_SECONDS, 5000.0):
+            got = slot.campaign_release(
+                leader="Zug", column="vendor", now=now, ground=travel.is_ground_aim
+            )
+            self.assertIsNone(got, now)
+
+    def test_a_keyword_aim_a_bridge_pass_wrote_is_still_handed_back(self):
+        slot = townslot.Slot(releasable=economy)
+        taken = slot.want(
+            claimant="economy",
+            character="Zug",
+            aim="vendor",
+            leader="Zug",
+            column="",
+            retaskable=retaskable("vendor"),
+            now=0.0,
         )
-        self.assertEqual("vendor", got.aim)
+        slot.settle(taken, True, 0.0)
+        got = slot.campaign_release(
+            leader="Zug", column="vendor", now=1.0, ground=travel.is_ground_aim
+        )
+        self.assertEqual("economy", got.claimant)
 
     def test_a_ground_orphan_only_after_a_lease_and_only_once(self):
         """After a restart the mailbox aim is an orphan; the coordinator's

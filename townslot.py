@@ -1175,8 +1175,14 @@ class Slot:
 
           * an aim this ledger records for a named pass is that pass's, and
             the bridge is its owner;
-          * a keyword or creature-entry aim is written by the bridge and never
-            by the coordinator;
+          * an ORPHAN keyword or creature-entry aim is left to its writer
+            (#265). It used to be handed back at once, on the premise that
+            only a bridge pass writes one. mod-overseer's town trip writes the
+            `vendor` and `repair` roles too, and the coordinator holds its run
+            for that trip: handing it back every minute on wow-dev 2026-09-23
+            restarted the Horde head's trip each time and the run waited on
+            every restart. A bridge errand orphaned by a restart is bounded by
+            the module's own wait for it and by the errand's backstop;
           * an ORPHAN ground aim (one this process does not remember writing,
             which is every aim after a restart) is handed back only after it
             has stood unchanged for `LEASE_SECONDS`, and only once per aim.
@@ -1191,8 +1197,10 @@ class Slot:
         holder = self.holder
         if holder is None or not self.releasable or not self.releasable(holder.aim):
             return None
-        if holder.claimant or not ground(holder.aim):
+        if holder.claimant:
             return holder
+        if not ground(holder.aim):
+            return None
         if holder.aim in self._yielded or now - holder.since < self.lease:
             return None
         self._yielded.add(holder.aim)

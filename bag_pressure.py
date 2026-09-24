@@ -323,6 +323,48 @@ def family_town_run_needed(
     return False
 
 
+# TOWN FIRST, THEN THE DUNGEON (#265). A campaign that was withheld at
+# TOWN_RUN_FREE_SLOTS and let go again at TOWN_RUN_FREE_SLOTS + 1 flaps: one
+# sale lifts a member to four, the run opens, the first loot puts him back at
+# three, and the module walks the family out. Measured on wow-dev 2026-09-23 as
+# an evacuation every ten seconds while every counter sat on another map. So the
+# campaign is let go at three and taken back only when every member has room
+# for a run's worth of loot: this many free slots each.
+CAMPAIGN_RESUME_FREE_SLOTS = 8
+
+# The resume floor is a hysteresis band, not a new wall. A member the town
+# passes cannot lift to it (everything it carries is protected, say) would hold
+# the campaign in town for ever, so after this long in town the campaign goes
+# back in at the ordinary floor, which the module's own bag check still guards.
+CAMPAIGN_RESUME_CEILING_SECONDS = 45 * 60
+
+
+def campaign_resume_short(
+    free_slots: dict,
+    held_seconds: float = 0.0,
+    resume: int = CAMPAIGN_RESUME_FREE_SLOTS,
+    ceiling: float = CAMPAIGN_RESUME_CEILING_SECONDS,
+) -> tuple:
+    """Members still short of the resume floor, sorted; () when the run may go.
+
+    Asked of a campaign that is NOT armed (its job is off the family): a fresh
+    start, or one handed to town for bag room. An armed campaign is asked only
+    `family_town_run_needed`, which is what makes this a band and not a flap.
+    An unknown or negative reading blocks nothing, the same fail-open rule
+    `family_town_run_needed` keeps for the same reason: a broken read must not
+    hold a campaign in town. Past `ceiling` seconds in town nothing is short.
+    """
+    if held_seconds >= ceiling:
+        return ()
+    return tuple(
+        sorted(
+            str(name)
+            for name, free in (free_slots or {}).items()
+            if isinstance(free, int) and 0 <= free < resume
+        )
+    )
+
+
 # WHAT THE ECONOMY PASS DOES THIS CYCLE (#225). Three answers, not a bool,
 # because the middle one is new. "trip" takes the travel column and writes
 # sales; "counter" writes sales only for holders already at a vendor and takes

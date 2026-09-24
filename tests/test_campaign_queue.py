@@ -465,6 +465,7 @@ def _drive_with_full_bags(withheld):
             "_insert_job": lambda *a: (_ for _ in ()).throw(
                 AssertionError("a job was written past full bags")
             ),
+            "_hand_to_town": lambda keyword, mode, names: 0,
         },
     )
     return ns["_drive_dungeon"]("ragefire", 50, ["Zug"], "s", withheld=withheld)
