@@ -31,6 +31,11 @@ their vendor from `item_template` and `npc_vendor`, all read 2026-09-23:
     Mooncloth Bag   16 slots  300  Pattern 14499 is a 0.02% drop and no
                                    vendor sells it: reachable only if carried
 
+THE CLASSIC RULESET (classic.py) CUTS THIS TABLE BACK. The worlds are held to a
+classic level-60 feel, so the Netherweave Bag, its bolt and the Master rank
+stay in the tables as measured but are never a target, and a tailor or a
+guildmate standing in Outland or Northrend is left where it is with a note.
+
 PURE MODULE: rows in, a plan and sentences out. No MySQL, no clock; the bridge
 reads the facts, passes them in, and writes the rows a step names.
 """
@@ -40,6 +45,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+import classic
 import guildroute
 
 TAILORING = 197
@@ -160,6 +166,18 @@ BUY_CEILING_NUM, BUY_CEILING_DEN = 5, 4
 BOLT_OF = {r.makes: r for r in BOLTS}
 BAG_ITEMS = {r.makes: r for r in BAGS}
 PATH_SPELLS = frozenset(r.spell for r in BOLTS + BAGS) | frozenset(RANKS)
+
+
+def _classic(recipe: Recipe) -> bool:
+    """Inside the classic ruleset (classic.py): learned at 300 or below, and
+    neither the product nor a reagent comes only from Outland or Northrend.
+    Bolt of Netherweave is learned at 300 and still fails, on its cloth."""
+    return (
+        classic.skill_ok(recipe.learn_rank)
+        and classic.item_ok(recipe.makes)
+        and all(classic.item_ok(entry) for entry, _ in recipe.reagents)
+    )
+
 
 # How much cloth to ask for at a time: one stack.
 STACK = 20
@@ -392,7 +410,7 @@ def target_bag(tailor, members, trainable, vendors):
     """(bag, reach) the tailor works toward now, or (None, why)."""
     value, _ = tailor.skill(TAILORING)
     for bag in sorted(BAGS, key=lambda r: (r.slots, r.learn_rank), reverse=True):
-        if value < bag.learn_rank:
+        if value < bag.learn_rank or not _classic(bag):
             continue
         reach = _reach(bag, tailor, trainable, vendors)
         if reach and _materials_exist(bag, tailor, members, trainable, vendors):
@@ -406,7 +424,7 @@ def skillup_bolt(tailor, members, trainable):
     if value >= cap:
         return None  # at its ceiling nothing teaches it anything: a rank first
     for bolt in sorted(BOLTS, key=lambda r: r.learn_rank, reverse=True):
-        if not (bolt.learn_rank <= value < bolt.grey):
+        if not (bolt.learn_rank <= value < bolt.grey) or not _classic(bolt):
             continue
         if not _bolt_usable(bolt, tailor, trainable):
             continue
@@ -420,6 +438,8 @@ def _due_rank(tailor, trainable) -> int:
     """The rank spell a trainer on the map would sell now, 0 when none."""
     value, cap = tailor.skill(TAILORING)
     for spell, (gives, needs) in sorted(RANKS.items(), key=lambda kv: kv[1][0]):
+        if not classic.skill_ok(gives):
+            continue  # Master and Grand Master: outside the classic ruleset
         if gives > cap and value >= needs and spell in trainable:
             return spell
     return 0
@@ -695,6 +715,7 @@ def supply_steps(
             and not m.family
             and m.online
             and m.name not in busy
+            and not classic.is_expansion_map(m.map_id)
             and m.count(entry) > 0
         ]
         senders.sort(key=lambda m: (-m.count(entry), m.name))
@@ -792,6 +813,9 @@ def _guild_steps(guild_facts, posts, recent, busy, steps, notes) -> None:
             continue
         if tailor.name in busy:
             notes.append("%s is already on a corps errand" % tailor.name)
+            continue
+        if classic.is_expansion_map(tailor.map_id):
+            notes.append(classic.outside_note(tailor.name, tailor.map_id))
             continue
         trainable = frozenset((trainable_by_map or {}).get(tailor.map_id, ()))
         vendors = frozenset((vendors_by_map or {}).get(tailor.map_id, ()))
@@ -1007,9 +1031,15 @@ def members_from_rows(
 
 
 def places_from_rows(rows, column) -> dict:
-    """map id -> frozenset of `column` values, from (map_id, column) rows."""
+    """map id -> frozenset of `column` values, from (map_id, column) rows.
+
+    Outland and Northrend rows are dropped: no trainer or vendor there is on
+    the classic ruleset's map.
+    """
     out = {}
     for row in rows or ():
+        if classic.is_expansion_map(row.get("map_id")):
+            continue
         out.setdefault(_int(row.get("map_id")), set()).add(_int(row.get(column)))
     return {k: frozenset(v) for k, v in out.items()}
 

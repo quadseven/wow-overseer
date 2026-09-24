@@ -40,6 +40,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+import classic
 import goals
 
 
@@ -149,7 +150,7 @@ def profession_gaps(members: Sequence) -> tuple:
     A profession only appears in the gap list if:
     - it is declared in the roster's `professions` column (wanted)
     - the character's current skill is > 0 (they actually have the profession)
-    - the character's current skill is below 450 (max skill for this expansion)
+    - the character's current skill is below 300 (the classic ruleset's cap)
     """
     gaps = []
     for m in members:
@@ -172,7 +173,7 @@ def profession_gaps(members: Sequence) -> tuple:
             # happens in the craft drive (_craft_once) which reads live skills.
             if current > 0:
                 prof_name = SKILL_NAMES.get(prof_id, f"skill_{prof_id}")
-                gaps.append((m.name, prof_name, current, 450))
+                gaps.append((m.name, prof_name, current, classic.MAX_PROFESSION_SKILL))
     return tuple(gaps)
 
 

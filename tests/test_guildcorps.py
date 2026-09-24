@@ -137,22 +137,34 @@ class ThePosts(unittest.TestCase):
 
 
 class ATailorsNextStep(unittest.TestCase):
-    def test_at_its_ceiling_it_walks_to_a_trainer_for_the_next_rank(self):
-        t = tailor(
-            "Xohjaz", guild="Bonkers", map_id=OUTLAND, carried=(held(21877, 15),)
-        )
+    def test_at_its_ceiling_below_artisan_it_walks_to_a_trainer_for_the_next_rank(self):
+        t = tailor("Xohjaz", 225, 225, guild="Bonkers")
         step, _ = step_of(t)
         self.assertEqual(step.action, "train")
         self.assertIsNone(step.walk)
         self.assertEqual(step.rows[0].kind, "cast")
         self.assertEqual(step.rows[0].command, "walk-to-trainer skill:197")
-        self.assertEqual(step.rows[0].source, "guildcorps:train:26791")
+        self.assertEqual(step.rows[0].source, "guildcorps:train:12181")
+
+    def test_at_artisan_no_trainer_sells_it_master(self):
+        # The classic ruleset stops at 300. A trainer that sells Master (26791)
+        # is not a reason to walk, wherever it stands.
+        t = tailor("Xohjaz", guild="Bonkers", carried=(held(21877, 15),))
+        step, _ = step_of(t, trainable=TRAINABLE[OUTLAND] | TRAINABLE[EVERLOOK])
+        self.assertNotEqual(getattr(step, "action", None), "train")
 
     def test_a_trainer_recipe_its_skill_allows_is_named(self):
-        t = tailor("Baldam", 305, 375, map_id=OUTLAND, known=KNOWN_300 - {26745})
-        crew = [member("Baleron", carried=(held(21877, 20),))]
+        t = tailor("Baldam", 250, 300, known=KNOWN_300 - {18401})
+        crew = [member("Baleron", carried=(held(14047, 20),))]
         step, _ = step_of(t, crew)
-        self.assertEqual(step.rows[0].command, "walk-to-trainer skill:197 learn:26745")
+        self.assertEqual(step.rows[0].command, "walk-to-trainer skill:197 learn:18401")
+
+    def test_no_netherweave_recipe_is_named_even_where_a_trainer_sells_it(self):
+        t = tailor("Baldam", 305, 375, known=KNOWN_300 - {26745})
+        crew = [member("Baleron", carried=(held(21877, 20),))]
+        step, _ = step_of(t, crew, trainable=TRAINABLE[OUTLAND])
+        commands = [row.command for row in getattr(step, "rows", ())]
+        self.assertFalse([c for c in commands if "26745" in c or "26746" in c])
 
     def test_no_trainer_on_the_map_means_no_walk(self):
         t = tailor("Derred", carried=(held(14047, 5),))
@@ -204,16 +216,15 @@ class ATailorsNextStep(unittest.TestCase):
         self.assertIn("Runecloth Bag", why)
 
     def test_below_its_ceiling_it_crafts_skill_ups(self):
-        t = tailor(
-            "Baldam",
-            305,
-            375,
-            map_id=OUTLAND,
-            carried=(held(21877, 20), held(21877, 20)),
-        )
+        t = tailor("Baldam", 255, 300, carried=(held(14047, 20), held(14047, 20)))
         step, _ = step_of(t)
-        self.assertEqual((step.action, step.key, step.repeat), ("craft", 26745, 8))
+        self.assertEqual((step.action, step.key, step.repeat), ("craft", 18401, 10))
         self.assertIn("skill-up", step.said)
+
+    def test_netherweave_cloth_is_no_skill_up(self):
+        t = tailor("Baldam", 305, 375, carried=(held(21877, 20), held(21877, 20)))
+        step, _ = step_of(t, trainable=TRAINABLE[OUTLAND])
+        self.assertNotEqual(getattr(step, "key", None), 26745)
 
     def test_a_finished_bag_goes_to_the_smallest_bag_in_the_family(self):
         t = tailor(carried=(gc.Held(9001, 14046, 1),))
@@ -476,3 +487,46 @@ class TheBridgePass(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheClassicRuleset(unittest.TestCase):
+    """Level 60, skill 300, and never Outland or Northrend (classic.py)."""
+
+    def test_no_bag_or_bolt_outside_the_ruleset_is_ever_a_target(self):
+        # Every trainer recipe and every material in hand: the Netherweave Bag
+        # is still not the target, and the Runecloth Bag's pattern is.
+        t = tailor(
+            "Derred",
+            320,
+            375,
+            known=KNOWN_300 | {26746},
+            carried=(held(21840, 8), held(14341, 2), held(14047, 20)),
+        )
+        crew = [member("Beerix", carried=(held(8170, 20),))]
+        bag, _ = gc.target_bag(
+            t, [t, *crew], TRAINABLE[OUTLAND] | TRAINABLE[EVERLOOK], VENDORS[EVERLOOK]
+        )
+        self.assertEqual(bag.name, "Runecloth Bag")
+
+    def test_a_tailor_in_outland_is_left_out_with_a_reason(self):
+        t = tailor("Xohjaz", guild="Bonkers", map_id=OUTLAND)
+        plan = gc.plan([t], {}, TRAINABLE, VENDORS, {}, set())
+        self.assertFalse([s for s in plan.steps if s.holder == "Xohjaz"])
+        self.assertIn("Xohjaz stands in Outland, outside the classic world", plan.notes)
+
+    def test_a_guildmate_in_outland_posts_nothing(self):
+        t = tailor("Derred", 255, 300)
+        away = member("Baleron", map_id=OUTLAND, carried=(held(14047, 20),))
+        steps = gc.supply_steps(t, None, gc.BOLT_OF[14048], [t, away], set())
+        self.assertEqual(steps, [])
+        home = member("Baleron", carried=(held(14047, 20),))
+        steps = gc.supply_steps(t, None, gc.BOLT_OF[14048], [t, home], set())
+        self.assertEqual([s.holder for s in steps], ["Baleron"])
+
+    def test_outland_and_northrend_trainers_and_vendors_are_not_read(self):
+        rows = [
+            {"map_id": 1, "spell": 18401},
+            {"map_id": 530, "spell": 26791},
+            {"map_id": 571, "spell": 51308},
+        ]
+        self.assertEqual(gc.places_from_rows(rows, "spell"), {1: frozenset({18401})})

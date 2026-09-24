@@ -57,6 +57,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import classic
 import guildroute
 import mailrun
 import recipebook
@@ -411,6 +412,17 @@ def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> lis
 
 def choose(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> Pick:
     """The one route for this recipe; a Pick with no taker when nobody fits."""
+    if not classic.skill_ok(recipe.rank):
+        return Pick(
+            recipe,
+            why="%s needs %s %d, past the classic ruleset's %d: nobody learns it"
+            % (
+                recipe.name,
+                TRADES.get(recipe.skill, "skill"),
+                recipe.rank,
+                classic.MAX_PROFESSION_SKILL,
+            ),
+        )
     found = candidates(recipe, reg, people, known, gap)
     if found:
         return found[0]

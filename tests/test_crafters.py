@@ -154,6 +154,15 @@ class UggasEightRecipes(unittest.TestCase):
             },
         )
 
+    def test_a_recipe_past_300_goes_to_nobody(self):
+        # The classic ruleset: a 375 alchemist could learn a 325 recipe, but
+        # it is never routed. Measured: 676 dev characters carry a 375 cap.
+        people = PEOPLE + [person("Adept", {ALCHEMY: 350})]
+        flask = recipe(90, 22900, "Recipe: Elixir of Camouflage", ALCHEMY, 305, 28543)
+        pick = routes(people=people, recipes=[flask])[90]
+        self.assertEqual(pick.taker, "")
+        self.assertIn("past the classic ruleset's 300", pick.why)
+
     def test_nobody_who_already_knows_it_is_sent_it(self):
         """Without the known check the 300 alchemists would take Purification."""
         unknown = routes(known=crafters.Known())

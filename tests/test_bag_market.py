@@ -266,6 +266,19 @@ class WhoIsOffered(unittest.TestCase):
         )
         self.assertEqual(upgrades[0].listing.name, "Brown Leather Satchel")
 
+    def test_an_outland_or_northrend_bag_is_never_bought(self):
+        # The classic ruleset: a 16-slot Netherweave Bag and a 20-slot
+        # Frostweave Bag on the house are passed over for a classic 12.
+        house = _house(
+            [
+                (21841, "Netherweave Bag", 16, 9000, 0),
+                (41599, "Frostweave Bag", 20, 9000, 0),
+                (1725, "Large Knapsack", 12, 8665, 0),
+            ]
+        )
+        upgrades, _ = bag_market.plan_upgrades([ALLIANCE[4]], ALLIANCE_PURSES, house)
+        self.assertEqual([u.listing.entry for u in upgrades], [1725])
+
     def test_the_house_bag_beats_a_smaller_vendor_bag(self):
         upgrades, _ = bag_market.plan_upgrades(
             [ALLIANCE[4]],

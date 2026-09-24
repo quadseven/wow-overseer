@@ -24,6 +24,7 @@ import math
 import re
 from dataclasses import dataclass
 
+import classic
 import dungeonplan
 import travel
 
@@ -406,6 +407,8 @@ def _cannot_walk(walker, holder, max_yards) -> str:
         return "%s is %s" % (holder, walker.unwalkable)
     if walker.in_combat:
         return "%s is in combat" % holder
+    if classic.is_expansion_map(walker.map_id):
+        return classic.outside_note(holder, walker.map_id)
     if walker.map_id not in dungeonplan.CONTINENT_MAPS:
         return "%s is inside an instance" % holder
     if not walker.aim or walker.yards is None:

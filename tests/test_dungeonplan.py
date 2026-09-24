@@ -1300,8 +1300,33 @@ class ThePartySizeIsReadToShowAndNeverToFilter(unittest.TestCase):
             ROGUE_SKILLS,
             roster=["Ugga"],
         )
+        # Karazhan (532) and Magtheridon's Lair (544) leave for the classic
+        # ruleset, not for their marker: see the test below.
         self.assertEqual(
-            {d["map_id"] for d in payload["dungeons"]}, set(REAL_COMMENTS) | {34}
+            {d["map_id"] for d in payload["dungeons"]},
+            (set(REAL_COMMENTS) - {532, 544}) | {34},
+        )
+
+    def test_only_classic_doors_are_listed(self):
+        """The classic ruleset: no Outland, Northrend or rebuilt-for-80 door."""
+        rows = [
+            catalogue(36, 17, 26, "The Deadmines"),
+            catalogue(540, 70, 72, "Hellfire Citadel: The Shattered Halls"),
+            catalogue(574, 70, 72, "Utgarde Keep"),
+            catalogue(249, 80, 80, "Onyxia's Lair"),
+        ]
+        payload = build(
+            rows,
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
+        self.assertEqual([d["map_id"] for d in payload["dungeons"]], [36])
+        self.assertEqual(
+            dungeonplan.map_ids(rows, {533: "Naxxramas", 36: "The Deadmines"}), [36]
         )
 
     def test_the_footer_says_a_row_without_the_chip_is_not_a_claim(self):

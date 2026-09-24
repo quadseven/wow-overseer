@@ -36,10 +36,12 @@ import pathlib
 import re
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import auction  # noqa: E402
+import craft_rhythm  # noqa: E402
 import travel  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -193,6 +195,11 @@ class HouseTest(unittest.TestCase):
 
     def test_unknown_map_fails_closed(self):
         self.assertFalse(auction.auctioneer_map_available(None, {0}))
+
+    def test_outland_and_northrend_are_never_a_trip_target(self):
+        # The classic ruleset, whatever the caller read as available.
+        self.assertFalse(auction.auctioneer_map_available(530, {0, 530}))
+        self.assertFalse(auction.auctioneer_map_available(571, {571}))
 
     def test_house_zero_keeps_no_listing_at_all(self):
         # Which is what makes failing closed actually close: an unknown team
@@ -427,6 +434,14 @@ class WantedTest(unittest.TestCase):
 
     def test_an_unknown_craft_spell_raises_nothing(self):
         self.assertEqual(auction.wanted(999999, {}, {}), [])
+
+    def test_an_outland_reagent_is_never_wanted(self):
+        # Bolt of Netherweave's cloth: the classic ruleset buys none of it.
+        netherweave = craft_rhythm.Reagent(21877, "Netherweave Cloth", 5)
+        linen = craft_rhythm.Reagent(2589, "Linen Cloth", 2)
+        with mock.patch.dict(auction.GATHERED, {26745: (netherweave, linen)}):
+            needs = auction.wanted(26745, carried={}, in_mail={})
+        self.assertEqual([n.entry for n in needs], [2589])
 
 
 class PlanBuysTest(unittest.TestCase):
