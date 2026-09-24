@@ -422,6 +422,13 @@ class TheBridgePass(unittest.TestCase):
             _jev=jev.Client(key, transport=fake), _planner_said={}
         )
         me._plan_campaign = types.MethodType(ns["_plan_campaign"], me)
+
+        async def no_situation(*_args):
+            return None
+
+        # The movement picture is read by the bridge (situation.py); these
+        # passes run without one, which asks the question as it always was.
+        me._situation_for = no_situation
         fams = {
             "Zug": {"leader": {"name": "Zug", "dungeon_runs_done": 0}, "names": ["Zug"]}
         }
