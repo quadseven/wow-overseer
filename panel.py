@@ -95,6 +95,7 @@ _EQUIPMENT_SLOT_NAMES = [
 ]
 _BAG_SLOTS = range(19, 23)  # the four carried bag slots
 _BACKPACK_SLOTS = range(23, 39)  # the built-in 16-slot backpack
+_BANK_SLOTS = range(39, 67)  # the bank's own 28 item slots (not carried)
 _BANK_BAG_SLOTS = range(67, 74)  # bank bag containers (not carried)
 
 

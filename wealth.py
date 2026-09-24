@@ -75,6 +75,7 @@ import armory
 import bagfate
 import bonds
 import family
+import holdings
 from armory import (
     ARMOR_SUBCLASSES,
     CLASS_COLOURS,
@@ -86,7 +87,13 @@ from armory import (
     WEAPON_SUBCLASSES,
 )
 from core import _ALLIANCE_RACES, _HORDE_RACES
-from panel import _BACKPACK_SLOTS, _BAG_SLOTS, _BANK_BAG_SLOTS, _CLASS_NAMES
+from panel import (
+    _BACKPACK_SLOTS,
+    _BAG_SLOTS,
+    _BANK_BAG_SLOTS,
+    _BANK_SLOTS,
+    _CLASS_NAMES,
+)
 
 # The coin. Named rather than spelled 10000 three times, because the one bug
 # this arithmetic can have is a factor of a hundred and it would look right.
@@ -486,6 +493,32 @@ def _container(
     }
 
 
+def _place_inside(
+    inside: list[dict],
+    by_guid: dict[int, dict],
+    bank_bags: set[int],
+    icons: dict[int, str],
+    carried_rows: list[dict],
+) -> tuple[int, int]:
+    """Put every row that sits inside a container into its carried bag.
+
+    Returns (elsewhere, bank): how many were inside something not carried,
+    and how many of those were inside a bank bag. A row whose container is
+    not carried is still counted, or the panel understates what somebody
+    owns.
+    """
+    elsewhere = bank = 0
+    for row in inside:
+        bag = by_guid.get(row["bag"])
+        if bag is None:
+            elsewhere += 1  # inside a bank bag, or a container not carried
+            bank += row["bag"] in bank_bags
+            continue
+        carried_rows.append(row)
+        bag["items"].append(item_payload(row, icons, CARRIED, bag["name"], row["slot"]))
+    return elsewhere, bank
+
+
 def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
     """One character's character_inventory rows -> where everything actually is.
 
@@ -506,6 +539,10 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
     bank_bags: set[int] = set()
     inside: list[dict] = []
     elsewhere = 0
+    # WHAT IS IN THE BANK, as its own count inside `elsewhere`: the bank's own
+    # slots plus whatever sits in a bank bag. The bank bag itself is furniture
+    # and is not counted, the same way a carried bag is not cargo.
+    bank = 0
 
     backpack = _container(BACKPACK, 0, BACKPACK_SLOTS, BACKPACK_NAME, None, icons)
     containers.append(backpack)
@@ -545,19 +582,18 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
             # mistaken for a carried bag nobody can find.
             bank_bags.add(row["item_guid"])
             elsewhere += 1
+        elif slot in _BANK_SLOTS:
+            bank += 1
+            elsewhere += 1
         else:
             # Bank slots, keyring, buyback: real possessions this view does
             # not draw. Counted so the page never silently understates what
             # somebody owns.
             elsewhere += 1
 
-    for row in inside:
-        bag = by_guid.get(row["bag"])
-        if bag is None:
-            elsewhere += 1  # inside a bank bag, or a container not carried
-            continue
-        carried_rows.append(row)
-        bag["items"].append(item_payload(row, icons, CARRIED, bag["name"], row["slot"]))
+    away, banked = _place_inside(inside, by_guid, bank_bags, icons, carried_rows)
+    elsewhere += away
+    bank += banked
 
     for bag in containers:
         bag["items"].sort(key=lambda i: i["position"])
@@ -585,6 +621,7 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
         "containers": containers,
         "elsewhere": elsewhere,
         "bank_bags": len(bank_bags),
+        "bank": bank,
         "worn_rows": worn_rows,
         "carried_rows": carried_rows,
     }
@@ -777,8 +814,14 @@ def build_member(
     claims: dict[int, str] | None = None,
     managed: bool = True,
     split: dict | None = None,
+    mailbox: dict | None = None,
+    history: dict | None = None,
 ) -> dict:
     """One member's purse, containers and holdings.
+
+    `mailbox` is holdings.mailboxes' entry for this member, or None when the
+    mail tables were not read; `history` is member_history's, or None when
+    no sample table was read at all.
 
     A member with no `characters` row still gets an entry. A family view that
     quietly drops somebody is the exact failure the Armory tab was built to
@@ -850,11 +893,16 @@ def build_member(
         " at a vendor",
     )
     member["elsewhere_note"] = (
-        "%d more stored elsewhere (bank, keyring), not drawn here" % member["elsewhere"]
+        "%d more stored elsewhere (bank, keyring), not drawn as slots"
+        % member["elsewhere"]
         if member["elsewhere"]
         else None
     )
     member["notable_note"] = NOTABLE_NOTE if member["notable"] else None
+    # THE MAILBOX AND THE BANK, beside the bags rather than folded into
+    # "stored elsewhere": gold on a letter is not in the purse until somebody
+    # collects it, and a bank is where a full bag's cure goes.
+    member.update(holding_fields(split["bank"], mailbox, history))
     # WHERE IT IS ALL GOING (#88): each carried stack in one pile, and what
     # stops the piles that go nowhere. bagfate says why these are the
     # pipeline's own rules rather than a second opinion.
@@ -1298,8 +1346,13 @@ def build_guild_bank(
     guild_bank_rows: list[dict] | None = None,
     guild_bank_right_rows: list[dict] | None = None,
     sides: list[dict] | None = None,
+    economy_rows: list[dict] | None = None,
 ) -> dict:
     """Which guild the family is in, if any, and what stands in front of one.
+
+    `economy_rows` are the bridge's overseer_economy_sample rows, or None when
+    the table was not read; each guild's line then carries its vault's gold
+    and a sparkline of the week behind it.
 
     `guild_rows` is whatever `guild_member` joined to `guild` returns for the
     roster: no rows means nobody is in a guild, which is the live answer today
@@ -1348,6 +1401,7 @@ def build_guild_bank(
     by_guild = _bank_by_guild(
         guild_rows, tabs, rights, observed, rights_observed, sides
     )
+    add_vaults(by_guild, guild_rows, economy_rows)
     if len(by_guild) > 1:
         # TWO FAMILIES, TWO GUILDS, TWO VAULTS. One sentence over both read
         # "The guild has 1 purchased bank tab" when that tab was Cave's and
@@ -1420,6 +1474,20 @@ def _bank_by_guild(
     return out
 
 
+def _vault_money(guild_rows: list[dict]) -> dict[str, int]:
+    """guild name -> guild.BankMoney, for the rows that carried it.
+
+    A row without the column is a vault whose gold was not read, which is a
+    different answer from an empty vault and is left out rather than zeroed.
+    """
+    out: dict[str, int] = {}
+    for row in guild_rows:
+        name = row.get("guild_name")
+        if name and "bank_money" in row and row["bank_money"] is not None:
+            out.setdefault(name, max(0, _int(row["bank_money"])))
+    return out
+
+
 def _bank_index(tabs: list[dict], rights: list[dict]) -> tuple[dict, dict]:
     """Tabs and deposit ranks bucketed by guild id, one pass over each."""
     tabs_of: dict[int, list[dict]] = {}
@@ -1486,6 +1554,209 @@ def _int(value) -> int:
         return 0
 
 
+# --- the mailbox, the bank, and the week behind them ------------------------
+# holdings.py does the counting and the scaling; every word about it is here,
+# by this module's own rule. The page draws a sparkline from `points` and
+# writes the caption beside it, and decides nothing.
+
+# Before the first sample, and on a realm whose bridge has not created the
+# table yet. Said rather than drawn as an empty box: a blank chart and a
+# broken query look the same.
+HISTORY_NOTE = (
+    "No history yet. The bridge records purses, mailboxes and banks on its "
+    "sample timer (every ten minutes unless the operator changed it), so a "
+    "line starts one sample after it first runs."
+)
+# The mail tables are part of every realm this runs against; a world that
+# could not answer is said to be one rather than drawn as an empty mailbox.
+MAIL_UNREAD_NOTE = "mailbox not read on this realm"
+MAIL_EMPTY = "mailbox empty"
+BANK_EMPTY = "nothing in the bank"
+HISTORY_CAPTION = (
+    "Lines are the last %d days of the bridge's samples, newest on the "
+    "right." % holdings.HISTORY_DAYS
+)
+
+# Which lines a card draws, in order: (label, sample column, is it money).
+# The purse always; the mail gold and the bank only when they were not zero
+# for the whole window, because a flat line at nothing is a line that says
+# nothing and costs a row on a phone.
+MEMBER_LINES = (
+    ("purse", "money", True),
+    ("mail gold", "mail_money", True),
+    ("bank stacks", "bank_items", False),
+)
+GUILD_LINES = (
+    ("vault gold", "money", True),
+    ("vault items", "bank_items", False),
+)
+ALWAYS_DRAWN = frozenset({"money"})
+
+
+def mailbox_line(box: dict | None) -> dict:
+    """What is waiting in one mailbox, as a sentence with money in it.
+
+    Amber when there is gold or an item to collect: mail keeps for thirty
+    days and then the letter and what is on it are gone, so something waiting
+    is worth a walk to a mailbox. A letter carrying neither is plain.
+    """
+    if box is None:
+        return {"before": MAIL_UNREAD_NOTE, "money": None, "after": "", "tone": PLAIN}
+    letters, unread = box["letters"], box["unread"]
+    items, money = box["items"], box["money"]
+    if not letters:
+        return {"before": MAIL_EMPTY, "money": None, "after": "", "tone": PLAIN}
+    text = "%d %s waiting" % (letters, plural(letters, "letter"))
+    if unread:
+        text += " (%d unread)" % unread
+    if items:
+        text += ", %d %s" % (items, plural(items, "attachment"))
+    tone = CAUTION if money or items else PLAIN
+    if money:
+        return {
+            "before": text + ", carrying ",
+            "money": coins(money),
+            "after": "",
+            "tone": tone,
+        }
+    return {"before": text, "money": None, "after": "", "tone": tone}
+
+
+def holding_fields(bank: int, mailbox: dict | None, history: dict | None) -> dict:
+    """The mailbox, the bank and the week, as the card's four keys."""
+    return {
+        "mailbox": mailbox,
+        "mail": mailbox_line(mailbox),
+        "bank": bank_line(bank),
+        "history": history
+        if history is not None
+        else build_history(None, "", "", None),
+    }
+
+
+def member_holdings(
+    names: list[str], mail_rows: list[dict] | None, economy_rows: list[dict] | None
+) -> dict[str, dict]:
+    """Per name, the `mailbox` and `history` build_member takes.
+
+    `mail_rows` None is a mail table that was not read, and every mailbox is
+    then None rather than empty; the samples share one right edge.
+    """
+    boxes = holdings.mailboxes(mail_rows, names) if mail_rows is not None else {}
+    end = holdings.timeline_end(economy_rows or [])
+    return {
+        name: {
+            "mailbox": boxes.get(name),
+            "history": build_history(economy_rows, holdings.MEMBER, name, end),
+        }
+        for name in names
+    }
+
+
+def add_vaults(
+    by_guild: list[dict], guild_rows: list[dict], economy_rows: list[dict] | None
+) -> None:
+    """Each guild line gains its vault's gold and the week behind it."""
+    end = holdings.timeline_end(economy_rows or [])
+    money_of = _vault_money(guild_rows)
+    for entry in by_guild:
+        money = money_of.get(entry["guild"])
+        entry["money"] = None if money is None else coins(money)
+        entry["money_line"] = (
+            None
+            if money is None
+            else money_sentence("%s vault holds " % entry["guild"], entry["money"], "")
+        )
+        entry["history"] = build_history(
+            economy_rows, holdings.GUILD, entry["guild"], end, GUILD_LINES
+        )
+
+
+def bank_line(stacks: int) -> dict:
+    """How much is in the personal bank, counted in stacks like the bags."""
+    return {
+        "stacks": stacks,
+        "label": "%d %s in the bank" % (stacks, plural(stacks, "stack"))
+        if stacks
+        else BANK_EMPTY,
+    }
+
+
+def span_words(seconds: int) -> str:
+    """'40 minutes', '5 hours', '3 days': how long a line actually covers."""
+    # Rounded, not floored: a week of samples ten minutes short of seven days
+    # is "7 days" to a reader, and "6 days" would undersell it by a day.
+    if seconds < 2 * 3600:
+        minutes = max(1, round(seconds / 60))
+        return "%d %s" % (minutes, plural(minutes, "minute"))
+    if seconds < 48 * 3600:
+        hours = round(seconds / 3600)
+        return "%d %s" % (hours, plural(hours, "hour"))
+    days = round(seconds / 86400)
+    return "%d %s" % (days, plural(days, "day"))
+
+
+def trend(label: str, line: dict, money: bool) -> dict:
+    """One sparkline's words: what it reads now and how far it moved.
+
+    THE SPAN IS THE LINE'S OWN, not the window's. Two days after the sampler
+    first ran, "up 12g over 7 days" would be a claim about five days nobody
+    measured; "over 2 days" is what the points cover.
+    """
+    first, last = line["first"], line["last"]
+
+    def amount(n: int) -> str:
+        return coins(n)["text"] if money else str(n)
+
+    if len(line["points"]) < 2 or not line["span_seconds"]:
+        caption = "%s now, one sample so far" % amount(last)
+    elif last == first:
+        caption = "%s now, unchanged over %s" % (
+            amount(last),
+            span_words(line["span_seconds"]),
+        )
+    else:
+        caption = "%s now, %s %s over %s" % (
+            amount(last),
+            "up" if last > first else "down",
+            amount(abs(last - first)),
+            span_words(line["span_seconds"]),
+        )
+    return {"label": label, "points": line["points"], "caption": caption}
+
+
+def build_history(
+    rows: list[dict] | None,
+    kind: str,
+    subject: str,
+    end,
+    wanted: tuple = MEMBER_LINES,
+) -> dict:
+    """The sparklines for one member or one guild, or the note saying why
+    there are none."""
+    lines = []
+    for label, field, money in wanted:
+        line = holdings.series(rows or [], kind, subject, field, end)
+        if line is None:
+            continue
+        if field not in ALWAYS_DRAWN and not line["high"]:
+            continue
+        lines.append(trend(label, line, money))
+    return {"lines": lines, "note": None if lines else HISTORY_NOTE}
+
+
+def bank_stacks(inventory_rows: list[dict]) -> dict[str, int]:
+    """Per name, how many stacks are in the personal bank.
+
+    split_inventory's answer, not a second reading of the slot ranges: the
+    bridge's sampler and this view count the bank with one function.
+    """
+    by_name: dict[str, list[dict]] = {}
+    for row in inventory_rows:
+        by_name.setdefault(row["name"], []).append(row)
+    return {name: split_inventory(rows, {})["bank"] for name, rows in by_name.items()}
+
+
 # --- what the page calls each block ----------------------------------------
 # The three-part section rule wants an index and a label, and both are words on
 # a screen. They live here for the same reason every other word on this view
@@ -1535,6 +1806,8 @@ def build_wealth(
     guild_bank_rows: list[dict] | None = None,
     guild_bank_right_rows: list[dict] | None = None,
     families: list[tuple[str, list[str]]] | None = None,
+    mail_rows: list[dict] | None = None,
+    economy_rows: list[dict] | None = None,
 ) -> dict:
     """Every member's purse and bags, the family total, the auction house,
     and the guild bank there is not.
@@ -1542,6 +1815,10 @@ def build_wealth(
     The row lists arrive keyed by character name, unfiltered, exactly as
     build_armory takes them; splitting them per member is this module's job
     so the adapter stays a handful of queries and no logic.
+
+    `mail_rows` (one per attachment, holdings.mailboxes' shape) and
+    `economy_rows` (overseer_economy_sample) are None when their tables could
+    not be read, which each card and the guild panel then say in words.
     """
     chars = {r["name"]: r for r in char_rows}
     inventory: dict[str, list[dict]] = {}
@@ -1559,6 +1836,9 @@ def build_wealth(
         if name in chars
     }
     claims = _claims_by_family(chars, splits, families)
+    held = member_holdings(
+        [name for _key, names in families for name in names], mail_rows, economy_rows
+    )
     # A character the economy passes do not cover gets one sentence instead
     # of piles. The passes cover the persona family (bonds), which is the
     # roster they are configured with; #150 is widening that.
@@ -1571,6 +1851,7 @@ def build_wealth(
             claims=claims,
             managed=name in bonds.FAMILY,
             split=splits.get(name),
+            **held[name],
         )
         for _key, names in families
         for name in names
@@ -1590,8 +1871,9 @@ def build_wealth(
         "family": build_family(members),
         "auctions": build_auctions(auction_rows, icons),
         "guild_bank": build_guild_bank(
-            guild_rows, guild_bank_rows, guild_bank_right_rows, sides
+            guild_rows, guild_bank_rows, guild_bank_right_rows, sides, economy_rows
         ),
+        "history_caption": HISTORY_CAPTION,
         "sections": SECTION_HEADERS,
         "saved_note": SAVED_NOTE,
         "expected": len(members),

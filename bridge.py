@@ -52,6 +52,7 @@ import guildshare
 import guildroute
 import guildwork
 import guildcorps
+import holdings
 import handover
 import craft
 import crafters
@@ -97,6 +98,7 @@ import vendor_stall
 import trainjob
 import travel
 import voice
+import wealth
 from transform import Geometry
 
 log = logging.getLogger("wow-overseer")
@@ -4181,6 +4183,7 @@ class Bridge(discord.Client):
         await asyncio.to_thread(_ensure_thought_store)
         await asyncio.to_thread(_ensure_goal_store)
         await asyncio.to_thread(_ensure_sample_store)
+        await asyncio.to_thread(_ensure_economy_store)
         await asyncio.to_thread(_ensure_trade_store)
         await asyncio.to_thread(_ensure_jev_store)
         await asyncio.to_thread(_ensure_queue_store)
@@ -13230,6 +13233,17 @@ class Bridge(discord.Client):
                 # A missed sample costs resolution at one instant, never the
                 # series. Taking the bridge down with it would cost all of it.
                 log.exception("sample cycle failed; retrying next interval")
+            # THE ECONOMY SAMPLE, on the same beat and in its own try: the
+            # Bags tab's week of purses, mailboxes, banks and vaults. A
+            # failure here must not cost the digest its counters, nor the
+            # reverse, so the two never share a handler.
+            try:
+                members, guilds = await asyncio.to_thread(_take_economy_sample)
+                pruned = await asyncio.to_thread(_prune_economy_samples)
+                log.info("economy sample: wrote %d member row(s) and %d guild "
+                         "row(s), pruned %d", members, guilds, pruned)
+            except Exception:
+                log.exception("economy sample failed; retrying next interval")
             await asyncio.sleep(SAMPLE_INTERVAL)
 
     async def _report_digest(self, query: core.DigestQuery, channel) -> None:
@@ -19530,6 +19544,129 @@ def _prune_samples() -> int:
         return cur.rowcount
 
 
+# --- the economy sample (the Bags tab's week) -------------------------------
+#
+# overseer_sample remembers the counters the digest reports. It does not
+# remember the mailbox, the personal bank or the guild vault, and nothing else
+# in the schema does either: every one of them is a balance. This is the same
+# memory for those, written on the same ten-minute beat with the same
+# retention, and read back by map_server's Bags adapter. Every count is made
+# in holdings.py and wealth.py; this side only fetches rows and writes them.
+
+_ECONOMY_MEMBER_SQL = "SELECT c.name, c.money FROM characters c WHERE c.name IN (%s)"
+# The whole inventory, unbounded by slot for the reason the Bags adapter gives:
+# which (bag, slot) pair is the bank is wealth.split_inventory's judgement, and
+# a slot range written here would be a second answer to it.
+_ECONOMY_INVENTORY_SQL = (
+    "SELECT c.name, ci.bag, ci.slot, ci.item AS item_guid, "
+    "ii.itemEntry AS entry, ii.count "
+    "FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE c.name IN (%s)"
+)
+# One row per guild any sampled member is in, with the vault's gold, tabs and
+# stored items.
+_ECONOMY_GUILD_SQL = (
+    "SELECT g.guildid AS guild_id, g.name AS guild_name, "
+    "g.BankMoney AS bank_money, "
+    "(SELECT COUNT(*) FROM guild_bank_tab t WHERE t.guildid = g.guildid) AS tab_count, "
+    "(SELECT COUNT(*) FROM guild_bank_item i WHERE i.guildid = g.guildid) AS item_count "
+    "FROM guild g WHERE g.guildid IN (SELECT gm.guildid FROM guild_member gm "
+    "JOIN characters c ON c.guid = gm.guid WHERE c.name IN (%s))"
+)
+_ECONOMY_INSERT_SQL = (
+    "INSERT INTO overseer_economy_sample "
+    "(subject, kind, money, mail_letters, mail_money, mail_items, bank_items, bank_tabs) "
+    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+)
+
+
+def _ensure_economy_store() -> None:
+    """The economy sample table, bridge-owned like overseer_sample.
+
+    Bridge-owned rather than module SQL for the reason _ensure_sample_store
+    gives: the worldserver never touches it. The collation is NAMED rather
+    than inherited, as overseer_jev_judgment's is, so it cannot depend on
+    whichever server default a realm was built under.
+
+    `money` and `mail_money` are BIGINT because `guild.BankMoney` is, and a
+    vault is written into the same column as a purse (`kind` tells them
+    apart). A failure here is logged and not raised: this is a record nothing
+    acts on, and a start-up that raised over it would stop every loop.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS overseer_economy_sample ("
+                " id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
+                " subject VARCHAR(24) NOT NULL,"
+                " kind VARCHAR(8) NOT NULL,"
+                " money BIGINT UNSIGNED NOT NULL DEFAULT 0,"
+                " mail_letters SMALLINT UNSIGNED NOT NULL DEFAULT 0,"
+                " mail_money BIGINT UNSIGNED NOT NULL DEFAULT 0,"
+                " mail_items SMALLINT UNSIGNED NOT NULL DEFAULT 0,"
+                " bank_items SMALLINT UNSIGNED NOT NULL DEFAULT 0,"
+                " bank_tabs TINYINT UNSIGNED NOT NULL DEFAULT 0,"
+                " taken_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                " PRIMARY KEY (id), KEY idx_subject_time (subject, taken_at),"
+                " KEY idx_time (taken_at)"
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+            )
+    except pymysql.err.MySQLError:
+        log.exception("economy sample: store unavailable; purses, mailboxes and "
+                      "banks will not be recorded")
+
+
+def _take_economy_sample() -> tuple:
+    """Write one member row per sampled character and one guild row per
+    guild they are in. Returns (member rows, guild rows) written.
+
+    Every roster family is sampled, not only this bridge's own, because the
+    Bags tab draws all of them (holdings.subjects says why).
+    """
+    names = holdings.subjects(_roster_cohort_rows(), _family_names())
+    if not names:
+        return 0, 0
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_ECONOMY_MEMBER_SQL % marks, names)  # noqa: S608 - placeholders from a COUNT, values still bound
+        char_rows = [dict(r) for r in cur.fetchall()]
+        cur.execute(_ECONOMY_INVENTORY_SQL % marks, names)  # noqa: S608 - placeholders from a COUNT, values still bound
+        inventory_rows = [dict(r) for r in cur.fetchall()]
+        try:
+            cur.execute(_ECONOMY_GUILD_SQL % marks, names)  # noqa: S608 - placeholders from a COUNT, values still bound
+            guild_rows = [dict(r) for r in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("economy sample: the guild bank tables are unavailable")
+                guild_rows = []
+            else:
+                raise
+    boxes = holdings.mailboxes(_fetch_mail(names), names)
+    members, guilds = holdings.sample_rows(
+        char_rows, wealth.bank_stacks(inventory_rows), boxes, guild_rows
+    )
+    rows = members + guilds
+    if rows:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.executemany(
+                _ECONOMY_INSERT_SQL,
+                [tuple(r[c] for c in holdings.SAMPLE_COLUMNS) for r in rows],
+            )
+    return len(members), len(guilds)
+
+
+def _prune_economy_samples() -> int:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM overseer_economy_sample "
+            "WHERE taken_at < NOW() - INTERVAL %s DAY",
+            (SAMPLE_RETENTION_DAYS,),
+        )
+        return cur.rowcount
+
+
 # Hoisted for the reason _LEDGER_MEMBER_SQL and _BOT_HELD_SQL are: ruff
 # anchors S608 at the START of the expression, so a noqa on the line carrying
 # the % does not silence a query whose literal spans several lines. Only the
@@ -19843,6 +19980,7 @@ class HeadlessBridge(Bridge):
         await asyncio.to_thread(_ensure_thought_store)
         await asyncio.to_thread(_ensure_goal_store)
         await asyncio.to_thread(_ensure_sample_store)
+        await asyncio.to_thread(_ensure_economy_store)
         await asyncio.to_thread(_ensure_trade_store)
         await asyncio.to_thread(_ensure_jev_store)
         await asyncio.to_thread(_ensure_queue_store)
