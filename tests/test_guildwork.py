@@ -111,6 +111,7 @@ class TheFarWalk(unittest.TestCase):
             (),
             (),
             max_yards=guildroute.FAR_WALK_YARDS,
+            eligible={"Velalenn"},
         )
         self.assertEqual(len(plan.runs), 1)
         self.assertEqual(plan.runs[0].walk_command, "walk-to-mailbox max:20000")
@@ -122,6 +123,7 @@ class TheFarWalk(unittest.TestCase):
             {"Velalenn": walker("Velalenn", yards=1953.0)},
             (),
             (),
+            eligible={"Velalenn"},
         )
         self.assertEqual(plan.runs, ())
         self.assertIn("1953 yards away, past the 600", plan.notes[0])
@@ -135,7 +137,13 @@ class TheFarWalk(unittest.TestCase):
             "Unknown": walker("Unknown", yards=None),
         }
         plan = guildwork.plan_dues(
-            crew, self.masters, walkers, (), (), max_yards=guildroute.FAR_WALK_YARDS
+            crew,
+            self.masters,
+            walkers,
+            (),
+            (),
+            max_yards=guildroute.FAR_WALK_YARDS,
+            eligible={m.name for m in crew},
         )
         self.assertEqual([r.holder for r in plan.runs], ["Near", "Mid"])
 
@@ -146,6 +154,7 @@ class ThePlan(unittest.TestCase):
     def plan(self, members, walkers=None, posted=(), busy=(), **kw):
         if walkers is None:
             walkers = {m.name: walker(m.name) for m in members}
+        kw.setdefault("eligible", {m.name for m in members})
         return guildwork.plan_dues(members, self.masters, walkers, posted, busy, **kw)
 
     def test_a_due_member_near_a_mailbox_walks(self):
