@@ -309,6 +309,15 @@ TOWN_STOP_SECONDS = 240.0
 CAMPAIGN_STOP_EVERY_SECONDS = 1800.0
 
 
+# THE WALKS THAT LEAVE TOWN, which wait while the family's campaign waits in
+# town for bag room (mod-overseer#659). The bridge's own claimant names:
+# bridge.GATHER_CLAIMANT, FLIGHT_CLAIMANT and LEVEL_CLAIMANT. A gathering
+# field, a flight master to learn and a leveling hub are each a walk out of
+# town, and a family waiting on a vendor meets there instead of scattering;
+# the vendor, bank, mail, auction and trainer passes keep their turns.
+AWAY_CLAIMANTS = frozenset({"gather", "flight", "level"})
+
+
 def is_town_stop(claimant: str, distance: float | None) -> bool:
     """Whether this ask is a short town stop rather than an ordinary trip."""
     if claimant not in STOP_CLAIMANTS or distance is None:
@@ -1204,8 +1213,9 @@ class Slot:
         self.campaign = ""
         # Why the family's campaign waits in town for bag room (#297), or "".
         # Set and cleared by the bridge's queue pass every cycle, like
-        # `campaign`. The town passes keep the traveller; only the learn trips
-        # wait, so the vendor trip the hold asks for can take the column.
+        # `campaign`. The town passes keep the traveller; the learn trips wait,
+        # so the vendor trip the hold asks for can take the column, and so do
+        # the walks out of town (AWAY_CLAIMANTS), so the family stays there.
         self.town_first = ""
         # Orphan ground aims already handed back for the campaign (#227).
         self._yielded: set = set()
@@ -1602,6 +1612,18 @@ class Slot:
                 reason="%s waits: the family's campaign owns the traveller %s "
                 "(%s), and town errands resume when it is withheld or done"
                 % (claimant, character, self.campaign),
+                claimant=claimant,
+                aim=aim,
+                character=character,
+            )
+        if self.town_first and claimant in AWAY_CLAIMANTS:
+            # Not registered as a wait, like the campaign's: the walk is not
+            # queued behind the town trip, it is off until the wait ends.
+            return Decision(
+                verdict=SLOT_WAIT,
+                reason="%s waits: the family's campaign waits in town (%s), "
+                "and nobody walks out of town until it goes in"
+                % (claimant, self.town_first),
                 claimant=claimant,
                 aim=aim,
                 character=character,

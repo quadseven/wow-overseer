@@ -229,8 +229,8 @@ class TheStandingJob(unittest.TestCase):
     def test_the_refusal_names_the_way_it_is_done_anyway(self):
         """A refusal with no way forward is a dead end. The explicit form in
         the overseer's own channel still sets any mode in MODES."""
-        why = decree.unwired_refusal("town run")
-        self.assertIn('"job town run"', why)
+        why = decree.unwired_refusal("grind")
+        self.assertIn('"job grind"', why)
 
     def test_what_it_says_is_what_the_bridge_says(self):
         order = decree.plan_order({"section": decree.JOB, "mode": "dungeon"}, roster())

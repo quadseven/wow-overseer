@@ -50,7 +50,7 @@ MODES = {
     "grind": "kill things for experience, no objective (The operator's 'level / grind' / 'xp')",
     "gear hunt": "target a specific item from a specific source (infra#2797)",
     "craft": "level a profession, work a queue of things the family needs",
-    "town run": "vendor, repair, restock, mail (needs infra#2783)",
+    "town run": "vendor, repair, restock, mail, with the family together in town",
     "train": "learn what is available - professions and class (infra#2757, #2782)",
     "rest": "hearth, inn, log off gracefully",
     "bank": "consolidate and hand off materials to whoever can use them (infra#2830)",
@@ -224,7 +224,22 @@ def is_dungeon_job(job) -> bool:
 # only inside a comment the module labels "compatibility markers for
 # source-contract tests". A pin that a comment can satisfy has stopped being a
 # pin; craft's name executable code or nothing.
-IMPLEMENTED = frozenset({"quest", "dungeon", "train", "craft", "raid prep", "fish"})
+#
+# `town run` JOINED THIS SET for wow-overseer's scatter fix (mod-overseer#659).
+# A campaign held "town first" for bag room used to wait under `quest`, and on
+# wow-dev 2026-09-24 the quest drive flew the Alliance leader to Un'Goro while
+# his members were 13,000 yards behind, and four Horde members cut off from
+# their leader were granted `new rpg` and flew to three zones. The bridge now
+# writes this job for the wait (bridge._hand_to_town, _keep_in_town), and the
+# module keeps a leader with no errand and a cut-off follower with an empty
+# column off `new rpg` for it, so the family stays where it is and only town
+# errands walk the leader.
+IMPLEMENTED = frozenset(
+    {"quest", "dungeon", "train", "craft", "raid prep", "fish", "town run"}
+)
+
+# The job a campaign waiting in town puts the family on (#265, mod-overseer#659).
+TOWN_RUN = "town run"
 
 # What each wired mode actually MAKES HAPPEN, named so `describe` can say it.
 # A mode in IMPLEMENTED with no entry here is a claim with no address, which
@@ -258,6 +273,14 @@ DRIVES = {
         "mod_overseer.cpp's fishing drive (mod-overseer#448): a row whose job "
         "is 'fish' toggles the bots' own fishing AI, teaches Fishing from a "
         "trainer and records fish/skill events (mod_overseer.cpp, wantsFishing)"
+    ),
+    "town run": (
+        "the family stays together in town: the quest drive stands down, the "
+        "leader carries `new rpg` only while a town errand or a catch-up walks "
+        "it and a follower cut off from it is not sent off on its own "
+        "(mod_overseer.cpp, LeaderCarriesNewRpg and CutOffFollowerRoams, "
+        "mod-overseer#659); the vendor, bank, mail and trainer passes do the "
+        "rest, and the far walks (gathering, flights, the leveling route) wait"
     ),
 }
 
