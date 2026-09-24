@@ -749,33 +749,7 @@ def _fetch_wealth(names: list[str] | None = None) -> dict:
                         log.warning("guild bank rights are unavailable")
                     else:
                         raise
-            # The mailboxes and the sampled week. Both fail closed to None on
-            # a realm without the table (the bridge creates the sample table
-            # on its first start), and the builder says so in words rather
-            # than drawing an empty mailbox or a flat line.
-            mail_rows = None
-            try:
-                cur.execute(_WEALTH_MAIL.format(holes=holes), tuple(names))  # noqa: S608
-                mail_rows = list(cur.fetchall())
-            except pymysql.err.MySQLError as exc:
-                if exc.args and exc.args[0] in (1054, 1146):
-                    log.warning("wealth: the mail tables are unavailable")
-                else:
-                    raise
-            economy_rows = None
-            subjects = list(names) + sorted({row["guild_name"] for row in guild_rows
-                                             if row.get("guild_name")})
-            try:
-                cur.execute(
-                    _WEALTH_ECONOMY.format(holes=", ".join(["%s"] * len(subjects))),  # noqa: S608
-                    (*subjects, holdings.HISTORY_DAYS),
-                )
-                economy_rows = list(cur.fetchall())
-            except pymysql.err.MySQLError as exc:
-                if exc.args and exc.args[0] in (1054, 1146):
-                    log.warning("wealth: overseer_economy_sample is unavailable")
-                else:
-                    raise
+            mail_rows, economy_rows = _fetch_wealth_holdings(cur, names, guild_rows)
     finally:
         conn.close()
     return {"char_rows": char_rows, "inventory_rows": inventory_rows,
@@ -783,6 +757,40 @@ def _fetch_wealth(names: list[str] | None = None) -> dict:
             "guild_bank_rows": guild_bank_rows,
             "guild_bank_right_rows": guild_bank_right_rows,
             "mail_rows": mail_rows, "economy_rows": economy_rows}
+
+
+def _fetch_wealth_holdings(cur, names: list[str], guild_rows: list[dict]) -> tuple:
+    """The mailboxes and the sampled week, on the Bags read's own cursor.
+
+    Both fail closed to None on a realm without the table (the bridge creates
+    the sample table on its first start), and the builder says so in words
+    rather than drawing an empty mailbox or a flat line.
+    """
+    holes = ", ".join(["%s"] * len(names))
+    mail_rows = None
+    try:
+        cur.execute(_WEALTH_MAIL.format(holes=holes), tuple(names))  # noqa: S608
+        mail_rows = list(cur.fetchall())
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            log.warning("wealth: the mail tables are unavailable")
+        else:
+            raise
+    economy_rows = None
+    subjects = list(names) + sorted({row["guild_name"] for row in guild_rows
+                                     if row.get("guild_name")})
+    try:
+        cur.execute(
+            _WEALTH_ECONOMY.format(holes=", ".join(["%s"] * len(subjects))),  # noqa: S608
+            (*subjects, holdings.HISTORY_DAYS),
+        )
+        economy_rows = list(cur.fetchall())
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            log.warning("wealth: overseer_economy_sample is unavailable")
+        else:
+            raise
+    return mail_rows, economy_rows
 
 
 # Everything a tooltip draws, straight off item_template. Listed once, here,

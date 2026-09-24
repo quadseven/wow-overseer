@@ -493,6 +493,32 @@ def _container(
     }
 
 
+def _place_inside(
+    inside: list[dict],
+    by_guid: dict[int, dict],
+    bank_bags: set[int],
+    icons: dict[int, str],
+    carried_rows: list[dict],
+) -> tuple[int, int]:
+    """Put every row that sits inside a container into its carried bag.
+
+    Returns (elsewhere, bank): how many were inside something not carried,
+    and how many of those were inside a bank bag. A row whose container is
+    not carried is still counted, or the panel understates what somebody
+    owns.
+    """
+    elsewhere = bank = 0
+    for row in inside:
+        bag = by_guid.get(row["bag"])
+        if bag is None:
+            elsewhere += 1  # inside a bank bag, or a container not carried
+            bank += row["bag"] in bank_bags
+            continue
+        carried_rows.append(row)
+        bag["items"].append(item_payload(row, icons, CARRIED, bag["name"], row["slot"]))
+    return elsewhere, bank
+
+
 def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
     """One character's character_inventory rows -> where everything actually is.
 
@@ -565,15 +591,9 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
             # somebody owns.
             elsewhere += 1
 
-    for row in inside:
-        bag = by_guid.get(row["bag"])
-        if bag is None:
-            elsewhere += 1  # inside a bank bag, or a container not carried
-            if row["bag"] in bank_bags:
-                bank += 1
-            continue
-        carried_rows.append(row)
-        bag["items"].append(item_payload(row, icons, CARRIED, bag["name"], row["slot"]))
+    away, banked = _place_inside(inside, by_guid, bank_bags, icons, carried_rows)
+    elsewhere += away
+    bank += banked
 
     for bag in containers:
         bag["items"].sort(key=lambda i: i["position"])
@@ -882,10 +902,7 @@ def build_member(
     # THE MAILBOX AND THE BANK, beside the bags rather than folded into
     # "stored elsewhere": gold on a letter is not in the purse until somebody
     # collects it, and a bank is where a full bag's cure goes.
-    member["mailbox"] = mailbox
-    member["mail"] = mailbox_line(mailbox)
-    member["bank"] = bank_line(split["bank"])
-    member["history"] = history or {"lines": [], "note": HISTORY_NOTE}
+    member.update(holding_fields(split["bank"], mailbox, history))
     # WHERE IT IS ALL GOING (#88): each carried stack in one pile, and what
     # stops the piles that go nowhere. bagfate says why these are the
     # pipeline's own rules rather than a second opinion.
@@ -1384,19 +1401,7 @@ def build_guild_bank(
     by_guild = _bank_by_guild(
         guild_rows, tabs, rights, observed, rights_observed, sides
     )
-    end = holdings.timeline_end(economy_rows or [])
-    money_of = _vault_money(guild_rows)
-    for entry in by_guild:
-        money = money_of.get(entry["guild"])
-        entry["money"] = coins(money) if money is not None else None
-        entry["money_line"] = (
-            money_sentence("%s vault holds " % entry["guild"], entry["money"], "")
-            if money is not None
-            else None
-        )
-        entry["history"] = build_history(
-            economy_rows, holdings.GUILD, entry["guild"], end, GUILD_LINES
-        )
+    add_vaults(by_guild, guild_rows, economy_rows)
     if len(by_guild) > 1:
         # TWO FAMILIES, TWO GUILDS, TWO VAULTS. One sentence over both read
         # "The guild has 1 purchased bank tab" when that tab was Cave's and
@@ -1558,8 +1563,9 @@ def _int(value) -> int:
 # table yet. Said rather than drawn as an empty box: a blank chart and a
 # broken query look the same.
 HISTORY_NOTE = (
-    "No history yet. The bridge records purses, mailboxes and banks every "
-    "ten minutes, so a line starts one sample after it first runs."
+    "No history yet. The bridge records purses, mailboxes and banks on its "
+    "sample timer (every ten minutes unless the operator changed it), so a "
+    "line starts one sample after it first runs."
 )
 # The mail tables are part of every realm this runs against; a world that
 # could not answer is said to be one rather than drawn as an empty mailbox.
@@ -1567,8 +1573,8 @@ MAIL_UNREAD_NOTE = "mailbox not read on this realm"
 MAIL_EMPTY = "mailbox empty"
 BANK_EMPTY = "nothing in the bank"
 HISTORY_CAPTION = (
-    "Lines are the last %d days of the bridge's ten-minute samples, newest "
-    "on the right." % holdings.HISTORY_DAYS
+    "Lines are the last %d days of the bridge's samples, newest on the "
+    "right." % holdings.HISTORY_DAYS
 )
 
 # Which lines a card draws, in order: (label, sample column, is it money).
@@ -1614,6 +1620,56 @@ def mailbox_line(box: dict | None) -> dict:
             "tone": tone,
         }
     return {"before": text, "money": None, "after": "", "tone": tone}
+
+
+def holding_fields(bank: int, mailbox: dict | None, history: dict | None) -> dict:
+    """The mailbox, the bank and the week, as the card's four keys."""
+    return {
+        "mailbox": mailbox,
+        "mail": mailbox_line(mailbox),
+        "bank": bank_line(bank),
+        "history": history
+        if history is not None
+        else build_history(None, "", "", None),
+    }
+
+
+def member_holdings(
+    names: list[str], mail_rows: list[dict] | None, economy_rows: list[dict] | None
+) -> dict[str, dict]:
+    """Per name, the `mailbox` and `history` build_member takes.
+
+    `mail_rows` None is a mail table that was not read, and every mailbox is
+    then None rather than empty; the samples share one right edge.
+    """
+    boxes = holdings.mailboxes(mail_rows, names) if mail_rows is not None else {}
+    end = holdings.timeline_end(economy_rows or [])
+    return {
+        name: {
+            "mailbox": boxes.get(name),
+            "history": build_history(economy_rows, holdings.MEMBER, name, end),
+        }
+        for name in names
+    }
+
+
+def add_vaults(
+    by_guild: list[dict], guild_rows: list[dict], economy_rows: list[dict] | None
+) -> None:
+    """Each guild line gains its vault's gold and the week behind it."""
+    end = holdings.timeline_end(economy_rows or [])
+    money_of = _vault_money(guild_rows)
+    for entry in by_guild:
+        money = money_of.get(entry["guild"])
+        entry["money"] = None if money is None else coins(money)
+        entry["money_line"] = (
+            None
+            if money is None
+            else money_sentence("%s vault holds " % entry["guild"], entry["money"], "")
+        )
+        entry["history"] = build_history(
+            economy_rows, holdings.GUILD, entry["guild"], end, GUILD_LINES
+        )
 
 
 def bank_line(stacks: int) -> dict:
@@ -1780,9 +1836,9 @@ def build_wealth(
         if name in chars
     }
     claims = _claims_by_family(chars, splits, families)
-    everyone = [name for _key, names in families for name in names]
-    boxes = holdings.mailboxes(mail_rows, everyone) if mail_rows is not None else None
-    end = holdings.timeline_end(economy_rows or [])
+    held = member_holdings(
+        [name for _key, names in families for name in names], mail_rows, economy_rows
+    )
     # A character the economy passes do not cover gets one sentence instead
     # of piles. The passes cover the persona family (bonds), which is the
     # roster they are configured with; #150 is widening that.
@@ -1795,8 +1851,7 @@ def build_wealth(
             claims=claims,
             managed=name in bonds.FAMILY,
             split=splits.get(name),
-            mailbox=boxes.get(name) if boxes is not None else None,
-            history=build_history(economy_rows, holdings.MEMBER, name, end),
+            **held[name],
         )
         for _key, names in families
         for name in names

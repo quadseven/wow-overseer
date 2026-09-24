@@ -438,6 +438,10 @@ class TheBridgeWritesTheWeek(unittest.TestCase):
             self.assertIn("_ensure_economy_store", _block(self.src, sig))
 
     def test_it_runs_on_the_sample_beat_in_its_own_handler(self):
+        """Exactly two `except Exception:` in `_sample_family`, and the count
+        is the contract: one for the digest's counters, one for the economy
+        sample. Folding them into one would let either failure cost the
+        other its sample."""
         loop = _block(self.src, "async def _sample_family(self) -> None:")
         self.assertIn("_take_economy_sample", loop)
         self.assertIn("_prune_economy_samples", loop)
@@ -488,7 +492,13 @@ class TheViewReadsTheWeek(unittest.TestCase):
         self.assertIn(
             '"mail_rows": mail_rows, "economy_rows": economy_rows', self.fetch
         )
-        self.assertEqual(self.fetch.count("in (1054, 1146)"), 4)
+        self.assertEqual(
+            self.fetch.count("in (1054, 1146)"),
+            4,
+            "expected four fail-closed reads in the Bags adapter: guild_bank_tab "
+            "and guild_bank_right in _fetch_wealth, mail and "
+            "overseer_economy_sample in _fetch_wealth_holdings",
+        )
 
     def test_the_page_draws_what_it_is_handed(self):
         econ = self.page[self.page.index("function wspark(points)") :]
