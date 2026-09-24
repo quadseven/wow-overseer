@@ -318,6 +318,8 @@ class FakeWorld:
         self.job = job
         self.releases = []
         self.learn_releases = []
+        # `bridge._TOWN_FIRST_SINCE`: when the queue first held this family.
+        self.town_first_since = {}
         self.writes = []
 
     def pending(self):
@@ -378,6 +380,7 @@ def _bridge_self(world, clock, log):
         {
             "bag_pressure": bag_pressure,
             "_town_first_hold": world.town_first_hold,
+            "_TOWN_FIRST_SINCE": world.town_first_since,
             "asyncio": types.SimpleNamespace(to_thread=_thread),
             "time": clock,
             "log": log,
@@ -564,6 +567,17 @@ class ACampaignHeldInTownSells(unittest.TestCase):
         slot = self.me._cohort_town_slot("Zug")
         self.assertEqual("", slot.town_first)
         self.assertEqual("", slot.learn_waits)
+
+    def test_the_hold_ends_at_the_campaigns_resume_ceiling(self):
+        """Past the ceiling the queue sends the run in whoever is short, so
+        the learn trips must not wait on after it."""
+        self.world.town_first_since[tuple(sorted(NAMES))] = 0.0
+        self.clock.now = bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS - 60.0
+        _queue_pass(self.me, self.world)
+        self.assertTrue(self.me._cohort_town_slot("Zug").town_first)
+        self.clock.now = bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS
+        _queue_pass(self.me, self.world)
+        self.assertEqual("", self.me._cohort_town_slot("Zug").town_first)
 
     def test_a_family_with_room_keeps_its_trainer_walk(self):
         self.world.free = dict(FREE)

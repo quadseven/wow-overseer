@@ -13059,7 +13059,12 @@ class Bridge(discord.Client):
         if not await asyncio.to_thread(_town_first_hold, names):
             return False
         free = await asyncio.to_thread(_fetch_free_slots, names)
-        short = bag_pressure.campaign_resume_short(free)
+        # THE QUEUE'S OWN CLOCK, so the hold ends when the campaign does:
+        # past the resume ceiling `_town_first` sends the run in whoever is
+        # still short, and the learn trips must not wait on after it.
+        since = _TOWN_FIRST_SINCE.get(tuple(sorted(names)))
+        held = 0.0 if since is None else time.monotonic() - since
+        short = bag_pressure.campaign_resume_short(free, held_seconds=held)
         if not short:
             return False
         if not slot.town_first:
