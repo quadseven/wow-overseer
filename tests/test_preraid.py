@@ -391,10 +391,13 @@ class ThePlannerGearsForTheRaid(unittest.TestCase):
         self.assertIn("raid's progression", campaignplan.heuristic_why(pick))
 
     def test_a_crossing_halves_what_a_run_is_worth(self):
-        [first, *_] = campaignplan.options(facts(gains(**{"dire-maul-north": 9.0})))
-        self.assertEqual(first.continent, "Kalimdor")
-        self.assertFalse(first.crossing)
-        crossed = replace(first, expected=9.0, crossing=True)
+        opts = campaignplan.options(facts(gains(**{"dire-maul-north": 9.0})))
+        self.assertEqual(len(opts), 3)  # the three Dire Maul wings
+        self.assertEqual({o.continent for o in opts}, {"Kalimdor"})
+        self.assertFalse(any(o.crossing for o in opts))
+        north = next(o for o in opts if o.keyword == "dire-maul-north")
+        self.assertEqual(north.value, 9.0)
+        crossed = replace(north, crossing=True)
         self.assertEqual(crossed.value, 4.5)
 
     def test_the_log_line_says_what_the_run_is_worth(self):
