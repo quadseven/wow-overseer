@@ -93,6 +93,7 @@ import raidsupply
 import recipebook
 import recruit
 import relay
+import situation
 import skillgoal
 import tabard
 import towntrip
@@ -101,6 +102,7 @@ import tradechoice
 import vendor_stall
 import trainjob
 import travel
+import vision
 import voice
 import wealth
 from transform import Geometry
@@ -2617,6 +2619,106 @@ def _activity_reads(names: list, leader: str) -> dict:
     return out
 
 
+# --- the situation's reads (situation.py) ------------------------------------
+#
+# situation shapes; these read. overseer_snapshot is the live position (the
+# module refreshes it every few seconds); `characters` is up to 15 minutes
+# stale and is never read for movement. The spawn and survey reads are boxed
+# on the leader's map, and every value is bound.
+_SITUATION_SNAPSHOT = (
+    "SELECT name, map_id, zone_id, pos_x, pos_y, pos_z, health, max_health, "
+    "in_combat, TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS age "
+    "FROM overseer_snapshot WHERE name IN (%s)")
+_SITUATION_SAMPLE = (
+    "SELECT name, map_id, zone_id, pos_x, pos_y, pos_z, health, max_health, "
+    "in_combat FROM overseer_snapshot WHERE name COLLATE utf8mb4_unicode_ci IN "
+    "(SELECT name FROM overseer_roster WHERE enabled = 1)")
+_SITUATION_READS = (
+    ("columns",
+     "SELECT name, travel_npc, job FROM overseer_roster WHERE name IN (%s)"),
+    ("members", "SELECT name, race, level FROM characters WHERE name IN (%s)"),
+    ("deaths",
+     "SELECT character_name, killer_type, killer_name, "
+     "TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age FROM overseer_death "
+     "WHERE created_at > NOW() - INTERVAL " + str(situation.DEATH_WINDOW_SECONDS)
+     + " SECOND AND character_name IN (%s)"),
+)
+# `rank` is a reserved word in MySQL 8 and is quoted for that reason.
+_SITUATION_SPAWNS = (
+    "SELECT ct.name, ct.minlevel, ct.maxlevel, ct.`rank`, "
+    "ft.EnemyGroup AS enemy_group, c.position_x AS x, c.position_y AS y, "
+    "c.position_z AS z FROM acore_world.creature c "
+    "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE c.map = %s AND c.position_x BETWEEN %s AND %s "
+    "AND c.position_y BETWEEN %s AND %s AND ct.npcflag = 0 AND ct.type <> 8")
+_SITUATION_NODES = (
+    "SELECT id, name, x, y, z FROM acore_playerbots.playerbots_travelnode "
+    "WHERE map_id = %s AND x BETWEEN %s AND %s AND y BETWEEN %s AND %s")
+
+
+def _situation_box(at, radius: float) -> tuple:
+    return (at.map, at.x - radius, at.x + radius, at.y - radius, at.y + radius)
+
+
+def _situation_try(cur, what: str, sql: str, args: tuple):
+    """Rows, or None when this realm cannot answer (1054 or 1146: a column or
+    table the world image predates). The fact then reads unknown."""
+    try:
+        cur.execute(sql, args)
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            log.info("situation: %s cannot be read on this realm", what)
+            return None
+        raise
+    return [dict(row) for row in cur.fetchall()]
+
+
+def _fetch_situation_sample() -> list:
+    """Every enabled roster member's live position, for situation.Tracker."""
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _situation_try(cur, "snapshot", _SITUATION_SAMPLE, ())
+    return rows or []
+
+
+def _situation_reads(names: list, leader: str) -> dict:
+    """What situation.build takes about one family. Reads only."""
+    out = {"snapshot": [], "columns": {}, "jobs": {}, "members": [],
+           "deaths": None, "spawns": None, "leader_nodes": None,
+           "goal_nodes": None}
+    if not names:
+        return out
+    marks = ", ".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        out["snapshot"] = _situation_try(
+            cur, "snapshot", _SITUATION_SNAPSHOT % marks, tuple(names)) or []
+        for key, sql in _SITUATION_READS:
+            rows = _situation_try(cur, key, sql % marks, tuple(names))
+            if key == "columns":
+                for r in rows or ():
+                    out["columns"][str(r["name"])] = str(r.get("travel_npc") or "")
+                    out["jobs"][str(r["name"])] = str(r.get("job") or "")
+            else:
+                out[key] = rows
+        lead = next((b for b in situation.bodies_from_rows(names, out["snapshot"])
+                     if b.name == leader), None)
+        if lead is None or lead.at is None:
+            return out
+        out["spawns"] = _situation_try(
+            cur, "spawns", _SITUATION_SPAWNS,
+            _situation_box(lead.at, situation.DANGER_YARDS))
+        out["leader_nodes"] = _situation_try(
+            cur, "survey", _SITUATION_NODES,
+            _situation_box(lead.at, situation.NODE_SEARCH_YARDS))
+        goal = situation.goal_of(out["columns"].get(leader, ""),
+                                 out["jobs"].get(leader, ""))
+        if goal is not None and goal.at is not None:
+            out["goal_nodes"] = _situation_try(
+                cur, "survey", _SITUATION_NODES,
+                _situation_box(goal.at, situation.NODE_SEARCH_YARDS))
+    return out
+
+
 def _holders_of(quest_id: int) -> set:
     """Which protected characters actually hold this quest in an actionable
     state.
@@ -4201,6 +4303,13 @@ class Bridge(discord.Client):
         # once and the facts are not re-read every cycle.
         self._planner_said: dict = {}
         self._activity_own_key = None
+        # THE MOVEMENT PICTURE (situation.py): each roster member's recent
+        # positions, sampled by _situation_loop on its own clock because no
+        # table keeps a position history, and what a head's own screen shows
+        # (vision.py). Both in memory; a restart reads progress as unknown
+        # until the trail is a minute long again.
+        self._situation_trail = situation.Tracker()
+        self._seer = vision.Seer.from_env(dict(os.environ, LLM_URL=LLM_URL))
 
     async def setup_hook(self) -> None:
         # Held, not fired and forgotten. asyncio keeps only a weak reference to
@@ -4246,6 +4355,7 @@ class Bridge(discord.Client):
                 self._activity_loop,
                 self._run_recovery_loop,
                 self._loot_council_loop,
+                self._situation_loop,
             )
         }
 
@@ -12643,8 +12753,10 @@ class Bridge(discord.Client):
         judgment = None
         rule = jev_choices.policy(jev_choices.KIND_DUNGEON)
         if rule.mode != jev.OFF and self._jev.ready(jev_choices.KIND_DUNGEON):
+            where = await self._situation_for(
+                key, list(fam["names"]), str(fam["leader"].get("name") or ""))
             judgment = await jev_choices.dungeon_ask(
-                self._jev, facts, opts, pick, rule, due.reason)
+                self._jev, facts, opts, pick, rule, due.reason, where=where)
         if judgment is not None:
             log.info("%s", judgment.line())
             try:
@@ -12837,6 +12949,69 @@ class Bridge(discord.Client):
             return ""
         return lease.activity
 
+    async def _situation_loop(self) -> None:
+        """Sample every roster member's position for situation.Tracker.
+
+        One read of overseer_snapshot per SITUATION_SAMPLE_SECONDS (30 by
+        default), so "stuck for five minutes" is ten samples, not a guess
+        from two.
+        """
+        await self.wait_until_ready()
+        every = float(os.environ.get("SITUATION_SAMPLE_SECONDS", "30"))
+        while not self.is_closed():
+            try:
+                rows = await asyncio.to_thread(_fetch_situation_sample)
+                names = [str(r["name"]) for r in rows]
+                self._situation_trail.record_bodies(
+                    situation.bodies_from_rows(names, rows), time.monotonic())
+            except Exception:
+                log.exception("situation: sampling failed; progress reads "
+                              "unknown until it recovers")
+            await asyncio.sleep(every)
+
+    def _travel_slot_of(self, key: str):
+        """The family's town slot: this bridge's own, or another family's."""
+        if key == self._activity_own_key:
+            return self._town_slot
+        return self._cohort_town_slots.get(key)
+
+    async def _situation_for(self, key: str, names: list, leader: str):
+        """The family's movement picture (situation.Situation), or None.
+
+        EVERY JEV KIND MAY CARRY IT: the activity choice and the dungeon
+        choice do, and a run recovery kind reads it the same way. None when
+        SITUATION_MODE=off or the reads fail, and the question is then asked
+        exactly as it was before this existed.
+        """
+        if not situation.enabled() or not names or not leader:
+            return None
+        try:
+            reads = await asyncio.to_thread(_situation_reads, list(names), leader)
+            look = None
+            if leader in vision.heads():
+                look = await self._seer.look(leader)
+            slot = self._travel_slot_of(key)
+            now = time.monotonic()
+            levels = [int(r.get("level") or 0) for r in reads["members"] or ()]
+            return situation.build(
+                list(names), leader, reads["snapshot"], self._situation_trail,
+                now, leader_travel=reads["columns"].get(leader, ""),
+                leader_job=reads["jobs"].get(leader, ""),
+                spawn_rows=reads["spawns"], death_rows=reads["deaths"],
+                leader_nodes=reads["leader_nodes"],
+                goal_nodes=reads["goal_nodes"],
+                races=[r.get("race") for r in reads["members"] or ()],
+                weakest_level=min(levels) if levels else 0,
+                holder=slot.holder if slot is not None else None,
+                campaign=slot.campaign if slot is not None else "",
+                columns=reads["columns"],
+                vision=look.state(time.monotonic()) if look is not None else None)
+        except Exception:
+            log.exception("situation: the picture for %s could not be read; "
+                          "the question is asked without it",
+                          campaignqueue._family(key))
+            return None
+
     async def _activity_loop(self) -> None:
         """Ask each family what it does next, on its own clock (#216).
 
@@ -12907,12 +13082,15 @@ class Bridge(discord.Client):
                      "again until it ends", campaignqueue._family(key),
                      interlude, reason)
             return
+        where = await self._situation_for(
+            key, names, str(leader.get("name") or ""))
         facts = jev_activity.Facts(
             family=key or str(leader.get("name") or ""), members=members,
             job=job, queue=campaignqueue.progress_line(rows, runs),
             withheld=held, can_gather=can_gather, can_train=can_train,
             minutes_on_activity=int((now - since) // 60), reason=reason,
-            minutes_since_fishing=self._activity_minutes_since_fishing(key, now))
+            minutes_since_fishing=self._activity_minutes_since_fishing(key, now),
+            situation=where)
         judgment = await jev_activity.ask(self._jev, facts, rule)
         self._activity_seen[key]["asked"] = now
         if judgment is None:
@@ -20840,6 +21018,7 @@ class HeadlessBridge(Bridge):
                 self._campaign_queue_loop,
                 self._activity_loop,
                 self._run_recovery_loop,
+                self._situation_loop,
             ) if coro.__name__ not in self.HEADLESS_SKIP
         ]
         log.info("headless: no Discord gateway; driving %d loop(s): %s",

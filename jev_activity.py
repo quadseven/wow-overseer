@@ -82,6 +82,7 @@ from dataclasses import dataclass, replace
 import bag_pressure
 import bonds
 import jev
+import situation
 import jobs
 
 KIND = "activity_choice"
@@ -187,6 +188,9 @@ class Facts:
     minutes_on_activity: int = 0
     reason: str = CADENCE
     minutes_since_fishing: int | None = None
+    # situation.Situation: the family's movement picture, or None when it
+    # could not be read. None leaves the question exactly as it was.
+    situation: object | None = None
 
     @property
     def levels(self) -> list:
@@ -420,7 +424,14 @@ def facts_line(f: Facts) -> str:
         parts.append("run withheld for bag space")
     parts.append("job %s" % (f.job or jobs.DEFAULT))
     parts.append("%d min on this activity" % int(f.minutes_on_activity))
-    return "; ".join(parts)
+    line = "; ".join(parts)
+    if f.situation is not None:
+        # The record's facts column is 1000 characters; the situation takes
+        # what the family's own facts leave.
+        room = 1000 - len(line) - len(" | situation: ")
+        if room > 40:
+            line += " | situation: " + f.situation.line(room)
+    return line
 
 
 def question(f: Facts, offered: dict):
@@ -463,6 +474,8 @@ def question(f: Facts, offered: dict):
         ),
         "why_now": f.reason,
     }
+    if f.situation is not None:
+        state["situation"] = f.situation.state()
     instructions = (
         "`family` is a group of World of Warcraft (3.3.5a) adventurers who "
         "play together the way a group of real human players does. Choose "
@@ -474,7 +487,7 @@ def question(f: Facts, offered: dict):
         "gather for their professions when it helps the group, now and then "
         "unwind by fishing when nothing presses, and let each member's role "
         "and persona color the choice."
-    )
+    ) + (situation.INSTRUCTION if f.situation is not None else "")
     return state, {"activity": jev.choice(instructions, dict(offered))}
 
 

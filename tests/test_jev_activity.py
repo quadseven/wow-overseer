@@ -500,6 +500,13 @@ def _bridge(world, fake_jev, holds=None):
     me._activity_fished = {}
     me._activity_own_key = None
     me._mid_run = mid_run
+
+    async def no_situation(*_args):
+        return None
+
+    # The movement picture is read by the bridge (situation.py); these passes
+    # run without one, which asks the question as it always was.
+    me._situation_for = no_situation
     for name in (
         "_vendor_once",
         "_bag_purchase_and_trip",

@@ -33,6 +33,7 @@ from dataclasses import dataclass, replace
 
 import campaignplan
 import jev
+import situation
 from jev_items import Judgment
 
 KIND_DUNGEON = "dungeon_choice"
@@ -174,8 +175,13 @@ def _unknown(value):
     return "unknown" if value is None else value
 
 
-def dungeon_question(facts, opts):
-    """(state, questions) for "which dungeon next", over campaignplan Options."""
+def dungeon_question(facts, opts, where=None):
+    """(state, questions) for "which dungeon next", over campaignplan Options.
+
+    `where` is the family's situation.Situation, or None. With one, each run
+    says how far its door is from the leader, and the state carries the
+    movement picture; without one the question is exactly as it was.
+    """
     gear = facts.gear or {}
     state = {
         "family": [
@@ -206,10 +212,21 @@ def dungeon_question(facts, opts):
                 "raid_progress": o.progress or "none",
                 "continent": o.continent or "unknown",
                 "needs_a_continent_crossing": o.crossing,
+                **(
+                    {
+                        "yards_from_the_leader_to_its_door": where.yards_to_door(
+                            o.keyword
+                        )
+                    }
+                    if where is not None
+                    else {}
+                ),
             }
             for o in opts
         ],
     }
+    if where is not None:
+        state["situation"] = where.state()
     criteria = {
         o.keyword: "The family runs %s next, %d times (levels %d to %d)."
         % (o.place, o.runs, o.floor, o.ceiling)
@@ -233,10 +250,16 @@ def dungeon_question(facts, opts):
         "quests, does not cross a continent for little, and is not one they "
         "have run to exhaustion or keep failing at."
     )
+    if where is not None:
+        instructions += (
+            " A door on another continent, or far away while the family is "
+            "scattered, stuck or dying, costs the group a long trip first."
+            + situation.INSTRUCTION
+        )
     return state, {"dungeon": jev.choice(instructions, criteria)}
 
 
-def facts_line(facts, opts) -> str:
+def facts_line(facts, opts, where=None) -> str:
     """The question's facts in one line for the record, at most 1000 chars."""
     who, level = facts.weakest
     parts = ["weakest %s %d" % (who, level)]
@@ -259,10 +282,13 @@ def facts_line(facts, opts) -> str:
                 " cross" if o.crossing else "",
             )
         )
-    return "; ".join(parts)[:1000]
+    line = "; ".join(parts)
+    if where is not None:
+        line += " | situation: " + where.line()
+    return line[:1000]
 
 
-async def dungeon_ask(client, facts, opts, pick, rule, why_now: str = ""):
+async def dungeon_ask(client, facts, opts, pick, rule, why_now: str = "", where=None):
     """The dungeon_choice judgment, acted on per `rule`, or None when there is
     nothing to ask: the kind is off, or there is one run or none."""
     if rule.mode == jev.OFF or pick is None or len(opts) < 2:
@@ -274,9 +300,9 @@ async def dungeon_ask(client, facts, opts, pick, rule, why_now: str = ""):
         mode=rule.mode,
         status="",
         item_name=why_now,
-        facts=facts_line(facts, opts),
+        facts=facts_line(facts, opts, where),
     )
-    state, questions = dungeon_question(facts, opts)
+    state, questions = dungeon_question(facts, opts, where)
     outcome = await client.ask(KIND_DUNGEON, state, questions)
     if outcome.answers is None:
         return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
