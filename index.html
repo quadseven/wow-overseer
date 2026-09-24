@@ -3512,6 +3512,8 @@
   <div id="wguild"></div>
   <div id="wroutehead" class="brule"></div>
   <div id="wroute"></div>
+  <div id="wcouncilhead" class="brule"></div>
+  <div id="wcouncil"></div>
 </section>
 <!-- THE CHRONICLE. What they have DONE, and the redesign of the Achievements
      tab rather than a second view beside it: same endpoint, same module, a
@@ -3533,6 +3535,12 @@
   <div class="ds-rule"><span class="ix">03</span><span class="ln"></span><span class="lb">notable loot, and where it went</span></div>
   <p id="chrlootbasis" class="chr-body"></p>
   <div id="chrloot"></div>
+  <!-- THE LOOT COUNCIL (#194). Every weapon and armor drop a family's party
+       or raid handed out: who got it and why. The sentences come from
+       lootcouncil.py; the reason is Jev's chosen option, or the heuristic's. -->
+  <div class="ds-rule"><span class="ix">04</span><span class="ln"></span><span class="lb">the loot council: who got what, and why</span></div>
+  <p id="chrcouncilbasis" class="chr-body"></p>
+  <div id="chrcouncil"></div>
   <!-- THE LOOT BOARD, FOLDED AWAY (#135). It is gear comparison for the last
        dungeon run, and it used to sit between "what is happening" and the
        story, where it filled most of the screen. Upgrades by dungeon are the
@@ -9154,6 +9162,33 @@ function chrLootLine(s) {
   return row;
 }
 
+// THE LOOT COUNCIL (#194). One line per award: the reader's clock, the item
+// in its quality colour, who it went to, and the reason lootcouncil.py wrote.
+const chrcouncil = document.getElementById("chrcouncil");
+const chrcouncilbasis = document.getElementById("chrcouncilbasis");
+
+function chrCouncilLine(a) {
+  const row = el("div", "chr-line chr-loot");
+  row.appendChild(el("span", "chr-when", chrWhen(a.at)));
+  const head = el("div", "chr-loot-item");
+  head.appendChild(el("span", "q" + (a.quality || 0), a.item_name));
+  head.appendChild(el("span", "who", "to " + (a.to || "nobody") +
+    (a.source ? " from " + a.source : "")));
+  row.appendChild(head);
+  row.appendChild(el("span", "chr-text", a.reason || a.outcome || ""));
+  return row;
+}
+
+function renderChrCouncil(c) {
+  if (!c) return;
+  chrcouncilbasis.textContent = c.basis || "";
+  chrcouncil.replaceChildren();
+  for (const a of c.awards || []) chrcouncil.appendChild(chrCouncilLine(a));
+  if (!(c.awards || []).length) {
+    chrcouncil.appendChild(el("div", "chr-body", c.empty || ""));
+  }
+}
+
 async function pollChrLoot() {
   try {
     const r = await fetch(u("/api/loot"));
@@ -9165,6 +9200,7 @@ async function pollChrLoot() {
     if (!(p.stories || []).length) {
       chrloot.appendChild(el("div", "chr-body", p.empty || ""));
     }
+    renderChrCouncil(p.council);
   } catch (e) {
     // Keep the lines already drawn and say they may be old, as the head
     // above does for the story. A quiet fortnight and a failed read must
@@ -11106,6 +11142,8 @@ const wauchead = document.getElementById("wauchead");
 const wguildhead = document.getElementById("wguildhead");
 const wroute = document.getElementById("wroute");
 const wroutehead = document.getElementById("wroutehead");
+const wcouncil = document.getElementById("wcouncil");
+const wcouncilhead = document.getElementById("wcouncilhead");
 
 // THE ONE SENTENCE THIS FILE OWNS, and it is about the FETCH rather than about
 // the family: there is no payload during the failure it exists for, so it
@@ -11564,6 +11602,16 @@ function renderWealth(p) {
   renderAuctions(p.auctions);
   renderGuild(p.guild_bank);
   renderRoutes(p.guild_routes);
+  renderLootCouncil(p.loot_council);
+}
+
+// The loot council's awards (#194): every sentence is lootcouncil.view's.
+function renderLootCouncil(g) {
+  if (!g) return;
+  wrule(wcouncilhead, g);
+  wcouncil.replaceChildren();
+  if (!g.lines.length) wcouncil.append(el("p", "", g.empty));
+  for (const line of g.lines) wcouncil.append(el("p", "", line));
 }
 
 // The guild hand-overs (#174): every sentence is guildroute.view's.

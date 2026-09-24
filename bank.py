@@ -568,6 +568,10 @@ class Storage:
     guild_free: int = 0
     stock_cap: int = disposition.REAGENT_KEEP
     routed: dict = field(default_factory=dict)
+    # item guid -> why, for bind-on-equip gear a guild member below its level
+    # will wear later (bag_pressure.guild_bank_keeps, #194). Only the guild
+    # bank takes these, and only from a member who may deposit there.
+    guild_later: dict = field(default_factory=dict)
 
 
 def _trades_and_skills(held, worked_by):
@@ -605,7 +609,9 @@ def _guild_room(guild):
     return depositors, free
 
 
-def storage_from(held, worked_by=None, named=None, guild=None, routed=None):
+def storage_from(
+    held, worked_by=None, named=None, guild=None, routed=None, guild_later=None
+):
     """The Storage this family is today, from what the bridge already reads.
 
     `held` is name -> {profession: value} (`_fetch_trade_skills`), `worked_by`
@@ -629,6 +635,7 @@ def storage_from(held, worked_by=None, named=None, guild=None, routed=None):
         guild_depositors=depositors,
         guild_free=free,
         routed=dict(routed or {}),
+        guild_later=dict(guild_later or {}),
     )
 
 
@@ -708,6 +715,15 @@ def storage_reason(holding, storage, surplus=frozenset()):
     and only matters for the holder's own trade stock.
     """
     item = holding.item
+    if (
+        item.item_class in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR)
+        and not holding.bound
+        and holding.guid in storage.guild_later
+        and holding.holder in storage.guild_depositors
+    ):
+        # The one piece of gear the keeper rule stores: a BoE the guild will
+        # wear later, and only into the guild bank (#194).
+        return storage.guild_later[holding.guid]
     if holding.container_slots > 0 or item.item_class in _NEVER_STORED:
         return ""
     if holding.start_quest > 0 or item.quest_item:
