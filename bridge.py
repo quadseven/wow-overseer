@@ -11599,8 +11599,14 @@ class Bridge(discord.Client):
             await self._for_other_families("guild dues", self._guild_dues_once)
             await asyncio.sleep(cycle)
 
-    async def _guild_corps_once(self) -> None:
+    async def _guild_corps_once(self, cohort=None) -> None:
         """One pass of the guild crafting corps (#256): bags crafted, not only bought.
+
+        EVERY FAMILY'S GUILD, NOT ONLY THIS BRIDGE'S (2026-09-24). The pass
+        read its names from `_protected_guids`, one family, so Bonkers' corps
+        was planned by nobody while the Horde family wore six-slot pouches.
+        Another family runs through `_for_other_families`; the raid's supply
+        stays with this bridge's own family, as it was.
 
         guildcorps.py decides who holds which post and what each tailor does
         next; this reads the facts and writes the rows a step names. Every row
@@ -11610,13 +11616,14 @@ class Bridge(discord.Client):
         carried pattern, or a cast of a recipe the character knows. Never a
         give, never a GM command.
         """
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        names = await asyncio.to_thread(_names_of, cohort)
         if not names:
             return
         facts = await asyncio.to_thread(_fetch_corps_facts, names)
         members = facts.get("members") or []
         if not any(m.maintenance for m in members):
-            log.info("guild corps: no family guild has a maintenance member yet")
+            log.info("guild corps: no family guild has a maintenance member yet%s",
+                     _family_label(cohort))
             return
         now = time.monotonic()
         self._corps_steps = guildroute.live_runs(
@@ -11643,7 +11650,10 @@ class Bridge(discord.Client):
             task = asyncio.create_task(self._run_corps_step(step, cap))
             self._mail_walk_tasks.add(task)
             task.add_done_callback(self._mail_walk_task_done)
-        log.info("guild corps: started %d step(s)", len(plan.steps))
+        log.info("guild corps: started %d step(s)%s", len(plan.steps),
+                 _family_label(cohort))
+        if cohort is not None:
+            return
         # THE RAID'S SUPPLY (#275) takes the members the corps left free. A
         # failure propagates to the corps loop, which logs it with its
         # traceback after the corps' own steps have already started.
@@ -11920,6 +11930,7 @@ class Bridge(discord.Client):
                 await self._guild_corps_once()
             except Exception:
                 log.exception("guild corps pass failed; retrying next cycle")
+            await self._for_other_families("guild corps", self._guild_corps_once)
             await asyncio.sleep(cycle)
 
     async def _mail_once(self, cohort=None) -> None:
@@ -18016,7 +18027,10 @@ def _fetch_corps_facts(family_names: list) -> dict:
         skill_rows = _corps_read(cur, "skills", _CORPS_SKILLS_SQL.format(guids=crew, skills=skills))
         spell_rows = _corps_read(cur, "recipes", _CORPS_SPELLS_SQL.format(guids=crew, spells=spells))
         item_rows = _corps_read(cur, "carried materials", _CORPS_ITEMS_SQL.format(guids=everyone, entries=entries))
-        mail_rows = _corps_read(cur, "letters", _CORPS_LETTERS_SQL.format(guids=crew, entries=entries))
+        # The family's letters too: a bag already posted to a family member
+        # counts as worn, so the next bag goes to somebody else.
+        mail_rows = _corps_read(cur, "letters", _CORPS_LETTERS_SQL.format(
+            guids=",".join(g for g in (crew, kin) if g != "0") or "0", entries=entries))
         bag_rows = _corps_read(cur, "worn bags", _CORPS_BAGS_SQL.format(guids=kin))
         trainable = _corps_read(cur, "trainers", _CORPS_TRAINABLE_SQL.format(spells=spells))
         vendors = _corps_read(cur, "vendors", _CORPS_VENDORS_SQL.format(entries=entries))
