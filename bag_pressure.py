@@ -1669,8 +1669,10 @@ class GearReach:
 
     `holder_wears` is the class, armour, weapon-skill and level rules alone,
     never an upgrade test: a second set is gear its holder CAN wear, not gear
-    it should wear today. `guild_wearers` are the guild members, the holder
-    excepted, who can wear it at its required level.
+    it should wear today. `later_wearers` are the other family members who
+    can wear it once they reach its required level. Only the families count
+    (the operator's "natural things only" rule): a guild member's
+    factory-granted level is not a character growing into a piece.
     """
 
     bucket: str
@@ -1678,21 +1680,18 @@ class GearReach:
     holder_class: int
     holder_level: int
     holder_wears: bool
-    guild_wearers: tuple = ()
+    later_wearers: tuple = ()
 
 
-def gear_reach(gear_rows, equipped_rows, family_names, guild_rows) -> dict:
+def gear_reach(gear_rows, equipped_rows, family_names) -> dict:
     """item guid -> GearReach, for the family's gear rows (#320).
 
     The adapter between world rows and gear.py for the bank policy, the way
     this module is for every other gear question: `gear_rows` are carried or
-    banked pieces, `equipped_rows` the family's worn rows, and `guild_rows`
-    name, class_id and level for every guild member.
+    banked pieces and `equipped_rows` the family's worn rows.
     """
     family = [str(n) for n in family_names or ()]
     characters = {c.name: c for c in family_characters(equipped_rows, family)}
-    guild_names = [str(r.get("name")) for r in guild_rows or () if r.get("name")]
-    guild = gear.characters_from_rows(guild_rows or (), guild_names)
     out = {}
     for holding in gear.holdings_from_rows(gear_rows):
         holder = characters.get(holding.holder)
@@ -1710,10 +1709,10 @@ def gear_reach(gear_rows, equipped_rows, family_names, guild_rows) -> dict:
             holder_class=int(holder.class_id),
             holder_level=int(holder.level),
             holder_wears=wears(holder, level),
-            guild_wearers=tuple(
+            later_wearers=tuple(
                 sorted(
                     c.name
-                    for c in guild
+                    for c in characters.values()
                     if c.name != holding.holder
                     and wears(c, max(int(c.level), int(holding.required_level)))
                 )

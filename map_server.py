@@ -4280,7 +4280,7 @@ def _fetch_client_guild_bank(name: str) -> dict:
 def _fetch_bank_policy(names) -> dict:
     """item guid -> bankpolicy.Placement for one family, or none.
 
-    The same four reads and the same judgement the bridge's bank passes act
+    The same three reads and the same judgement the bridge's bank passes act
     on (bankpolicy.read), so the page says what the passes do. A failed read
     is no lines, not a broken page.
     """

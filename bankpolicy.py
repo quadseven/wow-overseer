@@ -1,8 +1,8 @@
 """Where a classic raid guild keeps what it is not using today (#320).
 
 WHAT WAS ASKED FOR. Both guilds should use their banks the way a raid guild
-does. Tradable rare and epic gear nobody wears now, but a raider or a family
-member will wear later, goes to the guild bank. So do the raid's consumables
+does. Tradable rare and epic gear nobody wears now, but a family member will
+wear once it levels into it, goes to the guild bank. So do the raid's consumables
 and reagents (for Molten Core: fire resistance gear and the materials for
 Greater Fire Protection Potions) and the corps' crafting materials, each in
 its own tab. A family member keeps its own second set in its personal bank
@@ -32,12 +32,17 @@ THE ORDER OF THE RULES IS THE ORDER THEY OVERRIDE EACH OTHER.
   3. Raid supplies for the guild's "Raid Supplies" tab: fire resistance gear
      the holder cannot wear, raid consumables past the holder's own night,
      and reagents for a raid craft the holder does not work.
-  4. Tradable rare and epic gear nobody in the family wears, which a member
-     of the guild can wear at its level, for the "Gear for Later" tab.
+  4. Tradable rare and epic gear nobody in the family wears now, which another
+     family member will wear at its required level, for the "Gear for Later"
+     tab.
+
+NATURAL THINGS ONLY (the operator's rule). The guild's factory-made members
+were granted their levels, gear and skills, so nothing here is kept for
+them or valued by them: every wearer this policy counts is a family member.
   5. Everything else is the keeper rule's (bank.storage_reason): the
      "Materials" tab or the personal bank, as before.
 
-PURE MODULE apart from `read`, which runs four SELECTs on a cursor it is
+PURE MODULE apart from `read`, which runs three SELECTs on a cursor it is
 handed, so the bridge and the site read the same facts and reach the same
 answer. Every judgement is `place`, over plain rows.
 """
@@ -437,10 +442,10 @@ def _gear_for_later(pieces, reach, claimed, taken) -> dict:
             or piece.bound
             or piece.quality < RARE
             or piece.place != "bags"
-            or not fit.guild_wearers
+            or not fit.later_wearers
         ):
             continue
-        wearers = fit.guild_wearers
+        wearers = fit.later_wearers
         out[piece.guid] = Placement(
             piece.guid,
             piece.holder,
@@ -448,13 +453,15 @@ def _gear_for_later(pieces, reach, claimed, taken) -> dict:
             GUILD,
             GEAR_TAB,
             "gear for later",
-            "%s is %s gear nobody in the family wears now; %s can wear it"
+            "%s is %s gear nobody in the family wears now; %s will wear it "
+            "at level %d"
             % (
                 piece.name,
                 "epic" if piece.quality >= 4 else "rare",
                 wearers[0]
                 if len(wearers) == 1
                 else "%s and %d more" % (wearers[0], len(wearers) - 1),
+                piece.required_level,
             ),
         )
     return out
@@ -582,13 +589,6 @@ WORN_SQL = (
     "WHERE c.name IN (%s)"
 )
 
-GUILD_SQL = (
-    "SELECT c.name AS name, c.class AS class_id, c.level AS level "
-    "FROM guild_member gm JOIN characters c ON c.guid = gm.guid "
-    "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
-    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s))"
-)
-
 SKILLS_SQL = (
     "SELECT c.name AS name, cs.skill AS skill, cs.value AS value "
     "FROM character_skills cs JOIN characters c ON c.guid = cs.guid "
@@ -680,14 +680,14 @@ def trades_from_rows(rows) -> dict:
     return {name: frozenset(t) for name, t in out.items()}
 
 
-def facts_from_rows(names, item_rows, worn_rows, guild_rows, skill_rows) -> Facts:
-    """Facts for one family, from the four reads."""
+def facts_from_rows(names, item_rows, worn_rows, skill_rows) -> Facts:
+    """Facts for one family, from the three reads."""
     import bag_pressure  # local: bag_pressure imports the travel stack
 
     names = [str(n) for n in names]
     trades = trades_from_rows(skill_rows)
     gear_rows = [r for r in item_rows if _int(r.get("item_class")) in (WEAPON, ARMOR)]
-    reach = bag_pressure.gear_reach(gear_rows, worn_rows, names, guild_rows)
+    reach = bag_pressure.gear_reach(gear_rows, worn_rows, names)
     classes = {}
     for row in worn_rows:
         name = str(row.get("name") or "")
@@ -726,7 +726,7 @@ def _party_roles(names, classes) -> dict:
 
 
 def read(cur, names) -> Facts:
-    """The four reads over `cur`, for one family."""
+    """The three reads over `cur`, for one family."""
     names = [str(n) for n in names or () if n]
     if not names:
         return Facts()
@@ -735,8 +735,6 @@ def read(cur, names) -> Facts:
     items = [dict(r) for r in cur.fetchall()]
     cur.execute(WORN_SQL % marks, names)
     worn = [dict(r) for r in cur.fetchall()]
-    cur.execute(GUILD_SQL % marks, names)
-    guild = [dict(r) for r in cur.fetchall()]
     cur.execute(SKILLS_SQL % marks, names)
     skills = [dict(r) for r in cur.fetchall()]
-    return facts_from_rows(names, items, worn, guild, skills)
+    return facts_from_rows(names, items, worn, skills)

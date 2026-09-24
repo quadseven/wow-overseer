@@ -32,7 +32,7 @@ def reach(
         holder_class=cls,
         holder_level=60,
         holder_wears=wears,
-        guild_wearers=tuple(guild),
+        later_wearers=tuple(guild),
     )
 
 
@@ -315,10 +315,12 @@ class TheFactsAreReadFromRows(unittest.TestCase):
         self.assertEqual(2, sql.count("%"))
         self.assertIn("LOCATE('Arena', ct.subname) > 0", sql)
         self.assertIn("AS quest_needed", sql)
-        for other in (bankpolicy.WORN_SQL, bankpolicy.GUILD_SQL, bankpolicy.SKILLS_SQL):
+        for other in (bankpolicy.WORN_SQL, bankpolicy.SKILLS_SQL):
             self.assertEqual(2, (other % "%s,%s").count("%"))
 
-    def test_gear_reach_reads_class_armour_and_the_guild(self):
+    def test_gear_reach_counts_only_the_family(self):
+        """Natural things only: a factory-levelled guild member is never a
+        wearer; a family member who will level into the piece is."""
         gear_rows = [
             self.row(
                 item_guid=7,
@@ -336,17 +338,16 @@ class TheFactsAreReadFromRows(unittest.TestCase):
                 "level": 60,
                 "inventory_type": 1,
                 "item_level": 66,
-            }
+            },
+            {"name": "Zork", "class_id": 7, "level": 20},
+            {"name": "Oz", "class_id": MAGE, "level": 20},
         ]
-        guild = [
-            {"name": "Mage", "class_id": MAGE, "level": 30},
-            {"name": "Hunt", "class_id": 3, "level": 20},
-        ]
-        fit = bag_pressure.gear_reach(gear_rows, worn, ["Grog"], guild)[7]
+        fit = bag_pressure.gear_reach(gear_rows, worn, ["Grog", "Zork", "Oz"])[7]
         self.assertTrue(fit.holder_wears)
         self.assertEqual("head", fit.bucket)
-        # A hunter trains mail at 40 and will wear it at 50; a mage never will.
-        self.assertEqual(("Hunt",), fit.guild_wearers)
+        # A shaman trains mail at 40 and will wear it at 50; a mage never will.
+        self.assertEqual(("Zork",), fit.later_wearers)
+        self.assertNotIn("GUILD_SQL", dir(bankpolicy))
 
 
 class TheBankPlanFollowsThePolicy(unittest.TestCase):
