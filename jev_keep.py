@@ -89,9 +89,11 @@ GIVE_PREFIX = "give:"
 # the module docstring). A `give:<name>` answer is the GIVE route.
 GIVE = "give"
 ACTABLE: frozenset = frozenset({BANK, GIVE})
-# Each actable route's own default confidence floor. 0.6 lets the answers the
-# shadow record showed were sound act (bank peaked at 0.68, all of it on
-# stacks the guards allow) and keeps a coin toss from doing so.
+# Each actable route's own default confidence floor. Over one day of shadow
+# answers on stacks the protection kept, 23 bank answers cleared 0.6 (the best
+# 0.67, on recipes and cloth or herbs the holder does not work) and no give
+# answer did (the best 0.54), so give acts only once Jev is surer than it has
+# been. Below 0.6 the answers were near coin tosses between bank and a give.
 ROUTE_THRESHOLDS = {BANK: 0.6, GIVE: 0.6}
 # How long an order waits for its executor before it is dropped unread.
 ORDER_MINUTES = 60

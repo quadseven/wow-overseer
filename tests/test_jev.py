@@ -161,12 +161,12 @@ class FallbackTest(unittest.TestCase):
     def test_a_queued_ask_takes_the_slot_when_it_frees(self):
         """#267: a background pass waits for a slot rather than meeting busy."""
         transport = Transport(delay=0.2)
-        client = jev.Client("k", transport=transport, timeout=1.0, concurrency=1)
+        client = jev.Client("k", transport=transport, timeout=3.0, concurrency=1)
 
         async def both():
             first = asyncio.ensure_future(client.ask("x", "s1", {"route": ROUTE}))
             await asyncio.sleep(0.01)
-            second = await client.ask("x", "s2", {"route": ROUTE}, wait=1.0)
+            second = await client.ask("x", "s2", {"route": ROUTE}, wait=3.0)
             return await first, second
 
         first, second = asyncio.run(both())

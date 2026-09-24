@@ -478,6 +478,7 @@ def _bridge(world, fake_jev, holds=None):
         "_drive_activity",
         "_activity_emote",
         "_activity_restore_job",
+        "_activity_minutes_since_fishing",
     ]
     module = ast.Module(body=[_function(n) for n in names], type_ignores=[])
     exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
@@ -575,9 +576,9 @@ class TheBridgeCarriesItOut(unittest.TestCase):
         self.assertEqual({(n, "fish", ja.SOURCE) for n, _, _ in HORDE}, set(world.jobs))
         self.assertIn("Zug", me._activity_fished)
         # The break runs out while the leader is still fishing.
-        until, activity, _names = me._activity_restore["Zug"]
-        self.assertEqual(ja.FISH, activity)
-        me._activity_restore["Zug"] = (0.0, activity, _names)
+        held = me._activity_restore["Zug"]
+        self.assertEqual(ja.FISH, held[1])
+        me._activity_restore["Zug"] = (0.0,) + tuple(held[1:])
         world.jobs.clear()
         fam["leader"]["job"] = "fish"
         asyncio.run(me._activity_for("Zug", fam, [], False, ja.policy({})))

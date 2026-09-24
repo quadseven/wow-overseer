@@ -12122,6 +12122,7 @@ class Bridge(discord.Client):
         reads = await asyncio.to_thread(
             _activity_reads, names, str(leader.get("name") or ""))
         done = leader.get("dungeon_runs_done")
+        runs = None if done is None else int(done)
         held = jev_activity.withheld(bool(rows), reads["free"])
         members = jev_activity.members_from_rows(
             names, reads["members"], reads["free"], reads["worn"],
@@ -12132,7 +12133,7 @@ class Bridge(discord.Client):
         if await self._activity_restore_job(key, job, now):
             return
         marks = jev_activity.Marks(
-            runs_done=None if done is None else int(done),
+            runs_done=runs,
             levels=tuple((m.name, m.level) for m in members),
             deaths=reads["deaths"], withheld=held, at_town=reads["at_town"])
         reason, since = self._activity_due(key, marks, job, now)
@@ -12146,13 +12147,10 @@ class Bridge(discord.Client):
             return
         facts = jev_activity.Facts(
             family=key or str(leader.get("name") or ""), members=members,
-            job=job, queue=campaignqueue.progress_line(
-                rows, None if done is None else int(done)),
+            job=job, queue=campaignqueue.progress_line(rows, runs),
             withheld=held, can_gather=can_gather, can_train=can_train,
             minutes_on_activity=int((now - since) // 60), reason=reason,
-            minutes_since_fishing=(
-                None if key not in self._activity_fished
-                else int((now - self._activity_fished[key]) // 60)))
+            minutes_since_fishing=self._activity_minutes_since_fishing(key, now))
         judgment = await jev_activity.ask(self._jev, facts, rule)
         self._activity_seen[key]["asked"] = now
         if judgment is None:
@@ -12235,6 +12233,11 @@ class Bridge(discord.Client):
                  "today's rules resume", who, activity, want or job, minutes)
         await self._activity_emote(key, fam, activity)
 
+    def _activity_minutes_since_fishing(self, key: str, now: float):
+        """Minutes since Jev last sent this family fishing, or None."""
+        fished = self._activity_fished.get(key)
+        return None if fished is None else int((now - fished) // 60)
+
     async def _activity_emote(self, key: str, fam: dict, activity: str) -> None:
         """The leader says what the family does next, as a player would (#267).
 
@@ -12251,7 +12254,8 @@ class Bridge(discord.Client):
                 leader, "emote", text, "", jev_activity.SOURCE))
             log.info("activity: %s emotes: %s", leader, text)
         except Exception:
-            log.exception("activity: the emote for %s was not written", leader)
+            log.exception("activity: the %s emote for %s was not written",
+                          activity, leader)
 
     async def _activity_restore_job(self, key: str, job: str, now: float) -> bool:
         """Put a family back on the default job when its fishing break ends.

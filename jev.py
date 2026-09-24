@@ -472,6 +472,9 @@ class Client:
         if hit is not None:
             self._cache.move_to_end(key)
             return Outcome(CACHED, 0, answers=hit[0], model=hit[1])
+        # No await between a free slot and taking it (`_in_flight += 1`
+        # below): on one event loop no other ask can run in that gap, so a
+        # woken waiter cannot overfill the slots.
         if not await self._free_slot(wait):
             log.info("jev: kind=%s status=busy in_flight=%d", kind, self._in_flight)
             return Outcome(BUSY, elapsed())

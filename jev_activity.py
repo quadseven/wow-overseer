@@ -62,7 +62,8 @@ clock and every interlude lasted exactly its LEASE_MINUTES, so the realm's
 families changed what they were doing on the same minute. Each family now has
 its own cadence within SPREAD of CADENCE_MINUTES (`cadence_seconds`, fixed per
 family) and each interlude its own length within SPREAD of its lease
-(`lease_minutes`). Deterministic, from the family key and the minute, so a
+(`lease_minutes`, which also varies with the minute the interlude began, so
+one family's breaks differ from one another too). Deterministic, from the family key and the minute, so a
 test can pin it and a log can explain it.
 
 SAID OUT LOUD. When Jev changes what a family does, its leader says so with a
@@ -124,7 +125,7 @@ LEASE_MINUTES = {QUEST: 30, GATHER: 20, CRAFT: 20, SELL: 10, TRAIN: 15, FISH: 15
 
 CADENCE_MINUTES = 20
 # How far a family's cadence and an interlude's length stray from the above:
-# 0.25 is 15 to 25 minutes on the 20-minute cadence.
+# 0.25 is 15 up to 25 minutes on the 20-minute cadence.
 SPREAD = 0.25
 
 # A member at or below this many free slots makes a town trip worth offering
