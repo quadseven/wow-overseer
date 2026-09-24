@@ -184,6 +184,106 @@ class TheQuestion(unittest.TestCase):
         )
 
 
+# Big Bad Pauldrons, dev realm 2026-09-24 (overseer_loot_council id 12), as
+# the module now writes it: the main tank has first call on a tank's piece.
+PAULDRONS = [
+    dict(
+        CANDIDATES[0],
+        gain=169.0,
+        score=467.0,
+        upgrade_percent=36,
+        item_level_gain=8,
+        main_tank=True,
+        role_piece=True,
+        priority=0,
+    ),
+    dict(
+        CANDIDATES[3],
+        name="Grog",
+        comparison="better",
+        gain=76.3,
+        score=191.8,
+        upgrade_percent=40,
+        item_level_gain=8,
+        main_tank=False,
+        role_piece=False,
+        priority=3,
+    ),
+]
+
+
+def pauldrons(**kw):
+    return council(
+        kind="roll",
+        item_name="Big Bad Pauldrons",
+        candidates=json.dumps(PAULDRONS),
+        heuristic="Grug",
+        heuristic_why="the main tank in the family has first call on a tank's piece",
+        **kw,
+    )
+
+
+class FirstCall(unittest.TestCase):
+    def test_the_first_call_facts_parse(self):
+        grug, grog = pauldrons().candidates
+        self.assertTrue(grug.main_tank and grug.role_piece)
+        self.assertEqual(grug.priority, lootcouncil.MAIN_TANK_CALL)
+        self.assertEqual(grog.priority, lootcouncil.NO_CALL)
+
+    def test_an_older_row_reads_as_no_first_call(self):
+        grug = council().candidates[0]
+        self.assertFalse(grug.main_tank or grug.role_piece)
+        self.assertEqual(grug.priority, lootcouncil.NO_CALL)
+        odd = lootcouncil.candidates_from_json(
+            json.dumps([dict(PAULDRONS[0], priority=9)])
+        )
+        self.assertEqual(odd[0].priority, lootcouncil.NO_CALL)
+
+    def test_the_main_tank_is_offered_first_over_a_bigger_share(self):
+        names = [c.name for c in lootcouncil.offered(pauldrons())]
+        self.assertEqual(names, ["Grug", "Grog"])
+
+    def test_jev_is_told_the_main_tank_and_the_rule(self):
+        state, questions = lootcouncil.question(pauldrons(), {"name": "Pauldrons"})
+        options = questions["to"]["criteria"]
+        self.assertIn("(the main tank)", options["Grug"])
+        self.assertIn("first call as the main tank on a tank's piece", options["Grug"])
+        self.assertNotIn("first call", options["Grog"])
+        grug, grog = state["candidates"]
+        self.assertTrue(grug["main_tank"] and grug["a_piece_for_their_role"])
+        self.assertEqual(grog["first_call"], "none")
+        self.assertIn("gears its main tank first", questions["to"]["instructions"])
+        self.assertIn("healer's piece", questions["to"]["instructions"])
+
+    def test_agreeing_with_the_main_tank_says_why(self):
+        d = lootcouncil.decide(pauldrons(), outcome("Grug", 0.47), rule())
+        self.assertEqual((d.recipient, d.decided_by), ("Grug", jev.BOTH))
+        self.assertIn("first call as the main tank", d.reason)
+        self.assertLessEqual(len(d.reason.encode("utf-8")), lootcouncil.REASON_BYTES)
+
+    def test_an_unsure_jev_leaves_the_main_tank(self):
+        d = lootcouncil.decide(pauldrons(), outcome("Grog", 0.47), rule())
+        self.assertEqual((d.recipient, d.decided_by), ("Grug", jev.HEURISTIC))
+
+    def test_a_healer_is_offered_first_on_a_healers_piece(self):
+        ugga = dict(
+            CANDIDATES[2],
+            wearable=True,
+            comparison="better",
+            upgrade_percent=20,
+            role_piece=True,
+            priority=2,
+        )
+        og = dict(CANDIDATES[3], name="Og", comparison="better", upgrade_percent=60)
+        c = council(candidates=json.dumps([og, ugga]))
+        self.assertEqual([x.name for x in lootcouncil.offered(c)], ["Ugga", "Og"])
+        _, questions = lootcouncil.question(c, None)
+        self.assertIn(
+            "first call as a healer on a healer's piece",
+            questions["to"]["criteria"]["Ugga"],
+        )
+
+
 class TheDecision(unittest.TestCase):
     def test_a_confident_different_pick_acts_with_jevs_reason(self):
         d = lootcouncil.decide(council(), outcome("Og", 0.9), rule())
