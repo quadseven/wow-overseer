@@ -12754,7 +12754,7 @@ class Bridge(discord.Client):
         rule = jev_choices.policy(jev_choices.KIND_DUNGEON)
         if rule.mode != jev.OFF and self._jev.ready(jev_choices.KIND_DUNGEON):
             where = await self._situation_for(
-                key, list(fam["names"]), str(fam["leader"].get("name") or ""))
+                key, list(fam["names"]), fam["leader"].get("name"))
             judgment = await jev_choices.dungeon_ask(
                 self._jev, facts, opts, pick, rule, due.reason, where=where)
         if judgment is not None:
@@ -12983,6 +12983,7 @@ class Bridge(discord.Client):
         SITUATION_MODE=off or the reads fail, and the question is then asked
         exactly as it was before this existed.
         """
+        leader = str(leader or "")
         if not situation.enabled() or not names or not leader:
             return None
         try:
@@ -13082,8 +13083,7 @@ class Bridge(discord.Client):
                      "again until it ends", campaignqueue._family(key),
                      interlude, reason)
             return
-        where = await self._situation_for(
-            key, names, str(leader.get("name") or ""))
+        where = await self._situation_for(key, names, leader.get("name"))
         facts = jev_activity.Facts(
             family=key or str(leader.get("name") or ""), members=members,
             job=job, queue=campaignqueue.progress_line(rows, runs),

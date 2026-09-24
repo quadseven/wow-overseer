@@ -190,7 +190,7 @@ class Facts:
     minutes_since_fishing: int | None = None
     # situation.Situation: the family's movement picture, or None when it
     # could not be read. None leaves the question exactly as it was.
-    situation: object | None = None
+    situation: situation.Situation | None = None
 
     @property
     def levels(self) -> list:

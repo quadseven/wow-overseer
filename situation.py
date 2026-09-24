@@ -255,6 +255,44 @@ class Progress:
     closing_yards: int | None = None
 
 
+def _legs(samples) -> tuple:
+    """(yards walked, fastest leg in yards a second, whether the map changed)."""
+    moved = 0.0
+    fastest = 0.0
+    zoned = False
+    for a, b in zip(samples, samples[1:], strict=False):
+        leg = yards(a.at, b.at)
+        if leg is None:
+            zoned = True
+            continue
+        moved += leg
+        fastest = max(fastest, leg / max(b.t - a.t, 1e-6))
+    return moved, fastest, zoned
+
+
+def _closing(first: Point, last: Point, goal: Point | None) -> int | None:
+    """How many yards nearer the goal the trail ended, or None."""
+    if goal is None:
+        return None
+    before, after = yards(first, goal), yards(last, goal)
+    if before is None or after is None:
+        return None
+    return int(round(before - after))
+
+
+def _verdict(moved, fastest, zoned, net, has_goal: bool, arrived: bool) -> str:
+    if zoned or fastest >= TELEPORT_YPS:
+        return TELEPORTED
+    if fastest >= FLYING_YPS:
+        return FLYING
+    if moved < STILL_YARDS:
+        return STUCK if (has_goal and not arrived) else STILL
+    circling = (
+        moved >= CIRCLING_MIN_YARDS and net is not None and net < CIRCLING_RATIO * moved
+    )
+    return CIRCLING if (circling and not arrived) else MOVING
+
+
 def progress(trail, goal: Point | None = None) -> Progress:
     """What a trail says about getting anywhere. Pure.
 
@@ -265,48 +303,17 @@ def progress(trail, goal: Point | None = None) -> Progress:
     samples = list(trail or ())
     if len(samples) < 2 or samples[-1].t - samples[0].t < MIN_SPAN_SECONDS:
         return Progress(UNKNOWN)
-    span = samples[-1].t - samples[0].t
-    moved = 0.0
-    fastest = 0.0
-    zoned = False
-    for a, b in zip(samples, samples[1:]):
-        leg = yards(a.at, b.at)
-        if leg is None:
-            zoned = True
-            continue
-        moved += leg
-        dt = max(b.t - a.t, 1e-6)
-        fastest = max(fastest, leg / dt)
-    net = yards(samples[0].at, samples[-1].at)
-    closing = None
-    if goal is not None:
-        first, last = yards(samples[0].at, goal), yards(samples[-1].at, goal)
-        if first is not None and last is not None:
-            closing = int(round(first - last))
-    minutes = round(span / 60.0, 1)
-    left = yards(samples[-1].at, goal) if goal is not None else None
+    moved, fastest, zoned = _legs(samples)
+    first, last = samples[0].at, samples[-1].at
+    net = yards(first, last)
+    left = yards(last, goal) if goal is not None else None
     arrived = left is not None and left <= ARRIVED_YARDS
-    if zoned or fastest >= TELEPORT_YPS:
-        verdict = TELEPORTED
-    elif fastest >= FLYING_YPS:
-        verdict = FLYING
-    elif moved < STILL_YARDS:
-        verdict = STUCK if (goal is not None and not arrived) else STILL
-    elif (
-        moved >= CIRCLING_MIN_YARDS
-        and net is not None
-        and net < CIRCLING_RATIO * moved
-        and not arrived
-    ):
-        verdict = CIRCLING
-    else:
-        verdict = MOVING
     return Progress(
-        verdict,
+        _verdict(moved, fastest, zoned, net, goal is not None, arrived),
         moved_yards=int(round(moved)),
         net_yards=int(round(net or 0.0)),
-        minutes=minutes,
-        closing_yards=closing,
+        minutes=round((samples[-1].t - samples[0].t) / 60.0, 1),
+        closing_yards=_closing(first, last, goal),
     )
 
 
@@ -401,6 +408,52 @@ def hostile(enemy_group, side: int) -> bool | None:
     return bool(group & PLAYER_MASK) or bool(side and group & side)
 
 
+def _rank(row) -> int:
+    return int(row.get("rank") or 0)
+
+
+def _label(row) -> str:
+    """ "Gorishi Hive Guard (elite, 52-53)": name, rank word and levels."""
+    word = RANK_WORDS.get(_rank(row))
+    return "%s (%s%d-%d)" % (
+        str(row.get("name") or "?"),
+        (word + ", ") if word else "",
+        int(row.get("minlevel") or 0),
+        int(row.get("maxlevel") or 0),
+    )
+
+
+def _hostiles_near(spawns, around: Point, side: int) -> list:
+    """(yards, row) for each hostile spawn within DANGER_YARDS of `around`."""
+    near = []
+    for r in spawns or ():
+        d = yards(
+            around, Point(around.map, float(r["x"]), float(r["y"]), float(r["z"]))
+        )
+        if d is not None and d <= DANGER_YARDS and hostile(r.get("enemy_group"), side):
+            near.append((d, r))
+    return near
+
+
+def _worst(near) -> list:
+    """The distinct labels of the worst spawns: elites first, then level, then
+    the nearest, at most MAX_LISTED."""
+    ranked = sorted(
+        near,
+        key=lambda dr: (
+            -(_rank(dr[1]) in ELITE_RANKS),
+            -int(dr[1].get("maxlevel") or 0),
+            dr[0],
+        ),
+    )
+    named: list = []
+    for _, r in ranked:
+        label = _label(r)
+        if label not in named:
+            named.append(label)
+    return named[:MAX_LISTED]
+
+
 def danger(spawns, around: Point | None, weakest_level: int, side: int) -> dict | None:
     """Hostile spawn points within DANGER_YARDS of `around`. Pure.
 
@@ -410,47 +463,16 @@ def danger(spawns, around: Point | None, weakest_level: int, side: int) -> dict 
     """
     if around is None:
         return None
-    near = []
-    for r in spawns or ():
-        at = Point(around.map, float(r["x"]), float(r["y"]), float(r["z"]))
-        d = yards(around, at)
-        if d is None or d > DANGER_YARDS:
-            continue
-        if not hostile(r.get("enemy_group"), side):
-            continue
-        near.append((d, r))
+    near = _hostiles_near(spawns, around, side)
     if not near:
         return {"hostile_spawns": 0}
     top = max(int(r.get("maxlevel") or 0) for _, r in near)
-    elites = [r for _, r in near if int(r.get("rank") or 0) in ELITE_RANKS]
-    worst = sorted(
-        near,
-        key=lambda dr: (
-            -(int(dr[1].get("rank") or 0) in ELITE_RANKS),
-            -int(dr[1].get("maxlevel") or 0),
-            dr[0],
-        ),
-    )
-    named = []
-    for _, r in worst:
-        label = "%s (%s%d-%d)" % (
-            str(r.get("name") or "?"),
-            (RANK_WORDS[int(r["rank"])] + ", ")
-            if int(r.get("rank") or 0) in RANK_WORDS
-            else "",
-            int(r.get("minlevel") or 0),
-            int(r.get("maxlevel") or 0),
-        )
-        if label not in named:
-            named.append(label)
-        if len(named) >= MAX_LISTED:
-            break
     return {
         "hostile_spawns": len(near),
-        "elites": len(elites),
+        "elites": sum(1 for _, r in near if _rank(r) in ELITE_RANKS),
         "highest_level": top,
         "levels_above_weakest_member": max(0, top - int(weakest_level or 0)),
-        "worst": named,
+        "worst": _worst(near),
     }
 
 
