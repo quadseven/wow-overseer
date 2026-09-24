@@ -450,7 +450,7 @@ class TheOtherGuildPaysItsDues(unittest.TestCase):
         asyncio.run(ns["_guild_dues_once"](TheSelf(world), cohort))
         return world, log
 
-    def test_bonkers_maintenance_members_post_to_zug(self):
+    def test_bonkers_members_post_to_zug(self):
         world, log = self.run_dues(HORDE)
         self.assertEqual(sorted(HORDE.names), world["read"])
         self.assertTrue(world["rows"])

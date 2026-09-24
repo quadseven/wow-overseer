@@ -39,8 +39,10 @@ def walker(name, **over):
     return guildroute.Walker(**base)
 
 
-def member(name, gold=1704, online=True, guild="Cave"):
-    return guildwork.Member(name=name, guild=guild, money=gold * GOLD, online=online)
+def member(name, gold=1704, online=True, guild="Cave", **over):
+    return guildwork.Member(
+        name=name, guild=guild, money=gold * GOLD, online=online, **over
+    )
 
 
 class TheDuesAmount(unittest.TestCase):
@@ -48,14 +50,35 @@ class TheDuesAmount(unittest.TestCase):
         self.assertEqual(guildwork.dues_for(guildwork.FLOAT_COPPER), 0)
         self.assertEqual(guildwork.dues_for(0), 0)
 
-    def test_a_quarter_of_what_is_above_the_float(self):
-        self.assertEqual(guildwork.dues_for(296 * GOLD), 49 * GOLD)
+    def test_maintenance_posts_the_most(self):
+        """Half above the float for maintenance, a quarter for a summoner and a
+        tenth for a raider (the operator, 2026-09-24)."""
+        self.assertEqual(guildwork.dues_for(296 * GOLD), 98 * GOLD)
+        self.assertEqual(
+            guildwork.dues_for(296 * GOLD, role=guildwork.SUMMONER), 49 * GOLD
+        )
+        self.assertEqual(guildwork.dues_for(296 * GOLD, role=guildwork.RAIDER), 196000)
+
+    def test_a_role_nobody_named_posts_nothing(self):
+        self.assertEqual(guildwork.dues_for(3254 * GOLD, role="surplus"), 0)
+
+    def test_the_float_grows_with_the_level(self):
+        """A level 1 character needs every copper for its first trainer; a
+        level 60 keeps the hundred gold it always kept."""
+        self.assertEqual(guildwork.float_for(60), guildwork.FLOAT_COPPER)
+        self.assertEqual(guildwork.float_for(10), 27777)
+        self.assertEqual(guildwork.float_for(30), 25 * GOLD)
+        self.assertEqual(guildwork.float_for(70), guildwork.FLOAT_COPPER)
+        for bad in (None, "", "x", 0, -3):
+            self.assertEqual(guildwork.float_for(bad), guildwork.FLOAT_COPPER, bad)
+        # A level 30 maintenance member with 45 gold posts half of 20.
+        self.assertEqual(guildwork.dues_for(45 * GOLD, level=30), 10 * GOLD)
 
     def test_one_letter_never_carries_more_than_the_cap(self):
         self.assertEqual(guildwork.dues_for(3254 * GOLD), guildwork.LETTER_CAP_COPPER)
 
     def test_under_a_gold_is_not_worth_the_walk(self):
-        self.assertEqual(guildwork.dues_for(guildwork.FLOAT_COPPER + 3 * GOLD), 0)
+        self.assertEqual(guildwork.dues_for(guildwork.FLOAT_COPPER + 1 * GOLD), 0)
 
     def test_an_unreadable_purse_posts_nothing(self):
         for money in (None, "", "lots", -5):
@@ -246,6 +269,22 @@ class ThePlan(unittest.TestCase):
             sum("2 dues walks per guild per pass" in n for n in plan.notes), 6
         )
 
+    def test_maintenance_is_asked_before_the_summoners_and_the_raiders(self):
+        crew = [
+            member("Raider", role=guildwork.RAIDER),
+            member("Warlock", role=guildwork.SUMMONER),
+            member("Keeper"),
+        ]
+        walkers = {
+            "Raider": walker("Raider", yards=10.0),
+            "Warlock": walker("Warlock", yards=20.0),
+            "Keeper": walker("Keeper", yards=500.0),
+        }
+        plan = self.plan(crew, walkers=walkers)
+        self.assertEqual([r.holder for r in plan.runs], ["Keeper", "Warlock"])
+        raider = self.plan([member("Raider", gold=296, role=guildwork.RAIDER)])
+        self.assertEqual(raider.runs[0].copper, 196000)
+
     def test_the_guild_master_and_a_masterless_guild_post_nothing(self):
         plan = self.plan([member("Grug"), member("Orphan", guild="Nobody")])
         self.assertEqual(plan.runs, ())
@@ -289,6 +328,23 @@ class WhoIsOnMaintenance(unittest.TestCase):
         for m in members:
             self.assertEqual(m.money, picked[m.name]["money"])
             self.assertTrue(m.online)
+
+    def test_every_placed_member_posts_with_its_role(self):
+        """#194: the dues pass reads the whole lineup, not only maintenance."""
+        rows = self.rows()
+        members, _masters = guildwork.members_from_rows(rows, ["M00", "M01"])
+        roles = {}
+        for m in members:
+            roles[m.role] = roles.get(m.role, 0) + 1
+        self.assertEqual(roles[guildwork.MAINTENANCE], raidlineup.MAINTENANCE)
+        self.assertEqual(roles[guildwork.RAIDER], raidlineup.RAIDERS - 2)
+        self.assertNotIn("M00", {m.name for m in members})
+        self.assertEqual(
+            [m.role for m in members][: raidlineup.MAINTENANCE],
+            [guildwork.MAINTENANCE] * raidlineup.MAINTENANCE,
+        )
+        by_name = {m.name: m for m in members}
+        self.assertEqual(by_name["M10"].level, rows[10]["level"])
 
 
 def letter(name, status="delivered", money=2500000, outcome="sent", detail=""):
@@ -349,14 +405,34 @@ class WhatWasPosted(unittest.TestCase):
         self.assertEqual(first["job"], "guild dues")
         self.assertEqual(
             first["work"],
-            "guild dues: posts a quarter of its gold above 100g to Grug once a day"
+            "guild dues: posts half of its gold above 100g to Grug once a day"
             " - posted 250g in 1 letter",
         )
         self.assertTrue(second["work"].endswith("- nothing posted yet"))
         self.assertEqual(lineup["dues"]["copper"], 2500000)
         self.assertEqual(
-            lineup["dues"]["said"], "maintenance dues posted to Grug: 250g in 1 letter"
+            lineup["dues"]["said"], "dues posted to Grug: 250g in 1 letter"
         )
+
+    def test_the_total_counts_every_role(self):
+        lineup = {
+            "maintenance": [{"name": "Goraraa"}],
+            "summoners": [{"name": "Warlock"}],
+            "groups": [{"members": [{"name": "Raider"}]}],
+        }
+        guildwork.attach_work(
+            lineup,
+            "Grug",
+            guildwork.contributions(
+                [
+                    letter("Goraraa"),
+                    letter("Warlock", money=10000),
+                    letter("Raider", money=5000),
+                ]
+            ),
+        )
+        self.assertEqual(lineup["dues"]["copper"], 2515000)
+        self.assertEqual(lineup["dues"]["letters"], 3)
 
 
 class TheBridgePass(unittest.TestCase):
@@ -376,9 +452,18 @@ class TheBridgePass(unittest.TestCase):
 
     def test_the_pass_asks_the_pure_planner_for_the_pages_lineup(self):
         body = self.body("_guild_dues_once")
-        self.assertIn("guildwork.maintenance_from_rows", body)
+        self.assertIn("guildwork.members_from_rows", body)
         self.assertIn("guildwork.plan_dues", body)
         self.assertIn("_dues_recent_holders", body)
+
+    def test_every_role_is_asked_through_natural_py(self):
+        """#194 reads every placed member; natural.py (#331) still decides who
+        posts, and a member it does not name is never even located."""
+        body = self.body("_guild_dues_once")
+        self.assertLess(
+            body.index("members_from_rows"), body.index("_natural_contributors")
+        )
+        self.assertIn("and m.name in eligible and m.dues", body)
 
     def test_it_writes_mail_rows_and_nothing_else(self):
         """Never a give across a continent, never a GM command."""

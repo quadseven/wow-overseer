@@ -6975,8 +6975,9 @@ function lnList(title, members, classes, note) {
   }
   for (const m of members) {
     box.appendChild(lnCard(m, classes));
-    // A maintenance member's job and what it has posted (#234), written by
-    // guildwork.py. Only maintenance members carry it.
+    // A member's job, what it does now and what it gave the guild (#234,
+    // #194), written by guildwork.py and guildjobs.py. Every placed member
+    // outside the family carries it.
     if (m.work) {
       const w = document.createElement("div");
       w.className = "ln-work";
@@ -7064,6 +7065,15 @@ function lnRender(payload) {
       sec.appendChild(make);
     }
 
+    // What each role gave the guild in all (#194), written by guildjobs.py:
+    // dues, materials posted and grey loot sold. Naturally earned only.
+    if (g.given && g.given.said) {
+      const given = document.createElement("div");
+      given.className = "ln-note";
+      given.textContent = g.given.said;
+      sec.appendChild(given);
+    }
+
     const grid = document.createElement("div");
     grid.className = "ln-grid";
     for (const group of g.groups || []) {
@@ -7076,9 +7086,10 @@ function lnRender(payload) {
     extras.className = "ln-grid";
     extras.appendChild(lnList("Maintenance", g.maintenance || [], classes,
                               [g.dues ? g.dues.said : "", g.corps ? g.corps.said : ""]
-                                .filter(Boolean).join("; ") || "never raids"));
+                                .filter(Boolean).join("; ") ||
+                                "never raids; farms and gathers for the guild"));
     extras.appendChild(lnList("Summoners", g.summoners || [], classes,
-                              "warlocks, summoning only"));
+                              "warlocks: summon at a door, farm there between summons"));
     if ((g.surplus || []).length) {
       extras.appendChild(lnList("Surplus - not in the lineup", g.surplus,
                                 classes, "chosen for no place"));
