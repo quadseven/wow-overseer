@@ -269,6 +269,11 @@ class TheFamilyHearthsToItsLeader(unittest.TestCase):
         )
         self.assertEqual(("Uzza", "Zrog"), jm.homeward(horde_facts(hearthed=("Oz",))))
 
+    def test_a_leader_passing_by_is_not_a_leader_standing_there(self):
+        f = horde_facts(horde(moving=("Zug", "Oz", "Uzza", "Zrog")))
+        self.assertEqual((), jm.homeward(f))
+        self.assertNotIn(jm.HEARTH_TO_LEADER, jm.options(f))
+
     def test_a_member_already_near_the_leader_does_not_hearth(self):
         rows_near = horde_facts()
         near = dict(HORDE_BINDS)

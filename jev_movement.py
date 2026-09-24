@@ -169,9 +169,15 @@ def homeward(f: Facts) -> tuple:
     walked 3,900 to 6,600 yards back to it, one through a hostile town where it
     died twice. Neither hearth option was offered, because `stranded` wants a
     member standing still and `one_inn` wants every member bound at one inn.
+
+    THE LEADER MUST BE STANDING THERE, not passing by: a member hearthed to an
+    inn the leader walks on from is a member left behind somewhere new. The
+    live leader was held still for the regroup.
     """
     lead = f.where.lead_body
     if lead is None or lead.at is None:
+        return ()
+    if f.where.progress.get(f.where.leader) not in NOT_MOVING:
         return ()
     out = []
     for b in f.where.bodies:
