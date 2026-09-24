@@ -19,6 +19,7 @@ import council  # noqa: E402
 import decree  # noqa: E402
 import jobs  # noqa: E402
 import map_server  # noqa: E402
+import raidrun  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -309,6 +310,13 @@ class FakeWorld:
             self.jobs.append((name, jobs.dungeon_job(keyword), source))
         return len(names), len(names)
 
+    def drive_raid(self, keyword, family, names, source="", withheld=None):
+        self.raid_orders = getattr(self, "raid_orders", []) + [(keyword, family)]
+        for name in names:
+            self.row(name).update(job=jobs.raid_job(keyword))
+            self.jobs.append((name, jobs.raid_job(keyword), source))
+        return len(names)
+
     def insert_job(self, name, mode, source):
         self.row(name)["job"] = mode
         self.jobs.append((name, mode, source))
@@ -345,6 +353,8 @@ def _queue_pass(world, holds=None):
             "_fetch_queue_roster": world.fetch_roster,
             "_mark_queue": world.mark,
             "_drive_dungeon": world.drive,
+            "_drive_raid": world.drive_raid,
+            "raidrun": raidrun,
             "_insert_job": world.insert_job,
             "_reset_campaign_done": world.reset,
         },

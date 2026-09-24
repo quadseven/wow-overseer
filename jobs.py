@@ -125,6 +125,32 @@ def dungeon_job(keyword: str) -> str | None:
     return None
 
 
+# THE RAID DOORS mod-overseer's raid run has (RaidDoorFor in its
+# overseer_decisions, quadseven/mod-overseer#634). A `raid:<keyword>` job is
+# refused by the module's DoJob for any keyword not in its table, so this set
+# is the whole vocabulary. DELIBERATELY APART FROM PORTAL_KEYWORDS: the council
+# and the campaign planner choose among portal keywords, and a raid is only
+# ever an operator's order.
+RAID_KEYWORDS = frozenset({"moltencore"})
+RAID_PREFIX = "raid:"
+
+
+def raid_job(keyword: str) -> str | None:
+    """`raid:<keyword>` for a raid door the module has, or None."""
+    if keyword in RAID_KEYWORDS:
+        return RAID_PREFIX + keyword
+    return None
+
+
+def is_raid_job(job) -> bool:
+    return str(job or "").strip().lower().startswith(RAID_PREFIX)
+
+
+def job_for(keyword: str) -> str | None:
+    """The job a queue entry writes for `keyword`: a raid or a dungeon job."""
+    return raid_job(keyword) or dungeon_job(keyword)
+
+
 def is_dungeon_job(job) -> bool:
     """Whether `job` is a dungeon job, bare or naming its portal (#206).
 
@@ -434,6 +460,12 @@ def describe(mode: str) -> str:
     if mode.startswith("dungeon:"):
         keyword = mode.split(":", 1)[1]
         return f"job set to {mode} - run {keyword}. This drives: {DRIVES['dungeon']}."
+    if is_raid_job(mode):
+        return (
+            f"job set to {mode} - mod-overseer's raid run forms the raid from "
+            "overseer_raid_seat, walks it to the door and in, and holds it at "
+            "the entrance; it does not clear (mod-overseer#634)."
+        )
     what = MODES.get(mode, "")
     if mode in IMPLEMENTED:
         # `.get` and not `[]`: DRIVES falling behind IMPLEMENTED is a bug, and

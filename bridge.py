@@ -81,7 +81,9 @@ import questbook
 import questshare
 import quests
 import raidcraft
+import raidlineup
 import raidprep
+import raidrun
 import recipebook
 import recruit
 import relay
@@ -2179,6 +2181,59 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
     return jobs_written, campaign_written
 
 
+def _drive_raid(keyword: str, family: str, names: list, source: str,
+                withheld: list | None = None) -> int:
+    """Write an ordered raid's seats, then its job. Returns jobs written.
+
+    THE SEATS ARE THE LINEUP TAB'S OWN SELECTION: the family's guild is read
+    the way the Raid tab reads it and handed to raidlineup.build_lineup with
+    the family guaranteed a place, and the answer is written to
+    overseer_raid_seat for mod-overseer's raid run to form from
+    (mod-overseer#634). SEATS FIRST, JOB SECOND: a job with no seats would
+    park the family on a raid the module cannot form. A realm without the
+    table (the module's migration not applied) writes neither.
+    """
+    mode = jobs.raid_job(keyword)
+    if mode is None or not names:
+        return _withheld(withheld, "no raid door answers to %s" % keyword)[0]
+    holes = ", ".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes),  # noqa: S608
+                    tuple(names))
+        members = [dict(row) for row in cur.fetchall()]
+        lineup = raidlineup.build_lineup(members, guaranteed=list(names))
+        seats = raidrun.seat_rows(family, keyword, lineup)
+        if not seats:
+            log.warning("raid: %s has no lineup for %s - nobody in its guild "
+                        "could be placed, so no seat and no job is written",
+                        campaignqueue._family(family), keyword)
+            return _withheld(withheld, "nobody could be placed in the raid")[0]
+        try:
+            cur.execute(raidrun.DELETE_SEATS_SQL, (family, keyword))
+            for seat in seats:
+                cur.execute(raidrun.INSERT_SEAT_SQL, seat)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1146:
+                log.warning(
+                    "raid: overseer_raid_seat is missing - mod-overseer's "
+                    "2026_09_23_01_overseer_raid_seat.sql is not applied, so "
+                    "%s is not ordered into %s", campaignqueue._family(family),
+                    keyword)
+                return _withheld(withheld, "the raid seat table is not deployed")[0]
+            raise
+    written = 0
+    for name in names:
+        try:
+            _insert_job(name, mode, source)
+            written += 1
+        except Exception:
+            log.exception("raid job insert failed for %s (mode=%s)", name, mode)
+    log.info("raid: %s ordered into %s - %d seats written in %d groups, %d "
+             "job row(s) of %d", campaignqueue._family(family), keyword,
+             len(seats), len({s[3] for s in seats}), written, len(names))
+    return written
+
+
 # --- the campaign queue (#209) ------------------------------------------------
 #
 # campaignqueue.py decides; these read the rows it decides on and run the
@@ -2289,7 +2344,7 @@ def _reset_campaign_done(names: list) -> int:
     return reset
 
 
-def _apply_queue_move(move, names: list) -> str:
+def _apply_queue_move(move, names: list, family: str = "") -> str:
     """Run one campaignqueue.Move for one family. Decides nothing.
 
     The dungeon job goes through `_drive_dungeon`, the council goal's own
@@ -2314,8 +2369,12 @@ def _apply_queue_move(move, names: list) -> str:
     if not move.keyword:
         return move.why
     withheld: list = []
-    written, _ = _drive_dungeon(move.keyword, move.wanted, names,
-                                campaignqueue.SOURCE, withheld=withheld)
+    if raidrun.is_raid(move.keyword):
+        written = _drive_raid(move.keyword, family, names, campaignqueue.SOURCE,
+                              withheld=withheld)
+    else:
+        written, _ = _drive_dungeon(move.keyword, move.wanted, names,
+                                    campaignqueue.SOURCE, withheld=withheld)
     if not written:
         return "withheld: %s" % ("; ".join(withheld) or "no dungeon job insert landed")
     if move.reset:
@@ -11832,7 +11891,7 @@ class Bridge(discord.Client):
                 continue
             try:
                 said = await asyncio.to_thread(_apply_queue_move, move,
-                                               fam["names"])
+                                               fam["names"], key)
                 log.info("queue: %s: %s", campaignqueue._family(key), said)
             except Exception:
                 # One family's failure must not cost the other its advance.
@@ -11955,7 +12014,7 @@ class Bridge(discord.Client):
             return "", ""
         head, leader = rows[0], fam["leader"]
         name = str(leader.get("name") or "")
-        active = (jobs.dungeon_job(str(head["keyword"])) or ""
+        active = (jobs.job_for(str(head["keyword"])) or ""
                   if str(head["status"]) == campaignqueue.ACTIVE else "")
         job = str(leader.get("job") or "")
         if not name or not townslot.campaign_owns_traveller(active, job, False):

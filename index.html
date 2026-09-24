@@ -783,6 +783,20 @@
              border-left:2px dashed var(--card-line);
              color:var(--on-card); font-size:12.5px; line-height:1.5;
              overflow-wrap:anywhere; }
+  /* THE PER-RAIDER TABLE, shut by default: forty rows under a card that
+     sits beside another. It scrolls inside its own box on a phone rather
+     than widening the page. */
+  .rr-raiders { margin-top:.5rem; }
+  .rr-raiders > summary { cursor:pointer; font-size:13px; color:var(--on-card);
+                          overflow-wrap:anywhere; }
+  .rr-raiders > summary:focus-visible { outline:2px solid var(--accent);
+                                        outline-offset:3px; }
+  .rr-scroll { overflow-x:auto; margin-top:.4rem; }
+  .rr-table { border-collapse:collapse; font-size:12px; color:var(--on-card);
+              white-space:nowrap; }
+  .rr-table th { text-align:left; font-weight:500; color:var(--on-card-dim);
+                 padding:2px .6rem 2px 0; }
+  .rr-table td { padding:2px .6rem 2px 0; border-top:1px solid var(--card-line); }
   .rr-card .ds-tile.up .v { color:var(--accent-text); }
   .rr-card .ds-tile.no .v { color:var(--caution-text); }
   /* The guild switches: the Raid tab's consumables and the Trades tab. */
@@ -7122,6 +7136,33 @@ function rrCard(g) {
   for (const b of g.blockers) {
     rgNote(card, b.text, b.tone === "hard" ? "rg-block" : "rr-soft");
   }
+  // THE RUN, THE RAIDERS AND THE ATTUNEMENT. Every line and every cell is
+  // raidready.py's or raidrun.py's; the page only lays them out.
+  card.appendChild(el("div", "rg-sect", "the raid run"));
+  rgNote(card, g.run_line);
+  rgNote(card, g.clearing_line);
+  const each = el("details", "rr-raiders");
+  each.appendChild(el("summary", "", g.raiders_line));
+  const wrap = el("div", "rr-scroll");
+  const table = el("table", "rr-table");
+  const head = el("tr");
+  for (const label of g.raider_columns) head.appendChild(el("th", "", label));
+  table.appendChild(head);
+  for (const r of g.raiders) {
+    const tr = el("tr");
+    for (const cell of r.cells) tr.appendChild(el("td", "", cell));
+    table.appendChild(tr);
+  }
+  wrap.appendChild(table);
+  each.appendChild(wrap);
+  card.appendChild(each);
+  const att = g.attunement;
+  card.appendChild(el("div", "rg-sect", "attunement to the core"));
+  rgNote(card, att.line);
+  for (const m of att.members) rgNote(card, m.line, "rg-row");
+  for (const step of att.steps) rgNote(card, step, "rr-soft");
+  rgNote(card, att.unproven);
+  rgNote(card, att.bots);
   return card;
 }
 

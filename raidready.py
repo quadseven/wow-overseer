@@ -27,9 +27,11 @@ so a Python test can read it.
 
 from __future__ import annotations
 
+import bank
 import jobs
 import raidgoals
 import raidlineup
+import raidrun
 
 # The race ids of each faction, as `characters.race` stores them (3.3.5a).
 ALLIANCE_RACES = frozenset({1, 3, 4, 7, 11})
@@ -41,8 +43,9 @@ LEVEL_CAP = 60
 # THE ATTUNEMENT QUEST, BOTH OF ITS ROWS. The pinned core's quest_template
 # carries "Attunement to the Core" twice (7487 and 7848). Either one rewarded
 # means Lothos Riftwaker will port that character in. It is a shortcut and not
-# a gate: the instance is also walked into from Blackrock Depths, which is why
-# a missing attunement is soft.
+# a gate: the Molten Core window beside him (areatrigger 3529 on Blackrock
+# Mountain's own map) asks only a raid group and level 50, which is why a
+# missing attunement is soft. raidrun.py carries the path to earning it.
 ATTUNEMENT_QUESTS = (7487, 7848)
 
 # A CONVENTION AND NOT A GATE. Molten Core's access row states no item level
@@ -56,10 +59,21 @@ GEAR_CONVENTION = 55
 # tabard. Counting a level 1 shirt would drag every average down by a point.
 COSMETIC_SLOTS = frozenset({3, 18})
 
-# The keyword a Molten Core run would need in mod-overseer's portal table.
-# Absent from jobs.PORTAL_KEYWORDS, the coordinator refuses the job, so no
-# raid night can be started by the overseer at all.
-RAID_PORTAL = "molten-core"
+# The keyword an ordered Molten Core night carries (`raid:moltencore`). Absent
+# from jobs.RAID_KEYWORDS, mod-overseer's DoJob refuses the job, so no raid
+# night can be started by the overseer at all.
+RAID_PORTAL = raidrun.MOLTEN_CORE
+
+# The paper-doll read's fire resistance, per raider, is item_template's own
+# `fire_res` summed over worn items. Enchantments and buffs are not counted,
+# the same limit raidgoals states for its resistance goal.
+FIRE_PROTECTION = ("Greater Fire Protection Potion", "Fire Protection Potion")
+
+# `characters.map` as a reader would say where somebody is. The raid walks to
+# a door on Eastern Kingdoms; a raider anywhere else cannot follow the head
+# there, and nothing summons them yet.
+CONTINENTS = {0: "Eastern Kingdoms", 1: "Kalimdor", 530: "Outland", 571: "Northrend"}
+DOOR_MAP = 0
 
 HARD = "hard"
 SOFT = "soft"
@@ -200,17 +214,26 @@ def _by_level(members: list) -> list:
     return sorted(members, key=lambda m: (int(m.get("level") or 0), m["name"]))
 
 
-def _staffing_blockers(lineup: dict, raiders: list, runnable: bool) -> list:
+def _staffing_blockers(
+    lineup: dict, raiders: list, runnable: bool, clears: bool = True
+) -> list:
     """The HARD blockers about who is there: the raid cannot start without."""
     out = []
     short = lineup["shortfall"]
     groups = raidlineup.RAIDERS // raidlineup.GROUP_SIZE
     if not runnable:
         out.append(
-            "The overseer cannot take a raid in yet: its run coordinator only "
-            "runs the portals mod-overseer has rows for (%s), and Molten Core "
-            "is not one of them. Until it is, a raid night is somebody's "
-            "manual work." % ", ".join(sorted(jobs.PORTAL_KEYWORDS))
+            "The overseer cannot take a raid in yet: mod-overseer's raid run "
+            "only answers the raid keywords it has doors for (%s), and Molten "
+            "Core is not one of them. Until it is, a raid night is somebody's "
+            "manual work." % (", ".join(sorted(jobs.RAID_KEYWORDS)) or "none")
+        )
+    elif not clears:
+        out.append(
+            "Nothing clears Molten Core yet. An order forms the raid, walks it "
+            "to the door and in with the head last, and then it holds at the "
+            "entrance: the dungeon brain is kept off raid maps until clearing "
+            "is built and ordered."
         )
     if short["raiders"]:
         out.append(
@@ -291,9 +314,9 @@ def _gear_blockers(raiders: list, gear: dict, attuned: set) -> list:
     unattuned = [m for m in raiders if m["name"] not in attuned]
     if unattuned:
         out.append(
-            "%d of %s %s Attunement to the Core. It is not needed to walk in "
-            "through Blackrock Depths; it only opens the shortcut from Lothos "
-            "Riftwaker."
+            "%d of %s %s Attunement to the Core. The Molten Core window in "
+            "Blackrock Mountain admits a raid without it; it only opens Lothos "
+            "Riftwaker's teleport."
             % (
                 len(unattuned),
                 _count(len(raiders), "raider", "raiders"),
@@ -349,10 +372,11 @@ def _blockers(
     attuned: set,
     goals: dict,
     runnable: bool,
+    clears: bool = True,
 ) -> list:
     """Everything between this guild and its first raid, hard ones first."""
     level_hard, level_soft = _level_blockers(raiders, min_level)
-    hard = _staffing_blockers(lineup, raiders, runnable) + level_hard
+    hard = _staffing_blockers(lineup, raiders, runnable, clears) + level_hard
     soft = (
         level_soft
         + _gear_blockers(raiders, gear, attuned)
@@ -396,6 +420,8 @@ def _guild_members(group: dict, char_rows: list) -> list:
                 "level": row.get("level", guild_row.get("level")),
                 "class_id": row.get("class", guild_row.get("class_id")),
                 "race": guild_row.get("race", row.get("race")),
+                "map": row.get("map"),
+                "online": row.get("online"),
             }
         )
     return members
@@ -441,6 +467,121 @@ def _gear_line(raiders: list, gear: dict) -> str:
     )
 
 
+def fire_resistance(worn_rows: list) -> dict:
+    """name -> the fire resistance that character's worn items give."""
+    out: dict = {}
+    for row in worn_rows:
+        name = row.get("name")
+        out[name] = out.get(name, 0) + int(row.get("fire_res") or 0)
+    return out
+
+
+def carried(holding_rows: list, names: list, items: tuple) -> dict:
+    """name -> how many of `items` that character carries or banks.
+
+    bank.py places each stack, so a potion worn nowhere and a stack in a bank
+    bag are counted the way the Bags tab counts them.
+    """
+    out = {name: 0 for name in names}
+    for member in bank.members_from_rows(holding_rows or [], sorted(names)):
+        for holding in list(member.carried) + list(member.banked):
+            if holding.item.name in items:
+                out[member.name] = out.get(member.name, 0) + int(holding.count)
+    return out
+
+
+# The per-raider table's columns, in order, as the page labels them. The page
+# draws `cells` under these and decides nothing: every value is written here.
+RAIDER_COLUMNS = (
+    "group",
+    "raider",
+    "role",
+    "level",
+    "gear (avg ilvl)",
+    "fire resistance",
+    "attuned",
+    "fire protection potions",
+    "where",
+)
+
+
+def _cells(row: dict) -> list:
+    return [
+        str(row["group"]),
+        row["name"],
+        row["role"],
+        "?" if row["level"] is None else str(row["level"]),
+        "not read" if row["gear"] is None else str(row["gear"]),
+        str(row["fire_res"]),
+        "yes" if row["attuned"] else "no",
+        str(row["fire_potions"]),
+        row["where"],
+    ]
+
+
+def _where(member: dict) -> str:
+    map_id = member.get("map")
+    if map_id is None:
+        return "unknown"
+    place = CONTINENTS.get(int(map_id), "in an instance (map %d)" % int(map_id))
+    return place if member.get("online") else "%s, offline" % place
+
+
+def raider_rows(
+    lineup: dict,
+    members: list,
+    gear: dict,
+    fire: dict,
+    attuned: set,
+    potions: dict,
+) -> list:
+    """One row per placed raider: what the operator asked to see, per person.
+
+    Group and role are the lineup's; level from characters; gear the average
+    item level worn; fire resistance summed from worn items; attuned from the
+    rewarded quest; where, from the saved map and the online flag, because a
+    raider on another continent cannot follow the head to the door.
+    """
+    by_name = {m["name"]: m for m in members}
+    rows = []
+    for group in lineup["groups"]:
+        for member in group["members"]:
+            name = member["name"]
+            seen = by_name.get(name, {})
+            rows.append(
+                {
+                    "name": name,
+                    "group": group.get("number"),
+                    "role": member.get("role", "dps"),
+                    "level": member.get("level"),
+                    "gear": gear.get(name),
+                    "fire_res": fire.get(name, 0),
+                    "attuned": name in attuned,
+                    "fire_potions": potions.get(name, 0),
+                    "where": _where(seen),
+                    "at_door_continent": seen.get("map") is not None
+                    and int(seen["map"]) == DOOR_MAP,
+                }
+            )
+            rows[-1]["cells"] = _cells(rows[-1])
+    return rows
+
+
+def _raiders_line(rows: list) -> str:
+    if not rows:
+        return "No raider is placed."
+    attuned = len([r for r in rows if r["attuned"]])
+    with_fire = len([r for r in rows if r["fire_res"]])
+    fire = sum(r["fire_res"] for r in rows)
+    potions = sum(r["fire_potions"] for r in rows)
+    away = len([r for r in rows if not r["at_door_continent"]])
+    return (
+        "%d raiders: %d attuned, %d wearing any fire resistance (%d in all), "
+        "%d fire protection potions carried, %d not on Eastern Kingdoms where "
+        "the door is." % (len(rows), attuned, with_fire, fire, potions, away)
+    )
+
+
 def build_guild(
     group: dict,
     char_rows: list,
@@ -448,6 +589,9 @@ def build_guild(
     attuned_rows: list,
     min_level,
     goals: dict,
+    *,
+    quest_rows: list = (),
+    holding_rows: list = (),
 ) -> dict:
     """One guild's readiness card.
 
@@ -456,7 +600,9 @@ def build_guild(
     who the lineup is chosen from. `attuned_rows` are {"name"} rows for every
     character with either attunement quest rewarded. `min_level` is the
     instance's own access-row minimum, or None when the realm did not say.
-    `goals` is raidgoals.build_raidgoals for this guild.
+    `goals` is raidgoals.build_raidgoals for this guild. `quest_rows` are
+    {"name", "status"} rows for the attunement quest held in a log, and
+    `holding_rows` the Raid tab's bag read, for fragments and potions.
     """
     members = _guild_members(group, char_rows)
     lineup = raidlineup.build_lineup(members, guaranteed=group["family_names"])
@@ -470,7 +616,25 @@ def build_guild(
         gear,
         attuned,
         goals,
-        RAID_PORTAL in jobs.PORTAL_KEYWORDS,
+        RAID_PORTAL in jobs.RAID_KEYWORDS,
+        raidrun.CLEARS,
+    )
+    names = [m["name"] for m in raiders]
+    rows = raider_rows(
+        lineup,
+        members,
+        gear,
+        fire_resistance(worn_rows),
+        attuned,
+        carried(holding_rows, names, FIRE_PROTECTION),
+    )
+    in_log = {
+        r["name"]
+        for r in quest_rows
+        if r.get("name") and int(r.get("status") or 0) in raidrun.IN_LOG_STATUSES
+    }
+    fragments = carried(
+        holding_rows, list(group["family_names"]), (raidrun.CORE_FRAGMENT,)
     )
     hard = len([b for b in blockers if b["tone"] == HARD])
     faction = faction_of(m["race"] for m in members)
@@ -495,6 +659,14 @@ def build_guild(
             "make it harder."
         ),
         "goals": goals,
+        "raiders": rows,
+        "raider_columns": list(RAIDER_COLUMNS),
+        "raiders_line": _raiders_line(rows),
+        "run_line": raidrun.run_line(),
+        "clearing_line": raidrun.DUNGEON_CLEAR_LINE,
+        "attunement": raidrun.attunement(
+            list(group["family_names"]), attuned, in_log, fragments
+        ),
     }
 
 

@@ -85,6 +85,9 @@ COLLATIONS = {
     # Module-owned (mod-overseer#616), named in its own CREATE TABLE
     # (COLLATE=utf8mb4_unicode_ci) exactly as overseer_build is above.
     "overseer_dungeon_run_event": "utf8mb4_unicode_ci",
+    # Module-owned (mod-overseer#634, 2026_09_23_01_overseer_raid_seat.sql),
+    # named in its own CREATE TABLE the same way. The bridge only writes it.
+    "overseer_raid_seat": "utf8mb4_unicode_ci",
     # Not an overseer table, and the reason every join to it is safe. A binary
     # collation wins against any non-binary one of the same charset without
     # anybody writing COLLATE.
@@ -180,6 +183,8 @@ STRING_COLUMNS = {
         }
     ),
     "overseer_dungeon_queue": frozenset({"family", "keyword", "status", "source"}),
+    # From its own DDL (mod-overseer's 2026_09_23_01): every VARCHAR column.
+    "overseer_raid_seat": frozenset({"family", "keyword", "name", "role"}),
 }
 
 # Words that can follow a table name and are not an alias.

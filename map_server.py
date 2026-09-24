@@ -1900,13 +1900,25 @@ _RAID_TRAINER = (
     "SELECT SpellId AS spell, ReqSkillRank AS skill_rank "
     "FROM acore_world.trainer_spell WHERE SpellId IN ({holes})"
 )
-_RAID_CHARS = "SELECT name, level, class, race FROM characters WHERE name IN ({holes})"
+# `map` and `online` are the readiness card's "where": the raid's door is on
+# Eastern Kingdoms, and only a character in the world can be put in a raid.
+_RAID_CHARS = (
+    "SELECT name, level, class, race, map, online FROM characters "
+    "WHERE name IN ({holes})"
+)
 # WHO HOLDS THE ATTUNEMENT SHORTCUT. Both quest rows the core carries under
 # that title are bound, and the list is raidready's own so the two cannot
 # drift apart.
 _RAID_ATTUNED = (
     "SELECT DISTINCT c.name FROM characters c "
     "JOIN character_queststatus_rewarded q ON q.guid = c.guid "
+    "WHERE c.name IN ({holes}) AND q.quest IN ({quests})"
+)
+# WHO HOLDS THE ATTUNEMENT QUEST IN THEIR LOG, and in which state, for the
+# attunement path (raidrun.attunement). The same two quest rows.
+_RAID_ATTUNE_LOG = (
+    "SELECT c.name, q.status FROM characters c "
+    "JOIN character_queststatus q ON q.guid = c.guid "
     "WHERE c.name IN ({holes}) AND q.quest IN ({quests})"
 )
 # THE LOWEST LEVEL THE INSTANCE ADMITS, from its own access row rather than a
@@ -2177,6 +2189,11 @@ def _fetch_raidgoals() -> dict:
                 _RAID_ATTUNED.format(  # noqa: S608
                     holes=rholes, quests=", ".join(["%s"] * len(quests))),
                 (*roster, *quests), "", "character_queststatus_rewarded")
+            quest_log = _wide_guarded(
+                cur,
+                _RAID_ATTUNE_LOG.format(  # noqa: S608
+                    holes=rholes, quests=", ".join(["%s"] * len(quests))),
+                (*roster, *quests), "", "character_queststatus")
             access = _wide_guarded(cur, _RAID_ACCESS,
                                    (raidgoals.MOLTEN_CORE,), "",
                                    "dungeon_access_template")
@@ -2208,7 +2225,8 @@ def _fetch_raidgoals() -> dict:
             "holding_rows": holdings, "worn_rows": worn,
             "vendor_rows": vendor, "creature_rows": creature,
             "object_rows": objects, "guild_rows": guild,
-            "attuned_rows": attuned, "families": families,
+            "attuned_rows": attuned, "quest_rows": quest_log,
+            "families": families,
             "min_level": (int(access[0]["min_level"])
                           if access and access[0].get("min_level") else None)}
 # --- what the guild can make, and what it cannot (infra#3507) ---------------
@@ -4225,6 +4243,7 @@ class Handler(BaseHTTPRequestHandler):
             fetched = _fetch_raidgoals()
             families = fetched.pop("families")
             attuned = fetched.pop("attuned_rows")
+            quest_rows = fetched.pop("quest_rows")
             min_level = fetched.pop("min_level")
             guild_rows = fetched.pop("guild_rows")
             # ONE CARD PER GUILD. raidgoals counts one roster at a time, so it
@@ -4238,7 +4257,8 @@ class Handler(BaseHTTPRequestHandler):
                     roster=group["family_names"])
                 cards.append(raidready.build_guild(
                     group, fetched["char_rows"], fetched["worn_rows"],
-                    attuned, min_level, goals))
+                    attuned, min_level, goals, quest_rows=quest_rows,
+                    holding_rows=fetched["holding_rows"]))
             payload = raidready.build_readiness(cards)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
