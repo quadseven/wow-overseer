@@ -83,6 +83,10 @@ EQUIP = "equip"
 VENDOR = "vendor"
 AUCTION = "auction"
 GIVE_PREFIX = "give:"
+# The bank policy's route (bankpolicy, #320): a second set for the holder's
+# own bank, or raid supplies and gear kept for later for the guild bank. It
+# has no act path here, because the bank passes already carry it out.
+BANK = "bank"
 
 CARRIED = "carried"
 WORN = "worn"
@@ -196,14 +200,15 @@ def auctionable(row: dict) -> bool:
     )
 
 
-def options(row: dict, holding, characters) -> dict:
+def options(row: dict, holding, characters, banked: str = "") -> dict:
     """Every route this piece can take TODAY, as a Choice's criteria.
 
     `keep` is always there. The rest are offered only where the world could
     carry them out: `equip` when the holder can wield it, `give:<name>` for
     each other family member who can and only while the copy is not
     soulbound (GIVE cannot move a bound item), `vendor` when a vendor pays
-    for it, `auction` under the auction pass's own filter.
+    for it, `auction` under the auction pass's own filter, and `bank` when
+    the bank policy files it (#320), in the policy's own words.
     """
     by_name = {c.name: c for c in characters}
     holder = by_name.get(holding.holder)
@@ -241,6 +246,8 @@ def options(row: dict, holding, characters) -> dict:
             holding.holder,
             name,
         )
+    if banked:
+        out[BANK] = "%s banks %s. %s" % (holding.holder, name, banked)
     return out
 
 
@@ -258,9 +265,14 @@ class Pipeline:
     equipping: frozenset  # item guids the equip pass puts on
     selling: frozenset  # item guids the vendor pass sells
     keep_names: tuple = ()
+    # item guid -> the bank policy's line for it (#320). The sell passes skip
+    # these, so the heuristic's route for them is the bank.
+    banked: dict = None
 
     @classmethod
-    def read(cls, gear_rows, worn_rows, names, keep_names=()) -> "Pipeline":
+    def read(
+        cls, gear_rows, worn_rows, names, keep_names=(), banked=None
+    ) -> "Pipeline":
         fits = bag_pressure.family_fits(gear_rows, worn_rows, names)
         equips = bag_pressure.holder_equips(
             gear_rows, worn_rows, names, keep_names=keep_names
@@ -275,8 +287,9 @@ class Pipeline:
         return cls(
             claimants=bag_pressure.family_claimants(gear_rows, worn_rows, names),
             equipping=frozenset(e.guid for e in equips),
-            selling=frozenset(c.item_guid for c in sales),
+            selling=frozenset(c.item_guid for c in sales) - frozenset(banked or {}),
             keep_names=tuple(keep_names),
+            banked=dict(banked or {}),
         )
 
     def route(self, row: dict, guid: int, holder: str) -> tuple:
@@ -289,6 +302,8 @@ class Pipeline:
         who = self.claimants.get(guid, bag_pressure.CLAIM_UNJUDGEABLE)
         if bag_pressure.owner_keeps(row.get("name", ""), self.keep_names):
             return KEEP, "the operator marked it never to be disposed of"
+        if guid in (self.banked or {}):
+            return BANK, self.banked[guid]
         if guid in self.equipping:
             return EQUIP, "an upgrade its holder would wear"
         if who == holder:
@@ -316,9 +331,9 @@ def _guid_holder(row: dict):
         return None
 
 
-def heuristic(gear_rows, worn_rows, names, keep_names=()) -> dict:
+def heuristic(gear_rows, worn_rows, names, keep_names=(), banked=None) -> dict:
     """item guid -> (route, why): what the shipped pipeline does with each piece."""
-    pipeline = Pipeline.read(gear_rows, worn_rows, names, keep_names)
+    pipeline = Pipeline.read(gear_rows, worn_rows, names, keep_names, banked)
     out = {}
     for row in gear_rows:
         key = _guid_holder(row)
@@ -668,7 +683,12 @@ def _disposition_ask(family: _Family, holding, row: dict, item: dict, base: dict
     mode = family.mode(KIND_DISPOSITION)
     if mode == jev.OFF:
         return None
-    offered = options(row, holding, family.characters)
+    offered = options(
+        row,
+        holding,
+        family.characters,
+        (family.pipeline.banked or {}).get(int(holding.guid), ""),
+    )
     if len(offered) < 2:
         return None
     route, why = family.pipeline.route(row, int(holding.guid), holding.holder)
@@ -757,6 +777,7 @@ async def shadow_pass(
     modes=None,
     limit: int = 16,
     heads=(),
+    banked=None,
 ) -> list:
     """Ask Jev about each carried piece, beside the heuristic. Acts on nothing.
 
@@ -770,7 +791,7 @@ async def shadow_pass(
     family = _Family(
         characters=characters,
         closet=wardrobes(characters, worn_items, describe, specs or {}, heads),
-        pipeline=Pipeline.read(gear_rows, worn_rows, names, keep_names),
+        pipeline=Pipeline.read(gear_rows, worn_rows, names, keep_names, banked),
         modes=dict(modes or {}),
     )
     asks = _questions(family, gear_rows, describe)[: max(0, int(limit))]

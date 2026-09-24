@@ -429,7 +429,7 @@ def plan_deposits(
 
 
 def format_item_deposit(
-    *, item_guid: int | None = None, entry: int | None = None
+    *, item_guid: int | None = None, entry: int | None = None, tab: int = 0
 ) -> str:
     """The `bank deposit-item guid:<n>` / `entry:<n>` command text
     `GuildVerb::BankDepositItem` parses (overseer_decisions.cpp) and `DoGuild`
@@ -453,13 +453,18 @@ def format_item_deposit(
     """
     if (item_guid is None) == (entry is None):
         raise ValueError("give exactly one of item_guid or entry")
+    # TAB 0 IS SAID BY SAYING NOTHING (#320), which is the v1 text every
+    # module revision parses; a later tab is `tab:<n>` (mod-overseer#684).
+    if not isinstance(tab, int) or not 0 <= tab < len(TAB_COSTS_COPPER):
+        raise ValueError("tab must be 0 to 5")
+    suffix = f" tab:{tab}" if tab else ""
     if item_guid is not None:
         if not isinstance(item_guid, int) or item_guid <= 0:
             raise ValueError("item_guid must be a positive integer")
-        return f"bank deposit-item guid:{item_guid}"
+        return f"bank deposit-item guid:{item_guid}{suffix}"
     if not isinstance(entry, int) or entry <= 0:
         raise ValueError("entry must be a positive integer")
-    return f"bank deposit-item entry:{entry}"
+    return f"bank deposit-item entry:{entry}{suffix}"
 
 
 def tab_deposit_blockers(*, purchased_tabs: int, ranks_with_deposit: int) -> list[str]:

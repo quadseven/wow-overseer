@@ -23,6 +23,7 @@ import achievements
 import agenda
 import armory
 import bag_pressure
+import bankpolicy
 import basepath
 import campaignplan
 import campaignqueue
@@ -35,6 +36,7 @@ import dungeonplan
 import eye
 import family
 import frames
+import guildbank
 import guildcraft
 import guildroute
 import jevview
@@ -4196,7 +4198,9 @@ _CLIENT_GUILD_TABS = (
 _CLIENT_GUILD_ITEMS = (
     "SELECT gbi.TabId AS tab_id, gbi.SlotId AS slot_id, "
     "ii.itemEntry AS entry, ii.count, it.name AS item_name, "
-    "it.Quality AS quality, it.displayid "
+    "it.Quality AS quality, it.displayid, "
+    # What bankpolicy.why_stored reads (#320).
+    "it.class AS item_class, it.fire_res AS fire_res "
     "FROM guild_bank_item gbi "
     "JOIN item_instance ii ON ii.guid = gbi.item_guid "
     "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -4249,7 +4253,8 @@ def _fetch_client_inventory(name: str) -> dict:
 
 
 def _fetch_client_guild_bank(name: str) -> dict:
-    """The character's guild, its bought tabs and what is in them."""
+    """The character's guild, its bought tabs and what is in them, each item
+    with the sentence that says why it is there (#320)."""
     conn = _connect()
     try:
         with conn.cursor() as cur:
@@ -4258,12 +4263,52 @@ def _fetch_client_guild_bank(name: str) -> dict:
             items: list = []
             if guild is not None:
                 cur.execute(_CLIENT_GUILD_TABS, (guild["guild_id"],))
-                tabs = list(cur.fetchall())
+                tabs = [dict(r) for r in cur.fetchall()]
                 cur.execute(_CLIENT_GUILD_ITEMS, (guild["guild_id"],))
-                items = list(cur.fetchall())
+                items = [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
+    for tab in tabs:
+        kept = guildbank.TAB_BY_ID.get(int(tab.get("tab_id", -1)))
+        if kept is not None:
+            tab["tab_holds"] = kept.holds
+    for item in items:
+        item["why"] = bankpolicy.why_stored(item)
     return {"guild": guild, "tab_rows": tabs, "item_rows": items}
+
+
+def _fetch_bank_policy(names) -> dict:
+    """item guid -> bankpolicy.Placement for one family, or none.
+
+    The same three reads and the same judgement the bridge's bank passes act
+    on (bankpolicy.read), so the page says what the passes do. A failed read
+    is no lines, not a broken page.
+    """
+    names = [str(n) for n in names or () if n]
+    if not names:
+        return {}
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                return bankpolicy.place(bankpolicy.read(cur, names))
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("bank policy unreadable; the page shows no bank reasons")
+        return {}
+
+
+def _with_bank_reasons(rows, placed: dict) -> list:
+    """Inventory rows with each placed stack's line as `why` (#320)."""
+    out = []
+    for row in rows:
+        row = dict(row)
+        placement = placed.get(int(row.get("item_guid") or 0))
+        if placement is not None:
+            row["why"] = placement.line
+        out.append(row)
+    return out
 
 
 def _fetch_client_social(name: str, family_names: list[str]) -> dict:
@@ -5009,6 +5054,9 @@ class Handler(BaseHTTPRequestHandler):
             payload["guild_routes"] = _fetch_guild_routes()
             payload["loot_council"] = _fetch_loot_council_view()
             lootcouncil.annotate_tips(payload, payload["loot_council"]["by_guid"])
+            # WHERE EACH KEPT STACK GOES AND WHY (#320), per family.
+            for _key, group in groups:
+                bankpolicy.annotate_tips(payload, _fetch_bank_policy(group))
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the view keeps the bags it
@@ -5606,18 +5654,22 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, "application/json", b'{"error": "frame failed to build"}')
 
     def _client_bags(self, query: dict) -> None:
-        """GET /api/client/bags?name=X - the backpack and the four bags."""
-        def build(name, _key, _names):
+        """GET /api/client/bags?name=X - the backpack and the four bags, each
+        stack the bank policy files carrying where it goes and why (#320)."""
+        def build(name, _key, names):
             f = _fetch_client_inventory(name)
-            return vclient.build_inventory(f["rows"], CLIENT_ICONS, vclient.BAGS,
+            rows = _with_bank_reasons(f["rows"], _fetch_bank_policy(names))
+            return vclient.build_inventory(rows, CLIENT_ICONS, vclient.BAGS,
                                            money=f["money"])
         self._client_frame(query, build, "bags")
 
     def _client_bank(self, query: dict) -> None:
-        """GET /api/client/bank?name=X - the bank and its seven bag slots."""
-        def build(name, _key, _names):
+        """GET /api/client/bank?name=X - the bank and its seven bag slots, a
+        kept set saying why it is kept (#320)."""
+        def build(name, _key, names):
             f = _fetch_client_inventory(name)
-            return vclient.build_inventory(f["rows"], CLIENT_ICONS, vclient.BANK)
+            rows = _with_bank_reasons(f["rows"], _fetch_bank_policy(names))
+            return vclient.build_inventory(rows, CLIENT_ICONS, vclient.BANK)
         self._client_frame(query, build, "bank")
 
     def _client_guild_bank(self, query: dict) -> None:

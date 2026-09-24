@@ -1662,6 +1662,69 @@ def guild_routes_from_rows(gear_rows, equipped_rows, family_names, members):
     )
 
 
+@dataclass(frozen=True)
+class GearReach:
+    """What the bank policy needs to know about one carried or banked piece
+    of gear (bankpolicy, #320), from the one gear opinion.
+
+    `holder_wears` is the class, armour, weapon-skill and level rules alone,
+    never an upgrade test: a second set is gear its holder CAN wear, not gear
+    it should wear today. `later_wearers` are the other family members who
+    can wear it once they reach its required level. Only the families count
+    (the operator's "natural things only" rule): a guild member's
+    factory-granted level is not a character growing into a piece.
+    """
+
+    bucket: str
+    holder_role: str
+    holder_class: int
+    holder_level: int
+    holder_wears: bool
+    later_wearers: tuple = ()
+
+
+def _wears_at(holding, character, level) -> bool:
+    """Class, armour, weapon skill and level at `level`; never an upgrade test."""
+    bare = replace(character, equipped={}, level=level)
+    return bool(gear.would_wear(holding, bare)[0])
+
+
+def gear_reach(gear_rows, equipped_rows, family_names) -> dict:
+    """item guid -> GearReach, for the family's gear rows (#320).
+
+    The adapter between world rows and gear.py for the bank policy, the way
+    this module is for every other gear question: `gear_rows` are carried or
+    banked pieces and `equipped_rows` the family's worn rows.
+    """
+    family = [str(n) for n in family_names or ()]
+    characters = {c.name: c for c in family_characters(equipped_rows, family)}
+    out = {}
+    for holding in gear.holdings_from_rows(gear_rows):
+        holder = characters.get(holding.holder)
+        if holder is None:
+            continue
+        level = max(int(holder.level), int(holding.required_level))
+        out[int(holding.guid)] = GearReach(
+            bucket=gear.bucket_of(holding),
+            holder_role=holder.role,
+            holder_class=int(holder.class_id),
+            holder_level=int(holder.level),
+            holder_wears=_wears_at(holding, holder, level),
+            later_wearers=tuple(
+                sorted(
+                    c.name
+                    for c in characters.values()
+                    if c.name != holding.holder
+                    and int(c.level) < int(holding.required_level)
+                    and _wears_at(
+                        holding, c, max(int(c.level), int(holding.required_level))
+                    )
+                )
+            ),
+        )
+    return out
+
+
 def guild_bank_keeps(gear_rows, equipped_rows, family_names, members) -> dict:
     """item guid -> why, for the family's bind-on-equip gear the guild bank
     should keep (#194).

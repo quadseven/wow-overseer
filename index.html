@@ -3283,7 +3283,7 @@
   .vcslot.qb4 { border-color:#a335ee; } .vcslot.qb5 { border-color:#ff8000; }
   .vcslot.qb6, .vcslot.qb7 { border-color:#e6cc80; }
   .vcslot.item.qb1 { border-color:#6d6a5e; }
-  .vcfoot { display:flex; justify-content:space-between; gap:.6rem;
+  .vcfoot { display:flex; flex-wrap:wrap; justify-content:space-between; gap:.6rem;
             align-items:center; margin-top:6px; font-size:12px; color:var(--vc-dim); }
   .vcmoney .g { color:#ffd100; } .vcmoney .s { color:#c7c7cf; }
   .vcmoney .c { color:#d6874e; }
@@ -3334,6 +3334,8 @@
            box-shadow:0 4px 14px #000c; color:#fff; }
   .vctip[hidden] { display:none; }
   .vctip .vcsub { color:var(--vc-dim); font-size:11px; margin-top:.3rem; }
+  .vctip .vcwhy { color:var(--vc-gold-hi); }
+  .vcfoot .vcholds { flex-basis:100%; }
 </style>
 </head>
 <body>
@@ -12330,6 +12332,8 @@ async function vcShowTip(at, item, tip) {
   t.replaceChildren();
   itemTipLines(t, reading, null);
   if (item.count > 1) t.appendChild(el("div", "vcsub", "stack of " + item.count));
+  // Why it is in this bank, or where the bank policy sends it (#320).
+  if (item.why) t.appendChild(el("div", "vcsub vcwhy", item.why));
   vcTipPlace(at);
 }
 
@@ -12425,6 +12429,8 @@ async function vcGuildBank(name, f) {
     holder.replaceChildren(tools, grid);
     foot.replaceChildren(el("span", "", p.guild + " - " + tab.used + " of " + tab.total),
                          vcMoney(p.money));
+    // What this tab is for (#320), under the grid.
+    if (tab.holds) foot.appendChild(el("div", "vcnote vcholds", tab.name + ": " + tab.holds));
   };
   p.tabs.forEach((tab, i) => {
     const b = el("button", "vctab", tab.name);

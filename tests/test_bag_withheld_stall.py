@@ -564,8 +564,15 @@ def _run_vendor_once(queued, at_vendor=True):
     world = types.SimpleNamespace(sells=[])
     free = {"Zug": 2}
     ns = _load(
-        ["_vendor_once", "_vendor_pass_mode", "_sellable_per_holder"],
+        [
+            "_vendor_once",
+            "_vendor_pass_mode",
+            "_sellable_per_holder",
+            "_without_bank_keeps",
+        ],
         {
+            "_bank_policy": lambda names, fresh=False: {},
+            "_log_capped": lambda prefix, notes: None,
             "asyncio": types.SimpleNamespace(to_thread=_thread),
             "time": Clock(),
             "log": log,
