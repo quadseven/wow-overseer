@@ -2154,14 +2154,15 @@ def _leave_town(names: list, leader: str) -> int:
     dungeon job over `town run`, and so does the resume ceiling; this is for
     the campaign that is finished, cancelled or emptied while the family
     waits, which would otherwise leave it standing in town for good. Only a
-    town run this bridge wrote for the wait (TOWN_FIRST_SOURCE on the
-    leader's last job order) is released: an operator's own `job town run`
-    stands. Returns the rows written.
+    town run this bridge wrote for the wait (TOWN_FIRST_SOURCE on that
+    member's own last job order) is released: an operator's own `job town
+    run` stands, row by row. Returns the rows written.
     """
     if _campaign_waiting(names):
         return 0
-    held = [n for n, job in _jobs_of(names).items() if job == jobs.TOWN_RUN]
-    if not held or _last_job_source(leader) != TOWN_FIRST_SOURCE:
+    held = [n for n, job in _jobs_of(names).items()
+            if job == jobs.TOWN_RUN and _last_job_source(n) == TOWN_FIRST_SOURCE]
+    if not held:
         return 0
     written = 0
     for name in held:
@@ -14190,10 +14191,9 @@ class Bridge(discord.Client):
         # Dustwallow, during exactly such a wait. The goal resumes when the
         # wait ends.
         if standing == jobs.TOWN_RUN:
-            log.info("goal: the %s goal for %s waits - the family's campaign "
-                     "waits in town on job=%s, and nobody leaves town for a "
-                     "field until it goes in", action.skill_name,
-                     action.beneficiary, jobs.TOWN_RUN)
+            log.info("goal: a skill goal waits - the family's campaign waits "
+                     "in town on job=%s, and nobody leaves town for a field "
+                     "until it goes in", jobs.TOWN_RUN)
             return
         # infra#3789. A GATHERED skill is answerable only with somewhere to
         # stand, and the survey that finds it is a database read - so it

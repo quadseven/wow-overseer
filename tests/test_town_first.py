@@ -291,15 +291,19 @@ class TheWaitIsSpentInTown(unittest.TestCase):
 
 
 def _leave(world, last_source):
-    """bridge._leave_town, run for real against `world`."""
+    """bridge._leave_town, run for real against `world`. `last_source` is
+    every member's last job source, or a dict of them by name."""
     log = Log()
+    sources = last_source if isinstance(last_source, dict) else {}
     ns = {
         "jobs": jobs,
         "log": log,
         "TOWN_FIRST_SOURCE": "overseer:town-first",
         "_campaign_waiting": lambda names: world.waiting,
         "_jobs_of": lambda names: {n: world.jobs[n] for n in names},
-        "_last_job_source": lambda name: last_source,
+        "_last_job_source": lambda name: (
+            sources.get(name, last_source) if sources else last_source
+        ),
         "_insert_job": world.insert_job,
     }
     module = ast.Module(body=[_function("_leave_town")], type_ignores=[])
@@ -324,6 +328,16 @@ class TheFamilyLeavesTownWhenNothingWaits(unittest.TestCase):
         world = World(MEASURED, jobs.TOWN_RUN, waiting=False)
         self.assertEqual(0, _leave(world, "discord:operator")[0])
         self.assertEqual([], world.inserted)
+
+    def test_an_operators_town_run_on_one_member_stands(self):
+        """The leader's order was the bridge's; Og was ordered by a person."""
+        world = World(MEASURED, jobs.TOWN_RUN, waiting=False)
+        sources = {n: "overseer:town-first" for n in NAMES}
+        sources["Og"] = "discord:operator"
+        written, _ = _leave(world, sources)
+        self.assertEqual(4, written)
+        self.assertEqual(jobs.TOWN_RUN, world.jobs["Og"])
+        self.assertNotIn("Og", [n for n, _, _ in world.inserted])
 
     def test_only_the_town_run_rows_go_back(self):
         world = World(MEASURED, jobs.TOWN_RUN, waiting=False)
