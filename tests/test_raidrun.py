@@ -156,6 +156,8 @@ class TheSeatsAreTheLineup(unittest.TestCase):
             self.assertIn(
                 ("Grug", "moltencore", member["name"], 0, member["role"]), seats
             )
+        with_duty = raidrun.seat_rows("Grug", "moltencore", lineup, duty=True)
+        self.assertIn(("Grug", "moltencore", "T0", 0, "tank", "main tank"), with_duty)
 
 
 def _function(name):
@@ -166,7 +168,7 @@ def _function(name):
     raise AssertionError("no %s in bridge.py" % name)
 
 
-def _load_drive_raid(events, members, missing_table=False):
+def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
     """bridge._drive_raid, run for real against fakes that record order."""
     source = "\n\n".join(
         ast.get_source_segment(BRIDGE, _function(name))
@@ -188,6 +190,8 @@ def _load_drive_raid(events, members, missing_table=False):
         def executemany(self, sql, rows):
             if missing_table:
                 raise MissingTable(1146, "Table doesn't exist")
+            if missing_duty and "duty" in sql:
+                raise MissingTable(1054, "Unknown column 'duty' in 'field list'")
             events.append(("seat", sql.split()[0], list(rows)))
 
         def fetchall(self):
@@ -246,6 +250,23 @@ class TheBridgeWritesSeatsThenTheJob(unittest.TestCase):
         self.assertEqual(40, len(inserts[0][2]))
         self.assertEqual(("job", "Grug", "raid:moltencore"), events[-1])
         self.assertLess(kinds.index("seat"), kinds.index("job"))
+
+    def test_each_seat_carries_its_duty(self):
+        events = []
+        drive = _load_drive_raid(events, GUILD)
+        drive("moltencore", "Grug", ["Grug"], "overseer:queue", [])
+        rows = [e for e in events if e[0] == "seat" and e[1] == "INSERT"][0][2]
+        self.assertEqual(6, len(rows[0]), "family, keyword, name, subgroup, role, duty")
+        self.assertIn(("Grug", "moltencore", "Grug", 0, "tank", "main tank"), rows)
+
+    def test_a_realm_without_the_duty_column_still_gets_its_seats(self):
+        events = []
+        drive = _load_drive_raid(events, GUILD, missing_duty=True)
+        self.assertEqual(1, drive("moltencore", "Grug", ["Grug"], "q", []))
+        inserts = [e for e in events if e[0] == "seat" and e[1] == "INSERT"]
+        self.assertEqual(1, len(inserts))
+        self.assertEqual(5, len(inserts[0][2][0]))
+        self.assertEqual(("job", "Grug", "raid:moltencore"), events[-1])
 
     def test_no_seat_table_means_no_job(self):
         events = []

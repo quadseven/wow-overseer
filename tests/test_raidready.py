@@ -191,7 +191,11 @@ class HardBlockers(unittest.TestCase):
         card = _card(rows, [r["name"] for r in rows])
         hard = [b["text"] for b in card["blockers"] if b["tone"] == "hard"]
         self.assertTrue(any("35 raiders short" in t for t in hard), hard)
-        self.assertTrue(any("tanks short" in t for t in hard), hard)
+        soft = [b["text"] for b in card["blockers"] if b["tone"] == "soft"]
+        # A warrior and a druid hold the two tank places a raid cannot do
+        # without; the other two of the four are short, which is soft.
+        self.assertTrue(any("2 tanks short of the 4" in t for t in soft), soft)
+        self.assertFalse(any("tanks short" in t for t in hard), hard)
         self.assertTrue(any("healers short" in t for t in hard), hard)
         self.assertTrue(any("below level 50" in t for t in hard), hard)
         self.assertIn("(Horde)", card["title"])
@@ -395,7 +399,7 @@ class EachRaiderIsReported(unittest.TestCase):
             [
                 "1",
                 self.head,
-                "tank",
+                "main tank",
                 "60",
                 "45",
                 "17 of 200",

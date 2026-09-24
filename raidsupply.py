@@ -89,10 +89,16 @@ MANA_PHYSICAL = frozenset({PALADIN, HUNTER})
 CLOTH_CLASSES = frozenset({PRIEST, MAGE, WARLOCK})
 
 
-def role_of(lineup_role: str, class_id) -> str:
-    """tank, healer, physical or caster, from raidlineup's role and the class."""
+def role_of(lineup_role: str, class_id, raid_role: str = "") -> str:
+    """tank, healer, physical or caster, from raidlineup's role, the talent
+    tree's role where the lineup read one (a Shadow priest casts, an
+    Enhancement shaman hits), and the class otherwise."""
     if lineup_role in (TANK, HEALER):
         return lineup_role
+    if raid_role in ("melee", "ranged"):
+        return PHYSICAL
+    if raid_role == "caster":
+        return CASTER
     return PHYSICAL if int(class_id or 0) in PHYSICAL_CLASSES else CASTER
 
 
@@ -112,39 +118,57 @@ class Raider:
         return sum(int(f) for s, f in self.worn_fire if int(s) == int(slot))
 
 
-def raiders_from_lineup(lineup, classes, fire_rows=(), family=()) -> list:
-    """Raider rows from a raidlineup result.
-
-    `classes` maps a name to its class id; `fire_rows` are worn items with
-    `name`, `slot` and `fire_res`. The main tank is the first tank the lineup
-    placed: group one's, which is the group the head of the raid leads.
-    """
-    worn = {}
+def _worn_fire(fire_rows) -> dict:
+    """name -> ((equipment slot, fire resistance), ...) off the worn items."""
+    worn: dict = {}
     for row in fire_rows or ():
         name = str(row.get("name") or "")
         fire = int(row.get("fire_res") or 0)
         worn.setdefault(name, []).append((int(row.get("slot") or 0), fire))
+    return worn
+
+
+def raiders_from_lineup(lineup, classes, fire_rows=(), family=()) -> list:
+    """Raider rows from a raidlineup result.
+
+    `classes` maps a name to its class id; `fire_rows` are worn items with
+    `name`, `slot` and `fire_res`. The main tank is the one the lineup named
+    (raidlineup.MAIN_TANK), else the first tank it placed.
+    """
+    placed = [
+        m
+        for group in (lineup or {}).get("groups") or ()
+        for m in group.get("members") or ()
+        if str(m.get("name") or "")
+    ]
+    named = any(m.get("duty") == MAIN_TANK for m in placed)
+    worn = _worn_fire(fire_rows)
     out, main_taken = [], False
-    for group in (lineup or {}).get("groups") or ():
-        for member in group.get("members") or ():
-            name = str(member.get("name") or "")
-            if not name:
-                continue
-            role = role_of(member.get("role", "dps"), classes.get(name))
-            main = role == TANK and not main_taken
-            main_taken = main_taken or main
-            items = tuple(worn.get(name, ()))
-            out.append(
-                Raider(
-                    name=name,
-                    role=role,
-                    class_id=int(classes.get(name) or 0),
-                    main_tank=main,
-                    family=name in set(family or ()),
-                    fire=sum(f for _, f in items),
-                    worn_fire=items,
-                )
+    for member in placed:
+        name = str(member.get("name"))
+        role = role_of(
+            member.get("role", "dps"),
+            classes.get(name),
+            str(member.get("raid_role") or ""),
+        )
+        main = (
+            member.get("duty") == MAIN_TANK
+            if named
+            else role == TANK and not main_taken
+        )
+        main_taken = main_taken or main
+        items = tuple(worn.get(name, ()))
+        out.append(
+            Raider(
+                name=name,
+                role=role,
+                class_id=int(classes.get(name) or 0),
+                main_tank=main,
+                family=name in set(family or ()),
+                fire=sum(f for _, f in items),
+                worn_fire=items,
             )
+        )
     return out
 
 
@@ -986,7 +1010,15 @@ def guild_facts(guild, members, worn_rows, posts, vendors_by_map) -> GuildFacts:
     names = {m.name for m in crew}
     family = {m.name for m in crew if m.family}
     lineup = raidlineup.build_lineup(
-        [{"name": m.name, "level": m.level, "class_id": m.class_id} for m in crew],
+        [
+            {
+                "name": m.name,
+                "level": m.level,
+                "class_id": m.class_id,
+                "talent_spells": m.talent_spells,
+            }
+            for m in crew
+        ],
         guaranteed=family,
     )
     raiders = raiders_from_lineup(

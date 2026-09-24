@@ -31,6 +31,7 @@ import bank
 import jobs
 import raidgoals
 import raidlineup
+import raidroles
 import raidrun
 import raidsupply
 
@@ -246,17 +247,58 @@ def _staffing_blockers(
                 _count(len(raiders), "raider", "raiders"),
             )
         )
-    if short["tanks"]:
+    tanks, healers = _roles(lineup)["tank"], _roles(lineup)["healer"]
+    if short["tanks"] and tanks < raidlineup.MIN_TANKS:
         out.append(
-            "%s short: every one of the %d groups wants one, and only "
-            "warriors, death knights, paladins and druids can hold the role."
-            % (_count(short["tanks"], "tank", "tanks"), groups)
+            "%s short: a Molten Core raid brings %d, a main tank and off tanks, "
+            "and cannot hold a fight with fewer than %d. A tank is a "
+            "Protection tree, or a warrior in a shield."
+            % (
+                _count(short["tanks"], "tank", "tanks"),
+                lineup["wanted"]["tanks"],
+                raidlineup.MIN_TANKS,
+            )
         )
-    if short["healers"]:
+    if short["healers"] and healers < groups:
         out.append(
-            "%s short: every one of the %d groups wants one, and only "
-            "priests, paladins, druids and shamans can heal."
-            % (_count(short["healers"], "healer", "healers"), groups)
+            "%s short: a Molten Core raid brings %d, and fewer than one for "
+            "each of the %d groups cannot keep it standing. A healer is a "
+            "healing talent tree; a damage tree would have to respec."
+            % (
+                _count(short["healers"], "healer", "healers"),
+                lineup["wanted"]["healers"],
+                groups,
+            )
+        )
+    return out
+
+
+def _thin_role_blockers(lineup: dict) -> list:
+    """SOFT: short of the classic make-up, but above the minimums."""
+    out = []
+    short = lineup["shortfall"]
+    groups = raidlineup.RAIDERS // raidlineup.GROUP_SIZE
+    roles = _roles(lineup)
+    if short["tanks"] and roles["tank"] >= raidlineup.MIN_TANKS:
+        out.append(
+            "%s short of the %d a Molten Core raid brings: %d hold the tank "
+            "places."
+            % (
+                _count(short["tanks"], "tank", "tanks"),
+                lineup["wanted"]["tanks"],
+                roles["tank"],
+            )
+        )
+    if short["healers"] and roles["healer"] >= groups:
+        out.append(
+            "%s short of the %d a Molten Core raid brings: %d heal, one for "
+            "each group and no more to spare. A healer is a healing talent "
+            "tree; a damage tree would have to respec."
+            % (
+                _count(short["healers"], "healer", "healers"),
+                lineup["wanted"]["healers"],
+                roles["healer"],
+            )
         )
     return out
 
@@ -380,6 +422,7 @@ def _blockers(
     hard = _staffing_blockers(lineup, raiders, runnable, clears) + level_hard
     soft = (
         level_soft
+        + _thin_role_blockers(lineup)
         + _gear_blockers(raiders, gear, attuned)
         + _support_blockers(lineup, goals)
     )
@@ -423,6 +466,7 @@ def _guild_members(group: dict, char_rows: list) -> list:
                 "race": guild_row.get("race", row.get("race")),
                 "map": row.get("map"),
                 "online": row.get("online"),
+                raidroles.KEY: guild_row.get(raidroles.KEY),
             }
         )
     return members
@@ -430,12 +474,11 @@ def _guild_members(group: dict, char_rows: list) -> list:
 
 def _tiles(lineup: dict, raiders: list) -> list:
     roles = _roles(lineup)
-    groups = raidlineup.RAIDERS // raidlineup.GROUP_SIZE
     at_cap = len([m for m in raiders if int(m.get("level") or 0) >= LEVEL_CAP])
     return [
         _tile("raiders placed", len(raiders), raidlineup.RAIDERS),
-        _tile("tanks", roles["tank"], groups),
-        _tile("healers", roles["healer"], groups),
+        _tile("tanks", roles["tank"], lineup["wanted"]["tanks"]),
+        _tile("healers", roles["healer"], lineup["wanted"]["healers"]),
         _tile("raiders at %d" % LEVEL_CAP, at_cap, raidlineup.RAIDERS),
         _tile("summoners", len(lineup["summoners"]), raidlineup.SUMMONERS),
         _tile("maintenance", len(lineup["maintenance"]), raidlineup.MAINTENANCE),
@@ -444,16 +487,13 @@ def _tiles(lineup: dict, raiders: list) -> list:
 
 def _roster_line(members: list, lineup: dict, raiders: list) -> str:
     roles = _roles(lineup)
-    return (
-        "%s in the guild; %s placed as %s, %s and %s, one tank and one "
-        "healer per group of five."
-        % (
-            _count(len(members), "character", "characters"),
-            _count(len(raiders), "raider", "raiders"),
-            _count(roles["tank"], "tank", "tanks"),
-            _count(roles["healer"], "healer", "healers"),
-            _count(roles["dps"], "damage dealer", "damage dealers"),
-        )
+    return "%s in the guild; %s placed as %s, %s and %s. %s" % (
+        _count(len(members), "character", "characters"),
+        _count(len(raiders), "raider", "raiders"),
+        _count(roles["tank"], "tank", "tanks"),
+        _count(roles["healer"], "healer", "healers"),
+        _count(roles["dps"], "damage dealer", "damage dealers"),
+        lineup.get("roles_line", ""),
     )
 
 
@@ -553,7 +593,7 @@ def _cells(row: dict) -> list:
     return [
         str(row["group"]),
         row["name"],
-        row["role"],
+        row.get("label") or row["role"],
         "?" if row["level"] is None else str(row["level"]),
         "not read" if row["gear"] is None else str(row["gear"]),
         (
@@ -627,6 +667,9 @@ def raider_rows(
                     "name": name,
                     "group": group.get("number"),
                     "role": member.get("role", "dps"),
+                    # The duty and the talent tree ("main tank, Protection"),
+                    # raidlineup's; the cell prints it over the bare role.
+                    "label": member.get("label", ""),
                     "level": member.get("level"),
                     "gear": gear.get(name),
                     "fire_res": fire.get(name, 0),

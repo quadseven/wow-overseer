@@ -213,7 +213,8 @@ STRING_COLUMNS = {
     # From its own DDL (bridge._ensure_economy_store): every VARCHAR column.
     "overseer_economy_sample": frozenset({"kind", "subject"}),
     # From its own DDL (mod-overseer's 2026_09_23_01): every VARCHAR column.
-    "overseer_raid_seat": frozenset({"family", "keyword", "name", "role"}),
+    # And 2026_09_24_03's `duty`.
+    "overseer_raid_seat": frozenset({"duty", "family", "keyword", "name", "role"}),
     # From its own DDL (mod-overseer's 2026_09_24_01): every VARCHAR column.
     "overseer_loot_council": frozenset(
         {

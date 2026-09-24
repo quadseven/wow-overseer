@@ -9,6 +9,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import raidlineup  # noqa: E402
+import raidroles  # noqa: E402
 from raidlineup import (
     MAGE,
     PALADIN,
@@ -54,11 +55,22 @@ class AFullRosterFillsEveryPlace(unittest.TestCase):
         for group in self.lineup["groups"]:
             self.assertEqual(len(group["members"]), 5, group["number"])
 
-    def test_every_group_has_exactly_one_tank_and_one_healer(self):
+    def test_a_classic_raid_four_tanks_in_group_one_and_twelve_healers(self):
+        first = self.lineup["groups"][0]["members"]
+        self.assertEqual([m["role"] for m in first].count("tank"), 4)
+        self.assertEqual(first[0]["duty"], raidlineup.MAIN_TANK)
+        self.assertEqual([m["duty"] for m in first[1:4]], [raidlineup.OFF_TANK] * 3)
+        self.assertEqual(first[4]["class_id"], PRIEST, "a priest shields the tanks")
+        healers = [
+            m
+            for g in self.lineup["groups"]
+            for m in g["members"]
+            if m["role"] == "healer"
+        ]
+        self.assertEqual(len(healers), 12)
         for group in self.lineup["groups"]:
             roles = [m["role"] for m in group["members"]]
-            self.assertEqual(roles.count("tank"), 1, group["number"])
-            self.assertEqual(roles.count("healer"), 1, group["number"])
+            self.assertGreaterEqual(roles.count("healer"), 1, group["number"])
 
     def test_the_corps_is_twenty_one_and_all_warlocks(self):
         corps = self.lineup["summoners"]
@@ -196,31 +208,155 @@ class TheSurplusIsTheKickList(unittest.TestCase):
 
 class AThinRosterDegradesHonestly(unittest.TestCase):
     def test_short_on_tanks_reports_it_rather_than_forming_a_tankless_group(self):
-        """Two warriors and no hybrids cannot tank eight groups. Six groups go
-        without, and the number six is the recruiting ask - it must appear,
-        not be smoothed away by promoting a mage."""
+        """Two warriors and no hybrids cannot fill a raid's four tank places.
+        The two missing are the recruiting ask - they must appear, not be
+        smoothed away by promoting a mage."""
         lineup = raidlineup.build_lineup(
             _roster(WARRIOR=2, PRIEST=12, MAGE=30, WARLOCK=21)
         )
-        self.assertEqual(lineup["shortfall"]["tanks"], 6)
+        self.assertEqual(lineup["shortfall"]["tanks"], 2)
         tanks = [
             m for g in lineup["groups"] for m in g["members"] if m["role"] == "tank"
         ]
         self.assertEqual(len(tanks), 2)
         self.assertTrue(all(m["class_id"] in raidlineup.TANKS for m in tanks))
 
-    def test_dps_are_dealt_round_robin_so_groups_stay_even(self):
+    def test_a_short_roster_keeps_the_groups_after_the_tanks_even(self):
         lineup = raidlineup.build_lineup(
             _roster(WARRIOR=8, PRIEST=8, MAGE=8, WARLOCK=21)
         )
-        sizes = sorted(len(g["members"]) for g in lineup["groups"])
+        sizes = sorted(len(g["members"]) for g in lineup["groups"][1:])
         self.assertLessEqual(sizes[-1] - sizes[0], 1)
+        self.assertGreater(sizes[0], 0, "no group is left empty")
 
     def test_an_empty_roster_is_empty_groups_and_a_full_shortfall(self):
         lineup = raidlineup.build_lineup([])
         self.assertEqual(lineup["counts"]["raiders"], 0)
         self.assertEqual(lineup["shortfall"]["raiders"], 40)
         self.assertEqual(lineup["surplus"], [])
+
+
+def _talents(class_id, tree, points=5):
+    """A talent_spells string putting `points` single ranks in one tree."""
+    book = raidroles._book()
+    spells = sorted(
+        spell
+        for spell, (cid, name, rank) in book.items()
+        if cid == class_id and name == tree and rank == 1
+    )
+    return ",".join(str(s) for s in spells[:points])
+
+
+def _spec(name, class_id, tree, level=60):
+    return dict(_member(name, class_id, level), talent_spells=_talents(class_id, tree))
+
+
+class RolesComeFromTheTalentTree(unittest.TestCase):
+    """Read on the dev realm, 2026-09-24: packing by class put Fury and Arms
+    warriors in tank seats, Shadow priests in healer seats and a Restoration
+    druid among the damage dealers. The tree decides the role."""
+
+    def setUp(self):
+        roster = [
+            _spec("Grug", WARRIOR, "Protection"),
+            _spec("Fury1", WARRIOR, "Fury"),
+            _spec("Fury2", WARRIOR, "Fury"),
+            _spec("Arms1", WARRIOR, "Arms"),
+            _spec("Prot1", WARRIOR, "Protection"),
+            _spec("Holypal", PALADIN, "Protection"),
+            _spec("Shadow1", PRIEST, "Shadow"),
+            _spec("Shadow2", PRIEST, "Shadow"),
+            _spec("Holy1", PRIEST, "Holy"),
+            _spec("Disc1", PRIEST, "Discipline"),
+            _spec("Tree1", raidlineup.DRUID, "Restoration"),
+            _spec("Cat1", raidlineup.DRUID, "Feral Combat"),
+            _spec("Enh1", raidlineup.SHAMAN, "Enhancement"),
+            _spec("Resto1", raidlineup.SHAMAN, "Restoration"),
+        ]
+        roster += _roster(ROGUE=4, HUNTER=4, MAGE=6)
+        self.lineup = raidlineup.build_lineup(roster, guaranteed=["Grug"])
+        self.by_name = {
+            m["name"]: m for g in self.lineup["groups"] for m in g["members"]
+        }
+
+    def test_tanks_are_the_protection_trees_the_family_head_first(self):
+        tanks = [
+            m["name"]
+            for m in self.lineup["groups"][0]["members"]
+            if m["role"] == "tank"
+        ]
+        self.assertEqual(tanks, ["Grug", "Holypal", "Prot1"] + ["Arms1"])
+        self.assertEqual(self.by_name["Grug"]["duty"], raidlineup.MAIN_TANK)
+        self.assertEqual(self.by_name["Grug"]["label"], "main tank, Protection")
+        self.assertEqual(
+            self.by_name["Arms1"]["duty"],
+            raidlineup.OFF_TANK,
+            "a warrior in a damage tree fills the fourth tank place",
+        )
+
+    def test_healers_are_the_healing_trees_and_a_shadow_priest_never_heals(self):
+        healers = sorted(n for n, m in self.by_name.items() if m["role"] == "healer")
+        self.assertEqual(healers, ["Disc1", "Holy1", "Resto1", "Tree1"])
+        self.assertEqual(self.by_name["Shadow1"]["duty"], "caster")
+        self.assertEqual(self.lineup["shortfall"]["healers"], 8)
+
+    def test_damage_dealers_are_named_by_kind_and_stand_together(self):
+        self.assertEqual(self.by_name["Fury1"]["duty"], "melee")
+        self.assertEqual(self.by_name["Enh1"]["duty"], "melee")
+        self.assertEqual(self.by_name["Cat1"]["label"], "melee, Feral Combat")
+        self.assertEqual(self.by_name["Hunter0"]["duty"], "ranged")
+        melee_groups = {
+            g["number"]
+            for g in self.lineup["groups"]
+            for m in g["members"]
+            if m["duty"] == "melee"
+        }
+        caster_groups = {
+            g["number"]
+            for g in self.lineup["groups"]
+            for m in g["members"]
+            if m["duty"] == "caster"
+        }
+        self.assertLess(max(melee_groups), max(caster_groups))
+
+    def test_the_roles_line_says_the_make_up(self):
+        line = self.lineup["roles_line"]
+        self.assertIn("4 of 4 tanks (Grug the main tank), 4 of 12 healers", line)
+        self.assertIn("talent tree", line)
+        self.assertEqual(self.lineup["wanted"]["healers"], 12)
+        self.assertEqual(self.lineup["composition"]["main tank"], 1)
+
+
+class TheTreeIsRead(unittest.TestCase):
+    def test_the_tree_with_the_most_points(self):
+        spells = _talents(WARRIOR, "Protection", 5) + "," + _talents(WARRIOR, "Fury", 2)
+        self.assertEqual(raidroles.tree_of(WARRIOR, spells), "Protection")
+
+    def test_a_tie_or_nothing_is_no_tree(self):
+        spells = _talents(WARRIOR, "Protection", 2) + "," + _talents(WARRIOR, "Fury", 2)
+        self.assertEqual(raidroles.tree_of(WARRIOR, spells), "")
+        self.assertEqual(raidroles.tree_of(WARRIOR, None), "")
+        self.assertEqual(raidroles.tree_of(WARRIOR, "junk,,"), "")
+
+    def test_another_classes_spells_are_not_counted(self):
+        self.assertEqual(raidroles.tree_of(WARRIOR, _talents(PRIEST, "Holy")), "")
+
+    def test_a_single_role_class_needs_no_talents(self):
+        self.assertEqual(raidroles.role_of(_member("M", MAGE)), raidroles.CASTER)
+        self.assertEqual(raidroles.role_of(_member("P", PALADIN)), raidroles.UNKNOWN)
+
+    def test_every_guild_read_carries_the_talents(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        import raidrun
+
+        with open(os.path.join(root, "raidrun.py")) as f:
+            self.assertTrue("raidroles.TALENTS_COLUMN" in f.read())
+        self.assertIn(raidroles.KEY, raidrun.GUILD_MEMBERS_SQL)
+        for name, count in (("map_server.py", 2), ("bridge.py", 2)):
+            with open(os.path.join(root, name)) as f:
+                self.assertEqual(
+                    f.read().count("raidroles.TALENTS_COLUMN"), count, name
+                )
 
 
 class TheLineupIsStable(unittest.TestCase):

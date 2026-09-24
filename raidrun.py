@@ -22,6 +22,7 @@ nothing that talks to MySQL. bridge.py runs the statements named here.
 from __future__ import annotations
 
 import jobs
+import raidroles
 
 # The one raid door mod-overseer has (RaidDoorFor in overseer_decisions).
 MOLTEN_CORE = "moltencore"
@@ -64,13 +65,25 @@ INSERT_SEAT_SQL = (
     "INSERT INTO overseer_raid_seat (family, keyword, name, subgroup, role) "
     "VALUES (%s, %s, %s, %s, %s)"
 )
+# THE DUTY, from the talent tree (raidlineup: main tank, off tank, healer,
+# melee, ranged, caster or damage), in the column mod-overseer's
+# 2026_09_24_02_overseer_raid_seat_duty.sql adds. A realm without the column
+# refuses this statement with 1054, and the bridge writes INSERT_SEAT_SQL
+# instead, so the seats still form the raid.
+INSERT_SEAT_DUTY_SQL = (
+    "INSERT INTO overseer_raid_seat (family, keyword, name, subgroup, role, duty) "
+    "VALUES (%s, %s, %s, %s, %s, %s)"
+)
 
 # EVERY MEMBER OF THE FAMILY'S GUILD, found from the family's own names, which
 # is the same read the Raid tab's lineup is chosen from (map_server's
 # _RAID_GUILD), so the seats written are the lineup the operator saw.
+# Built from constant strings only (raidroles.TALENTS_COLUMN is one); every
+# value is bound by the driver.
 GUILD_MEMBERS_SQL = (
-    "SELECT c.name, c.level, c.class AS class_id, c.race "
-    "FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
+    "SELECT c.name, c.level, c.class AS class_id, c.race, "  # noqa: S608 - constant fragments only
+    + raidroles.TALENTS_COLUMN
+    + " FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
     "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
     "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
 )
@@ -126,8 +139,9 @@ def refusal(keyword: str, runs: int, level_rows: list) -> str:
     return ""
 
 
-def seat_rows(family: str, keyword: str, lineup: dict) -> list:
-    """(family, keyword, name, subgroup, role) per placed raider.
+def seat_rows(family: str, keyword: str, lineup: dict, *, duty: bool = False) -> list:
+    """(family, keyword, name, subgroup, role) per placed raider, and the
+    duty last when `duty` is set (INSERT_SEAT_DUTY_SQL).
 
     `lineup` is raidlineup.build_lineup's answer. Groups there are numbered
     1 to 8 for the page; the module and the core hold subgroups 0 to 7, so the
@@ -145,6 +159,7 @@ def seat_rows(family: str, keyword: str, lineup: dict) -> list:
                     number - 1,
                     str(member.get("role") or ""),
                 )
+                + ((str(member.get("duty") or ""),) if duty else ())
             )
     return rows
 

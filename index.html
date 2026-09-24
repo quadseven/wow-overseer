@@ -2868,6 +2868,10 @@
      crowd, so they are marked. Everyone else is deliberately unmarked. */
   .ln-row.r-tank .ln-cls::after { content:" tank"; color:var(--accent); }
   .ln-row.r-healer .ln-cls::after { content:" heal"; color:var(--accent); }
+  /* A placed raider with a duty says it in full instead. */
+  .ln-row.has-duty .ln-cls::after { content:none; }
+  .ln-duty { flex:none; font-size:.66rem; color:var(--muted); }
+  .ln-row.r-tank .ln-duty, .ln-row.r-healer .ln-duty { color:var(--accent); }
   .ln-short { font-size:.76rem; color:var(--rust); margin:.2rem 0 .5rem; }
   .ln-gname { font-weight:600; }
   #tabs { display:flex; flex-wrap:nowrap; gap:.2rem;
@@ -6939,6 +6943,15 @@ function lnCard(m, classes) {
   cls.className = "ln-cls";
   cls.textContent = classes[m.class_id] || "";
   row.append(name, lvl, cls);
+  // A placed raider's duty and talent tree ("main tank, Protection"), written
+  // by raidlineup.py from the tree the realm says each raider plays.
+  if (m.label) {
+    const duty = document.createElement("span");
+    duty.className = "ln-duty";
+    duty.textContent = m.label;
+    row.classList.add("has-duty");
+    row.appendChild(duty);
+  }
   return row;
 }
 
@@ -7037,6 +7050,13 @@ function lnRender(payload) {
       warn.textContent = "short: " +
         short.map(([what, n]) => n + " " + what).join(", ");
       sec.appendChild(warn);
+    }
+
+    if (g.roles_line) {
+      const make = document.createElement("div");
+      make.className = "ln-note";
+      make.textContent = g.roles_line;
+      sec.appendChild(make);
     }
 
     const grid = document.createElement("div");
