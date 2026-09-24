@@ -324,8 +324,13 @@ _AT = re.compile(r"^at:(\d+):(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)$")
 
 
 def _entrances() -> dict:
-    with open(Path(__file__).resolve().parent / "entrances.json") as f:
-        return json.load(f)
+    """entrances.json, or {} when it cannot be read: every door is then
+    unknown, which the goal and the dungeon distances already say."""
+    try:
+        with open(Path(__file__).resolve().parent / "entrances.json") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
 
 
 _DOORS: dict | None = None

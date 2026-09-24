@@ -12984,10 +12984,9 @@ class Bridge(discord.Client):
     async def _situation_for(self, key: str, names: list, leader: str):
         """The family's movement picture (situation.Situation), or None.
 
-        EVERY JEV KIND MAY CARRY IT: the activity choice and the dungeon
-        choice do, and a run recovery kind reads it the same way. None when
-        SITUATION_MODE=off or the reads fail, and the question is then asked
-        exactly as it was before this existed.
+        EVERY JEV KIND MAY CARRY IT: the activity choice, the dungeon choice
+        and run recovery do. None when SITUATION_MODE=off or the reads fail,
+        and the question is then asked exactly as it was before this existed.
         """
         leader = str(leader or "")
         if not situation.enabled() or not names or not leader:
@@ -12997,27 +12996,31 @@ class Bridge(discord.Client):
             look = None
             if leader in vision.heads():
                 look = await self._seer.look(leader)
-            slot = self._travel_slot_of(key)
-            now = time.monotonic()
-            levels = [int(r.get("level") or 0) for r in reads["members"] or ()]
-            return situation.build(
-                list(names), leader, reads["snapshot"], self._situation_trail,
-                now, leader_travel=reads["columns"].get(leader, ""),
-                leader_job=reads["jobs"].get(leader, ""),
-                spawn_rows=reads["spawns"], death_rows=reads["deaths"],
-                leader_nodes=reads["leader_nodes"],
-                goal_nodes=reads["goal_nodes"],
-                races=[r.get("race") for r in reads["members"] or ()],
-                weakest_level=min(levels) if levels else 0,
-                holder=slot.holder if slot is not None else None,
-                campaign=slot.campaign if slot is not None else "",
-                columns=reads["columns"],
-                vision=look.state(time.monotonic()) if look is not None else None)
+            return self._situation_build(key, list(names), leader, reads, look)
         except Exception:
             log.exception("situation: the picture for %s could not be read; "
                           "the question is asked without it",
                           campaignqueue._family(key))
             return None
+
+    def _situation_build(self, key: str, names: list, leader: str, reads: dict,
+                         look):
+        """situation.build over the reads, this family's town slot and the
+        head's last look."""
+        slot = self._travel_slot_of(key)
+        levels = [int(r.get("level") or 0) for r in reads["members"] or ()]
+        return situation.build(
+            names, leader, reads["snapshot"], self._situation_trail,
+            time.monotonic(), leader_travel=reads["columns"].get(leader, ""),
+            leader_job=reads["jobs"].get(leader, ""),
+            spawn_rows=reads["spawns"], death_rows=reads["deaths"],
+            leader_nodes=reads["leader_nodes"], goal_nodes=reads["goal_nodes"],
+            races=[r.get("race") for r in reads["members"] or ()],
+            weakest_level=min(levels) if levels else 0,
+            holder=slot.holder if slot is not None else None,
+            campaign=slot.campaign if slot is not None else "",
+            columns=reads["columns"],
+            vision=look.state(time.monotonic()) if look is not None else None)
 
     async def _activity_loop(self) -> None:
         """Ask each family what it does next, on its own clock (#216).
