@@ -1078,13 +1078,13 @@ class TheNeedsTheHandoversAndTheBonds(unittest.TestCase):
             self.assertIn('id="%s"' % node, self.section, node)
 
     def test_every_block_wears_the_same_three_part_rule(self):
-        """A mono index, a 2px line and the label right-aligned in muted, four
-        times. One of the four shouting in an <h2> while the others whisper is
+        """A mono index, a 2px line and the label right-aligned in muted, five
+        times (the fifth is the leveling route, levelroute.py). One of the four shouting in an <h2> while the others whisper is
         what this replaced."""
-        self.assertEqual(self.section.count('class="fsec"'), 4)
-        for index in ("01", "02", "03", "04"):
+        self.assertEqual(self.section.count('class="fsec"'), 5)
+        for index in ("01", "02", "03", "04", "05"):
             self.assertIn('<span class="fsecn">%s</span>' % index, self.section)
-        self.assertEqual(self.section.count('class="fsecline"'), 4)
+        self.assertEqual(self.section.count('class="fsecline"'), 5)
         rule = self.page[self.page.index(".fsecline {") :]
         self.assertIn("height:2px", rule[: rule.index("}")])
 

@@ -1,4 +1,5 @@
-"""Two family decisions asked of Jev: the next dungeon and the quest aim (#95).
+"""Three family decisions asked of Jev: the next dungeon, the leveling zone
+and the quest aim (#95).
 
   dungeon_choice  which of the runs campaignplan.options offers a family whose
                   campaign queue has run out. At level 60 each run carries
@@ -11,6 +12,11 @@
                   is queued when it is sure enough, campaignplan.heuristic's
                   otherwise, and on no answer at all. Asked only with two or
                   more runs to choose from.
+  leveling_zone   which of the hubs levelroute.options offers a family below
+                  the level cap should level at. ACT by default behind
+                  ZONE_THRESHOLD, the same shape as the dungeon: Jev's hub is
+                  carried out when it is sure enough, levelroute.heuristic's
+                  otherwise and on no answer. Asked only with two or more.
   quest_pick      which of the quests questbook.drive_candidates lists the
                   family's aim should drive. This is the bridge's `drive_quest`
                   aim, not the leader's own pick inside mod-overseer's
@@ -33,28 +39,36 @@ from dataclasses import dataclass, replace
 
 import campaignplan
 import jev
+import levelroute
 import situation
 from jev_items import Judgment
 
 KIND_DUNGEON = "dungeon_choice"
+KIND_ZONE = levelroute.KIND
 KIND_QUEST = "quest_pick"
-KINDS = (KIND_DUNGEON, KIND_QUEST)
+KINDS = (KIND_DUNGEON, KIND_ZONE, KIND_QUEST)
 
 # The dungeon's confidence floor. The shadow record's answers ran 0.76 to
 # 0.79 and agreed with the heuristic every time, so 0.7 lets a confident
 # answer act without letting a guess do so.
 DUNGEON_THRESHOLD = 0.7
 
+# The leveling zone's floor: the dungeon's, for the same reason. A family sent
+# to the wrong hub walks for minutes; a guess must not do that.
+ZONE_THRESHOLD = 0.7
+
 
 def policy(kind: str, environ=None) -> jev.Policy:
-    """The dungeon acts by default at DUNGEON_THRESHOLD; the quest aim is
-    shadow only, because no act path is built for it."""
-    if kind == KIND_DUNGEON:
+    """The dungeon and the leveling zone act by default at their thresholds;
+    the quest aim is shadow only, because no act path is built for it."""
+    if kind in (KIND_DUNGEON, KIND_ZONE):
         return jev.policy(
             kind,
             environ=environ,
             default_mode=jev.ACT,
-            default_threshold=DUNGEON_THRESHOLD,
+            default_threshold=DUNGEON_THRESHOLD
+            if kind == KIND_DUNGEON
+            else ZONE_THRESHOLD,
         )
     return jev.policy(kind, environ=environ, act_supported=False)
 
@@ -124,6 +138,7 @@ class DungeonJudgment:
     kind: str = KIND_DUNGEON
     item_guid: int = 0
     item_entry: int = 0
+    prefix: str = "planner"
 
     @property
     def holder(self) -> str:
@@ -153,9 +168,10 @@ class DungeonJudgment:
             else "jev=-"
         )
         return (
-            "planner: family=%s chose %s; kind=%s heuristic=%s %s status=%s "
+            "%s: family=%s chose %s; kind=%s heuristic=%s %s status=%s "
             "latency_ms=%d mode=%s acted=%s why_now=%r facts=%r"
             % (
+                self.prefix,
                 self.subject,
                 self.chosen,
                 self.kind,
@@ -330,6 +346,143 @@ def dungeon_carried(opts, pick, judgment):
     if judgment is None or judgment.acted != jev.JEV:
         return pick
     return next((o for o in opts if o.keyword == judgment.jev), pick)
+
+
+# ---------------------------------------------------------------------------
+# THE LEVELING ZONE
+
+
+def zone_question(facts, opts):
+    """(state, questions) for "where does the family level next", over
+    levelroute Options."""
+    gear = facts.gear or {}
+    who, level = facts.weakest
+    state = {
+        "weakest_member": {"name": who, "level": level},
+        "family": [
+            {
+                "name": str(m.get("name") or ""),
+                "level": int(m.get("level") or 0),
+                "standing_in": levelroute.zone_name(
+                    (facts.zones or {}).get(str(m.get("name")), 0)
+                ),
+                "worn_item_level": _unknown(gear.get(str(m.get("name")), (None,))[0]),
+            }
+            for m in facts.members
+        ],
+        "zones": [
+            {
+                "zone": o.zone,
+                "hub": o.hub,
+                "quest_levels": "%d to %d" % (o.floor, o.ceiling),
+                "weakest_member_ready": o.ready,
+                "open_quests_for_the_family": o.open,
+                "quests_the_family_has_done_there": o.done,
+                "quests_there_somebody_holds": o.held,
+                "quests_there_everyone_holds": o.held_by_all,
+                "hostile_spawns_near_the_hub": o.hostile,
+                "of_them_five_or_more_levels_above_the_weakest": o.above,
+                "hostile_elites_near_the_hub": o.elites,
+                "enemy_faction_towns_in_the_zone": list(o.towns),
+                "family_deaths_there_in_the_last_day": _unknown(o.deaths),
+                "yards_from_the_leader": _unknown(o.yards),
+                "the_family_is_there_now": o.here,
+            }
+            for o in opts
+        ],
+    }
+    criteria = {
+        o.key: "The family levels in %s from %s next (quests %d to %d)."
+        % (o.zone, o.hub, o.floor, o.ceiling)
+        for o in opts
+    }
+    instructions = (
+        "`family` is a party of World of Warcraft adventurers who level "
+        "together, and `zones` is every quest hub of their faction they can "
+        "walk to now: the levels its quests run at, how many quests are left "
+        "there that all of them can take, what they have already done or "
+        "carry there, how dangerous it is near the hub for the weakest member "
+        "(monsters far above them, elites, towns of the enemy faction whose "
+        "guards kill them), how often the family died there in the last day, "
+        "and how far away it is. Choose the hub a sensible group of players "
+        "would level at next: one the weakest member can survive, with plenty "
+        "of quests they can do together, in level order, and not one where "
+        "they keep dying."
+    )
+    return state, {"zone": jev.choice(instructions, criteria)}
+
+
+def zone_facts_line(facts, opts) -> str:
+    """The question's facts in one line for the record, at most 1000 chars."""
+    who, level = facts.weakest
+    parts = ["weakest %s %d" % (who, level)]
+    for o in opts:
+        parts.append(
+            "%s %d-%d open %d done %d held %d/%d above %d/%d elites %d towns %d "
+            "deaths %s yards %s"
+            % (
+                o.key,
+                o.floor,
+                o.ceiling,
+                o.open,
+                o.done,
+                o.held_by_all,
+                o.held,
+                o.above,
+                o.hostile,
+                o.elites,
+                len(o.towns),
+                _unknown(o.deaths),
+                _unknown(o.yards),
+            )
+        )
+    return "; ".join(parts)[:1000]
+
+
+async def zone_ask(client, facts, opts, pick, rule, why_now: str = ""):
+    """The leveling_zone judgment, acted on per `rule`, or None when there is
+    nothing to ask: the kind is off, or there is one hub or none."""
+    if rule.mode == jev.OFF or pick is None or len(opts) < 2:
+        return None
+    base = DungeonJudgment(
+        subject=str(facts.family or facts.weakest[0] or "?"),
+        heuristic=pick.key,
+        heuristic_why=levelroute.heuristic_why(pick),
+        mode=rule.mode,
+        status="",
+        item_name=why_now,
+        facts=zone_facts_line(facts, opts),
+        kind=KIND_ZONE,
+        prefix="levelroute",
+    )
+    state, questions = zone_question(facts, opts)
+    outcome = await client.ask(KIND_ZONE, state, questions)
+    if outcome.answers is None:
+        return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
+    answer = outcome.answers["zone"]
+    offered = {o.key for o in opts}
+    return replace(
+        base,
+        status=outcome.status,
+        latency_ms=outcome.latency_ms,
+        model=outcome.model,
+        jev=answer.choice,
+        confidence=answer.confidence,
+        probabilities=answer.probabilities,
+        acted=rule.acted(
+            pick.key,
+            answer.choice,
+            answer.confidence,
+            can_act=answer.choice in offered,
+        ),
+    )
+
+
+def zone_carried(opts, pick, judgment):
+    """The Option to carry out: Jev's where its answer acted, `pick` otherwise."""
+    if judgment is None or judgment.acted != jev.JEV:
+        return pick
+    return next((o for o in opts if o.key == judgment.jev), pick)
 
 
 # ---------------------------------------------------------------------------
