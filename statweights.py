@@ -120,3 +120,16 @@ def stat_weights(role: str) -> dict:
     """What one point of each stat is worth to this role, in armor points.
     Empty for an unknown role: no opinion, rather than a guess."""
     return dict(STAT_WEIGHTS.get(role, {}))
+
+
+def roles_of_class(class_id) -> frozenset:
+    """Every role `_ROLES` gives this class, whatever its talent tree (#320).
+
+    A warrior can tank or hit, a priest heal or cast: the roles a character
+    could be asked to play with a second set of gear.
+    """
+    try:
+        cid = int(class_id)
+    except (TypeError, ValueError):
+        return frozenset()
+    return frozenset(role for (c, _tree), role in _ROLES.items() if c == cid)

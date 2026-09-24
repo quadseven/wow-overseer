@@ -125,7 +125,7 @@ def item_cell(row: dict, icons: dict[int, str]) -> dict:
     if name is None:
         name = "Item #%d" % row["entry"]
     quality = row.get("quality")
-    return {
+    cell = {
         "entry": row["entry"],
         "name": name,
         "quality": quality,
@@ -133,6 +133,11 @@ def item_cell(row: dict, icons: dict[int, str]) -> dict:
         "letters": letters(name),
         "count": int(row.get("count") or 1),
     }
+    # WHY IT IS HERE (#320), when the caller knows: the bank policy's line for
+    # a carried or banked stack, or the guild bank tab's purpose.
+    if row.get("why"):
+        cell["why"] = str(row["why"])
+    return cell
 
 
 def _container(key: str, name: str, size: int, row: dict | None, icons) -> dict:
@@ -266,6 +271,8 @@ def build_guild_bank(
             "icon": row.get("tab_icon") or None,
             "cells": [None] * GUILD_BANK_TAB_SLOTS,
         }
+        if row.get("tab_holds"):
+            tab["holds"] = str(row["tab_holds"])
         tabs.append(tab)
         by_id[tab["tab"]] = tab
     for row in item_rows:

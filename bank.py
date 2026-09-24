@@ -71,6 +71,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import bankpolicy
 import disposition
 import goals
 import guildbank
@@ -242,9 +243,11 @@ class Move:
     item: str
     count: int
     why: str
-    # PERSONAL for the holder's own bank, GUILD for the guild bank's tab 0.
+    # PERSONAL for the holder's own bank, GUILD for the guild bank.
     # Only a DEPOSIT is ever GUILD: nothing here withdraws from a guild bank.
     to: str = PERSONAL
+    # The guild bank tab a GUILD deposit goes into (guildbank.TABS, #320).
+    tab: int = 0
 
 
 @dataclass(frozen=True)
@@ -572,6 +575,12 @@ class Storage:
     # will wear later (bag_pressure.guild_bank_keeps, #194). Only the guild
     # bank takes these, and only from a member who may deposit there.
     guild_later: dict = field(default_factory=dict)
+    # item guid -> bankpolicy.Placement (#320): the second sets, the raid's
+    # supplies and the gear kept for later. Asked before the keeper rule.
+    policy: dict = field(default_factory=dict)
+    # tab id -> free slots, for every purchased tab (#320). `guild_free` is
+    # tab 0's, kept for the callers that only ever knew one tab.
+    guild_tab_free: dict = field(default_factory=dict)
 
 
 def _trades_and_skills(held, worked_by):
@@ -596,21 +605,42 @@ def _trades_and_skills(held, worked_by):
 
 
 def _guild_room(guild):
-    """(members whose rank may deposit on tab 0, tab 0's free slots)."""
+    """(members whose rank may deposit on every tab, tab 0's free slots)."""
+    depositors, tabs = _guild_tabs(guild)
+    return depositors, tabs.get(0, 0)
+
+
+def _guild_tabs(guild):
+    """(members whose rank may deposit on every tab, tab id -> free slots).
+
+    A tab whose item count was not read is full, the fail-closed answer: the
+    core no-ops a deposit into a full tab without saying so.
+    """
     if not guild or _int(guild.get("purchased_tabs")) <= 0:
-        return frozenset(), 0
+        return frozenset(), {}
     rights = {_int(r) for r in guild.get("deposit_rank_ids", ())}
     depositors = frozenset(
         name
         for name, rank in dict(guild.get("member_ranks") or {}).items()
         if _int(rank, -1) in rights
     )
-    free = max(0, GUILD_TAB_SLOTS - _int(guild.get("tab0_items"), GUILD_TAB_SLOTS))
+    items = dict(guild.get("tab_items") or {})
+    if 0 not in items:
+        items[0] = guild.get("tab0_items")
+    free = {}
+    for tab in range(_int(guild.get("purchased_tabs"))):
+        free[tab] = max(0, GUILD_TAB_SLOTS - _int(items.get(tab), GUILD_TAB_SLOTS))
     return depositors, free
 
 
 def storage_from(
-    held, worked_by=None, named=None, guild=None, routed=None, guild_later=None
+    held,
+    worked_by=None,
+    named=None,
+    guild=None,
+    routed=None,
+    guild_later=None,
+    policy=None,
 ):
     """The Storage this family is today, from what the bridge already reads.
 
@@ -626,7 +656,8 @@ def storage_from(
     queue of refusals.
     """
     trades, skills = _trades_and_skills(held, worked_by)
-    depositors, free = _guild_room(guild)
+    depositors, tabs = _guild_tabs(guild)
+    free = tabs.get(0, 0)
     return Storage(
         trades={name: frozenset(t) for name, t in trades.items()},
         family_trades=frozenset(t for own in trades.values() for t in own),
@@ -636,6 +667,8 @@ def storage_from(
         guild_free=free,
         routed=dict(routed or {}),
         guild_later=dict(guild_later or {}),
+        policy=dict(policy or {}),
+        guild_tab_free=tabs,
     )
 
 
@@ -711,6 +744,12 @@ def _class_reason(holding, storage):
     read on: a guild-kept BoE's reason, '' for a bag or a class the rule never
     stores, None for everything else."""
     item = holding.item
+    # THE BANK POLICY FIRST (#320): a second set, a raid supply or gear kept
+    # for later is stored whatever its class, which is how a fire resistance
+    # set and a stack of potions get past `_NEVER_STORED`.
+    placed = storage.policy.get(holding.guid)
+    if placed is not None:
+        return placed.why
     if (
         item.item_class in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR)
         and not holding.bound
@@ -820,7 +859,7 @@ def _deposit_candidates(member, family, totals, storage):
     return candidates
 
 
-def _deposit(member, holding, why, to=PERSONAL):
+def _deposit(member, holding, why, to=PERSONAL, tab=0):
     return Move(
         character=member.name,
         verb=DEPOSIT,
@@ -829,31 +868,60 @@ def _deposit(member, holding, why, to=PERSONAL):
         count=holding.count,
         why=why,
         to=to,
+        tab=tab if to == GUILD else 0,
     )
+
+
+def _guild_tab_for(holding, storage, guild_room):
+    """The tab a guild-bound stack goes into, or None when no tab has room.
+
+    The policy's tab (#320) when the guild has bought it and it has room;
+    else Materials, tab 0, the tab every stored stack went to before. A BoE
+    kept for a lower-level guildmate (#194) is gear kept for later.
+    """
+    placed = storage.policy.get(holding.guid)
+    if placed is not None and placed.tab is not None:
+        wanted = placed.tab
+    elif holding.guid in storage.guild_later:
+        wanted = bankpolicy.GEAR_TAB
+    else:
+        wanted = bankpolicy.MATERIALS_TAB
+    for tab in (wanted, bankpolicy.MATERIALS_TAB):
+        if guild_room.get(tab, 0) > 0:
+            return tab
+    return None
 
 
 def _plan_deposits(member, candidates, storage, guild_room, visit_limit, notes):
     """(personal deposits, guild deposits, guild room left) for one member.
 
-    A keeper that may go to the guild goes there while the tab has room and
+    A keeper that may go to the guild goes there while its tab has room and
     this member's vault visit has room; past either, it is offered to the
     banker, because the two trips are separate and a stack that leaves the
-    bags by either one has done what it was planned for.
+    bags by either one has done what it was planned for. A second set the
+    bank policy files (#320) goes to the holder's own bank and never the
+    guild's. `guild_room` is tab id -> free slots, and is updated in place.
     """
     deposits, sent = [], []
     room = member.bank_free
     for holding, why, keeper in candidates:
+        placed = storage.policy.get(holding.guid) if storage else None
+        personal = placed is not None and placed.to == bankpolicy.PERSONAL
         to_guild = (
-            keeper and not holding.bound and member.name in storage.guild_depositors
+            keeper
+            and not personal
+            and not holding.bound
+            and member.name in storage.guild_depositors
         )
-        if to_guild and guild_room <= 0:
+        tab = _guild_tab_for(holding, storage, guild_room) if to_guild else None
+        if to_guild and tab is None:
             notes.append(
                 "the guild bank's tab is full, so %s goes to %s's own bank"
                 % (holding.item.name, member.name)
             )
-        if to_guild and guild_room > 0 and len(sent) < visit_limit:
-            guild_room -= 1
-            sent.append(_deposit(member, holding, why, GUILD))
+        if to_guild and tab is not None and len(sent) < visit_limit:
+            guild_room[tab] -= 1
+            sent.append(_deposit(member, holding, why, GUILD, tab))
             continue
         if len(deposits) >= visit_limit:
             notes.append(
@@ -923,6 +991,17 @@ def _plan_withdrawals(member, family, totals, storage, space, budget, notes):
     return withdrawals
 
 
+def _room_by_tab(storage):
+    """tab id -> free slots, from the Storage; tab 0 from `guild_free` when
+    the Storage was built without a per-tab read."""
+    if storage is None:
+        return {}
+    room = dict(storage.guild_tab_free or {})
+    if not room and storage.guild_free > 0:
+        room[0] = storage.guild_free
+    return room
+
+
 def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None):
     """Every bank move worth making, in the order it should be sent.
 
@@ -946,7 +1025,7 @@ def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None):
     """
     totals = reagent_totals(members)
     moves, notes, guild = [], [], []
-    guild_room = storage.guild_free if storage else 0
+    guild_room = _room_by_tab(storage)
     for member in sorted(members, key=lambda m: m.name):
         candidates = _deposit_candidates(member, family, totals, storage)
         deposits, sent, guild_room = _plan_deposits(
@@ -987,7 +1066,7 @@ def command(move):
     it goes to DoGuild as a `kind='guild'` row and not to DoBank.
     """
     if move.to == GUILD:
-        return guildbank.format_item_deposit(item_guid=move.guid)
+        return guildbank.format_item_deposit(item_guid=move.guid, tab=move.tab)
     return "%s guid:%d" % (move.verb, move.guid)
 
 
