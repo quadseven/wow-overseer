@@ -2625,20 +2625,19 @@ def _level_facts(key: str, fam: dict):
                              args, "the worn gear")
     where = _fetch_positions(names)
     leader = str(fam["leader"].get("name") or "")
-    spot = where.get(leader) or {}
-    here = None
-    if spot.get("pos_x") is not None and spot.get("pos_y") is not None:
-        here = (int(spot.get("map_id") or 0), int(spot.get("zone_id") or 0),
-                float(spot["pos_x"]), float(spot["pos_y"]))
     return levelroute.Facts(
-        family=key or leader, members=tuple(members), here=here,
+        family=key or leader, members=tuple(members),
+        here=levelroute.here_of(where.get(leader)),
         zones={n: int(r.get("zone_id") or 0) for n, r in where.items()},
-        quests=quests,
-        rewarded=None if rewarded is None else levelroute.by_name(rewarded, "quest"),
-        held=None if held is None else levelroute.by_name(held, "quest"),
-        spawns=spawns,
-        deaths=None if died is None else levelroute.deaths(died),
-        gear=None if worn is None else campaignplan.gear(worn))
+        quests=quests, rewarded=_read_or_none(levelroute.by_name, rewarded, "quest"),
+        held=_read_or_none(levelroute.by_name, held, "quest"), spawns=spawns,
+        deaths=_read_or_none(levelroute.deaths, died),
+        gear=_read_or_none(campaignplan.gear, worn))
+
+
+def _read_or_none(shape, rows, *args):
+    """`shape(rows, *args)`, or None for a read the realm could not answer."""
+    return None if rows is None else shape(rows, *args)
 
 
 def _family_aims(names: list) -> dict:
@@ -13441,37 +13440,53 @@ class Bridge(discord.Client):
         chosen = await self._level_choose(key, facts, opts, pick)
         await self._level_carry_out(key, fam, own, facts, chosen)
 
+    def _level_standing(self, key: str, sig: tuple, opts: list, now: float):
+        """The standing choice while its facts hold and it is still offered,
+        else None."""
+        held = self._level_choice.get(key)
+        if not held or held["sig"] != sig or now - held["at"] >= LEVEL_ASK_SECONDS:
+            return None
+        return next((o for o in opts if o.key == held["key"]), None)
+
+    def _level_why_now(self, key: str, sig: tuple, now: float) -> str:
+        held = self._level_choice.get(key)
+        if held is None:
+            return "first look"
+        if held["sig"] != sig:
+            return "the facts changed"
+        return "the standing choice is %d minutes old" % int((now - held["at"]) // 60)
+
+    async def _level_ask(self, key: str, facts, opts: list, pick, why_now: str):
+        """Jev's leveling_zone judgment, recorded, or None when not asked."""
+        rule = jev_choices.policy(jev_choices.KIND_ZONE)
+        if rule.mode == jev.OFF or not self._jev.ready(jev_choices.KIND_ZONE):
+            return None
+        judgment = await jev_choices.zone_ask(self._jev, facts, opts, pick, rule,
+                                              why_now)
+        if judgment is None:
+            return None
+        log.info("%s", judgment.line())
+        try:
+            await asyncio.to_thread(_insert_jev_judgment, judgment)
+        except Exception:
+            log.exception("levelroute: the zone choice for %s was not recorded",
+                          campaignqueue._family(key))
+        return judgment
+
     async def _level_choose(self, key: str, facts, opts: list, pick):
         """The hub to carry out: the standing choice while its facts hold,
         else a fresh one, Jev's where it acted and the heuristic's otherwise."""
         now = time.monotonic()
-        here = facts.here[1] if facts.here else 0
-        sig = (facts.weakest[1], tuple(o.key for o in opts), here)
-        held = self._level_choice.get(key)
-        if (held and held["sig"] == sig and now - held["at"] < LEVEL_ASK_SECONDS
-                and any(o.key == held["key"] for o in opts)):
-            return next(o for o in opts if o.key == held["key"])
-        why_now = ("first look" if held is None
-                   else "the facts changed" if held["sig"] != sig
-                   else "the standing choice is %d minutes old"
-                   % int((now - held["at"]) // 60))
-        judgment = None
-        rule = jev_choices.policy(jev_choices.KIND_ZONE)
-        if rule.mode != jev.OFF and self._jev.ready(jev_choices.KIND_ZONE):
-            judgment = await jev_choices.zone_ask(
-                self._jev, facts, opts, pick, rule, why_now)
-        if judgment is not None:
-            log.info("%s", judgment.line())
-            try:
-                await asyncio.to_thread(_insert_jev_judgment, judgment)
-            except Exception:
-                log.exception("levelroute: the zone choice for %s was not "
-                              "recorded", campaignqueue._family(key))
+        sig = (facts.weakest[1], tuple(o.key for o in opts),
+               facts.here[1] if facts.here else 0)
+        standing = self._level_standing(key, sig, opts, now)
+        if standing is not None:
+            return standing
+        why_now = self._level_why_now(key, sig, now)
+        judgment = await self._level_ask(key, facts, opts, pick, why_now)
         chosen = jev_choices.zone_carried(opts, pick, judgment)
-        by = ("Jev" if chosen is not pick
-              else "Jev and the heuristic, agreeing"
-              if judgment is not None and judgment.acted == jev.BOTH
-              else "the heuristic")
+        by = jev_choices.zone_chooser(judgment)
+        held = self._level_choice.get(key)
         if held is None or held["key"] != chosen.key:
             log.info("%s", levelroute.line(
                 campaignqueue._family(key), chosen, by, why_now))

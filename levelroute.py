@@ -263,17 +263,18 @@ QUESTS_SQL = (
 )
 
 DANGER_SQL = (
-    "SELECT c.map AS map_id, ROUND(c.position_x / %d) AS cx, "  # noqa: S608
-    "ROUND(c.position_y / %d) AS cy, ct.minlevel AS level, "
+    "SELECT c.map AS map_id, ROUND(c.position_x / " + str(int(CELL)) + ") AS cx, "  # noqa: S608
+    "ROUND(c.position_y / " + str(int(CELL)) + ") AS cy, ct.minlevel AS level, "
     "(ct.`rank` IN (1, 2)) AS elite, "
     "CASE WHEN (ft.FactionGroup & 2) THEN 2 WHEN (ft.FactionGroup & 4) THEN 4 "
     "ELSE 0 END AS side, COUNT(*) AS n "
     "FROM acore_world.creature c "
     "JOIN acore_world.creature_template ct ON ct.entry = c.id "
     "JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
-    "WHERE c.map IN (%s) AND (ft.EnemyGroup & 7) > 0 "
-    "GROUP BY 1, 2, 3, 4, 5, 6"
-) % (CELL, CELL, ", ".join(str(int(m)) for m in classic.CLASSIC_CONTINENTS))
+    "WHERE c.map IN ("
+    + ", ".join(str(int(m)) for m in classic.CLASSIC_CONTINENTS)
+    + ") AND (ft.EnemyGroup & 7) > 0 GROUP BY 1, 2, 3, 4, 5, 6"
+)
 
 DEATHS_SQL = (
     "SELECT zone, COUNT(*) AS n FROM overseer_death "
@@ -371,15 +372,10 @@ def towns(team: str, spawns) -> tuple:
     out = []
     seen = set()
     for node in flightlearn.NODES:
-        mine = node.horde if team == HORDE else node.alliance
-        theirs = node.alliance if team == HORDE else node.horde
-        if mine or not theirs or node.map_id not in classic.CLASSIC_CONTINENTS:
+        named = _their_town_node(node, team)
+        if named is None:
             continue
-        if not (node.x or node.y) or "," not in node.name:
-            continue
-        name, zone = (part.strip() for part in node.name.split(",", 1))
-        if name.lower().startswith(("quest", "transport", "generic")):
-            continue
+        name, zone = named
         point = (node.map_id, node.x, node.y)
         guards = sum(
             c.n for c in theirs_near if _near(c.map_id, c.x, c.y, point, TOWN_YARDS)
@@ -388,6 +384,21 @@ def towns(team: str, spawns) -> tuple:
             seen.add(name)
             out.append((name, zone, node.map_id, node.x, node.y))
     return tuple(out)
+
+
+def _their_town_node(node, team: str):
+    """(town, zone) off a flight point only the other side has on a classic
+    continent, or None. Quest, transport and test nodes are not towns."""
+    mine = node.horde if team == HORDE else node.alliance
+    theirs = node.alliance if team == HORDE else node.horde
+    if mine or not theirs or node.map_id not in classic.CLASSIC_CONTINENTS:
+        return None
+    if not (node.x or node.y) or "," not in node.name:
+        return None
+    name, zone = (part.strip() for part in node.name.split(",", 1))
+    if name.lower().startswith(("quest", "transport", "generic")):
+        return None
+    return name, zone
 
 
 def towns_in(hub: "Hub", found) -> tuple:
@@ -436,6 +447,35 @@ def bands(quest_rows, team: str) -> dict:
         )
         for zone, found in levels.items()
     }
+
+
+def here_of(spot) -> tuple | None:
+    """(map, zone id, x, y) off one overseer_snapshot row, or None."""
+    spot = spot or {}
+    if spot.get("pos_x") is None or spot.get("pos_y") is None:
+        return None
+    return (
+        int(spot.get("map_id") or 0),
+        int(spot.get("zone_id") or 0),
+        float(spot["pos_x"]),
+        float(spot["pos_y"]),
+    )
+
+
+# The words for who made a recorded choice, by overseer_jev_judgment.acted.
+CHOOSERS = {"jev": "Jev", "both": "Jev and the heuristic, agreeing"}
+HEURISTIC_CHOOSER = "the heuristic"
+
+
+def recorded_choice(row) -> tuple:
+    """(hub key, who chose it) off the latest leveling_zone judgment row, or
+    ("", "") for none. The hub carried out: Jev's where it acted, else the
+    heuristic's."""
+    if not row:
+        return "", ""
+    acted = str(row.get("acted") or "")
+    key = row.get("jev") if acted == "jev" else row.get("heuristic")
+    return str(key or ""), CHOOSERS.get(acted, HEURISTIC_CHOOSER)
 
 
 # --- the facts -----------------------------------------------------------
@@ -612,48 +652,44 @@ def _crossing_blocked() -> bool:
     return crossing.first_blocked_leg() is not None
 
 
+def _refusal(facts: Facts, hub: Hub, band, level: int, home, near) -> str:
+    """Why one hub is not offered at `level`, or ""."""
+    who = facts.weakest[0] or "the weakest"
+    if not hub.friendly or hub.point is None:
+        return "no %s flight master stands there" % hub.team
+    if band is None:
+        return "no quest there is one the %s can take" % hub.team
+    if band[0] > level + council.NEAR_ENOUGH:
+        return "too high: its quests start at %d and %s is %d" % (band[0], who, level)
+    if band[1] < level - OUTGROWN:
+        return "outgrown: its quests top out at %d" % band[1]
+    if home is not None and _continent(hub.map_id) != home and _crossing_blocked():
+        return "on another continent, and the crossing cannot be made yet"
+    beside = towns_beside(hub, near)
+    if beside:
+        return "its flight point stands beside %s" % ", ".join(beside)
+    opened, _done = zone_work(facts, hub.zone_id, level)
+    if facts.quests is not None and opened < MIN_OPEN:
+        return "done: %d quest%s left there for the family at %d" % (
+            opened,
+            "" if opened == 1 else "s",
+            level,
+        )
+    return ""
+
+
 def refusals(facts: Facts, level: int | None = None) -> dict:
     """Hub key -> why it is not offered, for every hub of the family's side."""
     team = facts.team
-    who, weakest = facts.weakest
-    level = weakest if level is None else int(level)
     if not team:
         return {}
+    level = facts.weakest[1] if level is None else int(level)
     found = bands(facts.quests or (), team)
     near = towns(team, facts.spawns or ())
     home = _continent(facts.here[0]) if facts.here else None
     out = {}
     for hub in hubs_for(team):
-        band = found.get(hub.zone_id)
-        why = ""
-        if not hub.friendly or hub.point is None:
-            why = "no %s flight master stands there" % team
-        elif band is None:
-            why = "no quest there is one the %s can take" % team
-        elif band[0] > level + council.NEAR_ENOUGH:
-            why = "too high: its quests start at %d and %s is %d" % (
-                band[0],
-                who or "the weakest",
-                level,
-            )
-        elif band[1] < level - OUTGROWN:
-            why = "outgrown: its quests top out at %d" % band[1]
-        elif (
-            home is not None and _continent(hub.map_id) != home and _crossing_blocked()
-        ):
-            why = "on another continent, and the crossing cannot be made yet"
-        else:
-            beside = towns_beside(hub, near)
-            if beside:
-                why = "its flight point stands beside %s" % ", ".join(beside)
-            else:
-                opened, _done = zone_work(facts, hub.zone_id, level)
-                if facts.quests is not None and opened < MIN_OPEN:
-                    why = "done: %d quest%s left there for the family at %d" % (
-                        opened,
-                        "" if opened == 1 else "s",
-                        level,
-                    )
+        why = _refusal(facts, hub, found.get(hub.zone_id), level, home, near)
         if why:
             out[hub.key] = why
     return out

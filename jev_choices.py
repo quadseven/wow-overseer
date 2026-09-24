@@ -485,6 +485,15 @@ def zone_carried(opts, pick, judgment):
     return next((o for o in opts if o.key == judgment.jev), pick)
 
 
+def zone_chooser(judgment) -> str:
+    """Who the carried hub is said to be chosen by, off the judgment."""
+    if judgment is None:
+        return levelroute.HEURISTIC_CHOOSER
+    return levelroute.recorded_choice(
+        {"acted": judgment.acted, "jev": judgment.jev, "heuristic": judgment.heuristic}
+    )[1]
+
+
 # ---------------------------------------------------------------------------
 # THE QUEST AIM
 

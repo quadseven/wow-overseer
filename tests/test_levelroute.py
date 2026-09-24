@@ -290,6 +290,27 @@ class ThePage(unittest.TestCase):
         self.assertEqual(view["now"], "At the level cap: no leveling zone.")
 
 
+class TheRecord(unittest.TestCase):
+    def test_the_recorded_choice_is_the_hub_carried_out(self):
+        row = {"acted": "jev", "jev": "stonetalon", "heuristic": "barrens"}
+        self.assertEqual(levelroute.recorded_choice(row), ("stonetalon", "Jev"))
+        row = {"acted": "heuristic", "jev": "stonetalon", "heuristic": "barrens"}
+        self.assertEqual(levelroute.recorded_choice(row), ("barrens", "the heuristic"))
+        row = {"acted": "both", "jev": "barrens", "heuristic": "barrens"}
+        self.assertEqual(
+            levelroute.recorded_choice(row),
+            ("barrens", "Jev and the heuristic, agreeing"),
+        )
+        self.assertEqual(levelroute.recorded_choice(None), ("", ""))
+
+    def test_a_snapshot_row_without_a_position_is_nowhere(self):
+        self.assertIsNone(levelroute.here_of({"map_id": 1, "pos_x": None}))
+        self.assertEqual(
+            levelroute.here_of({"map_id": 1, "zone_id": 17, "pos_x": 1, "pos_y": 2}),
+            (1, 17, 1.0, 2.0),
+        )
+
+
 class JevChoosesTheZone(unittest.TestCase):
     def ask(self, fake, key="k", environ=None, deaths=None):
         from test_jev_items import FakeJev  # noqa: F401 - the shared fake
@@ -339,6 +360,8 @@ class JevChoosesTheZone(unittest.TestCase):
         self.assertEqual(
             jev_choices.zone_carried(opts, pick, judgment).key, "stonetalon"
         )
+        self.assertEqual(jev_choices.zone_chooser(judgment), "Jev")
+        self.assertEqual(jev_choices.zone_chooser(None), "the heuristic")
         self.assertTrue(
             judgment.line().startswith("levelroute: family=Zug chose stonetalon")
         )

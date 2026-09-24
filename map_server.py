@@ -3049,59 +3049,59 @@ def _level_world(cur) -> tuple:
     return _LEVEL_WORLD
 
 
-def _fetch_levelroute(names: list, key: str) -> dict:
-    """levelroute.page_view for one family, with the choice the bridge
-    recorded and the family's campaign queue line. Names are lead first."""
-    if not names:
-        return levelroute.page_view(levelroute.Facts(family=key, members=()))
+def _level_reads(names: list, key: str) -> dict:
+    """The rows /api/levelroute is drawn from, for one family. Reads only."""
     holes = ", ".join(["%s"] * len(names))
     args = tuple(names)
     conn = _connect()
     try:
         with conn.cursor() as cur:
             quests, spawns = _level_world(cur)
-            members = _wide_guarded(
-                cur, levelroute.MEMBERS_SQL.format(holes=holes), args, "",
-                "characters")
-            rewarded = _wide_guarded(
-                cur, campaignplan.REWARDED_SQL.format(holes=holes), args, "",
-                "character_queststatus_rewarded")
-            held = _wide_guarded(
-                cur, levelroute.HELD_SQL.format(holes=holes), args, "",
-                "character_queststatus")
-            died = _wide_guarded(
-                cur, levelroute.DEATHS_SQL.format(holes=holes),
-                args + (levelroute.DEATH_HOURS,), "", "overseer_death")
-            where = _wide_guarded(
-                cur, _LEVEL_POSITIONS.format(holes=holes), args, "",
-                "overseer_snapshot")
-            choice = _wide_guarded(
-                cur, _LEVEL_CHOICE, (levelroute.KIND, key[:12]), "",
-                "overseer_jev_judgment")
-            queue = _queue_views(cur).get(key)
+            return {
+                "quests": quests,
+                "spawns": spawns,
+                "members": _wide_guarded(
+                    cur, levelroute.MEMBERS_SQL.format(holes=holes), args, "",
+                    "characters"),
+                "rewarded": _wide_guarded(
+                    cur, campaignplan.REWARDED_SQL.format(holes=holes), args, "",
+                    "character_queststatus_rewarded"),
+                "held": _wide_guarded(
+                    cur, levelroute.HELD_SQL.format(holes=holes), args, "",
+                    "character_queststatus"),
+                "died": _wide_guarded(
+                    cur, levelroute.DEATHS_SQL.format(holes=holes),
+                    args + (levelroute.DEATH_HOURS,), "", "overseer_death"),
+                "where": _wide_guarded(
+                    cur, _LEVEL_POSITIONS.format(holes=holes), args, "",
+                    "overseer_snapshot"),
+                "choice": _wide_guarded(
+                    cur, _LEVEL_CHOICE, (levelroute.KIND, key[:12]), "",
+                    "overseer_jev_judgment"),
+                "queue": _queue_views(cur).get(key) or {},
+            }
     finally:
         conn.close()
-    spots = {r["name"]: r for r in where}
-    lead = spots.get(names[0]) or {}
-    here = None
-    if lead.get("pos_x") is not None and lead.get("pos_y") is not None:
-        here = (int(lead.get("map_id") or 0), int(lead.get("zone_id") or 0),
-                float(lead["pos_x"]), float(lead["pos_y"]))
+
+
+def _fetch_levelroute(names: list, key: str) -> dict:
+    """levelroute.page_view for one family, with the choice the bridge
+    recorded and the family's campaign queue line. Names are lead first."""
+    if not names:
+        return levelroute.page_view(levelroute.Facts(family=key, members=()))
+    got = _level_reads(names, key)
+    spots = {r["name"]: r for r in got["where"]}
     facts = levelroute.Facts(
-        family=key, members=tuple(members), here=here,
+        family=key, members=tuple(got["members"]),
+        here=levelroute.here_of(spots.get(names[0])),
         zones={n: int(r.get("zone_id") or 0) for n, r in spots.items()},
-        quests=quests, rewarded=levelroute.by_name(rewarded, "quest"),
-        held=levelroute.by_name(held, "quest"), spawns=spawns,
-        deaths=levelroute.deaths(died))
-    chosen, chooser = "", ""
-    if choice:
-        row = choice[0]
-        acted = str(row.get("acted") or "")
-        chosen = str(row.get("jev") if acted == "jev" else row.get("heuristic") or "")
-        chooser = {"jev": "Jev", "both": "Jev and the heuristic, agreeing"}.get(
-            acted, "the heuristic")
+        quests=got["quests"], rewarded=levelroute.by_name(got["rewarded"], "quest"),
+        held=levelroute.by_name(got["held"], "quest"), spawns=got["spawns"],
+        deaths=levelroute.deaths(got["died"]))
+    chosen, chooser = levelroute.recorded_choice(
+        got["choice"][0] if got["choice"] else None)
     view = levelroute.page_view(facts, chosen, chooser)
-    view["queue"] = (queue or {}).get("line") or ""
+    view["queue"] = got["queue"].get("line") or ""
     return view
 
 
