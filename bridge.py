@@ -9004,7 +9004,7 @@ class Bridge(discord.Client):
                 if not missing_said:
                     log.warning(
                         "loot council: overseer_loot_council is missing - "
-                        "mod-overseer's 2026_09_24_00_overseer_loot_council.sql "
+                        "mod-overseer's 2026_09_24_01_overseer_loot_council.sql "
                         "is not applied, so there is nothing to answer")
                     missing_said = True
                 await asyncio.sleep(60)
