@@ -88,8 +88,14 @@ def keyword_for(text: str) -> str | None:
     return NAMES.get(folded)
 
 
+# How each raid keyword is said. Every jobs.RAID_KEYWORDS entry needs one, or
+# the queue would speak a bare keyword; tests/test_raidrun.py holds the two
+# sets equal so they move together.
+PLACES = {MOLTEN_CORE: "Molten Core"}
+
+
 def place(keyword: str) -> str:
-    return {MOLTEN_CORE: "Molten Core"}.get(keyword, keyword)
+    return PLACES.get(keyword, keyword)
 
 
 def refusal(keyword: str, runs: int, level_rows: list) -> str:

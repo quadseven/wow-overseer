@@ -2208,10 +2208,14 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
                         "could be placed, so no seat and no job is written",
                         campaignqueue._family(family), keyword)
             return _withheld(withheld, "nobody could be placed in the raid")[0]
+        # ONE STATEMENT FOR ALL FORTY: pymysql's executemany folds an INSERT
+        # ... VALUES into a single multi-row insert, so a failure leaves the
+        # family's seats deleted rather than half written, and no job follows
+        # (the exception leaves before the job loop). The next queue pass
+        # writes them again.
         try:
             cur.execute(raidrun.DELETE_SEATS_SQL, (family, keyword))
-            for seat in seats:
-                cur.execute(raidrun.INSERT_SEAT_SQL, seat)
+            cur.executemany(raidrun.INSERT_SEAT_SQL, seats)
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1146:
                 log.warning(

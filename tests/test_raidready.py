@@ -323,7 +323,7 @@ class EachRaiderIsReported(unittest.TestCase):
     def test_the_card_says_what_the_run_does_and_that_clearing_is_off(self):
         self.assertIn("moltencore 1", self.card["run_line"])
         self.assertIn("does not clear", self.card["run_line"])
-        self.assertIn("validated live", self.card["clearing_line"])
+        self.assertIn("none of it has been validated live", self.card["clearing_line"])
 
     def test_the_attunement_path_is_on_the_card(self):
         att = self.card["attunement"]

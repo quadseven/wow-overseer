@@ -51,6 +51,10 @@ class TheKeywordIsAnOrderAndNeverAPlan(unittest.TestCase):
         self.assertFalse(jobs.RAID_KEYWORDS & jobs.PORTAL_KEYWORDS)
         self.assertIsNone(jobs.dungeon_job("moltencore"))
 
+    def test_every_raid_keyword_has_a_name_to_be_said_by(self):
+        self.assertEqual(set(jobs.RAID_KEYWORDS), set(raidrun.PLACES))
+        self.assertEqual(set(jobs.RAID_KEYWORDS), set(raidrun.NAMES.values()))
+
     def test_describe_says_it_does_not_clear(self):
         said = jobs.describe("raid:moltencore")
         self.assertIn("does not clear", said)
@@ -181,6 +185,11 @@ def _load_drive_raid(events, members, missing_table=False):
             else:
                 events.append(("read", args))
 
+        def executemany(self, sql, rows):
+            if missing_table:
+                raise MissingTable(1146, "Table doesn't exist")
+            events.append(("seat", sql.split()[0], list(rows)))
+
         def fetchall(self):
             return list(members)
 
@@ -233,7 +242,8 @@ class TheBridgeWritesSeatsThenTheJob(unittest.TestCase):
         self.assertEqual("read", kinds[0])
         self.assertEqual(("seat", "DELETE", ("Grug", "moltencore")), events[1])
         inserts = [e for e in events if e[0] == "seat" and e[1] == "INSERT"]
-        self.assertEqual(40, len(inserts))
+        self.assertEqual(1, len(inserts), "the forty seats are one statement")
+        self.assertEqual(40, len(inserts[0][2]))
         self.assertEqual(("job", "Grug", "raid:moltencore"), events[-1])
         self.assertLess(kinds.index("seat"), kinds.index("job"))
 
