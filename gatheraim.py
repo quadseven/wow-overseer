@@ -103,6 +103,9 @@ class Spawn:
     z: float
     lock_id: int
     name: str = ""
+    # `gameobject.guid`, the spawn id a walk-to-spawn row names; 0 where the
+    # survey did not read it.
+    guid: int = 0
 
 
 @dataclass(frozen=True)

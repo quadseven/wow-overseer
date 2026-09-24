@@ -52,6 +52,8 @@ import guildwork
 import holdings
 import crafters
 import guildcorps
+import guildjobs
+import natural
 import raidlineup
 import raidroles
 import preraid
@@ -2141,6 +2143,25 @@ _LINEUP_CORPS_CRAFTS = (
     "SELECT target_name, source, status, result FROM overseer_command "
     "WHERE kind = 'cast' AND source LIKE %s ORDER BY id"
 )
+# THE GUILD JOBS (#194): what each member posted and sold for its guild, who
+# knows Ritual of Summoning, and who has restarted naturally. `kind = 'mail'`
+# and `kind = 'sell'` first, for the (kind, status, updated_at) index.
+_LINEUP_JOBS = (
+    "SELECT target_name, source, status, result FROM overseer_command "
+    "WHERE kind IN ('mail', 'sell') AND source LIKE %s ORDER BY id"
+)
+_LINEUP_RITUAL = (
+    "SELECT c.name FROM character_spell s JOIN characters c ON c.guid = s.guid "
+    "JOIN guild_member gm ON gm.guid = c.guid WHERE s.spell = %s "
+    "AND gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
+)
+_LINEUP_NATURAL = (
+    "SELECT c.name, n.part FROM overseer_naturalized n "
+    "JOIN characters c ON c.guid = n.guid JOIN guild_member gm ON gm.guid = c.guid "
+    "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
+)
 
 # EVERY MEMBER'S RECIPE TRADES (#248), for the designated-crafters register
 # the Lineup page shows. The skill ids are crafters.TRADES, bound as values.
@@ -2186,6 +2207,14 @@ def _fetch_lineup() -> dict:
             corps_crafts = _wide_guarded(
                 cur, _LINEUP_CORPS_CRAFTS, (guildcorps.SOURCE + ":craft:%",),
                 "", "overseer_command")
+            job_rows = _wide_guarded(
+                cur, _LINEUP_JOBS, (guildjobs.SOURCE + ":%",), "", "overseer_command")
+            ritual = _wide_guarded(
+                cur, _LINEUP_RITUAL.format(holes=holes),  # noqa: S608
+                (guildjobs.RITUAL_OF_SUMMONING, *names), "", "character_spell")
+            ledger = _wide_guarded(
+                cur, _LINEUP_NATURAL.format(holes=holes),  # noqa: S608
+                tuple(names), "", "overseer_naturalized")
     finally:
         conn.close()
     return {
@@ -2196,7 +2225,46 @@ def _fetch_lineup() -> dict:
         "skills": skills,
         "corps_skills": corps_skills,
         "corps_crafts": corps_crafts,
+        "job_rows": job_rows,
+        "ritual": {str(r.get("name") or "") for r in ritual},
+        # natural.py's rule: a guild bot counts once the ledger holds its
+        # reset. The page names no family member's work, so no dues takers.
+        "natural": natural.contributors(
+            [r.get("name") for r in rows], names, natural.parts_by_name(ledger), ()),
     }
+
+
+def _job_doing(lineup: dict, fetched: dict) -> dict:
+    """name -> what each placed member does now, as the page can read it:
+    guildjobs.page_doing over its level, gathering skills, the ritual and the
+    natural gate (#194)."""
+    skills = _job_skills(fetched.get("corps_skills"))
+    known = fetched.get("ritual") or set()
+    natural = fetched.get("natural") or set()
+    return {
+        m["name"]: guildjobs.page_doing(
+            role, m.get("level"), skills.get(m["name"], {}),
+            {guildjobs.RITUAL_OF_SUMMONING} if m["name"] in known else set(),
+            m["name"] in natural)
+        for m, role in _placed_job_members(lineup)
+    }
+
+
+def _job_skills(rows):
+    skills = {}
+    for row in rows or ():
+        skills.setdefault(str(row.get("name") or ""), {})[
+            int(row.get("skill") or 0)] = (
+                int(row.get("value") or 0), int(row.get("max") or 0))
+    return skills
+
+
+def _placed_job_members(lineup):
+    return ([(m, guildjobs.RAIDER) for g in lineup.get("groups") or ()
+             for m in g.get("members") or ()]
+            + [(m, guildjobs.MAINTENANCE)
+               for m in lineup.get("maintenance") or ()]
+            + [(m, guildjobs.SUMMONER) for m in lineup.get("summoners") or ()])
 
 
 def _crafter_register(members: list, roster: set, skill_rows: list) -> list:
@@ -4624,6 +4692,7 @@ class Handler(BaseHTTPRequestHandler):
                 })
             payload = []
             contributed = guildwork.contributions(fetched.get("dues"))
+            posted = guildjobs.contributions(fetched.get("job_rows"))
             made = guildcorps.bags_made(fetched.get("corps_crafts"))
             masters = fetched.get("masters") or {}
             for guild in guilds.values():
@@ -4636,6 +4705,11 @@ class Handler(BaseHTTPRequestHandler):
                 # Each maintenance member's job and what it has posted (#234).
                 guildwork.attach_work(
                     lineup, masters.get(guild["guildid"]) or "", contributed)
+                # EVERY PLACED MEMBER'S JOB AND WHAT IT GAVE (#194): dues,
+                # materials posted and grey loot sold, by role.
+                guildjobs.attach_jobs(
+                    lineup, _job_doing(lineup, fetched), posted, contributed,
+                    family=roster)
                 # The side the guild fights for, off its family's own races.
                 lineup["faction"] = achievements.faction_of(
                     m["race"] for m in guild["members"] if m["name"] in roster)
