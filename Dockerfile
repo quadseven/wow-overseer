@@ -39,7 +39,7 @@ COPY core.py bridge.py voice.py transform.py \
      bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py disposition.py bagfate.py \
      lockbox.py clearance.py \
      item_plan.py \
-     jev.py jev_items.py jev_choices.py jev_activity.py jev_keep.py jevview.py \
+     jev.py jev_items.py jev_choices.py jev_recovery.py jev_activity.py jev_keep.py jevview.py \
      bank.py \
      mailrun.py holdings.py \
      realm.py basepath.py watchwall.py realmnav.py classic.py \
