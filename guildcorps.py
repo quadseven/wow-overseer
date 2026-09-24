@@ -58,6 +58,7 @@ MINING = 186
 HERBALISM = 182
 ALCHEMY = 171
 LEATHERWORKING = 165
+COOKING = 185
 
 SKILL_NAMES = {
     TAILORING: "Tailoring",
@@ -66,6 +67,7 @@ SKILL_NAMES = {
     HERBALISM: "Herbalism",
     ALCHEMY: "Alchemy",
     LEATHERWORKING: "Leatherworking",
+    COOKING: "Cooking",
 }
 
 # The command log's `source` for every row this pass writes, and the prefix the
@@ -76,8 +78,13 @@ SOURCE = "guildcorps"
 # are the point; then the skinners, whose Rugged Leather is in every Runecloth
 # Bag; then miners and herbalists for the guild's other crafters. Two of each:
 # one to work and one to cover when the first is offline or far away.
+# ALCHEMISTS AND A COOK FOR THE RAID (#275): raidsupply.py gives them the
+# potions and the food a Molten Core night eats. After the tailors, so bags keep
+# the tailors they had; before the gatherers, who feed them.
 ROLES = (
     ("tailor", TAILORING, 2),
+    ("alchemist", ALCHEMY, 2),
+    ("cook", COOKING, 1),
     ("skinner", SKINNING, 2),
     ("miner", MINING, 2),
     ("herbalist", HERBALISM, 2),
@@ -1114,11 +1121,12 @@ def places_from_rows(rows, column) -> dict:
     return {k: frozenset(v) for k, v in out.items()}
 
 
-def recent_from_rows(rows) -> dict:
+def recent_from_rows(rows, prefix=SOURCE) -> dict:
     """(holder, action, key) -> minutes since the newest corps row of that step.
 
     A walk row counts for the step it opens. A supply letter also counts under
     ("to:<tailor>", "supply", entry), so a tailor is not asked for twice.
+    `prefix` is the pass's own source: the corps', or raidsupply's (#275).
     """
     out = {}
 
@@ -1128,7 +1136,7 @@ def recent_from_rows(rows) -> dict:
 
     for row in rows or ():
         parts = str(row.get("source") or "").split(":")
-        if len(parts) != 3 or parts[0] != SOURCE:
+        if len(parts) != 3 or parts[0] != prefix:
             continue
         action = parts[1][: -len("-walk")] if parts[1].endswith("-walk") else parts[1]
         key, age = _int(parts[2], -1), _int(row.get("age"), 0)

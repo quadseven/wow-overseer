@@ -7171,6 +7171,7 @@ function rrCard(g) {
   wrap.appendChild(table);
   each.appendChild(wrap);
   card.appendChild(each);
+  if (g.supply) rrSupply(card, g.supply);
   const att = g.attunement;
   card.appendChild(el("div", "rg-sect", "attunement to the core"));
   rgNote(card, att.line);
@@ -7179,6 +7180,40 @@ function rrCard(g) {
   rgNote(card, att.unproven);
   rgNote(card, att.bots);
   return card;
+}
+
+// THE MOLTEN CORE SUPPLY (#275): a night's consumables against what the guild
+// holds, and each tank's and healer's fire resistance against its target.
+// Every cell and line is raidsupply.py's; the page lays out two tables.
+function rrTable(columns, rows) {
+  const wrap = el("div", "rr-scroll");
+  const table = el("table", "rr-table");
+  const head = el("tr");
+  for (const label of columns) head.appendChild(el("th", "", label));
+  table.appendChild(head);
+  for (const r of rows) {
+    const tr = el("tr", r.short ? "" : "rr-soft");
+    for (const cell of r.cells) tr.appendChild(el("td", "", cell));
+    table.appendChild(tr);
+  }
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function rrSupply(card, s) {
+  card.appendChild(el("div", "rg-sect", "supply for a night in the core"));
+  rgNote(card, s.line);
+  rgNote(card, s.budget_line);
+  const cons = el("details", "rr-raiders");
+  cons.appendChild(el("summary", "", "consumables per night"));
+  cons.appendChild(rrTable(s.supply_columns, s.supplies));
+  card.appendChild(cons);
+  const fire = el("details", "rr-raiders");
+  fire.appendChild(el("summary", "", "fire resistance, tanks first"));
+  fire.appendChild(rrTable(s.fire_columns, s.fire));
+  card.appendChild(fire);
+  rgNote(card, s.fire_line, "rr-soft");
+  rgNote(card, s.basis, "rr-soft");
 }
 
 // WHICH GUILD'S CONSUMABLES ARE DRAWN BELOW, remembered by name across polls

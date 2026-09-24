@@ -86,6 +86,7 @@ import raidcraft
 import raidlineup
 import raidprep
 import raidrun
+import raidsupply
 import recipebook
 import recruit
 import relay
@@ -4060,6 +4061,8 @@ class Bridge(discord.Client):
         # memory like the dues walks; every cooldown is read from the command
         # log, which a restart does not forget.
         self._corps_steps: dict = {}
+        # guild -> the last raid_supply judgment's signature recorded (#275).
+        self._raid_supply_said: dict = {}
         # Leader snapshot history used only to detect a vendor aim that has
         # stopped moving. The decision itself lives in vendor_stall.py.
         self._vendor_movement: dict[str, vendor_stall.Movement] = {}
@@ -10826,6 +10829,137 @@ class Bridge(discord.Client):
             self._mail_walk_tasks.add(task)
             task.add_done_callback(self._mail_walk_task_done)
         log.info("guild corps: started %d step(s)", len(plan.steps))
+        # THE RAID'S SUPPLY (#275) takes the members the corps left free. A
+        # failure propagates to the corps loop, which logs it with its
+        # traceback after the corps' own steps have already started.
+        busy |= {step.holder for step in plan.steps}
+        await self._raid_supply_once(facts, plan.corps, busy, cap)
+
+    async def _raid_supply_once(self, facts, corps, busy, cap) -> None:
+        """One pass of the raid's supply (#275): Molten Core consumables and
+        fire resistance, made by the corps, bought within the guild's budget.
+
+        raidsupply.py decides; this reads the few facts the corps read did
+        not, asks Jev what to work first (`raid_supply`, act mode, the
+        heuristic on no answer), and writes the rows each step names through
+        the corps' own runner. The auction half buys only for the guild
+        master, only with gold the master withdrew for the raid, and the
+        withdrawal only at a vault. Never a give, never a GM command.
+        """
+        members = facts.get("members") or []
+        extra = await asyncio.to_thread(_fetch_raid_supply_facts, members)
+        members = raidsupply.with_letters(members, extra["letters"])
+        recent = guildcorps.recent_from_rows(extra["recent"], prefix=raidsupply.SOURCE)
+        started = 0
+        for guild, posts in sorted((corps or {}).items()):
+            guild_facts = raidsupply.guild_facts(
+                guild, members, extra["worn"], posts, facts.get("vendors") or {})
+            started += await self._raid_supply_guild(
+                guild_facts, extra, recent, busy, cap)
+        log.info("raid supply: started %d step(s)", started)
+
+    async def _raid_supply_guild(self, guild_facts, extra, recent, busy, cap) -> int:
+        """One guild's supply steps, started; returns how many."""
+        guild = guild_facts.guild
+        master = extra["masters"].get(guild, "")
+        withdrawn, spent = raidsupply.ledger(extra["ledger"], master)
+        focus = await self._raid_supply_focus(
+            guild_facts, recent, busy, cap, raidsupply.reserve(withdrawn, spent))
+        plan = raidsupply.plan_guild(guild_facts, recent, busy, focus=focus, cap=cap)
+        log.info("%s; focus %s", raidsupply.summary(plan), focus or "none")
+        _log_capped("raid supply", plan.notes)
+        now = time.monotonic()
+        for step in plan.steps:
+            self._corps_steps[step.holder] = now
+            task = asyncio.create_task(self._run_corps_step(step, cap))
+            self._mail_walk_tasks.add(task)
+            task.add_done_callback(self._mail_walk_task_done)
+        bank = extra["bank"].get(guild)
+        if master and bank is not None:
+            await self._raid_supply_market(
+                guild, plan, master, focus, (bank, withdrawn, spent), extra)
+        return len(plan.steps)
+
+    async def _raid_supply_focus(self, guild_facts, recent, busy, cap, budget) -> str:
+        """What the guild works first: Jev's `raid_supply` choice where it acts,
+        the heuristic's otherwise. The judgment is recorded when it changes."""
+        guild = guild_facts.guild
+        first = raidsupply.plan_guild(guild_facts, recent, set(busy), cap=cap)
+        opts = raidsupply.options(first.lines, first.fire, raidsupply.FIRE_GEAR)
+        rule = raidsupply.policy()
+        if rule.mode == jev.OFF or not self._jev.ready(raidsupply.KIND):
+            return raidsupply.focus_of(None, opts)
+        judgment = await raidsupply.ask(
+            self._jev, guild, first.lines, first.fire, opts, budget, rule)
+        if judgment is not None:
+            log.info("%s", judgment.line())
+            if self._raid_supply_said.get(guild) != judgment.signature:
+                self._raid_supply_said[guild] = judgment.signature
+                try:
+                    await asyncio.to_thread(_insert_jev_judgment, judgment)
+                except pymysql.err.MySQLError:
+                    log.exception("raid supply: the choice for %s was not recorded", guild)
+        return raidsupply.focus_of(judgment, opts)
+
+    async def _raid_supply_market(self, guild, plan, master, focus, money, extra) -> None:
+        """The auction half: withdraw at a vault, buy at a counter; else say why.
+
+        `master` is the guild's leader by `guild.leaderguid`, the only name a
+        withdrawal is ever written for; the core then checks the rank's rights
+        itself. Both rows are written only where the master is standing:
+        `guild bank withdraw` answers 'no guild bank in reach' anywhere else,
+        and an auction buy needs a counter.
+        """
+        bank, withdrawn, spent = money
+        needs = raidsupply.market_needs(plan, master, focus)
+        if not needs:
+            log.info("raid supply: %s: nothing the raid is short of needs the auction house", guild)
+            return
+        team = (await asyncio.to_thread(_fetch_teams, [master])).get(master, "")
+        house = auction.TEAM_HOUSE.get(team, 0)
+        entries = sorted({n.entry for n in needs})
+        listings = await asyncio.to_thread(_fetch_auction_listings, entries, house)
+        cost = raidsupply.market_cost(needs, listings, house)
+        copper, why = raidsupply.withdrawal(bank, withdrawn, spent, cost)
+        if copper:
+            spawn = await asyncio.to_thread(_nearest_vault, master)
+            where = (await asyncio.to_thread(_fetch_positions, [master])).get(master)
+            if travel.spawn_in_reach(spawn, where, TOWN_COUNTER_YARDS):
+                row = await asyncio.to_thread(
+                    _insert_guild, master, "bank withdraw %d" % copper, raidsupply.WITHDRAW_SOURCE)
+                log.info("raid supply: %s: the guild master %s withdraws %d copper for "
+                         "the raid (row %d): %s", guild, master, copper, row, why)
+            else:
+                log.info("raid supply: %s: the guild master %s would withdraw %d copper "
+                         "but is not at a vault; it waits for the guild bank trip", guild,
+                         master, copper)
+        else:
+            log.info("raid supply: %s: no withdrawal: %s", guild, why)
+        counter = await asyncio.to_thread(_fetch_auctioneer, master)
+        if not counter:
+            log.info("raid supply: %s: %s is not at an auctioneer, so nothing is bought "
+                     "for the raid this pass", guild, master)
+            return
+        house = auction.reachable_house(team, int(counter.get("faction") or 0))
+        listings = await asyncio.to_thread(_fetch_auction_listings, entries, house)
+        purse = int(extra["purses"].get(master, 0))
+        slots = (await asyncio.to_thread(_fetch_free_slots, [master])).get(master, 0)
+        buys, notes = raidsupply.plan_market(
+            needs, listings, house, master, purse, withdrawn, spent, slots)
+        _log_capped("raid supply", notes)
+        # A listing already asked for in the last day is not asked for again:
+        # the first row either bought it or found it gone.
+        seen = {str(r.get("command") or "") for r in extra["ledger"]
+                if r.get("target_name") == master
+                and str(r.get("source") or "").startswith(raidsupply.AH_SOURCE + ":")}
+        for buy in buys:
+            if buy.command in seen:
+                continue
+            if await asyncio.to_thread(
+                    _insert_auction, master, buy.command,
+                    raidsupply.ah_source(buy.entry, buy.spend)):
+                log.info("raid supply: %s: %s buys %d %s for %d copper (%s)", guild,
+                         master, buy.count, buy.label, buy.spend, buy.command)
 
     async def _corps_mailbox_yards(self, members, names, busy, now) -> dict:
         """name -> yards to its nearest mailbox, for the corps' likely senders.
@@ -16172,8 +16306,11 @@ def _fetch_corps_facts(family_names: list) -> dict:
         crew = ids(guid_of[n] for n in maintenance if n in guid_of)
         everyone = ids(guid_of.values())
         kin = ids(guid_of[n] for n in family if n in guid_of)
-        entries = ids(sorted(guildcorps.PATH_ENTRIES | set(guildcorps.BAG_ITEMS)))
-        spells = ids(sorted(guildcorps.PATH_SPELLS))
+        # THE RAID'S ITEMS AND CRAFTS RIDE THE SAME READS (#275), so one pass
+        # sees the corps' cloth and the raid's herbs, potions and recipes.
+        entries = ids(sorted(guildcorps.PATH_ENTRIES | set(guildcorps.BAG_ITEMS)
+                             | raidsupply.SUPPLY_ENTRIES))
+        spells = ids(sorted(guildcorps.PATH_SPELLS | raidsupply.SUPPLY_SPELLS))
         skills = ids(sorted(guildcorps.SKILL_NAMES))
         skill_rows = _corps_read(cur, "skills", _CORPS_SKILLS_SQL.format(guids=crew, skills=skills))
         spell_rows = _corps_read(cur, "recipes", _CORPS_SPELLS_SQL.format(guids=crew, spells=spells))
@@ -16219,6 +16356,72 @@ def _insert_corps_row(holder: str, row) -> int:
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+# THE RAID SUPPLY'S OWN READS (#275), beside the corps' ones: worn fire
+# resistance per slot, the raiders' letters, the guild bank's gold, each
+# guild's master, and a day of the pass's own rows (its cooldowns and its
+# ledger of withdrawals and purchases).
+_RAID_SUPPLY_WORN_SQL = (
+    "SELECT c.name, ci.slot, it.fire_res FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid AND ci.bag = 0 AND ci.slot < 19 "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.guid IN ({guids}) AND it.fire_res > 0"
+)
+_RAID_SUPPLY_BANK_SQL = (
+    "SELECT g.name AS guild_name, g.BankMoney AS bank, c.name AS master, c.money "
+    "FROM guild g LEFT JOIN characters c ON c.guid = g.leaderguid WHERE g.name IN ({names})"
+)
+_RAID_SUPPLY_ROWS_SQL = (
+    "SELECT target_name, target_arg, command, source, status, "
+    "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
+    "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY"
+)
+
+
+def _fetch_raid_supply_facts(members) -> dict:
+    """What raidsupply reads beyond the corps' facts; no judgement here."""
+    ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
+    names = sorted({m.name for m in members})
+    out = {"worn": [], "letters": [], "bank": {}, "masters": {}, "purses": {},
+           "ledger": [], "recent": []}
+    if not names:
+        return out
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT guid, name FROM characters WHERE name IN (%s)"  # noqa: S608 - placeholders from a COUNT, values still bound
+                    % ",".join(["%s"] * len(names)), names)
+        guid_of = {str(r["name"]): int(r["guid"]) for r in cur.fetchall()}
+        everyone = ids(guid_of.values())
+        entries = ids(sorted(raidsupply.SUPPLY_ENTRIES))
+        out["worn"] = _corps_read(cur, "worn fire resistance",
+                                  _RAID_SUPPLY_WORN_SQL.format(guids=everyone))
+        out["letters"] = _corps_read(cur, "raid letters", _CORPS_LETTERS_SQL.format(
+            guids=everyone, entries=entries))
+        _raid_supply_bank(cur, sorted({m.guild for m in members if m.guild}), out)
+        rows = _corps_read(cur, "raid supply rows", _RAID_SUPPLY_ROWS_SQL,
+                           (raidsupply.SOURCE + ":%",))
+    name_of = {guid: name for name, guid in guid_of.items()}
+    for row in out["letters"]:
+        row["name"] = name_of.get(int(row.get("receiver") or 0), "")
+    out["ledger"] = rows
+    out["recent"] = rows
+    return out
+
+
+def _raid_supply_bank(cur, guilds: list, out: dict) -> None:
+    """Each guild's bank gold, its master (guild.leaderguid) and the master's
+    purse, into `out`."""
+    if not guilds:
+        return
+    rows = _corps_read(cur, "guild bank gold", _RAID_SUPPLY_BANK_SQL.format(
+        names=",".join(["%s"] * len(guilds))), guilds)
+    for row in rows:
+        guild, master = str(row["guild_name"]), str(row.get("master") or "")
+        out["bank"][guild] = int(row.get("bank") or 0)
+        out["masters"][guild] = master
+        out["purses"][master] = int(row.get("money") or 0)
+
 
 
 def _recent_route_keys(minutes: int) -> set:
@@ -16875,7 +17078,12 @@ def _fetch_guild_money(names: list) -> list:
             "WHERE c.name IN (%s)" % marks,
             names,
         )
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+        # THE RAID'S GOLD STAYS IN THE MASTER'S PURSE (#275): what it withdrew
+        # for the auction house and has not spent is not deposited back.
+        ledger = _corps_read(cur, "raid supply rows", _RAID_SUPPLY_ROWS_SQL,
+                             (raidsupply.SOURCE + ":%",))
+    return raidsupply.hold_back(rows, ledger)
 
 
 def _fetch_guild_bank_setup(names: list) -> dict | None:

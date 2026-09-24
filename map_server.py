@@ -49,6 +49,7 @@ import crafters
 import guildcorps
 import raidlineup
 import raidready
+import raidsupply
 import recap
 import realm
 import runtimeline
@@ -2172,6 +2173,65 @@ def _crafter_register(members: list, roster: set, skill_rows: list) -> list:
         crafters.register(people, crafters.per_trade(os.environ)))
 
 
+# THE RAID SUPPLY'S READS (#275), per guild: what the guild holds of every
+# item the Molten Core night wants, in bags, bank and guild bank; who knows each
+# craft; and the guild bank's gold, which the auction budget is a share of.
+# Bound by guild id and by raidsupply's own entry and spell lists.
+_RAID_SUPPLY_HAVE = (
+    "SELECT gm.guildid, ii.itemEntry AS entry, SUM(ii.count) AS count "
+    "FROM guild_member gm JOIN character_inventory ci ON ci.guid = gm.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE gm.guildid IN ({guilds}) AND ii.itemEntry IN ({entries}) "
+    "GROUP BY gm.guildid, ii.itemEntry"
+)
+_RAID_SUPPLY_GBANK = (
+    "SELECT gb.guildid, ii.itemEntry AS entry, SUM(ii.count) AS count "
+    "FROM guild_bank_item gb JOIN item_instance ii ON ii.guid = gb.item_guid "
+    "WHERE gb.guildid IN ({guilds}) AND ii.itemEntry IN ({entries}) "
+    "GROUP BY gb.guildid, ii.itemEntry"
+)
+_RAID_SUPPLY_KNOWN = (
+    "SELECT gm.guildid, c.name, s.spell FROM guild_member gm "
+    "JOIN characters c ON c.guid = gm.guid "
+    "JOIN character_spell s ON s.guid = gm.guid "
+    "WHERE gm.guildid IN ({guilds}) AND s.spell IN ({spells})"
+)
+_RAID_SUPPLY_MONEY = (
+    "SELECT guildid, BankMoney AS bank FROM guild WHERE guildid IN ({guilds})"
+)
+
+
+def _fetch_raid_supply(cur, guild_ids: list) -> dict:
+    """guild id -> {have, knowers, bank} for the supply section; guarded."""
+    out = {g: {"have": {}, "knowers": {}, "bank": None} for g in guild_ids}
+    if not guild_ids:
+        return out
+    guilds = ", ".join(["%s"] * len(guild_ids))
+    entries = sorted(raidsupply.SUPPLY_ENTRIES)
+    spells = sorted(raidsupply.SUPPLY_SPELLS)
+    eholes = ", ".join(["%s"] * len(entries))
+    sholes = ", ".join(["%s"] * len(spells))
+    held = _wide_guarded(cur, _RAID_SUPPLY_HAVE.format(guilds=guilds, entries=eholes),  # noqa: S608
+                         (*guild_ids, *entries), "", "character_inventory supply")
+    banked = _wide_guarded(cur, _RAID_SUPPLY_GBANK.format(guilds=guilds, entries=eholes),  # noqa: S608
+                           (*guild_ids, *entries), "", "guild_bank_item")
+    known = _wide_guarded(cur, _RAID_SUPPLY_KNOWN.format(guilds=guilds, spells=sholes),  # noqa: S608
+                          (*guild_ids, *spells), "", "character_spell supply")
+    money = _wide_guarded(cur, _RAID_SUPPLY_MONEY.format(guilds=guilds),  # noqa: S608
+                          tuple(guild_ids), "", "guild")
+    for row in list(held) + list(banked):
+        have = out.setdefault(row.get("guildid"), {"have": {}, "knowers": {}, "bank": None})["have"]
+        entry = int(row.get("entry") or 0)
+        have[entry] = have.get(entry, 0) + int(row.get("count") or 0)
+    for row in known:
+        spot = out.setdefault(row.get("guildid"), {"have": {}, "knowers": {}, "bank": None})
+        spot["knowers"].setdefault(int(row.get("spell") or 0), []).append(str(row.get("name") or ""))
+    for row in money:
+        spot = out.setdefault(row.get("guildid"), {"have": {}, "knowers": {}, "bank": None})
+        spot["bank"] = int(row.get("bank") or 0)
+    return out
+
+
 def _fetch_raidgoals() -> dict:
     """Everything the raid-readiness view counts, on one connection.
 
@@ -2260,6 +2320,8 @@ def _fetch_raidgoals() -> dict:
             access = _wide_guarded(cur, _RAID_ACCESS,
                                    (raidgoals.MOLTEN_CORE,), "",
                                    "dungeon_access_template")
+            supply = _fetch_raid_supply(cur, sorted(
+                {row["guildid"] for row in guild if row.get("guildid") is not None}))
             # NO ENTRIES MEANS NOTHING TO BIND, and `IN ()` is a syntax error
             # rather than an empty result. Every reagent then reports that
             # this realm carries no item under its name, which is what
@@ -2289,7 +2351,7 @@ def _fetch_raidgoals() -> dict:
             "vendor_rows": vendor, "creature_rows": creature,
             "object_rows": objects, "guild_rows": guild,
             "attuned_rows": attuned, "quest_rows": quest_log,
-            "families": families,
+            "families": families, "supply": supply,
             "min_level": (int(access[0]["min_level"])
                           if access and access[0].get("min_level") else None)}
 # --- what the guild can make, and what it cannot (infra#3507) ---------------
@@ -4309,6 +4371,7 @@ class Handler(BaseHTTPRequestHandler):
             quest_rows = fetched.pop("quest_rows")
             min_level = fetched.pop("min_level")
             guild_rows = fetched.pop("guild_rows")
+            supply = fetched.pop("supply")
             # ONE CARD PER GUILD. raidgoals counts one roster at a time, so it
             # is handed one guild's rows and that guild's family as the
             # fallback; handed both guilds at once it would see a family split
@@ -4321,7 +4384,8 @@ class Handler(BaseHTTPRequestHandler):
                 cards.append(raidready.build_guild(
                     group, fetched["char_rows"], fetched["worn_rows"],
                     attuned, min_level, goals, quest_rows=quest_rows,
-                    holding_rows=fetched["holding_rows"]))
+                    holding_rows=fetched["holding_rows"],
+                    supply=supply.get(group["guildid"])))
             payload = raidready.build_readiness(cards)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
