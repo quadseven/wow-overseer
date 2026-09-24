@@ -34,6 +34,7 @@ import pathlib
 import types
 import unittest
 
+import bag_pressure
 import campaignqueue
 import jev_activity
 import jobs
@@ -317,6 +318,8 @@ class FakeWorld:
         self.job = job
         self.releases = []
         self.learn_releases = []
+        # `bridge._TOWN_FIRST_SINCE`: when the queue first held this family.
+        self.town_first_since = {}
         self.writes = []
 
     def pending(self):
@@ -352,6 +355,10 @@ class FakeWorld:
         self.column[name] = ""
         return True
 
+    def town_first_hold(self, names):
+        """`_town_first_hold`: a campaign waits and nobody carries its job."""
+        return bool(self.pending()) and not self.job.startswith("dungeon")
+
     def release_learn(self, name):
         self.learn_releases.append(name)
         if self.column.get(name) != learnaim.TRAINER_ROLE:
@@ -365,11 +372,15 @@ def _bridge_self(world, clock, log):
         [
             "_campaign_owns_travel",
             "_staging_campaign",
+            "_held_in_town",
             "_hand_back_for_campaign",
             "_claim_town_slot",
             "_cohort_town_slot",
         ],
         {
+            "bag_pressure": bag_pressure,
+            "_town_first_hold": world.town_first_hold,
+            "_TOWN_FIRST_SINCE": world.town_first_since,
             "asyncio": types.SimpleNamespace(to_thread=_thread),
             "time": clock,
             "log": log,
@@ -409,6 +420,7 @@ def _bridge_self(world, clock, log):
     for name in (
         "_campaign_owns_travel",
         "_staging_campaign",
+        "_held_in_town",
         "_hand_back_for_campaign",
         "_claim_town_slot",
         "_cohort_town_slot",
@@ -507,6 +519,81 @@ class TheLiveSequence(unittest.TestCase):
         self.assertEqual("", self.world.column["Zug"])
 
 
+# The Horde family on 2026-09-24 at 03:55 UTC: Ragefire held "town first", the
+# Jev sell interlude on (job=quest), and a trainer walk on the leader.
+TOWN_FIRST = {"Oz": 4, "Uzza": 6, "Zork": 4, "Zrog": 6, "Zug": 4}
+
+
+class ACampaignHeldInTownSells(unittest.TestCase):
+    """#297: the trainer walk yields to the town trip the hold asks for."""
+
+    def setUp(self):
+        self.world = FakeWorld(
+            column=learnaim.TRAINER_ROLE, free=TOWN_FIRST, job="quest"
+        )
+        self.clock, self.log = Clock(), _Log()
+        self.me = _bridge_self(self.world, self.clock, self.log)
+
+    def economy(self):
+        return asyncio.run(
+            self.me._claim_town_slot(
+                "economy", "Zug", "vendor", urgent=True, cohort="Zug"
+            )
+        )
+
+    def test_the_trainer_walk_is_handed_back_and_the_vendor_trip_taken(self):
+        # Before the queue pass the economy waits behind the trainer walk,
+        # exactly as the live log said it did every cycle.
+        self.assertFalse(self.economy())
+        self.assertIn(
+            "not an errand the economy may hand back", "\n".join(self.log.lines)
+        )
+        _queue_pass(self.me, self.world)
+        self.assertEqual(["Zug"], self.world.learn_releases)
+        self.assertTrue(self.me._cohort_town_slot("Zug").town_first)
+        self.assertEqual("", self.me._cohort_town_slot("Zug").campaign)
+        self.assertTrue(self.economy())
+        self.assertEqual("vendor", self.world.column["Zug"])
+
+    def test_the_learn_trips_wait_while_the_hold_lasts(self):
+        _queue_pass(self.me, self.world)
+        self.assertTrue(self.me._cohort_town_slot("Zug").learn_waits)
+
+    def test_room_enough_lets_the_learn_trips_go_again(self):
+        _queue_pass(self.me, self.world)
+        self.world.free = dict(FREE)
+        self.clock.now = 60.0
+        _queue_pass(self.me, self.world)
+        slot = self.me._cohort_town_slot("Zug")
+        self.assertEqual("", slot.town_first)
+        self.assertEqual("", slot.learn_waits)
+
+    def test_the_hold_ends_at_the_campaigns_resume_ceiling(self):
+        """Past the ceiling the queue sends the run in whoever is short, so
+        the learn trips must not wait on after it."""
+        self.world.town_first_since[tuple(sorted(NAMES))] = 0.0
+        self.clock.now = bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS - 60.0
+        _queue_pass(self.me, self.world)
+        self.assertTrue(self.me._cohort_town_slot("Zug").town_first)
+        self.clock.now = bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS
+        _queue_pass(self.me, self.world)
+        self.assertEqual("", self.me._cohort_town_slot("Zug").town_first)
+
+    def test_a_family_with_room_keeps_its_trainer_walk(self):
+        self.world.free = dict(FREE)
+        _queue_pass(self.me, self.world)
+        self.assertEqual([], self.world.learn_releases)
+        self.assertEqual(learnaim.TRAINER_ROLE, self.world.column["Zug"])
+
+    def test_a_staging_campaign_is_not_a_town_hold(self):
+        self.world.job = "dungeon:ragefire"
+        self.world.free = dict(FREE)
+        _queue_pass(self.me, self.world)
+        slot = self.me._cohort_town_slot("Zug")
+        self.assertEqual("", slot.town_first)
+        self.assertTrue(slot.campaign)
+
+
 class ClearancePicksAnotherMailbox(unittest.TestCase):
     def test_a_spent_mailbox_is_skipped(self):
         crossroads = dict(map_id=1, x=-443.7, y=-2649.1, z=95.8, d2=726.0**2)
@@ -545,10 +632,12 @@ class ClearancePicksAnotherMailbox(unittest.TestCase):
 
 
 class TheLearnTripsWait(unittest.TestCase):
-    def run_pass(self, campaign):
+    def run_pass(self, campaign, town_first=False):
         slot = townslot.Slot(releasable=economy)
         if campaign:
             slot.yield_to_campaign("dungeon:ragefire on Zug")
+        if town_first:
+            slot.hold_for_town("bag room for Oz, Zork, Zug")
         ran, marked = [], []
         rows = [
             learnaim.Row(character="Zug", learn_skill=186, leads=True),
@@ -591,6 +680,11 @@ class TheLearnTripsWait(unittest.TestCase):
         # The finished learn is still cleared.
         self.assertTrue(any("learn_skill = 0" in sql for sql, _ in ran), ran)
 
+    def test_no_trainer_walk_while_the_campaign_waits_in_town(self):
+        ran, marked = self.run_pass(campaign=False, town_first=True)
+        self.assertEqual([], marked)
+        self.assertFalse(any("travel_npc" in sql for sql, _ in ran), ran)
+
     def test_the_trainer_walk_is_aimed_once_it_lets_go(self):
         ran, _ = self.run_pass(campaign=False)
         self.assertTrue(any("travel_npc" in sql for sql, _ in ran), ran)
@@ -604,10 +698,14 @@ class TheWiring(unittest.TestCase):
             body.index("if not pending:"),
         )
 
+    def test_the_sell_rows_follow_the_vendor_aim(self):
+        body = ast.get_source_segment(BRIDGE, _function("_vendor_once"))
+        self.assertIn("leader_walking=aimed", body)
+
     def test_the_own_familys_learn_writers_are_gated(self):
         for name in ("_reconcile_learn_aims", "_send_trade_errand"):
             body = ast.get_source_segment(BRIDGE, _function(name))
-            self.assertIn("self._town_slot.campaign", body, name)
+            self.assertIn("self._town_slot.learn_waits", body, name)
 
 
 class _Cursor:

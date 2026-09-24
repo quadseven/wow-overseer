@@ -227,6 +227,7 @@ class BagPressureTests(unittest.TestCase):
                 leader="Grug",
                 leader_at_counter=True,
                 holder_at_counter=lambda _: False,
+                leader_walking=True,
             ),
         )
 
@@ -262,8 +263,43 @@ class BagPressureTests(unittest.TestCase):
                 leader="Grug",
                 leader_at_counter=False,
                 holder_at_counter=lambda name: name == "Grug",
+                leader_walking=True,
             ),
         )
+
+    def test_a_leader_walking_nowhere_gets_no_rows(self):
+        """#297, measured on wow-dev 2026-09-24: a trainer walk held the
+        Horde leader's travel column, the vendor aim was refused, and 57 rows
+        queued from where it stood all answered `vendor not in range`."""
+        rows = vendor_candidates(
+            [
+                {
+                    "holder": name,
+                    "item_guid": guid,
+                    "count": 1,
+                    "quality": 0,
+                    "sell_price": 4,
+                    "quest_item": False,
+                    "reagent": False,
+                    "profession_needed": False,
+                }
+                for guid, name in enumerate(("Zug", "Oz", "Zork"), start=1)
+            ]
+        )
+
+        def queue(walking, at_counter=lambda _: False):
+            return vendor_holders_to_queue(
+                rows,
+                leader="Zug",
+                leader_at_counter=False,
+                holder_at_counter=at_counter,
+                leader_walking=walking,
+            )
+
+        self.assertEqual((), queue(False))
+        self.assertEqual(("Zug",), queue(True))
+        # A follower standing at a counter of its own still sells.
+        self.assertEqual(("Oz",), queue(False, lambda name: name == "Oz"))
 
 
 class BindingIsAFactAboutTheCopy(unittest.TestCase):

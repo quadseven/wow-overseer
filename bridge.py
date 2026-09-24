@@ -5614,12 +5614,13 @@ class Bridge(discord.Client):
         errand = professions.to_errand(plan, skills)
         if not errand:
             return
-        if errand.travel_npc and self._town_slot.campaign:
-            # A staging campaign keeps its leader (#227). The plan stands and
-            # is written again on the first cycle after the campaign lets go.
+        if errand.travel_npc and self._town_slot.learn_waits:
+            # A staging campaign keeps its leader (#227), and so does one held
+            # in town for bag room (#297). The plan stands and is written again
+            # on the first cycle after the campaign lets go.
             log.info("trades: %s's trainer errand waits - the campaign owns "
                      "the traveller (%s)", errand.character,
-                     self._town_slot.campaign)
+                     self._town_slot.learn_waits)
             return
         await asyncio.to_thread(_write_trade_errand, errand)
         # AND TELL THE LEDGER WHEN THIS ONE MOVES SOMEBODY (infra#4194). A
@@ -8992,6 +8993,10 @@ class Bridge(discord.Client):
             leader=leader,
             leader_at_counter=leader_at_counter,
             holder_at_counter=lambda holder: bool(holder_town[holder].vendor),
+            # `aimed` is True only while the leader carries this pass's own
+            # vendor aim: taken or held this pass. Refused, it walks nowhere
+            # and its rows would answer `vendor not in range` (#297).
+            leader_walking=aimed,
         ))
         queue_holders = bag_pressure.counter_holders(
             queue_holders, mode, leader_at_counter,
@@ -10017,10 +10022,12 @@ class Bridge(discord.Client):
         rows = tradechoice.learn_rows(state["roster"], state["trades"], declared)
         if not rows:
             return
-        campaign = self._cohort_town_slot(cohort.key).campaign
+        campaign = self._cohort_town_slot(cohort.key).learn_waits
         if campaign:
             # A STAGING CAMPAIGN KEEPS ITS LEADER (#227): no lead is borrowed
             # and no trainer walk is aimed. Finished learns are still cleared.
+            # A campaign held in town for bag room keeps it the same way
+            # (#297), so the vendor trip it waits for can take the column.
             learn_plan = learnaim.plan(rows)
             if learn_plan.clear:
                 await asyncio.to_thread(_run_learn_aim_plan, learnaim.statements(
@@ -13008,11 +13015,14 @@ class Bridge(discord.Client):
         """
         own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
         owning: set = set()
+        in_town: set = set()
         for key, rows in pending.items():
             name, active = await self._staging_campaign(rows, fams.get(key))
-            if not active:
-                continue
             slot = self._town_slot if key == own else self._cohort_town_slot(key)
+            if not active:
+                if await self._held_in_town(slot, fams.get(key)):
+                    in_town.add(id(slot))
+                continue
             owning.add(id(slot))
             if not slot.campaign:
                 log.info("town slot: %s's campaign owns the traveller %s (%s) - "
@@ -13025,6 +13035,51 @@ class Bridge(discord.Client):
                 log.info("town slot: the campaign no longer owns %s - town "
                          "errands resume", slot.campaign)
                 slot.campaign_over()
+            if id(slot) not in in_town and slot.town_first:
+                log.info("town slot: the campaign no longer waits in town "
+                         "(%s) - the learn trips resume", slot.town_first)
+                slot.town_over()
+
+    async def _held_in_town(self, slot, fam: dict | None) -> bool:
+        """Hold the learn trips while the campaign waits in town for bag room.
+
+        True when it does (#297). The town passes keep the traveller: the
+        vendor trip is what lets the campaign back in. A trainer walk is the
+        one aim no town pass may take back, so it is handed back here, as it
+        is for a staging campaign, with `learn_skill` left pending. Measured
+        on wow-dev 2026-09-24: the Horde leader carried one through the whole
+        hold, the vendor trip waited behind it, and nothing sold.
+        """
+        if fam is None:
+            return False
+        names = list(fam["names"])
+        leader = str(fam["leader"].get("name") or "")
+        if not names or not leader:
+            return False
+        if not await asyncio.to_thread(_town_first_hold, names):
+            return False
+        free = await asyncio.to_thread(_fetch_free_slots, names)
+        # THE QUEUE'S OWN CLOCK, so the hold ends when the campaign does:
+        # past the resume ceiling `_town_first` sends the run in whoever is
+        # still short, and the learn trips must not wait on after it.
+        since = _TOWN_FIRST_SINCE.get(tuple(sorted(names)))
+        held = 0.0 if since is None else time.monotonic() - since
+        short = bag_pressure.campaign_resume_short(free, held_seconds=held)
+        if not short:
+            return False
+        if not slot.town_first:
+            log.info("town slot: %s's campaign waits in town for bag room "
+                     "(%s short of %d free slots) - the learn trips wait for "
+                     "the town trip", leader, ", ".join(short),
+                     bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS)
+        slot.hold_for_town("bag room for %s" % ", ".join(short))
+        column = await asyncio.to_thread(_current_travel_npc, leader)
+        if (column == learnaim.TRAINER_ROLE
+                and await asyncio.to_thread(_release_learn_aim, leader)):
+            log.warning("town slot: handed %s's trainer walk back so the "
+                        "campaign's town trip can take the column; the learn "
+                        "waits for it", leader)
+        return True
 
     async def _staging_campaign(self, rows: list, fam: dict | None) -> tuple:
         """(leader, dungeon job) when this family's campaign owns its leader.
@@ -13253,6 +13308,13 @@ class Bridge(discord.Client):
             await asyncio.to_thread(_insert_hearth, judgment.straggler)
             log.info("movement: %s hearths home - far from %s and not moving "
                      "(Jev, conf %.2f)", judgment.straggler, who,
+                     judgment.confidence or 0.0)
+        elif chosen == jev_movement.HEARTH_TO_LEADER and judgment.homeward:
+            for name in judgment.homeward:
+                await asyncio.to_thread(_insert_hearth, name)
+            log.info("movement: %s hearth(s) to %s's leader, who stands at "
+                     "their hearthstone point (Jev, conf %.2f)",
+                     ", ".join(judgment.homeward), who,
                      judgment.confidence or 0.0)
         elif chosen == jev_movement.HEARTH_FAMILY:
             for body in facts.where.bodies:
@@ -14397,11 +14459,12 @@ class Bridge(discord.Client):
             learn_plan = learnaim.plan(rows)
             if not (learn_plan.clear or learn_plan.aim or learn_plan.waiting):
                 return
-            if learn_plan.aim and self._town_slot.campaign:
-                # A staging campaign keeps its leader (#227).
+            if learn_plan.aim and self._town_slot.learn_waits:
+                # A staging campaign keeps its leader (#227), and so does one
+                # held in town for bag room (#297).
                 log.info("learn-aim: %s's trainer walk waits - the campaign "
                          "owns the traveller (%s)", learn_plan.aim,
-                         self._town_slot.campaign)
+                         self._town_slot.learn_waits)
                 learn_plan = dataclasses.replace(learn_plan, aim="", skill=0)
             landed = await asyncio.to_thread(
                 _run_learn_aim_plan, learnaim.statements(learn_plan)

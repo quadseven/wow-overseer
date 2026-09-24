@@ -24,6 +24,12 @@ WHAT JEV IS OFFERED. Only what can be carried out now (`options`):
                     Offered only when every member is bound within
                     INN_YARDS of one another, all are alive, out of combat,
                     standing still, and none hearthed in the last hour.
+  hearth_to_leader  every member far from the leader whose hearthstone point
+                    is within INN_YARDS of where the leader stands hearths,
+                    walking or not (#297). Offered for those alive, out of
+                    combat, not in flight, and not hearthed in the last hour.
+                    A player bound at the inn the family waits at does not
+                    walk 5,000 yards back to it.
   drop_errand       the leader's walk is given up: the travel column is
                     released (compare-and-swap on the aim) and the pass that
                     wrote it is not given that aim again for townslot's
@@ -31,8 +37,9 @@ WHAT JEV IS OFFERED. Only what can be carried out now (`options`):
                     this process wrote.
 
 WHEN IT IS ASKED. Only when something is wrong (`trouble`): a member far from
-the leader and not moving, a leader stuck or circling with a goal it has not
-reached, or the family dying. Never during a dungeon run or a dungeon job:
+the leader and not moving, a member far from a leader who stands at its
+hearthstone point, a leader stuck or circling with a goal it has not reached,
+or the family dying. Never during a dungeon run or a dungeon job:
 those belong to run recovery and the campaign's own staging.
 
 ACT BY DEFAULT, behind DEFAULT_THRESHOLD (JEV_MODE_MOVEMENT and
@@ -59,8 +66,9 @@ SOURCE = "overseer:movement"
 CARRY_ON = "carry_on"
 HEARTH_STRAGGLER = "hearth_straggler"
 HEARTH_FAMILY = "hearth_family"
+HEARTH_TO_LEADER = "hearth_to_leader"
 DROP_ERRAND = "drop_errand"
-OPTIONS = (CARRY_ON, HEARTH_STRAGGLER, HEARTH_FAMILY, DROP_ERRAND)
+OPTIONS = (CARRY_ON, HEARTH_STRAGGLER, HEARTH_FAMILY, HEARTH_TO_LEADER, DROP_ERRAND)
 
 # A member this far from the leader, and not moving, is stranded.
 STRANDED_YARDS = 300.0
@@ -76,6 +84,8 @@ ASK_SECONDS = 300.0
 ACT_COOLDOWN_SECONDS = 1200.0
 
 NOT_MOVING = frozenset({situation.STILL, situation.STUCK})
+# A hearthstone cannot be used on a flight or mid-teleport.
+IN_TRANSIT = frozenset({situation.FLYING, situation.TELEPORTED})
 LOST = frozenset({situation.STUCK, situation.CIRCLING})
 
 
@@ -110,18 +120,23 @@ def _body(f: Facts, name: str):
     return next((b for b in f.where.bodies if b.name == name), None)
 
 
-def _ready(f: Facts, name: str) -> bool:
-    """Alive, seen, out of combat, standing still and free to hearth."""
+def _free_to_hearth(f: Facts, name: str) -> bool:
+    """Alive, seen, out of combat, not in transit, and its hearthstone ready."""
     b = _body(f, name)
     return (
         b is not None
         and b.at is not None
         and not b.dead
         and not b.in_combat
-        and f.where.progress.get(name) in NOT_MOVING
+        and f.where.progress.get(name) not in IN_TRANSIT
         and name not in f.hearthed
         and name in f.binds
     )
+
+
+def _ready(f: Facts, name: str) -> bool:
+    """Free to hearth, and standing still."""
+    return _free_to_hearth(f, name) and f.where.progress.get(name) in NOT_MOVING
 
 
 def stranded(f: Facts) -> str:
@@ -146,6 +161,37 @@ def stranded(f: Facts) -> str:
     return best
 
 
+def homeward(f: Facts) -> tuple:
+    """Far members whose hearthstone lands them at the leader, sorted (#297).
+
+    Walking or not. Measured on wow-dev 2026-09-24: the Horde leader stood 68
+    yards from the hearth point three of its four members share, and they
+    walked 3,900 to 6,600 yards back to it, one through a hostile town where it
+    died twice. Neither hearth option was offered, because `stranded` wants a
+    member standing still and `one_inn` wants every member bound at one inn.
+
+    THE LEADER MUST BE STANDING THERE, not passing by: a member hearthed to an
+    inn the leader walks on from is a member left behind somewhere new. The
+    live leader was held still for the regroup.
+    """
+    lead = f.where.lead_body
+    if lead is None or lead.at is None:
+        return ()
+    if f.where.progress.get(f.where.leader) not in NOT_MOVING:
+        return ()
+    out = []
+    for b in f.where.bodies:
+        if b.name == f.where.leader or not _free_to_hearth(f, b.name):
+            continue
+        d = situation.yards(lead.at, b.at)
+        if d is not None and d < STRANDED_YARDS:
+            continue
+        home = situation.yards(lead.at, f.binds[b.name])
+        if home is not None and home <= INN_YARDS:
+            out.append(b.name)
+    return tuple(sorted(out))
+
+
 def one_inn(f: Facts) -> bool:
     """Every member ready to hearth, and all bound at one inn."""
     names = [b.name for b in f.where.bodies]
@@ -162,6 +208,12 @@ def trouble(f: Facts) -> str:
     far = f.where.cohesion.get("far_from_leader") or []
     if far and any(f.where.progress.get(n) in NOT_MOVING for n in _far_names(f)):
         why.append("a member is far from the leader and not moving")
+    home = homeward(f)
+    if home:
+        why.append(
+            "%s far from the leader, who stands at %s hearthstone point"
+            % (", ".join(home), "its" if len(home) == 1 else "their")
+        )
     if f.where.progress.get(f.where.leader) in LOST and f.where.goal is not None:
         why.append("the leader is %s" % f.where.progress[f.where.leader])
     deaths = (f.where.deaths or {}).get("count", 0)
@@ -196,6 +248,19 @@ def options(f: Facts) -> dict:
             "%s, far from the leader and not moving, uses the hearthstone to "
             "get back to its inn, which is nearer the family, and walks on "
             "from there." % who
+        )
+    home = homeward(f)
+    if home:
+        out[HEARTH_TO_LEADER] = (
+            "%s, far from the leader, %s the hearthstone and %s back beside "
+            "the leader, who stands at %s hearthstone point, instead of "
+            "walking the whole way."
+            % (
+                ", ".join(home),
+                "uses" if len(home) == 1 else "use",
+                "is" if len(home) == 1 else "are",
+                "its" if len(home) == 1 else "their",
+            )
         )
     if one_inn(f):
         out[HEARTH_FAMILY] = (
@@ -232,7 +297,9 @@ def question(f: Facts, offered: dict):
         "play together the way a group of real human players does, and "
         "something is wrong with how they are moving (`why_now`). Choose what "
         "they do about it, as sensible players would: a member stuck far "
-        "away with no way back uses the hearthstone; a family scattered "
+        "away with no way back uses the hearthstone; members far away whose "
+        "hearthstone would put them beside the leader use it rather than "
+        "walk the whole way; a family scattered "
         "across a zone or dying over and over meets again at its inn; a walk "
         "the family keeps failing to finish, or keeps dying on, is given up "
         "for now; and when the trouble is already being handled (the leader "
@@ -267,6 +334,7 @@ class Judgment:
     item_guid: int = 0
     item_entry: int = 0
     straggler: str = ""
+    homeward: tuple = ()
 
     @property
     def holder(self) -> str:
@@ -339,6 +407,7 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
         item_name=why[:120],
         facts=f.where.line(1000),
         straggler=stranded(f),
+        homeward=homeward(f),
     )
     state, questions = question(f, offered)
     outcome = await client.ask(KIND, state, questions)

@@ -193,6 +193,116 @@ class JevActs(unittest.TestCase):
         self.assertEqual("How a family gets moving again", jevview.KINDS[jm.KIND])
 
 
+# The Horde family on 2026-09-24 at 04:05 UTC (#297): the leader at its
+# hearthstone point in Durotar, three members bound there walking back from
+# thousands of yards away, and Zork, bound in Mulgore, held still in the Barrens.
+HORDE = ("Zug", "Oz", "Uzza", "Zork", "Zrog")
+VALLEY = sit.Point(1, -619.0, -4252.0, 38.0)
+MULGORE = sit.Point(1, -2918.0, -258.0, 60.0)
+HORDE_BINDS = {
+    "Zug": VALLEY,
+    "Oz": VALLEY,
+    "Uzza": VALLEY,
+    "Zrog": VALLEY,
+    "Zork": MULGORE,
+}
+
+
+def horde(moving=("Oz", "Uzza", "Zrog"), **kw):
+    rows = [
+        snap("Zug", -611.0, -4320.0, 40.0, zone=14),
+        snap("Oz", 3473.0, 800.0, 30.0, zone=331),
+        snap("Uzza", 2036.0, -3675.0, 90.0, zone=16),
+        snap("Zork", -2046.0, -2664.0, 92.0, zone=17),
+        snap(
+            "Zrog",
+            2272.0,
+            -2200.0,
+            100.0,
+            zone=331,
+            in_combat=kw.get("zrog_fighting", 0),
+        ),
+    ]
+    tr = sit.Tracker()
+    for i in range(8):
+        for r in rows:
+            dx = i * 20.0 if r["name"] in moving else 0.0
+            tr.record(
+                r["name"],
+                sit.Point(1, r["pos_x"] + dx, r["pos_y"], r["pos_z"]),
+                i * 30.0,
+            )
+    return sit.build(HORDE, "Zug", rows, tr, 210.0, death_rows=[])
+
+
+def horde_facts(w=None, hearthed=()):
+    return jm.Facts(
+        family="Zug",
+        where=w or horde(),
+        binds=dict(HORDE_BINDS),
+        hearthed=frozenset(hearthed),
+    )
+
+
+class TheFamilyHearthsToItsLeader(unittest.TestCase):
+    """#297: members bound where the leader stands hearth, walking or not."""
+
+    def test_the_members_bound_at_the_leaders_hearth_point_are_offered(self):
+        f = horde_facts()
+        self.assertEqual(("Oz", "Uzza", "Zrog"), jm.homeward(f))
+        self.assertIn(jm.HEARTH_TO_LEADER, jm.options(f))
+        # Neither older hearth fits this family, which is why nothing was asked.
+        self.assertEqual("", jm.stranded(f))
+        self.assertFalse(jm.one_inn(f))
+
+    def test_the_family_is_asked_without_a_death_or_a_still_member(self):
+        f = horde_facts(horde(moving=("Oz", "Uzza", "Zrog", "Zork")))
+        self.assertIn("hearthstone point", jm.trouble(f))
+        fake = FakeJev(picks={"movement": jm.HEARTH_TO_LEADER}, confidence=0.9)
+        j = ask(f, fake)
+        self.assertEqual(jm.HEARTH_TO_LEADER, j.carried_out)
+        self.assertEqual(("Oz", "Uzza", "Zrog"), j.homeward)
+
+    def test_a_fighting_member_or_a_used_hearthstone_is_left_walking(self):
+        self.assertEqual(
+            ("Oz", "Uzza"), jm.homeward(horde_facts(horde(zrog_fighting=1)))
+        )
+        self.assertEqual(("Uzza", "Zrog"), jm.homeward(horde_facts(hearthed=("Oz",))))
+
+    def test_a_leader_passing_by_is_not_a_leader_standing_there(self):
+        f = horde_facts(horde(moving=("Zug", "Oz", "Uzza", "Zrog")))
+        self.assertEqual((), jm.homeward(f))
+        self.assertNotIn(jm.HEARTH_TO_LEADER, jm.options(f))
+
+    def test_a_member_already_near_the_leader_does_not_hearth(self):
+        rows_near = horde_facts()
+        near = dict(HORDE_BINDS)
+        near["Oz"] = sit.Point(1, -1500.0, -4000.0, 40.0)
+        f = jm.Facts(family="Zug", where=rows_near.where, binds=near)
+        self.assertNotIn("Oz", jm.homeward(f))
+
+    def test_the_bridge_writes_one_hearth_per_member_named(self):
+        written = []
+        ns = _load(
+            ["_carry_out_movement"],
+            {
+                "asyncio": asyncio,
+                "time": __import__("time"),
+                "jev_movement": jm,
+                "campaignqueue": __import__("campaignqueue"),
+                "log": types.SimpleNamespace(info=lambda *a: None),
+                "_insert_hearth": written.append,
+                "_release_trade_errand": lambda c, a: True,
+            },
+        )
+        f = horde_facts()
+        j = ask(f, FakeJev(picks={"movement": jm.HEARTH_TO_LEADER}, confidence=0.9))
+        asyncio.run(
+            ns["_carry_out_movement"](types.SimpleNamespace(), "Zug", f, j, None)
+        )
+        self.assertEqual(["Oz", "Uzza", "Zrog"], written)
+
+
 class TheSlotRemembersAWalkGivenUp(unittest.TestCase):
     def test_an_abandoned_aim_is_refused_to_its_claimant(self):
         aim = "at:1:-7203.1,-3821.1,8.6"
