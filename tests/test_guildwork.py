@@ -388,7 +388,10 @@ class TheBridgePass(unittest.TestCase):
 
     def test_both_walk_passes_read_a_walk_row_the_same_way(self):
         self.assertIn("_await_mail_walk", self.body("_follow_mail_walk"))
-        self.assertIn("_await_mail_walk", self.body("_follow_dues_walk"))
+        # Through the guild passes' shared follow since #633, which is the one
+        # that writes a walk a fight ended once more.
+        self.assertIn("_follow_guild_walk", self.body("_follow_dues_walk"))
+        self.assertIn("_await_mail_walk", self.body("_follow_guild_walk"))
 
     def test_the_dues_pass_asks_the_far_cap_and_follows_it(self):
         """quadseven/mod-overseer#633: the pass asks the far cap while the
@@ -396,11 +399,10 @@ class TheBridgePass(unittest.TestCase):
         walk a fight ended once more."""
         self.assertIn("max_yards=self._guild_walk_cap()", self.body("_guild_dues_once"))
         follow = self.body("_follow_dues_walk")
-        self.assertIn("self._await_mail_walk(run.holder, row_id, run.cap)", follow)
-        self.assertIn("self._walk_again_after_a_fight(", follow)
+        self.assertIn("self._follow_guild_walk(", follow)
+        self.assertIn("run.cap", follow)
         self.assertLess(
-            follow.index("_walk_again_after_a_fight("),
-            follow.index("guildroute.ARRIVED"),
+            follow.index("_follow_guild_walk("), follow.index("guildroute.ARRIVED")
         )
         await_walk = self.body("_await_mail_walk")
         self.assertIn("guildroute.follow_seconds(cap)", await_walk)

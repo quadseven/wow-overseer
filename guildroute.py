@@ -538,36 +538,44 @@ def judge_walk(holder, status, detail, result, far=False) -> WalkAnswer:
     status = str(status or "").strip().lower()
     detail = str(detail or "").strip()
     body = _result_of(result)
-    if far and status == "error" and detail.startswith(MALFORMED_WALK):
+    if status in ("pending", "claimed", "verifying", ""):
+        return WalkAnswer(WALKING)
+    if status == "applied":
+        return _arrival(holder, body)
+    if status == "unchanged":
+        why = detail or str(body.get("reason") or "did not reach the mailbox")
+        return WalkAnswer(ENDED, "%s %s" % (holder, why), retryable=True)
+    return _refusal(holder, status, detail, body, far)
+
+
+def _arrival(holder, body) -> WalkAnswer:
+    """An 'applied' walk row. The module answers 'applied' only on arrival, and
+    says so in the result; a body that does not say "arrived" is not trusted."""
+    reached = body.get("reached") if isinstance(body.get("reached"), dict) else {}
+    if body.get("outcome") != "arrived" or not reached.get("name"):
+        return WalkAnswer(
+            ENDED,
+            "%s's walk row read 'applied' without an arrival in its result" % holder,
+        )
+    box = str(reached["name"])
+    return WalkAnswer(ARRIVED, "%s stands at %s" % (holder, box), mailbox=box)
+
+
+def _refusal(holder, status, detail, body, far) -> WalkAnswer:
+    """An 'error' walk row, or one with a status nothing here knows."""
+    minutes = int(WALK_UNSUPPORTED_SECONDS // 60)
+    if status == "error" and far and detail.startswith(MALFORMED_WALK):
         return WalkAnswer(
             FAR_UNSUPPORTED,
             "this worldserver answered a far walk as %r, so it cannot walk a guild "
             "bot past the near cap yet; the near cap is asked for %d minutes"
-            % (detail, int(WALK_UNSUPPORTED_SECONDS // 60)),
+            % (detail, minutes),
         )
-    if status in ("pending", "claimed", "verifying", ""):
-        return WalkAnswer(WALKING)
-    if status == "applied":
-        # The module answers 'applied' only on arrival, and says so in the
-        # result. A body that does not say "arrived" is not trusted as one.
-        reached = body.get("reached") if isinstance(body.get("reached"), dict) else {}
-        if body.get("outcome") != "arrived" or not reached.get("name"):
-            return WalkAnswer(
-                ENDED,
-                "%s's walk row read 'applied' without an arrival in its result"
-                % holder,
-            )
-        box = str(reached["name"])
-        return WalkAnswer(ARRIVED, "%s stands at %s" % (holder, box), mailbox=box)
-    if status == "unchanged":
-        why = detail or str(body.get("reason") or "did not reach the mailbox")
-        return WalkAnswer(ENDED, "%s %s" % (holder, why), retryable=True)
     if status == "error" and UNKNOWN_MAIL_VERB in detail:
         return WalkAnswer(
             UNSUPPORTED,
             "this worldserver answered the walk as %r, so it cannot walk a "
-            "guild bot yet; not asking again for %d minutes"
-            % (detail, int(WALK_UNSUPPORTED_SECONDS // 60)),
+            "guild bot yet; not asking again for %d minutes" % (detail, minutes),
         )
     why = detail or "the world refused the walk and said nothing about why"
     return WalkAnswer(

@@ -7697,21 +7697,30 @@ class Bridge(discord.Client):
         return guildroute.walk_cap(
             time.monotonic() >= self._far_walk_unsupported_until)
 
-    async def _walk_again_after_a_fight(self, label: str, holder: str, row_id: int,
-                                        answer, attempt: int, insert) -> int:
-        """Write a walk a fight ended once more; the new row id, or 0 when not.
+    async def _follow_guild_walk(self, label: str, holder: str, row_id: int,
+                                 cap: float, insert) -> tuple:
+        """(answer, row id) of a guild walk row, written once more if a fight
+        ended it (#633); the row id is the last one written.
 
         The module pauses a walk for a fight since quadseven/mod-overseer#633,
-        so this is the rarer ending: a fight longer than the walk's allowance,
-        or a worldserver older than the pause. `insert` writes the row again.
+        so a fight ending one is the rarer case: a fight longer than the walk's
+        allowance, or a worldserver older than the pause. `insert` writes the
+        row again. Bounded: at most WALK_COMBAT_RETRIES more rows.
         """
-        if not guildroute.retry_after_combat(answer, attempt):
-            return 0
-        log.info("%s: walk row %d for %s ended in a fight; walking it again in %d "
-                 "seconds", label, row_id, holder,
-                 int(guildroute.WALK_COMBAT_RETRY_SECONDS))
-        await asyncio.sleep(guildroute.WALK_COMBAT_RETRY_SECONDS)
-        return await asyncio.to_thread(insert) or 0
+        answer = await self._await_mail_walk(holder, row_id, cap)
+        for attempt in range(1, guildroute.WALK_COMBAT_RETRIES + 1):
+            if not guildroute.retry_after_combat(answer, attempt):
+                break
+            log.info("%s: walk row %d for %s ended in a fight; walking it again in %d "
+                     "seconds", label, row_id, holder,
+                     int(guildroute.WALK_COMBAT_RETRY_SECONDS))
+            await asyncio.sleep(guildroute.WALK_COMBAT_RETRY_SECONDS)
+            again = await asyncio.to_thread(insert)
+            if not again:
+                break
+            row_id = again
+            answer = await self._await_mail_walk(holder, row_id, cap)
+        return answer, row_id
 
     async def _end_mail_walk(self, run, row_id: int, answer) -> None:
         """Post the letter on arrival; otherwise say why the route waits."""
@@ -10552,18 +10561,10 @@ class Bridge(discord.Client):
         A walk a fight ended is written once more (#633).
         """
         try:
-            answer = await self._await_mail_walk(run.holder, row_id, run.cap)
-            attempt = 1
-            while True:
-                again = await self._walk_again_after_a_fight(
-                    "guild dues", run.holder, row_id, answer, attempt,
-                    lambda: _insert_dues_row(run.holder, run.walk_command, run.taker,
-                                             run.walk_source))
-                if not again:
-                    break
-                attempt += 1
-                row_id = again
-                answer = await self._await_mail_walk(run.holder, row_id, run.cap)
+            answer, row_id = await self._follow_guild_walk(
+                "guild dues", run.holder, row_id, run.cap,
+                lambda: _insert_dues_row(run.holder, run.walk_command, run.taker,
+                                         run.walk_source))
             if answer.state == guildroute.ARRIVED:
                 letter = await asyncio.to_thread(
                     _insert_dues_row, run.holder, run.command, run.taker, run.source)
@@ -10855,17 +10856,9 @@ class Bridge(discord.Client):
                 if not walk_id:
                     return
                 log.info("guild corps: %s (walk row %d)", step.said, walk_id)
-                answer = await self._await_mail_walk(step.holder, walk_id, cap)
-                attempt = 1
-                while True:
-                    again = await self._walk_again_after_a_fight(
-                        "guild corps", step.holder, walk_id, answer, attempt,
-                        lambda: _insert_corps_row(step.holder, step.walk))
-                    if not again:
-                        break
-                    attempt += 1
-                    walk_id = again
-                    answer = await self._await_mail_walk(step.holder, walk_id, cap)
+                answer, walk_id = await self._follow_guild_walk(
+                    "guild corps", step.holder, walk_id, cap,
+                    lambda: _insert_corps_row(step.holder, step.walk))
                 if answer.state != guildroute.ARRIVED:
                     log.info("guild corps: walk row %d for %s ended without "
                              "arriving: %s", walk_id, step.holder,
@@ -10904,28 +10897,49 @@ class Bridge(discord.Client):
                 log.info("guild corps: %s row %d for %s (%s) came back %s",
                          row.kind, row_id, step.holder, row.command, status)
                 return True
-            if attempt == 1 and detail == CORPS_MOVING:
-                await asyncio.sleep(MAIL_WALK_POLL_SECONDS)
+            if attempt == 1 and await self._corps_row_again(
+                    step, row, row_id, detail, walk):
                 continue
-            if attempt == 1 and walk and detail.startswith(guildroute.COMBAT_ENDING):
-                log.info("guild corps: %s row %d for %s ended in a fight; walking it "
-                         "again in %d seconds", row.kind, row_id, step.holder,
-                         int(guildroute.WALK_COMBAT_RETRY_SECONDS))
-                await asyncio.sleep(guildroute.WALK_COMBAT_RETRY_SECONDS)
-                continue
-            if (walk and float(cap) > guildroute.TRAINER_WALK_YARDS
-                    and detail.startswith(guildroute.MALFORMED_WALK)):
-                self._far_walk_unsupported_until = (
-                    time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS)
-                log.warning("guild corps: %s row %d for %s asked a far walk this "
-                            "worldserver does not know (%s); the near cap is asked "
-                            "for %d minutes", row.kind, row_id, step.holder, detail,
-                            int(guildroute.WALK_UNSUPPORTED_SECONDS // 60))
+            if walk:
+                self._note_far_refusal(step, row, row_id, detail, cap)
             log.info("guild corps: %s row %d for %s (%s) came back %s: %s",
                      row.kind, row_id, step.holder, row.command,
                      status or "unanswered", detail)
             return False
         return False
+
+    async def _corps_row_again(self, step, row, row_id: int, detail: str,
+                               walk: bool) -> bool:
+        """Is a corps row that did not work worth one more ask? Waits first.
+
+        A cast refused because the character was moving: the refusal placed the
+        hold, so the next ask finds it standing. A trainer walk a fight ended
+        (#633): walked once more after WALK_COMBAT_RETRY_SECONDS.
+        """
+        if detail == CORPS_MOVING:
+            await asyncio.sleep(MAIL_WALK_POLL_SECONDS)
+            return True
+        if walk and detail.startswith(guildroute.COMBAT_ENDING):
+            log.info("guild corps: %s row %d for %s ended in a fight; walking it "
+                     "again in %d seconds", row.kind, row_id, step.holder,
+                     int(guildroute.WALK_COMBAT_RETRY_SECONDS))
+            await asyncio.sleep(guildroute.WALK_COMBAT_RETRY_SECONDS)
+            return True
+        return False
+
+    def _note_far_refusal(self, step, row, row_id: int, detail: str, cap: float) -> None:
+        """A far walk row a worldserver older than #633 refused: the near cap is
+        asked for WALK_UNSUPPORTED_SECONDS."""
+        if float(cap) <= guildroute.TRAINER_WALK_YARDS:
+            return
+        if not detail.startswith(guildroute.MALFORMED_WALK):
+            return
+        self._far_walk_unsupported_until = (
+            time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS)
+        log.warning("guild corps: %s row %d for %s asked a far walk this "
+                    "worldserver does not know (%s); the near cap is asked "
+                    "for %d minutes", row.kind, row_id, step.holder, detail,
+                    int(guildroute.WALK_UNSUPPORTED_SECONDS // 60))
 
     async def _await_corps_answer(self, row_id: int, seconds: float):
         """Read one row until it leaves pending/claimed/verifying, bounded."""

@@ -542,11 +542,15 @@ class TheBridgePass(unittest.TestCase):
 
     def test_a_walk_a_fight_ended_is_walked_again_once(self):
         step = self.body("_run_corps_step")
-        self.assertIn("self._walk_again_after_a_fight(", step)
-        self.assertIn("self._await_mail_walk(step.holder, walk_id, cap)", step)
+        self.assertIn("self._follow_guild_walk(", step)
+        follow = self.body("_follow_guild_walk")
+        self.assertIn("self._await_mail_walk(holder, row_id, cap)", follow)
+        self.assertIn("range(1, guildroute.WALK_COMBAT_RETRIES + 1)", follow)
+        self.assertNotIn("while True", follow)
         row = self.body("_corps_row")
-        self.assertIn("guildroute.COMBAT_ENDING", row)
+        self.assertIn("self._corps_row_again(", row)
         self.assertIn("guildroute.follow_seconds(cap)", row)
+        self.assertIn("guildroute.COMBAT_ENDING", self.body("_corps_row_again"))
         self.assertIn(
             '"guild corps: %s row %d for %s ended in a fight; walking it "', BRIDGE
         )
