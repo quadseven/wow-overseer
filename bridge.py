@@ -12106,11 +12106,7 @@ class Bridge(discord.Client):
         # errands cycle after cycle, so the guild never bought a tab. Urgency
         # is bounded the way the auction pass's is: a grant that queues no take
         # backs off (`_mail_urgency_spent`).
-        urgent = await asyncio.to_thread(_dues_fund_tab, names)
-        if urgent:
-            log.info("mail: the guild master's mailbox holds the dues that pay "
-                     "for the guild's next bank tab, so this walk is urgent%s",
-                     _family_label(cohort))
+        urgent = await self._mail_urgent(names, cohort)
         aimed = await self._claim_town_slot("mail", leader, post.aim,
                                              urgent=urgent,
                                              cohort=_cohort_key(cohort),
@@ -12165,8 +12161,17 @@ class Bridge(discord.Client):
                  "aimed at %s%s",
                  len(fresh), len(mail_plan.takes), len(letters), leader, post.aim,
                  _family_label(cohort))
+        self._mail_urgency_spent(cohort, urgent and aimed, bool(fresh))
+
+    async def _mail_urgent(self, names, cohort) -> bool:
+        """Whether this mail walk is urgent (#319): the guild master's mailbox
+        holds the dues that pay for the guild's next bank tab."""
+        urgent = await asyncio.to_thread(_dues_fund_tab, names)
         if urgent:
-            self._mail_urgency_spent(cohort, aimed, bool(fresh))
+            log.info("mail: the guild master's mailbox holds the dues that pay "
+                     "for the guild's next bank tab, so this walk is urgent%s",
+                     _family_label(cohort))
+        return urgent
 
     def _mail_urgency_spent(self, cohort, urgent: bool, queued: bool) -> None:
         """Report an urgent mail grant's outcome to the town slot (#319).
@@ -18894,17 +18899,7 @@ def _fetch_guild_bank_setup(names: list) -> dict | None:
                 (guild_id, max(purchased, 1), max(purchased, 1)),
             )
             deposit_ranks = tuple(int(row["rid"]) for row in cur.fetchall())
-            # WHAT EACH TAB IS CALLED AND HOW FULL IT IS (#319, #320).
-            cur.execute(
-                "SELECT t.TabId AS tab, t.TabName AS name, "
-                "(SELECT COUNT(*) FROM guild_bank_item i "
-                " WHERE i.guildid = t.guildid AND i.TabId = t.TabId) AS items "
-                "FROM guild_bank_tab t WHERE t.guildid = %s ORDER BY t.TabId",
-                (guild_id,),
-            )
-            tab_rows = cur.fetchall()
-            tab_names = {int(r["tab"]): str(r["name"] or "") for r in tab_rows}
-            tab_items = {int(r["tab"]): int(r["items"] or 0) for r in tab_rows}
+            tab_names, tab_items = _guild_tab_contents(cur, guild_id)
             # WHO MAY PUT AN ITEM IN, AND HOW MUCH ROOM TAB 0 HAS (#233).
             # The core no-ops an item deposit for a rank without the right or
             # into a full tab, so bank.storage_from offers the guild only to
@@ -18931,20 +18926,7 @@ def _fetch_guild_bank_setup(names: list) -> dict | None:
             )
             master = cur.fetchone()
             master_name = str(master["name"]) if master else ""
-            # THE DUES WAITING FOR THE MASTER (#319). guildwork.plan_dues posts
-            # them to the guild master, and they buy nothing until they are
-            # taken out of the mailbox. Only delivered letters count, the same
-            # rule mailrun.plan keeps.
-            mailed = 0
-            if master_name:
-                cur.execute(
-                    "SELECT COALESCE(SUM(m.money), 0) AS copper FROM mail m "
-                    "JOIN characters c ON c.guid = m.receiver "
-                    "WHERE c.name = %s AND m.money > 0 AND m.cod = 0 "
-                    "AND m.deliver_time <= UNIX_TIMESTAMP()",
-                    (master_name,),
-                )
-                mailed = int(cur.fetchone()["copper"] or 0)
+            mailed = _mailed_copper(cur, master_name)
             return {"purchased_tabs": purchased, "rank_ids": rank_ids,
                     "deposit_rank_ids": deposit_ranks,
                     "member_ranks": member_ranks, "tab0_items": tab0_items,
@@ -18955,6 +18937,39 @@ def _fetch_guild_bank_setup(names: list) -> dict | None:
                 log.warning("guild bank setup tables are unavailable")
                 return None
             raise
+
+
+def _guild_tab_contents(cur, guild_id) -> tuple:
+    """(tab -> name, tab -> item count) for every purchased tab (#319, #320)."""
+    cur.execute(
+        "SELECT t.TabId AS tab, t.TabName AS name, "
+        "(SELECT COUNT(*) FROM guild_bank_item i "
+        " WHERE i.guildid = t.guildid AND i.TabId = t.TabId) AS items "
+        "FROM guild_bank_tab t WHERE t.guildid = %s ORDER BY t.TabId",
+        (guild_id,),
+    )
+    rows = cur.fetchall()
+    return ({int(r["tab"]): str(r["name"] or "") for r in rows},
+            {int(r["tab"]): int(r["items"] or 0) for r in rows})
+
+
+def _mailed_copper(cur, name: str) -> int:
+    """Copper waiting in `name`'s mailbox, in delivered letters (#319).
+
+    The guild's dues are posted to the guild master (guildwork.plan_dues) and
+    buy nothing until they are taken out. Only delivered letters count, the
+    same rule mailrun.plan keeps.
+    """
+    if not name:
+        return 0
+    cur.execute(
+        "SELECT COALESCE(SUM(m.money), 0) AS copper FROM mail m "
+        "JOIN characters c ON c.guid = m.receiver "
+        "WHERE c.name = %s AND m.money > 0 AND m.cod = 0 "
+        "AND m.deliver_time <= UNIX_TIMESTAMP()",
+        (name,),
+    )
+    return int(cur.fetchone()["copper"] or 0)
 
 
 def _setup_buyer(setup: dict | None, names: list, leader: str) -> str:

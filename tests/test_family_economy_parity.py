@@ -296,7 +296,7 @@ def _mail_ns(world, log):
             ),
         }
     )
-    return _load(["_mail_once", *HELPERS], ns)
+    return _load(["_mail_once", "_mail_urgent", *HELPERS], ns)
 
 
 class TheMailPassServesTheFamilyItIsGiven(unittest.TestCase):
@@ -304,6 +304,7 @@ class TheMailPassServesTheFamilyItIsGiven(unittest.TestCase):
         world, log = {}, _Log()
         me = TheSelf(world)
         ns = _mail_ns(world, log)
+        me._mail_urgent = lambda *a: ns["_mail_urgent"](me, *a)
         asyncio.run(ns["_mail_once"](me, cohort))
         return world, me, log
 
@@ -330,6 +331,7 @@ class TheMailPassServesTheFamilyItIsGiven(unittest.TestCase):
         world, log = {"dues_fund_tab": True}, _Log()
         me = TheSelf(world)
         ns = _mail_ns(world, log)
+        me._mail_urgent = lambda *a: ns["_mail_urgent"](me, *a)
         asyncio.run(ns["_mail_once"](me, HORDE))
         self.assertEqual(["mail"], world["urgent_claims"])
         self.assertEqual([(True, True)], world["mail_urgency"])

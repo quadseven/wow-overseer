@@ -249,34 +249,52 @@ def plan_setup(
         return ()
     if not isinstance(purchased_tabs, int) or purchased_tabs < 0:
         return ()
-    actions: list[SetupAction] = []
-    tab = next_tab(purchased_tabs, wanted_tabs)
-    if tab is not None and (purse is None or can_buy_tab(purse, tab)):
-        actions.append(SetupAction(leader, f"bank buy-tab tab:{tab}"))
+    actions = list(_purchase(leader, purchased_tabs, purse, wanted_tabs))
     if purchased_tabs == 0:
         return tuple(actions)
+    grants = _grants(leader, rank_ids, deposit_rank_ids)
+    if grants is None:
+        return tuple(actions)
+    actions.extend(grants)
+    actions.extend(_names(leader, purchased_tabs, tab_names))
+    return tuple(actions)
+
+
+def _purchase(leader, purchased_tabs, purse, wanted_tabs) -> tuple:
+    """The next tab's purchase, when the buyer's purse pays or was not read."""
+    tab = next_tab(purchased_tabs, wanted_tabs)
+    if tab is None or (purse is not None and not can_buy_tab(purse, tab)):
+        return ()
+    return (SetupAction(leader, f"bank buy-tab tab:{tab}"),)
+
+
+def _grants(leader, rank_ids, deposit_rank_ids):
+    """The deposit grants still missing, or None when the ranks are unreadable."""
     try:
         ranks = sorted({int(r) for r in rank_ids if int(r) > 0})
         granted = {int(r) for r in deposit_rank_ids if int(r) > 0}
     except (TypeError, ValueError):
-        return tuple(actions)
-    actions.extend(
+        return None
+    return [
         SetupAction(leader, f"bank grant-deposit rank:{rid}")
         for rid in ranks
         if rid not in granted
-    )
-    if isinstance(tab_names, dict):
-        for kept in TABS:
-            if kept.tab_id >= purchased_tabs:
-                break
-            if str(tab_names.get(kept.tab_id) or "") != kept.name:
-                actions.append(
-                    SetupAction(
-                        leader,
-                        f"bank name-tab tab:{kept.tab_id} icon:{kept.icon} {kept.name}",
-                    )
-                )
-    return tuple(actions)
+    ]
+
+
+def _names(leader, purchased_tabs, tab_names) -> list:
+    """A rename for each purchased tab not yet called what TABS calls it;
+    nothing when the names were not read."""
+    if not isinstance(tab_names, dict):
+        return []
+    return [
+        SetupAction(
+            leader, f"bank name-tab tab:{kept.tab_id} icon:{kept.icon} {kept.name}"
+        )
+        for kept in TABS
+        if kept.tab_id < purchased_tabs
+        and str(tab_names.get(kept.tab_id) or "") != kept.name
+    ]
 
 
 def can_buy_tab(purse, tab_id: int = 0) -> bool:

@@ -1057,7 +1057,7 @@ class BankSetupBridgeTests(unittest.TestCase):
 
     def test_setup_reads_every_tab_and_the_masters_dues(self):
         body = self.source[self.source.index("def _fetch_guild_bank_setup(") :]
-        body = body[: body.index("\ndef _setup_buyer")]
+        body = body[: body.index("\ndef _recent_guild_setup_keys")]
         self.assertIn("HAVING COUNT(*) = %s", body)
         self.assertIn('"tab_names": tab_names', body)
         self.assertIn('"tab_items": tab_items', body)
