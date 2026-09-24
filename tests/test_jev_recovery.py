@@ -150,6 +150,66 @@ class HearthRegroupTest(unittest.TestCase):
         self.assertEqual(judgment.chosen, "restage_nearer")
 
 
+class FallbackLadderTest(unittest.TestCase):
+    """The module's summon and dungeon_finder (mod-overseer#696) are asked about.
+
+    Measured on wow-dev on 2026-09-24: the Alliance campaign's fourth failure
+    in a row had Og 3,361 yards out after restage_nearer, hearth_regroup and
+    regroup. The module now offers `summon` at that streak, and
+    `dungeon_finder` once a summon has been tried. A bridge that does not know
+    the words drops them from the options and, with one as the heuristic,
+    never asks at all.
+    """
+
+    SUMMON = dict(
+        attempt=4,
+        failure="staging_failed: BARRIER held for more than 12 minutes and "
+        "never opened - Bork (124y out), Og (3361y out and 3y above it)",
+        facts="leader 20y from the staging point; farthest member 3361y from "
+        "the leader; tried restage_nearer hearth_regroup regroup; the door's "
+        "meeting stone stands 58y from its trigger (summon opens at 3 in a row)",
+        options="restage_nearer,regroup,replan,one_copy,reset_instance,"
+        "wait_for_client,town_for_bags,summon",
+        heuristic="summon",
+        heuristic_why="4 attempts in a row never got inside",
+    )
+    FINDER = dict(
+        SUMMON,
+        attempt=5,
+        options="restage_nearer,regroup,replan,one_copy,reset_instance,"
+        "wait_for_client,town_for_bags,summon,dungeon_finder",
+        heuristic="dungeon_finder",
+    )
+
+    def test_the_summon_row_is_asked(self):
+        req = jev_recovery.request_from_row(recovery_row(**self.SUMMON))
+        self.assertIsNotNone(req)
+        self.assertIn("summon", req.options)
+        self.assertEqual(req.heuristic, "summon")
+        _state, questions = jev_recovery.question(req, context())
+        self.assertIn("meeting stone", str(questions["recovery"]))
+
+    def test_the_finder_row_is_asked(self):
+        req = jev_recovery.request_from_row(recovery_row(**self.FINDER))
+        self.assertIsNotNone(req)
+        self.assertIn("dungeon_finder", req.options)
+        _state, questions = jev_recovery.question(req, context())
+        self.assertIn("last resort", str(questions["recovery"]))
+
+    def test_jev_can_choose_the_summon_over_a_walk(self):
+        row = dict(self.SUMMON, heuristic="regroup")
+        _req, judgment = judge(
+            recovery_row(**row), FakeJev({"recovery": "summon"}, 0.8)
+        )
+        self.assertEqual(judgment.chosen, "summon")
+
+    def test_not_offered_is_not_chosen(self):
+        _req, judgment = judge(
+            recovery_row(), FakeJev({"recovery": "dungeon_finder"}, 0.9)
+        )
+        self.assertEqual(judgment.chosen, "restage_nearer")
+
+
 class StateTest(unittest.TestCase):
     def test_the_state_carries_timeline_positions_bags_and_offline(self):
         req = jev_recovery.request_from_row(recovery_row())

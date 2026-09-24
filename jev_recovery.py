@@ -96,6 +96,26 @@ RECOVERY_CRITERIA = {
         "far from each other or from the door, the way a group of players "
         "hearths home and regroups instead of fetching one member at a time."
     ),
+    # mod-overseer#696, the fallback ladder. The module offers these two only
+    # once walking has failed several attempts in a row (its
+    # Overseer.Recovery.SummonAfterFailures), and the finder only after a
+    # summon was tried this streak and only where its switch is on. Measured
+    # 2026-09-24: 21 of 25 Horde Ragefire attempts and 12 of 26 Alliance
+    # Zul'Farrak attempts closed staging_failed, answered by the same walks.
+    "summon": (
+        "The leader walks to the dungeon's meeting stone with no staging "
+        "clock, and once a second member stands there the stone summons every "
+        "member who is not there, one at a time. Right when walking to the "
+        "door has already failed several times in a row, most of all when "
+        "members straggle far behind or keep failing to arrive."
+    ),
+    "dungeon_finder": (
+        "The last resort: the family queues as one group for its own dungeon "
+        "in the dungeon finder and is teleported inside, then leaves by the "
+        "same door. Right only when walking and the summon at the stone have "
+        "both already failed this streak; every use is counted against the "
+        "classic road."
+    ),
 }
 
 STALL_CRITERIA = {
