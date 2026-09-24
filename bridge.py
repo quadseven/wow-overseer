@@ -73,6 +73,7 @@ import jev_activity
 import jev_keep
 import jev_movement
 import jobs
+import keep
 import kin
 import learnaim
 import levelroute
@@ -210,6 +211,65 @@ def _connect():
     )
 
 
+# ---------------------------------------------------------------- keep --
+#
+# overseer_keep: an item the operator reserved on a character. mod-overseer
+# refuses to sell, destroy, give, trade, mail, auction or guild-bank it; the
+# disposal writers below do not ask it to (keep.py says why). The kinds whose
+# rows move an item off its holder, for the writers that also carry other
+# kinds.
+_DISPOSAL_KINDS = frozenset({"sell", "give", "trade", "mail", "auction", "guild"})
+
+
+def _fetch_keep():
+    """The reservations, with an entry-wide one resolved to the instances its
+    character holds, so a row naming only a guid is still recognised. A world
+    that has not run the table's migration has nothing reserved (1146); any
+    other error propagates, and keep.Keep keeps the last list it read."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT k.character_name, k.item_entry, k.item_guid FROM overseer_keep k "
+                "UNION ALL "
+                "SELECT k.character_name, k.item_entry, ii.guid FROM overseer_keep k "
+                "JOIN characters c ON c.name = k.character_name "
+                "JOIN item_instance ii ON ii.owner_guid = c.guid AND ii.itemEntry = k.item_entry "
+                "WHERE k.item_guid = 0 AND k.item_entry <> 0"
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return cur.fetchall()
+
+
+_KEEP = keep.Keep(_fetch_keep)
+
+
+def _keep_reservations(cur, names) -> tuple:
+    """The reservations for `names`, as bankpolicy.Reservation, over `cur`.
+
+    An entry-wide reservation is handed over by its entry alone: bankpolicy
+    reads the first non-empty of guid and entry, and a guid of 0 is not empty.
+    A world without the table has none (1146).
+    """
+    try:
+        cur.execute(
+            "SELECT character_name, item_entry, item_guid, until_level, reason FROM overseer_keep"
+        )
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return ()
+        raise
+    rows = []
+    for row in cur.fetchall():
+        row = dict(row)
+        if not int(row.get("item_guid") or 0):
+            row.pop("item_guid", None)
+        rows.append(row)
+    return bankpolicy.reservations_from_rows(rows, names)
+
+
 def _insert_command(cmd: core.InsertCommand) -> int:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -270,6 +330,9 @@ def _insert_guild(name: str, command: str, source: str, target_arg: str = "") ->
     whichever loop called it rather than skipping a pass. 1265 is a truncated
     ENUM value, 1146 a missing table, 1054 a missing column.
     """
+    if command.startswith("bank deposit") and _KEEP.blocks(name, command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, name)
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -17083,6 +17146,9 @@ def _fetch_crafter_letters(receivers: list, senders: list) -> list:
 
 def _insert_crafter_row(holder: str, command: str, kind: str, source: str) -> int:
     """One pickup row for a designated crafter (#248): a walk or a take."""
+    if kind in _DISPOSAL_KINDS and _KEEP.blocks(holder, command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, holder)
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -17178,6 +17244,9 @@ def _insert_lockbox_row(character: str, command: str, kind: str,
     if kind not in ("bot", handover.GIVE, handover.MAIL):
         log.warning("lockbox: refusing to write kind=%r for %s", kind, character)
         return 0
+    if kind in _DISPOSAL_KINDS and _KEEP.blocks(character, command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, character)
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -17256,6 +17325,9 @@ def _insert_destroy(candidate: bag_pressure.SellCandidate) -> int:
     reads it as a malformed sale and refuses it, which costs one row.
     """
     command = bag_pressure.destroy_command(candidate)
+    if _KEEP.blocks(candidate.holder, command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, candidate.holder)
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -17312,6 +17384,9 @@ def _sell_attempts(hours: int) -> list:
 def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:
     """Queue one explicitly chosen stack for the world-side vendor executor."""
     command = "guid:%d count:%d" % (candidate.item_guid, candidate.count)
+    if _KEEP.blocks(candidate.holder, command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, candidate.holder)
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -17601,6 +17676,9 @@ def _insert_give(grant: materials.Grant) -> int:
     checks, for the same reason: a worldserver behind the migration must
     warn rather than raise.
     """
+    if _KEEP.blocks(grant.holder, grant.command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", grant.command, grant.holder)
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -17661,6 +17739,9 @@ def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
         log.warning("guildshare: refusing to write kind=%r for %s", verb, gift.item)
         return 0
     command = gift.post_command if verb == handover.MAIL else gift.command
+    if _KEEP.blocks(gift.holder, command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, gift.holder)
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -18118,6 +18199,9 @@ def _insert_corps_row(holder: str, row) -> int:
     Guarded on 1146 and 1265 like `_insert_dues_row`: a world whose queue has
     no such table, or no such `kind`, gets a warning and no row.
     """
+    if row.kind in _DISPOSAL_KINDS and _KEEP.blocks(holder, row.command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", row.command, holder)
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -18232,6 +18316,9 @@ def _insert_route(route) -> int:
     if route.verb not in guildroute.VERBS:
         log.warning("guild route: refusing to write kind=%r for %s", route.verb,
                     route.name)
+        return 0
+    if _KEEP.blocks(route.holder, route.command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", route.command, route.holder)
         return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
@@ -18352,6 +18439,9 @@ def _insert_gear_handoff(grant) -> int:
     behind mod-overseer's trade migration must warn rather than raise and
     take the whole economy pass down with it.
     """
+    if _KEEP.blocks(grant.holder, grant.command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", grant.command, grant.holder)
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -18750,6 +18840,9 @@ def _insert_bag_give(move, command: str) -> int:
     command. A different `source` so the log and the queue can tell a bag
     handover from a reagent one.
     """
+    if _KEEP.blocks(move.giver, command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, move.giver)
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -18859,7 +18952,9 @@ def _bank_policy(names: list, fresh: bool = False) -> dict:
         return hit[1]
     with _connect() as conn, conn.cursor() as cur:
         try:
-            placed = bankpolicy.place(bankpolicy.read(cur, list(key)))
+            placed = bankpolicy.place(
+                bankpolicy.read(cur, list(key), reservations=_keep_reservations(cur, key))
+            )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("bank policy: the facts it reads are missing on "
@@ -20739,6 +20834,9 @@ def _insert_auction(member: str, command: str, source: str = "auction") -> int:
     `source` is 'bags' for a bag upgrade, so `_recent_bag_buys` can tell a
     bag bought in the retry window from a reagent.
     """
+    if _KEEP.blocks(member, command):
+        log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, member)
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(

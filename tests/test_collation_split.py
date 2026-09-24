@@ -97,6 +97,9 @@ COLLATIONS = {
     # Module-owned (mod-overseer#642, 2026_09_24_01_overseer_loot_council.sql),
     # named in its own CREATE TABLE the same way. The bridge answers its rows.
     "overseer_loot_council": "utf8mb4_unicode_ci",
+    # Module-owned (2026_09_24_06_overseer_keep.sql), named in its own CREATE
+    # TABLE the same way. The bridge reads it, joined to `characters` by name.
+    "overseer_keep": "utf8mb4_unicode_ci",
     # Not an overseer table, and the reason every join to it is safe. A binary
     # collation wins against any non-binary one of the same charset without
     # anybody writing COLLATE.
@@ -215,6 +218,8 @@ STRING_COLUMNS = {
     # From its own DDL (mod-overseer's 2026_09_23_01): every VARCHAR column.
     # And 2026_09_24_03's `duty`.
     "overseer_raid_seat": frozenset({"duty", "family", "keyword", "name", "role"}),
+    # From its own DDL (mod-overseer's 2026_09_24_06): every VARCHAR column.
+    "overseer_keep": frozenset({"character_name", "reason"}),
     # From its own DDL (mod-overseer's 2026_09_24_01): every VARCHAR column.
     "overseer_loot_council": frozenset(
         {
