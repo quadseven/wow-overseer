@@ -7179,6 +7179,35 @@ function rrCard(g) {
   for (const step of att.steps) rgNote(card, step, "rr-soft");
   rgNote(card, att.unproven);
   rgNote(card, att.bots);
+  // THE PRE-RAID PLAN (#280): each member's next upgrades and where they
+  // drop, and what one run of each dungeon the family can reach is worth.
+  // Every sentence and cell is preraid.py's; the page only lays them out.
+  const pre = g.preraid;
+  if (pre) {
+    card.appendChild(el("div", "rg-sect", "next upgrades and where they drop"));
+    rgNote(card, pre.line);
+    for (const m of pre.members) {
+      const who = el("details", "rr-raiders");
+      who.appendChild(el("summary", "", m.line));
+      const box = el("div", "rr-scroll");
+      const grid = el("table", "rr-table");
+      const top = el("tr");
+      for (const label of pre.columns) top.appendChild(el("th", "", label));
+      grid.appendChild(top);
+      for (const r of m.rows) {
+        const tr = el("tr");
+        for (const cell of r.cells) tr.appendChild(el("td", "", cell));
+        grid.appendChild(tr);
+      }
+      box.appendChild(grid);
+      who.appendChild(box);
+      card.appendChild(who);
+    }
+    for (const line of pre.runs) rgNote(card, line, "rg-row");
+    for (const line of pre.progress) rgNote(card, line, "rr-soft");
+    for (const line of pre.closed) rgNote(card, line, "rr-soft");
+    rgNote(card, pre.basis);
+  }
   return card;
 }
 

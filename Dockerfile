@@ -50,6 +50,7 @@ COPY core.py bridge.py voice.py transform.py \
      vendor_stall.py \
      campaignqueue.py \
      campaignplan.py \
+     preraid.py \
      runtimeline.py \
      vclient.py \
      zones.json entrances.json shapes.json \

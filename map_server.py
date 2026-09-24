@@ -48,6 +48,7 @@ import holdings
 import crafters
 import guildcorps
 import raidlineup
+import preraid
 import raidready
 import raidsupply
 import recap
@@ -2230,6 +2231,53 @@ def _fetch_raid_supply(cur, guild_ids: list) -> dict:
         spot = out.setdefault(row.get("guildid"), {"have": {}, "knowers": {}, "bank": None})
         spot["bank"] = int(row.get("bank") or 0)
     return out
+# preraid's catalog of every piece the level 60 dungeons drop or reward. The
+# world's loot tables do not change under a running server, so it is read
+# once per process and kept, like the bridge planner's copy (#280).
+_PRERAID_CATALOG: dict | None = None
+
+
+def _preraid_catalog(cur) -> dict:
+    """preraid's catalog, read once; {} when this realm cannot answer."""
+    global _PRERAID_CATALOG
+    if _PRERAID_CATALOG is not None:
+        return _PRERAID_CATALOG
+    drops = _wide_guarded(cur, preraid.DROPS_SQL, (), "", "level 60 loot")
+    anchors = _wide_guarded(cur, preraid.ANCHORS_SQL, (), "", "wing bosses")
+    rewards = _wide_guarded(cur, preraid.REWARDS_SQL, (), "", "dungeon rewards")
+    entries = preraid.catalog_entries(drops, rewards)
+    items = _wide_guarded(
+        cur, preraid.ITEMS_SQL.format(holes=preraid.holes(len(entries))),  # noqa: S608
+        tuple(entries) or (0,), "", "level 60 items")
+    found = preraid.catalog(drops, anchors, rewards, items)
+    if found:
+        _PRERAID_CATALOG = found
+        log.info("raid: read the level 60 dungeon catalog, %d pieces", len(found))
+    return found
+
+
+def _fetch_preraid(cur, names: list) -> dict:
+    """The pre-raid plan's reads for `names`, on the raid fetch's cursor."""
+    holes = preraid.holes(len(names))
+    args = tuple(names)
+    # S608: `holes` is a run of placeholders sized by a list this process
+    # owns; every value is bound.
+    return {
+        "items": _preraid_catalog(cur),
+        "member_rows": _wide_guarded(cur, preraid.MEMBERS_SQL.format(holes=holes),  # noqa: S608
+                                     args, "", "preraid members"),
+        "worn_rows": _wide_guarded(cur, preraid.WORN_SQL.format(holes=holes),  # noqa: S608
+                                   args, "", "preraid worn"),
+        "rewarded_rows": _wide_guarded(
+            cur, preraid.PROGRESS_REWARDED_SQL.format(holes=holes),  # noqa: S608
+            args, "", "preraid quests rewarded"),
+        "log_rows": _wide_guarded(
+            cur, preraid.PROGRESS_LOG_SQL.format(holes=holes),  # noqa: S608
+            args, "", "preraid quests held"),
+        "held_rows": _wide_guarded(
+            cur, preraid.PROGRESS_ITEMS_SQL.format(holes=holes),  # noqa: S608
+            args, "", "preraid items held"),
+    }
 
 
 def _fetch_raidgoals() -> dict:
@@ -2322,6 +2370,9 @@ def _fetch_raidgoals() -> dict:
                                    "dungeon_access_template")
             supply = _fetch_raid_supply(cur, sorted(
                 {row["guildid"] for row in guild if row.get("guildid") is not None}))
+            # THE PRE-RAID PLAN (#280), for the families only: a guild bot
+            # has no drive that could send it after an upgrade.
+            prep = _fetch_preraid(cur, names)
             # NO ENTRIES MEANS NOTHING TO BIND, and `IN ()` is a syntax error
             # rather than an empty result. Every reagent then reports that
             # this realm carries no item under its name, which is what
@@ -2351,7 +2402,7 @@ def _fetch_raidgoals() -> dict:
             "vendor_rows": vendor, "creature_rows": creature,
             "object_rows": objects, "guild_rows": guild,
             "attuned_rows": attuned, "quest_rows": quest_log,
-            "families": families, "supply": supply,
+            "families": families, "supply": supply, "preraid": prep,
             "min_level": (int(access[0]["min_level"])
                           if access and access[0].get("min_level") else None)}
 # --- what the guild can make, and what it cannot (infra#3507) ---------------
@@ -4372,6 +4423,7 @@ class Handler(BaseHTTPRequestHandler):
             min_level = fetched.pop("min_level")
             guild_rows = fetched.pop("guild_rows")
             supply = fetched.pop("supply")
+            prep = fetched.pop("preraid")
             # ONE CARD PER GUILD. raidgoals counts one roster at a time, so it
             # is handed one guild's rows and that guild's family as the
             # fallback; handed both guilds at once it would see a family split
@@ -4385,7 +4437,9 @@ class Handler(BaseHTTPRequestHandler):
                     group, fetched["char_rows"], fetched["worn_rows"],
                     attuned, min_level, goals, quest_rows=quest_rows,
                     holding_rows=fetched["holding_rows"],
-                    supply=supply.get(group["guildid"])))
+                    supply=supply.get(group["guildid"]),
+                    preraid=preraid.family_view(
+                        list(group["family_names"]), **prep)))
             payload = raidready.build_readiness(cards)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:

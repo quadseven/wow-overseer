@@ -1293,6 +1293,39 @@ def bag_candidates(
 # dependency-free and must not learn about disposition to do it.
 
 
+def can_equip_piece(piece, class_id: int, level: int) -> bool:
+    """Whether a class at `level` can put on a looted piece it does not hold
+    yet: gear.py's armour training and weapon skills, asked of the pre-raid
+    plan's preraid.Item (#280). Kept here so a row still becomes a
+    gear.Holding in one module."""
+    holding = gear.Holding(
+        holder="",
+        guid=0,
+        entry=int(piece.entry),
+        name=str(piece.name),
+        quality=int(piece.quality),
+        item_level=int(piece.item_level),
+        required_level=int(piece.required_level),
+        allowable_class=int(piece.allowable_class),
+        inventory_type=int(piece.inventory_type),
+        item_class=int(piece.item_class),
+        item_subclass=int(piece.subclass),
+    )
+    character = gear.CharacterState("", int(class_id), int(level))
+    return bool(
+        gear.wearable_armor(holding, character)
+        and gear.wieldable_weapon(holding, character)
+    )
+
+
+def heaviest_armor(class_id: int, level: int) -> int:
+    """gear.heaviest_armor, for a module that does not import gear."""
+    return gear.heaviest_armor(class_id, level)
+
+
+WEAPON_WAND = gear.WEAPON_WAND
+
+
 def family_characters(equipped_rows, names) -> list:
     """The family's CharacterStates, each carrying its party role (#174).
 

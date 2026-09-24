@@ -594,6 +594,7 @@ def build_guild(
     quest_rows: list = (),
     holding_rows: list = (),
     supply: dict | None = None,
+    preraid: dict | None = None,
 ) -> dict:
     """One guild's readiness card.
 
@@ -607,6 +608,8 @@ def build_guild(
     `holding_rows` the Raid tab's bag read, for fragments and potions.
     `supply` is this guild's raid supply read (#275): `have` by item entry,
     `knowers` by craft spell and the guild bank's gold as `bank`.
+    `preraid` is preraid.family_view's section for the family: each member's
+    next upgrades and where they drop.
     """
     members = _guild_members(group, char_rows)
     lineup = raidlineup.build_lineup(members, guaranteed=group["family_names"])
@@ -672,6 +675,7 @@ def build_guild(
             list(group["family_names"]), attuned, in_log, fragments
         ),
         "supply": _supply_card(lineup, members, worn_rows, group, supply),
+        "preraid": preraid,
     }
 
 

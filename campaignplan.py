@@ -35,11 +35,27 @@ HOW MANY RUNS (`target`). Not a fixed fifty:
     of QUEST_PASS_RUNS more runs on top.
 
 WHICH ONE (`heuristic`). A ready run before one the family would be carried
-through; then the run they will outgrow soonest, because a group levelling
-through a band uses a dungeon before it loses it; then the one with the least
-of its target done; then path order. Jev is asked the same question over the
-same options (jev_choices.dungeon_ask) and its answer is carried out when it
-is confident enough; otherwise this answer is.
+through. Then, for a levelling family, the run they will outgrow soonest,
+because a group levelling through a band uses a dungeon before it loses it;
+then the one with the least of its target done; then path order.
+
+AT THE LEVEL CAP THE GEAR DECIDES, the way a raid guild gears for Molten
+Core (#280). preraid.py reads every level 60 dungeon's loot tables against
+what each member wears, and each Option carries what one run is worth:
+`expected`, the item levels the family should gain per run (each upgrade's
+drop chance times its item level gain, summed over the members), and
+`progress`, the raid progression a run gives (the Molten Core attunement in
+Blackrock Depths, the Upper Spire key in the Lower Spire). A capped family
+runs, in order: a run that advances the attunement now; one that advances
+the key; the most expected item levels, halved for a run across a continent
+crossing; the least of its target done; path order. Each dungeon is still
+run AT_CAP_RUNS times a round before the next round starts, so the family
+works through the dungeons as it outgrows their loot rather than living in
+one.
+
+Jev is asked the same question over the same options, told the same facts
+(jev_choices.dungeon_ask), and its answer is carried out when it is
+confident enough; otherwise this answer is.
 
 PURE MODULE: no MySQL, no Discord, no clock. Rows in, choices and sentences
 out. The statements the bridge and the site read with are written here.
@@ -341,6 +357,8 @@ class Facts:
     quests      zone -> open quest count, or None when unread
     gear        name -> (mean worn item level, empty gear slots), or None
     loot        map id -> boss gear item level, or None
+    upgrades    preraid place -> (preraid.Gain per member), or None
+    progress    preraid place -> preraid.Progress, or None
     """
 
     family: str
@@ -350,6 +368,8 @@ class Facts:
     quests: dict | None = None
     gear: dict | None = None
     loot: dict | None = None
+    upgrades: dict | None = None
+    progress: dict | None = None
 
     @property
     def weakest(self) -> tuple:
@@ -382,6 +402,18 @@ class Option:
     loot_level: int | None
     below: tuple  # members whose worn gear is under the loot level
     capped: bool = False  # sized as a level-cap round, not by levels
+    gains: tuple = ()  # preraid.Gain per member for one run, () when unread
+    expected: float | None = None  # item levels the family gains per run
+    progress: str = ""  # the attunement or key progress a run gives, said
+    progress_rank: int = 0  # 2 the attunement, 1 the key, 0 neither now
+    continent: str = ""  # the continent the door stands on
+    crossing: bool = False  # the door is across a continent crossing
+
+    @property
+    def value(self) -> float:
+        """`expected`, halved for a run across a continent crossing."""
+        worth = float(self.expected or 0.0)
+        return round(worth / 2 if self.crossing else worth, 2)
 
     @property
     def why(self) -> str:
@@ -433,6 +465,24 @@ def refusals(facts: Facts) -> dict:
     return out
 
 
+def _gear_facts(facts: Facts, run: Run) -> dict:
+    """The preraid fields of one run's Option, from the facts."""
+    out: dict = {}
+    if facts.upgrades is not None:
+        gains = tuple(facts.upgrades.get(run.keyword, ()))
+        out["gains"] = gains
+        out["expected"] = round(sum(float(g.levels) for g in gains), 2)
+    moved = (facts.progress or {}).get(run.keyword)
+    if moved is not None and moved.needed:
+        out["progress"] = moved.line
+        out["progress_rank"] = int(moved.rank)
+    door = council.continent_of(run.map_id)
+    home = council._home_continent(list(facts.level_rows))
+    out["continent"] = council.CONTINENT_NAMES.get(door, "")
+    out["crossing"] = door is not None and home is not None and door != home
+    return out
+
+
 def options(facts: Facts) -> list:
     """Every run the family could be queued for now, in path order."""
     _who, level = facts.weakest
@@ -469,6 +519,7 @@ def options(facts: Facts) -> list:
                 loot_level=loot_level,
                 below=below,
                 capped=level >= LEVEL_CAP,
+                **_gear_facts(facts, run),
             )
         )
     return out
@@ -478,22 +529,49 @@ def _order(option: Option) -> int:
     return next(i for i, r in enumerate(RUNS) if r.keyword == option.keyword)
 
 
+def rank(option: Option) -> tuple:
+    """The heuristic's sort key: smallest first. See the module docstring."""
+    if option.capped:
+        return (
+            not option.ready,
+            -option.progress_rank,
+            -option.value,
+            option.done / max(option.target, 1),
+            _order(option),
+        )
+    return (
+        not option.ready,
+        option.ceiling,
+        option.done / max(option.target, 1),
+        _order(option),
+    )
+
+
 def heuristic(opts: list) -> Option | None:
     """The run a group of players would pick. See the module docstring."""
     if not opts:
         return None
-    return min(
-        opts,
-        key=lambda o: (
-            not o.ready,
-            o.ceiling,
-            o.done / max(o.target, 1),
-            _order(o),
-        ),
-    )
+    return min(opts, key=rank)
 
 
 def heuristic_why(pick: Option) -> str:
+    if pick.capped and pick.progress_rank:
+        return "%s advances the raid's progression: %s (%s)" % (
+            pick.place,
+            pick.progress,
+            pick.why,
+        )
+    if pick.capped and pick.expected is not None:
+        return (
+            "%s gives the family the most expected upgrades of the dungeons "
+            "it can reach, %.1f item levels a run over every member's slots%s (%s)"
+            % (
+                pick.place,
+                pick.expected,
+                ", across a continent crossing" if pick.crossing else "",
+                pick.why,
+            )
+        )
     return "%s the weakest member %s, and the soonest outgrown of those (%s)" % (
         pick.place,
         "is ready for" if pick.ready else "would be carried through",
@@ -567,11 +645,17 @@ def entry_line(option: Option) -> str:
 
 def planned_line(option: Option, reason: str, chooser: str) -> str:
     """The log line for a written plan."""
-    return "queued %s (%s; %s done of %d) because %s; chosen by %s" % (
+    worth = ""
+    if option.expected is not None:
+        worth = "; %.1f expected item levels a run over every slot" % (option.expected)
+    if option.progress:
+        worth += "; %s" % option.progress
+    return "queued %s (%s; %s done of %d%s) because %s; chosen by %s" % (
         entry_line(option),
         option.why,
         option.done,
         option.target,
+        worth,
         reason,
         chooser,
     )
