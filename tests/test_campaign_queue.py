@@ -366,9 +366,13 @@ def _queue_pass(world, holds=None):
     async def no_plan(pending, fams):
         return False
 
+    async def no_town(fams):
+        return None
+
     me = types.SimpleNamespace(
         _activity_holds=lambda key=None: holds.get(key, ""),
         _campaign_owns_travel=owns_travel,
+        _leave_town_when_done=no_town,
         _plan_campaigns=no_plan,
     )
     asyncio.run(ns["_campaign_queue_once"](me))
@@ -476,6 +480,7 @@ def _drive_with_full_bags(withheld):
                 AssertionError("a job was written past full bags")
             ),
             "_hand_to_town": lambda keyword, mode, names: 0,
+            "_keep_in_town": lambda names: 0,
         },
     )
     return ns["_drive_dungeon"]("ragefire", 50, ["Zug"], "s", withheld=withheld)

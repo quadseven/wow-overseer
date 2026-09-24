@@ -66,10 +66,12 @@ class Log:
 class World:
     """The roster's jobs and bags, and every write the drive makes."""
 
-    def __init__(self, free, job):
+    def __init__(self, free, job, waiting=True):
         self.free = dict(free)
         self.jobs = {n: job for n in NAMES}
         self.inserted = []
+        # Whether a queued campaign waits on the family (_campaign_waiting).
+        self.waiting = waiting
 
     def insert_job(self, name, mode, source):
         self.inserted.append((name, mode, source))
@@ -98,6 +100,7 @@ def _drive(world, clock, log, since):
         "_fetch_free_slots": lambda names: {n: world.free[n] for n in names},
         "_jobs_of": lambda names: {n: world.jobs[n] for n in names},
         "_insert_job": world.insert_job,
+        "_campaign_waiting": lambda names: world.waiting,
         "_connect": lambda: contextlib.nullcontext(Conn()),
         "pymysql": None,
     }
@@ -107,6 +110,7 @@ def _drive(world, clock, log, since):
             for n in (
                 "_withheld",
                 "_hand_to_town",
+                "_keep_in_town",
                 "_town_first",
                 "_insert_family_jobs",
                 "_drive_dungeon",
@@ -168,7 +172,7 @@ class TownFirstThenTheDungeon(unittest.TestCase):
         self.assertEqual((0, 0), result)
         self.assertIn("bags are near full", withheld[0])
         self.assertEqual(
-            [(n, jobs.DEFAULT, "overseer:town-first") for n in NAMES], world.inserted
+            [(n, jobs.TOWN_RUN, "overseer:town-first") for n in NAMES], world.inserted
         )
         self.assertTrue(
             [
@@ -180,7 +184,7 @@ class TownFirstThenTheDungeon(unittest.TestCase):
         )
 
     def test_a_campaign_already_in_town_is_not_handed_twice(self):
-        world = World(MEASURED, jobs.DEFAULT)
+        world = World(MEASURED, jobs.TOWN_RUN)
         self.drive(world)
         self.assertEqual([], world.inserted)
 
@@ -217,7 +221,7 @@ class TownFirstThenTheDungeon(unittest.TestCase):
         self.assertEqual((5, 5), result)
 
     def test_a_fresh_start_waits_for_room_too(self):
-        world = World({n: 5 for n in NAMES}, jobs.DEFAULT)
+        world = World({n: 5 for n in NAMES}, jobs.TOWN_RUN)
         result, withheld = self.drive(world)
         self.assertEqual((0, 0), result)
         self.assertEqual([], world.inserted)
@@ -228,6 +232,129 @@ class TownFirstThenTheDungeon(unittest.TestCase):
         result, withheld = self.drive(world)
         self.assertEqual((5, 5), result)
         self.assertEqual([], withheld)
+
+
+class TheWaitIsSpentInTown(unittest.TestCase):
+    """mod-overseer#659. A campaign waiting in town used to leave the family on
+    the default `quest` job, and on wow-dev 2026-09-24 the questing rules flew
+    the Alliance leader 13,000 yards from his members and sent four Horde
+    members off to three zones while their campaigns waited on a vendor."""
+
+    def setUp(self):
+        self.clock, self.log, self.since = Clock(), Log(), {}
+
+    def drive(self, world):
+        withheld = []
+        result = _drive(world, self.clock, self.log, self.since)(withheld)
+        return result, withheld
+
+    def test_the_hand_off_writes_town_run_not_quest(self):
+        world = World(MEASURED, ZF)
+        self.drive(world)
+        self.assertEqual({jobs.TOWN_RUN}, {mode for _, mode, _ in world.inserted})
+        self.assertNotIn(jobs.DEFAULT, {mode for _, mode, _ in world.inserted})
+
+    def test_a_wait_that_began_on_quest_moves_to_town(self):
+        """The measured state: the hold began before this change, on quest."""
+        world = World(MEASURED, jobs.DEFAULT)
+        result, withheld = self.drive(world)
+        self.assertEqual((0, 0), result)
+        self.assertEqual(1, len(withheld))
+        self.assertEqual(
+            [(n, jobs.TOWN_RUN, "overseer:town-first") for n in NAMES], world.inserted
+        )
+        self.assertTrue(
+            [ln for ln in self.log.lines if "wait in town for the campaign" in ln],
+            self.log.lines,
+        )
+
+    def test_a_fresh_start_short_of_room_waits_in_town(self):
+        world = World({n: 5 for n in NAMES}, jobs.DEFAULT)
+        self.drive(world)
+        self.assertEqual({jobs.TOWN_RUN}, {mode for _, mode, _ in world.inserted})
+
+    def test_only_the_default_job_is_moved(self):
+        world = World(MEASURED, jobs.DEFAULT)
+        world.jobs.update({"Og": "craft", "Grog": "fish", "Ugga": ""})
+        self.drive(world)
+        self.assertEqual(
+            [("Grug", jobs.TOWN_RUN), ("Bork", jobs.TOWN_RUN), ("Ugga", jobs.TOWN_RUN)],
+            [(n, mode) for n, mode, _ in world.inserted],
+        )
+
+    def test_no_queued_campaign_no_town_run(self):
+        """A council goal withheld with no queue row keeps the old behavior,
+        so the release below cannot undo it every cycle."""
+        world = World(MEASURED, jobs.DEFAULT, waiting=False)
+        self.drive(world)
+        self.assertEqual([], world.inserted)
+
+
+def _leave(world, last_source):
+    """bridge._leave_town, run for real against `world`. `last_source` is
+    every member's last job source, or a dict of them by name."""
+    log = Log()
+    sources = last_source if isinstance(last_source, dict) else {}
+    ns = {
+        "jobs": jobs,
+        "log": log,
+        "TOWN_FIRST_SOURCE": "overseer:town-first",
+        "_campaign_waiting": lambda names: world.waiting,
+        "_jobs_of": lambda names: {n: world.jobs[n] for n in names},
+        "_last_job_source": lambda name: (
+            sources.get(name, last_source) if sources else last_source
+        ),
+        "_insert_job": world.insert_job,
+    }
+    module = ast.Module(body=[_function("_leave_town")], type_ignores=[])
+    exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+    return ns["_leave_town"](list(NAMES), "Grug"), log
+
+
+class TheFamilyLeavesTownWhenNothingWaits(unittest.TestCase):
+    def test_a_finished_campaign_sends_the_family_back_to_quest(self):
+        world = World(MEASURED, jobs.TOWN_RUN, waiting=False)
+        written, log = _leave(world, "overseer:town-first")
+        self.assertEqual(5, written)
+        self.assertEqual({jobs.DEFAULT}, set(world.jobs.values()))
+        self.assertTrue([ln for ln in log.lines if "no campaign waits" in ln])
+
+    def test_a_waiting_campaign_keeps_it_in_town(self):
+        world = World(MEASURED, jobs.TOWN_RUN, waiting=True)
+        self.assertEqual(0, _leave(world, "overseer:town-first")[0])
+        self.assertEqual([], world.inserted)
+
+    def test_an_operators_town_run_stands(self):
+        world = World(MEASURED, jobs.TOWN_RUN, waiting=False)
+        self.assertEqual(0, _leave(world, "discord:operator")[0])
+        self.assertEqual([], world.inserted)
+
+    def test_an_operators_town_run_on_one_member_stands(self):
+        """The leader's order was the bridge's; Og was ordered by a person."""
+        world = World(MEASURED, jobs.TOWN_RUN, waiting=False)
+        sources = {n: "overseer:town-first" for n in NAMES}
+        sources["Og"] = "discord:operator"
+        written, _ = _leave(world, sources)
+        self.assertEqual(4, written)
+        self.assertEqual(jobs.TOWN_RUN, world.jobs["Og"])
+        self.assertNotIn("Og", [n for n, _, _ in world.inserted])
+
+    def test_only_the_town_run_rows_go_back(self):
+        world = World(MEASURED, jobs.TOWN_RUN, waiting=False)
+        world.jobs["Og"] = "craft"
+        _leave(world, "overseer:town-first")
+        self.assertEqual("craft", world.jobs["Og"])
+        self.assertNotIn("Og", [n for n, _, _ in world.inserted])
+
+    def test_the_queue_pass_asks_for_the_release(self):
+        body = ast.get_source_segment(BRIDGE, _function("_campaign_queue_once"))
+        self.assertIn("await self._leave_town_when_done(fams)", body)
+        self.assertLess(
+            body.index("_campaign_owns_travel("), body.index("_leave_town_when_done(")
+        )
+        self.assertLess(
+            body.index("_leave_town_when_done("), body.index("if not pending:")
+        )
 
 
 if __name__ == "__main__":

@@ -458,6 +458,7 @@ def _bridge(world, fake_jev, holds=None):
         "time": __import__("time"),
         "jev": jev,
         "jev_activity": ja,
+        "jobs": jobs,
         "campaignqueue": campaignqueue,
         "townslot": townslot,
         "gatheraim": types.SimpleNamespace(),
@@ -559,6 +560,31 @@ class TheBridgeCarriesItOut(unittest.TestCase):
         )
         self.assertEqual(ja.SELL, me._activity_holds("Zug"))
         self.assertTrue(any("Jev chose sell" in line for line in log.lines), log.lines)
+
+    def test_a_family_waiting_in_town_sells_on_its_town_job(self):
+        """mod-overseer#659. Sell writes the default job, and the default job
+        is the quest drive that scattered the families while their campaigns
+        waited in town. A family on `town run` stays on it and still sells."""
+        world = FakeFamily({"Zug": 0, "Oz": 9, "Uzza": 9, "Zork": 9, "Zrog": 9})
+        fam = _family()
+        fam["leader"] = dict(fam["leader"], job=jobs.TOWN_RUN)
+        me, log = _bridge(world, FakeJev(picks={"activity": ja.SELL}, confidence=0.8))
+        asyncio.run(me._activity_for("Zug", fam, _rows(), False, ja.policy({})))
+        self.assertEqual([], world.jobs)
+        self.assertEqual(
+            ["_vendor_once", "_bag_purchase_and_trip"],
+            [name for name, _ in world.calls],
+        )
+        self.assertTrue(
+            any(
+                "runs under job=town run rather than job=quest" in ln
+                for ln in log.lines
+            ),
+            log.lines,
+        )
+        self.assertTrue(
+            any("Jev chose sell; job=town run" in ln for ln in log.lines), log.lines
+        )
 
     def test_a_carried_out_choice_is_announced_by_the_leader(self):
         world = FakeFamily({"Zug": 0, "Oz": 9, "Uzza": 9, "Zork": 9, "Zrog": 9})

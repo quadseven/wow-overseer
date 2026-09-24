@@ -576,6 +576,7 @@ def life_strategies(
     aimed: bool = False,
     travelling: bool = False,
     gathering: bool = False,
+    in_town: bool = False,
 ) -> list:
     """What keeps this character playing, given whether it leads the party.
 
@@ -650,10 +651,35 @@ def life_strategies(
     fifth flag and not a fifth branch: the leader on a gathering trip needs to
     be able to loot a node exactly as much as the follower beside it does.
     """
+    if in_town and not travelling:
+        return _in_town_strategies(leads)
     return _with_gathering(
         _life_strategies(leads=leads, aimed=aimed, travelling=travelling),
         gathering,
     )
+
+
+def _in_town_strategies(leads: bool) -> list:
+    """Nobody travels on its own while the family's campaign waits in town.
+
+    `in_town` IS THE `town run` JOB (mod-overseer#659), and it withholds the
+    wander strategy from the leader as well as the followers. A leader with
+    `new rpg` and no errand is handed a random status by upstream on its next
+    tick - a flight to another zone among them - and on wow-dev 2026-09-24
+    the questing rule flew the Alliance leader 13,000 yards from his family
+    while its campaign waited on a vendor. mod-overseer takes the strategy off
+    such a leader itself; granting it here every roster cycle would only
+    reopen that window each time. A town errand makes the leader
+    `travelling`, which keeps the ordinary leader branch, so the walk to the
+    vendor still carries the strategy that moves it.
+
+    A follower keeps `follow`, as in the unaimed branch: aimed or not, it
+    has nowhere of its own to be while the family waits. Everybody keeps
+    `flee`. The leader is not handed `follow`; it is its own master.
+    """
+    if leads:
+        return ["nc -new rpg", FLEE_STRATEGY]
+    return ["nc -new rpg", "nc +follow", FLEE_STRATEGY]
 
 
 def _with_gathering(base: list, gathering: bool) -> list:

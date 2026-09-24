@@ -1057,10 +1057,15 @@ def _give_them_a_life(names: list) -> int:
     # the measurement - `nc +loot` has never been issued on this realm - and
     # note that this loop is exactly where it belongs, because neither
     # strategy survives the ResetStrategies that runs on every login.
+    standing = _standing_jobs()
     gathering = {
-        name for name, mode in _standing_jobs().items()
+        name for name, mode in standing.items()
         if mode == craft_rhythm.MODE_GATHER
     }
+    # WHO WAITS IN TOWN FOR A CAMPAIGN TRAVELS ONLY ON AN ERRAND
+    # (mod-overseer#659). Per row, like `gathering`: the module reads the job
+    # one row at a time and so does this.
+    in_town = {name for name, mode in standing.items() if mode == jobs.TOWN_RUN}
     for name in driven:
         # The leader always travels. A follower travels when it has somewhere
         # to be - see goals.life_strategies: an UNAIMED follower given the
@@ -1077,6 +1082,7 @@ def _give_them_a_life(names: list) -> int:
             aimed=(name in aimed),
             travelling=(name in travelling),
             gathering=(name in gathering),
+            in_town=(name in in_town),
         ):
             _insert_command(core.InsertCommand(name, command, "overseer:life"))
     return len(driven)
@@ -2075,19 +2081,99 @@ def _hand_to_town(keyword: str, mode: str, names: list) -> int:
     handed = 0
     for name in names:
         try:
-            _insert_job(name, jobs.DEFAULT, TOWN_FIRST_SOURCE)
+            _insert_job(name, jobs.TOWN_RUN, TOWN_FIRST_SOURCE)
             handed += 1
         except Exception:
-            log.exception("town first: quest job insert failed for %s", name)
+            log.exception("town first: town run job insert failed for %s", name)
     log.warning(
         "town first: dungeon:%s hands the family to town - a member has %d or "
-        "fewer free slots, so its job is taken off %d character(s) and the town "
+        "fewer free slots, so %d character(s) go on job=%s and the town "
         "passes have the head. The campaign goes back in when every member has "
         "%d free slots (wow-overseer#265)",
         keyword or "(default)", bag_pressure.TOWN_RUN_FREE_SLOTS, handed,
-        bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS,
+        jobs.TOWN_RUN, bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS,
     )
     return handed
+
+
+def _keep_in_town(names: list) -> int:
+    """Put a family whose campaign waits in town on the town run job.
+
+    THE WAIT IS SPENT IN TOWN, NOT QUESTING. The hand-off above used to write
+    the default `quest` job, and a questing family travels: on wow-dev
+    2026-09-24 the quest drive flew the Alliance leader from Tanaris to
+    Winterspring and on to Un'Goro while his members were 13,000 yards behind,
+    and four Horde members cut off from a leader stuck in the instance were
+    sent off on their own and ended up in three zones. Under `town run` the
+    quest drive stands down and mod-overseer keeps everybody without an errand
+    where the family is (mod-overseer#659).
+
+    Re-asserted on every withheld pass, so a wait that began on `quest` (a
+    fresh start, a hold from before this change, a Jev interlude that wrote
+    the default job) is moved onto it. Only a member on the default job is
+    written: craft, train, fish and an operator's own orders are left alone.
+    Returns the rows written.
+    """
+    if not _campaign_waiting(names):
+        # Only a queued campaign waits in town: the release below puts a
+        # family with none back on `quest`, and a council goal withheld with
+        # no queue row would otherwise be written and released every cycle.
+        return 0
+    moved = [n for n, job in _jobs_of(names).items()
+             if job in ("", jobs.DEFAULT)]
+    written = 0
+    for name in moved:
+        try:
+            _insert_job(name, jobs.TOWN_RUN, TOWN_FIRST_SOURCE)
+            written += 1
+        except Exception:
+            log.exception("town first: town run job insert failed for %s", name)
+    if written:
+        log.info("town first: %s wait in town for the campaign on job=%s rather "
+                 "than questing, so nobody travels off on their own",
+                 ", ".join(moved), jobs.TOWN_RUN)
+    return written
+
+
+def _last_job_source(name: str) -> str:
+    """The source of the last job order written for `name`, "" if none."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT source FROM overseer_command WHERE target_name = %s "
+            "AND kind = 'job' ORDER BY id DESC LIMIT 1",
+            (name,),
+        )
+        row = cur.fetchone()
+    return str(row["source"] or "") if row else ""
+
+
+def _leave_town(names: list, leader: str) -> int:
+    """Put a family off the town run job once no campaign waits for it.
+
+    The other end of `_keep_in_town`. A campaign that goes back in writes its
+    dungeon job over `town run`, and so does the resume ceiling; this is for
+    the campaign that is finished, cancelled or emptied while the family
+    waits, which would otherwise leave it standing in town for good. Only a
+    town run this bridge wrote for the wait (TOWN_FIRST_SOURCE on that
+    member's own last job order) is released: an operator's own `job town
+    run` stands, row by row. Returns the rows written.
+    """
+    if _campaign_waiting(names):
+        return 0
+    held = [n for n, job in _jobs_of(names).items()
+            if job == jobs.TOWN_RUN and _last_job_source(n) == TOWN_FIRST_SOURCE]
+    if not held:
+        return 0
+    written = 0
+    for name in held:
+        try:
+            _insert_job(name, jobs.DEFAULT, TOWN_FIRST_SOURCE)
+            written += 1
+        except Exception:
+            log.exception("town first: quest job insert failed for %s", name)
+    log.info("town first: no campaign waits for %s any more, so %s go back to "
+             "job=%s", leader, ", ".join(held), jobs.DEFAULT)
+    return written
 
 
 def _town_first(mode: str, names: list, free_slots: dict) -> str:
@@ -2184,12 +2270,14 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
             keyword or "(default)", len(names),
         )
         _hand_to_town(keyword, mode, names)
+        _keep_in_town(names)
         return _withheld(withheld, "bags are near full, and a run started now "
                          "would be evacuated before it could progress")
     waits = _town_first(mode, names, free_slots)
     if waits:
         log.info("goal: withholding dungeon:%s for %d enabled character(s) - %s "
                  "(wow-overseer#265)", keyword or "(default)", len(names), waits)
+        _keep_in_town(names)
         return _withheld(withheld, waits)
 
     jobs_written = _insert_family_jobs(names, mode, source)
@@ -12894,6 +12982,7 @@ class Bridge(discord.Client):
         # THE TRAVEL COLUMN FIRST, AND FOR EVERY FAMILY (#227): a family whose
         # queue emptied must get its town errands back this pass too.
         await self._campaign_owns_travel(pending, fams)
+        await self._leave_town_when_done(fams)
         if not pending:
             return
         for key, rows in pending.items():
@@ -12924,6 +13013,23 @@ class Bridge(discord.Client):
                 # One family's failure must not cost the other its advance.
                 log.exception("queue: the pass for %s failed; retrying next "
                               "cycle", campaignqueue._family(key))
+
+    async def _leave_town_when_done(self, fams: dict) -> None:
+        """Release every family left on the town run job by a finished wait.
+
+        Read off the roster the queue pass already fetched, so a family on any
+        other job costs nothing. One family's failure never costs another.
+        """
+        for key, fam in sorted(fams.items()):
+            leader = str(fam["leader"].get("name") or "")
+            job = str(fam["leader"].get("job") or "").strip().lower()
+            if not leader or job != jobs.TOWN_RUN:
+                continue
+            try:
+                await asyncio.to_thread(_leave_town, list(fam["names"]), leader)
+            except Exception:
+                log.exception("town first: releasing %s from town failed; "
+                              "retrying next cycle", campaignqueue._family(key))
 
     async def _plan_campaigns(self, pending: dict, fams: dict) -> bool:
         """Queue the next dungeon for every family that has run out.
@@ -13539,6 +13645,16 @@ class Bridge(discord.Client):
             return
         self._activity_interludes[key] = lease
         want = jev_activity.JOB[activity]
+        # A FAMILY WAITING IN TOWN STAYS ON ITS TOWN JOB (mod-overseer#659).
+        # Selling, questing and gathering all map to the default job, and
+        # writing it here would put a family whose campaign waits on a vendor
+        # back on the quest drive that scattered it. The interlude still runs
+        # its pass; the far walks wait in the town slot while the hold lasts.
+        if want == jobs.DEFAULT and job == jobs.TOWN_RUN:
+            log.info("activity: %s waits in town for its campaign, so %s runs "
+                     "under job=%s rather than job=%s", who, activity,
+                     jobs.TOWN_RUN, jobs.DEFAULT)
+            want = ""
         if want and want != job:
             for name in names:
                 try:
@@ -14069,6 +14185,16 @@ class Bridge(discord.Client):
         standing = craft_rhythm.standing_mode(
             await asyncio.to_thread(_standing_jobs)
         )
+        # NOT WHILE THE FAMILY WAITS IN TOWN FOR ITS CAMPAIGN (mod-overseer#659).
+        # A gathered skill's plan writes job=quest and walks the family to a
+        # field; on wow-dev 2026-09-24 it asked for both, for a field in
+        # Dustwallow, during exactly such a wait. The goal resumes when the
+        # wait ends.
+        if standing == jobs.TOWN_RUN:
+            log.info("goal: a skill goal waits - the family's campaign waits "
+                     "in town on job=%s, and nobody leaves town for a field "
+                     "until it goes in", jobs.TOWN_RUN)
+            return
         # infra#3789. A GATHERED skill is answerable only with somewhere to
         # stand, and the survey that finds it is a database read - so it
         # happens here and `skillgoal.plan` stays pure. Only gathering pays
