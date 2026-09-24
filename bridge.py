@@ -54,6 +54,7 @@ import guildbank
 import guildshare
 import guildroute
 import guildwork
+import natural
 import guildcorps
 import holdings
 import handover
@@ -10973,8 +10974,13 @@ class Bridge(discord.Client):
         # THE GUILD MASTER BUYS, FROM ITS OWN PURSE, AND ONLY WHEN IT CAN PAY
         # (#246). `_plan_guild_setup` has the reasoning.
         members = await asyncio.to_thread(_fetch_guild_money, names)
+        # NATURALLY EARNED ONLY (the operator, 2026-09-24): a family character
+        # still holding the factory-made members' dues deposits nothing and
+        # buys no tab until those dues are taken out (natural.py).
+        eligible = await asyncio.to_thread(_natural_contributors, names, names)
+        members = natural.only_contributors(members, eligible)
         actions = _plan_guild_setup(setup, purchased_tabs, names, leader,
-                                    members, cohort)
+                                    members, cohort, eligible)
         # THE TAB COUNT WAS ALREADY IN HAND AND WAS NEVER PASSED (infra#4198).
         # `plan_deposits` defaults `guild_has_tab` to False - the cautious
         # answer, which reserves `FLOAT_COPPER + TAB0_COST_COPPER` - and this
@@ -11155,8 +11161,10 @@ class Bridge(discord.Client):
             return
         setup = await asyncio.to_thread(_fetch_guild_bank_setup, names)
         purchased_tabs = int(setup["purchased_tabs"]) if setup else 0
+        eligible = await asyncio.to_thread(_natural_contributors, names, names)
         deposits = guildbank.plan_deposits(
-            await asyncio.to_thread(_fetch_guild_money, names),
+            natural.only_contributors(
+                await asyncio.to_thread(_fetch_guild_money, names), eligible),
             guild_has_tab=purchased_tabs > 0,
             buyer=_setup_buyer(setup, names, leader),
             reserve_for_buyer=guildbank.buyer_reserve(purchased_tabs))
@@ -11360,19 +11368,24 @@ class Bridge(discord.Client):
             self._dues_walks, now, guildroute.GUILD_STEP_SECONDS)
         posted = await asyncio.to_thread(_dues_recent_holders)
         busy = set(self._dues_walks) | set(self._guild_mail_runs)
+        # NATURALLY EARNED ONLY (the operator, 2026-09-24): a member posts dues
+        # only once it has been reset to level 1; natural.py has the rule.
+        eligible = await asyncio.to_thread(
+            _natural_contributors, [m.name for m in members], names)
         # Positions and mailboxes are read only for a member the plan could
         # start: one mailbox read each, every cycle, is what the gear route
         # also bounds.
         candidates = [
             m.name for m in members
             if m.online and m.name not in posted and m.name not in busy
-            and guildwork.dues_for(m.money)
+            and m.name in eligible and guildwork.dues_for(m.money)
         ]
         row_walks = now >= self._mail_walk_unsupported_until
         walkers = (await asyncio.to_thread(_route_walkers, candidates, names, row_walks)
                    if candidates else {})
         plan = guildwork.plan_dues(members, masters, walkers, posted, busy,
-                                   max_yards=self._guild_walk_cap())
+                                   max_yards=self._guild_walk_cap(),
+                                   eligible=eligible)
         _log_capped("guild dues", plan.notes)
         started = 0
         for run in plan.runs:
@@ -17926,6 +17939,37 @@ def _fetch_dues_rows(family_names: list) -> list:
         return [dict(row) for row in cur.fetchall()]
 
 
+def _natural_contributors(candidates: list, family_names: list) -> frozenset:
+    """natural.contributors over the module's ledger; no judgement here.
+
+    The ledger is `overseer_naturalized` (quadseven/mod-overseer#704); a realm
+    without the table has reset nobody. The dues takers are the characters a
+    dues letter was ever posted to, from the command log.
+    """
+    rows, readable, takers = [], True, set()
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute("SELECT name, part FROM overseer_naturalized")
+            rows = [dict(row) for row in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            readable = False
+        try:
+            cur.execute(
+                "SELECT DISTINCT target_arg FROM overseer_command "
+                "WHERE kind = 'mail' AND source LIKE %s AND status <> 'error'",
+                (guildwork.SOURCE + ":%",))
+            takers = {str(row["target_arg"]) for row in cur.fetchall() if row["target_arg"]}
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            # Not knowing who took dues must not let the dues through.
+            takers = {str(n) for n in family_names or ()}
+    return natural.contributors(candidates, family_names,
+                                natural.parts_by_name(rows), takers, readable)
+
+
 def _dues_recent_holders() -> set:
     """Members who posted, or were asked to, recently enough to wait.
 
@@ -19092,7 +19136,8 @@ def _setup_buyer(setup: dict | None, names: list, leader: str) -> str:
 
 
 def _plan_guild_setup(setup: dict | None, purchased_tabs: int, names: list,
-                      leader: str, members: list, cohort=None) -> tuple:
+                      leader: str, members: list, cohort=None,
+                      eligible=frozenset()) -> tuple:
     """The tab and rank setup rows the guild-bank pass may ask for (#246).
 
     `Guild::HandleBuyBankTab` debits the buyer, so a `buy-tab` row written for
@@ -19112,6 +19157,14 @@ def _plan_guild_setup(setup: dict | None, purchased_tabs: int, names: list,
         purse=purse,
         tab_names=setup.get("tab_names"),
     )
+    # A TAB IS BOUGHT ONLY WITH EARNED GOLD (the operator, 2026-09-24). A buyer
+    # whose purse still holds the factory-made members' dues buys nothing.
+    if buyer not in eligible:
+        bought = [a for a in actions if a.command.startswith("bank buy-tab")]
+        if bought:
+            log.info("guild bank setup: %s buys no tab - %s%s", buyer,
+                     natural.why_not(buyer, names, {}, [buyer]), _family_label(cohort))
+        actions = tuple(a for a in actions if not a.command.startswith("bank buy-tab"))
     # THE NEXT TAB, NOT ONLY TAB 0 (#319): a guild that owns tab 0 still waits
     # on the master's purse for the next one, and says so with the dues that
     # sit unopened in its mailbox.
@@ -19132,6 +19185,10 @@ def _dues_fund_tab(names: list) -> bool:
         return False
     master = str(setup.get("master") or "")
     if not master or master not in names:
+        return False
+    # Dues from members that were not reset are not earned gold; they never
+    # make a mail walk urgent for a tab (the operator, 2026-09-24).
+    if master not in _natural_contributors([master], names):
         return False
     purse = {str(m.get("name")): m.get("money")
              for m in _fetch_guild_money(names)}.get(master)

@@ -173,13 +173,16 @@ class DuesPlan:
     notes: tuple = ()
 
 
-def _not_due(member, taker, posted) -> str | None:
+def _not_due(member, taker, posted, eligible) -> str | None:
     """Why this member posts nothing this pass; "" to say nothing; None if due.
 
     The empty string is a quiet skip: a member who already posted inside
     INTERVAL_HOURS is the normal case and is not worth a log line.
     """
     name = str(member.name)
+    if name not in eligible:
+        return ("%s posts no dues: it has not been reset to level 1, so its "
+                "gold was handed to it, and only earned gold is contributed" % name)
     if not taker:
         return "%s: %s has no guild master to post to" % (name, member.guild)
     if taker == name:
@@ -215,6 +218,8 @@ def plan_dues(
     busy,
     per_guild=WALKS_PER_GUILD,
     max_yards=guildroute.MAIL_RUN_YARDS,
+    *,
+    eligible,
 ) -> DuesPlan:
     """Which maintenance members start a dues walk this pass, and why not.
 
@@ -224,6 +229,11 @@ def plan_dues(
     were already asked to, inside INTERVAL_HOURS. `busy` holds members already
     walking to a mailbox for any pass. One note per member left out.
 
+    NATURALLY EARNED ONLY (the operator, 2026-09-24). `eligible` names the
+    members whose gold was earned (`natural.contributors`); nobody else posts.
+    It has no default on purpose: a caller that forgets it must fail, not
+    post the factory's gold.
+
     THE NEAREST FIRST (#633). Inside a guild the members nearest a mailbox are
     asked first, so the guild's two walks a pass go to the shortest ones and a
     member a continent away waits for a pass nobody nearer needs.
@@ -232,11 +242,12 @@ def plan_dues(
     started = {}
     busy = {str(n) for n in busy or ()}
     posted = {str(n) for n in posted or ()}
+    eligible = {str(n) for n in eligible or ()}
     for member in _nearest_first(members, walkers):
         name = str(member.name)
         taker = str((masters or {}).get(member.guild) or "")
         walker = (walkers or {}).get(name)
-        why = _not_due(member, taker, posted)
+        why = _not_due(member, taker, posted, eligible)
         due = why is None
         if due:
             why = _cannot_walk(name, walker, busy, max_yards)

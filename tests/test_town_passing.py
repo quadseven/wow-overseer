@@ -149,6 +149,8 @@ class TheVaultLookDepositsOnlyForWhoeverIsAtAVault(unittest.TestCase):
                 "GIVE_RETRY_MINUTES": 60,
                 "TOWN_COUNTER_YARDS": 8,
                 "_fetch_guild_bank_setup": lambda names: {"purchased_tabs": 1},
+                "natural": __import__("natural"),
+                "_natural_contributors": lambda candidates, family: frozenset(candidates),
                 "_fetch_guild_money": lambda names: [
                     {"name": n, "money": 50_000_000, "in_guild": 1} for n in names
                 ],

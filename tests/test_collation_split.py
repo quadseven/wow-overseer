@@ -54,6 +54,7 @@ BRIDGE = PACKAGE / "bridge.py"
 # worse than no entry at all because it silences the sweep below.
 COLLATIONS = {
     "overseer_roster": "utf8mb4_unicode_ci",
+    "overseer_naturalized": "utf8mb4_unicode_ci",
     "overseer_event": "utf8mb4_unicode_ci",
     "overseer_death": "utf8mb4_unicode_ci",
     "overseer_snapshot": "utf8mb4_0900_ai_ci",
@@ -121,6 +122,7 @@ STRING_COLUMNS = {
         {"channel", "channel_name", "heard_by", "sender_name", "text"}
     ),
     "overseer_chat_watch": frozenset({"channels", "name"}),
+    "overseer_naturalized": frozenset({"name", "part"}),
     "overseer_command": frozenset(
         {
             "channel",

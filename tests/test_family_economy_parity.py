@@ -27,6 +27,7 @@ from test_decree_order import FakeConn, FakeCursor  # noqa: F401 - sets up the p
 import guildbank  # noqa: E402
 import guildroute  # noqa: E402
 import guildwork  # noqa: E402
+import natural  # noqa: E402
 import townslot  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
@@ -407,7 +408,7 @@ class AnUrgentMailWalkIsBounded(unittest.TestCase):
 
 
 class TheOtherGuildPaysItsDues(unittest.TestCase):
-    def run_dues(self, cohort):
+    def run_dues(self, cohort, natural_names=None):
         world, log = {}, _Log()
         guilds = {
             tuple(ALLIANCE): _guild_rows("Cave", "Grug", ALLIANCE, 60),
@@ -436,6 +437,10 @@ class TheOtherGuildPaysItsDues(unittest.TestCase):
                 "_dues_recent_holders": lambda: set(),
                 "_route_walkers": walkers,
                 "_log_capped": lambda what, lines: None,
+                # Everyone reset unless the test names who (natural.py).
+                "_natural_contributors": lambda candidates, family: frozenset(
+                    candidates if natural_names is None else natural_names
+                ),
                 "_insert_dues_row": lambda holder, command, taker, source: (
                     world.setdefault("rows", []).append((holder, taker)) or 7
                 ),
@@ -454,6 +459,12 @@ class TheOtherGuildPaysItsDues(unittest.TestCase):
             self.assertEqual("Zug", taker)
         self.assertTrue(any("for family Zug" in ln for ln in log.lines), log.lines)
 
+    def test_a_guild_that_nobody_has_reset_posts_no_dues(self):
+        # Naturally earned only (the operator, 2026-09-24): a maintenance
+        # member that was not reset to level 1 posts nothing.
+        world, _ = self.run_dues(HORDE, natural_names=())
+        self.assertNotIn("rows", world)
+
     def test_cave_still_posts_to_grug(self):
         world, _ = self.run_dues(None)
         self.assertEqual(ALLIANCE, world["read"])
@@ -465,7 +476,7 @@ class TheOtherGuildPaysItsDues(unittest.TestCase):
 
 
 class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
-    def run_bank(self, cohort, purse, master="Zug", tabs=0):
+    def run_bank(self, cohort, purse, master="Zug", tabs=0, natural_names=None):
         world, log = {}, _Log()
         me = TheSelf(world)
         names = sorted(HORDE.names) if cohort else ALLIANCE
@@ -493,6 +504,10 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
                     for x in n
                 ],
                 "_plan_bank": lambda n: types.SimpleNamespace(guild=[]),
+                "natural": natural,
+                "_natural_contributors": lambda candidates, family: frozenset(
+                    candidates if natural_names is None else natural_names
+                ),
                 "_not_kept_at_home": lambda moves, names: tuple(moves),
                 "_fetch_positions": lambda n: {x: {"map_id": 1} for x in n},
                 "_nearest_vault": lambda leader: world.setdefault("vault_for", leader),
@@ -525,6 +540,16 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
             any("tab 0 waits - Zug holds 3g of the 100g" in ln for ln in log.lines),
             log.lines,
         )
+
+    def test_a_master_holding_the_factory_members_dues_buys_no_tab(self):
+        # Naturally earned only (the operator, 2026-09-24): the master still
+        # holds dues the factory-made members posted, so neither the tab nor
+        # a deposit is paid from its purse.
+        world, _me, log = self.run_bank(HORDE, purse=1_200_000, natural_names=())
+        rows = world.get("guild_rows", [])
+        self.assertFalse(any("buy-tab" in c for _, c in rows), rows)
+        self.assertFalse(any("deposit" in c for _, c in rows), rows)
+        self.assertTrue(any("buys no tab" in ln for ln in log.lines), log.lines)
 
     def test_a_master_holding_the_price_walks_and_buys_it(self):
         world, me, _ = self.run_bank(HORDE, purse=1_200_000)
