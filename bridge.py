@@ -79,6 +79,7 @@ import mailrun
 import materials
 import overhear
 import persona
+import preraid
 import professions
 import protect
 import questbook
@@ -2409,6 +2410,9 @@ def _apply_queue_move(move, names: list, family: str = "") -> str:
 # unknown, so a missing column costs a fact and never the plan.
 
 _PLANNER_LOOT: dict | None = None
+# preraid's catalog: every piece the level 60 dungeons drop or reward, with
+# where and how often. Static per world, so read once, like the boss loot.
+_PLANNER_CATALOG: dict | None = None
 
 
 def _planner_rows(cur, sql: str, args: tuple, what: str):
@@ -2450,10 +2454,66 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
     done, failed = campaignplan.ledger(runs, names)
     quests = (None if quest_rows is None or rewarded is None
               else campaignplan.open_quests(quest_rows, rewarded, level_rows))
+    upgrades, progress = _planner_preraid(names, level_rows)
     return campaignplan.Facts(
         family=key, level_rows=tuple(level_rows), done=done, failed=failed,
         quests=quests, gear=None if worn is None else campaignplan.gear(worn),
-        loot=_PLANNER_LOOT)
+        loot=_PLANNER_LOOT, upgrades=upgrades, progress=progress)
+
+
+def _planner_catalog(cur) -> dict | None:
+    """preraid's catalog, read once per process; None when unreadable."""
+    global _PLANNER_CATALOG
+    if _PLANNER_CATALOG is not None:
+        return _PLANNER_CATALOG
+    drops = _planner_rows(cur, preraid.DROPS_SQL, (), "the level 60 loot")
+    anchors = _planner_rows(cur, preraid.ANCHORS_SQL, (), "the wing bosses")
+    rewards = _planner_rows(cur, preraid.REWARDS_SQL, (), "the dungeon rewards")
+    if drops is None or anchors is None or rewards is None:
+        return None
+    entries = preraid.catalog_entries(drops, rewards)
+    items = _planner_rows(
+        cur, preraid.ITEMS_SQL.format(holes=preraid.holes(len(entries))),
+        tuple(entries) or (0,), "the level 60 items") or []
+    _PLANNER_CATALOG = preraid.catalog(drops, anchors, rewards, items)
+    log.info("planner: read the level 60 dungeon catalog, %d pieces",
+             len(_PLANNER_CATALOG))
+    return _PLANNER_CATALOG
+
+
+def _planner_preraid(names: list, level_rows: list) -> tuple:
+    """(upgrades, progress) for campaignplan.Facts: what one run of each
+    level 60 dungeon is worth to each member (#280), and the attunement and
+    key. (None, None) below the level cap, where gear does not choose the
+    dungeon, and for any read this realm cannot answer."""
+    levels = [int(r.get("level") or 0) for r in level_rows]
+    if not levels or min(levels) < campaignplan.LEVEL_CAP:
+        return None, None
+    marks = preraid.holes(len(names))
+    args = tuple(names)
+    with _connect() as conn, conn.cursor() as cur:
+        found = _planner_catalog(cur)
+        people = _planner_rows(cur, preraid.MEMBERS_SQL.format(holes=marks),
+                               args, "the members' specs")
+        worn = _planner_rows(cur, preraid.WORN_SQL.format(holes=marks), args,
+                             "the members' worn items")
+        done = _planner_rows(
+            cur, preraid.PROGRESS_REWARDED_SQL.format(holes=marks), args,
+            "the attunement and key quests rewarded")
+        held_quests = _planner_rows(
+            cur, preraid.PROGRESS_LOG_SQL.format(holes=marks), args,
+            "the attunement and key quests held")
+        held = _planner_rows(
+            cur, preraid.PROGRESS_ITEMS_SQL.format(holes=marks), args,
+            "the attunement and key items")
+    upgrades = None
+    if found is not None and people is not None and worn is not None:
+        plans = [preraid.plan(m, found) for m in preraid.members(people, worn)]
+        upgrades = preraid.run_gains(plans)
+    progress = None
+    if done is not None and held_quests is not None and held is not None:
+        progress = preraid.progress(names, done, held_quests, held)
+    return upgrades, progress
 
 
 def _append_planned(family: str, rows: list, finish: int, option) -> int:

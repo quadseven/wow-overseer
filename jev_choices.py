@@ -1,9 +1,13 @@
 """Two family decisions asked of Jev: the next dungeon and the quest aim (#95).
 
   dungeon_choice  which of the runs campaignplan.options offers a family whose
-                  campaign queue has run out. ACT by default, behind a
-                  confidence floor (DUNGEON_THRESHOLD; JEV_MODE_DUNGEON_CHOICE
-                  and JEV_THRESHOLD_DUNGEON_CHOICE override both): Jev's run
+                  campaign queue has run out. At level 60 each run carries
+                  what it is worth to the raid (#280): the upgrades its loot
+                  tables hold for each member, the item levels expected per
+                  run, the attunement or key progress, and the continent.
+                  ACT by default, behind a confidence floor
+                  (DUNGEON_THRESHOLD; JEV_MODE_DUNGEON_CHOICE and
+                  JEV_THRESHOLD_DUNGEON_CHOICE override both): Jev's run
                   is queued when it is sure enough, campaignplan.heuristic's
                   otherwise, and on no answer at all. Asked only with two or
                   more runs to choose from.
@@ -197,6 +201,11 @@ def dungeon_question(facts, opts):
                 "open_quests": _unknown(o.quests),
                 "boss_gear_item_level": _unknown(o.loot_level),
                 "members_whose_gear_is_below_it": list(o.below),
+                "expected_item_levels_gained_per_run": _unknown(o.expected),
+                "upgrades_per_member": [g.line for g in o.gains] or "unknown",
+                "raid_progress": o.progress or "none",
+                "continent": o.continent or "unknown",
+                "needs_a_continent_crossing": o.crossing,
             }
             for o in opts
         ],
@@ -212,10 +221,17 @@ def dungeon_question(facts, opts):
         "and enter now: the levels it suits, how often they have completed it "
         "and failed at it, how many runs it would be queued for, the quests it "
         "still holds for them, and how its bosses' gear compares with what "
-        "they wear. Choose the dungeon a sensible group would run next: one "
+        "they wear. At level 60 they are gearing for their guild's first "
+        "Molten Core raid, the way a raid guild does it: each dungeon lists "
+        "the upgrades its loot tables hold for each member against what they "
+        "wear (with drop chances), the item levels the family should gain per "
+        "run summed over every member's slots, the raid progress a run gives "
+        "(the Molten Core attunement, the Upper Blackrock Spire key), and "
+        "whether it needs a continent crossing. Choose the dungeon a sensible group would run next: one "
         "that suits the weakest member's level, levels and gears the party, "
-        "finishes open quests, and is not one they have run to exhaustion or "
-        "keep failing at."
+        "moves the raid's attunement or key along when it can, finishes open "
+        "quests, does not cross a continent for little, and is not one they "
+        "have run to exhaustion or keep failing at."
     )
     return state, {"dungeon": jev.choice(instructions, criteria)}
 
@@ -226,7 +242,8 @@ def facts_line(facts, opts) -> str:
     parts = ["weakest %s %d" % (who, level)]
     for o in opts:
         parts.append(
-            "%s %d-%d done %d/%d failed %d quests %s loot %s below %d"
+            "%s %d-%d done %d/%d failed %d quests %s loot %s below %d "
+            "exp %s prog %d%s"
             % (
                 o.keyword,
                 o.floor,
@@ -237,6 +254,9 @@ def facts_line(facts, opts) -> str:
                 _unknown(o.quests),
                 _unknown(o.loot_level),
                 len(o.below),
+                _unknown(o.expected),
+                o.progress_rank,
+                " cross" if o.crossing else "",
             )
         )
     return "; ".join(parts)[:1000]
