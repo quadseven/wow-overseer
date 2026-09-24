@@ -126,8 +126,10 @@ class TheSelf:
             self.world.setdefault("urgent_claims", []).append(claimant)
         return True
 
-    def _mail_urgency_spent(self, cohort, urgent, queued):
-        self.world.setdefault("mail_urgency", []).append((urgent, queued))
+    def _mail_urgency_spent(self, cohort, urgent, aimed, fresh):
+        self.world.setdefault("mail_urgency", []).append(
+            (urgent and aimed, bool(fresh))
+        )
 
     async def _follow_dues_walk(self, run, row_id):
         return None
@@ -370,6 +372,38 @@ def _guild_rows(guild, master, family, bots):
         for i in range(bots)
     ]
     return rows
+
+
+class AnUrgentMailWalkIsBounded(unittest.TestCase):
+    """#319: the urgent dues walk backs off when a grant queues no take."""
+
+    def spend(self, urgent, aimed, fresh):
+        calls = []
+
+        class Slot:
+            def productive(self, claimant):
+                calls.append(("productive", claimant))
+
+            def fruitless(self, claimant, now):
+                calls.append(("fruitless", claimant))
+                return now
+
+        ns = _base({})
+        ns.update({"log": _Log(), "time": types.SimpleNamespace(monotonic=lambda: 0.0)})
+        ns = _load(["_mail_urgency_spent", *HELPERS], ns)
+        me = types.SimpleNamespace(_cohort_town_slot=lambda key: Slot())
+        ns["_mail_urgency_spent"](me, None, urgent, aimed, fresh)
+        return calls
+
+    def test_a_take_queued_is_productive(self):
+        self.assertEqual([("productive", "mail")], self.spend(True, True, [1]))
+
+    def test_no_take_yet_backs_off(self):
+        self.assertEqual([("fruitless", "mail")], self.spend(True, True, []))
+
+    def test_an_ordinary_or_ungranted_walk_costs_nothing(self):
+        self.assertEqual([], self.spend(False, True, []))
+        self.assertEqual([], self.spend(True, False, []))
 
 
 class TheOtherGuildPaysItsDues(unittest.TestCase):

@@ -12161,7 +12161,7 @@ class Bridge(discord.Client):
                  "aimed at %s%s",
                  len(fresh), len(mail_plan.takes), len(letters), leader, post.aim,
                  _family_label(cohort))
-        self._mail_urgency_spent(cohort, urgent and aimed, bool(fresh))
+        self._mail_urgency_spent(cohort, urgent, aimed, fresh)
 
     async def _mail_urgent(self, names, cohort) -> bool:
         """Whether this mail walk is urgent (#319): the guild master's mailbox
@@ -12173,19 +12173,20 @@ class Bridge(discord.Client):
                      _family_label(cohort))
         return urgent
 
-    def _mail_urgency_spent(self, cohort, urgent: bool, queued: bool) -> None:
+    def _mail_urgency_spent(self, cohort, urgent: bool, aimed: bool, fresh) -> None:
         """Report an urgent mail grant's outcome to the town slot (#319).
 
         The same bound `_auction_urgency_spent` puts on the auction pass: a
         grant that queued a take was productive, and one that queued nothing
         yet (the walk is still on its way) backs the urgency off, so a walk
         that never lands stops taking every other errand's column. A grant
-        that was not urgent costs nothing here.
+        that was not urgent, or not granted, costs nothing here. `fresh` is
+        the takes this grant queued.
         """
-        if not urgent:
+        if not (urgent and aimed):
             return
         slot = self._cohort_town_slot(_cohort_key(cohort))
-        if queued:
+        if fresh:
             slot.productive("mail")
             return
         until = slot.fruitless("mail", time.monotonic())
