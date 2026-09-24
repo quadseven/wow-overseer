@@ -5,7 +5,8 @@ by `item_guid` or every instance of `item_entry`. mod-overseer then refuses to
 sell, destroy, give, trade, mail, auction or guild-bank it, and moves it
 between the character's own bank and its hands by level. This module stops
 the bridge from ASKING it to: every disposal row a pass writes names its item
-as `guid:<n>` or `entry:<n>`, and a row naming a reserved item is not written.
+as `guid:<n>` or `entry:<n>` (a mail's attachment as `item:<n>`, which is an
+instance guid too), and a row naming a reserved item is not written.
 
 The world would refuse the row anyway. Not writing it keeps the refusals out
 of the queue and out of the passes that read their own refusals back, and it
@@ -25,7 +26,8 @@ from dataclasses import dataclass, field
 
 RELOAD_SECONDS = 60.0
 
-_GUID = re.compile(r"(?<![a-z_])guid:(\d+)")
+# `item:` is the mail verb's attachment, an item_instance guid.
+_GUID = re.compile(r"(?<![a-z_])(?:guid|item):(\d+)")
 _ENTRY = re.compile(r"(?<![a-z_])entry:(\d+)")
 
 

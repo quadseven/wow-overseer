@@ -53,8 +53,15 @@ class ReservedTest(unittest.TestCase):
         )
         self.assertFalse(keep.reserved(r, "Grog", "guid:0 entry:0"))
 
+    def test_a_mail_attachment_is_an_instance(self):
+        r = keep.from_rows(rows())
+        self.assertTrue(
+            keep.reserved(r, "Grog", "send item:%d subject:For you" % SWORD_GUID)
+        )
+
     def test_only_whole_words_are_read(self):
-        self.assertEqual(keep.items_named("walk-to-vendor item:647 max:600"), ((), ()))
+        self.assertEqual(keep.items_named("walk-to-vendor max:600"), ((), ()))
+        self.assertEqual(keep.items_named("send item:5 subject:x"), ((5,), ()))
         self.assertEqual(keep.items_named("send guid:5 subject:x"), ((5,), ()))
         self.assertEqual(keep.items_named("buy entry:647 count:1"), ((), (647,)))
         self.assertEqual(keep.items_named("itemguid:5"), ((), ()))
@@ -134,6 +141,24 @@ class WritersTest(unittest.TestCase):
                 write = body.find("INSERT INTO overseer_command")
                 self.assertGreater(ask, 0, name)
                 self.assertLess(ask, write, name)
+
+
+class MailWritersTest(unittest.TestCase):
+    """The mail forms the guild share, the guild routes and the lockbox pass
+    actually write are recognised (they attach by `item:<guid>`)."""
+
+    def test_the_mail_forms_in_use_attach_by_item(self):
+        sources = [
+            (HERE / n).read_text()
+            for n in ("guildshare.py", "guildroute.py", "lockbox.py", "bridge.py")
+        ]
+        forms = set()
+        for text in sources:
+            forms.update(re.findall(r"send (\w+):%", text))
+        self.assertTrue(forms, "no mail send form found")
+        for form in forms:
+            with self.subTest(form=form):
+                self.assertIn(form, ("item", "guid", "entry", "money"))
 
 
 class BankPolicyTest(unittest.TestCase):
