@@ -660,8 +660,10 @@ class AModuleThatBoardsOpensTheOtherContinentsDoors(unittest.TestCase):
         crossing.note_module_crossing("")
 
     def test_without_the_report_blackrock_depths_is_refused(self):
-        self.assertIn("with no way across yet",
-                      council.door_refusal("blackrock-depths", self.rows))
+        self.assertIn(
+            "with no way across yet",
+            council.door_refusal("blackrock-depths", self.rows),
+        )
 
     def test_with_the_report_blackrock_depths_is_allowed(self):
         self.assertTrue(crossing.note_module_crossing("boards"))
@@ -678,8 +680,10 @@ class AModuleThatBoardsOpensTheOtherContinentsDoors(unittest.TestCase):
         for value in ("", None, "refuses", "board", "BOARDS "):
             crossing.note_module_crossing(value)
             with self.subTest(value=value):
-                self.assertEqual(value is not None and str(value).strip().lower() == "boards",
-                                 crossing.module_boards())
+                self.assertEqual(
+                    value is not None and str(value).strip().lower() == "boards",
+                    crossing.module_boards(),
+                )
 
     def test_only_a_dungeon_door_leans_on_it(self):
         """The module crosses inside a dungeon run and nowhere else, so every
@@ -697,11 +701,14 @@ class AModuleThatBoardsOpensTheOtherContinentsDoors(unittest.TestCase):
 class TheBridgeReadsTheModulesReport(unittest.TestCase):
     def test_the_queue_pass_reads_the_build_fact_before_judging_a_door(self):
         source = (Path(__file__).resolve().parent.parent / "bridge.py").read_text()
-        self.assertIn("SELECT value FROM overseer_build WHERE name = 'crossing'", source)
-        once = source[source.index("async def _campaign_queue_once"):]
-        once = once[:once.index("async def ", 10)]
-        self.assertLess(once.index("_fetch_module_crossing"),
-                        once.index("_plan_campaigns"))
+        self.assertIn(
+            "SELECT value FROM overseer_build WHERE name = 'crossing'", source
+        )
+        once = source[source.index("async def _campaign_queue_once") :]
+        once = once[: once.index("async def ", 10)]
+        self.assertLess(
+            once.index("_fetch_module_crossing"), once.index("_plan_campaigns")
+        )
 
 
 if __name__ == "__main__":
