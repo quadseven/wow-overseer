@@ -10829,12 +10829,11 @@ class Bridge(discord.Client):
             self._mail_walk_tasks.add(task)
             task.add_done_callback(self._mail_walk_task_done)
         log.info("guild corps: started %d step(s)", len(plan.steps))
-        # THE RAID'S SUPPLY (#275) takes the members the corps left free.
+        # THE RAID'S SUPPLY (#275) takes the members the corps left free. A
+        # failure propagates to the corps loop, which logs it with its
+        # traceback after the corps' own steps have already started.
         busy |= {step.holder for step in plan.steps}
-        try:
-            await self._raid_supply_once(facts, plan.corps, busy, cap)
-        except pymysql.err.MySQLError:
-            log.exception("raid supply: the pass failed on a read; retrying next cycle")
+        await self._raid_supply_once(facts, plan.corps, busy, cap)
 
     async def _raid_supply_once(self, facts, corps, busy, cap) -> None:
         """One pass of the raid's supply (#275): Molten Core consumables and
