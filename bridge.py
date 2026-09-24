@@ -71,6 +71,7 @@ import jev_keep
 import jobs
 import kin
 import learnaim
+import levelroute
 import lockbox
 import lootcouncil
 # NOT `mailbox` - that is a Python standard library module, and this package is
@@ -539,6 +540,24 @@ GATHER_CLAIMANT = "gather"
 # rule is that an errand which cannot finish must not hold the column for ever,
 # and a discovery walk is exactly the kind that can fail to finish.
 FLIGHT_CLAIMANT = "flight"
+
+# THE SAME, FOR THE LEVELING WALK: the leader walked to the chosen hub's flight
+# point (levelroute.py). A hub is a zone away, which is the flight pass's
+# distance, so it is held to that pass's lease: a lease and not an exemption,
+# for infra#3703's reason.
+LEVEL_CLAIMANT = "level"
+
+# How often the leveling pass looks, and how long a leveling choice stands
+# before Jev is asked again on unchanged facts. A level, a new option or a
+# move to another zone asks at once.
+LEVEL_CYCLE_SECONDS = float(os.environ.get("LEVEL_CYCLE_SECONDS", "120"))
+LEVEL_ASK_SECONDS = float(os.environ.get("LEVEL_ASK_SECONDS", "1800"))
+
+# A zone quest aimed this long without being handed in is put aside for
+# LEVEL_SKIP_SECONDS: mod-overseer releases an aim that never lands after its
+# own half-hour backstop, and re-aiming it at once would pin the family to it.
+LEVEL_AIM_SECONDS = 1800.0
+LEVEL_SKIP_SECONDS = 7200.0
 
 # The bag pass's name in the town slot (#206), and the pass that owns the
 # traveller while a campaign is withheld for bag space (#225).
@@ -2555,6 +2574,121 @@ def _queue_owns_job(family: str | None = None) -> bool:
         return False
 
 
+# --- the leveling zone (levelroute.py) -----------------------------------------
+#
+# levelroute decides; these read what it decides from and write the one aim it
+# asks for. Every read the realm cannot answer (1054 or 1146) reads as unknown.
+
+_LEVEL_WORLD: tuple | None = None
+
+
+def _level_world() -> tuple:
+    """(hub quest rows, spawn cells) off acore_world, read once per process.
+
+    Neither changes while a realm runs. A read this realm cannot answer is
+    None and is tried again on the next pass rather than remembered.
+    """
+    global _LEVEL_WORLD
+    if _LEVEL_WORLD is not None:
+        return _LEVEL_WORLD
+    with _connect() as conn, conn.cursor() as cur:
+        quests = _planner_rows(cur, levelroute.QUESTS_SQL, (), "the hub quests")
+        spawns = _planner_rows(cur, levelroute.DANGER_SQL, (), "the hub spawns")
+    if quests is None or spawns is None:
+        return (None if quests is None else tuple(quests),
+                None if spawns is None else levelroute.cells(spawns))
+    _LEVEL_WORLD = (tuple(quests), levelroute.cells(spawns))
+    log.info("levelroute: read %d hub quests and %d spawn cells from the world "
+             "database", len(_LEVEL_WORLD[0]), len(_LEVEL_WORLD[1]))
+    return _LEVEL_WORLD
+
+
+def _level_facts(key: str, fam: dict):
+    """levelroute.Facts for one family. Reads only."""
+    names = list(fam["names"])
+    marks = campaignplan.holes(len(names))
+    args = tuple(names)
+    quests, spawns = _level_world()
+    with _connect() as conn, conn.cursor() as cur:
+        members = _planner_rows(
+            cur, levelroute.MEMBERS_SQL.format(holes=marks), args,
+            "the family's levels") or []
+        rewarded = _planner_rows(
+            cur, campaignplan.REWARDED_SQL.format(holes=marks), args,
+            "the rewarded quests")
+        held = _planner_rows(
+            cur, levelroute.HELD_SQL.format(holes=marks), args, "the held quests")
+        died = _planner_rows(
+            cur, levelroute.DEATHS_SQL.format(holes=marks),
+            args + (levelroute.DEATH_HOURS,), "the family's deaths")
+        worn = _planner_rows(cur, campaignplan.GEAR_SQL.format(holes=marks),
+                             args, "the worn gear")
+    where = _fetch_positions(names)
+    leader = str(fam["leader"].get("name") or "")
+    return levelroute.Facts(
+        family=key or leader, members=tuple(members),
+        here=levelroute.here_of(where.get(leader)),
+        zones={n: int(r.get("zone_id") or 0) for n, r in where.items()},
+        quests=quests, rewarded=_read_or_none(levelroute.by_name, rewarded, "quest"),
+        held=_read_or_none(levelroute.by_name, held, "quest"), spawns=spawns,
+        deaths=_read_or_none(levelroute.deaths, died),
+        gear=_read_or_none(campaignplan.gear, worn))
+
+
+def _read_or_none(shape, rows, *args):
+    """`shape(rows, *args)`, or None for a read the realm could not answer."""
+    return None if rows is None else shape(rows, *args)
+
+
+def _family_aims(names: list) -> dict:
+    """name -> overseer_roster.drive_quest for these names; {} when unread."""
+    if not names:
+        return {}
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _planner_rows(
+            cur, "SELECT name, drive_quest FROM overseer_roster "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "WHERE name IN (%s)" % campaignplan.holes(len(names)),
+            tuple(names), "the family's quest aims")
+    return {str(r["name"]): int(r.get("drive_quest") or 0) for r in rows or ()}
+
+
+def _aim_family_quest(family: str, quest_id: int, holders: tuple) -> int:
+    """Aim one family's holders at a quest and clear the rest of THAT family.
+
+    The same rule _aim_quest keeps for this bridge's own family, held to the
+    family's own rows by `family = %s` on every statement, so another
+    family's aims are never touched: a holder is aimed, a non-holder is
+    cleared (aiming a non-holder idles it on the next tick). A row already
+    carrying the quest is not rewritten. Rows changed.
+    """
+    if not family:
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            if quest_id and holders:
+                marks = campaignplan.holes(len(holders))
+                cur.execute(
+                    "UPDATE overseer_roster SET drive_quest = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
+                    "WHERE family = %%s AND drive_quest <> %%s AND name IN (%s)"
+                    % marks, (int(quest_id), family, int(quest_id), *holders))
+                changed = cur.rowcount or 0
+                cur.execute(
+                    "UPDATE overseer_roster SET drive_quest = 0 "  # noqa: S608 - placeholders from a COUNT, values still bound
+                    "WHERE family = %%s AND drive_quest <> 0 AND name NOT IN (%s)"
+                    % marks, (family, *holders))
+                return changed + (cur.rowcount or 0)
+            cur.execute("UPDATE overseer_roster SET drive_quest = 0 "
+                        "WHERE family = %s AND drive_quest <> 0", (family,))
+            return cur.rowcount or 0
+        except pymysql.err.OperationalError as exc:
+            if exc.args and exc.args[0] == 1054:
+                log.warning("levelroute: overseer_roster has no drive_quest or "
+                            "family column, so %s's zone quest is not aimed",
+                            family)
+                return 0
+            raise
+
+
 # --- the activity choice's reads (#216) --------------------------------------
 #
 # jev_activity decides; these read what the question carries. Every statement
@@ -4200,6 +4334,7 @@ class Bridge(discord.Client):
             long_leases={
                 GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS,
                 FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+                LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
             },
         )
         # WHICH NODE HAS BEEN ASKED FOR, HOW OFTEN, AND WITH WHAT MASK BEHIND
@@ -4310,6 +4445,15 @@ class Bridge(discord.Client):
         # until the trail is a minute long again.
         self._situation_trail = situation.Tracker()
         self._seer = vision.Seer.from_env(dict(os.environ, LLM_URL=LLM_URL))
+        # THE LEVELING ZONE (levelroute.py). Per family key: the facts the
+        # last choice was made on, the hub chosen, who chose it and when; the
+        # zone quest aimed and since when; the quests put aside, until when;
+        # and the last "nothing to choose" line. In memory: a restart asks
+        # again, which costs one question.
+        self._level_choice: dict = {}
+        self._level_aims: dict = {}
+        self._level_skip: dict = {}
+        self._level_said: dict = {}
 
     async def setup_hook(self) -> None:
         # Held, not fired and forgotten. asyncio keeps only a weak reference to
@@ -4356,6 +4500,7 @@ class Bridge(discord.Client):
                 self._run_recovery_loop,
                 self._loot_council_loop,
                 self._situation_loop,
+                self._level_route_loop,
             )
         }
 
@@ -5972,6 +6117,7 @@ class Bridge(discord.Client):
                 long_leases={
                     GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS,
                     FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+                    LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                 },
             )
             self._cohort_town_slots[key] = slot
@@ -13234,6 +13380,200 @@ class Bridge(discord.Client):
                  campaignqueue._family(key), activity, back)
         return True
 
+    # --- the leveling zone (levelroute.py) -------------------------------------
+
+    async def _level_route_loop(self) -> None:
+        """Choose each family's leveling hub and carry it out, on its own clock.
+
+        LEVEL_CYCLE_SECONDS by default: a hub changes with a level or a
+        finished zone, so a two-minute look is soon enough and cheap.
+        """
+        await self.wait_until_ready()
+        await asyncio.sleep(min(LEVEL_CYCLE_SECONDS, 90.0))
+        while not self.is_closed():
+            try:
+                await self._level_route_once()
+            except Exception:
+                log.exception("levelroute: pass failed; retrying next cycle")
+            await asyncio.sleep(LEVEL_CYCLE_SECONDS)
+
+    async def _level_route_once(self) -> None:
+        """One pass: every family on the roster, each guarded on its own."""
+        own_key = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
+        fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        for key, fam in sorted(fams.items()):
+            try:
+                await self._level_route_for(key, fam, key == (own_key or ""))
+            except Exception:
+                log.exception("levelroute: the pass for %s failed; retrying "
+                              "next cycle", campaignqueue._family(key))
+
+    def _level_quiet(self, key: str, line: str) -> None:
+        """Say a "nothing to choose" line once, until it changes."""
+        if self._level_said.get(key) != line:
+            log.info("levelroute: %s: %s", campaignqueue._family(key), line)
+        self._level_said[key] = line
+
+    async def _level_route_for(self, key: str, fam: dict, own: bool) -> None:
+        """Read one family, choose its hub (Jev past its floor), carry it out."""
+        names = list(fam["names"])
+        if not names:
+            return
+        facts = await asyncio.to_thread(_level_facts, key, fam)
+        who, level = facts.weakest
+        if not level:
+            self._level_quiet(key, "nobody's level can be read, so no hub is chosen")
+            return
+        if level >= levelroute.LEVEL_CAP:
+            self._level_quiet(key, "at the level cap, so no leveling hub")
+            return
+        # Off the event loop: the spawn and quest walks are pure but not free.
+        opts = await asyncio.to_thread(levelroute.options, facts)
+        pick = levelroute.heuristic(opts)
+        if pick is None:
+            refused = await asyncio.to_thread(levelroute.refusals, facts)
+            self._level_quiet(key, "no hub for a family whose weakest is %s at %d%s" % (
+                who, level, " (%s)" % "; ".join(
+                    "%s: %s" % kv for kv in sorted(refused.items())) if refused else ""))
+            return
+        self._level_said.pop(key, None)
+        chosen = await self._level_choose(key, facts, opts, pick)
+        await self._level_carry_out(key, fam, own, facts, chosen)
+
+    def _level_standing(self, key: str, sig: tuple, opts: list, now: float):
+        """The standing choice while its facts hold and it is still offered,
+        else None."""
+        held = self._level_choice.get(key)
+        if not held or held["sig"] != sig or now - held["at"] >= LEVEL_ASK_SECONDS:
+            return None
+        return next((o for o in opts if o.key == held["key"]), None)
+
+    def _level_why_now(self, key: str, sig: tuple, now: float) -> str:
+        held = self._level_choice.get(key)
+        if held is None:
+            return "first look"
+        if held["sig"] != sig:
+            return "the facts changed"
+        return "the standing choice is %d minutes old" % int((now - held["at"]) // 60)
+
+    async def _level_ask(self, key: str, facts, opts: list, pick, why_now: str):
+        """Jev's leveling_zone judgment, recorded, or None when not asked."""
+        rule = jev_choices.policy(jev_choices.KIND_ZONE)
+        if rule.mode == jev.OFF or not self._jev.ready(jev_choices.KIND_ZONE):
+            return None
+        judgment = await jev_choices.zone_ask(self._jev, facts, opts, pick, rule,
+                                              why_now)
+        if judgment is None:
+            return None
+        log.info("%s", judgment.line())
+        try:
+            await asyncio.to_thread(_insert_jev_judgment, judgment)
+        except Exception:
+            log.exception("levelroute: the zone choice for %s was not recorded",
+                          campaignqueue._family(key))
+        return judgment
+
+    async def _level_choose(self, key: str, facts, opts: list, pick):
+        """The hub to carry out: the standing choice while its facts hold,
+        else a fresh one, Jev's where it acted and the heuristic's otherwise."""
+        now = time.monotonic()
+        sig = (facts.weakest[1], tuple(o.key for o in opts),
+               facts.here[1] if facts.here else 0)
+        standing = self._level_standing(key, sig, opts, now)
+        if standing is not None:
+            return standing
+        why_now = self._level_why_now(key, sig, now)
+        judgment = await self._level_ask(key, facts, opts, pick, why_now)
+        chosen = jev_choices.zone_carried(opts, pick, judgment)
+        by = jev_choices.zone_chooser(judgment)
+        held = self._level_choice.get(key)
+        if held is None or held["key"] != chosen.key:
+            log.info("%s", levelroute.line(
+                campaignqueue._family(key), chosen, by, why_now))
+        self._level_choice[key] = {"sig": sig, "key": chosen.key, "by": by,
+                                   "at": now}
+        return chosen
+
+    async def _level_carry_out(self, key: str, fam: dict, own: bool, facts,
+                               chosen) -> None:
+        """Walk to the hub, aim a zone quest, share the zone's quests.
+
+        ONLY WHILE THE FAMILY QUESTS. A campaign, a craft or a fish job owns
+        the family, and a run in progress is never interrupted, so nothing
+        here writes unless the leader's job is the default one. The walk goes
+        through the town slot, which answers every pass with a wait while a
+        queued campaign stages (#227).
+
+        THE AIM AND THE SHARES ARE FOR OTHER FAMILIES ONLY. This bridge's own
+        family is aimed and shared by its council (_aim_quest, _share_quests);
+        a second writer for its drive_quest is the mistake this repo keeps
+        paying for. Its leader is still walked to the hub.
+        """
+        who = campaignqueue._family(key)
+        names = list(fam["names"])
+        job = str(fam["leader"].get("job") or "").strip().lower()
+        if job not in ("", jobs.DEFAULT):
+            log.debug("levelroute: %s is on job %s, so %s waits", who, job,
+                      chosen.key)
+            return
+        if await self._mid_run(names):
+            return
+        hub = levelroute.BY_KEY[chosen.key]
+        leader = str(fam["leader"].get("name") or "")
+        if facts.here is not None and int(facts.here[1] or 0) != hub.zone_id:
+            point = levelroute.walk_aim(hub)
+            aim = travel.ground_aim(*point) if point else None
+            if aim and leader:
+                aimed = await self._claim_town_slot(
+                    LEVEL_CLAIMANT, leader, aim, cohort=None if own else key)
+                log.info("levelroute: %s: %s %s to %s in %s (%s)", who,
+                         "walking" if aimed else "could not yet walk", leader,
+                         hub.name, hub.zone, aim)
+        if own:
+            return
+        await self._level_aim(key, names, facts, hub)
+        try:
+            await asyncio.to_thread(
+                _share_family_quests, names, hub.zone_id,
+                "levelroute: %s in %s: " % (who, hub.zone))
+        except Exception:
+            log.exception("levelroute: the zone shares for %s failed", who)
+
+    async def _level_aim(self, key: str, names: list, facts, hub) -> None:
+        """Aim the family at the zone quest the most of them hold."""
+        now = time.monotonic()
+        skip = {q for q, until in (self._level_skip.get(key) or {}).items()
+                if until > now}
+        aimed = self._level_aims.get(key)
+        if aimed and now - aimed[1] > LEVEL_AIM_SECONDS:
+            # Held past mod-overseer's own backstop without a hand-in: put it
+            # aside rather than pin the family to it again.
+            self._level_skip.setdefault(key, {})[aimed[0]] = now + LEVEL_SKIP_SECONDS
+            skip.add(aimed[0])
+            log.info("levelroute: %s: quest %d was aimed %d minutes without a "
+                     "hand-in, so it is put aside for %d minutes",
+                     campaignqueue._family(key), aimed[0], int((now - aimed[1]) // 60),
+                     int(LEVEL_SKIP_SECONDS // 60))
+            self._level_aims.pop(key, None)
+            aimed = None
+        quest_id, holders = levelroute.zone_aim(facts, hub.zone_id, skip)
+        current = await asyncio.to_thread(_family_aims, names)
+        if quest_id and all(current.get(n) == quest_id for n in holders):
+            if not aimed or aimed[0] != quest_id:
+                self._level_aims[key] = (quest_id, now)
+            return
+        changed = await asyncio.to_thread(_aim_family_quest, key, quest_id, holders)
+        if quest_id:
+            self._level_aims[key] = (quest_id, now)
+            log.info("levelroute: %s: aimed %s at quest %d in %s (%d row(s) "
+                     "changed)", campaignqueue._family(key), ", ".join(holders),
+                     quest_id, hub.zone, changed)
+        else:
+            self._level_aims.pop(key, None)
+            log.info("levelroute: %s: nobody holds a quest of %s yet, so the "
+                     "aim is cleared (%d row(s)) and the zone's shares come first",
+                     campaignqueue._family(key), hub.zone, changed)
+
     async def _goal_thought(self, row: dict, action) -> None:
         await asyncio.to_thread(
             _insert_thought, action.character_name, "goal", action.text)
@@ -14322,7 +14662,7 @@ _LEDGER_REWARDED_SQL = (
 # know before it proposes a share the worldserver can only refuse.
 _LEDGER_CATALOG_SQL = (
     "SELECT t.ID, t.LogTitle, t.QuestLevel, t.MinLevel, t.AllowableRaces, "
-    "       t.Flags, "
+    "       t.Flags, GREATEST(t.QuestSortID, 0) AS zone, "
     "       a.MaxLevel, a.AllowableClasses, a.PrevQuestID, a.NextQuestID, "
     "       a.ExclusiveGroup "
     "FROM acore_world.quest_template t "
@@ -14345,14 +14685,13 @@ def _fetch_family_quests(names: list) -> tuple:
     REWARDED for it - so pulling the whole 10,000-row quest_template would cost
     a large query to answer questions nobody asks. Around 90 ids in practice.
 
-    ZONE IS DELIBERATELY LEFT UNKNOWN (0). questbook.Quest.zone is what marks
-    Bork's Coldridge Valley rows as stalls, and quest_template's QuestSortID
-    would plausibly supply it - but its positive/negative encoding has not been
-    read against THIS server, and the module's own rule is that an unknown zone
-    never blocks anything. Guessing it wrong would mark reachable work
-    unreachable and quietly drop it out of the catch-up plan, which is the
-    exact failure questbook was written to prevent. Reporting stalls is left to
-    a follow-up that can verify the column first.
+    ZONE IS QuestSortID WHEN IT IS A ZONE. Read against the dev world: a
+    positive QuestSortID is the quest's zone (17 on every Barrens quest the
+    Horde family holds, 331 on Ashenvale's) and a negative one is a sort, not
+    a place (-81 warrior, -263 druid), so the catalog carries the positive one
+    and 0 otherwise. It blocks nothing by itself: questbook.blockers says
+    ELSEWHERE only when the member's zones are known too, and only the
+    leveling pass (_share_family_quests with a zone) gives them any.
     """
     if not names:
         return [], {}
@@ -14565,8 +14904,21 @@ def _share_quests() -> questshare.Plan:
     refused because no quest in this zone carries QUEST_FLAGS_SHARABLE" are one
     log line apart rather than indistinguishable silence.
     """
-    names = sorted(_protected_guids().values())
+    return _share_family_quests(sorted(_protected_guids().values()))
+
+
+def _share_family_quests(names: list, zone: int = 0, label: str = "") -> questshare.Plan:
+    """_share_quests for `names`, and with `zone` held to that zone.
+
+    The leveling pass (levelroute.py) hands another family's names and its
+    chosen hub's zone: every member is given that zone, so questbook.blockers
+    refuses a share outside it as ELSEWHERE, and a family levelling in the
+    Barrens is not handed the Durotar quest its leader never turned in.
+    `label` names the family in the line said.
+    """
     members, catalog = _fetch_family_quests(names)
+    if zone:
+        members = levelroute.share_members(members, zone)
     plan = questshare.plan(members, catalog)
 
     seen = _recent_share_keys(SHARE_RETRY_MINUTES)
@@ -14598,7 +14950,7 @@ def _share_quests() -> questshare.Plan:
             continue
         if _insert_share(grant):
             inserted += 1
-    log.info("%s; %d command(s) inserted", questshare.say(plan), inserted)
+    log.info("%s%s; %d command(s) inserted", label, questshare.say(plan), inserted)
     return plan
 
 
@@ -21028,6 +21380,7 @@ class HeadlessBridge(Bridge):
                 self._activity_loop,
                 self._run_recovery_loop,
                 self._situation_loop,
+                self._level_route_loop,
             ) if coro.__name__ not in self.HEADLESS_SKIP
         ]
         log.info("headless: no Discord gateway; driving %d loop(s): %s",

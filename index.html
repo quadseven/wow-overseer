@@ -2753,6 +2753,14 @@
      one-column layout this already wanted below its own breakpoint. */
   #fmovelist, #fbondlist { display:grid; gap:14px;
                 grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr)); }
+  /* THE LEVELING ROUTE (levelroute.py): the same head and cards as the two
+     blocks above, and the same auto-fit floor. */
+  #froutehead { color:var(--on-card-dim); font-size:.9rem;
+                overflow-wrap:anywhere; margin-bottom:.6rem; }
+  #froutehead.alarm { color:var(--warn-text); }
+  #froutehead .fnow { color:var(--on-card); font-weight:700; }
+  #froutelist { display:grid; gap:14px;
+                grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr)); }
   .fmv, .fbd { background:var(--panel); border:1px solid var(--line);
                border-radius:12px; padding:14px; min-width:0; }
   /* A handover the world keeps refusing is not a row with a red word on it,
@@ -3448,6 +3456,16 @@
     <div id="fbondhead"></div>
     <div id="fbondlist"></div>
     <div id="fbondrule"></div>
+  </div>
+  <!-- WHERE THEY LEVEL (levelroute.py). Where the family stands, the hub it
+       levels at now and who chose it (the bridge's heuristic, or Jev past its
+       floor), the hub after it, and the route to the cap by level band: the
+       hubs of their side, the dungeons that open, the class quests and the
+       mount. Everything below arrives written. -->
+  <div id="froute">
+    <div class="fsec"><span class="fsecn">05</span><span class="fsecline"></span><span class="fsecl">leveling route</span></div>
+    <div id="froutehead"></div>
+    <div id="froutelist"></div>
   </div>
 </section>
 <!-- THE WATCH WALL. Deliberately its own view rather than a wider Family tab:
@@ -6638,6 +6656,7 @@ function showView(v) {
     pollFamily();
     pollQuests();
     pollNeeds();
+    pollRoute();
     refreshFamilyWatch();
     return;
   }
@@ -6788,6 +6807,7 @@ setInterval(pollFamily, 5000);         // the family rides the same 5s cadence
 setInterval(refreshFamilyWatch, 5000); // and so does the watch it owns
 setInterval(pollQuests, 30000);        // quest rows are a save, not a stream
 setInterval(pollNeeds, 30000);         // and so are bags, gear and coin
+setInterval(pollRoute, 30000);         // a level or a finished zone moves it
 
 // THE CENSUS DOES NOT WAIT FOR THE MAP FILES. It used to start only after
 // zones.json and shapes.json had both arrived, so the header said "reaching
@@ -6796,6 +6816,64 @@ setInterval(pollNeeds, 30000);         // and so are bags, gear and coin
 poll();
 setInterval(poll, 5000);
 loadZones().then(() => { render(); });
+
+// --- the leveling route (levelroute.py) -----------------------------------
+//
+// HERE, past loadZones().then(, and not inside the Family tab's window: that
+// suite holds the tab to one replaceChildren (the board's), because a card
+// there carries a live <video>. This block holds text only.
+//
+// Where the family stands and where it levels next, off /api/levelroute. The
+// sentences arrive written by levelroute.page_view; this only draws them, as
+// text. Thirty seconds, the quest board's cadence: a level or a finished zone
+// is what changes it.
+const frouteHead = document.getElementById("froutehead");
+const frouteList = document.getElementById("froutelist");
+
+function routeBand(band) {
+  const card = el("div", "fmv");
+  const top = el("div", "fmvtop");
+  top.append(el("span", "fmvw", "levels " + band.band));
+  const hubs = band.zones.map((z) => z.zone + " (" + z.hub + ", " + z.levels + ")"
+    + (z.away ? ", across the sea" : "")
+    + (z.towns.length ? ", enemy towns " + z.towns.join(", ") : ""));
+  top.append(el("span", "fmvt", hubs.length ? hubs.join("; ") : "no hub starts in this band"));
+  card.append(top);
+  if (band.dungeons.length) card.append(el("div", "", "dungeons: " + band.dungeons.join("; ")));
+  if (band.milestones.length) card.append(el("div", "", band.milestones.join("; ")));
+  return card;
+}
+
+function renderRoute(p) {
+  const lines = [el("div", "", p.where)];
+  if (p.queue) lines.push(el("div", "", p.queue));
+  lines.push(el("div", "fnow", p.now));
+  if (p.next) lines.push(el("div", "", p.next));
+  frouteHead.replaceChildren(...lines);
+  frouteHead.className = "";
+  frouteList.replaceChildren(...(p.route || []).map(routeBand));
+}
+
+async function pollRoute() {
+  if (view !== FAMILY_VIEW) return;
+  const asked = familyKey;
+  try {
+    const r = await fetch(u("/api/levelroute" + familyQuery(asked)));
+    if (!r.ok) throw new Error(r.status);
+    const p = await r.json();
+    // By the family the server drew, as pollQuests does and for its reason.
+    if ((p.family || asked) !== familyKey || view !== FAMILY_VIEW) return;
+    renderRoute(p);
+  } catch (e) {
+    // Keep the route that is drawn and say so: a blank route reads as
+    // "nowhere to go", which is not what a failed read found out.
+    frouteHead.className = "alarm";
+    if (!frouteHead.querySelector(".rstale")) {
+      frouteHead.prepend(el("div", "rstale", "the world is unreachable - this route may be stale"));
+    }
+  }
+}
+
 setInterval(fetchPanel, 5000);  // panel rides the same 5s snapshot cadence
 setInterval(refreshMind, 5000);  // and so does the thought stream
 setInterval(refreshFrame, 5000);  // and so does their own screen

@@ -37,6 +37,7 @@ import frames
 import guildcraft
 import guildroute
 import jevview
+import levelroute
 import lootcouncil
 import lootstory
 import modelviewer
@@ -3020,6 +3021,90 @@ def _fetch_queue_views() -> dict:
         conn.close()
 
 
+# --- the leveling route (levelroute.py) ---------------------------------------
+#
+# The bridge chooses; this reads the same facts and the choice it recorded, so
+# the Family tab's "where we are, where next" is the bridge's own route. The
+# world rows (hub quests and spawn cells) are read once per process, as the
+# bridge reads them.
+_LEVEL_WORLD: tuple | None = None
+_LEVEL_POSITIONS = (
+    "SELECT name, map_id, zone_id, pos_x, pos_y FROM overseer_snapshot "
+    "WHERE name IN ({holes})"
+)
+_LEVEL_CHOICE = (
+    "SELECT heuristic, jev, acted, created_at FROM overseer_jev_judgment "
+    "WHERE kind = %s AND subject = %s ORDER BY id DESC LIMIT 1"
+)
+
+
+def _level_world(cur) -> tuple:
+    global _LEVEL_WORLD
+    if _LEVEL_WORLD is None:
+        quests = _wide_guarded(cur, levelroute.QUESTS_SQL, (), "", "quest_template")
+        spawns = _wide_guarded(cur, levelroute.DANGER_SQL, (), "", "creature")
+        if quests and spawns:
+            _LEVEL_WORLD = (tuple(quests), levelroute.cells(spawns))
+        return (tuple(quests) or None, levelroute.cells(spawns) or None)
+    return _LEVEL_WORLD
+
+
+def _level_reads(names: list, key: str) -> dict:
+    """The rows /api/levelroute is drawn from, for one family. Reads only."""
+    holes = ", ".join(["%s"] * len(names))
+    args = tuple(names)
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            quests, spawns = _level_world(cur)
+            return {
+                "quests": quests,
+                "spawns": spawns,
+                "members": _wide_guarded(
+                    cur, levelroute.MEMBERS_SQL.format(holes=holes), args, "",
+                    "characters"),
+                "rewarded": _wide_guarded(
+                    cur, campaignplan.REWARDED_SQL.format(holes=holes), args, "",
+                    "character_queststatus_rewarded"),
+                "held": _wide_guarded(
+                    cur, levelroute.HELD_SQL.format(holes=holes), args, "",
+                    "character_queststatus"),
+                "died": _wide_guarded(
+                    cur, levelroute.DEATHS_SQL.format(holes=holes),
+                    args + (levelroute.DEATH_HOURS,), "", "overseer_death"),
+                "where": _wide_guarded(
+                    cur, _LEVEL_POSITIONS.format(holes=holes), args, "",
+                    "overseer_snapshot"),
+                "choice": _wide_guarded(
+                    cur, _LEVEL_CHOICE, (levelroute.KIND, key[:12]), "",
+                    "overseer_jev_judgment"),
+                "queue": _queue_views(cur).get(key) or {},
+            }
+    finally:
+        conn.close()
+
+
+def _fetch_levelroute(names: list, key: str) -> dict:
+    """levelroute.page_view for one family, with the choice the bridge
+    recorded and the family's campaign queue line. Names are lead first."""
+    if not names:
+        return levelroute.page_view(levelroute.Facts(family=key, members=()))
+    got = _level_reads(names, key)
+    spots = {r["name"]: r for r in got["where"]}
+    facts = levelroute.Facts(
+        family=key, members=tuple(got["members"]),
+        here=levelroute.here_of(spots.get(names[0])),
+        zones={n: int(r.get("zone_id") or 0) for n, r in spots.items()},
+        quests=got["quests"], rewarded=levelroute.by_name(got["rewarded"], "quest"),
+        held=levelroute.by_name(got["held"], "quest"), spawns=got["spawns"],
+        deaths=levelroute.deaths(got["died"]))
+    chosen, chooser = levelroute.recorded_choice(
+        got["choice"][0] if got["choice"] else None)
+    view = levelroute.page_view(facts, chosen, chooser)
+    view["queue"] = got["queue"].get("line") or ""
+    return view
+
+
 # --- the run timeline (mod-overseer#616) -----------------------------------
 #
 # The worldserver writes each dungeon run's phase changes and decisions to
@@ -5312,6 +5397,25 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("party status query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _levelroute(self, query: dict) -> None:
+        """GET /api/levelroute[?family=X] - where the family levels, and next.
+
+        The family key, never a name, resolved by _family_scope like every
+        per-family panel. levelroute.page_view says it; this only reads.
+        """
+        try:
+            names, chosen, known = self._family_scope(query)
+            payload = _fetch_levelroute(names, chosen or "")
+            payload["family"] = chosen
+            payload["families"] = known
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # The block keeps the route it has drawn and says it may be stale:
+            # a blank route reads as "nowhere to go", which is not what a
+            # failed read found out.
+            log.exception("levelroute query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _armory_guild(self, query: dict) -> None:
         """GET /api/armory/guild?guild=X - one family guild, as a short list.
 
@@ -5553,6 +5657,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/council": _council,
         "/api/eye": _eye,
         "/api/agenda": _agenda,
+        "/api/levelroute": _levelroute,
         "/api/party-status": _party_status,
         "/api/decree": _decree,
         "/api/thoughts": _thoughts,
