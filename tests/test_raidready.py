@@ -251,6 +251,95 @@ class SoftBlockersStopNothing(unittest.TestCase):
         self.assertEqual(raidready.worn_item_levels(worn), {"A": 60})
 
 
+def _held(holder, name, count, slot=23):
+    """One backpack stack, in the shape bank.members_from_rows reads."""
+    return {
+        "holder": holder,
+        "level": 60,
+        "item_guid": hash((holder, name)) & 0xFFFFFF,
+        "count": count,
+        "name": name,
+        "quality": 1,
+        "sell_price": 0,
+        "required_level": 0,
+        "bonding": 0,
+        "item_class": 0,
+        "container_slots": 0,
+        "bag": 0,
+        "slot": slot,
+    }
+
+
+class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
+    """Per raider: gear against the floor, fire resistance against the role's
+    target, and the night's supplies carried against what the role wants."""
+
+    def setUp(self):
+        self.rows = _guild("Cave", 23, FULL)
+        self.head = self.rows[0]["name"]
+
+    def _card_for(self, worn, held):
+        return _card(
+            self.rows,
+            [self.head],
+            worn=worn,
+            holding_rows=held,
+            clears=False,
+        )
+
+    def _tank_night(self, extra=0):
+        wants = {
+            "Greater Fire Protection Potion": 4 + extra,
+            "Major Healing Potion": 5 + extra,
+            "Flask of the Titans": 1,
+            "Elixir of the Mongoose": 1,
+            "Smoked Desert Dumplings": 2,
+            "Juju Power": 1,
+        }
+        return [
+            _held(self.head, name, n, slot=23 + i)
+            for i, (name, n) in enumerate(sorted(wants.items()))
+        ]
+
+    def test_a_geared_stocked_main_tank_is_ready(self):
+        worn = [
+            {"name": self.head, "slot": 0, "item_level": 62, "fire_res": 120},
+            {"name": self.head, "slot": 1, "item_level": 60, "fire_res": 80},
+        ]
+        card = self._card_for(worn, self._tank_night())
+        head = next(r for r in card["raiders"] if r["name"] == self.head)
+        self.assertTrue(head["ready"], head["short"])
+        self.assertEqual("yes", head["cells"][-1])
+        self.assertEqual("200 of 200", head["cells"][5])
+        self.assertEqual("14 of 14", head["cells"][8])
+        self.assertIn("1 ready for the core", card["raiders_line"])
+
+    def test_a_big_stack_does_not_stand_in_for_a_missing_flask(self):
+        held = [
+            _held(self.head, "Major Healing Potion", 40, slot=23),
+            _held(self.head, "Greater Fire Protection Potion", 4, slot=24),
+        ]
+        worn = [{"name": self.head, "slot": 0, "item_level": 62, "fire_res": 200}]
+        head = next(
+            r for r in self._card_for(worn, held)["raiders"] if r["name"] == self.head
+        )
+        self.assertEqual((9, 14), (head["supplies_carried"], head["supplies_wanted"]))
+        self.assertEqual(["supplies 9 of 14"], head["short"])
+
+    def test_targets_follow_the_role(self):
+        card = self._card_for([], [])
+        by_role = {}
+        for r in card["raiders"]:
+            by_role.setdefault((r["role"], r["main_tank"]), r)
+        self.assertEqual(200, by_role[("tank", True)]["fire_target"])
+        self.assertEqual(120, by_role[("tank", False)]["fire_target"])
+        self.assertEqual(60, by_role[("healer", False)]["fire_target"])
+        dps = by_role[("dps", False)]
+        self.assertEqual(0, dps["fire_target"])
+        self.assertNotIn(" of ", dps["cells"][5])
+        self.assertIn("gear not read", dps["short"])
+
+
 class EachRaiderIsReported(unittest.TestCase):
     """The operator asked for a row per raider: level, gear, attunement, fire
     resistance, role, and what stands in the way."""
@@ -303,9 +392,23 @@ class EachRaiderIsReported(unittest.TestCase):
         self.assertTrue(head["attuned"])
         self.assertEqual("Eastern Kingdoms", head["where"])
         self.assertEqual(
-            ["1", self.head, "tank", "60", "45", "17", "yes", "0", "Eastern Kingdoms"],
+            [
+                "1",
+                self.head,
+                "tank",
+                "60",
+                "45",
+                "17 of 200",
+                "yes",
+                "0",
+                "0 of 14",
+                "Eastern Kingdoms",
+                "no: gear 45 of 55; fire resistance 17 of 200; supplies 0 of 14",
+            ],
             head["cells"],
         )
+        self.assertTrue(head["main_tank"])
+        self.assertFalse(head["ready"])
 
     def test_unread_gear_and_other_continents_are_said_not_guessed(self):
         others = [r for r in self.card["raiders"] if r["name"] != self.head]
@@ -316,7 +419,7 @@ class EachRaiderIsReported(unittest.TestCase):
 
     def test_the_summary_line_counts_what_the_rows_say(self):
         line = self.card["raiders_line"]
-        self.assertIn("40 raiders: 1 attuned", line)
+        self.assertIn("40 raiders: 0 ready for the core, 1 attuned", line)
         self.assertIn("1 wearing any fire resistance (17 in all)", line)
         self.assertIn("0 fire protection potions carried", line)
 
