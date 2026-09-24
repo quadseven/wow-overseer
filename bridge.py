@@ -8472,6 +8472,19 @@ class Bridge(discord.Client):
         """
         trip_worth = bag_pressure.family_town_run_needed(
             free_slots, sellable=sellable_counts)
+        # A CAMPAIGN HELD IN TOWN SELLS UP TO ITS RESUME FLOOR. Without this a
+        # member between the trigger and the floor waited out the whole
+        # resume ceiling with a full bag of junk; see town_first_trip_worth.
+        if (not trip_worth and not in_run
+                and await asyncio.to_thread(_town_first_hold, names)
+                and bag_pressure.town_first_trip_worth(
+                    free_slots, sellable_counts)):
+            log.info("economy: the family's campaign waits in town for %d free "
+                     "slots each (free slots %s, sellable %s) - a vendor trip "
+                     "goes now rather than at the trigger of %d",
+                     bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS, free_slots,
+                     sellable_counts, bag_pressure.TOWN_RUN_FREE_SLOTS)
+            trip_worth = True
         withheld = not trip_worth and jev_activity.withheld(
             await asyncio.to_thread(_campaign_waiting, names), free_slots)
         mode = bag_pressure.vendor_pass_mode(trip_worth, withheld, in_run)
@@ -18049,6 +18062,18 @@ _CAMPAIGN_WAITING_SQL = (
     "ON q.family COLLATE utf8mb4_unicode_ci = r.family "
     "WHERE r.name IN (%s) AND q.status IN ('queued', 'active')"
 )
+
+
+def _town_first_hold(names: list) -> bool:
+    """True when a campaign waits on this family and none of it carries a
+    dungeon job: a fresh start or one handed to town (#265), which only the
+    resume floor lets back in. An armed campaign is never a town hold."""
+    if not _campaign_waiting(names):
+        return False
+    jobs_now = _jobs_of(names)
+    if not jobs_now:
+        return False
+    return not any(job.startswith("dungeon") for job in jobs_now.values())
 
 
 def _campaign_waiting(names: list) -> bool:

@@ -590,6 +590,7 @@ def _run_vendor_once(queued, at_vendor=True):
             "_fetch_surplus_gear": lambda names: [],
             "_fetch_family_equipped": lambda names: [],
             "_campaign_waiting": lambda names: queued,
+            "_town_first_hold": lambda names: False,
             "_insert_job": lambda *a: 1,
             "_sell_attempts": lambda hours: {},
             "_fetch_town": lambda name: towntrip.Town(vendor=at_vendor),

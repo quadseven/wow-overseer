@@ -369,6 +369,29 @@ def campaign_resume_short(
 # because the middle one is new. "trip" takes the travel column and writes
 # sales; "counter" writes sales only for holders already at a vendor and takes
 # no aim; "none" writes nothing.
+def town_first_trip_worth(
+    free_slots: dict,
+    sellable: dict | None,
+    resume: int = CAMPAIGN_RESUME_FREE_SLOTS,
+) -> bool:
+    """Whether a family held in town for bag room should walk to a vendor.
+
+    A campaign handed to town (#265) goes back in only when every member has
+    `resume` free slots, but the ordinary vendor trigger is
+    TOWN_RUN_FREE_SLOTS. A member between the two was below the resume floor
+    and above the trigger, so no trip was worth taking and the family stood
+    idle until the resume ceiling. Measured on wow-dev 2026-09-24: the Horde
+    family at 4 to 10 free slots with 14 to 18 sellable items each, Ragefire
+    withheld, and every cycle logging "no vendor trip is worth taking".
+
+    While the hold lasts the trigger is the resume floor: a trip is worth
+    taking when selling lifts a member short of it to at least `resume`.
+    """
+    return family_town_run_needed(
+        free_slots, minimum_free=resume - 1, sellable=sellable
+    )
+
+
 VENDOR_MODE_TRIP = "trip"
 VENDOR_MODE_COUNTER = "counter"
 VENDOR_MODE_NONE = "none"
