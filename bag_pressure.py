@@ -126,6 +126,11 @@ def vendor_candidates(rows: Iterable[dict], keep_names=()) -> tuple[SellCandidat
     """
     out = []
     for row in rows:
+        try:
+            if int(row.get("entry", 0)) == GUILD_TABARD_ENTRY:
+                continue
+        except (TypeError, ValueError):
+            continue
         if owner_keeps(row.get("name", ""), keep_names):
             continue
         try:
@@ -155,6 +160,10 @@ QUEST_CLASS = 12
 # ITEM_QUALITY_UNCOMMON. The world's destroy verb refuses anything above it
 # unless the row says `allow:quality`, and this side never says it.
 DESTROY_MAX_QUALITY = 2
+
+# Guild Tabard (item 5976) is the family's persistent guild identity. It is
+# bought again when the current copy is sold, so it is never vendor stock.
+GUILD_TABARD_ENTRY = 5976
 
 
 def destroy_candidates(
