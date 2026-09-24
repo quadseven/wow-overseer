@@ -437,17 +437,7 @@ def attach_work(lineup, taker, contributed) -> dict:
             name, taker, contributed, MAINTENANCE, member.get("level") or FLOAT_LEVEL
         )
     # THE TOTAL IS EVERY MEMBER'S, since every placed member posts dues.
-    placed = [m.get("name") for m in lineup.get("maintenance") or ()]
-    placed += [m.get("name") for m in lineup.get("summoners") or ()]
-    placed += [
-        m.get("name")
-        for g in lineup.get("groups") or ()
-        for m in g.get("members") or ()
-    ]
-    for name in placed:
-        entry = (contributed or {}).get(name) or {}
-        letters += int(entry.get("letters") or 0)
-        copper += int(entry.get("copper") or 0)
+    letters, copper = _dues_totals(_placed_names(lineup), contributed)
     lineup["dues"] = {
         "taker": taker or "",
         "letters": letters,
@@ -461,6 +451,27 @@ def attach_work(lineup, taker, contributed) -> dict:
         ),
     }
     return lineup
+
+
+def _placed_names(lineup):
+    return (
+        [m.get("name") for m in lineup.get("maintenance") or ()]
+        + [m.get("name") for m in lineup.get("summoners") or ()]
+        + [
+            m.get("name")
+            for g in lineup.get("groups") or ()
+            for m in g.get("members") or ()
+        ]
+    )
+
+
+def _dues_totals(placed, contributed):
+    letters = copper = 0
+    for name in placed:
+        entry = (contributed or {}).get(name) or {}
+        letters += int(entry.get("letters") or 0)
+        copper += int(entry.get("copper") or 0)
+    return letters, copper
 
 
 def _by_guild(rows) -> tuple:

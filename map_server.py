@@ -2238,23 +2238,33 @@ def _job_doing(lineup: dict, fetched: dict) -> dict:
     """name -> what each placed member does now, as the page can read it:
     guildjobs.page_doing over its level, gathering skills, the ritual and the
     natural gate (#194)."""
-    skills: dict = {}
-    for row in fetched.get("corps_skills") or ():
-        skills.setdefault(str(row.get("name") or ""), {})[int(row.get("skill") or 0)] = (
-            int(row.get("value") or 0), int(row.get("max") or 0))
+    skills = _job_skills(fetched.get("corps_skills"))
     known = fetched.get("ritual") or set()
     natural = fetched.get("natural") or set()
-    placed = [(m, guildjobs.RAIDER) for g in lineup.get("groups") or ()
-              for m in g.get("members") or ()]
-    placed += [(m, guildjobs.MAINTENANCE) for m in lineup.get("maintenance") or ()]
-    placed += [(m, guildjobs.SUMMONER) for m in lineup.get("summoners") or ()]
     return {
         m["name"]: guildjobs.page_doing(
             role, m.get("level"), skills.get(m["name"], {}),
             {guildjobs.RITUAL_OF_SUMMONING} if m["name"] in known else set(),
             m["name"] in natural)
-        for m, role in placed
+        for m, role in _placed_job_members(lineup)
     }
+
+
+def _job_skills(rows):
+    skills = {}
+    for row in rows or ():
+        skills.setdefault(str(row.get("name") or ""), {})[
+            int(row.get("skill") or 0)] = (
+                int(row.get("value") or 0), int(row.get("max") or 0))
+    return skills
+
+
+def _placed_job_members(lineup):
+    return ([(m, guildjobs.RAIDER) for g in lineup.get("groups") or ()
+             for m in g.get("members") or ()]
+            + [(m, guildjobs.MAINTENANCE)
+               for m in lineup.get("maintenance") or ()]
+            + [(m, guildjobs.SUMMONER) for m in lineup.get("summoners") or ()])
 
 
 def _crafter_register(members: list, roster: set, skill_rows: list) -> list:

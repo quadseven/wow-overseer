@@ -859,7 +859,14 @@ def _maintenance_step(m, trades, fields, crafters, master, kept, recent, cap):
         return shared
     if shared[2]:
         notes.append(shared[2])
-    spot = fields.get(m.name)
+    step, doing = _gathering_step(m, fields.get(m.name), recent, cap)
+    if step:
+        return step, step.said, ""
+    return None, doing, "; ".join(notes)
+
+
+def _gathering_step(m, spot, recent, cap):
+    """(step or None, what a maintenance member gathers now)."""
     gathering = [SKILL_NAMES[s] for s in GATHERING if m.holds(s)]
     if spot is not None and not _near(m, spot, FIELD_REACH):
         if not _cooling(m, "farm", recent):
@@ -868,7 +875,7 @@ def _maintenance_step(m, trades, fields, crafters, master, kept, recent, cap):
                 spot.name or "a field",
                 spot.why,
             )
-            return _spot_step(m, spot, "farm", cap, said), said, ""
+            return _spot_step(m, spot, "farm", cap, said), said
     if spot is not None:
         doing = "gathers %s at %s" % (
             " and ".join(gathering) or "what it can",
@@ -878,7 +885,7 @@ def _maintenance_step(m, trades, fields, crafters, master, kept, recent, cap):
         doing = "gathers %s where it levels" % " and ".join(gathering)
     else:
         doing = "levels, and learns its trades once it can pay a trainer"
-    return None, doing, "; ".join(notes)
+    return None, doing
 
 
 def _shared_step(m, crafters, master, kept, recent, cap):
@@ -964,44 +971,19 @@ def plan(
     trades = split_trades(members)
     steps, lines, notes = [], {}, []
     started = {}
-    order = {MAINTENANCE: 0, SUMMONER: 1, RAIDER: 2}
-    for m in sorted(
-        members or (), key=lambda m: (order.get(m.role, 3), m.guild, m.name)
-    ):
-        if m.role not in order:
-            continue
-        if not m.eligible:
-            lines[m.name] = "waits for its natural restart; nothing it holds is counted"
+    for m in _ordered_members(members):
+        if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
         master = str(masters.get(m.guild) or "")
-        if m.role == MAINTENANCE:
-            step, doing, note = _maintenance_step(
-                m, trades, fields, crafters, master, kept, recent, cap
-            )
-        elif m.role == SUMMONER:
-            step, doing, note = _summoner_step(
-                m, doors, pending, crafters, master, kept, recent, cap
-            )
-        else:
-            step, doing, note = _shared_step(m, crafters, master, kept, recent, cap)
-            doing = doing or "levels toward the raid and raids when the guild does"
+        step, doing, note = _plan_member(
+            m, trades, fields, doors, pending, crafters, master, kept, recent, cap
+        )
         lines[m.name] = doing
         if note:
             notes.append(note)
         if step is None:
             continue
-        why = ""
-        if not m.online:
-            why = "%s is offline" % m.name
-        elif m.in_combat:
-            why = "%s is in combat" % m.name
-        elif m.name in busy:
-            why = "%s is already on another guild walk" % m.name
-        elif started.get(m.guild, 0) >= int(per_guild):
-            why = "%s waits: %d guild job steps per guild per pass" % (
-                m.name,
-                int(per_guild),
-            )
+        why = _step_refusal(m, busy, started, per_guild)
         if why:
             notes.append(why)
             continue
@@ -1015,6 +997,45 @@ def plan(
         doors=doors,
         notes=tuple(notes),
     )
+
+
+def _plan_member(
+    m, trades, fields, doors, pending, crafters, master, kept, recent, cap
+):
+    if not m.eligible:
+        return None, "waits for its natural restart; nothing it holds is counted", ""
+    return _member_job(
+        m, trades, fields, doors, pending, crafters, master, kept, recent, cap
+    )
+
+
+def _ordered_members(members):
+    order = {MAINTENANCE: 0, SUMMONER: 1, RAIDER: 2}
+    return sorted(members or (), key=lambda m: (order.get(m.role, 3), m.guild, m.name))
+
+
+def _member_job(m, trades, fields, doors, pending, crafters, master, kept, recent, cap):
+    if m.role == MAINTENANCE:
+        return _maintenance_step(m, trades, fields, crafters, master, kept, recent, cap)
+    if m.role == SUMMONER:
+        return _summoner_step(m, doors, pending, crafters, master, kept, recent, cap)
+    step, doing, note = _shared_step(m, crafters, master, kept, recent, cap)
+    return step, doing or "levels toward the raid and raids when the guild does", note
+
+
+def _step_refusal(m, busy, started, per_guild):
+    if not m.online:
+        return "%s is offline" % m.name
+    if m.in_combat:
+        return "%s is in combat" % m.name
+    if m.name in busy:
+        return "%s is already on another guild walk" % m.name
+    if started.get(m.guild, 0) >= int(per_guild):
+        return "%s waits: %d guild job steps per guild per pass" % (
+            m.name,
+            int(per_guild),
+        )
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -1172,41 +1193,46 @@ def attach_jobs(lineup, doing, posted, dues, family=()) -> dict:
     doing, posted, dues = doing or {}, posted or {}, dues or {}
     family = set(family or ())
     totals = {role: {"copper": 0, "items": 0, "sold": 0} for role in ROLE_ORDER}
+    for member, role in _placed_jobs(lineup, family):
+        _attach_job(member, role, doing, posted, dues, totals)
+    lineup["given"] = {"by_role": totals, "said": _given_summary(totals)}
+    return lineup
 
-    def put(member, role):
-        name = member.get("name")
-        member["job"] = role
-        member["work"] = job_line(
-            role, doing.get(name, ""), posted.get(name), dues.get(name)
-        )
-        t = totals[role]
-        t["copper"] += int((dues.get(name) or {}).get("copper") or 0)
-        t["items"] += int((posted.get(name) or {}).get("items") or 0)
-        t["sold"] += int((posted.get(name) or {}).get("sold") or 0)
 
+def _placed_jobs(lineup, family):
     for group in lineup.get("groups") or ():
         for member in group.get("members") or ():
             if member.get("name") not in family:
-                put(member, RAIDER)
+                yield member, RAIDER
     for member in lineup.get("maintenance") or ():
-        put(member, MAINTENANCE)
+        yield member, MAINTENANCE
     for member in lineup.get("summoners") or ():
-        put(member, SUMMONER)
-    lineup["given"] = {
-        "by_role": totals,
-        "said": "given: "
-        + "; ".join(
-            "%s %s in dues, %d item(s) posted, %s of grey loot sold"
-            % (
-                role,
-                _gold(totals[role]["copper"]),
-                totals[role]["items"],
-                _gold(totals[role]["sold"]),
-            )
-            for role in ROLE_ORDER
-        ),
-    }
-    return lineup
+        yield member, SUMMONER
+
+
+def _attach_job(member, role, doing, posted, dues, totals):
+    name = member.get("name")
+    member["job"] = role
+    member["work"] = job_line(
+        role, doing.get(name, ""), posted.get(name), dues.get(name)
+    )
+    total = totals[role]
+    total["copper"] += int((dues.get(name) or {}).get("copper") or 0)
+    total["items"] += int((posted.get(name) or {}).get("items") or 0)
+    total["sold"] += int((posted.get(name) or {}).get("sold") or 0)
+
+
+def _given_summary(totals):
+    return "given: " + "; ".join(
+        "%s %s in dues, %d item(s) posted, %s of grey loot sold"
+        % (
+            role,
+            _gold(totals[role]["copper"]),
+            totals[role]["items"],
+            _gold(totals[role]["sold"]),
+        )
+        for role in ROLE_ORDER
+    )
 
 
 # ---------------------------------------------------------------------------

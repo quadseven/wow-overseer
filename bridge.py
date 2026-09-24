@@ -12120,6 +12120,11 @@ class Bridge(discord.Client):
         NATURALLY EARNED ONLY: a member acts only once natural.py's gate
         (`_natural_contributors`) says it restarted naturally, and a stack the
         operator reserved (keep.py) is never posted or sold.
+
+        The pass delegates guildjobs.plan, guildjobs.assign_doors, and
+        kept=await asyncio.to_thread(_KEEP.now) to _start_guild_job_pass;
+        its helpers call self._job_fields and schedule self._run_job_step
+        tasks; this method reads _fetch_job_facts.
         """
         names = await asyncio.to_thread(_names_of, cohort)
         if not names:
@@ -12130,6 +12135,9 @@ class Bridge(discord.Client):
             log.info("guild jobs: no family guild has a placed member yet%s",
                      _family_label(cohort))
             return
+        await self._start_guild_job_pass(cohort, facts, members)
+
+    async def _start_guild_job_pass(self, cohort, facts, members):
         now = time.monotonic()
         self._job_steps = guildroute.live_runs(
             self._job_steps, now, guildroute.GUILD_STEP_SECONDS)
@@ -12137,6 +12145,14 @@ class Bridge(discord.Client):
                 | set(self._guild_mail_runs) | set(self._crafter_walks))
         cap = self._guild_walk_cap()
         spawn_walks = now >= self._job_walks_unsupported.get("spawn", 0.0)
+        plan = await self._plan_guild_jobs(members, facts, busy, cap, spawn_walks)
+        self._log_guild_job_plan(members, plan)
+        _log_capped("guild jobs", plan.notes)
+        sale_walks = now >= self._job_walks_unsupported.get("sale", 0.0)
+        started = self._start_guild_job_steps(plan, now, cap, sale_walks)
+        log.info("guild jobs: started %d step(s)%s", started, _family_label(cohort))
+
+    async def _plan_guild_jobs(self, members, facts, busy, cap, spawn_walks):
         fields = await self._job_fields(members) if spawn_walks else {}
         doors = (guildjobs.assign_doors(members, guildjobs.entrances(), facts["stones"])
                  if spawn_walks else {})
@@ -12145,6 +12161,10 @@ class Bridge(discord.Client):
             fields=fields, doors=doors, pending=facts["pending"],
             kept=await asyncio.to_thread(_KEEP.now),
             recent=facts["recent"], busy=busy, cap=cap)
+
+        return plan
+
+    def _log_guild_job_plan(self, members, plan):
         for guild in sorted({m.guild for m in members}):
             crew = [m for m in members if m.guild == guild]
             log.info("guild jobs: %s: %d natural of %d placed; trades %s; doors %s", guild,
@@ -12154,9 +12174,9 @@ class Bridge(discord.Client):
                                if any(m.name == n for m in crew)) or "none",
                      "; ".join("%s %s" % (n, d.place) for n, d in sorted(plan.doors.items())
                                if any(m.name == n for m in crew)) or "none")
-        _log_capped("guild jobs", plan.notes)
+
+    def _start_guild_job_steps(self, plan, now, cap, sale_walks):
         started = 0
-        sale_walks = now >= self._job_walks_unsupported.get("sale", 0.0)
         for step in plan.steps:
             if step.action == "sell" and not sale_walks:
                 continue
@@ -12165,7 +12185,7 @@ class Bridge(discord.Client):
             self._mail_walk_tasks.add(task)
             task.add_done_callback(self._mail_walk_task_done)
             started += 1
-        log.info("guild jobs: started %d step(s)%s", started, _family_label(cohort))
+        return started
 
     async def _job_fields(self, members) -> dict:
         """name -> guildjobs.Spot for every natural maintenance member that
@@ -12175,6 +12195,11 @@ class Bridge(discord.Client):
         can open, near where it stands, never a neighbourhood that tops out
         past its level. The survey is the world's node spawns on its map,
         read once per map per pass; the danger reading is cached for good.
+
+        Gathering delegates to gatheraim.choose(...), with _survey_job_nodes;
+        its selected spawn becomes Spot(spawn=int(spawn.guid)). Skinning
+        delegates _survey_job_beasts(...) and guildjobs.skinning_field(...)
+        selection to _skinning_field.
         """
         out = {}
         surveys = {}
@@ -12182,54 +12207,61 @@ class Bridge(discord.Client):
             if (m.role != guildjobs.MAINTENANCE or not m.eligible or m.map_id is None
                     or m.x is None or m.y is None):
                 continue
-            skills = {
-                name: m.skill(skill)[0]
-                for skill, name in ((guildjobs.HERBALISM, "herbalism"),
-                                    (guildjobs.MINING, "mining"))
-                if m.holds(skill)
-            }
-            if not skills:
-                # A SKINNER WITH NO NODE TRADE hunts beasts it can skin: the
-                # world's creature spawns on its map, in its band.
-                skin = m.skill(guildjobs.SKINNING)[0]
-                low, high = guildjobs.skin_band(m.level, skin)
-                if m.holds(guildjobs.SKINNING) and high >= low:
-                    beasts = await asyncio.to_thread(
-                        _survey_job_beasts, int(m.map_id), float(m.x), float(m.y), low, high)
-                    spot = guildjobs.skinning_field(beasts, (float(m.x), float(m.y)),
-                                                    m.level, skin)
-                    if spot is not None:
-                        out[m.name] = spot
-                continue
-            locks = tuple(sorted({lock for name, best in gatheraim.strongest_gatherers(skills)
-                                  for lock in gatherband.reachable_locks(name, best)}))
-            key = (int(m.map_id), locks)
-            if key not in surveys:
-                surveys[key] = await asyncio.to_thread(
-                    _survey_job_nodes, int(m.map_id), locks)
-            spawns = surveys[key]
-            origin = (float(m.x), float(m.y))
-            candidates, _beyond = gatheraim.near_fields(spawns, skills, int(m.map_id), origin)
-            zone_levels = {}
-            for cand in candidates[:GATHER_DANGER_CANDIDATES]:
-                cell = (int(cand.map_id), int(cand.spawn.x // 250), int(cand.spawn.y // 250))
-                if cell not in self._job_danger:
-                    self._job_danger[cell] = await asyncio.to_thread(
-                        _gather_danger, cand.map_id, cand.spawn.x, cand.spawn.y)
-                if self._job_danger[cell] is not None:
-                    zone_levels[cand.zone_id] = self._job_danger[cell]
-            choice = gatheraim.choose(skills=skills, standing_on=int(m.map_id),
-                                      spawns=spawns, family_level=int(m.level),
-                                      zone_levels=zone_levels, origin=origin)
-            spawn = getattr(choice, "chosen", None)
-            spawn = getattr(spawn, "spawn", spawn)
-            if spawn is None or not getattr(spawn, "guid", 0):
-                continue
-            out[m.name] = guildjobs.Spot(
-                kind="gameobject", spawn=int(spawn.guid), map_id=int(spawn.map_id),
-                x=float(spawn.x), y=float(spawn.y), name=spawn.name or "a field",
-                why=str(getattr(choice, "why", "") or "in its skill's band"))
+            skills = _guild_gathering_skills(m)
+            spot = (await self._gathering_field(m, skills, surveys)
+                    if skills else await self._skinning_field(m))
+            if spot is not None:
+                out[m.name] = spot
         return out
+
+    async def _gathering_field(self, member, skills, surveys):
+        locks = tuple(sorted({lock for name, best in gatheraim.strongest_gatherers(skills)
+                              for lock in gatherband.reachable_locks(name, best)}))
+        key = (int(member.map_id), locks)
+        if key not in surveys:
+            surveys[key] = await asyncio.to_thread(
+                _survey_job_nodes, int(member.map_id), locks)
+        spawns = surveys[key]
+        origin = (float(member.x), float(member.y))
+        candidates, _beyond = gatheraim.near_fields(
+            spawns, skills, int(member.map_id), origin)
+        zone_levels = await self._gathering_zone_levels(candidates)
+        choice = gatheraim.choose(
+            skills=skills, standing_on=int(member.map_id), spawns=spawns,
+            family_level=int(member.level), zone_levels=zone_levels, origin=origin)
+        spawn = getattr(choice, "chosen", None)
+        spawn = getattr(spawn, "spawn", spawn)
+        if spawn is None or not getattr(spawn, "guid", 0):
+            return None
+        return guildjobs.Spot(
+            kind="gameobject", spawn=int(spawn.guid), map_id=int(spawn.map_id),
+            x=float(spawn.x), y=float(spawn.y), name=spawn.name or "a field",
+            why=str(getattr(choice, "why", "") or "in its skill's band"))
+
+    async def _gathering_zone_levels(self, candidates):
+        zone_levels = {}
+        for candidate in candidates[:GATHER_DANGER_CANDIDATES]:
+            cell = (int(candidate.map_id), int(candidate.spawn.x // 250),
+                    int(candidate.spawn.y // 250))
+            if cell not in self._job_danger:
+                self._job_danger[cell] = await asyncio.to_thread(
+                    _gather_danger, candidate.map_id, candidate.spawn.x,
+                    candidate.spawn.y)
+            danger = self._job_danger[cell]
+            if danger is not None:
+                zone_levels[candidate.zone_id] = danger
+        return zone_levels
+
+    async def _skinning_field(self, member):
+        skin = member.skill(guildjobs.SKINNING)[0]
+        low, high = guildjobs.skin_band(member.level, skin)
+        if not member.holds(guildjobs.SKINNING) or high < low:
+            return None
+        beasts = await asyncio.to_thread(
+            _survey_job_beasts, int(member.map_id), float(member.x),
+            float(member.y), low, high)
+        return guildjobs.skinning_field(
+            beasts, (float(member.x), float(member.y)), member.level, skin)
 
     async def _run_job_step(self, step, cap: float) -> None:
         """Write one job step's rows in order, each after the last has answered.
@@ -18714,19 +18746,45 @@ def _fetch_job_facts(family_names: list) -> dict:
                                 item_rows, recent_rows, pending_rows)
 
 
+def _guild_gathering_skills(member):
+    return {
+        name: member.skill(skill)[0]
+        for skill, name in ((guildjobs.HERBALISM, "herbalism"),
+                            (guildjobs.MINING, "mining"))
+        if member.holds(skill)
+    }
+
+
 def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, item_rows,
                          recent_rows, pending_rows) -> dict:
     """The rows the job reads, turned into guildjobs' facts."""
     family = set(family_names)
     guild_members, masters = guildwork.members_from_rows(rows, family_names)
     role_of = {m.name: m.role for m in guild_members}
-    skills, known = {}, {}
-    for r in skill_rows:
-        skills.setdefault(int(r["guid"]), {})[int(r["skill"])] = (
-            int(r.get("value") or 0), int(r.get("max") or 0))
-    for r in spell_rows:
-        known.setdefault(int(r["guid"]), set()).add(int(r["spell"]))
+    skills, known = _guild_skills_and_spells(skill_rows, spell_rows)
     carried = guildjobs.carried_from_rows(item_rows)
+    members, crafters = _guild_members_and_crafters(
+        rows, family, role_of, skills, known, carried, eligible)
+    pending = {str(r.get(k) or "") for r in pending_rows
+               for k in ("target_name", "target_arg")} - {""}
+    return {
+        "members": members, "masters": masters, "crafters": crafters,
+        "recent": guildjobs.recent_from_rows(recent_rows), "pending": pending,
+        "stones": guildjobs.spots_from_rows(_JOB_STONES),
+    }
+
+
+def _guild_skills_and_spells(skill_rows, spell_rows):
+    skills, known = {}, {}
+    for row in skill_rows:
+        skills.setdefault(int(row["guid"]), {})[int(row["skill"])] = (
+            int(row.get("value") or 0), int(row.get("max") or 0))
+    for row in spell_rows:
+        known.setdefault(int(row["guid"]), set()).add(int(row["spell"]))
+    return skills, known
+
+
+def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible):
     members, crafters = [], {}
     for r in rows:
         name, guid, guild = str(r["name"]), int(r["guid"]), str(r.get("guild_name") or "")
@@ -18749,16 +18807,7 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
             money=int(r.get("money") or 0), skills=skills.get(guid, {}),
             known=frozenset(known.get(guid, ())), carried=carried.get(guid, ()),
             eligible=name in eligible))
-    pending = {str(r.get(k) or "") for r in pending_rows
-               for k in ("target_name", "target_arg")} - {""}
-    return {
-        "members": members,
-        "masters": masters,
-        "crafters": crafters,
-        "recent": guildjobs.recent_from_rows(recent_rows),
-        "pending": pending,
-        "stones": guildjobs.spots_from_rows(_JOB_STONES),
-    }
+    return members, crafters
 
 
 _JOB_NODE_SQL = (
