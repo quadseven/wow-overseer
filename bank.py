@@ -706,14 +706,10 @@ def stock_surplus(carried, storage):
     return frozenset(surplus)
 
 
-def storage_reason(holding, storage, surplus=frozenset()):
-    """Why this stack belongs in storage and not in the bags, or ''.
-
-    '' is the common answer and means "not this rule's business": the bags
-    keep it, or another pass (the vendor, the gear passes, the quest rule)
-    decides it. `surplus` is `stock_surplus` over the holder's carried stacks,
-    and only matters for the holder's own trade stock.
-    """
+def _class_reason(holding, storage):
+    """The keeper rule's answer from what KIND of stack this is, or None to
+    read on: a guild-kept BoE's reason, '' for a bag or a class the rule never
+    stores, None for everything else."""
     item = holding.item
     if (
         item.item_class in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR)
@@ -726,6 +722,21 @@ def storage_reason(holding, storage, surplus=frozenset()):
         return storage.guild_later[holding.guid]
     if holding.container_slots > 0 or item.item_class in _NEVER_STORED:
         return ""
+    return None
+
+
+def storage_reason(holding, storage, surplus=frozenset()):
+    """Why this stack belongs in storage and not in the bags, or ''.
+
+    '' is the common answer and means "not this rule's business": the bags
+    keep it, or another pass (the vendor, the gear passes, the quest rule)
+    decides it. `surplus` is `stock_surplus` over the holder's carried stacks,
+    and only matters for the holder's own trade stock.
+    """
+    item = holding.item
+    settled = _class_reason(holding, storage)
+    if settled is not None:
+        return settled
     if holding.start_quest > 0 or item.quest_item:
         return ""
     trades = storage.trades.get(holding.holder, frozenset())

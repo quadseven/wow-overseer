@@ -289,9 +289,7 @@ def decide(council: Council, outcome: jev.Outcome, rule: jev.Policy) -> Decision
         status=outcome.status,
         latency_ms=outcome.latency_ms,
     )
-    answer = None
-    if outcome.answers is not None and "to" in outcome.answers:
-        answer = outcome.answers["to"]
+    answer = (outcome.answers or {}).get("to")
     if answer is not None:
         base = replace(
             base,
@@ -308,21 +306,30 @@ def decide(council: Council, outcome: jev.Outcome, rule: jev.Policy) -> Decision
         if fresh
         else jev.HEURISTIC
     )
-    judgment = replace(base, acted=acted)
-    if acted in (jev.JEV, jev.BOTH):
-        pick = answer.choice
-        said = "Jev" if acted == jev.JEV else "Jev agreed"
-        reason = "%s (%.2f): %s" % (said, float(answer.confidence), criteria[pick])
-    else:
-        pick = heuristic
-        reason = "Heuristic: %s" % (council.heuristic_why or "the biggest upgrade")
-        if fresh:
-            reason += " (Jev was unsure: %.2f for %s)" % (
-                float(answer.confidence),
-                answer.choice,
-            )
+    pick, reason = _pick_and_reason(council, acted, answer if fresh else None, criteria)
     recipient = "" if pick == NOBODY else pick
+    judgment = replace(base, acted=acted)
     return Decision(council.key, recipient, _fit(reason), acted, judgment)
+
+
+def _pick_and_reason(council: Council, acted: str, answer, criteria: dict) -> tuple:
+    """(pick, reason): Jev's pick with the option it chose, or the heuristic's
+    with its own reason and, when Jev answered, what Jev was unsure of."""
+    if acted in (jev.JEV, jev.BOTH):
+        said = "Jev" if acted == jev.JEV else "Jev agreed"
+        reason = "%s (%.2f): %s" % (
+            said,
+            float(answer.confidence),
+            criteria[answer.choice],
+        )
+        return answer.choice, reason
+    reason = "Heuristic: %s" % (council.heuristic_why or "the biggest upgrade")
+    if answer is not None:
+        reason += " (Jev was unsure: %.2f for %s)" % (
+            float(answer.confidence),
+            answer.choice,
+        )
+    return council.heuristic or NOBODY, reason
 
 
 def skipped(council: Council) -> Decision:

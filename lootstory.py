@@ -90,6 +90,22 @@ def place(row: dict, zones: dict) -> str:
     return recap.place_name(map_id, zone_id, achievements.MAP_NAMES, zones)
 
 
+def _loot_clause(via: str, source: str, where: str) -> str:
+    """How the item was first got: looted, won on a roll, or awarded by the
+    loot council (#194), from what and where."""
+    if via in (VIA_NEED, VIA_GREED):
+        text = "won it on a %s roll" % via
+    elif via == VIA_COUNCIL:
+        text = "was awarded it by the loot council"
+    else:
+        text = "looted it"
+    if source:
+        text += " from " + source
+    if where:
+        text += " in " + where
+    return text
+
+
 def clause(row: dict, zones: dict) -> str:
     """One step of the story, with the item as "it" and no subject.
 
@@ -101,17 +117,7 @@ def clause(row: dict, zones: dict) -> str:
     where = place(row, zones)
     source = row.get("source") or ""
     if kind == ITEM_LOOT:
-        if via in (VIA_NEED, VIA_GREED):
-            text = "won it on a %s roll" % via
-        elif via == VIA_COUNCIL:
-            text = "was awarded it by the loot council"
-        else:
-            text = "looted it"
-        if source:
-            text += " from " + source
-        if where:
-            text += " in " + where
-        return text
+        return _loot_clause(via, source, where)
     if kind == ITEM_GIVEN:
         to = row.get("counterpart") or "somebody"
         if via == VIA_TRADE:
