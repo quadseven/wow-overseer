@@ -83,6 +83,19 @@ RECOVERY_CRITERIA = {
         "Reset the instance and try the same approach again. Right when the "
         "reset failed or nothing else fits."
     ),
+    # mod-overseer offers this only when most of the family is bound at one
+    # inn on the dungeon's continent and most can hearth there now; its facts
+    # line says who hearths and who walks. Measured 2026-09-24: a family spread
+    # over two zones, four of five bound at one inn, was offered only walks
+    # and holds, and two walks and two regroup holds had already failed.
+    "hearth_regroup": (
+        "Everybody bound at the inn most of the family shares uses the "
+        "hearthstone; anybody bound elsewhere or with the stone on cooldown "
+        "walks or flies to that inn; the family meets there and then walks to "
+        "the dungeon together. Right when the family is spread across zones, "
+        "far from each other or from the door, the way a group of players "
+        "hearths home and regroups instead of fetching one member at a time."
+    ),
 }
 
 STALL_CRITERIA = {

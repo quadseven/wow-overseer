@@ -100,6 +100,56 @@ class RowsTest(unittest.TestCase):
             self.assertFalse(any("stop" in option for option in criteria))
 
 
+class HearthRegroupTest(unittest.TestCase):
+    """The module's hearth_regroup (2026-09-24) is asked about, and can win.
+
+    Measured on wow-dev: the Horde family's fifth failed Ragefire attempt had
+    the leader 5,549 yards from the door, a member 4,289 yards from him, and
+    four of five bound at one inn. The module now offers hearth_regroup and
+    chooses it; a bridge that does not know the word drops it from the
+    options and, with it as the heuristic, never asks at all.
+    """
+
+    MEASURED = dict(
+        attempt=5,
+        failure="staging_failed: GATHERING was closed early: the leader's "
+        "staging errand was taken back 7 times",
+        facts="leader 5549y from the staging point; farthest member 4289y "
+        "from the leader; 4 of 5 bound at one inn (map 1 area 14), 4 can "
+        "hearth there now, Zork would walk or fly to it",
+        options="restage_nearer,regroup,replan,one_copy,reset_instance,"
+        "wait_for_client,town_for_bags,hearth_regroup",
+        heuristic="hearth_regroup",
+        heuristic_why="the family was spread across zones and most of it is "
+        "bound at one inn",
+    )
+
+    def test_the_module_heuristic_row_is_asked(self):
+        req = jev_recovery.request_from_row(recovery_row(**self.MEASURED))
+        self.assertIsNotNone(req)
+        self.assertIn("hearth_regroup", req.options)
+        self.assertEqual(req.heuristic, "hearth_regroup")
+
+    def test_jev_is_shown_what_it_means(self):
+        req = jev_recovery.request_from_row(recovery_row(**self.MEASURED))
+        _state, questions = jev_recovery.question(req, context())
+        self.assertIn("hearthstone", str(questions["recovery"]))
+
+    def test_jev_can_choose_it_over_a_walk(self):
+        row = dict(self.MEASURED, heuristic="restage_nearer")
+        _req, judgment = judge(
+            recovery_row(**row), FakeJev({"recovery": "hearth_regroup"}, 0.8)
+        )
+        self.assertEqual(judgment.chosen, "hearth_regroup")
+        self.assertEqual(judgment.chosen_by, "jev")
+
+    def test_not_offered_is_not_chosen(self):
+        _req, judgment = judge(
+            recovery_row(), FakeJev({"recovery": "hearth_regroup"}, 0.9)
+        )
+        self.assertEqual(judgment.chosen, "restage_nearer")
+
+
 class StateTest(unittest.TestCase):
     def test_the_state_carries_timeline_positions_bags_and_offline(self):
         req = jev_recovery.request_from_row(recovery_row())
