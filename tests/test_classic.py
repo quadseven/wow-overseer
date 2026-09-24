@@ -81,6 +81,10 @@ class TheMaps(unittest.TestCase):
             classic.outside_note("Zora", 571),
             "Zora stands in Northrend, outside the classic world",
         )
+        self.assertEqual(
+            classic.outside_note("Zora", 540),
+            "Zora stands in map 540, outside the classic world",
+        )
 
 
 # The first mod-overseer commit that carries OverseerDecisions::Classic.

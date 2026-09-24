@@ -226,16 +226,14 @@ def is_classic_map(map_id) -> bool:
 def outside_classic(map_id) -> bool:
     """Outland, Northrend, or an instance that came with them.
 
-    The question a door list or a destination asks. An unknown map is not
-    judged: it is neither named classic nor named outside.
+    The question a door list or a destination asks. An unknown map (None, a
+    test map, a custom one) is not judged, so every caller lets it through:
+    this is a list of what to refuse, not of what to allow. A caller that
+    needs "named classic" asks is_classic_map instead.
     """
     return map_id is not None and (
         int(map_id) in EXPANSION_MAPS or int(map_id) in EXPANSION_INSTANCE_MAPS
     )
-
-
-def level_ok(level) -> bool:
-    return int(level or 0) <= MAX_LEVEL
 
 
 def skill_ok(skill) -> bool:
@@ -256,9 +254,14 @@ def item_ok(entry, item_level=0, required_level=0) -> bool:
     )
 
 
+_LANDS = {OUTLAND_MAP: "Outland", NORTHREND_MAP: "Northrend"}
+
+
 def outside_note(who, map_id) -> str:
-    """The sentence a planner writes when it leaves somebody out for the map."""
-    return "%s stands in %s, outside the classic world" % (
-        who,
-        "Outland" if int(map_id) == OUTLAND_MAP else "Northrend",
-    )
+    """The sentence a planner writes when it leaves somebody out for the map.
+
+    Callers ask it after is_expansion_map; any other map is named by number
+    rather than called Northrend.
+    """
+    land = _LANDS.get(int(map_id), "map %d" % int(map_id))
+    return "%s stands in %s, outside the classic world" % (who, land)
