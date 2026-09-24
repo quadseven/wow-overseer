@@ -26,7 +26,8 @@ THE RULES.
 MIRRORED IN THE MODULE. mod-overseer keeps the same numbers in
 `OverseerDecisions::Classic` (src/overseer_decisions.h), because it is the half
 that walks a character and buys a rank. tests/test_classic.py reads that block
-from the pinned module and fails when the two disagree. Change both together.
+from the pinned module and fails when the two disagree; it engages once the
+pin reaches the module commit that added the block. Change both together.
 
 PURE MODULE: numbers and questions, no MySQL, no clock.
 """
