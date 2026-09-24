@@ -122,7 +122,12 @@ class TheSelf:
         self, claimant, character, aim, urgent=False, cohort=None, distance=None
     ):
         self.claims.append((claimant, character, aim, cohort))
+        if urgent:
+            self.world.setdefault("urgent_claims", []).append(claimant)
         return True
+
+    def _mail_urgency_spent(self, cohort, urgent, queued):
+        self.world.setdefault("mail_urgency", []).append((urgent, queued))
 
     async def _follow_dues_walk(self, run, row_id):
         return None
@@ -265,6 +270,7 @@ def _mail_ns(world, log):
             "TOWN_COUNTER_YARDS": 10,
             "_fetch_mail": lambda names: world.setdefault("mail_read", list(names)),
             "_recent_mail_keys": lambda minutes: set(),
+            "_dues_fund_tab": lambda names: world.get("dues_fund_tab", False),
             "_fetch_free_slots": lambda names: {n: 10 for n in names},
             "_fetch_positions": lambda names: {n: {"map_id": 1} for n in names},
             "_nearest_mailbox": lambda leader: world.setdefault("mailbox_for", leader),
@@ -316,6 +322,21 @@ class TheMailPassServesTheFamilyItIsGiven(unittest.TestCase):
         self.assertEqual(ALLIANCE, world["mail_read"])
         self.assertEqual("Grug", world["mailbox_for"])
         self.assertEqual([("mail", "Grug", "at:1:1,1,1", None)], me.claims)
+        self.assertNotIn("urgent_claims", world)
+
+    def test_dues_that_pay_for_the_next_tab_make_the_walk_urgent(self):
+        """#319: the Horde master held 5 silver with 2,400 gold of dues in its
+        mailbox while the mail pass lost the column every cycle."""
+        world, log = {"dues_fund_tab": True}, _Log()
+        me = TheSelf(world)
+        ns = _mail_ns(world, log)
+        asyncio.run(ns["_mail_once"](me, HORDE))
+        self.assertEqual(["mail"], world["urgent_claims"])
+        self.assertEqual([(True, True)], world["mail_urgency"])
+        self.assertTrue(
+            any("pay for the guild's next bank tab" in ln for ln in log.lines),
+            log.lines,
+        )
 
 
 # --- guild dues: the other family's guild posts to its own master ------------
@@ -471,19 +492,33 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
     def test_a_master_holding_the_price_walks_and_buys_it(self):
         world, me, _ = self.run_bank(HORDE, purse=1_200_000)
         self.assertEqual([("guild bank", "Zug", "at:1:3,3,3", "Zug")], me.claims)
-        # The tab first; then only what sits above the float and the price,
-        # which is the reserve `plan_deposits` keeps while there is no tab.
+        # The tab first, named so a stale count can never buy tab 1 (#496);
+        # then only what sits above the float and the price, which is the
+        # reserve `plan_deposits` keeps while there is no tab.
         self.assertEqual(
-            [("Zug", "bank buy-tab"), ("Zug", "bank deposit 100000")],
+            [("Zug", "bank buy-tab tab:0"), ("Zug", "bank deposit 100000")],
             world["guild_rows"],
         )
 
-    def test_the_alliance_guild_with_its_tab_is_unchanged(self):
+    def test_the_alliance_guild_buys_its_next_tab_and_keeps_its_price(self):
+        """#319: a guild with tab 0 buys tab 1 next, and the master's gold
+        deposit leaves the 250 gold that tab costs in its purse."""
         world, me, log = self.run_bank(None, purse=5_000_000, master="Grug", tabs=1)
         self.assertEqual("Grug", world["vault_for"])
         self.assertEqual([("guild bank", "Grug", "at:1:3,3,3", None)], me.claims)
-        self.assertEqual([("Grug", "bank deposit 4900000")], world["guild_rows"])
+        self.assertEqual(
+            [("Grug", "bank buy-tab tab:1"), ("Grug", "bank deposit 2400000")],
+            world["guild_rows"],
+        )
         self.assertFalse(any("tab 0 waits" in ln for ln in log.lines))
+
+    def test_a_master_short_of_the_next_tab_says_so_with_its_dues(self):
+        world, _me, log = self.run_bank(None, purse=1_000_000, master="Grug", tabs=1)
+        self.assertNotIn(("Grug", "bank buy-tab tab:1"), world.get("guild_rows", []))
+        self.assertTrue(
+            any("tab 1 waits - Grug holds 100g of the 250g" in ln for ln in log.lines),
+            log.lines,
+        )
 
 
 class TheBuyerIsTheGuildMaster(unittest.TestCase):
@@ -508,13 +543,13 @@ class ThePlanAsksOnlyAPurseThatPays(unittest.TestCase):
 
     def test_the_price_in_hand_asks_for_the_tab(self):
         self.assertEqual(
-            (guildbank.SetupAction("Zug", "bank buy-tab"),),
+            (guildbank.SetupAction("Zug", "bank buy-tab tab:0"),),
             self.plan(guildbank.TAB0_COST_COPPER),
         )
 
     def test_an_unread_purse_keeps_the_old_answer(self):
         self.assertEqual(
-            (guildbank.SetupAction("Zug", "bank buy-tab"),), self.plan(None)
+            (guildbank.SetupAction("Zug", "bank buy-tab tab:0"),), self.plan(None)
         )
 
     def test_the_purse_never_gates_the_rank_grants(self):

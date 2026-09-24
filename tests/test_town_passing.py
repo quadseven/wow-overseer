@@ -153,10 +153,11 @@ class TheVaultLookDepositsOnlyForWhoeverIsAtAVault(unittest.TestCase):
                     {"name": n, "money": 50_000_000, "in_guild": 1} for n in names
                 ],
                 "guildbank": types.SimpleNamespace(
-                    plan_deposits=lambda members, guild_has_tab: [
+                    plan_deposits=lambda members, guild_has_tab, **kw: [
                         types.SimpleNamespace(name=m["name"], copper=1000)
                         for m in members
-                    ]
+                    ],
+                    buyer_reserve=lambda tabs: 0,
                 ),
                 "_fetch_positions": lambda names: {
                     n: {"map_id": 1, "at": n == "Zug"} for n in names
@@ -169,7 +170,7 @@ class TheVaultLookDepositsOnlyForWhoeverIsAtAVault(unittest.TestCase):
                 "travel": types.SimpleNamespace(spawn_in_reach=_at(world)),
             }
         )
-        ns = _load(["_guild_bank_passing_once", *HELPERS], ns)
+        ns = _load(["_guild_bank_passing_once", "_setup_buyer", *HELPERS], ns)
         asyncio.run(ns["_guild_bank_passing_once"](object(), HORDE))
         self.assertEqual([("Zug", "bank deposit 1000", "guildbank")], world["written"])
         self.assertTrue(

@@ -10974,7 +10974,9 @@ class Bridge(discord.Client):
         # `plan_deposits`' own docstring anticipated: "wiring that read in later
         # can only ever release gold, never strand it".
         deposits = guildbank.plan_deposits(
-            members, guild_has_tab=purchased_tabs > 0)
+            members, guild_has_tab=purchased_tabs > 0,
+            buyer=_setup_buyer(setup, names, leader),
+            reserve_for_buyer=guildbank.buyer_reserve(purchased_tabs))
         items = (await asyncio.to_thread(_plan_bank, names)).guild
         # AND WHAT JEV CHOSE TO BANK (#267), under the same gates.
         items = tuple(items) + tuple(self._jev_keep_deposits(names, setup, items))
@@ -11131,14 +11133,16 @@ class Bridge(discord.Client):
         column, and it leaves the tab purchase and the kept stacks to the full
         pass, which walks for them.
         """
-        names, _leader = await asyncio.to_thread(_family_of, cohort)
+        names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names:
             return
         setup = await asyncio.to_thread(_fetch_guild_bank_setup, names)
         purchased_tabs = int(setup["purchased_tabs"]) if setup else 0
         deposits = guildbank.plan_deposits(
             await asyncio.to_thread(_fetch_guild_money, names),
-            guild_has_tab=purchased_tabs > 0)
+            guild_has_tab=purchased_tabs > 0,
+            buyer=_setup_buyer(setup, names, leader),
+            reserve_for_buyer=guildbank.buyer_reserve(purchased_tabs))
         if not deposits:
             return
         positions = await asyncio.to_thread(
@@ -12095,7 +12099,20 @@ class Bridge(discord.Client):
         # (townslot.STOP_CLAIMANTS): ahead of the queue into a free column,
         # not preempted while it walks, and let through once per window while
         # the family's campaign owns the traveller.
+        # DUES THAT PAY FOR THE GUILD'S NEXT BANK TAB MAKE THE WALK URGENT
+        # (#319). Measured on the dev realm 2026-09-24: the Horde guild master
+        # held 5 silver while 2,400 gold of dues sat unopened in its mailbox,
+        # and this pass lost the column to the bank, vendor and town-trip
+        # errands cycle after cycle, so the guild never bought a tab. Urgency
+        # is bounded the way the auction pass's is: a grant that queues no take
+        # backs off (`_mail_urgency_spent`).
+        urgent = await asyncio.to_thread(_dues_fund_tab, names)
+        if urgent:
+            log.info("mail: the guild master's mailbox holds the dues that pay "
+                     "for the guild's next bank tab, so this walk is urgent%s",
+                     _family_label(cohort))
         aimed = await self._claim_town_slot("mail", leader, post.aim,
+                                             urgent=urgent,
                                              cohort=_cohort_key(cohort),
                                              distance=_spawn_yards(spawn))
         # ALREADY STANDING THERE COUNTS AS AIMED, the reasoning `_guild_bank_once`
@@ -12148,6 +12165,28 @@ class Bridge(discord.Client):
                  "aimed at %s%s",
                  len(fresh), len(mail_plan.takes), len(letters), leader, post.aim,
                  _family_label(cohort))
+        if urgent:
+            self._mail_urgency_spent(cohort, aimed, bool(fresh))
+
+    def _mail_urgency_spent(self, cohort, urgent: bool, queued: bool) -> None:
+        """Report an urgent mail grant's outcome to the town slot (#319).
+
+        The same bound `_auction_urgency_spent` puts on the auction pass: a
+        grant that queued a take was productive, and one that queued nothing
+        yet (the walk is still on its way) backs the urgency off, so a walk
+        that never lands stops taking every other errand's column. A grant
+        that was not urgent costs nothing here.
+        """
+        if not urgent:
+            return
+        slot = self._cohort_town_slot(_cohort_key(cohort))
+        if queued:
+            slot.productive("mail")
+            return
+        until = slot.fruitless("mail", time.monotonic())
+        log.info("mail: the urgent walk for the guild's dues queued no take yet; "
+                 "urgency suppressed for %.0fs%s",
+                 max(0.0, until - time.monotonic()), _family_label(cohort))
 
     async def _mail_in_passing(self, takes, seen: set, cohort=None) -> set:
         """Queue the takes of every holder standing at a mailbox of their own.
@@ -18844,12 +18883,28 @@ def _fetch_guild_bank_setup(names: list) -> dict | None:
             cur.execute("SELECT rid FROM guild_rank WHERE guildid = %s ORDER BY rid",
                         (guild_id,))
             rank_ids = tuple(int(row["rid"]) for row in cur.fetchall())
+            # A RANK CAN DEPOSIT WHEN IT CAN DEPOSIT INTO EVERY PURCHASED TAB
+            # (#319). It used to be tab 0 alone, which was every tab there
+            # was; a second tab bought after the grants starts closed to
+            # every rank but the master's, so the grant is asked for again.
             cur.execute(
                 "SELECT rid FROM guild_bank_right WHERE guildid = %s "
-                "AND TabId = 0 AND (gbright & 3) = 3",
-                (guild_id,),
+                "AND TabId < %s AND (gbright & 3) = 3 "
+                "GROUP BY rid HAVING COUNT(*) = %s",
+                (guild_id, max(purchased, 1), max(purchased, 1)),
             )
             deposit_ranks = tuple(int(row["rid"]) for row in cur.fetchall())
+            # WHAT EACH TAB IS CALLED AND HOW FULL IT IS (#319, #320).
+            cur.execute(
+                "SELECT t.TabId AS tab, t.TabName AS name, "
+                "(SELECT COUNT(*) FROM guild_bank_item i "
+                " WHERE i.guildid = t.guildid AND i.TabId = t.TabId) AS items "
+                "FROM guild_bank_tab t WHERE t.guildid = %s ORDER BY t.TabId",
+                (guild_id,),
+            )
+            tab_rows = cur.fetchall()
+            tab_names = {int(r["tab"]): str(r["name"] or "") for r in tab_rows}
+            tab_items = {int(r["tab"]): int(r["items"] or 0) for r in tab_rows}
             # WHO MAY PUT AN ITEM IN, AND HOW MUCH ROOM TAB 0 HAS (#233).
             # The core no-ops an item deposit for a rank without the right or
             # into a full tab, so bank.storage_from offers the guild only to
@@ -18875,10 +18930,26 @@ def _fetch_guild_bank_setup(names: list) -> dict | None:
                 (guild_id,),
             )
             master = cur.fetchone()
+            master_name = str(master["name"]) if master else ""
+            # THE DUES WAITING FOR THE MASTER (#319). guildwork.plan_dues posts
+            # them to the guild master, and they buy nothing until they are
+            # taken out of the mailbox. Only delivered letters count, the same
+            # rule mailrun.plan keeps.
+            mailed = 0
+            if master_name:
+                cur.execute(
+                    "SELECT COALESCE(SUM(m.money), 0) AS copper FROM mail m "
+                    "JOIN characters c ON c.guid = m.receiver "
+                    "WHERE c.name = %s AND m.money > 0 AND m.cod = 0 "
+                    "AND m.deliver_time <= UNIX_TIMESTAMP()",
+                    (master_name,),
+                )
+                mailed = int(cur.fetchone()["copper"] or 0)
             return {"purchased_tabs": purchased, "rank_ids": rank_ids,
                     "deposit_rank_ids": deposit_ranks,
                     "member_ranks": member_ranks, "tab0_items": tab0_items,
-                    "master": str(master["name"]) if master else ""}
+                    "tab_names": tab_names, "tab_items": tab_items,
+                    "master": master_name, "master_mailed_copper": mailed}
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("guild bank setup tables are unavailable")
@@ -18916,11 +18987,33 @@ def _plan_guild_setup(setup: dict | None, purchased_tabs: int, names: list,
         rank_ids=setup["rank_ids"],
         deposit_rank_ids=setup["deposit_rank_ids"],
         purse=purse,
+        tab_names=setup.get("tab_names"),
     )
-    if purchased_tabs == 0 and not actions:
-        log.info("%s%s", guildbank.tab_waits_line(buyer, purse),
+    # THE NEXT TAB, NOT ONLY TAB 0 (#319): a guild that owns tab 0 still waits
+    # on the master's purse for the next one, and says so with the dues that
+    # sit unopened in its mailbox.
+    waiting = guildbank.next_tab(purchased_tabs)
+    if waiting is not None and not any(
+            a.command.startswith("bank buy-tab") for a in actions):
+        mailed = setup.get("master_mailed_copper", 0) if buyer == setup.get("master") else 0
+        log.info("%s%s", guildbank.tab_waits_line(buyer, purse, waiting, mailed),
                  _family_label(cohort))
     return actions
+
+
+def _dues_fund_tab(names: list) -> bool:
+    """Whether the dues in this family's guild master's mailbox are what its
+    next bank tab waits on (#319); guildbank.dues_fund_tab judges."""
+    setup = _fetch_guild_bank_setup(names)
+    if not setup:
+        return False
+    master = str(setup.get("master") or "")
+    if not master or master not in names:
+        return False
+    purse = {str(m.get("name")): m.get("money")
+             for m in _fetch_guild_money(names)}.get(master)
+    return guildbank.dues_fund_tab(setup.get("purchased_tabs", 0), purse,
+                                   setup.get("master_mailed_copper", 0))
 
 
 def _recent_guild_setup_keys(minutes: int) -> set[tuple[str, str]]:
@@ -18941,7 +19034,8 @@ def _recent_guild_setup_keys(minutes: int) -> set[tuple[str, str]]:
                 # bank tab (infra#3713).
                 "SELECT target_name, command FROM overseer_command "
                 "WHERE kind = 'guild' AND created_at > NOW() - INTERVAL %s MINUTE "
-                "AND (command = 'bank buy-tab' OR command LIKE 'bank grant-deposit %%')",
+                "AND (command LIKE 'bank buy-tab%%' OR command LIKE 'bank grant-deposit %%' "
+                "OR command LIKE 'bank name-tab %%')",
                 (int(minutes),),
             )
         except pymysql.err.MySQLError as exc:
