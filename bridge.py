@@ -13195,30 +13195,41 @@ class Bridge(discord.Client):
             return
         if await self._mid_run(names):
             return
-        where = await self._situation_for(key, names, leader)
-        if where is None:
+        facts = await self._movement_facts(key, names, leader)
+        if facts is None:
             return
-        reads = await asyncio.to_thread(_movement_reads, names)
-        slot = self._travel_slot_of(key)
-        holder = slot.holder if slot is not None else None
-        mine = holder is not None and holder.claimant and holder.character == leader
-        facts = jev_movement.Facts(
-            family=key or leader, where=where, binds=reads["binds"],
-            hearthed=reads["hearthed"], errand=holder.aim if mine else "",
-            claimant=holder.claimant if mine else "")
         judgment = await jev_movement.ask(self._jev, facts, rule)
         if judgment is None:
             return
         self._movement_seen.setdefault(key, {})["asked"] = now
+        await self._movement_record(key, judgment)
+        if judgment.carried_out:
+            await self._carry_out_movement(key, facts, judgment,
+                                           self._travel_slot_of(key))
+            self._movement_seen[key]["acted"] = now
+
+    async def _movement_facts(self, key: str, names: list, leader: str):
+        """jev_movement.Facts for one family, or None without a picture."""
+        where = await self._situation_for(key, names, leader)
+        if where is None:
+            return None
+        reads = await asyncio.to_thread(_movement_reads, names)
+        slot = self._travel_slot_of(key)
+        holder = slot.holder if slot is not None else None
+        mine = bool(holder is not None and holder.claimant
+                    and holder.character == leader)
+        return jev_movement.Facts(
+            family=key or leader, where=where, binds=reads["binds"],
+            hearthed=reads["hearthed"], errand=holder.aim if mine else "",
+            claimant=holder.claimant if mine else "")
+
+    async def _movement_record(self, key: str, judgment) -> None:
         log.info("%s", judgment.line())
         try:
             await asyncio.to_thread(_insert_jev_judgment, judgment)
         except Exception:
             log.exception("movement: the choice for %s was not recorded",
                           campaignqueue._family(key))
-        if judgment.carried_out:
-            await self._carry_out_movement(key, facts, judgment, slot)
-            self._movement_seen[key]["acted"] = now
 
     async def _carry_out_movement(self, key: str, facts, judgment, slot) -> None:
         """Write what Jev chose. Every road here already exists in the world:
