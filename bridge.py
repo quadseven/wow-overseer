@@ -11808,9 +11808,14 @@ class Bridge(discord.Client):
                 | set(self._guild_mail_runs) | set(self._crafter_walks))
         cap = self._guild_walk_cap()
         near = await self._corps_mailbox_yards(members, names, busy, now)
-        plan = guildcorps.plan(
-            members, facts["family"], facts["trainable"], facts["vendors"],
-            facts["recent"], busy, walk_yards=cap, mailbox_yards=near)
+        if _guild_bag_corps_enabled():
+            plan = guildcorps.plan(
+                members, facts["family"], facts["trainable"], facts["vendors"],
+                facts["recent"], busy, walk_yards=cap, mailbox_yards=near)
+        else:
+            log.info("guild corps: bag crafting is held by configuration%s",
+                     _family_label(cohort))
+            plan = guildcorps.CorpsPlan(corps={})
         for guild, posts in sorted(plan.corps.items()):
             log.info("guild corps: %s: %s", guild,
                      "; ".join("%s %s" % (p.name, p.said) for p in posts)
@@ -18562,6 +18567,14 @@ def _corps_read(cur, what: str, sql: str, params=()) -> list:
             return []
         raise
     return [dict(row) for row in cur.fetchall()]
+
+
+def _guild_bag_corps_enabled() -> bool:
+    """Whether the guild tailoring corps may walk, craft, and mail bags."""
+    value = os.environ.get("GUILD_BAG_CORPS_ENABLED", "1").strip()
+    if value not in {"0", "1"}:
+        raise ValueError("GUILD_BAG_CORPS_ENABLED must be 0 or 1")
+    return value == "1"
 
 
 def _fetch_corps_facts(family_names: list) -> dict:
