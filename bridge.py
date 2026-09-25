@@ -13824,15 +13824,18 @@ class Bridge(discord.Client):
         facts = await asyncio.to_thread(
             _dungeonquest_facts, fam, str(head["keyword"]), leader, True, mid)
         step = dungeonquests.step(facts)
+        rows_written = False
         for name, command in step.rows:
             written = await asyncio.to_thread(
                 _insert_dungeonquest_row, name, command)
             if written:
+                rows_written = True
                 log.info("dungeon quests: %s wrote %s for %s (%d)",
                          campaignqueue._family(key), command, name, written)
         cohort = None if key == (own or "") else key
+        aim_taken = True
         if step.aim:
-            await self._claim_town_slot(
+            aim_taken = await self._claim_town_slot(
                 DUNGEON_QUEST_CLAIMANT, leader, str(step.aim), cohort=cohort)
         if step.release:
             await asyncio.to_thread(_release_trade_errand, leader,
@@ -13840,7 +13843,10 @@ class Bridge(discord.Client):
         if step.rows or step.aim:
             log.info("dungeon quests: %s: %s",
                      campaignqueue._family(key), step.line)
-        return step.hold_planner
+        # A failed travel-slot claim means the dungeon-quest action cannot
+        # start. Let the campaign queue run in that case instead of holding
+        # its first entry forever behind an aim another pass still owns.
+        return step.hold_planner and (aim_taken or rows_written or not step.aim)
 
     async def _dungeonquest_pass(self, pending: dict, fams: dict) -> set:
         """Take or hand in dungeon quests before advancing a campaign run."""
