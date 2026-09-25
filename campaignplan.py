@@ -278,11 +278,11 @@ RUNS_SQL_OLD = (
 # module's own integer constants (ZONES, GEAR_SLOTS, MAPS), passed through
 # int() or range(); no value from outside reaches them.
 QUESTS_SQL = (
-    "SELECT ID AS quest, QuestSortID AS zone, MinLevel AS min_level, "  # noqa: S608
-    "AllowableRaces AS races, a.PrevQuestID AS prev_quest "
+    "SELECT q.ID AS quest, q.QuestSortID AS zone, q.MinLevel AS min_level, "  # noqa: S608
+    "q.AllowableRaces AS races, a.PrevQuestID AS prev_quest "
     "FROM acore_world.quest_template q "
     "LEFT JOIN acore_world.quest_template_addon a ON a.ID = q.ID "
-    "WHERE QuestSortID IN (" + ", ".join(str(int(z)) for z in ZONES) + ") "
+    "WHERE q.QuestSortID IN (" + ", ".join(str(int(z)) for z in ZONES) + ") "
     "AND q.LogTitle NOT LIKE '<%%' "
     "AND EXISTS (SELECT 1 FROM acore_world.creature_queststarter s "
     "WHERE s.quest = q.ID) AND EXISTS (SELECT 1 FROM acore_world.creature_questender e "
