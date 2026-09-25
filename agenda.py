@@ -867,7 +867,8 @@ def _decide(
     if err is not None and err["leads"]:
         return _on_an_errand(err, names)
     mode = _mode(rows[0])
-    if mode == DUNGEON:
+    # Match the dungeon job forms accepted by the run coordinator.
+    if jobs.is_dungeon_job(mode):
         return _between_runs(run_rows, counter)
     if mode != jobs.DEFAULT:
         return _another_job(mode)
