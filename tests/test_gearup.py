@@ -5,10 +5,18 @@ import gearup
 
 
 def item(inv, subclass=0, **kw):
-    return {"id": kw.pop("id", 1), "entry": kw.pop("entry", 100),
-            "class": kw.pop("item_class", 4), "subclass": subclass,
-            "InventoryType": inv, "RequiredLevel": 1, "AllowableClass": 0,
-            "ItemLevel": kw.pop("ilvl", 30), "buyout": kw.pop("price", 100), **kw}
+    return {
+        "id": kw.pop("id", 1),
+        "entry": kw.pop("entry", 100),
+        "class": kw.pop("item_class", 4),
+        "subclass": subclass,
+        "InventoryType": inv,
+        "RequiredLevel": 1,
+        "AllowableClass": 0,
+        "ItemLevel": kw.pop("ilvl", 30),
+        "buyout": kw.pop("price", 100),
+        **kw,
+    }
 
 
 class GearupTests(unittest.TestCase):
@@ -39,31 +47,44 @@ class GearupTests(unittest.TestCase):
         self.assertEqual(16, gearup.empty_gear_slots([3, 18, 0]))
 
     def test_a_second_ring_is_bought_beside_a_worn_first(self):
-        c = {"class": "mage", "level": 35, "purse": 10000,
-             "equipped": {"finger1": 30}}
+        c = {"class": "mage", "level": 35, "purse": 10000, "equipped": {"finger1": 30}}
         ring = item(11, subclass=0, id=7, ilvl=30, price=100)
-        self.assertEqual(["finger2"], [b.slot for b in gearup.plan_buys({"T": c}, [ring])])
+        self.assertEqual(
+            ["finger2"], [b.slot for b in gearup.plan_buys({"T": c}, [ring])]
+        )
 
     def test_weapon_requires_a_held_weapon_skill(self):
         weapon = item(13, subclass=15, item_class=2)
         self.assertFalse(gearup._allowed({"class": "rogue", "level": 35}, weapon))
-        self.assertTrue(gearup._allowed(
-            {"class": "rogue", "level": 35, "skills": {"weapons": {15}}}, weapon
-        ))
+        self.assertTrue(
+            gearup._allowed(
+                {"class": "rogue", "level": 35, "skills": {"weapons": {15}}}, weapon
+            )
+        )
 
     def test_tank_offhand_only_accepts_shield(self):
-        c = {"class": "warrior", "level": 40, "purse": 1000,
-             "tank": True, "equipped": {}}
+        c = {
+            "class": "warrior",
+            "level": 40,
+            "purse": 1000,
+            "tank": True,
+            "equipped": {},
+        }
         shield = item(14, subclass=6, item_class=4)
         holdable = item(23, subclass=0, item_class=4, id=2)
         weapon = item(22, subclass=0, item_class=2, id=3)
-        self.assertEqual(["offhand"], [b.slot for b in gearup.plan_buys({"T": c}, [shield, holdable, weapon])])
+        self.assertEqual(
+            ["offhand"],
+            [b.slot for b in gearup.plan_buys({"T": c}, [shield, holdable, weapon])],
+        )
 
     def test_budget_caps_and_best_listing_per_empty_slot(self):
         c = {"class": "mage", "level": 35, "purse": 1000, "equipped": {}}
-        rows = [item(1, subclass=0, id=1, ilvl=20, price=201),
-                item(1, subclass=0, id=2, ilvl=18, price=200),
-                item(2, subclass=0, id=3, ilvl=17, price=100)]
+        rows = [
+            item(1, subclass=0, id=1, ilvl=20, price=201),
+            item(1, subclass=0, id=2, ilvl=18, price=200),
+            item(2, subclass=0, id=3, ilvl=17, price=100),
+        ]
         buys = gearup.plan_buys({"T": c}, rows, repair_floor=100)
         self.assertEqual([2, 3], [b.listing_id for b in buys])
         self.assertLessEqual(sum(b.buyout for b in buys), 600)
@@ -72,9 +93,9 @@ class GearupTests(unittest.TestCase):
         character = {"class": "mage", "level": 35, "purse": 1000, "equipped": {}}
         with mock.patch.object(gearup, "plan_buys", return_value=()):
             with self.assertRaises(AssertionError):
-                self.assertEqual(1, len(gearup.plan_buys(
-                    {"T": character}, [item(1, id=1)]
-                )))
+                self.assertEqual(
+                    1, len(gearup.plan_buys({"T": character}, [item(1, id=1)]))
+                )
 
 
 if __name__ == "__main__":

@@ -4,27 +4,65 @@ The planner is pure: it only spends a character's own purse on equipment
 they can wear now, and keeps the same repair reserve and bounded spending
 discipline as the other town purchases.
 """
+
 from dataclasses import dataclass
 
 
 SLOT_TYPES = {
-    1: ("head",), 2: ("neck",), 3: ("shoulder",),
-    5: ("chest",), 20: ("chest",), 6: ("waist",), 7: ("legs",),
-    8: ("feet",), 9: ("wrist",), 10: ("hands",),
-    11: ("finger1", "finger2"), 12: ("trinket1", "trinket2"),
-    13: ("mainhand", "offhand"), 17: ("mainhand",), 21: ("mainhand",),
-    14: ("offhand",), 22: ("offhand",), 23: ("offhand",),
-    15: ("ranged",), 16: ("back",), 25: ("ranged",),
-    26: ("ranged",), 28: ("ranged",),
+    1: ("head",),
+    2: ("neck",),
+    3: ("shoulder",),
+    5: ("chest",),
+    20: ("chest",),
+    6: ("waist",),
+    7: ("legs",),
+    8: ("feet",),
+    9: ("wrist",),
+    10: ("hands",),
+    11: ("finger1", "finger2"),
+    12: ("trinket1", "trinket2"),
+    13: ("mainhand", "offhand"),
+    17: ("mainhand",),
+    21: ("mainhand",),
+    14: ("offhand",),
+    22: ("offhand",),
+    23: ("offhand",),
+    15: ("ranged",),
+    16: ("back",),
+    25: ("ranged",),
+    26: ("ranged",),
+    28: ("ranged",),
 }
-CLASS_IDS = {"warrior": 1, "paladin": 2, "hunter": 3, "rogue": 4,
-             "priest": 5, "death_knight": 6, "shaman": 7, "mage": 8,
-             "warlock": 9, "druid": 11}
-WEAPON_SUBCLASS = {"axe": 0, "two-handed axe": 1, "bow": 2, "gun": 3,
-                   "mace": 4, "two-handed mace": 5, "polearm": 6,
-                   "sword": 7, "two-handed sword": 8, "staff": 10,
-                   "fist": 13, "dagger": 15, "thrown": 16,
-                   "crossbow": 18, "wand": 19, "fishing pole": 20}
+CLASS_IDS = {
+    "warrior": 1,
+    "paladin": 2,
+    "hunter": 3,
+    "rogue": 4,
+    "priest": 5,
+    "death_knight": 6,
+    "shaman": 7,
+    "mage": 8,
+    "warlock": 9,
+    "druid": 11,
+}
+WEAPON_SUBCLASS = {
+    "axe": 0,
+    "two-handed axe": 1,
+    "bow": 2,
+    "gun": 3,
+    "mace": 4,
+    "two-handed mace": 5,
+    "polearm": 6,
+    "sword": 7,
+    "two-handed sword": 8,
+    "staff": 10,
+    "fist": 13,
+    "dagger": 15,
+    "thrown": 16,
+    "crossbow": 18,
+    "wand": 19,
+    "fishing pole": 20,
+}
 SHIELD_CLASSES = {1, 2, 7}
 
 # THE COSMETIC SLOTS ARE NOT GEAR. A shirt (slot 3) and a tabard (slot 18) carry
@@ -92,7 +130,10 @@ def _allowed(character, item):
     if kind != 2:
         return False
     allowed_weapons = _get(skills, "weapons", default=skills.get("weapon_types", ()))
-    return sub in allowed_weapons or WEAPON_SUBCLASS.get(str(sub).lower()) in allowed_weapons
+    return (
+        sub in allowed_weapons
+        or WEAPON_SUBCLASS.get(str(sub).lower()) in allowed_weapons
+    )
 
 
 def plan_buys(characters, listings, *, repair_floor=0):
@@ -103,15 +144,31 @@ def plan_buys(characters, listings, *, repair_floor=0):
         purse = int(_get(character, "purse", "money", default=0) or 0)
         equipped = _get(character, "equipped", "slots", default={}) or {}
         tank = bool(_get(character, "shield_tank", "tank", default=False))
-        reserve = repair_floor.get(name, 0) if isinstance(repair_floor, dict) else repair_floor
-        available = max(0, min(purse * .6, purse - int(reserve)))
+        reserve = (
+            repair_floor.get(name, 0)
+            if isinstance(repair_floor, dict)
+            else repair_floor
+        )
+        available = max(0, min(purse * 0.6, purse - int(reserve)))
         chosen = set()
         used = set()
-        for item in sorted(listings, key=lambda r: (-int(_get(r, "ItemLevel", "item_level", default=0) or 0), int(_get(r, "buyout", default=0) or 0), int(_get(r, "id", "listing_id", "auction_id", default=0) or 0))):
-            if not _allowed(character, item) or int(_get(item, "buyout", default=0) or 0) <= 0:
+        for item in sorted(
+            listings,
+            key=lambda r: (
+                -int(_get(r, "ItemLevel", "item_level", default=0) or 0),
+                int(_get(r, "buyout", default=0) or 0),
+                int(_get(r, "id", "listing_id", "auction_id", default=0) or 0),
+            ),
+        ):
+            if (
+                not _allowed(character, item)
+                or int(_get(item, "buyout", default=0) or 0) <= 0
+            ):
                 continue
             inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
-            listing_id = int(_get(item, "id", "listing_id", "auction_id", default=0) or 0)
+            listing_id = int(
+                _get(item, "id", "listing_id", "auction_id", default=0) or 0
+            )
             if listing_id in used:
                 continue
             slots = SLOT_TYPES.get(inv, ())
@@ -119,26 +176,45 @@ def plan_buys(characters, listings, *, repair_floor=0):
                 continue
             for slot in slots:
                 # The second ring or trinket only once the first is worn or bought.
-                if slot in chosen or (slot in ("finger2", "trinket2") and
-                                      slot[:-1] + "1" not in chosen and
-                                      slot[:-1] + "1" not in equipped):
+                if slot in chosen or (
+                    slot in ("finger2", "trinket2")
+                    and slot[:-1] + "1" not in chosen
+                    and slot[:-1] + "1" not in equipped
+                ):
                     continue
-                if slot == "offhand" and tank and not (int(_get(item, "class", "item_class", default=0) or 0) == 4 and int(_get(item, "subclass", default=0) or 0) == 6 and inv == 14):
+                if (
+                    slot == "offhand"
+                    and tank
+                    and not (
+                        int(_get(item, "class", "item_class", default=0) or 0) == 4
+                        and int(_get(item, "subclass", default=0) or 0) == 6
+                        and inv == 14
+                    )
+                ):
                     continue
                 worn = equipped.get(slot)
-                worn_level = (worn.get("item_level") if isinstance(worn, dict)
-                              else worn)
+                worn_level = worn.get("item_level") if isinstance(worn, dict) else worn
                 item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
                 if slot in equipped and (
-                    worn_level is None or int(worn_level) > level - 10
+                    worn_level is None
+                    or int(worn_level) > level - 10
                     or item_level <= int(worn_level)
                 ):
                     continue
                 price = int(_get(item, "buyout", default=0) or 0)
                 spent = sum(x.buyout for x in output if x.character == name)
-                if price > purse * .2 or price > available - spent:
+                if price > purse * 0.2 or price > available - spent:
                     continue
-                output.append(Buy(name, slot, int(_get(item, "id", "listing_id", "auction_id", default=0)), int(_get(item, "entry", default=0)), price, item_level))
+                output.append(
+                    Buy(
+                        name,
+                        slot,
+                        int(_get(item, "id", "listing_id", "auction_id", default=0)),
+                        int(_get(item, "entry", default=0)),
+                        price,
+                        item_level,
+                    )
+                )
                 chosen.add(slot)
                 used.add(listing_id)
                 break
