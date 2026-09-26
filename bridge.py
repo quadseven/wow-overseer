@@ -2379,7 +2379,10 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
     if not names:
         return _withheld(withheld, "no enabled character to send")
 
-    reason = _gear_gate(names, keyword)
+    # Looked up, not called by name: the campaign tests load this function in
+    # isolation, without the gate beside it.
+    gear_gate = globals().get("_gear_gate")
+    reason = gear_gate(names, keyword) if gear_gate else None
     if reason:
         _hand_to_town(keyword, mode, names)
         _keep_in_town(names)
