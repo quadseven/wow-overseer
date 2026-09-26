@@ -619,6 +619,31 @@ def next_lead(rows: Sequence, *, leader: str, head: str, expired=frozenset()) ->
     return leader
 
 
+def campaign_lead(rows: Sequence, *, head: str) -> str:
+    """The lead a family's staging campaign hands back to its head, or "".
+
+    A LEARN ERRAND BORROWS THE LEAD; A CAMPAIGN NEVER KEEPS A BORROWER. While
+    a campaign owns the traveller (#227) no learn trip is aimed, so no borrow
+    is live, and `next_lead` is not asked at all. A borrower that already held
+    the lead when the campaign armed therefore kept it for the whole campaign.
+    Measured on the dev realm 2026-09-25: a trainee took the Horde lead for an
+    alchemy learn, the Ragefire campaign armed, and every run from then on was
+    led by that trainee instead of the head, who carries the game client and
+    tanks. Every worldserver restart re-formed the party under the borrower,
+    because the roster's `lead` flag is what mod-overseer enforces.
+
+    Returns the head when a borrower (anyone else) holds the flag and the head
+    is on the roster; "" when the head already leads, or is not a member here,
+    which leaves the flag alone rather than writing a family with no leader.
+    """
+    rows = list(rows or ())
+    if not head or head not in {r.character for r in rows}:
+        return ""
+    if any(r.character == head and r.leads for r in rows):
+        return ""
+    return head
+
+
 def led_by(rows: Sequence, lead: str) -> list:
     """The rows as they read once `lead` holds the family's lead flag."""
     return [replace(r, leads=(r.character == lead)) for r in rows or ()]

@@ -10389,12 +10389,28 @@ class Bridge(discord.Client):
         rows = tradechoice.learn_rows(state["roster"], state["trades"], declared)
         if not rows:
             return
-        campaign = self._cohort_town_slot(cohort.key).learn_waits
+        slot = self._cohort_town_slot(cohort.key)
+        campaign = slot.learn_waits
         if campaign:
             # A STAGING CAMPAIGN KEEPS ITS LEADER (#227): no lead is borrowed
             # and no trainer walk is aimed. Finished learns are still cleared.
             # A campaign held in town for bag room keeps it the same way
             # (#297), so the vendor trip it waits for can take the column.
+            #
+            # AND ITS LEADER IS THE HEAD, NOT A TRAINEE WHO BORROWED THE LEAD
+            # BEFORE THE CAMPAIGN ARMED. Nothing below this return hands a
+            # borrowed lead back, so without this the borrower led every run
+            # of the campaign. Only for a staging campaign: a town hold's
+            # vendor trip is walked by whoever leads when it was aimed.
+            back = tradechoice.campaign_lead(rows, head=cohort.key) if slot.campaign else ""
+            if back:
+                was = next((r.character for r in rows if r.leads), "nobody")
+                await asyncio.to_thread(_mark_party_leader, back)
+                rows = tradechoice.led_by(rows, back)
+                log.info("trades: %s takes back the lead of family %s from %s - "
+                         "a campaign is led by the family's head, never by a "
+                         "character that borrowed the lead for a learn errand (%s)",
+                         back, cohort.key, was, campaign)
             learn_plan = learnaim.plan(rows)
             if learn_plan.clear:
                 await asyncio.to_thread(_run_learn_aim_plan, learnaim.statements(
