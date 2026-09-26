@@ -34,6 +34,7 @@ KINDS = {
     "profession_choice": "A family member's professions",
     "activity_choice": "A family's next activity",
     "movement": "How a family gets moving again",
+    "family_intent": "What a family's leader is doing now",
     "item_keep": "What to do with a protected non-gear item",
 }
 

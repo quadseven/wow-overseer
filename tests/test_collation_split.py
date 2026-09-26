@@ -98,6 +98,10 @@ COLLATIONS = {
     # Module-owned (mod-overseer#642, 2026_09_24_01_overseer_loot_council.sql),
     # named in its own CREATE TABLE the same way. The bridge answers its rows.
     "overseer_loot_council": "utf8mb4_unicode_ci",
+    # Module-owned (mod-overseer#722, 2026_09_26_00_overseer_family_intent.sql),
+    # named in its own CREATE TABLE the same way. The bridge reads it and
+    # writes only its chosen_* columns.
+    "overseer_family_intent": "utf8mb4_unicode_ci",
     # Module-owned (2026_09_24_06_overseer_keep.sql), named in its own CREATE
     # TABLE the same way. The bridge reads it, joined to `characters` by name.
     "overseer_keep": "utf8mb4_unicode_ci",
@@ -238,6 +242,20 @@ STRING_COLUMNS = {
             "decided_by",
             "given_to",
             "outcome",
+        }
+    ),
+    "overseer_family_intent": frozenset(
+        {
+            "chosen_by",
+            "chosen_kind",
+            "chosen_target",
+            "current_kind",
+            "current_owner",
+            "current_target",
+            "family",
+            "leader_name",
+            "members_state",
+            "on_the_table",
         }
     ),
 }
