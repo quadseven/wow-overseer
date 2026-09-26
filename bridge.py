@@ -2133,6 +2133,7 @@ TOWN_FIRST_SOURCE = "overseer:town-first"
 # purpose: a restart starts the clock again, which costs a longer stay in town
 # and never a run into full bags.
 _TOWN_FIRST_SINCE: dict = {}
+_GEAR_HOLD_SINCE: dict = {}
 
 
 def _jobs_of(names: list) -> dict:
@@ -2327,6 +2328,40 @@ def _gear_gate(names, keyword):
     reason = "gear-up first: %s has six or more empty equipment slots" % ", ".join(gear_short)
     log.info("goal: withholding dungeon:%s - %s", label, reason)
     return reason
+
+
+def _gear_campaign_hold(names, keyword, in_run):
+    """Yield an already-running queue entry to the gear errand between runs (#146, #147).
+
+    The queue entry stays active while its roster jobs move to town run. The
+    ordinary queue re-assertion resumes it when the condition clears or the
+    bag-withhold ceiling expires, so gear shopping cannot deadlock a campaign.
+    """
+    key = tuple(sorted(names))
+    facts = _fetch_gearup_facts(names)
+    since = _GEAR_HOLD_SINCE.get(key, time.monotonic())
+    held = gearup.campaign_hold(
+        facts, in_run, held_seconds=time.monotonic() - since,
+        empty_slots=GEARUP_GATE_EMPTY_SLOTS,
+        min_purse=GEARUP_GATE_MIN_PURSE,
+        ceiling=bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS,
+    )
+    if held:
+        _GEAR_HOLD_SINCE.setdefault(key, since)
+        armed = [n for n, job in _jobs_of(names).items()
+                 if job.startswith("dungeon")]
+        if armed:
+            for name in names:
+                _insert_job(name, jobs.TOWN_RUN, TOWN_FIRST_SOURCE)
+            log.info("gear-up: campaign dungeon:%s handed to town; auctioneer errand runs between dungeons",
+                     keyword or "(default)")
+        return True
+    was_held = key in _GEAR_HOLD_SINCE
+    _GEAR_HOLD_SINCE.pop(key, None)
+    if was_held:
+        log.info("gear-up: campaign dungeon:%s resumes after town gear errand",
+                 keyword or "(default)")
+    return False
 
 
 def _drive_dungeon(keyword: str, wanted: int, names=None,
@@ -13908,6 +13943,33 @@ class Bridge(discord.Client):
                 log.exception("queue: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    async def _queue_gear_hold(self, head: dict, fam: dict) -> bool:
+        """Whether this family's running queue entry waits in town for gear (#146).
+
+        ASKED WHILE THE HOLD IS IN FORCE TOO, not only while the job reads
+        dungeon: otherwise the queue re-sends the campaign the next pass, the
+        hold hands it back, and the family flips between town and dungeon every
+        pass. Looked up through globals() because the campaign tests load the
+        queue pass without the gear helpers.
+        """
+        mid_run_check = getattr(self, "_mid_run", None)
+        gear_hold_check = globals().get("_gear_campaign_hold")
+        if mid_run_check is None or gear_hold_check is None:
+            return False
+        keyword = str(head.get("keyword") or "")
+        if head.get("status") != campaignqueue.ACTIVE or raidrun.is_raid(keyword):
+            return False
+        names = list(fam["names"])
+        leader_job = str(fam["leader"].get("job") or "").strip().lower()
+        holding = tuple(sorted(names)) in globals().get("_GEAR_HOLD_SINCE", {})
+        if not (leader_job.startswith("dungeon") or holding):
+            return False
+        in_run = await mid_run_check(names)
+        if not await asyncio.to_thread(gear_hold_check, names, keyword, in_run):
+            return False
+        await asyncio.to_thread(_keep_in_town, names)
+        return True
+
     async def _campaign_queue_once(self) -> None:
         """One pass: every family with a pending entry, off its own leader."""
         # WHAT THE MODULE CAN CROSS, read before any door is judged, so a
@@ -13945,6 +14007,9 @@ class Bridge(discord.Client):
                 log.warning("queue: %s has queued dungeons and no enabled "
                             "roster row, so nothing is written",
                             campaignqueue._family(key))
+                continue
+            gear_hold = getattr(self, "_queue_gear_hold", None)
+            if gear_hold is not None and await gear_hold(rows[0], fam):
                 continue
             move = campaignqueue.step(rows, fam["leader"])
             if not move.writes:
