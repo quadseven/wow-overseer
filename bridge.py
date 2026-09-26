@@ -56,6 +56,7 @@ import guildbank
 import guildshare
 import guildroute
 import guildwork
+import gearup
 import natural
 import guildcorps
 import guildjobs
@@ -2299,6 +2300,35 @@ def _insert_family_jobs(names: list, mode: str, source: str) -> int:
     return written
 
 
+def _gear_gate(names, keyword):
+    """Apply GEAR UP BEFORE THE DOOR (#146, #147), BUT NEVER A DEADLOCK.
+
+    Six empty stat slots hold a member in town while gear-up can spend its
+    gold; a member too poor to buy is logged and the run goes ahead. Look up
+    the reader so isolated campaign tests can load this function without it.
+    """
+    reader = globals().get("_fetch_gearup_facts")
+    facts = reader(names) if reader else {}
+    gear_short, gear_broke = [], []
+    for name, character in facts.items():
+        worn = [slot for slot in character["equipped"]
+                if slot not in ("shirt", "tabard")]
+        if 17 - len(worn) >= globals().get("GEARUP_GATE_EMPTY_SLOTS", 6):
+            target = gear_short if character["purse"] >= globals().get(
+                "GEARUP_GATE_MIN_PURSE", 20000) else gear_broke
+            target.append(name)
+    label = keyword or "(default)"
+    if gear_broke:
+        log.info("goal: dungeon:%s is not held for gear - %s %s six or more empty slots "
+                 "but under 2 gold to spend, so the run goes ahead", label,
+                 ", ".join(gear_broke), "has" if len(gear_broke) == 1 else "have")
+    if not gear_short:
+        return None
+    reason = "gear-up first: %s has six or more empty equipment slots" % ", ".join(gear_short)
+    log.info("goal: withholding dungeon:%s - %s", label, reason)
+    return reason
+
+
 def _drive_dungeon(keyword: str, wanted: int, names=None,
                    source: str = "overseer:goal", withheld=None) -> tuple:
     """Turn a decided dungeon goal into the roster writes that actually send
@@ -2348,6 +2378,15 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
     names = _fetch_enabled_names() if names is None else list(names)
     if not names:
         return _withheld(withheld, "no enabled character to send")
+
+    # Looked up, not called by name: the campaign tests load this function in
+    # isolation, without the gate beside it.
+    gear_gate = globals().get("_gear_gate")
+    reason = gear_gate(names, keyword) if gear_gate else None
+    if reason:
+        _hand_to_town(keyword, mode, names)
+        _keep_in_town(names)
+        return _withheld(withheld, reason)
 
     free_slots = _fetch_free_slots(names)
     if bag_pressure.family_town_run_needed(free_slots):
@@ -7279,6 +7318,7 @@ class Bridge(discord.Client):
             )
             return
         step = await self._settle_auction_errand(names, leader)
+        await self._gearup_once(names, leader, step, cohort)
         await self._auction_sales_once(names, leader, step, cohort)
         # BAGS BEFORE THE REAGENT GATE BELOW, which returns when nobody is on
         # a craft errand: a bigger bag is worth the walk on its own.
@@ -7388,6 +7428,101 @@ class Bridge(discord.Client):
             "and are not craftable until a mailbox pass collects them.",
             queued, spent, len(shoppers), leader, aimed, _family_label(cohort),
         )
+
+    async def _gearup_facts_and_tanks(self, names):
+        facts = await asyncio.to_thread(_fetch_gearup_facts, names)
+        for name in names:
+            if name not in facts:
+                log.info("gearup: %s nothing: equipment or purse facts unavailable", name)
+        roles = await asyncio.to_thread(_fetch_family_equipped, names)
+        tanks, _ = bag_pressure.tree_tanks(roles, names)
+        for name in facts:
+            facts[name]["tank"] = name in tanks
+        return facts
+
+    async def _gearup_house(self, names, leader, facts, step, cohort):
+        """Find the leader's counter and reachable house, claiming town if needed."""
+        short = {n: f for n, f in facts.items()
+                 if sum(1 for slot in range(19) if slot not in f["equipped"]) > 0}
+        if not short:
+            return {}, {}, None
+        leader_counter = await asyncio.to_thread(_fetch_auctioneer, leader)
+        if not leader_counter:
+            free = {n: 19 - len(f["equipped"]) for n, f in facts.items()}
+            if any(v >= 4 for v in free.values()) and step == bag_pressure.VENDOR_ERRAND_AIM:
+                await self._claim_town_slot("gearup", leader, auction.AUCTIONEER_ROLE,
+                                             urgent=True, cohort=_cohort_key(cohort))
+            for n in sorted(facts):
+                log.info("gearup: %s nothing yet: not at an auctioneer", n)
+            return {}, {}, None
+        teams = await asyncio.to_thread(_fetch_teams, names)
+        house = auction.reachable_house(teams.get(leader, ""),
+                                        int(leader_counter.get("faction") or 0))
+        if not house:
+            for name in sorted(facts):
+                log.info("gearup: %s nothing: no reachable auction house", name)
+            return {}, teams, None
+        return short, teams, house
+
+    async def _gearup_standing_members(self, facts, teams, names, house):
+        planned = {}
+        for name, character in facts.items():
+            stand = await asyncio.to_thread(_fetch_auctioneer, name)
+            if not stand:
+                log.info("gearup: %s nothing: not at an auctioneer", name)
+                continue
+            own_house = auction.reachable_house(
+                teams.get(name, ""), int(stand.get("faction") or 0))
+            if own_house != house:
+                log.info("gearup: %s nothing: no listing at its reachable house", name)
+                continue
+            planned[name] = character
+        return planned
+
+    async def _gearup_queue_buys(self, planned, listings):
+        recent = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
+        buys = gearup.plan_buys(
+            planned, listings,
+            repair_floor={n: f["purse"] * towntrip.FLOOR for n, f in planned.items()},
+        )
+        bought = {}
+        for buy in buys:
+            command = auction.buy_command(buy.listing_id)
+            if (buy.character, command) in recent:
+                continue
+            if await asyncio.to_thread(_insert_auction, buy.character, command):
+                bought.setdefault(buy.character, []).append(
+                    "entry %d for %s" % (buy.entry, buy.slot)
+                )
+        return buys, recent, bought
+
+    def _gearup_log_outcomes(self, planned, buys, recent, bought):
+        for name in sorted(planned):
+            if name in bought:
+                log.info("gearup: %s bought %s", name, "; ".join(bought[name]))
+                continue
+            candidates = {auction.buy_command(b.listing_id) for b in buys
+                          if b.character == name}
+            pending = any((name, command) in recent for command in candidates)
+            why = ("an auction buy is inside the retry window" if pending
+                   else "no affordable usable listing")
+            log.info("gearup: %s nothing: %s", name, why)
+
+    async def _gearup_once(self, names: list, leader: str, step: str,
+                           cohort=None) -> None:
+        """Buy usable auction equipment with each character's own gold (#146/#147)."""
+        facts = await self._gearup_facts_and_tanks(names)
+        short, teams, house = await self._gearup_house(
+            names, leader, facts, step, cohort)
+        if house is None:
+            return
+        listings = await asyncio.to_thread(_fetch_gearup_listings, house)
+        planned = await self._gearup_standing_members(facts, teams, names, house)
+        buys, recent, bought = await self._gearup_queue_buys(planned, listings)
+        if bought:
+            await self._keep_at_auctioneer(leader, cohort)
+            self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
+        self._gearup_log_outcomes(planned, buys, recent, bought)
 
     async def _auction_sales_once(self, names: list, leader: str,
                                   step: str, cohort=None) -> None:
@@ -21720,6 +21855,81 @@ def _fetch_auction_listings(entries: list, house: int) -> list:
         )
         for row in rows
     ]
+
+
+# Gear-up reads the same worn equipment range as the equip pass, plus the
+# character's own purse. Listings stay scoped to the reachable auction house.
+_GEARUP_EQUIPPED_SQL = (
+    "SELECT c.name, c.class AS class_id, c.level, c.money AS purse, "
+    "ci.slot, it.ItemLevel AS item_level FROM characters c "
+    "LEFT JOIN character_inventory ci ON ci.guid=c.guid AND ci.bag=0 AND ci.slot<19 "
+    "LEFT JOIN item_instance ii ON ii.guid=ci.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry=ii.itemEntry WHERE c.name IN (%s)"
+)
+
+
+# The campaign gate on gear (see _drive_dungeon): six or more empty stat slots,
+# and at least 2 gold to spend - the Horde auction house lists level 8-17 gear
+# at 0.9g on average, so 2g buys a piece or two.
+GEARUP_GATE_EMPTY_SLOTS = 6
+GEARUP_GATE_MIN_PURSE = 20000
+
+
+def _fetch_gearup_facts(names: list) -> dict:
+    if not names:
+        return {}
+    sql = _GEARUP_EQUIPPED_SQL % ",".join(["%s"] * len(names))
+    classes = {1: "warrior", 2: "paladin", 3: "hunter", 4: "rogue",
+               5: "priest", 6: "death_knight", 7: "shaman", 8: "mage",
+               9: "warlock", 11: "druid"}
+    slots = ("head", "neck", "shoulder", "shirt", "chest", "waist", "legs",
+             "feet", "wrist", "hands", "finger1", "finger2", "trinket1",
+             "trinket2", "back", "mainhand", "offhand", "ranged", "tabard")
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        rows = cur.fetchall()
+        marks = ",".join(["%s"] * len(names))
+        cur.execute(
+            "SELECT c.name, cs.skill FROM characters c "
+            "JOIN character_skills cs ON cs.guid=c.guid "
+            "WHERE c.name IN (%s) AND cs.value>0" % marks, names,
+        )
+        skill_rows = cur.fetchall()
+    weapon_skills = {44: 0, 172: 1, 45: 2, 46: 3, 54: 4, 160: 5,
+                     229: 6, 43: 7, 55: 8, 136: 10, 473: 13,
+                     173: 15, 176: 16, 226: 18, 228: 19, 356: 20}
+    held = {}
+    for row in skill_rows:
+        subclass = weapon_skills.get(int(row["skill"]))
+        if subclass is not None:
+            held.setdefault(row["name"], set()).add(subclass)
+    result = {}
+    for row in rows:
+        name = row["name"]
+        result.setdefault(name, {"class": classes.get(int(row["class_id"]), ""),
+                                 "level": int(row["level"]),
+                                 "purse": int(row["purse"] or 0), "equipped": {},
+                                 "skills": {"weapons": held.get(name, set())}})
+        if row["slot"] is not None:
+            slot = int(row["slot"])
+            if 0 <= slot < len(slots):
+                result[name]["equipped"][slots[slot]] = (
+                    int(row["item_level"]) if row["item_level"] is not None else None
+                )
+    return result
+
+
+def _fetch_gearup_listings(house: int) -> list:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT a.id AS listing_id, a.buyoutprice AS buyout, ii.itemEntry AS entry, "
+            "it.InventoryType, it.class, it.subclass, it.RequiredLevel, "
+            "it.AllowableClass, it.ItemLevel, it.Quality FROM auctionhouse a "
+            "JOIN item_instance ii ON ii.guid=a.itemguid "
+            "JOIN acore_world.item_template it ON it.entry=ii.itemEntry "
+            "WHERE a.houseid=%s AND a.buyoutprice>0 AND it.class IN (2,4) "
+            "AND it.InventoryType BETWEEN 1 AND 28", (int(house),))
+        return [dict(row) for row in cur.fetchall()]
 
 
 # WHAT A CHARACTER ACTUALLY HOLDS, JOINED THROUGH `character_inventory` AND NOT
