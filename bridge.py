@@ -13943,6 +13943,33 @@ class Bridge(discord.Client):
                 log.exception("queue: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    async def _queue_gear_hold(self, head: dict, fam: dict) -> bool:
+        """Whether this family's running queue entry waits in town for gear (#146).
+
+        ASKED WHILE THE HOLD IS IN FORCE TOO, not only while the job reads
+        dungeon: otherwise the queue re-sends the campaign the next pass, the
+        hold hands it back, and the family flips between town and dungeon every
+        pass. Looked up through globals() because the campaign tests load the
+        queue pass without the gear helpers.
+        """
+        mid_run_check = getattr(self, "_mid_run", None)
+        gear_hold_check = globals().get("_gear_campaign_hold")
+        if mid_run_check is None or gear_hold_check is None:
+            return False
+        keyword = str(head.get("keyword") or "")
+        if head.get("status") != campaignqueue.ACTIVE or raidrun.is_raid(keyword):
+            return False
+        names = list(fam["names"])
+        leader_job = str(fam["leader"].get("job") or "").strip().lower()
+        holding = tuple(sorted(names)) in globals().get("_GEAR_HOLD_SINCE", {})
+        if not (leader_job.startswith("dungeon") or holding):
+            return False
+        in_run = await mid_run_check(names)
+        if not await asyncio.to_thread(gear_hold_check, names, keyword, in_run):
+            return False
+        await asyncio.to_thread(_keep_in_town, names)
+        return True
+
     async def _campaign_queue_once(self) -> None:
         """One pass: every family with a pending entry, off its own leader."""
         # WHAT THE MODULE CAN CROSS, read before any door is judged, so a
@@ -13981,25 +14008,9 @@ class Bridge(discord.Client):
                             "roster row, so nothing is written",
                             campaignqueue._family(key))
                 continue
-            head = rows[0]
-            leader_job = str(fam["leader"].get("job") or "").strip().lower()
-            mid_run_check = getattr(self, "_mid_run", None)
-            gear_hold_check = globals().get("_gear_campaign_hold")
-            # ASKED WHILE THE HOLD IS IN FORCE TOO, not only while the job reads
-            # dungeon: otherwise the queue re-sends the campaign the next pass,
-            # the hold hands it back, and the family flips every pass.
-            holding = tuple(sorted(fam["names"])) in globals().get("_GEAR_HOLD_SINCE", {})
-            if (mid_run_check is not None and gear_hold_check is not None
-                    and head.get("status") == campaignqueue.ACTIVE
-                    and (leader_job.startswith("dungeon") or holding)
-                    and not raidrun.is_raid(str(head.get("keyword") or ""))):
-                in_run = await mid_run_check(list(fam["names"]))
-                gear_hold = await asyncio.to_thread(
-                    gear_hold_check, list(fam["names"]),
-                    str(head.get("keyword") or ""), in_run)
-                if gear_hold:
-                    await asyncio.to_thread(_keep_in_town, list(fam["names"]))
-                    continue
+            gear_hold = getattr(self, "_queue_gear_hold", None)
+            if gear_hold is not None and await gear_hold(rows[0], fam):
+                continue
             move = campaignqueue.step(rows, fam["leader"])
             if not move.writes:
                 log.info("queue: %s: %s", campaignqueue._family(key), move.why)
