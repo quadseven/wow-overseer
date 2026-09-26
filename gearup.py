@@ -107,115 +107,131 @@ def _allowed(character, item):
     level = int(_get(character, "level", default=0) or 0)
     cls = _get(character, "class", "class_id")
     cls_id = CLASS_IDS.get(str(cls).lower(), int(cls) if str(cls).isdigit() else 0)
-    if int(_get(item, "RequiredLevel", "required_level", default=0) or 0) > level:
-        return False
-    allowed = int(_get(item, "AllowableClass", "allowable_class", default=0) or 0)
-    if allowed not in (-1, 0) and not allowed & (1 << (cls_id - 1)):
+    if not _level_and_class_ok(item, cls_id, level):
         return False
     kind = int(_get(item, "class", "item_class", default=-1) or 0)
     sub = int(_get(item, "subclass", default=-1) or 0)
-    skills = _get(character, "skills", default={}) or {}
+    inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
     if kind == 4:
-        if int(_get(item, "InventoryType", "inventory_type", default=0) or 0) == 14:
-            return cls_id in SHIELD_CLASSES
-        if sub in (0, 1):
-            return True
-        if sub == 2:
-            return cls_id in LEATHER_CLASSES
-        if sub == 3:
-            return cls_id in MAIL_FROM_START or (cls_id in MAIL_AT_40 and level >= 40)
-        if sub == 4:
-            return cls_id in PLATE_AT_40 and level >= 40
+        return _armor_ok(cls_id, sub, inv, level)
+    if kind == 2:
+        return _weapon_ok(character, sub)
+    return False
+
+
+def _level_and_class_ok(item, cls_id, level):
+    if int(_get(item, "RequiredLevel", "required_level", default=0) or 0) > level:
         return False
-    if kind != 2:
-        return False
-    allowed_weapons = _get(skills, "weapons", default=skills.get("weapon_types", ()))
-    return (
-        sub in allowed_weapons
-        or WEAPON_SUBCLASS.get(str(sub).lower()) in allowed_weapons
-    )
+    allowed = int(_get(item, "AllowableClass", "allowable_class", default=0) or 0)
+    return allowed in (-1, 0) or bool(allowed & (1 << (cls_id - 1)))
+
+
+def _armor_ok(cls_id, sub, inv, level):
+    if inv == 14:
+        return cls_id in SHIELD_CLASSES
+    if sub in (0, 1):
+        return True
+    rules = {
+        2: LEATHER_CLASSES,
+        3: MAIL_FROM_START | (MAIL_AT_40 if level >= 40 else set()),
+        4: PLATE_AT_40 if level >= 40 else set(),
+    }
+    return cls_id in rules.get(sub, set())
+
+
+def _weapon_ok(character, sub):
+    skills = _get(character, "skills", default={}) or {}
+    allowed = _get(skills, "weapons", default=skills.get("weapon_types", ()))
+    return sub in allowed or WEAPON_SUBCLASS.get(str(sub).lower()) in allowed
 
 
 def plan_buys(characters, listings, *, repair_floor=0):
     """Return best affordable buyouts for empty slots (or 10-level upgrades)."""
     output = []
+    ordered = sorted(listings, key=_listing_order)
     for name, character in sorted(characters.items()):
-        level = int(_get(character, "level", default=0) or 0)
-        purse = int(_get(character, "purse", "money", default=0) or 0)
-        equipped = _get(character, "equipped", "slots", default={}) or {}
-        tank = bool(_get(character, "shield_tank", "tank", default=False))
-        reserve = (
-            repair_floor.get(name, 0)
-            if isinstance(repair_floor, dict)
-            else repair_floor
-        )
-        available = max(0, min(purse * 0.6, purse - int(reserve)))
-        chosen = set()
-        used = set()
-        for item in sorted(
-            listings,
-            key=lambda r: (
-                -int(_get(r, "ItemLevel", "item_level", default=0) or 0),
-                int(_get(r, "buyout", default=0) or 0),
-                int(_get(r, "id", "listing_id", "auction_id", default=0) or 0),
-            ),
-        ):
-            if (
-                not _allowed(character, item)
-                or int(_get(item, "buyout", default=0) or 0) <= 0
-            ):
-                continue
-            inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
-            listing_id = int(
-                _get(item, "id", "listing_id", "auction_id", default=0) or 0
+        output.extend(
+            _plan_character(
+                name, character, ordered, _budget_for(name, character, repair_floor)
             )
-            if listing_id in used:
-                continue
-            slots = SLOT_TYPES.get(inv, ())
-            if not slots:
-                continue
-            for slot in slots:
-                # The second ring or trinket only once the first is worn or bought.
-                if slot in chosen or (
-                    slot in ("finger2", "trinket2")
-                    and slot[:-1] + "1" not in chosen
-                    and slot[:-1] + "1" not in equipped
-                ):
-                    continue
-                if (
-                    slot == "offhand"
-                    and tank
-                    and not (
-                        int(_get(item, "class", "item_class", default=0) or 0) == 4
-                        and int(_get(item, "subclass", default=0) or 0) == 6
-                        and inv == 14
-                    )
-                ):
-                    continue
-                worn = equipped.get(slot)
-                worn_level = worn.get("item_level") if isinstance(worn, dict) else worn
-                item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
-                if slot in equipped and (
-                    worn_level is None
-                    or int(worn_level) > level - 10
-                    or item_level <= int(worn_level)
-                ):
-                    continue
-                price = int(_get(item, "buyout", default=0) or 0)
-                spent = sum(x.buyout for x in output if x.character == name)
-                if price > purse * 0.2 or price > available - spent:
-                    continue
-                output.append(
-                    Buy(
-                        name,
-                        slot,
-                        int(_get(item, "id", "listing_id", "auction_id", default=0)),
-                        int(_get(item, "entry", default=0)),
-                        price,
-                        item_level,
-                    )
-                )
-                chosen.add(slot)
-                used.add(listing_id)
-                break
+        )
     return tuple(output)
+
+
+def _listing_order(row):
+    return (
+        -int(_get(row, "ItemLevel", "item_level", default=0) or 0),
+        int(_get(row, "buyout", default=0) or 0),
+        int(_get(row, "id", "listing_id", "auction_id", default=0) or 0),
+    )
+
+
+def _budget_for(name, character, reserve):
+    purse = int(_get(character, "purse", "money", default=0) or 0)
+    amount = reserve.get(name, 0) if isinstance(reserve, dict) else reserve
+    return purse, max(0, min(purse * 0.6, purse - int(amount)))
+
+
+def _candidate_slots(item, equipped, chosen, tank, level):
+    inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
+    for slot in SLOT_TYPES.get(inv, ()):
+        if slot in chosen:
+            continue
+        if (
+            slot in ("finger2", "trinket2")
+            and slot[:-1] + "1" not in chosen
+            and slot[:-1] + "1" not in equipped
+        ):
+            continue
+        shield = (
+            int(_get(item, "class", "item_class", default=0) or 0) == 4
+            and int(_get(item, "subclass", default=0) or 0) == 6
+            and inv == 14
+        )
+        if slot == "offhand" and tank and not shield:
+            continue
+        worn = equipped.get(slot)
+        worn_level = worn.get("item_level") if isinstance(worn, dict) else worn
+        item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
+        if slot in equipped and (
+            worn_level is None
+            or int(worn_level) > level - 10
+            or item_level <= int(worn_level)
+        ):
+            continue
+        yield slot, item_level
+
+
+def _fits_budget(price, purse, available, spent):
+    return price <= purse * 0.2 and price <= available - spent
+
+
+def _plan_character(name, character, listings, budget):
+    level = int(_get(character, "level", default=0) or 0)
+    equipped = _get(character, "equipped", "slots", default={}) or {}
+    tank = bool(_get(character, "shield_tank", "tank", default=False))
+    purse, available = budget
+    chosen, used, buys = set(), set(), []
+    for item in listings:
+        price = int(_get(item, "buyout", default=0) or 0)
+        listing_id = int(_get(item, "id", "listing_id", "auction_id", default=0) or 0)
+        if not _allowed(character, item) or price <= 0 or listing_id in used:
+            continue
+        for slot, item_level in _candidate_slots(item, equipped, chosen, tank, level):
+            spent = sum(b.buyout for b in buys)
+            if not _fits_budget(price, purse, available, spent):
+                continue
+            buys.append(
+                Buy(
+                    name,
+                    slot,
+                    listing_id,
+                    int(_get(item, "entry", default=0)),
+                    price,
+                    item_level,
+                )
+            )
+            chosen.add(slot)
+            used.add(listing_id)
+            break
+    return buys

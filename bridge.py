@@ -2300,6 +2300,35 @@ def _insert_family_jobs(names: list, mode: str, source: str) -> int:
     return written
 
 
+def _gear_gate(names, keyword):
+    """Apply GEAR UP BEFORE THE DOOR (#146, #147), BUT NEVER A DEADLOCK.
+
+    Six empty stat slots hold a member in town while gear-up can spend its
+    gold; a member too poor to buy is logged and the run goes ahead. Look up
+    the reader so isolated campaign tests can load this function without it.
+    """
+    reader = globals().get("_fetch_gearup_facts")
+    facts = reader(names) if reader else {}
+    gear_short, gear_broke = [], []
+    for name, character in facts.items():
+        worn = [slot for slot in character["equipped"]
+                if slot not in ("shirt", "tabard")]
+        if 17 - len(worn) >= globals().get("GEARUP_GATE_EMPTY_SLOTS", 6):
+            target = gear_short if character["purse"] >= globals().get(
+                "GEARUP_GATE_MIN_PURSE", 20000) else gear_broke
+            target.append(name)
+    label = keyword or "(default)"
+    if gear_broke:
+        log.info("goal: dungeon:%s is not held for gear - %s %s six or more empty slots "
+                 "but under 2 gold to spend, so the run goes ahead", label,
+                 ", ".join(gear_broke), "has" if len(gear_broke) == 1 else "have")
+    if not gear_short:
+        return None
+    reason = "gear-up first: %s has six or more empty equipment slots" % ", ".join(gear_short)
+    log.info("goal: withholding dungeon:%s - %s", label, reason)
+    return reason
+
+
 def _drive_dungeon(keyword: str, wanted: int, names=None,
                    source: str = "overseer:goal", withheld=None) -> tuple:
     """Turn a decided dungeon goal into the roster writes that actually send
@@ -2350,28 +2379,8 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
     if not names:
         return _withheld(withheld, "no enabled character to send")
 
-    # GEAR UP BEFORE THE DOOR (#146, #147), BUT NEVER A DEADLOCK. A member with
-    # six or more of its 17 stat slots empty holds the run in town while the
-    # gear-up pass buys with its own gold - but only a member whose purse can
-    # buy something. One too poor to buy is said and the run goes ahead,
-    # because waiting in town cannot earn it gold.
-    # Looked up, not called by name: the campaign tests load this function in
-    # isolation, without the fetch below.
-    gear_facts_reader = globals().get("_fetch_gearup_facts")
-    gear_facts = gear_facts_reader(names) if gear_facts_reader else {}
-    gear_short, gear_broke = [], []
-    for n, facts in gear_facts.items():
-        worn = [s for s in facts["equipped"] if s not in ("shirt", "tabard")]
-        if 17 - len(worn) >= globals().get("GEARUP_GATE_EMPTY_SLOTS", 6):
-            (gear_short if facts["purse"] >= globals().get("GEARUP_GATE_MIN_PURSE", 20000)
-             else gear_broke).append(n)
-    if gear_broke:
-        log.info("goal: dungeon:%s is not held for gear - %s %s six or more empty slots "
-                 "but under 2 gold to spend, so the run goes ahead", keyword or "(default)",
-                 ", ".join(gear_broke), "has" if len(gear_broke) == 1 else "have")
-    if gear_short:
-        reason = "gear-up first: %s has six or more empty equipment slots" % ", ".join(gear_short)
-        log.info("goal: withholding dungeon:%s - %s", keyword or "(default)", reason)
+    reason = _gear_gate(names, keyword)
+    if reason:
         _hand_to_town(keyword, mode, names)
         _keep_in_town(names)
         return _withheld(withheld, reason)
@@ -7417,9 +7426,7 @@ class Bridge(discord.Client):
             queued, spent, len(shoppers), leader, aimed, _family_label(cohort),
         )
 
-    async def _gearup_once(self, names: list, leader: str, step: str,
-                           cohort=None) -> None:
-        """Buy usable auction equipment with each character's own gold (#146/#147)."""
+    async def _gearup_facts_and_tanks(self, names):
         facts = await asyncio.to_thread(_fetch_gearup_facts, names)
         for name in names:
             if name not in facts:
@@ -7428,10 +7435,14 @@ class Bridge(discord.Client):
         tanks, _ = bag_pressure.tree_tanks(roles, names)
         for name in facts:
             facts[name]["tank"] = name in tanks
+        return facts
+
+    async def _gearup_house(self, names, leader, facts, step, cohort):
+        """Find the leader's counter and reachable house, claiming town if needed."""
         short = {n: f for n, f in facts.items()
                  if sum(1 for slot in range(19) if slot not in f["equipped"]) > 0}
         if not short:
-            return
+            return {}, {}, None
         leader_counter = await asyncio.to_thread(_fetch_auctioneer, leader)
         if not leader_counter:
             free = {n: 19 - len(f["equipped"]) for n, f in facts.items()}
@@ -7440,26 +7451,32 @@ class Bridge(discord.Client):
                                              urgent=True, cohort=_cohort_key(cohort))
             for n in sorted(facts):
                 log.info("gearup: %s nothing yet: not at an auctioneer", n)
-            return
+            return {}, {}, None
         teams = await asyncio.to_thread(_fetch_teams, names)
         house = auction.reachable_house(teams.get(leader, ""),
                                         int(leader_counter.get("faction") or 0))
         if not house:
             for name in sorted(facts):
                 log.info("gearup: %s nothing: no reachable auction house", name)
-            return
-        listings = await asyncio.to_thread(_fetch_gearup_listings, house)
+            return {}, teams, None
+        return short, teams, house
+
+    async def _gearup_standing_members(self, facts, teams, names, house):
         planned = {}
-        for name, f in facts.items():
+        for name, character in facts.items():
             stand = await asyncio.to_thread(_fetch_auctioneer, name)
             if not stand:
                 log.info("gearup: %s nothing: not at an auctioneer", name)
                 continue
-            own_house = auction.reachable_house(teams.get(name, ""), int(stand.get("faction") or 0))
+            own_house = auction.reachable_house(
+                teams.get(name, ""), int(stand.get("faction") or 0))
             if own_house != house:
                 log.info("gearup: %s nothing: no listing at its reachable house", name)
                 continue
-            planned[name] = f
+            planned[name] = character
+        return planned
+
+    async def _gearup_queue_buys(self, planned, listings):
         recent = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
         buys = gearup.plan_buys(
             planned, listings,
@@ -7474,19 +7491,35 @@ class Bridge(discord.Client):
                 bought.setdefault(buy.character, []).append(
                     "entry %d for %s" % (buy.entry, buy.slot)
                 )
-        if bought:
-            await self._keep_at_auctioneer(leader, cohort)
-            self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
+        return buys, recent, bought
+
+    def _gearup_log_outcomes(self, planned, buys, recent, bought):
         for name in sorted(planned):
             if name in bought:
                 log.info("gearup: %s bought %s", name, "; ".join(bought[name]))
-            else:
-                candidates = {auction.buy_command(b.listing_id) for b in buys
-                              if b.character == name}
-                pending = any((name, command) in recent for command in candidates)
-                why = ("an auction buy is inside the retry window" if pending
-                       else "no affordable usable listing")
-                log.info("gearup: %s nothing: %s", name, why)
+                continue
+            candidates = {auction.buy_command(b.listing_id) for b in buys
+                          if b.character == name}
+            pending = any((name, command) in recent for command in candidates)
+            why = ("an auction buy is inside the retry window" if pending
+                   else "no affordable usable listing")
+            log.info("gearup: %s nothing: %s", name, why)
+
+    async def _gearup_once(self, names: list, leader: str, step: str,
+                           cohort=None) -> None:
+        """Buy usable auction equipment with each character's own gold (#146/#147)."""
+        facts = await self._gearup_facts_and_tanks(names)
+        short, teams, house = await self._gearup_house(
+            names, leader, facts, step, cohort)
+        if house is None:
+            return
+        listings = await asyncio.to_thread(_fetch_gearup_listings, house)
+        planned = await self._gearup_standing_members(facts, teams, names, house)
+        buys, recent, bought = await self._gearup_queue_buys(planned, listings)
+        if bought:
+            await self._keep_at_auctioneer(leader, cohort)
+            self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
+        self._gearup_log_outcomes(planned, buys, recent, bought)
 
     async def _auction_sales_once(self, names: list, leader: str,
                                   step: str, cohort=None) -> None:
