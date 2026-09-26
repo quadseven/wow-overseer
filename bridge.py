@@ -9650,9 +9650,13 @@ class Bridge(discord.Client):
         # vendor half and must not depend on how far that half got.
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
         positions = await asyncio.to_thread(_fetch_positions, names)
+        # A holder at a mailbox posts the piece to a sibling who is apart
+        # (#189), so a tank's shield does not wait for the family to meet.
+        at_mailbox = await asyncio.to_thread(_holders_at_mailbox, list(names), positions)
         plan = bag_pressure.family_gifts(
             gear_rows, worn, names, keep_names=OWNER_KEEPS,
             position_rows=positions, free_slots=free_slots,
+            at_mailbox=at_mailbox,
         )
         # A piece Jev acted on stays with its holder (#95): it is being put
         # on, or Jev judged it one to keep. Each one becomes a note.
@@ -9701,6 +9705,10 @@ class Bridge(discord.Client):
         """
         history = await asyncio.to_thread(_equip_history, EQUIP_MEMORY_HOURS,
                                           EQUIP_RETRY_MINUTES)
+        # A level change re-opens every slot: attempts made at the old level
+        # neither hold a piece back nor count towards giving up on it.
+        changed = await asyncio.to_thread(_level_changes, list(names))
+        current = bag_pressure.since_level_change(history, changed)
         carried = {(str(row.get("holder")), int(row.get("entry") or 0))
                    for row in gear_rows}
         for row in history:
@@ -9724,10 +9732,10 @@ class Bridge(discord.Client):
         # is worn is left in the bags. No plan leaves `wanted` as it is.
         wanted = bag_pressure.jev_equips(
             wanted, gear_rows, worn, names, jev_plan, keep_names=OWNER_KEEPS)
-        recent = {(row["target_name"], row["command"]) for row in history
+        recent = {(row["target_name"], row["command"]) for row in current
                   if row["recent"]}
         tries: dict = {}
-        for row in history:
+        for row in current:
             key = (row["target_name"], row["command"])
             tries[key] = tries.get(key, 0) + 1
         queue, notes = bag_pressure.equips_to_queue(wanted, recent, tries)
@@ -16830,6 +16838,25 @@ _FAMILY_EQUIPPED_SQL = (
     "WHERE c.name IN (%s)"
 )
 
+# The same read with the two facts that say who tanks (bag_pressure.tree_tanks):
+# the roster's talent tree and any tank seat in the raid lineup. A realm
+# without either table or column falls back to the read above, whose rows
+# leave the class packing to decide.
+_FAMILY_EQUIPPED_ROLES_SQL = (
+    "SELECT c.name AS name, c.class AS class_id, c.level AS level, "
+    "it.InventoryType AS inventory_type, it.ItemLevel AS item_level, "
+    "r.spec_tab AS spec_tab, "
+    "(SELECT COUNT(*) FROM overseer_raid_seat s "
+    "WHERE s.name = c.name AND s.role = 'tank') AS tank_seat "
+    "FROM characters c "
+    "LEFT JOIN overseer_roster r ON r.name = c.name "
+    "LEFT JOIN character_inventory ci ON ci.guid = c.guid "
+    "AND ci.bag = 0 AND ci.slot < 19 "
+    "LEFT JOIN item_instance ii ON ii.guid = ci.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s)"
+)
+
 
 def _fetch_family_equipped(names: list) -> list:
     """Read what the family is wearing; gear.py decides what it means.
@@ -16841,16 +16868,22 @@ def _fetch_family_equipped(names: list) -> list:
     """
     if not names:
         return []
-    sql = _FAMILY_EQUIPPED_SQL % ",".join(["%s"] * len(names))
+    marks = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
-        try:
-            cur.execute(sql, names)
-        except pymysql.err.MySQLError as exc:
-            if exc.args and exc.args[0] in (1054, 1146):
-                log.warning("equipped facts unavailable on this world image")
-                return []
-            raise
-        return [dict(row) for row in cur.fetchall()]
+        for template in (_FAMILY_EQUIPPED_ROLES_SQL, _FAMILY_EQUIPPED_SQL):
+            try:
+                cur.execute(template % marks, names)
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    if template is _FAMILY_EQUIPPED_ROLES_SQL:
+                        log.warning("equipped facts: no roster tree or raid seat "
+                                    "on this world image; roles come from classes")
+                        continue
+                    log.warning("equipped facts unavailable on this world image")
+                    return []
+                raise
+            return [dict(row) for row in cur.fetchall()]
+    return []
 
 
 # JEV'S TWO EXTRA READS (#95). The shadow pass shows Jev what each member
@@ -19325,7 +19358,7 @@ def _equip_history(hours: int, recent_minutes: int) -> list:
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
-                "SELECT id, target_name, command, status, detail, "
+                "SELECT id, target_name, command, status, detail, created_at, "
                 "created_at > NOW() - INTERVAL %s MINUTE AS recent "
                 "FROM overseer_command "
                 "WHERE source = %s AND created_at > NOW() - INTERVAL %s HOUR "
@@ -19342,8 +19375,32 @@ def _equip_history(hours: int, recent_minutes: int) -> list:
             "command": str(row["command"] or ""),
             "status": str(row["status"] or ""),
             "detail": str(row["detail"] or ""),
+            "created_at": row.get("created_at"),
             "recent": bool(row["recent"]),
         } for row in cur.fetchall()]
+
+
+def _level_changes(names: list) -> dict:
+    """name -> when its level last changed (a ding or the natural lowering),
+    from the module's `level_up` events. {} on a world without them, which
+    keeps every equip attempt in the count as before."""
+    if not names:
+        return {}
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT character_name, MAX(last_seen) AS changed FROM overseer_event "
+                "WHERE kind = 'level_up' AND character_name IN (%s) "
+                "GROUP BY character_name" % marks,
+                list(names),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+        return {str(row["character_name"]): row["changed"] for row in cur.fetchall()
+                if row["changed"] is not None}
 
 
 def _insert_equip(equip) -> int:

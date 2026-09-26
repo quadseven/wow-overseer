@@ -9,6 +9,7 @@ import disposition
 import gear
 import jobs
 import raidlineup
+import raidroles
 import travel
 
 # The trade-range judgement, re-exported for `handover` (#189) so there is one
@@ -1384,12 +1385,68 @@ def family_characters(equipped_rows, names) -> list:
     all read the same role and cannot disagree about the same piece.
 
     `names` is ONE family: the bridge passes its own roster, never two.
+
+    THE TREE AND THE SEAT OUTRANK THE PACKING when the rows carry them
+    (`spec_tab` from the roster, `tank_seat` from `overseer_raid_seat`): see
+    `tree_tanks`. The packing is a guess from classes; the roster's tree is
+    the operator's decision.
     """
     base = gear.characters_from_rows(equipped_rows, names)
     roles = raidlineup.party_roles(
         [{"name": c.name, "class_id": c.class_id} for c in base]
     )
+    tanks, trees = tree_tanks(equipped_rows, names)
+    if tanks:
+        for name in list(roles):
+            if name in tanks:
+                roles[name] = raidlineup.TANK
+            elif roles[name] == raidlineup.TANK and name in trees:
+                # The packing's tank plays another tree: the tree's tank wins.
+                roles[name] = raidlineup.DAMAGE
     return gear.characters_from_rows(equipped_rows, names, roles=roles)
+
+
+# The trees that tank without a seat saying so: a Protection warrior and a
+# Protection paladin. A Feral Combat druid is a cat as often as a bear, so it
+# tanks only in a tank seat.
+_TANK_TREES = ((1, "Protection"), (2, "Protection"))
+_NO_TREE = 255
+
+
+def tree_tanks(equipped_rows, names) -> tuple:
+    """(tanks, named): who the roster's tree or a raid seat makes a tank, and
+    who has a tree at all.
+
+    `spec_tab` is `overseer_roster.spec_tab` (255 is "no tree chosen") and
+    `tank_seat` counts the character's `overseer_raid_seat` rows whose role is
+    tank. A row without either column says nothing, which leaves the packing.
+    """
+    wanted = {str(n) for n in names or ()}
+    tree_tab = {cid: raidroles.tree_tab(cid, tree) for cid, tree in _TANK_TREES}
+    tanks, named = set(), set()
+    for row in equipped_rows or ():
+        try:
+            name, class_id = str(row["name"]), int(row["class_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if name not in wanted:
+            continue
+        try:
+            seated = int(row.get("tank_seat") or 0) > 0
+        except (TypeError, ValueError):
+            seated = False
+        if seated and class_id in raidlineup.TANKS:
+            tanks.add(name)
+        try:
+            tab = int(row["spec_tab"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if tab == _NO_TREE:
+            continue
+        named.add(name)
+        if tree_tab.get(class_id) == tab:
+            tanks.add(name)
+    return tanks, named
 
 
 def family_fits(gear_rows, equipped_rows, names) -> dict:
@@ -1435,7 +1492,13 @@ def family_claimants(gear_rows, equipped_rows, names) -> dict:
 
 
 def family_gifts(
-    gear_rows, equipped_rows, names, keep_names=(), position_rows=None, free_slots=None
+    gear_rows,
+    equipped_rows,
+    names,
+    keep_names=(),
+    position_rows=None,
+    free_slots=None,
+    at_mailbox=None,
 ):
     """The carried pieces a sibling should be handed, and who should have them.
 
@@ -1474,6 +1537,11 @@ def family_gifts(
     them. `position_rows` and `free_slots` default to "nobody asked" and the
     result is what it was before either gate existed; see `gear.deliverable`.
 
+    `at_mailbox` names the holders standing at a mailbox now: a sibling who
+    is not beside such a holder is posted the piece rather than waited for
+    (#189's letter, for the family as for the guild). A soulbound piece never
+    reaches here, so everything posted is mailable.
+
     THE NOTES ARE THE DELIVERY REFUSALS ONLY. `gear.plan` also notes every
     piece nobody in the family can use, which on a measured cycle is most of
     the bag and is the VENDOR half's business - it is already reported there,
@@ -1488,6 +1556,7 @@ def family_gifts(
         gear.plan(holdings, characters).grants,
         position_rows=position_rows,
         free_slots=free_slots,
+        at_mailbox=at_mailbox,
     )
 
 
@@ -1537,6 +1606,7 @@ def jev_equips(wanted, gear_rows, equipped_rows, names, plan, keep_names=()) -> 
 # adapter); see gear.equips_to_queue and gear.equip_entry.
 equips_to_queue = gear.equips_to_queue
 equip_entry = gear.equip_entry
+since_level_change = gear.since_level_change
 
 
 def guild_gear_gifts(

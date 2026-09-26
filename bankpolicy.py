@@ -63,6 +63,11 @@ PERSONAL = "personal"
 MATERIALS_TAB, GEAR_TAB, RAID_TAB = 0, 1, 2
 
 RARE = 3
+# Uncommon gear waits in its owner's bank for its level as a rare does
+# (the natural lowering, 2026-09-26): a family lowered from 60 carries dozens
+# of green pieces it will wear again, and one of them is the tank's next
+# shield.
+UNCOMMON = 2
 
 WEAPON, ARMOR, CONSUMABLE = 2, 4, 0
 
@@ -306,17 +311,18 @@ def claimed_from_rows(item_rows, worn_rows, names) -> frozenset:
     import bag_pressure  # local: bag_pressure imports the travel stack
 
     names = [str(n) for n in names]
-    gear_rows = [
-        r
-        for r in item_rows
-        if _int(r.get("item_class")) in (WEAPON, ARMOR) and not _in_bank(r, item_rows)
-    ]
-    if not gear_rows:
+    every = [r for r in item_rows if _int(r.get("item_class")) in (WEAPON, ARMOR)]
+    gear_rows = [r for r in every if not _in_bank(r, item_rows)]
+    if not every:
         return frozenset()
     equips = bag_pressure.holder_equips(gear_rows, worn_rows, names)
     out = {int(e.guid) for e in equips}
-    rows_by_guid = {_int(r.get("item_guid")): r for r in gear_rows}
-    for guid, who in bag_pressure.family_claimants(gear_rows, worn_rows, names).items():
+    rows_by_guid = {_int(r.get("item_guid")): r for r in every}
+    # A BANKED piece another member would wear NOW is claimed too, so no rule
+    # keeps it in the bank: it comes back out for the hand-off. Otherwise a
+    # shield banked for its holder's level waits there while the tank, who
+    # could wear it today, wears none.
+    for guid, who in bag_pressure.family_claimants(every, worn_rows, names).items():
         holder = str(rows_by_guid.get(int(guid), {}).get("holder", ""))
         if who in names and who != holder:
             out.add(int(guid))
@@ -327,10 +333,11 @@ def _second_set(piece, keeper):
     """(set kind, score, why) when this piece is one of the holder's second
     sets, else None. Gear it grows back into first, then fire resistance,
     then PvP, then an off role."""
-    if piece.required_level > keeper.level and piece.quality >= RARE:
-        # NATURAL PROGRESSION: a rare or epic the holder cannot wear yet and
-        # will at its level (Grog's Destiny, level 52, while Grog is 36). It
-        # waits in the holder's own bank, never the guild's, never a vendor.
+    if piece.required_level > keeper.level and piece.quality >= UNCOMMON:
+        # NATURAL PROGRESSION: gear the holder cannot wear yet and will at its
+        # level (Grog's Destiny, level 52, while Grog is 36; the shields Grog
+        # carries at 39 to 58). It waits in the holder's own bank, never the
+        # guild's, never a vendor or an auction.
         why = "%s keeps %s until level %d, when it can wear it" % (
             piece.holder,
             piece.name,
@@ -500,6 +507,45 @@ def _gear_for_later(pieces, reach, claimed, taken) -> dict:
     return out
 
 
+def _kept_for_family(pieces, reach, claimed, taken) -> dict:
+    """Rule 4b: guid -> Placement in the HOLDER's bank for tradable uncommon
+    gear its holder will never wear and a family member will at its level.
+
+    Rule 4 sends a rare of this kind to the guild's Gear for Later tab; an
+    uncommon one went nowhere and was listed on the auction house the moment
+    nobody wore it today. Measured 2026-09-26: Embossed Plate Shield (level
+    40) and Heavy Lamellar Shield (level 50) were the auction heuristic's
+    answer for Grog's bags while Grug, the family's tank, was 38. It waits in
+    the owner's own bank until that member reaches the level, and the gear
+    hand-off takes it from there.
+    """
+    out = {}
+    for piece in pieces:
+        fit = reach.get(piece.guid)
+        if (
+            fit is None
+            or piece.guid in taken
+            or piece.guid in claimed
+            or not piece.is_gear
+            or piece.bound
+            or piece.quality != UNCOMMON
+            or not fit.later_wearers
+        ):
+            continue
+        wearer = fit.later_wearers[0]
+        out[piece.guid] = Placement(
+            piece.guid,
+            piece.holder,
+            piece.name,
+            PERSONAL,
+            None,
+            GROWS_INTO,
+            "%s keeps %s in the bank until %s reaches level %d and can wear it"
+            % (piece.holder, piece.name, wearer, piece.required_level),
+        )
+    return out
+
+
 def _reserved(pieces, reservations, levels) -> dict:
     """Rule 0: guid -> Placement in its owner's own bank, for every stack a
     keep reservation covers while its owner is below the level it waits for.
@@ -544,6 +590,7 @@ def place(facts: Facts) -> dict:
     out.update(_personal(pieces, facts.family, facts.reach, claimed))
     out.update(_raid_supplies(pieces, facts.family, claimed, frozenset(out)))
     out.update(_gear_for_later(pieces, facts.reach, claimed, frozenset(out)))
+    out.update(_kept_for_family(pieces, facts.reach, claimed, frozenset(out)))
     return out
 
 

@@ -361,20 +361,31 @@ class RareGearIsKeptForLater(unittest.TestCase):
         )
         self.assertEqual("the guild bank's Gear for Later tab", placed.where)
 
-    def test_bound_uncommon_or_unwearable_gear_is_not(self):
+    def test_bound_or_unwearable_gear_is_not(self):
         bound = piece(31, "Bound", quality=3, bound=True)
-        green = piece(32, "Green", quality=2, bound=False)
         nobody = piece(33, "Nobody", quality=3, bound=False)
         facts = bankpolicy.Facts(
-            pieces=(bound, green, nobody),
+            pieces=(bound, nobody),
             family=(keeper(),),
             reach={
                 31: reach(wears=False, guild=("A",)),
-                32: reach(wears=False, guild=("A",)),
                 33: reach(wears=False),
             },
         )
         self.assertEqual({}, bankpolicy.place(facts))
+
+    def test_an_uncommon_one_waits_in_its_holders_bank_not_the_guilds(self):
+        green = piece(32, "Green", quality=2, bound=False)
+        facts = bankpolicy.Facts(
+            pieces=(green,),
+            family=(keeper(),),
+            reach={32: reach(wears=False, guild=("A",))},
+        )
+        placed = bankpolicy.place(facts)[32]
+        self.assertEqual(
+            (bankpolicy.PERSONAL, bankpolicy.GROWS_INTO), (placed.to, placed.kind)
+        )
+        self.assertIn("until A reaches level 55", placed.why)
 
 
 class TheFactsAreReadFromRows(unittest.TestCase):
