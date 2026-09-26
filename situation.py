@@ -617,6 +617,16 @@ class Situation:
     travel: dict = field(default_factory=dict)
     zone_name: str = ""
     vision: dict | None = None
+    # The leader's trail in numbers, not only its verdict: how far he walked,
+    # how far that got him, and how much nearer his goal (mod-overseer#722).
+    # Jev read "moving" or "stuck" and nothing else, and a walk that bends away
+    # from its goal reads "moving" whether it is closing or not.
+    lead_progress: Progress | None = None
+    # mod-overseer's intent book for the leader (overseer_family_intent): what
+    # holds him, for how long, what else is asking, his distance to what his
+    # errand resolved to, and what the module is doing with each member. None
+    # on a realm without the table.
+    intent: dict | None = None
 
     @property
     def lead_body(self) -> Body | None:
@@ -628,7 +638,13 @@ class Situation:
         lead = self.lead_body
         out = {"aim": self.goal.aim}
         if self.goal.at is None:
-            out["yards"] = "unknown: the aim names a role, not a place"
+            # The module resolves a role to a spawn and says how far it is.
+            known = (self.intent or {}).get("goal_yards")
+            out["yards"] = (
+                int(known)
+                if known is not None
+                else "unknown: the aim names a role, not a place"
+            )
             return out
         if lead is None or lead.at is None:
             out["yards"] = UNKNOWN
@@ -683,6 +699,18 @@ class Situation:
         }
         if lead is not None and lead.at is None:
             out["leader_seen"] = False
+        lp = self.lead_progress
+        if lp is not None and lp.verdict != UNKNOWN:
+            trail = {
+                "walked_yards": lp.moved_yards,
+                "net_yards": lp.net_yards,
+                "over_minutes": lp.minutes,
+            }
+            if lp.closing_yards is not None:
+                trail["nearer_goal_by_yards"] = lp.closing_yards
+            out["leader_trail"] = trail
+        if self.intent is not None:
+            out["leader_intent"] = intent_state(self.intent)
         if self.vision is not None:
             out["leader_screen"] = self.vision
         return out
@@ -722,6 +750,42 @@ class Situation:
         if self.vision and self.vision.get("screen"):
             parts.append("screen %s" % self.vision["screen"])
         return "; ".join(parts)[:limit]
+
+
+def intent_state(row: dict) -> dict:
+    """The module's intent book for the leader, as Jev reads it. Pure.
+
+    `row` is one overseer_family_intent row as the bridge selects it
+    (current_for and module_age already in seconds).
+    """
+    out = {"doing": str(row.get("current_kind") or "none")}
+    if out["doing"] != "none":
+        out["asked_by"] = str(row.get("current_owner") or "")
+        if row.get("current_target"):
+            out["target"] = str(row["current_target"])
+        if row.get("current_for") is not None:
+            out["for_seconds"] = int(row["current_for"])
+    asking = []
+    for line in str(row.get("on_the_table") or "").splitlines():
+        kind, _, rest = line.partition("|")
+        owner, _, target = rest.partition("|")
+        if kind:
+            asking.append(("%s %s" % (kind, target)).strip() + " (by %s)" % owner)
+    if asking:
+        out["also_asking"] = asking[: MAX_LISTED + 2]
+    members = {}
+    for line in str(row.get("members_state") or "").splitlines():
+        name, _, rest = line.partition("|")
+        state, _, far = rest.partition("|")
+        if not name or not state or state == "following":
+            continue
+        if far.isdigit():
+            members[name] = "%s, %s yd" % (state, far)
+        else:
+            members[name] = "%s, %s" % (state, far) if far else state
+    if members:
+        out["members"] = members
+    return out
 
 
 def zone_names() -> dict:
@@ -792,6 +856,7 @@ def build(
     campaign: str = "",
     columns: dict | None = None,
     vision: dict | None = None,
+    intent: dict | None = None,
 ) -> Situation:
     """The whole picture from the bridge's reads. Pure, given the tracker.
 
@@ -828,6 +893,8 @@ def build(
         if lead
         else "",
         vision=vision,
+        lead_progress=lead_progress,
+        intent=intent,
     )
 
 
@@ -837,7 +904,11 @@ INSTRUCTION = (
     "(stuck means standing still with a goal not reached), who is far from "
     "the leader, hostile spawns near the leader and how far above the weakest "
     "member they are, recent deaths and their killers, and what holds the "
-    "family's one travel column. A family that is stuck, scattered or dying "
+    "family's one travel column. `leader_trail` is how far the leader walked "
+    "in the last few minutes and how much nearer his goal that got him, and "
+    "`leader_intent` is what the module is having him do, what else is asking "
+    "for him, and what is being done with each member who is not simply "
+    "following. A family that is stuck, scattered or dying "
     "to the same thing is not in shape for anything demanding until that is "
     "fixed."
 )

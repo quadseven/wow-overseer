@@ -45,6 +45,7 @@ import events
 import fanout
 import flightlearn
 import goals
+import leadcmd
 import attunestep
 import dungeonquests
 import bonds
@@ -74,6 +75,7 @@ import jev_choices
 import jev_recovery
 import jev_activity
 import jev_keep
+import jev_family_intent
 import jev_movement
 import jobs
 import keep
@@ -1142,6 +1144,13 @@ def _give_them_a_life(names: list) -> int:
     # (mod-overseer#659). Per row, like `gathering`: the module reads the job
     # one row at a time and so does this.
     in_town = {name for name, mode in standing.items() if mode == jobs.TOWN_RUN}
+    # A FAMILY LEADER'S `new rpg` IS mod-overseer's (mod-overseer#722). Its
+    # intent book grants and removes it on the leader as the walk he is on
+    # needs, and refuses the toggle from here; toggling it every cycle was one
+    # of the handoffs that stopped and restarted him. The roster lead, not
+    # `head`: a follower that borrows the head for a trade errand still needs
+    # the strategy from this loop.
+    leads = _roster_leads()
     for name in driven:
         # The leader always travels. A follower travels when it has somewhere
         # to be - see goals.life_strategies: an UNAIMED follower given the
@@ -1153,12 +1162,15 @@ def _give_them_a_life(names: list) -> int:
         # the task strategy on top is infra#3423, which the module catches and
         # undoes within one poll - bounded, but two writers should not both be
         # answering one question.
-        for command in goals.life_strategies(
-            leads=(name == head),
-            aimed=(name in aimed),
-            travelling=(name in travelling),
-            gathering=(name in gathering),
-            in_town=(name in in_town),
+        for command in leadcmd.for_character(
+            goals.life_strategies(
+                leads=(name == head),
+                aimed=(name in aimed),
+                travelling=(name in travelling),
+                gathering=(name in gathering),
+                in_town=(name in in_town),
+            ),
+            name in leads,
         ):
             _insert_command(core.InsertCommand(name, command, "overseer:life"))
     return len(driven)
@@ -3156,7 +3168,7 @@ def _situation_reads(names: list, leader: str) -> dict:
     """What situation.build takes about one family. Reads only."""
     out = {"snapshot": [], "columns": {}, "jobs": {}, "members": [],
            "deaths": None, "spawns": None, "leader_nodes": None,
-           "goal_nodes": None}
+           "goal_nodes": None, "intent": None}
     if not names:
         return out
     marks = ", ".join(["%s"] * len(names))
@@ -3171,6 +3183,16 @@ def _situation_reads(names: list, leader: str) -> dict:
                     out["jobs"][str(r["name"])] = str(r.get("job") or "")
             else:
                 out[key] = rows
+        # The module's intent book for this leader (mod-overseer#722), when
+        # the realm has the table and the module has written his row lately.
+        intents = _situation_try(
+            cur, "family intent", _FAMILY_INTENT_SQL + " WHERE leader_name = %s",
+            (leader,))
+        if intents:
+            row = intents[0]
+            age = row.get("module_age")
+            if age is not None and int(age) <= jev_family_intent.FRESH_SECONDS:
+                out["intent"] = row
         lead = next((b for b in situation.bodies_from_rows(names, out["snapshot"])
                      if b.name == leader), None)
         if lead is None or lead.at is None:
@@ -3220,6 +3242,56 @@ def _movement_reads(names: list) -> dict:
                               tuple(names))
         out["hearthed"] = frozenset(str(r["target_name"]) for r in rows or ())
     return out
+
+
+# --- the family intent choice's reads and writer (jev_family_intent.py) -------
+# One row per family leader, written by mod-overseer's intent book on its party
+# poll (2026_09_26_00_overseer_family_intent.sql). The bridge writes only the
+# chosen_* columns, and only for a leader the module has a row for.
+_FAMILY_INTENT_SQL = (
+    "SELECT leader_name, family, current_kind, current_owner, current_target, "
+    "TIMESTAMPDIFF(SECOND, current_since, NOW()) AS current_for, on_the_table, "
+    "goal_yards, members_state, TIMESTAMPDIFF(SECOND, module_at, NOW()) AS module_age, "
+    "chosen_kind, chosen_target, chosen_by, changes FROM overseer_family_intent")
+
+
+def _fetch_family_intents() -> dict:
+    """leader -> the row as a dict, or {} on a realm without the table."""
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _situation_try(cur, "family intent", _FAMILY_INTENT_SQL, ())
+    return {str(r["leader_name"]): r for r in rows or ()}
+
+
+def _write_family_pick(leader: str, kind: str, target: str, confidence) -> int:
+    """Jev's pick for a leader, honoured by the module for PICK_SECONDS."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_family_intent SET chosen_kind = %s, chosen_target = %s, "
+            "chosen_by = 'jev', chosen_confidence = %s, "
+            "chosen_until = NOW() + INTERVAL %s SECOND WHERE leader_name = %s",
+            (kind, target[:96], None if confidence is None else float(confidence),
+             int(jev_family_intent.PICK_SECONDS), leader),
+        )
+        return cur.rowcount
+
+
+def _clear_family_pick(leader: str) -> int:
+    """Hand a leader back to the module's static order."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_family_intent SET chosen_by = 'heuristic', "
+            "chosen_until = NULL WHERE leader_name = %s AND chosen_by = 'jev'",
+            (leader,),
+        )
+        return cur.rowcount
+
+
+def _roster_leads() -> set:
+    """The families' leaders (overseer_roster.lead), whose movement is the
+    module's intent book's (leadcmd)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_COUNCIL_LEAD_SQL)
+        return {str(r["name"]) for r in cur.fetchall()}
 
 
 def _insert_hearth(name: str) -> int:
@@ -4843,6 +4915,10 @@ class Bridge(discord.Client):
         # movement choice's own clock (jev_movement.ASK_SECONDS and
         # ACT_COOLDOWN_SECONDS). In memory; a restart may ask once early.
         self._movement_seen: dict = {}
+        # leader -> {"signature": the table last asked about, "asked": when},
+        # monotonic, for the family intent choice (jev_family_intent). In
+        # memory; a restart asks once early.
+        self._intent_seen: dict = {}
         self._seer = vision.Seer.from_env(dict(os.environ, LLM_URL=LLM_URL))
         # THE LEVELING ZONE (levelroute.py). Per family key: the facts the
         # last choice was made on, the hub chosen, who chose it and when; the
@@ -4902,6 +4978,7 @@ class Bridge(discord.Client):
                 self._situation_loop,
                 self._level_route_loop,
                 self._movement_loop,
+                self._family_intent_loop,
             )
         }
 
@@ -5284,7 +5361,14 @@ class Bridge(discord.Client):
         # what actually landed, below, rather than by assuming it all did.
         self._last_muster_at = time.monotonic()
         written = 0
+        leads = await asyncio.to_thread(_roster_leads)
         for action in muster.actions:
+            if action.character_name in leads and leadcmd.moves_the_leader(action.command):
+                # The family follows its leader; he does not answer a plea by
+                # following somebody (mod-overseer#722 refuses it anyway).
+                log.info("kin muster: %s leads, so %r is not sent to him",
+                         action.character_name, action.command)
+                continue
             try:
                 await asyncio.to_thread(
                     _insert_command,
@@ -5411,6 +5495,7 @@ class Bridge(discord.Client):
         decisions = await asyncio.gather(
             *(self._answer_as(name, directive) for name in who)
         )
+        leads = await asyncio.to_thread(_roster_leads)
 
         answered = 0
         # strict=True: asyncio.gather returns exactly one result per awaitable,
@@ -5430,6 +5515,13 @@ class Bridge(discord.Client):
             if decision.command is None:
                 log.info("overheard '%s': no command fits for %s",
                          directive.text[:50], name)
+            elif name in leads and leadcmd.moves_the_leader(decision.command):
+                # The family leader's walk is mod-overseer's intent book's
+                # (mod-overseer#722), which refuses this from the in-game ear
+                # anyway: over a week it heard the family's own bot speech as
+                # orders and queued `stay`, `follow` and `reset ai` for him.
+                log.info("overheard '%s': %s leads, so %r is not sent to him",
+                         directive.text[:50], name, decision.command)
             else:
                 await asyncio.to_thread(
                     _insert_command,
@@ -14198,6 +14290,76 @@ class Bridge(discord.Client):
                      "(Jev, conf %.2f)", leader, facts.errand, facts.claimant,
                      released, judgment.confidence or 0.0)
 
+    async def _family_intent_loop(self) -> None:
+        """Let Jev choose what each family is doing, from what the module's
+        intent book can carry out (jev_family_intent)."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("FAMILY_INTENT_CYCLE_SECONDS", "30"))
+        # After the sampler has a trail, like the movement choice.
+        await asyncio.sleep(max(cycle, 90.0))
+        while not self.is_closed():
+            try:
+                await self._family_intent_once()
+            except Exception:
+                log.exception("family intent: pass failed; the module's order "
+                              "stands")
+            await asyncio.sleep(cycle)
+
+    async def _family_intent_once(self) -> None:
+        rule = jev_family_intent.policy()
+        if rule.mode == jev.OFF or not self._jev.ready(jev_family_intent.KIND):
+            return
+        rows = await asyncio.to_thread(_fetch_family_intents)
+        if not rows:
+            return
+        fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        for key, fam in sorted(fams.items()):
+            leader = str(fam["leader"].get("name") or "")
+            row = rows.get(leader)
+            if row is None:
+                continue
+            try:
+                await self._family_intent_for(key, list(fam["names"]), row, rule)
+            except Exception:
+                log.exception("family intent: the choice for %s failed; the "
+                              "module's order stands", campaignqueue._family(key))
+
+    async def _family_intent_for(self, key: str, names: list, raw: dict, rule) -> None:
+        row = jev_family_intent.row_from_db(raw)
+        where = await self._situation_for(key, names, row.leader)
+        deaths = ((where.deaths or {}).get("count", 0) if where is not None else 0)
+        facts = jev_family_intent.Facts(
+            family=key or row.leader, row=row, where=where, deaths=int(deaths or 0))
+        seen = self._intent_seen.setdefault(row.leader, {})
+        now = time.monotonic()
+        if not jev_family_intent.due(facts, seen.get("signature", ""),
+                                     seen.get("asked", -1e9), now):
+            return
+        judgment = await jev_family_intent.ask(self._jev, facts, rule)
+        if judgment is None:
+            return
+        seen["signature"] = jev_family_intent.signature(facts)
+        seen["asked"] = now
+        log.info("%s", judgment.line())
+        try:
+            await asyncio.to_thread(_insert_jev_judgment, judgment)
+        except Exception:
+            log.exception("family intent: the choice for %s was not recorded",
+                          campaignqueue._family(key))
+        if judgment.pick:
+            kind, target = jev_family_intent.pick_of(judgment.pick)
+            written = await asyncio.to_thread(
+                _write_family_pick, row.leader, kind, target, judgment.confidence)
+            log.info("family intent: %s's leader %s is to %s (Jev, conf %.2f; "
+                     "row updated=%s)", campaignqueue._family(key), row.leader,
+                     judgment.pick, judgment.confidence or 0.0, bool(written))
+        elif row.chosen_by == "jev":
+            # The latest judgment does not stand behind the standing pick.
+            await asyncio.to_thread(_clear_family_pick, row.leader)
+            log.info("family intent: %s's leader %s goes back to the module's "
+                     "order (%s)", campaignqueue._family(key), row.leader,
+                     judgment.heuristic)
+
     async def _situation_loop(self) -> None:
         """Sample every roster member's position for situation.Tracker.
 
@@ -14263,7 +14425,8 @@ class Bridge(discord.Client):
             holder=slot.holder if slot is not None else None,
             campaign=slot.campaign if slot is not None else "",
             columns=reads["columns"],
-            vision=look.state(time.monotonic()) if look is not None else None)
+            vision=look.state(time.monotonic()) if look is not None else None,
+            intent=reads.get("intent"))
 
     async def _activity_loop(self) -> None:
         """Ask each family what it does next, on its own clock (#216).
@@ -22996,6 +23159,7 @@ class HeadlessBridge(Bridge):
                 self._situation_loop,
                 self._level_route_loop,
                 self._movement_loop,
+                self._family_intent_loop,
             ) if coro.__name__ not in self.HEADLESS_SKIP
         ]
         log.info("headless: no Discord gateway; driving %d loop(s): %s",
