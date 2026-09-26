@@ -3758,6 +3758,13 @@ def _fetch_streams() -> list:
         return list(cur.fetchall())
 
 
+def _roster_names() -> list:
+    """Every family character's name, from the roster the module reads."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT name FROM overseer_roster")
+        return [r["name"] if isinstance(r, dict) else r[0] for r in cur.fetchall()]
+
+
 def _request_stream(name: str, mode: str) -> None:
     """Ask for a client. REPLACE, so re-watching a character that ended
     earlier reuses its row rather than colliding on the primary key."""
@@ -5522,6 +5529,16 @@ class Handler(BaseHTTPRequestHandler):
     def _watch_act(self, name: str, action: str, mode: str) -> None:
         rows = _fetch_streams()
         stream_expire(rows, time.time())
+        # NO ON-DEMAND CLIENT FOR A FAMILY CHARACTER (stream.family_client_refusal).
+        # A heartbeat for one ends its row, so the agent tears down a client it
+        # already launched, and a start is refused.
+        refusal = stream.family_client_refusal(name, _roster_names())
+        if refusal and action != "stop":
+            _stop_stream(name)
+            log.info("stream: %s for %s refused - %s", action, name, refusal)
+            self._send(409, "application/json",
+                       json.dumps({"error": refusal}).encode())
+            return
         if action == "beat":
             # Deliberately cheap and deliberately unconditional: a heartbeat
             # for a row that has already ended is not an error, it is a viewer
