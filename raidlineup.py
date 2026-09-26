@@ -293,16 +293,17 @@ def _deal(groups: list, members: list, cap: int, kind=None) -> None:
         ]
         if not open_:
             return
+        best = min(open_, key=lambda i: _fit_key(member, groups[i], i))
+        groups[best].append(member)
 
-        def key(i):
-            group = groups[i]
-            lacks = (
-                0 if member.get("buff") and member["buff"] not in _buffs(group) else 1
-            )
-            same = len([m for m in group if m["duty"] == member["duty"]])
-            return (lacks, len(_buffs(group)), same, len(group), i)
 
-        groups[min(open_, key=key)].append(member)
+def _fit_key(member: dict, group: list, index: int) -> tuple:
+    """Where a member goes: a group lacking its buff, then the fewest buffs,
+    the fewest of its own duty, the emptiest, the lowest number."""
+    buff = member.get("buff")
+    lacks = 0 if buff and buff not in _buffs(group) else 1
+    same = len([m for m in group if m["duty"] == member["duty"]])
+    return (lacks, len(_buffs(group)), same, len(group), index)
 
 
 def _groups(tanks: list, healers: list, damage: list, count: int) -> list:
@@ -405,42 +406,11 @@ def build_lineup(
 
     tank_list, healer_list, damage_list = _pick_seats(pool, guaranteed, count)
     upkeep = _take(pool, maintenance)
-
-    tanks = [
-        _placed(m, raidroles.SEAT_TANK, MAIN_TANK if i == 0 else OFF_TANK, guaranteed)
-        for i, m in enumerate(tank_list)
-    ]
-    healers = [
-        _placed(m, raidroles.SEAT_HEALER, HEALER_WORD, guaranteed) for m in healer_list
-    ]
-    damage = [
-        _placed(m, raidroles.SEAT_DAMAGE, DAMAGE_WORD, guaranteed) for m in damage_list
-    ]
-    dealt = _groups(tanks, healers, damage, count)
-    groups = [
-        {
-            "number": index + 1,
-            "members": group,
-            "buffs": [b for b in BUFFS if b in _buffs(group)],
-            "missing_buffs": [b for b in BUFFS if b not in _buffs(group)],
-        }
-        for index, group in enumerate(dealt)
-    ]
-
+    tanks, healers, damage, groups = _seat_groups(
+        tank_list, healer_list, damage_list, guaranteed, count
+    )
     placed = [m for g in groups for m in g["members"]]
-    composition: dict = {}
-    for member in placed:
-        composition[member["duty"]] = composition.get(member["duty"], 0) + 1
-    wanted = {
-        "raiders": raiders,
-        "maintenance": maintenance,
-        "summoners": summoners,
-        "total": raiders + maintenance + summoners,
-        "groups": count,
-        "tanks": count * TANKS_PER_GROUP,
-        "healers": count * HEALERS_PER_GROUP,
-        "damage": count * DAMAGE_PER_GROUP,
-    }
+    wanted = _wanted(raiders, maintenance, summoners, count)
     gaps = {
         "tanks": max(0, wanted["tanks"] - len(tanks)),
         "healers": max(0, wanted["healers"] - len(healers)),
@@ -471,10 +441,77 @@ def build_lineup(
             "considered": len(members),
             "respec": len([m for m in placed if m.get("respec")]),
         },
-        "composition": composition,
+        "composition": _composition(placed),
         "roles_line": roles_line(groups, wanted),
         "gap_line": gap_line(gaps, recruit, cover, count),
     }
+
+
+def _seat_groups(tank_list, healer_list, damage_list, guaranteed, count) -> tuple:
+    """(tanks, healers, damage, groups): the picked raiders placed in their
+    seats and dealt into `count` groups, each group with its buffs."""
+    tanks = [
+        _placed(m, raidroles.SEAT_TANK, MAIN_TANK if i == 0 else OFF_TANK, guaranteed)
+        for i, m in enumerate(tank_list)
+    ]
+    healers = [
+        _placed(m, raidroles.SEAT_HEALER, HEALER_WORD, guaranteed) for m in healer_list
+    ]
+    damage = [
+        _placed(m, raidroles.SEAT_DAMAGE, DAMAGE_WORD, guaranteed) for m in damage_list
+    ]
+    dealt = _groups(tanks, healers, damage, count)
+    groups = [
+        {
+            "number": index + 1,
+            "members": group,
+            "buffs": [b for b in BUFFS if b in _buffs(group)],
+            "missing_buffs": [b for b in BUFFS if b not in _buffs(group)],
+        }
+        for index, group in enumerate(dealt)
+    ]
+    return tanks, healers, damage, groups
+
+
+def _wanted(raiders: int, maintenance: int, summoners: int, count: int) -> dict:
+    return {
+        "raiders": raiders,
+        "maintenance": maintenance,
+        "summoners": summoners,
+        "total": raiders + maintenance + summoners,
+        "groups": count,
+        "tanks": count * TANKS_PER_GROUP,
+        "healers": count * HEALERS_PER_GROUP,
+        "damage": count * DAMAGE_PER_GROUP,
+    }
+
+
+def _composition(placed: list) -> dict:
+    out: dict = {}
+    for member in placed:
+        out[member["duty"]] = out.get(member["duty"], 0) + 1
+    return out
+
+
+def _full_group(group: dict) -> bool:
+    """One tank, one healer and three damage dealers."""
+    seats = [m["seat"] for m in group["members"]]
+    return (
+        seats.count(raidroles.SEAT_TANK) == TANKS_PER_GROUP
+        and seats.count(raidroles.SEAT_HEALER) == HEALERS_PER_GROUP
+        and len(seats) == GROUP_SIZE
+    )
+
+
+def _damage_kinds(placed: list) -> str:
+    """ " (11 melee, 5 ranged, 8 caster)", or "" when nobody deals damage."""
+    counts = _composition(placed)
+    kinds = [
+        "%d %s" % (counts[word], word)
+        for word in (raidroles.MELEE, raidroles.RANGED, raidroles.CASTER, DAMAGE_WORD)
+        if counts.get(word)
+    ]
+    return " (%s)" % ", ".join(kinds) if kinds else ""
 
 
 def roles_line(groups: list, wanted: dict) -> str:
@@ -483,44 +520,24 @@ def roles_line(groups: list, wanted: dict) -> str:
     if not placed:
         return "Nobody is placed, so there is no raid to describe."
     main = next((m for m in placed if m["duty"] == MAIN_TANK), None)
-
-    def seated(seat):
-        return len([m for m in placed if m["seat"] == seat])
-
-    def duty(word):
-        return len([m for m in placed if m["duty"] == word])
-
-    kinds = [
-        "%d %s" % (duty(word), word)
-        for word in (raidroles.MELEE, raidroles.RANGED, raidroles.CASTER, DAMAGE_WORD)
-        if duty(word)
-    ]
-    full = len(
-        [
-            g
-            for g in groups
-            if [m["seat"] for m in g["members"]].count(raidroles.SEAT_TANK)
-            == TANKS_PER_GROUP
-            and [m["seat"] for m in g["members"]].count(raidroles.SEAT_HEALER)
-            == HEALERS_PER_GROUP
-            and len(g["members"]) == GROUP_SIZE
-        ]
-    )
+    seated = {
+        seat: len([m for m in placed if m["seat"] == seat]) for seat in _SEAT_ROLE
+    }
     respec = len([m for m in placed if m.get("respec")])
     return (
         "%d of %d tanks%s, %d of %d healers, %d of %d damage%s. %d of %d groups "
         "are a full tank, healer and three damage dealers; each raider is "
         "given the talent tree its seat needs%s."
         % (
-            seated(raidroles.SEAT_TANK),
+            seated[raidroles.SEAT_TANK],
             wanted["tanks"],
             " (%s the main tank)" % main["name"] if main else "",
-            seated(raidroles.SEAT_HEALER),
+            seated[raidroles.SEAT_HEALER],
             wanted["healers"],
-            seated(raidroles.SEAT_DAMAGE),
+            seated[raidroles.SEAT_DAMAGE],
             wanted["damage"],
-            " (%s)" % ", ".join(kinds) if kinds else "",
-            full,
+            _damage_kinds(placed),
+            len([g for g in groups if _full_group(g)]),
             wanted["groups"],
             "; %d play another tree now" % respec if respec else "",
         )
