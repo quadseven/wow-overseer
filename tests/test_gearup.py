@@ -20,6 +20,22 @@ def item(inv, subclass=0, **kw):
 
 
 class GearupTests(unittest.TestCase):
+    def test_campaign_yields_for_funded_gear_short_member(self):
+        facts = {"T": {"equipped": {}, "purse": 20000}}
+        self.assertTrue(gearup.campaign_hold(facts, False))
+
+    def test_campaign_does_not_yield_when_gear_short_member_is_broke(self):
+        facts = {"T": {"equipped": {}, "purse": 19999}}
+        self.assertFalse(gearup.campaign_hold(facts, False))
+
+    def test_campaign_finishes_run_before_yielding_for_gear(self):
+        facts = {"T": {"equipped": {}, "purse": 20000}}
+        self.assertFalse(gearup.campaign_hold(facts, True))
+
+    def test_campaign_resume_ceiling_releases_gear_hold(self):
+        facts = {"T": {"equipped": {}, "purse": 20000}}
+        self.assertFalse(gearup.campaign_hold(facts, False, held_seconds=2700))
+
     def test_slot_mapping(self):
         self.assertEqual(("finger1", "finger2"), gearup.SLOT_TYPES[11])
         self.assertEqual(("mainhand",), gearup.SLOT_TYPES[21])

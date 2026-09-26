@@ -33,6 +33,28 @@ SLOT_TYPES = {
     26: ("ranged",),
     28: ("ranged",),
 }
+
+
+def campaign_hold(
+    facts, in_run, held_seconds=0, empty_slots=6, min_purse=20000, ceiling=45 * 60
+):
+    """Whether an active campaign should yield to the town gear errand (#146, #147).
+
+    A family already in a dungeon finishes that run first. Gear-short members
+    with enough purse hold the next run, but the bag-withhold ceiling releases
+    the campaign if town shopping cannot clear the condition.
+    """
+    if in_run or held_seconds >= ceiling:
+        return False
+    for character in (facts or {}).values():
+        worn = [
+            slot for slot in character["equipped"] if slot not in ("shirt", "tabard")
+        ]
+        if 17 - len(worn) >= empty_slots and character["purse"] >= min_purse:
+            return True
+    return False
+
+
 CLASS_IDS = {
     "warrior": 1,
     "paladin": 2,
