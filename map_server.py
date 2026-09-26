@@ -29,6 +29,7 @@ import campaignplan
 import campaignqueue
 import chat
 import council
+import crossing
 import decree
 import dungeonladder
 import dungeonpath
@@ -250,6 +251,37 @@ def _realm_guarded(cur, sql: str, what: str) -> list:
         log.info("realm: %s unavailable (%s); the banner runs without it",
                  what, exc.args[0])
         return []
+
+
+_CROSSING_SQL = "SELECT value FROM overseer_build WHERE name = 'crossing'"
+
+
+def _note_module_crossing() -> None:
+    """Tell crossing.py what the running module says it can cross (#671).
+
+    The bridge process reads this build fact every queue pass, but this is a
+    separate process with its own copy of crossing.py, so without this read
+    the console judged every door on the other continent "no way across yet"
+    while the module reported `crossing = boards`. A realm whose worldserver
+    predates the row reads as before: no crossing.
+    """
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                rows = _realm_guarded(cur, _CROSSING_SQL, "overseer_build crossing")
+        finally:
+            conn.close()
+    except Exception:
+        # A failed read must never block an order: the console keeps whatever
+        # crossing fact it last read, which is what it did before this read.
+        log.exception("decree: could not read the module's crossing fact")
+        return
+    value = ""
+    if rows:
+        row = rows[0]
+        value = row.get("value") if isinstance(row, dict) else row[0]
+    crossing.note_module_crossing(value or "")
 
 
 def _fetch_realm() -> dict:
@@ -5389,6 +5421,7 @@ class Handler(BaseHTTPRequestHandler):
             # socket, which is a queue nobody asked for on a page polled every
             # ten seconds.
             with _DECREE_LOCK:
+                _note_module_crossing()
                 order = decree.plan_order(request, _fetch_roster_rows())
                 changed = 0 if order.refusal else _apply_order(order)
             if order.refusal:
