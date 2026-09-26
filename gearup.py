@@ -172,32 +172,43 @@ def _budget_for(name, character, reserve):
     return purse, max(0, min(purse * 0.6, purse - int(amount)))
 
 
+def _is_shield(item, inv):
+    return (
+        int(_get(item, "class", "item_class", default=0) or 0) == 4
+        and int(_get(item, "subclass", default=0) or 0) == 6
+        and inv == 14
+    )
+
+
+def _pair_slot_open(slot, equipped, chosen):
+    """The second ring or trinket only once the first is worn or bought."""
+    if slot not in ("finger2", "trinket2"):
+        return True
+    first = slot[:-1] + "1"
+    return first in chosen or first in equipped
+
+
+def _worn_is_better(slot, equipped, item_level, level):
+    """A worn piece stays unless it is 10 or more levels behind and this is better."""
+    if slot not in equipped:
+        return False
+    worn = equipped.get(slot)
+    worn_level = worn.get("item_level") if isinstance(worn, dict) else worn
+    if worn_level is None:
+        return True
+    return int(worn_level) > level - 10 or item_level <= int(worn_level)
+
+
 def _candidate_slots(item, equipped, chosen, tank, level):
     inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
+    item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
+    tank_refuses = tank and not _is_shield(item, inv)
     for slot in SLOT_TYPES.get(inv, ()):
-        if slot in chosen:
+        if slot in chosen or not _pair_slot_open(slot, equipped, chosen):
             continue
-        if (
-            slot in ("finger2", "trinket2")
-            and slot[:-1] + "1" not in chosen
-            and slot[:-1] + "1" not in equipped
-        ):
+        if slot == "offhand" and tank_refuses:
             continue
-        shield = (
-            int(_get(item, "class", "item_class", default=0) or 0) == 4
-            and int(_get(item, "subclass", default=0) or 0) == 6
-            and inv == 14
-        )
-        if slot == "offhand" and tank and not shield:
-            continue
-        worn = equipped.get(slot)
-        worn_level = worn.get("item_level") if isinstance(worn, dict) else worn
-        item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
-        if slot in equipped and (
-            worn_level is None
-            or int(worn_level) > level - 10
-            or item_level <= int(worn_level)
-        ):
+        if _worn_is_better(slot, equipped, item_level, level):
             continue
         yield slot, item_level
 
