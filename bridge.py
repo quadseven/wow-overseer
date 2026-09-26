@@ -3164,6 +3164,20 @@ def _fetch_situation_sample() -> list:
     return rows or []
 
 
+def _situation_intent(cur, leader: str) -> dict | None:
+    """The module's intent book for this leader (mod-overseer#722), when the
+    realm has the table and the module has written his row lately."""
+    rows = _situation_try(
+        cur, "family intent", _FAMILY_INTENT_SQL + " WHERE leader_name = %s",
+        (leader,))
+    if not rows:
+        return None
+    age = rows[0].get("module_age")
+    if age is None or int(age) > jev_family_intent.FRESH_SECONDS:
+        return None
+    return rows[0]
+
+
 def _situation_reads(names: list, leader: str) -> dict:
     """What situation.build takes about one family. Reads only."""
     out = {"snapshot": [], "columns": {}, "jobs": {}, "members": [],
@@ -3183,16 +3197,7 @@ def _situation_reads(names: list, leader: str) -> dict:
                     out["jobs"][str(r["name"])] = str(r.get("job") or "")
             else:
                 out[key] = rows
-        # The module's intent book for this leader (mod-overseer#722), when
-        # the realm has the table and the module has written his row lately.
-        intents = _situation_try(
-            cur, "family intent", _FAMILY_INTENT_SQL + " WHERE leader_name = %s",
-            (leader,))
-        if intents:
-            row = intents[0]
-            age = row.get("module_age")
-            if age is not None and int(age) <= jev_family_intent.FRESH_SECONDS:
-                out["intent"] = row
+        out["intent"] = _situation_intent(cur, leader)
         lead = next((b for b in situation.bodies_from_rows(names, out["snapshot"])
                      if b.name == leader), None)
         if lead is None or lead.at is None:

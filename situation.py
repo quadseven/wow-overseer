@@ -699,15 +699,15 @@ class Situation:
         }
         if lead is not None and lead.at is None:
             out["leader_seen"] = False
-        lp = self.lead_progress
-        if lp is not None and lp.verdict != UNKNOWN:
-            trail = {
-                "walked_yards": lp.moved_yards,
-                "net_yards": lp.net_yards,
-                "over_minutes": lp.minutes,
-            }
-            if lp.closing_yards is not None:
-                trail["nearer_goal_by_yards"] = lp.closing_yards
+        out.update(self._leader_extras())
+        return out
+
+    def _leader_extras(self) -> dict:
+        """The leader's trail in numbers, the module's intent book and his
+        screen, each only when there is one."""
+        out = {}
+        trail = trail_state(self.lead_progress)
+        if trail is not None:
             out["leader_trail"] = trail
         if self.intent is not None:
             out["leader_intent"] = intent_state(self.intent)
@@ -752,40 +752,75 @@ class Situation:
         return "; ".join(parts)[:limit]
 
 
+def trail_state(lp: Progress | None) -> dict | None:
+    """A trail's numbers, or None when it says nothing yet. Pure."""
+    if lp is None or lp.verdict == UNKNOWN:
+        return None
+    trail = {
+        "walked_yards": lp.moved_yards,
+        "net_yards": lp.net_yards,
+        "over_minutes": lp.minutes,
+    }
+    if lp.closing_yards is not None:
+        trail["nearer_goal_by_yards"] = lp.closing_yards
+    return trail
+
+
 def intent_state(row: dict) -> dict:
     """The module's intent book for the leader, as Jev reads it. Pure.
 
     `row` is one overseer_family_intent row as the bridge selects it
     (current_for and module_age already in seconds).
     """
+    out = _intent_doing(row)
+    asking = _intent_asking(row)
+    if asking:
+        out["also_asking"] = asking[: MAX_LISTED + 2]
+    members = _intent_members(row)
+    if members:
+        out["members"] = members
+    return out
+
+
+def _intent_doing(row: dict) -> dict:
     out = {"doing": str(row.get("current_kind") or "none")}
-    if out["doing"] != "none":
-        out["asked_by"] = str(row.get("current_owner") or "")
-        if row.get("current_target"):
-            out["target"] = str(row["current_target"])
-        if row.get("current_for") is not None:
-            out["for_seconds"] = int(row["current_for"])
-    asking = []
+    if out["doing"] == "none":
+        return out
+    out["asked_by"] = str(row.get("current_owner") or "")
+    if row.get("current_target"):
+        out["target"] = str(row["current_target"])
+    if row.get("current_for") is not None:
+        out["for_seconds"] = int(row["current_for"])
+    return out
+
+
+def _intent_asking(row: dict) -> list:
+    """`kind|owner|target` lines as "kind target (by owner)"."""
+    out = []
     for line in str(row.get("on_the_table") or "").splitlines():
         kind, _, rest = line.partition("|")
         owner, _, target = rest.partition("|")
         if kind:
-            asking.append(("%s %s" % (kind, target)).strip() + " (by %s)" % owner)
-    if asking:
-        out["also_asking"] = asking[: MAX_LISTED + 2]
-    members = {}
+            out.append(("%s %s" % (kind, target)).strip() + " (by %s)" % owner)
+    return out
+
+
+def _intent_members(row: dict) -> dict:
+    """Every member not simply following: its state and yards from him."""
+    out = {}
     for line in str(row.get("members_state") or "").splitlines():
         name, _, rest = line.partition("|")
         state, _, far = rest.partition("|")
         if not name or not state or state == "following":
             continue
-        if far.isdigit():
-            members[name] = "%s, %s yd" % (state, far)
-        else:
-            members[name] = "%s, %s" % (state, far) if far else state
-    if members:
-        out["members"] = members
+        out[name] = _member_words(state, far)
     return out
+
+
+def _member_words(state: str, far: str) -> str:
+    if far.isdigit():
+        return "%s, %s yd" % (state, far)
+    return "%s, %s" % (state, far) if far else state
 
 
 def zone_names() -> dict:
