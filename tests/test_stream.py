@@ -816,3 +816,22 @@ class ThePlayer(unittest.TestCase):
         view = self.page[self.page.index("function watchView") :]
         view = view[: view.index("async function refreshWatch")]
         self.assertIn("w.unclaimed", view)
+
+
+class NoOnDemandClientForTheFamily(unittest.TestCase):
+    """A second login as a family character evicts the session holding it."""
+
+    ROSTER = ["Grug", "Grog", "Bork", "Og", "Ugga", "Zug", "Oz", "Uzza", "Zork", "Zrog"]
+
+    def test_a_head_held_by_the_client_host_is_refused(self):
+        why = stream.family_client_refusal("Zug", self.ROSTER)
+        self.assertIn("evict", why)
+
+    def test_a_headless_family_member_is_refused(self):
+        self.assertTrue(stream.family_client_refusal("Uzza", self.ROSTER))
+
+    def test_a_character_outside_the_family_may_still_be_watched(self):
+        self.assertEqual(stream.family_client_refusal("Achevar", self.ROSTER), "")
+
+    def test_a_near_miss_is_not_the_family(self):
+        self.assertEqual(stream.family_client_refusal("zug", self.ROSTER), "")

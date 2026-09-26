@@ -300,6 +300,27 @@ def can_start(rows, character: str, mode: str) -> tuple[bool, str]:
     return True, ""
 
 
+def family_client_refusal(character: str, roster) -> str:
+    """Why an on-demand client may not log in as this character, or "".
+
+    A FAMILY CHARACTER IS ALREADY IN THE WORLD, AND A SECOND LOGIN EVICTS IT.
+    The two heads are held by their own sessions on the client host (their
+    Watch tiles are those sessions' broadcasts), and the other eight play as
+    headless bots. A client the on-demand agent launches for any of them logs
+    in on the same account, the core drops the other session, the other side
+    logs back in, and the two take turns: measured on the dev realm as Zug and
+    Uzza dropping every ~70 seconds for hours, with the Horde family unable to
+    enter a dungeon because its leader never held a client for two minutes.
+    """
+    name = (character or "").strip()
+    if name and name in {(n or "").strip() for n in roster}:
+        return (
+            f"{name} is a family character and is already in the world; "
+            "an on-demand client would log in over that session and evict it"
+        )
+    return ""
+
+
 def pov_changes_the_family(character: str, leader: str) -> bool:
     """Does watching this character in POV change what the family does?
 
