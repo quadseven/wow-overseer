@@ -387,6 +387,48 @@ class ANoSizeGateIsTrustedRatherThanSecondGuessed(unittest.TestCase):
         self.assertEqual(plan(member_count=999, target_size=0).verb, "invite")
 
 
+class TheRaidPlansMissingClassesAreAskedFirst(unittest.TestCase):
+    """The operator's eight groups of one tank, one healer and three damage
+    dealers: a guild short of a seat asks the classes that fill it first
+    (raidlineup's `recruit_classes`). The module still judges every name."""
+
+    RESULT = {
+        "shortlist": [
+            {"name": "Mage1", "class": 8},
+            {"name": "Priest1", "class": 5},
+            {"name": "Rogue1", "class": 4},
+            {"name": "Warrior1", "class": 1},
+            {"name": "Priest2", "class": 5},
+            {"name": "Odd", "class": "x"},
+        ]
+    }
+
+    def test_preferred_classes_lead_in_preference_order(self):
+        self.assertEqual(
+            recruit.names_from_shortlist(self.RESULT, (1, 5)),
+            ["Warrior1", "Priest1", "Priest2", "Mage1", "Rogue1", "Odd"],
+        )
+
+    def test_no_preference_is_the_modules_order(self):
+        self.assertEqual(
+            recruit.names_from_shortlist(self.RESULT),
+            ["Mage1", "Priest1", "Rogue1", "Warrior1", "Priest2", "Odd"],
+        )
+
+    def test_a_preference_asks_for_the_longer_shortlist(self):
+        action = plan(
+            shortlist_age_minutes=None, shortlist_asked_minutes_ago=None, prefer=(1,)
+        )
+        self.assertEqual(action.command, "shortlist %d" % recruit.PREFER_SHORTLIST_SIZE)
+        action = plan(shortlist_age_minutes=None, shortlist_asked_minutes_ago=None)
+        self.assertEqual(action.command, "shortlist %d" % recruit.SHORTLIST_SIZE)
+
+    def test_the_pass_reads_the_acting_guilds_plan(self):
+        text = BRIDGE.read_text(encoding="utf-8")
+        self.assertIn("recruit.names_from_shortlist(result or {}, prefer)", text)
+        self.assertIn('lineup.get("recruit_classes")', text)
+
+
 class AResultThisLoopCannotReadMeansNoCandidates(unittest.TestCase):
     """Not a traceback. The JSON is written by another process, and a shape
     this loop does not understand must cost one quiet pass rather than the

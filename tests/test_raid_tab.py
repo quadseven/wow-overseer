@@ -708,6 +708,9 @@ class TheModuleAndThePageAgree(unittest.TestCase):
             "gear_line",
             "blockers_line",
             "blockers",
+            "groups",
+            "gap_line",
+            "gaps",
         ):
             self.assertIn("g." + key, CODE, key)
             self.assertIn(key, card, key)

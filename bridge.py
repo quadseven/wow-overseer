@@ -2394,6 +2394,56 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
     return jobs_written, campaign_written
 
 
+# Said once per process when the module's seat-target table is missing, not
+# every pass: the fix is a migration, and a warning every ten minutes would
+# bury everything else the bridge says.
+_RAID_SPEC_MISSING_SAID = False
+
+
+def _write_raid_specs(names: list) -> str:
+    """Plan the family's guild as eight groups and write each raider's target
+    tree to overseer_raid_spec (raidrun.spec_rows). Returns the log line.
+
+    THE LINEUP IS THE PAGE'S LINEUP: the same read and the same
+    raidlineup.build_lineup, the family guaranteed a place. One transaction
+    per guild: its rows are deleted and written again, so a raider who left
+    a seat loses its target in the same commit the new plan lands in.
+    """
+    global _RAID_SPEC_MISSING_SAID
+    if not names:
+        return ""
+    holes = ", ".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(raidrun.GUILD_OF_SQL.format(holes=holes), tuple(names))  # noqa: S608
+        row = cur.fetchone()
+        guild = str((row or {}).get("name") or "")
+        if not guild:
+            return "raid spec: the family %s is in no guild, so no seat targets are written" % names[0]
+        cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes), tuple(names))  # noqa: S608
+        members = [dict(r) for r in cur.fetchall()]
+        lineup = raidlineup.build_lineup(members, guaranteed=list(names))
+        rows = raidrun.spec_rows(guild, lineup)
+        try:
+            cur.execute(raidrun.DELETE_SPECS_SQL, (guild,))
+            if rows:
+                cur.executemany(raidrun.INSERT_SPEC_SQL, rows)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1146:
+                if not _RAID_SPEC_MISSING_SAID:
+                    _RAID_SPEC_MISSING_SAID = True
+                    log.warning(
+                        "raid spec: overseer_raid_spec is missing - mod-overseer's "
+                        "2026_09_25_10_overseer_raid_spec.sql is not applied, so "
+                        "no seat targets are written; %s's plan is %s %s",
+                        guild, lineup.get("roles_line", ""), lineup.get("gap_line", ""))
+                return ""
+            raise
+    gaps = lineup.get("gaps") or {}
+    return "raid spec: %s - %d seat target(s) written; gaps: %d tank(s), %d healer(s), %d damage. %s %s" % (
+        guild, len(rows), gaps.get("tanks", 0), gaps.get("healers", 0),
+        gaps.get("damage", 0), lineup.get("roles_line", ""), lineup.get("gap_line", ""))
+
+
 def _drive_raid(keyword: str, family: str, names: list, source: str,
                 withheld: list | None = None) -> int:
     """Write an ordered raid's seats, then its job. Returns jobs written.
@@ -4968,6 +5018,7 @@ class Bridge(discord.Client):
                 self._mail_loop,
                 self._town_passing_loop,
                 self._recruit_loop,
+                self._raid_spec_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
                 self._forge_loop,
@@ -11498,14 +11549,19 @@ class Bridge(discord.Client):
 
         THE JUDGEMENT IS NOT HERE AND MUST NOT MOVE HERE. Who is worth asking
         is mod-overseer's `RecruitVerdictFor` and `RecruitShortlist`, against
-        the guild's real holes. This pass decides pace and turn only.
+        the guild's real holes. This pass decides pace and turn only, and the
+        ORDER among the names the module judged worth asking: a class the
+        acting guild's eight raid groups are short of goes first
+        (raidlineup's `recruit_classes`, _recruit_prefer).
         """
         actors = await asyncio.to_thread(_online_guild_members)
+        prefer = await asyncio.to_thread(_recruit_prefer, sorted(actors)[0]) if actors else ()
         result, age = await asyncio.to_thread(_latest_guild_shortlist)
         members, target = recruit.roster_from_shortlist(result or {})
         action = recruit.plan_recruit(
             actors=actors,
-            shortlist=recruit.names_from_shortlist(result or {}),
+            prefer=prefer,
+            shortlist=recruit.names_from_shortlist(result or {}, prefer),
             shortlist_age_minutes=age,
             shortlist_asked_minutes_ago=await asyncio.to_thread(_minutes_since_shortlist_asked),
             asked=await asyncio.to_thread(_guild_invites_asked, recruit.ASKED_MEMORY_DAYS),
@@ -11567,6 +11623,31 @@ class Bridge(discord.Client):
                 await self._recruit_once()
             except Exception:
                 log.exception("recruit pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _raid_spec_once(self, cohort=None) -> None:
+        """One family's guild planned as eight groups of five, and each
+        raider's target tree written for the module (_write_raid_specs)."""
+        names = await asyncio.to_thread(_names_of, cohort)
+        line = await asyncio.to_thread(_write_raid_specs, names)
+        if line:
+            log.info("%s", line)
+
+    async def _raid_spec_loop(self) -> None:
+        """Keep every family guild's seat targets current (the operator's
+        eight groups of one tank, one healer and three damage dealers).
+
+        Ten minutes by default: a target only matters at a level-up or a
+        login, and the module reads the table once a minute.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("RAID_SPEC_CYCLE_SECONDS", "600"))
+        while not self.is_closed():
+            try:
+                await self._raid_spec_once()
+            except Exception:
+                log.exception("raid spec pass failed; retrying next cycle")
+            await self._for_other_families("raid spec", self._raid_spec_once)
             await asyncio.sleep(cycle)
 
     async def _guild_bank_loop(self) -> None:
@@ -20898,6 +20979,31 @@ def _minutes_since_last_guild_invite() -> float | None:
     return float(row["age_s"] or 0) / 60.0
 
 
+def _recruit_prefer(actor: str) -> tuple:
+    """The classes the acting character's guild's raid plan is short of, most
+    wanted first, or () when it is short of none or cannot be read.
+
+    The page's lineup over the actor's guild, every roster name in it
+    guaranteed a place. A failed read prefers nobody rather than stopping the
+    recruit pass: the order is a preference, the module's gates still judge.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes="%s"), (actor,))  # noqa: S608
+            members = [dict(r) for r in cur.fetchall()]
+            cur.execute("SELECT name FROM overseer_roster")
+            roster = {r["name"] for r in cur.fetchall()}
+    except pymysql.err.MySQLError:
+        log.warning("recruit: the acting guild's raid plan could not be read; no class is preferred")
+        return ()
+    lineup = raidlineup.build_lineup(
+        members, guaranteed=[m["name"] for m in members if m.get("name") in roster])
+    prefer = tuple(lineup.get("recruit_classes") or ())
+    if prefer:
+        log.info("recruit: %s", lineup.get("gap_line", ""))
+    return prefer
+
+
 def _online_guild_members() -> list:
     """Family names that are in a guild AND in the world right now.
 
@@ -23166,6 +23272,7 @@ class HeadlessBridge(Bridge):
                 self._mail_loop,
                 self._town_passing_loop,
                 self._recruit_loop,
+                self._raid_spec_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
                 self._forge_loop,

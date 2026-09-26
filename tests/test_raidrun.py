@@ -325,3 +325,108 @@ class NothingAutomaticWritesARaid(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _load_write_specs(events, members, guild="Cave", missing_table=False):
+    """bridge._write_raid_specs, run for real against a recording fake."""
+    source = ast.get_source_segment(BRIDGE, _function("_write_raid_specs"))
+
+    class MissingTable(Exception):
+        pass
+
+    class Cursor:
+        def __init__(self):
+            self.last = ""
+
+        def execute(self, sql, args=()):
+            self.last = sql
+            if "overseer_raid_spec" in sql:
+                if missing_table:
+                    raise MissingTable(1146, "Table doesn't exist")
+                events.append(("spec", sql.split()[0], args))
+            else:
+                events.append(("read", sql.split()[0]))
+
+        def executemany(self, sql, rows):
+            events.append(("spec", sql.split()[0], list(rows)))
+
+        def fetchone(self):
+            return {"name": guild} if guild else None
+
+        def fetchall(self):
+            return list(members)
+
+    class Conn:
+        def cursor(self):
+            return contextlib.nullcontext(Cursor())
+
+    said = []
+
+    class Log:
+        def warning(self, *a, **k):
+            said.append(a[0] % a[1:])
+
+        info = exception = warning
+
+    namespace = {
+        "raidrun": raidrun,
+        "raidlineup": raidlineup,
+        "log": Log(),
+        "_RAID_SPEC_MISSING_SAID": False,
+        "_connect": lambda: contextlib.nullcontext(Conn()),
+        "pymysql": types.SimpleNamespace(
+            err=types.SimpleNamespace(MySQLError=MissingTable)
+        ),
+    }
+    exec(compile(source, str(BRIDGE), "exec"), namespace)  # noqa: S102 - bridge.py's own source
+    return namespace["_write_raid_specs"], said
+
+
+class TheSeatTargetsAreWrittenForTheModule(unittest.TestCase):
+    """overseer_raid_spec (mod-overseer's 2026_09_25_10): the tree each seat
+    needs, so a guild bot levelling from 1 spends its points there."""
+
+    def test_each_placed_raider_gets_its_seats_tree_and_tab(self):
+        lineup = raidlineup.build_lineup(GUILD, guaranteed=["Grug"])
+        rows = raidrun.spec_rows("Cave", lineup)
+        self.assertEqual(40, len(rows))
+        by_name = {r[0]: r for r in rows}
+        self.assertEqual(
+            ("Grug", "Cave", raidlineup.WARRIOR, 2, "Protection", "main tank", 0),
+            by_name["Grug"],
+        )
+        priest = by_name["P0"]
+        self.assertEqual((raidlineup.PRIEST, 1, "Holy", "healer"), priest[2:6])
+        mage = by_name["M0"]
+        self.assertEqual((raidlineup.MAGE, 2, "Frost", "caster"), mage[2:6])
+        self.assertEqual({0, 1, 2, 3, 4, 5, 6, 7}, {r[6] for r in rows})
+        self.assertEqual(7, raidrun.INSERT_SPEC_SQL.count("%s"))
+
+    def test_the_guilds_rows_are_replaced_in_one_statement(self):
+        events = []
+        write, _said = _load_write_specs(events, GUILD)
+        line = write(["Grug"])
+        specs = [e for e in events if e[0] == "spec"]
+        self.assertEqual(("spec", "DELETE", ("Cave",)), specs[0])
+        self.assertEqual("INSERT", specs[1][1])
+        self.assertEqual(40, len(specs[1][2]))
+        self.assertIn("raid spec: Cave - 40 seat target(s) written", line)
+        self.assertIn("gaps: 0 tank(s), 0 healer(s), 0 damage", line)
+
+    def test_a_realm_without_the_table_says_so_once_and_writes_nothing(self):
+        events = []
+        write, said = _load_write_specs(events, GUILD, missing_table=True)
+        self.assertEqual("", write(["Grug"]))
+        self.assertEqual("", write(["Grug"]))
+        self.assertEqual(
+            1, len([s for s in said if "overseer_raid_spec is missing" in s])
+        )
+
+    def test_a_family_in_no_guild_writes_nothing(self):
+        events = []
+        write, _said = _load_write_specs(events, GUILD, guild="")
+        self.assertIn("in no guild", write(["Grug"]))
+        self.assertFalse([e for e in events if e[0] == "spec"])
+
+    def test_the_bridge_runs_the_pass_in_both_loop_lists(self):
+        self.assertEqual(2, BRIDGE.count("self._raid_spec_loop,"))

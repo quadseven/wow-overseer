@@ -250,23 +250,23 @@ def _staffing_blockers(
     tanks, healers = _roles(lineup)["tank"], _roles(lineup)["healer"]
     if short["tanks"] and tanks < raidlineup.MIN_TANKS:
         out.append(
-            "%s short: a Molten Core raid brings %d, a main tank and off tanks, "
-            "and cannot hold a fight with fewer than %d. A tank is a "
-            "Protection tree, or a warrior in a shield."
+            "%s short: the raid is %d groups with a tank each, and cannot hold "
+            "a fight with fewer than %d. No class left in the guild can take "
+            "the seat; recruiting prefers a warrior, paladin or druid."
             % (
                 _count(short["tanks"], "tank", "tanks"),
-                lineup["wanted"]["tanks"],
+                groups,
                 raidlineup.MIN_TANKS,
             )
         )
     if short["healers"] and healers < groups:
         out.append(
-            "%s short: a Molten Core raid brings %d, and fewer than one for "
-            "each of the %d groups cannot keep it standing. A healer is a "
-            "healing talent tree; a damage tree would have to respec."
+            "%s short: the raid is %d groups with a healer each, and a group "
+            "without one cannot keep itself standing. No class left in the "
+            "guild can take the seat; recruiting prefers a priest, shaman, "
+            "paladin or druid."
             % (
                 _count(short["healers"], "healer", "healers"),
-                lineup["wanted"]["healers"],
                 groups,
             )
         )
@@ -277,27 +277,28 @@ def _thin_role_blockers(lineup: dict) -> list:
     """SOFT: short of the classic make-up, but above the minimums."""
     out = []
     short = lineup["shortfall"]
-    groups = raidlineup.RAIDERS // raidlineup.GROUP_SIZE
     roles = _roles(lineup)
     if short["tanks"] and roles["tank"] >= raidlineup.MIN_TANKS:
         out.append(
-            "%s short of the %d a Molten Core raid brings: %d hold the tank "
-            "places."
+            "%s short of the %d the eight groups need, one each: %d hold the "
+            "tank seats, so %s without a tank."
             % (
                 _count(short["tanks"], "tank", "tanks"),
                 lineup["wanted"]["tanks"],
                 roles["tank"],
+                _count(short["tanks"], "group is", "groups are"),
             )
         )
-    if short["healers"] and roles["healer"] >= groups:
+    # One healer a group is the whole of what is wanted, so a healer short is
+    # always a group without one: that is the hard blocker above.
+    if short.get("damage"):
         out.append(
-            "%s short of the %d a Molten Core raid brings: %d heal, one for "
-            "each group and no more to spare. A healer is a healing talent "
-            "tree; a damage tree would have to respec."
+            "%s short of the %d the eight groups need, three each: %d deal "
+            "damage."
             % (
-                _count(short["healers"], "healer", "healers"),
-                lineup["wanted"]["healers"],
-                roles["healer"],
+                _count(short["damage"], "damage dealer", "damage dealers"),
+                lineup["wanted"]["damage"],
+                roles["dps"],
             )
         )
     return out
@@ -479,6 +480,7 @@ def _tiles(lineup: dict, raiders: list) -> list:
         _tile("raiders placed", len(raiders), raidlineup.RAIDERS),
         _tile("tanks", roles["tank"], lineup["wanted"]["tanks"]),
         _tile("healers", roles["healer"], lineup["wanted"]["healers"]),
+        _tile("damage", roles["dps"], lineup["wanted"]["damage"]),
         _tile("raiders at %d" % LEVEL_CAP, at_cap, raidlineup.RAIDERS),
         _tile("summoners", len(lineup["summoners"]), raidlineup.SUMMONERS),
         _tile("maintenance", len(lineup["maintenance"]), raidlineup.MAINTENANCE),
@@ -487,14 +489,44 @@ def _tiles(lineup: dict, raiders: list) -> list:
 
 def _roster_line(members: list, lineup: dict, raiders: list) -> str:
     roles = _roles(lineup)
-    return "%s in the guild; %s placed as %s, %s and %s. %s" % (
+    return "%s in the guild; %s placed as %s, %s and %s. %s %s" % (
         _count(len(members), "character", "characters"),
         _count(len(raiders), "raider", "raiders"),
         _count(roles["tank"], "tank", "tanks"),
         _count(roles["healer"], "healer", "healers"),
         _count(roles["dps"], "damage dealer", "damage dealers"),
         lineup.get("roles_line", ""),
+        lineup.get("gap_line", ""),
     )
+
+
+def _group_lines(lineup: dict) -> list:
+    """Each of the eight groups as a line: who sits in it, in which seat and
+    tree, and the group buffs it lacks."""
+    out = []
+    for group in lineup["groups"]:
+        seats = "; ".join(
+            "%s (%s) %s"
+            % (
+                m["name"],
+                raidlineup.CLASS_NAMES.get(m.get("class_id"), "?"),
+                m.get("label", ""),
+            )
+            for m in group["members"]
+        )
+        missing = group.get("missing_buffs") or []
+        out.append(
+            {
+                "number": group["number"],
+                "line": "Group %d: %s.%s"
+                % (
+                    group["number"],
+                    seats or "nobody placed",
+                    " No %s." % " or ".join(missing) if missing else "",
+                ),
+            }
+        )
+    return out
 
 
 def _gear_line(raiders: list, gear: dict) -> str:
@@ -799,6 +831,11 @@ def build_guild(
         ),
         "tiles": _tiles(lineup, raiders),
         "roster_line": _roster_line(members, lineup, raiders),
+        # The eight groups (the operator's one tank, one healer and three
+        # damage dealers each) and what no class in the guild can fill.
+        "groups": _group_lines(lineup),
+        "gap_line": lineup.get("gap_line", ""),
+        "gaps": lineup.get("gaps", {}),
         "gear_line": _gear_line(raiders, gear),
         "blockers": blockers,
         "blockers_line": (
