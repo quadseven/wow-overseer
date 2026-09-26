@@ -97,6 +97,9 @@ def policy(environ=None) -> jev.Policy:
         environ=environ,
         default_mode=jev.ACT,
         default_threshold=DEFAULT_THRESHOLD,
+        # #356: an agreement below the floor is recorded as Jev's (18 of 68
+        # calls in 24 hours). It changes no action.
+        on_agreement=True,
     )
 
 

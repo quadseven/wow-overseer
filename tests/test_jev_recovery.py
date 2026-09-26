@@ -211,6 +211,21 @@ class FallbackLadderTest(unittest.TestCase):
 
 
 class StateTest(unittest.TestCase):
+    def test_each_recovery_kind_sends_the_heuristic_row_inputs(self):
+        for row, count_key in (
+            (recovery_row(), "failures_in_a_row"),
+            (stall_row(), "times_taken_back"),
+        ):
+            request = jev_recovery.request_from_row(row)
+            state, _questions = jev_recovery.question(request, context())
+            # The C++ module heuristic is represented by its row input: count,
+            # failure, measured facts, selected heuristic and explanation.
+            self.assertEqual(state[count_key], request.attempt)
+            self.assertEqual(state["what_happened"], request.failure)
+            self.assertEqual(state["module_facts"], request.facts)
+            self.assertEqual(state["module_heuristic"], request.heuristic)
+            self.assertEqual(state["module_heuristic_why"], request.heuristic_why)
+
     def test_the_state_carries_timeline_positions_bags_and_offline(self):
         req = jev_recovery.request_from_row(recovery_row())
         state = jev_recovery.state_for(req, context())

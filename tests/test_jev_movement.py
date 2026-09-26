@@ -97,6 +97,14 @@ DYING = [
 
 
 class WhatIsOffered(unittest.TestCase):
+    def test_the_heuristic_input_is_in_the_question_facts(self):
+        f = facts(errand="at:1:-7203.1,-3821.1,8.6", claimant="guild bank")
+        jm.heuristic(f)
+        judgment = ask(f, FakeJev())
+        # Today's movement heuristic is constant; the current situation is
+        # the only decision context it receives, and the question records it.
+        self.assertEqual(judgment.facts, f.where.line(1000))
+
     def test_a_member_stranded_in_the_crater_may_hearth(self):
         f = facts()
         self.assertEqual("Bork", jm.stranded(f))

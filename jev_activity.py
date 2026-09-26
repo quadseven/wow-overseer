@@ -153,6 +153,9 @@ def policy(environ=None) -> jev.Policy:
         environ=environ,
         default_mode=jev.ACT,
         default_threshold=DEFAULT_THRESHOLD,
+        # #356: 81 of 183 calls in 24 hours agreed below the floor and were
+        # recorded as the heuristic's. An agreement is Jev's; no action changes.
+        on_agreement=True,
     )
 
 

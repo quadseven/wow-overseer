@@ -438,6 +438,10 @@ def policy(kind: str, environ=None) -> jev.Policy:
         default_threshold=RECOVERY_THRESHOLD
         if kind == KIND_RECOVERY
         else STALL_THRESHOLD,
+        # #356: Jev's confidence runs low on both kinds (median 0.43 and 0.34
+        # over 24 hours) even where it names the heuristic's own choice, so an
+        # agreement is recorded as Jev's. It changes no action.
+        on_agreement=True,
     )
 
 

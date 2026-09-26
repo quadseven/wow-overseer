@@ -83,6 +83,13 @@ class HumanTouches(unittest.TestCase):
     """#267: a player unwinds by fishing, the realm's families do not all
     turn on the same minute, and a leader says what the family does next."""
 
+    def test_the_heuristic_inputs_are_in_the_question_facts(self):
+        f = facts(queue="Ragefire plan", withheld=True, job="craft")
+        ja.heuristic(f)
+        line = ja.facts_line(f)
+        for value in (f.queue, "run withheld for bag space", "job craft"):
+            self.assertIn(value, line)
+
     def test_fishing_is_offered_with_room_in_every_bag(self):
         roomy = ja.options(facts(queue="", job="quest", members=members(free=ROOMY)))
         self.assertEqual([ja.QUEST, ja.FISH], list(roomy))
