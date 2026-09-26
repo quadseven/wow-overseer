@@ -42,6 +42,7 @@ import guildcraft
 import guildroute
 import jevview
 import levelroute
+import llmmode
 import lootcouncil
 import lootstory
 import modelviewer
@@ -3943,6 +3944,8 @@ def _insert_command(name: str, command: str, source: str) -> int:
 
 
 def _ask_llm(prompt: str) -> str:
+    # LLM_MODE=off raises here, before any request exists; see llmmode.
+    llmmode.check()
     body = json.dumps({
         "model": LLM_MODEL,
         "messages": [

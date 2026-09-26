@@ -83,6 +83,7 @@ import keep
 import kin
 import learnaim
 import levelroute
+import llmmode
 import lockbox
 import lootcouncil
 # NOT `mailbox` - that is a Python standard library module, and this package is
@@ -854,6 +855,8 @@ def _fetch_grounding(name: str) -> dict | None:
 
 
 def _ask_llm(prompt: str, system: str = "") -> str:
+    # LLM_MODE=off raises here, before any request exists; see llmmode.
+    llmmode.check()
     body = json.dumps({
         "model": LLM_MODEL,
         "messages": [
@@ -13707,7 +13710,11 @@ class Bridge(discord.Client):
                 notable = set()
             detected = events.filter_for_story(detected, frozenset(notable))
             prev = curr
-            voiced, overflow = events.split_for_voicing(detected, cap)
+            # With the model switched off, every event takes the templated
+            # path rather than raising through the voiced one each cycle.
+            voiced, overflow = events.split_for_voicing(
+                detected, cap if llmmode.enabled() else 0
+            )
             texts: list[str] = []
             if voiced:
                 try:
