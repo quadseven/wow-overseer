@@ -336,6 +336,86 @@ def prefers_two_hander(character: CharacterState) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# WHAT A TANK'S OFF HAND IS FOR
+#
+# Measured on the dev realm 2026-09-26, after the operator lowered the family
+# to its natural levels. Grug, the Protection warrior who tanks for the
+# Alliance family, went from 60 to 38, and every shield in his reach needed 39
+# to 58. Grog handed him a Sorcerer Sphere (InventoryType 23, held in the off
+# hand, armour subclass 0) and the equip pass put it on, because an empty off
+# hand read as item level 0 and `wearable_armor` abstains on subclass 0. He
+# died four times in thirteen minutes in Desolace. The item-level comparison
+# was not wrong about the numbers; nothing asked what the off hand is for.
+#
+# InventoryType of the three things an off hand can hold besides a one-hander.
+INVTYPE_SHIELD = 14
+INVTYPE_WEAPON_OFF_HAND = 22
+INVTYPE_HOLDABLE = 23
+
+# What is worn in the off hand, read from its InventoryType.
+OFF_HAND_NONE = ""
+OFF_HAND_SHIELD = "shield"
+OFF_HAND_HELD = "held"
+OFF_HAND_WEAPON = "weapon"
+_OFF_HAND_KIND = {
+    INVTYPE_SHIELD: OFF_HAND_SHIELD,
+    INVTYPE_HOLDABLE: OFF_HAND_HELD,
+    INVTYPE_WEAPON_OFF_HAND: OFF_HAND_WEAPON,
+}
+_OFF_HAND_SAID = {
+    OFF_HAND_HELD: "a held-in-off-hand piece",
+    OFF_HAND_WEAPON: "an off-hand weapon",
+}
+
+# Warrior, rogue and death knight have no mana: a held-in-off-hand is a
+# caster's piece and nothing on one is ever for them.
+_NO_HELD_CLASSES = frozenset({1, 4, 6})
+# A paladin in a damage role is Retribution, a melee fighter: the same answer
+# mod-overseer's scorer gives its melee role.
+_PALADIN = 2
+
+
+def shield_tank(character: CharacterState) -> bool:
+    """A tank whose class holds a shield: warrior, paladin (shaman never
+    tanks in a party). A feral druid in a tank seat is a tank without one."""
+    return (
+        str(character.role) == ROLE_TANK and int(character.class_id) in _SHIELD_CLASSES
+    )
+
+
+def is_shield(holding: Holding) -> bool:
+    return int(holding.inventory_type) == INVTYPE_SHIELD
+
+
+def _off_hand_refusal(holding: Holding, character: CharacterState) -> str:
+    """Why this off-hand piece is not for this character, or ""."""
+    kind = _OFF_HAND_KIND.get(int(holding.inventory_type), OFF_HAND_NONE)
+    melee_paladin = (
+        int(character.class_id) == _PALADIN and str(character.role) == ROLE_DAMAGE
+    )
+    if kind == OFF_HAND_HELD and melee_paladin:
+        return "a held-in-off-hand piece is a caster's, and a Retribution paladin has no use for one"
+    if kind == OFF_HAND_HELD and int(character.class_id) in _NO_HELD_CLASSES:
+        cls = _CLASS_NAMES.get(character.class_id, "class %d" % character.class_id)
+        return f"a held-in-off-hand piece is a caster's, and a {cls} has no use for one"
+    if kind in (OFF_HAND_HELD, OFF_HAND_WEAPON) and shield_tank(character):
+        return (
+            "%s is never a tank's: a tank holds a shield in the off hand"
+            % (_OFF_HAND_SAID[kind])
+        )
+    return ""
+
+
+def _shield_over_other(holding: Holding, character: CharacterState) -> bool:
+    """A shield for a shield tank whose off hand holds something else."""
+    return (
+        is_shield(holding)
+        and shield_tank(character)
+        and character.off_hand_kind not in (OFF_HAND_NONE, OFF_HAND_SHIELD)
+    )
+
+
 def heaviest_armor(class_id: int, level: int) -> int:
     """The heaviest armour subclass this character is trained in right now."""
     best = ARMOR_CLOTH
@@ -420,6 +500,10 @@ class CharacterState:
     # `prefers_two_hander`: only a damage role on a two-hander class changes
     # anything, and unknown keeps the off-hand guard.
     role: str = ROLE_UNKNOWN
+    # OFF_HAND_SHIELD, OFF_HAND_HELD, OFF_HAND_WEAPON, or OFF_HAND_NONE for an
+    # empty off hand or one this row could not read. What decides whether a
+    # shield is an upgrade for a tank whatever the item levels say.
+    off_hand_kind: str = OFF_HAND_NONE
 
     def equipped_level(self, slot: str) -> int:
         return int(self.equipped.get(slot, 0))
@@ -548,6 +632,9 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
         return False, "inventory type %d has no known slot" % int(
             holding.inventory_type
         )
+    refusal = _off_hand_refusal(holding, character)
+    if refusal:
+        return False, refusal
 
     # THE ROLE GUARD (the Severing Axe test, #2813). A two-hander is never an
     # upgrade for anyone currently wearing something in the off hand: taking
@@ -579,6 +666,15 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
         )
 
     current = character.equipped_level(slot)
+    if current and _shield_over_other(holding, character):
+        return (
+            True,
+            "a tank's off hand holds %s (item level %d), and a shield belongs there"
+            % (
+                _OFF_HAND_SAID.get(character.off_hand_kind, "something else"),
+                current,
+            ),
+        )
     if current and holding.item_level <= current:
         return False, f"not an upgrade (currently equipped is item level {current})"
 
@@ -623,6 +719,10 @@ def worn_against(holding: Holding, character: CharacterState) -> int:
     worn = character.equipped_level(slot)
     if slot == _TWO_HAND:
         worn = max(worn, character.equipped_level(_MAIN_HAND))
+    if _shield_over_other(holding, character):
+        # An orb or a blade in a shield tank's off hand is worth nothing to
+        # him, so all of the shield is a gain.
+        worn = 0
     return int(worn)
 
 
@@ -748,6 +848,41 @@ def weakest_slot(character: CharacterState):
     return best
 
 
+def tank_claim(holding: Holding, characters) -> str:
+    """The family's shield tank this shield should go to first, or "".
+
+    THE ONE EXCEPTION TO THE HOLDER'S FIRST CLAIM. A raiding guild gears its
+    tank first on a tank's piece, and a shield is the tank's piece: to a
+    Retribution paladin carrying one it is a spare (`prefers_two_hander`), to
+    the tank it is the off hand. So a tradable shield that is an upgrade for a
+    shield tank who is not its holder goes to that tank, even when the holder
+    could wear it too. The best gain wins between two tanks, then the name.
+
+    Soulbound is refused by `is_upgrade_for`, so a shield bound to its holder
+    never moves: the natural rules have no way to hand it over.
+    """
+    if not is_shield(holding) or holding.soulbound:
+        return ""
+    holder = next((c for c in characters if c.name == holding.holder), None)
+    if holder is not None and shield_tank(holder) and would_wear(holding, holder)[0]:
+        # A tank holding a shield he would wear keeps it: tank to tank is
+        # the ordinary holder-first rule.
+        return ""
+    best = None
+    for character in characters:
+        if character.name == holding.holder or not shield_tank(character):
+            continue
+        if not is_upgrade_for(holding, character)[0]:
+            continue
+        gain = int(holding.item_level) - worn_against(holding, character)
+        if gain <= 0:
+            continue
+        key = (-gain, character.name)
+        if best is None or key < best:
+            best = key
+    return best[1] if best else ""
+
+
 def plan(holdings, characters) -> Plan:
     """Every item that should move because it is dead weight where it sits
     and a real upgrade for someone else.
@@ -789,6 +924,12 @@ def plan(holdings, characters) -> Plan:
     notes = []
     for holding in sorted(holdings, key=lambda h: (h.holder, h.guid)):
         holder_state = by_name.get(holding.holder)
+        tank = tank_claim(holding, characters)
+        if tank:
+            # THE TANK'S SHIELD, ahead of the holder (see `tank_claim`).
+            _, reason = is_upgrade_for(holding, by_name[tank])
+            grants.append(_grant_for(holding, by_name[tank], reason))
+            continue
         if holder_state is not None:
             holder_upgrade, _ = is_upgrade_for(holding, holder_state)
             if holder_upgrade:
@@ -803,7 +944,7 @@ def plan(holdings, characters) -> Plan:
             upgrade, reason = is_upgrade_for(holding, character)
             if not upgrade:
                 continue
-            gain = holding.item_level - character.equipped_level(_slot_for(holding))
+            gain = holding.item_level - worn_against(holding, character)
             candidates.append((gain, character.name, reason))
 
         if not candidates:
@@ -1119,6 +1260,9 @@ def claimant(holding: Holding, characters) -> str:
         # A row whose holder nobody described. Refusing beats guessing that
         # the absent character had no use for their own gear.
         return UNJUDGEABLE
+    tank = tank_claim(holding, characters)
+    if tank:
+        return tank
     if would_wear(holding, holder)[0]:
         return holder.name
     for character in sorted(characters, key=lambda c: c.name):
@@ -1242,9 +1386,7 @@ def equips(holdings, characters) -> tuple:
         slot = _slot_for(holding)
         group = _WEAPON_GROUP.get(slot, slot)
         key = (holding.holder, group)
-        worn = character.equipped_level(slot)
-        if slot == _TWO_HAND:
-            worn = max(worn, character.equipped_level(_MAIN_HAND))
+        worn = worn_against(holding, character)
         pick = Equip(
             holder=holding.holder,
             guid=int(holding.guid),
@@ -1279,9 +1421,7 @@ def chosen_equip(holding: Holding, character: CharacterState, reason: str):
     slot = _slot_for(holding)
     if not slot or character.name != holding.holder:
         return None
-    worn = character.equipped_level(slot)
-    if slot == _TWO_HAND:
-        worn = max(worn, character.equipped_level(_MAIN_HAND))
+    worn = worn_against(holding, character)
     return Equip(
         holder=holding.holder,
         guid=int(holding.guid),
@@ -1318,6 +1458,30 @@ def merge_equips(wanted, withheld, chosen) -> tuple:
         ]
         out.append(pick)
     return tuple(sorted(out, key=lambda e: (e.holder, e.slot, e.guid)))
+
+
+def since_level_change(history, changed) -> list:
+    """The equip attempts made at each character's CURRENT level.
+
+    A LEVEL CHANGE RE-OPENS EVERY SLOT. `equips_to_queue` holds a piece back
+    after `give_up` attempts, on the grounds that the world refuses it for a
+    reason this side cannot see; a level is the commonest such reason and a
+    level change retires it. The natural lowering of 2026-09-26 changed every
+    family member's level at once, and every slot's question with it, so the
+    attempts before the change say nothing about the answer after it.
+
+    `history` rows carry target_name and created_at; `changed` maps a name to
+    the time of its last level change. A row without a time, or a character
+    with no recorded change, is kept.
+    """
+    out = []
+    for row in history or ():
+        at = row.get("created_at")
+        since = (changed or {}).get(str(row.get("target_name", "")))
+        if at is not None and since is not None and at < since:
+            continue
+        out.append(row)
+    return out
 
 
 def equips_to_queue(wanted, recent, tries, give_up=3) -> tuple:
@@ -1385,6 +1549,7 @@ def characters_from_rows(rows, names, roles=None) -> list:
     """
     roles = dict(roles or {})
     seen = {}
+    off_hands = {}
     for row in rows:
         try:
             name = str(row["name"])
@@ -1405,6 +1570,9 @@ def characters_from_rows(rows, names, roles=None) -> list:
             # one bucket. The BEST of them is what an upgrade has to beat,
             # because the worst is the one a new piece would displace.
             equipped[slot] = max(equipped.get(slot, 0), item_level)
+        kind = _OFF_HAND_KIND.get(int(row["inventory_type"]), OFF_HAND_NONE)
+        if kind:
+            off_hands[name] = kind
     return [
         CharacterState(
             name=name,
@@ -1412,6 +1580,7 @@ def characters_from_rows(rows, names, roles=None) -> list:
             level=seen[name][1],
             equipped=seen[name][2],
             role=str(roles.get(name, ROLE_UNKNOWN) or ROLE_UNKNOWN),
+            off_hand_kind=off_hands.get(name, OFF_HAND_NONE),
         )
         for name in names
         if name in seen
