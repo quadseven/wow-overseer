@@ -61,6 +61,12 @@ from dataclasses import dataclass
 # cap is 100.
 SHORTLIST_SIZE = 20
 
+# The size asked for while the guild's raid plan is short of a seat
+# (raidlineup's `recruit_classes`): the module ranks candidates by the guild's
+# holes and then by name, and a class the eight groups need can sit past the
+# twentieth name. The module's cap.
+PREFER_SHORTLIST_SIZE = 100
+
 # A shortlist older than this is re-asked rather than acted on. The world
 # moves underneath it: a candidate joins somebody else's guild, levels out of
 # the band, or is deleted, and an invite drawn from a stale list is refused by
@@ -134,6 +140,7 @@ def plan_recruit(
     minutes_since_last_invite: float | None,
     member_count: int,
     target_size: int,
+    prefer: tuple = (),
 ) -> RecruitAction:
     """The one thing this sweep should do.
 
@@ -157,6 +164,11 @@ def plan_recruit(
                       or None when none has ever been issued.
     `member_count`    the guild's size as the module last reported it.
     `target_size`     the size it is aiming at, as the module last reported it.
+    `prefer`          class ids the guild's raid plan is short of, most wanted
+                      first (raidlineup.build_lineup's `recruit_classes`).
+                      A shortlist is asked for at PREFER_SHORTLIST_SIZE, and
+                      the caller orders `shortlist` with names_from_shortlist
+                      so those classes are asked first.
 
     THE ORDER OF THE GATES IS THE DESIGN, AND FRESHNESS COMES BEFORE
     ROSTER-FULL. The order is: is anybody online, is the shortlist still good,
@@ -229,7 +241,7 @@ def plan_recruit(
         return RecruitAction(
             verb="shortlist",
             actor=actor,
-            command=f"shortlist {SHORTLIST_SIZE}",
+            command=f"shortlist {PREFER_SHORTLIST_SIZE if prefer else SHORTLIST_SIZE}",
             target_arg="",
             reason=wants_shortlist,
         )
@@ -295,7 +307,7 @@ def plan_recruit(
     )
 
 
-def names_from_shortlist(result: dict) -> list:
+def names_from_shortlist(result: dict, prefer=()) -> list:
     """The shortlisted names, in rank order, out of a `guild shortlist` result.
 
     TOLERANT ON PURPOSE, and it fails toward doing nothing. This reads JSON
@@ -304,18 +316,31 @@ def names_from_shortlist(result: dict) -> list:
     understand, and the safe reading of that is "no candidates" rather than a
     traceback that takes the whole sweep down. The same rule guildbank.py's
     plan_deposits keeps for a stale or absent read.
+
+    PREFERRED CLASSES FIRST. With `prefer` (class ids, most wanted first) a
+    candidate of a class the guild's eight groups are short of is asked before
+    anybody else, in `prefer` order; the module's order holds within a class
+    and for everybody else.
     """
     picks = result.get("shortlist") if isinstance(result, dict) else None
     if not isinstance(picks, list):
         return []
-    names = []
-    for pick in picks:
+    rank = {int(c): i for i, c in enumerate(prefer or ())}
+    named = []
+    for index, pick in enumerate(picks):
         if not isinstance(pick, dict):
             continue
         name = pick.get("name")
         if isinstance(name, str) and name:
-            names.append(name)
-    return names
+            cls = pick.get("class")
+            named.append(
+                (
+                    rank.get(cls, len(rank)) if isinstance(cls, int) else len(rank),
+                    index,
+                    name,
+                )
+            )
+    return [name for _rank, _index, name in sorted(named)]
 
 
 def roster_from_shortlist(result: dict) -> tuple:

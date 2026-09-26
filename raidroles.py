@@ -23,6 +23,13 @@ council and mod-overseer's GearRoleFor already share. A member with no talent
 spells, or a tie at the top, has no known tree and falls back to the class
 rule the lineup has always used.
 
+THE TARGET TREE (2026-09-26). The operator's raid is eight groups of one
+tank, one healer and three damage dealers, planned from the raiders' classes.
+Each seat names the tree a raider needs for it (`target_tree`), and its tab
+(`tree_tab`, the talent frame's order, 0 to 2) is what mod-overseer's
+overseer_raid_spec takes, so a guild bot levelling from 1 spends its points
+there. A raider already in a tree that fits the seat keeps it.
+
 PURE: strings in, words out. The only file read is talents.json, once.
 """
 
@@ -46,6 +53,38 @@ TALENTS_COLUMN = (
 )
 
 _BOOK: dict | None = None
+_TABS: dict | None = None
+
+# The seat words.
+SEAT_TANK, SEAT_HEALER, SEAT_DAMAGE = "tank", "healer", "dps"
+
+# The tree each class plays a seat in, by class id. A class missing from a
+# table cannot take that seat. A druid tanks as a bear, which is the Feral
+# Combat tree; statweights calls that tree melee, so a seat's role comes from
+# the seat, not the tree.
+TANK_TREE = {1: "Protection", 2: "Protection", 6: "Blood", 11: "Feral Combat"}
+HEALER_TREE = {2: "Holy", 5: "Holy", 7: "Restoration", 11: "Restoration"}
+# The damage tree a class is given when it has none that deals damage yet:
+# the classic raid's, where a class had one (a Marksmanship hunter's Trueshot
+# Aura, a Balance druid's Moonkin Aura), else the one it levels best in.
+DAMAGE_TREE = {
+    1: "Fury",
+    2: "Retribution",
+    3: "Marksmanship",
+    4: "Combat",
+    5: "Shadow",
+    6: "Frost",
+    7: "Enhancement",
+    8: "Frost",
+    9: "Destruction",
+    11: "Balance",
+}
+# Trees that already fit a seat and are kept. A Discipline priest heals; a
+# bear is a Feral Combat druid.
+_FITS = {
+    SEAT_TANK: {(c, t) for c, t in TANK_TREE.items()},
+    SEAT_HEALER: {(c, t) for c, t in HEALER_TREE.items()} | {(5, "Discipline")},
+}
 
 
 def _book() -> dict:
@@ -122,3 +161,73 @@ def with_spec(member: dict) -> dict:
         out["spec"] = tree_of(out.get("class_id"), out.get(KEY))
     out["raid_role"] = role_of(out)
     return out
+
+
+def _tabs() -> dict:
+    """(class id, tree name) -> tab page 0 to 2, from talents.json, once."""
+    global _TABS
+    if _TABS is None:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "talents.json")
+        with open(path) as f:
+            raw = json.load(f)
+        _TABS = {
+            (int(t.get("class") or 0), str(t.get("name") or "")): int(
+                t.get("order") or 0
+            )
+            for t in (raw.get("trees") or {}).values()
+        }
+    return _TABS
+
+
+def tree_tab(class_id, tree) -> int | None:
+    """The tree's tab page (TalentTab.tabpage, 0 to 2), or None."""
+    try:
+        cid = int(class_id)
+    except (TypeError, ValueError):
+        return None
+    return _tabs().get((cid, str(tree or "")))
+
+
+def can_seat(class_id, seat: str) -> bool:
+    """Can this class take a tank, healer or damage seat at all."""
+    try:
+        cid = int(class_id)
+    except (TypeError, ValueError):
+        return False
+    if seat == SEAT_TANK:
+        return cid in TANK_TREE
+    if seat == SEAT_HEALER:
+        return cid in HEALER_TREE
+    return cid in DAMAGE_TREE
+
+
+def fits_seat(class_id, tree, seat: str) -> bool:
+    """Does the tree already play this seat, so no respec is needed."""
+    try:
+        cid = int(class_id)
+    except (TypeError, ValueError):
+        return False
+    if not tree:
+        return False
+    if seat == SEAT_DAMAGE:
+        return statweights.role_for(cid, tree) in (MELEE, RANGED, CASTER)
+    return (cid, str(tree)) in _FITS.get(seat, set())
+
+
+def target_tree(class_id, seat: str, tree="") -> str:
+    """The tree a raider of this class needs for the seat: the one it plays
+    when that already fits, else the class's tree for the seat, or ""."""
+    if fits_seat(class_id, tree, seat):
+        return str(tree)
+    try:
+        cid = int(class_id)
+    except (TypeError, ValueError):
+        return ""
+    table = {SEAT_TANK: TANK_TREE, SEAT_HEALER: HEALER_TREE}.get(seat, DAMAGE_TREE)
+    return table.get(cid, "")
+
+
+def seat_duty(class_id, tree: str) -> str:
+    """A damage seat's kind (melee, ranged or caster) from the target tree."""
+    role = statweights.role_for(class_id, tree)
+    return role if role in (MELEE, RANGED, CASTER) else "damage"

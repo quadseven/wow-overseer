@@ -53,5 +53,34 @@ class TheLineupFetches(unittest.TestCase):
         self.assertIn("LINEUP_VIEW", listed[: listed.index("]")])
 
 
+class TheLineupDrawsTheEightGroups(unittest.TestCase):
+    """The operator's eight groups of one tank, one healer and three damage
+    dealers: each group names the buffs it lacks, and each guild says the
+    seats no class can fill and who recruiting prefers (raidlineup)."""
+
+    def _render(self):
+        body = PAGE[PAGE.index("function lnRender(payload)") :]
+        return body[: body.index("let lnPulling")]
+
+    def test_the_gap_line_is_drawn_and_a_seat_gap_is_a_warning(self):
+        render = self._render()
+        self.assertIn("g.gap_line", render)
+        self.assertIn('"ln-short"', render)
+
+    def test_each_group_notes_its_missing_buffs(self):
+        self.assertIn("group.missing_buffs", self._render())
+
+    def test_every_key_it_reads_is_one_the_lineup_writes(self):
+        import sys
+
+        sys.path.insert(0, str(HERE))
+        import raidlineup
+
+        lineup = raidlineup.build_lineup([])
+        for key in ("gap_line", "gaps", "roles_line"):
+            self.assertIn(key, lineup, key)
+        self.assertIn("missing_buffs", lineup["groups"][0])
+
+
 if __name__ == "__main__":
     unittest.main()

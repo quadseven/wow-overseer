@@ -7064,6 +7064,15 @@ function lnRender(payload) {
       make.textContent = g.roles_line;
       sec.appendChild(make);
     }
+    // The seats no class in the guild can fill, the buffs too few raiders
+    // bring, and who recruiting prefers for them (raidlineup.gap_line).
+    if (g.gap_line) {
+      const gap = document.createElement("div");
+      gap.className = (g.gaps && (g.gaps.tanks || g.gaps.healers || g.gaps.damage))
+        ? "ln-short" : "ln-note";
+      gap.textContent = g.gap_line;
+      sec.appendChild(gap);
+    }
 
     // What each role gave the guild in all (#194), written by guildjobs.py:
     // dues, materials posted and grey loot sold. Naturally earned only.
@@ -7076,9 +7085,13 @@ function lnRender(payload) {
 
     const grid = document.createElement("div");
     grid.className = "ln-grid";
+    // Each group is one tank, one healer and three damage dealers; its note
+    // names the group buffs it lacks. A label reads "off tank, Protection",
+    // or "(now Fury)" where the raider plays another tree today.
     for (const group of g.groups || []) {
+      const missing = group.missing_buffs || [];
       grid.appendChild(lnList("Group " + group.number, group.members || [],
-                              classes, ""));
+                              classes, missing.length ? "no " + missing.join(", no ") : ""));
     }
     sec.appendChild(grid);
 
@@ -7268,6 +7281,14 @@ function rrCard(g) {
   card.appendChild(strip);
   rgNote(card, g.roster_line);
   rgNote(card, g.gear_line);
+  // THE EIGHT GROUPS: a tank, a healer and three damage dealers each, with
+  // the tree each seat needs. raidready.py writes every line.
+  if ((g.groups || []).length) {
+    card.appendChild(el("div", "rg-sect", "the eight groups"));
+    rgNote(card, g.gap_line, (g.gaps && (g.gaps.tanks || g.gaps.healers || g.gaps.damage))
+      ? "rg-block" : "rg-note");
+    for (const group of g.groups) rgNote(card, group.line, "rg-row");
+  }
   card.appendChild(el("div", "rg-sect", "what stands in the way"));
   rgNote(card, g.blockers_line);
   for (const b of g.blockers) {

@@ -89,6 +89,57 @@ GUILD_MEMBERS_SQL = (
 )
 
 
+# --- the seat targets ------------------------------------------------------------
+#
+# THE TALENT TREE EACH RAIDER'S SEAT NEEDS, in mod-overseer's
+# overseer_raid_spec (2026_09_25_10_overseer_raid_spec.sql). Written for every
+# placed raider of each family's guild whenever the bridge plans the lineup,
+# not only when a raid is ordered: the natural guilds' bots level from 1 and
+# the module spends each new talent point in the seat's tree (`tab`, the
+# talent frame's order, 0 to 2). A family character's row is written for the
+# page and the log; the module leaves the family to its roster tree.
+SPEC_TABLE = "overseer_raid_spec"
+DELETE_SPECS_SQL = "DELETE FROM overseer_raid_spec WHERE guild = %s"
+INSERT_SPEC_SQL = (
+    "INSERT INTO overseer_raid_spec (name, guild, class, tab, tree, duty, subgroup) "
+    "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+    "ON DUPLICATE KEY UPDATE guild = VALUES(guild), class = VALUES(class), "
+    "tab = VALUES(tab), tree = VALUES(tree), duty = VALUES(duty), "
+    "subgroup = VALUES(subgroup)"
+)
+# The guild a family's names are in: the first one, as every guild read here
+# takes the family's guild to be one.
+GUILD_OF_SQL = (
+    "SELECT g.name FROM guild g JOIN guild_member gm ON gm.guildid = g.guildid "  # noqa: S608 - constant fragments only
+    "JOIN characters c ON c.guid = gm.guid WHERE c.name IN ({holes}) "
+    "ORDER BY g.guildid LIMIT 1"
+)
+
+
+def spec_rows(guild: str, lineup: dict) -> list:
+    """(name, guild, class, tab, tree, duty, subgroup) per placed raider whose
+    seat names a tree, subgroup zero-based as the seat table holds it."""
+    rows = []
+    for index, group in enumerate(lineup.get("groups") or []):
+        number = int(group.get("number") or index + 1)
+        for member in group.get("members") or []:
+            tab = member.get("target_tab")
+            if tab is None or not member.get("target_spec"):
+                continue
+            rows.append(
+                (
+                    str(member["name"]),
+                    str(guild or ""),
+                    int(member.get("class_id") or 0),
+                    int(tab),
+                    str(member["target_spec"]),
+                    str(member.get("duty") or ""),
+                    number - 1,
+                )
+            )
+    return rows
+
+
 def is_raid(keyword: str) -> bool:
     return str(keyword or "") in jobs.RAID_KEYWORDS
 

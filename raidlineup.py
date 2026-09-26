@@ -95,144 +95,268 @@ def _take(pool: list, want: int, allowed: frozenset | None = None, test=None) ->
     return taken
 
 
-# A CLASSIC MOLTEN CORE RAID, not one tank and one healer per group. Guilds
-# brought a main tank and three off tanks (Garr's adds, Majordomo's guards,
-# the Ragnaros tank swap) and about three healers in ten. Per forty raiders:
-# four tanks and twelve healers. A raid below the minimums cannot hold the
-# fights at all: two tanks, and one healer for each group.
-TANKS_PER_TEN = 1
-HEALERS_PER_TEN = 3
+# EIGHT PERFECT GROUPS OF FIVE (the operator, 2026-09-26). Every group is one
+# tank, one healer and three damage dealers, so each also works as a dungeon
+# party, and the raid's group buffs are spread: a paladin or a shaman in each
+# group where the guild has them, a priest's Fortitude, a druid's Mark.
+#
+# THE SEATS ARE PLANNED FROM CLASSES. The natural guilds' bots start again at
+# level 1 and choose talents as they level, so a talent tree read today is a
+# preference, not a fact the plan must keep. Each placed raider gets the tree
+# its seat needs (`target_spec`, `target_tab`), which mod-overseer's
+# overseer_raid_spec takes so the bot spends its points there. A raider
+# already in a tree that fits its seat keeps it. The family is the exception:
+# a family character's tree is the operator's decision (the roster's spec
+# tab), so it takes the seat its tree plays and is never planned a respec.
+TANKS_PER_GROUP, HEALERS_PER_GROUP = 1, 1
+DAMAGE_PER_GROUP = GROUP_SIZE - TANKS_PER_GROUP - HEALERS_PER_GROUP
+# Below this many tanks a raid cannot hold a fight at all (raidready's hard
+# blocker); between it and one a group, the raid runs thin.
 MIN_TANKS = 2
 
 # The duty words, written on each placed raider and into the seat table.
 MAIN_TANK, OFF_TANK = "main tank", "off tank"
+HEALER_WORD = "healer"
 DAMAGE_WORD = "damage"
 
-# Damage dealers are grouped by kind, the way a raid leader groups them: the
-# melee together (shouts, Windfury, Leader of the Pack reach their own group
-# only), then the hunters (Trueshot Aura), then the casters (Moonkin Aura, a
-# priest's spirit). A damage dealer whose tree is unknown goes last.
-_DPS_ORDER = {
-    raidroles.TANK: 0,
-    raidroles.MELEE: 1,
-    raidroles.RANGED: 2,
-    raidroles.CASTER: 3,
+# The group buffs a raid leader spreads, by the class that brings them. A
+# paladin's blessings and a shaman's totems are one need: either fills it.
+BLESSINGS, FORTITUDE, MARK = "blessings or totems", "fortitude", "mark"
+BUFF_OF = {PALADIN: BLESSINGS, SHAMAN: BLESSINGS, PRIEST: FORTITUDE, DRUID: MARK}
+BUFFS = (BLESSINGS, FORTITUDE, MARK)
+
+# Who to recruit for a missing seat, most useful first. A class that fills
+# only the missing seat comes before a hybrid, which could be taken for the
+# other. No death knight: recruits start at level 1 under the natural rules,
+# and a death knight starts at 55.
+RECRUIT_FOR = {
+    "tanks": (WARRIOR, PALADIN, DRUID),
+    "healers": (PRIEST, SHAMAN, PALADIN, DRUID),
+}
+
+_SEAT_ROLE = {
+    raidroles.SEAT_TANK: "tank",
+    raidroles.SEAT_HEALER: "healer",
+    raidroles.SEAT_DAMAGE: "dps",
 }
 
 
-def _known_tree(member: dict) -> bool:
-    return bool(member.get("spec"))
+def _locked_seat(member: dict, guaranteed: frozenset) -> str:
+    """The seat a family character's own tree plays, or "" when it is free."""
+    if member["name"] not in guaranteed or not member.get("spec"):
+        return ""
+    role = member.get("raid_role")
+    if role == raidroles.TANK:
+        return raidroles.SEAT_TANK
+    if role == raidroles.HEALER:
+        return raidroles.SEAT_HEALER
+    return raidroles.SEAT_DAMAGE
 
 
-def _plays(role: str):
-    return lambda member: member.get("raid_role") == role
+def _fits(seat: str):
+    return lambda m: raidroles.fits_seat(m.get("class_id"), m.get("spec"), seat)
 
 
-def _unknown_tree(member: dict) -> bool:
-    return not _known_tree(member)
+def _free_tree(member: dict) -> bool:
+    return not member.get("spec")
 
 
-def _pick_tanks(pool: list, want: int) -> list:
-    """Tanks by tree first; then a member whose tree is unknown and whose
-    class can tank (a pure tank class first); then a warrior playing a damage
-    tree, as a classic raid's off tank in a shield. Never a known healer."""
-    tanks = _take(pool, want, None, _plays(raidroles.TANK))
-    tanks += _take(pool, want - len(tanks), PURE_TANKS, _unknown_tree)
-    tanks += _take(pool, want - len(tanks), TANKS, _unknown_tree)
-    tanks += _take(pool, want - len(tanks), PURE_TANKS)
-    return tanks
+def _pick_seats(pool: list, guaranteed: frozenset, groups: int) -> tuple:
+    """(tanks, healers, damage) for `groups` groups, taken out of `pool`.
+
+    The family first, each to the seat its tree plays. Then, for the tanks
+    and the healers: a tree that already fits the seat; a class that can
+    only take that seat (warrior and death knight tank, priest heals; a
+    shaman heals but cannot tank), free trees before ones that would
+    respec; and last the hybrids (paladin, druid), each to whichever of the
+    two seats is shorter, so a guild short of both is short evenly. Then the
+    damage dealers: the family, a class that brings a group buff, the rest.
+    """
+    want = {
+        raidroles.SEAT_TANK: groups * TANKS_PER_GROUP,
+        raidroles.SEAT_HEALER: groups * HEALERS_PER_GROUP,
+        raidroles.SEAT_DAMAGE: groups * DAMAGE_PER_GROUP,
+    }
+    seats = {seat: [] for seat in want}
+
+    def room(seat):
+        return want[seat] - len(seats[seat])
+
+    for member in [m for m in pool if _locked_seat(m, guaranteed)]:
+        seat = _locked_seat(member, guaranteed)
+        if room(seat) <= 0:
+            continue
+        pool.remove(member)
+        seats[seat].append(member)
+
+    def take(seat, allowed=None, test=None):
+        seats[seat] += _take(pool, max(0, room(seat)), allowed, test)
+
+    tank, healer = raidroles.SEAT_TANK, raidroles.SEAT_HEALER
+    pure_tanks, pure_healers = frozenset({WARRIOR, DEATH_KNIGHT}), frozenset({PRIEST})
+    healer_only = frozenset({PRIEST, SHAMAN})
+    hybrids = frozenset({PALADIN, DRUID})
+
+    take(tank, None, _fits(tank))
+    take(healer, None, _fits(healer))
+    take(tank, pure_tanks, _free_tree)
+    take(tank, pure_tanks)
+    take(healer, pure_healers, _free_tree)
+    take(healer, healer_only, _free_tree)
+    take(healer, pure_healers)
+    take(healer, healer_only)
+    for test in (_free_tree, None):
+        while room(tank) > 0 or room(healer) > 0:
+            seat = tank if room(tank) >= room(healer) else healer
+            got = _take(pool, 1, hybrids, test)
+            if not got:
+                break
+            seats[seat] += got
+
+    take(raidroles.SEAT_DAMAGE, None, lambda m: m["name"] in guaranteed)
+    take(raidroles.SEAT_DAMAGE, frozenset(BUFF_OF))
+    take(raidroles.SEAT_DAMAGE)
+    return seats[tank], seats[healer], seats[raidroles.SEAT_DAMAGE]
 
 
-def _pick_healers(pool: list, want: int) -> list:
-    """Healers by tree first; then a member whose tree is unknown and whose
-    class can heal. A damage tree is never made to heal: that is a respec,
-    and the shortfall says so instead."""
-    healers = _take(pool, want, None, _plays(raidroles.HEALER))
-    healers += _take(pool, want - len(healers), PURE_HEALERS, _unknown_tree)
-    healers += _take(pool, want - len(healers), HEALERS, _unknown_tree)
-    return healers
+def _target(member: dict, seat: str, guaranteed: frozenset) -> str:
+    if _locked_seat(member, guaranteed) == seat:
+        return member.get("spec") or ""
+    return raidroles.target_tree(member.get("class_id"), seat, member.get("spec"))
 
 
 def _label(member: dict) -> str:
-    duty = member["duty"]
-    return "%s, %s" % (duty, member["spec"]) if member.get("spec") else duty
+    duty, target, spec = member["duty"], member.get("target_spec"), member.get("spec")
+    if not target:
+        return duty
+    if member.get("respec"):
+        return "%s, %s (now %s)" % (duty, target, spec)
+    return "%s, %s" % (duty, target)
 
 
-def _placed(member: dict, role: str, duty: str) -> dict:
-    out = dict(member, role=role, duty=duty)
+def _placed(member: dict, seat: str, duty: str, guaranteed: frozenset) -> dict:
+    target = _target(member, seat, guaranteed)
+    if seat == raidroles.SEAT_DAMAGE:
+        duty = (
+            raidroles.seat_duty(member.get("class_id"), target)
+            if target
+            else DAMAGE_WORD
+        )
+    out = dict(
+        member,
+        role=_SEAT_ROLE[seat],
+        seat=seat,
+        duty=duty,
+        target_spec=target,
+        target_tab=raidroles.tree_tab(member.get("class_id"), target),
+        respec=bool(member.get("spec"))
+        and bool(target)
+        and member.get("spec") != target,
+        buff=BUFF_OF.get(member.get("class_id"), ""),
+    )
     out["label"] = _label(out)
     return out
 
 
-def _healer_order(healers) -> list:
-    """The healers placed, a priest first: group 1's shields the tanks."""
-    rest = list(healers)
-    first = next((h for h in rest if h.get("class_id") == PRIEST), None)
-    if first is None and rest:
-        first = rest[0]
-    order = ([first] if first is not None else []) + [h for h in rest if h is not first]
-    return [_placed(h, "healer", raidroles.HEALER) for h in order]
+def _buffs(group: list) -> set:
+    return {m["buff"] for m in group if m.get("buff")}
 
 
-def _deal_healers(groups: list, healers: list, size: int) -> None:
-    """One healer to each group in order while they last, then the rest into
-    the last groups, the raid's healing group."""
-    for group in groups:
-        if healers and len(group) < size:
-            group.append(healers.pop(0))
-    for group in reversed(groups):
-        while healers and len(group) < size:
-            group.append(healers.pop(0))
+def _scarcity(members: list) -> dict:
+    """buff -> how many of the members bring it; the rarest is placed first."""
+    out: dict = {}
+    for m in members:
+        if m.get("buff"):
+            out[m["buff"]] = out.get(m["buff"], 0) + 1
+    return out
 
 
-def _damage_queue(spare_tanks, dps) -> list:
-    """Spare tanks as off tanks, then melee, hunters and casters in turn."""
-    ordered = sorted(
-        dps, key=lambda m: _DPS_ORDER.get(m.get("raid_role"), len(_DPS_ORDER))
-    )
-    duty = lambda m: (  # noqa: E731
-        m.get("raid_role") if m.get("raid_role") in _DPS_ORDER else DAMAGE_WORD
-    )
-    return [_placed(m, "tank", OFF_TANK) for m in spare_tanks] + [
-        _placed(m, "dps", duty(m)) for m in ordered
-    ]
+def _deal(groups: list, members: list, cap: int, kind=None) -> None:
+    """Deal `members` into the groups, at most `cap` of this kind a group.
 
-
-def _deal_damage(groups: list, damage: list, size: int) -> None:
-    """EVEN, THEN FULL. The groups after the tanks' are filled in order to an
-    even share first, so a short roster makes seven thin groups rather than
-    four full ones and three with only a healer, and a full one still fills
-    group by group, each kind together. Whatever is left fills any room."""
-    rest = groups[1:]
-    if rest:
-        share = (sum(len(g) for g in rest) + len(damage)) // len(rest)
-        for cap in (share, share + 1):
-            for group in rest:
-                while damage and len(group) < min(cap, size):
-                    group.append(damage.pop(0))
-    for group in groups:
-        while damage and len(group) < size:
-            group.append(damage.pop(0))
-
-
-def _groups(tanks, healers, dps, count: int, size: int) -> list:
-    """Deal the raid into `count` groups of `size`.
-
-    Group 1 is the tanks' group: the main tank and the off tanks (up to
-    size - 1) with a healer, a priest first (Power Word: Shield on the tank).
-    Every other group gets one healer while they last, and the healers left
-    over fill the last groups, the raid's healing group. The damage dealers
-    fill the free places in group order, melee first, then hunters, then
-    casters, so each kind stands together, to an even share per group first.
+    A buff bearer goes to the group that lacks its buff and has the fewest
+    buffs, the rarest buff first so it is not spent where a commoner one would
+    do. Anyone else goes where the fewest of its own duty stand (a dungeon
+    party wants a mix), then to the emptiest group. Ties to the lowest group.
     """
+    count = _scarcity(members)
+    ordered = sorted(
+        members,
+        key=lambda m: (0 if m.get("buff") else 1, count.get(m.get("buff"), 0)),
+    )
+    for member in ordered:
+        open_ = [
+            i
+            for i, g in enumerate(groups)
+            if len([m for m in g if (kind is None or m["seat"] == kind)]) < cap
+            and len(g) < GROUP_SIZE
+        ]
+        if not open_:
+            return
+
+        def key(i):
+            group = groups[i]
+            lacks = (
+                0 if member.get("buff") and member["buff"] not in _buffs(group) else 1
+            )
+            same = len([m for m in group if m["duty"] == member["duty"]])
+            return (lacks, len(_buffs(group)), same, len(group), i)
+
+        groups[min(open_, key=key)].append(member)
+
+
+def _groups(tanks: list, healers: list, damage: list, count: int) -> list:
+    """Eight groups: a tank each (the main tank in group 1), a healer each (a
+    priest in group 1 when there is one, for Power Word: Shield on the main
+    tank), and three damage dealers each, the buffs spread."""
     groups = [[] for _ in range(count)]
     if not count:
         return groups
-    for index, member in enumerate(tanks[: size - 1]):
-        groups[0].append(_placed(member, "tank", MAIN_TANK if index == 0 else OFF_TANK))
-    _deal_healers(groups, _healer_order(healers), size)
-    _deal_damage(groups, _damage_queue(tanks[size - 1 :], dps), size)
+    for index, tank in enumerate(tanks[:count]):
+        groups[index].append(tank)
+    healers = list(healers[:count])
+    priest = next((h for h in healers if h.get("class_id") == PRIEST), None)
+    if priest is not None:
+        healers.remove(priest)
+        groups[0].append(priest)
+    _deal(groups, healers, HEALERS_PER_GROUP, raidroles.SEAT_HEALER)
+    _deal(groups, damage, DAMAGE_PER_GROUP, raidroles.SEAT_DAMAGE)
     return groups
+
+
+# A buff no group can have because too few raiders bring it: recruit the
+# classes that do, after any missing seat.
+RECRUIT_FOR_BUFF = {BLESSINGS: (PALADIN, SHAMAN), MARK: (DRUID,), FORTITUDE: (PRIEST,)}
+
+
+def _recruit_classes(gaps: dict, cover: dict | None = None, groups: int = 0) -> list:
+    """The classes recruiting prefers, most useful first: those that fill a
+    missing tank or healer seat (a paladin or a druid first when both are
+    short, since either fills either), then those that bring a group buff
+    fewer raiders bring than there are groups."""
+    wanted = [seat for seat in ("tanks", "healers") if gaps.get(seat)]
+    if len(wanted) == 2:
+        both = [c for c in RECRUIT_FOR["tanks"] if c in RECRUIT_FOR["healers"]]
+        out = both + [c for s in wanted for c in RECRUIT_FOR[s] if c not in both]
+    elif wanted:
+        out = list(RECRUIT_FOR[wanted[0]])
+    else:
+        out = []
+    for buff in BUFFS:
+        if cover and groups and cover.get(buff, {}).get("bearers", 0) < groups:
+            out += list(RECRUIT_FOR_BUFF[buff])
+    return list(dict.fromkeys(out))
+
+
+def _buff_cover(groups: list, raiders: list) -> dict:
+    """buff -> (groups holding it, raiders who bring it)."""
+    return {
+        buff: {
+            "groups": len([g for g in groups if buff in _buffs(g["members"])]),
+            "bearers": len([m for m in raiders if m.get("buff") == buff]),
+        }
+        for buff in BUFFS
+    }
 
 
 def build_lineup(
@@ -252,22 +376,20 @@ def build_lineup(
     kick list, and it is a list rather than a count so a page can name every
     character before a person acts on it.
 
-    Each placed raider carries `role` (tank, healer or dps, as before),
-    `spec` (the talent tree, or ""), `raid_role` (raidroles' word), `duty`
-    (main tank, off tank, healer, melee, ranged, caster or damage) and
-    `label`, the duty and the tree as the page prints them.
+    Each placed raider carries `role` (tank, healer or dps), `seat`, `spec`
+    (the tree it plays now, or ""), `raid_role`, `duty` (main tank, off tank,
+    healer, melee, ranged, caster or damage), `target_spec` and `target_tab`
+    (the tree the seat needs), `respec` (it plays another tree now), `buff`
+    and `label`. Each group carries `buffs` and `missing_buffs`. The lineup
+    carries `gaps` (seats no class in the guild can fill), `recruit_classes`
+    (the classes to recruit for them) and `buff_cover`.
     """
     guaranteed = frozenset(guaranteed)
     pool = sorted(
         (raidroles.with_spec(m) for m in members if m.get("name")),
         key=lambda m: _sort_key(m, guaranteed),
     )
-
-    groups_wanted = raiders // group_size if group_size else 0
-    tanks_wanted = max(MIN_TANKS, raiders * TANKS_PER_TEN // 10) if raiders else 0
-    healers_wanted = (
-        max(groups_wanted, raiders * HEALERS_PER_TEN // 10) if raiders else 0
-    )
+    count = raiders // group_size if group_size else 0
 
     # SUMMONERS BEFORE RAIDERS, because the corps is class-locked and the raid
     # is not. Warlocks spent as raid DPS cannot be recovered for summoning,
@@ -281,88 +403,156 @@ def build_lineup(
         summoner_corps.remove(member)
         pool.insert(0, member)
 
-    tanks = _pick_tanks(pool, tanks_wanted)
-    healers = _pick_healers(pool, healers_wanted)
-    dps = _take(pool, max(0, raiders - len(tanks) - len(healers)))
+    tank_list, healer_list, damage_list = _pick_seats(pool, guaranteed, count)
     upkeep = _take(pool, maintenance)
 
+    tanks = [
+        _placed(m, raidroles.SEAT_TANK, MAIN_TANK if i == 0 else OFF_TANK, guaranteed)
+        for i, m in enumerate(tank_list)
+    ]
+    healers = [
+        _placed(m, raidroles.SEAT_HEALER, HEALER_WORD, guaranteed) for m in healer_list
+    ]
+    damage = [
+        _placed(m, raidroles.SEAT_DAMAGE, DAMAGE_WORD, guaranteed) for m in damage_list
+    ]
+    dealt = _groups(tanks, healers, damage, count)
     groups = [
-        {"number": index + 1, "members": members_}
-        for index, members_ in enumerate(
-            _groups(tanks, healers, dps, groups_wanted, group_size)
-        )
+        {
+            "number": index + 1,
+            "members": group,
+            "buffs": [b for b in BUFFS if b in _buffs(group)],
+            "missing_buffs": [b for b in BUFFS if b not in _buffs(group)],
+        }
+        for index, group in enumerate(dealt)
     ]
 
-    placed = sum(len(group["members"]) for group in groups)
+    placed = [m for g in groups for m in g["members"]]
     composition: dict = {}
-    for group in groups:
-        for member in group["members"]:
-            composition[member["duty"]] = composition.get(member["duty"], 0) + 1
+    for member in placed:
+        composition[member["duty"]] = composition.get(member["duty"], 0) + 1
+    wanted = {
+        "raiders": raiders,
+        "maintenance": maintenance,
+        "summoners": summoners,
+        "total": raiders + maintenance + summoners,
+        "groups": count,
+        "tanks": count * TANKS_PER_GROUP,
+        "healers": count * HEALERS_PER_GROUP,
+        "damage": count * DAMAGE_PER_GROUP,
+    }
+    gaps = {
+        "tanks": max(0, wanted["tanks"] - len(tanks)),
+        "healers": max(0, wanted["healers"] - len(healers)),
+        "damage": max(0, wanted["damage"] - len(damage)),
+    }
+    cover = _buff_cover(groups, placed)
+    recruit = _recruit_classes(gaps, cover, count)
     return {
         "groups": groups,
         "maintenance": [dict(m, role="maintenance") for m in upkeep],
         "summoners": [dict(m, role="summoner") for m in summoner_corps],
         "surplus": list(pool),
-        "wanted": {
-            "raiders": raiders,
-            "maintenance": maintenance,
-            "summoners": summoners,
-            "total": raiders + maintenance + summoners,
-            "tanks": tanks_wanted,
-            "healers": healers_wanted,
-        },
+        "wanted": wanted,
         "shortfall": {
-            "raiders": max(0, raiders - placed),
+            "raiders": max(0, raiders - len(placed)),
             "maintenance": max(0, maintenance - len(upkeep)),
             "summoners": max(0, summoners - len(summoner_corps)),
-            "tanks": max(0, tanks_wanted - len(tanks)),
-            "healers": max(0, healers_wanted - len(healers)),
+            **gaps,
         },
+        "gaps": gaps,
+        "recruit_classes": recruit,
+        "buff_cover": cover,
         "counts": {
-            "raiders": placed,
+            "raiders": len(placed),
             "maintenance": len(upkeep),
             "summoners": len(summoner_corps),
             "surplus": len(pool),
             "considered": len(members),
+            "respec": len([m for m in placed if m.get("respec")]),
         },
         "composition": composition,
-        "roles_line": roles_line(groups, tanks_wanted, healers_wanted),
+        "roles_line": roles_line(groups, wanted),
+        "gap_line": gap_line(gaps, recruit, cover, count),
     }
 
 
-def roles_line(groups: list, tanks_wanted: int, healers_wanted: int) -> str:
+def roles_line(groups: list, wanted: dict) -> str:
     """The raid's make-up in one sentence, as a raid leader would say it."""
     placed = [m for g in groups for m in g["members"]]
     if not placed:
         return "Nobody is placed, so there is no raid to describe."
     main = next((m for m in placed if m["duty"] == MAIN_TANK), None)
-    tanks = [m for m in placed if m["role"] == "tank"]
-    healers = [m for m in placed if m["role"] == "healer"]
 
-    def count(duty):
-        return len([m for m in placed if m["duty"] == duty])
+    def seated(seat):
+        return len([m for m in placed if m["seat"] == seat])
 
-    head = "%d of %d tanks%s, %d of %d healers" % (
-        len(tanks),
-        tanks_wanted,
-        " (%s the main tank)" % main["name"] if main else "",
-        len(healers),
-        healers_wanted,
-    )
+    def duty(word):
+        return len([m for m in placed if m["duty"] == word])
+
     kinds = [
-        "%d %s" % (count(duty), duty)
-        for duty in (raidroles.MELEE, raidroles.RANGED, raidroles.CASTER, DAMAGE_WORD)
-        if count(duty)
+        "%d %s" % (duty(word), word)
+        for word in (raidroles.MELEE, raidroles.RANGED, raidroles.CASTER, DAMAGE_WORD)
+        if duty(word)
     ]
-    unknown = len([m for m in placed if not m.get("spec")])
-    tail = "; %d with no talent tree read, placed by class" % unknown if unknown else ""
-    return (
-        head
-        + (", " + ", ".join(kinds) if kinds else "")
-        + ". Roles come from each raider's talent tree; group 1 holds the tanks, "
-        "each other group a healer while they last, and the damage dealers "
-        "stand with their own kind" + tail + "."
+    full = len(
+        [
+            g
+            for g in groups
+            if [m["seat"] for m in g["members"]].count(raidroles.SEAT_TANK)
+            == TANKS_PER_GROUP
+            and [m["seat"] for m in g["members"]].count(raidroles.SEAT_HEALER)
+            == HEALERS_PER_GROUP
+            and len(g["members"]) == GROUP_SIZE
+        ]
     )
+    respec = len([m for m in placed if m.get("respec")])
+    return (
+        "%d of %d tanks%s, %d of %d healers, %d of %d damage%s. %d of %d groups "
+        "are a full tank, healer and three damage dealers; each raider is "
+        "given the talent tree its seat needs%s."
+        % (
+            seated(raidroles.SEAT_TANK),
+            wanted["tanks"],
+            " (%s the main tank)" % main["name"] if main else "",
+            seated(raidroles.SEAT_HEALER),
+            wanted["healers"],
+            seated(raidroles.SEAT_DAMAGE),
+            wanted["damage"],
+            " (%s)" % ", ".join(kinds) if kinds else "",
+            full,
+            wanted["groups"],
+            "; %d play another tree now" % respec if respec else "",
+        )
+    )
+
+
+def gap_line(
+    gaps: dict, recruit: list, cover: dict | None = None, groups: int = 0
+) -> str:
+    """The seats no class in the guild can fill, the buffs too few raiders
+    bring to reach every group, and who recruiting prefers for them."""
+    short = [
+        "%d %s" % (gaps[k], k[:-1] if gaps[k] == 1 else k)
+        for k in ("tanks", "healers", "damage")
+        if gaps.get(k)
+    ]
+    line = (
+        "Short %s." % ", ".join(short)
+        if short
+        else "No seat gap: every seat of the %d groups has a raider of a class that can fill it."
+        % groups
+    )
+    thin = [
+        "%s reaches %d of %d" % (buff, cover[buff]["groups"], groups)
+        for buff in BUFFS
+        if cover and groups and cover.get(buff, {}).get("bearers", 0) < groups
+    ]
+    if thin:
+        line += " Too few raiders bring a buff to every group: %s." % "; ".join(thin)
+    if recruit:
+        line += " Recruiting prefers %s." % ", ".join(CLASS_NAMES[c] for c in recruit)
+    return line
 
 
 # The party role words, as armory.py and gear.py spell them.
