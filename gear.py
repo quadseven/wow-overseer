@@ -587,6 +587,26 @@ def usable_by_class(holding: Holding, class_id: int) -> bool:
     return bool(int(holding.allowable_class) & (1 << (class_id - 1)))
 
 
+def _cannot_wear(holding: Holding, character: CharacterState) -> str:
+    """Why this character may not put this on at all, or "": class, armour
+    training, weapon skill, level, a known slot and the off hand's use."""
+    cls = _CLASS_NAMES.get(character.class_id, "class %d" % character.class_id)
+    if not usable_by_class(holding, character.class_id):
+        return f"{cls} cannot equip it"
+    # AllowableClass said yes, which for armour it says to everyone. Whether
+    # the class is trained in that armour type is a separate fact and the one
+    # that stops mail reaching the priest - see _ARMOR_TRAINED_AT.
+    if not wearable_armor(holding, character):
+        return f"{cls} is not trained in that armour type"
+    if not wieldable_weapon(holding, character):
+        return f"{cls} cannot wield that weapon type"
+    if character.level < holding.required_level:
+        return f"requires level {holding.required_level}"
+    if not _slot_for(holding):
+        return "inventory type %d has no known slot" % int(holding.inventory_type)
+    return _off_hand_refusal(holding, character)
+
+
 def would_wear(holding: Holding, character: CharacterState) -> tuple:
     """Would this character actually put this on, ignoring who may own it.
 
@@ -612,29 +632,10 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
             False,
             "not gear (quest items, reagents and consumables are never considered)",
         )
-    if not usable_by_class(holding, character.class_id):
-        cls = _CLASS_NAMES.get(character.class_id, "class %d" % character.class_id)
-        return False, f"{cls} cannot equip it"
-    # AllowableClass said yes, which for armour it says to everyone. Whether
-    # the class is trained in that armour type is a separate fact and the one
-    # that stops mail reaching the priest - see _ARMOR_TRAINED_AT.
-    if not wearable_armor(holding, character):
-        cls = _CLASS_NAMES.get(character.class_id, "class %d" % character.class_id)
-        return False, f"{cls} is not trained in that armour type"
-    if not wieldable_weapon(holding, character):
-        cls = _CLASS_NAMES.get(character.class_id, "class %d" % character.class_id)
-        return False, f"{cls} cannot wield that weapon type"
-    if character.level < holding.required_level:
-        return False, f"requires level {holding.required_level}"
-
-    slot = _slot_for(holding)
-    if not slot:
-        return False, "inventory type %d has no known slot" % int(
-            holding.inventory_type
-        )
-    refusal = _off_hand_refusal(holding, character)
+    refusal = _cannot_wear(holding, character)
     if refusal:
         return False, refusal
+    slot = _slot_for(holding)
 
     # THE ROLE GUARD (the Severing Axe test, #2813). A two-hander is never an
     # upgrade for anyone currently wearing something in the off hand: taking
