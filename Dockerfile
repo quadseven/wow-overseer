@@ -23,7 +23,7 @@ COPY core.py bridge.py voice.py transform.py \
      bonkers.py \
      quests.py overhear.py questbook.py \
      questshare.py travel.py stream.py frames.py \
-     professions.py craft.py craft_supply.py auction.py jobs.py trainjob.py \
+     professions.py craft.py craft_supply.py auction.py gearup.py jobs.py trainjob.py \
      craft_rhythm.py \
      skillgoal.py gatheraim.py gatherband.py \
      flightlearn.py \
