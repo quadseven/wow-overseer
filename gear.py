@@ -928,7 +928,14 @@ def plan(holdings, characters) -> Plan:
         if tank:
             # THE TANK'S SHIELD, ahead of the holder (see `tank_claim`).
             _, reason = is_upgrade_for(holding, by_name[tank])
-            grants.append(_grant_for(holding, by_name[tank], reason))
+            grant = _grant_for(holding, by_name[tank], reason)
+            grants.append(
+                replace(
+                    grant,
+                    reason=f"{holding.holder} is holding {holding.name} (item level "
+                    f"{holding.item_level}), and {tank} tanks for the family: {reason}.",
+                )
+            )
             continue
         if holder_state is not None:
             holder_upgrade, _ = is_upgrade_for(holding, holder_state)
