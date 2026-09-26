@@ -319,6 +319,19 @@ class WhoLeadsToTheTrainer(unittest.TestCase):
         rows = [row("Zug"), row("Oz", lead=1)]
         self.assertEqual("Zug", tradechoice.next_lead(rows, leader="Oz", head="Zug"))
 
+    def test_a_campaign_hands_a_borrowed_lead_back_to_the_head(self):
+        rows = [row("Zug"), row("Uzza", lead=1), row("Oz")]
+        self.assertEqual("Zug", tradechoice.campaign_lead(rows, head="Zug"))
+
+    def test_a_campaign_leaves_the_head_leading(self):
+        rows = [row("Zug", lead=1), row("Uzza", learn=171)]
+        self.assertEqual("", tradechoice.campaign_lead(rows, head="Zug"))
+
+    def test_a_campaign_never_names_a_head_that_is_not_on_the_roster(self):
+        rows = [row("Uzza", lead=1), row("Oz")]
+        self.assertEqual("", tradechoice.campaign_lead(rows, head="Zug"))
+        self.assertEqual("", tradechoice.campaign_lead(rows, head=""))
+
     def test_a_borrower_past_its_bound_is_skipped(self):
         rows = [row("Zug", lead=1), row("Oz", learn=197), row("Uzza", learn=171)]
         got = tradechoice.next_lead(

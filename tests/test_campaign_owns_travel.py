@@ -40,6 +40,7 @@ import jev_activity
 import jobs
 import learnaim
 import townslot
+import tradechoice as real_tradechoice
 import travel
 
 BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
@@ -633,16 +634,17 @@ class ClearancePicksAnotherMailbox(unittest.TestCase):
 
 
 class TheLearnTripsWait(unittest.TestCase):
-    def run_pass(self, campaign, town_first=False):
+    def run_pass(self, campaign, town_first=False, leads="Zug"):
         slot = townslot.Slot(releasable=economy)
         if campaign:
-            slot.yield_to_campaign("dungeon:ragefire on Zug")
+            slot.yield_to_campaign("dungeon:ragefire on " + leads)
         if town_first:
             slot.hold_for_town("bag room for Oz, Zork, Zug")
         ran, marked = [], []
         rows = [
-            learnaim.Row(character="Zug", learn_skill=186, leads=True),
+            learnaim.Row(character="Zug", learn_skill=186, leads=leads == "Zug"),
             learnaim.Row(character="Oz", learn_skill=171, wanted=(164,)),
+            learnaim.Row(character="Uzza", leads=leads == "Uzza"),
         ]
         me = types.SimpleNamespace(
             _cohort_town_slot=lambda key=None: slot, _family_lead_since={}
@@ -653,6 +655,7 @@ class TheLearnTripsWait(unittest.TestCase):
             borrow_clock=lambda since, rows, lead, key, now: {},
             expired=lambda since, now, limit: set(),
             led_by=lambda rows, lead: rows,
+            campaign_lead=real_tradechoice.campaign_lead,
         )
         ns = _load(
             ["_family_learn_aims"],
@@ -680,6 +683,17 @@ class TheLearnTripsWait(unittest.TestCase):
         self.assertFalse(any("travel_npc" in sql for sql, _ in ran), ran)
         # The finished learn is still cleared.
         self.assertTrue(any("learn_skill = 0" in sql for sql, _ in ran), ran)
+
+    def test_a_borrowed_lead_goes_back_to_the_head_when_the_campaign_stages(self):
+        # Measured 2026-09-25: a trainee borrowed the lead for a learn errand,
+        # the Ragefire campaign armed, and the trainee led every run after.
+        ran, marked = self.run_pass(campaign=True, leads="Uzza")
+        self.assertEqual(["Zug"], marked)
+        self.assertFalse(any("travel_npc" in sql for sql, _ in ran), ran)
+
+    def test_a_town_hold_leaves_a_borrowed_lead_alone(self):
+        ran, marked = self.run_pass(campaign=False, town_first=True, leads="Uzza")
+        self.assertEqual([], marked)
 
     def test_no_trainer_walk_while_the_campaign_waits_in_town(self):
         ran, marked = self.run_pass(campaign=False, town_first=True)
