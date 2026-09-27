@@ -132,6 +132,7 @@ class Letter:
     delivered: bool
     expire_time: int
     attachments: tuple = ()
+    gear: bool = False
 
 
 @dataclass(frozen=True)
@@ -160,6 +161,34 @@ class Plan:
     notes: tuple = ()
 
 
+# THE EQUIPMENT SLOTS A LETTER CAN FILL, by `item_template.InventoryType`.
+# Every type from head (1) to relic (28), less the ones that are not gear: a
+# shirt (4) and a tabard (19) carry no stats, a bag (18) goes in a bag slot
+# rather than on the character, and ammo (24) and a quiver (27) are consumed
+# or held rather than worn. The same list `gearup.SLOT_TYPES` buys against.
+WEARABLE_TYPES = frozenset(range(1, 29)) - {4, 18, 19, 24, 27}
+
+
+def wears_now(row) -> bool:
+    """Whether one attachment row is equipment its holder can put on today.
+
+    THE PURCHASES THE GEAR ERRAND MAKES ARRIVE HERE. An auction house buy is
+    delivered by post, so every piece `gearup` pays for sits in the buyer's
+    mailbox until a mail pass takes it out. Measured on the dev realm on
+    2026-09-27: 45 pieces of equipment bought at the auction house were still
+    in their buyers' mailboxes a day after the gold was spent, while the same
+    buyers had eight or more of seventeen slots empty.
+
+    `required_level` against `holder_level` is the core's own first refusal to
+    an equip. Class and proficiency are left to the equip drive, which asks the
+    core; this only decides what is worth a bag slot first.
+    """
+    kind = _int(row.get("inventory_type"))
+    if kind not in WEARABLE_TYPES:
+        return False
+    return _int(row.get("required_level")) <= _int(row.get("holder_level"))
+
+
 def _int(value, default=0):
     """Read a number a database driver may hand over as almost anything."""
     try:
@@ -184,7 +213,15 @@ def letters_from_rows(rows, names):
     can only ever ask for what it can see. What tells them apart is the bridge's
     own error handling, which logs, and `Plan.notes`, which explains.
 
-    SORTED BY WHAT EXPIRES FIRST. Mail keeps for thirty days and then the letter
+    GEAR FIRST, THEN BY WHAT EXPIRES FIRST. A letter carrying equipment its
+    holder can wear now (`wears_now`) goes ahead of every other letter that
+    holder has. The visit limit and the bag room both bite, and the oldest
+    letters in a family mailbox are guild materials: measured on 2026-09-27, a
+    visit that landed took sixteen of them and filled the bags, and the
+    forty-five pieces of bought gear behind them stayed in the post. A piece
+    that is put on frees the slot it took.
+
+    Then by expiry. Mail keeps for thirty days and then the letter
     and everything on it are gone, so when the visit limit bites, the letter
     closest to that deadline is the one worth spending the trip on. `mail_id`
     breaks the tie rather than leaving the order to the database, because a plan
@@ -196,6 +233,7 @@ def letters_from_rows(rows, names):
     seen = set(wanted)
     letters: dict = {}
     attachments: dict = {}
+    gear: set = set()
     for row in rows:
         holder = row.get("holder")
         if holder not in seen:
@@ -220,6 +258,8 @@ def letters_from_rows(rows, names):
         guid = _int(row.get("item_guid"))
         if guid > 0 and guid not in attachments[key]:
             attachments[key].append(guid)
+        if guid > 0 and wears_now(row):
+            gear.add(key)
 
     built = [
         Letter(
@@ -230,12 +270,30 @@ def letters_from_rows(rows, names):
             delivered=letter.delivered,
             expire_time=letter.expire_time,
             attachments=tuple(sorted(attachments[key])),
+            gear=key in gear,
         )
         for key, letter in letters.items()
     ]
     return tuple(
-        sorted(built, key=lambda one: (one.holder, one.expire_time, one.mail_id))
+        sorted(
+            built,
+            key=lambda one: (one.holder, not one.gear, one.expire_time, one.mail_id),
+        )
     )
+
+
+def gear_waiting(letters) -> dict:
+    """name -> delivered letters carrying equipment that name can wear now.
+
+    What the gear errand has already bought and not yet collected. The gear
+    pass reads it so it does not buy the same slot twice, and the mail pass
+    reads it to know its walk is the one that fills empty slots.
+    """
+    out: dict = {}
+    for letter in letters:
+        if letter.gear and letter.delivered and not letter.cod:
+            out[letter.holder] = out.get(letter.holder, 0) + 1
+    return out
 
 
 def room_for(name: str, free_slots: dict, already_asked: dict) -> int:

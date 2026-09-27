@@ -290,6 +290,7 @@ def _mail_ns(world, log):
                 ),
                 command=lambda take: "take all",
                 lines=lambda fresh: [],
+                gear_waiting=lambda letters: {},
             ),
             "travel": types.SimpleNamespace(
                 mailbox_aim=lambda spawn, map_id: types.SimpleNamespace(

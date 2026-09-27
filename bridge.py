@@ -2313,13 +2313,20 @@ def _gear_gate(names, keyword):
     """
     reader = globals().get("_fetch_gearup_facts")
     facts = reader(names) if reader else {}
+    # GEAR ALREADY BOUGHT AND WAITING IN THE POST FUNDS THE HOLD AS GOLD DOES.
+    # A member who spent its purse at the auction house reads as too poor to
+    # hold for, while the pieces it paid for sit in its mailbox; the hold is
+    # what gives the mail pass a town to collect them in.
+    mailed = globals().get("_mail_gear_holders")
+    waiting = mailed(names) if mailed else {}
     gear_short, gear_broke = [], []
     for name, character in facts.items():
         worn = [slot for slot in character["equipped"]
                 if slot not in ("shirt", "tabard")]
         if 17 - len(worn) >= globals().get("GEARUP_GATE_EMPTY_SLOTS", 6):
-            target = gear_short if character["purse"] >= globals().get(
-                "GEARUP_GATE_MIN_PURSE", 20000) else gear_broke
+            funded = character["purse"] >= globals().get(
+                "GEARUP_GATE_MIN_PURSE", 20000) or waiting.get(name, 0) > 0
+            target = gear_short if funded else gear_broke
             target.append(name)
     label = keyword or "(default)"
     if gear_broke:
@@ -2359,6 +2366,10 @@ def _gear_campaign_hold(names, keyword, in_run):
     if in_run:
         return False
     facts = _fetch_gearup_facts(names)
+    mailed = globals().get("_mail_gear_holders")
+    for name, count in (mailed(names) if mailed else {}).items():
+        if name in facts:
+            facts[name]["mail_gear"] = count
     short = gearup.campaign_hold(
         facts, False, empty_slots=GEARUP_GATE_EMPTY_SLOTS,
         min_purse=GEARUP_GATE_MIN_PURSE, ceiling=float("inf"),
@@ -7566,8 +7577,20 @@ class Bridge(discord.Client):
 
     async def _gearup_once(self, names: list, leader: str, step: str,
                            cohort=None) -> None:
-        """Buy usable auction equipment with each character's own gold (#146/#147)."""
+        """Buy usable auction equipment with each character's own gold (#146/#147).
+
+        A MEMBER WHOSE LAST PURCHASES ARE STILL IN THE POST IS NOT SHOPPED FOR.
+        The planner reads worn slots only, so it would buy the same empty slot
+        again, and its urgent claim on the traveller would take the column off
+        the mail walk that is on its way to collect them.
+        """
         facts = await self._gearup_facts_and_tanks(names)
+        waiting = await asyncio.to_thread(_mail_gear_holders, names)
+        for name in sorted(waiting):
+            if facts.pop(name, None) is not None:
+                log.info("gearup: %s nothing yet: %d letter(s) of bought "
+                         "equipment wait in the mailbox, and the mail pass "
+                         "collects them first", name, waiting[name])
         short, teams, house = await self._gearup_house(
             names, leader, facts, step, cohort)
         if house is None:
@@ -12918,7 +12941,7 @@ class Bridge(discord.Client):
         # errands cycle after cycle, so the guild never bought a tab. Urgency
         # is bounded the way the auction pass's is: a grant that queues no take
         # backs off (`_mail_urgency_spent`).
-        urgent = await self._mail_urgent(names, cohort)
+        urgent = await self._mail_urgent(names, cohort, letters)
         aimed = await self._claim_town_slot("mail", leader, post.aim,
                                              urgent=urgent,
                                              cohort=_cohort_key(cohort),
@@ -12975,9 +12998,25 @@ class Bridge(discord.Client):
                  _family_label(cohort))
         self._mail_urgency_spent(cohort, urgent, aimed, fresh)
 
-    async def _mail_urgent(self, names, cohort) -> bool:
-        """Whether this mail walk is urgent (#319): the guild master's mailbox
-        holds the dues that pay for the guild's next bank tab."""
+    async def _mail_urgent(self, names, cohort, letters=()) -> bool:
+        """Whether this mail walk is urgent: the guild master's mailbox holds
+        the dues that pay for the guild's next bank tab (#319), or somebody's
+        holds equipment they can wear now.
+
+        THE GEAR IS ALREADY PAID FOR. An auction buy arrives by post, so the
+        gear errand's purchases wait here, and a walk that collects them fills
+        empty slots the moment the equip drive sees them in a bag. Bounded the
+        same way as the dues: an urgent grant that queues no take backs off
+        (`_mail_urgency_spent`).
+        """
+        gear = mailrun.gear_waiting(letters)
+        if gear:
+            log.info("mail: %s has bought equipment waiting in the mailbox, so "
+                     "this walk is urgent%s",
+                     ", ".join("%s (%d letter(s))" % (n, gear[n])
+                               for n in sorted(gear)),
+                     _family_label(cohort))
+            return True
         urgent = await asyncio.to_thread(_dues_fund_tab, names)
         if urgent:
             log.info("mail: the guild master's mailbox holds the dues that pay "
@@ -20675,6 +20714,11 @@ def _nearest_mailbox(name: str, skip=None):
 # sitting on 4,100 copper, the single most valuable thing in any of these
 # mailboxes. The fold back into one Letter per id is `mailrun.letters_from_rows`.
 #
+# THE ITEM FACTS RIDE ALONG (LEFT JOINs again, so a money-only letter still
+# arrives): `mailrun.wears_now` reads the attachment's slot type and required
+# level against the holder's level, so the equipment the gear errand bought is
+# collected ahead of the guild materials that fill the same bags.
+#
 # `deliver_time <= UNIX_TIMESTAMP()` IS ANSWERED IN SQL, where the clock is.
 # The pure module has none, and a Python clock disagreeing with the database's
 # would be a second opinion on a question the executor already answers by
@@ -20690,12 +20734,22 @@ _MAIL_SQL = (
     "SELECT c.name AS holder, m.id AS mail_id, m.money AS money, "
     "m.cod AS cod, m.expire_time AS expire_time, "
     "(m.deliver_time <= UNIX_TIMESTAMP()) AS delivered, "
-    "mi.item_guid AS item_guid "
+    "mi.item_guid AS item_guid, c.level AS holder_level, "
+    "it.InventoryType AS inventory_type, it.RequiredLevel AS required_level "
     "FROM mail m "
     "JOIN characters c ON c.guid = m.receiver "
     "LEFT JOIN mail_items mi ON mi.mail_id = m.id "
+    "LEFT JOIN item_instance ii ON ii.guid = mi.item_guid "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "WHERE c.name IN (%s)"
 )
+
+
+def _mail_gear_holders(names: list) -> dict:
+    """name -> letters of equipment waiting in that name's mailbox that it can
+    wear now; `mailrun.gear_waiting` judges."""
+    return mailrun.gear_waiting(
+        mailrun.letters_from_rows(_fetch_mail(names), names))
 
 
 def _fetch_mail(names: list) -> list:

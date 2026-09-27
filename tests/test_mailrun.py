@@ -112,6 +112,81 @@ class LettersAreFoldedBackTogether(unittest.TestCase):
         self.assertEqual(letters[0].attachments, (777,))
 
 
+def _gear(holder, mail_id, item, *, expire=0, inv=5, req=30, level=35, **kw):
+    """One attachment row carrying the item facts the bridge now joins."""
+    row = _row(holder, mail_id, expire=expire, item=item, **kw)
+    row.update(inventory_type=inv, required_level=req, holder_level=level)
+    return row
+
+
+class BoughtGearComesOutFirst(unittest.TestCase):
+    """The dev realm on 2026-09-27: the family's one landed mailbox visit took
+    sixteen letters of guild materials, oldest first, and filled the bags,
+    while 45 pieces of auction-bought equipment stayed in the post behind
+    them. A letter carrying something its holder can wear now goes first."""
+
+    def test_wearable_gear_goes_ahead_of_older_materials(self):
+        rows = [_row("Bork", 100 + n, expire=1000 + n, item=n + 1) for n in range(10)]
+        rows.append(_gear("Bork", 900, 9001, expire=9999))
+        letters = mailrun.letters_from_rows(rows, ["Bork"])
+        self.assertEqual(letters[0].mail_id, 900)
+        self.assertTrue(letters[0].gear)
+        takes = mailrun.plan(letters, {"Bork": 40}).takes
+        self.assertEqual(takes[0].item_guid, 9001)
+
+    def test_a_visit_limit_still_collects_every_bought_piece_first(self):
+        rows = [_row("Bork", 100 + n, expire=1000 + n, item=n + 1) for n in range(20)]
+        rows += [_gear("Bork", 900 + n, 9000 + n, expire=9999) for n in range(3)]
+        takes = mailrun.plan(
+            mailrun.letters_from_rows(rows, ["Bork"]), {"Bork": 40}
+        ).takes
+        self.assertEqual(len(takes), mailrun.VISIT_LIMIT)
+        self.assertEqual([t.item_guid for t in takes[:3]], [9000, 9001, 9002])
+
+    def test_gear_above_the_holder_level_keeps_its_place(self):
+        """The strip mailed back level 40 to 60 pieces; they wait their turn."""
+        letters = mailrun.letters_from_rows(
+            [
+                _row("Bork", 1, expire=10, item=1),
+                _gear("Bork", 2, 2, expire=20, req=60),
+            ],
+            ["Bork"],
+        )
+        self.assertEqual([one.mail_id for one in letters], [1, 2])
+        self.assertFalse(letters[1].gear)
+
+    def test_bags_shirts_tabards_and_ammo_are_not_gear(self):
+        for inv in (0, 4, 18, 19, 24, 27):
+            self.assertFalse(
+                mailrun.wears_now(
+                    {"inventory_type": inv, "required_level": 1, "holder_level": 35}
+                ),
+                inv,
+            )
+        for inv in (1, 3, 5, 11, 13, 16, 17, 20, 21, 26):
+            self.assertTrue(
+                mailrun.wears_now(
+                    {"inventory_type": inv, "required_level": 1, "holder_level": 35}
+                ),
+                inv,
+            )
+
+    def test_a_row_without_item_facts_is_not_gear(self):
+        """A money-only letter (the LEFT JOIN case) has no item at all."""
+        self.assertFalse(mailrun.wears_now(_row("Og", 41, money=4100)))
+
+    def test_gear_waiting_counts_only_what_can_be_taken(self):
+        rows = [
+            _gear("Bork", 1, 1),
+            _gear("Bork", 2, 2),
+            _gear("Grog", 3, 3, delivered=0),
+            _gear("Grug", 4, 4, cod=500),
+            _row("Og", 5, item=5),
+        ]
+        letters = mailrun.letters_from_rows(rows, FAMILY)
+        self.assertEqual(mailrun.gear_waiting(letters), {"Bork": 2})
+
+
 class WhatIsWorthAskingFor(unittest.TestCase):
     def test_money_is_collected_before_items(self):
         """A take-money costs no bag slot. Putting it second would let a full

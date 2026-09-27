@@ -130,6 +130,16 @@ class GearGateCeilingTest(unittest.TestCase):
         self.assertEqual(self.inserted, [])
         self.assertEqual(self.ns["_GEAR_HOLD_SINCE"], {})
 
+    def test_bought_gear_in_the_mail_holds_a_broke_family(self):
+        """The dev realm, 2026-09-27: the buyers' purses were spent and their
+        purchases sat in the mailbox, so the gate read them as too poor to
+        hold for and sent them to the door in eight of seventeen slots."""
+        self.facts = {n: dict(NAKED, purse=0) for n in NAMES}
+        self.assertIsNone(self.gate())
+        self.ns["_mail_gear_holders"] = lambda names: {"Bork": 5}
+        self.assertIn("Bork", self.gate())
+        self.assertTrue(self.hold())
+
     def test_clock_clears_when_the_gear_does(self):
         self.gate()
         self.clock.now += CEILING
