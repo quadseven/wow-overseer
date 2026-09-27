@@ -2308,6 +2308,15 @@ def _insert_family_jobs(names: list, mode: str, source: str) -> int:
     return written
 
 
+def _town_errand_withholds(names, keyword):
+    """The gate's answer while the family is on its town errand (#365), else None."""
+    if not _town_errand_active(names):
+        return None
+    reason = "the family is on its town errand (#365)"
+    log.info("goal: withholding dungeon:%s - %s", keyword or "(default)", reason)
+    return reason
+
+
 def _gear_gate(names, keyword):
     """Apply GEAR UP BEFORE THE DOOR (#146, #147), BUT NEVER A DEADLOCK.
 
@@ -2315,10 +2324,9 @@ def _gear_gate(names, keyword):
     gold; a member too poor to buy is logged and the run goes ahead. Look up
     the reader so isolated campaign tests can load this function without it.
     """
-    errand = globals().get("_town_errand_active")
-    if errand is not None and errand(names):
-        reason = "the family is on its town errand (#365)"
-        log.info("goal: withholding dungeon:%s - %s", keyword or "(default)", reason)
+    errand = globals().get("_town_errand_withholds")
+    reason = errand(names, keyword) if errand is not None else None
+    if reason:
         return reason
     reader = globals().get("_fetch_gearup_facts")
     facts = reader(names) if reader else {}
