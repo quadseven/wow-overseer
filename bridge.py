@@ -2326,7 +2326,22 @@ def _gear_gate(names, keyword):
         log.info("goal: dungeon:%s is not held for gear - %s %s six or more empty slots "
                  "but under 2 gold to spend, so the run goes ahead", label,
                  ", ".join(gear_broke), "has" if len(gear_broke) == 1 else "have")
+    key = tuple(sorted(names))
     if not gear_short:
+        _GEAR_HOLD_SINCE.pop(key, None)
+        return None
+    # THE SAME CEILING AS THE HOLD, ON THE SAME CLOCK. Without it this gate was
+    # the deadlock its own docstring rules out: measured on wow-dev 2026-09-27,
+    # both campaigns read `withheld: gear-up first` for over ten hours while
+    # every auctioneer walk failed, because the hold's ceiling released the
+    # campaign and the re-send landed here, where nothing ever let it go.
+    now = time.monotonic()
+    held = now - _GEAR_HOLD_SINCE.setdefault(key, now)
+    ceiling = bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS
+    if held >= ceiling:
+        log.info("goal: dungeon:%s is no longer held for gear - %s still short after "
+                 "%ds in town, past the %ds ceiling, so the run goes ahead", label,
+                 ", ".join(gear_short), int(held), int(ceiling))
         return None
     reason = "gear-up first: %s has six or more empty equipment slots" % ", ".join(gear_short)
     log.info("goal: withholding dungeon:%s - %s", label, reason)
@@ -2341,30 +2356,33 @@ def _gear_campaign_hold(names, keyword, in_run):
     bag-withhold ceiling expires, so gear shopping cannot deadlock a campaign.
     """
     key = tuple(sorted(names))
+    if in_run:
+        return False
     facts = _fetch_gearup_facts(names)
-    since = _GEAR_HOLD_SINCE.get(key, time.monotonic())
-    held = gearup.campaign_hold(
-        facts, in_run, held_seconds=time.monotonic() - since,
-        empty_slots=GEARUP_GATE_EMPTY_SLOTS,
-        min_purse=GEARUP_GATE_MIN_PURSE,
-        ceiling=bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS,
+    short = gearup.campaign_hold(
+        facts, False, empty_slots=GEARUP_GATE_EMPTY_SLOTS,
+        min_purse=GEARUP_GATE_MIN_PURSE, ceiling=float("inf"),
     )
-    if held:
-        _GEAR_HOLD_SINCE.setdefault(key, since)
-        armed = [n for n, job in _jobs_of(names).items()
-                 if job.startswith("dungeon")]
-        if armed:
-            for name in names:
-                _insert_job(name, jobs.TOWN_RUN, TOWN_FIRST_SOURCE)
-            log.info("gear-up: campaign dungeon:%s handed to town; auctioneer errand runs between dungeons",
+    if not short:
+        if _GEAR_HOLD_SINCE.pop(key, None) is not None:
+            log.info("gear-up: campaign dungeon:%s resumes after town gear errand",
                      keyword or "(default)")
-        return True
-    was_held = key in _GEAR_HOLD_SINCE
-    _GEAR_HOLD_SINCE.pop(key, None)
-    if was_held:
-        log.info("gear-up: campaign dungeon:%s resumes after town gear errand",
+        return False
+    # THE CLOCK IS CLEARED ONLY WHEN THE GEAR IS. A ceiling release that
+    # cleared it too restarted the wait on the very next pass, so the family
+    # was handed back to town forever instead of going in short.
+    now = time.monotonic()
+    since = _GEAR_HOLD_SINCE.setdefault(key, now)
+    if now - since >= bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS:
+        return False
+    armed = [n for n, job in _jobs_of(names).items()
+             if job.startswith("dungeon")]
+    if armed:
+        for name in names:
+            _insert_job(name, jobs.TOWN_RUN, TOWN_FIRST_SOURCE)
+        log.info("gear-up: campaign dungeon:%s handed to town; auctioneer errand runs between dungeons",
                  keyword or "(default)")
-    return False
+    return True
 
 
 def _drive_dungeon(keyword: str, wanted: int, names=None,
