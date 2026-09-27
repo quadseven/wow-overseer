@@ -105,6 +105,27 @@ class GearupTests(unittest.TestCase):
         self.assertEqual([2, 3], [b.listing_id for b in buys])
         self.assertLessEqual(sum(b.buyout for b in buys), 600)
 
+    def test_two_members_never_plan_the_same_listing(self):
+        """The dev realm, 2026-09-26: the paladin and the warrior planned the
+        same eight auctions, the paladin's went first, and all eight of the
+        warrior's came back `auction not found`."""
+        plate = {"class": "paladin", "level": 36, "purse": 100000, "equipped": {}}
+        warrior = {"class": "warrior", "level": 38, "purse": 500000, "equipped": {}}
+        rows = [
+            item(5, subclass=3, id=1, ilvl=39, price=1000),
+            item(5, subclass=3, id=2, ilvl=30, price=900),
+        ]
+        buys = gearup.plan_buys({"Grog": plate, "Grug": warrior}, rows)
+        self.assertEqual(
+            [("Grog", 1), ("Grug", 2)], [(b.character, b.listing_id) for b in buys]
+        )
+
+    def test_a_member_is_left_short_rather_than_given_a_taken_listing(self):
+        first = {"class": "mage", "level": 35, "purse": 100000, "equipped": {}}
+        second = {"class": "mage", "level": 35, "purse": 100000, "equipped": {}}
+        buys = gearup.plan_buys({"A": first, "B": second}, [item(1, id=7, price=10)])
+        self.assertEqual([("A", 7)], [(b.character, b.listing_id) for b in buys])
+
     def test_expected_buy_assertion_fails_when_planner_is_stubbed_empty(self):
         character = {"class": "mage", "level": 35, "purse": 1000, "equipped": {}}
         with mock.patch.object(gearup, "plan_buys", return_value=()):
