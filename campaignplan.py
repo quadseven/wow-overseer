@@ -94,6 +94,10 @@ import dungeonpath
 SOURCE = "overseer:planner"
 SOURCE_JEV = "overseer:jev"
 PLANNED_SOURCES = (SOURCE, SOURCE_JEV)
+# A step-down entry queued AHEAD of a door the family keeps wiping in
+# (dungeonpace.py, mod-overseer#767). Not a planned source: it is never the
+# planner's to outgrow or append after.
+SOURCE_STEPDOWN = "overseer:stepdown"
 
 
 def source_for(by_jev: bool) -> str:

@@ -218,6 +218,17 @@ class TheChoiceSet(unittest.TestCase):
         self.assertIn("bag_pressure.family_town_run_needed(free_slots)", body)
 
 
+class WhileTheDoorWaits(unittest.TestCase):
+    """mod-overseer#767: a family questing because no dungeon is clearable is
+    not offered the campaign, so the choice is among its own activities."""
+
+    def test_the_campaign_is_not_offered_while_the_family_levels(self):
+        f = facts(job="quest", paused="no dungeon the family can clear")
+        self.assertNotIn(ja.CAMPAIGN, ja.options(f))
+        self.assertEqual(ja.QUEST, ja.heuristic(f)[0])
+        self.assertIn("run waits while the family levels", ja.facts_line(f))
+
+
 class WhenItIsAsked(unittest.TestCase):
     def marks(self, **kw):
         base = dict(

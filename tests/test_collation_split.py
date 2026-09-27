@@ -86,6 +86,8 @@ COLLATIONS = {
     # Bridge-owned (the guild coordinator), named in
     # bridge._ensure_guild_run_store the same way overseer_jev_judgment is.
     "overseer_guild_run": "utf8mb4_0900_ai_ci",
+    # Bridge-owned (mod-overseer#767), named in dungeonpace.CREATE_SQL.
+    "overseer_dungeon_pace": "utf8mb4_0900_ai_ci",
     # Bridge-owned (the Bags tab's week), named in
     # bridge._ensure_economy_store the same way overseer_jev_judgment is.
     "overseer_economy_sample": "utf8mb4_0900_ai_ci",
@@ -242,6 +244,19 @@ STRING_COLUMNS = {
             "state",
             "tank",
             "why",
+        }
+    ),
+    # From its own DDL (dungeonpace.CREATE_SQL): every VARCHAR column.
+    "overseer_dungeon_pace": frozenset(
+        {
+            "baseline",
+            "chosen_by",
+            "decision",
+            "door",
+            "family",
+            "outcome",
+            "reason",
+            "target",
         }
     ),
     # From its own DDL (bridge._ensure_economy_store): every VARCHAR column.

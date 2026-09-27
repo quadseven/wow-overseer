@@ -69,6 +69,7 @@ import craft_rhythm
 import gatheraim
 import gatherband
 import craft_supply
+import dungeonpace
 import dungeonprogression
 import item_plan
 import jev
@@ -1600,6 +1601,8 @@ def _crafting_roster(family: str | None = None) -> list:
     crossing a continent because THIS family wanted something made.
 
     `family` names another roster family (#215); None is this bridge's own.
+    `dungeon` is for a writer of a dungeon job, which the pace fallback's
+    questing never lets through.
     """
     cohort = family or _cohort_of(bonds.head_of_family())
     scope = " AND family = %s" if cohort else ""
@@ -2659,6 +2662,12 @@ def _ensure_queue_store() -> None:
     except pymysql.err.MySQLError:
         log.exception("queue: the campaign queue store is unavailable, so no "
                       "family's queue can be set or advanced")
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(dungeonpace.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("pace: the dungeon pace store is unavailable, so no family "
+                      "steps down from a door it keeps wiping in")
 
 
 def _fetch_queue_rows() -> list:
@@ -3079,7 +3088,7 @@ def _append_planned(family: str, rows: list, finish: int, option,
     return changed
 
 
-def _queue_owns_job(family: str | None = None) -> bool:
+def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
     """Whether a family's campaign queue owns its job now.
 
     The passes that write this family's job on their own clock (the council
@@ -3091,10 +3100,171 @@ def _queue_owns_job(family: str | None = None) -> bool:
     """
     try:
         family = family or _cohort_of(bonds.head_of_family()) or ""
+        # Looked up through globals(), as the gear helpers are, because the
+        # campaign tests load this function without the pace pass.
+        if family in globals().get("_PACE_QUESTING", {}) and not dungeon:
+            # QUESTING WHILE THE DOOR WAITS (mod-overseer#767): the queue does
+            # not own the job then, so the craft rhythm and the skill goal
+            # get the family's time back.
+            return False
         return bool(campaignqueue.pending_by_family(_fetch_queue_rows()).get(family))
     except Exception:
         log.exception("queue: could not read whether a queue owns the job")
         return False
+
+
+# --- the dungeon pace (dungeonpace.py, mod-overseer#767) -------------------------
+#
+# dungeonpace.py decides; these read its facts and run its statements. The
+# families questing under its fallback, family key -> why, so _queue_owns_job
+# can hand their time back to the craft rhythm and the skill goal and the
+# activity choice can say why the run waits.
+_PACE_QUESTING: dict = {}
+
+
+def _pace_reads(key: str, fam: dict, level_rows: list, ids: list) -> dict:
+    """Everything one family's pace pass reads, on one connection."""
+    names = list(fam["names"])
+    marks = dungeonpace.holes(len(names))
+    args = tuple(names)
+    with _connect() as conn, conn.cursor() as cur:
+        gear = _planner_rows(cur, campaignplan.GEAR_SQL.format(holes=marks), args,
+                             "the worn gear")
+        armed = _planner_rows(cur, dungeonpace.MAIN_HAND_SQL.format(holes=marks),
+                              args, "the main-hand weapons")
+        runs = _planner_rows(cur, dungeonpace.RUNS_SQL.format(holes=marks),
+                             args + (dungeonpace.WINDOW_HOURS,), "the run ledger")
+        keys = _planner_rows(cur, campaignplan.KEYS_SQL.format(holes=marks), args,
+                             "the door keys")
+        started = _planner_rows(
+            cur, dungeonpace.QUEUE_STARTED_SQL.format(holes=dungeonpace.holes(len(ids))),
+            tuple(ids) or (0,), "the queue's start times") or []
+        opened = _planner_rows(cur, dungeonpace.OPEN_SQL, (key,), "the open pace row")
+        back = _planner_rows(cur, dungeonpace.LAST_BACK_SQL, (key,), "the last step back")
+        unscored = _planner_rows(cur, dungeonpace.UNSCORED_SQL, (key,),
+                                 "the unscored pace rows") or []
+    return {
+        "members": dungeonpace.members_from_rows(level_rows, gear, armed),
+        "runs": runs or [],
+        "keys": _read_or_none(campaignplan.keys_held, keys),
+        "started": {int(r["id"]): r.get("started_at") for r in started},
+        "open": (opened or [None])[0],
+        "back": {str(r["door"]): r.get("at") for r in back or []},
+        "unscored": unscored,
+    }
+
+
+def _pace_jobs(names: list, mode: str) -> int:
+    """Put a family on `mode` from a dungeon job or the campaign's town wait.
+
+    Craft, train, fish, an operator's own town run and a town errand still
+    under way (#365) are left alone. A finished errand's town run hands the
+    family back to the campaign, which is not coming while it quests, so that
+    one is taken here.
+    """
+    errand = globals().get("_town_errand_active")
+    on_errand = bool(errand(names)) if errand is not None else False
+    written = 0
+    for name, job in _jobs_of(names).items():
+        if job == mode or job != jobs.TOWN_RUN and not jobs.is_dungeon_job(job):
+            continue
+        source = _last_job_source(name) if job == jobs.TOWN_RUN else ""
+        waiting = source == TOWN_FIRST_SOURCE or (
+            source == globals().get("TOWN_ERRAND_SOURCE") and not on_errand)
+        if not (jobs.is_dungeon_job(job) or waiting):
+            continue
+        try:
+            _insert_job(name, mode, dungeonpace.JOB_SOURCE)
+            written += 1
+        except Exception:
+            log.exception("pace: %s job insert failed for %s", mode, name)
+    return written
+
+
+def _pace_close(cur, opened, members, runs) -> None:
+    """Close the open stretch with what it came to."""
+    base = str(opened.get("baseline") or "")
+    cur.execute(dungeonpace.CLOSE_SQL, (dungeonpace.stretch_outcome(
+        runs, _pace_map(str(opened.get("target") or "")), opened.get("created_at"),
+        dungeonpace.named_change(base, members)), int(opened["id"])))
+
+
+def _pace_queue(cur, key: str, rows: list, decision, door_row: dict) -> int:
+    """The queue writes one decision makes. The new entry's id, or 0.
+
+    Never a cancel, and never fewer runs: a step-down entry is added ahead,
+    finished, or given more runs, and the door behind it waits `queued`.
+    """
+    head = rows[0]
+    if dungeonpace.is_step_down(head) and decision.kind in (
+            dungeonpace.FURTHER, dungeonpace.QUEST, dungeonpace.STEP_UP):
+        cur.execute(campaignqueue.FINISH_SQL, (int(head["id"]),))
+    if decision.kind == dungeonpace.EXTEND:
+        cur.execute(dungeonpace.EXTEND_SQL, (
+            dungeonpace.STEP_DOWN_RUNS, int(head["id"]), dungeonpace.SOURCE))
+    if decision.kind not in (dungeonpace.STEP_DOWN, dungeonpace.FURTHER):
+        return 0
+    position = min(int(r.get("position") or 0) for r in rows)
+    cur.execute(dungeonpace.SHIFT_SQL, (key,))
+    cur.execute(campaignqueue.INSERT_SQL, (
+        key, position, decision.target, dungeonpace.STEP_DOWN_RUNS,
+        dungeonpace.SOURCE))
+    new_id = int(cur.lastrowid or 0)
+    cur.execute(dungeonpace.REQUEUE_SQL, (int(door_row["id"]),))
+    return new_id
+
+
+def _pace_write(key: str, rows: list, decision, members, opened, runs, by: tuple) -> int:
+    """Carry out one dungeonpace.Decision in one transaction, and record it.
+    The new queue id, or 0 when none was written."""
+    head = rows[0]
+    door_row = rows[1] if dungeonpace.is_step_down(head) and len(rows) > 1 else head
+    base = str((opened or {}).get("baseline") or "") or dungeonpace.baseline(members)
+    opens = decision.kind in dungeonpace.OPENS
+    with _connect() as conn, conn.cursor() as cur:
+        conn.begin()
+        try:
+            if opened is not None and decision.kind != dungeonpace.EXTEND:
+                _pace_close(cur, opened, members, runs)
+            new_id = _pace_queue(cur, key, rows, decision, door_row)
+            cur.execute(dungeonpace.INSERT_SQL, (
+                key, decision.kind, str(door_row.get("keyword") or ""),
+                decision.target, new_id, by[0], by[1], decision.why[:255],
+                base if opens else ""))
+            if decision.kind == dungeonpace.EXTEND:
+                cur.execute(dungeonpace.CLOSE_SQL, ("extended", int(cur.lastrowid or 0)))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return new_id
+
+
+def _pace_adopt(key: str, head: dict, door: str, members) -> None:
+    """Open a record for a step-down entry that has none."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(dungeonpace.INSERT_SQL, (
+            key, dungeonpace.STEP_DOWN, door, str(head.get("keyword") or ""),
+            int(head["id"]), "rule", None, "adopted: no record for this entry",
+            dungeonpace.baseline(members)))
+
+
+def _pace_map(keyword: str) -> int:
+    run = campaignplan.BY_KEYWORD.get(str(keyword or ""))
+    return run.map_id if run is not None else 0
+
+
+def _pace_score(unscored: list, runs: list) -> list:
+    """Score each step-up or release by the first run back. The lines said."""
+    said = []
+    with _connect() as conn, conn.cursor() as cur:
+        for row in unscored:
+            outcome = dungeonpace.first_fight_after(
+                runs, _pace_map(row.get("door")), row.get("created_at"))
+            if outcome:
+                cur.execute(dungeonpace.SCORE_SQL, (outcome, int(row["id"])))
+                said.append("%s: %s" % (row.get("door"), outcome))
+    return said
 
 
 # --- the leveling zone (levelroute.py) -----------------------------------------
@@ -5084,6 +5254,8 @@ class Bridge(discord.Client):
         # family -> (the last "nothing to plan" line, when), so it is said
         # once and the facts are not re-read every cycle.
         self._planner_said: dict = {}
+        # dungeonpace: the last "nothing to do" line said per family (#767).
+        self._pace_said: dict = {}
         # The attunement step (attunestep.py): the line last said per family,
         # and when the current stretch of holding its planner began.
         self._attune_said: dict = {}
@@ -14392,7 +14564,7 @@ class Bridge(discord.Client):
         # A CAMPAIGN QUEUE OWNS THE JOB WHILE IT HAS ENTRIES (#209). This
         # lease re-asserts the council's keyword every few cycles, which would
         # pull a family off the queue's dungeon and restart nothing.
-        if await asyncio.to_thread(_queue_owns_job):
+        if await asyncio.to_thread(_queue_owns_job, None, True):
             log.info("goal: dungeon:%s stands down - the family's campaign "
                      "queue owns its job", action.keyword or "(default)")
             return
@@ -14636,8 +14808,8 @@ class Bridge(discord.Client):
                             "roster row, so nothing is written",
                             campaignqueue._family(key))
                 continue
-            gear_hold = getattr(self, "_queue_gear_hold", None)
-            if gear_hold is not None and await gear_hold(rows[0], fam):
+            holds = getattr(self, "_queue_holds", None)
+            if holds is not None and await holds(key, rows, fam):
                 continue
             move = campaignqueue.step(rows, fam["leader"])
             if not move.writes:
@@ -14660,6 +14832,124 @@ class Bridge(discord.Client):
                 # One family's failure must not cost the other its advance.
                 log.exception("queue: the pass for %s failed; retrying next "
                               "cycle", campaignqueue._family(key))
+
+    async def _queue_holds(self, key: str, rows: list, fam: dict) -> bool:
+        """Whether the queue's step waits this pass: the ladder took it
+        (mod-overseer#767), or the gear hold keeps the family in town (#146).
+
+        THE LADDER FIRST: a door the family keeps wiping in is stepped down
+        from before the gear hold or the step can send it back in.
+        """
+        pace = getattr(self, "_dungeon_pace", None)
+        if pace is not None:
+            try:
+                if await pace(key, rows, fam):
+                    return True
+            except Exception:
+                log.exception("pace: the pass for %s failed; the queue steps as "
+                              "before", campaignqueue._family(key))
+        gear_hold = getattr(self, "_queue_gear_hold", None)
+        return gear_hold is not None and await gear_hold(rows[0], fam)
+
+    async def _pace_facts(self, key: str, rows: list, fam: dict):
+        """(dungeonpace.Facts, the reads) for one family, or (None, reads)
+        when a step-down entry had no record and was adopted instead."""
+        head = rows[0]
+        level_rows = await asyncio.to_thread(_queue_level_rows, fam)
+        reads = await asyncio.to_thread(_pace_reads, key, fam, level_rows,
+                                        [int(r["id"]) for r in rows[:2]])
+        for said in await asyncio.to_thread(_pace_score, reads["unscored"],
+                                            reads["runs"]):
+            log.info("pace: %s: outcome of the step back up to %s",
+                     campaignqueue._family(key), said)
+        stepping = dungeonpace.is_step_down(head)
+        door_row = rows[1] if stepping and len(rows) > 1 else head
+        door = str(door_row.get("keyword") or "")
+        opened, members = reads["open"], reads["members"]
+        if stepping and opened is None:
+            # A step-down entry with no open record (a store written by hand,
+            # or lost): adopt it, so a named change is measured from now.
+            await asyncio.to_thread(_pace_adopt, key, head, door, members)
+            log.info("pace: %s: adopted step-down entry %s ahead of %s with no "
+                     "record; a named change is measured from now",
+                     campaignqueue._family(key), head.get("id"), door)
+            return None, reads
+        head_kw = str(head.get("keyword") or "")
+        gates, notes = dungeonpace.readiness(door, members)
+        since = dungeonpace.since(reads["started"].get(int(head["id"])),
+                                  reads["back"].get(head_kw))
+        changed = ""
+        if opened:
+            changed = dungeonpace.named_change(str(opened.get("baseline") or ""), members)
+        return dungeonpace.Facts(
+            family=key, head=head, door=door, door_row=door_row,
+            record=dungeonpace.viability(reads["runs"], _pace_map(head_kw), since),
+            members=members, gates=gates, notes=notes, open=opened, changed=changed,
+            done=fam["leader"].get("dungeon_runs_done"),
+            cands=tuple(dungeonpace.candidates(head_kw, level_rows, reads["keys"],
+                                               reads["runs"], avoid={head_kw}))), reads
+
+    async def _pace_judge(self, key: str, facts, decision):
+        """Jev's pick among the offered doors, recorded, or None when not asked."""
+        rule = dungeonpace.policy()
+        if (not decision.acts or len(decision.offer) < 2 or rule.mode == jev.OFF
+                or not self._jev.ready(dungeonpace.KIND)):
+            return None
+        judgment = await dungeonpace.ask(self._jev, facts, decision, rule)
+        if judgment is None:
+            return None
+        log.info("%s", judgment.line())
+        try:
+            await asyncio.to_thread(_insert_jev_judgment, judgment)
+        except Exception:
+            log.exception("pace: the step choice for %s was not recorded",
+                          campaignqueue._family(key))
+        return judgment
+
+    async def _pace_quest(self, key: str, names: list, questing: bool) -> None:
+        """Keep a family questing under the fallback on the default job."""
+        if not questing:
+            _PACE_QUESTING.pop(key, None)
+            return
+        _PACE_QUESTING[key] = "no dungeon the family can clear yet"
+        written = await asyncio.to_thread(_pace_jobs, names, jobs.DEFAULT)
+        if written:
+            log.info("pace: %s: %d member(s) on job=%s while the door waits",
+                     campaignqueue._family(key), written, jobs.DEFAULT)
+
+    async def _dungeon_pace(self, key: str, rows: list, fam: dict) -> bool:
+        """Step this family down from a door it keeps wiping in, or back up.
+
+        True when the queue's step must not run this pass: the queue was just
+        rewritten, or the family quests under the fallback. dungeonpace.py
+        decides; Jev picks among the easier doors past its floor.
+        """
+        names = list(fam["names"])
+        if raidrun.is_raid(str(rows[0].get("keyword") or "")) or await self._mid_run(names):
+            return False
+        facts, reads = await self._pace_facts(key, rows, fam)
+        if facts is None:
+            return False
+        decision = dungeonpace.decide(facts)
+        judgment = await self._pace_judge(key, facts, decision)
+        decision = dungeonpace.carried(decision, judgment)
+        opened = reads["open"]
+        if not decision.acts:
+            if self._pace_said.get(key) != decision.why:
+                log.info("pace: %s: %s%s", campaignqueue._family(key), decision.why,
+                         " (%s)" % "; ".join(facts.notes) if facts.notes else "")
+            self._pace_said[key] = decision.why
+            questing = opened is not None and str(opened.get("decision")) == dungeonpace.QUEST
+            await self._pace_quest(key, names, questing)
+            return questing
+        by = dungeonpace.chooser(judgment)
+        new_id = await asyncio.to_thread(_pace_write, key, rows, decision,
+                                         facts.members, opened, reads["runs"], by)
+        self._pace_said.pop(key, None)
+        log.warning("pace: %s%s", dungeonpace.line(key, decision, by[0]),
+                    "; queued as %d" % new_id if new_id else "")
+        await self._pace_quest(key, names, decision.kind == dungeonpace.QUEST)
+        return True
 
     async def _leave_town_when_done(self, fams: dict) -> None:
         """Release every family left on the town run job by a finished wait.
@@ -15443,6 +15733,7 @@ class Bridge(discord.Client):
             withheld=held, can_gather=can_gather, can_train=can_train,
             minutes_on_activity=int((now - since) // 60), reason=reason,
             minutes_since_fishing=self._activity_minutes_since_fishing(key, now),
+            paused=globals().get("_PACE_QUESTING", {}).get(key, ""),
             situation=where)
         judgment = await jev_activity.ask(self._jev, facts, rule)
         self._activity_seen[key]["asked"] = now

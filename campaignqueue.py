@@ -519,6 +519,7 @@ def step(rows: list, leader: dict | None) -> Move:
 CHOOSERS = {
     campaignplan.SOURCE_JEV: "Jev's choice",
     campaignplan.SOURCE: "planned",
+    campaignplan.SOURCE_STEPDOWN: "stepped down",
 }
 
 
