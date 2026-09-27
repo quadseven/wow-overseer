@@ -3566,10 +3566,12 @@ _MOVEMENT_BINDS = (
     "SELECT c.name, h.mapId AS map_id, h.posX AS x, h.posY AS y, h.posZ AS z "
     "FROM character_homebind h JOIN characters c ON c.guid = h.guid "
     "WHERE c.name IN (%s)")
-# A hearth that did not happen (an error row) starts no cooldown.
+# A hearth that did not happen starts no cooldown: an error row, or an
+# `unchanged` one ("the cast never started and the character never left",
+# Og on wow-dev 2026-09-27, who was then left in Tirisfal for the hour).
 _MOVEMENT_HEARTHED = (
     "SELECT DISTINCT target_name FROM overseer_command WHERE kind = 'hearth' "
-    "AND status <> 'error' AND created_at > NOW() - INTERVAL "
+    "AND status NOT IN ('error', 'unchanged') AND created_at > NOW() - INTERVAL "
     + str(jev_movement.HEARTH_COOLDOWN_SECONDS) + " SECOND "
     "AND target_name IN (%s)")
 
@@ -13504,6 +13506,10 @@ class Bridge(discord.Client):
             slot.reserve(TOWN_ERRAND_CLAIMANT, now, "the family's town errand")
         positions = await self._settled_positions(names)
         hub = state.hub
+        if (state.phase in (townerrand.GO, townerrand.GATHER)
+                and townerrand.aim_now(state, now)):
+            state = await self._town_errand_regroup(state, names, positions,
+                                                    now, label)
         leader_at_hub = townerrand.in_range(
             hub, positions.get(leader), townerrand.HUB_YARDS)
         gathered = all(
@@ -13582,6 +13588,18 @@ class Bridge(discord.Client):
                  "at %s by %s%s", label, why, _hub_aim(hub), hub.get("place", ""),
                  "; %s hearth(s) there first" % ", ".join(far) if far else "")
         return townerrand.start(now, hub, why, hearthed=bool(far))
+
+    async def _town_errand_regroup(self, state, names, positions, now, label):
+        """Hearth home any member still further than a walk from a home hub."""
+        reads = await asyncio.to_thread(_movement_reads, list(names))
+        far = townerrand.to_hearth(state.hub, positions, names, reads["hearthed"])
+        if not far:
+            return state
+        for name in far:
+            await asyncio.to_thread(_insert_hearth, name, TOWN_ERRAND_SOURCE)
+        log.info("town errand: %s still far from home%s; hearth(s) there now",
+                 ", ".join(far), label)
+        return townerrand.hearthing(state, now)
 
     async def _town_errand_aim(self, leader, aim, cohort) -> bool:
         """Aim the leader through the town slot, urgently, as the errand."""
@@ -15511,8 +15529,13 @@ class Bridge(discord.Client):
         reads = await asyncio.to_thread(_movement_reads, names)
         slot = self._travel_slot_of(key)
         holder = slot.holder if slot is not None else None
+        # THE TOWN ERRAND'S WALK IS NOT OFFERED TO BE DROPPED. It regroups a
+        # scattered family itself (by hearth) and its own windows end it; a
+        # drop made the town slot refuse its aim for 1800s, which outlived the
+        # errand's walk window (wow-dev 2026-09-27 21:42 and 22:35).
         mine = bool(holder is not None and holder.claimant
-                    and holder.character == leader)
+                    and holder.character == leader
+                    and holder.claimant != TOWN_ERRAND_CLAIMANT)
         return jev_movement.Facts(
             family=key or leader, where=where, binds=reads["binds"],
             hearthed=reads["hearthed"], errand=holder.aim if mine else "",

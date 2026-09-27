@@ -210,6 +210,14 @@ def to_hearth(hub: dict, positions: dict, names, hearthed=frozenset()) -> list:
     return out
 
 
+def hearthing(state: State, now: float) -> State:
+    """The errand after hearth rows were written at `now`: the leader is left
+    alone for the cast. A member still far from home while the family walks
+    or gathers hearths then (the start's cast refused as "moving", or a
+    member that was offline), which is how a straggler rejoins."""
+    return replace(state, hearth_until=now + HEARTH_SECONDS)
+
+
 def aim_now(state: State, now: float) -> bool:
     """Whether the leader may be aimed: not inside a hearth's cast window."""
     return now >= state.hearth_until
