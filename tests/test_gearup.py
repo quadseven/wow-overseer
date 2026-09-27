@@ -132,6 +132,39 @@ class GearupTests(unittest.TestCase):
         buys = gearup.plan_buys({"A": first, "B": second}, [item(1, id=7, price=10)])
         self.assertEqual([("A", 7)], [(b.character, b.listing_id) for b in buys])
 
+    def test_vendor_fills_empty_slots_only(self):
+        """A level 35 mage in five of seventeen slots, at an armour merchant."""
+        mage = {
+            "class": "mage",
+            "level": 35,
+            "purse": 100000,
+            "equipped": {"chest": 16, "back": 13},
+        }
+        stock = [
+            item(5, subclass=1, entry=201, ilvl=35, price=900),
+            item(10, subclass=1, entry=202, ilvl=33, price=500),
+            item(8, subclass=1, entry=203, ilvl=33, price=500),
+        ]
+        buys = gearup.plan_vendor_buys({"Og": mage}, {"Og": stock})
+        self.assertEqual(
+            [("hands", 202), ("feet", 203)], [(b.slot, b.entry) for b in buys]
+        )
+        self.assertEqual("entry:202 count:1 max:500", gearup.vendor_command(buys[0]))
+
+    def test_vendor_keeps_class_and_budget_rules(self):
+        mage = {"class": "mage", "level": 35, "purse": 1000, "equipped": {}}
+        stock = [
+            item(7, subclass=3, entry=301, ilvl=35, price=100),  # mail: not a mage's
+            item(7, subclass=1, entry=302, ilvl=35, price=900),  # over 20% of purse
+            item(7, subclass=1, entry=303, ilvl=30, price=150),
+        ]
+        buys = gearup.plan_vendor_buys({"Og": mage}, {"Og": stock})
+        self.assertEqual([303], [b.entry for b in buys])
+
+    def test_vendor_buys_nothing_for_a_member_with_no_vendor(self):
+        mage = {"class": "mage", "level": 35, "purse": 100000, "equipped": {}}
+        self.assertEqual((), gearup.plan_vendor_buys({"Og": mage}, {}))
+
     def test_expected_buy_assertion_fails_when_planner_is_stubbed_empty(self):
         character = {"class": "mage", "level": 35, "purse": 1000, "equipped": {}}
         with mock.patch.object(gearup, "plan_buys", return_value=()):

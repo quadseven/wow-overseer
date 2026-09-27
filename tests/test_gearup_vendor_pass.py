@@ -1,0 +1,47 @@
+"""The vendor half of the gear errand runs, and runs before the auction half.
+
+bridge.py imports discord and cannot be imported here, so this reads it as
+text, the way test_mail_pass does. Pinned: `_gearup_once` asks the vendors in
+each member's reach before it looks for an auctioneer, the vendor half writes
+a kind='buy' town row through `gearup.vendor_command`, and a slot it bought is
+marked worn so the auction half does not buy it again.
+"""
+
+import pathlib
+import re
+import unittest
+
+BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
+
+
+def _block(signature: str) -> str:
+    src = BRIDGE.read_text(encoding="utf-8")
+    start = src.index(signature)
+    rest = src[start:]
+    match = re.search(r"\n    (async def |def )", rest[1:])
+    return rest[: match.start() + 1] if match else rest
+
+
+class VendorHalfOfTheGearErrand(unittest.TestCase):
+    def test_vendors_are_asked_before_the_auctioneer(self):
+        body = _block("    async def _gearup_once(")
+        self.assertIn("await self._gearup_vendor_once(facts)", body)
+        self.assertLess(
+            body.index("_gearup_vendor_once(facts)"), body.index("_gearup_house(")
+        )
+
+    def test_a_vendor_buy_is_a_town_buy_row(self):
+        body = _block("    async def _gearup_vendor_once(")
+        self.assertIn("gearup.vendor_command(buy)", body)
+        self.assertIn("towntrip.BUY_KIND", body)
+        self.assertIn("_recent_town_keys", body)
+
+    def test_a_slot_bought_at_the_vendor_is_not_bought_again(self):
+        body = _block("    async def _gearup_vendor_once(")
+        self.assertIn(
+            'facts[buy.character]["equipped"][buy.slot] = buy.item_level', body
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

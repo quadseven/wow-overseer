@@ -7575,6 +7575,46 @@ class Bridge(discord.Client):
                    else "no affordable usable listing")
             log.info("gearup: %s nothing: %s", name, why)
 
+    async def _gearup_vendor_once(self, facts: dict) -> None:
+        """Buy vendor equipment for empty slots where each member stands.
+
+        `gearup.plan_vendor_buys` decides; this reads and writes. A purchase
+        is a kind='buy' town-trip row, written only for a member whose OWN
+        vendors in reach stock the piece, because DoBuy refuses on the buyer's
+        range. No walk is taken and no equip row is written: the piece lands
+        in the bags and the module's equip drive puts it into the empty slot.
+        A slot bought here is marked worn in `facts`, so the auction half of
+        this pass does not buy it a second time.
+        """
+        offers = {}
+        for name, character in facts.items():
+            if len(character["equipped"]) >= gearup.GEAR_SLOT_COUNT:
+                continue
+            town = await asyncio.to_thread(_fetch_town, name)
+            if town.vendor and town.stocks:
+                offers[name] = await asyncio.to_thread(
+                    _fetch_gear_offers, sorted(town.stocks))
+        if not offers:
+            return
+        buys = gearup.plan_vendor_buys(
+            {n: facts[n] for n in offers}, offers,
+            repair_floor={n: facts[n]["purse"] * towntrip.FLOOR for n in offers},
+        )
+        seen = await asyncio.to_thread(_recent_town_keys, GIVE_RETRY_MINUTES)
+        for buy in buys:
+            command = gearup.vendor_command(buy)
+            if (buy.character, command) in seen:
+                continue
+            why = "an empty %s slot, from a vendor in reach" % buy.slot
+            errand = towntrip.Errand(buy.character, towntrip.BUY_KIND, command,
+                                     why, buy.buyout)
+            if not await asyncio.to_thread(_insert_town_errand, errand):
+                continue
+            facts[buy.character]["equipped"][buy.slot] = buy.item_level
+            log.info("gearup: %s buys entry %d at a vendor for %s, item level "
+                     "%d, up to %d copper", buy.character, buy.entry, buy.slot,
+                     buy.item_level, buy.buyout)
+
     async def _gearup_once(self, names: list, leader: str, step: str,
                            cohort=None) -> None:
         """Buy usable auction equipment with each character's own gold (#146/#147).
@@ -7591,6 +7631,7 @@ class Bridge(discord.Client):
                 log.info("gearup: %s nothing yet: %d letter(s) of bought "
                          "equipment wait in the mailbox, and the mail pass "
                          "collects them first", name, waiting[name])
+        await self._gearup_vendor_once(facts)
         short, teams, house = await self._gearup_house(
             names, leader, facts, step, cohort)
         if house is None:
@@ -22061,6 +22102,25 @@ def _fetch_gearup_facts(names: list) -> dict:
                     int(row["item_level"]) if row["item_level"] is not None else None
                 )
     return result
+
+
+def _fetch_gear_offers(entries: list) -> list:
+    """Equipment rows for the vendor stock `entries`, priced at the vendor.
+
+    The same columns `_fetch_gearup_listings` reads off the auction house, so
+    `gearup` judges both with one rule; `buyout` is the vendor's BuyPrice.
+    """
+    if not entries:
+        return []
+    marks = ",".join(["%s"] * len(entries))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT entry, BuyPrice AS buyout, InventoryType, class, subclass, "
+            "RequiredLevel, AllowableClass, ItemLevel, Quality "
+            "FROM acore_world.item_template WHERE entry IN (%s) "  # noqa: S608 - placeholders from a COUNT
+            "AND class IN (2,4) AND InventoryType BETWEEN 1 AND 28 "
+            "AND BuyPrice > 0" % marks, [int(e) for e in entries])
+        return [dict(row) for row in cur.fetchall()]
 
 
 def _fetch_gearup_listings(house: int) -> list:
