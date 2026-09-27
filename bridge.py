@@ -112,6 +112,7 @@ import situation
 import skillgoal
 import tabard
 import towntrip
+import townerrand
 import townslot
 import tradechoice
 import vendor_stall
@@ -2314,6 +2315,11 @@ def _gear_gate(names, keyword):
     gold; a member too poor to buy is logged and the run goes ahead. Look up
     the reader so isolated campaign tests can load this function without it.
     """
+    errand = globals().get("_town_errand_active")
+    if errand is not None and errand(names):
+        reason = "the family is on its town errand (#365)"
+        log.info("goal: withholding dungeon:%s - %s", keyword or "(default)", reason)
+        return reason
     reader = globals().get("_fetch_gearup_facts")
     facts = reader(names) if reader else {}
     # GEAR ALREADY BOUGHT AND WAITING IN THE POST FUNDS THE HOLD AS GOLD DOES.
@@ -5127,6 +5133,7 @@ class Bridge(discord.Client):
                 self._mail_loop,
                 self._town_passing_loop,
                 self._tidy_loop,
+                self._town_errand_loop,
                 self._recruit_loop,
                 self._raid_spec_loop,
                 self._craft_supply_loop,
@@ -13254,6 +13261,224 @@ class Bridge(discord.Client):
                 log.exception("town passing: the %s look failed%s; retrying "
                               "next cycle", what, _family_label(cohort))
 
+    # ------------------------------------------------------ the town errand --
+    #
+    # ONE ERRAND IN THE CAPITAL, NOT SIX PASSES AROUND IT (#365). `townerrand`
+    # has the states and the measurement that asked for them; this is the
+    # adapter. It reads, it asks `townerrand` what to do, and it writes, and
+    # every position it judges is a settled one (`_settled_positions`).
+
+    async def _town_errand_loop(self) -> None:
+        """Run each family's town errand, every TOWN_ERRAND_CYCLE_SECONDS."""
+        await self.wait_until_ready()
+        await asyncio.sleep(TOWN_ERRAND_CYCLE_SECONDS)
+        while not self.is_closed():
+            try:
+                await self._town_errand_once()
+            except Exception:
+                log.exception("town errand: pass failed; retrying next cycle")
+            await self._for_other_families("town errand", self._town_errand_once)
+            await asyncio.sleep(TOWN_ERRAND_CYCLE_SECONDS)
+
+    async def _town_errand_once(self, cohort=None) -> None:
+        """One tick of one family's errand: start it, move it on, or end it."""
+        names, leader = await asyncio.to_thread(_family_of, cohort)
+        if not names or not leader:
+            return
+        key = tuple(sorted(names))
+        state = _TOWN_ERRANDS.get(key, townerrand.State())
+        now = time.monotonic()
+        in_run = await self._mid_run(names)
+        slot = self._cohort_town_slot(_cohort_key(cohort))
+        label = _family_label(cohort)
+        if not state.active:
+            state = await self._town_errand_start(
+                state, names, leader, in_run, now, label)
+            _TOWN_ERRANDS[key] = state
+            if not state.active:
+                return
+            slot.reserve(TOWN_ERRAND_CLAIMANT, now, "the family's town errand")
+        positions = await self._settled_positions(names)
+        hub = state.hub
+        leader_at_hub = townerrand.in_range(
+            hub, positions.get(leader), townerrand.HUB_YARDS)
+        gathered = all(
+            townerrand.in_range(hub, positions.get(n), townerrand.GATHER_YARDS)
+            for n in names)
+        step_done = False
+        if state.phase == townerrand.STEPS:
+            step_done = await self._town_errand_step(
+                state, names, leader, positions, cohort, now)
+        else:
+            await self._town_errand_aim(leader, _hub_aim(hub), cohort)
+        new, line = townerrand.advance(
+            state, now, in_run=in_run, leader_at_hub=leader_at_hub,
+            gathered=gathered, step_done=step_done)
+        if line:
+            away = sorted(n for n in names if not townerrand.in_range(
+                hub, positions.get(n), townerrand.GATHER_YARDS))
+            log.info("town errand: %s%s (not standing at the mailbox: %s)",
+                     line, label, ", ".join(away) or "nobody")
+        if new.phase != state.phase or new.step != state.step:
+            # A NEW PHASE OR STEP GETS A FRESH RESERVATION, so a long errand is
+            # not cut by the reservation's own ceiling; the errand's ceiling
+            # (townerrand.TOTAL_SECONDS) is what bounds it.
+            slot.unreserve(TOWN_ERRAND_CLAIMANT)
+            if new.active:
+                slot.reserve(TOWN_ERRAND_CLAIMANT, now, "the family's town errand")
+            _TOWN_ERRAND_MARKS.pop(key, None)
+        if new.phase == townerrand.DONE:
+            await self._town_errand_release(names, leader, slot, label)
+        _TOWN_ERRANDS[key] = new
+
+    async def _town_errand_start(self, state, names, leader, in_run, now, label):
+        """Start the errand if `townerrand.should_start` gives a reason."""
+        facts = await asyncio.to_thread(_fetch_gearup_facts, names)
+        mail_gear = await asyncio.to_thread(_mail_gear_holders, names)
+        why = townerrand.should_start(
+            state, now=now, in_run=in_run, mail_gear=mail_gear, facts=facts)
+        if not why:
+            return state
+        teams = await asyncio.to_thread(_fetch_teams, [leader])
+        hub = await asyncio.to_thread(_fetch_capital_hub, leader,
+                                      teams.get(leader, ""))
+        if not hub:
+            log.info("town errand: %s%s, but no capital of the family's own "
+                     "auction house is on %s's map; not going", why, label, leader)
+            return townerrand.State(ended=now)
+        await asyncio.to_thread(_town_errand_jobs, names)
+        log.info("town errand: starts%s - %s; the family goes to the mailbox "
+                 "at %s by the auctioneer %s", label, why, _hub_aim(hub),
+                 hub.get("auctioneer", ""))
+        return townerrand.start(now, hub, why)
+
+    async def _town_errand_aim(self, leader, aim, cohort) -> bool:
+        """Aim the leader through the town slot, urgently, as the errand."""
+        if not aim:
+            return False
+        return await self._claim_town_slot(
+            TOWN_ERRAND_CLAIMANT, leader, aim, urgent=True,
+            cohort=_cohort_key(cohort))
+
+    async def _town_errand_step(self, state, names, leader, positions,
+                                cohort, now) -> bool:
+        """Run the current step for the members standing at its counter.
+
+        Returns the step's read-back: whether it is done. A step that needs
+        a counter other than the mailbox aims the leader there first and does
+        nothing until the leader is read standing at it.
+        """
+        step = state.current_step
+        key = tuple(sorted(names))
+        marks = _TOWN_ERRAND_MARKS.setdefault(key, {})
+        ran_for = now - marks[step] if step in marks else 0.0
+        if step == townerrand.MAIL:
+            await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
+            return await self._town_errand_mail(state.hub, names, positions,
+                                                cohort)
+        if step in (townerrand.EQUIP, townerrand.HANDDOWN):
+            await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
+            if step not in marks:
+                # The sell pass is also the hand-off and equip pass: it puts on
+                # what a holder would wear and hands on what suits a sibling.
+                await self._vendor_once(cohort)
+                marks[step] = now
+            return ran_for >= TOWN_ERRAND_SETTLE_SECONDS
+        if step == townerrand.VENDOR:
+            return await self._town_errand_vendor(
+                state, names, leader, positions, cohort, now, marks)
+        if step == townerrand.BANK:
+            await self._town_errand_aim(leader, "banker", cohort)
+            at = await asyncio.to_thread(_fetch_town, leader)
+            if leader not in positions or not at.banker:
+                return False
+            if step not in marks:
+                await self._bank_passing_once(cohort)
+                marks[step] = now
+            return ran_for >= TOWN_ERRAND_SETTLE_SECONDS
+        if step == townerrand.TIDY:
+            # THE BAG TIDY PASS RUNS HERE TOO (#375), while the family stands
+            # together: its hand-ons are gives and trades between members, and
+            # its junk sale wants a counter in reach. Its own loop keeps running.
+            if step not in marks:
+                await self._tidy_once(cohort)
+                marks[step] = now
+            return ran_for >= TOWN_ERRAND_SETTLE_SECONDS
+        return True
+
+    async def _town_errand_mail(self, hub, names, positions, cohort) -> bool:
+        """Takes for every member standing at the hub mailbox; done when the
+        plan has nothing left to take for them."""
+        letters = mailrun.letters_from_rows(
+            await asyncio.to_thread(_fetch_mail, names), names)
+        seen = await asyncio.to_thread(_recent_mail_keys, GIVE_RETRY_MINUTES)
+        plan = mailrun.plan(
+            letters, await asyncio.to_thread(_fetch_free_slots, names),
+            mailrun.attachments_asked(seen))
+        here = [t for t in plan.takes if townerrand.in_range(
+            hub, positions.get(t.character), TOWN_COUNTER_YARDS)]
+        fresh = []
+        for take in here:
+            command = mailrun.command(take)
+            if (take.character, command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_mail, take, command):
+                fresh.append(take)
+        for line in mailrun.lines(fresh):
+            log.info("town errand mail: %s", line)
+        log.info("town errand mail: %d take(s) queued of %d planned, %d "
+                 "letter(s) left%s", len(fresh), len(plan.takes), len(letters),
+                 _family_label(cohort))
+        return not plan.takes
+
+    async def _town_errand_vendor(self, state, names, leader, positions,
+                                  cohort, now, marks) -> bool:
+        """Walk to a vendor that sells a short member gear, then buy and sell.
+
+        The vendor is chosen from the hub (`gearup.vendor_trip`, the world's
+        spawn and stock tables); with no gear to buy, the nearest vendor that
+        will deal (`vendor`) still takes the junk. Buys are written only for
+        members read standing at a vendor.
+        """
+        step = townerrand.VENDOR
+        facts = await self._gearup_facts_and_tanks(names)
+        hub = state.hub
+        here = bag_pressure.Standing(name=leader, map_id=int(hub["map_id"]),
+                                     x=float(hub["x"]), y=float(hub["y"]))
+        trip = gearup.vendor_trip(
+            facts, await asyncio.to_thread(_fetch_gear_vendors, here),
+            map_id=here.map_id, max_yards=TOWN_ERRAND_VENDOR_YARDS,
+            repair_floor={n: f["purse"] * towntrip.FLOOR for n, f in facts.items()})
+        aim = travel.resolve(str(trip.vendor)) if trip.vendor else "vendor"
+        await self._town_errand_aim(leader, aim, cohort)
+        at = await asyncio.to_thread(_fetch_town, leader)
+        if leader not in positions or not at.vendor:
+            return False
+        standing = {}
+        for name in names:
+            if name in positions and name in facts:
+                town = await asyncio.to_thread(_fetch_town, name)
+                if town.vendor:
+                    standing[name] = facts[name]
+        if step not in marks:
+            log.info("town errand vendor: %s at %s; buying for %s%s", leader,
+                     trip.name or "a vendor", ", ".join(sorted(standing)) or
+                     "nobody yet", _family_label(cohort))
+            await self._gearup_vendor_once(standing)
+            await self._vendor_once(cohort)
+            marks[step] = now
+            return False
+        return now - marks[step] >= TOWN_ERRAND_SETTLE_SECONDS
+
+    async def _town_errand_release(self, names, leader, slot, label) -> None:
+        """Hand the traveller back and the family back to what it was doing."""
+        slot.unreserve(TOWN_ERRAND_CLAIMANT)
+        column = await asyncio.to_thread(_current_travel_npc, leader)
+        if column and _is_economy_aim(column):
+            await asyncio.to_thread(_release_trade_errand, leader, column)
+        restored = await asyncio.to_thread(_town_errand_release_jobs, names)
+        log.info("town errand: released%s; %s", label, restored)
+
     async def _town_passing_loop(self) -> None:
         """The quick look at the counters, every TOWN_PASSING_CYCLE_SECONDS."""
         await self.wait_until_ready()
@@ -14240,6 +14465,11 @@ class Bridge(discord.Client):
         pass. Looked up through globals() because the campaign tests load the
         queue pass without the gear helpers.
         """
+        # THE TOWN ERRAND HOLDS THE CAMPAIGN WHILE IT RUNS (#365); it is
+        # bounded by its own ceiling and releases the family itself.
+        errand = globals().get("_town_errand_active")
+        if errand is not None and errand(list(fam["names"])):
+            return True
         mid_run_check = getattr(self, "_mid_run", None)
         gear_hold_check = globals().get("_gear_campaign_hold")
         if mid_run_check is None or gear_hold_check is None:
@@ -21187,6 +21417,109 @@ _MAIL_SQL = (
 )
 
 
+# The town errand (#365): its claimant in the town slot, its job source, how
+# often it ticks, how long a counter step waits for the world to answer, and
+# how far from the hub the vendor it walks to may be.
+TOWN_ERRAND_CLAIMANT = "town errand"
+TOWN_ERRAND_SOURCE = "overseer:town-errand"
+TOWN_ERRAND_CYCLE_SECONDS = 30.0
+TOWN_ERRAND_SETTLE_SECONDS = 60.0
+TOWN_ERRAND_VENDOR_YARDS = 250.0
+# family key -> townerrand.State, and family key -> {step: first run}.
+_TOWN_ERRANDS: dict = {}
+_TOWN_ERRAND_MARKS: dict = {}
+
+
+def _town_errand_active(names) -> bool:
+    """Whether this family is on its town errand (the campaign yields)."""
+    state = _TOWN_ERRANDS.get(tuple(sorted(names)))
+    return bool(state and state.active)
+
+
+def _hub_aim(hub) -> str:
+    """The ground aim at the hub mailbox, or '' when it cannot be written."""
+    if not hub:
+        return ""
+    return travel.mailbox_aim(hub, hub.get("map_id")).aim or ""
+
+
+# THE CAPITAL, FROM THE WORLD'S OWN SPAWN TABLES. The nearest auctioneer on the
+# leader's map that serves the family's own auction house, then the mailbox
+# spawn nearest to that auctioneer: the counters of a capital stand together,
+# and no coordinate is written here.
+_ERRAND_AUCTIONEERS_SQL = (
+    "SELECT cr.map AS map_id, cr.position_x AS x, cr.position_y AS y, "
+    "ct.name AS name, ct.faction AS faction, "
+    "(POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2)) AS d2 "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.creature cr ON cr.map = s.map_id "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND (ct.npcflag & %s) <> 0 ORDER BY d2 LIMIT 60"
+)
+_ERRAND_MAILBOX_SQL = (
+    "SELECT g.map AS map_id, g.position_x AS x, g.position_y AS y, "
+    "g.position_z AS z, "
+    "(POW(g.position_x - %s, 2) + POW(g.position_y - %s, 2)) AS d2 "
+    "FROM acore_world.gameobject g "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE g.map = %s AND gt.type = %s ORDER BY d2 LIMIT 1"
+)
+# A mailbox further than this from the auctioneer is not the same town square.
+ERRAND_HUB_MAILBOX_YARDS = 120.0
+
+
+def _fetch_capital_hub(leader: str, team: str) -> dict:
+    """The mailbox spawn by the nearest auctioneer of `team`'s house, or {}."""
+    house = auction.TEAM_HOUSE.get(team, 0)
+    if not house:
+        return {}
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_ERRAND_AUCTIONEERS_SQL, (leader, NPC_FLAG_AUCTIONEER))
+            rows = [dict(r) for r in cur.fetchall()]
+            own = next((r for r in rows if auction.reachable_house(
+                team, int(r.get("faction") or 0)) == house), None)
+            if own is None:
+                return {}
+            cur.execute(_ERRAND_MAILBOX_SQL, (float(own["x"]), float(own["y"]),
+                                              int(own["map_id"]),
+                                              travel.MAILBOX_GO_TYPE))
+            box = cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+    if not box or float(box["d2"]) > ERRAND_HUB_MAILBOX_YARDS ** 2:
+        return {}
+    hub = dict(box)
+    hub["auctioneer"] = str(own.get("name") or "")
+    return hub
+
+
+def _town_errand_jobs(names: list) -> int:
+    """Every member on the default or a dungeon job goes on `town run`, which
+    keeps a family without an errand where it stands (mod-overseer#659)."""
+    written = 0
+    for name, job in _jobs_of(names).items():
+        if job in ("", jobs.DEFAULT, jobs.TOWN_RUN) or jobs.is_dungeon_job(job):
+            _insert_job(name, jobs.TOWN_RUN, TOWN_ERRAND_SOURCE)
+            written += 1
+    return written
+
+
+def _town_errand_release_jobs(names: list) -> str:
+    """After the errand: a waiting campaign re-asserts its own job on the next
+    queue pass; with none, the errand's `town run` goes back to the default."""
+    if _campaign_waiting(names):
+        return "the campaign queue takes the family back"
+    back = [n for n, job in _jobs_of(names).items()
+            if job == jobs.TOWN_RUN and _last_job_source(n) == TOWN_ERRAND_SOURCE]
+    for name in back:
+        _insert_job(name, jobs.DEFAULT, TOWN_ERRAND_SOURCE)
+    return "back to %s: %s" % (jobs.DEFAULT, ", ".join(back) or "nobody")
+
+
 def _mail_gear_holders(names: list) -> dict:
     """name -> letters of equipment waiting in that name's mailbox that it can
     wear now; `mailrun.gear_waiting` judges."""
@@ -24193,6 +24526,7 @@ class HeadlessBridge(Bridge):
                 self._mail_loop,
                 self._town_passing_loop,
                 self._tidy_loop,
+                self._town_errand_loop,
                 self._recruit_loop,
                 self._raid_spec_loop,
                 self._craft_supply_loop,
