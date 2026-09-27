@@ -560,7 +560,8 @@ class Storage:
     `guild_free` describe the guild bank's tab 0. `routed` maps a recipe's
     guid to the crafter the designated-crafters register sends it to (#248):
     such a recipe stays in the bags for the hand-off, and comes out of the
-    bank for it.
+    bank for it. The tidy pass (#375) routes gear the same way: a piece meant
+    for another member is withdrawn, never deposited, and handed on.
     """
 
     trades: dict = field(default_factory=dict)
@@ -773,6 +774,9 @@ def storage_reason(holding, storage, surplus=frozenset()):
     and only matters for the holder's own trade stock.
     """
     item = holding.item
+    if holding.guid in storage.routed and not disposition.recipe(item):
+        # On its way to another member (the tidy pass): never put back down.
+        return ""
     settled = _class_reason(holding, storage)
     if settled is not None:
         return settled
@@ -847,7 +851,10 @@ def _deposit_candidates(member, family, totals, storage):
         for holding, why in (_stored(member, storage) if storage else [])
     ]
     chosen = {holding.guid for holding, _why, _keeper in candidates}
+    routed = storage.routed if storage else {}
     for holding in member.carried:
+        if holding.guid in routed and not disposition.recipe(holding.item):
+            continue
         if holding.guid in chosen or holding.container_slots > 0:
             # An empty spare bag belongs in somebody's empty bag position
             # and a full one cannot be moved at all. Either way the bank
@@ -949,6 +956,8 @@ def _wanted_back(holding, member, family, totals, storage):
     verdict = _verdict(holding, family, member.level, totals)
     if storage is None:
         return verdict.why if verdict.route in WITHDRAW_ROUTES else ""
+    if holding.guid in storage.routed and not disposition.recipe(holding.item):
+        return "%s is for %s" % (holding.item.name, storage.routed[holding.guid])
     if storage_reason(holding, storage):
         return ""
     if disposition.recipe(holding.item) and _learnable(holding, storage):

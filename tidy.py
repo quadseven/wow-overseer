@@ -398,3 +398,57 @@ def _settle_try_on(place, holder: str, name: str) -> tuple:
         "%s tried on %s and kept what it wears (the bot scored it lower)"
         % (holder, name),
     )
+
+
+def nobody_can_use(row: dict, members: dict) -> bool:
+    """No member can ever wear this piece, at any level (an idol, no druid)."""
+    return bool(members) and all(refusal(row, m) for m in members.values())
+
+
+# item_template.bonding values bound before anybody equips anything.
+_BOUND_TEMPLATES = frozenset({1, 4})
+
+
+def guild_class_keeps(gear_rows, family: dict, guild: dict) -> dict:
+    """item guid -> why, for carried pieces only a guildmate's class can use.
+
+    The family's own home for a piece comes first; a piece no member can
+    ever wear (a druid's idol in a warrior's bags) goes to the guild bank
+    when somebody in the guild is of the class that can, and the auction
+    house otherwise. `guild` is name -> Member for the whole guild roster;
+    the lowest-level guildmate who can use it is named, as the one who has
+    longest to wear it.
+    """
+    keeps = {}
+    for row in gear_rows:
+        guid = int(row.get("item_guid") or 0)
+        if not guid or int(row.get("instance_flags") or 0) & SOULBOUND_FLAG:
+            continue
+        if int(row.get("bonding") or 0) in _BOUND_TEMPLATES:
+            continue
+        if not nobody_can_use(row, family):
+            continue
+        takers = sorted(
+            (m.level, m.name)
+            for m in guild.values()
+            if m.name not in family and not refusal(row, m)
+        )
+        if not takers:
+            continue
+        name = takers[0][1]
+        member = guild[name]
+        keeps[guid] = (
+            "%s: nobody in the family can use it, and %s (%s, level %d) can"
+            % (
+                row.get("name") or "item",
+                name,
+                gear._CLASS_NAMES.get(member.class_id, "class %d" % member.class_id),
+                member.level,
+            )
+        )
+    return keeps
+
+
+def routes(grants) -> dict:
+    """item guid -> taker, for the bank plan's `routed` map."""
+    return {int(g.guid): g.taker for g in grants}

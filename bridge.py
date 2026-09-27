@@ -7733,6 +7733,9 @@ class Bridge(discord.Client):
         equipped = (await asyncio.to_thread(_fetch_family_equipped, names)
                     if gear_rows else [])
         fits = bag_pressure.family_fits(gear_rows, equipped, names)
+        # A piece no member can ever wear (#375): gear.py abstains on relics,
+        # so `fits` never calls one FIT_NOBODY.
+        members = tidy.members_from_rows(equipped)
         # GEMS AND RECIPES NOBODY IN THE FAMILY OR GUILD CAN USE (#148), when
         # the market beats the vendor; `clearance.plan` decides which.
         candidates = _clearance_listings(
@@ -7744,7 +7747,8 @@ class Bridge(discord.Client):
         for row in gear_rows:
             try:
                 guid = int(row["item_guid"])
-                if fits.get(guid) != disposition.FIT_NOBODY:
+                if (fits.get(guid) != disposition.FIT_NOBODY
+                        and not tidy.nobody_can_use(row, members)):
                     continue
                 if bag_pressure.item_binding(row) != disposition.BIND_ON_EQUIP:
                     continue
@@ -8729,6 +8733,14 @@ class Bridge(discord.Client):
         # auction pass leaves them alone.
         keeps = bag_pressure.guild_bank_keeps(
             gear_rows, equipped, family_names, roster)
+        # AND A PIECE ONLY A GUILDMATE'S CLASS CAN USE (#375): a druid's idol
+        # in a warrior's bags has no slot for gear.py, so the rule above never
+        # sees it. The tidy judgement names the class that can.
+        members = tidy.members_from_rows(equipped)
+        family_members = {n: m for n, m in members.items() if n in family_names}
+        for guid, why in tidy.guild_class_keeps(
+                gear_rows, family_members, members).items():
+            keeps.setdefault(guid, why)
         _GUILD_BANK_KEEPS.clear()
         _GUILD_BANK_KEEPS.update(keeps)
         _log_capped("guild bank keep", list(keeps.values()))
@@ -20531,6 +20543,53 @@ _WORN_ENTRIES_SQL = (
 )
 
 
+# The carried-gear read over the BANK's slots instead of the bags': the bank
+# window (bag 0, slots 39-66) and the bank bags (bag 0, slots 67-73).
+_BANKED_GEAR_SQL = _SURPLUS_GEAR_SQL.replace(
+    "((ci.bag = 0 AND ci.slot BETWEEN 19 AND 38) ",
+    "((ci.bag = 0 AND ci.slot BETWEEN 39 AND 66) ",
+).replace("bag.slot BETWEEN 19 AND 22", "bag.slot BETWEEN 67 AND 73")
+
+
+def _fetch_banked_gear(names: list) -> list:
+    """`_fetch_surplus_gear`'s rows for what each member has banked (#375)."""
+    if not names:
+        return []
+    sql = _BANKED_GEAR_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _tidy_routes(names: list) -> dict:
+    """item guid -> the member the tidy pass hands it to, bags and bank (#375).
+
+    The bank plan's `routed` map: a banked piece meant for another member is
+    withdrawn for the hand-off, and a carried one is never put back down.
+    Blocking. A failed read routes nothing, which leaves the bank as it was.
+    """
+    try:
+        rows = _fetch_surplus_gear(names) + _fetch_banked_gear(names)
+        if not rows:
+            return {}
+        worn_rows = _fetch_family_equipped(names)
+        members = tidy.members_from_rows(worn_rows)
+        claims = bag_pressure.family_claimants(rows, worn_rows, names)
+        declined = tidy.declined_equips(
+            _equip_history(EQUIP_MEMORY_HOURS, EQUIP_RETRY_MINUTES))
+        return tidy.routes(tidy.hand_ons(
+            rows, members, claims, TIDY_FUTURE_LEVELS, declined))
+    except pymysql.err.MySQLError:
+        log.exception("tidy: the hand-on routes could not be read; the bank "
+                      "plan routes no gear this pass")
+        return {}
+
+
 def _fetch_worn_entries(names: list) -> dict:
     """name -> {equipment slot: item entry} for what each member wears."""
     if not names:
@@ -21177,7 +21236,7 @@ def _plan_bank(names: list) -> "bank.Plan":
     # for the hand-off, and comes back out of the bank for it (#248).
     storage = bank.storage_from(
         held, _worked_by(names), REAGENT_TRADES, _fetch_guild_bank_setup(names),
-        routed=_crafter_plan(names).routed,
+        routed=_crafter_plan(names).routed | _tidy_routes(names),
         guild_later=dict(_GUILD_BANK_KEEPS),
         policy=_bank_policy(names),
     )
