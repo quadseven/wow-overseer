@@ -23,6 +23,20 @@ def _block(signature: str) -> str:
 
 
 class VendorHalfOfTheGearErrand(unittest.TestCase):
+    def test_a_short_family_is_walked_to_a_vendor_before_the_auctioneer(self):
+        body = _block("    async def _gearup_once(")
+        self.assertIn("_gearup_vendor_trip(names, leader, facts, cohort)", body)
+        self.assertLess(
+            body.index("_gearup_vendor_trip("), body.index("_gearup_house(")
+        )
+
+    def test_the_vendor_walk_is_a_creature_aim_through_the_town_slot(self):
+        body = _block("    async def _gearup_vendor_trip(")
+        self.assertIn("gearup.vendor_trip(", body)
+        self.assertIn("travel.resolve(str(trip.vendor))", body)
+        self.assertIn("self._claim_town_slot(", body)
+        self.assertIn("bag_pressure.trip_blocked(", body)
+
     def test_vendors_are_asked_before_the_auctioneer(self):
         body = _block("    async def _gearup_once(")
         self.assertIn("await self._gearup_vendor_once(facts)", body)
