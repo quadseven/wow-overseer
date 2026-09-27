@@ -44,6 +44,7 @@ import jevview
 import levelroute
 import llmmode
 import lootcouncil
+import gearorigin
 import lootstory
 import modelviewer
 import needs
@@ -1089,6 +1090,77 @@ def _fetch_armory(names: list[str] | None = None) -> dict:
             "char_rows": char_rows, "equipment_rows": equipment_rows,
             "talent_rows": talent_rows, "stats_rows": stats_rows,
             "base_rows": base_rows, "set_rows": set_rows}
+
+
+# WHERE EACH WORN ITEM CAME FROM (#371), for the character sheet's tooltip.
+# The event read takes this member's own rows and every hand-over that names
+# them as the receiver; the story columns arrive in a later migration than the
+# table, so a realm without them falls back to the plain columns and loses
+# only the guid join and the hand-overs.
+_ORIGIN_WORN = (
+    "SELECT ci.item AS item_guid, ii.itemEntry AS entry FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid AND ci.bag = 0 "
+    "AND ci.slot < %s JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE c.name = %s"
+)
+_ORIGIN_COLUMNS = (
+    "SELECT e.id, e.character_name, e.kind, e.subject_id, e.subject_name, "
+    "e.subject_quality, e.detail, e.map, e.zone, e.first_seen, e.last_seen{story} "
+    "FROM overseer_event e "
+)
+_ORIGIN_STORY = ", e.item_guid, e.counterpart, e.via, e.source"
+_ORIGIN_OWN = (
+    "WHERE e.character_name = %s AND e.kind IN "
+    "('item_loot', 'item_given', 'item_equip', 'quest_reward', 'craft')"
+)
+_ORIGIN_GIVEN = "WHERE e.kind = 'item_given' AND e.counterpart = %s"
+# Purchases this service asked for and the module read back as bought. The
+# kind comes first, for the (kind, status, updated_at) index.
+_ORIGIN_BUYS = (
+    "SELECT kind, result, created_at, updated_at FROM overseer_command "
+    "WHERE kind IN ('buy', 'auction') AND target_name = %s "
+    "AND result LIKE %s"
+)
+
+
+def _fetch_gear_origin(name: str) -> dict:
+    """The rows gearorigin.origins reads for one member; never raises on a
+    realm whose overseer tables are missing or older (1146, 1054)."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_ORIGIN_WORN, (len(armory.EQUIPPED_SLOTS), name))
+            worn = list(cur.fetchall())
+            event_rows = _wide_guarded(
+                cur, _ORIGIN_COLUMNS.format(story=_ORIGIN_STORY) + _ORIGIN_OWN,
+                (name,), _ORIGIN_COLUMNS.format(story="") + _ORIGIN_OWN,
+                "overseer_event")
+            # Hand-overs TO this member need the counterpart column; without
+            # it there are none to read.
+            event_rows += _wide_guarded(
+                cur, _ORIGIN_COLUMNS.format(story=_ORIGIN_STORY) + _ORIGIN_GIVEN,
+                (name,), "", "overseer_event")
+            command_rows = _wide_guarded(
+                cur, _ORIGIN_BUYS, (name, '%"outcome":"bought"%'), "",
+                "overseer_command")
+            quest_ids = sorted({int(r["subject_id"]) for r in event_rows
+                                if r["kind"] == gearorigin.QUEST_REWARD})
+            quest_rows = []
+            if quest_ids:
+                qholes = ", ".join(["%s"] * len(quest_ids))
+                cur.execute(
+                    "SELECT ID, RewardItem1, RewardItem2, RewardItem3, RewardItem4, "  # noqa: S608
+                    "RewardAmount1, RewardAmount2, RewardAmount3, RewardAmount4, "
+                    "RewardChoiceItemID1, RewardChoiceItemID2, RewardChoiceItemID3, "
+                    "RewardChoiceItemID4, RewardChoiceItemID5, RewardChoiceItemID6 "
+                    f"FROM acore_world.quest_template WHERE ID IN ({qholes})",
+                    tuple(quest_ids),
+                )
+                quest_rows = list(cur.fetchall())
+    finally:
+        conn.close()
+    return {"worn": worn, "event_rows": event_rows, "command_rows": command_rows,
+            "quest_rewards": achievements.quest_rewards_from_rows(quest_rows)}
 
 
 def _fetch_standing(names: list[str] | None = None) -> dict:
@@ -5739,8 +5811,20 @@ class Handler(BaseHTTPRequestHandler):
             fetched.pop("equip_event_rows")
             payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
                                           families=[("", [wanted])])
+            # Where each worn item came from (#371): gearorigin decides, from
+            # the rows this reads. A failed read costs the tooltip its origin
+            # line and nothing else: the sheet still draws.
+            try:
+                origin = gearorigin.origins(
+                    wanted, **_fetch_gear_origin(wanted), craftbook=CRAFTBOOK,
+                    zones=recap.zone_names(GEO.continents))
+            except Exception:
+                log.exception("gear origin read failed for %s; the sheet "
+                              "draws without origin lines", wanted)
+                origin = {}
             self._send(200, "application/json", json.dumps(
-                {"member": payload["members"][0], "doll": payload["doll"]}).encode())
+                {"member": payload["members"][0], "doll": payload["doll"],
+                 "origin": origin}).encode())
         except Exception:
             log.exception("armory member query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')

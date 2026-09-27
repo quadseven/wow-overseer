@@ -12616,7 +12616,8 @@ async function vcShowTip(at, item, tip) {
   t.replaceChildren();
   itemTipLines(t, reading, null);
   if (item.count > 1) t.appendChild(el("div", "vcsub", "stack of " + item.count));
-  // Why it is in this bank, or where the bank policy sends it (#320).
+  // Why it is in this bank, or where the bank policy sends it (#320), or,
+  // on the character sheet, where the worn item came from (#371).
   if (item.why) t.appendChild(el("div", "vcsub vcwhy", item.why));
   vcTipPlace(at);
 }
@@ -12733,6 +12734,8 @@ async function vcCharacter(name) {
   const p = await vcGet(u("/api/armory/member?name=") + encodeURIComponent(name));
   const m = p.member;
   const bySlot = new Map(m.slots.map((s) => [s.slot, s]));
+  // Where each worn item came from, by entry, as the server wrote it (#371).
+  const origin = p.origin || {};
   // Every cell by its slot, with what the other sheet is compared on (#371).
   const read = new Map();
   const column = (names) => {
@@ -12747,8 +12750,10 @@ async function vcCharacter(name) {
         cell.setAttribute("aria-label", "empty " + n);
         read.set(n, { cell: cell, filled: false, ilvl: null, say: "empty " + n });
       } else {
+        const from = origin[String(s.entry)];
         cell = vcSlot({ entry: s.entry, name: s.name, quality: s.quality,
-                        icon: s.icon, letters: s.mark, count: 1 },
+                        icon: s.icon, letters: s.mark, count: 1,
+                        why: from ? from.line : "" },
                       s.tooltip, false);
         const ilvl = typeof s.item_level === "number" ? s.item_level : null;
         if (ilvl !== null) cell.appendChild(el("span", "vcilvl", String(ilvl)));
