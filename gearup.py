@@ -196,6 +196,48 @@ def plan_buys(characters, listings, *, repair_floor=0):
     return tuple(output)
 
 
+def plan_vendor_buys(characters, offers, *, repair_floor=0):
+    """Buy vendor equipment for EMPTY slots only, from each member's own reach.
+
+    THE VENDOR IS THE PATH THAT IS ALWAYS OPEN. The auction house needs a walk
+    to one counter in a capital and delivers by post; an armour merchant sells
+    over the counter, into the bags, where the module's equip drive puts the
+    piece on. Measured on the dev realm on 2026-09-27: the Alliance mage and
+    priest wore five and six of seventeen slots at level 35, never stood at an
+    auctioneer when the gear errand shopped, and each carried ten gold.
+
+    `offers` is name -> the item rows the vendors within that member's reach
+    stock, each with `entry` and `buyout` (the vendor price). A white from a
+    vendor is rarely better than a worn green, so a worn slot is never
+    replaced here: every worn slot reads as better than anything on offer. The
+    same class, level, armour and budget rules as `plan_buys` apply.
+    """
+    output = []
+    for name, character in sorted(characters.items()):
+        rows = sorted(
+            (
+                dict(row, id=int(_get(row, "entry", default=0) or 0))
+                for row in (offers.get(name) or ())
+            ),
+            key=_listing_order,
+        )
+        if not rows:
+            continue
+        equipped = _get(character, "equipped", "slots", default={}) or {}
+        worn_only = dict(character, equipped={slot: None for slot in equipped})
+        output.extend(
+            _plan_character(
+                name, worn_only, rows, _budget_for(name, character, repair_floor)
+            )
+        )
+    return tuple(output)
+
+
+def vendor_command(buy) -> str:
+    """The kind='buy' row DoBuy reads: one piece, capped at the list price."""
+    return "entry:%d count:1 max:%d" % (int(buy.entry), int(buy.buyout))
+
+
 def _listing_order(row):
     return (
         -int(_get(row, "ItemLevel", "item_level", default=0) or 0),
