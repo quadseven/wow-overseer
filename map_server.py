@@ -56,6 +56,7 @@ import holdings
 import crafters
 import guildcorps
 import guildjobs
+import guildrun
 import natural
 import raidlineup
 import raidroles
@@ -2277,6 +2278,18 @@ _LINEUP_SKILLS = (
     "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
     "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes})) "
     "AND cs.skill IN ({skills}) AND cs.value > 0"
+)
+
+
+# The guild coordinator's runs, newest first: enough ended ones for the
+# records guildrun.rates folds (ROLLING per key) and the Guild tab's list.
+_GUILD_RUNS_SQL = (
+    "SELECT id, guild, band, composition, keyword, tank, members, dungeon_by, "
+    "dungeon_jev, dungeon_confidence, composition_by, composition_jev, "
+    "composition_confidence, prior_rate, prior_runs, state, outcome, why, deaths, "
+    "seconds_inside, bosses_done, bosses_total, loot_items, loot_notable, "
+    "ilvl_gained, levels_gained, created_at, ended_at "
+    "FROM overseer_guild_run ORDER BY id DESC LIMIT 500"
 )
 
 
@@ -5923,6 +5936,27 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(200, "application/json", json.dumps(tip).encode())
 
+    def _guild_runs(self, _query: dict) -> None:
+        """GET /api/guildruns - the guild coordinator's groups (guildrun).
+
+        The groups in flight, the last thirty that ended with their outcomes,
+        and each (dungeon, band, composition) record the coordinator learns
+        from. No parameters: it is one realm's guild runs. A world without the
+        table (the bridge creates it) answers empty rather than 503.
+        """
+        try:
+            conn = _connect()
+            try:
+                with conn.cursor() as cur:
+                    rows = _wide_guarded(cur, _GUILD_RUNS_SQL, (), "", "overseer_guild_run")
+            finally:
+                conn.close()
+            payload = guildrun.page(list(rows))
+            self._send(200, "application/json", json.dumps(payload, default=str).encode())
+        except Exception:
+            log.exception("guild runs query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _read_json_body(self) -> dict | None:
         """The POST body as a dict, or None after sending the error itself."""
         try:
@@ -6018,6 +6052,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/agenda": _agenda,
         "/api/levelroute": _levelroute,
         "/api/party-status": _party_status,
+        "/api/guildruns": _guild_runs,
         "/api/decree": _decree,
         "/api/thoughts": _thoughts,
         "/api/watch": _watch_state,
