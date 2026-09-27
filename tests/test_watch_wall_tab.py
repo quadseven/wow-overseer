@@ -304,7 +304,7 @@ class TheTilesAreMovedAndNeverRebuilt(unittest.TestCase):
         controls swallows clicks that land on it, which is why the tile is
         INSERTED FIRST rather than appended."""
         self.assertIn('el("button", "povhit")', PAGE)
-        self.assertIn("shot.append(hit, big, ear);", PAGE)
+        self.assertIn("shot.append(hit);", PAGE)
         self.assertIn("target.insertBefore(t.tile, target.firstChild)", PAGE)
         css = PAGE[PAGE.index(".povhit {") :]
         self.assertIn("inset:0", css[: css.index("}")])

@@ -441,24 +441,55 @@
   #agfam { color:var(--dim); font-family:var(--mono); font-size:.72rem;
            letter-spacing:.08em; text-transform:uppercase; margin-bottom:.2rem; }
   #agfam:empty { display:none; }
-  /* The other family's goal: one line, the same colour rules in miniature, so
-     a split or a stall on the second family still stands out. */
+  /* EVERY OTHER FAMILY IS ITS OWN CARD (#363), a sibling of #agenda with
+     the same gutter and the same 4px bar, so two families read as two
+     objects of one kind. It used to be a row INSIDE #agenda: indented by the
+     first card's padding, under the first card's bar, with a second bar of
+     its own. The colour rules are the big card's in miniature, so a split
+     or a stall on the second family still stands out.
+
+     ONE FACT PER LINE: whose family, the step, the queue, then the stall
+     and the clock. Read on a phone at a glance, a run-on sentence that
+     wraps mid-queue is the thing that could not be scanned. */
   #agother:empty { display:none; }
-  #agother { margin-top:.4rem; padding-top:.35rem; border-top:1px solid var(--line); }
-  .agrow { display:flex; gap:.6rem; flex-wrap:wrap; align-items:baseline;
-           padding:.15rem 0 .15rem .5rem; border-left:3px solid var(--alliance); }
+  .agrow { display:flex; flex-direction:column; gap:.1rem;
+           padding:.5rem var(--gutter) .55rem; background:var(--panel);
+           border-bottom:1px solid var(--line);
+           border-left:4px solid var(--alliance); }
   .agrow.split { border-left-color:var(--neutral); }
   .agrow.stalled { border-left-color:var(--horde); }
   .agrow.dungeon { border-left-color:var(--gold); }
   .agrow.idle { border-left-color:var(--line); }
   .agrowfam { color:var(--dim); font-family:var(--mono); font-size:.72rem;
               letter-spacing:.08em; text-transform:uppercase; }
-  .agrowline { color:var(--text); }
+  .agrowline { color:var(--text); font-size:1rem; line-height:1.35;
+               overflow-wrap:anywhere; }
+  .agrow.stalled .agrowline { color:var(--horde); }
+  .agrowqueue { color:var(--dim); font-size:.88rem; line-height:1.4;
+                overflow-wrap:anywhere; }
+  .agrowqueue:empty, .agrowwhen:empty { display:none; }
+  .agrowwhen { display:flex; flex-direction:column; align-items:flex-start;
+               gap:.2rem; color:var(--dim); font-size:.82rem; }
+  /* STALLED IS A FLAG, NOT A WORD IN THE LINE. Filled, in the stall colour,
+     on both kinds of card: the one state on this banner worth interrupting
+     somebody for has to be seen before it is read. */
+  .agflag { display:inline-block; align-self:flex-start; padding:.05rem .45rem;
+            border-radius:4px; background:var(--horde); color:#fff;
+            font-family:var(--mono); font-size:.72rem; font-weight:700;
+            letter-spacing:.12em; }
+  .agstall { color:var(--horde); font-weight:600; }
   nav { display:flex; gap:.4rem; padding:.6rem 1rem; flex-wrap:wrap; }
   nav button { background:transparent; color:var(--shell-text);
                border:1px solid var(--shell-line);
                padding:.3rem .8rem; border-radius:6px; cursor:pointer; font:inherit; }
   nav button.on { border-color:var(--alliance); color:var(--alliance); }
+  /* THE TAB BAR IS STICKY (#363). On a phone the views are long and the tab
+     row was a scroll to the top away; now it rides the top edge. z-index 5
+     keeps it under the character panel (10) and the client frames (60). */
+  #tabbar { position:sticky; top:0; z-index:5; }
+  /* A #watch or #armory link lands the browser on that <section>; the margin
+     keeps its first line clear of the sticky bar instead of under it. */
+  body > section { scroll-margin-top:56px; }
 
   /* --- THE SHELL ON A PHONE (infra#3482) ------------------------------------
      Placed here, immediately after the shell's own rules and BEFORE the
@@ -502,11 +533,26 @@
        on #recordings already pushes that group right; this keeps the group
        from being taller than the 44px its own controls need. */
     #theme { min-height:44px; padding:0 .65rem; }
+    /* THE THEME BUTTON JOINS THE MARK (#363) instead of wrapping onto a row
+       of its own at the foot of the header; the census and the realm pills
+       follow, sharing a row when the census is short enough. The pills are
+       44px here, for a thumb. */
+    header .mark { order:1; }
+    #theme { order:2; margin-left:auto; }
+    #census { order:3; flex:1 1 auto; min-width:0; }
+    .hgap { display:none; }
+    #realmnav { order:4; }
+    #recordings { order:5; }
+    .rn-pill { min-height:44px; }
+    .ftile button.ffull { min-height:44px; min-width:44px; }
     /* The goal banner is the feature and keeps the largest text on the page.
        What it loses is the space around its supporting lines. */
     #agenda { padding:var(--s3) var(--gutter); }
     #agdetail { margin-top:var(--s1); font-size:13.5px; line-height:1.45; }
-    #agwhen { margin-top:var(--s2); gap:var(--s1) var(--s3); font-size:12px; }
+    /* One clock per line on a phone (#363): the stall, then when they last
+       moved, then when the goal was set, each readable without the others. */
+    #agwhen { margin-top:var(--s2); gap:var(--s1) var(--s3); font-size:12.5px;
+              flex-direction:column; align-items:flex-start; }
     /* THE TAB ROW SAYS THAT IT SCROLLS. A row of words clipped flat by the
        edge of the screen reads as a row that was cut off, not as one you can
        push - which is how the fourteen tabs beyond "Chronicle" stayed
@@ -2968,9 +3014,16 @@
      promoted tile leads the column, and the other four carry a BIG chip.
      order:-1 rather than a DOM move, because layoutBroadcasts re-parents live
      PeerConnections and reordering the array would tear one down. */
+  /* THE THREE MODES STILL MEAN THREE THINGS ON A PHONE (#363). With every
+     tile the same width, a FIVE UP whose big tile jumped to the top was the
+     same column as HERO + WALL under another name. So below the breakpoint:
+     FIVE UP is the five in roster order with no BIG chip (there is no big
+     one to make); HERO + WALL puts the chosen tile first and offers BIG on
+     the rest; STACKED is the seamless column with neither. */
   @media (max-width: 640px) {
     #wall.m-five-up, #wall.m-hero { grid-template-columns:1fr; gap:0; }
-    #wall.m-five-up > .povslot.hero,
+    #wall.m-five-up > .povslot.hero { grid-area:auto; }
+    #wall.m-five-up .povbig { display:none; }
     #wall.m-hero > .povslot.hero { grid-area:auto; grid-column:1 / -1;
                                    order:-1; }
   }
@@ -3066,22 +3119,20 @@
   .povhit { position:absolute; inset:0; border:0; background:transparent;
             cursor:pointer; padding:0; }
   .povhit:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
-  /* The BIG chip rides on the picture, top right, on the four that are not
-     the hero. */
-  .povbig { position:absolute; top:8px; right:8px; z-index:1; min-height:28px;
-            padding:0 .6rem; border-radius:999px; border:0;
-            background:var(--paper); color:var(--ink);
+  /* THE CONTROL ROW (#363): HEAR, BIG and the client's action bar, under the
+     caption and never over the picture. Wraps rather than scrolls, so on a
+     phone the action bar takes a full row of its own under the two chips. */
+  .povctl { display:flex; flex-wrap:wrap; align-items:center; gap:6px;
+            padding:0 var(--s3) 8px; background:var(--card); }
+  .povbig, .povear { min-height:36px; padding:0 .8rem; border-radius:999px;
+            border:1px solid var(--card-line);
             font-family:var(--mono); font-size:10px; letter-spacing:.14em;
             font-weight:700; cursor:pointer; }
+  .povbig { background:var(--paper); color:var(--ink); }
   .povbig:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .povbig[hidden] { display:none; }
-  /* The HEAR chip, top left, opposite BIG. Pressed reads as the one stream
-     being heard. */
-  .povear { position:absolute; top:8px; left:8px; z-index:1; min-height:28px;
-            padding:0 .6rem; border-radius:999px; border:0;
-            background:var(--card); color:var(--on-card-dim);
-            font-family:var(--mono); font-size:10px; letter-spacing:.14em;
-            font-weight:700; cursor:pointer; }
+  .povear { background:var(--card); color:var(--on-card-dim); }
+  @media (max-width:640px) { .povbig, .povear { min-height:44px; } }
   .povear[aria-pressed="true"] { background:var(--ink); color:var(--pale-green); }
   .povear:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   #wallsoundnote { font-size:12px; color:var(--dim); }
@@ -3207,12 +3258,13 @@
     --on-dark:#E8EFE6; --on-dark-dim:#B9C9BC; --on-dark-faint:#8FA396;
     --caution-text:#E8B33D; --warn-text:#FF7A5E; --accent-text:#2FD46F;
   }
-  /* THE ACTION BAR rides on the picture, bottom right, above the health band
-     and above .povhit, so a press opens a frame instead of promoting the tile. */
-  .vcbar { position:absolute; right:8px; bottom:10px; z-index:2; display:flex;
-           gap:3px; padding:3px; border-radius:6px;
-           background:linear-gradient(#1f1d14e6, #0c0d0ae6);
-           border:1px solid var(--vc-gold); box-shadow:0 2px 8px #000a; }
+  /* THE ACTION BAR sits in the tile's control row, under the caption (#363),
+     so no button covers the picture. The frame styling stays: it is the
+     game client's own bar, and reads as that rather than as the page. */
+  .vcbar { display:flex; gap:3px; padding:3px; border-radius:6px;
+           margin-left:auto;
+           background:linear-gradient(#1f1d14, #0c0d0a);
+           border:1px solid var(--vc-gold); }
   .vcbtn { width:30px; height:30px; padding:0; border-radius:4px; cursor:pointer;
            border:1px solid #5a4a22; color:var(--vc-gold-hi);
            background:radial-gradient(circle at 50% 35%, #3a3322, #15130c);
@@ -3221,7 +3273,15 @@
   .vcbtn:hover, .vcbtn[aria-pressed="true"] { border-color:var(--vc-gold-hi);
            box-shadow:inset 0 0 6px #f0cf6a88; }
   .vcbtn:focus-visible { outline:2px solid var(--vc-gold-hi); outline-offset:1px; }
-  @media (max-width:640px) { .vcbtn { width:26px; height:26px; font-size:8px; } }
+  /* ON A PHONE THE BAR TAKES THE REST OF THE ROW: six buttons sharing the
+     width, each 44px tall and at least 44px wide. The 280px basis is about
+     six of those plus the bar's gaps and frame: where the row has that much
+     room beside the chips the bar shares it, and otherwise it wraps to a row
+     of its own rather than shrinking a button under a thumb's width. */
+  @media (max-width:640px) {
+    .vcbar { flex:1 1 280px; margin-left:0; }
+    .vcbtn { flex:1 1 0; width:auto; height:44px; font-size:10px; }
+  }
 
   /* THE LAYER covers the viewport and takes no clicks itself; each frame does. */
   .vclayer { position:fixed; inset:0; z-index:60; pointer-events:none; }
@@ -3404,18 +3464,27 @@
      because it is not a tab: it is true on the map, in the Armory and on the
      Achievements page alike, and the question it answers ("what are they
      even doing right now") is the one this page could not answer at all. -->
+<div id="agstack">
 <div id="agenda">
   <div id="agfam"></div>
   <div id="agline">reaching the world...</div>
   <div id="agdetail"></div>
   <div id="agwhen"></div>
-  <!-- EVERY OTHER FAMILY, one line each. The banner above is one family's
-       goal in full; a second family's goal used to be folded into it, and
-       then split out of it with nowhere to go. -->
-  <div id="agother"></div>
 </div>
+<!-- EVERY OTHER FAMILY, one card each, and a SIBLING of #agenda rather than
+     a child of it (#363). It used to sit inside #agenda, so the second
+     family's card inherited the first family's padding and coloured left
+     bar and drew its own bar inside them: one card nested in another, which
+     read as "the second family is part of the first". -->
+<div id="agother"></div>
+</div>
+<!-- THE TAB BAR STAYS ON SCREEN (#363). One sticky wrapper for the row and
+     the group row under it, so an opened group travels with the row that
+     opened it instead of scrolling away beneath it. -->
+<div id="tabbar">
 <nav id="tabs"></nav>
 <div id="tabsub"></div>
+</div>
 <section id="family">
   <!-- FOUR BLOCKS, ONE SEPARATOR. The mono index, the ink rule and the
        right-aligned label are the same three parts every time, so the tab
@@ -5575,8 +5644,8 @@ function wallSlot(name) {
   hit.setAttribute("aria-label", "Make " + name + " the large tile");
   hit.onclick = () => promote(name);
 
-  // The BIG chip, on the picture rather than in the caption: the caption is
-  // 32px tall and already carries a name and a status word.
+  // The BIG chip, in the control row under the caption: the caption already
+  // carries a name and a status word.
   const big = el("button", "povbig", "BIG");
   big.type = "button";
   big.hidden = true;
@@ -5587,7 +5656,7 @@ function wallSlot(name) {
     e.stopPropagation();
     promote(name);
   };
-  // THE SPEAKER, on the picture, top left: which tile is heard. A press
+  // THE SPEAKER, first in the control row: which tile is heard. A press
   // also turns sound on, because pressing HEAR and hearing nothing would be
   // a control that lies. It is a click, so the unmute is allowed.
   const ear = el("button", "povear", "HEAR");
@@ -5604,11 +5673,16 @@ function wallSlot(name) {
     }
     wallApplyAudio();
   };
-  shot.append(hit, big, ear);
-  // The virtual client's action bar (vclient.py): bags, bank, guild bank,
-  // character, social and quest log for this tile's character.
-  shot.appendChild(vclientBar(name));
-  slot.append(shot, strip);
+  shot.append(hit);
+  // THE CONTROLS SIT UNDER THE PICTURE, NOT ON IT (#363). HEAR, BIG and the
+  // virtual client's action bar (vclient.py: bags, bank, guild bank,
+  // character, social and quest log) used to ride the video's corners, where
+  // on a phone they covered the game's own hotbar and were too small for a
+  // thumb. A row of their own under the caption keeps the picture whole and
+  // gives every control 44px.
+  const ctl = el("div", "povctl");
+  ctl.append(ear, big, vclientBar(name));
+  slot.append(shot, strip, ctl);
   wall.slots.set(name, { slot: slot, shot: shot, standing: standing,
                          line: line, status: status, big: big, hit: hit,
                          ear: ear });
@@ -6591,7 +6665,9 @@ function revealTab(b) {
   // A tab already inside the row does not move. The gutter of slack keeps a
   // tab that has just arrived off the very edge, where it reads as clipped
   // rather than as the end of the row.
-  const slack = 12;
+  // 32 rather than 12 since the row fades its last 28px on a phone (#363):
+  // a lit tab parked inside the fade read as half hidden.
+  const slack = 32;
   if (br.left < rr.left + slack) {
     row.scrollLeft -= (rr.left + slack) - br.left;
   } else if (br.right > rr.right - slack) {
@@ -8953,6 +9029,15 @@ function agStamp(label, seconds, stale) {
   return el;
 }
 
+// The STALLED flag, the same element on the big card and on every other
+// family's card, so the alarm looks the same wherever it is raised.
+function agFlag() {
+  const f = document.createElement("span");
+  f.className = "agflag";
+  f.textContent = "STALLED";
+  return f;
+}
+
 function renderAgenda(p) {
   // Whose goal this is, once there is more than one family to be confused
   // between. A world with one family keeps the banner exactly as it was.
@@ -8966,23 +9051,28 @@ function renderAgenda(p) {
     agDetail.appendChild(d);
   }
   agWhen.replaceChildren();
+  // THE STALL LEADS (#363): a filled flag, then the sentence with the real
+  // gap in it, then the clocks. It used to trail both clocks, which put the
+  // one alarm on this banner last in reading order.
+  if (p.stalled) {
+    agWhen.appendChild(agFlag());
+    if (p.stall_line) {
+      const s = document.createElement("span");
+      s.className = "agstale agstall";
+      s.textContent = p.stall_line;
+      agWhen.appendChild(s);
+    }
+  }
   // BOTH CLOCKS WHEN BOTH ARE KNOWN. "Set 40 minutes ago" is fine for a goal
   // still being worked; "last moved 40 minutes ago" is the stall. Showing
   // only one lets either be mistaken for the other, which is the whole point
   // of the pair. A clock this realm cannot read (no order behind the goal,
   // no movement row yet) is left off: "goal set: unknown" read as a fault.
-  if (p.changed_seconds !== null && p.changed_seconds !== undefined) {
-    agWhen.appendChild(agStamp("goal set", p.changed_seconds, false));
-  }
   if (p.moved_seconds !== null && p.moved_seconds !== undefined) {
     agWhen.appendChild(agStamp("last moved", p.moved_seconds, p.stalled));
   }
-  // The stall sentence arrives written, with the real gap in it.
-  if (p.stalled && p.stall_line) {
-    const s = document.createElement("span");
-    s.className = "agstale";
-    s.textContent = p.stall_line;
-    agWhen.appendChild(s);
+  if (p.changed_seconds !== null && p.changed_seconds !== undefined) {
+    agWhen.appendChild(agStamp("goal set", p.changed_seconds, false));
   }
   if (p.orders && p.orders.channel_id) {
     const o = document.createElement("span");
@@ -8997,25 +9087,34 @@ function renderAgenda(p) {
   if (p.stalled) agEl.classList.add("stalled");
 }
 
-// The other families' rows. Their clocks are not drawn - the full banner is
-// one tap away on that family's tab - but a stall is said in words, because
-// colour alone is not a warning.
+// The other families' cards. One fact per line (#363): whose family, the
+// step, the queue, then the stall and when they last moved. The goal-set
+// clock stays on the big card, one tap away on that family's tab; the
+// movement clock is here because it is the one that says a stall is real.
+// A stall is said in words as well as colour, because colour alone is not a
+// warning.
 function renderAgendaRow(p) {
   let row = agRows.get(p.family);
   if (!row) {
     row = { el: document.createElement("div"), fam: document.createElement("span"),
-            line: document.createElement("span"), when: document.createElement("span") };
+            line: document.createElement("span"), queue: document.createElement("span"),
+            when: document.createElement("span") };
     row.fam.className = "agrowfam";
     row.line.className = "agrowline";
-    row.el.append(row.fam, row.line, row.when);
+    row.queue.className = "agrowqueue";
+    row.when.className = "agrowwhen";
+    row.el.append(row.fam, row.line, row.queue, row.when);
     agRows.set(p.family, row);
   }
   row.el.className = "agrow " + p.activity + (p.stalled ? " stalled" : "");
   row.fam.textContent = p.family + "'s family";
-  row.line.textContent = p.headline
-    + (p.queue && p.queue.line ? " " + p.queue.line : "");
-  row.when.textContent = p.stalled ? "STALLED" : "";
-  row.when.className = p.stalled ? "agstale" : "";
+  row.line.textContent = p.headline;
+  row.queue.textContent = p.queue && p.queue.line ? p.queue.line : "";
+  row.when.replaceChildren();
+  if (p.stalled) row.when.appendChild(agFlag());
+  if (p.moved_seconds !== null && p.moved_seconds !== undefined) {
+    row.when.appendChild(agStamp("last moved", p.moved_seconds, p.stalled));
+  }
   return row.el;
 }
 
@@ -9051,8 +9150,13 @@ async function pollAgenda() {
         // Keep the row it had and mark it, as the big line does.
         const had = agRows.get(f);
         if (!had) return null;
-        had.when.textContent = "may be stale";
-        had.when.className = "agstale";
+        for (const c of had.when.children) c.classList.add("agstale");
+        if (!had.when.querySelector(".agmaybe")) {
+          const m = document.createElement("span");
+          m.className = "agstale agmaybe";
+          m.textContent = "may be stale";
+          had.when.appendChild(m);
+        }
         return had.el;
       }
     }));
@@ -12153,7 +12257,10 @@ function vcFront(f) {
 // frames do not open on top of each other. After that it stays where it was
 // dragged.
 function vcPlace(f, anchor) {
-  const shot = anchor && anchor.closest(".povshot");
+  // The bar sits under the picture now, so the frame is placed over the
+  // picture of the tile the bar belongs to.
+  const tile = anchor && anchor.closest(".povslot");
+  const shot = tile && tile.querySelector(".povshot");
   const r = (shot || anchor || document.body).getBoundingClientRect();
   const i = VC_FRAMES.findIndex((x) => x.kind === f.kind);
   vcMove(f, r.left + 12 + i * 22, r.top + 12 + i * 18);

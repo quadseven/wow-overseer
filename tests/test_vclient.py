@@ -454,7 +454,8 @@ class TheOverlayHandlesBothFamilies(unittest.TestCase):
     def test_every_wall_tile_gets_the_bar(self):
         slot = PAGE[PAGE.index("function wallSlot(name) {") :]
         slot = slot[: slot.index("\n}")]
-        self.assertIn("shot.appendChild(vclientBar(name));", slot)
+        self.assertIn("ctl.append(ear, big, vclientBar(name));", slot)
+        self.assertIn("slot.append(shot, strip, ctl);", slot)
 
     def test_no_family_or_character_is_named_in_the_overlay(self):
         code = overlay()
