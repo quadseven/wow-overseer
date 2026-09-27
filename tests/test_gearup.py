@@ -165,6 +165,50 @@ class GearupTests(unittest.TestCase):
         mage = {"class": "mage", "level": 35, "purse": 100000, "equipped": {}}
         self.assertEqual((), gearup.plan_vendor_buys({"Og": mage}, {}))
 
+    def _stock(self, vendor, yards, *items, map_id=0, name="Armorer"):
+        return [
+            dict(it, vendor=vendor, vendor_name=name, map_id=map_id, yards=yards)
+            for it in items
+        ]
+
+    def test_vendor_trip_picks_the_nearest_counter_that_sells_a_short_member_gear(self):
+        """The dev realm, 2026-09-27: no vendor buy in half an hour, because
+        nothing walked a gear-short member to a counter."""
+        mage = {"class": "mage", "level": 35, "purse": 100000, "equipped": {}}
+        cloth = item(10, subclass=1, entry=202, ilvl=33, price=500)
+        mail = item(10, subclass=3, entry=203, ilvl=33, price=500)
+        rows = (
+            self._stock(7, 40.0, mail)  # nearer, but nothing a mage wears
+            + self._stock(9, 120.0, cloth)
+            + self._stock(11, 300.0, cloth)
+        )
+        trip = gearup.vendor_trip({"Og": mage}, rows, map_id=0)
+        self.assertEqual((9, ("Og",), False), (trip.vendor, trip.buyers, trip.here))
+
+    def test_vendor_trip_needs_enough_empty_slots(self):
+        worn = {s: 30 for s in list(gearup._SLOT_NUMBERS)[:17] if s not in ("shirt",)}
+        mage = {"class": "mage", "level": 35, "purse": 100000, "equipped": worn}
+        rows = self._stock(9, 50.0, item(10, subclass=1, entry=202, price=500))
+        trip = gearup.vendor_trip({"Og": mage}, rows, map_id=0)
+        self.assertEqual(0, trip.vendor)
+        self.assertIn("empty slots", trip.why_not)
+
+    def test_vendor_trip_stays_on_the_leaders_map_and_inside_the_cap(self):
+        mage = {"class": "mage", "level": 35, "purse": 100000, "equipped": {}}
+        cloth = item(10, subclass=1, entry=202, price=500)
+        rows = self._stock(9, 50.0, cloth, map_id=1) + self._stock(11, 900.0, cloth)
+        self.assertEqual(0, gearup.vendor_trip({"Og": mage}, rows, map_id=0).vendor)
+
+    def test_vendor_trip_needs_gold_the_member_earned(self):
+        broke = {"class": "mage", "level": 35, "purse": 100, "equipped": {}}
+        rows = self._stock(9, 50.0, item(10, subclass=1, entry=202, price=500))
+        self.assertEqual(0, gearup.vendor_trip({"Og": broke}, rows, map_id=0).vendor)
+
+    def test_standing_at_the_counter_is_here(self):
+        mage = {"class": "mage", "level": 35, "purse": 100000, "equipped": {}}
+        rows = self._stock(9, 4.0, item(10, subclass=1, entry=202, price=500))
+        self.assertTrue(gearup.vendor_trip({"Og": mage}, rows, map_id=0).here)
+
     def test_expected_buy_assertion_fails_when_planner_is_stubbed_empty(self):
         character = {"class": "mage", "level": 35, "purse": 1000, "equipped": {}}
         with mock.patch.object(gearup, "plan_buys", return_value=()):

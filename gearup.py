@@ -233,6 +233,102 @@ def plan_vendor_buys(characters, offers, *, repair_floor=0):
     return tuple(output)
 
 
+# A member with at least this many empty stat slots is worth a walk to an
+# armour merchant. Fewer than that and the next quest reward or drop is as
+# likely to fill them as a white off a counter.
+VENDOR_TRIP_EMPTY_SLOTS = 3
+# The walk cap, the bag trip's: a vendor in the same town or the next one.
+VENDOR_TRIP_MAX_YARDS = 500.0
+# Standing this close to the vendor is already there: the buy waits for reach.
+VENDOR_TRIP_HERE_YARDS = 10.0
+
+
+@dataclass(frozen=True)
+class VendorTrip:
+    """Where to walk the family so gear-short members can buy at a counter."""
+
+    vendor: int = 0
+    name: str = ""
+    yards: float = 0.0
+    buyers: tuple = ()
+    here: bool = False
+    why_not: str = ""
+
+
+def vendor_trip(
+    characters, rows, *, map_id, repair_floor=0, max_yards=VENDOR_TRIP_MAX_YARDS
+):
+    """The nearest vendor on the leader's map that sells a short member a piece.
+
+    THE WALK THE VENDOR HALF WAS MISSING. `plan_vendor_buys` buys only where a
+    member already stands, and the family rarely stands at an armour merchant:
+    measured on the dev realm on 2026-09-27, not one vendor buy in the first
+    half hour. This picks a counter to walk to, from the world's own spawn and
+    stock tables (`rows`, one per vendor and item, measured from the leader),
+    and never a coordinate: the aim is the vendor's creature entry, resolved
+    by the module to a spawn that will deal with the character.
+
+    `characters` are the gear facts of the members on the leader's map. Only a
+    member with VENDOR_TRIP_EMPTY_SLOTS or more empty slots counts, and a
+    vendor counts only if `plan_vendor_buys` would buy that member something
+    there with its own gold, under the same budget rules.
+    """
+    short = {
+        name: c
+        for name, c in (characters or {}).items()
+        if empty_gear_slots(_slot_numbers(c)) >= VENDOR_TRIP_EMPTY_SLOTS
+    }
+    if not short:
+        return VendorTrip(
+            why_not="nobody on the leader's map has %d or more empty slots"
+            % VENDOR_TRIP_EMPTY_SLOTS
+        )
+    vendors: dict = {}
+    for row in rows or ():
+        try:
+            vendor = int(row["vendor"])
+            where = (str(row.get("vendor_name") or ""), int(row["map_id"]))
+            yards = float(row["yards"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if where[1] != int(map_id) or yards > max_yards:
+            continue
+        seen = vendors.setdefault(vendor, [where[0], yards, []])
+        seen[1] = min(seen[1], yards)
+        seen[2].append(row)
+    for vendor, (name, yards, stock) in sorted(
+        vendors.items(), key=lambda kv: (kv[1][1], kv[0])
+    ):
+        buys = plan_vendor_buys(
+            short, {n: stock for n in short}, repair_floor=repair_floor
+        )
+        if buys:
+            return VendorTrip(
+                vendor=vendor,
+                name=name,
+                yards=yards,
+                buyers=tuple(sorted({b.character for b in buys})),
+                here=yards <= VENDOR_TRIP_HERE_YARDS,
+            )
+    return VendorTrip(
+        why_not="no vendor within %d yards sells a short member a piece it can "
+        "wear and afford" % int(max_yards)
+    )
+
+
+_SLOT_NUMBERS = {
+    "head": 0, "neck": 1, "shoulder": 2, "shirt": 3, "chest": 4, "waist": 5,
+    "legs": 6, "feet": 7, "wrist": 8, "hands": 9, "finger1": 10,
+    "finger2": 11, "trinket1": 12, "trinket2": 13, "back": 14,
+    "mainhand": 15, "offhand": 16, "ranged": 17, "tabard": 18,
+}  # fmt: skip
+
+
+def _slot_numbers(character) -> list:
+    equipped = _get(character, "equipped", "slots", default={}) or {}
+    return [_SLOT_NUMBERS[s] for s in equipped if s in _SLOT_NUMBERS]
+
+
 def vendor_command(buy) -> str:
     """The kind='buy' row DoBuy reads: one piece, capped at the list price."""
     return "entry:%d count:1 max:%d" % (int(buy.entry), int(buy.buyout))

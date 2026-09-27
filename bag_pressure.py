@@ -1048,6 +1048,12 @@ def _trip_blocked(leader: str, standing: dict, in_run: bool) -> str:
     return ""
 
 
+def trip_blocked(leader: str, standing: dict, in_run: bool) -> str:
+    """Why no walk to a counter may be taken now, or ''; the gear errand's
+    vendor walk asks the same question as the bag trip."""
+    return _trip_blocked(leader, standing, in_run)
+
+
 def _trip_walkers(buyers, standing: dict, map_id: int) -> list:
     """Buyers with a position to fill and a slot to land a bag in, who stand
     on the leader's map and so can follow it to a counter."""

@@ -643,6 +643,8 @@ LEVEL_SKIP_SECONDS = 7200.0
 # The bag pass's name in the town slot (#206), and the pass that owns the
 # traveller while a campaign is withheld for bag space (#225).
 BAGS_CLAIMANT = "bags"
+# The gear errand's walk to an armour merchant (#365).
+GEAR_VENDOR_CLAIMANT = "gear vendor"
 
 # How far the flight-network pass will send somebody, and how long it may keep
 # the column while it does.
@@ -7575,6 +7577,52 @@ class Bridge(discord.Client):
                    else "no affordable usable listing")
             log.info("gearup: %s nothing: %s", name, why)
 
+    async def _gearup_vendor_trip(self, names, leader, facts, cohort) -> bool:
+        """Aim the leader at the nearest vendor that sells a short member gear.
+
+        `gearup.vendor_trip` decides; this reads and writes. The aim is the
+        vendor's creature entry through the town slot, the shape the bag trip
+        uses (`_aim_at_bag_vendor`), so mod-overseer walks the leader there,
+        the family follows, and `_gearup_vendor_once` buys on a later cycle
+        once they stand in reach. True when the trip holds the traveller this
+        pass, so the auctioneer errand does not take it off the walk.
+        """
+        if not leader or not facts:
+            return False
+        standing = bag_pressure.standing_from_rows(
+            await asyncio.to_thread(_fetch_bag_trip_facts, names))
+        blocked = bag_pressure.trip_blocked(
+            leader, standing, await self._mid_run(names))
+        if blocked:
+            log.info("gearup: no vendor walk - %s", blocked)
+            return False
+        here = standing[leader]
+        on_map = {n: f for n, f in facts.items()
+                  if standing.get(n) is not None
+                  and standing[n].map_id == here.map_id}
+        trip = gearup.vendor_trip(
+            on_map, await asyncio.to_thread(_fetch_gear_vendors, here),
+            map_id=here.map_id,
+            repair_floor={n: f["purse"] * towntrip.FLOOR for n, f in on_map.items()},
+        )
+        if not trip.vendor:
+            log.info("gearup: no vendor walk - %s", trip.why_not)
+            return False
+        if trip.here:
+            log.info("gearup: %s stands at %s (creature %d); %s buy once in reach",
+                     leader, trip.name, trip.vendor, ", ".join(trip.buyers))
+            return True
+        target = travel.resolve(str(trip.vendor))
+        if not target or len(target) > travel.COLUMN_WIDTH:
+            return False
+        aimed = await self._claim_town_slot(
+            GEAR_VENDOR_CLAIMANT, leader, target, urgent=True,
+            cohort=_cohort_key(cohort))
+        log.info("gearup: %s is aimed at %s (creature %d, %d yards) so %s can "
+                 "buy gear for empty slots (aim taken=%s)", leader, trip.name,
+                 trip.vendor, int(trip.yards), ", ".join(trip.buyers), aimed)
+        return aimed
+
     async def _gearup_vendor_once(self, facts: dict) -> None:
         """Buy vendor equipment for empty slots where each member stands.
 
@@ -7632,6 +7680,11 @@ class Bridge(discord.Client):
                          "equipment wait in the mailbox, and the mail pass "
                          "collects them first", name, waiting[name])
         await self._gearup_vendor_once(facts)
+        # A WALK TO AN ARMOUR MERCHANT BEFORE THE AUCTIONEER. A counter in the
+        # same town is a shorter errand than a capital's auction house, and
+        # it sells over the counter into the bags.
+        if await self._gearup_vendor_trip(names, leader, facts, cohort):
+            return
         short, teams, house = await self._gearup_house(
             names, leader, facts, step, cohort)
         if house is None:
@@ -19991,6 +20044,49 @@ _BAG_VENDOR_SQL = (
     "it.ContainerSlots, it.BuyPrice "
     "HAVING yards <= %s ORDER BY yards, entry, price"
 )
+
+
+# THE VENDORS NEAR THE LEADER THAT SELL EQUIPMENT, one row per (vendor, item),
+# the bag trip's query with the item filter `_fetch_gear_offers` uses. Read
+# from the world's spawn and stock tables, never authored.
+_GEAR_VENDOR_SQL = (
+    "SELECT cr.id AS vendor, ct.name AS vendor_name, cr.map AS map_id, "
+    "MIN(SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2))) AS yards, "
+    "it.entry AS entry, it.BuyPrice AS buyout, it.InventoryType AS InventoryType, "
+    "it.class AS class, it.subclass AS subclass, it.RequiredLevel AS RequiredLevel, "
+    "it.AllowableClass AS AllowableClass, it.ItemLevel AS ItemLevel, "
+    "it.Quality AS Quality "
+    "FROM acore_world.npc_vendor nv "
+    "JOIN acore_world.creature cr ON cr.id = nv.entry "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "JOIN acore_world.item_template it ON it.entry = nv.item "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND nv.maxcount = 0 "
+    "AND it.class IN (2,4) AND it.InventoryType BETWEEN 1 AND 28 "
+    "AND it.BuyPrice > 0 "
+    "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
+    "GROUP BY cr.id, ct.name, cr.map, it.entry, it.BuyPrice, it.InventoryType, "
+    "it.class, it.subclass, it.RequiredLevel, it.AllowableClass, it.ItemLevel, "
+    "it.Quality "
+    "HAVING yards <= %s ORDER BY yards, vendor"
+)
+
+
+def _fetch_gear_vendors(here) -> list:
+    """Rows for gearup.vendor_trip, measured from the leader's Standing."""
+    cap = float(gearup.VENDOR_TRIP_MAX_YARDS)
+    x, y = float(here.x), float(here.y)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                _GEAR_VENDOR_SQL,
+                (x, y, int(here.map_id), towntrip.NPC_FLAG_VENDOR,
+                 x, cap, y, cap, cap),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
 
 
 def _fetch_bag_vendors(here) -> list:
