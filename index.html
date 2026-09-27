@@ -3366,6 +3366,39 @@
   .vcstat { display:flex; justify-content:space-between; gap:.5rem; font-size:12px; }
   .vcstat .k { color:var(--vc-dim); }
 
+  /* TWO SHEETS SIDE BY SIDE (#371). The CMP button in the character frame's
+     head opens a second sheet beside it. While both are open, each slot is
+     marked against the same slot on the other sheet: a green edge for the
+     side that has an item where the other is empty or has the higher item
+     level, a red edge for the other side, and the item level in the corner
+     so the difference is a number as well as a colour. */
+  .vccmp { height:22px; padding:0 6px; border-radius:4px; cursor:pointer;
+           border:1px solid #5a4a22; color:var(--vc-gold-hi);
+           background:radial-gradient(circle at 50% 35%, #3a3322, #15130c);
+           font-family:var(--mono); font-size:10px; font-weight:700; }
+  .vccmp[aria-pressed="true"] { border-color:var(--vc-gold-hi);
+           box-shadow:inset 0 0 6px #f0cf6a88; }
+  .vccmp:focus-visible { outline:2px solid var(--vc-gold-hi); outline-offset:1px; }
+  .vcslot .vcilvl { display:none; position:absolute; left:1px; bottom:0;
+                    font-family:var(--mono); font-size:10px; font-weight:700;
+                    color:#fff; text-shadow:0 0 2px #000, 1px 1px 1px #000; }
+  .vcpaired .vcslot .vcilvl { display:block; }
+  .vcslot[data-cmp="up"], .vcslot[data-cmp="has"] {
+    box-shadow:inset 0 0 0 2px var(--vc-online); }
+  .vcslot[data-cmp="down"] { box-shadow:inset 0 0 0 2px #ff5a3c; }
+  .vcslot[data-cmp="lack"] { box-shadow:inset 0 0 0 2px #ff5a3c;
+                             border-style:dashed; }
+  .vcslot[data-cmp="up"] .vcilvl { color:#7dff9f; }
+  .vcslot[data-cmp="down"] .vcilvl { color:#ff9f8a; }
+  /* ON A PHONE THE TWO SHEETS STACK: each is at most half the window tall
+     and scrolls inside itself, so both are on screen at once and neither
+     reaches past the window's width. The head's buttons are 44px there. */
+  @media (max-width:640px) {
+    .vcframe.vcpaired { max-height:calc(50vh - 12px); }
+    .vcframe .vcx, .vcframe .vccmp { min-width:44px; height:44px; }
+    .vcframe .vcx { border-radius:8px; }
+  }
+
   /* SOCIAL and the QUEST LOG: lists, read top down. */
   .vclist { display:flex; flex-direction:column; gap:2px; min-width:240px; }
   .vcrow { display:grid; grid-template-columns:10px 1fr auto; gap:6px;
@@ -12170,7 +12203,13 @@ const VC_FRAMES = [
   { kind: "social", label: "Social", mark: "SOC", key: "o" },
   { kind: "quests", label: "Quest log", mark: "QST", key: "l" },
 ];
+// The second character sheet (#371). Not on the tile's bar: it is opened
+// from the first sheet's head, so it always has a sheet to sit beside.
+const VC_COMPARE = { kind: "compare", label: "Compare", mark: "CMP" };
 const VC_COLUMNS = { bags: 10, bank: 14, guildbank: 14 };
+// At or under this width the two sheets stack; it is the phone breakpoint the
+// stylesheet uses.
+const VC_STACK_WIDTH = 640;
 const vc = { layer: null, frames: new Map(), z: 1, social: new Map(),
              items: new Map(), tip: null, tipAt: null, last: null };
 
@@ -12220,7 +12259,8 @@ function vcToggle(kind, name, anchor) {
 function vcFrame(kind) {
   let f = vc.frames.get(kind);
   if (f) return f;
-  const spec = VC_FRAMES.find((x) => x.kind === kind);
+  const spec = kind === VC_COMPARE.kind ? VC_COMPARE
+    : VC_FRAMES.find((x) => x.kind === kind);
   const frame = el("div", "vcframe");
   frame.setAttribute("role", "dialog");
   frame.setAttribute("aria-label", spec.label);
@@ -12235,12 +12275,24 @@ function vcFrame(kind) {
   x.title = "Close (Esc)";
   x.setAttribute("aria-label", "Close " + spec.label.toLowerCase());
   x.addEventListener("click", () => vcClose(kind));
-  head.append(title, who, gap, x);
+  head.append(title, who, gap);
+  // Only the first sheet has the compare button: it opens the second one.
+  let cmp = null;
+  if (kind === "character") {
+    cmp = el("button", "vccmp", VC_COMPARE.mark);
+    cmp.type = "button";
+    cmp.title = "Compare with another character";
+    cmp.setAttribute("aria-label", "Compare with another character");
+    cmp.setAttribute("aria-pressed", "false");
+    cmp.addEventListener("click", () => vcCompareToggle());
+    head.appendChild(cmp);
+  }
+  head.appendChild(x);
   const body = el("div", "vcbody");
   frame.append(head, body);
   vcLayer().appendChild(frame);
   f = { kind: kind, el: frame, body: body, who: who, name: null, placed: false,
-        ask: 0, state: {} };
+        ask: 0, state: {}, cmp: cmp };
   who.addEventListener("change", () => { f.name = who.value; vcLoad(f); });
   frame.addEventListener("pointerdown", () => vcFront(f));
   vcDrag(f, head);
@@ -12316,6 +12368,95 @@ function vcClose(kind) {
   f.ask += 1;
   vcHideTip();
   vcPressed();
+  vcCompareSync();
+}
+
+// --- two character sheets side by side (#371) -------------------------------
+
+function vcShown(f) { return !!f && !f.el.hidden; }
+
+function vcCompareToggle() {
+  const a = vc.frames.get("character");
+  if (!vcShown(a)) return;
+  if (vcShown(vc.frames.get(VC_COMPARE.kind))) { vcClose(VC_COMPARE.kind); return; }
+  const b = vcFrame(VC_COMPARE.kind);
+  // Someone else from the first sheet's family to start with; the second
+  // sheet's own picker changes it from there.
+  const other = [...a.who.options].map((o) => o.value).find((n) => n !== a.name);
+  b.name = other || a.name;
+  b.el.hidden = false;
+  vcFront(b);
+  vcPicker(b);
+  vcPair(a, b);
+  vcLoad(b);
+  vcCompareSync();
+}
+
+// BESIDE THE FIRST SHEET AND AT ITS HEIGHT, so the slot columns line up row
+// for row: to its right, or its left when the right has no room. On a phone,
+// or anywhere neither side has room, the first goes to the top and the
+// second under it.
+function vcPair(a, b) {
+  const W = window.innerWidth;
+  const w = Math.max(b.el.offsetWidth, a.el.offsetWidth);
+  const left = a.el.offsetLeft, right = left + a.el.offsetWidth;
+  if (W > VC_STACK_WIDTH && right + 8 + w <= W - 8) {
+    vcMove(b, right + 8, a.el.offsetTop);
+  } else if (W > VC_STACK_WIDTH && left - 8 - w >= 8) {
+    vcMove(b, left - 8 - w, a.el.offsetTop);
+  } else {
+    vcMove(a, 8, 8);
+    vcMove(b, 8, a.el.offsetTop + a.el.offsetHeight + 8);
+  }
+}
+
+// One slot against the same slot on the other sheet: "has" an item where the
+// other is empty, "lack" the reverse, "up" or "down" for the higher or lower
+// item level, and null when there is nothing to tell apart (both empty, the
+// same level, or a level the world does not know).
+function vcCompareSlot(mine, theirs) {
+  if (mine.filled && !theirs.filled) return "has";
+  if (!mine.filled && theirs.filled) return "lack";
+  if (!mine.filled || mine.ilvl === null || theirs.ilvl === null) return null;
+  if (mine.ilvl > theirs.ilvl) return "up";
+  if (mine.ilvl < theirs.ilvl) return "down";
+  return null;
+}
+
+const VC_CMP_SAY = {
+  has: " (the other has nothing here)",
+  lack: " (the other has an item here)",
+  up: " (higher item level than the other)",
+  down: " (lower item level than the other)",
+};
+
+// Marks every slot on both sheets while both are open and read, and clears
+// every mark otherwise. Called whenever either sheet opens, closes or reads.
+function vcCompareSync() {
+  const a = vc.frames.get("character"), b = vc.frames.get(VC_COMPARE.kind);
+  const both = vcShown(a) && vcShown(b);
+  if (a && a.cmp) a.cmp.setAttribute("aria-pressed", String(both));
+  const sheets = [a, b].filter((f) => f && f.state.slots);
+  for (const f of [a, b]) if (f) f.el.classList.toggle("vcpaired", both);
+  for (const f of sheets) {
+    for (const cell of f.state.slots.values()) {
+      delete cell.cell.dataset.cmp;
+      cell.cell.setAttribute("aria-label", cell.say);
+    }
+  }
+  if (!both) return;
+  if (window.innerWidth <= VC_STACK_WIDTH) vcPair(a, b);
+  if (sheets.length !== 2) return;
+  for (const [slot, mine] of a.state.slots) {
+    const theirs = b.state.slots.get(slot);
+    if (!theirs) continue;
+    for (const [x, y] of [[mine, theirs], [theirs, mine]]) {
+      const mark = vcCompareSlot(x, y);
+      if (!mark) continue;
+      x.cell.dataset.cmp = mark;
+      x.cell.setAttribute("aria-label", x.say + VC_CMP_SAY[mark]);
+    }
+  }
 }
 
 // Which bar buttons have their frame open, for the character it shows.
@@ -12382,12 +12523,15 @@ async function vcLoad(f) {
   const ask = ++f.ask;
   const name = f.name;
   vcHideTip();
+  f.state.slots = null;
   f.body.replaceChildren(el("div", "vcnote", "reading " + name + "..."));
   try {
     const draw = VC_DRAW[f.kind];
     const node = await draw(name, f);
     if (ask !== f.ask) return;
     f.body.replaceChildren(node);
+    // A character sheet says what is in each slot, for the comparison.
+    f.state.slots = node.vcSlots || null;
   } catch (err) {
     if (ask !== f.ask) return;
     f.body.replaceChildren(el("div", "vcnote bad",
@@ -12395,6 +12539,7 @@ async function vcLoad(f) {
   }
   // A frame that grew past the edge is brought back inside the window.
   vcMove(f, f.el.offsetLeft, f.el.offsetTop);
+  if (f.kind === "character" || f.kind === VC_COMPARE.kind) vcCompareSync();
 }
 
 // --- slots -----------------------------------------------------------------
@@ -12588,20 +12733,30 @@ async function vcCharacter(name) {
   const p = await vcGet(u("/api/armory/member?name=") + encodeURIComponent(name));
   const m = p.member;
   const bySlot = new Map(m.slots.map((s) => [s.slot, s]));
+  // Every cell by its slot, with what the other sheet is compared on (#371).
+  const read = new Map();
   const column = (names) => {
     const col = el("div", "vccol");
     for (const n of names) {
       const s = bySlot.get(n);
+      let cell;
       if (!s || s.empty) {
-        const cell = vcSlot(null, null, false);
+        cell = vcSlot(null, null, false);
         cell.appendChild(el("span", "vcmark", s ? s.mark : n.slice(0, 2).toUpperCase()));
         cell.title = s ? s.empty_label + ": " + n : n;
-        col.appendChild(cell);
+        cell.setAttribute("aria-label", "empty " + n);
+        read.set(n, { cell: cell, filled: false, ilvl: null, say: "empty " + n });
       } else {
-        col.appendChild(vcSlot({ entry: s.entry, name: s.name, quality: s.quality,
-                                 icon: s.icon, letters: s.mark, count: 1 },
-                               s.tooltip, false));
+        cell = vcSlot({ entry: s.entry, name: s.name, quality: s.quality,
+                        icon: s.icon, letters: s.mark, count: 1 },
+                      s.tooltip, false);
+        const ilvl = typeof s.item_level === "number" ? s.item_level : null;
+        if (ilvl !== null) cell.appendChild(el("span", "vcilvl", String(ilvl)));
+        read.set(n, { cell: cell, filled: true, ilvl: ilvl,
+                      say: cell.getAttribute("aria-label") });
       }
+      cell.dataset.slot = n;
+      col.appendChild(cell);
     }
     return col;
   };
@@ -12623,6 +12778,7 @@ async function vcCharacter(name) {
   }
   const doll = el("div", "vcdoll");
   doll.append(column(p.doll.left), sheet, column(p.doll.right));
+  doll.vcSlots = read;
   return doll;
 }
 
@@ -12714,6 +12870,7 @@ const VC_DRAW = {
   bank: (name) => vcInventory("bank", name),
   guildbank: vcGuildBank,
   character: vcCharacter,
+  compare: vcCharacter,
   social: vcSocialFrame,
   quests: vcQuests,
 };
