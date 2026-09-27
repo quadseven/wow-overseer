@@ -228,11 +228,15 @@ class ATrainerWalkThatKeepsFailing(unittest.TestCase):
 
     def test_each_failure_in_a_row_doubles_the_wait_up_to_the_cap(self):
         self.assertEqual(guildjobs.train_cooldown("Keeper", ()), 60)
-        self.assertEqual(guildjobs.train_cooldown("Keeper", self.failed(60, 120, 180)), 480)
+        self.assertEqual(
+            guildjobs.train_cooldown("Keeper", self.failed(60, 120, 180)), 480
+        )
         hourly = self.failed(*range(5, 24 * 60, 60), status="unchanged")
         self.assertEqual(guildjobs.train_cooldown("Keeper", hourly), 720)
         m = member("Keeper", level=10, money=500)
-        self.assertIsNone(only_step(plan([m], recent=self.failed(*range(65, 600, 60))), "Keeper"))
+        self.assertIsNone(
+            only_step(plan([m], recent=self.failed(*range(65, 600, 60))), "Keeper")
+        )
 
     def test_a_walk_that_taught_resets_the_wait(self):
         recent = (
