@@ -18410,7 +18410,12 @@ def _ensure_guild_run_store() -> None:
 
 _GUILD_RUN_MEMBERS_SQL = (
     "SELECT s.name, s.level, s.class AS class_id, s.map_id, s.in_combat, s.health, "
-    "s.group_leader, g.name AS guild_name, c.online, "
+    # IN THE WORLD IS A FRESH SNAPSHOT, NOT characters.online. The flag reads
+    # 0 for random bots that are in the world (8 guild members flipped to 0 at
+    # once on the dev realm while their snapshots kept updating), and the
+    # snapshot is written only for characters in the world.
+    "s.group_leader, g.name AS guild_name, "
+    "(s.updated_at > NOW() - INTERVAL 60 SECOND) AS online, "
     "EXISTS (SELECT 1 FROM corpse k WHERE k.guid = s.guid) AS has_corpse, "
     + raidroles.TALENTS_COLUMN + " "
     "FROM overseer_snapshot s JOIN characters c ON c.guid = s.guid "
