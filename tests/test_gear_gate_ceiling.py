@@ -104,7 +104,7 @@ class GearGateCeilingTest(unittest.TestCase):
         self.gate()
         self.clock.now += CEILING
         self.assertIsNone(self.gate())
-        self.assertTrue(any("no longer held for gear" in l for l in self.log.lines))
+        self.assertTrue(any("no longer held for gear" in line for line in self.log.lines))
 
     def test_hold_then_gate_share_one_clock(self):
         self.assertTrue(self.hold())
