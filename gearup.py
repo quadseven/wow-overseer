@@ -168,15 +168,29 @@ def _weapon_ok(character, sub):
 
 
 def plan_buys(characters, listings, *, repair_floor=0):
-    """Return best affordable buyouts for empty slots (or 10-level upgrades)."""
+    """Return best affordable buyouts for empty slots (or 10-level upgrades).
+
+    ONE LISTING, ONE BUYER. An auction can be bought once, and every member
+    reads the same listings in the same order, so two members who want the
+    same slot plan the same auction. Measured on the dev realm on 2026-09-26:
+    the paladin's buys went first and took the listings, and the warrior's
+    eight planned purchases for the same slots all came back `auction not
+    found`, which the retry window then held for thirty minutes. Each member
+    is planned against what the members before it have not already taken.
+    """
     output = []
+    taken = set()
     ordered = sorted(listings, key=_listing_order)
     for name, character in sorted(characters.items()):
-        output.extend(
-            _plan_character(
-                name, character, ordered, _budget_for(name, character, repair_floor)
-            )
+        buys = _plan_character(
+            name,
+            character,
+            ordered,
+            _budget_for(name, character, repair_floor),
+            taken,
         )
+        taken.update(b.listing_id for b in buys)
+        output.extend(buys)
     return tuple(output)
 
 
@@ -239,12 +253,12 @@ def _fits_budget(price, purse, available, spent):
     return price <= purse * 0.2 and price <= available - spent
 
 
-def _plan_character(name, character, listings, budget):
+def _plan_character(name, character, listings, budget, taken=frozenset()):
     level = int(_get(character, "level", default=0) or 0)
     equipped = _get(character, "equipped", "slots", default={}) or {}
     tank = bool(_get(character, "shield_tank", "tank", default=False))
     purse, available = budget
-    chosen, used, buys = set(), set(), []
+    chosen, used, buys = set(), set(taken), []
     for item in listings:
         price = int(_get(item, "buyout", default=0) or 0)
         listing_id = int(_get(item, "id", "listing_id", "auction_id", default=0) or 0)
