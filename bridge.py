@@ -14707,17 +14707,29 @@ class Bridge(discord.Client):
                      bounds.max_groups)
             return
         now = time.monotonic()
-        if (self._guild_run_formed_at is not None
+        gate = await asyncio.to_thread(_guild_run_gate)
+        if guildrun.settling(gate["uptime"]):
+            log.info("guild runs: the worldserver has been up %ds; nobody is picked "
+                     "before %ds, while a restart's logins settle", gate["uptime"],
+                     guildrun.SETTLE_SECONDS)
+            return
+        swap = guildrun.swap_now(gate["latest"])
+        if (not swap and self._guild_run_formed_at is not None
                 and now - self._guild_run_formed_at < bounds.form_every_seconds):
             return
         facts = await asyncio.to_thread(_fetch_guild_run_facts, bounds)
+        if swap:
+            log.info("guild runs: the last run was refused over %s; forming again "
+                     "without %s", guildrun.refused_member(gate["latest"][0].get("why")),
+                     ", ".join(sorted(facts["benched"])) or "them")
         members = []
         skipped: dict = {}
         for row in facts["rows"]:
             member = guildrun.member_from_row(row)
             if member is None:
                 continue
-            why = guildrun.why_not(member, facts["busy"], facts["resting"], facts["family"])
+            why = guildrun.why_not(member, facts["busy"], facts["resting"], facts["family"],
+                                   facts["benched"])
             if why:
                 skipped[why] = skipped.get(why, 0) + 1
                 continue
@@ -18373,7 +18385,9 @@ def _ensure_guild_run_store() -> None:
 
 _GUILD_RUN_MEMBERS_SQL = (
     "SELECT s.name, s.level, s.class AS class_id, s.map_id, s.in_combat, s.health, "
-    "s.group_leader, g.name AS guild_name, " + raidroles.TALENTS_COLUMN + " "
+    "s.group_leader, g.name AS guild_name, c.online, "
+    "EXISTS (SELECT 1 FROM corpse k WHERE k.guid = s.guid) AS has_corpse, "
+    + raidroles.TALENTS_COLUMN + " "
     "FROM overseer_snapshot s JOIN characters c ON c.guid = s.guid "
     "JOIN guild g ON g.guildid = s.guild_id "
     "WHERE s.updated_at > NOW() - INTERVAL 60 SECOND AND s.is_bot = 1 "
@@ -18424,10 +18438,13 @@ def _fetch_guild_run_facts(bounds) -> dict:
         cur.execute("SELECT name FROM overseer_roster")
         family = {r["name"] for r in cur.fetchall()}
         busy = set(_guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE)))
+        # Only a run that went in rests its members: a refused or lost run
+        # did nothing to them (guildrun.WENT_IN).
         cur.execute(
             "SELECT members FROM overseer_guild_run WHERE state = 'ended' "
-            "AND ended_at > NOW() - INTERVAL %s MINUTE",
-            (bounds.cooldown_minutes,),
+            "AND ended_at > NOW() - INTERVAL %s MINUTE AND outcome IN ("
+            + ",".join(["%s"] * len(guildrun.WENT_IN)) + ")",
+            (bounds.cooldown_minutes, *guildrun.WENT_IN),
         )
         resting = set()
         for row in cur.fetchall():
@@ -18447,8 +18464,36 @@ def _fetch_guild_run_facts(bounds) -> dict:
             "WHERE difficulty = 0"
         )
         floors = {int(r["map_id"]): int(r["min_level"]) for r in cur.fetchall()}
+        cur.execute(
+            "SELECT outcome, why FROM overseer_guild_run WHERE state = 'ended' "
+            "AND ended_at > NOW() - INTERVAL %s MINUTE",
+            (guildrun.BENCH_MINUTES,),
+        )
+        benched = guildrun.benched(list(cur.fetchall()))
     return {"rows": rows, "family": family, "busy": busy, "resting": resting,
-            "in_flight_by_guild": by_guild, "history": history, "finder_floors": floors}
+            "benched": benched, "in_flight_by_guild": by_guild, "history": history,
+            "finder_floors": floors}
+
+
+def _guild_run_gate() -> dict:
+    """What decides whether a formation pass may run now: the worldserver's
+    uptime (None when the realm has no uptime table) and the newest runs,
+    newest first, for guildrun.swap_now."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute("SELECT UNIX_TIMESTAMP() - MAX(starttime) AS up "
+                        "FROM acore_auth.uptime")
+            up = (cur.fetchone() or {}).get("up")
+        except pymysql.err.MySQLError:
+            log.exception("guild runs: the worldserver's uptime is unreadable; "
+                          "no restart settle is applied")
+            up = None
+        # Every state, not only ended: a run formed since the refusal (queued,
+        # inside) heads the list and ends the swap streak.
+        cur.execute("SELECT state, outcome, why FROM overseer_guild_run "
+                    "ORDER BY id DESC LIMIT %s", (guildrun.MAX_SWAPS,))
+        latest = list(cur.fetchall())
+    return {"uptime": None if up is None else int(up), "latest": latest}
 
 
 def _start_guild_run(decision) -> int:
