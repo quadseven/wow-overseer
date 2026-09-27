@@ -54,6 +54,17 @@ def _at(world):
     return lambda spawn, where, yards: bool(where) and where.get("at", False)
 
 
+class _Settled:
+    """The bridge as `_mail_in_passing` sees it: a settled reading that is the
+    fixture's own positions (travel.settled is tested on its own)."""
+
+    def __init__(self, ns):
+        self.ns = ns
+
+    async def _settled_positions(self, names):
+        return self.ns["_fetch_positions"](names)
+
+
 class TheMailLookWritesOnlyForWhoeverIsAtABox(unittest.TestCase):
     def run_look(self, standing, seen=frozenset()):
         world, log = {"written": []}, _Log()
@@ -75,7 +86,9 @@ class TheMailLookWritesOnlyForWhoeverIsAtABox(unittest.TestCase):
         )
         ns = _load(["_mail_in_passing", *HELPERS], ns)
         takes = [_Take("Grug", 1), _Take("Grug", 2), _Take("Ugga", 3), _Take("Og", 4)]
-        wrote = asyncio.run(ns["_mail_in_passing"](None, takes, set(seen), HORDE))
+        wrote = asyncio.run(
+            ns["_mail_in_passing"](_Settled(ns), takes, set(seen), HORDE)
+        )
         return world, log, wrote
 
     def test_a_follower_at_a_box_collects_while_the_leader_is_elsewhere(self):

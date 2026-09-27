@@ -119,6 +119,9 @@ class TheSelf:
         self.world.setdefault("mid_run_names", []).append(list(names))
         return False
 
+    async def _settled_positions(self, names):
+        return {n: {"map_id": 1} for n in names}
+
     async def _claim_town_slot(
         self, claimant, character, aim, urgent=False, cohort=None, distance=None
     ):
@@ -274,6 +277,7 @@ def _mail_ns(world, log):
             "_fetch_mail": lambda names: world.setdefault("mail_read", list(names)),
             "_recent_mail_keys": lambda minutes: set(),
             "_dues_fund_tab": lambda names: world.get("dues_fund_tab", False),
+            "_mail_range_refusals": lambda names, minutes: set(),
             "_fetch_free_slots": lambda names: {n: 10 for n in names},
             "_fetch_positions": lambda names: {n: {"map_id": 1} for n in names},
             "_nearest_mailbox": lambda leader: world.setdefault("mailbox_for", leader),
