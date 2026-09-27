@@ -13,7 +13,10 @@ different tab. This banner is not a tab at all, so it has to sit in the one
 gap none of them claim.
 """
 
+import json
 import pathlib
+import shutil
+import subprocess
 import unittest
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
@@ -316,7 +319,9 @@ class EveryFamilyIsOnTheBanner(unittest.TestCase):
         row = self.tab[self.tab.index("function renderAgendaRow") :]
         row = row[: row.index("\n}\n")]
         self.assertIn("agRows.get(p.family)", row)
-        self.assertIn('"STALLED"', row)
+        self.assertIn("if (p.stalled) row.when.appendChild(agFlag());", row)
+        flag = self.tab[self.tab.index("function agFlag") :]
+        self.assertIn('"STALLED"', flag[: flag.index("\n}\n")])
         self.assertNotIn("innerHTML", row)
 
     def test_the_big_line_says_whose_goal_it_is(self):
@@ -324,3 +329,151 @@ class EveryFamilyIsOnTheBanner(unittest.TestCase):
 
     def test_a_family_switch_moves_the_banner_at_once(self):
         self.assertIn("pollFamily(); pollAgenda(); };", self.page)
+
+
+class EachFamilyIsItsOwnCard(unittest.TestCase):
+    """#363: the second family's card rendered INSIDE the first one, because
+    #agother (every other family's rows) was a child of #agenda (the viewed
+    family's card). It inherited that card's padding and coloured bar and drew
+    its own bar inside them. The cards are siblings now, and these pin it:
+    once as markup, once by drawing three families through the page's own
+    render functions."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        start = cls.page.index(BANNER)
+        cls.tab = cls.page[start : cls.page.index(CHRONICLE, start)]
+
+    def _parents(self):
+        """{id: the id of its nearest ancestor with one} for the page body."""
+        from html.parser import HTMLParser
+
+        void = {"meta", "link", "br", "img", "input", "hr", "source", "wbr"}
+        parents = {}
+
+        class Walk(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.stack = []
+
+            def handle_starttag(self, tag, attrs):
+                if tag in void:
+                    return
+                ident = dict(attrs).get("id")
+                if ident:
+                    above = [i for _t, i in self.stack if i]
+                    parents[ident] = above[-1] if above else None
+                self.stack.append((tag, ident))
+
+            def handle_endtag(self, tag):
+                while self.stack:
+                    if self.stack.pop()[0] == tag:
+                        break
+
+        body = self.page[
+            self.page.index("<body>") : self.page.index('<section id="family">')
+        ]
+        Walk().feed(body)
+        return parents
+
+    def test_the_other_families_are_not_inside_the_first(self):
+        parents = self._parents()
+        self.assertEqual(parents["agother"], "agstack")
+        self.assertEqual(parents["agenda"], "agstack")
+        for child in ("agfam", "agline", "agdetail", "agwhen"):
+            self.assertEqual(parents[child], "agenda", child)
+
+    def test_the_tab_row_rides_a_sticky_bar(self):
+        parents = self._parents()
+        self.assertEqual(parents["tabs"], "tabbar")
+        self.assertEqual(parents["tabsub"], "tabbar")
+        rule = self.page[self.page.index("#tabbar {") :]
+        self.assertIn("position:sticky", rule[: rule.index("}")])
+
+    @unittest.skipUnless(
+        shutil.which("node"), "needs node to run the page's own render code"
+    )
+    def test_three_families_draw_three_sibling_cards(self):
+        """The page's own renderAgenda, renderAgendaRow and placeAgendaRows,
+        run against a small stand-in DOM: one family in the big card, two in
+        #agother, and no card inside another."""
+        code = self.tab[
+            self.tab.index("const agEl") : self.tab.index("async function pollAgenda")
+        ]
+        script = FAKE_DOM + code + DRAW_THREE
+        out = subprocess.run(
+            [shutil.which("node"), "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(out.returncode, 0, out.stderr)
+        got = json.loads(out.stdout)
+        self.assertEqual(got["agenda_rows"], 0)
+        self.assertEqual(got["other"], ["agrow dungeon", "agrow quest stalled"])
+        self.assertEqual(got["other_nested"], 0)
+        self.assertEqual(
+            got["texts"][1],
+            [
+                "Morka's family",
+                "Questing, 2 of 6 steps",
+                "Queue: Wailing Caverns 0 of 50.",
+                "STALLED",
+                "last moved: 45 minutes ago",
+            ],
+        )
+        self.assertEqual(got["big_when"][0], "STALLED")
+
+
+# A stand-in for the few DOM calls the banner makes. Enough to hold a tree and
+# say where every node ended up; nothing that could pass for a browser.
+FAKE_DOM = r"""
+class El {
+  constructor(tag, id) { this.tag = tag; this.id = id || ""; this.children = [];
+    this.parentElement = null; this._text = ""; this.className = "";
+    const self = this;
+    this.classList = {
+      add(...c) { const s = new Set(self.className.split(" ").filter(Boolean)); c.forEach((x) => s.add(x)); self.className = [...s].join(" "); },
+      remove(...c) { self.className = self.className.split(" ").filter((x) => x && !c.includes(x)).join(" "); },
+    };
+  }
+  set textContent(v) { this._text = String(v); this.children = []; }
+  get textContent() { return this.children.length ? this.children.map((c) => c.textContent).join("") : this._text; }
+  appendChild(c) { if (c.parentElement) c.parentElement.children = c.parentElement.children.filter((x) => x !== c);
+    c.parentElement = this; this.children.push(c); return c; }
+  append(...cs) { cs.forEach((c) => this.appendChild(c)); }
+  replaceChildren(...cs) { this.children.forEach((c) => { c.parentElement = null; }); this.children = []; this.append(...cs); }
+  querySelector(sel) { const cls = sel.slice(1); for (const c of this.all()) if (c.className.split(" ").includes(cls)) return c; return null; }
+  all() { return this.children.flatMap((c) => [c, ...c.all()]); }
+}
+const ids = {};
+const stack = new El("div", "agstack");
+const agenda = new El("div", "agenda");
+for (const i of ["agfam", "agline", "agdetail", "agwhen"]) { ids[i] = new El("div", i); agenda.appendChild(ids[i]); }
+ids.agenda = agenda; ids.agother = new El("div", "agother");
+stack.append(agenda, ids.agother);
+const document = { getElementById: (i) => ids[i], createElement: (t) => new El(t) };
+"""
+
+DRAW_THREE = r"""
+const fams = ["Aldren", "Morka", "Tovi"];
+renderAgenda({ family: "Tovi", families: fams, activity: "job", headline: "Gathering",
+  detail: [], stalled: true, stall_line: "nobody has moved", moved_seconds: 3000,
+  changed_seconds: 60 });
+placeAgendaRows([
+  renderAgendaRow({ family: "Aldren", activity: "dungeon", headline: "Deadmines, 0 of 10",
+    queue: { line: "" }, stalled: false, moved_seconds: 30 }),
+  renderAgendaRow({ family: "Morka", activity: "quest", headline: "Questing, 2 of 6 steps",
+    queue: { line: "Queue: Wailing Caverns 0 of 50." }, stalled: true, moved_seconds: 2700 }),
+]);
+const isRow = (e) => e.className.split(" ").includes("agrow");
+process.stdout.write(JSON.stringify({
+  agenda_rows: agenda.all().filter(isRow).length,
+  other: ids.agother.children.map((c) => c.className),
+  other_nested: ids.agother.children.flatMap((c) => c.all()).filter(isRow).length,
+  texts: ids.agother.children.map((c) => c.all().filter((x) => !x.children.length && x.textContent).map((x) => x.textContent)),
+  big_when: ids.agwhen.children.map((c) => c.textContent),
+}));
+"""
