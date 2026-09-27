@@ -41,7 +41,8 @@ def campaign_hold(
     """Whether an active campaign should yield to the town gear errand (#146, #147).
 
     A family already in a dungeon finishes that run first. Gear-short members
-    with enough purse hold the next run, but the bag-withhold ceiling releases
+    with enough purse, or with bought equipment waiting in the mailbox
+    (`mail_gear`), hold the next run, but the bag-withhold ceiling releases
     the campaign if town shopping cannot clear the condition.
     """
     if in_run or held_seconds >= ceiling:
@@ -50,7 +51,8 @@ def campaign_hold(
         worn = [
             slot for slot in character["equipped"] if slot not in ("shirt", "tabard")
         ]
-        if 17 - len(worn) >= empty_slots and character["purse"] >= min_purse:
+        funded = character["purse"] >= min_purse or character.get("mail_gear", 0) > 0
+        if 17 - len(worn) >= empty_slots and funded:
             return True
     return False
 

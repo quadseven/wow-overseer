@@ -28,6 +28,12 @@ class GearupTests(unittest.TestCase):
         facts = {"T": {"equipped": {}, "purse": 19999}}
         self.assertFalse(gearup.campaign_hold(facts, False))
 
+    def test_campaign_yields_for_bought_gear_waiting_in_the_mail(self):
+        """A buyer who spent its purse on gear is not broke: the gear is in its
+        mailbox, and the hold is what gives the mail pass a town to collect it."""
+        facts = {"T": {"equipped": {}, "purse": 0, "mail_gear": 3}}
+        self.assertTrue(gearup.campaign_hold(facts, False))
+
     def test_campaign_finishes_run_before_yielding_for_gear(self):
         facts = {"T": {"equipped": {}, "purse": 20000}}
         self.assertFalse(gearup.campaign_hold(facts, True))
