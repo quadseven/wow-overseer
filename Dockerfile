@@ -46,7 +46,7 @@ COPY core.py bridge.py voice.py transform.py \
      mailrun.py holdings.py \
      realm.py basepath.py watchwall.py realmnav.py classic.py \
      needs.py partystatus.py lootcard.py lootstory.py towntrip.py \
-     townslot.py tradechoice.py \
+     townerrand.py townslot.py tradechoice.py \
      enroll.py \
      tabard.py crossing.py \
      vendor_stall.py \
