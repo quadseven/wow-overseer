@@ -185,6 +185,7 @@ class TheAdapter(unittest.TestCase):
         self.jobs = []
         self.home = {}
         self.hearths = []
+        self.hearthed = frozenset()
         letters = [
             {
                 "holder": "Bork",
@@ -227,7 +228,7 @@ class TheAdapter(unittest.TestCase):
             "_TOWN_ERRAND_HEAD_AWAY": set(),
             "TOWN_ERRAND_SOURCE": "overseer:town-errand",
             "_fetch_bind_hub": lambda leader: dict(self.home),
-            "_movement_reads": lambda names: {"binds": {}, "hearthed": frozenset()},
+            "_movement_reads": lambda names: {"binds": {}, "hearthed": self.hearthed},
             "_insert_hearth": lambda name, source: self.hearths.append(name) or 1,
             "_town_errand_jobs": lambda names: self.jobs.append("town run") or 2,
             "_hub_aim": lambda hub: "at:0:100,100,10",
@@ -245,6 +246,7 @@ class TheAdapter(unittest.TestCase):
                 "_town_errand_aim",
                 "_town_errand_step",
                 "_town_errand_mail",
+                "_town_errand_regroup",
             ),
             type_ignores=[],
         )
@@ -255,6 +257,9 @@ class TheAdapter(unittest.TestCase):
         self.fam._town_errand_aim = lambda *a: ns["_town_errand_aim"](self.fam, *a)
         self.fam._town_errand_step = lambda *a: ns["_town_errand_step"](self.fam, *a)
         self.fam._town_errand_mail = lambda *a: ns["_town_errand_mail"](self.fam, *a)
+        self.fam._town_errand_regroup = lambda *a: ns["_town_errand_regroup"](
+            self.fam, *a
+        )
 
     def tick(self, seconds=30.0):
         self.now += seconds
@@ -311,6 +316,62 @@ class TheAdapter(unittest.TestCase):
         self.tick(te.HEARTH_SECONDS)
         self.assertEqual("town errand", self.fam.aims[-1][0])
         self.assertEqual(["Bork", "Grug"], self.hearths)  # once, at the start
+
+    def test_a_straggler_hearths_home_while_the_family_gathers(self):
+        # wow-dev 2026-09-27 22:26: Og's cast "never started", he was counted
+        # as hearthed and left in Tirisfal while the other four stood at the
+        # Ratchet mailbox.
+        self.home = dict(HOME)
+        self.positions = {"Grug": _at(-1034, -3675, 1), "Bork": _at(1572, -422)}
+        self.hearthed = frozenset({"Bork"})
+        state = self.tick()
+        self.assertEqual([], self.hearths)  # counted as hearthed: left alone
+        self.hearthed = frozenset()
+        state = self.tick()
+        self.assertEqual(te.GATHER, state.phase)
+        self.assertEqual(["Bork"], self.hearths)
+        self.hearthed = frozenset({"Bork"})
+        self.tick()
+        self.assertEqual(["Bork"], self.hearths)  # its row stands; not twice
+
+
+class TheMovementChoice(unittest.TestCase):
+    """The movement choice is not offered the town errand's walk to drop."""
+
+    def facts(self, claimant):
+        import jev_movement
+
+        holder = types.SimpleNamespace(
+            claimant=claimant, character="Grug", aim="at:1:1,2,3"
+        )
+        fam = types.SimpleNamespace(
+            _travel_slot_of=lambda key: types.SimpleNamespace(holder=holder),
+        )
+
+        async def where(key, names, leader):
+            return object()
+
+        fam._situation_for = where
+        ns = {
+            "asyncio": asyncio,
+            "jev_movement": jev_movement,
+            "TOWN_ERRAND_CLAIMANT": "town errand",
+            "_movement_reads": lambda names: {"binds": {}, "hearthed": frozenset()},
+        }
+        module = ast.Module(body=_functions("_movement_facts"), type_ignores=[])
+        exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+        return asyncio.run(ns["_movement_facts"](fam, "Grug", ["Grug"], "Grug"))
+
+    def test_the_town_errand_walk_is_not_offered(self):
+        self.assertEqual("", self.facts("town errand").errand)
+
+    def test_a_cast_that_never_started_is_no_hearth(self):
+        start = BRIDGE.index("_MOVEMENT_HEARTHED = (")
+        sql = BRIDGE[start : BRIDGE.index(")", BRIDGE.index("SECOND", start))]
+        self.assertIn("status NOT IN ('error', 'unchanged')", sql)
+
+    def test_another_pass_walk_still_is(self):
+        self.assertEqual("at:1:1,2,3", self.facts("bank").errand)
 
 
 if __name__ == "__main__":
