@@ -844,3 +844,46 @@ def spawn_in_reach(spawn, standing, yards) -> bool:
     except (TypeError, ValueError):
         return False
     return dx * dx + dy * dy <= limit * limit
+
+
+# HOW FAR A CHARACTER MAY DRIFT BETWEEN TWO READINGS AND STILL COUNT AS STANDING.
+# Two yards is a bot shuffling at a counter; a family walking past a mailbox
+# covers seven yards a second, so one snapshot interval apart it has moved
+# thirty.
+SETTLED_YARDS = 2.0
+
+
+def settled(first, second, still_yards=SETTLED_YARDS) -> dict:
+    """name -> its SECOND reading, for every character standing still between two.
+
+    WHY TWO READINGS. A snapshot row can be up to a minute old, and one written
+    five seconds ago still shows a family walking past a mailbox as standing at
+    it. Measured on the dev realm on 2026-09-27: sixteen `take-item` rows were
+    written for two characters the snapshot put inside eight yards of a
+    mailbox, and every one came back `mailbox not in range` with the nearest
+    box 25 yards off. Refusals over four days fell at 9 to 29 yards; every
+    delivered take was at 11 yards or less. So a counter row is written only
+    for a character read twice, one snapshot interval apart, on the same map
+    and within `still_yards` of where it was: the second reading is where it
+    stands now, and it is not about to leave.
+
+    `first` and `second` are name -> snapshot row maps (`map_id`, `pos_x`,
+    `pos_y`). A name missing from either reading, or unreadable in either, is
+    not settled.
+    """
+    out = {}
+    limit = float(still_yards) ** 2
+    for name, now in (second or {}).items():
+        before = (first or {}).get(name)
+        if not before or not now:
+            continue
+        try:
+            if int(before.get("map_id")) != int(now.get("map_id")):
+                continue
+            dx = float(now.get("pos_x")) - float(before.get("pos_x"))
+            dy = float(now.get("pos_y")) - float(before.get("pos_y"))
+        except (TypeError, ValueError):
+            continue
+        if dx * dx + dy * dy <= limit:
+            out[name] = now
+    return out

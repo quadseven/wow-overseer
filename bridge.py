@@ -13022,9 +13022,14 @@ class Bridge(discord.Client):
         # measurement). It decides the list this loop walks rather than sitting
         # inside it, so a take whose holder has not arrived never reaches
         # `_insert_mail` at all.
+        # A FRESH, STILL READING PER TAKER, NOT THE ONE THE AIM WAS JUDGED ON
+        # (travel.settled has the measurement). The first read above can be a
+        # minute old, and a taker walking past the box is not at it.
+        standing = await self._settled_positions(
+            sorted({t.character for t in mail_plan.takes}))
         fresh = []
         for take in _mail_takes_in_reach(
-                mail_plan.takes, spawn, positions, TOWN_COUNTER_YARDS,
+                mail_plan.takes, spawn, standing, TOWN_COUNTER_YARDS,
                 post.aim):
             command = mailrun.command(take)
             if (take.character, command) in seen:
@@ -13039,6 +13044,18 @@ class Bridge(discord.Client):
                  _family_label(cohort))
         self._mail_urgency_spent(cohort, urgent, aimed, fresh)
 
+    async def _settled_positions(self, names: list) -> dict:
+        """Two position reads one snapshot interval apart; `travel.settled`
+        keeps the characters standing still and returns where they stand."""
+        if not names:
+            return {}
+        first = await asyncio.to_thread(_fetch_fresh_positions, names)
+        if not first:
+            return {}
+        await asyncio.sleep(SETTLE_SECONDS)
+        second = await asyncio.to_thread(_fetch_fresh_positions, names)
+        return travel.settled(first, second)
+
     async def _mail_urgent(self, names, cohort, letters=()) -> bool:
         """Whether this mail walk is urgent: the guild master's mailbox holds
         the dues that pay for the guild's next bank tab (#319), or somebody's
@@ -13050,6 +13067,15 @@ class Bridge(discord.Client):
         same way as the dues: an urgent grant that queues no take backs off
         (`_mail_urgency_spent`).
         """
+        # A TAKE REFUSED FOR RANGE IS A WALK THAT DID NOT LAND, and the answer
+        # to it is another approach, not a count against the bag budget.
+        refused = await asyncio.to_thread(_mail_range_refusals, names,
+                                          GIVE_RETRY_MINUTES)
+        if refused:
+            log.info("mail: %s had a take refused as out of the mailbox's "
+                     "range, so the family re-approaches the mailbox%s",
+                     ", ".join(sorted(refused)), _family_label(cohort))
+            return True
         gear = mailrun.gear_waiting(letters)
         if gear:
             log.info("mail: %s has bought equipment waiting in the mailbox, so "
@@ -13108,7 +13134,7 @@ class Bridge(discord.Client):
             by_holder.setdefault(take.character, []).append((take, command))
         if not by_holder:
             return set()
-        positions = await asyncio.to_thread(_fetch_positions, sorted(by_holder))
+        positions = await self._settled_positions(sorted(by_holder))
         wrote: set = set()
         fresh = []
         for holder in sorted(by_holder):
@@ -21523,6 +21549,51 @@ def _mail_takes_in_reach(takes, spawn, positions, yards, aim) -> list:
     return close
 
 
+# The executor's refusal literal for a take away from any mailbox.
+MAIL_RANGE_REFUSAL = "mailbox not in range"
+# One snapshot interval (mod-overseer writes overseer_snapshot every 5 s) and a
+# second of slack, so the two reads `travel.settled` compares are two writes.
+SETTLE_SECONDS = 6.0
+_FRESH_POSITION_SQL = (
+    "SELECT name, map_id, zone_id, pos_x, pos_y FROM overseer_snapshot "
+    "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 7 SECOND"
+)
+
+
+def _fetch_fresh_positions(names: list) -> dict:
+    """name -> its snapshot row, only when written in the last snapshot tick."""
+    if not names:
+        return {}
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_FRESH_POSITION_SQL % ",".join(["%s"] * len(names)), names)  # noqa: S608 - placeholders from a COUNT
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+        return {row["name"]: dict(row) for row in cur.fetchall()}
+
+
+def _mail_range_refusals(names: list, minutes: int) -> set:
+    """Who among `names` had a take refused for range inside the window."""
+    if not names:
+        return set()
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT DISTINCT target_name FROM overseer_command "
+                "WHERE kind = 'mail' AND status = 'error' AND detail = %s "
+                "AND created_at > NOW() - INTERVAL %s MINUTE "
+                "AND target_name IN (" + ",".join(["%s"] * len(names)) + ")",
+                [MAIL_RANGE_REFUSAL, int(minutes), *names],
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {row["target_name"] for row in cur.fetchall()}
+
+
 def _recent_mail_keys(minutes: int) -> set:
     """(character, command) pairs already proposed inside the retry window.
 
@@ -21540,10 +21611,14 @@ def _recent_mail_keys(minutes: int) -> set:
     """
     with _connect() as conn, conn.cursor() as cur:
         try:
+            # A REFUSAL FOR RANGE IS LEFT OUT: nothing was taken, so it spends
+            # no bag room, and the take is asked again from a settled reading
+            # at the box rather than held back for the whole window.
             cur.execute(
                 "SELECT target_name, command FROM overseer_command "
-                "WHERE kind = 'mail' AND created_at > NOW() - INTERVAL %s MINUTE",
-                (int(minutes),),
+                "WHERE kind = 'mail' AND created_at > NOW() - INTERVAL %s MINUTE "
+                "AND NOT (status = 'error' AND detail = %s)",
+                (int(minutes), MAIL_RANGE_REFUSAL),
             )
         except pymysql.err.MySQLError as exc:
             # 1054 missing column, 1146 missing table, 1265 a `kind` ENUM with

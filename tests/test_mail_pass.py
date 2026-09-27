@@ -384,7 +384,7 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
         else, so nothing can iterate the unfiltered plan and write from it."""
         self.assertIn(
             "for take in _mail_takes_in_reach(\n"
-            "                mail_plan.takes, spawn, positions, "
+            "                mail_plan.takes, spawn, standing, "
             "TOWN_COUNTER_YARDS,\n                post.aim):",
             self.loop,
         )
