@@ -11,8 +11,11 @@ queues it, arms mod-dungeon-clear inside and reads the run back to its end.
 WHAT IT DECIDES, and what Jev decides.
 
   groups       Online members of one guild, not in a family, a group or an
-               instance, alive, out of combat and rested (COOLDOWN_MINUTES
-               since their last run), sorted by level. A group is five within
+               instance, alive (no corpse: a ghost still reports health),
+               out of combat and rested (COOLDOWN_MINUTES since their last
+               run that went in), sorted by level. Nobody is picked until the
+               worldserver has been up SETTLE_SECONDS, so a restart's
+               logouts and logins are over first. A group is five within
                BAND_SPREAD levels of each other with a tank and a healer by the
                talent tree each plays (raidroles), or by the seat the raid plan
                gave them (overseer_raid_spec) when no talent is spent yet.
@@ -39,7 +42,9 @@ GUARDRAILS. Off unless GUILD_RUNS is on. At most MAX_GROUPS groups in flight
 (the realm runs two map-update threads, sized for its two continents; each
 dungeon is one more active map), and each group makes its five always active
 (playerbots' AllowActive exempts dungeons), far under the 250-bot throttle.
-One new group per FORM_EVERY_SECONDS realm-wide. mod-overseer has its own
+One new group per FORM_EVERY_SECONDS realm-wide, except that a run the module
+refused over one named member is formed again at once without that member
+(BENCH_MINUTES), up to MAX_SWAPS times in a row. mod-overseer has its own
 switch and cap (Overseer.GuildFinder.Enable, .MaxGroups) behind this one.
 
 PURE: facts in, groups, questions and judgments out. The bridge reads and
@@ -75,6 +80,16 @@ DEFAULT_GUILDS = ("Cave", "Bonkers")
 OPEN_WORLD_MAPS = (0, 1, 530)
 # A run no row has ended by now is lost (a worldserver restart, a sweep).
 LOST_AFTER_MINUTES = 120
+# Nobody is picked until the worldserver has been up this long. The first run
+# after a restart went to five members the old process had just logged out,
+# two seconds after the new one started; random bots log in over minutes.
+SETTLE_SECONDS = 600
+# A member the module refused (dead, locked out, already queued) sits out this
+# long, and the run is formed again without them rather than waiting out
+# FORM_EVERY_SECONDS. MAX_SWAPS refusals in a row fall back to the spacing, so
+# a refusal no swap can fix cannot turn into a run a minute.
+BENCH_MINUTES = 15
+MAX_SWAPS = 3
 
 SOURCE = "overseer:guildrun"
 
@@ -96,6 +111,9 @@ OUTCOMES = (
     "refused",
     "lost",
 )
+# The outcomes of a run that went in. Only these say anything about the
+# dungeon, and only these rest the members afterwards.
+WENT_IN = (CLEARED, "wiped", "abandoned", "timed out")
 
 
 def enabled(environ=None) -> bool:
@@ -160,6 +178,7 @@ class Member:
     grouped: bool = False
     in_combat: bool = False
     alive: bool = True
+    online: bool = True
 
     @property
     def played_tree(self) -> str:
@@ -175,6 +194,15 @@ class Member:
             if raidroles.fits_seat(self.class_id, self.played_tree, seat)
             else "class"
         )
+
+
+def _alive(row: dict) -> bool:
+    """A released ghost reports a health of 1 and has a corpse row, and
+    Player::IsAlive is false for it. A corpse row alone is not death: one
+    resurrected without the corpse turning to bones keeps its row while it
+    fights at full health."""
+    health = int(row.get("health") or 0)
+    return health > 1 or (health == 1 and not row.get("has_corpse"))
 
 
 def member_from_row(row: dict) -> Member | None:
@@ -199,18 +227,25 @@ def member_from_row(row: dict) -> Member | None:
         map_id=map_id,
         grouped=bool(row.get("group_leader")),
         in_combat=bool(row.get("in_combat")),
-        alive=int(row.get("health") or 0) > 0,
+        alive=_alive(row),
+        online=bool(row.get("online", 1)),
     )
 
 
-def why_not(member: Member, busy: set, resting: set, family: set) -> str:
+def why_not(
+    member: Member, busy: set, resting: set, family: set, benched=frozenset()
+) -> str:
     """Why this member cannot be picked now, or ""."""
     if member.name in family:
         return "a family member"
+    if not member.online:
+        return "offline"
     if member.name in busy:
         return "in a guild run"
     if member.name in resting:
         return "resting after a run"
+    if member.name in benched:
+        return "refused a run just now"
     if not member.alive:
         return "dead"
     if member.in_combat:
@@ -220,6 +255,53 @@ def why_not(member: Member, busy: set, resting: set, family: set) -> str:
     if member.map_id not in OPEN_WORLD_MAPS:
         return "inside an instance"
     return ""
+
+
+def settling(uptime_seconds, settle_seconds: int = SETTLE_SECONDS) -> bool:
+    """Whether the worldserver is too newly started to pick anyone. An
+    unknown uptime (no uptime table) does not hold the coordinator back."""
+    if uptime_seconds is None:
+        return False
+    return int(uptime_seconds) < settle_seconds
+
+
+def refused_member(why: str) -> str:
+    """The member a module refusal names ("'Daidanden' is dead"), or ""
+    when the refusal is about the realm or the door rather than one member."""
+    text = str(why or "")
+    if not text.startswith("'"):
+        return ""
+    end = text.find("'", 1)
+    return text[1:end] if end > 1 else ""
+
+
+def benched(recent: list) -> set:
+    """Members named by refusals in `recent` (overseer_guild_run rows ended
+    within BENCH_MINUTES)."""
+    out = set()
+    for row in recent:
+        if str(row.get("outcome") or "") != "refused":
+            continue
+        name = refused_member(row.get("why"))
+        if name:
+            out.add(name)
+    return out
+
+
+def swap_now(latest: list, max_swaps: int = MAX_SWAPS) -> bool:
+    """Whether to form again without waiting FORM_EVERY_SECONDS. `latest` is
+    the newest runs of any state, newest first. True when the newest was
+    refused over one named member and fewer than `max_swaps` such refusals
+    came in a row; a run formed since (queued, inside) heads the list and
+    ends the streak."""
+    streak = 0
+    for row in latest:
+        if str(row.get("outcome") or "") != "refused" or not refused_member(
+            row.get("why")
+        ):
+            break
+        streak += 1
+    return 0 < streak < max_swaps
 
 
 # --- the doors ----------------------------------------------------------------
@@ -507,7 +589,7 @@ def rates(rows: list, rolling: int = ROLLING) -> dict:
         if str(row.get("state") or "") != ENDED:
             continue
         outcome = str(row.get("outcome") or "")
-        if outcome not in (CLEARED, "wiped", "abandoned", "timed out"):
+        if outcome not in WENT_IN:
             continue
         key = (
             str(row.get("keyword") or ""),

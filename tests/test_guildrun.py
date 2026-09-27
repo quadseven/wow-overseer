@@ -123,6 +123,95 @@ class WhoCanGo(unittest.TestCase):
         )
 
 
+class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
+    """The first three runs after a restart all failed before entering: five
+    members the old process had just logged out, then a ghost twice. A ghost
+    reports health 1, so health alone passed it."""
+
+    def test_a_ghost_is_dead_though_it_reports_health(self):
+        ghost = member("Eazoth", 16, WARRIOR, health=1, has_corpse=1)
+        self.assertFalse(ghost.alive)
+        self.assertEqual(guildrun.why_not(ghost, set(), set(), set()), "dead")
+        self.assertTrue(member("Hurt", 16, WARRIOR, health=1, has_corpse=0).alive)
+        # Resurrected in place, its old corpse row still standing.
+        self.assertTrue(member("Grog", 36, WARRIOR, health=1121, has_corpse=1).alive)
+        self.assertFalse(member("Fallen", 16, WARRIOR, health=0).alive)
+
+    def test_an_offline_member_is_not_picked(self):
+        away = member("Tynneda", 16, MAGE, online=0)
+        self.assertEqual(guildrun.why_not(away, set(), set(), set()), "offline")
+
+    def test_a_member_a_refusal_named_sits_out(self):
+        free = member("Daidanden", 14, WARRIOR)
+        self.assertEqual(
+            guildrun.why_not(free, set(), set(), set(), {"Daidanden"}),
+            "refused a run just now",
+        )
+
+    def test_nobody_is_picked_while_a_restart_settles(self):
+        self.assertTrue(guildrun.settling(2))
+        self.assertTrue(guildrun.settling(guildrun.SETTLE_SECONDS - 1))
+        self.assertFalse(guildrun.settling(guildrun.SETTLE_SECONDS))
+        self.assertFalse(guildrun.settling(None))
+
+    def test_the_refused_member_is_read_off_the_why(self):
+        self.assertEqual(guildrun.refused_member("'Daidanden' is dead"), "Daidanden")
+        self.assertEqual(
+            guildrun.refused_member("'Bramitho' is locked out of it (level)"), "Bramitho"
+        )
+        self.assertEqual(guildrun.refused_member("target not online"), "")
+        self.assertEqual(
+            guildrun.refused_member("the realm already has 2 guild groups out"), ""
+        )
+        self.assertEqual(
+            guildrun.benched(
+                [
+                    {"outcome": "refused", "why": "'Eazoth' is dead"},
+                    {"outcome": "lost", "why": "'Selie' is not in the world"},
+                    {"outcome": "refused", "why": "the door has no finder entry"},
+                ]
+            ),
+            {"Eazoth"},
+        )
+
+    def test_a_refusal_over_one_member_is_formed_again_at_once(self):
+        refused = {"state": "ended", "outcome": "refused", "why": "'Eazoth' is dead"}
+        self.assertTrue(guildrun.swap_now([refused]))
+        self.assertTrue(guildrun.swap_now([refused, refused]))
+        # A run formed since heads the list: no second swap while it is out.
+        queued = {"state": "queued", "outcome": "", "why": ""}
+        self.assertFalse(guildrun.swap_now([queued, refused]))
+        # A refusal no swap can fix, and a streak at the cap, wait the spacing.
+        realm = {"state": "ended", "outcome": "refused", "why": "the finder is off"}
+        self.assertFalse(guildrun.swap_now([realm]))
+        self.assertFalse(guildrun.swap_now([refused] * guildrun.MAX_SWAPS))
+        self.assertFalse(guildrun.swap_now([]))
+
+    def test_only_a_run_that_went_in_rests_its_members(self):
+        self.assertNotIn("refused", guildrun.WENT_IN)
+        self.assertNotIn("lost", guildrun.WENT_IN)
+        facts = BRIDGE[BRIDGE.index("def _fetch_guild_run_facts") :]
+        facts = facts[: facts.index("\ndef ")]
+        resting = facts[facts.index("resting = set()") - 400 : facts.index("resting = set()")]
+        self.assertIn("guildrun.WENT_IN", resting)
+
+    def test_the_bridge_reads_online_and_the_corpse(self):
+        sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
+        sql = sql[: sql.index("\n)\n")]
+        self.assertIn("c.online", sql)
+        self.assertIn("FROM corpse k WHERE k.guid = s.guid) AS has_corpse", sql)
+
+    def test_the_pass_settles_then_swaps_then_passes_the_bench(self):
+        once = BRIDGE[BRIDGE.index("async def _guild_run_once") :]
+        once = once[: once.index("    async def ", 10)]
+        self.assertLess(
+            once.index("guildrun.settling(gate[\"uptime\"])"),
+            once.index("_fetch_guild_run_facts"),
+        )
+        self.assertIn("if (not swap and self._guild_run_formed_at is not None", once)
+        self.assertIn('facts["benched"])', once)
+
+
 class TheDoorsThatFit(unittest.TestCase):
     def test_a_band_of_fifteen_to_seventeen_gets_ragefire_first(self):
         keywords = [
