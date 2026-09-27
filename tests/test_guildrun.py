@@ -157,7 +157,8 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
     def test_the_refused_member_is_read_off_the_why(self):
         self.assertEqual(guildrun.refused_member("'Daidanden' is dead"), "Daidanden")
         self.assertEqual(
-            guildrun.refused_member("'Bramitho' is locked out of it (level)"), "Bramitho"
+            guildrun.refused_member("'Bramitho' is locked out of it (level)"),
+            "Bramitho",
         )
         self.assertEqual(guildrun.refused_member("target not online"), "")
         self.assertEqual(
@@ -192,7 +193,9 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
         self.assertNotIn("lost", guildrun.WENT_IN)
         facts = BRIDGE[BRIDGE.index("def _fetch_guild_run_facts") :]
         facts = facts[: facts.index("\ndef ")]
-        resting = facts[facts.index("resting = set()") - 400 : facts.index("resting = set()")]
+        resting = facts[
+            facts.index("resting = set()") - 400 : facts.index("resting = set()")
+        ]
         self.assertIn("guildrun.WENT_IN", resting)
 
     def test_the_bridge_reads_online_and_the_corpse(self):
@@ -205,7 +208,7 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
         once = BRIDGE[BRIDGE.index("async def _guild_run_once") :]
         once = once[: once.index("    async def ", 10)]
         self.assertLess(
-            once.index("guildrun.settling(gate[\"uptime\"])"),
+            once.index('guildrun.settling(gate["uptime"])'),
             once.index("_fetch_guild_run_facts"),
         )
         self.assertIn("if (not swap and self._guild_run_formed_at is not None", once)
