@@ -321,6 +321,50 @@ class WhereMaterialsGo(unittest.TestCase):
             "8 Copper Ore to Grug (the guild bank's Materials tab)", step.said
         )
 
+    def test_meat_with_every_cook_at_one_goes_to_the_bank(self):
+        # #373: ten family members at Cooking 1 made the pick a name
+        # tiebreak, and Bork was posted 1,190 items he never opened.
+        meat = stack(21, 769, 20, subclass=8, name="Chunk of Boar Meat")
+        cooks = {185: [(n, 1) for n in ("Og", "Bork", "Grug", "Ugga", "Grog")]}
+        self.assertEqual(
+            guildjobs.recipient_for(meat, cooks, "Grug"),
+            ("Grug", "the guild bank's Materials tab"),
+        )
+
+    def test_cloth_goes_only_to_a_tailor_who_can_work_it(self):
+        linen = stack(22, 2589, 20, subclass=5, name="Linen Cloth")
+        # Tailoring 1 is under the floor; Tailoring 30 can cast Bolt of Linen.
+        self.assertEqual(
+            guildjobs.recipient_for(linen, {197: [("Bork", 1)]}, "Grug")[0], "Grug"
+        )
+        self.assertEqual(
+            guildjobs.recipient_for(linen, {197: [("Bork", 1), ("Og", 30)]}, "Grug"),
+            ("Og", "its crafter"),
+        )
+
+    def test_a_crafter_with_posts_unopened_is_sent_nothing_new(self):
+        m = member(
+            "Keeper",
+            skills={H: (40, 75), M: (40, 75)},
+            carried=(
+                stack(11, 2447, 12, subclass=9, name="Peacebloom"),
+                stack(13, 2901, 1, item_class=2),
+            ),
+        )
+        crafters = {"Cave": {171: [("Ugga", 60), ("Og", 90)]}}
+
+        def rows(result):
+            return [(x.command, x.target_arg) for x in only_step(result, "Keeper").rows]
+
+        self.assertEqual(
+            rows(plan([m], crafters=crafters, unclaimed={"Og"})),
+            [("send item:11 subject:Guild materials", "Ugga")],
+        )
+        self.assertEqual(
+            rows(plan([m], crafters=crafters, unclaimed={"Og", "Ugga"})),
+            [("send item:11 subject:Guild materials", "Grug")],
+        )
+
     def test_a_reserved_stack_is_never_posted(self):
         m = member(
             "Keeper",

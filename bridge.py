@@ -12692,8 +12692,12 @@ class Bridge(discord.Client):
             members, masters=facts["masters"], crafters=facts["crafters"],
             fields=fields, doors=doors, pending=facts["pending"],
             kept=await asyncio.to_thread(_KEEP.now),
-            recent=facts["recent"], busy=busy, cap=cap)
-
+            recent=facts["recent"], busy=busy, cap=cap,
+            unclaimed=facts.get("unclaimed", ()))
+        if facts.get("unclaimed"):
+            log.info("guild jobs: no new materials post for %s until the posts "
+                     "waiting unopened are collected; theirs go to the bank",
+                     ", ".join(sorted(facts["unclaimed"])))
         return plan
 
     def _log_guild_job_plan(self, members, plan):
@@ -19730,6 +19734,12 @@ _JOB_PENDING_SUMMONS_SQL = (
     "WHERE kind = 'summon' AND status IN ('pending', 'claimed', 'verifying') "
     "AND created_at > NOW() - INTERVAL 1 HOUR"
 )
+# Who has a materials post waiting unopened (#373): a crafter is sent nothing
+# new until it collects what it was sent.
+_JOB_UNCLAIMED_SQL = (
+    "SELECT DISTINCT c.name FROM mail m JOIN characters c ON c.guid = m.receiver "
+    "WHERE m.subject = %s AND m.has_items = 1"
+)
 _JOB_STONES_SQL = (
     "SELECT g.guid, g.map AS map_id, g.position_x AS x, g.position_y AS y, t.name "
     "FROM acore_world.gameobject g "
@@ -19779,14 +19789,18 @@ def _fetch_job_facts(family_names: list) -> dict:
         recent_rows = _job_read(cur, "recent rows", _JOB_RECENT_SQL,
                                 (guildjobs.SOURCE + ":%",))
         pending_rows = _job_read(cur, "summons", _JOB_PENDING_SUMMONS_SQL)
+        unclaimed_rows = _job_read(cur, "unopened material posts", _JOB_UNCLAIMED_SQL,
+                                   (guildjobs.POST_SUBJECT,))
         if not _JOB_STONES:
             _JOB_STONES.extend(_job_read(cur, "meeting stones", _JOB_STONES_SQL,
                                          (MEETING_STONE_GO_TYPE,)))
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)
-    return _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows,
-                                item_rows, recent_rows, pending_rows)
+    facts = _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows,
+                                 item_rows, recent_rows, pending_rows)
+    facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}
+    return facts
 
 
 def _guild_gathering_skills(member):

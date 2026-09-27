@@ -86,6 +86,8 @@ from dataclasses import dataclass, field
 
 import campaignplan
 import council
+import craft
+import craft_rhythm
 import dungeonpath
 import guildcorps
 import guildroute
@@ -669,15 +671,70 @@ def _tool_step(member, cap):
     return None, ""
 
 
+# A CRAFTER IS POSTED ONLY WHAT IT CAN WORK NOW (#373). Holding a trade is not
+# enough: on wow-dev on 2026-09-27 all ten family members held Cooking at 1,
+# so "the best cook" was a name tiebreak, and Bork was posted 1,190 items of
+# meat across 64 letters he never opened. A holder qualifies when its skill is
+# at least CRAFTER_FLOOR and a recipe it can cast at that skill consumes the
+# item (craft.RECIPES, reagents from craft_rhythm.GATHERED). Anything else goes
+# to the guild bank's Materials tab.
+CRAFTER_FLOOR = 5
+
+# The subject every post carries, which is also how an unopened one is found.
+POST_SUBJECT = "Guild materials"
+
+
+def consumes_at(skill: int, value: int, entry: int) -> bool:
+    """Whether a recipe of `skill` castable at `value` eats item `entry`."""
+    if int(value) < CRAFTER_FLOOR:
+        return False
+    for recipe in craft.RECIPES.get(int(skill), ()):
+        if recipe.min_skill > int(value):
+            continue
+        if any(
+            r.entry == int(entry)
+            for r in craft_rhythm.GATHERED.get(recipe.spell_id, ())
+        ):
+            return True
+    return False
+
+
+def without_unclaimed(crafters: dict, unclaimed) -> dict:
+    """`crafters` less every holder with an unopened post waiting (#373).
+
+    A crafter who has not collected earlier posts is sent nothing new until
+    it does, so its pile cannot grow without limit; the material goes to the
+    bank instead.
+    """
+    waiting = {str(n) for n in unclaimed or ()}
+    if not waiting:
+        return crafters
+    return {
+        guild: {
+            skill: [p for p in holders if str(p[0]) not in waiting]
+            for skill, holders in (skills or {}).items()
+        }
+        for guild, skills in (crafters or {}).items()
+    }
+
+
 def recipient_for(item: Carried, crafters: dict, master: str) -> tuple:
     """(who, why) a material goes to: the guild's crafter of the trade that
-    uses it, else the guild master for the Materials tab.
+    uses it, when that crafter can work it now, else the guild master for the
+    Materials tab.
 
     `crafters` maps a skill line to [(name, value)] of the family members of
     this guild who hold it.
     """
     for skill in CONSUMERS.get(int(item.subclass), ()):
-        holders = sorted(crafters.get(skill, ()), key=lambda p: (-int(p[1]), p[0]))
+        holders = sorted(
+            (
+                p
+                for p in crafters.get(skill, ())
+                if consumes_at(skill, p[1], item.entry)
+            ),
+            key=lambda p: (-int(p[1]), p[0]),
+        )
         if holders:
             return holders[0][0], "its crafter"
     return master, "the guild bank's Materials tab"
@@ -720,7 +777,7 @@ def _post_step(member, crafters, master, kept, cap):
         rows.append(
             guildcorps.Row(
                 "mail",
-                "send item:%d subject:%s" % (int(c.guid), "Guild materials"),
+                "send item:%d subject:%s" % (int(c.guid), POST_SUBJECT),
                 who,
                 source_for("post", member.name),
             )
@@ -988,6 +1045,7 @@ def plan(
     busy=(),
     cap=guildroute.MAIL_RUN_YARDS,
     per_guild=STEPS_PER_GUILD,
+    unclaimed=(),
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -995,10 +1053,11 @@ def plan(
     name, value)]}; `fields` name -> Spot a maintenance member gathers at;
     `doors` name -> Door (assign_doors); `pending` names a summon waits on;
     `kept` keep.Reservations; `recent` Recent rows; `busy`
-    names another pass has on a walk.
+    names another pass has on a walk; `unclaimed` names family members with a
+    materials post still unopened in their mailbox (`without_unclaimed`).
     """
     masters = masters or {}
-    crafters = crafters or {}
+    crafters = without_unclaimed(crafters or {}, unclaimed)
     fields = fields or {}
     doors = doors or {}
     busy = {str(n) for n in busy or ()}
