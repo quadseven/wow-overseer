@@ -16,7 +16,8 @@ the rest, hand things down, then leave. That is this module.
 THE STATES, with a clear entry and exit:
 
     IDLE    -> GO       `should_start` gives a reason (gear in the post, or a
-                        member short of slots with gold of its own).
+                        member short of slots with gold of its own). Members
+                        further than a walk from a home hub hearth there.
     GO      -> GATHER   the leader is read standing at the hub mailbox.
     GATHER  -> STEPS    every member is read standing within GATHER_YARDS of
                         the hub, or the gather window runs out (the steps then
@@ -78,6 +79,26 @@ TOTAL_SECONDS = 3600.0
 # Two errands per family are at least this far apart, however the first ended.
 COOLDOWN_SECONDS = 7200.0
 
+# THE WAY THERE (wow-dev 2026-09-27). The Alliance family is bound in Ratchet,
+# which has a mailbox, armorers, a weaponsmith and two bankers beside the inn,
+# and it was sent to Stormwind instead: 3,223 yards from a head fighting alone
+# in the Burning Steppes, with three members 11,000 yards off in Tirisfal. A
+# player shops at home and hearths there. So the hub is the mailbox by the
+# head's hearthstone point when there is one, unless the head already stands in
+# walking range of a capital; and every member further than a walk from the hub
+# uses its hearthstone at the start, which is also what brings a scattered
+# family back together.
+#
+# A walk further than this is a journey, not a walk to a counter (the module's
+# own mailbox walk caps at the same 600 yards).
+WALK_YARDS = 600.0
+# How far the mailbox may stand from the hearthstone point and still be the
+# town it is bound in.
+BIND_MAILBOX_YARDS = 60.0
+# How long after the hearth rows the leader is left alone: a walk written
+# during the ten second cast moves him and interrupts it.
+HEARTH_SECONDS = 45.0
+
 # How close counts as at the hub. The core opens a mailbox from about ten
 # yards; the leader lands within a few yards of a ground aim.
 HUB_YARDS = 10.0
@@ -100,6 +121,7 @@ class State:
     hub: dict = field(default_factory=dict)
     ended: float = 0.0
     why: str = ""
+    hearth_until: float = 0.0
 
     @property
     def active(self) -> bool:
@@ -140,9 +162,57 @@ def should_start(
     return ""
 
 
-def start(now: float, hub: dict, why: str) -> State:
-    """A new errand, walking to `hub` (a mailbox spawn row)."""
-    return State(phase=GO, started=now, phase_since=now, hub=dict(hub), why=why)
+def start(now: float, hub: dict, why: str, hearthed: bool = False) -> State:
+    """A new errand, walking to `hub` (a mailbox spawn row). `hearthed` is
+    whether hearth rows were written for it this tick."""
+    return State(
+        phase=GO,
+        started=now,
+        phase_since=now,
+        hub=dict(hub),
+        why=why,
+        hearth_until=now + HEARTH_SECONDS if hearthed else 0.0,
+    )
+
+
+def choose_hub(bind_hub: dict, capital_hub: dict, leader_at) -> dict:
+    """The errand's hub: the head's home town, or a capital he is already in.
+
+    `bind_hub` is the mailbox by the head's hearthstone point ({} when none is
+    within BIND_MAILBOX_YARDS of it), `capital_hub` the mailbox by the nearest
+    auctioneer of the family's own house on the head's map ({} when none),
+    `leader_at` the head's snapshot row. A capital wins only when the head is
+    already within a walk of it; otherwise home, which a hearthstone reaches
+    from anywhere. With no home mailbox, the capital as before.
+    """
+    if capital_hub and in_range(capital_hub, leader_at, WALK_YARDS):
+        return dict(capital_hub)
+    return dict(bind_hub or capital_hub or {})
+
+
+def to_hearth(hub: dict, positions: dict, names, hearthed=frozenset()) -> list:
+    """The members who use their hearthstone to reach `hub`, sorted.
+
+    A member read on another map or further than WALK_YARDS from it. Only for
+    a hub by the hearthstone point (`hub["bind"]`); a member with no fresh
+    reading (offline) and one that hearthed inside the stone's cooldown
+    (`hearthed`) are left to the walk.
+    """
+    if not hub or not hub.get("bind"):
+        return []
+    out = []
+    for name in sorted(names):
+        at = (positions or {}).get(name)
+        if not at or name in hearthed:
+            continue
+        if not in_range(hub, at, WALK_YARDS):
+            out.append(name)
+    return out
+
+
+def aim_now(state: State, now: float) -> bool:
+    """Whether the leader may be aimed: not inside a hearth's cast window."""
+    return now >= state.hearth_until
 
 
 def end(state: State, now: float, why: str) -> tuple:

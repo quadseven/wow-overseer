@@ -3643,13 +3643,13 @@ def _roster_leads() -> set:
         return {str(r["name"]) for r in cur.fetchall()}
 
 
-def _insert_hearth(name: str) -> int:
+def _insert_hearth(name: str, source: str = jev_movement.SOURCE) -> int:
     """One kind='hearth' row: the character uses its hearthstone."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO overseer_command (target_name, command, kind, source) "
             "VALUES (%s, 'use', 'hearth', %s)",
-            (name, jev_movement.SOURCE),
+            (name, source),
         )
         return cur.lastrowid
 
@@ -13513,7 +13513,7 @@ class Bridge(discord.Client):
         if state.phase == townerrand.STEPS:
             step_done = await self._town_errand_step(
                 state, names, leader, positions, cohort, now)
-        else:
+        elif townerrand.aim_now(state, now):
             await self._town_errand_aim(leader, _hub_aim(hub), cohort)
         new, line = townerrand.advance(
             state, now, in_run=in_run, leader_at_hub=leader_at_hub,
@@ -13551,7 +13551,8 @@ class Bridge(discord.Client):
         # ended the errand into its two-hour cooldown: measured on wow-dev
         # 2026-09-27, the pod came up at 21:15 with the head away and he was
         # back at 21:17. The errand starts on the first tick he is back.
-        if leader not in await asyncio.to_thread(_fetch_positions, [leader]):
+        positions = await asyncio.to_thread(_fetch_positions, list(names))
+        if leader not in positions:
             if leader not in _TOWN_ERRAND_HEAD_AWAY:
                 _TOWN_ERRAND_HEAD_AWAY.add(leader)
                 log.info("town errand: %s%s, but %s leads the family and is "
@@ -13561,17 +13562,26 @@ class Bridge(discord.Client):
             return state
         _TOWN_ERRAND_HEAD_AWAY.discard(leader)
         teams = await asyncio.to_thread(_fetch_teams, [leader])
-        hub = await asyncio.to_thread(_fetch_capital_hub, leader,
-                                      teams.get(leader, ""))
+        capital = await asyncio.to_thread(_fetch_capital_hub, leader,
+                                          teams.get(leader, ""))
+        home = await asyncio.to_thread(_fetch_bind_hub, leader)
+        hub = townerrand.choose_hub(home, capital, positions.get(leader))
         if not hub:
-            log.info("town errand: %s%s, but no capital of the family's own "
-                     "auction house is on %s's map; not going", why, label, leader)
+            log.info("town errand: %s%s, but neither %s's hearthstone point nor "
+                     "a capital of the family's own auction house on his map "
+                     "has a mailbox; not going", why, label, leader)
             return townerrand.State(ended=now)
+        # THE HEARTHSTONE IS THE WAY HOME AND THE REGROUP IN ONE CAST, the
+        # existing kind='hearth' row the movement choice already writes.
+        reads = await asyncio.to_thread(_movement_reads, list(names))
+        far = townerrand.to_hearth(hub, positions, names, reads["hearthed"])
         await asyncio.to_thread(_town_errand_jobs, names)
+        for name in far:
+            await asyncio.to_thread(_insert_hearth, name, TOWN_ERRAND_SOURCE)
         log.info("town errand: starts%s - %s; the family goes to the mailbox "
-                 "at %s by the auctioneer %s", label, why, _hub_aim(hub),
-                 hub.get("auctioneer", ""))
-        return townerrand.start(now, hub, why)
+                 "at %s by %s%s", label, why, _hub_aim(hub), hub.get("place", ""),
+                 "; %s hearth(s) there first" % ", ".join(far) if far else "")
+        return townerrand.start(now, hub, why, hearthed=bool(far))
 
     async def _town_errand_aim(self, leader, aim, cohort) -> bool:
         """Aim the leader through the town slot, urgently, as the errand."""
@@ -22196,6 +22206,39 @@ def _fetch_capital_hub(leader: str, team: str) -> dict:
         return {}
     hub = dict(box)
     hub["auctioneer"] = str(own.get("name") or "")
+    hub["place"] = "the auctioneer %s" % hub["auctioneer"]
+    return hub
+
+
+# THE HOME TOWN: the mailbox spawn nearest the head's hearthstone point, on its
+# map, when it stands within townerrand.BIND_MAILBOX_YARDS of it.
+_ERRAND_BIND_MAILBOX_SQL = (
+    "SELECT g.map AS map_id, g.position_x AS x, g.position_y AS y, "
+    "g.position_z AS z, "
+    "(POW(g.position_x - h.posX, 2) + POW(g.position_y - h.posY, 2)) AS d2 "
+    "FROM characters c JOIN character_homebind h ON h.guid = c.guid "
+    "JOIN acore_world.gameobject g ON g.map = h.mapId "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE c.name = %s AND gt.type = %s ORDER BY d2 LIMIT 1"
+)
+
+
+def _fetch_bind_hub(leader: str) -> dict:
+    """The mailbox by `leader`'s hearthstone point, or {}."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_ERRAND_BIND_MAILBOX_SQL,
+                        (leader, travel.MAILBOX_GO_TYPE))
+            box = cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+    if not box or float(box["d2"]) > townerrand.BIND_MAILBOX_YARDS ** 2:
+        return {}
+    hub = dict(box)
+    hub["bind"] = True
+    hub["place"] = "%s's hearthstone point" % leader
     return hub
 
 
