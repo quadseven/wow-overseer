@@ -553,14 +553,14 @@ class TheFactsAreReadBeforeTheRowIsWritten(unittest.TestCase):
         self.assertIn("_FAMILY_POSITION_SQL", _block("def _fetch_positions(names"))
 
     def test_the_writer_sends_the_verb_the_plan_chose(self):
-        body = _block("def _insert_gear_handoff(grant)")
+        body = _block("def _insert_gear_handoff(grant")
         self.assertIn("grant.verb", body)
         self.assertIn("grant.taker", body)
         self.assertIn("grant.command", body)
 
     def test_the_writer_still_degrades_on_a_world_without_the_migration(self):
         """1146 missing table, 1265 a `kind` ENUM with no 'trade' value."""
-        body = _block("def _insert_gear_handoff(grant)")
+        body = _block("def _insert_gear_handoff(grant")
         self.assertIn("1146", body)
         self.assertIn("1265", body)
 

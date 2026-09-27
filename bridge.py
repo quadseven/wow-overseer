@@ -90,6 +90,7 @@ import lootcouncil
 # imported with its own directory first on sys.path. See mailrun.py's docstring.
 import mailrun
 import materials
+import tidy
 import overhear
 import persona
 import preraid
@@ -5125,6 +5126,7 @@ class Bridge(discord.Client):
                 self._guild_jobs_loop,
                 self._mail_loop,
                 self._town_passing_loop,
+                self._tidy_loop,
                 self._recruit_loop,
                 self._raid_spec_loop,
                 self._craft_supply_loop,
@@ -13262,6 +13264,108 @@ class Bridge(discord.Client):
                                            self._town_passing_once)
             await asyncio.sleep(TOWN_PASSING_CYCLE_SECONDS)
 
+    async def _tidy_once(self, cohort=None) -> None:
+        """Put a family's carried gear on its way, and report what landed.
+
+        The other passes leave three kinds of gear in the bags (tidy.py's
+        banner has the measurement): pieces nobody can wear YET, relics for a
+        class the holder is not, and rings and trinkets nobody tries on. This
+        pass hands the first two to the member they are for and asks the bot
+        to try the third on, and reads every earlier row back before saying
+        it worked. No travel column, no leader: a hand-off is posted only
+        from a mailbox or handed over in trade range (gear.deliverable).
+        """
+        names, _leader = await asyncio.to_thread(_family_of, cohort)
+        if not names:
+            return
+        await self._tidy_settle(names)
+        gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
+        if not gear_rows:
+            return
+        worn_rows = await asyncio.to_thread(_fetch_family_equipped, names)
+        members = tidy.members_from_rows(worn_rows)
+        if not members:
+            log.info("tidy: no member facts%s; nothing judged", _family_label(cohort))
+            return
+        claims = bag_pressure.family_claimants(gear_rows, worn_rows, names)
+        worn = await asyncio.to_thread(_fetch_worn_entries, names)
+        tries = tidy.try_ons(gear_rows, members, worn)
+        seen = await asyncio.to_thread(_recent_tidy_keys, TIDY_RETRY_HOURS)
+        wrote_tries = 0
+        for tryon in tries:
+            if wrote_tries >= TIDY_MAX_ROWS:
+                break
+            if (tryon.holder, "", tryon.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_tidy_try_on, tryon):
+                wrote_tries += 1
+                log.info("tidy: %s tries on %s", tryon.holder, tryon.name)
+        declined = tidy.declined_equips(
+            await asyncio.to_thread(_equip_history, EQUIP_MEMORY_HOURS,
+                                    EQUIP_RETRY_MINUTES))
+        grants = tidy.hand_ons(gear_rows, members, claims, TIDY_FUTURE_LEVELS,
+                               declined)
+        asked = {tidy.guid_of(command) for _h, _t, command in seen}
+        grants = [g for g in grants if g.guid not in asked]
+        wrote_hands = 0
+        notes = []
+        if grants:
+            positions = await asyncio.to_thread(_fetch_positions, names)
+            plan = tidy.deliverable(
+                grants,
+                position_rows=positions,
+                free_slots=await asyncio.to_thread(_fetch_free_slots, names),
+                at_mailbox=await asyncio.to_thread(
+                    _holders_at_mailbox, list(names), positions),
+            )
+            notes = list(plan.notes)
+            for grant in plan.grants[:TIDY_MAX_ROWS]:
+                if await asyncio.to_thread(
+                        _insert_gear_handoff, grant, tidy.SOURCE_HANDON):
+                    wrote_hands += 1
+                    log.info("tidy: %s -> %s by %s, %s - %s", grant.holder,
+                             grant.taker, grant.verb, grant.name, grant.reason)
+        for note in notes:
+            log.info("tidy: waiting - %s", note)
+        log.info("tidy: %d try-on(s) of %d, %d hand-on(s) of %d queued, "
+                 "%d waiting%s", wrote_tries, len(tries), wrote_hands,
+                 len(grants), len(notes), _family_label(cohort))
+
+    async def _tidy_settle(self, names: list) -> None:
+        """Read back every answered tidy row once, and record what it did.
+
+        Waits TIDY_SETTLE_MINUTES after the answer, because the bags are the
+        world's save file and trail the world by up to fifteen minutes. The
+        event row is keyed on the command row's id, so a restart never
+        reports one row twice.
+        """
+        rows = await asyncio.to_thread(
+            _fetch_tidy_rows, names, TIDY_RETRY_HOURS, TIDY_SETTLE_MINUTES)
+        counts: dict = {}
+        for row in rows:
+            place = await asyncio.to_thread(_tidy_place, row)
+            outcome, sentence = tidy.settle(row, place)
+            if outcome == tidy.WAITING:
+                continue
+            counts[outcome] = counts.get(outcome, 0) + 1
+            if await asyncio.to_thread(_insert_tidy_event, row, outcome, sentence):
+                log.info("tidy: %s", sentence)
+        if counts:
+            log.info("tidy: read back %s", ", ".join(
+                "%d %s" % (n, k) for k, n in sorted(counts.items())))
+
+    async def _tidy_loop(self) -> None:
+        """The tidy pass for every family, every TIDY_CYCLE_SECONDS."""
+        await self.wait_until_ready()
+        await asyncio.sleep(min(TIDY_CYCLE_SECONDS, 240.0))
+        while not self.is_closed():
+            try:
+                await self._tidy_once()
+            except Exception:
+                log.exception("tidy pass failed; retrying next cycle")
+            await self._for_other_families("tidy", self._tidy_once)
+            await asyncio.sleep(TIDY_CYCLE_SECONDS)
+
     async def _mail_loop(self) -> None:
         """Keep the family's mailboxes emptied (infra#3741).
 
@@ -19798,7 +19902,7 @@ def _insert_equip(equip) -> int:
         return cur.lastrowid or 0
 
 
-def _insert_gear_handoff(grant) -> int:
+def _insert_gear_handoff(grant, source: str = "gear") -> int:
     """One overseer_command row handing one carried piece to a sibling.
 
     The giver in target_name, the receiver in target_arg and the
@@ -19826,7 +19930,7 @@ def _insert_gear_handoff(grant) -> int:
                 "INSERT INTO overseer_command "
                 "(target_name, command, kind, target_arg, source) "
                 "VALUES (%s, %s, %s, %s, %s)",
-                (grant.holder, grant.command, grant.verb, grant.taker, "gear"),
+                (grant.holder, grant.command, grant.verb, grant.taker, source),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1146, 1265):
@@ -19839,6 +19943,181 @@ def _insert_gear_handoff(grant) -> int:
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+# THE TIDY PASS (tidy.py). How often it runs, how many rows one family gets
+# per step per pass, how far ahead a piece is held for a member, how long a
+# row is left before it is asked again, and how long an answered row waits
+# before its read-back: the bags are the world's save file, fifteen minutes
+# behind it at worst, so a read-back sooner would report a move as missing.
+TIDY_CYCLE_SECONDS = float(os.environ.get("TIDY_CYCLE_SECONDS", "600"))
+TIDY_MAX_ROWS = int(os.environ.get("TIDY_MAX_ROWS", "3"))
+TIDY_FUTURE_LEVELS = int(os.environ.get("TIDY_FUTURE_LEVELS", str(tidy.FUTURE_LEVELS)))
+TIDY_RETRY_HOURS = int(os.environ.get("TIDY_RETRY_HOURS", "24"))
+TIDY_SETTLE_MINUTES = int(os.environ.get("TIDY_SETTLE_MINUTES", "20"))
+TIDY_SOURCES = (tidy.SOURCE_HANDON, tidy.SOURCE_TRYON)
+# `kind` of the overseer_event row a settled tidy row becomes. The row's
+# `bucket` is the command row's id, so each command is reported once.
+TIDY_EVENT_KIND = "tidy"
+
+_WORN_ENTRIES_SQL = (
+    "SELECT c.name AS name, ci.slot AS slot, ii.itemEntry AS entry "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE c.name IN (%s) AND ci.bag = 0 AND ci.slot < 19"
+)
+
+
+def _fetch_worn_entries(names: list) -> dict:
+    """name -> {equipment slot: item entry} for what each member wears."""
+    if not names:
+        return {}
+    sql = _WORN_ENTRIES_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        out: dict = {}
+        for row in cur.fetchall():
+            out.setdefault(row["name"], {})[int(row["slot"])] = int(row["entry"])
+    return out
+
+
+def _recent_tidy_keys(hours: int) -> set:
+    """(holder, taker, command) for every tidy row inside the window.
+
+    One answer per row, then the row is not asked again inside the window:
+    a try-on the bot declined would decline again, and a hand-on refused
+    for range or room is re-planned the next day from where they stand.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, target_arg, command FROM overseer_command "
+                "WHERE source IN (%s, %s) AND created_at > NOW() - INTERVAL %s HOUR",
+                (tidy.SOURCE_HANDON, tidy.SOURCE_TRYON, int(hours)),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return set()
+            raise
+        return {(r["target_name"], r["target_arg"], r["command"])
+                for r in cur.fetchall()}
+
+
+def _insert_tidy_try_on(tryon) -> int:
+    """One kind='bot' `e` row: the holder tries a carried ring or trinket on."""
+    if _KEEP.blocks(tryon.holder, tryon.command):
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_command (target_name, command, kind, source) "
+            "VALUES (%s, %s, 'bot', %s)",
+            (tryon.holder, tryon.command, tidy.SOURCE_TRYON),
+        )
+        return cur.lastrowid or 0
+
+
+_TIDY_ROWS_SQL = (
+    "SELECT oc.id, oc.target_name, oc.target_arg, oc.command, oc.kind, "
+    "oc.source, oc.status, oc.detail FROM overseer_command oc "
+    "WHERE oc.source IN (%s, %s) AND oc.target_name IN ({holes}) "
+    "AND oc.created_at > NOW() - INTERVAL %s HOUR "
+    "AND oc.status IN ('delivered', 'applied', 'unchanged', 'error') "
+    "AND oc.updated_at < NOW() - INTERVAL %s MINUTE "
+    # The two tables sit in different collation groups (infra#3173); they
+    # are joined on an integer only, and the one string compared is a bound
+    # value, collated to the event table's side.
+    "AND NOT EXISTS (SELECT 1 FROM overseer_event e "
+    "WHERE e.kind = %s COLLATE utf8mb4_unicode_ci AND e.bucket = oc.id) "
+    "ORDER BY oc.id LIMIT 50"
+)
+
+
+def _fetch_tidy_rows(names: list, hours: int, settle_minutes: int) -> list:
+    """Answered tidy rows old enough to read back and not yet reported."""
+    if not names:
+        return []
+    sql = _TIDY_ROWS_SQL.format(holes=",".join(["%s"] * len(names)))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, (*TIDY_SOURCES, *names, int(hours),
+                              int(settle_minutes), TIDY_EVENT_KIND))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("tidy: cannot read back its rows on this world image")
+                return []
+            raise
+        return [dict(r) for r in cur.fetchall()]
+
+
+def _tidy_place(row: dict) -> dict | None:
+    """Where the item a tidy row names is now; fills row's guid, entry, name.
+
+    A hand-on names its item_instance, so the owner is read off the
+    instance and the letter it may be riding in. A try-on names only an
+    entry, so the holder's own copies are read: worn, or still carried.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        if row.get("source") == tidy.SOURCE_HANDON:
+            guid = tidy.guid_of(row.get("command", ""))
+            row["guid"] = guid
+            cur.execute(
+                "SELECT ii.itemEntry AS entry, it.name AS name, c.name AS owner, "
+                "(SELECT COUNT(*) FROM mail_items mi WHERE mi.item_guid = ii.guid) "
+                "AS in_mail FROM item_instance ii "
+                "LEFT JOIN characters c ON c.guid = ii.owner_guid "
+                "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+                "WHERE ii.guid = %s",
+                (guid,),
+            )
+            found = cur.fetchone()
+            if not found:
+                return None
+            row["entry"], row["name"] = int(found["entry"]), found["name"]
+            return {"owner": found["owner"], "mail": bool(found["in_mail"]),
+                    "worn": False}
+        entry = bag_pressure.equip_entry(row.get("command", ""))
+        row["guid"], row["entry"] = 0, entry
+        cur.execute(
+            "SELECT it.name AS name, MAX(ci.bag = 0 AND ci.slot < 19) AS worn, "
+            "COUNT(ci.item) AS held FROM characters c "
+            "JOIN acore_world.item_template it ON it.entry = %s "
+            "LEFT JOIN character_inventory ci ON ci.guid = c.guid AND ci.item IN "
+            "(SELECT guid FROM item_instance WHERE itemEntry = %s AND owner_guid = c.guid) "
+            "WHERE c.name = %s GROUP BY it.name",
+            (entry, entry, row.get("target_name", "")),
+        )
+        found = cur.fetchone()
+        if not found:
+            return None
+        row["name"] = found["name"]
+        if not int(found["held"] or 0):
+            return None
+        return {"owner": row.get("target_name", ""), "mail": False,
+                "worn": bool(found["worn"])}
+
+
+def _insert_tidy_event(row: dict, outcome: str, sentence: str) -> int:
+    """One overseer_event row per settled tidy row, for the site to show."""
+    via = "equip" if row.get("source") == tidy.SOURCE_TRYON else row.get("kind", "")
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT IGNORE INTO overseer_event (character_name, kind, "
+                "subject_id, subject_name, detail, bucket, item_guid, "
+                "counterpart, via) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (row.get("target_name", ""), TIDY_EVENT_KIND,
+                 int(row.get("entry") or 0), (row.get("name") or "")[:255],
+                 ("%s: %s" % (outcome, sentence))[:255], int(row["id"]),
+                 int(row.get("guid") or 0),
+                 (row.get("target_arg") or "")[:12], via[:16]),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("tidy: overseer_event cannot take a tidy row here")
+                return 0
+            raise
+        return cur.rowcount or 0
 
 
 # Every container the family owns and where it sits. `used` is how many items
@@ -23913,6 +24192,7 @@ class HeadlessBridge(Bridge):
                 self._guild_jobs_loop,
                 self._mail_loop,
                 self._town_passing_loop,
+                self._tidy_loop,
                 self._recruit_loop,
                 self._raid_spec_loop,
                 self._craft_supply_loop,
