@@ -194,6 +194,10 @@ class Facts:
     # situation.Situation: the family's movement picture, or None when it
     # could not be read. None leaves the question exactly as it was.
     situation: situation.Situation | None = None
+    # Why the family's queued run waits while it quests at its level
+    # (dungeonpace.py, mod-overseer#767), or "". The campaign is not offered
+    # then, so the choice is among questing, training, crafting and gathering.
+    paused: str = ""
 
     @property
     def levels(self) -> list:
@@ -328,7 +332,7 @@ def _nearly_full(f: Facts) -> list:
 def options(f: Facts) -> dict:
     """Every activity the family can carry out now, as a Choice's criteria."""
     out = {}
-    if (f.queue or f.on_dungeon) and not f.withheld:
+    if (f.queue or f.on_dungeon) and not f.withheld and not f.paused:
         out[CAMPAIGN] = (
             "Keep the commitment: run the next dungeon from the operator's "
             "queue (%s)." % f.queue
@@ -368,6 +372,8 @@ def can_fish(f: Facts) -> bool:
 
 def heuristic(f: Facts) -> tuple:
     """(activity, why): what today's rules are doing, which acting changes nothing."""
+    if f.queue and f.paused:
+        return QUEST, "the queued run waits while the family levels: %s" % f.paused
     if f.queue:
         if f.withheld:
             return CAMPAIGN, (
@@ -425,6 +431,8 @@ def facts_line(f: Facts) -> str:
     parts.append("queue " + (f.queue or "empty"))
     if f.withheld:
         parts.append("run withheld for bag space")
+    if f.paused:
+        parts.append("run waits while the family levels")
     parts.append("job %s" % (f.job or jobs.DEFAULT))
     parts.append("%d min on this activity" % int(f.minutes_on_activity))
     line = "; ".join(parts)

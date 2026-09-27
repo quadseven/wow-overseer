@@ -50,7 +50,7 @@ COPY core.py bridge.py voice.py transform.py \
      enroll.py \
      tabard.py crossing.py \
      vendor_stall.py \
-     campaignqueue.py \
+     campaignqueue.py dungeonpace.py \
      campaignplan.py dungeonladder.py levelroute.py \
      preraid.py \
      runtimeline.py \
