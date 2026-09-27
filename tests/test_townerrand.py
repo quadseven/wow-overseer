@@ -189,7 +189,15 @@ class TheAdapter(unittest.TestCase):
             "_fetch_gearup_facts": lambda names: FACTS,
             "_mail_gear_holders": lambda names: {"Bork": 1},
             "_fetch_teams": lambda names: {"Grug": "alliance"},
-            "_fetch_capital_hub": lambda leader, team: dict(HUB),
+            # The capital is read on the leader's own fresh snapshot, so an
+            # absent leader finds none, as _ERRAND_AUCTIONEERS_SQL does.
+            "_fetch_capital_hub": lambda leader, team: (
+                dict(HUB) if leader in self.positions else {}
+            ),
+            "_fetch_positions": lambda names: {
+                n: self.positions[n] for n in names if n in self.positions
+            },
+            "_TOWN_ERRAND_HEAD_AWAY": set(),
             "_town_errand_jobs": lambda names: self.jobs.append("town run") or 2,
             "_hub_aim": lambda hub: "at:0:100,100,10",
             "_fetch_mail": lambda names: letters,
@@ -240,6 +248,22 @@ class TheAdapter(unittest.TestCase):
         state = self.tick()
         self.assertEqual([("Bork", "take-item mail:9 item:77")], self.written)
         self.assertEqual(te.MAIL, state.current_step)
+
+    def test_an_absent_head_defers_the_errand_without_a_cooldown(self):
+        # wow-dev 2026-09-27 21:15: the pod came up while the roster head was
+        # out of the world, the capital read on his snapshot found nothing,
+        # and "not going" started the two-hour cooldown. He was back at 21:17.
+        # mod-overseer holds the family while its head is away and lets no
+        # member lead in his place (mod-overseer#736), so the errand waits.
+        del self.positions["Grug"]
+        state = self.tick()
+        self.assertFalse(state.active)
+        self.assertEqual(0.0, state.ended)
+        self.assertEqual([], self.fam.aims)
+        self.assertEqual([], self.jobs)
+        self.positions["Grug"] = _at(400, 400)
+        self.assertEqual(te.GO, self.tick().phase)
+        self.assertEqual(("town errand", "Grug", "at:0:100,100,10"), self.fam.aims[-1])
 
 
 if __name__ == "__main__":
