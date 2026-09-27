@@ -267,14 +267,14 @@ class TheRowIsTheRowTheExecutorReads(unittest.TestCase):
         """The kind is `grant.verb` and no longer a literal: which verb can
         land is a fact about where the two of them are standing, and
         gear.deliverable has already looked."""
-        body = _block("def _insert_gear_handoff(grant)")
+        body = _block("def _insert_gear_handoff(grant")
         self.assertIn("grant.verb", body)
         self.assertIn("grant.taker", body)
         self.assertIn("grant.command", body)
 
     def test_the_writer_degrades_on_a_world_without_the_migration(self):
         """1146 missing table, 1265 a `kind` ENUM with no 'trade' value."""
-        body = _block("def _insert_gear_handoff(grant)")
+        body = _block("def _insert_gear_handoff(grant")
         self.assertIn("1146", body)
         self.assertIn("1265", body)
 

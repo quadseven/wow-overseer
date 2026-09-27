@@ -127,9 +127,11 @@ class TheGateCountsAWithheldCampaign(unittest.TestCase):
                 bag_pressure.vendor_pass_mode(True, withheld, False),
             )
 
-    def test_no_campaign_waiting_stays_home_as_before(self):
+    def test_no_campaign_waiting_still_sells_at_the_counter(self):
+        """A quiet cycle takes no trip, and a member at a vendor still sells
+        (the tidy order): the trigger decides the walk, not the sale."""
         self.assertEqual(
-            bag_pressure.VENDOR_MODE_NONE,
+            bag_pressure.VENDOR_MODE_COUNTER,
             bag_pressure.vendor_pass_mode(False, False, False),
         )
 
@@ -626,13 +628,17 @@ class TheEconomySellsForAWithheldCampaign(unittest.TestCase):
         self.assertEqual([], sells)
         self.assertEqual([], claims)
 
-    def test_with_no_campaign_waiting_it_stays_home_as_before(self):
+    def test_with_no_campaign_waiting_it_sells_where_it_stands(self):
+        """The tidy order: a member at a vendor sells its junk on a quiet
+        cycle too, and still no trip is taken for it."""
         sells, claims, lines = _run_vendor_once(queued=False)
+        self.assertEqual([9001], [c.item_guid for c in sells], lines)
+        self.assertEqual([], claims)
+
+    def test_with_no_campaign_waiting_and_no_vendor_nothing_is_written(self):
+        sells, claims, _ = _run_vendor_once(queued=False, at_vendor=False)
         self.assertEqual([], sells)
         self.assertEqual([], claims)
-        self.assertTrue(
-            any("no vendor trip is worth taking" in ln for ln in lines), lines
-        )
 
 
 if __name__ == "__main__":

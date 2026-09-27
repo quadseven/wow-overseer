@@ -436,10 +436,19 @@ def vendor_pass_mode(trip_worth: bool, withheld: bool, in_run: bool) -> str:
     vendor that stocks a bag. Every vendor buys, so the sales are written
     there. A trip this pass cannot justify is still not taken, which keeps
     infra#4190's reason for the gate intact.
+
+    AND A QUIET CYCLE SELLS AT THE COUNTER TOO (the tidy order, 2026-09-27).
+    The trigger decides whether the family WALKS to a vendor, never whether a
+    member already standing at one may sell. Measured on wow-dev that day, the
+    first family carried 67 sellable stacks at 12 to 21 free slots each, and
+    every cycle logged "no vendor trip is worth taking" while members passed
+    vendors on other errands. Counter mode takes no trip and claims no column,
+    so the gate's reason (infra#4190) still holds; `withheld` now changes
+    nothing this function returns and is kept for the callers' logging.
     """
     if trip_worth:
         return VENDOR_MODE_TRIP
-    if withheld and not in_run:
+    if not in_run:
         return VENDOR_MODE_COUNTER
     return VENDOR_MODE_NONE
 
