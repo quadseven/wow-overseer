@@ -2923,6 +2923,24 @@
   .ln-row.r-tank .ln-duty, .ln-row.r-healer .ln-duty { color:var(--accent); }
   .ln-short { font-size:.76rem; color:var(--rust); margin:.2rem 0 .5rem; }
   .ln-gname { font-weight:600; }
+  /* THE GUILD'S OWN GROUPS (the guild coordinator). One card per group, in
+     the lineup's small-box vocabulary so a group of five reads the same way
+     on both tabs, and one column on a phone. */
+  #guild { display:none; padding:.9rem var(--gutter) 1.2rem; }
+  .gd-list { display:grid; gap:.6rem; grid-template-columns:1fr; }
+  @media (min-width:961px) {
+    .gd-list { grid-template-columns:repeat(2, 1fr); }
+  }
+  .gd-run .ln-boxhead { display:flex; flex-wrap:wrap; gap:.2rem .6rem; }
+  .gd-state { font-family:var(--mono); font-size:11px; letter-spacing:.1em;
+              text-transform:uppercase; color:var(--on-card-dim); }
+  .gd-state.good { color:var(--accent-text); }
+  .gd-state.bad { color:var(--warn-text); }
+  .gd-line { font-size:.74rem; color:var(--on-card-dim); margin-top:.3rem;
+             overflow-wrap:anywhere; }
+  .gd-rec { display:flex; flex-wrap:wrap; gap:.2rem .6rem; font-size:.78rem;
+            padding:.3rem 0; border-bottom:1px solid var(--card-line); }
+  .gd-rec .v { font-family:var(--mono); color:var(--on-card); }
   #tabs { display:flex; flex-wrap:nowrap; gap:.2rem;
           padding:0 calc(var(--gutter) - .8rem);
           background:var(--card); border-bottom:1px solid var(--card-line);
@@ -3730,6 +3748,16 @@
      of the list come from guildcraft.py; this markup holds no judgement of its
      own, and the rule the list is in is printed on the page rather than left
      implied. -->
+<section id="guild">
+  <div id="gdhead" class="ds-head">reaching the world...</div>
+  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">groups out now</span></div>
+  <div id="gdactive" class="gd-list"></div>
+  <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">how they came back</span></div>
+  <div id="gdrecent" class="gd-list"></div>
+  <div class="ds-rule"><span class="ix">03</span><span class="ln"></span><span class="lb">what the guild has learned</span></div>
+  <div id="gdrecords"></div>
+</section>
+
 <section id="lineup">
   <div id="lnhead" class="ds-head">reaching the world...</div>
   <div id="lnbody"></div>
@@ -3966,6 +3994,10 @@ const RAID_VIEW = "raid";
 // that one asks what the guild still has to farm, this one asks who the
 // guild is. They share a word and nothing else.
 const LINEUP_VIEW = "lineup";
+// THE GUILD'S OWN FIVE-MANS, beside the lineup that says who the guild is:
+// which groups the coordinator has out, the dungeon Jev chose for each and how
+// sure it was, and how every group came back.
+const GUILD_VIEW = "guild";
 const TRADES_VIEW = "trades";
 const DECREE_VIEW = "decree";
 const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
@@ -4003,7 +4035,7 @@ const MORE_GROUP = "more";
 // a temporal-dead-zone error before any of this ran.
 function tabLayout() {
   return {
-    primary: [WATCH_VIEW, FAMILY_VIEW, LINEUP_VIEW, ARMORY_VIEW, BAGS_VIEW,
+    primary: [WATCH_VIEW, FAMILY_VIEW, LINEUP_VIEW, GUILD_VIEW, ARMORY_VIEW, BAGS_VIEW,
               DUNGEONS_VIEW, DECREE_VIEW],
     groups: [[MORE_GROUP, "More"], [MAPS_GROUP, "Maps"]],
   };
@@ -4168,6 +4200,12 @@ function buildViewTabs() {
   lb.dataset.view = LINEUP_VIEW;
   lb.onclick = () => showView(LINEUP_VIEW);
   tabs.appendChild(lb);
+  // Straight after who the guild is: what the guild is doing together.
+  const gdb = document.createElement("button");
+  gdb.textContent = "Guild";
+  gdb.dataset.view = GUILD_VIEW;
+  gdb.onclick = () => showView(GUILD_VIEW);
+  tabs.appendChild(gdb);
   // Seventh, straight after the dungeon plan, because it is the same kind of
   // question about the same five: that one says which place is worth walking
   // to for a drop, this one says which place is worth walking to for a recipe
@@ -6746,6 +6784,7 @@ function showView(v) {
   const isDgn = v === DUNGEONS_VIEW;
   const isRaid = v === RAID_VIEW;
   const isLineup = v === LINEUP_VIEW;
+  const isGuild = v === GUILD_VIEW;
   const isTrd = v === TRADES_VIEW;
   const isDec = v === DECREE_VIEW;
   fsection.style.display = isFam ? "block" : "none";
@@ -6758,6 +6797,7 @@ function showView(v) {
   dgnsection.style.display = isDgn ? "block" : "none";
   rgsection.style.display = isRaid ? "block" : "none";
   lnsection.style.display = isLineup ? "block" : "none";
+  gdsection.style.display = isGuild ? "block" : "none";
   gcrsection.style.display = isTrd ? "block" : "none";
   dcrSection.style.display = isDec ? "block" : "none";
   // Every non-map view hides the canvas and its legend. This used to read
@@ -6878,6 +6918,13 @@ function showView(v) {
     closePanel();
     stopBroadcasts();
     pollLineup();
+    return;
+  }
+  if (isGuild) {
+    // The Lineup's treatment and reasons: a read, fetched on the way in.
+    closePanel();
+    stopBroadcasts();
+    pollGuild();
     return;
   }
   if (isDec) {
@@ -7003,6 +7050,71 @@ setInterval(refreshFrame, 5000);  // and so does their own screen
 setInterval(refreshWatch, 5000);
 setInterval(render, 200);  // combat pulse
 window.addEventListener("resize", render);
+
+// --- the Guild tab (the guild coordinator, /api/guildruns) -----------------
+//
+// HERE, past loadZones().then( and above the raid block, in the leveling
+// route's text-only stretch, for that block's reason: the Family window ends
+// at loadZones().then( and the raid suite's window starts at its own banner.
+//
+// Every word comes from the server (guildrun.page); this only draws it. A
+// group's card: its guild and dungeon, its band, where it stands, its five in
+// their seats, then the module's lines (what Jev chose and how sure it was,
+// and how the run went).
+const gdsection = document.getElementById("guild");
+const gdhead = document.getElementById("gdhead");
+const gdactive = document.getElementById("gdactive");
+const gdrecent = document.getElementById("gdrecent");
+const gdrecords = document.getElementById("gdrecords");
+
+function gdCard(run) {
+  const box = el("div", "ln-box gd-run");
+  const head = el("div", "ln-boxhead");
+  head.appendChild(el("span", "ln-gname", run.title));
+  head.appendChild(el("span", "", run.band_line));
+  head.appendChild(el("span", "gd-state" + (run.tone ? " " + run.tone : ""), run.status));
+  box.appendChild(head);
+  for (const m of run.members || []) {
+    const r = el("div", "ln-row r-" + (m.seat === "tank" || m.seat === "healer" ? m.seat : "dps"));
+    r.appendChild(el("span", "ln-name", m.name));
+    r.appendChild(el("span", "ln-lvl", String(m.level)));
+    r.appendChild(el("span", "ln-cls", m.class));
+    box.appendChild(r);
+  }
+  for (const line of run.lines || []) box.appendChild(el("div", "gd-line", line));
+  return box;
+}
+
+function gdList(parent, items, draw, empty) {
+  parent.replaceChildren(...(items.length ? items.map(draw) : [el("p", "chr-body", empty)]));
+}
+
+function gdRender(data) {
+  gdhead.className = "ds-head";
+  gdhead.textContent = data.head;
+  gdList(gdactive, data.active || [], gdCard, data.empty_active);
+  gdList(gdrecent, data.recent || [], gdCard, data.empty_recent);
+  gdList(gdrecords, data.records || [], (r) => el("div", "gd-rec", r.line), data.empty_records);
+}
+
+let gdPulling = false;
+
+async function pollGuild() {
+  if (view !== GUILD_VIEW || gdPulling) return;
+  gdPulling = true;
+  try {
+    const r = await fetch(u("/api/guildruns"), {signal: AbortSignal.timeout(20000)});
+    if (!r.ok) throw new Error(r.status);
+    gdRender(await r.json());
+  } catch (e) {
+    // Whatever is drawn stays drawn, as on the Lineup.
+    gdhead.textContent = "the world is unreachable - this may be stale";
+    gdhead.className = "ds-head alarm";
+  } finally {
+    gdPulling = false;
+  }
+}
+setInterval(() => { if (view === GUILD_VIEW) pollGuild(); }, 30000);
 
 // --- what the guild still needs before it can raid (infra#3508) -------------
 //
@@ -7566,6 +7678,7 @@ async function pollRaid() {
 // makes that true even for the call showView makes on the way in.
 setInterval(() => { if (view === RAID_VIEW) pollRaid(); }, 60000);
 setInterval(() => { if (view === LINEUP_VIEW) pollLineup(); }, 60000);
+
 
 
 // --- the item tooltip, on every gear name (infra#3501) -------------------
@@ -12024,7 +12137,7 @@ function adoptContinent() {
 // carries state (which continent) and so needs more than a name.
 const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, BAGS_VIEW,
                     CHRONICLE_VIEW, DUNGEONS_VIEW, RAID_VIEW, LINEUP_VIEW,
-                    TRADES_VIEW,
+                    GUILD_VIEW, TRADES_VIEW,
                     COUNCIL_VIEW, EYE_VIEW, DECREE_VIEW];
 
 // ADDRESSES A VIEW USED TO HAVE. The Achievements tab was renamed to the

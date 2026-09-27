@@ -60,6 +60,7 @@ import gearup
 import natural
 import guildcorps
 import guildjobs
+import guildrun
 import holdings
 import handover
 import craft
@@ -5022,6 +5023,11 @@ class Bridge(discord.Client):
         # heuristic keeps deciding, which is also what it does when Jev is
         # slow or down.
         self._jev = jev.Client.from_env()
+        # THE GUILD COORDINATOR (guildrun). The names of every member in a
+        # guild run in flight, so the guild's own job passes leave them alone
+        # while they are in a dungeon, and when the last group was formed.
+        self._guild_run_names: set = set()
+        self._guild_run_formed_at: float | None = None
         # The last comparison written per (kind, subject, item guid), so an
         # unchanged answer is recorded once rather than every economy cycle.
         self._jev_recorded: dict = {}
@@ -5140,6 +5146,7 @@ class Bridge(discord.Client):
                 self._campaign_queue_loop,
                 self._activity_loop,
                 self._run_recovery_loop,
+                self._guild_run_loop,
                 self._loot_council_loop,
                 self._situation_loop,
                 self._level_route_loop,
@@ -5161,6 +5168,7 @@ class Bridge(discord.Client):
         await asyncio.to_thread(_ensure_economy_store)
         await asyncio.to_thread(_ensure_trade_store)
         await asyncio.to_thread(_ensure_jev_store)
+        await asyncio.to_thread(_ensure_guild_run_store)
         await asyncio.to_thread(_ensure_queue_store)
 
     async def on_message(self, message: discord.Message) -> None:
@@ -12018,7 +12026,7 @@ class Bridge(discord.Client):
         self._dues_walks = guildroute.live_runs(
             self._dues_walks, now, guildroute.GUILD_STEP_SECONDS)
         posted = await asyncio.to_thread(_dues_recent_holders)
-        busy = set(self._dues_walks) | set(self._guild_mail_runs)
+        busy = set(getattr(self, "_guild_run_names", ())) | set(self._dues_walks) | set(self._guild_mail_runs)
         # NATURALLY EARNED ONLY (the operator, 2026-09-24): a member posts dues
         # only once it has been reset to level 1; natural.py has the rule.
         eligible = await asyncio.to_thread(
@@ -12156,7 +12164,7 @@ class Bridge(discord.Client):
         )
         receivers = sorted({x.receiver for x in letters})
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
-        busy = (set(self._crafter_walks) | set(self._guild_mail_runs)
+        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._crafter_walks) | set(self._guild_mail_runs)
                 | set(self._dues_walks))
         plan, notes = crafters.visits(letters, designated, known,
                                       frozenset(busy), free_slots)
@@ -12316,7 +12324,7 @@ class Bridge(discord.Client):
         # Any bot another guild pass has on a walk is left alone: the module
         # would refuse a second walk anyway, and the refusal would spend the
         # step's cooldown.
-        busy = (set(self._corps_steps) | set(self._dues_walks)
+        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._corps_steps) | set(self._dues_walks)
                 | set(self._guild_mail_runs) | set(self._crafter_walks))
         cap = self._guild_walk_cap()
         near = await self._corps_mailbox_yards(members, names, busy, now)
@@ -12658,7 +12666,7 @@ class Bridge(discord.Client):
         now = time.monotonic()
         self._job_steps = guildroute.live_runs(
             self._job_steps, now, guildroute.GUILD_STEP_SECONDS)
-        busy = (set(self._job_steps) | set(self._corps_steps) | set(self._dues_walks)
+        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._job_steps) | set(self._corps_steps) | set(self._dues_walks)
                 | set(self._guild_mail_runs) | set(self._crafter_walks))
         cap = self._guild_walk_cap()
         spawn_walks = now >= self._job_walks_unsupported.get("spawn", 0.0)
@@ -14213,6 +14221,84 @@ class Bridge(discord.Client):
         if not changed:
             log.info("run recovery: request %d for %s was already applied by the "
                      "module before this answer landed", request.id, request.family)
+
+    # --- the guild coordinator (guildrun) --------------------------------------
+
+    async def _guild_run_loop(self) -> None:
+        """Form, queue and follow the bot guilds' own five-mans (guildrun).
+
+        Every cycle: read what mod-overseer says about the runs in flight and
+        record their outcomes, then, when GUILD_RUNS is on, the cap has room
+        and the realm-wide spacing has passed, form one group, ask Jev which
+        composition and which dungeon, and send the row.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("GUILD_RUN_CYCLE_SECONDS", "60"))
+        said_off = False
+        while not self.is_closed():
+            try:
+                await asyncio.to_thread(_follow_guild_runs)
+                active = await asyncio.to_thread(_active_guild_run_names)
+                self._guild_run_names = set(active)
+                if guildrun.enabled():
+                    said_off = False
+                    await self._guild_run_once()
+                elif not said_off:
+                    log.info("guild runs: GUILD_RUNS is off; runs in flight are still "
+                             "followed, nothing new is formed")
+                    said_off = True
+            except Exception:
+                log.exception("guild runs: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _guild_run_once(self) -> None:
+        bounds = guildrun.limits()
+        in_flight = await asyncio.to_thread(_guild_runs_in_flight)
+        if in_flight >= bounds.max_groups:
+            log.info("guild runs: %d group(s) in flight, at the cap of %d", in_flight,
+                     bounds.max_groups)
+            return
+        now = time.monotonic()
+        if (self._guild_run_formed_at is not None
+                and now - self._guild_run_formed_at < bounds.form_every_seconds):
+            return
+        facts = await asyncio.to_thread(_fetch_guild_run_facts, bounds)
+        members = []
+        skipped: dict = {}
+        for row in facts["rows"]:
+            member = guildrun.member_from_row(row)
+            if member is None:
+                continue
+            why = guildrun.why_not(member, facts["busy"], facts["resting"], facts["family"])
+            if why:
+                skipped[why] = skipped.get(why, 0) + 1
+                continue
+            members.append(member)
+        doors = guildrun.doors(facts["finder_floors"])
+        pools = guildrun.pools(members, doors)
+        if not pools:
+            log.info("guild runs: %d free member(s) in %s, and no five of one guild and one "
+                     "band can be seated for a door (%s)", len(members),
+                     "/".join(bounds.guilds),
+                     ", ".join("%d %s" % (n, w) for w, n in sorted(skipped.items())) or
+                     "nobody skipped")
+            return
+        # The guild with the fewest runs in flight first, so both get turns.
+        pools.sort(key=lambda p: (facts["in_flight_by_guild"].get(p.guild, 0),
+                                  -max(p.levels)))
+        plan = guildrun.plan_for(pools[0], doors, guildrun.rates(facts["history"]))
+        if plan is None:
+            return
+        decision = await guildrun.decide(self._jev, plan)
+        log.info("%s", decision.composition.line())
+        log.info("%s", decision.dungeon.line())
+        run_id = await asyncio.to_thread(_start_guild_run, decision)
+        self._guild_run_formed_at = now
+        self._guild_run_names |= set(decision.chosen.names)
+        log.info("guild runs: run %d - %s sends %s into %s (band %s, %s; prior %s)",
+                 run_id, plan.pool.guild, ", ".join(decision.chosen.names),
+                 decision.door.place, plan.band, decision.chosen.key,
+                 decision.prior.words())
 
     async def _campaign_queue_loop(self) -> None:
         """Advance every family's queue on its own clock.
@@ -17661,6 +17747,230 @@ def _insert_jev_judgment(judgment) -> None:
                 judgment.mode[:8], facts[:1000], acted[:10],
             ),
         )
+
+
+# THE GUILD COORDINATOR (guildrun). Bridge-owned state: one row per guild
+# run, the decision that made it and the outcome mod-overseer read back, which
+# is what the learning loop and the Guild tab read. The worldserver never reads
+# it; the run's own progress lives on its overseer_command row.
+def _ensure_guild_run_store() -> None:
+    """overseer_guild_run, created the way the Jev store is. A failure is
+    logged and swallowed: without the table the coordinator forms nothing
+    (its insert fails and says so), and nothing else stops."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS overseer_guild_run ("
+                " id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
+                " guild VARCHAR(24) NOT NULL,"
+                " band VARCHAR(8) NOT NULL,"
+                " composition VARCHAR(40) NOT NULL,"
+                " keyword VARCHAR(32) NOT NULL,"
+                " tank VARCHAR(12) NOT NULL,"
+                " members VARCHAR(255) NOT NULL,"
+                " command_id INT UNSIGNED NULL DEFAULT NULL,"
+                " dungeon_by VARCHAR(10) NOT NULL DEFAULT '',"
+                " dungeon_jev VARCHAR(40) NULL DEFAULT NULL,"
+                " dungeon_confidence FLOAT NULL DEFAULT NULL,"
+                " composition_by VARCHAR(10) NOT NULL DEFAULT '',"
+                " composition_jev VARCHAR(40) NULL DEFAULT NULL,"
+                " composition_confidence FLOAT NULL DEFAULT NULL,"
+                " prior_rate FLOAT NULL DEFAULT NULL,"
+                " prior_runs INT UNSIGNED NOT NULL DEFAULT 0,"
+                " state VARCHAR(12) NOT NULL DEFAULT 'queued',"
+                " outcome VARCHAR(16) NOT NULL DEFAULT '',"
+                " why VARCHAR(255) NOT NULL DEFAULT '',"
+                " deaths INT UNSIGNED NOT NULL DEFAULT 0,"
+                " seconds_inside INT UNSIGNED NOT NULL DEFAULT 0,"
+                " bosses_done TINYINT UNSIGNED NOT NULL DEFAULT 0,"
+                " bosses_total TINYINT UNSIGNED NOT NULL DEFAULT 0,"
+                " loot_items INT UNSIGNED NOT NULL DEFAULT 0,"
+                " loot_notable VARCHAR(200) NOT NULL DEFAULT '',"
+                " ilvl_gained INT NOT NULL DEFAULT 0,"
+                " levels_gained INT NOT NULL DEFAULT 0,"
+                " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                " ended_at TIMESTAMP NULL DEFAULT NULL,"
+                " PRIMARY KEY (id), KEY idx_state (state),"
+                " KEY idx_learn (keyword, band, composition, state)"
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+            )
+    except pymysql.err.MySQLError:
+        log.exception("guild runs: overseer_guild_run unavailable; no guild group "
+                      "will be formed")
+
+
+_GUILD_RUN_MEMBERS_SQL = (
+    "SELECT s.name, s.level, s.class AS class_id, s.map_id, s.in_combat, s.health, "
+    "s.group_leader, g.name AS guild_name, " + raidroles.TALENTS_COLUMN + " "
+    "FROM overseer_snapshot s JOIN characters c ON c.guid = s.guid "
+    "JOIN guild g ON g.guildid = s.guild_id "
+    "WHERE s.updated_at > NOW() - INTERVAL 60 SECOND AND s.is_bot = 1 "
+    "AND g.name IN ({holes})"
+)
+
+
+def _guild_run_state_names(cur, states) -> list:
+    cur.execute(
+        "SELECT members FROM overseer_guild_run WHERE state IN (%s)"  # noqa: S608 - placeholders only
+        % ",".join(["%s"] * len(states)),
+        list(states),
+    )
+    names = []
+    for row in cur.fetchall():
+        names += [m["name"] for m in guildrun._member_list(row["members"])]
+    return names
+
+
+def _active_guild_run_names() -> list:
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            return _guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1146:
+                return []
+            raise
+
+
+def _guild_runs_in_flight() -> int:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM overseer_guild_run "
+                    "WHERE state IN ('queued', 'inside')")
+        return int((cur.fetchone() or {}).get("n") or 0)
+
+
+def _fetch_guild_run_facts(bounds) -> dict:
+    """Everything one formation pass reads, in one connection."""
+    guilds = list(bounds.guilds)
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_GUILD_RUN_MEMBERS_SQL.format(holes=",".join(["%s"] * len(guilds))),
+                    guilds)
+        rows = list(cur.fetchall())
+        cur.execute("SELECT name, tree FROM overseer_raid_spec")
+        spec = {r["name"]: r["tree"] for r in cur.fetchall()}
+        for row in rows:
+            row["target_tree"] = spec.get(row["name"], "")
+        cur.execute("SELECT name FROM overseer_roster")
+        family = {r["name"] for r in cur.fetchall()}
+        busy = set(_guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE)))
+        cur.execute(
+            "SELECT members FROM overseer_guild_run WHERE state = 'ended' "
+            "AND ended_at > NOW() - INTERVAL %s MINUTE",
+            (bounds.cooldown_minutes,),
+        )
+        resting = set()
+        for row in cur.fetchall():
+            resting |= {m["name"] for m in guildrun._member_list(row["members"])}
+        cur.execute(
+            "SELECT guild, COUNT(*) AS n FROM overseer_guild_run "
+            "WHERE state IN ('queued', 'inside') GROUP BY guild"
+        )
+        by_guild = {r["guild"]: int(r["n"]) for r in cur.fetchall()}
+        cur.execute(
+            "SELECT keyword, band, composition, state, outcome, deaths "
+            "FROM overseer_guild_run WHERE state = 'ended' ORDER BY id DESC LIMIT 2000"
+        )
+        history = list(cur.fetchall())
+        cur.execute(
+            "SELECT map_id, min_level FROM acore_world.dungeon_access_template "
+            "WHERE difficulty = 0"
+        )
+        floors = {int(r["map_id"]): int(r["min_level"]) for r in cur.fetchall()}
+    return {"rows": rows, "family": family, "busy": busy, "resting": resting,
+            "in_flight_by_guild": by_guild, "history": history, "finder_floors": floors}
+
+
+def _start_guild_run(decision) -> int:
+    """The run's row, both judgments, and the module's row, in that order,
+    so each judgment names its run and the run names its command."""
+    comp = decision.chosen
+    door = decision.door
+    prior = decision.prior
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_guild_run (guild, band, composition, keyword, tank, "
+            "members, dungeon_by, dungeon_jev, dungeon_confidence, composition_by, "
+            "composition_jev, composition_confidence, prior_rate, prior_runs) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                decision.plan.pool.guild[:24], decision.plan.band[:8], comp.key[:40],
+                door.keyword[:32], comp.tank.name[:12], guildrun.members_text(comp)[:255],
+                decision.dungeon.chosen_by[:10], decision.dungeon.jev[:40] or None,
+                decision.dungeon.confidence, decision.composition.chosen_by[:10],
+                decision.composition.jev[:40] or None, decision.composition.confidence,
+                prior.smoothed if prior.runs else None, prior.runs,
+            ),
+        )
+        run_id = int(cur.lastrowid)
+    for judgment in (decision.composition, decision.dungeon):
+        try:
+            _insert_jev_judgment(dataclasses.replace(judgment, item_guid=run_id))
+        except Exception:
+            log.exception("guild runs: the %s judgment for run %d was not recorded",
+                          judgment.kind, run_id)
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_command (target_name, command, kind, source) "
+            "VALUES (%s, %s, 'guild', %s)",
+            (comp.tank.name, comp.command(door.keyword), guildrun.SOURCE),
+        )
+        command_id = int(cur.lastrowid)
+        cur.execute("UPDATE overseer_guild_run SET command_id = %s WHERE id = %s",
+                    (command_id, run_id))
+    return run_id
+
+
+def _follow_guild_runs() -> int:
+    """Read each run in flight off its overseer_command row and record what
+    it says. A run with no answer by guildrun.LOST_AFTER_MINUTES is lost."""
+    changed = 0
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT r.id, r.state, r.created_at < NOW() - INTERVAL %s MINUTE AS stale, "
+                "c.status, c.detail, c.result FROM overseer_guild_run r "
+                "LEFT JOIN overseer_command c ON c.id = r.command_id "
+                "WHERE r.state IN ('queued', 'inside')",
+                (guildrun.LOST_AFTER_MINUTES,),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1146:
+                return 0
+            raise
+        rows = list(cur.fetchall())
+        for row in rows:
+            seen = guildrun.outcome_from_row(row) if row.get("status") else None
+            if seen is None and row.get("stale"):
+                seen = {"state": guildrun.ENDED, "outcome": "lost",
+                        "why": "no outcome from the worldserver within %d minutes"
+                        % guildrun.LOST_AFTER_MINUTES}
+            if seen is None:
+                continue
+            if seen["state"] == guildrun.INSIDE:
+                cur.execute(
+                    "UPDATE overseer_guild_run SET state = 'inside', deaths = %s, "
+                    "seconds_inside = %s, bosses_done = %s, bosses_total = %s WHERE id = %s",
+                    (seen["deaths"], seen["seconds_inside"], seen["bosses_done"],
+                     seen["bosses_total"], row["id"]),
+                )
+                changed += 1
+                continue
+            cur.execute(
+                "UPDATE overseer_guild_run SET state = 'ended', outcome = %s, why = %s, "
+                "deaths = %s, seconds_inside = %s, bosses_done = %s, bosses_total = %s, "
+                "loot_items = %s, loot_notable = %s, ilvl_gained = %s, levels_gained = %s, "
+                "ended_at = NOW() WHERE id = %s AND state <> 'ended'",
+                (seen["outcome"], seen.get("why", "")[:255], seen.get("deaths", 0),
+                 seen.get("seconds_inside", 0), seen.get("bosses_done", 0),
+                 seen.get("bosses_total", 0), seen.get("loot_items", 0),
+                 seen.get("loot_notable", ""), seen.get("ilvl_gained", 0),
+                 seen.get("levels_gained", 0), row["id"]),
+            )
+            changed += 1
+            log.info("guild runs: run %d ended - %s (%s); %d death(s), %d of %d bosses, "
+                     "%ds inside", row["id"], seen["outcome"], seen.get("why", ""),
+                     seen.get("deaths", 0), seen.get("bosses_done", 0),
+                     seen.get("bosses_total", 0), seen.get("seconds_inside", 0))
+    return changed
 
 
 # RUN RECOVERY (jev_recovery). mod-overseer writes one overseer_run_recovery row
@@ -24166,6 +24476,7 @@ class HeadlessBridge(Bridge):
         await asyncio.to_thread(_ensure_economy_store)
         await asyncio.to_thread(_ensure_trade_store)
         await asyncio.to_thread(_ensure_jev_store)
+        await asyncio.to_thread(_ensure_guild_run_store)
         await asyncio.to_thread(_ensure_queue_store)
 
         loops = [
@@ -24206,6 +24517,7 @@ class HeadlessBridge(Bridge):
                 self._campaign_queue_loop,
                 self._activity_loop,
                 self._run_recovery_loop,
+                self._guild_run_loop,
                 self._situation_loop,
                 self._level_route_loop,
                 self._movement_loop,

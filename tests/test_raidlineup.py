@@ -493,8 +493,9 @@ class TheTreeIsRead(unittest.TestCase):
             self.assertTrue("raidroles.TALENTS_COLUMN" in f.read())
         self.assertIn(raidroles.KEY, raidrun.GUILD_MEMBERS_SQL)
         # bridge.py: the dues read, the corps read and the guild jobs' read
-        # (#194), each of which builds the same lineup the page draws.
-        for name, count in (("map_server.py", 2), ("bridge.py", 3)):
+        # (#194), each of which builds the same lineup the page draws, and the
+        # guild coordinator's read, which seats a tank and a healer by tree.
+        for name, count in (("map_server.py", 2), ("bridge.py", 4)):
             with open(os.path.join(root, name)) as f:
                 self.assertEqual(
                     f.read().count("raidroles.TALENTS_COLUMN"), count, name
