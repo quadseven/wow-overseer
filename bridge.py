@@ -13543,6 +13543,23 @@ class Bridge(discord.Client):
             state, now=now, in_run=in_run, mail_gear=mail_gear, facts=facts)
         if not why:
             return state
+        # AN ABSENT HEAD IS A WAIT, NOT A FAILED START. mod-overseer holds the
+        # family where it stands while its roster head is out of the world and
+        # lets no member lead in his place (mod-overseer#736), so no other
+        # member can carry the walk. The capital is read on the head's own
+        # snapshot, which he has none of, and treating that as "no capital"
+        # ended the errand into its two-hour cooldown: measured on wow-dev
+        # 2026-09-27, the pod came up at 21:15 with the head away and he was
+        # back at 21:17. The errand starts on the first tick he is back.
+        if leader not in await asyncio.to_thread(_fetch_positions, [leader]):
+            if leader not in _TOWN_ERRAND_HEAD_AWAY:
+                _TOWN_ERRAND_HEAD_AWAY.add(leader)
+                log.info("town errand: %s%s, but %s leads the family and is "
+                         "not in the world; the family holds until he is "
+                         "back, and the errand waits for him", why, label,
+                         leader)
+            return state
+        _TOWN_ERRAND_HEAD_AWAY.discard(leader)
         teams = await asyncio.to_thread(_fetch_teams, [leader])
         hub = await asyncio.to_thread(_fetch_capital_hub, leader,
                                       teams.get(leader, ""))
@@ -22110,6 +22127,9 @@ TOWN_ERRAND_VENDOR_YARDS = 250.0
 # family key -> townerrand.State, and family key -> {step: first run}.
 _TOWN_ERRANDS: dict = {}
 _TOWN_ERRAND_MARKS: dict = {}
+# Heads whose absence the errand has already reported, so a head away for an
+# evening is one log line and not one every cycle.
+_TOWN_ERRAND_HEAD_AWAY: set = set()
 
 
 def _town_errand_active(names) -> bool:
