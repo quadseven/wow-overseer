@@ -34,7 +34,10 @@ CEILING = bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS
 
 def _function(name):
     for node in ast.walk(ast.parse(BRIDGE)):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == name
+        ):
             return node
     raise AssertionError("%s not found in bridge.py" % name)
 
@@ -104,7 +107,9 @@ class GearGateCeilingTest(unittest.TestCase):
         self.gate()
         self.clock.now += CEILING
         self.assertIsNone(self.gate())
-        self.assertTrue(any("no longer held for gear" in line for line in self.log.lines))
+        self.assertTrue(
+            any("no longer held for gear" in line for line in self.log.lines)
+        )
 
     def test_hold_then_gate_share_one_clock(self):
         self.assertTrue(self.hold())
