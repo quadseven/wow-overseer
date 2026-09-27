@@ -190,7 +190,7 @@ def future_owner(row: dict, members: dict, horizon: int = FUTURE_LEVELS) -> tupl
     ranked.sort()
     best_foreign, best_gap, best = ranked[0]
     holder = row.get("holder", "")
-    for foreign, gap, name in ranked:
+    for foreign, _gap, name in ranked:
         if name == holder and foreign == best_foreign:
             return holder, "the holder suits it as well as anybody"
     member = members[best]
@@ -245,19 +245,9 @@ def hand_ons(
     """
     out = []
     for row in gear_rows:
-        guid = int(row.get("item_guid") or 0)
-        if not guid:
+        if not _may_hand_on(row, claims, declined):
             continue
         holder = row.get("holder", "")
-        claim = claims.get(guid)
-        if claim == holder and (holder, int(row.get("entry") or 0)) in declined:
-            claim = gear.NOBODY
-        if claim not in (gear.NOBODY, gear.UNJUDGEABLE):
-            continue
-        if int(row.get("instance_flags") or 0) & SOULBOUND_FLAG:
-            continue
-        if int(row.get("inventory_type") or 0) in TRY_ON_TYPES:
-            continue
         owner, reason = future_owner(row, members, horizon)
         if not owner or owner == holder:
             continue
@@ -268,12 +258,28 @@ def hand_ons(
                 taker=owner,
                 entry=int(row.get("entry") or 0),
                 name=name,
-                guid=guid,
+                guid=int(row["item_guid"]),
                 reason=reason,
                 said="%s is for %s" % (name, owner),
             )
         )
     return out
+
+
+def _may_hand_on(row: dict, claims: dict, declined: frozenset) -> bool:
+    """Is this carried row one the tidy pass may move at all."""
+    guid = int(row.get("item_guid") or 0)
+    if not guid:
+        return False
+    holder = row.get("holder", "")
+    claim = claims.get(guid)
+    if claim == holder and (holder, int(row.get("entry") or 0)) in declined:
+        claim = gear.NOBODY
+    if claim not in (gear.NOBODY, gear.UNJUDGEABLE):
+        return False
+    if int(row.get("instance_flags") or 0) & SOULBOUND_FLAG:
+        return False
+    return int(row.get("inventory_type") or 0) not in TRY_ON_TYPES
 
 
 def try_ons(gear_rows, members: dict, worn: dict) -> list:
@@ -358,26 +364,37 @@ def settle(row: dict, place: dict | None) -> tuple:
             row.get("detail") or "refused",
         )
     if row.get("source") == SOURCE_HANDON:
-        taker = row.get("target_arg", "")
-        if place and place.get("owner") == taker:
-            how = "by post" if place.get("mail") else "in hand"
-            return MOVED, "%s passed %s to %s (%s), confirmed in %s's %s" % (
-                holder,
-                name,
-                taker,
-                how,
-                taker,
-                "mailbox" if place.get("mail") else "bags",
-            )
-        if place and place.get("owner") == holder:
-            return WAITING, ""
-        return REFUSED, "%s: %s did not reach %s" % (holder, name, taker)
-    if place and place.get("owner") == holder and place.get("worn"):
-        return WORN, "%s put on %s, confirmed worn" % (holder, name)
-    if place and place.get("owner") == holder:
-        return (
-            KEPT,
-            "%s tried on %s and kept what it wears (the bot scored it lower)"
-            % (holder, name),
+        return _settle_hand_on(row, place, holder, name)
+    return _settle_try_on(place, holder, name)
+
+
+def _settle_hand_on(row: dict, place, holder: str, name: str) -> tuple:
+    """A delivered hand-on: moved only once the receiver owns the item."""
+    taker = row.get("target_arg", "")
+    owner = place.get("owner") if place else None
+    if owner == taker:
+        mail = bool(place.get("mail"))
+        return MOVED, "%s passed %s to %s (%s), confirmed in %s's %s" % (
+            holder,
+            name,
+            taker,
+            "by post" if mail else "in hand",
+            taker,
+            "mailbox" if mail else "bags",
         )
-    return REFUSED, "%s: %s is no longer carried" % (holder, name)
+    if owner == holder:
+        return WAITING, ""
+    return REFUSED, "%s: %s did not reach %s" % (holder, name, taker)
+
+
+def _settle_try_on(place, holder: str, name: str) -> tuple:
+    """A delivered try-on: worn, or kept because the bot scored it lower."""
+    if not place or place.get("owner") != holder:
+        return REFUSED, "%s: %s is no longer carried" % (holder, name)
+    if place.get("worn"):
+        return WORN, "%s put on %s, confirmed worn" % (holder, name)
+    return (
+        KEPT,
+        "%s tried on %s and kept what it wears (the bot scored it lower)"
+        % (holder, name),
+    )
