@@ -623,7 +623,7 @@ def heuristic_composition(plan: Plan) -> tuple:
     """(label, why). The best record at this band with MIN_SAMPLES runs,
     else the first option, which seats the best-fitting tank and healer."""
     best = None
-    for label, comp in zip(plan.labels, plan.options):
+    for label, comp in zip(plan.labels, plan.options, strict=True):
         rate = comp_rate(plan.table, comp.key, plan.band)
         if rate.runs >= MIN_SAMPLES and (best is None or rate.smoothed > best[0]):
             best = (rate.smoothed, label, rate)
@@ -676,7 +676,7 @@ def state_for(plan: Plan) -> dict:
 def questions(plan: Plan) -> dict:
     """Two Choices in one request: the composition and the dungeon."""
     comp_criteria = {}
-    for label, comp in zip(plan.labels, plan.options):
+    for label, comp in zip(plan.labels, plan.options, strict=True):
         comp_criteria[label] = "%s. Shape %s; record at band %s: %s" % (
             comp.describe(),
             comp.key,
@@ -897,69 +897,73 @@ def members_text(comp: Composition) -> str:
     seats = ["tank", "healer", "dps", "dps", "dps"]
     return ",".join(
         "%s:%s:%s:%d" % (m.name, seat, raidroles_class_name(m.class_id), m.level)
-        for m, seat in zip(comp.members, seats)
+        for m, seat in zip(comp.members, seats, strict=True)
     )
+
+
+def _num(result: dict, key: str) -> int:
+    try:
+        return int(result.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _result_of(row: dict) -> dict:
+    try:
+        result = json.loads(row.get("result") or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def _levels_gained(members) -> int:
+    levels = 0
+    for m in members if isinstance(members, list) else []:
+        if not isinstance(m, dict):
+            continue
+        start, end = _num(m, "level_start"), _num(m, "level_end")
+        if start and end:
+            levels += max(0, end - start)
+    return levels
+
+
+def _progress(result: dict) -> dict:
+    return {
+        key: _num(result, key)
+        for key in ("deaths", "seconds_inside", "bosses_done", "bosses_total")
+    }
+
+
+def _ended(row: dict, result: dict) -> dict:
+    outcome = str(result.get("outcome") or "")
+    notable = result.get("loot_notable") or []
+    ilvl_start, ilvl_end = _num(result, "ilvl_start"), _num(result, "ilvl_end")
+    out = {
+        "state": ENDED,
+        "outcome": outcome if outcome in OUTCOMES else "lost",
+        "why": str(result.get("why") or row.get("detail") or "")[:255],
+        "loot_items": _num(result, "loot_items"),
+        "loot_notable": ",".join(str(x) for x in notable if str(x).isdigit())[:200],
+        "ilvl_gained": (ilvl_end - ilvl_start) if (ilvl_start and ilvl_end) else 0,
+        "levels_gained": _levels_gained(result.get("members")),
+    }
+    out.update(_progress(result))
+    return out
 
 
 def outcome_from_row(row: dict) -> dict | None:
     """What an overseer_command row says about its run, or None while it is
-    still queued. Keys are overseer_guild_run's columns."""
+    still queued. Keys are overseer_guild_run's columns. An ended row whose
+    result names no known outcome (a sweep, a restart) is lost."""
     status = str(row.get("status") or "")
-    try:
-        result = json.loads(row.get("result") or "{}")
-    except (TypeError, ValueError):
-        result = {}
-    if not isinstance(result, dict):
-        result = {}
-    phase = str(result.get("phase") or "")
+    result = _result_of(row)
     if status == "verifying":
-        if phase == "inside":
-            return {
-                "state": INSIDE,
-                "seconds_inside": int(result.get("seconds_inside") or 0),
-                "deaths": int(result.get("deaths") or 0),
-                "bosses_done": int(result.get("bosses_done") or 0),
-                "bosses_total": int(result.get("bosses_total") or 0),
-            }
-        return None
-    if status in ("pending", "claimed"):
-        return None
-    outcome = str(result.get("outcome") or "")
-    if status == "error" and outcome not in OUTCOMES:
-        outcome = "lost"
-    if status == "applied" and outcome not in OUTCOMES:
-        outcome = "lost"
+        if str(result.get("phase") or "") != "inside":
+            return None
+        return dict(_progress(result), state=INSIDE)
     if status not in ("applied", "error", "delivered", "unchanged"):
         return None
-    if not outcome:
-        outcome = "lost"
-    members = result.get("members") or []
-    levels = 0
-    for m in members if isinstance(members, list) else []:
-        try:
-            start, end = int(m.get("level_start") or 0), int(m.get("level_end") or 0)
-        except (TypeError, ValueError, AttributeError):
-            continue
-        if start and end:
-            levels += max(0, end - start)
-    notable = result.get("loot_notable") or []
-    ilvl_start = int(result.get("ilvl_start") or 0)
-    ilvl_end = int(result.get("ilvl_end") or 0)
-    return {
-        "state": ENDED,
-        "outcome": outcome,
-        "why": str(result.get("why") or row.get("detail") or "")[:255],
-        "deaths": int(result.get("deaths") or 0),
-        "seconds_inside": int(result.get("seconds_inside") or 0),
-        "bosses_done": int(result.get("bosses_done") or 0),
-        "bosses_total": int(result.get("bosses_total") or 0),
-        "loot_items": int(result.get("loot_items") or 0),
-        "loot_notable": ",".join(str(int(x)) for x in notable if str(x).isdigit())[
-            :200
-        ],
-        "ilvl_gained": (ilvl_end - ilvl_start) if (ilvl_start and ilvl_end) else 0,
-        "levels_gained": levels,
-    }
+    return _ended(row, result)
 
 
 # --- the Guild tab ---------------------------------------------------------------
@@ -1052,47 +1056,46 @@ def _run_lines(view: dict) -> list:
     return lines
 
 
-def _run_view(row: dict) -> dict:
-    def conf(value):
-        return None if value is None else round(float(value), 2)
+def _confidence(value):
+    return None if value is None else round(float(value), 2)
 
-    created = row.get("created_at")
-    ended = row.get("ended_at")
-    view = {
-        "id": row.get("id"),
-        "guild": row.get("guild") or "",
-        "band": row.get("band") or "",
-        "composition": row.get("composition") or "",
-        "keyword": row.get("keyword") or "",
-        "place": _place(row.get("keyword") or ""),
-        "members": _member_list(row.get("members")),
-        "state": row.get("state") or "",
-        "outcome": row.get("outcome") or "",
-        "why": row.get("why") or "",
-        "dungeon": {
-            "by": row.get("dungeon_by") or "",
-            "jev": row.get("dungeon_jev") or "",
-            "confidence": conf(row.get("dungeon_confidence")),
-        },
-        "choice": {
-            "by": row.get("composition_by") or "",
-            "jev": row.get("composition_jev") or "",
-            "confidence": conf(row.get("composition_confidence")),
-        },
-        "prior": None
-        if row.get("prior_rate") is None
-        else round(float(row["prior_rate"]), 2),
-        "prior_runs": int(row.get("prior_runs") or 0),
-        "deaths": int(row.get("deaths") or 0),
-        "seconds_inside": int(row.get("seconds_inside") or 0),
-        "bosses_done": int(row.get("bosses_done") or 0),
-        "bosses_total": int(row.get("bosses_total") or 0),
-        "loot_items": int(row.get("loot_items") or 0),
-        "ilvl_gained": int(row.get("ilvl_gained") or 0),
-        "levels_gained": int(row.get("levels_gained") or 0),
-        "created_at": str(created) if created else "",
-        "ended_at": str(ended) if ended else "",
+
+def _judged(row: dict, prefix: str) -> dict:
+    return {
+        "by": row.get(prefix + "_by") or "",
+        "jev": row.get(prefix + "_jev") or "",
+        "confidence": _confidence(row.get(prefix + "_confidence")),
     }
+
+
+_TEXT = ("guild", "band", "composition", "keyword", "state", "outcome", "why")
+_COUNTS = (
+    "prior_runs",
+    "deaths",
+    "seconds_inside",
+    "bosses_done",
+    "bosses_total",
+    "loot_items",
+    "ilvl_gained",
+    "levels_gained",
+)
+
+
+def _run_view(row: dict) -> dict:
+    view = {key: row.get(key) or "" for key in _TEXT}
+    view.update({key: _num(row, key) for key in _COUNTS})
+    view.update(
+        {
+            "id": row.get("id"),
+            "place": _place(view["keyword"]),
+            "members": _member_list(row.get("members")),
+            "dungeon": _judged(row, "dungeon"),
+            "choice": _judged(row, "composition"),
+            "prior": _confidence(row.get("prior_rate")),
+            "created_at": str(row.get("created_at") or ""),
+            "ended_at": str(row.get("ended_at") or ""),
+        }
+    )
     ended_run = view["state"] == ENDED
     view["title"] = "%s - %s" % (view["guild"], view["place"])
     view["band_line"] = "band %s" % view["band"]
