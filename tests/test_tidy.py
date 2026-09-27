@@ -336,3 +336,134 @@ class TheLoopServesEveryFamily(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- banked gear and gear no member can use (#375, second half) ------------
+
+import bank  # noqa: E402
+import bankpolicy  # noqa: E402
+import disposition  # noqa: E402
+
+
+def _kilt(place):
+    return bank.Holding(
+        holder="Grug",
+        guid=6118962,
+        place=place,
+        count=1,
+        container_slots=0,
+        item=disposition.Item(
+            name="Jinxed Hoodoo Kilt",
+            known=True,
+            quality=3,
+            item_class=4,
+            quest_item=False,
+            equipment=True,
+            required_level=44,
+        ),
+        template_id=9474,
+        bound=False,
+    )
+
+
+class ABankedPieceForAnotherMemberComesOut(unittest.TestCase):
+    # The bank policy keeps the kilt for Grug until 44 - the placement that
+    # held it in his bank on 2026-09-27.
+    POLICY = {
+        6118962: bankpolicy.Placement(
+            6118962,
+            "Grug",
+            "Jinxed Hoodoo Kilt",
+            "personal",
+            None,
+            "kept until its level",
+            "Grug keeps it until level 44",
+        )
+    }
+
+    def plan(self, place, routed):
+        storage = bank.storage_from({}, routed=routed, policy=self.POLICY)
+        holding = _kilt(place)
+        member = bank.Member(
+            name="Grug",
+            level=38,
+            bag_free=5,
+            bank_free=10,
+            carried=(holding,) if place == bank.BAGS else (),
+            banked=(holding,) if place == bank.BANK else (),
+        )
+        return bank.plan([member], disposition.Family(), storage=storage)
+
+    def test_a_routed_kilt_is_withdrawn_for_the_rogue(self):
+        moves = self.plan(bank.BANK, {6118962: "Bork"}).moves
+        self.assertEqual([(bank.WITHDRAW, 6118962)], [(m.verb, m.guid) for m in moves])
+        self.assertIn("Bork", moves[0].why)
+
+    def test_unrouted_it_stays_in_the_bank(self):
+        self.assertEqual((), self.plan(bank.BANK, {}).moves)
+
+    def test_a_routed_kilt_in_the_bags_is_never_put_back(self):
+        self.assertEqual((), self.plan(bank.BAGS, {6118962: "Bork"}).moves)
+
+    def test_unrouted_in_the_bags_the_policy_banks_it(self):
+        moves = self.plan(bank.BAGS, {}).moves
+        self.assertEqual([bank.DEPOSIT], [m.verb for m in moves])
+
+    def test_routes_are_guid_to_taker(self):
+        grants = tidy.hand_ons([KILT], FAMILY, NOBODY)
+        self.assertEqual({101: "Bork"}, tidy.routes(grants))
+
+
+class APieceNoMemberCanUseGoesToTheGuildOrTheHouse(unittest.TestCase):
+    GUILD = dict(
+        FAMILY,
+        Twig=tidy.Member("Twig", DRUID, 14),
+        Moss=tidy.Member("Moss", DRUID, 11),
+    )
+    IDOL = dict(IDOL, bonding=2)
+
+    def test_no_family_member_can_use_the_idol(self):
+        self.assertTrue(tidy.nobody_can_use(self.IDOL, FAMILY))
+        self.assertFalse(tidy.nobody_can_use(KILT, FAMILY))
+
+    def test_the_guild_bank_keeps_it_for_the_youngest_druid(self):
+        keeps = tidy.guild_class_keeps([self.IDOL, KILT], FAMILY, self.GUILD)
+        self.assertEqual([104], list(keeps))
+        self.assertIn("Moss", keeps[104])
+
+    def test_with_no_druid_in_the_guild_it_is_left_for_the_auction(self):
+        self.assertEqual({}, tidy.guild_class_keeps([self.IDOL], FAMILY, FAMILY))
+
+    def test_a_bound_idol_is_nobodys_to_keep(self):
+        bound = dict(self.IDOL, instance_flags=1)
+        self.assertEqual({}, tidy.guild_class_keeps([bound], FAMILY, self.GUILD))
+
+
+class TheBridgeWiresBothHalves(unittest.TestCase):
+    def test_the_bank_plan_routes_the_tidy_hand_ons(self):
+        self.assertIn("_tidy_routes(names)", _source("_plan_bank"))
+
+    def test_the_banked_read_names_the_bank_slots(self):
+        import pathlib
+
+        text = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        ns = {}
+        start = text.index("_SURPLUS_GEAR_SQL = (")
+        end = text.index("\n)\n", start) + 3
+        exec(text[start:end], ns)  # noqa: S102 - bridge.py's own constant
+        start = text.index("_BANKED_GEAR_SQL = ")
+        end = text.index("\n\n", start)
+        exec(text[start:end], ns)  # noqa: S102
+        self.assertIn("BETWEEN 39 AND 66", ns["_BANKED_GEAR_SQL"])
+        self.assertIn("BETWEEN 67 AND 73", ns["_BANKED_GEAR_SQL"])
+        self.assertNotIn("BETWEEN 19 AND 38", ns["_BANKED_GEAR_SQL"])
+
+    def test_the_auction_lists_what_nobody_can_use(self):
+        self.assertIn(
+            "tidy.nobody_can_use(row, members)", _source("_auction_sales_once")
+        )
+
+    def test_the_guild_keeps_take_the_class_keeps(self):
+        self.assertIn("tidy.guild_class_keeps(", _source("_guild_gear_share_once"))
