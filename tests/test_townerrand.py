@@ -21,6 +21,7 @@ BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
     encoding="utf-8"
 )
 HUB = {"map_id": 0, "x": 100.0, "y": 100.0, "z": 10.0, "auctioneer": "Auctioneer"}
+HOME = {"map_id": 1, "x": -1035.1, "y": -3676.0, "z": 23.1, "bind": True}
 FACTS = {
     "Bork": {"equipped": {"finger1": 21}, "purse": 800},
     "Grug": {"equipped": {"head": 45}, "purse": 500000},
@@ -96,6 +97,30 @@ class TheStates(unittest.TestCase):
         self.assertEqual(te.DONE, te.advance(s, te.TOTAL_SECONDS)[0].phase)
         self.assertEqual(te.DONE, te.advance(s, 5.0, in_run=True)[0].phase)
 
+    def test_home_unless_the_head_already_stands_by_a_capital(self):
+        home = dict(HOME)
+        self.assertEqual(home, te.choose_hub(home, HUB, _at(3000, 3000)))
+        self.assertEqual(HUB, te.choose_hub(home, HUB, _at(150, 150)))
+        self.assertEqual(HUB, te.choose_hub({}, HUB, _at(3000, 3000)))
+        self.assertEqual({}, te.choose_hub({}, {}, _at(0, 0)))
+
+    def test_members_beyond_a_walk_from_home_hearth(self):
+        positions = {
+            "Grug": _at(3000, 3000),
+            "Bork": _at(-990, -3700, 1),
+            "Og": _at(0, 0),
+            "Ugga": _at(-1040, -3670, 0),
+        }
+        names = ["Bork", "Grug", "Og", "Ugga", "Zed"]
+        self.assertEqual(["Grug", "Ugga"], te.to_hearth(HOME, positions, names, {"Og"}))
+        self.assertEqual([], te.to_hearth(HUB, positions, names))
+
+    def test_the_leader_is_not_aimed_during_the_cast(self):
+        s = te.start(0.0, HOME, "why", hearthed=True)
+        self.assertFalse(te.aim_now(s, 10.0))
+        self.assertTrue(te.aim_now(s, te.HEARTH_SECONDS))
+        self.assertTrue(te.aim_now(te.start(0.0, HOME, "why"), 0.0))
+
     def test_in_range_is_planar_and_same_map(self):
         self.assertTrue(te.in_range(HUB, _at(105, 105), 10))
         self.assertFalse(te.in_range(HUB, _at(120, 100), 10))
@@ -158,6 +183,8 @@ class TheAdapter(unittest.TestCase):
         self.positions = {"Grug": _at(400, 400), "Bork": _at(401, 400)}
         self.written = []
         self.jobs = []
+        self.home = {}
+        self.hearths = []
         letters = [
             {
                 "holder": "Bork",
@@ -198,6 +225,10 @@ class TheAdapter(unittest.TestCase):
                 n: self.positions[n] for n in names if n in self.positions
             },
             "_TOWN_ERRAND_HEAD_AWAY": set(),
+            "TOWN_ERRAND_SOURCE": "overseer:town-errand",
+            "_fetch_bind_hub": lambda leader: dict(self.home),
+            "_movement_reads": lambda names: {"binds": {}, "hearthed": frozenset()},
+            "_insert_hearth": lambda name, source: self.hearths.append(name) or 1,
             "_town_errand_jobs": lambda names: self.jobs.append("town run") or 2,
             "_hub_aim": lambda hub: "at:0:100,100,10",
             "_fetch_mail": lambda names: letters,
@@ -264,6 +295,22 @@ class TheAdapter(unittest.TestCase):
         self.positions["Grug"] = _at(400, 400)
         self.assertEqual(te.GO, self.tick().phase)
         self.assertEqual(("town errand", "Grug", "at:0:100,100,10"), self.fam.aims[-1])
+
+    def test_a_scattered_family_hearths_home_and_then_walks_the_last_yards(self):
+        # wow-dev 2026-09-27 21:41: sent to Stormwind, the head 3,223 yards off
+        # in the Burning Steppes and three members in Tirisfal, bound in
+        # Ratchet beside a mailbox, vendors and a banker.
+        self.home = dict(HOME)
+        self.positions = {"Grug": _at(-7924, -1353), "Bork": _at(2050, -601)}
+        state = self.tick()
+        self.assertEqual(te.GO, state.phase)
+        self.assertEqual(HOME["x"], state.hub["x"])
+        self.assertEqual(["Bork", "Grug"], self.hearths)
+        self.assertEqual([], self.fam.aims)  # the cast is not walked out of
+        self.positions = {"Grug": _at(-1046, -3665, 1), "Bork": _at(-1044, -3663, 1)}
+        self.tick(te.HEARTH_SECONDS)
+        self.assertEqual("town errand", self.fam.aims[-1][0])
+        self.assertEqual(["Bork", "Grug"], self.hearths)  # once, at the start
 
 
 if __name__ == "__main__":
