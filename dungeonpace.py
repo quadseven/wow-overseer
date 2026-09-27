@@ -289,24 +289,27 @@ class Member:
     main_hand: bool | None = None
 
 
+def _gear_of(row: dict | None, read: bool) -> tuple:
+    """(slots filled, sum of worn item levels) off one GEAR_SQL row, or
+    (None, None) when the gear could not be read."""
+    if not read:
+        return None, None
+    worn = int((row or {}).get("worn") or 0)
+    return worn, round(float((row or {}).get("item_level") or 0) * worn, 1)
+
+
 def members_from_rows(level_rows, gear_rows, main_hand_rows) -> tuple:
     """Members off LEVEL_ROWS_SQL, campaignplan.GEAR_SQL and MAIN_HAND_SQL."""
     gear = {str(r.get("name")): r for r in gear_rows or ()}
-    armed = (
-        None if main_hand_rows is None else {str(r.get("name")) for r in main_hand_rows}
-    )
+    armed = None
+    if main_hand_rows is not None:
+        armed = {str(r.get("name")) for r in main_hand_rows}
     out = []
     for row in level_rows or ():
         name = str(row.get("name") or "")
         if not name:
             continue
-        g = gear.get(name)
-        worn = None if gear_rows is None else int((g or {}).get("worn") or 0)
-        total = (
-            None
-            if gear_rows is None
-            else round(float((g or {}).get("item_level") or 0) * (worn or 0), 1)
-        )
+        worn, total = _gear_of(gear.get(name), gear_rows is not None)
         out.append(
             Member(
                 name=name,
@@ -426,6 +429,36 @@ def _index(keyword: str) -> int:
     )
 
 
+def _weakest_level(level_rows) -> int:
+    known = [int(r.get("level") or 0) for r in level_rows or ()]
+    known = [level for level in known if level > 0]
+    return min(known) if known else 0
+
+
+def _open_to(run, level: int, level_rows, keys) -> bool:
+    """Whether the family may be sent through `run`'s door and still learn
+    from it: council allows it, the weakest has its floor and has not outgrown
+    it past the grace, and no key it lacks locks it."""
+    if council.door_refusal(run.keyword, list(level_rows)):
+        return False
+    if level < run.floor or run.ceiling + OUTGROWN_GRACE < level:
+        return False
+    need = campaignplan.DOOR_KEYS.get(run.keyword)
+    return need is None or (keys is not None and need[0] in keys)
+
+
+def _record(run, runs) -> str | None:
+    """The door's own record in the window, "" when it says nothing, or None
+    when it is unclearable. A map another wing shares cannot say whose runs
+    were whose, so it says nothing."""
+    if runs is None or campaignplan.shares_map(run):
+        return ""
+    v = viability(runs, run.map_id)
+    if not v.clearable:
+        return None
+    return v.line() if v.fought else ""
+
+
 def candidates(below: str, level_rows, keys, runs=None, avoid=()) -> list:
     """Every door easier than `below` the family can clear now, hardest first.
 
@@ -435,33 +468,16 @@ def candidates(below: str, level_rows, keys, runs=None, avoid=()) -> list:
     `avoid` names doors to leave out (the one that just failed).
     """
     top = _index(below)
-    if top <= 0:
+    level = _weakest_level(level_rows)
+    if top <= 0 or not level:
         return []
-    known = [
-        int(r.get("level") or 0)
-        for r in level_rows or ()
-        if int(r.get("level") or 0) > 0
-    ]
-    if not known:
-        return []
-    level = min(known)
     out = []
     for run in campaignplan.RUNS[:top]:
-        if run.keyword in avoid:
+        if run.keyword in avoid or not _open_to(run, level, level_rows, keys):
             continue
-        if council.door_refusal(run.keyword, list(level_rows)):
+        record = _record(run, runs)
+        if record is None:
             continue
-        if level < run.floor or run.ceiling + OUTGROWN_GRACE < level:
-            continue
-        need = campaignplan.DOOR_KEYS.get(run.keyword)
-        if need is not None and (keys is None or need[0] not in keys):
-            continue
-        record = ""
-        if runs is not None and not campaignplan.shares_map(run):
-            v = viability(runs, run.map_id)
-            if not v.clearable:
-                continue
-            record = v.line() if v.fought else ""
         out.append(Candidate(run.keyword, run.place, run.floor, run.ceiling, record))
     out.reverse()
     return out
@@ -523,86 +539,85 @@ def is_step_down(row: dict | None) -> bool:
     return bool(row) and str(row.get("source") or "") == SOURCE
 
 
-def decide(f: Facts) -> Decision:
-    """What the ladder does this pass. See the module docstring."""
-    head_kw = str(f.head.get("keyword") or "")
-    stepping = is_step_down(f.head)
-    place = council.keyword_place(head_kw)
-    if f.open is not None and str(f.open.get("decision")) == QUEST:
-        if f.cands:
-            pick = ladder(f.cands)
-            return Decision(
-                STEP_DOWN,
-                pick.keyword,
-                "an easier door opened while questing: %s" % pick.place,
-                tuple(c.keyword for c in f.cands),
-            )
-        if f.changed and not f.gates:
-            return Decision(RELEASE, "", "%s, so back to %s" % (f.changed, place))
-        return Decision(
-            NOTHING,
-            "",
-            "questing until a named change: %s"
-            % ("; ".join(f.gates) or "no level or upgrade since the last wipe"),
+def _down_to(kind: str, cands, why: str) -> Decision:
+    """A step to the hardest candidate, with every candidate offered to Jev."""
+    return Decision(kind, ladder(cands).keyword, why, tuple(c.keyword for c in cands))
+
+
+def _while_questing(f: Facts, place: str) -> Decision:
+    """The questing fallback: step down if a door opened, else wait for a change."""
+    if f.cands:
+        return _down_to(
+            STEP_DOWN,
+            f.cands,
+            "an easier door opened while questing: %s" % ladder(f.cands).place,
         )
-    if f.open is not None and not stepping:
+    if f.changed and not f.gates:
+        return Decision(RELEASE, "", "%s, so back to %s" % (f.changed, place))
+    waiting = "; ".join(f.gates) or "no level or upgrade since the last wipe"
+    return Decision(NOTHING, "", "questing until a named change: %s" % waiting)
+
+
+def _while_stepped_down(f: Facts, place: str) -> Decision:
+    """The step-down entry at the head: further down, back up, on, or more."""
+    if str(f.head.get("status") or "") != "active":
+        return Decision(NOTHING, "", "%s is about to start" % place)
+    if not f.record.clearable:
+        why = "%s is not clearable either (%s)" % (place, f.record.line())
+        if f.cands:
+            return _down_to(FURTHER, f.cands, why)
+        return Decision(QUEST, "", why + " and no easier door is", (LEVEL,))
+    if f.changed and not f.gates:
         return Decision(
             STEP_UP,
-            head_kw,
-            "the step-down entry ran its count, so %s is next" % place,
+            f.door,
+            "%s, and %s is ready" % (f.changed, council.keyword_place(f.door)),
         )
-    if stepping:
-        status = str(f.head.get("status") or "")
-        if status != "active":
-            return Decision(NOTHING, "", "%s is about to start" % place)
-        if not f.record.clearable:
-            if f.cands:
-                pick = ladder(f.cands)
-                return Decision(
-                    FURTHER,
-                    pick.keyword,
-                    "%s is not clearable either (%s)" % (place, f.record.line()),
-                    tuple(c.keyword for c in f.cands),
-                )
-            return Decision(
-                QUEST,
-                "",
-                "%s is not clearable (%s) and no easier door is"
-                % (place, f.record.line()),
-                (LEVEL,),
-            )
-        if f.changed and not f.gates:
-            return Decision(
-                STEP_UP,
-                f.door,
-                "%s, and %s is ready" % (f.changed, council.keyword_place(f.door)),
-            )
-        wanted = int(f.head.get("runs_wanted") or 0)
-        if f.done is not None and wanted and f.done >= wanted and not f.changed:
-            return Decision(
-                EXTEND,
-                head_kw,
-                "%s is at %d of %d with no level or upgrade since stepping "
-                "down, so it runs %d more" % (place, f.done, wanted, STEP_DOWN_RUNS),
-            )
-        return Decision(NOTHING, "", "farming %s (%s)" % (place, f.record.line()))
-    if head_kw not in campaignplan.BY_KEYWORD:
-        return Decision(NOTHING, "", "%s is not on the dungeon ladder" % place)
-    status = str(f.head.get("status") or "")
-    if status == "active" and not f.record.clearable:
+    wanted = int(f.head.get("runs_wanted") or 0)
+    if f.done is not None and wanted and f.done >= wanted and not f.changed:
+        return Decision(
+            EXTEND,
+            str(f.head.get("keyword") or ""),
+            "%s is at %d of %d with no level or upgrade since stepping down, so "
+            "it runs %d more" % (place, f.done, wanted, STEP_DOWN_RUNS),
+        )
+    return Decision(NOTHING, "", "farming %s (%s)" % (place, f.record.line()))
+
+
+def _at_the_door(f: Facts, place: str) -> Decision:
+    """The operator's (or the planner's) entry at the head: hold or step down."""
+    if str(f.head.get("status") or "") == "active" and not f.record.clearable:
         why = "%s is not clearable: %s" % (place, f.record.line())
     elif f.gates:
         why = "%s is not ready: %s" % (place, "; ".join(f.gates))
     else:
         return Decision(NOTHING, "", "%s holds (%s)" % (place, f.record.line()))
-    if f.cands:
-        offer = tuple(c.keyword for c in f.cands)
-        # A high rate with no two-wipe streak and no gate is a judgment call:
-        # Jev may keep the door. Two wipes in a row or a gate never may.
-        if not f.record.hard and not f.gates:
-            offer = offer + (STAY,)
-        return Decision(STEP_DOWN, ladder(f.cands).keyword, why, offer)
-    return Decision(QUEST, "", why + "; no easier door can be cleared", (LEVEL,))
+    if not f.cands:
+        return Decision(QUEST, "", why + "; no easier door can be cleared", (LEVEL,))
+    d = _down_to(STEP_DOWN, f.cands, why)
+    # A high rate with no two-wipe streak and no gate is a judgment call: Jev
+    # may keep the door. Two wipes in a row or a gate never may.
+    if not f.record.hard and not f.gates:
+        d = replace(d, offer=d.offer + (STAY,))
+    return d
+
+
+def decide(f: Facts) -> Decision:
+    """What the ladder does this pass. See the module docstring."""
+    head_kw = str(f.head.get("keyword") or "")
+    place = council.keyword_place(head_kw)
+    stepping = is_step_down(f.head)
+    if f.open is not None and str(f.open.get("decision")) == QUEST:
+        return _while_questing(f, place)
+    if f.open is not None and not stepping:
+        return Decision(
+            STEP_UP, head_kw, "the step-down entry ran its count, so %s is next" % place
+        )
+    if stepping:
+        return _while_stepped_down(f, place)
+    if head_kw not in campaignplan.BY_KEYWORD:
+        return Decision(NOTHING, "", "%s is not on the dungeon ladder" % place)
+    return _at_the_door(f, place)
 
 
 # --- Jev ----------------------------------------------------------------------

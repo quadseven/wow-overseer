@@ -322,19 +322,23 @@ class TheBridgePass(unittest.TestCase):
     def test_the_ladder_runs_before_the_gear_hold_and_the_step(self):
         body = BRIDGE[BRIDGE.index("    async def _campaign_queue_once") :]
         body = body[: body.index("    async def _leave_town_when_done")]
-        self.assertLess(body.index("_dungeon_pace"), body.index("_queue_gear_hold"))
-        self.assertLess(body.index("_dungeon_pace"), body.index("campaignqueue.step("))
+        self.assertLess(body.index('"_queue_holds"'), body.index("campaignqueue.step("))
+        holds = BRIDGE[BRIDGE.index("    async def _queue_holds(") :]
+        holds = holds[: holds.index("    async def _pace_facts(")]
+        self.assertLess(holds.index("_dungeon_pace"), holds.index("_queue_gear_hold"))
 
     def test_the_pace_never_cancels_or_shortens_a_queue(self):
-        body = BRIDGE[BRIDGE.index("def _pace_write(") :]
+        body = BRIDGE[BRIDGE.index("def _pace_close(") :]
         body = body[: body.index("\ndef _pace_adopt(")]
+        self.assertIn("SHIFT_SQL", body)
         self.assertNotIn("CANCEL_SQL", body)
         self.assertNotIn("runs_wanted -", body)
+        self.assertNotIn("runs_wanted -", pace.EXTEND_SQL)
 
     def test_a_dungeon_writer_never_passes_the_questing_family(self):
         self.assertIn("_queue_owns_job, None, True", BRIDGE)
         self.assertIn(
-            'if family in globals().get("_PACE_QUESTING", ()) and not dungeon:', BRIDGE
+            'if family in globals().get("_PACE_QUESTING", {}) and not dungeon:', BRIDGE
         )
 
 
