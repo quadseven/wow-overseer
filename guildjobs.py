@@ -226,6 +226,22 @@ COOLDOWN_MINUTES = {
     "door": 45,
 }
 
+# A TRAINER WALK THAT KEEPS FAILING IS ASKED LESS OFTEN (#766). Measured on the
+# dev world, 2026-09-27: a level 1 hunter was sent to a skinning trainer every
+# hour for a day and every walk ended `died on the way to the trainer` or `the
+# ground toward the trainer does not hold`, and a level 10 member's walk ended
+# on the same ground 20 times. Each failed walk in a row (status `error` or
+# `unchanged` in the log, newest first, until one that did not fail) doubles
+# the wait, up to this cap; a walk that teaches something resets it.
+TRAIN_FAILED = frozenset({"error", "unchanged"})
+TRAIN_BACKOFF_CAP_MINUTES = 12 * 60
+
+# NO TRADE BEFORE THIS LEVEL (#766). A player picks up a trade after leaving
+# the starting area, and a level 1 walked to a capital's trainer dies on the
+# way. Herbalism and mining already ask level 5 of their first rank; skinning
+# asks none, and this is what keeps a level 1 skinner at home.
+TRAIN_MIN_LEVEL = 5
+
 # A member is at its field or its door within these many yards. The field is
 # where it gathers, so it is left there while it stays inside; the door is a
 # stone it farms around.
@@ -409,10 +425,27 @@ def _cap_word(cap) -> str:
 
 def _cooling(member: Member, action: str, recent) -> bool:
     minutes = COOLDOWN_MINUTES.get(action, 60)
+    if action == "train":
+        minutes = train_cooldown(member.name, recent)
     return any(
         r.name == member.name and r.action == action and int(r.age_minutes) < minutes
         for r in recent or ()
     )
+
+
+def train_cooldown(name: str, recent) -> int:
+    """Minutes to wait since this member's last train row (see TRAIN_FAILED)."""
+    rows = sorted(
+        (r for r in recent or () if r.name == name and r.action == "train"),
+        key=lambda r: int(r.age_minutes),
+    )
+    failed = 0
+    for r in rows:
+        if r.status not in TRAIN_FAILED:
+            break
+        failed += 1
+    base = COOLDOWN_MINUTES["train"]
+    return min(base * 2**failed, max(base, TRAIN_BACKOFF_CAP_MINUTES))
 
 
 # ---------------------------------------------------------------------------
@@ -558,6 +591,8 @@ def next_rank(skill: int, value: int, cap: int, level: int):
 
 def _train_step(member, trades, cap):
     """Buy the next rank of one of its trades, the cheapest first."""
+    if member.level < TRAIN_MIN_LEVEL and trades.get(member.name):
+        return None, "%s learns a trade from level %d" % (member.name, TRAIN_MIN_LEVEL)
     wants = []
     for skill in trades.get(member.name, ()):
         value, ceiling = member.skill(skill)

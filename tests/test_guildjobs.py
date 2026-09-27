@@ -197,6 +197,56 @@ class Maintenance(unittest.TestCase):
         )
 
 
+class ATrainerWalkThatKeepsFailing(unittest.TestCase):
+    """#766: a level 1 hunter was sent to a skinning trainer every hour for a
+    day, and every walk died on the way or found the ground did not hold."""
+
+    def failed(self, *ages, status="error"):
+        return tuple(guildjobs.Recent("Keeper", "train", a, status) for a in ages)
+
+    def test_a_level_1_skinner_is_not_walked_to_a_trainer(self):
+        # The second of two takes skinning, whose apprentice asks no level.
+        crew = [member("A"), member("Keeper", level=1, money=500)]
+        self.assertIn(S, guildjobs.split_trades(crew)["Keeper"])
+        result = plan(crew)
+        step = only_step(result, "Keeper")
+        self.assertTrue(step is None or step.action != "train")
+        self.assertIn("Keeper learns a trade from level 5", result.notes)
+
+    def test_at_level_5_it_is(self):
+        m = member("Keeper", level=5, money=500)
+        step = only_step(plan([m]), "Keeper")
+        self.assertEqual(step.action, "train")
+
+    def test_one_failed_walk_waits_two_hours(self):
+        self.assertEqual(guildjobs.train_cooldown("Keeper", self.failed(61)), 120)
+        m = member("Keeper", level=10, money=500)
+        self.assertIsNone(only_step(plan([m], recent=self.failed(61)), "Keeper"))
+        self.assertEqual(
+            only_step(plan([m], recent=self.failed(121)), "Keeper").action, "train"
+        )
+
+    def test_each_failure_in_a_row_doubles_the_wait_up_to_the_cap(self):
+        self.assertEqual(guildjobs.train_cooldown("Keeper", ()), 60)
+        self.assertEqual(guildjobs.train_cooldown("Keeper", self.failed(60, 120, 180)), 480)
+        hourly = self.failed(*range(5, 24 * 60, 60), status="unchanged")
+        self.assertEqual(guildjobs.train_cooldown("Keeper", hourly), 720)
+        m = member("Keeper", level=10, money=500)
+        self.assertIsNone(only_step(plan([m], recent=self.failed(*range(65, 600, 60))), "Keeper"))
+
+    def test_a_walk_that_taught_resets_the_wait(self):
+        recent = (
+            guildjobs.Recent("Keeper", "train", 70, "applied"),
+            guildjobs.Recent("Keeper", "train", 130, "error"),
+            guildjobs.Recent("Keeper", "train", 190, "error"),
+        )
+        self.assertEqual(guildjobs.train_cooldown("Keeper", recent), 60)
+
+    def test_another_members_failures_do_not_count(self):
+        other = (guildjobs.Recent("Other", "train", 61, "error"),)
+        self.assertEqual(guildjobs.train_cooldown("Keeper", other), 60)
+
+
 class ASkinnersField(unittest.TestCase):
     def beast(self, spawn, x, y, level=10, name="Mottled Boar"):
         return (guildjobs.Spot("creature", spawn, 1, x, y, name), level)
