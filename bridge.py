@@ -13506,10 +13506,8 @@ class Bridge(discord.Client):
             slot.reserve(TOWN_ERRAND_CLAIMANT, now, "the family's town errand")
         positions = await self._settled_positions(names)
         hub = state.hub
-        if (state.phase in (townerrand.GO, townerrand.GATHER)
-                and townerrand.aim_now(state, now)):
-            state = await self._town_errand_regroup(state, names, positions,
-                                                    now, label)
+        state = await self._town_errand_regroup(state, names, positions, now,
+                                                label)
         leader_at_hub = townerrand.in_range(
             hub, positions.get(leader), townerrand.HUB_YARDS)
         gathered = all(
@@ -13590,7 +13588,11 @@ class Bridge(discord.Client):
         return townerrand.start(now, hub, why, hearthed=bool(far))
 
     async def _town_errand_regroup(self, state, names, positions, now, label):
-        """Hearth home any member still further than a walk from a home hub."""
+        """Hearth home any member still further than a walk from a home hub,
+        while the family walks or gathers and outside a cast window."""
+        if (state.phase not in (townerrand.GO, townerrand.GATHER)
+                or not townerrand.aim_now(state, now)):
+            return state
         reads = await asyncio.to_thread(_movement_reads, list(names))
         far = townerrand.to_hearth(state.hub, positions, names, reads["hearthed"])
         if not far:
