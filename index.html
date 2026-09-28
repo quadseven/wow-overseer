@@ -2897,6 +2897,11 @@
      box, never the page, and the name column stays put while it does, so a
      phone reads a row by its name. Flagged rows (no weapon, many empty
      slots) carry a warn bar down their left edge and warn-coloured cells. */
+  /* The Lineup tab keeps the page's side gutter, and a long rule label (the
+     lineup's "40 raiding, 10 maintenance, ..." count) wraps instead of
+     pushing the page wider than a phone. */
+  #lineup { padding:0 var(--gutter) 1.2rem; }
+  #lineup .ds-rule .lb { flex:0 1 auto; min-width:0; white-space:normal; }
   .lg-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%;
                border:1px solid var(--card-line); border-radius:6px;
                background:var(--card); margin:.3rem 0 1.2rem; }
@@ -7423,7 +7428,12 @@ function lgMembers() {
   const shown = lg.guild ? gs.filter((g) => g.name === lg.guild) : gs;
   const out = [];
   for (const g of shown) out.push(...g.members);
-  if (lg.sort) {
+  if (!lg.sort) {
+    // Worst first across both guilds, the server's order (guildgear.worst_first).
+    out.sort((a, b) => (b.flags.length > 0) - (a.flags.length > 0)
+      || a.weapon - b.weapon || b.empty - a.empty
+      || a.avg_item_level - b.avg_item_level || a.name.localeCompare(b.name));
+  } else {
     const col = LG_COLUMNS.find((c) => c.key === lg.sort);
     out.sort((a, b) => {
       const x = col.get(a), y = col.get(b);

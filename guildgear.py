@@ -33,6 +33,11 @@ EMPTY_WARN = 6
 EMPTY_WARN_LEVEL = 20
 
 
+def worst_first(m: dict) -> tuple:
+    """Flagged first, then no weapon, most empty, lowest average, name."""
+    return (not m["flags"], m["weapon"], -m["empty"], m["avg_item_level"], m["name"])
+
+
 def _slot_name(slot):
     try:
         i = int(slot)
@@ -48,8 +53,7 @@ def members_from_rows(rows: list[dict]) -> list[dict]:
 
     Each row carries guild_name, name, level, class_id, money, online, dead,
     talent_spells, and slot/item_level/item_name for one worn item (all None
-    for a member wearing nothing). Sorted worst first: no weapon, then most
-    empty slots, then lowest average, then name.
+    for a member wearing nothing). Sorted worst first (`worst_first`).
     """
     by_name: dict = {}
     for r in rows or ():
@@ -69,7 +73,7 @@ def members_from_rows(rows: list[dict]) -> list[dict]:
             "name": r.get("item_name") or "",
         }
     out = [_member(m["row"], m["worn"]) for m in by_name.values()]
-    out.sort(key=lambda m: (m["weapon"], -m["empty"], m["avg_item_level"], m["name"]))
+    out.sort(key=worst_first)
     return out
 
 

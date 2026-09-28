@@ -72,6 +72,12 @@ class TheRows(unittest.TestCase):
             (warrior["worn"], warrior["empty"], warrior["flags"]), (17, 0, [])
         )
 
+    def test_a_flagged_level_thirty_five_sorts_above_a_bare_level_four(self):
+        rows = [worn("Low", 15, 2, level=4)]
+        rows += [worn("Og", s, 20) for s in (4, 7, 9, 10, 11, 14, 16)]
+        out = guildgear.members_from_rows(rows)
+        self.assertEqual([m["name"] for m in out], ["Og", "Low"])
+
     def test_empty_slots_are_flagged_only_from_level_twenty(self):
         low = [worn("Low", 15, 5, level=12)]
         (m,) = guildgear.members_from_rows(low)
