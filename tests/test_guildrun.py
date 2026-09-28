@@ -356,6 +356,14 @@ class TheDoorsThatFit(unittest.TestCase):
         self.assertIn("deadmines", older)
         self.assertIn("wailing", older)
 
+    def test_the_margin_edge_is_floor_plus_two(self):
+        """Wailing Caverns has floor 17: mean 19.0 goes in, mean 18.6 stays out."""
+        at = [d.keyword for d in guildrun.fitting_doors([19, 19, 19, 19, 19], DOORS)]
+        under = [d.keyword for d in guildrun.fitting_doors([18, 18, 19, 19, 19], DOORS)]
+        self.assertIn("wailing", at)
+        self.assertNotIn("wailing", under)
+        self.assertIn("ragefire", under)
+
     def test_a_group_at_the_floor_is_held_home(self):
         """113 runs at or just under the floor cleared none."""
         self.assertEqual(guildrun.fitting_doors([15, 15, 15, 15, 16], DOORS), [])
