@@ -390,3 +390,50 @@ class TheVendorStepReadsItsRowsBack(unittest.TestCase):
         self.assertEqual(
             {"Og": {"mainhand"}}, self.ns["_TOWN_ERRAND_BOUGHT"][("Og", "Ugga")]
         )
+
+
+class TheOffHandIsForDualWielders(unittest.TestCase):
+    MACE = dict(
+        entry=852,
+        InventoryType=13,
+        subclass=4,
+        ItemLevel=14,
+        RequiredLevel=9,
+        buyout=1739,
+    )
+
+    def test_a_priest_is_never_sold_a_one_hander_for_her_off_hand(self):
+        # wow-dev 2026-09-28 03:51: the level 13 priest bought a Mace for it.
+        priest = {
+            "class": "priest",
+            "level": 13,
+            "purse": 42366,
+            "equipped": {"mainhand": 12},
+            "skills": {"weapons": {4, 10}},
+        }
+        buys = gearup.plan_vendor_buys({"Uzza": priest}, {"Uzza": [weapon(self.MACE)]})
+        self.assertEqual((), buys)
+
+    def test_a_rogue_still_fills_his_off_hand(self):
+        rogue = {
+            "class": "rogue",
+            "level": 35,
+            "purse": 23904,
+            "equipped": {"mainhand": 30},
+            "skills": {"weapons": {4, 15}},
+        }
+        mace = weapon(dict(self.MACE, ItemLevel=20))
+        buys = gearup.plan_vendor_buys({"Bork": rogue}, {"Bork": [mace]})
+        self.assertEqual(["offhand"], [b.slot for b in buys])
+
+    def test_a_warrior_dual_wields_from_twenty(self):
+        young = {
+            "class": "warrior",
+            "level": 17,
+            "purse": 50000,
+            "equipped": {"mainhand": 12},
+            "skills": {"weapons": {4}},
+        }
+        self.assertEqual(
+            (), gearup.plan_vendor_buys({"Zug": young}, {"Zug": [weapon(self.MACE)]})
+        )

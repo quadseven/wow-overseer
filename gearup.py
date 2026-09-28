@@ -425,7 +425,21 @@ def _worn_is_better(slot, equipped, item_level, level):
     return int(worn_level) > level - 10 or item_level <= int(worn_level)
 
 
-def _candidate_slots(item, equipped, chosen, tank, level):
+# A ONE-HANDED WEAPON GOES IN THE OFF HAND ONLY FOR A CLASS THAT DUAL WIELDS:
+# rogues from the start, warriors and hunters from level 20 (class id -> level).
+# Measured on the dev realm on 2026-09-28: the errand bought a level 13 priest a
+# Mace for her off hand, which she can never equip there.
+DUAL_WIELD_FROM = {4: 1, 1: 20, 3: 20}
+
+
+def _dual_wields(character) -> bool:
+    cls = _get(character, "class", "class_id")
+    cls_id = CLASS_IDS.get(str(cls).lower(), int(cls) if str(cls).isdigit() else 0)
+    level = int(_get(character, "level", default=0) or 0)
+    return cls_id in DUAL_WIELD_FROM and level >= DUAL_WIELD_FROM[cls_id]
+
+
+def _candidate_slots(item, equipped, chosen, tank, level, dual_wields=True):
     inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
     item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
     tank_refuses = tank and not _is_shield(item, inv)
@@ -433,6 +447,8 @@ def _candidate_slots(item, equipped, chosen, tank, level):
         if slot in chosen or not _pair_slot_open(slot, equipped, chosen):
             continue
         if slot == "offhand" and tank_refuses:
+            continue
+        if slot == "offhand" and inv == 13 and not dual_wields:
             continue
         if _worn_is_better(slot, equipped, item_level, level):
             continue
@@ -500,7 +516,12 @@ class _Plan:
         if not _fits_budget(price, self.purse, self.available, spent, weapon_first):
             return False
         for slot, item_level in _candidate_slots(
-            item, self.equipped, self.chosen, self.tank, self.level
+            item,
+            self.equipped,
+            self.chosen,
+            self.tank,
+            self.level,
+            _dual_wields(self.character),
         ):
             if weapon_first and slot != "mainhand":
                 continue
