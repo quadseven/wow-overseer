@@ -300,3 +300,94 @@ class TheErrandRemembers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ABuyCountsOnlyOnceTheWorldSaysSo(unittest.TestCase):
+    """wow-dev 2026-09-28 03:13Z: three buys refused `vendor not in range`
+    were counted as bought, so the next vendor never offered the staff."""
+
+    ROWS = [
+        gearup.BuyRow("Og", "mainhand", 293261),
+        gearup.BuyRow("Ugga", "mainhand", 293262),
+        gearup.BuyRow("Bork", "offhand", 293260),
+    ]
+
+    def test_refused_for_range_is_not_bought(self):
+        refused = {"status": "error", "detail": "vendor not in range"}
+        answers = {r.row_id: refused for r in self.ROWS}
+        bought, waiting, out_of_reach = gearup.settle_buys(self.ROWS, answers)
+        self.assertEqual({}, bought)
+        self.assertEqual([], waiting)
+        self.assertTrue(out_of_reach)
+
+    def test_delivered_is_bought_and_pending_waits(self):
+        answers = {
+            293261: {"status": "delivered"},
+            293262: {"status": "pending"},
+            293260: {"status": "error", "detail": "not enough money"},
+        }
+        bought, waiting, out_of_reach = gearup.settle_buys(self.ROWS, answers)
+        self.assertEqual({"Og": {"mainhand"}}, bought)
+        self.assertEqual([self.ROWS[1]], waiting)
+        self.assertFalse(out_of_reach)
+
+
+class TheVendorStepReadsItsRowsBack(unittest.TestCase):
+    def setUp(self):
+        import asyncio
+        import types
+
+        self.asyncio = asyncio
+        self.answers = {}
+        self.ns = {
+            "asyncio": asyncio,
+            "gearup": gearup,
+            "log": types.SimpleNamespace(info=lambda *a, **k: None),
+            "_TOWN_ERRAND_BOUGHT": {},
+            "_family_label": lambda cohort: "",
+            "_command_answer": lambda row_id: self.answers.get(row_id),
+        }
+        fn = [
+            n
+            for n in ast.walk(ast.parse(BRIDGE))
+            if isinstance(n, ast.AsyncFunctionDef)
+            and n.name == "_town_errand_vendor_settle"
+        ]
+        exec(
+            compile(ast.Module(body=fn, type_ignores=[]), "bridge.py", "exec"), self.ns
+        )  # noqa: S102
+        self.settle = self.ns["_town_errand_vendor_settle"]
+
+    def run_settle(self, marks, visited):
+        return self.asyncio.run(self.settle(None, ["Og", "Ugga"], marks, visited, None))
+
+    def test_a_range_refusal_revisits_the_vendor_once_and_buys_nothing(self):
+        rows = [gearup.BuyRow("Og", "mainhand", 1)]
+        self.answers = {1: {"status": "error", "detail": "vendor not in range"}}
+        visited = set()
+        marks = {"written": rows, "at": 3658, "tries": {3658: 1}}
+        self.assertTrue(self.run_settle(marks, visited))
+        self.assertEqual(set(), visited)
+        self.assertEqual({}, self.ns["_TOWN_ERRAND_BOUGHT"].get(("Og", "Ugga"), {}))
+        marks = {"written": rows, "at": 3658, "tries": {3658: 2}}
+        self.assertTrue(self.run_settle(marks, visited))
+        self.assertEqual({3658}, visited)
+
+    def test_an_unanswered_row_holds_the_step(self):
+        self.answers = {1: {"status": "pending"}}
+        marks = {"written": [gearup.BuyRow("Og", "mainhand", 1)], "at": 3658}
+        self.assertFalse(self.run_settle(marks, set()))
+
+    def test_a_delivered_buy_is_remembered(self):
+        self.answers = {1: {"status": "delivered"}}
+        visited = set()
+        marks = {
+            "written": [gearup.BuyRow("Og", "mainhand", 1)],
+            "at": 3491,
+            "tries": {3491: 1},
+        }
+        self.assertTrue(self.run_settle(marks, visited))
+        self.assertEqual({3491}, visited)
+        self.assertEqual(
+            {"Og": {"mainhand"}}, self.ns["_TOWN_ERRAND_BOUGHT"][("Og", "Ugga")]
+        )

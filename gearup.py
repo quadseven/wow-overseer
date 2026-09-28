@@ -596,3 +596,45 @@ def plan_funding(characters) -> tuple:
 def fund_command(gift) -> str:
     """The kind='mail' send row DoMail reads: gold only, from the donor."""
     return "send money:%d subject:For your gear" % int(gift.copper)
+
+
+# WHAT A BUY ROW ANSWERED (dev realm, 2026-09-28 03:13Z). The errand wrote
+# three buys at the weaponsmith for members the snapshot read in reach, and
+# the world refused all three with `vendor not in range`: the followers were
+# still walking up. The errand had already marked the slots bought, so the
+# next vendor never offered the mage a staff. A slot counts as bought only
+# once its row says so, and a vendor whose rows were refused for range is
+# tried again, up to VENDOR_TRIES times.
+BUY_DONE = frozenset({"delivered", "applied", "verifying", "unchanged"})
+BUY_WAITING = frozenset({"", "pending", "claimed"})
+OUT_OF_REACH = "vendor not in range"
+VENDOR_TRIES = 2
+
+
+@dataclass(frozen=True)
+class BuyRow:
+    """One written vendor buy: who, which slot, its command row."""
+
+    character: str
+    slot: str
+    row_id: int
+
+
+def settle_buys(rows, answers) -> tuple:
+    """(bought, waiting, out_of_reach) from each row's answer.
+
+    `answers` is row id -> the command row ({status, detail}) or None.
+    `bought` is name -> slots the world confirmed, `waiting` the rows still
+    unanswered, `out_of_reach` whether any row was refused for range. Pure.
+    """
+    bought, waiting, out_of_reach = {}, [], False
+    for row in rows or ():
+        answer = answers.get(row.row_id) or {}
+        status = str(answer.get("status") or "")
+        if status in BUY_WAITING:
+            waiting.append(row)
+        elif status in BUY_DONE:
+            bought.setdefault(row.character, set()).add(row.slot)
+        elif str(answer.get("detail") or "") == OUT_OF_REACH:
+            out_of_reach = True
+    return bought, waiting, out_of_reach

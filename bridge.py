@@ -7827,7 +7827,8 @@ class Bridge(discord.Client):
                  trip.vendor, int(trip.yards), ", ".join(trip.buyers), aimed)
         return aimed
 
-    async def _gearup_vendor_once(self, facts: dict) -> None:
+    async def _gearup_vendor_once(self, facts: dict,
+                                  retry_out_of_reach: bool = False) -> list:
         """Buy vendor equipment for empty slots where each member stands.
 
         `gearup.plan_vendor_buys` decides; this reads and writes. A purchase
@@ -7837,6 +7838,10 @@ class Bridge(discord.Client):
         in the bags and the module's equip drive puts it into the empty slot.
         A slot bought here is marked worn in `facts`, so the auction half of
         this pass does not buy it a second time.
+
+        Returns the rows written, as gearup.BuyRow. `retry_out_of_reach` lets
+        a buy the world refused only for range be written again inside the
+        retry window (the town errand, standing at the counter, asks for it).
         """
         offers = {}
         for name, character in facts.items():
@@ -7847,12 +7852,15 @@ class Bridge(discord.Client):
                 offers[name] = await asyncio.to_thread(
                     _fetch_gear_offers, sorted(town.stocks))
         if not offers:
-            return
+            return []
         buys = gearup.plan_vendor_buys(
             {n: facts[n] for n in offers}, offers,
             repair_floor={n: facts[n]["purse"] * towntrip.FLOOR for n in offers},
         )
         seen = await asyncio.to_thread(_recent_town_keys, GIVE_RETRY_MINUTES)
+        if retry_out_of_reach:
+            seen -= await asyncio.to_thread(_out_of_reach_buys, GIVE_RETRY_MINUTES)
+        written = []
         for buy in buys:
             command = gearup.vendor_command(buy)
             if (buy.character, command) in seen:
@@ -7860,12 +7868,15 @@ class Bridge(discord.Client):
             why = "an empty %s slot, from a vendor in reach" % buy.slot
             errand = towntrip.Errand(buy.character, towntrip.BUY_KIND, command,
                                      why, buy.buyout)
-            if not await asyncio.to_thread(_insert_town_errand, errand):
+            row_id = await asyncio.to_thread(_insert_town_errand, errand)
+            if not row_id:
                 continue
+            written.append(gearup.BuyRow(buy.character, buy.slot, int(row_id)))
             facts[buy.character]["equipped"][buy.slot] = buy.item_level
             log.info("gearup: %s buys entry %d at a vendor for %s, item level "
                      "%d, up to %d copper", buy.character, buy.entry, buy.slot,
                      buy.item_level, buy.buyout)
+        return written
 
     async def _gearup_once(self, names: list, leader: str, step: str,
                            cohort=None) -> None:
@@ -13762,6 +13773,9 @@ class Bridge(discord.Client):
         visited = marks.setdefault("vendors", set())
         if step in marks and now - marks[step] < TOWN_ERRAND_SETTLE_SECONDS:
             return False
+        if not await self._town_errand_vendor_settle(names, marks, visited,
+                                                     cohort):
+            return False
         facts, rows, trip = await self._town_errand_vendor_trip(
             state, names, leader, visited)
         if not trip.vendor and step in marks:
@@ -13778,14 +13792,48 @@ class Bridge(discord.Client):
         # came away with a fishing pole.
         if trip.vendor and not gearup.stock_of(rows, trip.vendor) & set(at.stocks):
             return False
-        await self._town_errand_vendor_buy(names, leader, positions, facts,
-                                           trip, cohort)
+        marks["written"] = await self._town_errand_vendor_buy(
+            names, leader, positions, facts, trip, cohort)
+        marks["at"] = trip.vendor
+        tries = marks.setdefault("tries", {})
+        tries[trip.vendor] = tries.get(trip.vendor, 0) + 1
         if step not in marks:
             await self._vendor_once(cohort)
         marks[step] = now
-        if trip.vendor:
-            visited.add(trip.vendor)
         return False
+
+    async def _town_errand_vendor_settle(self, names, marks, visited,
+                                         cohort) -> bool:
+        """Read back the last vendor's buy rows before choosing the next.
+
+        A slot is bought only once its row says so (`gearup.settle_buys`). A
+        vendor is done with unless a row was refused for range and it has
+        had fewer than gearup.VENDOR_TRIES visits. False while a row is still
+        unanswered.
+        """
+        rows = marks.get("written") or []
+        answers = {}
+        for row in rows:
+            answers[row.row_id] = await asyncio.to_thread(_command_answer,
+                                                          row.row_id)
+        bought, waiting, out_of_reach = gearup.settle_buys(rows, answers)
+        if waiting:
+            return False
+        mine = _TOWN_ERRAND_BOUGHT.setdefault(tuple(sorted(names)), {})
+        for name, slots in bought.items():
+            mine.setdefault(name, set()).update(slots)
+            log.info("town errand vendor: %s bought for %s%s", name,
+                     ", ".join(sorted(slots)), _family_label(cohort))
+        vendor = marks.pop("at", 0)
+        marks["written"] = []
+        tries = marks.get("tries", {}).get(vendor, 0)
+        if vendor and (not out_of_reach or tries >= gearup.VENDOR_TRIES):
+            visited.add(vendor)
+        elif vendor:
+            log.info("town errand vendor: a buy at creature %d was refused "
+                     "for range; trying it again%s", vendor,
+                     _family_label(cohort))
+        return True
 
     async def _town_errand_vendor_trip(self, state, names, leader, visited):
         """(facts, vendor rows, gearup.vendor_trip) measured from the hub, with
@@ -13806,8 +13854,8 @@ class Bridge(discord.Client):
         return facts, rows, trip
 
     async def _town_errand_vendor_buy(self, names, leader, positions, facts,
-                                      trip, cohort) -> None:
-        """Buy for every member standing at a vendor, and remember the slots."""
+                                      trip, cohort) -> list:
+        """Buy for every member standing at a vendor; the rows written."""
         standing = {}
         for name in names:
             if name in positions and name in facts:
@@ -13817,13 +13865,9 @@ class Bridge(discord.Client):
         log.info("town errand vendor: %s at %s; buying for %s%s", leader,
                  trip.name or "a vendor", ", ".join(sorted(standing)) or
                  "nobody yet", _family_label(cohort))
-        before = {n: set(f["equipped"]) for n, f in standing.items()}
-        await self._gearup_vendor_once(standing)
-        bought = _TOWN_ERRAND_BOUGHT.setdefault(tuple(sorted(names)), {})
-        for name, character in standing.items():
-            new = set(character["equipped"]) - before[name]
-            if new:
-                bought.setdefault(name, set()).update(new)
+        return await self._gearup_vendor_once(
+            {n: dict(f, equipped=dict(f["equipped"])) for n, f in standing.items()},
+            retry_out_of_reach=True)
 
     async def _town_errand_release(self, names, leader, slot, label) -> None:
         """Hand the traveller back and the family back to what it was doing."""
@@ -24647,6 +24691,26 @@ def _recent_town_keys(minutes: int) -> set:
             # 1054 missing column, 1146 missing table, 1265 a `kind` ENUM with
             # no 'repair' or 'buy' value. A world with none of that machinery
             # has been asked for nothing, so nothing is already queued.
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _out_of_reach_buys(minutes: int) -> set:
+    """(character, command) of town-trip buys the world refused only for range
+    inside the window, and never answered otherwise since. Reads only."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE kind = 'buy' AND source = 'towntrip' "
+                "AND created_at > NOW() - INTERVAL %s MINUTE "
+                "GROUP BY target_name, command "
+                "HAVING SUM(NOT (status = 'error' AND detail = %s)) = 0",
+                (int(minutes), gearup.OUT_OF_REACH),
+            )
+        except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146, 1265):
                 return set()
             raise
