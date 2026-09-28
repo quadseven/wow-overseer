@@ -11839,7 +11839,8 @@ class Bridge(discord.Client):
         deposits = guildbank.plan_deposits(
             members, guild_has_tab=purchased_tabs > 0,
             buyer=_setup_buyer(setup, names, leader),
-            reserve_for_buyer=guildbank.buyer_reserve(purchased_tabs))
+            reserve_for_buyer=guildbank.buyer_reserve(purchased_tabs)
+        ) if guildbank.MEMBER_GOLD_DEPOSITS else []
         items = (await asyncio.to_thread(_plan_bank, names)).guild
         # AND WHAT JEV CHOSE TO BANK (#267), under the same gates.
         items = tuple(items) + tuple(self._jev_keep_deposits(names, setup, items))
@@ -12010,7 +12011,8 @@ class Bridge(discord.Client):
                 await asyncio.to_thread(_fetch_guild_money, names), eligible),
             guild_has_tab=purchased_tabs > 0,
             buyer=_setup_buyer(setup, names, leader),
-            reserve_for_buyer=guildbank.buyer_reserve(purchased_tabs))
+            reserve_for_buyer=guildbank.buyer_reserve(purchased_tabs)
+        ) if guildbank.MEMBER_GOLD_DEPOSITS else []
         if not deposits:
             return
         positions = await asyncio.to_thread(

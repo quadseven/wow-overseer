@@ -175,6 +175,9 @@ class TheVaultLookDepositsOnlyForWhoeverIsAtAVault(unittest.TestCase):
                         for m in members
                     ],
                     buyer_reserve=lambda tabs: 0,
+                    # The mechanism under test; the live policy is off (the
+                    # members keep their gold) and test_guildbank pins that.
+                    MEMBER_GOLD_DEPOSITS=True,
                 ),
                 "_fetch_positions": lambda names: {
                     n: {"map_id": 1, "at": n == "Zug"} for n in names
