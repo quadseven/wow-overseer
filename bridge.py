@@ -18684,11 +18684,7 @@ def _hearth_stranded_guild_members() -> int:
         rows = list(cur.fetchall())
         busy = set(_guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE)))
     members = [m for m in (guildrun.member_from_row(r) for r in rows) if m]
-    factions = {}
-    for guild in {m.guild for m in members}:
-        factions[guild] = guildrun.faction_of([m for m in members if m.guild == guild])
-    due = [m.name for m in members
-           if m.name not in busy and guildrun.stranded(m, factions.get(m.guild, ""))]
+    due = guildrun.stranded_names(members, busy)
     if not due:
         return 0
     with _connect() as conn, conn.cursor() as cur:

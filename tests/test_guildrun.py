@@ -266,6 +266,16 @@ class EachGuildStaysOnItsOwnSide(unittest.TestCase):
             guildrun.stranded(member("W", 13, MAGE, zone_id=40), "Alliance")
         )
 
+    def test_each_member_is_judged_by_its_own_guild_and_runs_are_left_alone(self):
+        cave = [
+            member("A", 13, MAGE, race=self.HUMAN, zone_id=14),
+            member("B", 13, MAGE, race=self.HUMAN, zone_id=14),
+        ]
+        bonkers = [
+            member("C", 13, MAGE, race=self.ORC, zone_id=14, guild_name="Bonkers")
+        ]
+        self.assertEqual(guildrun.stranded_names(cave + bonkers, {"B"}), ["A"])
+
     def test_the_bridge_hearths_the_stranded_every_cycle(self):
         loop = BRIDGE[BRIDGE.index("async def _guild_run_loop") :]
         loop = loop[: loop.index("async def _guild_run_once")]

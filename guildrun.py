@@ -389,6 +389,20 @@ def stranded(member: Member, faction: str) -> bool:
     ) or member.map_id in HOSTILE_CAPITAL_DUNGEONS.get(faction, ())
 
 
+def stranded_names(members: list, busy: set) -> list:
+    """Names of members stranded on the other faction's ground (`stranded`),
+    each judged by its own guild's faction, leaving out anyone in a run."""
+    factions = {
+        guild: faction_of([m for m in members if m.guild == guild])
+        for guild in {m.guild for m in members}
+    }
+    return [
+        m.name
+        for m in members
+        if m.name not in busy and stranded(m, factions.get(m.guild, ""))
+    ]
+
+
 def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
     """The doors this set of levels fits, best fit first.
 
