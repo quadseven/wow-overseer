@@ -14,6 +14,8 @@ import pathlib
 import types
 import unittest
 
+import gearup
+import guildwork
 import mailrun
 import townerrand as te
 
@@ -40,11 +42,61 @@ class TheStates(unittest.TestCase):
         self.assertIn("Bork", why)
 
     def test_a_short_member_with_its_own_gold_starts_it(self):
+        facts = {
+            "Bork": {"equipped": {"finger1": 21, "mainhand": 30}, "purse": 800},
+            "Grug": {"equipped": {"head": 45, "mainhand": 40}, "purse": 50000},
+        }
         why = te.should_start(
-            te.State(), now=0, in_run=False, mail_gear={}, facts=FACTS
+            te.State(), now=0, in_run=False, mail_gear={}, facts=facts
         )
         self.assertIn("Grug", why)
         self.assertNotIn("Bork", why)  # 8 silver is not enough to shop with
+
+    def test_a_member_with_no_weapon_starts_it_when_a_sibling_can_fund_it(self):
+        # wow-dev 2026-09-28: the level 35 mage and priest wore no main hand,
+        # and the warrior carried 54 gold. A missing weapon is reason enough,
+        # and a broke member goes when the family can pay for it.
+        facts = {
+            "Og": {
+                "equipped": {
+                    s: 20
+                    for s in (
+                        "head",
+                        "chest",
+                        "legs",
+                        "feet",
+                        "hands",
+                        "wrist",
+                        "waist",
+                        "back",
+                        "neck",
+                        "shoulder",
+                        "finger1",
+                        "finger2",
+                        "trinket1",
+                        "trinket2",
+                        "offhand",
+                        "ranged",
+                    )
+                },
+                "purse": 800,
+            },
+            "Grug": {"equipped": {"mainhand": 40}, "purse": 540000},
+        }
+        why = te.should_start(
+            te.State(), now=0, in_run=False, mail_gear={}, facts=facts
+        )
+        self.assertIn("Og (no weapon)", why)
+        poor = dict(facts, Grug={"equipped": {"mainhand": 40}, "purse": 800})
+        self.assertEqual(
+            "",
+            te.should_start(te.State(), now=0, in_run=False, mail_gear={}, facts=poor),
+        )
+
+    def test_the_family_is_funded_before_the_post_is_collected(self):
+        self.assertEqual(te.FUND, te.STEP_ORDER[0])
+        self.assertLess(te.STEP_ORDER.index(te.FUND), te.STEP_ORDER.index(te.MAIL))
+        self.assertLess(te.STEP_ORDER.index(te.MAIL), te.STEP_ORDER.index(te.VENDOR))
 
     def test_not_in_a_run_not_twice_and_not_inside_the_cooldown(self):
         args = dict(now=100.0, mail_gear={"Bork": 1}, facts={})
@@ -85,7 +137,10 @@ class TheStates(unittest.TestCase):
         self.assertIn("every step ran", line)
 
     def test_a_step_that_never_finishes_is_cut_at_its_window(self):
-        s = te.State(phase=te.STEPS, started=0.0, phase_since=0.0, step=0, hub=HUB)
+        at_mail = te.STEP_ORDER.index(te.MAIL)
+        s = te.State(
+            phase=te.STEPS, started=0.0, phase_since=0.0, step=at_mail, hub=HUB
+        )
         s2, _ = te.advance(s, te.STEP_SECONDS[te.MAIL] - 1)
         self.assertEqual(te.MAIL, s2.current_step)
         s3, line = te.advance(s, te.STEP_SECONDS[te.MAIL])
@@ -211,6 +266,14 @@ class TheAdapter(unittest.TestCase):
             "TOWN_ERRAND_CLAIMANT": "town errand",
             "_TOWN_ERRANDS": {},
             "_TOWN_ERRAND_MARKS": {},
+            "_TOWN_ERRAND_FUNDED": {},
+            "_TOWN_ERRAND_BOUGHT": {},
+            "gearup": gearup,
+            "guildwork": guildwork,
+            "TOWN_ERRAND_SETTLE_SECONDS": 60.0,
+            "_insert_fund_letter": lambda gift, command: (
+                self.written.append((gift.donor, gift.taker, command)) or 1
+            ),
             "_family_of": lambda cohort: (["Bork", "Grug"], "Grug"),
             "_cohort_key": lambda cohort: None,
             "_family_label": lambda cohort: "",
@@ -246,6 +309,7 @@ class TheAdapter(unittest.TestCase):
                 "_town_errand_aim",
                 "_town_errand_step",
                 "_town_errand_mail",
+                "_town_errand_fund",
                 "_town_errand_regroup",
             ),
             type_ignores=[],
@@ -257,6 +321,7 @@ class TheAdapter(unittest.TestCase):
         self.fam._town_errand_aim = lambda *a: ns["_town_errand_aim"](self.fam, *a)
         self.fam._town_errand_step = lambda *a: ns["_town_errand_step"](self.fam, *a)
         self.fam._town_errand_mail = lambda *a: ns["_town_errand_mail"](self.fam, *a)
+        self.fam._town_errand_fund = lambda *a: ns["_town_errand_fund"](self.fam, *a)
         self.fam._town_errand_regroup = lambda *a: ns["_town_errand_regroup"](
             self.fam, *a
         )
@@ -281,9 +346,35 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual([], self.written)
         self.positions["Bork"] = _at(103, 101)
         self.assertEqual(te.STEPS, self.tick().phase)
+        self.assertEqual(te.MAIL, self.tick().current_step)  # nothing to fund
         state = self.tick()
         self.assertEqual([("Bork", "take-item mail:9 item:77")], self.written)
         self.assertEqual(te.MAIL, state.current_step)
+
+    def test_the_richest_member_posts_gold_before_the_post_is_taken(self):
+        # wow-dev 2026-09-28: the warrior carried 54 gold, the rogue 2.
+        rich = {
+            "Grug": {"level": 38, "purse": 540103, "equipped": {"mainhand": 43}},
+            "Bork": {"level": 35, "purse": 23904, "equipped": {"head": 38}},
+        }
+        self.ns["_fetch_gearup_facts"] = lambda names: rich
+        self.tick()
+        self.positions = {"Grug": _at(101, 100), "Bork": _at(103, 101)}
+        self.assertEqual(te.GATHER, self.tick().phase)
+        self.assertEqual(te.STEPS, self.tick().phase)
+        state = self.tick()
+        gift = 35 * gearup.FUND_PER_LEVEL - 23904
+        self.assertEqual(
+            [("Grug", "Bork", "send money:%d subject:For your gear" % gift)],
+            self.written,
+        )
+        self.assertEqual(te.FUND, state.current_step)
+        self.assertEqual(
+            {"Bork": gift, "Grug": -gift},
+            self.ns["_TOWN_ERRAND_FUNDED"][("Bork", "Grug")],
+        )
+        self.assertEqual(te.FUND, self.tick().current_step)  # the letter settles
+        self.assertEqual(te.MAIL, self.tick(60.0).current_step)
 
     def test_an_absent_head_defers_the_errand_without_a_cooldown(self):
         # wow-dev 2026-09-27 21:15: the pod came up while the roster head was

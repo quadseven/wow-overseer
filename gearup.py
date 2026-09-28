@@ -127,11 +127,28 @@ def _get(row, *keys, default=None):
     return default
 
 
+# NOT GEAR, THOUGH item_template FILES THEM AS WEAPONS. A fishing pole
+# (subclass 20) and the miscellaneous tools (subclass 14: a Blacksmith Hammer, a
+# Mining Pick) are two-handers and main-hand pieces to the slot rules, and a
+# character with the fishing skill passes the skill test for the pole. Measured
+# on the dev realm on 2026-09-27: the level 35 mage bought a Strong Fishing Pole
+# for his empty main hand twice, and the errand walked the family to the
+# fishing supplier at the mailbox instead of the weaponsmith 128 yards off.
+NOT_GEAR_WEAPONS = frozenset({14, 20})
+
+# A piece this many levels below the buyer is not worth a slot or a coin: the
+# holiday masks and starting-zone whites a level 35 character should walk past.
+MAX_LEVELS_BEHIND = 25
+
+
 def _allowed(character, item):
     level = int(_get(character, "level", default=0) or 0)
     cls = _get(character, "class", "class_id")
     cls_id = CLASS_IDS.get(str(cls).lower(), int(cls) if str(cls).isdigit() else 0)
     if not _level_and_class_ok(item, cls_id, level):
+        return False
+    item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
+    if item_level < max(2, level - MAX_LEVELS_BEHIND):
         return False
     kind = int(_get(item, "class", "item_class", default=-1) or 0)
     sub = int(_get(item, "subclass", default=-1) or 0)
@@ -164,6 +181,8 @@ def _armor_ok(cls_id, sub, inv, level):
 
 
 def _weapon_ok(character, sub):
+    if sub in NOT_GEAR_WEAPONS:
+        return False
     skills = _get(character, "skills", default={}) or {}
     allowed = _get(skills, "weapons", default=skills.get("weapon_types", ()))
     return sub in allowed or WEAPON_SUBCLASS.get(str(sub).lower()) in allowed
@@ -256,9 +275,15 @@ class VendorTrip:
 
 
 def vendor_trip(
-    characters, rows, *, map_id, repair_floor=0, max_yards=VENDOR_TRIP_MAX_YARDS
+    characters,
+    rows,
+    *,
+    map_id,
+    repair_floor=0,
+    max_yards=VENDOR_TRIP_MAX_YARDS,
+    skip=frozenset(),
 ):
-    """The nearest vendor on the leader's map that sells a short member a piece.
+    """The vendor on the leader's map worth the walk for the short members.
 
     THE WALK THE VENDOR HALF WAS MISSING. `plan_vendor_buys` buys only where a
     member already stands, and the family rarely stands at an armour merchant:
@@ -268,21 +293,51 @@ def vendor_trip(
     and never a coordinate: the aim is the vendor's creature entry, resolved
     by the module to a spawn that will deal with the character.
 
+    A WEAPON FIRST, THEN THE MOST PIECES, THEN THE NEAREST. The nearest vendor
+    that sold anybody anything used to win, and in Ratchet that was the fishing
+    supplier sixteen yards from the mailbox: the mage bought a fishing pole
+    and the weaponsmith was never visited (dev realm, 2026-09-27). So a vendor
+    that puts a weapon in an empty main hand beats one that does not, then the
+    vendor that fills more slots, and only then the nearer one. `skip` is the
+    vendors this errand already bought at, so the next call names the next.
+
     `characters` are the gear facts of the members on the leader's map. Only a
-    member with VENDOR_TRIP_EMPTY_SLOTS or more empty slots counts, and a
-    vendor counts only if `plan_vendor_buys` would buy that member something
-    there with its own gold, under the same budget rules.
+    member with VENDOR_TRIP_EMPTY_SLOTS or more empty slots, or no main hand,
+    counts, and a vendor counts only if `plan_vendor_buys` would buy that
+    member something there with its own gold, under the same budget rules.
     """
-    short = {
-        name: c
-        for name, c in (characters or {}).items()
-        if empty_gear_slots(_slot_numbers(c)) >= VENDOR_TRIP_EMPTY_SLOTS
-    }
+    short = {name: c for name, c in (characters or {}).items() if gear_short(c)}
     if not short:
         return VendorTrip(
             why_not="nobody on the leader's map has %d or more empty slots"
             % VENDOR_TRIP_EMPTY_SLOTS
         )
+    ranked = []
+    for vendor, (name, yards, stock) in _vendors(rows, map_id, max_yards, skip).items():
+        buys = plan_vendor_buys(
+            short, {n: stock for n in short}, repair_floor=repair_floor
+        )
+        if buys:
+            weapons = sum(1 for b in buys if b.slot == "mainhand")
+            key = (-weapons, -len(buys), yards, vendor)
+            ranked.append((key, vendor, name, yards, buys))
+    if not ranked:
+        return VendorTrip(
+            why_not="no vendor within %d yards sells a short member a piece it "
+            "can wear and afford" % int(max_yards)
+        )
+    _key, vendor, name, yards, buys = min(ranked)
+    return VendorTrip(
+        vendor=vendor,
+        name=name,
+        yards=yards,
+        buyers=tuple(sorted({b.character for b in buys})),
+        here=yards <= VENDOR_TRIP_HERE_YARDS,
+    )
+
+
+def _vendors(rows, map_id, max_yards, skip) -> dict:
+    """vendor -> [name, nearest yards, stock rows], on the map and in reach."""
     vendors: dict = {}
     for row in rows or ():
         try:
@@ -291,29 +346,24 @@ def vendor_trip(
             yards = float(row["yards"])
         except (KeyError, TypeError, ValueError):
             continue
-        if where[1] != int(map_id) or yards > max_yards:
+        if where[1] != int(map_id) or yards > max_yards or vendor in skip:
             continue
         seen = vendors.setdefault(vendor, [where[0], yards, []])
         seen[1] = min(seen[1], yards)
         seen[2].append(row)
-    for vendor, (name, yards, stock) in sorted(
-        vendors.items(), key=lambda kv: (kv[1][1], kv[0])
-    ):
-        buys = plan_vendor_buys(
-            short, {n: stock for n in short}, repair_floor=repair_floor
-        )
-        if buys:
-            return VendorTrip(
-                vendor=vendor,
-                name=name,
-                yards=yards,
-                buyers=tuple(sorted({b.character for b in buys})),
-                here=yards <= VENDOR_TRIP_HERE_YARDS,
-            )
-    return VendorTrip(
-        why_not="no vendor within %d yards sells a short member a piece it can "
-        "wear and afford" % int(max_yards)
-    )
+    return vendors
+
+
+def stock_of(rows, vendor) -> set:
+    """The item entries one vendor stocks, from `vendor_trip`'s rows."""
+    out = set()
+    for row in rows or ():
+        try:
+            if int(row["vendor"]) == int(vendor):
+                out.add(int(row["entry"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
 
 
 _SLOT_NUMBERS = {
@@ -389,36 +439,160 @@ def _candidate_slots(item, equipped, chosen, tank, level):
         yield slot, item_level
 
 
-def _fits_budget(price, purse, available, spent):
-    return price <= purse * 0.2 and price <= available - spent
+def _fits_budget(price, purse, available, spent, weapon_first=False):
+    """A piece costs at most a fifth of the purse; the first weapon for an
+    empty main hand may take the whole spendable budget."""
+    if price > available - spent:
+        return False
+    return weapon_first or price <= purse * 0.2
+
+
+def _can_take(item, character, tank):
+    """Class, level and skill rules, and never a two-hander for a shield tank."""
+    inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
+    if tank and inv == 17:
+        return False
+    return _allowed(character, item)
 
 
 def _plan_character(name, character, listings, budget, taken=frozenset()):
-    level = int(_get(character, "level", default=0) or 0)
+    """The buys for one character, the main hand first.
+
+    A WEAPON BEFORE ANYTHING ELSE. A level 35 mage and priest wore no main hand
+    at all on the dev realm on 2026-09-28 while the planner filled cheaper
+    slots first, and every piece was capped at a fifth of the purse, which put
+    every weapon out of reach. So an empty main hand is planned first, against
+    the best listing the character can afford with its whole spendable budget,
+    and only then do the other empty slots share what is left, a fifth each.
+    """
+    plan = _Plan(name, character, budget, set(taken))
     equipped = _get(character, "equipped", "slots", default={}) or {}
-    tank = bool(_get(character, "shield_tank", "tank", default=False))
-    purse, available = budget
-    chosen, used, buys = set(), set(taken), []
+    if "mainhand" not in equipped:
+        for item in listings:
+            if plan.consider(item, weapon_first=True):
+                break
     for item in listings:
+        plan.consider(item, weapon_first=False)
+    return plan.buys
+
+
+class _Plan:
+    """One character's buys as they are chosen, and what is left to spend."""
+
+    def __init__(self, name, character, budget, used):
+        self.name = name
+        self.character = character
+        self.level = int(_get(character, "level", default=0) or 0)
+        self.equipped = _get(character, "equipped", "slots", default={}) or {}
+        self.tank = bool(_get(character, "shield_tank", "tank", default=False))
+        self.purse, self.available = budget
+        self.chosen, self.used, self.buys = set(), used, []
+
+    def consider(self, item, weapon_first):
+        """Buy `item` for the first open slot it suits and the budget allows."""
         price = int(_get(item, "buyout", default=0) or 0)
         listing_id = int(_get(item, "id", "listing_id", "auction_id", default=0) or 0)
-        if not _allowed(character, item) or price <= 0 or listing_id in used:
-            continue
-        for slot, item_level in _candidate_slots(item, equipped, chosen, tank, level):
-            spent = sum(b.buyout for b in buys)
-            if not _fits_budget(price, purse, available, spent):
+        if price <= 0 or listing_id in self.used:
+            return False
+        if not _can_take(item, self.character, self.tank):
+            return False
+        spent = sum(b.buyout for b in self.buys)
+        if not _fits_budget(price, self.purse, self.available, spent, weapon_first):
+            return False
+        for slot, item_level in _candidate_slots(
+            item, self.equipped, self.chosen, self.tank, self.level
+        ):
+            if weapon_first and slot != "mainhand":
                 continue
-            buys.append(
-                Buy(
-                    name,
-                    slot,
-                    listing_id,
-                    int(_get(item, "entry", default=0)),
-                    price,
-                    item_level,
-                )
+            entry = int(_get(item, "entry", default=0))
+            self.buys.append(Buy(self.name, slot, listing_id, entry, price, item_level))
+            self.chosen.add(slot)
+            self.used.add(listing_id)
+            return True
+        return False
+
+
+# THE FAMILY FUNDS ITS OWN (dev realm, 2026-09-28): the warrior carried 54 gold
+# while the rogue had 2 and the second family 0 to 5 each, and every planner
+# above spends only the buyer's own purse. A player hands a sibling gold before
+# a shopping trip; here the richest member posts it at the errand's mailbox,
+# where the mail step collects it a moment later (a letter with money and no
+# item is delivered at once). A gear-short member is topped up to
+# FUND_PER_LEVEL copper per level; the donor keeps its own top-up and at least
+# FUND_DONOR_KEEP of its purse, and a gift under FUND_MIN_GIFT is not worth a
+# letter.
+FUND_PER_LEVEL = 3000
+FUND_DONOR_KEEP = 0.5
+FUND_MIN_GIFT = 5000
+
+
+@dataclass(frozen=True)
+class Gift:
+    """One letter of gold from `donor` to `taker`."""
+
+    donor: str
+    taker: str
+    copper: int
+    why: str
+
+
+def gear_short(character) -> bool:
+    """No main hand, or VENDOR_TRIP_EMPTY_SLOTS or more empty stat slots."""
+    equipped = _get(character, "equipped", "slots", default={}) or {}
+    return (
+        "mainhand" not in equipped
+        or empty_gear_slots(_slot_numbers(character)) >= VENDOR_TRIP_EMPTY_SLOTS
+    )
+
+
+def plan_funding(characters) -> tuple:
+    """The richest member's gold letters to its gear-short siblings.
+
+    `characters` are the gear facts (`level`, `purse`, `equipped`) of the
+    members standing at the mailbox. Members with no main hand are funded
+    first, then the higher level first. Pure: returns the gifts.
+    """
+    facts = {n: c for n, c in (characters or {}).items() if c}
+    if len(facts) < 2:
+        return ()
+
+    def purse(c):
+        return int(_get(c, "purse", "money", default=0) or 0)
+
+    def target(c):
+        return FUND_PER_LEVEL * int(_get(c, "level", default=0) or 0)
+
+    donor = max(sorted(facts), key=lambda n: purse(facts[n]))
+    rich = facts[donor]
+    keep = max(target(rich), int(purse(rich) * FUND_DONOR_KEEP))
+    left = purse(rich) - keep
+    takers = sorted(
+        (n for n in facts if n != donor and gear_short(facts[n])),
+        key=lambda n: (
+            "mainhand" in (_get(facts[n], "equipped", default={}) or {}),
+            -int(_get(facts[n], "level", default=0) or 0),
+            n,
+        ),
+    )
+    gifts = []
+    for name in takers:
+        need = target(facts[name]) - purse(facts[name])
+        copper = min(need, left)
+        if copper < FUND_MIN_GIFT:
+            continue
+        armed = "mainhand" in (_get(facts[name], "equipped", default={}) or {})
+        gifts.append(
+            Gift(
+                donor,
+                name,
+                copper,
+                "%s is short of gear" % name if armed else "%s has no weapon" % name,
             )
-            chosen.add(slot)
-            used.add(listing_id)
-            break
-    return buys
+        )
+        left -= copper
+    return tuple(gifts)
+
+
+def fund_command(gift) -> str:
+    """The kind='mail' send row DoMail reads: gold only, from the donor."""
+    return "send money:%d subject:For your gear" % int(gift.copper)
