@@ -353,9 +353,8 @@ class TheVendorStepReadsItsRowsBack(unittest.TestCase):
             if isinstance(n, ast.AsyncFunctionDef)
             and n.name == "_town_errand_vendor_settle"
         ]
-        exec(
-            compile(ast.Module(body=fn, type_ignores=[]), "bridge.py", "exec"), self.ns
-        )  # noqa: S102
+        code = compile(ast.Module(body=fn, type_ignores=[]), "bridge.py", "exec")
+        exec(code, self.ns)  # noqa: S102 - bridge.py's own source, as in test_townerrand
         self.settle = self.ns["_town_errand_vendor_settle"]
 
     def run_settle(self, marks, visited):
