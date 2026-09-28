@@ -636,11 +636,16 @@ class TheBridgeCarriesItOut(unittest.TestCase):
         self.assertEqual(
             {(n, "quest", ja.SOURCE) for n, _, _ in HORDE}, set(world.jobs)
         )
-        self.assertNotIn("Zug", me._activity_restore)
         self.assertTrue(
             any("fish break is over; job=quest again" in line for line in log.lines),
             log.lines,
         )
+        # Kept, to be written again, until the leader reads the job it went to.
+        self.assertEqual(ja.FISH, me._activity_restore["Zug"][1])
+        fam["leader"]["job"] = "quest"
+        me._activity_restore["Zug"] = (0.0,) + tuple(me._activity_restore["Zug"][1:])
+        asyncio.run(me._activity_for("Zug", fam, [], False, ja.policy({})))
+        self.assertNotIn("Zug", me._activity_restore)
 
     def test_a_family_moved_on_since_is_not_put_back(self):
         world = FakeFamily({n: 20 for n, _, _ in HORDE})
