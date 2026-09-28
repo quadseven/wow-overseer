@@ -317,6 +317,24 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
             guildrun.why_not(member("U", 14, MAGE), set(), set(), set()), ""
         )
 
+    def test_the_gear_gate_can_be_lifted_for_the_fallback(self):
+        weak = member("Weak", 14, WARRIOR, gear_ilvl=2.0)
+        self.assertEqual(
+            guildrun.why_not(weak, set(), set(), set()), "gear too weak for a dungeon"
+        )
+        self.assertEqual(
+            guildrun.why_not(weak, set(), set(), set(), gear_gate=False), ""
+        )
+        # Lifting the gear gate lifts nothing else.
+        dead = member("Dead", 14, WARRIOR, gear_ilvl=2.0, health=0)
+        self.assertEqual(
+            guildrun.why_not(dead, set(), set(), set(), gear_gate=False), "dead"
+        )
+
+    def test_the_bridge_falls_back_when_the_gear_gate_leaves_no_run(self):
+        self.assertIn("_free_members(False)", BRIDGE)
+        self.assertIn("forming without it", BRIDGE)
+
     def test_the_bridge_reads_worn_item_level(self):
         sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
         sql = sql[: sql.index("\n)\n")]
