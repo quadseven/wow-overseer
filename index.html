@@ -12861,8 +12861,13 @@ async function vcLoad(f) {
     f.body.replaceChildren(el("div", "vcnote bad",
       "the world did not answer for " + name + ": " + err.message));
   }
-  // A frame that grew past the edge is brought back inside the window.
-  vcMove(f, f.el.offsetLeft, f.el.offsetTop);
+  // A frame that grew past the edge is brought back inside the window, and
+  // one that grew past the bottom is raised until it fits (on a phone, a
+  // frame opened from a row low on the screen showed only its title).
+  let top = f.el.offsetTop;
+  const h = f.el.offsetHeight;
+  if (top + h > window.innerHeight - 8) top = Math.max(8, window.innerHeight - h - 8);
+  vcMove(f, f.el.offsetLeft, top);
   if (f.kind === "character" || f.kind === VC_COMPARE.kind) vcCompareSync();
 }
 
