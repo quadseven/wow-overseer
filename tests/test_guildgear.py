@@ -72,6 +72,11 @@ class TheRows(unittest.TestCase):
             (warrior["worn"], warrior["empty"], warrior["flags"]), (17, 0, [])
         )
 
+    def test_empty_slots_are_flagged_only_from_level_twenty(self):
+        low = [worn("Low", 15, 5, level=12)]
+        (m,) = guildgear.members_from_rows(low)
+        self.assertEqual((m["empty"], m["flags"]), (16, []))
+
     def test_a_member_wearing_nothing_still_has_a_row_and_death_shows(self):
         rows = [worn("Naked", None, None, dead=1)]
         (m,) = guildgear.members_from_rows(rows)

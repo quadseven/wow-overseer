@@ -27,6 +27,10 @@ MAIN_HAND = "main hand"
 # At or above this many empty stat slots, a member is flagged. Six is the
 # campaign's own gear gate (the bridge holds a dungeon run for it).
 EMPTY_WARN = 6
+# ...but only from this level. Below it, a character wearing six or seven
+# pieces is ordinary play, and flagging it flagged 139 of 142 members on the
+# dev realm, which is the same as flagging nobody.
+EMPTY_WARN_LEVEL = 20
 
 
 def _slot_name(slot):
@@ -87,9 +91,9 @@ def _presence(row: dict) -> str:
     return "online" if row.get("online") else "offline"
 
 
-def _flags(weapon: bool, empty: int) -> list:
+def _flags(weapon: bool, empty: int, level: int) -> list:
     flags = [] if weapon else ["no weapon"]
-    if empty >= EMPTY_WARN:
+    if empty >= EMPTY_WARN and level >= EMPTY_WARN_LEVEL:
         flags.append("%d empty" % empty)
     return flags
 
@@ -118,7 +122,7 @@ def _member(row: dict, worn: dict) -> dict:
         "weakest": _weakest(worn),
         "gold": wealth.coins(row.get("money")),
         "presence": _presence(row),
-        "flags": _flags(weapon, len(empty_slots)),
+        "flags": _flags(weapon, len(empty_slots), int(row.get("level") or 0)),
     }
 
 
@@ -129,6 +133,7 @@ def build(rows: list[dict]) -> dict:
         guilds.setdefault(m["guild"], []).append(m)
     return {
         "empty_warn": EMPTY_WARN,
+        "empty_warn_level": EMPTY_WARN_LEVEL,
         "slots": len(STAT_SLOTS),
         "guilds": [
             {

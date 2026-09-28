@@ -7449,8 +7449,9 @@ function lgRender() {
   const flagged = members.filter((m) => m.flags.length).length;
   const noWeapon = members.filter((m) => !m.weapon).length;
   lghead.textContent = members.length + " members, " + noWeapon + " with no weapon, "
-    + flagged + " flagged (no weapon or " + p.empty_warn + "+ of " + p.slots
-    + " slots empty). Tap a column to sort, a member to open their bags and sheet.";
+    + flagged + " flagged (no weapon, or " + p.empty_warn + "+ of " + p.slots
+    + " slots empty from level " + p.empty_warn_level
+    + "). Tap a column to sort, a member to open their bags and sheet.";
   const head = el("tr");
   for (const c of LG_COLUMNS) {
     const th = el("th", c.num ? "n" : "");
@@ -7481,7 +7482,8 @@ function lgRender() {
       el("td", "lg-dim", m.role || "-"),
       el("td", "n", m.avg_item_level.toFixed(1)),
       el("td", "n", m.worn + "/" + m.of),
-      el("td", "n" + (m.empty >= p.empty_warn ? " bad" : ""), String(m.empty)),
+      el("td", "n" + (m.empty >= p.empty_warn && m.level >= p.empty_warn_level ? " bad" : ""),
+         String(m.empty)),
       el("td", m.weapon ? "" : "bad", m.weapon ? "yes" : "NO"),
       el("td", "lg-dim", weak),
       el("td", "n", m.gold.text),
