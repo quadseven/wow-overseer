@@ -13593,6 +13593,8 @@ class Bridge(discord.Client):
         log.info("town errand: starts%s - %s; the family goes to the mailbox "
                  "at %s by %s%s", label, why, _hub_aim(hub), hub.get("place", ""),
                  "; %s hearth(s) there first" % ", ".join(far) if far else "")
+        _TOWN_ERRAND_FUNDED.pop(tuple(sorted(names)), None)
+        _TOWN_ERRAND_BOUGHT.pop(tuple(sorted(names)), None)
         return townerrand.start(now, hub, why, hearthed=bool(far))
 
     async def _town_errand_regroup(self, state, names, positions, now, label):
@@ -13631,6 +13633,10 @@ class Bridge(discord.Client):
         key = tuple(sorted(names))
         marks = _TOWN_ERRAND_MARKS.setdefault(key, {})
         ran_for = now - marks[step] if step in marks else 0.0
+        if step == townerrand.FUND:
+            await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
+            return await self._town_errand_fund(state.hub, names, positions,
+                                                cohort, now, marks)
         if step == townerrand.MAIL:
             await self._town_errand_aim(leader, _hub_aim(state.hub), cohort)
             return await self._town_errand_mail(state.hub, names, positions,
@@ -13665,6 +13671,44 @@ class Bridge(discord.Client):
             return ran_for >= TOWN_ERRAND_SETTLE_SECONDS
         return True
 
+    async def _town_errand_fund(self, hub, names, positions, cohort, now,
+                                marks) -> bool:
+        """The richest member posts gold to its gear-short siblings.
+
+        `gearup.plan_funding` decides, over the members standing at the hub
+        mailbox; the letters are `send money:` rows from the donor, which the
+        mail step after this one collects for the takers. Done at once when
+        there is nothing to send, else after TOWN_ERRAND_SETTLE_SECONDS.
+        """
+        step = townerrand.FUND
+        if step in marks:
+            return now - marks[step] >= TOWN_ERRAND_SETTLE_SECONDS
+        key = tuple(sorted(names))
+        facts = await asyncio.to_thread(_fetch_gearup_facts, names)
+        here = {n: f for n, f in facts.items() if townerrand.in_range(
+            hub, positions.get(n), TOWN_COUNTER_YARDS)}
+        gifts = gearup.plan_funding(here)
+        seen = await asyncio.to_thread(_recent_mail_keys, GIVE_RETRY_MINUTES)
+        funded = _TOWN_ERRAND_FUNDED.setdefault(key, {})
+        sent = 0
+        for gift in gifts:
+            command = gearup.fund_command(gift)
+            if (gift.donor, command) in seen:
+                continue
+            if not await asyncio.to_thread(_insert_fund_letter, gift, command):
+                continue
+            sent += 1
+            funded[gift.taker] = funded.get(gift.taker, 0) + gift.copper
+            funded[gift.donor] = funded.get(gift.donor, 0) - gift.copper
+            log.info("town errand fund: %s posts %s to %s from its own purse; "
+                     "%s%s", gift.donor, guildwork.gold(gift.copper),
+                     gift.taker, gift.why, _family_label(cohort))
+        log.info("town errand fund: %d gold letter(s) of %d planned, among %s "
+                 "at the mailbox%s", sent, len(gifts),
+                 ", ".join(sorted(here)) or "nobody", _family_label(cohort))
+        marks[step] = now
+        return sent == 0
+
     async def _town_errand_mail(self, hub, names, positions, cohort) -> bool:
         """Takes for every member standing at the hub mailbox; done when the
         plan has nothing left to take for them."""
@@ -13692,26 +13736,47 @@ class Bridge(discord.Client):
 
     async def _town_errand_vendor(self, state, names, leader, positions,
                                   cohort, now, marks) -> bool:
-        """Walk to a vendor that sells a short member gear, then buy and sell.
+        """Walk to each vendor that sells a short member gear, and buy there.
 
         The vendor is chosen from the hub (`gearup.vendor_trip`, the world's
-        spawn and stock tables); with no gear to buy, the nearest vendor that
-        will deal (`vendor`) still takes the junk. Buys are written only for
-        members read standing at a vendor.
+        spawn and stock tables): one that arms an empty main hand first, then
+        the one that fills the most slots. After a buy the next vendor is
+        chosen the same way, with the ones already visited skipped, until no
+        vendor in reach sells anybody anything or the step's window runs out.
+        With no gear to buy anywhere, the nearest vendor that will deal
+        (`vendor`) still takes the junk. Buys are written only for members read
+        standing at a vendor.
         """
         step = townerrand.VENDOR
-        facts = await self._gearup_facts_and_tanks(names)
+        key = tuple(sorted(names))
+        visited = marks.setdefault("vendors", set())
+        if step in marks and now - marks[step] < TOWN_ERRAND_SETTLE_SECONDS:
+            return False
+        facts = _town_errand_facts(
+            await self._gearup_facts_and_tanks(names),
+            _TOWN_ERRAND_FUNDED.get(key, {}), _TOWN_ERRAND_BOUGHT.get(key, {}))
         hub = state.hub
         here = bag_pressure.Standing(name=leader, map_id=int(hub["map_id"]),
                                      x=float(hub["x"]), y=float(hub["y"]))
+        rows = await asyncio.to_thread(_fetch_gear_vendors, here)
         trip = gearup.vendor_trip(
-            facts, await asyncio.to_thread(_fetch_gear_vendors, here),
+            facts, rows,
             map_id=here.map_id, max_yards=TOWN_ERRAND_VENDOR_YARDS,
-            repair_floor={n: f["purse"] * towntrip.FLOOR for n, f in facts.items()})
+            repair_floor={n: f["purse"] * towntrip.FLOOR for n, f in facts.items()},
+            skip=frozenset(visited))
+        if not trip.vendor and step in marks:
+            log.info("town errand vendor: nothing more to buy at any vendor "
+                     "in reach - %s%s", trip.why_not, _family_label(cohort))
+            return True
         aim = travel.resolve(str(trip.vendor)) if trip.vendor else "vendor"
         await self._town_errand_aim(leader, aim, cohort)
         at = await asyncio.to_thread(_fetch_town, leader)
         if leader not in positions or not at.vendor:
+            return False
+        # AT THE CHOSEN VENDOR, not merely at a vendor: the fishing supplier
+        # by the mailbox is a vendor too, and buying there is how the mage
+        # came away with a fishing pole.
+        if trip.vendor and not gearup.stock_of(rows, trip.vendor) & set(at.stocks):
             return False
         standing = {}
         for name in names:
@@ -13719,15 +13784,22 @@ class Bridge(discord.Client):
                 town = await asyncio.to_thread(_fetch_town, name)
                 if town.vendor:
                     standing[name] = facts[name]
+        log.info("town errand vendor: %s at %s; buying for %s%s", leader,
+                 trip.name or "a vendor", ", ".join(sorted(standing)) or
+                 "nobody yet", _family_label(cohort))
+        before = {n: set(f["equipped"]) for n, f in standing.items()}
+        await self._gearup_vendor_once(standing)
+        bought = _TOWN_ERRAND_BOUGHT.setdefault(key, {})
+        for name, character in standing.items():
+            new = set(character["equipped"]) - before[name]
+            if new:
+                bought.setdefault(name, set()).update(new)
         if step not in marks:
-            log.info("town errand vendor: %s at %s; buying for %s%s", leader,
-                     trip.name or "a vendor", ", ".join(sorted(standing)) or
-                     "nobody yet", _family_label(cohort))
-            await self._gearup_vendor_once(standing)
             await self._vendor_once(cohort)
-            marks[step] = now
-            return False
-        return now - marks[step] >= TOWN_ERRAND_SETTLE_SECONDS
+        marks[step] = now
+        if trip.vendor:
+            visited.add(trip.vendor)
+        return False
 
     async def _town_errand_release(self, names, leader, slot, label) -> None:
         """Hand the traveller back and the family back to what it was doing."""
@@ -22237,6 +22309,13 @@ TOWN_ERRAND_VENDOR_YARDS = 250.0
 # family key -> townerrand.State, and family key -> {step: first run}.
 _TOWN_ERRANDS: dict = {}
 _TOWN_ERRAND_MARKS: dict = {}
+# family key -> {name: copper} the fund step moved this errand, and family key
+# -> {name: slots bought}. The character table trails the world by up to
+# fifteen minutes, so the vendor step adds these to what it reads rather than
+# planning a gifted purse as empty or an emptied slot twice.
+_TOWN_ERRAND_FUNDED: dict = {}
+_TOWN_ERRAND_BOUGHT: dict = {}
+TOWN_ERRAND_FUND_SOURCE = "economy:fund"
 # Heads whose absence the errand has already reported, so a head away for an
 # evening is one log line and not one every cycle.
 _TOWN_ERRAND_HEAD_AWAY: set = set()
@@ -23181,6 +23260,46 @@ def _recent_mail_keys(minutes: int) -> set:
                 return set()
             raise
         return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _insert_fund_letter(gift, command: str) -> int:
+    """One `kind='mail'` send row: the donor posts gold to a sibling.
+
+    The donor in target_name, the taker in target_arg, as every `send` row.
+    Guarded on 1146 and 1265 like `_insert_mail`.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'mail', %s, %s)",
+                (gift.donor, command, gift.taker, TOWN_ERRAND_FUND_SOURCE),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning("town errand fund: cannot queue a letter for %s "
+                            "on this worldserver image", gift.donor)
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+def _town_errand_facts(facts: dict, funded: dict, bought: dict) -> dict:
+    """Gear facts with this errand's own gifts and buys laid over them.
+
+    The character table trails the world by up to fifteen minutes, so a gift
+    posted and collected a minute ago, and a slot bought at the last vendor,
+    are not in it yet. Pure.
+    """
+    out = {}
+    for name, fact in (facts or {}).items():
+        fact = dict(fact, equipped=dict(fact.get("equipped") or {}))
+        fact["purse"] = max(0, int(fact.get("purse") or 0) + int(funded.get(name, 0)))
+        for slot in bought.get(name, ()):
+            fact["equipped"].setdefault(slot, None)
+        out[name] = fact
+    return out
 
 
 def _insert_mail(take, command: str) -> int:

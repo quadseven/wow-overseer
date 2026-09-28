@@ -47,20 +47,24 @@ GATHER = "gather"
 STEPS = "steps"
 DONE = "done"
 
-# The order a player does it in. `tidy` is the bag tidy pass (#375), run once
-# more while the family stands together.
+# The order a player does it in. `fund` is the richest member posting gold to
+# the gear-short ones, first, so the mail step collects it before anybody
+# shops. `tidy` is the bag tidy pass (#375), run once more while the family
+# stands together.
+FUND = "fund"
 MAIL = "mail"
 EQUIP = "equip"
 VENDOR = "vendor"
 BANK = "bank"
 HANDDOWN = "handdown"
 TIDY = "tidy"
-STEP_ORDER = (MAIL, EQUIP, VENDOR, BANK, HANDDOWN, TIDY)
+STEP_ORDER = (FUND, MAIL, EQUIP, VENDOR, BANK, HANDDOWN, TIDY)
 
 # How long each step may take before the errand moves on without it. The mail
 # step is the longest: eight takes per visit, a few seconds apart, and a
 # family's post runs to dozens of letters.
 STEP_SECONDS = {
+    FUND: 120.0,
     MAIL: 900.0,
     EQUIP: 120.0,
     VENDOR: 480.0,
@@ -104,10 +108,12 @@ HEARTH_SECONDS = 45.0
 HUB_YARDS = 10.0
 GATHER_YARDS = 12.0
 
-# The entry test: gear in the post, or a member this short of slots with at
-# least this much of its own gold.
+# The entry test: gear in the post, or a member this short of slots (or with
+# no main hand) with at least this much of its own gold, or a sibling with
+# START_FAMILY_PURSE to fund it.
 START_EMPTY_SLOTS = 3
 START_PURSE = 20000
+START_FAMILY_PURSE = 100000
 
 
 @dataclass(frozen=True)
@@ -152,11 +158,19 @@ def should_start(
     if waiting:
         return "bought gear waits in the mailbox for %s" % ", ".join(waiting)
     short = []
+    richest = max((int(f.get("purse") or 0) for f in (facts or {}).values()), default=0)
     for name, fact in sorted((facts or {}).items()):
-        worn = [s for s in fact.get("equipped", {}) if s not in ("shirt", "tabard")]
+        equipped = fact.get("equipped", {})
+        worn = [s for s in equipped if s not in ("shirt", "tabard")]
         empty = 17 - len(worn)
-        if empty >= START_EMPTY_SLOTS and int(fact.get("purse") or 0) >= START_PURSE:
-            short.append("%s (%d empty)" % (name, empty))
+        unarmed = "mainhand" not in equipped
+        if not (empty >= START_EMPTY_SLOTS or unarmed):
+            continue
+        own = int(fact.get("purse") or 0)
+        if own >= START_PURSE or richest >= START_FAMILY_PURSE:
+            short.append(
+                "%s (%s)" % (name, "no weapon" if unarmed else "%d empty" % empty)
+            )
     if short:
         return "%s short of gear with gold to spend" % ", ".join(short)
     return ""
