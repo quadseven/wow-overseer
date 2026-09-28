@@ -57,6 +57,7 @@ import guildshare
 import guildroute
 import guildwork
 import gearup
+import weaponskill
 import natural
 import guildcorps
 import guildjobs
@@ -5327,6 +5328,7 @@ class Bridge(discord.Client):
                 self._town_passing_loop,
                 self._tidy_loop,
                 self._town_errand_loop,
+                self._weapon_skill_loop,
                 self._recruit_loop,
                 self._raid_spec_loop,
                 self._craft_supply_loop,
@@ -13494,6 +13496,93 @@ class Bridge(discord.Client):
     # has the states and the measurement that asked for them; this is the
     # adapter. It reads, it asks `townerrand` what to do, and it writes, and
     # every position it judges is a settled one (`_settled_positions`).
+
+    # ------------------------------------------ weapon training (#399) --
+    #
+    # `weaponskill` decides; this reads and writes. A member carrying a weapon
+    # its class can learn and it has no skill for, which fills an empty slot or
+    # beats the worn one, walks with the family to a weapon master of its own
+    # side on the leader's map, buys the skill with its own gold
+    # (`train-weapon skill:<id>`), and puts the weapon on once the row reads
+    # applied. Never inside a dungeon run or a town errand.
+
+    async def _weapon_skill_loop(self) -> None:
+        """Every WEAPON_SKILL_CYCLE_SECONDS, for every family."""
+        await self.wait_until_ready()
+        await asyncio.sleep(WEAPON_SKILL_CYCLE_SECONDS)
+        while not self.is_closed():
+            try:
+                await self._weapon_skill_once()
+            except Exception:
+                log.exception("weapon skill: pass failed; retrying next cycle")
+            await self._for_other_families("weapon skill", self._weapon_skill_once)
+            await asyncio.sleep(WEAPON_SKILL_CYCLE_SECONDS)
+
+    async def _weapon_skill_once(self, cohort=None) -> None:
+        """One family: equip what was trained, train who stands in reach, or
+        walk the leader to the weapon master."""
+        names, leader = await asyncio.to_thread(_family_of, cohort)
+        if not names or not leader:
+            return
+        label = _family_label(cohort)
+        await self._weapon_skill_equip(names, label)
+        if await self._mid_run(names) or _town_errand_active(names):
+            return
+        facts = await asyncio.to_thread(_fetch_gearup_facts, names)
+        needs = weaponskill.needs(
+            facts, await asyncio.to_thread(_fetch_bag_weapons, names))
+        if not needs:
+            return
+        positions = await asyncio.to_thread(_fetch_positions, list(names))
+        at = positions.get(leader)
+        if not at:
+            return
+        teams = await asyncio.to_thread(_fetch_teams, [leader])
+        master = weaponskill.choose_master(
+            await asyncio.to_thread(_fetch_weapon_masters, at,
+                                    sorted({n.spell for n in needs})),
+            {n.spell for n in needs}, teams.get(leader, ""), int(at["map_id"]))
+        said = "; ".join("%s carries %s (%s) and has no skill %d for it" % (
+            n.name, n.item, n.why, n.skill) for n in needs)
+        if not master:
+            log.info("weapon skill: %s; no weapon master of the family's side "
+                     "on this map teaches it, so nobody walks%s", said, label)
+            return
+        if await self._weapon_skill_train(needs, master, positions, label):
+            return
+        target = travel.resolve(str(int(master["entry"])))
+        if not target:
+            return
+        aimed = await self._claim_town_slot(
+            WEAPON_SKILL_CLAIMANT, leader, target, urgent=True,
+            cohort=_cohort_key(cohort))
+        log.info("weapon skill: %s; %s is aimed at %s (creature %d, %d yards) "
+                 "(aim taken=%s)%s", said, leader, master["name"],
+                 int(master["entry"]), int(float(master["yards"])), aimed, label)
+
+    async def _weapon_skill_train(self, needs, master, positions, label) -> int:
+        """Write a train row for each member standing at the master; how many."""
+        written = 0
+        for need in needs:
+            if need.spell not in master["spells"]:
+                continue
+            if not weaponskill.in_reach(master, positions.get(need.name)):
+                continue
+            if await asyncio.to_thread(_weapon_train_asked, need):
+                continue
+            if await asyncio.to_thread(_insert_weapon_train, need):
+                written += 1
+                log.info("weapon skill: %s buys skill %d at %s with its own "
+                         "gold, to wield %s%s", need.name, need.skill,
+                         master["name"], need.item, label)
+        return written
+
+    async def _weapon_skill_equip(self, names, label) -> None:
+        """Put on each weapon whose skill row reads applied and not yet worn."""
+        for row in await asyncio.to_thread(_weapon_trains_applied, names):
+            if await asyncio.to_thread(_insert_weapon_equip, row):
+                log.info("weapon skill: %s learned skill %s; puts on item %s%s",
+                         row["name"], row["skill"], row["entry"], label)
 
     async def _town_errand_loop(self) -> None:
         """Run each family's town errand, every TOWN_ERRAND_CYCLE_SECONDS."""
@@ -23375,6 +23464,130 @@ def _recent_mail_keys(minutes: int) -> set:
         return {(row["target_name"], row["command"]) for row in cur.fetchall()}
 
 
+# Weapon training (#399): cadence, the town-slot claimant, and its reads.
+WEAPON_SKILL_CYCLE_SECONDS = 300.0
+WEAPON_SKILL_CLAIMANT = "weapon master"
+# A refusal that may pass later (not in reach yet, money) is asked again after
+# this long; the walk that closes the distance runs on the same cycle.
+WEAPON_TRAIN_RETRY_MINUTES = 10
+WEAPON_EQUIP_SOURCE = "gear:weapon-skill-equip"
+
+_BAG_WEAPONS_SQL = (
+    "SELECT c.name, ii.itemEntry AS entry, it.name AS label, it.subclass, "
+    "it.InventoryType, it.ItemLevel, it.RequiredLevel, it.AllowableClass "
+    "FROM characters c JOIN character_inventory ci ON ci.guid = c.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND it.class = 2 AND NOT (ci.bag = 0 AND ci.slot < 19)"
+)
+
+_WEAPON_MASTERS_SQL = (
+    "SELECT cr.id AS entry, ct.name AS name, ct.faction AS faction, "
+    "cr.map AS map_id, cr.position_x AS x, cr.position_y AS y, "
+    "SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2)) AS yards, "
+    "ts.SpellId AS spell "
+    "FROM acore_world.creature cr "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "JOIN acore_world.creature_default_trainer cdt ON cdt.CreatureId = cr.id "
+    "JOIN acore_world.trainer_spell ts ON ts.TrainerId = cdt.TrainerId "
+    "WHERE cr.map = %s AND ts.SpellId IN ({spells})"
+)
+
+
+def _fetch_bag_weapons(names: list) -> list:
+    """Every carried (not worn) weapon of the family, with its template."""
+    if not names:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_BAG_WEAPONS_SQL % ",".join(["%s"] * len(names)), list(names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("weapon skill: the bags cannot be read on this world image")
+                return []
+            raise
+        return [dict(r) for r in cur.fetchall()]
+
+
+def _fetch_weapon_masters(at: dict, spells: list) -> list:
+    """Spawns on the reading's map of trainers that teach any of `spells`."""
+    if not at or not spells:
+        return []
+    sql = _WEAPON_MASTERS_SQL.format(spells=",".join(["%s"] * len(spells)))
+    x, y = float(at["pos_x"]), float(at["pos_y"])
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, (x, y, int(at["map_id"]), *[int(s) for s in spells]))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [dict(r) for r in cur.fetchall()]
+
+
+def _weapon_train_asked(need) -> bool:
+    """A train row for this member and skill that is in flight, applied, or
+    refused for good; a refusal that may pass later is asked again after
+    WEAPON_TRAIN_RETRY_MINUTES."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, detail, created_at > NOW() - INTERVAL %s MINUTE AS recent "
+            "FROM overseer_command WHERE kind = 'cast' AND source = %s "
+            "AND target_name = %s AND command = %s ORDER BY id DESC LIMIT 1",
+            (WEAPON_TRAIN_RETRY_MINUTES, weaponskill.TRAIN_SOURCE, need.name,
+             need.train_command))
+        row = cur.fetchone()
+    if not row:
+        return False
+    return str(row["status"]) != "error" or bool(row["recent"])
+
+
+def _insert_weapon_train(need) -> int:
+    """One kind='cast' `train-weapon` row for a member at a weapon master."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_command (target_name, command, kind, target_arg, source) "
+            "VALUES (%s, %s, 'cast', %s, %s)",
+            (need.name, need.train_command, str(need.entry), weaponskill.TRAIN_SOURCE))
+        return cur.lastrowid or 0
+
+
+def _weapon_trains_applied(names: list) -> list:
+    """Applied train rows in the last day with no equip row written since:
+    name, skill, and the weapon entry kept in target_arg."""
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT t.target_name AS name, t.command, t.target_arg AS entry "
+            "FROM overseer_command t WHERE t.kind = 'cast' AND t.source = %s "
+            "AND t.status = 'applied' AND t.target_name IN (" + marks + ") "
+            "AND t.created_at > NOW() - INTERVAL 1 DAY "
+            "AND NOT EXISTS (SELECT 1 FROM overseer_command e WHERE e.kind = 'bot' "
+            "AND e.source = %s AND e.target_name = t.target_name "
+            "AND e.command = CONCAT('e Hitem:', t.target_arg, ':0') AND e.id > t.id)",
+            (weaponskill.TRAIN_SOURCE, *names, WEAPON_EQUIP_SOURCE))
+        rows = [dict(r) for r in cur.fetchall()]
+    for row in rows:
+        row["skill"] = str(row["command"]).rsplit(":", 1)[-1]
+    return rows
+
+
+def _insert_weapon_equip(row: dict) -> int:
+    """The `e Hitem:<entry>:0` row that puts the trained weapon on."""
+    if not str(row.get("entry") or "").isdigit():
+        return 0
+    command = "e Hitem:%d:0" % int(row["entry"])
+    if _KEEP.blocks(row["name"], command):
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_command (target_name, command, kind, source) "
+            "VALUES (%s, %s, 'bot', %s)", (row["name"], command, WEAPON_EQUIP_SOURCE))
+        return cur.lastrowid or 0
+
+
 def _insert_fund_letter(gift, command: str) -> int:
     """One `kind='mail'` send row: the donor posts gold to a sibling.
 
@@ -25625,6 +25838,7 @@ class HeadlessBridge(Bridge):
                 self._town_passing_loop,
                 self._tidy_loop,
                 self._town_errand_loop,
+                self._weapon_skill_loop,
                 self._recruit_loop,
                 self._raid_spec_loop,
                 self._craft_supply_loop,
