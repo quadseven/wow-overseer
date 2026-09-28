@@ -190,11 +190,16 @@ class TheDecision(unittest.TestCase):
         self.assertEqual("scarlet", back.target)
         self.assertIn("beat the family again", back.why)
 
-    def test_a_return_is_only_one_inside_the_queue_entry(self):
-        self.assertTrue(pace.returned(T0, T0 + timedelta(minutes=5)))
-        self.assertTrue(pace.returned(None, T0))
-        self.assertFalse(pace.returned(T0 + timedelta(minutes=5), T0))
+    def test_an_entry_that_starts_after_the_step_back_is_the_return(self):
+        """wow-dev 2026-09-28: stepped back up at 00:14:54, the Library entry
+        started at 01:01:43, and the family wiped at 01:08."""
+        back = T0
+        self.assertTrue(pace.returned(T0 + timedelta(minutes=47), back))
+        self.assertTrue(pace.returned(T0 - timedelta(minutes=5), back))
+        self.assertTrue(pace.returned(None, back))
         self.assertFalse(pace.returned(T0, None))
+        late = T0 + timedelta(hours=pace.RETURN_HOURS, minutes=1)
+        self.assertFalse(pace.returned(late, back))
 
     def test_a_clearable_door_holds(self):
         runs = [run("wipe", 0), run("complete", 10)]
