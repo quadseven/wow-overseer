@@ -2926,6 +2926,10 @@
   .lg-table .lg-dim { color:var(--on-card-dim); }
   .lg-table tr.lg-open td { white-space:normal; background:var(--card); }
   .lg-open .lg-say { font-size:.75rem; color:var(--on-card-dim); margin-bottom:.35rem; }
+  /* The opened line stays in view while the table scrolls sideways, and is
+     no wider than the screen, so all six frame buttons are under a thumb. */
+  .lg-open .lg-say, .lg-open .vcbar { position:sticky; left:.5rem;
+              box-sizing:border-box; width:min(24rem, calc(100vw - 2 * var(--gutter) - 1.2rem)); }
   .lg-note { font-size:.75rem; color:var(--muted); margin:.3rem 0 0; }
   #lgpick button { font:inherit; font-size:12px; cursor:pointer; min-height:36px;
               padding:0 .8rem; border-radius:999px; background:none;
