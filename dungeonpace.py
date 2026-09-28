@@ -250,6 +250,12 @@ def since(started, back):
     return max(known) if known else None
 
 
+def returned(started, back) -> bool:
+    """Whether the family's last step back to a door is inside its queue
+    entry, so the door's record counts from that return."""
+    return back is not None and (started is None or back >= started)
+
+
 def viability(runs, map_id: int, since=None) -> Viability:
     """The door's record from ledger rows, oldest first.
 
@@ -362,6 +368,21 @@ def readiness(keyword: str, members) -> tuple:
     return tuple(gates), tuple(notes)
 
 
+def step_up_blockers(members) -> tuple:
+    """Why the family is not armed for a harder door yet, or ().
+
+    A STEP UP IS A CLAIM THAT THE FAMILY GREW, and the gear it grew by has to
+    be on the members who were short. Measured on wow-dev 2026-09-28: the town
+    errand filled 24 slots across Bork, Grog and Grug, the ladder stepped back
+    up to the Scarlet Library on that, and the family wiped in its first pull
+    with Og and Ugga still holding no weapon and nine or ten slots empty. The
+    gear hold (#146) owns whether the family waits in town; this owns only
+    whether the family is sent back into the door that beat it.
+    """
+    _gates, notes = readiness("", members)
+    return tuple(notes)
+
+
 def baseline(members) -> str:
     """The family as it stands, for `named_change` to compare against later."""
     return json.dumps(
@@ -413,13 +434,17 @@ class Candidate:
     floor: int
     ceiling: int
     record: str = ""
+    # A wing of the instance the failing door opens into (Scarlet Monastery,
+    # Maraudon, Dire Maul, Stratholme): the family is already standing at it.
+    beside: bool = False
 
     def said(self) -> str:
-        return "%s (levels %d-%d%s)" % (
+        return "%s (levels %d-%d%s%s)" % (
             self.place,
             self.floor,
             self.ceiling,
             "; " + self.record if self.record else "",
+            "; next door, no travel" if self.beside else "",
         )
 
 
@@ -471,6 +496,7 @@ def candidates(below: str, level_rows, keys, runs=None, avoid=()) -> list:
     level = _weakest_level(level_rows)
     if top <= 0 or not level:
         return []
+    here = campaignplan.RUNS[top].map_id
     out = []
     for run in campaignplan.RUNS[:top]:
         if run.keyword in avoid or not _open_to(run, level, level_rows, keys):
@@ -478,14 +504,34 @@ def candidates(below: str, level_rows, keys, runs=None, avoid=()) -> list:
         record = _record(run, runs)
         if record is None:
             continue
-        out.append(Candidate(run.keyword, run.place, run.floor, run.ceiling, record))
+        out.append(
+            Candidate(
+                run.keyword,
+                run.place,
+                run.floor,
+                run.ceiling,
+                record,
+                beside=run.map_id == here,
+            )
+        )
     out.reverse()
     return out
 
 
 def ladder(cands) -> Candidate | None:
-    """The hardest easier door: the one that still teaches the family most."""
-    return cands[0] if cands else None
+    """The easier door the family should walk to next.
+
+    A WING BESIDE THE FAILING DOOR FIRST, then the hardest. Measured on wow-dev
+    2026-09-27: the Alliance family wiped in the Scarlet Library and the ladder
+    sent it to Gnomeregan, the hardest easier door by band, across the
+    Eastern Kingdoms. It never got there in three hours of town errands, stepped
+    back up and wiped in the Library again, while the Graveyard, a door it
+    could clear, stood thirty yards from where it wiped. A group of players
+    steps down to the wing next door.
+    """
+    if not cands:
+        return None
+    return next((c for c in cands if c.beside), cands[0])
 
 
 # --- the decision ---------------------------------------------------------------
@@ -521,6 +567,9 @@ class Facts:
     changed: str
     done: int | None
     cands: tuple
+    # The family stepped back up to this door (a step-up or release since the
+    # entry started), so its record counts from that return.
+    returned: bool = False
 
 
 @dataclass(frozen=True)
@@ -552,10 +601,41 @@ def _while_questing(f: Facts, place: str) -> Decision:
             f.cands,
             "an easier door opened while questing: %s" % ladder(f.cands).place,
         )
-    if f.changed and not f.gates:
+    blockers = step_up_blockers(f.members)
+    if f.changed and not f.gates and not blockers:
         return Decision(RELEASE, "", "%s, so back to %s" % (f.changed, place))
-    waiting = "; ".join(f.gates) or "no level or upgrade since the last wipe"
+    waiting = "; ".join(f.gates + blockers) or "no level or upgrade since the last wipe"
     return Decision(NOTHING, "", "questing until a named change: %s" % waiting)
+
+
+def _count_reached(f: Facts) -> int:
+    """The step-down entry's run count when the leader has run it, else 0."""
+    wanted = int(f.head.get("runs_wanted") or 0)
+    return wanted if f.done is not None and wanted and f.done >= wanted else 0
+
+
+def _grown_or_farming(f: Facts, place: str) -> Decision:
+    """A clearable step-down door: back up, run more, or keep farming."""
+    blockers = step_up_blockers(f.members)
+    grown = bool(f.changed) and not f.gates and not blockers
+    if grown:
+        return Decision(
+            STEP_UP,
+            f.door,
+            "%s, and %s is ready" % (f.changed, council.keyword_place(f.door)),
+        )
+    wanted = _count_reached(f)
+    if wanted and not (f.changed and not blockers):
+        return Decision(
+            EXTEND,
+            str(f.head.get("keyword") or ""),
+            "%s is at %d of %d with no level or upgrade since stepping down, so "
+            "it runs %d more" % (place, f.done, wanted, STEP_DOWN_RUNS),
+        )
+    held = ""
+    if f.changed and blockers:
+        held = "; %s, but not back up yet: %s" % (f.changed, "; ".join(blockers))
+    return Decision(NOTHING, "", "farming %s (%s)%s" % (place, f.record.line(), held))
 
 
 def _while_stepped_down(f: Facts, place: str) -> Decision:
@@ -567,27 +647,22 @@ def _while_stepped_down(f: Facts, place: str) -> Decision:
         if f.cands:
             return _down_to(FURTHER, f.cands, why)
         return Decision(QUEST, "", why + " and no easier door is", (LEVEL,))
-    if f.changed and not f.gates:
-        return Decision(
-            STEP_UP,
-            f.door,
-            "%s, and %s is ready" % (f.changed, council.keyword_place(f.door)),
-        )
-    wanted = int(f.head.get("runs_wanted") or 0)
-    if f.done is not None and wanted and f.done >= wanted and not f.changed:
-        return Decision(
-            EXTEND,
-            str(f.head.get("keyword") or ""),
-            "%s is at %d of %d with no level or upgrade since stepping down, so "
-            "it runs %d more" % (place, f.done, wanted, STEP_DOWN_RUNS),
-        )
-    return Decision(NOTHING, "", "farming %s (%s)" % (place, f.record.line()))
+    return _grown_or_farming(f, place)
 
 
 def _at_the_door(f: Facts, place: str) -> Decision:
     """The operator's (or the planner's) entry at the head: hold or step down."""
-    if str(f.head.get("status") or "") == "active" and not f.record.clearable:
+    active = str(f.head.get("status") or "") == "active"
+    if active and not f.record.clearable:
         why = "%s is not clearable: %s" % (place, f.record.line())
+    elif active and f.returned and f.record.wipes:
+        # BACK DOWN AT ONCE (2026-09-28). The door already beat this family
+        # once; a wipe on the way back in is the same answer, not bad luck,
+        # and waiting for a second one costs five corpse runs to learn it.
+        why = "%s beat the family again on its way back: %s" % (
+            place,
+            f.record.line(),
+        )
     elif f.gates:
         why = "%s is not ready: %s" % (place, "; ".join(f.gates))
     else:
@@ -717,6 +792,11 @@ def question(f: Facts, d: Decision):
         elif option in by_kw:
             c = by_kw[option]
             criteria[option] = "Farm %s for gear and experience." % c.said()
+            if c.beside:
+                criteria[option] += (
+                    " It is a wing of the same instance, so they start at once "
+                    "instead of crossing the continent."
+                )
     state = {
         "family": [
             {
