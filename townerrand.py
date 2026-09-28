@@ -157,23 +157,34 @@ def should_start(
     waiting = sorted(n for n, count in (mail_gear or {}).items() if count > 0)
     if waiting:
         return "bought gear waits in the mailbox for %s" % ", ".join(waiting)
-    short = []
-    richest = max((int(f.get("purse") or 0) for f in (facts or {}).values()), default=0)
-    for name, fact in sorted((facts or {}).items()):
-        equipped = fact.get("equipped", {})
-        worn = [s for s in equipped if s not in ("shirt", "tabard")]
-        empty = 17 - len(worn)
-        unarmed = "mainhand" not in equipped
-        if not (empty >= START_EMPTY_SLOTS or unarmed):
-            continue
-        own = int(fact.get("purse") or 0)
-        if own >= START_PURSE or richest >= START_FAMILY_PURSE:
-            short.append(
-                "%s (%s)" % (name, "no weapon" if unarmed else "%d empty" % empty)
-            )
+    short = short_of_gear(facts)
     if short:
         return "%s short of gear with gold to spend" % ", ".join(short)
     return ""
+
+
+def _shortfall(fact: dict) -> str:
+    """'no weapon', 'N empty', or '' for a member not short of gear."""
+    equipped = fact.get("equipped", {})
+    if "mainhand" not in equipped:
+        return "no weapon"
+    worn = [s for s in equipped if s not in ("shirt", "tabard")]
+    empty = 17 - len(worn)
+    return "%d empty" % empty if empty >= START_EMPTY_SLOTS else ""
+
+
+def short_of_gear(facts: dict) -> list:
+    """'Name (why)' for each member short of gear with gold to shop with: its
+    own START_PURSE, or a sibling with START_FAMILY_PURSE to fund it."""
+    facts = facts or {}
+    richest = max((int(f.get("purse") or 0) for f in facts.values()), default=0)
+    funded = richest >= START_FAMILY_PURSE
+    out = []
+    for name, fact in sorted(facts.items()):
+        why = _shortfall(fact)
+        if why and (funded or int(fact.get("purse") or 0) >= START_PURSE):
+            out.append("%s (%s)" % (name, why))
+    return out
 
 
 def start(now: float, hub: dict, why: str, hearthed: bool = False) -> State:

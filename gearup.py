@@ -306,17 +306,38 @@ def vendor_trip(
     counts, and a vendor counts only if `plan_vendor_buys` would buy that
     member something there with its own gold, under the same budget rules.
     """
-    short = {
-        name: c
-        for name, c in (characters or {}).items()
-        if empty_gear_slots(_slot_numbers(c)) >= VENDOR_TRIP_EMPTY_SLOTS
-        or "mainhand" not in (_get(c, "equipped", "slots", default={}) or {})
-    }
+    short = {name: c for name, c in (characters or {}).items() if gear_short(c)}
     if not short:
         return VendorTrip(
             why_not="nobody on the leader's map has %d or more empty slots"
             % VENDOR_TRIP_EMPTY_SLOTS
         )
+    ranked = []
+    for vendor, (name, yards, stock) in _vendors(rows, map_id, max_yards, skip).items():
+        buys = plan_vendor_buys(
+            short, {n: stock for n in short}, repair_floor=repair_floor
+        )
+        if buys:
+            weapons = sum(1 for b in buys if b.slot == "mainhand")
+            key = (-weapons, -len(buys), yards, vendor)
+            ranked.append((key, vendor, name, yards, buys))
+    if not ranked:
+        return VendorTrip(
+            why_not="no vendor within %d yards sells a short member a piece it "
+            "can wear and afford" % int(max_yards)
+        )
+    _key, vendor, name, yards, buys = min(ranked)
+    return VendorTrip(
+        vendor=vendor,
+        name=name,
+        yards=yards,
+        buyers=tuple(sorted({b.character for b in buys})),
+        here=yards <= VENDOR_TRIP_HERE_YARDS,
+    )
+
+
+def _vendors(rows, map_id, max_yards, skip) -> dict:
+    """vendor -> [name, nearest yards, stock rows], on the map and in reach."""
     vendors: dict = {}
     for row in rows or ():
         try:
@@ -330,30 +351,7 @@ def vendor_trip(
         seen = vendors.setdefault(vendor, [where[0], yards, []])
         seen[1] = min(seen[1], yards)
         seen[2].append(row)
-    ranked = []
-    for vendor, (name, yards, stock) in vendors.items():
-        buys = plan_vendor_buys(
-            short, {n: stock for n in short}, repair_floor=repair_floor
-        )
-        if not buys:
-            continue
-        weapons = sum(1 for b in buys if b.slot == "mainhand")
-        ranked.append(
-            ((-weapons, -len(buys), yards, vendor), vendor, name, yards, buys)
-        )
-    if ranked:
-        _key, vendor, name, yards, buys = min(ranked)
-        return VendorTrip(
-            vendor=vendor,
-            name=name,
-            yards=yards,
-            buyers=tuple(sorted({b.character for b in buys})),
-            here=yards <= VENDOR_TRIP_HERE_YARDS,
-        )
-    return VendorTrip(
-        why_not="no vendor within %d yards sells a short member a piece it can "
-        "wear and afford" % int(max_yards)
-    )
+    return vendors
 
 
 def stock_of(rows, vendor) -> set:
@@ -467,45 +465,51 @@ def _plan_character(name, character, listings, budget, taken=frozenset()):
     the best listing the character can afford with its whole spendable budget,
     and only then do the other empty slots share what is left, a fifth each.
     """
-    level = int(_get(character, "level", default=0) or 0)
+    plan = _Plan(name, character, budget, set(taken))
     equipped = _get(character, "equipped", "slots", default={}) or {}
-    tank = bool(_get(character, "shield_tank", "tank", default=False))
-    purse, available = budget
-    chosen, used, buys = set(), set(taken), []
-
-    def consider(item, weapon_first):
-        price = int(_get(item, "buyout", default=0) or 0)
-        listing_id = int(_get(item, "id", "listing_id", "auction_id", default=0) or 0)
-        if price <= 0 or listing_id in used or not _can_take(item, character, tank):
-            return False
-        for slot, item_level in _candidate_slots(item, equipped, chosen, tank, level):
-            if weapon_first and slot != "mainhand":
-                continue
-            spent = sum(b.buyout for b in buys)
-            if not _fits_budget(price, purse, available, spent, weapon_first):
-                continue
-            buys.append(
-                Buy(
-                    name,
-                    slot,
-                    listing_id,
-                    int(_get(item, "entry", default=0)),
-                    price,
-                    item_level,
-                )
-            )
-            chosen.add(slot)
-            used.add(listing_id)
-            return True
-        return False
-
     if "mainhand" not in equipped:
         for item in listings:
-            if consider(item, True):
+            if plan.consider(item, weapon_first=True):
                 break
     for item in listings:
-        consider(item, False)
-    return buys
+        plan.consider(item, weapon_first=False)
+    return plan.buys
+
+
+class _Plan:
+    """One character's buys as they are chosen, and what is left to spend."""
+
+    def __init__(self, name, character, budget, used):
+        self.name = name
+        self.character = character
+        self.level = int(_get(character, "level", default=0) or 0)
+        self.equipped = _get(character, "equipped", "slots", default={}) or {}
+        self.tank = bool(_get(character, "shield_tank", "tank", default=False))
+        self.purse, self.available = budget
+        self.chosen, self.used, self.buys = set(), used, []
+
+    def consider(self, item, weapon_first):
+        """Buy `item` for the first open slot it suits and the budget allows."""
+        price = int(_get(item, "buyout", default=0) or 0)
+        listing_id = int(_get(item, "id", "listing_id", "auction_id", default=0) or 0)
+        if price <= 0 or listing_id in self.used:
+            return False
+        if not _can_take(item, self.character, self.tank):
+            return False
+        spent = sum(b.buyout for b in self.buys)
+        if not _fits_budget(price, self.purse, self.available, spent, weapon_first):
+            return False
+        for slot, item_level in _candidate_slots(
+            item, self.equipped, self.chosen, self.tank, self.level
+        ):
+            if weapon_first and slot != "mainhand":
+                continue
+            entry = int(_get(item, "entry", default=0))
+            self.buys.append(Buy(self.name, slot, listing_id, entry, price, item_level))
+            self.chosen.add(slot)
+            self.used.add(listing_id)
+            return True
+        return False
 
 
 # THE FAMILY FUNDS ITS OWN (dev realm, 2026-09-28): the warrior carried 54 gold

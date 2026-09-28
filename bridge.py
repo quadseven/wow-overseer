@@ -13748,22 +13748,11 @@ class Bridge(discord.Client):
         standing at a vendor.
         """
         step = townerrand.VENDOR
-        key = tuple(sorted(names))
         visited = marks.setdefault("vendors", set())
         if step in marks and now - marks[step] < TOWN_ERRAND_SETTLE_SECONDS:
             return False
-        facts = _town_errand_facts(
-            await self._gearup_facts_and_tanks(names),
-            _TOWN_ERRAND_FUNDED.get(key, {}), _TOWN_ERRAND_BOUGHT.get(key, {}))
-        hub = state.hub
-        here = bag_pressure.Standing(name=leader, map_id=int(hub["map_id"]),
-                                     x=float(hub["x"]), y=float(hub["y"]))
-        rows = await asyncio.to_thread(_fetch_gear_vendors, here)
-        trip = gearup.vendor_trip(
-            facts, rows,
-            map_id=here.map_id, max_yards=TOWN_ERRAND_VENDOR_YARDS,
-            repair_floor={n: f["purse"] * towntrip.FLOOR for n, f in facts.items()},
-            skip=frozenset(visited))
+        facts, rows, trip = await self._town_errand_vendor_trip(
+            state, names, leader, visited)
         if not trip.vendor and step in marks:
             log.info("town errand vendor: nothing more to buy at any vendor "
                      "in reach - %s%s", trip.why_not, _family_label(cohort))
@@ -13778,6 +13767,36 @@ class Bridge(discord.Client):
         # came away with a fishing pole.
         if trip.vendor and not gearup.stock_of(rows, trip.vendor) & set(at.stocks):
             return False
+        await self._town_errand_vendor_buy(names, leader, positions, facts,
+                                           trip, cohort)
+        if step not in marks:
+            await self._vendor_once(cohort)
+        marks[step] = now
+        if trip.vendor:
+            visited.add(trip.vendor)
+        return False
+
+    async def _town_errand_vendor_trip(self, state, names, leader, visited):
+        """(facts, vendor rows, gearup.vendor_trip) measured from the hub, with
+        this errand's gifts and buys laid over the stale character read."""
+        key = tuple(sorted(names))
+        facts = _town_errand_facts(
+            await self._gearup_facts_and_tanks(names),
+            _TOWN_ERRAND_FUNDED.get(key, {}), _TOWN_ERRAND_BOUGHT.get(key, {}))
+        hub = state.hub
+        here = bag_pressure.Standing(name=leader, map_id=int(hub["map_id"]),
+                                     x=float(hub["x"]), y=float(hub["y"]))
+        rows = await asyncio.to_thread(_fetch_gear_vendors, here)
+        trip = gearup.vendor_trip(
+            facts, rows,
+            map_id=here.map_id, max_yards=TOWN_ERRAND_VENDOR_YARDS,
+            repair_floor={n: f["purse"] * towntrip.FLOOR for n, f in facts.items()},
+            skip=frozenset(visited))
+        return facts, rows, trip
+
+    async def _town_errand_vendor_buy(self, names, leader, positions, facts,
+                                      trip, cohort) -> None:
+        """Buy for every member standing at a vendor, and remember the slots."""
         standing = {}
         for name in names:
             if name in positions and name in facts:
@@ -13789,17 +13808,11 @@ class Bridge(discord.Client):
                  "nobody yet", _family_label(cohort))
         before = {n: set(f["equipped"]) for n, f in standing.items()}
         await self._gearup_vendor_once(standing)
-        bought = _TOWN_ERRAND_BOUGHT.setdefault(key, {})
+        bought = _TOWN_ERRAND_BOUGHT.setdefault(tuple(sorted(names)), {})
         for name, character in standing.items():
             new = set(character["equipped"]) - before[name]
             if new:
                 bought.setdefault(name, set()).update(new)
-        if step not in marks:
-            await self._vendor_once(cohort)
-        marks[step] = now
-        if trip.vendor:
-            visited.add(trip.vendor)
-        return False
 
     async def _town_errand_release(self, names, leader, slot, label) -> None:
         """Hand the traveller back and the family back to what it was doing."""
