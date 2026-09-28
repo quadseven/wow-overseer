@@ -216,6 +216,79 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
         self.assertIn('facts["benched"])', once)
 
 
+class EachGuildStaysOnItsOwnSide(unittest.TestCase):
+    """60 of 159 guild deaths in 30 minutes on wow-dev were Alliance members
+    killed by Razor Hill Grunts after Cave runs into Ragefire Chasm, whose door
+    is inside Orgrimmar, left them on the Horde side."""
+
+    HUMAN, ORC = 1, 2
+
+    def test_an_alliance_guild_is_not_sent_into_orgrimmar(self):
+        levels = [14, 15, 15, 16, 16]
+        alliance = [
+            d.keyword for d in guildrun.fitting_doors(levels, DOORS, "Alliance")
+        ]
+        horde = [d.keyword for d in guildrun.fitting_doors(levels, DOORS, "Horde")]
+        self.assertNotIn("ragefire", alliance)
+        self.assertIn("ragefire", horde)
+        self.assertNotIn(
+            "stockades",
+            [d.keyword for d in guildrun.fitting_doors([26] * 5, DOORS, "Horde")],
+        )
+
+    def test_the_faction_is_read_off_the_members(self):
+        cave = [member("A", 12, MAGE, race=self.HUMAN), member("B", 12, MAGE, race=7)]
+        self.assertEqual(guildrun.faction_of(cave), "Alliance")
+        self.assertEqual(
+            guildrun.faction_of([member("C", 12, MAGE, race=self.ORC)]), "Horde"
+        )
+        self.assertEqual(
+            guildrun.faction_of(cave + [member("C", 12, MAGE, race=self.ORC)]), ""
+        )
+
+    def test_a_member_on_the_other_side_hearths_home(self):
+        in_durotar = member("Bramitho", 14, PRIEST, zone_id=14)
+        self.assertTrue(guildrun.stranded(in_durotar, "Alliance"))
+        self.assertFalse(guildrun.stranded(in_durotar, "Horde"))
+        inside = member("Cesca", 13, WARLOCK, map_id=389)
+        self.assertTrue(guildrun.stranded(inside, "Alliance"))
+        self.assertFalse(
+            guildrun.stranded(
+                member("G", 13, MAGE, zone_id=14, health=1, has_corpse=1), "Alliance"
+            )
+        )
+        self.assertFalse(
+            guildrun.stranded(
+                member("F", 13, MAGE, zone_id=14, in_combat=1), "Alliance"
+            )
+        )
+        self.assertFalse(
+            guildrun.stranded(member("W", 13, MAGE, zone_id=40), "Alliance")
+        )
+
+    def test_each_member_is_judged_by_its_own_guild_and_runs_are_left_alone(self):
+        cave = [
+            member("A", 13, MAGE, race=self.HUMAN, zone_id=14),
+            member("B", 13, MAGE, race=self.HUMAN, zone_id=14),
+        ]
+        bonkers = [
+            member("C", 13, MAGE, race=self.ORC, zone_id=14, guild_name="Bonkers")
+        ]
+        self.assertEqual(guildrun.stranded_names(cave + bonkers, {"B"}), ["A"])
+
+    def test_the_bridge_hearths_the_stranded_every_cycle(self):
+        loop = BRIDGE[BRIDGE.index("async def _guild_run_loop") :]
+        loop = loop[: loop.index("async def _guild_run_once")]
+        self.assertLess(
+            loop.index("_hearth_stranded_guild_members"),
+            loop.index("if guildrun.enabled():"),
+        )
+        rescue = BRIDGE[BRIDGE.index("def _hearth_stranded_guild_members") :]
+        rescue = rescue[: rescue.index("\ndef ")]
+        self.assertIn("_MOVEMENT_HEARTHED", rescue)
+        self.assertIn("_insert_hearth(name, guildrun.SOURCE)", rescue)
+
+
 class TheDoorsThatFit(unittest.TestCase):
     def test_a_band_of_fifteen_to_seventeen_gets_ragefire_first(self):
         keywords = [
