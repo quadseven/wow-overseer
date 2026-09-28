@@ -608,29 +608,24 @@ def _while_questing(f: Facts, place: str) -> Decision:
     return Decision(NOTHING, "", "questing until a named change: %s" % waiting)
 
 
-def _while_stepped_down(f: Facts, place: str) -> Decision:
-    """The step-down entry at the head: further down, back up, on, or more."""
-    if str(f.head.get("status") or "") != "active":
-        return Decision(NOTHING, "", "%s is about to start" % place)
-    if not f.record.clearable:
-        why = "%s is not clearable either (%s)" % (place, f.record.line())
-        if f.cands:
-            return _down_to(FURTHER, f.cands, why)
-        return Decision(QUEST, "", why + " and no easier door is", (LEVEL,))
+def _count_reached(f: Facts) -> int:
+    """The step-down entry's run count when the leader has run it, else 0."""
+    wanted = int(f.head.get("runs_wanted") or 0)
+    return wanted if f.done is not None and wanted and f.done >= wanted else 0
+
+
+def _grown_or_farming(f: Facts, place: str) -> Decision:
+    """A clearable step-down door: back up, run more, or keep farming."""
     blockers = step_up_blockers(f.members)
-    if f.changed and not f.gates and not blockers:
+    grown = bool(f.changed) and not f.gates and not blockers
+    if grown:
         return Decision(
             STEP_UP,
             f.door,
             "%s, and %s is ready" % (f.changed, council.keyword_place(f.door)),
         )
-    wanted = int(f.head.get("runs_wanted") or 0)
-    if (
-        f.done is not None
-        and wanted
-        and f.done >= wanted
-        and not (f.changed and not blockers)
-    ):
+    wanted = _count_reached(f)
+    if wanted and not (f.changed and not blockers):
         return Decision(
             EXTEND,
             str(f.head.get("keyword") or ""),
@@ -641,6 +636,18 @@ def _while_stepped_down(f: Facts, place: str) -> Decision:
     if f.changed and blockers:
         held = "; %s, but not back up yet: %s" % (f.changed, "; ".join(blockers))
     return Decision(NOTHING, "", "farming %s (%s)%s" % (place, f.record.line(), held))
+
+
+def _while_stepped_down(f: Facts, place: str) -> Decision:
+    """The step-down entry at the head: further down, back up, on, or more."""
+    if str(f.head.get("status") or "") != "active":
+        return Decision(NOTHING, "", "%s is about to start" % place)
+    if not f.record.clearable:
+        why = "%s is not clearable either (%s)" % (place, f.record.line())
+        if f.cands:
+            return _down_to(FURTHER, f.cands, why)
+        return Decision(QUEST, "", why + " and no easier door is", (LEVEL,))
+    return _grown_or_farming(f, place)
 
 
 def _at_the_door(f: Facts, place: str) -> Decision:
