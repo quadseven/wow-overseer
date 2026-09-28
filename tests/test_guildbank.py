@@ -1251,3 +1251,15 @@ class TheGuildBankPassActsOnlyWhereItIsStanding(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MembersKeepTheirGold(unittest.TestCase):
+    """wow-dev 2026-09-28: three members read exactly 100000 copper after the
+    pass deposited everything above the float (rows 293336-293338)."""
+
+    def test_no_member_gold_is_deposited(self):
+        self.assertFalse(guildbank.MEMBER_GOLD_DEPOSITS)
+        src = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(2, src.count("if guildbank.MEMBER_GOLD_DEPOSITS else []"))

@@ -559,11 +559,11 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
     def test_a_master_holding_the_price_walks_and_buys_it(self):
         world, me, _ = self.run_bank(HORDE, purse=1_200_000)
         self.assertEqual([("guild bank", "Zug", "at:1:3,3,3", "Zug")], me.claims)
-        # The tab first, named so a stale count can never buy tab 1 (#496);
-        # then only what sits above the float and the price, which is the
-        # reserve `plan_deposits` keeps while there is no tab.
+        # The tab, named so a stale count can never buy tab 1 (#496). No gold
+        # deposit follows: members keep the gold they earn (the operator,
+        # 2026-09-28, guildbank.MEMBER_GOLD_DEPOSITS).
         self.assertEqual(
-            [("Zug", "bank buy-tab tab:0"), ("Zug", "bank deposit 100000")],
+            [("Zug", "bank buy-tab tab:0")],
             world["guild_rows"],
         )
 
@@ -574,7 +574,7 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
         self.assertEqual("Grug", world["vault_for"])
         self.assertEqual([("guild bank", "Grug", "at:1:3,3,3", None)], me.claims)
         self.assertEqual(
-            [("Grug", "bank buy-tab tab:1"), ("Grug", "bank deposit 2400000")],
+            [("Grug", "bank buy-tab tab:1")],
             world["guild_rows"],
         )
         self.assertFalse(any("tab 0 waits" in ln for ln in log.lines))

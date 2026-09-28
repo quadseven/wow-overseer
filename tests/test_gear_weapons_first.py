@@ -246,19 +246,10 @@ class TheFamilyFundsItsOwn(unittest.TestCase):
         self.assertEqual({"Grug"}, {g.donor for g in gifts})
         self.assertEqual(["Bork", "Og"], [g.taker for g in gifts])
         by = {g.taker: g.copper for g in gifts}
-        self.assertEqual(gearup.FUND_PURSE_CAP - 23904, by["Bork"])
-        self.assertEqual(gearup.FUND_PURSE_CAP - 60000, by["Og"])
+        self.assertEqual(35 * gearup.FUND_PER_LEVEL - 23904, by["Bork"])
+        self.assertEqual(35 * gearup.FUND_PER_LEVEL - 60000, by["Og"])
         self.assertNotIn("Grog", by)  # two empty slots and a weapon: not short
         self.assertIn("no weapon", gifts[0].why)
-
-    def test_nobody_is_funded_past_the_trial_purse_cap(self):
-        # wow-dev 2026-09-28: 105000 copper read back as 100000 with nothing
-        # bought; the realm's Trial.MoneyCap took the rest.
-        facts = {
-            "Grug": {"level": 38, "purse": 540103, "equipped": {"mainhand": 43}},
-            "Og": {"level": 35, "purse": 100000, "equipped": {}},
-        }
-        self.assertEqual((), gearup.plan_funding(facts))
 
     def test_the_donor_keeps_half_its_purse(self):
         facts = {

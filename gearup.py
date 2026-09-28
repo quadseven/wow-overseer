@@ -543,12 +543,6 @@ class _Plan:
 # FUND_DONOR_KEEP of its purse, and a gift under FUND_MIN_GIFT is not worth a
 # letter.
 FUND_PER_LEVEL = 3000
-# THE REALM CAPS A TRIAL ACCOUNT'S PURSE (worldserver.conf Trial.MoneyCap,
-# 100000 copper), and four of the first family's accounts carry that flag:
-# measured on wow-dev 2026-09-28, the rogue read 105000 copper after a gift and
-# 100000 ten minutes later with nothing bought. A top-up past the cap is gold
-# thrown away, so no member is funded past it.
-FUND_PURSE_CAP = 100000
 FUND_DONOR_KEEP = 0.5
 FUND_MIN_GIFT = 5000
 
@@ -588,7 +582,7 @@ def plan_funding(characters) -> tuple:
 
     def target(c):
         level = int(_get(c, "level", default=0) or 0)
-        return min(FUND_PER_LEVEL * level, FUND_PURSE_CAP)
+        return FUND_PER_LEVEL * level
 
     donor = max(sorted(facts), key=lambda n: purse(facts[n]))
     rich = facts[donor]

@@ -98,6 +98,16 @@ from dataclasses import dataclass
 # a test rather than silently parting company.
 FLOAT_COPPER = 100_000
 
+# MEMBERS KEEP THE GOLD THEY EARN (the operator, 2026-09-28: "make it
+# natural"). The float above drained every family member's purse to exactly
+# ten gold into the guild vault: measured on wow-dev, the mage, the rogue and
+# the paladin each read 100000 copper ten minutes after a sibling's gift, which
+# looked like a purse cap and was this pass (rows 293336-293338). A player in a
+# guild keeps what it earns and pays dues; the guild's gold comes from the dues
+# pass (guildwork.py). So the passes no longer plan member gold deposits;
+# `plan_deposits` stays for its tests and for a guild that asks for it again.
+MEMBER_GOLD_DEPOSITS = False
+
 # What the guild's FIRST bank tab costs, in copper. One hundred gold.
 #
 # READ FROM THE REALM, NOT FROM A WIKI AND NOT FROM MEMORY. The price is not a
