@@ -187,6 +187,7 @@ class ThePage(unittest.TestCase):
     def test_the_picker_offers_the_guild_too(self):
         picker = js("async function vcPicker(f) {", "\n}")
         self.assertIn("s.guild.members", picker)
+        self.assertIn("bar.disabled = true;", picker)
 
 
 if __name__ == "__main__":

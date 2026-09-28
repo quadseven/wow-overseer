@@ -12683,7 +12683,7 @@ function vcCompareToggle() {
   const b = vcFrame(VC_COMPARE.kind);
   // Someone else from the first sheet's family to start with; the second
   // sheet's own picker changes it from there.
-  const other = [...a.who.options].map((o) => o.value).find((n) => n !== a.name);
+  const other = [...a.who.options].map((o) => o.value).find((n) => n && n !== a.name);
   b.name = other || a.name;
   b.el.hidden = false;
   vcFront(b);
@@ -12815,17 +12815,18 @@ async function vcPicker(f) {
   try {
     const s = await vcSocial(want);
     if (f.name !== want) return;
-    // The family first, then everyone else in the guild, so any guildmate is
-    // one pick away; a guildmate opened from the Lineup tab is a family of one.
-    const fam = el("optgroup");
-    fam.label = s.family.key ? "family" : "this character";
-    fam.append(...s.family.members.map((m) => new Option(m.name, m.name)));
+    // The family first, then everyone else in the guild under a divider, so
+    // any guildmate is one pick away; a guildmate opened from the Lineup tab
+    // is a family of one.
     const seen = new Set(s.family.members.map((m) => m.name));
-    const guild = el("optgroup");
-    guild.label = s.guild.name || "guild";
-    guild.append(...s.guild.members.filter((m) => !seen.has(m.name))
-      .map((m) => new Option(m.name, m.name)));
-    f.who.replaceChildren(fam, ...(guild.children.length ? [guild] : []));
+    const rest = ((s.guild && s.guild.members) || []).filter((m) => !seen.has(m.name));
+    const opts = s.family.members.map((m) => new Option(m.name, m.name));
+    if (rest.length) {
+      const bar = new Option("-- " + (s.guild.name || "guild") + " --", "");
+      bar.disabled = true;
+      opts.push(bar, ...rest.map((m) => new Option(m.name, m.name)));
+    }
+    f.who.replaceChildren(...opts);
     f.who.value = want;
   } catch (e) { /* the picker keeps the one name it has */ }
 }
