@@ -15222,7 +15222,12 @@ class Bridge(discord.Client):
         if step.release:
             await asyncio.to_thread(_release_trade_errand, leader,
                                     str(step.giver or ""))
-        if step.rows or step.aim:
+        # SAID ONLY WHEN SOMETHING WAS DONE. A walk the town slot refused is
+        # not a walk: on wow-dev 2026-09-28 "walk the family to dungeon quest
+        # giver 3665" was logged every minute for an hour while the slot had
+        # given that walk up for 1800s, and read as a family walking nowhere.
+        # The slot says why it refused.
+        if step.rows or (step.aim and aim_taken):
             log.info("dungeon quests: %s: %s",
                      campaignqueue._family(key), step.line)
         # A failed travel-slot claim means the dungeon-quest action cannot
