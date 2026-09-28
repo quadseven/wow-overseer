@@ -240,9 +240,16 @@ def member_from_row(row: dict) -> Member | None:
 
 
 def why_not(
-    member: Member, busy: set, resting: set, family: set, benched=frozenset()
+    member: Member,
+    busy: set,
+    resting: set,
+    family: set,
+    benched=frozenset(),
+    gear_gate: bool = True,
 ) -> str:
-    """Why this member cannot be picked now, or ""."""
+    """Why this member cannot be picked now, or "". With gear_gate off the
+    gear check is skipped: the fallback for a realm where the gate alone
+    holds so many members home that no run can form at all."""
     if member.name in family:
         return "a family member"
     if not member.online:
@@ -253,7 +260,7 @@ def why_not(
         return "resting after a run"
     if member.name in benched:
         return "refused a run just now"
-    if under_geared(member):
+    if gear_gate and under_geared(member):
         return "gear too weak for a dungeon"
     if not member.alive:
         return "dead"
