@@ -2893,6 +2893,39 @@
      name then level then class, one colour per class. Wide screens get four
      boxes across so eight groups read as two rows; a phone gets one column,
      because five names on a 360px screen is already the full width. */
+  /* THE GEAR TABLE (guildgear.py). The table scrolls sideways inside its own
+     box, never the page, and the name column stays put while it does, so a
+     phone reads a row by its name. Flagged rows (no weapon, many empty
+     slots) carry a warn bar down their left edge and warn-coloured cells. */
+  .lg-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%;
+               border:1px solid var(--card-line); border-radius:6px;
+               background:var(--card); margin:.3rem 0 1.2rem; }
+  .lg-table { border-collapse:collapse; width:100%; font-size:.8rem;
+              color:var(--on-card); font-variant-numeric:tabular-nums; }
+  .lg-table th, .lg-table td { padding:.35rem .5rem; text-align:left;
+              white-space:nowrap; border-bottom:1px solid var(--card-line); }
+  .lg-table th { position:sticky; top:0; background:var(--card); z-index:1; }
+  .lg-table th button { font:inherit; font-size:.7rem; letter-spacing:.06em;
+              text-transform:uppercase; color:var(--on-card-dim); background:none;
+              border:0; padding:.3rem 0; min-height:32px; cursor:pointer; }
+  .lg-table th button[aria-sort="ascending"]::after { content:" \25B2"; }
+  .lg-table th button[aria-sort="descending"]::after { content:" \25BC"; }
+  .lg-table .n { text-align:right; }
+  .lg-table td:first-child, .lg-table th:first-child { position:sticky; left:0;
+              background:var(--card); z-index:2; }
+  .lg-table tbody tr.lg-row { cursor:pointer; }
+  .lg-table tbody tr.lg-row:hover td { background:var(--line); }
+  .lg-table tr.flag td:first-child { box-shadow:inset 3px 0 0 var(--warn-text); }
+  .lg-table td.bad { color:var(--warn-text); font-weight:600; }
+  .lg-table .lg-name { font-weight:700; min-width:6.5rem; }
+  .lg-table .lg-dim { color:var(--on-card-dim); }
+  .lg-table tr.lg-open td { white-space:normal; background:var(--card); }
+  .lg-open .lg-say { font-size:.75rem; color:var(--on-card-dim); margin-bottom:.35rem; }
+  .lg-note { font-size:.75rem; color:var(--muted); margin:.3rem 0 0; }
+  #lgpick button { font:inherit; font-size:12px; cursor:pointer; min-height:36px;
+              padding:0 .8rem; border-radius:999px; background:none;
+              color:var(--text); border:1px solid var(--card-line); }
+  #lgpick button.on { border-color:var(--accent-text); color:var(--accent-text); }
   .ln-guild { margin-bottom:1.4rem; }
   .ln-grid { display:grid; gap:.5rem; grid-template-columns:1fr; }
   @media (min-width:641px) {
@@ -3760,6 +3793,14 @@
 
 <section id="lineup">
   <div id="lnhead" class="ds-head">reaching the world...</div>
+  <!-- EVERY MEMBER'S GEAR (guildgear.py): both family guilds, one sortable
+       table, worst first. A row opens the same game frames a family member's
+       tile has (bags, bank, guild bank, character, social, quest log). -->
+  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">every member's gear</span></div>
+  <div id="lgpick" class="rg-chips"></div>
+  <div id="lghead" class="lg-note"></div>
+  <div class="lg-scroll"><table id="lgtable" class="lg-table"></table></div>
+  <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">the raid lineup</span></div>
   <div id="lnbody"></div>
 </section>
 
@@ -6918,6 +6959,7 @@ function showView(v) {
     closePanel();
     stopBroadcasts();
     pollLineup();
+    pollGuildGear();
     return;
   }
   if (isGuild) {
@@ -7352,6 +7394,131 @@ async function pollLineup() {
     lnPulling = false;
   }
 }
+// --- every member's gear (guildgear.py) ------------------------------------
+//
+// One table for both family guilds, worst first as the server sorts it, and
+// re-sorted by any column a reader taps. A row opens a line under it with the
+// game-frame bar a Watch tile carries, for that member: the frames and their
+// endpoints are the tile's own.
+const lgpick = document.getElementById("lgpick");
+const lghead = document.getElementById("lghead");
+const lgtable = document.getElementById("lgtable");
+const LG_COLUMNS = [
+  { key: "name", label: "Name", get: (m) => m.name },
+  { key: "class", label: "Class", get: (m) => m["class"] },
+  { key: "level", label: "Lvl", get: (m) => m.level, num: true },
+  { key: "role", label: "Role", get: (m) => m.role },
+  { key: "avg", label: "iLvl", get: (m) => m.avg_item_level, num: true },
+  { key: "worn", label: "Worn", get: (m) => m.worn, num: true },
+  { key: "empty", label: "Empty", get: (m) => m.empty, num: true },
+  { key: "weapon", label: "Weapon", get: (m) => (m.weapon ? 1 : 0), num: true },
+  { key: "weakest", label: "Weakest", get: (m) => (m.weakest ? m.weakest.item_level : -1), num: true },
+  { key: "gold", label: "Gold", get: (m) => m.gold.total, num: true },
+  { key: "state", label: "State", get: (m) => m.presence },
+];
+const lg = { payload: null, guild: "", sort: null, dir: 1, open: null };
+
+function lgMembers() {
+  const gs = (lg.payload && lg.payload.guilds) || [];
+  const shown = lg.guild ? gs.filter((g) => g.name === lg.guild) : gs;
+  const out = [];
+  for (const g of shown) out.push(...g.members);
+  if (lg.sort) {
+    const col = LG_COLUMNS.find((c) => c.key === lg.sort);
+    out.sort((a, b) => {
+      const x = col.get(a), y = col.get(b);
+      const c = col.num ? x - y : String(x).localeCompare(String(y));
+      return c * lg.dir || a.name.localeCompare(b.name);
+    });
+  }
+  return out;
+}
+
+function lgRender() {
+  const p = lg.payload;
+  if (!p) return;
+  lgpick.replaceChildren();
+  for (const [key, label] of [["", "Both"], ...p.guilds.map((g) => [g.name, g.name])]) {
+    const b = el("button", key === lg.guild ? "on" : "", label);
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(key === lg.guild));
+    b.addEventListener("click", () => { lg.guild = key; lgRender(); });
+    lgpick.appendChild(b);
+  }
+  const members = lgMembers();
+  const flagged = members.filter((m) => m.flags.length).length;
+  const noWeapon = members.filter((m) => !m.weapon).length;
+  lghead.textContent = members.length + " members, " + noWeapon + " with no weapon, "
+    + flagged + " flagged (no weapon or " + p.empty_warn + "+ of " + p.slots
+    + " slots empty). Tap a column to sort, a member to open their bags and sheet.";
+  const head = el("tr");
+  for (const c of LG_COLUMNS) {
+    const th = el("th", c.num ? "n" : "");
+    const b = el("button", "", c.label);
+    b.type = "button";
+    if (lg.sort === c.key) b.setAttribute("aria-sort", lg.dir > 0 ? "ascending" : "descending");
+    b.addEventListener("click", () => {
+      if (lg.sort === c.key) lg.dir = -lg.dir;
+      else { lg.sort = c.key; lg.dir = c.num ? -1 : 1; }
+      lgRender();
+    });
+    th.appendChild(b);
+    head.appendChild(th);
+  }
+  const thead = el("thead");
+  thead.appendChild(head);
+  const body = el("tbody");
+  for (const m of members) {
+    const tr = el("tr", "lg-row" + (m.flags.length ? " flag" : ""));
+    tr.tabIndex = 0;
+    const name = el("td", "lg-name", m.name);
+    name.style.color = m.class_colour || "";
+    const cls = el("td", "", m["class"]);
+    cls.style.color = m.class_colour || "";
+    const weak = m.weakest ? m.weakest.slot + " " + m.weakest.item_level : "-";
+    tr.append(name, cls,
+      el("td", "n", String(m.level)),
+      el("td", "lg-dim", m.role || "-"),
+      el("td", "n", m.avg_item_level.toFixed(1)),
+      el("td", "n", m.worn + "/" + m.of),
+      el("td", "n" + (m.empty >= p.empty_warn ? " bad" : ""), String(m.empty)),
+      el("td", m.weapon ? "" : "bad", m.weapon ? "yes" : "NO"),
+      el("td", "lg-dim", weak),
+      el("td", "n", m.gold.text),
+      el("td", m.presence === "dead" ? "bad" : "lg-dim", m.presence));
+    if (m.weakest) tr.children[8].title = m.weakest.name;
+    const toggle = () => { lg.open = lg.open === m.name ? null : m.name; lgRender(); };
+    tr.addEventListener("click", toggle);
+    tr.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+    });
+    body.appendChild(tr);
+    if (lg.open === m.name) {
+      const open = el("tr", "lg-open");
+      const td = el("td");
+      td.colSpan = LG_COLUMNS.length;
+      const say = m.flags.length ? m.flags.join(", ") + ". " : "";
+      const empty = m.empty_slots.length ? "Empty: " + m.empty_slots.join(", ") + "." : "Every slot worn.";
+      td.append(el("div", "lg-say", say + empty), vclientBar(m.name));
+      open.appendChild(td);
+      body.appendChild(open);
+    }
+  }
+  lgtable.replaceChildren(thead, body);
+}
+
+async function pollGuildGear() {
+  try {
+    const r = await fetch(u("/api/guildgear"), {signal: AbortSignal.timeout(20000)});
+    if (!r.ok) throw new Error(r.status);
+    lg.payload = await r.json();
+    lgRender();
+  } catch (e) {
+    // The table drawn stays drawn, and says it may be stale.
+    lghead.textContent = "the world is unreachable - the gear table may be stale";
+  }
+}
+
 const rghead = document.getElementById("rghead");
 const rrgoal = document.getElementById("rrgoal");
 const rrlist = document.getElementById("rrlist");
@@ -7678,6 +7845,7 @@ async function pollRaid() {
 // makes that true even for the call showView makes on the way in.
 setInterval(() => { if (view === RAID_VIEW) pollRaid(); }, 60000);
 setInterval(() => { if (view === LINEUP_VIEW) pollLineup(); }, 60000);
+setInterval(() => { if (view === LINEUP_VIEW) pollGuildGear(); }, 60000);
 
 
 
@@ -12381,7 +12549,7 @@ function vcFrame(kind) {
   const head = el("div", "vchead");
   const title = el("span", "vctitle", spec.label);
   const who = el("select", "vcwho");
-  who.setAttribute("aria-label", "Which family member");
+  who.setAttribute("aria-label", "Which character");
   const gap = el("span", "vcgap");
   const x = el("button", "vcx", "x");
   x.type = "button";
@@ -12416,6 +12584,15 @@ function vcFrame(kind) {
 function vcFront(f) {
   vc.z += 1;
   f.el.style.zIndex = String(vc.z);
+  vcTipTop();
+}
+
+// THE TOOLTIP IS ALWAYS ABOVE EVERY FRAME. Each press on a frame raises it one
+// step, and the tooltip used to sit at a fixed step of its own, so after
+// enough taps on a phone the frame climbed past it and the item card opened
+// behind the bags with only its last line showing.
+function vcTipTop() {
+  if (vc.tip) vc.tip.style.zIndex = String(vc.z + 1);
 }
 
 // Placed once, over the tile it was opened from and cascaded by kind so two
@@ -12462,7 +12639,18 @@ function vcDrag(f, head) {
   head.addEventListener("pointercancel", stop);
 }
 
+// THE LAYER LIVES IN THE SECTION THE FRAME WAS OPENED FROM: the Watch tab's
+// tiles, or the Lineup tab's gear table. A layer left inside a hidden section
+// would open every frame out of sight.
+function vcHost(anchor) {
+  const layer = vcLayer();
+  const home = (anchor && anchor.closest && anchor.closest("section"))
+    || document.getElementById("watch") || document.body;
+  if (layer.parentNode !== home) home.appendChild(layer);
+}
+
 function vcOpen(kind, name, anchor) {
+  vcHost(anchor);
   const f = vcFrame(kind);
   f.name = name;
   vc.last = name;
@@ -12627,7 +12815,17 @@ async function vcPicker(f) {
   try {
     const s = await vcSocial(want);
     if (f.name !== want) return;
-    f.who.replaceChildren(...s.family.members.map((m) => new Option(m.name, m.name)));
+    // The family first, then everyone else in the guild, so any guildmate is
+    // one pick away; a guildmate opened from the Lineup tab is a family of one.
+    const fam = el("optgroup");
+    fam.label = s.family.key ? "family" : "this character";
+    fam.append(...s.family.members.map((m) => new Option(m.name, m.name)));
+    const seen = new Set(s.family.members.map((m) => m.name));
+    const guild = el("optgroup");
+    guild.label = s.guild.name || "guild";
+    guild.append(...s.guild.members.filter((m) => !seen.has(m.name))
+      .map((m) => new Option(m.name, m.name)));
+    f.who.replaceChildren(fam, ...(guild.children.length ? [guild] : []));
     f.who.value = want;
   } catch (e) { /* the picker keeps the one name it has */ }
 }
@@ -12717,6 +12915,7 @@ async function vcShowTip(at, item, tip) {
   t.replaceChildren(el("div", "nm" + (item.quality === null ? "" : " q" + item.quality),
                        item.name));
   t.hidden = false;
+  vcTipTop();
   vcTipPlace(at);
   let reading = tip;
   if (!reading) {
@@ -12959,9 +13158,9 @@ function vcDifficulty(quest, level) {
 }
 
 async function vcQuests(name) {
-  const s = await vcSocial(name);
-  const p = await vcGet(u("/api/questlog?family=") + encodeURIComponent(s.family.key));
-  const m = (p.members || []).find((x) => x.name === name);
+  // By name, scoped by the server like every frame, so a guildmate has one.
+  const p = await vcGet(u("/api/client/quests?name=") + encodeURIComponent(name));
+  const m = p.member;
   const out = el("div", "vclist");
   if (!m) {
     out.appendChild(el("div", "vcnote", name + " has no quest log on this realm."));

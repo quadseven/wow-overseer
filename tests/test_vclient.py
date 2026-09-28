@@ -362,7 +362,10 @@ class TheEndpoints(unittest.TestCase):
             self.assertEqual(s.call_args.args, ("Zrog", FAMILIES[1][1]))
 
     def test_a_name_off_the_rosters_never_reaches_sql(self, _groups):
-        with mock.patch.object(map_server, "_fetch_client_inventory") as inv:
+        with (
+            mock.patch.object(map_server, "_fetch_client_inventory") as inv,
+            mock.patch.object(map_server, "_is_family_guildmate", return_value=False),
+        ):
             for bad in ("Stranger", "x", "Grug'--", ""):
                 h = get("/api/client/bags?name=" + bad)
                 self.assertEqual(h.code, 404, bad)
@@ -431,6 +434,7 @@ class TheEndpointsAreReadOnly(unittest.TestCase):
                 "/api/client/bank",
                 "/api/client/guildbank",
                 "/api/client/item",
+                "/api/client/quests",
                 "/api/client/social",
             ],
         )
@@ -465,11 +469,9 @@ class TheOverlayHandlesBothFamilies(unittest.TestCase):
         for guild in ("Cave", "Bonkers"):
             self.assertNotIn(guild, code)
 
-    def test_the_quest_log_family_is_the_servers(self):
+    def test_the_quest_log_is_scoped_by_the_server(self):
         code = overlay()
-        self.assertIn(
-            'u("/api/questlog?family=") + encodeURIComponent(s.family.key)', code
-        )
+        self.assertIn('u("/api/client/quests?name=") + encodeURIComponent(name)', code)
         self.assertIn("s.family.members.map(", code)
 
     def test_six_frames_draggable_closable_and_escape(self):
