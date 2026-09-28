@@ -295,9 +295,9 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
 
     def test_each_side_is_offered_only_its_own_doors(self):
         alliance = {
-            d.keyword for d in guildrun.fitting_doors([18] * 5, DOORS, "Alliance")
+            d.keyword for d in guildrun.fitting_doors([19] * 5, DOORS, "Alliance")
         }
-        horde = {d.keyword for d in guildrun.fitting_doors([16] * 5, DOORS, "Horde")}
+        horde = {d.keyword for d in guildrun.fitting_doors([17] * 5, DOORS, "Horde")}
         self.assertLessEqual(alliance, guildrun.GUILD_DOORS["Alliance"])
         self.assertIn("deadmines", alliance)
         self.assertLessEqual(horde, guildrun.GUILD_DOORS["Horde"])
