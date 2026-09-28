@@ -134,11 +134,27 @@ class TheRecordOfADoor(unittest.TestCase):
 
 
 class TheEasierDoors(unittest.TestCase):
-    def test_the_alliance_at_35_steps_down_to_the_hardest_door_it_can_clear(self):
+    def test_the_alliance_at_35_steps_down_to_the_wing_next_door(self):
         cands = pace.candidates("scarlet-library", ALLIANCE, frozenset(), [])
-        self.assertEqual("gnomeregan", pace.ladder(cands).keyword)
-        self.assertIn("scarlet", [c.keyword for c in cands])
+        self.assertEqual("scarlet", pace.ladder(cands).keyword)
+        self.assertIn("gnomeregan", [c.keyword for c in cands])
         self.assertNotIn("scarlet-library", [c.keyword for c in cands])
+        beside = {c.keyword: c.beside for c in cands}
+        self.assertTrue(beside["scarlet"])
+        self.assertFalse(beside["gnomeregan"])
+
+    def test_without_a_wing_beside_it_the_hardest_door_is_taken(self):
+        cands = pace.candidates("razorfen-kraul", ALLIANCE, frozenset(), [])
+        self.assertFalse(any(c.beside for c in cands))
+        self.assertEqual(cands[0].keyword, pace.ladder(cands).keyword)
+
+    def test_jev_is_told_which_door_is_next_door(self):
+        f = facts(head("scarlet-library"), members(ALLIANCE), TheDecision.WIPES)
+        d = pace.decide(f)
+        _state, questions = pace.question(f, d)
+        said = str(questions["dungeon"])
+        self.assertIn("next door, no travel", said)
+        self.assertIn("same instance", said)
 
     def test_ragefire_is_the_lowest_rung(self):
         self.assertEqual([], pace.candidates("ragefire", HORDE, frozenset(), []))
@@ -147,7 +163,7 @@ class TheEasierDoors(unittest.TestCase):
         gnome = pace.campaignplan.BY_KEYWORD["gnomeregan"].map_id
         runs = [run("wipe", 0, gnome), run("wipe", 10, gnome)]
         cands = pace.candidates("scarlet-library", ALLIANCE, frozenset(), runs)
-        self.assertEqual("scarlet", pace.ladder(cands).keyword)
+        self.assertNotIn("gnomeregan", [c.keyword for c in cands])
 
 
 class TheDecision(unittest.TestCase):
@@ -156,15 +172,29 @@ class TheDecision(unittest.TestCase):
     def test_two_wipes_step_down_and_jev_may_not_keep_the_door(self):
         d = pace.decide(facts(head("scarlet-library"), members(ALLIANCE), self.WIPES))
         self.assertEqual(pace.STEP_DOWN, d.kind)
-        self.assertEqual("gnomeregan", d.target)
+        self.assertEqual("scarlet", d.target)
         self.assertNotIn(pace.STAY, d.offer)
-        self.assertIn("scarlet", d.offer)
+        self.assertIn("gnomeregan", d.offer)
 
     def test_a_high_rate_alone_lets_jev_keep_the_door(self):
         runs = [run("wipe", 0), run("left", 5), run("wipe", 10), run("left", 20)]
         d = pace.decide(facts(head("scarlet-library"), members(ALLIANCE), runs))
         self.assertEqual(pace.STEP_DOWN, d.kind)
         self.assertIn(pace.STAY, d.offer)
+
+    def test_a_wipe_on_the_way_back_in_steps_down_at_once(self):
+        f = facts(head("scarlet-library"), members(ALLIANCE), [run("wipe", 0)])
+        self.assertFalse(pace.decide(f).acts)
+        back = pace.decide(pace.replace(f, returned=True))
+        self.assertEqual(pace.STEP_DOWN, back.kind)
+        self.assertEqual("scarlet", back.target)
+        self.assertIn("beat the family again", back.why)
+
+    def test_a_return_is_only_one_inside_the_queue_entry(self):
+        self.assertTrue(pace.returned(T0, T0 + timedelta(minutes=5)))
+        self.assertTrue(pace.returned(None, T0))
+        self.assertFalse(pace.returned(T0 + timedelta(minutes=5), T0))
+        self.assertFalse(pace.returned(T0, None))
 
     def test_a_clearable_door_holds(self):
         runs = [run("wipe", 0), run("complete", 10)]
@@ -197,7 +227,7 @@ class TheDecision(unittest.TestCase):
         back = pace.decide(
             facts(
                 head("ragefire", id_=4),
-                members(grown),
+                members(grown, worn=14),
                 [],
                 open_=opened,
                 level_rows=grown,
@@ -206,11 +236,11 @@ class TheDecision(unittest.TestCase):
         )
         self.assertEqual(pace.RELEASE, back.kind)
 
-    def _stepping(self, runs, changed="", done=0, open_=None):
+    def _stepping(self, runs, changed="", done=0, open_=None, rows=None):
         step = head("gnomeregan", source=pace.SOURCE, id_=9, runs=5)
         f = facts(
             step,
-            members(ALLIANCE),
+            rows or members(ALLIANCE, worn=14),
             runs,
             door="scarlet-library",
             open_=open_ or {"id": 1, "decision": pace.STEP_DOWN, "baseline": ""},
@@ -229,6 +259,34 @@ class TheDecision(unittest.TestCase):
     def test_a_named_change_steps_back_up(self):
         d = self._stepping([], changed="level gained: Bork 35 -> 36", done=2)
         self.assertEqual((pace.STEP_UP, "scarlet-library"), (d.kind, d.target))
+
+    def test_a_named_change_with_a_member_unarmed_does_not_step_up(self):
+        """wow-dev 2026-09-28: three members filled 21 slots, the ladder went
+        back up to the Library, and the family wiped at once with Og and Ugga
+        still holding no weapon and nine or ten slots empty."""
+        rows = tuple(
+            pace.Member(
+                m.name,
+                m.level,
+                7 if m.name in ("Og", "Ugga") else 15,
+                300.0,
+                m.name not in ("Og", "Ugga"),
+            )
+            for m in members(ALLIANCE)
+        )
+        d = self._stepping(
+            [], changed="upgrade equipped: Bork filled 7 slot(s)", done=2, rows=rows
+        )
+        self.assertNotEqual(pace.STEP_UP, d.kind)
+        self.assertIn("no main-hand weapon: Og, Ugga", d.why)
+
+    def test_the_count_reached_with_a_member_unarmed_extends(self):
+        rows = tuple(
+            pace.Member(m.name, m.level, 14, 300.0, m.name != "Og")
+            for m in members(ALLIANCE)
+        )
+        d = self._stepping([], changed="level gained: Bork 35 -> 36", done=5, rows=rows)
+        self.assertEqual(pace.EXTEND, d.kind)
 
     def test_an_unclearable_step_down_door_steps_further_down(self):
         gnome = pace.campaignplan.BY_KEYWORD["gnomeregan"].map_id
@@ -302,20 +360,20 @@ class JevPicks(unittest.TestCase):
         return d, judgment, client
 
     def test_a_confident_pick_is_carried_out(self):
-        d, judgment, client = self._ask("scarlet", 0.8)
+        d, judgment, client = self._ask("gnomeregan", 0.8)
         self.assertEqual(pace.KIND, client.asked[0][0])
         self.assertEqual(jev.JEV, judgment.acted)
-        self.assertEqual("scarlet", pace.carried(d, judgment).target)
+        self.assertEqual("gnomeregan", pace.carried(d, judgment).target)
         self.assertEqual(("jev", 0.8), pace.chooser(judgment))
 
     def test_below_the_floor_the_ladder_stands(self):
-        d, judgment, _ = self._ask("scarlet", 0.3)
-        self.assertEqual("gnomeregan", pace.carried(d, judgment).target)
+        d, judgment, _ = self._ask("gnomeregan", 0.3)
+        self.assertEqual("scarlet", pace.carried(d, judgment).target)
         self.assertEqual(("rule", 0.3), pace.chooser(judgment))
 
     def test_a_door_not_offered_is_never_carried_out(self):
         d, judgment, _ = self._ask("stay", 0.99)
-        self.assertEqual("gnomeregan", pace.carried(d, judgment).target)
+        self.assertEqual("scarlet", pace.carried(d, judgment).target)
 
 
 class TheBridgePass(unittest.TestCase):

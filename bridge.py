@@ -14946,7 +14946,9 @@ class Bridge(discord.Client):
             members=members, gates=gates, notes=notes, open=opened, changed=changed,
             done=fam["leader"].get("dungeon_runs_done"),
             cands=tuple(dungeonpace.candidates(head_kw, level_rows, reads["keys"],
-                                               reads["runs"], avoid={head_kw}))), reads
+                                               reads["runs"], avoid={head_kw})),
+            returned=dungeonpace.returned(reads["started"].get(int(head["id"])),
+                                          reads["back"].get(head_kw))), reads
 
     async def _pace_judge(self, key: str, facts, decision):
         """Jev's pick among the offered doors, recorded, or None when not asked."""
