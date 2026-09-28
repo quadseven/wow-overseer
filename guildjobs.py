@@ -740,6 +740,30 @@ def recipient_for(item: Carried, crafters: dict, master: str) -> tuple:
     return master, "the guild bank's Materials tab"
 
 
+def bank_masters(masters: dict, banks, unclaimed) -> dict:
+    """guild -> the master a Materials-tab post may go to, or "" (#395).
+
+    A POST FOR THE BANK NEEDS A BANK, AND A MASTER WHO EMPTIES HIS MAILBOX.
+    On wow-dev 2026-09-28 Bonkers owned no bank tab (its first costs 100g and
+    Zug held 0g), yet every Bonkers pass posted meat, eggs and linen to Zug
+    "for the Materials tab": letters with nowhere to go. Cave's master Grug
+    held 70 letters. So a guild with no tab posts nothing to its master, and
+    a master with an unopened materials post waiting is sent no more until he
+    collects it. The stack stays in its holder's bags, where the vendor pass
+    sees it. `banks` None (unread) keeps the old answer.
+    """
+    waiting = {str(n) for n in unclaimed or ()}
+    out = {}
+    for guild, master in (masters or {}).items():
+        master = str(master or "")
+        if banks is not None and guild not in banks:
+            master = ""
+        if master in waiting:
+            master = ""
+        out[guild] = master
+    return out
+
+
 def postable(member: Member, kept) -> list:
     """The material stacks this member would post, biggest first."""
     bar = POST_MIN.get(member.role, POST_MIN[RAIDER])
@@ -1046,6 +1070,7 @@ def plan(
     cap=guildroute.MAIL_RUN_YARDS,
     per_guild=STEPS_PER_GUILD,
     unclaimed=(),
+    banks=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -1054,9 +1079,10 @@ def plan(
     `doors` name -> Door (assign_doors); `pending` names a summon waits on;
     `kept` keep.Reservations; `recent` Recent rows; `busy`
     names another pass has on a walk; `unclaimed` names family members with a
-    materials post still unopened in their mailbox (`without_unclaimed`).
+    materials post still unopened in their mailbox (`without_unclaimed`);
+    `banks` the guilds that own a guild bank tab, None when unread.
     """
-    masters = masters or {}
+    masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
     fields = fields or {}
     doors = doors or {}
