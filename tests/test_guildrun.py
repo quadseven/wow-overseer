@@ -201,7 +201,8 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
     def test_the_bridge_reads_online_and_the_corpse(self):
         sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
         sql = sql[: sql.index("\n)\n")]
-        self.assertIn("c.online", sql)
+        self.assertNotIn("c.online", sql)
+        self.assertIn("(s.updated_at > NOW() - INTERVAL 60 SECOND) AS online", sql)
         self.assertIn("FROM corpse k WHERE k.guid = s.guid) AS has_corpse", sql)
 
     def test_the_pass_settles_then_swaps_then_passes_the_bench(self):
