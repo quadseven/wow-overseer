@@ -365,6 +365,44 @@ class WhereMaterialsGo(unittest.TestCase):
             [("send item:11 subject:Guild materials", "Grug")],
         )
 
+    def test_a_guild_with_no_bank_tab_posts_nothing_to_its_master(self):
+        """#395: Bonkers owned no bank tab on 2026-09-28, and every pass posted
+        meat, eggs and linen to Zug 'for the Materials tab'."""
+        m = member(
+            "Keeper",
+            guild="Bonkers",
+            skills={H: (40, 75), M: (40, 75)},
+            carried=(
+                stack(21, 769, 20, subclass=8, name="Chunk of Boar Meat"),
+                stack(13, 2901, 1, item_class=2),
+            ),
+        )
+        step = only_step(plan([m], banks={"Cave"}), "Keeper")
+        self.assertTrue(step is None or step.action != "post", step)
+        step = only_step(plan([m], banks={"Cave", "Bonkers"}), "Keeper")
+        self.assertEqual([r.target_arg for r in step.rows], ["Zug"])
+
+    def test_a_master_with_a_post_unopened_is_sent_nothing_new(self):
+        m = member(
+            "Keeper",
+            skills={H: (40, 75), M: (40, 75)},
+            carried=(
+                stack(21, 769, 20, subclass=8, name="Chunk of Boar Meat"),
+                stack(13, 2901, 1, item_class=2),
+            ),
+        )
+        step = only_step(plan([m], banks={"Cave"}, unclaimed={"Grug"}), "Keeper")
+        self.assertTrue(step is None or step.action != "post", step)
+        self.assertEqual(
+            guildjobs.bank_masters({"Cave": "Grug"}, None, ()), {"Cave": "Grug"}
+        )
+
+    def test_the_pass_reads_the_guild_bank_tabs(self):
+        self.assertIn(
+            "guild_bank_tab", BRIDGE[BRIDGE.index("_JOB_BANK_TABS_SQL = (") :]
+        )
+        self.assertIn('banks=facts.get("banks")', BRIDGE)
+
     def test_a_reserved_stack_is_never_posted(self):
         m = member(
             "Keeper",

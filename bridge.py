@@ -12892,7 +12892,7 @@ class Bridge(discord.Client):
             fields=fields, doors=doors, pending=facts["pending"],
             kept=await asyncio.to_thread(_KEEP.now),
             recent=facts["recent"], busy=busy, cap=cap,
-            unclaimed=facts.get("unclaimed", ()))
+            unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"))
         if facts.get("unclaimed"):
             log.info("guild jobs: no new materials post for %s until the posts "
                      "waiting unopened are collected; theirs go to the bank",
@@ -20565,6 +20565,9 @@ _JOB_UNCLAIMED_SQL = (
     "SELECT DISTINCT c.name FROM mail m JOIN characters c ON c.guid = m.receiver "
     "WHERE m.subject = %s AND m.has_items = 1"
 )
+_JOB_BANK_TABS_SQL = (
+    "SELECT DISTINCT g.name FROM guild g JOIN guild_bank_tab t ON t.guildid = g.guildid"
+)
 _JOB_STONES_SQL = (
     "SELECT g.guid, g.map AS map_id, g.position_x AS x, g.position_y AS y, t.name "
     "FROM acore_world.gameobject g "
@@ -20616,6 +20619,7 @@ def _fetch_job_facts(family_names: list) -> dict:
         pending_rows = _job_read(cur, "summons", _JOB_PENDING_SUMMONS_SQL)
         unclaimed_rows = _job_read(cur, "unopened material posts", _JOB_UNCLAIMED_SQL,
                                    (guildjobs.POST_SUBJECT,))
+        bank_rows = _job_read(cur, "guild bank tabs", _JOB_BANK_TABS_SQL)
         if not _JOB_STONES:
             _JOB_STONES.extend(_job_read(cur, "meeting stones", _JOB_STONES_SQL,
                                          (MEETING_STONE_GO_TYPE,)))
@@ -20625,6 +20629,9 @@ def _fetch_job_facts(family_names: list) -> dict:
     facts = _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows,
                                  item_rows, recent_rows, pending_rows)
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}
+    # Guilds that own a bank tab (#395). A schema without the table reads as
+    # none, so a post never goes to a bank this world cannot show exists.
+    facts["banks"] = {str(r.get("name") or "") for r in bank_rows} - {""}
     return facts
 
 
