@@ -71,11 +71,11 @@ HARD_MAX_GROUPS = 4
 FORM_EVERY_SECONDS = 300
 COOLDOWN_MINUTES = 40
 BAND_SPREAD = 4
-# A group goes in only when its average is this many levels OVER the door's
-# floor. The floor is the finder's minimum, not a level a group survives at:
-# on wow-dev (2026-09-28) 113 runs at or just under the floor cleared none, and
-# their members wore starter gear (item level 5 to 8 at level 16).
-LEVEL_MARGIN = 2
+# The guide minimum: a group goes in when its average reaches the door's floor,
+# the lowest level public guides recommend. Attempts are how the guild learns,
+# and the decision tools learn from every one; holding groups home for more
+# levels starves that loop (operator, 2026-09-28).
+LEVEL_MARGIN = 0
 ROLLING = 20
 MIN_SAMPLES = 3
 MAX_OPTIONS = 3
@@ -445,7 +445,7 @@ def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
     capital's guards.
 
     Fits: every member at or over the finder's minimum, the average at least
-    LEVEL_MARGIN over the door's floor, and nobody past its ceiling.
+    the door's floor (plus LEVEL_MARGIN), and nobody past its ceiling.
     Best fit is the door whose band's middle is nearest the average.
     """
     levels = [int(x) for x in levels]

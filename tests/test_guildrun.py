@@ -348,26 +348,25 @@ class TheDoorsThatFit(unittest.TestCase):
             d.keyword for d in guildrun.fitting_doors([17, 17, 18, 18, 19], DOORS)
         ]
         self.assertEqual(keywords[0], "ragefire")
-        self.assertNotIn("deadmines", keywords)
         self.assertNotIn("shadowfang", keywords)
 
-    def test_the_deadmines_wants_two_levels_over_its_floor(self):
-        older = [d.keyword for d in guildrun.fitting_doors([19, 19, 20, 20, 20], DOORS)]
-        self.assertIn("deadmines", older)
-        self.assertIn("wailing", older)
-
-    def test_the_margin_edge_is_floor_plus_two(self):
-        """Wailing Caverns has floor 17: mean 19.0 goes in, mean 18.6 stays out."""
-        at = [d.keyword for d in guildrun.fitting_doors([19, 19, 19, 19, 19], DOORS)]
-        under = [d.keyword for d in guildrun.fitting_doors([18, 18, 19, 19, 19], DOORS)]
+    def test_the_guide_minimum_goes_in(self):
+        """Wailing Caverns has floor 17: a mean of 17.0 is offered, 16.8 is not."""
+        at = [d.keyword for d in guildrun.fitting_doors([17, 17, 17, 17, 17], DOORS)]
+        under = [d.keyword for d in guildrun.fitting_doors([16, 17, 17, 17, 17], DOORS)]
         self.assertIn("wailing", at)
+        self.assertIn("deadmines", at)
         self.assertNotIn("wailing", under)
         self.assertIn("ragefire", under)
 
-    def test_a_group_at_the_floor_is_held_home(self):
-        """113 runs at or just under the floor cleared none."""
-        self.assertEqual(guildrun.fitting_doors([15, 15, 15, 15, 16], DOORS), [])
-        self.assertEqual(guildrun.fitting_doors([13, 14, 15, 15, 16], DOORS), [])
+    def test_a_group_at_the_ragefire_floor_is_sent(self):
+        keywords = [
+            d.keyword for d in guildrun.fitting_doors([15, 15, 15, 15, 16], DOORS)
+        ]
+        self.assertEqual(keywords, ["ragefire"])
+
+    def test_a_group_below_every_floor_stays_home(self):
+        self.assertEqual(guildrun.fitting_doors([13, 14, 14, 14, 14], DOORS), [])
 
     def test_the_finders_own_minimum_keeps_a_low_member_out(self):
         floors = guildrun.doors({389: 15})
