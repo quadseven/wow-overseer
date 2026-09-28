@@ -363,7 +363,7 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual(te.GATHER, self.tick().phase)
         self.assertEqual(te.STEPS, self.tick().phase)
         state = self.tick()
-        gift = 35 * gearup.FUND_PER_LEVEL - 23904
+        gift = gearup.FUND_PURSE_CAP - 23904
         self.assertEqual(
             [("Grug", "Bork", "send money:%d subject:For your gear" % gift)],
             self.written,

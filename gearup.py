@@ -425,7 +425,21 @@ def _worn_is_better(slot, equipped, item_level, level):
     return int(worn_level) > level - 10 or item_level <= int(worn_level)
 
 
-def _candidate_slots(item, equipped, chosen, tank, level):
+# A ONE-HANDED WEAPON GOES IN THE OFF HAND ONLY FOR A CLASS THAT DUAL WIELDS:
+# rogues from the start, warriors and hunters from level 20 (class id -> level).
+# Measured on the dev realm on 2026-09-28: the errand bought a level 13 priest a
+# Mace for her off hand, which she can never equip there.
+DUAL_WIELD_FROM = {4: 1, 1: 20, 3: 20}
+
+
+def _dual_wields(character) -> bool:
+    cls = _get(character, "class", "class_id")
+    cls_id = CLASS_IDS.get(str(cls).lower(), int(cls) if str(cls).isdigit() else 0)
+    level = int(_get(character, "level", default=0) or 0)
+    return cls_id in DUAL_WIELD_FROM and level >= DUAL_WIELD_FROM[cls_id]
+
+
+def _candidate_slots(item, equipped, chosen, tank, level, dual_wields=True):
     inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
     item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
     tank_refuses = tank and not _is_shield(item, inv)
@@ -433,6 +447,8 @@ def _candidate_slots(item, equipped, chosen, tank, level):
         if slot in chosen or not _pair_slot_open(slot, equipped, chosen):
             continue
         if slot == "offhand" and tank_refuses:
+            continue
+        if slot == "offhand" and inv == 13 and not dual_wields:
             continue
         if _worn_is_better(slot, equipped, item_level, level):
             continue
@@ -500,7 +516,12 @@ class _Plan:
         if not _fits_budget(price, self.purse, self.available, spent, weapon_first):
             return False
         for slot, item_level in _candidate_slots(
-            item, self.equipped, self.chosen, self.tank, self.level
+            item,
+            self.equipped,
+            self.chosen,
+            self.tank,
+            self.level,
+            _dual_wields(self.character),
         ):
             if weapon_first and slot != "mainhand":
                 continue
@@ -522,6 +543,12 @@ class _Plan:
 # FUND_DONOR_KEEP of its purse, and a gift under FUND_MIN_GIFT is not worth a
 # letter.
 FUND_PER_LEVEL = 3000
+# THE REALM CAPS A TRIAL ACCOUNT'S PURSE (worldserver.conf Trial.MoneyCap,
+# 100000 copper), and four of the first family's accounts carry that flag:
+# measured on wow-dev 2026-09-28, the rogue read 105000 copper after a gift and
+# 100000 ten minutes later with nothing bought. A top-up past the cap is gold
+# thrown away, so no member is funded past it.
+FUND_PURSE_CAP = 100000
 FUND_DONOR_KEEP = 0.5
 FUND_MIN_GIFT = 5000
 
@@ -560,7 +587,8 @@ def plan_funding(characters) -> tuple:
         return int(_get(c, "purse", "money", default=0) or 0)
 
     def target(c):
-        return FUND_PER_LEVEL * int(_get(c, "level", default=0) or 0)
+        level = int(_get(c, "level", default=0) or 0)
+        return min(FUND_PER_LEVEL * level, FUND_PURSE_CAP)
 
     donor = max(sorted(facts), key=lambda n: purse(facts[n]))
     rich = facts[donor]

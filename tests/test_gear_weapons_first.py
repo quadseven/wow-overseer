@@ -210,11 +210,11 @@ class TheRightVendor(unittest.TestCase):
 
 
 class TheFamilyFundsItsOwn(unittest.TestCase):
-    # Live purses and levels, 2026-09-28 01:22Z.
+    # Live purses and levels, 2026-09-28 01:22Z (the mage poorer, to order).
     FACTS = {
         "Grug": {"level": 38, "purse": 540103, "equipped": {"mainhand": 43}},
         "Bork": {"level": 35, "purse": 23904, "equipped": {"head": 38}},
-        "Og": {"level": 35, "purse": 99342, "equipped": {"chest": 16}},
+        "Og": {"level": 35, "purse": 60000, "equipped": {"chest": 16}},
         "Grog": {
             "level": 36,
             "purse": 100075,
@@ -246,10 +246,19 @@ class TheFamilyFundsItsOwn(unittest.TestCase):
         self.assertEqual({"Grug"}, {g.donor for g in gifts})
         self.assertEqual(["Bork", "Og"], [g.taker for g in gifts])
         by = {g.taker: g.copper for g in gifts}
-        self.assertEqual(35 * gearup.FUND_PER_LEVEL - 23904, by["Bork"])
-        self.assertEqual(35 * gearup.FUND_PER_LEVEL - 99342, by["Og"])
+        self.assertEqual(gearup.FUND_PURSE_CAP - 23904, by["Bork"])
+        self.assertEqual(gearup.FUND_PURSE_CAP - 60000, by["Og"])
         self.assertNotIn("Grog", by)  # two empty slots and a weapon: not short
         self.assertIn("no weapon", gifts[0].why)
+
+    def test_nobody_is_funded_past_the_trial_purse_cap(self):
+        # wow-dev 2026-09-28: 105000 copper read back as 100000 with nothing
+        # bought; the realm's Trial.MoneyCap took the rest.
+        facts = {
+            "Grug": {"level": 38, "purse": 540103, "equipped": {"mainhand": 43}},
+            "Og": {"level": 35, "purse": 100000, "equipped": {}},
+        }
+        self.assertEqual((), gearup.plan_funding(facts))
 
     def test_the_donor_keeps_half_its_purse(self):
         facts = {
@@ -389,4 +398,51 @@ class TheVendorStepReadsItsRowsBack(unittest.TestCase):
         self.assertEqual({3491}, visited)
         self.assertEqual(
             {"Og": {"mainhand"}}, self.ns["_TOWN_ERRAND_BOUGHT"][("Og", "Ugga")]
+        )
+
+
+class TheOffHandIsForDualWielders(unittest.TestCase):
+    MACE = dict(
+        entry=852,
+        InventoryType=13,
+        subclass=4,
+        ItemLevel=14,
+        RequiredLevel=9,
+        buyout=1739,
+    )
+
+    def test_a_priest_is_never_sold_a_one_hander_for_her_off_hand(self):
+        # wow-dev 2026-09-28 03:51: the level 13 priest bought a Mace for it.
+        priest = {
+            "class": "priest",
+            "level": 13,
+            "purse": 42366,
+            "equipped": {"mainhand": 12},
+            "skills": {"weapons": {4, 10}},
+        }
+        buys = gearup.plan_vendor_buys({"Uzza": priest}, {"Uzza": [weapon(self.MACE)]})
+        self.assertEqual((), buys)
+
+    def test_a_rogue_still_fills_his_off_hand(self):
+        rogue = {
+            "class": "rogue",
+            "level": 35,
+            "purse": 23904,
+            "equipped": {"mainhand": 30},
+            "skills": {"weapons": {4, 15}},
+        }
+        mace = weapon(dict(self.MACE, ItemLevel=20))
+        buys = gearup.plan_vendor_buys({"Bork": rogue}, {"Bork": [mace]})
+        self.assertEqual(["offhand"], [b.slot for b in buys])
+
+    def test_a_warrior_dual_wields_from_twenty(self):
+        young = {
+            "class": "warrior",
+            "level": 17,
+            "purse": 50000,
+            "equipped": {"mainhand": 12},
+            "skills": {"weapons": {4}},
+        }
+        self.assertEqual(
+            (), gearup.plan_vendor_buys({"Zug": young}, {"Zug": [weapon(self.MACE)]})
         )
