@@ -2987,15 +2987,27 @@
           padding:0 calc(var(--gutter) - .8rem);
           background:var(--card); border-bottom:1px solid var(--card-line);
           overflow-x:auto; overscroll-behavior-x:contain;
-          scrollbar-width:none; scroll-snap-type:x proximity;
+          scrollbar-width:none;
           -webkit-overflow-scrolling:touch; }
   #tabs::-webkit-scrollbar { display:none; }
-  #tabs button { flex:none; min-height:44px; padding:0 .8rem; border:0;
+  /* COMPACT, THE WAY A STREAMING SITE'S CHANNEL BAR IS: 40px and a step
+     smaller type, so the two sticky rows cost 74px of a phone rather than
+     88 and the page keeps the screen. The hit area is the full row height and
+     .7rem either side, which is still a comfortable thumb target. */
+  #tabs button { flex:none; min-height:40px; padding:0 .7rem; border:0;
                  background:transparent; color:var(--on-card-dim);
-                 font:inherit; font-weight:600; cursor:pointer;
-                 white-space:nowrap; scroll-snap-align:start;
-                 scroll-margin-inline:var(--gutter);
-                 border-bottom:3px solid transparent; }
+                 font:inherit; font-size:.9rem; font-weight:600; cursor:pointer;
+                 white-space:nowrap;
+                 border-bottom:2px solid transparent; }
+  /* LIVE FIRST: the Watch tab carries a red dot while any family member is
+     on the air, the one signal a viewer wants before choosing a tab. */
+  #tabs button.live::before { content:""; display:inline-block; width:.5em;
+    height:.5em; margin-right:.45em; vertical-align:.08em; border-radius:50%;
+    background:#ff4d4d; animation:tab-live 2s ease-in-out infinite; }
+  @keyframes tab-live { 50% { opacity:.35; } }
+  @media (prefers-reduced-motion:reduce) {
+    #tabs button.live::before { animation:none; }
+  }
   #tabs button:hover { color:var(--on-card); }
   #tabs button.on { color:var(--on-card); border-bottom-color:var(--accent); }
   #tabs button:focus-visible { outline:2px solid var(--accent);
@@ -3011,10 +3023,11 @@
               scrollbar-width:none; -webkit-overflow-scrolling:touch; }
   .tabpanel[hidden] { display:none; }
   .tabpanel::-webkit-scrollbar { display:none; }
-  .tabpanel button { flex:none; min-height:44px; padding:0 .8rem; border:0;
+  .tabpanel button { flex:none; min-height:36px; padding:0 .7rem; border:0;
                      background:transparent; color:var(--dim);
-                     font:inherit; cursor:pointer; white-space:nowrap;
-                     border-bottom:3px solid transparent; }
+                     font:inherit; font-size:.85rem; cursor:pointer;
+                     white-space:nowrap;
+                     border-bottom:2px solid transparent; }
   .tabpanel button:hover { color:var(--text); }
   .tabpanel button.on { color:var(--text); border-bottom-color:var(--accent); }
   .tabpanel button:focus-visible { outline:2px solid var(--accent);
@@ -5947,6 +5960,9 @@ function renderBroadcasts(p) {
   const now = Date.now();
   wallLines.clear();
   for (const t of (p.wall && p.wall.tiles) || []) wallLines.set(t.name, t.line);
+  const onAir = p.members.some((m) => m.broadcast_url && m.present);
+  const watchTab = document.querySelector('#tabs button[data-view="' + WATCH_VIEW + '"]');
+  if (watchTab) watchTab.classList.toggle("live", onAir);
   for (const m of p.members) {
     // NOBODY WITHOUT A STREAM GETS A TILE. A character that is not streamed has
     // no URL, and a tile with nothing to connect to is a black rectangle that
@@ -6778,10 +6794,22 @@ function markTabs() {
 // first paint the row is below the fold, so the page scrolled 430px down and
 // stayed there - every load landing halfway through the header. Setting
 // scrollLeft touches one axis of one element and can move nothing else.
+//
+// ONCE PER SELECTION, NOT ONCE PER REDRAW. render() calls markTabs() five
+// times a second for the combat pulse, and every call used to run this, so a
+// finger dragging the row was pulled back to the lit tab within 200ms: the
+// row could not be scrolled at all. A row now remembers which tab it last
+// brought into view and moves again only when the lit tab is a different one.
+const revealedTab = new WeakMap();
 function revealTab(b) {
   const row = b.parentElement;
   if (!row) return;
+  if (revealedTab.get(row) === b) return;
   const rr = row.getBoundingClientRect();
+  // A hidden row measures zero: nothing to reveal yet, and the tab must not
+  // count as revealed or it would never be brought in once the row shows.
+  if (!rr.width) return;
+  revealedTab.set(row, b);
   const br = b.getBoundingClientRect();
   // A tab already inside the row does not move. The gutter of slack keeps a
   // tab that has just arrived off the very edge, where it reads as clipped
