@@ -53,13 +53,13 @@ def cave_band():
     warrior, a Holy priest, a paladin with no talents and the raid plan's
     Holy, and three damage dealers."""
     return [
-        member("Tanky", 17, WARRIOR, talent_spells=PROTECTION_TALENT),
-        member("Furio", 16, WARRIOR, talent_spells="61216"),
-        member("Healy", 16, PRIEST, talent_spells=HOLY_TALENT),
-        member("Pally", 15, PALADIN, target_tree="Holy"),
-        member("Stabby", 16, ROGUE),
-        member("Zappy", 15, MAGE),
-        member("Locky", 14, WARLOCK),
+        member("Tanky", 20, WARRIOR, talent_spells=PROTECTION_TALENT),
+        member("Furio", 19, WARRIOR, talent_spells="61216"),
+        member("Healy", 19, PRIEST, talent_spells=HOLY_TALENT),
+        member("Pally", 19, PALADIN, target_tree="Holy"),
+        member("Stabby", 19, ROGUE),
+        member("Zappy", 18, MAGE),
+        member("Locky", 17, WARLOCK),
     ]
 
 
@@ -224,7 +224,7 @@ class EachGuildStaysOnItsOwnSide(unittest.TestCase):
     HUMAN, ORC = 1, 2
 
     def test_an_alliance_guild_is_not_sent_into_orgrimmar(self):
-        levels = [14, 15, 15, 16, 16]
+        levels = [17, 17, 18, 18, 18]
         alliance = [
             d.keyword for d in guildrun.fitting_doors(levels, DOORS, "Alliance")
         ]
@@ -295,9 +295,9 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
 
     def test_each_side_is_offered_only_its_own_doors(self):
         alliance = {
-            d.keyword for d in guildrun.fitting_doors([18] * 5, DOORS, "Alliance")
+            d.keyword for d in guildrun.fitting_doors([19] * 5, DOORS, "Alliance")
         }
-        horde = {d.keyword for d in guildrun.fitting_doors([16] * 5, DOORS, "Horde")}
+        horde = {d.keyword for d in guildrun.fitting_doors([17] * 5, DOORS, "Horde")}
         self.assertLessEqual(alliance, guildrun.GUILD_DOORS["Alliance"])
         self.assertIn("deadmines", alliance)
         self.assertLessEqual(horde, guildrun.GUILD_DOORS["Horde"])
@@ -343,21 +343,31 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
 
 
 class TheDoorsThatFit(unittest.TestCase):
-    def test_a_band_of_fifteen_to_seventeen_gets_ragefire_first(self):
+    def test_a_band_of_seventeen_to_nineteen_gets_ragefire_first(self):
         keywords = [
-            d.keyword for d in guildrun.fitting_doors([15, 15, 16, 16, 17], DOORS)
+            d.keyword for d in guildrun.fitting_doors([17, 17, 18, 18, 19], DOORS)
         ]
         self.assertEqual(keywords[0], "ragefire")
-        self.assertIn("deadmines", keywords)
+        self.assertNotIn("deadmines", keywords)
         self.assertNotIn("shadowfang", keywords)
 
-    def test_a_younger_band_is_held_to_ragefire(self):
-        """The Deadmines wants 17, and an average of 14.6 is more than two
-        levels short of it (council.NEAR_ENOUGH)."""
-        keywords = [
-            d.keyword for d in guildrun.fitting_doors([13, 14, 15, 15, 16], DOORS)
-        ]
-        self.assertEqual(keywords, ["ragefire"])
+    def test_the_deadmines_wants_two_levels_over_its_floor(self):
+        older = [d.keyword for d in guildrun.fitting_doors([19, 19, 20, 20, 20], DOORS)]
+        self.assertIn("deadmines", older)
+        self.assertIn("wailing", older)
+
+    def test_the_margin_edge_is_floor_plus_two(self):
+        """Wailing Caverns has floor 17: mean 19.0 goes in, mean 18.6 stays out."""
+        at = [d.keyword for d in guildrun.fitting_doors([19, 19, 19, 19, 19], DOORS)]
+        under = [d.keyword for d in guildrun.fitting_doors([18, 18, 19, 19, 19], DOORS)]
+        self.assertIn("wailing", at)
+        self.assertNotIn("wailing", under)
+        self.assertIn("ragefire", under)
+
+    def test_a_group_at_the_floor_is_held_home(self):
+        """113 runs at or just under the floor cleared none."""
+        self.assertEqual(guildrun.fitting_doors([15, 15, 15, 15, 16], DOORS), [])
+        self.assertEqual(guildrun.fitting_doors([13, 14, 15, 15, 16], DOORS), [])
 
     def test_the_finders_own_minimum_keeps_a_low_member_out(self):
         floors = guildrun.doors({389: 15})
@@ -409,11 +419,11 @@ class TheCompositions(unittest.TestCase):
         horde = [
             guildrun.member_from_row(dict(row(n + "h", lvl, c), guild_name="Bonkers"))
             for n, lvl, c in (
-                ("W", 16, WARRIOR),
-                ("P", 15, PRIEST),
-                ("R", 15, ROGUE),
-                ("M", 14, MAGE),
-                ("L", 14, WARLOCK),
+                ("W", 19, WARRIOR),
+                ("P", 18, PRIEST),
+                ("R", 18, ROGUE),
+                ("M", 17, MAGE),
+                ("L", 17, WARLOCK),
             )
         ]
         pools = guildrun.pools(cave_band() + horde, DOORS)
