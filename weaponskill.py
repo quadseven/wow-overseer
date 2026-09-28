@@ -104,53 +104,67 @@ def needs(facts: dict, bag_rows) -> list:
     RequiredLevel, AllowableClass. An upgrade fills an empty slot or beats the
     worn piece's item level.
     """
-    from gearup import CLASS_IDS
-
     best: dict = {}
     for row in bag_rows or ():
         name = str(row.get("name") or "")
-        fact = (facts or {}).get(name)
-        if not fact:
-            continue
-        cls_id = CLASS_IDS.get(str(fact.get("class") or "").lower(), 0)
-        sub = int(row.get("subclass") if row.get("subclass") is not None else -1)
-        slot = WEAPON_SLOT.get(int(row.get("InventoryType") or 0))
-        held = set((fact.get("skills") or {}).get("weapons") or ())
-        if sub not in WEAPON_SKILLS or sub in held or not slot:
-            continue
-        if sub not in CLASS_WEAPONS.get(cls_id, set()):
-            continue
-        if int(row.get("RequiredLevel") or 0) > int(fact.get("level") or 0):
-            continue
-        allowed = int(row.get("AllowableClass") or 0)
-        if allowed not in (-1, 0) and not allowed & (1 << (cls_id - 1)):
+        need = _need(name, (facts or {}).get(name), row)
+        if need is None:
             continue
         item_level = int(row.get("ItemLevel") or 0)
-        worn = (fact.get("equipped") or {}).get(slot)
-        if (
-            slot in (fact.get("equipped") or {})
-            and worn is not None
-            and item_level <= int(worn)
-        ):
-            continue
-        skill, spell = WEAPON_SKILLS[sub]
-        why = (
-            "its %s is empty" % slot
-            if slot not in (fact.get("equipped") or {})
-            else "item level %d over %s worn" % (item_level, worn)
-        )
-        need = Need(
-            name,
-            skill,
-            spell,
-            int(row.get("entry") or 0),
-            str(row.get("label") or ""),
-            slot,
-            why,
-        )
         if name not in best or item_level > best[name][0]:
             best[name] = (item_level, need)
-    return [best[n][1] for n in sorted(best)]
+    return [need for _level, need in (best[n] for n in sorted(best))]
+
+
+def _class_id(fact) -> int:
+    from gearup import CLASS_IDS
+
+    return CLASS_IDS.get(str(fact.get("class") or "").lower(), 0)
+
+
+def _learnable(fact, row) -> bool:
+    """Its class can learn the type, it lacks the skill, and it can wear it."""
+    cls_id = _class_id(fact)
+    sub = row.get("subclass")
+    sub = int(sub) if sub is not None else -1
+    held = set((fact.get("skills") or {}).get("weapons") or ())
+    if sub not in WEAPON_SKILLS or sub in held:
+        return False
+    if sub not in CLASS_WEAPONS.get(cls_id, set()):
+        return False
+    if int(row.get("RequiredLevel") or 0) > int(fact.get("level") or 0):
+        return False
+    allowed = int(row.get("AllowableClass") or 0)
+    return allowed in (-1, 0) or bool(allowed & (1 << (cls_id - 1)))
+
+
+def _need(name, fact, row):
+    """The Need this carried weapon makes for its holder, or None."""
+    if not fact or not _learnable(fact, row):
+        return None
+    slot = WEAPON_SLOT.get(int(row.get("InventoryType") or 0))
+    if not slot:
+        return None
+    equipped = fact.get("equipped") or {}
+    item_level = int(row.get("ItemLevel") or 0)
+    worn = equipped.get(slot)
+    if slot in equipped and worn is not None and item_level <= int(worn):
+        return None
+    skill, spell = WEAPON_SKILLS[int(row["subclass"])]
+    why = (
+        "its %s is empty" % slot
+        if slot not in equipped
+        else "item level %d over %s worn" % (item_level, worn)
+    )
+    return Need(
+        name,
+        skill,
+        spell,
+        int(row.get("entry") or 0),
+        str(row.get("label") or ""),
+        slot,
+        why,
+    )
 
 
 def choose_master(masters, wanted, team: str, map_id: int) -> dict:

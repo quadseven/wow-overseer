@@ -13546,6 +13546,20 @@ class Bridge(discord.Client):
             log.info("weapon skill: %s; no weapon master of the family's side "
                      "on this map teaches it, so nobody walks%s", said, label)
             return
+        if await self._weapon_skill_train(needs, master, positions, label):
+            return
+        target = travel.resolve(str(int(master["entry"])))
+        if not target:
+            return
+        aimed = await self._claim_town_slot(
+            WEAPON_SKILL_CLAIMANT, leader, target, urgent=True,
+            cohort=_cohort_key(cohort))
+        log.info("weapon skill: %s; %s is aimed at %s (creature %d, %d yards) "
+                 "(aim taken=%s)%s", said, leader, master["name"],
+                 int(master["entry"]), int(float(master["yards"])), aimed, label)
+
+    async def _weapon_skill_train(self, needs, master, positions, label) -> int:
+        """Write a train row for each member standing at the master; how many."""
         written = 0
         for need in needs:
             if need.spell not in master["spells"]:
@@ -13559,17 +13573,7 @@ class Bridge(discord.Client):
                 log.info("weapon skill: %s buys skill %d at %s with its own "
                          "gold, to wield %s%s", need.name, need.skill,
                          master["name"], need.item, label)
-        if written:
-            return
-        target = travel.resolve(str(int(master["entry"])))
-        if not target:
-            return
-        aimed = await self._claim_town_slot(
-            WEAPON_SKILL_CLAIMANT, leader, target, urgent=True,
-            cohort=_cohort_key(cohort))
-        log.info("weapon skill: %s; %s is aimed at %s (creature %d, %d yards) "
-                 "(aim taken=%s)%s", said, leader, master["name"],
-                 int(master["entry"]), int(float(master["yards"])), aimed, label)
+        return written
 
     async def _weapon_skill_equip(self, names, label) -> None:
         """Put on each weapon whose skill row reads applied and not yet worn."""
@@ -23489,7 +23493,13 @@ def _fetch_bag_weapons(names: list) -> list:
     if not names:
         return []
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(_BAG_WEAPONS_SQL % ",".join(["%s"] * len(names)), list(names))
+        try:
+            cur.execute(_BAG_WEAPONS_SQL % ",".join(["%s"] * len(names)), list(names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("weapon skill: the bags cannot be read on this world image")
+                return []
+            raise
         return [dict(r) for r in cur.fetchall()]
 
 
