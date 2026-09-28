@@ -12945,6 +12945,9 @@ class Bridge(discord.Client):
         return out
 
     async def _gathering_field(self, member, skills, surveys):
+        # gatheraim reads {character: {skill: value}}; `skills` is this one
+        # member's {skill: value}, so it goes in under the member's name.
+        skills = {member.name: skills}
         locks = tuple(sorted({lock for name, best in gatheraim.strongest_gatherers(skills)
                               for lock in gatherband.reachable_locks(name, best)}))
         key = (int(member.map_id), locks)
