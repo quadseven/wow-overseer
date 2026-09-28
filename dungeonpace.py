@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
+from datetime import timedelta
 
 import campaignplan
 import council
@@ -90,6 +91,9 @@ RATE_WINDOW = 6
 WINDOW_HOURS = 48
 
 STEP_DOWN_RUNS = 5
+# A queue entry that started within this long after a step back up to its
+# door is that return (`returned`).
+RETURN_HOURS = 6
 # A run whose band tops out this many levels under the weakest member is still
 # worth farming for gear while the family grows; past it, it is outgrown.
 OUTGROWN_GRACE = 3
@@ -251,9 +255,18 @@ def since(started, back):
 
 
 def returned(started, back) -> bool:
-    """Whether the family's last step back to a door is inside its queue
-    entry, so the door's record counts from that return."""
-    return back is not None and (started is None or back >= started)
+    """Whether the family's queue entry is its return to the door after a
+    step back up.
+
+    THE ENTRY STARTS AFTER THE STEP BACK, NOT BEFORE IT. The step-up
+    finishes the step-down entry and the door's own entry goes active when
+    the family next reaches it: on wow-dev 2026-09-28 the step back was at
+    00:14:54 and the Library entry started at 01:01:43. So a step back up to
+    RETURN_HOURS before the entry started still makes this run a return.
+    """
+    if back is None:
+        return False
+    return started is None or started - back <= timedelta(hours=RETURN_HOURS)
 
 
 def viability(runs, map_id: int, since=None) -> Viability:
