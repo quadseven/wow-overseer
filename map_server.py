@@ -957,7 +957,8 @@ _GUILD_GEAR = (
     "c.money, c.online, "
     "EXISTS(SELECT 1 FROM overseer_snapshot s WHERE s.guid = c.guid "
     "AND s.health = 0 AND s.updated_at > NOW() - INTERVAL 60 SECOND) AS dead, "
-    + raidroles.TALENTS_COLUMN + ", "
+    # S608: TALENTS_COLUMN is a module constant (raidroles), not input.
+    + raidroles.TALENTS_COLUMN + ", "  # noqa: S608
     "ci.slot, it.ItemLevel AS item_level, it.name AS item_name "
     "FROM guild g JOIN guild_member gm ON gm.guildid = g.guildid "
     "JOIN characters c ON c.guid = gm.guid "

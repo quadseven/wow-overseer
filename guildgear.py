@@ -69,10 +69,8 @@ def members_from_rows(rows: list[dict]) -> list[dict]:
     return out
 
 
-def _member(row: dict, worn: dict) -> dict:
-    class_id = row.get("class_id")
-    levels = [w["item_level"] for w in worn.values() if w["item_level"] is not None]
-    avg = round(sum(levels) / len(levels), 1) if levels else 0.0
+def _weakest(worn: dict):
+    """The worn stat piece with the lowest item level, or None."""
     weakest = None
     for slot in STAT_SLOTS:
         w = worn.get(slot)
@@ -80,19 +78,27 @@ def _member(row: dict, worn: dict) -> dict:
             continue
         if weakest is None or w["item_level"] < weakest["item_level"]:
             weakest = {"slot": slot, "item_level": w["item_level"], "name": w["name"]}
+    return weakest
+
+
+def _presence(row: dict) -> str:
+    if row.get("dead"):
+        return "dead"
+    return "online" if row.get("online") else "offline"
+
+
+def _flags(weapon: bool, empty: int) -> list:
+    flags = [] if weapon else ["no weapon"]
+    if empty >= EMPTY_WARN:
+        flags.append("%d empty" % empty)
+    return flags
+
+
+def _member(row: dict, worn: dict) -> dict:
+    class_id = row.get("class_id")
+    levels = [w["item_level"] for w in worn.values() if w["item_level"] is not None]
     empty_slots = [s for s in STAT_SLOTS if s not in worn]
     weapon = MAIN_HAND in worn
-    if row.get("dead"):
-        presence = "dead"
-    elif row.get("online"):
-        presence = "online"
-    else:
-        presence = "offline"
-    flags = []
-    if not weapon:
-        flags.append("no weapon")
-    if len(empty_slots) >= EMPTY_WARN:
-        flags.append("%d empty" % len(empty_slots))
     role = raidroles.role_of(
         {"class_id": class_id, raidroles.KEY: row.get(raidroles.KEY)}
     )
@@ -103,16 +109,16 @@ def _member(row: dict, worn: dict) -> dict:
         "class_colour": CLASS_COLOURS.get(class_id, "#ffffff"),
         "level": int(row.get("level") or 0),
         "role": role or "",
-        "avg_item_level": avg,
+        "avg_item_level": round(sum(levels) / len(levels), 1) if levels else 0.0,
         "worn": len(worn),
         "of": len(STAT_SLOTS),
         "empty": len(empty_slots),
         "empty_slots": empty_slots,
         "weapon": weapon,
-        "weakest": weakest,
+        "weakest": _weakest(worn),
         "gold": wealth.coins(row.get("money")),
-        "presence": presence,
-        "flags": flags,
+        "presence": _presence(row),
+        "flags": _flags(weapon, len(empty_slots)),
     }
 
 
