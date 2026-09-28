@@ -14856,6 +14856,7 @@ class Bridge(discord.Client):
                 await asyncio.to_thread(_follow_guild_runs)
                 active = await asyncio.to_thread(_active_guild_run_names)
                 self._guild_run_names = set(active)
+                await asyncio.to_thread(_hearth_stranded_guild_members)
                 if guildrun.enabled():
                     said_off = False
                     await self._guild_run_once()
@@ -18575,6 +18576,7 @@ def _ensure_guild_run_store() -> None:
 
 _GUILD_RUN_MEMBERS_SQL = (
     "SELECT s.name, s.level, s.class AS class_id, s.map_id, s.in_combat, s.health, "
+    "s.race, s.zone_id, "
     # IN THE WORLD IS A FRESH SNAPSHOT, NOT characters.online. The flag reads
     # 0 for random bots that are in the world (8 guild members flipped to 0 at
     # once on the dev realm while their snapshots kept updating), and the
@@ -18668,6 +18670,40 @@ def _fetch_guild_run_facts(bounds) -> dict:
     return {"rows": rows, "family": family, "busy": busy, "resting": resting,
             "benched": benched, "in_flight_by_guild": by_guild, "history": history,
             "finder_floors": floors}
+
+
+def _hearth_stranded_guild_members() -> int:
+    """Send home by hearthstone every guild member stranded on the other
+    faction's ground (guildrun.stranded), at most once an hour each: the
+    same kind='hearth' row the movement choice writes, and the same hour."""
+    bounds = guildrun.limits()
+    guilds = list(bounds.guilds)
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_GUILD_RUN_MEMBERS_SQL.format(holes=",".join(["%s"] * len(guilds))),
+                    guilds)
+        rows = list(cur.fetchall())
+        busy = set(_guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE)))
+    members = [m for m in (guildrun.member_from_row(r) for r in rows) if m]
+    factions = {}
+    for guild in {m.guild for m in members}:
+        factions[guild] = guildrun.faction_of([m for m in members if m.guild == guild])
+    due = [m.name for m in members
+           if m.name not in busy and guildrun.stranded(m, factions.get(m.guild, ""))]
+    if not due:
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_MOVEMENT_HEARTHED % ",".join(["%s"] * len(due)), due)
+        recent = {str(r["target_name"]) for r in cur.fetchall()}
+    sent = 0
+    for name in due:
+        if name in recent:
+            continue
+        _insert_hearth(name, guildrun.SOURCE)
+        sent += 1
+    if sent:
+        log.info("guild runs: %d member(s) stranded on the other faction's ground hearth "
+                 "home (%s)", sent, ", ".join(n for n in due if n not in recent))
+    return sent
 
 
 def _guild_run_gate() -> dict:

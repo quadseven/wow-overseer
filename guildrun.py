@@ -179,6 +179,8 @@ class Member:
     in_combat: bool = False
     alive: bool = True
     online: bool = True
+    race: int = 0
+    zone_id: int = 0
 
     @property
     def played_tree(self) -> str:
@@ -229,6 +231,8 @@ def member_from_row(row: dict) -> Member | None:
         in_combat=bool(row.get("in_combat")),
         alive=_alive(row),
         online=bool(row.get("online", 1)),
+        race=int(row.get("race") or 0),
+        zone_id=int(row.get("zone_id") or 0),
     )
 
 
@@ -351,8 +355,46 @@ def band_of(levels) -> str:
     return "%d-%d" % (low, low + 4)
 
 
-def fitting_doors(levels, all_doors: list) -> list:
+ALLIANCE_RACES = frozenset({1, 3, 4, 7, 11})
+HORDE_RACES = frozenset({2, 5, 6, 8, 10})
+
+
+def faction_of(members) -> str:
+    """ "Alliance", "Horde" or "" off the members' own races."""
+    races = {int(m.race) for m in members if m.race}
+    if races and races <= ALLIANCE_RACES:
+        return "Alliance"
+    if races and races <= HORDE_RACES:
+        return "Horde"
+    return ""
+
+
+# THE OTHER FACTION'S HOME GROUND, where its guards kill a member on sight.
+# Measured on wow-dev (2026-09-28): 60 of 159 guild deaths in 30 minutes were
+# Alliance members killed by Razor Hill Grunts (level 30 to 32) in Durotar,
+# after Cave runs into Ragefire Chasm, a door inside Orgrimmar, left them on
+# the Horde side. Zones: Durotar and Orgrimmar; Elwynn Forest and Stormwind.
+HOSTILE_HOME_ZONES = {"Alliance": frozenset({14, 1637}), "Horde": frozenset({12, 1519})}
+# The dungeon maps whose doors stand inside a capital (council._inside_capital).
+HOSTILE_CAPITAL_DUNGEONS = {"Alliance": frozenset({389}), "Horde": frozenset({34})}
+
+
+def stranded(member: Member, faction: str) -> bool:
+    """A living member standing on the other faction's home ground, or inside
+    a dungeon whose door is in the other faction's capital: it hearths home."""
+    if not faction or not member.alive or member.in_combat or member.grouped:
+        return False
+    return member.zone_id in HOSTILE_HOME_ZONES.get(
+        faction, ()
+    ) or member.map_id in HOSTILE_CAPITAL_DUNGEONS.get(faction, ())
+
+
+def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
     """The doors this set of levels fits, best fit first.
+
+    A door inside the other faction's capital (council._other_capital) is not
+    offered to a guild of known faction: its members come out among that
+    capital's guards.
 
     Fits: every member at or over the finder's minimum, the average within
     council.NEAR_ENOUGH of the door's floor, and nobody past its ceiling.
@@ -365,6 +407,8 @@ def fitting_doors(levels, all_doors: list) -> list:
     mean = sum(levels) / len(levels)
     out = []
     for door in all_doors:
+        if faction and council._other_capital(door.map_id, faction):
+            continue
         if low < door.finder_floor:
             continue
         if mean + council.NEAR_ENOUGH < door.floor:
@@ -543,7 +587,7 @@ def pools(members: list, all_doors: list) -> list:
             comps = compositions(window)
             if not comps:
                 continue
-            if not fitting_doors(comps[0].levels, all_doors):
+            if not fitting_doors(comps[0].levels, all_doors, faction_of(window)):
                 continue
             out.append(Pool(guild=guild, members=tuple(window)))
             taken.update(m.name for m in window)
@@ -660,7 +704,7 @@ def plan_for(pool: Pool, all_doors: list, table: dict) -> Plan | None:
     comps = compositions(list(pool.members))
     if not comps:
         return None
-    best = fitting_doors(comps[0].levels, all_doors)
+    best = fitting_doors(comps[0].levels, all_doors, faction_of(pool.members))
     if not best:
         return None
     return Plan(
