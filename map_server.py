@@ -39,6 +39,7 @@ import family
 import frames
 import guildbank
 import guildcraft
+import guildgear
 import guildroute
 import jevview
 import levelroute
@@ -940,6 +941,50 @@ def _is_family_guildmate(name: str, family_names: list[str]) -> bool:
             cur.execute(_ARMORY_IS_GUILDMATE.format(holes=holes),  # noqa: S608
                         (name, *family_names))
             return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+# EVERY MEMBER OF EVERY FAMILY GUILD, ONE ROW PER WORN ITEM (the Lineup tab's
+# gear table). The guilds are the ones the roster's names are in, as the
+# database reports them, exactly as _LINEUP_GUILD binds them; nothing from the
+# request reaches it. A member wearing nothing still comes back once, with a
+# NULL slot. `dead` is the world's own fresh reading (a snapshot row written
+# in the last minute with no health left); the `corpse` table is not used,
+# because a corpse row outlives the death until the next save.
+# S608 below: the one concatenation is the talents column, a module constant.
+_GUILD_GEAR = (
+    "SELECT g.name AS guild_name, c.name, c.level, c.class AS class_id, "  # noqa: S608
+    "c.money, c.online, "
+    "EXISTS(SELECT 1 FROM overseer_snapshot s WHERE s.guid = c.guid "
+    "AND s.health = 0 AND s.updated_at > NOW() - INTERVAL 60 SECOND) AS dead, "
+    + raidroles.TALENTS_COLUMN + ", "
+    "ci.slot, it.ItemLevel AS item_level, it.name AS item_name "
+    "FROM guild g JOIN guild_member gm ON gm.guildid = g.guildid "
+    "JOIN characters c ON c.guid = gm.guid "
+    "LEFT JOIN character_inventory ci ON ci.guid = c.guid "
+    "AND ci.bag = 0 AND ci.slot < {slots} "
+    "LEFT JOIN item_instance ii ON ii.guid = ci.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
+)
+
+
+def _fetch_guild_gear() -> list[dict]:
+    """The rows guildgear.build reads, for every family guild at once."""
+    names = _all_roster_names()
+    if not names:
+        return []
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608: placeholders only, one per roster name; the slot bound is
+            # the length of a constant list.
+            cur.execute(_GUILD_GEAR.format(  # noqa: S608
+                holes=holes, slots=len(armory.EQUIPPED_SLOTS)), tuple(names))
+            return list(cur.fetchall())
     finally:
         conn.close()
 
@@ -5801,6 +5846,18 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("armory guild query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _guild_gear(self, _query: dict) -> None:
+        """GET /api/guildgear - every family-guild member's gear, one table.
+
+        No parameters: it answers about the guilds the families are in and
+        nothing else (guildgear.py has the rules)."""
+        try:
+            payload = guildgear.build(_fetch_guild_gear())
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            log.exception("guild gear query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _armory_member(self, query: dict) -> None:
         """GET /api/armory/member?name=X - one guildmate's full profile.
 
@@ -5852,9 +5909,16 @@ class Handler(BaseHTTPRequestHandler):
         wanted = query.get("name", [""])[0]
         if not _NAME_RE.fullmatch(wanted):
             return None
-        for key, names in _fetch_family_groups():
+        groups = _fetch_family_groups()
+        for key, names in groups:
             if wanted in names:
                 return wanted, key, names
+        # A MEMBER OF A FAMILY GUILD gets the same frames, as a family of one
+        # with no family key: the Lineup tab's gear table opens them. Still a
+        # closed set: the guilds the families are in, as the database says.
+        everyone = [n for _key, names in groups for n in names]
+        if _is_family_guildmate(wanted, everyone):
+            return wanted, "", [wanted]
         return None
 
     def _client_frame(self, query: dict, build, what: str) -> None:
@@ -5909,6 +5973,17 @@ class Handler(BaseHTTPRequestHandler):
             return vclient.build_social(name, key, names,
                                         **_fetch_client_social(name, names))
         self._client_frame(query, build, "social")
+
+    def _client_quests(self, query: dict) -> None:
+        """GET /api/client/quests?name=X - one character's quest log, for the
+        frame. By name rather than by family key, so a guildmate opened from
+        the Lineup tab has one too; the name is scoped like every frame's."""
+        def build(name, _key, _names):
+            log_ = questlog.build_questlog(**_fetch_questlog([name]), roster=[name])
+            member = next((m for m in log_.get("members") or ()
+                           if m.get("name") == name), None)
+            return {"member": member}
+        self._client_frame(query, build, "quests")
 
     def _client_item_tip(self, query: dict) -> None:
         """GET /api/client/item?entry=N - one item's tooltip, cached per entry.
@@ -6034,6 +6109,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/client/bank": _client_bank,
         "/api/client/guildbank": _client_guild_bank,
         "/api/client/social": _client_social,
+        "/api/client/quests": _client_quests,
         "/api/client/item": _client_item_tip,
         "/api/standing": _standing,
         "/api/wealth": _wealth,
@@ -6045,6 +6121,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/runtimeline": _run_timeline,
         "/api/raidgoals": _raidgoals,
         "/api/lineup": _lineup,
+        "/api/guildgear": _guild_gear,
         "/api/trades": _trades,
         "/api/recap": _recap,
         "/api/council": _council,

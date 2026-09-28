@@ -54,7 +54,7 @@ COPY core.py bridge.py voice.py transform.py \
      campaignplan.py dungeonladder.py levelroute.py \
      preraid.py \
      runtimeline.py \
-     vclient.py \
+     vclient.py guildgear.py \
      situation.py vision.py llmmode.py jev_movement.py jev_family_intent.py leadcmd.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json bagicons.json spells.json bagspells.json viewerdisplays.json \
