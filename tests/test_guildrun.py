@@ -308,6 +308,9 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         self.assertEqual(
             guildrun.why_not(weak, set(), set(), set()), "gear too weak for a dungeon"
         )
+        # Exactly GEAR_GAP under is still sent; only more than that is not.
+        edge = member("Edge", 16, WARRIOR, gear_ilvl=10.0)
+        self.assertEqual(guildrun.why_not(edge, set(), set(), set()), "")
         ready = member("Selie", 14, WARRIOR, gear_ilvl=9.0)
         self.assertEqual(guildrun.why_not(ready, set(), set(), set()), "")
         self.assertEqual(
