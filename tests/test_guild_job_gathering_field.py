@@ -77,8 +77,15 @@ class GatheringFieldTest(unittest.TestCase):
         self.assertEqual(skills, {"mining": 1})
         lock = gatherband.reachable_locks("mining", 1)[0]
         node = gatheraim.Spawn(
-            map_id=1, zone_id=14, x=1100.0, y=-4000.0, z=10.0,
-            lock_id=lock, name="Copper Vein", guid=4242)
+            map_id=1,
+            zone_id=14,
+            x=1100.0,
+            y=-4000.0,
+            z=10.0,
+            lock_id=lock,
+            name="Copper Vein",
+            guid=4242,
+        )
         seen = {}
 
         def survey(map_id, locks):
@@ -87,8 +94,7 @@ class GatheringFieldTest(unittest.TestCase):
 
         this = _Pass()
         with mock.patch.object(bridge, "_survey_job_nodes", survey):
-            spot = asyncio.run(
-                bridge.Bridge._gathering_field(this, m, skills, {}))
+            spot = asyncio.run(bridge.Bridge._gathering_field(this, m, skills, {}))
 
         self.assertIn(lock, seen["locks"])
         self.assertIsNotNone(spot)
