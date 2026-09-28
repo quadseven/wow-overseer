@@ -210,11 +210,11 @@ class TheRightVendor(unittest.TestCase):
 
 
 class TheFamilyFundsItsOwn(unittest.TestCase):
-    # Live purses and levels, 2026-09-28 01:22Z.
+    # Live purses and levels, 2026-09-28 01:22Z (the mage poorer, to order).
     FACTS = {
         "Grug": {"level": 38, "purse": 540103, "equipped": {"mainhand": 43}},
         "Bork": {"level": 35, "purse": 23904, "equipped": {"head": 38}},
-        "Og": {"level": 35, "purse": 99342, "equipped": {"chest": 16}},
+        "Og": {"level": 35, "purse": 60000, "equipped": {"chest": 16}},
         "Grog": {
             "level": 36,
             "purse": 100075,
@@ -247,7 +247,7 @@ class TheFamilyFundsItsOwn(unittest.TestCase):
         self.assertEqual(["Bork", "Og"], [g.taker for g in gifts])
         by = {g.taker: g.copper for g in gifts}
         self.assertEqual(gearup.FUND_PURSE_CAP - 23904, by["Bork"])
-        self.assertEqual(gearup.FUND_PURSE_CAP - 99342, by["Og"])
+        self.assertEqual(gearup.FUND_PURSE_CAP - 60000, by["Og"])
         self.assertNotIn("Grog", by)  # two empty slots and a weapon: not short
         self.assertIn("no weapon", gifts[0].why)
 
