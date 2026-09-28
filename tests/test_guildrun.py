@@ -289,6 +289,38 @@ class EachGuildStaysOnItsOwnSide(unittest.TestCase):
         self.assertIn("_insert_hearth(name, guildrun.SOURCE)", rescue)
 
 
+class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
+    """12 guild runs entered Ragefire Chasm on wow-dev and none cleared: members
+    at levels 10 to 16 wore item level 2 to 5 gear."""
+
+    def test_each_side_is_offered_only_its_own_doors(self):
+        alliance = {
+            d.keyword for d in guildrun.fitting_doors([18] * 5, DOORS, "Alliance")
+        }
+        horde = {d.keyword for d in guildrun.fitting_doors([16] * 5, DOORS, "Horde")}
+        self.assertLessEqual(alliance, guildrun.GUILD_DOORS["Alliance"])
+        self.assertIn("deadmines", alliance)
+        self.assertLessEqual(horde, guildrun.GUILD_DOORS["Horde"])
+        self.assertIn("ragefire", horde)
+
+    def test_an_under_geared_member_is_not_sent(self):
+        weak = member("Bramitho", 14, PRIEST, gear_ilvl=4.0)
+        self.assertEqual(
+            guildrun.why_not(weak, set(), set(), set()), "gear too weak for a dungeon"
+        )
+        ready = member("Selie", 14, WARRIOR, gear_ilvl=9.0)
+        self.assertEqual(guildrun.why_not(ready, set(), set(), set()), "")
+        self.assertEqual(
+            guildrun.why_not(member("U", 14, MAGE), set(), set(), set()), ""
+        )
+
+    def test_the_bridge_reads_worn_item_level(self):
+        sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
+        sql = sql[: sql.index("\n)\n")]
+        self.assertIn("AVG(it.ItemLevel)", sql)
+        self.assertIn("AS gear_ilvl", sql)
+
+
 class TheDoorsThatFit(unittest.TestCase):
     def test_a_band_of_fifteen_to_seventeen_gets_ragefire_first(self):
         keywords = [

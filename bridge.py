@@ -18577,6 +18577,10 @@ def _ensure_guild_run_store() -> None:
 _GUILD_RUN_MEMBERS_SQL = (
     "SELECT s.name, s.level, s.class AS class_id, s.map_id, s.in_combat, s.health, "
     "s.race, s.zone_id, "
+    "(SELECT AVG(it.ItemLevel) FROM character_inventory ci "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE ci.guid = s.guid AND ci.bag = 0 AND ci.slot < 19) AS gear_ilvl, "
     # IN THE WORLD IS A FRESH SNAPSHOT, NOT characters.online. The flag reads
     # 0 for random bots that are in the world (8 guild members flipped to 0 at
     # once on the dev realm while their snapshots kept updating), and the

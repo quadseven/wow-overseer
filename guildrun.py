@@ -181,6 +181,8 @@ class Member:
     online: bool = True
     race: int = 0
     zone_id: int = 0
+    # Average item level of what it wears (None when unread).
+    gear_ilvl: float | None = None
 
     @property
     def played_tree(self) -> str:
@@ -233,6 +235,7 @@ def member_from_row(row: dict) -> Member | None:
         online=bool(row.get("online", 1)),
         race=int(row.get("race") or 0),
         zone_id=int(row.get("zone_id") or 0),
+        gear_ilvl=None if row.get("gear_ilvl") is None else float(row["gear_ilvl"]),
     )
 
 
@@ -250,6 +253,8 @@ def why_not(
         return "resting after a run"
     if member.name in benched:
         return "refused a run just now"
+    if under_geared(member):
+        return "gear too weak for a dungeon"
     if not member.alive:
         return "dead"
     if member.in_combat:
@@ -403,6 +408,23 @@ def stranded_names(members: list, busy: set) -> list:
     ]
 
 
+# THE DOORS EACH SIDE USES. 12 guild runs entered Ragefire Chasm and none
+# cleared (wow-dev, 2026-09-28), and Cave's left its members among the Horde's
+# guards. Each guild goes only to its own side's five-mans for its band.
+GUILD_DOORS = {
+    "Alliance": frozenset({"deadmines", "stockades", "wailing"}),
+    "Horde": frozenset({"ragefire", "wailing"}),
+}
+# A member whose worn gear averages more than this many item levels under its
+# own level is not sent into a dungeon: at levels 10 to 16 the guilds wore
+# item level 2 to 5 and every run that entered wiped or was lost.
+GEAR_GAP = 6
+
+
+def under_geared(member: Member) -> bool:
+    return member.gear_ilvl is not None and member.gear_ilvl < member.level - GEAR_GAP
+
+
 def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
     """The doors this set of levels fits, best fit first.
 
@@ -422,6 +444,8 @@ def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
     out = []
     for door in all_doors:
         if faction and council._other_capital(door.map_id, faction):
+            continue
+        if faction and door.keyword not in GUILD_DOORS.get(faction, frozenset()):
             continue
         if low < door.finder_floor:
             continue
