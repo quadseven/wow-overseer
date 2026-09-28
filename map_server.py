@@ -952,13 +952,13 @@ def _is_family_guildmate(name: str, family_names: list[str]) -> bool:
 # NULL slot. `dead` is the world's own fresh reading (a snapshot row written
 # in the last minute with no health left); the `corpse` table is not used,
 # because a corpse row outlives the death until the next save.
+# S608 below: the one concatenation is raidroles.TALENTS_COLUMN, a constant.
 _GUILD_GEAR = (
-    "SELECT g.name AS guild_name, c.name, c.level, c.class AS class_id, "
+    "SELECT g.name AS guild_name, c.name, c.level, c.class AS class_id, "  # noqa: S608
     "c.money, c.online, "
     "EXISTS(SELECT 1 FROM overseer_snapshot s WHERE s.guid = c.guid "
     "AND s.health = 0 AND s.updated_at > NOW() - INTERVAL 60 SECOND) AS dead, "
-    # S608: TALENTS_COLUMN is a module constant (raidroles), not input.
-    + raidroles.TALENTS_COLUMN + ", "  # noqa: S608
+    + raidroles.TALENTS_COLUMN + ", "
     "ci.slot, it.ItemLevel AS item_level, it.name AS item_name "
     "FROM guild g JOIN guild_member gm ON gm.guildid = g.guildid "
     "JOIN characters c ON c.guid = gm.guid "
