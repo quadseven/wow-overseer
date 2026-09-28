@@ -13685,9 +13685,20 @@ class Bridge(discord.Client):
             return now - marks[step] >= TOWN_ERRAND_SETTLE_SECONDS
         key = tuple(sorted(names))
         facts = await asyncio.to_thread(_fetch_gearup_facts, names)
+        wanted = gearup.plan_funding(facts)
+        if not wanted:
+            marks[step] = now
+            return True
+        # THE DONOR POSTS FROM THE MAILBOX. A tick whose settled reading has
+        # the donor elsewhere (walking up, or a reading two ticks disagree on)
+        # waits; the step's own window bounds the wait. Measured on wow-dev
+        # 2026-09-28: the step ran on a tick that read nobody at the mailbox
+        # and ended with no letter.
         here = {n: f for n, f in facts.items() if townerrand.in_range(
             hub, positions.get(n), TOWN_COUNTER_YARDS)}
-        gifts = gearup.plan_funding(here)
+        if wanted[0].donor not in here:
+            return False
+        gifts = wanted
         seen = await asyncio.to_thread(_recent_mail_keys, GIVE_RETRY_MINUTES)
         funded = _TOWN_ERRAND_FUNDED.setdefault(key, {})
         sent = 0

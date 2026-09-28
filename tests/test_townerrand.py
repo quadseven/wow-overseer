@@ -376,6 +376,27 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual(te.FUND, self.tick().current_step)  # the letter settles
         self.assertEqual(te.MAIL, self.tick(60.0).current_step)
 
+    def test_the_fund_step_waits_for_the_donor_at_the_mailbox(self):
+        # wow-dev 2026-09-28 02:20: the step ran on a tick whose settled
+        # reading had nobody at the mailbox, and ended with no letter.
+        rich = {
+            "Grug": {"level": 38, "purse": 540103, "equipped": {"mainhand": 43}},
+            "Bork": {"level": 35, "purse": 23904, "equipped": {"head": 38}},
+        }
+        self.ns["_fetch_gearup_facts"] = lambda names: rich
+        self.tick()
+        self.positions = {"Grug": _at(101, 100), "Bork": _at(103, 101)}
+        self.assertEqual(te.GATHER, self.tick().phase)
+        self.assertEqual(te.STEPS, self.tick().phase)
+        self.positions = {"Bork": _at(103, 101)}  # the donor's reading is gone
+        self.assertEqual(te.FUND, self.tick().current_step)
+        self.assertEqual(te.FUND, self.tick().current_step)
+        self.assertEqual([], self.written)
+        self.positions["Grug"] = _at(101, 100)
+        self.tick()
+        self.assertEqual("Grug", self.written[0][0])
+        self.assertEqual("Bork", self.written[0][1])
+
     def test_an_absent_head_defers_the_errand_without_a_cooldown(self):
         # wow-dev 2026-09-27 21:15: the pod came up while the roster head was
         # out of the world, the capital read on his snapshot found nothing,
