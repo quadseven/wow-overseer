@@ -5088,6 +5088,11 @@ def _fetch_event_snapshot() -> list[dict]:
         return list(cur.fetchall())
 
 
+# How long a break's restore waits before it is written again while the
+# leader still reads the break's job (a row refused `target not online`).
+ACTIVITY_RESTORE_RETRY_SECONDS = 120.0
+
+
 class Bridge(discord.Client):
     def __init__(self, allowed_ids: frozenset[str]):
         intents = discord.Intents.default()
@@ -15931,9 +15936,19 @@ class Bridge(discord.Client):
         if held is None or now < held[0]:
             return False
         _until, activity, names = held
-        self._activity_restore.pop(key, None)
         if job != jev_activity.JOB[activity]:
+            # Restored, or moved on by a queue or a person: either way done.
+            self._activity_restore.pop(key, None)
             return False
+        # KEPT UNTIL THE LEADER IS SEEN OFF THE BREAK'S JOB, and asked again
+        # after ACTIVITY_RESTORE_RETRY_SECONDS. Measured on wow-dev 2026-09-28:
+        # Zug was offline for the moment the fishing break ended, his row came
+        # back `target not online`, the restore had already been forgotten, and
+        # the leader fished for 37 more minutes while his family quested
+        # without him.
+        self._activity_restore[key] = (
+            now + globals().get("ACTIVITY_RESTORE_RETRY_SECONDS", 120.0),
+            activity, names)
         back = jev_activity.RESTORE[activity]
         for name in names:
             try:
