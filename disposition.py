@@ -1042,6 +1042,36 @@ def profession_keeps(
     return keeps
 
 
+# How much of ONE material a single character keeps in its own bags before the
+# rest is vendor goods: six full stacks. `materials.REAGENTS` names the stock
+# the family's crafters need, and it used to be protected without limit, so a
+# crafter that everybody handed cloth to filled every slot it owned and stayed
+# at zero free slots with nothing sellable (wow-dev, 2026-09-29, the Horde
+# mage: about forty stacks of Linen Cloth). The bag gate and the module's own
+# door both shut at three free slots, so one such character held a whole
+# family out of its dungeon for good.
+MATERIAL_KEEP = 120
+
+
+def material_keeps(rows, names, keep=MATERIAL_KEEP) -> dict:
+    """guid -> why, for the stacks of the named materials each holder keeps.
+
+    `names` is any container of item names (`materials.REAGENTS`). Per holder
+    and per item, whole stacks, largest first, one stack always kept: the same
+    shape `_stock_keeps` gives the family's other stock, so a pile inside the
+    cap is untouched and a pile past it leaves only its surplus for the vendor.
+    """
+    groups: dict = {}
+    for entry, held in _stacks_by_entry(rows).items():
+        for stack in held:
+            if stack[2] in names:
+                groups.setdefault((stack[4], entry), []).append(stack)
+    keeps: dict = {}
+    for held in groups.values():
+        keeps.update(_stock_keeps(held, "the family's crafts", keep))
+    return keeps
+
+
 def _holders_trades(worked_by):
     """holder -> lower-cased trade names, or None when no plan was given."""
     if worked_by is None:

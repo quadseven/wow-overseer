@@ -15,6 +15,7 @@ import unittest
 
 from test_decree_order import FakeConn, FakeCursor  # noqa: F401 - sets up the pymysql stub
 
+import bag_pressure  # noqa: E402
 import craft  # noqa: E402
 import craft_rhythm  # noqa: E402
 import craft_supply  # noqa: E402
@@ -372,6 +373,7 @@ class AnotherFamilysMaterialsReachItsCrafter(unittest.TestCase):
             {
                 "asyncio": FAKE_ASYNCIO,
                 "materials": materials,
+                "bag_pressure": bag_pressure,
                 "log": _Log(),
                 "GIVE_GIVE_UP_HOURS": 6,
                 "GIVE_RETRY_MINUTES": 10,
@@ -380,7 +382,7 @@ class AnotherFamilysMaterialsReachItsCrafter(unittest.TestCase):
                     materials.Holding("Zug", "Linen Cloth", 9, 7)
                 ],
                 "_give_attempts": lambda hours: [],
-                "_fetch_free_slots": lambda names: {n: 5 for n in names},
+                "_fetch_free_slots": lambda names: {n: 30 for n in names},
                 "_recent_give_keys": lambda minutes: set(),
                 "_fetch_positions": lambda names: {},
                 "handover": types.SimpleNamespace(

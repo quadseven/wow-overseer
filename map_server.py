@@ -5127,6 +5127,10 @@ class Handler(BaseHTTPRequestHandler):
         /api/family refuse a name.
         """
         try:
+            # THE MODULE'S CROSSING FACT FIRST: this is a separate process from
+            # the bridge, and every door on the other continent reads "no way
+            # across yet" until it is told what the module can cross.
+            _note_module_crossing()
             fetched = _fetch_dungeonplan()
             payload = _dungeon_paths(fetched)
             self._send(200, "application/json", json.dumps(payload).encode())

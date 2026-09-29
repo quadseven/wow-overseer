@@ -53,10 +53,14 @@ class _Pass:
         return self.granted
 
 
+FREE = {"Zug": 30, "Oz": 30}
+
+
 def run_pass(granted):
     fam = {"leader": {"name": "Zug"}, "names": ["Zug", "Oz"]}
     rows = [{"status": campaignqueue.QUEUED, "keyword": "ragefire"}]
     with (
+        mock.patch.object(bridge, "_fetch_free_slots", lambda names: FREE),
         mock.patch.object(bridge, "_dungeonquest_facts", lambda *a: None),
         mock.patch.object(bridge.dungeonquests, "step", lambda facts: WALK),
         mock.patch.object(bridge.log, "info") as info,
@@ -80,6 +84,22 @@ class RefusedWalkTest(unittest.TestCase):
         held, said = run_pass(True)
         self.assertTrue(held)
         self.assertTrue([s for s in said if "walk the family" in s], said)
+
+
+class WithheldForBagRoomTest(unittest.TestCase):
+    """A family at three free slots or fewer walks nowhere for a quest."""
+
+    def setUp(self):
+        global FREE
+        self._saved = dict(FREE)
+        FREE["Oz"] = 0
+        self.addCleanup(lambda: (FREE.clear(), FREE.update(self._saved)))
+
+    def test_the_walk_waits_and_the_queue_is_not_held(self):
+        held, said = run_pass(True)
+        self.assertFalse(held)
+        self.assertFalse([s for s in said if "walk the family" in s], said)
+        self.assertTrue([s for s in said if "waits for bag room" in s], said)
 
 
 if __name__ == "__main__":

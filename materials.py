@@ -349,8 +349,28 @@ def family_crafters(skills_by_name: Mapping) -> dict:
     return out
 
 
+def _blocked(holding, taker: str, skill: str, refusal: str) -> Blocked:
+    """The Blocked row for one holder's stack the taker will not be handed."""
+    return Blocked(
+        holder=holding.holder,
+        taker=taker,
+        material=holding.material,
+        skill=skill,
+        refusal=refusal,
+        said=(
+            f"{holding.holder} no give {taker} {holding.material} - "
+            f"{refusal}. {holding.holder} wait."
+        ),
+    )
+
+
 def plan(
-    holdings, *, stuck_pairs: Mapping | None = None, crafters: Mapping | None = None
+    holdings,
+    *,
+    stuck_pairs: Mapping | None = None,
+    crafters: Mapping | None = None,
+    room: Mapping | None = None,
+    reserve: int = 0,
 ) -> Plan:
     """Every stack that should move, in one pass.
 
@@ -372,8 +392,21 @@ def plan(
     `crafters` maps a skill to the member who works it, for a family ROSTER
     does not name (#215); `family_crafters` builds it from what they hold.
     None keeps ROSTER's answer for this bridge's own family.
+
+    `room` maps a member to its free bag slots, and `reserve` is how many of
+    them a receiver keeps for a dungeon run's loot. A crafter that everybody
+    hands cloth to used to be filled to zero free slots, which shuts the
+    family's bag gate and the module's door (wow-dev, 2026-09-29). A stack is
+    one slot, so each grant spends one; a receiver with no reading in `room`
+    is not limited, the same fail-open rule the bag gate keeps for a broken
+    read.
     """
     refused = stuck_pairs or {}
+    spare = {
+        str(name): int(free) - int(reserve)
+        for name, free in (room or {}).items()
+        if isinstance(free, int)
+    }
     grants = []
     notes = []
     blocked = []
@@ -400,23 +433,19 @@ def plan(
             # notes that are actually asking for something.
             continue
         refusal = refused.get((holding.holder, taker))
+        if not refusal and taker in spare:
+            if spare[taker] <= 0:
+                refusal = "%s keeps %d bag slots free for a dungeon run" % (
+                    taker,
+                    int(reserve),
+                )
+            else:
+                spare[taker] -= 1
         if refusal:
             mark = (holding.holder, taker, holding.material)
             if mark not in seen_blocks:
                 seen_blocks.add(mark)
-                blocked.append(
-                    Blocked(
-                        holder=holding.holder,
-                        taker=taker,
-                        material=holding.material,
-                        skill=skill,
-                        refusal=refusal,
-                        said=(
-                            f"{holding.holder} no give {taker} {holding.material} - "
-                            f"{refusal}. {holding.holder} wait."
-                        ),
-                    )
-                )
+                blocked.append(_blocked(holding, taker, skill, refusal))
             continue
         grants.append(
             Grant(
