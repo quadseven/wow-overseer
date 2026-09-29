@@ -553,6 +553,9 @@ class SaleCandidate:
     recipient: str = ""
     sell_price: int = 0
     market_price: int = 0
+    # Units in the stack: a listing carries the whole stack, so its price is a
+    # unit price times this.
+    count: int = 1
 
 
 @dataclass(frozen=True)
@@ -592,6 +595,7 @@ def plan_sales(rows, *, max_items: int = 10, hours: int = 12) -> tuple:
                 recipient=str(row.get("recipient", "")).strip(),
                 sell_price=int(row.get("sell_price", 0)),
                 market_price=int(row.get("market_price", 0)),
+                count=max(1, int(row.get("count", 1) or 1)),
             )
         except (KeyError, TypeError, ValueError):
             continue
@@ -606,7 +610,7 @@ def plan_sales(rows, *, max_items: int = 10, hours: int = 12) -> tuple:
             or item.market_price <= 0
         ):
             continue
-        buyout = max(item.market_price, item.sell_price * 4, 1)
+        buyout = max(item.market_price, item.sell_price * 4, 1) * item.count
         bid = max(1, buyout * 80 // 100)
         out.append(Sale(item, bid, buyout, hours))
     return tuple(

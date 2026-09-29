@@ -110,25 +110,18 @@ class TheVendorReadOffersTheSurplus(unittest.TestCase):
         ):
             return b._fetch_vendor_items(["Oz"])
 
-    def test_the_surplus_linen_is_sellable_and_the_kept_linen_is_not(self):
+    def test_the_surplus_linen_is_flagged_for_clearance_and_never_offered_to_a_vendor(
+        self,
+    ):
+        """The cap frees bag room, and the surplus goes to `clearance`, whose
+        last stop is the vendor: the vendor read offers none of it itself."""
         out = self._read([dict(r) for r in hoard(40)])
-        offered = bag_pressure.vendor_candidates(out)
-        held = [
-            r
-            for r in out
-            if not bag_pressure.sellable(
-                bag_pressure.ItemForSale(
-                    quality=r["quality"],
-                    quest_item=bool(r["quest_item"]),
-                    reagent=bool(r["reagent"]),
-                    profession_needed=bool(r["profession_needed"]),
-                    sell_price=r["sell_price"],
-                )
-            )
-        ]
-        self.assertEqual(sum(r["count"] for r in held), disposition.MATERIAL_KEEP)
-        self.assertEqual(len(offered), 40 - len(held))
-        self.assertGreater(len(offered), 30)
+        self.assertEqual(bag_pressure.vendor_candidates(out), ())
+        over = [r for r in out if r["material_surplus"]]
+        kept = [r for r in out if not r["material_surplus"]]
+        self.assertEqual(sum(r["count"] for r in kept), disposition.MATERIAL_KEEP)
+        self.assertEqual(len(over), 40 - len(kept))
+        self.assertGreater(len(over), 30)
 
     def test_a_small_pile_is_still_never_sold(self):
         out = self._read([dict(r) for r in hoard(4)])
@@ -170,7 +163,7 @@ class TheSourceUsesTheCap(unittest.TestCase):
     def test_the_name_protection_is_no_longer_unconditional(self):
         src = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
         body = src[src.index("def _fetch_vendor_items(") :]
-        self.assertIn("disposition.material_keeps(", body)
+        self.assertIn("disposition.material_surplus(", body)
 
 
 class TheCrafterKeepsRoomForARun(unittest.TestCase):

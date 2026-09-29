@@ -10880,7 +10880,14 @@ class Bridge(discord.Client):
         family.
         """
         rows = await asyncio.to_thread(_fetch_clearance_items, names)
-        stacks = clearance.stacks_from_rows(rows)
+        # THE MATERIALS PAST THE KEEP CAP RIDE WITH THE GEMS AND RECIPES: the
+        # same route, a guildmate who can use them first and a vendor last.
+        materials_over = await asyncio.to_thread(
+            _fetch_clearance_materials, names)
+        over = disposition.material_surplus(materials_over, materials.REAGENTS)
+        surplus_rows = [dict(row, material_surplus=True)
+                        for row in materials_over if row["item_guid"] in over]
+        stacks = clearance.stacks_from_rows(rows + surplus_rows)
         # THE DESIGNATED CRAFTERS PLACE EVERY RECIPE FIRST (#248), and the
         # family recipe hand-off leaves what they route to `_route_clearance`.
         crafting = await asyncio.to_thread(_crafter_plan, names)
@@ -10901,9 +10908,15 @@ class Bridge(discord.Client):
             for listing in listings:
                 market[listing.entry] = min(
                     market.get(listing.entry, listing.per_unit), listing.per_unit)
+        vault, vault_room = frozenset(), 0
+        if surplus_rows:
+            vault, vault_room = bank.guild_room(
+                await asyncio.to_thread(_fetch_guild_bank_setup, names))
         routes = clearance.plan(stacks, people, kept=kept, market=market,
-                                auction_open=auction_open, picks=crafting.picks)
-        log.info("clearance: %d gem and recipe stack(s) - %s", len(routes),
+                                auction_open=auction_open, picks=crafting.picks,
+                                vault=vault, vault_room=vault_room)
+        log.info("clearance: %d gem, recipe and surplus material stack(s) - %s",
+                 len(routes),
                  ", ".join("%s %d" % pair
                            for pair in sorted(clearance.counts(routes).items())))
         return routes
@@ -19257,17 +19270,22 @@ def _fetch_vendor_items(names: list) -> list:
     keeps = disposition.profession_keeps(
         rows, worked=worked, named=REAGENT_TRADES, worked_by=worked_by,
     )
-    # THE MATERIAL NAMES ARE PROTECTED UP TO A CAP PER HOLDER, NOT WITHOUT ONE.
-    # A crafter that every other member hands cloth to filled every slot it
-    # owned with protected stacks, sat at zero free slots with nothing sellable,
-    # and held its family's dungeon out for good (wow-dev, 2026-09-29).
-    material_kept = disposition.material_keeps(rows, materials.REAGENTS)
+    # THE MATERIAL NAMES ARE KEPT UP TO A CAP PER HOLDER, AND THE SURPLUS IS
+    # NOT VENDOR GOODS EITHER. A crafter that every other member hands cloth to
+    # filled every slot it owned with protected stacks, sat at zero free slots
+    # with nothing sellable, and held its family's dungeon out for good
+    # (wow-dev, 2026-09-29). The cap answered that by turning the surplus into
+    # vendor goods, and fifty-five stacks of cloth went for copper while
+    # guildmates needed it to raise a trade. The surplus is now `clearance`'s:
+    # a guildmate who can use it, then the guild bank, then the auction house,
+    # and a vendor only when nothing else takes it (`_clearance_plan`).
+    material_surplus = disposition.material_surplus(rows, materials.REAGENTS)
     for item in rows:
         # Trade goods such as Linen are class 7, not class 5. The
         # profession roster is the stronger fact and must protect them
         # even when item_template calls them ordinary trade goods.
-        profession_material = (item.get("name") in materials.REAGENTS
-                               and item.get("item_guid") in material_kept)
+        profession_material = item.get("name") in materials.REAGENTS
+        item["material_surplus"] = item.get("item_guid") in material_surplus
         item["reagent"] = bool(item.get("reagent")) or profession_material
         item["profession_needed"] = bool(
             profession_material or item.get("item_guid") in keeps
@@ -19456,6 +19474,39 @@ def _fetch_clearance_items(names: list) -> list:
         return [dict(row) for row in cur.fetchall()]
 
 
+# Carried crafting materials (`materials.REAGENTS`): the surplus half of
+# `_CLEARANCE_SQL`'s scope. `subclass` names the trade that consumes a
+# material (`guildshare.FEEDS`); the keep cap is applied in Python.
+_CLEARANCE_MATERIALS_SQL = (
+    "SELECT c.name AS holder, ii.guid AS item_guid, ii.itemEntry AS entry, "
+    "ii.count AS count, ii.flags AS instance_flags, it.name AS name, "
+    "it.class AS item_class, it.subclass AS subclass, it.Quality AS quality, "
+    "it.SellPrice AS sell_price, it.bonding AS bonding, "
+    "it.BagFamily AS bag_family, "
+    "it.RequiredSkill AS required_skill, it.RequiredSkillRank AS required_rank "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND it.name IN (%s) AND it.bonding = 0 "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
+)
+
+
+def _fetch_clearance_materials(names: list) -> list:
+    """Rows of every carried stack of a named crafting material."""
+    if not names:
+        return []
+    reagents = sorted(materials.REAGENTS)
+    sql = _CLEARANCE_MATERIALS_SQL % (
+        ",".join(["%s"] * len(names)), ",".join(["%s"] * len(reagents)))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, list(names) + reagents)
+        return [dict(row) for row in cur.fetchall()]
+
+
 def _clearance_sales(routes) -> tuple:
     """The vendor pass's SellCandidate for every stack `clearance` sends there."""
     return tuple(
@@ -19475,7 +19526,7 @@ def _clearance_listings(routes) -> list:
             "entry": r.stack.entry, "label": r.stack.name,
             "quality": r.stack.quality,
             "binding": disposition.BIND_NONE, "quest_item": False,
-            "sell_price": r.stack.sell_price,
+            "sell_price": r.stack.sell_price, "count": r.stack.count,
         }
         for r in routes if r.route == clearance.AUCTION
     ]

@@ -1072,6 +1072,23 @@ def material_keeps(rows, names, keep=MATERIAL_KEEP) -> dict:
     return keeps
 
 
+def material_surplus(rows, names, keep=MATERIAL_KEEP) -> frozenset:
+    """guids of the named materials each holder carries past the keep cap.
+
+    The complement of `material_keeps` over the same rows: what is left when the
+    stacks a holder keeps are taken away. It is NOT vendor goods. It goes to a
+    guildmate who can use it, the guild bank or the auction house before a
+    vendor sees it (`clearance`).
+    """
+    kept = material_keeps(rows, names, keep)
+    return frozenset(
+        stack[1]
+        for held in _stacks_by_entry(rows).values()
+        for stack in held
+        if stack[2] in names and stack[1] not in kept
+    )
+
+
 def _holders_trades(worked_by):
     """holder -> lower-cased trade names, or None when no plan was given."""
     if worked_by is None:
