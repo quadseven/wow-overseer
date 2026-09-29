@@ -166,6 +166,7 @@ class ThePlanSpreadsTheSurplus(unittest.TestCase):
             entry=7910,
             name="Star Ruby",
             item_class=clearance.GEM_CLASS,
+            subclass=0,
             quality=2,
             sell_price=5000,
         )
