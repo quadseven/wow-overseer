@@ -84,7 +84,7 @@ DEFAULT_GUILDS = ("Cave", "Bonkers")
 # The continents a queue may start from: never from inside an instance.
 OPEN_WORLD_MAPS = (0, 1, 530)
 # A run no row has ended by now is lost (a worldserver restart, a sweep).
-LOST_AFTER_MINUTES = 120
+LOST_AFTER_MINUTES = 180
 # Nobody is picked until the worldserver has been up this long. The first run
 # after a restart went to five members the old process had just logged out,
 # two seconds after the new one started; random bots log in over minutes.
