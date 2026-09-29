@@ -14,10 +14,12 @@ import pathlib
 import types
 import unittest
 
+import bag_pressure
 import gearup
 import guildbank
 import guildwork
 import mailrun
+import situation
 import townerrand as te
 
 BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
@@ -33,6 +35,19 @@ FACTS = {
 
 def _at(x, y, map_id=0):
     return {"map_id": map_id, "pos_x": x, "pos_y": y}
+
+
+def _bound_at_home(*names):
+    """Every name's hearthstone bound at HOME, as bridge._movement_reads reads it."""
+    return {
+        n: situation.Point(HOME["map_id"], HOME["x"], HOME["y"], HOME["z"])
+        for n in names
+    }
+
+
+# wow-dev 2026-09-29: the head bound at the Gilded Rose in Stormwind, four
+# members bound at the Ratchet inn in the Barrens.
+STORMWIND_BIND = {"map_id": 0, "x": -8877.0, "y": 652.0, "z": 96.0, "bind": True}
 
 
 class TheStates(unittest.TestCase):
@@ -171,6 +186,62 @@ class TheStates(unittest.TestCase):
         self.assertEqual(["Grug", "Ugga"], te.to_hearth(HOME, positions, names, {"Og"}))
         self.assertEqual([], te.to_hearth(HUB, positions, names))
 
+    def test_a_hearthstone_lands_at_its_own_bind_so_only_the_bound_cast(self):
+        # wow-dev 2026-09-29 21:17: the errand's hub was the mailbox by the
+        # head's bind (Stormwind) and all five "hearthed there first". Four
+        # were bound at Ratchet: they landed in the Barrens, the head stayed in
+        # Stormwind, and the family stood on two continents.
+        names = ["Bork", "Grog", "Grug", "Og", "Ugga"]
+        stormwind = situation.Point(0, -8866.0, 667.0, 98.0)
+        ratchet = situation.Point(1, -943.0, -3720.0, 8.0)
+        binds = {
+            "Grug": stormwind,
+            "Bork": ratchet,
+            "Grog": ratchet,
+            "Og": ratchet,
+            "Ugga": ratchet,
+        }
+        # The Stockade's graveyard, well past a walk from the mailbox.
+        positions = {n: _at(-8770.0, 1400.0) for n in names}
+        self.assertEqual(
+            ["Grug"], te.to_hearth(STORMWIND_BIND, positions, names, binds=binds)
+        )
+
+    def test_nobody_casts_when_casting_would_leave_the_family_on_two_continents(self):
+        # The head bound in Stormwind, standing in the Barrens with four members
+        # bound in Ratchet: his stone would take him alone.
+        names = ["Bork", "Grog", "Grug", "Og", "Ugga"]
+        ratchet = situation.Point(1, -943.0, -3720.0, 8.0)
+        binds = {n: ratchet for n in names}
+        binds["Grug"] = situation.Point(0, -8866.0, 667.0, 98.0)
+        positions = {n: _at(-1000.0, -3700.0, 1) for n in names}
+        cast = te.to_hearth(STORMWIND_BIND, positions, names, binds=binds)
+        self.assertEqual([], cast)
+        self.assertFalse(te.hub_reachable(STORMWIND_BIND, positions, "Grug", cast))
+        # The head who does cast reaches it; one on the hub's map walks.
+        self.assertTrue(te.hub_reachable(STORMWIND_BIND, positions, "Grug", ["Grug"]))
+        self.assertTrue(
+            te.hub_reachable(STORMWIND_BIND, {"Grug": _at(0, 0, 0)}, "Grug", [])
+        )
+
+    def test_a_member_with_no_bind_reading_is_not_hearthed(self):
+        positions = {"Bork": _at(3000, 3000), "Grug": _at(3000, 3000)}
+        binds = {"Grug": situation.Point(0, -8870.0, 650.0, 96.0)}
+        self.assertEqual(
+            ["Grug"],
+            te.to_hearth(STORMWIND_BIND, positions, ["Bork", "Grug"], binds=binds),
+        )
+        # No reading at all is the old rule: everybody casts.
+        self.assertEqual(
+            ["Bork", "Grug"],
+            te.to_hearth(STORMWIND_BIND, positions, ["Bork", "Grug"]),
+        )
+
+    def test_a_bind_on_the_hubs_map_but_across_the_continent_does_not_count(self):
+        positions = {"Og": _at(3000, 3000)}
+        far = {"Og": situation.Point(0, -5000.0, -900.0, 400.0)}
+        self.assertEqual([], te.to_hearth(STORMWIND_BIND, positions, ["Og"], binds=far))
+
     def test_the_leader_is_not_aimed_during_the_cast(self):
         s = te.start(0.0, HOME, "why", hearthed=True)
         self.assertFalse(te.aim_now(s, 10.0))
@@ -182,6 +253,46 @@ class TheStates(unittest.TestCase):
         self.assertFalse(te.in_range(HUB, _at(120, 100), 10))
         self.assertFalse(te.in_range(HUB, _at(100, 100, 1), 10))
         self.assertFalse(te.in_range(HUB, None, 10))
+
+
+class TheHoldCeiling(unittest.TestCase):
+    """The errand is a hold, and a hold outlasts no ceiling (wow-dev 2026-09-29)."""
+
+    FACTS = {
+        "Og": {"equipped": {"finger1": 21}, "purse": 500000},
+        "Grug": {"equipped": {"mainhand": 40}, "purse": 500000},
+    }
+
+    def start(self, stalled):
+        return te.should_start(
+            te.State(),
+            now=0,
+            in_run=False,
+            mail_gear={},
+            facts=self.FACTS,
+            stalled=stalled,
+        )
+
+    def test_the_ceiling_is_the_one_the_gear_and_bag_gates_use(self):
+        self.assertEqual(
+            bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS, te.HOLD_CEILING_SECONDS
+        )
+
+    def test_a_campaign_that_has_waited_past_the_ceiling_is_not_held_again(self):
+        # 58 minutes without a run, and the run was requested 15 seconds ago.
+        self.assertEqual("", self.start(58 * 60.0))
+
+    def test_a_campaign_inside_the_ceiling_is_still_held_for_gear(self):
+        self.assertIn("Og", self.start(10 * 60.0))
+        self.assertIn("Og", self.start(0.0))
+
+    def test_an_errand_in_flight_is_released_when_the_campaign_passes_the_ceiling(self):
+        state = te.start(0.0, HUB, "why")
+        held, line = te.advance(state, 100.0, stalled=10 * 60.0)
+        self.assertTrue(held.active, line)
+        gone, line = te.advance(state, 100.0, stalled=46 * 60.0)
+        self.assertFalse(gone.active)
+        self.assertIn("waited 46 minutes", line)
 
 
 def _functions(*names):
@@ -242,6 +353,8 @@ class TheAdapter(unittest.TestCase):
         self.home = {}
         self.hearths = []
         self.hearthed = frozenset()
+        self.binds = {}
+        self.stall = 0.0
         letters = [
             {
                 "holder": "Bork",
@@ -295,7 +408,11 @@ class TheAdapter(unittest.TestCase):
             "_TOWN_ERRAND_HEAD_AWAY": set(),
             "TOWN_ERRAND_SOURCE": "overseer:town-errand",
             "_fetch_bind_hub": lambda leader: dict(self.home),
-            "_movement_reads": lambda names: {"binds": {}, "hearthed": self.hearthed},
+            "_movement_reads": lambda names: {
+                "binds": self.binds,
+                "hearthed": self.hearthed,
+            },
+            "_queue_stall_floor": lambda names: self.stall,
             "_insert_hearth": lambda name, source: self.hearths.append(name) or 1,
             "_town_errand_jobs": lambda names: self.jobs.append("town run") or 2,
             "_hub_aim": lambda hub: "at:0:100,100,10",
@@ -466,6 +583,7 @@ class TheAdapter(unittest.TestCase):
         # in the Burning Steppes and three members in Tirisfal, bound in
         # Ratchet beside a mailbox, vendors and a banker.
         self.home = dict(HOME)
+        self.binds = _bound_at_home("Grug", "Bork")
         self.positions = {"Grug": _at(-7924, -1353), "Bork": _at(2050, -601)}
         state = self.tick()
         self.assertEqual(te.GO, state.phase)
@@ -477,11 +595,55 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual("town errand", self.fam.aims[-1][0])
         self.assertEqual(["Bork", "Grug"], self.hearths)  # once, at the start
 
+    def test_a_family_bound_in_two_towns_is_not_hearthed_apart(self):
+        # The hub is the head's bind; a member bound in another town would land
+        # there. Standing on another map from the hub, it cannot follow, so
+        # nobody casts and the family is not split.
+        self.home = dict(HOME)
+        self.binds = _bound_at_home("Grug")
+        self.binds["Bork"] = situation.Point(0, -8866.0, 667.0, 98.0)
+        self.positions = {"Grug": _at(-7924, -1353), "Bork": _at(-7930, -1350)}
+        self.tick()
+        self.assertEqual([], self.hearths)
+
+    def test_a_member_bound_elsewhere_on_the_hubs_map_walks_while_the_bound_cast(self):
+        self.home = dict(HOME)
+        self.binds = _bound_at_home("Grug")
+        self.binds["Bork"] = situation.Point(0, -8866.0, 667.0, 98.0)
+        self.positions = {
+            "Grug": _at(-7924, -1353),
+            "Bork": _at(-1500, -3700, 1),
+        }
+        self.tick()
+        self.assertEqual(["Grug"], self.hearths)
+
+    def test_the_family_is_not_sent_to_a_hub_only_a_stone_could_reach(self):
+        # wow-dev 2026-09-29: head bound in Stormwind, four members bound in
+        # Ratchet, all standing in the Barrens.
+        self.home = {"map_id": 0, "x": -8877.0, "y": 652.0, "z": 96.0, "bind": True}
+        ratchet = situation.Point(1, -943.0, -3720.0, 8.0)
+        self.binds = {"Grug": situation.Point(0, -8866.0, 667.0, 98.0), "Bork": ratchet}
+        self.positions = {"Grug": _at(-1000, -3700, 1), "Bork": _at(-1002, -3701, 1)}
+        state = self.tick()
+        self.assertFalse(state.active)
+        self.assertEqual([], self.hearths)
+        self.assertEqual([], self.jobs)
+        self.assertEqual([], self.fam.aims)
+
+    def test_no_errand_starts_over_a_campaign_that_has_waited_past_its_ceiling(self):
+        self.stall = 58 * 60.0
+        state = self.tick()
+        self.assertFalse(state.active)
+        self.assertEqual([], self.jobs)
+        self.assertEqual([], self.hearths)
+        self.assertEqual([], self.fam.aims)
+
     def test_a_straggler_hearths_home_while_the_family_gathers(self):
         # wow-dev 2026-09-27 22:26: Og's cast "never started", he was counted
         # as hearthed and left in Tirisfal while the other four stood at the
         # Ratchet mailbox.
         self.home = dict(HOME)
+        self.binds = _bound_at_home("Grug", "Bork")
         self.positions = {"Grug": _at(-1034, -3675, 1), "Bork": _at(1572, -422)}
         self.hearthed = frozenset({"Bork"})
         state = self.tick()

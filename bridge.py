@@ -13776,7 +13776,8 @@ class Bridge(discord.Client):
             await self._town_errand_aim(leader, _hub_aim(hub), cohort)
         new, line = townerrand.advance(
             state, now, in_run=in_run, leader_at_hub=leader_at_hub,
-            gathered=gathered, step_done=step_done)
+            gathered=gathered, step_done=step_done,
+            stalled=_queue_stall_floor(names))
         if line:
             away = sorted(n for n in names if not townerrand.in_range(
                 hub, positions.get(n), townerrand.GATHER_YARDS))
@@ -13799,7 +13800,8 @@ class Bridge(discord.Client):
         facts = await asyncio.to_thread(_fetch_gearup_facts, names)
         mail_gear = await asyncio.to_thread(_mail_gear_holders, names)
         why = townerrand.should_start(
-            state, now=now, in_run=in_run, mail_gear=mail_gear, facts=facts)
+            state, now=now, in_run=in_run, mail_gear=mail_gear, facts=facts,
+            stalled=_queue_stall_floor(names))
         if not why:
             return state
         # AN ABSENT HEAD IS A WAIT, NOT A FAILED START. mod-overseer holds the
@@ -13833,7 +13835,18 @@ class Bridge(discord.Client):
         # THE HEARTHSTONE IS THE WAY HOME AND THE REGROUP IN ONE CAST, the
         # existing kind='hearth' row the movement choice already writes.
         reads = await asyncio.to_thread(_movement_reads, list(names))
-        far = townerrand.to_hearth(hub, positions, names, reads["hearthed"])
+        far = townerrand.to_hearth(hub, positions, names, reads["hearthed"],
+                                   reads["binds"])
+        # A HUB THE HEAD CANNOT REACH IS NO ERRAND (wow-dev 2026-09-29). His
+        # bind was Stormwind and he stood in the Barrens with four members
+        # bound in Ratchet: the stone would have taken him alone, so nobody
+        # casts, and the walk to a mailbox on another continent never lands.
+        if hub.get("bind") and not townerrand.hub_reachable(
+                hub, positions, leader, far):
+            log.info("town errand: %s%s, but %s's hearthstone point is on "
+                     "another map from where he stands and his stone would "
+                     "leave the family behind; not going", why, label, leader)
+            return townerrand.State(ended=now)
         await asyncio.to_thread(_town_errand_jobs, names)
         for name in far:
             await asyncio.to_thread(_insert_hearth, name, TOWN_ERRAND_SOURCE)
@@ -13851,7 +13864,8 @@ class Bridge(discord.Client):
                 or not townerrand.aim_now(state, now)):
             return state
         reads = await asyncio.to_thread(_movement_reads, list(names))
-        far = townerrand.to_hearth(state.hub, positions, names, reads["hearthed"])
+        far = townerrand.to_hearth(state.hub, positions, names, reads["hearthed"],
+                                   reads["binds"])
         if not far:
             return state
         for name in far:

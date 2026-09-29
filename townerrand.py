@@ -82,6 +82,11 @@ GATHER_SECONDS = 300.0
 TOTAL_SECONDS = 3600.0
 # Two errands per family are at least this far apart, however the first ended.
 COOLDOWN_SECONDS = 7200.0
+# How long a campaign may have waited for its run before no errand holds it any
+# longer. The same 45 minutes as bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS,
+# which the gear gate and the town-first gate already use; kept as its own
+# constant so this pure module imports nothing, and pinned equal by a test.
+HOLD_CEILING_SECONDS = 45 * 60.0
 
 # THE WAY THERE (wow-dev 2026-09-27). The Alliance family is bound in Ratchet,
 # which has a mailbox, armorers, a weaponsmith and two bankers beside the inn,
@@ -141,7 +146,13 @@ class State:
 
 
 def should_start(
-    state: State, *, now: float, in_run: bool, mail_gear: dict, facts: dict
+    state: State,
+    *,
+    now: float,
+    in_run: bool,
+    mail_gear: dict,
+    facts: dict,
+    stalled: float = 0.0,
 ) -> str:
     """Why this family should go to town now, or '' when it should not.
 
@@ -149,8 +160,18 @@ def should_start(
     the post). `facts` is the gear facts per member (`equipped` slot names and
     `purse`). A family inside a dungeon run, on an errand already, or inside
     the cooldown since its last one does not go.
+
+    `stalled` is how long the family's campaign has gone without a run
+    (bridge._queue_stall_floor). THE ERRAND IS A HOLD, AND A HOLD HAS A CEILING
+    (wow-dev 2026-09-29). The gear gate and the bag gate let a campaign go once
+    it has waited HOLD_CEILING_SECONDS; this errand had no such limit, so it
+    started 15 seconds after the run that ceiling released was requested, took
+    the family's job off `dungeon` and held it for up to another hour. Past the
+    ceiling the family goes to its run, gear or not.
     """
     if state.active or in_run:
+        return ""
+    if stalled >= HOLD_CEILING_SECONDS:
         return ""
     if state.ended and now - state.ended < COOLDOWN_SECONDS:
         return ""
@@ -215,24 +236,80 @@ def choose_hub(bind_hub: dict, capital_hub: dict, leader_at) -> dict:
     return dict(bind_hub or capital_hub or {})
 
 
-def to_hearth(hub: dict, positions: dict, names, hearthed=frozenset()) -> list:
+def to_hearth(
+    hub: dict, positions: dict, names, hearthed=frozenset(), binds=None
+) -> list:
     """The members who use their hearthstone to reach `hub`, sorted.
 
     A member read on another map or further than WALK_YARDS from it. Only for
     a hub by the hearthstone point (`hub["bind"]`); a member with no fresh
     reading (offline) and one that hearthed inside the stone's cooldown
     (`hearthed`) are left to the walk.
+
+    A HEARTHSTONE LANDS AT THE CASTER'S OWN BIND, NOT AT THE HUB (wow-dev
+    2026-09-29). The hub is the mailbox by the HEAD's bind, and four members
+    bound in Ratchet were sent to a Stormwind hub by "hearth there first": they
+    landed in the Barrens, the head stayed in Stormwind, and the family was
+    split across two continents where nothing in the module can rejoin it.
+    `binds` (name -> situation.Point, from bridge._movement_reads) says where
+    each stone lands, and only a member whose stone lands within WALK_YARDS of
+    the hub casts. A member whose bind is unknown or elsewhere stays where it
+    is, with the rest of the family. `binds=None` is the old rule, for a caller
+    that has no reading.
     """
     if not hub or not hub.get("bind"):
         return []
     out = []
+    stranded = []
     for name in sorted(names):
         at = (positions or {}).get(name)
         if not at or name in hearthed:
             continue
+        if binds is not None and not _bound_at(hub, (binds or {}).get(name)):
+            # Its stone would land somewhere else. On the hub's own map it
+            # walks with the family; on another it is cut off from the hub.
+            if not _same_map(hub, at):
+                stranded.append(name)
+            continue
         if not in_range(hub, at, WALK_YARDS):
             out.append(name)
+    # NOBODY CASTS IF CASTING WOULD SPLIT THE FAMILY. A member bound at the hub
+    # who lands there while another, on a different map and bound elsewhere,
+    # cannot follow leaves the two on separate continents.
+    if out and stranded:
+        return []
     return out
+
+
+def hub_reachable(hub: dict, positions: dict, leader: str, casting) -> bool:
+    """Can the head get to `hub`: he casts, or he is on its map to walk."""
+    if leader in casting:
+        return True
+    return _same_map(hub, (positions or {}).get(leader))
+
+
+def _same_map(spot: dict, standing) -> bool:
+    if not spot or not standing:
+        return False
+    try:
+        return int(spot.get("map_id")) == int(standing.get("map_id"))
+    except (TypeError, ValueError):
+        return False
+
+
+def _bound_at(hub: dict, bind) -> bool:
+    """Does a hearthstone bound at `bind` (a point with map, x, y) land within
+    a walk of `hub`?"""
+    if bind is None:
+        return False
+    try:
+        if int(hub.get("map_id")) != int(bind.map):
+            return False
+        dx = float(hub.get("x")) - float(bind.x)
+        dy = float(hub.get("y")) - float(bind.y)
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return dx * dx + dy * dy <= WALK_YARDS**2
 
 
 def hearthing(state: State, now: float) -> State:
@@ -261,6 +338,7 @@ def advance(
     leader_at_hub: bool = False,
     gathered: bool = False,
     step_done: bool = False,
+    stalled: float = 0.0,
 ) -> tuple:
     """The next state and one sentence about what changed ('' when nothing).
 
@@ -272,6 +350,12 @@ def advance(
         return state, ""
     if in_run:
         return end(state, now, "a dungeon run started")
+    if stalled >= HOLD_CEILING_SECONDS:
+        return end(
+            state,
+            now,
+            "the campaign has waited %d minutes for its run" % int(stalled // 60),
+        )
     if now - state.started >= TOTAL_SECONDS:
         return end(state, now, "the errand's %ds ceiling" % int(TOTAL_SECONDS))
     held = now - state.phase_since
