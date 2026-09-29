@@ -440,9 +440,11 @@ def under_geared(member: Member) -> bool:
 def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
     """The doors this set of levels fits, best fit first.
 
-    A door inside the other faction's capital (council._other_capital) is not
-    offered to a guild of known faction: its members come out among that
-    capital's guards.
+    A door inside the other faction's capital (council._other_capital) is
+    never offered: its members come out among that capital's guards. A
+    faction that cannot be read (no race in the snapshot, a mixed roster)
+    counts as the other one, as council does, so only the doors both sides
+    use are offered.
 
     Fits: every member at or over the finder's minimum, the average at least
     the door's floor (plus LEVEL_MARGIN), and nobody past its ceiling.
@@ -453,11 +455,12 @@ def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
         return []
     low, high = min(levels), max(levels)
     mean = sum(levels) / len(levels)
+    allowed = GUILD_DOORS.get(faction) or frozenset.intersection(*GUILD_DOORS.values())
     out = []
     for door in all_doors:
-        if faction and council._other_capital(door.map_id, faction):
+        if council._other_capital(door.map_id, faction):
             continue
-        if faction and door.keyword not in GUILD_DOORS.get(faction, frozenset()):
+        if door.keyword not in allowed:
             continue
         if low < door.finder_floor:
             continue
