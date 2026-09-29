@@ -62,6 +62,7 @@ import json
 from dataclasses import dataclass, replace
 from datetime import timedelta
 
+import bag_pressure
 import campaignplan
 import council
 import jev
@@ -100,6 +101,16 @@ OUTGROWN_GRACE = 3
 # An upgrade: a slot filled, or the worn item levels rising by this much.
 UPGRADE_ITEM_LEVELS = 5
 
+# HOW LONG BARE SLOTS MAY HOLD A QUESTING FAMILY OUT OF ITS DOOR. The gear hold
+# (#146) is bounded by this same ceiling "so gear shopping cannot deadlock a
+# campaign"; the questing fallback's release read the same empty-slot notes
+# with no bound at all. Measured on wow-dev 2026-09-29: the Horde family had
+# gained levels since it stepped back on 2026-09-27 and sat on the fallback for
+# two days, because five members that cannot afford gear never all drop under
+# six empty slots. Past the ceiling only the level gate and a named change
+# still hold it, which is what the fallback was for.
+QUEST_GEAR_CEILING_SECONDS = bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS
+
 # Decisions, as the record names them.
 STEP_DOWN = "step_down"
 FURTHER = "further_down"
@@ -136,7 +147,8 @@ CREATE_SQL = (
     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
 )
 OPEN_SQL = (
-    "SELECT id, decision, door, target, queue_id, baseline, created_at "
+    "SELECT id, decision, door, target, queue_id, baseline, created_at, "
+    "TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age "
     "FROM overseer_dungeon_pace WHERE family = %s AND closed_at IS NULL "
     "AND decision IN ('step_down', 'further_down', 'quest') "
     "ORDER BY id DESC LIMIT 1"
@@ -606,6 +618,14 @@ def _down_to(kind: str, cands, why: str) -> Decision:
     return Decision(kind, ladder(cands).keyword, why, tuple(c.keyword for c in cands))
 
 
+def _stretch_age(row: dict | None) -> int:
+    """Seconds the open stretch has run, 0 when unread (which waives nothing)."""
+    try:
+        return max(0, int((row or {}).get("age") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _while_questing(f: Facts, place: str) -> Decision:
     """The questing fallback: step down if a door opened, else wait for a change."""
     if f.cands:
@@ -615,6 +635,8 @@ def _while_questing(f: Facts, place: str) -> Decision:
             "an easier door opened while questing: %s" % ladder(f.cands).place,
         )
     blockers = step_up_blockers(f.members)
+    if blockers and _stretch_age(f.open) >= QUEST_GEAR_CEILING_SECONDS:
+        blockers = ()
     if f.changed and not f.gates and not blockers:
         return Decision(RELEASE, "", "%s, so back to %s" % (f.changed, place))
     waiting = "; ".join(f.gates + blockers) or "no level or upgrade since the last wipe"
