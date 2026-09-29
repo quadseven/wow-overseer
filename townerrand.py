@@ -254,8 +254,8 @@ def to_hearth(
     `binds` (name -> situation.Point, from bridge._movement_reads) says where
     each stone lands, and only a member whose stone lands within WALK_YARDS of
     the hub casts. A member whose bind is unknown or elsewhere stays where it
-    is, with the rest of the family. `binds=None` is the old rule, for a caller
-    that has no reading.
+    is, with the rest of the family. No `binds` at all reads as every bind
+    unknown, so nobody casts: a state it cannot read is never a landing.
     """
     if not hub or not hub.get("bind"):
         return []
@@ -265,7 +265,7 @@ def to_hearth(
         at = (positions or {}).get(name)
         if not at or name in hearthed:
             continue
-        if binds is not None and not _bound_at(hub, (binds or {}).get(name)):
+        if not _bound_at(hub, (binds or {}).get(name)):
             # Its stone would land somewhere else. On the hub's own map it
             # walks with the family; on another it is cut off from the hub.
             if not _same_map(hub, at):

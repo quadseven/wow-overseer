@@ -183,7 +183,11 @@ class TheStates(unittest.TestCase):
             "Ugga": _at(-1040, -3670, 0),
         }
         names = ["Bork", "Grug", "Og", "Ugga", "Zed"]
-        self.assertEqual(["Grug", "Ugga"], te.to_hearth(HOME, positions, names, {"Og"}))
+        binds = _bound_at_home(*names)
+        self.assertEqual(
+            ["Grug", "Ugga"],
+            te.to_hearth(HOME, positions, names, {"Og"}, binds),
+        )
         self.assertEqual([], te.to_hearth(HUB, positions, names))
 
     def test_a_hearthstone_lands_at_its_own_bind_so_only_the_bound_cast(self):
@@ -231,11 +235,8 @@ class TheStates(unittest.TestCase):
             ["Grug"],
             te.to_hearth(STORMWIND_BIND, positions, ["Bork", "Grug"], binds=binds),
         )
-        # No reading at all is the old rule: everybody casts.
-        self.assertEqual(
-            ["Bork", "Grug"],
-            te.to_hearth(STORMWIND_BIND, positions, ["Bork", "Grug"]),
-        )
+        # No reading at all is every bind unknown: nobody casts.
+        self.assertEqual([], te.to_hearth(STORMWIND_BIND, positions, ["Bork", "Grug"]))
 
     def test_a_bind_on_the_hubs_map_but_across_the_continent_does_not_count(self):
         positions = {"Og": _at(3000, 3000)}
