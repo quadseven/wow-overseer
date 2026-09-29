@@ -212,6 +212,25 @@ def _leader_at_giver(facts: Facts, spawn) -> bool:
     )
 
 
+def _too_far(facts: Facts, giver: int, spawn) -> Step | None:
+    """A wait when the leader is too far from the giver to walk for a run's sake."""
+    leader = next((m for m in facts.members if m.name == facts.leader), None)
+    leader = leader or (facts.members[0] if facts.members else None)
+    gap = None if leader is None else _distance(leader, spawn)
+    if gap is not None and gap <= WALK_LIMIT_YARDS:
+        return None
+    where = (
+        "on another map or out of sight" if gap is None else "%d yards off" % int(gap)
+    )
+    return Step(
+        WAIT,
+        "dungeon quest giver %d is %s: a queued run does not wait for that walk"
+        % (giver, where),
+        giver=giver,
+        release=True,
+    )
+
+
 def step(facts: Facts) -> Step:
     actions = _actions(facts)
     if not actions:
@@ -227,23 +246,9 @@ def step(facts: Facts) -> Step:
     ready = _ready_actions(actions, giver, spawn)
     at_giver = _leader_at_giver(facts, spawn)
     if not ready and not at_giver:
-        leader = next((m for m in facts.members if m.name == facts.leader), None)
-        leader = leader or (facts.members[0] if facts.members else None)
-        gap = None if leader is None else _distance(leader, spawn)
-        if gap is None or gap > WALK_LIMIT_YARDS:
-            return Step(
-                WAIT,
-                "dungeon quest giver %d is %s: a queued run does not wait for "
-                "that walk"
-                % (
-                    giver,
-                    "on another map or out of sight"
-                    if gap is None
-                    else "%d yards off" % int(gap),
-                ),
-                giver=giver,
-                release=True,
-            )
+        far = _too_far(facts, giver, spawn)
+        if far is not None:
+            return far
     verb = "take" if any("take " in command for _, command in ready) else "turn in"
     line = (
         "at giver %d: %s" % (giver, "; ".join("%s %s" % x for x in ready))

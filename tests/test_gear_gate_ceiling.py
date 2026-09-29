@@ -79,6 +79,7 @@ class GearGateCeilingTest(unittest.TestCase):
             "_GEAR_HOLD_SINCE": {},
             "_fetch_gearup_facts": lambda names: {n: self.facts[n] for n in names},
             "_jobs_of": lambda names: {n: self.jobs[n] for n in names},
+            "_queue_stall_floor": lambda names: 0.0,
             "_insert_job": self._insert_job,
         }
         module = ast.Module(

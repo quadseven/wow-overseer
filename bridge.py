@@ -2342,8 +2342,7 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
     now = time.monotonic()
     since = _TOWN_FIRST_SINCE.setdefault(key, now)
     short = bag_pressure.campaign_resume_short(
-        free_slots, held_seconds=max(now - since,
-                                     (globals().get("_queue_stall_floor") or (lambda _n: 0.0))(names)))
+        free_slots, held_seconds=max(now - since, _queue_stall_floor(names)))
     if not short:
         _TOWN_FIRST_SINCE.pop(key, None)
         return ""
@@ -2417,7 +2416,7 @@ def _gear_gate(names, keyword):
     # campaign and the re-send landed here, where nothing ever let it go.
     now = time.monotonic()
     held = max(now - _GEAR_HOLD_SINCE.setdefault(key, now),
-               (globals().get("_queue_stall_floor") or (lambda _n: 0.0))(names))
+               _queue_stall_floor(names))
     ceiling = bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS
     if held >= ceiling:
         log.info("goal: dungeon:%s is no longer held for gear - %s still short after "
@@ -2458,7 +2457,7 @@ def _gear_campaign_hold(names, keyword, in_run):
     # was handed back to town forever instead of going in short.
     now = time.monotonic()
     since = _GEAR_HOLD_SINCE.setdefault(key, now)
-    if max(now - since, (globals().get("_queue_stall_floor") or (lambda _n: 0.0))(names)) >= (
+    if max(now - since, _queue_stall_floor(names)) >= (
             bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS):
         return False
     armed = [n for n, job in _jobs_of(names).items()
@@ -15184,7 +15183,7 @@ class Bridge(discord.Client):
                 stall = await asyncio.to_thread(
                     _fetch_queue_stall, rows[0]["id"],
                     str(fam["leader"].get("name") or ""))
-            except Exception:
+            except pymysql.err.MySQLError:
                 log.exception("queue: the stall of %s could not be read",
                               campaignqueue._family(key))
                 stall = None
@@ -15738,7 +15737,7 @@ class Bridge(discord.Client):
         since = _TOWN_FIRST_SINCE.get(tuple(sorted(names)))
         held = 0.0 if since is None else time.monotonic() - since
         short = bag_pressure.campaign_resume_short(
-            free, held_seconds=max(held, (globals().get("_queue_stall_floor") or (lambda _n: 0.0))(names)))
+            free, held_seconds=max(held, _queue_stall_floor(names)))
         if not short:
             return False
         if not slot.town_first:

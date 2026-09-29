@@ -382,6 +382,7 @@ def _bridge_self(world, clock, log):
             "bag_pressure": bag_pressure,
             "_town_first_hold": world.town_first_hold,
             "_TOWN_FIRST_SINCE": world.town_first_since,
+            "_queue_stall_floor": lambda names: 0.0,
             "asyncio": types.SimpleNamespace(to_thread=_thread),
             "time": clock,
             "log": log,
