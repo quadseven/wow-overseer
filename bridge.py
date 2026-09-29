@@ -3255,12 +3255,14 @@ def _pace_queue(cur, key: str, rows: list, decision, door_row: dict) -> int:
     """
     head = rows[0]
     if dungeonpace.is_step_down(head) and decision.kind in (
-            dungeonpace.FURTHER, dungeonpace.QUEST, dungeonpace.STEP_UP):
+            dungeonpace.FURTHER, dungeonpace.QUEST, dungeonpace.STEP_UP,
+            dungeonpace.ADVANCE):
         cur.execute(campaignqueue.FINISH_SQL, (int(head["id"]),))
     if decision.kind == dungeonpace.EXTEND:
         cur.execute(dungeonpace.EXTEND_SQL, (
             dungeonpace.STEP_DOWN_RUNS, int(head["id"]), dungeonpace.SOURCE))
-    if decision.kind not in (dungeonpace.STEP_DOWN, dungeonpace.FURTHER):
+    if decision.kind not in (dungeonpace.STEP_DOWN, dungeonpace.FURTHER,
+                             dungeonpace.ADVANCE):
         return 0
     position = min(int(r.get("position") or 0) for r in rows)
     cur.execute(dungeonpace.SHIFT_SQL, (key,))
@@ -15355,6 +15357,8 @@ class Bridge(discord.Client):
             done=fam["leader"].get("dungeon_runs_done"),
             cands=tuple(dungeonpace.candidates(head_kw, level_rows, reads["keys"],
                                                reads["runs"], avoid={head_kw})),
+            ahead=tuple(dungeonpace.ascend(head_kw, level_rows, reads["keys"],
+                                           reads["runs"], members, avoid={door})),
             returned=dungeonpace.returned(reads["started"].get(int(head["id"])),
                                           reads["back"].get(head_kw))), reads
 

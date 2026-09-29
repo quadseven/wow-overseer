@@ -42,6 +42,13 @@ WHAT HAPPENS (`decide`).
               until a named change and readiness bring it back. The queue
               entry stays active; only the job changes.
   RELEASE     the questing fallback ends the same way a step-up does.
+  ADVANCE     the step-down entry reached its count and the door is MASTERED
+              (`Viability.mastered`: `MASTERY_CLEARS` clears, no wipe in a
+              row): the entry is finished and a step-down-source entry for the
+              next door up (`ascend`) goes ahead of the operator's door, for
+              `STEP_DOWN_RUNS` runs, town errands between runs as any campaign
+              has. A wipe there is the ordinary step-down: the ladder prefers
+              the door the family mastered (`ladder`). Any family, no names.
 
 WHICH EASIER DOOR (`candidates`, `ladder`). Every Run below the failing one in
 campaignplan.RUNS (lowest band first), that council.door_refusal allows, whose
@@ -92,6 +99,10 @@ RATE_WINDOW = 6
 WINDOW_HOURS = 48
 
 STEP_DOWN_RUNS = 5
+# A door is MASTERED at this many clears with no wipe in a row (and a rate the
+# family can hold). Measured on wow-dev 2026-09-29: the Stockade cleared in 37
+# minutes with no wipe; two clears show the party can do the door twice.
+MASTERY_CLEARS = 2
 # A queue entry that started within this long after a step back up to its
 # door is that return (`returned`).
 RETURN_HOURS = 6
@@ -115,12 +126,13 @@ QUEST_GEAR_CEILING_SECONDS = bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS
 STEP_DOWN = "step_down"
 FURTHER = "further_down"
 STEP_UP = "step_up"
+ADVANCE = "advance"
 EXTEND = "extend"
 QUEST = "quest"
 RELEASE = "release"
 NOTHING = ""
 # Decisions that leave a stretch open, to be closed by a step-up or release.
-OPENS = (STEP_DOWN, FURTHER, QUEST)
+OPENS = (STEP_DOWN, FURTHER, QUEST, ADVANCE)
 
 # The Choice option that means "keep the door" when the rule allows it.
 STAY = "stay"
@@ -150,7 +162,7 @@ OPEN_SQL = (
     "SELECT id, decision, door, target, queue_id, baseline, created_at, "
     "TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age "
     "FROM overseer_dungeon_pace WHERE family = %s AND closed_at IS NULL "
-    "AND decision IN ('step_down', 'further_down', 'quest') "
+    "AND decision IN ('step_down', 'further_down', 'quest', 'advance') "
     "ORDER BY id DESC LIMIT 1"
 )
 INSERT_SQL = (
@@ -240,6 +252,12 @@ class Viability:
     def hard(self) -> bool:
         """Two wipes in a row: the next attempt waits for a named change."""
         return self.streak >= STREAK_WIPES
+
+    @property
+    def mastered(self) -> bool:
+        """MASTERY_CLEARS clears, the last fought run not a wipe, and a rate
+        the family can hold."""
+        return self.complete >= MASTERY_CLEARS and self.streak == 0 and self.clearable
 
     @property
     def clearable(self) -> bool:
@@ -462,6 +480,9 @@ class Candidate:
     # A wing of the instance the failing door opens into (Scarlet Monastery,
     # Maraudon, Dire Maul, Stratholme): the family is already standing at it.
     beside: bool = False
+    # The family has cleared it (Viability.mastered): a step down goes back to
+    # a door it knows before one it has only met.
+    mastered: bool = False
 
     def said(self) -> str:
         return "%s (levels %d-%d%s%s)" % (
@@ -537,16 +558,56 @@ def candidates(below: str, level_rows, keys, runs=None, avoid=()) -> list:
                 run.ceiling,
                 record,
                 beside=run.map_id == here,
+                mastered=bool(runs) and viability(runs, run.map_id).mastered,
             )
         )
     out.reverse()
     return out
 
 
+def ascend(below: str, level_rows, keys, runs=None, members=(), avoid=()) -> list:
+    """Every door harder than `below` the family may be stepped UP to, easiest
+    first: the next rung of the ladder.
+
+    The same door rules as `candidates` (council allows it, a crossing can be
+    made, no key is missing, not outgrown), plus what a step UP owes: the
+    weakest member has REACHED the door's floor (not merely near it), and the
+    map's own record is not unclearable. A wing on a shared map is judged by
+    the whole map's record here, because the Graveyard's wipes are a reason to
+    doubt the Library next to it. `avoid` names doors to leave out (the door
+    that beat the family stays the operator's to send it back to).
+    """
+    top = _index(below)
+    level = _weakest_level(level_rows)
+    if top < 0 or not level:
+        return []
+    out = []
+    for run in campaignplan.RUNS[top + 1 :]:
+        if run.keyword in avoid or not _open_to(run, level, level_rows, keys):
+            continue
+        if readiness(run.keyword, members)[0]:
+            continue
+        if runs is not None and not viability(runs, run.map_id).clearable:
+            continue
+        record = _record(run, runs)
+        out.append(
+            Candidate(
+                run.keyword,
+                run.place,
+                run.floor,
+                run.ceiling,
+                record or "",
+                mastered=False,
+            )
+        )
+    return out
+
+
 def ladder(cands) -> Candidate | None:
     """The easier door the family should walk to next.
 
-    A WING BESIDE THE FAILING DOOR FIRST, then the hardest. Measured on wow-dev
+    A WING BESIDE THE FAILING DOOR FIRST, then the hardest door the family has
+    mastered, then the hardest. Measured on wow-dev
     2026-09-27: the Alliance family wiped in the Scarlet Library and the ladder
     sent it to Gnomeregan, the hardest easier door by band, across the
     Eastern Kingdoms. It never got there in three hours of town errands, stepped
@@ -556,7 +617,10 @@ def ladder(cands) -> Candidate | None:
     """
     if not cands:
         return None
-    return next((c for c in cands if c.beside), cands[0])
+    return next(
+        (c for c in cands if c.beside),
+        next((c for c in cands if c.mastered), cands[0]),
+    )
 
 
 # --- the decision ---------------------------------------------------------------
@@ -578,6 +642,7 @@ class Facts:
     changed    named_change against the open row's baseline, or ""
     done       the leader's dungeon_runs_done
     cands      candidates easier than the head
+    ahead      `ascend`: the doors above the head the family may be stepped up to
     """
 
     family: str
@@ -595,6 +660,7 @@ class Facts:
     # The family stepped back up to this door (a step-up or release since the
     # entry started), so its record counts from that return.
     returned: bool = False
+    ahead: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -660,6 +726,16 @@ def _grown_or_farming(f: Facts, place: str) -> Decision:
             "%s, and %s is ready" % (f.changed, council.keyword_place(f.door)),
         )
     wanted = _count_reached(f)
+    if wanted and f.record.mastered and f.ahead:
+        held = blockers if _stretch_age(f.open) < QUEST_GEAR_CEILING_SECONDS else ()
+        if not held:
+            nxt = f.ahead[0]
+            return Decision(
+                ADVANCE,
+                nxt.keyword,
+                "%s is mastered (%s), so on to %s"
+                % (place, f.record.line(), nxt.said()),
+            )
     if wanted and not (f.changed and not blockers):
         return Decision(
             EXTEND,
@@ -953,6 +1029,7 @@ def line(family: str, d: Decision, by: str) -> str:
         STEP_DOWN: "steps down to %s" % target,
         FURTHER: "steps further down to %s" % target,
         STEP_UP: "steps back up to %s" % target,
+        ADVANCE: "has mastered its step-down door and advances to %s" % target,
         EXTEND: "farms %s %d more runs" % (target, STEP_DOWN_RUNS),
         QUEST: "quests at its level",
         RELEASE: "stops questing and goes back to its queue",
