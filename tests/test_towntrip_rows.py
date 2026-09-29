@@ -23,9 +23,11 @@ def stack_row(
     carried=1,
     category=towntrip.CONSUMABLE_CATEGORY_FOOD,
     flags=0,
+    required_level=0,
 ):
     """One carried consumable stack, as _TOWN_CARRIED_SQL returns it."""
     return {
+        "required_level": required_level,
         "holder": holder,
         "guid": guid,
         "entry": entry,
@@ -351,3 +353,129 @@ class ThePlannerAcceptsWhatThisProduces(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AStackAboveTheHoldersLevelIsNotFood(unittest.TestCase):
+    """Level 55 water in a level 35 mage's bags is not drink.
+
+    Live, 2026-09-29: the whole family carried Conjured Crystal Water and
+    Conjured Cinnamon Roll (RequiredLevel 55) at levels 35-37. The core refuses
+    to let a character consume an item above its level, so nobody could eat or
+    drink, and the between-pulls rest waited on mana that could only come back
+    by standing still. The planner counted those stacks as a full 20 units and
+    never bought the level-appropriate drink.
+    """
+
+    def _og(self, *stacks, level=35):
+        return towntrip.members_from_rows(
+            [worn_row("Og", klass="Mage", level=level)], list(stacks), [], {}, ["Og"]
+        )[0]
+
+    def test_an_item_above_the_holders_level_is_not_counted(self):
+        og = self._og(
+            stack_row(
+                "Og",
+                guid=1,
+                entry=8079,
+                name="Conjured Crystal Water",
+                category=towntrip.CONSUMABLE_CATEGORY_DRINK,
+                carried=22,
+                flags=towntrip.ITEM_FLAG_CONJURED,
+                required_level=55,
+            ),
+            stack_row(
+                "Og",
+                guid=2,
+                entry=22895,
+                name="Conjured Cinnamon Roll",
+                category=towntrip.CONSUMABLE_CATEGORY_FOOD,
+                carried=39,
+                flags=towntrip.ITEM_FLAG_CONJURED,
+                required_level=55,
+            ),
+        )
+        self.assertEqual(og.drink_carried, 0)
+        self.assertEqual(og.food_carried, 0)
+        self.assertEqual(og.stacks, ())
+
+    def test_an_item_at_or_below_the_holders_level_is_counted(self):
+        og = self._og(
+            stack_row(
+                "Og",
+                guid=1,
+                entry=1645,
+                name="Moonberry Juice",
+                category=towntrip.CONSUMABLE_CATEGORY_DRINK,
+                carried=20,
+                required_level=35,
+            ),
+            stack_row(
+                "Og",
+                guid=2,
+                entry=159,
+                name="Refreshing Spring Water",
+                category=towntrip.CONSUMABLE_CATEGORY_DRINK,
+                carried=5,
+                required_level=1,
+            ),
+        )
+        self.assertEqual(og.drink_carried, 25)
+
+    def test_an_unknown_level_counts_everything(self):
+        """No worn row means no level was read; guessing "too high" would buy
+        a stack for somebody we simply could not see."""
+        og = towntrip.members_from_rows(
+            [],
+            [
+                stack_row(
+                    "Og",
+                    category=towntrip.CONSUMABLE_CATEGORY_DRINK,
+                    carried=20,
+                    required_level=55,
+                )
+            ],
+            [],
+            {},
+            ["Og"],
+        )[0]
+        self.assertEqual(og.drink_carried, 20)
+
+    def test_the_mage_with_only_high_level_water_is_bought_the_right_tier(self):
+        og = self._og(
+            stack_row(
+                "Og",
+                guid=1,
+                entry=8079,
+                name="Conjured Crystal Water",
+                category=towntrip.CONSUMABLE_CATEGORY_DRINK,
+                carried=22,
+                flags=towntrip.ITEM_FLAG_CONJURED,
+                required_level=55,
+            ),
+        )
+        town = Town(vendor=True, stocks=frozenset({1645, 21552}))
+        trip = towntrip.plan([_with_room(og)], town)
+        buys = [e for e in trip.errands if e.kind == towntrip.BUY_KIND]
+        self.assertIn("entry:1645 count:20", [e.command.split(" max")[0] for e in buys])
+        self.assertTrue(any("above level 35" in n for n in trip.notes))
+
+
+def _with_room(member):
+    from dataclasses import replace
+
+    return replace(member, money=100000, free_slots=8)
+
+
+class TheQueryAsksForTheLevelTheRowsNeed(unittest.TestCase):
+    def test_the_carried_sql_selects_required_level(self):
+        """members_from_rows drops a stack by `required_level`; a query that
+        stopped selecting it would silently read every row as level 0 and put
+        the level 55 water back in the count."""
+        import pathlib
+
+        text = (
+            pathlib.Path(__file__).resolve().parent.parent / "bridge.py"
+        ).read_text()
+        start = text.index("_TOWN_CARRIED_SQL = (")
+        block = text[start : text.index(")\n", start)]
+        self.assertIn("it.RequiredLevel AS required_level", block)
