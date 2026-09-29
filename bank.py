@@ -605,6 +605,12 @@ def _trades_and_skills(held, worked_by):
     return trades, skills
 
 
+def guild_room(guild):
+    """(members whose rank may deposit, tab 0's free slots): where the guild
+    bank takes a stack now, for a pass that plans around the bank pass."""
+    return _guild_room(guild)
+
+
 def _guild_room(guild):
     """(members whose rank may deposit on every tab, tab 0's free slots)."""
     depositors, tabs = _guild_tabs(guild)

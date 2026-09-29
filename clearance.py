@@ -27,6 +27,25 @@ THE ROUTE, IN ORDER, AND THE FIRST ONE THAT APPLIES WINS.
               `disposition.AUCTION_BEATS_VENDOR_BY`.
     VENDOR    the rest, when the vendor pays for it.
 
+A CRAFTING MATERIAL PAST ITS KEEP CAP TAKES THE SAME ROAD, WITH ONE STOP MORE.
+The family keeps `disposition.MATERIAL_KEEP` of each material a holder carries
+and the surplus used to be vendor goods, so a crafter's fifty-five stacks of
+cloth went to a vendor for copper while guildmates raised trades on nothing.
+The order for a surplus material stack is now
+
+    GUILD     an online guildmate outside the family who holds a trade that
+              consumes it (`guildshare.FEEDS`), by give or by letter.
+    BANK      the guild vault, when the guild has a tab, the holder's rank may
+              deposit and the tab has room. bank.py's keeper rule makes the
+              deposit; this route only keeps the stack away from the vendor.
+    AUCTION   the house pays `disposition.AUCTION_BEATS_VENDOR_BY` times the
+              vendor price.
+    VENDOR    the last resort, when nobody can use it and nothing else takes it.
+
+A material never WAITs for an offline guildmate: cloth is not scarce enough to
+hold a full bag for, and the next pass asks again. The family is not a taker
+for a material either; `materials.py` owns hand-offs inside the family.
+
 A RECIPE THE DESIGNATED-CRAFTERS REGISTER PLACES (#248) skips the by-name
 search: `crafters.choose` has already picked the family member or designated
 guild crafter who learns it, skipping anyone who already knows it. A recipe
@@ -45,6 +64,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import disposition
+import guildshare
 
 GEM_CLASS = 3
 RECIPE_CLASS = disposition.RECIPE_CLASS
@@ -53,6 +73,7 @@ JEWELCRAFTING = 755
 SOULBOUND_FLAG = 0x1
 
 KEEP = "keep"
+BANK = "bank"
 FAMILY = "family"
 GUILD = "guild"
 WAIT = "wait"
@@ -76,6 +97,10 @@ class Stack:
     required_skill: int = 0
     required_rank: int = 0
     bound: bool = False
+    subclass: int = 0
+    # A crafting material past its holder's keep cap (`disposition.MATERIAL_KEEP`).
+    # The caller sets it; the stack is otherwise a trade good this module ignores.
+    material: bool = False
 
     @property
     def gem(self) -> bool:
@@ -125,6 +150,8 @@ def _stack_from_row(row) -> Stack:
         required_skill=int(row.get("required_skill", 0) or 0),
         required_rank=int(row.get("required_rank", 0) or 0),
         bound=bonding in (1, 4) or bool(flags & SOULBOUND_FLAG),
+        subclass=int(row.get("subclass", 0) or 0),
+        material=bool(row.get("material_surplus", False)),
     )
 
 
@@ -137,7 +164,7 @@ def stacks_from_rows(rows) -> list:
         except (KeyError, TypeError, ValueError):
             continue
         if stack.holder and stack.guid > 0 and stack.count > 0:
-            if stack.gem or stack.recipe:
+            if stack.gem or stack.recipe or stack.material:
                 out.append(stack)
     return out
 
@@ -151,12 +178,26 @@ def can_learn_now(stack: Stack, person: Person) -> bool:
 
 def can_use(stack: Stack, person: Person) -> str:
     """Why this person could use the stack, or ''."""
+    if stack.material:
+        return _material_use(stack, person)
     if stack.recipe:
         if can_learn_now(stack, person):
             return "%s can learn it now" % person.name
         return ""
     if stack.gem and person.rank(JEWELCRAFTING) > 0:
         return "%s cuts gems" % person.name
+    return ""
+
+
+def _material_use(stack: Stack, person: Person) -> str:
+    """The trade this person holds that consumes the material, or ''.
+
+    The trade is read off the item's own subclass, `guildshare.FEEDS`, and the
+    skill line off `character_skills`: the same two facts guildshare asks.
+    """
+    for trade in guildshare.FEEDS.get(int(stack.subclass), ()):
+        if person.rank(guildshare.SKILL_LINES.get(trade, 0)) > 0:
+            return "%s has %s" % (person.name, trade)
     return ""
 
 
@@ -184,6 +225,7 @@ def route(
     auction_open: bool = False,
     busy=frozenset(),
     picks=None,
+    vault=frozenset(),
 ) -> Route:
     """One stack's route. See the module docstring for the order.
 
@@ -197,7 +239,12 @@ def route(
     `picks` maps a recipe's guid to `crafters.Pick` (#248). When a recipe has
     one, the designated-crafters register decides who takes it, and the
     by-name search below is not asked.
+
+    `vault` names the holders whose surplus the guild bank will take now: the
+    guild has a tab with room and the holder's rank may deposit into it.
     """
+    if stack.material:
+        return _material_route(stack, people, kept, market, auction_open, busy, vault)
     pick = (picks or {}).get(stack.guid) if stack.recipe else None
     if pick is not None and pick.taker:
         return _picked(stack, pick, busy)
@@ -219,6 +266,34 @@ def route(
             VENDOR,
             why="nobody who can use %s can be handed it, and a vendor pays %d "
             "copper" % (stack.name, stack.sell_price),
+        )
+    return Route(stack, KEEP, why="%s has no route and no vendor price" % stack.name)
+
+
+def _material_route(stack, people, kept, market, auction_open, busy, vault) -> Route:
+    """GUILD, BANK, AUCTION, then VENDOR for a material past its keep cap."""
+    if stack.guid in kept:
+        return Route(stack, KEEP, why="another pass owns %s" % stack.name)
+    person, need = _first(stack, people, family=False, online=True, skip=busy)
+    if person is not None:
+        return Route(stack, GUILD, person.name, need)
+    if stack.holder in vault:
+        return Route(
+            stack,
+            BANK,
+            why="nobody outside the family can use %s now, and the guild bank "
+            "has a tab with room for it" % stack.name,
+        )
+    listed = _listed(stack, market, auction_open)
+    if listed is not None:
+        return listed
+    if stack.sell_price > 0:
+        return Route(
+            stack,
+            VENDOR,
+            why="nobody can use %s, the guild bank has no room for it and the "
+            "house does not pay enough; a vendor pays %d copper each"
+            % (stack.name, stack.sell_price),
         )
     return Route(stack, KEEP, why="%s has no route and no vendor price" % stack.name)
 
@@ -291,13 +366,24 @@ def _picked(stack: Stack, pick, busy) -> Route:
 
 
 def plan(
-    stacks, people, *, kept=frozenset(), market=None, auction_open=False, picks=None
+    stacks,
+    people,
+    *,
+    kept=frozenset(),
+    market=None,
+    auction_open=False,
+    picks=None,
+    vault=frozenset(),
+    vault_room=0,
 ) -> tuple:
     """Every stack's Route, holders in name order.
 
     A guildmate or family member is handed at most one stack per pass, the
     budget `guildshare._best_taker` keeps for the same reason: nobody reads
     their bags, and a receiver is only known to have one free slot.
+
+    `vault_room` is tab 0's free slots: each BANK route takes one, and a
+    material past the room goes on to the auction house or the vendor.
     """
     people = list(people)
     by_name = {p.name: p for p in people}
@@ -313,9 +399,12 @@ def plan(
             auction_open=auction_open,
             busy=frozenset(taken),
             picks=picks,
+            vault=vault if vault_room > 0 else frozenset(),
         )
         if got.route in GIVEN:
             taken.add(got.taker)
+        if got.route == BANK:
+            vault_room -= 1
         out.append(got)
     return tuple(out)
 
