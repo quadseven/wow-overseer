@@ -367,6 +367,145 @@ class TheDecision(unittest.TestCase):
         self.assertEqual(pace.STEP_UP, pace.decide(f).kind)
 
 
+class TheMasteredDoor(unittest.TestCase):
+    """A step-down door the family has mastered steps it UP to the next door.
+
+    wow-dev 2026-09-29: the Alliance family (35 to 39) cleared the Stockade in
+    37 minutes and kept farming it, because the only ways off a step-down door
+    were a named change back to the door that beat it or another five runs of
+    the same dungeon. The Graveyard's wipes stood in the way of the ladder's
+    next rung, and nothing climbed past a mastered door on its own.
+    """
+
+    STOCK = pace.campaignplan.BY_KEYWORD["stockades"].map_id
+    SCARLET = pace.campaignplan.BY_KEYWORD["scarlet"].map_id
+
+    def _at_stockade(self, runs, done=5, rows=None, open_=None, door="scarlet-library"):
+        step = head("stockades", source=pace.SOURCE, id_=9, runs=5)
+        rows = rows or members(ALLIANCE, worn=14)
+        f = facts(
+            step,
+            rows,
+            runs,
+            door=door,
+            open_=open_ or {"id": 1, "decision": pace.FURTHER, "baseline": ""},
+            done=done,
+        )
+        ahead = tuple(
+            pace.ascend(
+                "stockades", ALLIANCE, frozenset(), list(runs), rows, avoid={door}
+            )
+        )
+        return pace.decide(pace.replace(f, ahead=ahead))
+
+    def _cleared(self, n=2, map_id=None):
+        return [run("complete", 10 * i, map_id or self.STOCK) for i in range(n)]
+
+    def test_two_clears_and_no_wipe_is_mastery(self):
+        v = pace.viability(self._cleared(2), self.STOCK)
+        self.assertTrue(v.mastered)
+
+    def test_one_clear_is_not_mastery(self):
+        self.assertFalse(pace.viability(self._cleared(1), self.STOCK).mastered)
+
+    def test_a_wipe_in_a_row_ends_mastery(self):
+        runs = self._cleared(2, self.STOCK) + [run("wipe", 30, self.STOCK)]
+        self.assertFalse(pace.viability(runs, self.STOCK).mastered)
+
+    def test_a_mastered_door_at_its_count_advances_to_the_next_door(self):
+        beaten = [run("wipe", 100, self.SCARLET), run("wipe", 110, self.SCARLET)]
+        d = self._at_stockade(self._cleared(2) + beaten)
+        self.assertEqual(pace.ADVANCE, d.kind)
+        # The Graveyard beat the family (two wipes in a row on its map), so the
+        # next rung above the Stockade is Gnomeregan, not a second try there.
+        self.assertEqual("gnomeregan", d.target)
+
+    def test_a_mastered_door_short_of_its_count_keeps_farming(self):
+        self.assertFalse(self._at_stockade(self._cleared(2), done=3).acts)
+
+    def test_an_unmastered_door_at_its_count_still_extends(self):
+        d = self._at_stockade(self._cleared(1))
+        self.assertEqual(pace.EXTEND, d.kind)
+
+    def test_a_member_without_a_weapon_holds_the_advance(self):
+        rows = tuple(
+            pace.Member(m.name, m.level, 14, 300.0, m.name != "Og")
+            for m in members(ALLIANCE)
+        )
+        d = self._at_stockade(self._cleared(2), rows=rows)
+        self.assertEqual(pace.EXTEND, d.kind)
+
+    def test_a_named_change_still_goes_back_to_the_operators_door(self):
+        step = head("stockades", source=pace.SOURCE, id_=9, runs=5)
+        f = facts(
+            step,
+            members(ALLIANCE, worn=14),
+            self._cleared(2),
+            door="scarlet-library",
+            open_={"id": 1, "decision": pace.FURTHER, "baseline": ""},
+            changed="level gained: Bork 35 -> 36",
+            done=5,
+        )
+        self.assertEqual(pace.STEP_UP, pace.decide(f).kind)
+
+    def test_nothing_above_means_the_old_rules_stand(self):
+        step = head("stockades", source=pace.SOURCE, id_=9, runs=5)
+        f = facts(
+            step,
+            members(ALLIANCE, worn=14),
+            self._cleared(2),
+            door="scarlet-library",
+            open_={"id": 1, "decision": pace.FURTHER, "baseline": ""},
+            done=5,
+        )
+        self.assertEqual(pace.EXTEND, pace.decide(f).kind)
+
+    def test_the_next_door_is_general_not_one_family(self):
+        horde = [
+            {"name": "Zug", "level": 27, "race": 2, "map_id": 1},
+            {"name": "Oz", "level": 26, "race": 8, "map_id": 1},
+        ]
+        got = pace.ascend(
+            "deadmines", horde, frozenset(), [], members(horde), avoid={"scarlet"}
+        )
+        self.assertTrue(got)
+        self.assertGreater(
+            pace._index(got[0].keyword), pace._index("deadmines"), got[0].keyword
+        )
+
+    def test_a_door_the_level_has_not_reached_is_not_the_next_door(self):
+        low = [{"name": "Bork", "level": 20, "race": 7, "map_id": 0}]
+        got = pace.ascend("wailing", low, frozenset(), [], members(low), avoid=set())
+        self.assertTrue(all(c.floor <= 20 for c in got))
+
+    def test_a_wipe_on_the_new_door_steps_back_down_to_the_mastered_one(self):
+        gnome = pace.campaignplan.BY_KEYWORD["gnomeregan"].map_id
+        runs = self._cleared(2) + [run("wipe", 50, gnome), run("wipe", 60, gnome)]
+        step = head("gnomeregan", source=pace.SOURCE, id_=10, runs=5)
+        f = facts(
+            step,
+            members(ALLIANCE, worn=14),
+            runs,
+            door="scarlet-library",
+            open_={"id": 2, "decision": pace.ADVANCE, "baseline": ""},
+            done=2,
+            avoid={"gnomeregan"},
+        )
+        d = pace.decide(f)
+        self.assertEqual(pace.FURTHER, d.kind)
+        # Not the Graveyard that beat the family: the door it mastered.
+        self.assertEqual("stockades", d.target)
+
+    def test_the_advance_writes_a_step_down_source_entry_ahead_of_the_door(self):
+        body = BRIDGE[BRIDGE.index("def _pace_queue(") :]
+        body = body[: body.index("\ndef _pace_write(")]
+        self.assertIn("pace.ADVANCE", body.replace("dungeonpace.", "pace."))
+        self.assertIn("SHIFT_SQL", body)
+        self.assertNotIn("CANCEL_SQL", body)
+        self.assertIn("'advance'", pace.OPEN_SQL)
+        self.assertIn(pace.ADVANCE, pace.OPENS)
+
+
 class NamedChange(unittest.TestCase):
     def test_level_slot_and_item_levels(self):
         before = pace.baseline(members(ALLIANCE[:1], worn=10, total=250.0))
