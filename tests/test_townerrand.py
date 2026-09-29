@@ -15,6 +15,7 @@ import types
 import unittest
 
 import gearup
+import guildbank
 import guildwork
 import mailrun
 import townerrand as te
@@ -270,6 +271,9 @@ class TheAdapter(unittest.TestCase):
             "_TOWN_ERRAND_BOUGHT": {},
             "gearup": gearup,
             "guildwork": guildwork,
+            "guildbank": guildbank,
+            "_fetch_guild_bank_setup": lambda names: self.setup,
+            "_natural_contributors": lambda cands, names: frozenset(cands),
             "TOWN_ERRAND_SETTLE_SECONDS": 60.0,
             "_insert_fund_letter": lambda gift, command: (
                 self.written.append((gift.donor, gift.taker, command)) or 1
@@ -310,6 +314,7 @@ class TheAdapter(unittest.TestCase):
                 "_town_errand_step",
                 "_town_errand_mail",
                 "_town_errand_fund",
+                "_tab_gifts",
                 "_town_errand_regroup",
             ),
             type_ignores=[],
@@ -325,6 +330,8 @@ class TheAdapter(unittest.TestCase):
         self.fam._town_errand_regroup = lambda *a: ns["_town_errand_regroup"](
             self.fam, *a
         )
+
+    setup = None
 
     def tick(self, seconds=30.0):
         self.now += seconds
@@ -375,6 +382,47 @@ class TheAdapter(unittest.TestCase):
         )
         self.assertEqual(te.FUND, self.tick().current_step)  # the letter settles
         self.assertEqual(te.MAIL, self.tick(60.0).current_step)
+
+    def test_with_no_gear_to_fund_the_family_funds_the_guilds_first_tab(self):
+        # wow-dev 2026-09-29: the Horde guild had no tab, its master held
+        # under a gold against the hundred it costs, and no sibling posted.
+        rich = {
+            "Grug": {"level": 18, "purse": 8467, "equipped": {"mainhand": 43}},
+            "Bork": {"level": 16, "purse": 51567, "equipped": {"mainhand": 44}},
+        }
+        self.ns["_fetch_gearup_facts"] = lambda names: rich
+        self.setup = {"master": "Grug", "purchased_tabs": 0, "master_mailed_copper": 0}
+        self.tick()
+        self.positions = {"Grug": _at(101, 100), "Bork": _at(103, 101)}
+        self.assertEqual(te.GATHER, self.tick().phase)
+        self.assertEqual(te.STEPS, self.tick().phase)
+        state = self.tick()
+        spare = 51567 - guildbank.tab_fund_float(16)
+        self.assertEqual(
+            [
+                (
+                    "Bork",
+                    "Grug",
+                    "send money:%d subject:For the guild bank" % (spare // 2),
+                )
+            ],
+            self.written,
+        )
+        self.assertEqual(te.FUND, state.current_step)
+
+    def test_a_guild_that_owns_its_tab_is_not_asked_for_more(self):
+        rich = {
+            "Grug": {"level": 18, "purse": 8467, "equipped": {"mainhand": 43}},
+            "Bork": {"level": 16, "purse": 51567, "equipped": {"mainhand": 44}},
+        }
+        self.ns["_fetch_gearup_facts"] = lambda names: rich
+        self.setup = {"master": "Grug", "purchased_tabs": 1, "master_mailed_copper": 0}
+        self.tick()
+        self.positions = {"Grug": _at(101, 100), "Bork": _at(103, 101)}
+        self.tick()
+        self.tick()
+        self.tick()
+        self.assertEqual([], self.written)
 
     def test_the_fund_step_waits_for_the_donor_at_the_mailbox(self):
         # wow-dev 2026-09-28 02:20: the step ran on a tick whose settled
