@@ -261,8 +261,10 @@ class TheBridgeWritesIt(unittest.TestCase):
         self.assertIn("ORDER BY id", body)
 
     def test_each_equip_and_its_outcome_is_logged(self):
-        body = _block("    async def _equip_upgrades(self")
+        body = _block("    async def _write_equips(self")
         self.assertIn('"equip: %s puts on %s', body)
+        body = _block("    async def _equip_upgrades(self")
+        self.assertIn("await self._write_equips(wanted, current)", body)
         self.assertIn('"equip: %s %r answered %s', body)
 
 
