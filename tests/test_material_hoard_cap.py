@@ -173,10 +173,6 @@ class TheSourceUsesTheCap(unittest.TestCase):
         self.assertIn("disposition.material_keeps(", body)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheCrafterKeepsRoomForARun(unittest.TestCase):
     """`materials.plan` stops handing a crafter stacks once its free slots
     reach the reserve, so the family's gate never sees the crafter at zero."""
@@ -219,3 +215,7 @@ class TheBridgePassesTheRoom(unittest.TestCase):
         self.assertEqual(
             src.count("reserve=bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS"), 2
         )
+
+
+if __name__ == "__main__":
+    unittest.main()

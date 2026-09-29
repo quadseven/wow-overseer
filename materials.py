@@ -349,6 +349,21 @@ def family_crafters(skills_by_name: Mapping) -> dict:
     return out
 
 
+def _blocked(holding, taker: str, skill: str, refusal: str) -> Blocked:
+    """The Blocked row for one holder's stack the taker will not be handed."""
+    return Blocked(
+        holder=holding.holder,
+        taker=taker,
+        material=holding.material,
+        skill=skill,
+        refusal=refusal,
+        said=(
+            f"{holding.holder} no give {taker} {holding.material} - "
+            f"{refusal}. {holding.holder} wait."
+        ),
+    )
+
+
 def plan(
     holdings,
     *,
@@ -418,49 +433,20 @@ def plan(
             # notes that are actually asking for something.
             continue
         refusal = refused.get((holding.holder, taker))
+        if not refusal and taker in spare:
+            if spare[taker] <= 0:
+                refusal = "%s keeps %d bag slots free for a dungeon run" % (
+                    taker,
+                    int(reserve),
+                )
+            else:
+                spare[taker] -= 1
         if refusal:
             mark = (holding.holder, taker, holding.material)
             if mark not in seen_blocks:
                 seen_blocks.add(mark)
-                blocked.append(
-                    Blocked(
-                        holder=holding.holder,
-                        taker=taker,
-                        material=holding.material,
-                        skill=skill,
-                        refusal=refusal,
-                        said=(
-                            f"{holding.holder} no give {taker} {holding.material} - "
-                            f"{refusal}. {holding.holder} wait."
-                        ),
-                    )
-                )
+                blocked.append(_blocked(holding, taker, skill, refusal))
             continue
-        if taker in spare:
-            if spare[taker] <= 0:
-                mark = (holding.holder, taker, holding.material)
-                if mark not in seen_blocks:
-                    seen_blocks.add(mark)
-                    why = "%s keeps %d bag slots free for a dungeon run" % (
-                        taker,
-                        int(reserve),
-                    )
-                    blocked.append(
-                        Blocked(
-                            holder=holding.holder,
-                            taker=taker,
-                            material=holding.material,
-                            skill=skill,
-                            refusal=why,
-                            said=(
-                                f"{holding.holder} no give {taker} "
-                                f"{holding.material} - {why}. "
-                                f"{holding.holder} wait."
-                            ),
-                        )
-                    )
-                continue
-            spare[taker] -= 1
         grants.append(
             Grant(
                 holder=holding.holder,

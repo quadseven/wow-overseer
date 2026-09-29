@@ -491,6 +491,7 @@ def _bridge(world, fake_jev, holds=None):
     names = [
         "_activity_holds",
         "_activity_resting",
+        "_activity_paused",
         "_activity_for",
         "_activity_can",
         "_activity_due",

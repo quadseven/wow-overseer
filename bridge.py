@@ -15805,6 +15805,22 @@ class Bridge(discord.Client):
             return ""
         return lease.activity
 
+    def _activity_paused(self, key, reason: str) -> bool:
+        """Whether family `key` is not asked now: it is on an interlude, or
+        resting after one. Says which."""
+        interlude = self._activity_holds(key)
+        if interlude:
+            log.info("activity: %s is on its %s interlude; %s is not asked "
+                     "again until it ends", campaignqueue._family(key),
+                     interlude, reason)
+            return True
+        if self._activity_resting(key):
+            log.info("activity: %s is resting after its last interlude; %s is "
+                     "not asked until the queue has had its stretch",
+                     campaignqueue._family(key), reason)
+            return True
+        return False
+
     def _activity_resting(self, key) -> bool:
         """Whether family `key` is inside the rest an interlude's end left it.
 
@@ -16138,16 +16154,7 @@ class Bridge(discord.Client):
         reason, since = self._activity_due(key, marks, job, now)
         if not reason:
             return
-        interlude = self._activity_holds(key)
-        if interlude:
-            log.info("activity: %s is on its %s interlude; %s is not asked "
-                     "again until it ends", campaignqueue._family(key),
-                     interlude, reason)
-            return
-        if self._activity_resting(key):
-            log.info("activity: %s is resting after its last interlude; %s is "
-                     "not asked until the queue has had its stretch",
-                     campaignqueue._family(key), reason)
+        if self._activity_paused(key, reason):
             return
         where = await self._situation_for(key, names, leader.get("name"))
         facts = jev_activity.Facts(

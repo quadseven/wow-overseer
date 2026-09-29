@@ -56,6 +56,9 @@ class _Pass:
     def _activity_resting(self, key):
         return bridge.Bridge._activity_resting(self, key)
 
+    def _activity_paused(self, key, reason):
+        return bridge.Bridge._activity_paused(self, key, reason)
+
 
 class TheRestFollowsTheInterlude(unittest.TestCase):
     def test_a_live_interlude_starts_no_rest(self):
@@ -82,13 +85,23 @@ class TheRestFollowsTheInterlude(unittest.TestCase):
 
 
 class TheChoiceIsNotAskedWhileResting(unittest.TestCase):
-    def test_the_pass_checks_the_rest_before_it_asks(self):
+    def test_a_resting_family_is_paused_and_a_free_one_is_not(self):
+        this = _Pass(time.monotonic() - 1)
+        self.assertTrue(this._activity_paused("Zug", "arrived in town"))
+        this._activity_rest.clear()
+        self.assertFalse(this._activity_paused("Zug", "arrived in town"))
+
+    def test_a_live_interlude_pauses_it_too(self):
+        this = _Pass(time.monotonic() + 600)
+        self.assertTrue(this._activity_paused("Zug", "arrived in town"))
+
+    def test_the_pass_checks_the_pause_before_it_asks(self):
         src = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
         body = src[src.index("async def _activity_for(") :]
         body = body[: body.index("async def _activity_can(")]
-        self.assertIn("self._activity_resting(key)", body)
+        self.assertIn("self._activity_paused(key, reason)", body)
         self.assertLess(
-            body.index("self._activity_resting(key)"),
+            body.index("self._activity_paused(key, reason)"),
             body.index("await jev_activity.ask("),
         )
 
