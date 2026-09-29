@@ -33,6 +33,8 @@ def row(name, level, class_id, **kw):
         "level": level,
         "class_id": class_id,
         "map_id": 0,
+        # An orc: a band the Horde's own doors (Ragefire Chasm) are open to.
+        "race": 2,
         "in_combat": 0,
         "health": 300,
         "group_leader": 0,
@@ -342,18 +344,87 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         self.assertIn("AS gear_ilvl", sql)
 
 
+class TheHostileCapitalDoorIsNeverOffered(unittest.TestCase):
+    """Cave (Alliance) never runs Ragefire Chasm (map 389) and Bonkers (Horde)
+    never runs The Stockade (map 34), at any level, and a side whose faction
+    cannot be read is held to the doors both sides may use."""
+
+    ALLIANCE_MAP, HORDE_MAP = 34, 389
+
+    def offered(self, level, faction):
+        return [
+            d.keyword
+            for d in guildrun.fitting_doors([level] * 5, guildrun.doors(), faction)
+        ]
+
+    def test_alliance_never_gets_ragefire_at_any_level(self):
+        for level in range(1, 61):
+            self.assertNotIn("ragefire", self.offered(level, "Alliance"), level)
+
+    def test_horde_never_gets_the_stockade_at_any_level(self):
+        for level in range(1, 61):
+            self.assertNotIn("stockades", self.offered(level, "Horde"), level)
+
+    def test_each_side_climbs_its_own_doors_in_level_order(self):
+        """The first door offered never falls back to a lower floor as the
+        group grows: the doors a side uses come in the order of their floors."""
+        by_keyword = {d.keyword: d for d in guildrun.doors()}
+        for faction in ("Alliance", "Horde"):
+            floors = []
+            for level in range(1, 61):
+                offered = self.offered(level, faction)
+                for keyword in offered:
+                    door = by_keyword[keyword]
+                    self.assertIn(keyword, guildrun.GUILD_DOORS[faction])
+                    self.assertGreaterEqual(level, door.floor)
+                    self.assertLessEqual(level, door.ceiling)
+                    self.assertNotIn(
+                        door.map_id, guildrun.HOSTILE_CAPITAL_DUNGEONS[faction]
+                    )
+                if offered:
+                    floors.append(by_keyword[offered[0]].floor)
+            self.assertEqual(floors, sorted(floors), faction)
+
+    def test_an_unreadable_faction_is_offered_neither_capital_door(self):
+        """Race 0 (a snapshot without a race) or a mixed roster reads as no
+        faction; that must not lift the filter."""
+        for level in range(1, 61):
+            offered = self.offered(level, "")
+            self.assertNotIn("ragefire", offered, level)
+            self.assertNotIn("stockades", offered, level)
+        self.assertEqual(self.offered(19, ""), ["wailing"])
+
+    def test_the_hostile_capital_map_ids_are_the_capital_dungeons(self):
+        self.assertEqual(guildrun.HOSTILE_CAPITAL_DUNGEONS["Alliance"], {389})
+        self.assertEqual(guildrun.HOSTILE_CAPITAL_DUNGEONS["Horde"], {34})
+
+    def test_a_member_inside_the_hostile_dungeon_map_is_stranded(self):
+        alliance = member("A", 19, MAGE, race=1, map_id=389)
+        horde = member("H", 19, MAGE, race=2, map_id=34, guild_name="Bonkers")
+        self.assertEqual(guildrun.stranded_names([alliance, horde], set()), ["A", "H"])
+        own = member("O", 19, MAGE, race=1, map_id=34)
+        self.assertEqual(guildrun.stranded_names([own], set()), [])
+
+
 class TheDoorsThatFit(unittest.TestCase):
     def test_a_band_of_seventeen_to_nineteen_gets_ragefire_first(self):
         keywords = [
-            d.keyword for d in guildrun.fitting_doors([17, 17, 18, 18, 19], DOORS)
+            d.keyword
+            for d in guildrun.fitting_doors([17, 17, 18, 18, 19], DOORS, "Horde")
         ]
         self.assertEqual(keywords[0], "ragefire")
         self.assertNotIn("shadowfang", keywords)
 
     def test_the_guide_minimum_goes_in(self):
         """Wailing Caverns has floor 17: a mean of 17.0 is offered, 16.8 is not."""
-        at = [d.keyword for d in guildrun.fitting_doors([17, 17, 17, 17, 17], DOORS)]
-        under = [d.keyword for d in guildrun.fitting_doors([16, 17, 17, 17, 17], DOORS)]
+        at = [
+            d.keyword
+            for d in guildrun.fitting_doors([17, 17, 17, 17, 17], DOORS, "Alliance")
+        ]
+        under = [
+            d.keyword
+            for d in guildrun.fitting_doors([16, 17, 17, 17, 17], DOORS, "Horde")
+        ]
         self.assertIn("wailing", at)
         self.assertIn("deadmines", at)
         self.assertNotIn("wailing", under)
@@ -361,7 +432,8 @@ class TheDoorsThatFit(unittest.TestCase):
 
     def test_a_group_at_the_ragefire_floor_is_sent(self):
         keywords = [
-            d.keyword for d in guildrun.fitting_doors([15, 15, 15, 15, 16], DOORS)
+            d.keyword
+            for d in guildrun.fitting_doors([15, 15, 15, 15, 16], DOORS, "Horde")
         ]
         self.assertEqual(keywords, ["ragefire"])
 
@@ -483,14 +555,14 @@ class TheHeuristicIsThePrior(unittest.TestCase):
         self.assertIn("closest level fit", why)
 
     def test_a_record_with_enough_runs_moves_it(self):
-        rows = [ended("ragefire", "wiped")] * 4 + [ended("deadmines", "cleared")] * 4
+        rows = [ended("ragefire", "wiped")] * 4 + [ended("wailing", "cleared")] * 4
         p = plan(rows)
         keyword, why = guildrun.heuristic_door(p, p.options[0])
-        self.assertEqual(keyword, "deadmines")
+        self.assertEqual(keyword, "wailing")
         self.assertIn("best record", why)
 
     def test_too_few_runs_do_not(self):
-        rows = [ended("ragefire", "wiped")] * 4 + [ended("deadmines", "cleared")] * 2
+        rows = [ended("ragefire", "wiped")] * 4 + [ended("wailing", "cleared")] * 2
         p = plan(rows)
         self.assertEqual(guildrun.heuristic_door(p, p.options[0])[0], "ragefire")
 
@@ -501,9 +573,7 @@ class JevChoosesWithAConfidence(unittest.TestCase):
         return asyncio.run(guildrun.decide(client, plan(), environ={}))
 
     def test_both_questions_go_in_one_request_with_the_records(self):
-        fake = FakeJev(
-            picks={"dungeon": "deadmines", "composition": "b"}, confidence=0.9
-        )
+        fake = FakeJev(picks={"dungeon": "wailing", "composition": "b"}, confidence=0.9)
         self.decide(fake)
         self.assertEqual(len(fake.requests), 1)
         questions = fake.requests[0]["questions"]
@@ -514,24 +584,20 @@ class JevChoosesWithAConfidence(unittest.TestCase):
         self.assertIn("record at band", questions["composition"]["criteria"]["a"])
 
     def test_a_confident_answer_acts(self):
-        fake = FakeJev(
-            picks={"dungeon": "deadmines", "composition": "b"}, confidence=0.9
-        )
+        fake = FakeJev(picks={"dungeon": "wailing", "composition": "b"}, confidence=0.9)
         decision = self.decide(fake)
-        self.assertEqual(decision.dungeon.chosen, "deadmines")
+        self.assertEqual(decision.dungeon.chosen, "wailing")
         self.assertEqual(decision.dungeon.acted, jev.JEV)
         self.assertEqual(decision.dungeon.confidence, 0.9)
         self.assertEqual(decision.composition.chosen, "b")
         self.assertEqual(decision.chosen, decision.plan.options[1])
 
     def test_below_the_floor_the_prior_acts_and_jevs_answer_is_kept(self):
-        fake = FakeJev(
-            picks={"dungeon": "deadmines", "composition": "b"}, confidence=0.3
-        )
+        fake = FakeJev(picks={"dungeon": "wailing", "composition": "b"}, confidence=0.3)
         decision = self.decide(fake)
         self.assertEqual(decision.dungeon.chosen, "ragefire")
         self.assertEqual(decision.dungeon.acted, jev.HEURISTIC)
-        self.assertEqual(decision.dungeon.jev, "deadmines")
+        self.assertEqual(decision.dungeon.jev, "wailing")
         self.assertEqual(decision.dungeon.confidence, 0.3)
         self.assertEqual(decision.composition.chosen, "a")
 
