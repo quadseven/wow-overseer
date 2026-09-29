@@ -241,6 +241,64 @@ class TheDecision(unittest.TestCase):
         )
         self.assertEqual(pace.RELEASE, back.kind)
 
+    def _questing_bare(self, age):
+        """The Horde family as measured 2026-09-29: levels gained, 8 slots empty."""
+        opened = {"id": 1, "decision": pace.QUEST, "baseline": "", "age": age}
+        grown = [dict(r, level=max(r["level"], 15)) for r in HORDE]
+        return pace.decide(
+            facts(
+                head("ragefire", id_=4),
+                members(grown, worn=9),
+                [],
+                open_=opened,
+                level_rows=grown,
+                changed="level gained: Uzza 13 -> 15",
+            )
+        )
+
+    def test_bare_slots_hold_a_fresh_questing_stretch_back(self):
+        d = self._questing_bare(age=60)
+        self.assertFalse(d.acts)
+        self.assertIn("six or more empty slots", d.why)
+
+    def test_bare_slots_do_not_hold_a_questing_family_out_of_its_door_for_ever(self):
+        """The gear hold has a ceiling so shopping cannot deadlock a campaign
+        (#146); the questing release had none, and a family that cannot buy
+        gear stayed on the fallback for two days with its levels gained."""
+        d = self._questing_bare(age=pace.QUEST_GEAR_CEILING_SECONDS)
+        self.assertEqual(pace.RELEASE, d.kind)
+
+    def test_the_ceiling_never_waives_the_level_gate_or_the_named_change(self):
+        opened = {
+            "id": 1,
+            "decision": pace.QUEST,
+            "baseline": "",
+            "age": pace.QUEST_GEAR_CEILING_SECONDS * 10,
+        }
+        still_low = pace.decide(
+            facts(
+                head("ragefire", id_=4),
+                members(HORDE, worn=9),
+                [],
+                open_=opened,
+                level_rows=HORDE,
+                changed="level gained: Uzza 13 -> 14",
+            )
+        )
+        self.assertFalse(still_low.acts)
+        unchanged = [dict(r, level=max(r["level"], 15)) for r in HORDE]
+        nothing_new = pace.decide(
+            facts(
+                head("ragefire", id_=4),
+                members(unchanged, worn=9),
+                [],
+                open_=opened,
+                level_rows=unchanged,
+                changed="",
+            )
+        )
+        self.assertFalse(nothing_new.acts)
+
     def _stepping(self, runs, changed="", done=0, open_=None, rows=None):
         step = head("gnomeregan", source=pace.SOURCE, id_=9, runs=5)
         f = facts(

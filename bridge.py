@@ -3121,6 +3121,11 @@ def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
 # can hand their time back to the craft rhythm and the skill goal and the
 # activity choice can say why the run waits.
 _PACE_QUESTING: dict = {}
+# THE SAME FAMILIES BY MEMBER NAME, for the passes that are handed names and not
+# a family key. A family on the fallback is not waiting in town for bag room:
+# `_town_first_hold` reads "a campaign waits and nobody carries its job" as that,
+# which is also what the fallback looks like.
+_PACE_QUESTERS: set = set()
 
 
 def _pace_reads(key: str, fam: dict, level_rows: list, ids: list) -> dict:
@@ -15272,8 +15277,10 @@ class Bridge(discord.Client):
         """Keep a family questing under the fallback on the default job."""
         if not questing:
             _PACE_QUESTING.pop(key, None)
+            _PACE_QUESTERS.difference_update(names)
             return
         _PACE_QUESTING[key] = "no dungeon the family can clear yet"
+        _PACE_QUESTERS.update(names)
         written = await asyncio.to_thread(_pace_jobs, names, jobs.DEFAULT)
         if written:
             log.info("pace: %s: %d member(s) on job=%s while the door waits",
@@ -21881,7 +21888,16 @@ _CAMPAIGN_WAITING_SQL = (
 def _town_first_hold(names: list) -> bool:
     """True when a campaign waits on this family and none of it carries a
     dungeon job: a fresh start or one handed to town (#265), which only the
-    resume floor lets back in. An armed campaign is never a town hold."""
+    resume floor lets back in. An armed campaign is never a town hold.
+
+    NOR IS ONE THE PACE HOLDS ON THE QUESTING FALLBACK. Nobody carries a dungeon
+    job then either, and the family is not waiting in town for bag room: it is
+    questing until dungeonpace releases it. Read as a hold, the fallback kept the
+    Horde family standing in town for two days on a ceiling clock only the queue
+    step starts, and the queue step is exactly what the pace withholds.
+    """
+    if any(n in globals().get("_PACE_QUESTERS", ()) for n in names):
+        return False
     if not _campaign_waiting(names):
         return False
     jobs_now = _jobs_of(names)
