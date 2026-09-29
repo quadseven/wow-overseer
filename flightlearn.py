@@ -186,6 +186,80 @@ ARRIVAL_SEEN_SECONDS = 60.0
 REACH_YARDS = 5000.0
 
 
+# HOW CLOSE THE FAMILY HAS TO BE FOR ITS LEADER TO BE SENT ON A DISCOVERY WALK.
+#
+# The pass aims one character on the premise that the other four follow him,
+# and that premise is only true while they are near enough to. A member on
+# another map, or in another zone, does not follow a walk of thousands of yards
+# across a continent; he is left where he stands and the leader is alone. Three
+# hundred yards is a town: the family standing about a trainer or an inn is
+# together, and one standing in Elwynn while the leader is in Stormwind is not.
+TOGETHER_YARDS = 300.0
+
+
+def family_refusal(*, leader, names, positions, campaign_waiting) -> str:
+    """Why the leader must NOT be sent on a discovery walk now, or "" if he may.
+
+    infra#4206's pass aims the leader alone and counts on the followers to
+    arrive with him and learn the node for free. Measured on 2026-09-29 on the
+    dev realm that count was wrong twice over: the leader was sent 2621 yards
+    to Thorium Point while two members stood in Elwynn and two in the Barrens,
+    and a Razorfen Kraul campaign order had just been taken. Nobody followed;
+    the leader walked a continent alone and ended standing on the plane beneath
+    Stormwind (mod-overseer, the under-the-city plane).
+
+    TWO REFUSALS, EACH A WHOLE SENTENCE:
+
+      * A DUNGEON CAMPAIGN WAITS ON THE FAMILY. The order is the family's work
+        and the leader is the one character it cannot start without. A node
+        learned is learned for ever and can wait for a quiet hour.
+      * ANY MEMBER IS NOT WITH THE LEADER: another map, farther than
+        TOGETHER_YARDS, or without a fresh snapshot row. ABSENCE IS NOT
+        TOGETHERNESS: a member nobody can see is offline or stale, and a walk
+        that leaves him is a split, so he counts as apart.
+
+    `positions` is name -> {"map_id", "pos_x", "pos_y"}, the snapshot rows
+    `_fetch_positions` returns. Nothing here reads a clock or a database.
+    """
+    if campaign_waiting:
+        return (
+            "a dungeon campaign is waiting on the family, so its leader stays "
+            "with it and the discovery walk waits for a quiet hour"
+        )
+    here = (positions or {}).get(leader)
+    try:
+        lmap = int(here["map_id"])
+        lx = float(here["pos_x"])
+        ly = float(here["pos_y"])
+    except (TypeError, KeyError, ValueError):
+        return (
+            "nobody can say where the leader is standing, so nobody can say "
+            "whether the family is with him"
+        )
+    apart = []
+    for name in sorted(names or ()):
+        if name == leader:
+            continue
+        row = (positions or {}).get(name)
+        try:
+            if int(row["map_id"]) != lmap:
+                apart.append("%s is on another map" % name)
+                continue
+            d = ((float(row["pos_x"]) - lx) ** 2 + (float(row["pos_y"]) - ly) ** 2) ** 0.5
+        except (TypeError, KeyError, ValueError):
+            apart.append("%s cannot be seen" % name)
+            continue
+        if d > TOGETHER_YARDS:
+            apart.append("%s is %d yards away" % (name, int(d)))
+    if apart:
+        return (
+            "the family is not standing together (%s), so sending the leader "
+            "to learn a flight node would leave them behind"
+            % ", ".join(apart)
+        )
+    return ""
+
+
 def lease_for(yards: float) -> float:
     """How long a walk of `yards` needs before anybody may take the column.
 

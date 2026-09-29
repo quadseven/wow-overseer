@@ -14513,7 +14513,21 @@ class Bridge(discord.Client):
         leader = await asyncio.to_thread(_head_now)
         if not leader:
             return
-        where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
+        # THE LEADER WALKS ALONE ONLY IF THE FAMILY IS WITH HIM, AND NOT WHILE A
+        # CAMPAIGN WAITS ON IT. The aim is the leader's and the followers learn
+        # the node by arriving with him, so a family that is split, or a leader
+        # a Razorfen Kraul order is waiting on, is not a family to send on a
+        # 2600-yard walk. See `flightlearn.family_refusal` for the 2026-09-29
+        # measurement that put the leader alone under Stormwind.
+        family = await asyncio.to_thread(_fetch_positions, names)
+        where = family.get(leader)
+        refusal = flightlearn.family_refusal(
+            leader=leader, names=names, positions=family,
+            campaign_waiting=await asyncio.to_thread(_campaign_waiting, names),
+        )
+        if refusal:
+            log.info("flight: %s", refusal)
+            return
         saved = (await asyncio.to_thread(_fetch_taximasks, [leader])).get(leader) or {}
         taximask = saved.get("taximask")
         # SETTLED BEFORE ANYTHING NEW IS ASKED FOR, so a node that HAS been
