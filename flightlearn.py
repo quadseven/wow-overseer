@@ -245,7 +245,9 @@ def family_refusal(*, leader, names, positions, campaign_waiting) -> str:
             if int(row["map_id"]) != lmap:
                 apart.append("%s is on another map" % name)
                 continue
-            d = ((float(row["pos_x"]) - lx) ** 2 + (float(row["pos_y"]) - ly) ** 2) ** 0.5
+            d = (
+                (float(row["pos_x"]) - lx) ** 2 + (float(row["pos_y"]) - ly) ** 2
+            ) ** 0.5
         except (TypeError, KeyError, ValueError):
             apart.append("%s cannot be seen" % name)
             continue
@@ -254,8 +256,7 @@ def family_refusal(*, leader, names, positions, campaign_waiting) -> str:
     if apart:
         return (
             "the family is not standing together (%s), so sending the leader "
-            "to learn a flight node would leave them behind"
-            % ", ".join(apart)
+            "to learn a flight node would leave them behind" % ", ".join(apart)
         )
     return ""
 
