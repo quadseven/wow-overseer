@@ -5098,6 +5098,13 @@ def _fetch_event_snapshot() -> list[dict]:
 # leader still reads the break's job (a row refused `target not online`).
 ACTIVITY_RESTORE_RETRY_SECONDS = 120.0
 
+# How long a family is left to its campaign after a Jev interlude ends, before
+# it is asked what to do next. Long enough for the queue to stage a run. Without
+# it a ten-minute sell interlude was chosen again the moment it ended, three
+# times in forty minutes, and the queue held Ragefire Chasm behind all of them
+# (wow-dev, 2026-09-29).
+ACTIVITY_REST_SECONDS = 20 * 60.0
+
 
 class Bridge(discord.Client):
     def __init__(self, allowed_ids: frozenset[str]):
@@ -5258,6 +5265,9 @@ class Bridge(discord.Client):
         # rules simply resume.
         self._activity_seen: dict = {}
         self._activity_interludes: dict = {}
+        # Per family key, the monotonic time before which Jev is not asked
+        # again: the rest after an interlude ended (ACTIVITY_REST_SECONDS).
+        self._activity_rest: dict = {}
         # A break only this choice ever starts (job=fish, #267): per family,
         # (when it ends, the activity, the names).
         # Kept apart from the interlude, which any job pass may drop first.
@@ -8534,7 +8544,9 @@ class Bridge(discord.Client):
             refused, await asyncio.to_thread(_fetch_free_slots, names)
         )
         material_plan = await asyncio.to_thread(
-            materials.plan, holdings, stuck_pairs=refused
+            materials.plan, holdings, stuck_pairs=refused,
+            room=await asyncio.to_thread(_fetch_free_slots, names),
+            reserve=bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS,
         )
         for note in material_plan.notes:
             log.info("materials: %s", note)
@@ -8592,7 +8604,9 @@ class Bridge(discord.Client):
         )
         material_plan = materials.plan(
             holdings, stuck_pairs=refused,
-            crafters=materials.family_crafters(skills))
+            crafters=materials.family_crafters(skills),
+            room=await asyncio.to_thread(_fetch_free_slots, names),
+            reserve=bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS)
         for note in material_plan.notes:
             log.info("materials: family %s: %s", cohort.key, note)
         for block in material_plan.blocked:
@@ -15509,6 +15523,16 @@ class Bridge(discord.Client):
         leader = str(fam["leader"].get("name") or "")
         if not leader:
             return False
+        # A FAMILY WITHHELD FOR BAG ROOM DOES NOT WALK TO A QUEST GIVER. It
+        # cannot stage a run, and the walk took the leader's one travel column
+        # every minute from the vendor trip that would give it the room: Zug's
+        # family walked toward a giver two thousand yards off, and held the
+        # queue, while its mage stood at zero free slots (wow-dev, 2026-09-29).
+        free = await asyncio.to_thread(_fetch_free_slots, list(fam["names"]))
+        if jev_activity.withheld(True, free):
+            log.info("dungeon quests: %s waits for bag room; the vendor trip "
+                     "keeps the travel column", campaignqueue._family(key))
+            return False
         mid = await self._mid_run(list(fam["names"]))
         facts = await asyncio.to_thread(
             _dungeonquest_facts, fam, str(head["keyword"]), leader, True, mid)
@@ -15775,10 +15799,25 @@ class Bridge(discord.Client):
             return ""
         if not lease.live(time.monotonic()):
             self._activity_interludes.pop(key, None)
+            self._activity_rest[key] = time.monotonic() + ACTIVITY_REST_SECONDS
             log.info("activity: %s's %s interlude is over; today's rules "
                      "resume", campaignqueue._family(key), lease.activity)
             return ""
         return lease.activity
+
+    def _activity_resting(self, key) -> bool:
+        """Whether family `key` is inside the rest an interlude's end left it.
+
+        The queue gets this stretch to stage a run before Jev is asked to
+        interrupt it again; an ended rest is dropped here.
+        """
+        until = self._activity_rest.get(key)
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            self._activity_rest.pop(key, None)
+            return False
+        return True
 
     async def _movement_loop(self) -> None:
         """Ask each family how it gets moving again, when something is wrong
@@ -16104,6 +16143,11 @@ class Bridge(discord.Client):
             log.info("activity: %s is on its %s interlude; %s is not asked "
                      "again until it ends", campaignqueue._family(key),
                      interlude, reason)
+            return
+        if self._activity_resting(key):
+            log.info("activity: %s is resting after its last interlude; %s is "
+                     "not asked until the queue has had its stretch",
+                     campaignqueue._family(key), reason)
             return
         where = await self._situation_for(key, names, leader.get("name"))
         facts = jev_activity.Facts(
@@ -19206,11 +19250,17 @@ def _fetch_vendor_items(names: list) -> list:
     keeps = disposition.profession_keeps(
         rows, worked=worked, named=REAGENT_TRADES, worked_by=worked_by,
     )
+    # THE MATERIAL NAMES ARE PROTECTED UP TO A CAP PER HOLDER, NOT WITHOUT ONE.
+    # A crafter that every other member hands cloth to filled every slot it
+    # owned with protected stacks, sat at zero free slots with nothing sellable,
+    # and held its family's dungeon out for good (wow-dev, 2026-09-29).
+    material_kept = disposition.material_keeps(rows, materials.REAGENTS)
     for item in rows:
         # Trade goods such as Linen are class 7, not class 5. The
         # profession roster is the stronger fact and must protect them
         # even when item_template calls them ordinary trade goods.
-        profession_material = item.get("name") in materials.REAGENTS
+        profession_material = (item.get("name") in materials.REAGENTS
+                               and item.get("item_guid") in material_kept)
         item["reagent"] = bool(item.get("reagent")) or profession_material
         item["profession_needed"] = bool(
             profession_material or item.get("item_guid") in keeps

@@ -77,6 +77,19 @@ class ConsoleReadsModuleCrossing(unittest.TestCase):
             body.index("_note_module_crossing()"), body.index("decree.plan_order(")
         )
 
+    def test_the_dungeons_tab_reads_it_before_it_judges_a_door(self):
+        """The ladder said "no way across yet" for every Eastern Kingdoms door
+        while the Alliance family, on a queue the bridge had accepted, was
+        walking into The Stockade (wow-dev, 2026-09-29): this process never
+        read the fact outside a decree POST."""
+        src = (ROOT / "map_server.py").read_text()
+        start = src.index("def _dungeons(")
+        body = src[start : src.index("\n    def ", start + 10)]
+        self.assertIn("_note_module_crossing()", body)
+        self.assertLess(
+            body.index("_note_module_crossing()"), body.index("_fetch_dungeonplan()")
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

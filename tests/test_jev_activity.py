@@ -490,6 +490,7 @@ def _bridge(world, fake_jev, holds=None):
     }
     names = [
         "_activity_holds",
+        "_activity_resting",
         "_activity_for",
         "_activity_can",
         "_activity_due",
@@ -515,6 +516,7 @@ def _bridge(world, fake_jev, holds=None):
     me._jev = jev.Client("k", transport=fake_jev)
     me._activity_seen = {}
     me._activity_interludes = {}
+    me._activity_rest = {}
     me._activity_restore = {}
     me._activity_fished = {}
     me._activity_own_key = None

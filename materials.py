@@ -350,7 +350,12 @@ def family_crafters(skills_by_name: Mapping) -> dict:
 
 
 def plan(
-    holdings, *, stuck_pairs: Mapping | None = None, crafters: Mapping | None = None
+    holdings,
+    *,
+    stuck_pairs: Mapping | None = None,
+    crafters: Mapping | None = None,
+    room: Mapping | None = None,
+    reserve: int = 0,
 ) -> Plan:
     """Every stack that should move, in one pass.
 
@@ -372,8 +377,21 @@ def plan(
     `crafters` maps a skill to the member who works it, for a family ROSTER
     does not name (#215); `family_crafters` builds it from what they hold.
     None keeps ROSTER's answer for this bridge's own family.
+
+    `room` maps a member to its free bag slots, and `reserve` is how many of
+    them a receiver keeps for a dungeon run's loot. A crafter that everybody
+    hands cloth to used to be filled to zero free slots, which shuts the
+    family's bag gate and the module's door (wow-dev, 2026-09-29). A stack is
+    one slot, so each grant spends one; a receiver with no reading in `room`
+    is not limited, the same fail-open rule the bag gate keeps for a broken
+    read.
     """
     refused = stuck_pairs or {}
+    spare = {
+        str(name): int(free) - int(reserve)
+        for name, free in (room or {}).items()
+        if isinstance(free, int)
+    }
     grants = []
     notes = []
     blocked = []
@@ -418,6 +436,31 @@ def plan(
                     )
                 )
             continue
+        if taker in spare:
+            if spare[taker] <= 0:
+                mark = (holding.holder, taker, holding.material)
+                if mark not in seen_blocks:
+                    seen_blocks.add(mark)
+                    why = "%s keeps %d bag slots free for a dungeon run" % (
+                        taker,
+                        int(reserve),
+                    )
+                    blocked.append(
+                        Blocked(
+                            holder=holding.holder,
+                            taker=taker,
+                            material=holding.material,
+                            skill=skill,
+                            refusal=why,
+                            said=(
+                                f"{holding.holder} no give {taker} "
+                                f"{holding.material} - {why}. "
+                                f"{holding.holder} wait."
+                            ),
+                        )
+                    )
+                continue
+            spare[taker] -= 1
         grants.append(
             Grant(
                 holder=holding.holder,
