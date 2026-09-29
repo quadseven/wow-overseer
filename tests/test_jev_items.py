@@ -446,7 +446,7 @@ class BridgeWiringTest(unittest.TestCase):
         equip = equip[: equip.index("\n    async def ")]
         self.assertIn("bag_pressure.jev_equips(", equip)
         self.assertLess(
-            equip.index("bag_pressure.jev_equips("), equip.index("_insert_equip")
+            equip.index("bag_pressure.jev_equips("), equip.index("self._write_equips(")
         )
 
     def test_the_guild_route_asks_before_it_delivers(self):

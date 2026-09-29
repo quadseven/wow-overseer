@@ -9264,6 +9264,11 @@ class Bridge(discord.Client):
                 await self._guild_share_once()
             except Exception:
                 log.exception("guildshare pass failed; retrying next cycle")
+            try:
+                await self._guild_equip_once()
+            except Exception:
+                log.exception("guild equip pass failed; retrying next cycle")
+            await self._for_other_families("guild equip", self._guild_equip_once)
             await asyncio.sleep(cycle)
 
     async def _settle_vendor_errand(self, names: list, leader: str) -> str:
@@ -10269,6 +10274,15 @@ class Bridge(discord.Client):
         # is worn is left in the bags. No plan leaves `wanted` as it is.
         wanted = bag_pressure.jev_equips(
             wanted, gear_rows, worn, names, jev_plan, keep_names=OWNER_KEEPS)
+        await self._write_equips(wanted, current)
+
+    async def _write_equips(self, wanted, current: list, label: str = "") -> None:
+        """Queue and log the `e` rows for `wanted`, inside the retry window.
+
+        Shared by the family's pass and the guild's, so both keep one retry
+        window, one give-up and one row shape. `current` is the history since
+        each holder's last level change.
+        """
         recent = {(row["target_name"], row["command"]) for row in current
                   if row["recent"]}
         tries: dict = {}
@@ -10288,11 +10302,44 @@ class Bridge(discord.Client):
                     equip.item_level, equip.worn_level, equip.reason,
                 )
         log.info(
-            "equip: %d carried piece(s) the holder would wear, queued %d, "
+            "equip: %d %scarried piece(s) the holder would wear, queued %d, "
             "%d already asked inside %d minutes, %d held back",
-            len(wanted), written, len(wanted) - len(queue) - len(notes),
+            len(wanted), label, written, len(wanted) - len(queue) - len(notes),
             EQUIP_RETRY_MINUTES, len(notes),
         )
+
+    async def _guild_equip_once(self, cohort=None) -> None:
+        """Put on what guild members carry, and fill their empty slots.
+
+        The guild half of `_equip_upgrades`, for the guild this family is in:
+        the Alliance guild for this bridge's own family, the Horde guild
+        through `_for_other_families`. Members outside the family only, and
+        only those observed online, because a bot command for a member who
+        is not in the world would sit unanswered. Nothing is granted: each
+        row asks a member to wear a piece already in their own bags, the same
+        `e Hitem:` command and retry window the family uses.
+        """
+        names = await asyncio.to_thread(_names_of, cohort)
+        if not names:
+            return
+        roster = await asyncio.to_thread(_fetch_guild_roster, names)
+        members = [str(m.name) for m in roster
+                   if m.online and str(m.name) not in names]
+        if not members:
+            return
+        gear_rows = await asyncio.to_thread(_fetch_surplus_gear, members)
+        if not gear_rows:
+            return
+        worn = await asyncio.to_thread(_fetch_family_equipped, members)
+        wanted = bag_pressure.guild_equips(
+            gear_rows, worn, members, names, keep_names=OWNER_KEEPS)
+        if not wanted:
+            return
+        history = await asyncio.to_thread(_equip_history, EQUIP_MEMORY_HOURS,
+                                          EQUIP_RETRY_MINUTES)
+        changed = await asyncio.to_thread(_level_changes, members)
+        current = bag_pressure.since_level_change(history, changed)
+        await self._write_equips(wanted, current, label="guild ")
 
     async def _jev_items_plan(self, gear_rows: list, worn: list, names: list):
         """This family's Jev pass, and what it changes this cycle (#95).

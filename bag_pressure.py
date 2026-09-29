@@ -1590,6 +1590,32 @@ def holder_equips(gear_rows, equipped_rows, names, keep_names=()) -> tuple:
     return gear.equips(gear.holdings_from_rows(kept), characters)
 
 
+def guild_equips(
+    gear_rows, equipped_rows, member_names, family_names, keep_names=()
+) -> tuple:
+    """The carried pieces each non-family guild member should put on now.
+
+    `holder_equips` for a guild: `gear.equips` decides, one member at a time.
+    Each member is judged alone, so a guildmate better placed to wear a piece
+    never keeps its holder from putting it on (nothing here hands a piece
+    on), and no party role is packed across a guild the way a family's is.
+    The family is skipped because `holder_equips` already serves it with its
+    roles and Jev's plan. The owner's never-dispose mark is honoured.
+    """
+    family = {str(name) for name in (family_names or ())}
+    names = [str(n) for n in (member_names or ()) if str(n) not in family]
+    kept = [
+        row for row in gear_rows if not owner_keeps(row.get("name", ""), keep_names)
+    ]
+    holdings = gear.holdings_from_rows(kept)
+    characters = gear.characters_from_rows(equipped_rows, names)
+    out = []
+    for character in characters:
+        mine = [h for h in holdings if h.holder == character.name]
+        out.extend(gear.equips(mine, [character]))
+    return tuple(sorted(out, key=lambda e: (e.holder, e.slot, e.guid)))
+
+
 def jev_equips(wanted, gear_rows, equipped_rows, names, plan, keep_names=()) -> tuple:
     """`holder_equips` with Jev's act plan applied (#95); `wanted` itself when
     there is no plan or it changes no equip.
