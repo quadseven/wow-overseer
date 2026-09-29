@@ -206,6 +206,130 @@ def buyer_reserve(purchased_tabs, wanted_tabs: int = len(TABS)) -> int:
     return tab_cost(tab) if tab is not None else 0
 
 
+# WHAT THE GUILD'S FIRST TAB ASKS OF ITS MEMBERS (the operator, 2026-09-29).
+# Tab 0 is bought from the guild master's own purse (see the module
+# docstring), and on the dev realm a family guild's master held under a gold
+# against the hundred it costs, with no member posting dues: a member's float
+# (guildwork.float_for) is a hundred gold at the cap and six at level 15, a
+# purse a young member never reaches. While a guild has no tab, then, the float
+# is a quarter of that curve, never under two gold: enough for the next trainer
+# and repair, and the rest above it is what the dues and the family's gifts
+# carry to the master. Once the tab exists the ordinary float applies again.
+TAB_FUND_FLOOR_COPPER = 20_000
+TAB_FUND_CAP_COPPER = 250_000
+TAB_FUND_LEVEL = 60
+
+
+def tab_fund_float(level=TAB_FUND_LEVEL) -> int:
+    """Copper a member keeps while its guild saves for its first tab.
+
+    A quarter of guildwork's level curve (25 gold at level 60, growing with
+    the square of the level), never under TAB_FUND_FLOOR_COPPER. An unreadable
+    level keeps the cap, so a bad read never lowers what a member keeps.
+    """
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        return TAB_FUND_CAP_COPPER
+    if level <= 0:
+        return TAB_FUND_CAP_COPPER
+    level = min(level, TAB_FUND_LEVEL)
+    scaled = TAB_FUND_CAP_COPPER * level * level // (TAB_FUND_LEVEL * TAB_FUND_LEVEL)
+    return max(TAB_FUND_FLOOR_COPPER, scaled)
+
+
+# A sibling gives half of what sits above its float, and never a letter of
+# under a gold or over two hundred and fifty: the purse as the database reads
+# it lags the world by up to fifteen minutes, so a share, not the whole spare.
+TAB_GIFT_MIN_COPPER = 10_000
+TAB_GIFT_CAP_COPPER = 250_000
+TAB_GIFT_SUBJECT = "For the guild bank"
+
+
+@dataclass(frozen=True)
+class TabGift:
+    """One letter of gold from a family member to the guild master, toward the
+    guild's first tab."""
+
+    donor: str
+    taker: str
+    copper: int
+    why: str
+
+    @property
+    def command(self) -> str:
+        """The `kind='mail'` send row DoMail reads: gold only, from the donor."""
+        return "send money:%d subject:%s" % (int(self.copper), TAB_GIFT_SUBJECT)
+
+
+def plan_tab_gifts(
+    characters: dict,
+    *,
+    master: str,
+    purchased_tabs: int,
+    master_purse: int = 0,
+    master_mailed: int = 0,
+    eligible=None,
+) -> tuple:
+    """The family's gold letters to the guild master while the guild has no tab.
+
+    `characters` maps a name to {"level", "purse"} for the members standing at
+    the mailbox. Only a guild with no tab at all is helped (the first tab is
+    the one nothing else can buy), only siblings of the master give, only from
+    what sits above `tab_fund_float`, and only while the master's purse and the
+    letters already waiting in its mailbox are short of the tab's price.
+    `eligible` names the members whose gold was earned (natural.py); None asks
+    nobody, a set restricts. Pure: returns the gifts, richest donor first.
+    """
+    if purchased_tabs != 0 or not master or master not in (characters or {}):
+        return ()
+    try:
+        need = (
+            tab_cost(0)
+            - max(0, int(master_purse or 0))
+            - max(0, int(master_mailed or 0))
+        )
+    except (TypeError, ValueError):
+        return ()
+    gifts = []
+    donors = sorted(
+        (n for n in characters if n != master),
+        key=lambda n: (-_purse(characters[n]), n),
+    )
+    for name in donors:
+        if need <= 0:
+            break
+        if eligible is not None and name not in eligible:
+            continue
+        spare = _purse(characters[name]) - tab_fund_float(_level(characters[name]))
+        # The last sliver of the price is given whole: a letter is never under
+        # the gold minimum, so a need under it is rounded up to it.
+        share = min(spare // 2, TAB_GIFT_CAP_COPPER, max(need, TAB_GIFT_MIN_COPPER))
+        if share < TAB_GIFT_MIN_COPPER:
+            continue
+        gifts.append(
+            TabGift(
+                name,
+                master,
+                share,
+                "the guild has no bank tab and %s pays for it" % master,
+            )
+        )
+        need -= share
+    return tuple(gifts)
+
+
+def _purse(character) -> int:
+    try:
+        return max(0, int((character or {}).get("purse") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _level(character):
+    return (character or {}).get("level")
+
+
 @dataclass(frozen=True)
 class Deposit:
     name: str

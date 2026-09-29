@@ -531,3 +531,69 @@ class ThePage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WhileTheGuildHasNoTab(unittest.TestCase):
+    """wow-dev 2026-09-29: sixty-six members carried under a gold each against
+    floors of one to six gold, so nobody posted and the master never reached
+    the hundred its first tab costs."""
+
+    def test_the_float_is_the_smaller_tab_fund_float(self):
+        self.assertEqual(guildwork.float_for(15), 62_500)
+        self.assertEqual(guildwork.float_for(15, tab_pending=True), 2 * GOLD)
+        self.assertLess(guildwork.float_for(15, True), guildwork.float_for(15))
+        self.assertEqual(guildwork.float_for(60, True), 25 * GOLD)
+
+    def test_a_young_member_posts_what_the_ordinary_float_would_keep(self):
+        # A level 15 maintenance member with 7.5 gold: the ordinary float is
+        # 6.25 gold, so half of the 1.25 above it is under the gold a letter
+        # is worth; the tab-fund float is 2, so it posts half of the 5.5.
+        money = 75_000
+        self.assertEqual(guildwork.dues_for(money, level=15), 0)
+        self.assertEqual(guildwork.dues_for(money, level=15, tab_pending=True), 27_500)
+
+    def test_a_member_never_posts_below_the_float(self):
+        self.assertEqual(guildwork.dues_for(3 * GOLD, 15, tab_pending=True), 0)
+
+    def test_the_member_row_carries_the_guilds_state(self):
+        m = guildwork.Member(name="A", guild="Bonkers", money=75_000, level=15)
+        self.assertEqual(m.dues, 0)
+        m = guildwork.Member(
+            name="A", guild="Bonkers", money=75_000, level=15, tab_pending=True
+        )
+        self.assertEqual(m.dues, 27_500)
+
+    def test_members_from_rows_marks_only_the_tabless_guilds(self):
+        rows = [
+            dict(
+                guild_name=g,
+                name="%s%02d" % (g[0], i),
+                class_id=1,
+                level=15,
+                money=9 * GOLD,
+                online=1,
+                master="%s00" % g[0],
+            )
+            for g in ("Bonkers", "Cave")
+            for i in range(12)
+        ]
+        members, _masters = guildwork.members_from_rows(rows, [], {"Bonkers"})
+        by_guild = {}
+        for m in members:
+            by_guild.setdefault(m.guild, set()).add(m.tab_pending)
+        self.assertEqual(by_guild, {"Bonkers": {True}, "Cave": {False}})
+
+    def test_the_pass_reads_the_tabless_guilds_before_it_plans(self):
+        src = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        tree = ast.parse(src)
+        once = next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.AsyncFunctionDef) and n.name == "_guild_dues_once"
+        )
+        body = ast.unparse(once)
+        self.assertIn("_tabless_guilds", body)
+        self.assertIn("members_from_rows(rows, names, tabless)", body)
+        self.assertIn("guild_bank_tab", src)

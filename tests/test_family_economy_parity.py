@@ -440,6 +440,7 @@ class TheOtherGuildPaysItsDues(unittest.TestCase):
                     guilds[tuple(names)],
                 )[1],
                 "_dues_recent_holders": lambda: set(),
+                "_tabless_guilds": lambda guilds: frozenset(),
                 "_route_walkers": walkers,
                 "_log_capped": lambda what, lines: None,
                 # Everyone reset unless the test names who (natural.py).

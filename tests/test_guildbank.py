@@ -1263,3 +1263,104 @@ class MembersKeepTheirGold(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertEqual(2, src.count("if guildbank.MEMBER_GOLD_DEPOSITS else []"))
+
+
+class TheFirstTabIsFundedByTheFamily(unittest.TestCase):
+    """wow-dev 2026-09-29: the Horde guild had no bank tab, its master held
+    under a gold against the hundred it costs, and nobody posted gold to it."""
+
+    G = 10_000
+
+    def chars(self, **purses):
+        return {n: {"level": 16, "purse": p * self.G} for n, p in purses.items()}
+
+    def test_the_float_is_a_quarter_of_the_curve_and_never_under_two_gold(self):
+        self.assertEqual(guildbank.tab_fund_float(1), 2 * self.G)
+        self.assertEqual(guildbank.tab_fund_float(16), 2 * self.G)
+        self.assertEqual(guildbank.tab_fund_float(30), 62_500)
+        self.assertEqual(guildbank.tab_fund_float(60), 25 * self.G)
+        self.assertEqual(guildbank.tab_fund_float(99), 25 * self.G)
+        for bad in (None, "", "x", 0, -3):
+            self.assertEqual(guildbank.tab_fund_float(bad), 25 * self.G, bad)
+
+    def test_a_sibling_posts_half_of_what_sits_above_its_float(self):
+        gifts = guildbank.plan_tab_gifts(
+            self.chars(Zug=0, Oz=12), master="Zug", purchased_tabs=0
+        )
+        self.assertEqual(
+            [(g.donor, g.taker, g.copper) for g in gifts], [("Oz", "Zug", 5 * self.G)]
+        )
+        self.assertEqual(
+            gifts[0].command, "send money:50000 subject:For the guild bank"
+        )
+
+    def test_a_purse_near_the_float_gives_nothing(self):
+        # Two gold float, half of a two-gold spare is under the gold minimum.
+        self.assertEqual(
+            guildbank.plan_tab_gifts(
+                self.chars(Zug=0, Oz=3.5), master="Zug", purchased_tabs=0
+            ),
+            (),
+        )
+
+    def test_nothing_is_asked_once_the_guild_has_a_tab(self):
+        self.assertEqual(
+            guildbank.plan_tab_gifts(
+                self.chars(Zug=0, Oz=90), master="Zug", purchased_tabs=1
+            ),
+            (),
+        )
+
+    def test_nothing_is_asked_when_the_master_is_not_there_to_receive(self):
+        self.assertEqual(
+            guildbank.plan_tab_gifts(self.chars(Oz=90), master="Zug", purchased_tabs=0),
+            (),
+        )
+
+    def test_the_gifts_stop_at_the_price(self):
+        gifts = guildbank.plan_tab_gifts(
+            self.chars(Zug=60, Oz=200, Uzza=200, Zork=200),
+            master="Zug",
+            purchased_tabs=0,
+            master_purse=60 * self.G,
+        )
+        self.assertEqual(sum(g.copper for g in gifts), 40 * self.G)
+        self.assertEqual(gifts[0].donor, "Oz")
+
+    def test_dues_already_in_the_mailbox_count_toward_the_price(self):
+        self.assertEqual(
+            guildbank.plan_tab_gifts(
+                self.chars(Zug=10, Oz=200),
+                master="Zug",
+                purchased_tabs=0,
+                master_purse=10 * self.G,
+                master_mailed=90 * self.G,
+            ),
+            (),
+        )
+
+    def test_only_earned_gold_is_given(self):
+        gifts = guildbank.plan_tab_gifts(
+            self.chars(Zug=0, Oz=50, Uzza=50),
+            master="Zug",
+            purchased_tabs=0,
+            eligible={"Uzza"},
+        )
+        self.assertEqual([g.donor for g in gifts], ["Uzza"])
+
+    def test_an_unreadable_purse_gives_nothing(self):
+        chars = {"Zug": {"level": 16, "purse": 0}, "Oz": {"level": 16, "purse": "x"}}
+        self.assertEqual(
+            guildbank.plan_tab_gifts(chars, master="Zug", purchased_tabs=0), ()
+        )
+
+    def test_the_last_sliver_of_the_price_is_given_whole(self):
+        # 99.5 gold held: a donor with the spare posts the gold minimum rather
+        # than the missing half gold, which the letter minimum would refuse.
+        gifts = guildbank.plan_tab_gifts(
+            self.chars(Zug=0, Oz=50),
+            master="Zug",
+            purchased_tabs=0,
+            master_purse=1_000_000 - 5_000,
+        )
+        self.assertEqual([g.copper for g in gifts], [self.G])

@@ -27,7 +27,11 @@ maintenance member, a quarter for a summoner, a tenth for a raider (SHARES).
 The float grows with the level (`float_for`), because a level 1 character with
 a few silver needs every copper of it for its next trainer, and the hundred
 gold a level 60 keeps is the same rule at the cap. The family posts nothing
-here; its own guild-bank pass deposits.
+here. While its guild owns no bank tab the family gives through the town
+errand instead (`guildbank.plan_tab_gifts`, the letters its members post to the
+master at the capital's mailbox), and the smaller `guildbank.tab_fund_float`
+applies to every member's dues, so the master's purse can reach the price of
+the first tab (the operator, 2026-09-29).
 
 NATURALLY EARNED ONLY. A member posts only once it has restarted naturally
 (`eligible`, from natural.py's gate), so no gold the random-bot
@@ -47,6 +51,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+import guildbank
 import guildroute
 import raidlineup
 import raidroles
@@ -111,9 +116,16 @@ _SHARE_WORDS = {(1, 2): "half", (1, 4): "a quarter", (1, 10): "a tenth"}
 _NOTHING_YET = "nothing posted yet"
 
 
-def float_for(level=FLOAT_LEVEL) -> int:
+def float_for(level=FLOAT_LEVEL, tab_pending=False) -> int:
     """Copper a member of this level keeps. An unreadable level keeps the
-    level 60 float, so a bad read never lowers what a member keeps."""
+    level 60 float, so a bad read never lowers what a member keeps.
+
+    While the guild has no bank tab (`tab_pending`) the float is the smaller
+    `guildbank.tab_fund_float`, so a young member's dues can fill the master's
+    purse the tab is bought from (the operator, 2026-09-29).
+    """
+    if tab_pending:
+        return guildbank.tab_fund_float(level)
     try:
         level = int(level)
     except (TypeError, ValueError):
@@ -124,7 +136,7 @@ def float_for(level=FLOAT_LEVEL) -> int:
     return FLOAT_COPPER * level * level // (FLOAT_LEVEL * FLOAT_LEVEL)
 
 
-def dues_for(money, level=FLOAT_LEVEL, role=MAINTENANCE) -> int:
+def dues_for(money, level=FLOAT_LEVEL, role=MAINTENANCE, tab_pending=False) -> int:
     """Copper to post from a purse of `money` copper; 0 when nothing is due.
 
     A missing, negative or unreadable purse posts nothing: a stale or absent
@@ -137,7 +149,7 @@ def dues_for(money, level=FLOAT_LEVEL, role=MAINTENANCE) -> int:
         return 0
     if role not in SHARES:
         return 0
-    spare = money - float_for(level)
+    spare = money - float_for(level, tab_pending)
     if spare <= 0:
         return 0
     numerator, denominator = SHARES[role]
@@ -164,10 +176,12 @@ class Member:
     online: bool = False
     role: str = MAINTENANCE
     level: int = FLOAT_LEVEL
+    # The guild has no first bank tab yet, so the smaller float applies.
+    tab_pending: bool = False
 
     @property
     def dues(self) -> int:
-        return dues_for(self.money, self.level, self.role)
+        return dues_for(self.money, self.level, self.role, self.tab_pending)
 
 
 @dataclass(frozen=True)
@@ -246,7 +260,7 @@ def _not_due(member, taker, posted, eligible) -> str | None:
         return "%s carries %s, not enough above the %s float to post" % (
             name,
             gold(member.money),
-            gold(float_for(member.level)),
+            gold(float_for(member.level, member.tab_pending)),
         )
     return None
 
@@ -487,7 +501,7 @@ def _by_guild(rows) -> tuple:
     return guilds, masters
 
 
-def _member_from(guild, row, role=MAINTENANCE) -> Member:
+def _member_from(guild, row, role=MAINTENANCE, tab_pending=False) -> Member:
     """One Member from one guild row; an unreadable purse reads as empty."""
     try:
         money = int(row.get("money") or 0)
@@ -509,6 +523,7 @@ def _member_from(guild, row, role=MAINTENANCE) -> Member:
         online=online,
         role=role,
         level=level,
+        tab_pending=tab_pending,
     )
 
 
@@ -551,12 +566,15 @@ def roles_of(lineup, family_names=()) -> dict:
     return out
 
 
-def members_from_rows(rows, family_names):
+def members_from_rows(rows, family_names, tabless=frozenset()):
     """(members, masters): every placed member of every guild, with its role.
 
     The same lineup the page draws, so the page and the pass name the same
-    people. Who may post is natural.py's gate, asked by the pass.
+    people. Who may post is natural.py's gate, asked by the pass. `tabless`
+    names the guilds that own no bank tab yet: their members keep the smaller
+    tab-fund float (`float_for`).
     """
+    tabless = {str(g) for g in tabless or ()}
     _guilds, masters = _by_guild(rows)
     members = []
     for guild, by_name, lineup in _lineups(rows, family_names):
@@ -564,7 +582,7 @@ def members_from_rows(rows, family_names):
             roles_of(lineup, family_names).items(),
             key=lambda kv: (ROLE_ORDER.get(kv[1], 3), kv[0]),
         ):
-            members.append(_member_from(guild, by_name[name], role))
+            members.append(_member_from(guild, by_name[name], role, guild in tabless))
     return members, masters
 
 

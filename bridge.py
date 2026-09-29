@@ -12371,7 +12371,12 @@ class Bridge(discord.Client):
         rows = await asyncio.to_thread(_fetch_dues_rows, names)
         # EVERY PLACED MEMBER POSTS, MAINTENANCE THE MOST (#194): the lineup's
         # roles. Only earned gold is posted: `eligible` below, natural.py.
-        members, masters = guildwork.members_from_rows(rows, names)
+        # A GUILD WITH NO BANK TAB KEEPS A SMALLER FLOAT (the operator,
+        # 2026-09-29): the master buys the first tab from its own purse and
+        # the dues are what fill it.
+        tabless = await asyncio.to_thread(
+            _tabless_guilds, sorted({str(r.get("guild_name") or "") for r in rows}))
+        members, masters = guildwork.members_from_rows(rows, names, tabless)
         if not members:
             log.info("guild dues: no family guild has a placed member yet%s",
                      _family_label(cohort))
@@ -13922,6 +13927,13 @@ class Bridge(discord.Client):
         facts = await asyncio.to_thread(_fetch_gearup_facts, names)
         wanted = gearup.plan_funding(facts)
         if not wanted:
+            # NO GEAR TO FUND: THE GUILD'S FIRST TAB (the operator,
+            # 2026-09-29). Gear comes first; with none short, the siblings at
+            # the mailbox post what they earned above their float to the guild
+            # master, whose purse the tab is bought from.
+            wanted = await asyncio.to_thread(
+                _tab_gifts, names, facts, hub, positions)
+        if not wanted:
             marks[step] = now
             return True
         # THE DONOR POSTS FROM THE MAILBOX. A tick whose settled reading has
@@ -13938,7 +13950,8 @@ class Bridge(discord.Client):
         funded = _TOWN_ERRAND_FUNDED.setdefault(key, {})
         sent = 0
         for gift in gifts:
-            command = gearup.fund_command(gift)
+            command = (gift.command if isinstance(gift, guildbank.TabGift)
+                       else gearup.fund_command(gift))
             if (gift.donor, command) in seen:
                 continue
             if not await asyncio.to_thread(_insert_fund_letter, gift, command):
@@ -20705,6 +20718,26 @@ def _fetch_dues_rows(family_names: list) -> list:
         return [dict(row) for row in cur.fetchall()]
 
 
+def _tabless_guilds(guild_names: list) -> frozenset:
+    """The named guilds that own no bank tab. A world that cannot show the
+    table reads as none, so the ordinary float applies rather than the smaller
+    one."""
+    names = [str(n) for n in guild_names or () if n]
+    if not names:
+        return frozenset()
+    sql = ("SELECT g.name FROM guild g WHERE g.name IN (%s) AND NOT EXISTS "
+           "(SELECT 1 FROM guild_bank_tab t WHERE t.guildid = g.guildid)"
+           % ",".join(["%s"] * len(names)))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return frozenset()
+            raise
+        return frozenset(str(row["name"]) for row in cur.fetchall())
+
+
 def _natural_contributors(candidates: list, family_names: list) -> frozenset:
     """natural.contributors over the module's ledger; no judgement here.
 
@@ -23862,6 +23895,25 @@ def _insert_weapon_equip(row: dict) -> int:
             "INSERT INTO overseer_command (target_name, command, kind, source) "
             "VALUES (%s, %s, 'bot', %s)", (row["name"], command, WEAPON_EQUIP_SOURCE))
         return cur.lastrowid or 0
+
+
+def _tab_gifts(names: list, facts: dict, hub, positions: dict) -> tuple:
+    """guildbank.plan_tab_gifts over the members standing at the hub mailbox;
+    nothing when the guild has a tab, no master in the family, or nobody's
+    gold was earned (natural.py). No judgement here."""
+    setup = _fetch_guild_bank_setup(names)
+    master = str((setup or {}).get("master") or "")
+    if not setup or not master or master not in names:
+        return ()
+    here = {n: f for n, f in facts.items() if townerrand.in_range(
+        hub, positions.get(n), TOWN_COUNTER_YARDS)}
+    if master not in here:
+        return ()
+    return guildbank.plan_tab_gifts(
+        here, master=master, purchased_tabs=int(setup.get("purchased_tabs", 0)),
+        master_purse=int(here[master].get("purse") or 0),
+        master_mailed=int(setup.get("master_mailed_copper", 0)),
+        eligible=_natural_contributors(names, names))
 
 
 def _insert_fund_letter(gift, command: str) -> int:
