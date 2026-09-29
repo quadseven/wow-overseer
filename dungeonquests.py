@@ -10,6 +10,12 @@ import math
 from dataclasses import dataclass, replace
 
 REACH_YARDS = 12.0
+# A giver further than this from the leader (or on another map, or with the
+# leader unseen) is not worth holding a queued run for. Zug's family was held
+# out of Ragefire Chasm for a turn-in at a giver 2600 yards off (wow-dev,
+# 2026-09-29): the walk is an incidental errand, and the quest is taken when
+# the family is next by the giver.
+WALK_LIMIT_YARDS = 600.0
 STATUS_NONE, STATUS_COMPLETE, STATUS_INCOMPLETE = 0, 1, 3
 TAKE, TURN_IN = "take", "turnin"
 WAIT, GO, DONE = "wait", "go", "done"
@@ -206,6 +212,25 @@ def _leader_at_giver(facts: Facts, spawn) -> bool:
     )
 
 
+def _too_far(facts: Facts, giver: int, spawn) -> Step | None:
+    """A wait when the leader is too far from the giver to walk for a run's sake."""
+    leader = next((m for m in facts.members if m.name == facts.leader), None)
+    leader = leader or (facts.members[0] if facts.members else None)
+    gap = None if leader is None else _distance(leader, spawn)
+    if gap is not None and gap <= WALK_LIMIT_YARDS:
+        return None
+    where = (
+        "on another map or out of sight" if gap is None else "%d yards off" % int(gap)
+    )
+    return Step(
+        WAIT,
+        "dungeon quest giver %d is %s: a queued run does not wait for that walk"
+        % (giver, where),
+        giver=giver,
+        release=True,
+    )
+
+
 def step(facts: Facts) -> Step:
     actions = _actions(facts)
     if not actions:
@@ -220,6 +245,10 @@ def step(facts: Facts) -> Step:
     spawn = _giver(facts, giver)
     ready = _ready_actions(actions, giver, spawn)
     at_giver = _leader_at_giver(facts, spawn)
+    if not ready and not at_giver:
+        far = _too_far(facts, giver, spawn)
+        if far is not None:
+            return far
     verb = "take" if any("take " in command for _, command in ready) else "turn in"
     line = (
         "at giver %d: %s" % (giver, "; ".join("%s %s" % x for x in ready))

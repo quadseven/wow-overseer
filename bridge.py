@@ -2147,6 +2147,55 @@ TOWN_FIRST_SOURCE = "overseer:town-first"
 _TOWN_FIRST_SINCE: dict = {}
 _GEAR_HOLD_SINCE: dict = {}
 
+# HOW LONG A FAMILY'S QUEUE HAS GONE WITHOUT A RUN, READ FROM THE STORE. The
+# two clocks above live in this process, so a restart began every hold's 45
+# minutes again: the queue head of Zug's family had been active for four days
+# with no run, and each restart still gave the gear hold a fresh three
+# quarters of an hour (wow-dev, 2026-09-29). The stall is the time since the
+# head was started (or queued) or its leader's last run ended, whichever is
+# later: a hold cannot have begun before it, so it is an honest upper bound on
+# how long any hold has kept the family out. Keyed like the clocks: sorted
+# names -> (seconds at the read, monotonic time of the read).
+_QUEUE_STALL: dict = {}
+_QUEUE_STALL_SQL = (
+    "SELECT TIMESTAMPDIFF(SECOND, GREATEST(COALESCE(q.started_at, q.created_at), "
+    "COALESCE((SELECT MAX(r.ended_at) FROM overseer_dungeon_run r "
+    "WHERE r.leader_name = %s AND r.state = 'ended'), q.created_at)), NOW()) "
+    "AS stalled FROM overseer_dungeon_queue q WHERE q.id = %s"
+)
+
+
+def _fetch_queue_stall(head_id, leader: str):
+    """Seconds this queue head has gone without a run; None when unreadable."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_QUEUE_STALL_SQL, (leader, int(head_id)))
+            row = cur.fetchone()
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return None
+        raise
+    if not row or row.get("stalled") is None:
+        return None
+    return max(0.0, float(row["stalled"]))
+
+
+def _note_queue_stall(names, seconds) -> None:
+    """Record a read of the stall; None forgets it (an unreadable store)."""
+    key = tuple(sorted(names))
+    if seconds is None:
+        _QUEUE_STALL.pop(key, None)
+    else:
+        _QUEUE_STALL[key] = (float(seconds), time.monotonic())
+
+
+def _queue_stall_floor(names) -> float:
+    """The queue's stall now: the last read plus the time since; 0 unread."""
+    read = _QUEUE_STALL.get(tuple(sorted(names)))
+    if not read:
+        return 0.0
+    return read[0] + max(0.0, time.monotonic() - read[1])
+
 
 def _jobs_of(names: list) -> dict:
     """name -> overseer_roster.job for `names`; {} when it cannot be read."""
@@ -2292,7 +2341,8 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
         return ""
     now = time.monotonic()
     since = _TOWN_FIRST_SINCE.setdefault(key, now)
-    short = bag_pressure.campaign_resume_short(free_slots, held_seconds=now - since)
+    short = bag_pressure.campaign_resume_short(
+        free_slots, held_seconds=max(now - since, _queue_stall_floor(names)))
     if not short:
         _TOWN_FIRST_SINCE.pop(key, None)
         return ""
@@ -2365,7 +2415,8 @@ def _gear_gate(names, keyword):
     # every auctioneer walk failed, because the hold's ceiling released the
     # campaign and the re-send landed here, where nothing ever let it go.
     now = time.monotonic()
-    held = now - _GEAR_HOLD_SINCE.setdefault(key, now)
+    held = max(now - _GEAR_HOLD_SINCE.setdefault(key, now),
+               _queue_stall_floor(names))
     ceiling = bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS
     if held >= ceiling:
         log.info("goal: dungeon:%s is no longer held for gear - %s still short after "
@@ -2406,7 +2457,8 @@ def _gear_campaign_hold(names, keyword, in_run):
     # was handed back to town forever instead of going in short.
     now = time.monotonic()
     since = _GEAR_HOLD_SINCE.setdefault(key, now)
-    if now - since >= bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS:
+    if max(now - since, _queue_stall_floor(names)) >= (
+            bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS):
         return False
     armed = [n for n, job in _jobs_of(names).items()
              if job.startswith("dungeon")]
@@ -15117,6 +15169,26 @@ class Bridge(discord.Client):
                 log.exception("queue: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    async def _note_stalls(self, pending: dict, fams: dict) -> None:
+        """Read each family's queue stall from the store, for the hold ceilings.
+
+        A failed read forgets the last one and the holds fall back to their
+        in-process clocks: it never holds a family longer.
+        """
+        for key, rows in pending.items():
+            fam = fams.get(key)
+            if fam is None or not rows:
+                continue
+            try:
+                stall = await asyncio.to_thread(
+                    _fetch_queue_stall, rows[0]["id"],
+                    str(fam["leader"].get("name") or ""))
+            except pymysql.err.MySQLError:
+                log.exception("queue: the stall of %s could not be read",
+                              campaignqueue._family(key))
+                stall = None
+            _note_queue_stall(fam["names"], stall)
+
     async def _queue_gear_hold(self, head: dict, fam: dict) -> bool:
         """Whether this family's running queue entry waits in town for gear (#146).
 
@@ -15171,6 +15243,9 @@ class Bridge(discord.Client):
                 await asyncio.to_thread(_fetch_queue_rows))
         # THE TRAVEL COLUMN FIRST, AND FOR EVERY FAMILY (#227): a family whose
         # queue emptied must get its town errands back this pass too.
+        note_stalls = getattr(self, "_note_stalls", None)
+        if note_stalls is not None:
+            await note_stalls(pending, fams)
         await self._campaign_owns_travel(pending, fams)
         dungeonquest_pass = getattr(self, "_dungeonquest_pass", None)
         held = (await dungeonquest_pass(pending, fams)
@@ -15546,6 +15621,17 @@ class Bridge(discord.Client):
                 log.info("dungeon quests: %s wrote %s for %s (%d)",
                          campaignqueue._family(key), command, name, written)
         cohort = None if key == (own or "") else key
+        # A STALLED QUEUE IS NOT HELD FOR AN INCIDENTAL WALK. Past the ceiling
+        # the queue has already waited out every hold it may, so the walk is
+        # not taken and does not keep the run's step from being made; rows for
+        # a giver the family already stands at are still written.
+        if step.aim and _queue_stall_floor(fam["names"]) >= (
+                bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS):
+            log.info("dungeon quests: %s: the queue has waited %d minutes for "
+                     "its run, so the walk to giver %s is not taken",
+                     campaignqueue._family(key),
+                     int(_queue_stall_floor(fam["names"]) // 60), step.giver)
+            step = dataclasses.replace(step, aim=None, hold_planner=bool(step.rows))
         aim_taken = True
         if step.aim:
             aim_taken = await self._claim_town_slot(
@@ -15650,7 +15736,8 @@ class Bridge(discord.Client):
         # still short, and the learn trips must not wait on after it.
         since = _TOWN_FIRST_SINCE.get(tuple(sorted(names)))
         held = 0.0 if since is None else time.monotonic() - since
-        short = bag_pressure.campaign_resume_short(free, held_seconds=held)
+        short = bag_pressure.campaign_resume_short(
+            free, held_seconds=max(held, _queue_stall_floor(names)))
         if not short:
             return False
         if not slot.town_first:

@@ -99,6 +99,7 @@ def _drive(world, clock, log, since):
         "_fetch_enabled_names": lambda: list(NAMES),
         "_fetch_free_slots": lambda names: {n: world.free[n] for n in names},
         "_jobs_of": lambda names: {n: world.jobs[n] for n in names},
+        "_queue_stall_floor": lambda names: 0.0,
         "_insert_job": world.insert_job,
         "_campaign_waiting": lambda names: world.waiting,
         "_connect": lambda: contextlib.nullcontext(Conn()),
@@ -301,6 +302,7 @@ def _leave(world, last_source):
         "TOWN_FIRST_SOURCE": "overseer:town-first",
         "_campaign_waiting": lambda names: world.waiting,
         "_jobs_of": lambda names: {n: world.jobs[n] for n in names},
+        "_queue_stall_floor": lambda names: 0.0,
         "_last_job_source": lambda name: (
             sources.get(name, last_source) if sources else last_source
         ),
