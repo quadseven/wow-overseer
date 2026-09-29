@@ -615,30 +615,31 @@ def split_trades(members, tailors=frozenset()) -> dict:
         if m.role == MAINTENANCE:
             crews.setdefault(m.guild, []).append(m)
     for _guild, crew in sorted(crews.items()):
-        counts = {s: 0 for s in GATHERING}
         crew = sorted(crew, key=lambda m: m.name)
         # What the crew already holds is counted first, so a member who
         # learned a trade on its own keeps it and the split fills round it.
+        counts = {s: sum(1 for m in crew if m.holds(s)) for s in GATHERING}
         for m in crew:
-            for s in GATHERING:
-                if m.holds(s):
-                    counts[s] += 1
-        for m in crew:
-            held = [s for s in GATHERING if m.holds(s)]
-            others = [s for s in m.primaries if s not in GATHERING]
-            reserved = 1 if m.name in tailors and not m.holds(TAILORING) else 0
-            room = max(0, MAX_PRIMARY - len(held) - len(others) - reserved)
-            wanted = list(held)
-            while room > 0:
-                free = [s for s in GATHERING if s not in wanted]
-                if not free:
-                    break
-                pick = min(free, key=lambda s: (counts[s], GATHERING.index(s)))
-                wanted.append(pick)
-                counts[pick] += 1
-                room -= 1
-            out[m.name] = tuple(wanted)
+            out[m.name] = _fill_gathering(m, counts, m.name in tailors)
     return out
+
+
+def _fill_gathering(m, counts, tailor) -> tuple:
+    """The gathering trades one member works: what it holds, then the trade the
+    crew has fewest of while a primary slot is left (a tailor keeps one back)."""
+    wanted = [s for s in GATHERING if m.holds(s)]
+    others = [s for s in m.primaries if s not in GATHERING]
+    reserved = 1 if tailor and not m.holds(TAILORING) else 0
+    room = max(0, MAX_PRIMARY - len(wanted) - len(others) - reserved)
+    while room > 0:
+        free = [s for s in GATHERING if s not in wanted]
+        if not free:
+            break
+        pick = min(free, key=lambda s: (counts[s], GATHERING.index(s)))
+        wanted.append(pick)
+        counts[pick] += 1
+        room -= 1
+    return tuple(wanted)
 
 
 def cloth_trades(trades, tailors) -> dict:

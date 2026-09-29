@@ -13176,8 +13176,12 @@ class Bridge(discord.Client):
             for row in step.rows:
                 # A craft batch is one cast row written `repeat` times, one at
                 # a time, as the corps' runner writes it.
-                for _ in range(max(1, int(step.repeat))):
+                casts = max(1, int(step.repeat))
+                for done in range(casts):
                     if not await self._job_row(step, row, cap):
+                        if casts > 1:
+                            log.info("guild jobs: %s stopped after %d of %d casts",
+                                     step.holder, done, casts)
                         return
         except pymysql.err.MySQLError:
             log.exception("guild jobs: step for %s failed", step.holder)

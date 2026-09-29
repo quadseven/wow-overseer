@@ -137,7 +137,7 @@ class TheClothTrades(unittest.TestCase):
     def test_first_aid_takes_no_primary_slot(self):
         crew = [bare("M%02d" % i) for i in range(10)]
         trades = plan(crew).trades
-        for name, held in trades.items():
+        for held in trades.values():
             self.assertIn(FA, held)
             self.assertLessEqual(
                 len([s for s in held if s in guildjobs.PRIMARY_SKILLS]), 2
@@ -263,6 +263,8 @@ class TheClothTrades(unittest.TestCase):
             if isinstance(n, ast.AsyncFunctionDef) and n.name == "_run_job_step"
         )
         self.assertIn("step.repeat", ast.unparse(run))
+        # A batch that stops early says how many casts landed.
+        self.assertIn("stopped after %d of %d casts", ast.unparse(run))
 
 
 class TheRanks(unittest.TestCase):
