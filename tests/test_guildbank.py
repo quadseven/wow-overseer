@@ -1353,3 +1353,14 @@ class TheFirstTabIsFundedByTheFamily(unittest.TestCase):
         self.assertEqual(
             guildbank.plan_tab_gifts(chars, master="Zug", purchased_tabs=0), ()
         )
+
+    def test_the_last_sliver_of_the_price_is_given_whole(self):
+        # 99.5 gold held: a donor with the spare posts the gold minimum rather
+        # than the missing half gold, which the letter minimum would refuse.
+        gifts = guildbank.plan_tab_gifts(
+            self.chars(Zug=0, Oz=50),
+            master="Zug",
+            purchased_tabs=0,
+            master_purse=1_000_000 - 5_000,
+        )
+        self.assertEqual([g.copper for g in gifts], [self.G])

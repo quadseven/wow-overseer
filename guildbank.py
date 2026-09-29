@@ -297,12 +297,14 @@ def plan_tab_gifts(
         key=lambda n: (-_purse(characters[n]), n),
     )
     for name in donors:
-        if need < TAB_GIFT_MIN_COPPER:
+        if need <= 0:
             break
         if eligible is not None and name not in eligible:
             continue
         spare = _purse(characters[name]) - tab_fund_float(_level(characters[name]))
-        share = min(spare // 2, TAB_GIFT_CAP_COPPER, need)
+        # The last sliver of the price is given whole: a letter is never under
+        # the gold minimum, so a need under it is rounded up to it.
+        share = min(spare // 2, TAB_GIFT_CAP_COPPER, max(need, TAB_GIFT_MIN_COPPER))
         if share < TAB_GIFT_MIN_COPPER:
             continue
         gifts.append(
