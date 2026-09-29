@@ -424,8 +424,45 @@ def stranded_names(members: list, busy: set) -> list:
 # cleared (wow-dev, 2026-09-28), and Cave's left its members among the Horde's
 # guards. Each guild goes only to its own side's five-mans for its band.
 GUILD_DOORS = {
-    "Alliance": frozenset({"deadmines", "stockades", "wailing"}),
-    "Horde": frozenset({"ragefire", "wailing"}),
+    "Alliance": frozenset(
+        {
+            "deadmines", "wailing", "shadowfang", "blackfathom", "stockades",
+            "scarlet", "gnomeregan", "razorfen-kraul", "razorfen-downs",
+            "uldaman", "zulfarrak", "maraudon-orange", "maraudon-purple",
+            "sunken-temple", "blackrock-depths", "scholomance",
+        }
+    ),
+    "Horde": frozenset(
+        {
+            "ragefire", "deadmines", "wailing", "shadowfang", "blackfathom",
+            "scarlet", "gnomeregan", "razorfen-kraul", "razorfen-downs",
+            "uldaman", "zulfarrak", "maraudon-orange", "maraudon-purple",
+            "sunken-temple", "blackrock-depths", "scholomance",
+        }
+    ),
+}  # fmt: skip
+# DOORS NEITHER SIDE IS OFFERED because mod-overseer's finder cannot resolve
+# them today (FinderDungeonForDoor / ChooseFinderDungeon). Adding a keyword to
+# GUILD_DOORS while it is here would queue a run the module refuses.
+#   * scarlet-library, scarlet-armory, scarlet-cathedral: only the Graveyard
+#     has a finder row with an entrance on map 189; the other wings share the
+#     map's entrance, so the module refuses them as "the wrong one". Needs
+#     lfg_dungeon_template rows for the three wings, with entrances matching
+#     each door's landing, in mod-overseer's world data.
+#   * dire-maul-*, lower-blackrock-spire: several finder wings share the map
+#     (Dire Maul has three, the Spire has the lower and upper); whether each
+#     door lands within 60 yards of its own wing's lfg_dungeon_template start
+#     is not confirmed. Needs that check against the realm's world DB, then a
+#     row fix in mod-overseer if a landing misses.
+# Stratholme is separate: dungeonpath.WITHHELD_DOORS (mod-overseer#582).
+BLOCKED_DOORS = {
+    "scarlet-library": "no finder entrance for the wing",
+    "scarlet-armory": "no finder entrance for the wing",
+    "scarlet-cathedral": "no finder entrance for the wing",
+    "lower-blackrock-spire": "finder wing match unconfirmed",
+    "dire-maul-east-east": "finder wing match unconfirmed",
+    "dire-maul-west-north": "finder wing match unconfirmed",
+    "dire-maul-north": "finder wing match unconfirmed",
 }
 # A member whose worn gear averages more than this many item levels under its
 # own level is not sent into a dungeon: at levels 10 to 16 the guilds wore

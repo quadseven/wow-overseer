@@ -392,7 +392,7 @@ class TheHostileCapitalDoorIsNeverOffered(unittest.TestCase):
             offered = self.offered(level, "")
             self.assertNotIn("ragefire", offered, level)
             self.assertNotIn("stockades", offered, level)
-        self.assertEqual(self.offered(19, ""), ["wailing"])
+        self.assertEqual(self.offered(19, ""), ["wailing", "deadmines"])
 
     def test_the_hostile_capital_map_ids_are_the_capital_dungeons(self):
         self.assertEqual(guildrun.HOSTILE_CAPITAL_DUNGEONS["Alliance"], {389})
@@ -404,6 +404,58 @@ class TheHostileCapitalDoorIsNeverOffered(unittest.TestCase):
         self.assertEqual(guildrun.stranded_names([alliance, horde], set()), ["A", "H"])
         own = member("O", 19, MAGE, race=1, map_id=34)
         self.assertEqual(guildrun.stranded_names([own], set()), [])
+
+
+class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):
+    """wow-overseer#414: the per-side door lists stopped short, so the Horde
+    was offered no door from level 25 up and the Alliance none from level 33
+    up. Every dungeon mod-overseer's finder can queue is on each side's ladder,
+    the hostile capital's own dungeon excepted."""
+
+    # Doors the module can queue through the dungeon finder: one finder row on
+    # the map, or a wing the door's own landing picks out (Maraudon).
+    QUEUEABLE = {
+        "wailing", "deadmines", "shadowfang", "blackfathom", "scarlet",
+        "gnomeregan", "razorfen-kraul", "razorfen-downs", "uldaman",
+        "zulfarrak", "ragefire", "stockades", "maraudon-orange", "maraudon-purple", "sunken-temple",
+        "blackrock-depths", "scholomance",
+    }  # fmt: skip
+    # Doors the finder cannot resolve today (see guildrun.BLOCKED_DOORS).
+    BLOCKED = {
+        "scarlet-library", "scarlet-armory", "scarlet-cathedral",
+        "lower-blackrock-spire", "dire-maul-east-east", "dire-maul-west-north",
+        "dire-maul-north",
+    }  # fmt: skip
+    FIRST_LEVEL = {"Alliance": 17, "Horde": 15}
+
+    def offered(self, level, faction):
+        return [
+            d.keyword
+            for d in guildrun.fitting_doors([level] * 5, guildrun.doors(), faction)
+        ]
+
+    def test_each_side_uses_every_queueable_door_but_the_hostile_capital(self):
+        self.assertEqual(
+            guildrun.GUILD_DOORS["Alliance"], self.QUEUEABLE - {"ragefire"}
+        )
+        self.assertEqual(guildrun.GUILD_DOORS["Horde"], self.QUEUEABLE - {"stockades"})
+
+    def test_no_blocked_door_is_on_either_ladder(self):
+        for faction, keywords in guildrun.GUILD_DOORS.items():
+            self.assertFalse(keywords & self.BLOCKED, faction)
+        self.assertEqual(set(guildrun.BLOCKED_DOORS), self.BLOCKED)
+
+    def test_every_level_from_the_first_door_to_sixty_has_a_door(self):
+        for faction, first in self.FIRST_LEVEL.items():
+            for level in range(first, 61):
+                self.assertTrue(self.offered(level, faction), (faction, level))
+
+    def test_the_ladder_climbs_through_the_high_dungeons(self):
+        self.assertIn("razorfen-kraul", self.offered(32, "Horde"))
+        self.assertIn("zulfarrak", self.offered(40, "Alliance"))
+        self.assertIn("sunken-temple", self.offered(52, "Horde"))
+        self.assertIn("blackrock-depths", self.offered(56, "Alliance"))
+        self.assertIn("scholomance", self.offered(60, "Horde"))
 
 
 class TheDoorsThatFit(unittest.TestCase):
