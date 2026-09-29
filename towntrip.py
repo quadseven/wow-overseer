@@ -855,6 +855,25 @@ def town_from_rows(rows) -> Town:
     return Town(repairs=repairs, stocks=frozenset(stocks), vendor=vendor, banker=banker)
 
 
+def _consumable(row, level: int):
+    """(what, count, usable) for one carried row, or None when it is not food.
+
+    A STACK THE HOLDER IS TOO LOW TO CONSUME IS NOT FOOD. The core refuses to
+    let a character use an item above its level, so counting it kept a family
+    of level 35-37 "stocked" on level 55 water and cinnamon rolls it could
+    never touch: no drink was ever bought, and the between-pulls rest waited on
+    mana that only standing still could restore. An unknown level (no worn row
+    was read) counts everything, the same direction the rest of this seam errs:
+    we could not see them, so we do not guess them short.
+    """
+    what = CATEGORY_KIND.get(_int(row.get("spell_category"), -1))
+    count = _int(row.get("carried"))
+    if what is None or count <= 0:
+        return None
+    usable = not (level > 0 and _int(row.get("required_level")) > level)
+    return what, count, usable
+
+
 def members_from_rows(rows, carried, spells, free_slots, names) -> tuple:
     """One Member per name, whether or not any row mentions them.
 
@@ -916,21 +935,11 @@ def members_from_rows(rows, carried, spells, free_slots, names) -> tuple:
         holder = row.get("holder")
         if holder not in food:
             continue
-        what = CATEGORY_KIND.get(_int(row.get("spell_category"), -1))
-        if what is None:
+        got = _consumable(row, facts[holder].get("level", 0))
+        if got is None:
             continue
-        count = _int(row.get("carried"))
-        if count <= 0:
-            continue
-        # A STACK THE HOLDER IS TOO LOW TO CONSUME IS NOT FOOD. The core refuses
-        # to let a character use an item above its level, so counting it kept a
-        # family of level 35-37 "stocked" on level 55 water and cinnamon rolls it
-        # could never touch: no drink was ever bought, and the between-pulls rest
-        # waited on mana that only standing still could restore. An unknown level
-        # (no worn row was read) counts everything, the same direction the rest
-        # of this seam errs: we could not see them, so we do not guess them short.
-        level = facts[holder].get("level", 0)
-        if level > 0 and _int(row.get("required_level")) > level:
+        what, count, usable = got
+        if not usable:
             too_high[holder] += count
             continue
         if what == FOOD_KIND:
