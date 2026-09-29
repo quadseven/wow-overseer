@@ -751,5 +751,121 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         self.assertEqual(flightlearn.FLIGHT_MASTER_NPC_FLAG, 0x2000)
 
 
+# The family as the snapshot table reads it: name -> {"map_id", "pos_x", "pos_y"}.
+def _family_at(**where) -> dict:
+    return {
+        name: {"map_id": m, "pos_x": x, "pos_y": y} for name, (m, x, y) in where.items()
+    }
+
+
+class ALoneLeaderIsNotSentToLearnANode(unittest.TestCase):
+    """The leader walks the family's discovery errand and the family follows,
+    which is the whole premise of aiming one character (see `_flight_learn_once`).
+    On 2026-09-29 that premise was false: the leader was sent 2621 yards to
+    Thorium Point while two members stood in Elwynn and two in the Barrens, with
+    a Razorfen Kraul campaign order just taken. Nobody followed him, the walk
+    crossed ground with no navmesh above the city floor, and he was on the
+    plane under Stormwind, alone."""
+
+    NAMES = ["Grug", "Og", "Ugga", "Bork", "Grog"]
+
+    def _together(self):
+        return _family_at(
+            Grug=(0, -8800.0, 600.0),
+            Og=(0, -8790.0, 610.0),
+            Ugga=(0, -8810.0, 590.0),
+            Bork=(0, -8805.0, 605.0),
+            Grog=(0, -8795.0, 595.0),
+        )
+
+    def test_a_family_standing_together_with_no_campaign_may_go(self):
+        self.assertEqual(
+            flightlearn.family_refusal(
+                leader="Grug",
+                names=self.NAMES,
+                positions=self._together(),
+                campaign_waiting=False,
+            ),
+            "",
+        )
+
+    def test_a_campaign_order_keeps_the_leader_home(self):
+        said = flightlearn.family_refusal(
+            leader="Grug",
+            names=self.NAMES,
+            positions=self._together(),
+            campaign_waiting=True,
+        )
+        self.assertIn("campaign", said)
+
+    def test_a_member_on_another_map_keeps_the_leader_home(self):
+        where = self._together()
+        where["Bork"] = {"map_id": 1, "pos_x": -900.0, "pos_y": -3700.0}
+        said = flightlearn.family_refusal(
+            leader="Grug", names=self.NAMES, positions=where, campaign_waiting=False
+        )
+        self.assertIn("Bork", said)
+        self.assertIn("another map", said)
+
+    def test_a_member_far_away_on_the_same_map_keeps_the_leader_home(self):
+        where = self._together()
+        where["Og"] = {"map_id": 0, "pos_x": -9400.0, "pos_y": -100.0}
+        said = flightlearn.family_refusal(
+            leader="Grug", names=self.NAMES, positions=where, campaign_waiting=False
+        )
+        self.assertIn("Og", said)
+
+    def test_a_member_nobody_can_see_counts_as_apart(self):
+        """Absence is not togetherness: no fresh snapshot row means the member
+        is offline or stale, and a walk that leaves them is a split."""
+        where = self._together()
+        del where["Grog"]
+        said = flightlearn.family_refusal(
+            leader="Grug", names=self.NAMES, positions=where, campaign_waiting=False
+        )
+        self.assertIn("Grog", said)
+
+    def test_a_leader_nobody_can_see_is_refused(self):
+        where = self._together()
+        del where["Grug"]
+        self.assertTrue(
+            flightlearn.family_refusal(
+                leader="Grug", names=self.NAMES, positions=where, campaign_waiting=False
+            )
+        )
+
+    def test_the_boundary_is_the_named_constant(self):
+        where = self._together()
+        edge = flightlearn.TOGETHER_YARDS
+        where["Og"] = {"map_id": 0, "pos_x": -8800.0 + edge - 1.0, "pos_y": 600.0}
+        self.assertEqual(
+            flightlearn.family_refusal(
+                leader="Grug", names=self.NAMES, positions=where, campaign_waiting=False
+            ),
+            "",
+        )
+        where["Og"] = {"map_id": 0, "pos_x": -8800.0 + edge + 1.0, "pos_y": 600.0}
+        self.assertTrue(
+            flightlearn.family_refusal(
+                leader="Grug", names=self.NAMES, positions=where, campaign_waiting=False
+            )
+        )
+
+    def test_the_pass_asks_before_it_chooses_and_reads_the_campaign(self):
+        source = BRIDGE.read_text(encoding="utf-8", errors="replace")
+        start = source.index("async def _flight_learn_once(self)")
+        body = source[start : source.index("async def _flight_learn_loop(self)")]
+        body = body[body.index('"""', body.index('"""') + 3) + 3 :]
+        self.assertIn("flightlearn.family_refusal(", body)
+        self.assertIn("_campaign_waiting", body)
+        self.assertLess(
+            body.index("flightlearn.family_refusal("), body.index("flightlearn.choose(")
+        )
+        self.assertLess(
+            body.index("flightlearn.family_refusal("),
+            body.index("_claim_town_slot(FLIGHT_CLAIMANT"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
