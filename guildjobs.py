@@ -73,6 +73,16 @@ own) and farms near that door's meeting stone, the stone nearest the door's
 entrance (entrances.json) in the world's spawn table. The warlocks are spread
 over the doors that fit, fewest first.
 
+THE CLOTH TRADES (the operator, 2026-09-29: "those are valuable crafting
+resources for someone"). Every maintenance member also learns First Aid, a
+secondary trade that costs no primary slot, and one member in three takes
+Tailoring in place of one gathering trade (`choose_tailors`). A member that
+holds either casts what the cloth in its own bags allows (`_craft_step`):
+Linen Bandage, then Bolt of Linen Cloth, each the recipe craft.py keeps for
+its skill value. It keeps the cloth its next casts eat instead of posting it,
+and posts the rest as before. The trainer rows are `walk-to-trainer skill:`
+and the casts are `cast` rows: what a player does, paid for at a trainer.
+
 PURE MODULE: rows in, steps and sentences out. No MySQL, no clock.
 """
 
@@ -97,7 +107,15 @@ HERBALISM = guildcorps.HERBALISM
 MINING = guildcorps.MINING
 SKINNING = guildcorps.SKINNING
 GATHERING = (HERBALISM, MINING, SKINNING)
-SKILL_NAMES = {HERBALISM: "Herbalism", MINING: "Mining", SKINNING: "Skinning"}
+FIRST_AID = 129
+TAILORING = guildcorps.TAILORING
+SKILL_NAMES = {
+    HERBALISM: "Herbalism",
+    MINING: "Mining",
+    SKINNING: "Skinning",
+    FIRST_AID: "First Aid",
+    TAILORING: "Tailoring",
+}
 
 # The primary trades, gathering and crafting, by skill line. Two may be held.
 PRIMARY_SKILLS = frozenset({164, 165, 171, 182, 186, 197, 202, 333, 393, 755, 773})
@@ -149,6 +167,40 @@ RANKS = {
         Rank(10769, 300, 25, 200, 50000),
     ),
 }
+
+# THE CLOTH TRADES (the operator, 2026-09-29: "those are valuable crafting
+# resources for someone"). Every guild's maintenance crew learns First Aid, a
+# secondary trade that costs no primary slot, and a third of it also takes
+# Tailoring in place of one gathering trade, so cloth the crew loots has a
+# consumer that is not a family member. Measured on the dev world
+# (acore_world.trainer_spell, 2026-09-29): Apprentice First Aid is the
+# wrapper 3279 (one silver, no level); Journeyman and Expert are 3280 and
+# 54254. Tailoring's ranks are the corps' own 3911, 3912 and 3913.
+RANKS[FIRST_AID] = (
+    Rank(3279, 75, 0, 0, 100),
+    Rank(3280, 150, 0, 50, 500),
+    Rank(54254, 225, 0, 125, 1000),
+)
+RANKS[TAILORING] = (
+    Rank(3911, 75, 5, 0, 10),
+    Rank(3912, 150, 10, 50, 500),
+    Rank(3913, 225, 20, 125, 5000),
+)
+
+# One maintenance member in this many is a tailor: a crew of ten gives three.
+TAILOR_EVERY = 3
+
+# A RECIPE A TRAINER ADDS TO THE BOOK BY ITSELF. Linen Bandage comes with
+# Apprentice First Aid and Bolt of Linen Cloth with Apprentice Tailoring
+# (SkillLineAbility AcquireMethod 1, ClassMask 0; craft.py's notes). Any other
+# recipe is cast only once `character_spell` says the member knows it.
+AUTO_LEARNED = frozenset({3275, 2963})
+CRAFT_SKILLS = (FIRST_AID, TAILORING)
+CRAFT_SPELLS = frozenset(
+    r.spell_id for skill in CRAFT_SKILLS for r in craft.RECIPES.get(skill, ())
+)
+# Casts in one stand, so a stand stays short; the next pass casts more.
+CRAFT_BATCH = 10
 
 # A rank is bought once the skill is this close to its ceiling, as a player
 # does: the last points of a rank come slowly and the next rank is the point.
@@ -226,6 +278,7 @@ COOLDOWN_MINUTES = {
     "sell": 120,
     "farm": 45,
     "door": 45,
+    "craft": 15,
 }
 
 # A TRAINER WALK THAT KEEPS FAILING IS ASKED LESS OFTEN (#766). Measured on the
@@ -354,6 +407,9 @@ class Member:
 
     def carries(self, entry) -> bool:
         return any(int(c.entry) == int(entry) for c in self.carried)
+
+    def count(self, entry) -> int:
+        return sum(int(c.count) for c in self.carried if int(c.entry) == int(entry))
 
     @property
     def primaries(self) -> tuple:
@@ -530,38 +586,71 @@ def skinning_field(beasts, origin, level, value) -> Spot | None:
 # THE TRADE SPLIT.
 
 
-def split_trades(members) -> dict:
+def choose_tailors(members) -> frozenset:
+    """The maintenance members that take Tailoring, per guild.
+
+    One in TAILOR_EVERY of a crew, so a crew under three has none. A member
+    that already holds Tailoring comes first, then the ones with a primary
+    slot to spare, the fewest primaries first and by name.
+    """
+    crews = {}
+    for m in members or ():
+        if m.role == MAINTENANCE:
+            crews.setdefault(m.guild, []).append(m)
+    out = set()
+    for _guild, crew in sorted(crews.items()):
+        room = [m for m in crew if m.holds(TAILORING) or len(m.primaries) < MAX_PRIMARY]
+        room.sort(key=lambda m: (not m.holds(TAILORING), len(m.primaries), m.name))
+        out.update(m.name for m in room[: len(crew) // TAILOR_EVERY])
+    return frozenset(out)
+
+
+def split_trades(members, tailors=frozenset()) -> dict:
     """name -> (skill, skill): the two gathering trades each maintenance
-    member works, per guild. See TRADE SPLIT in the module docstring."""
+    member works, per guild. See TRADE SPLIT in the module docstring. A member
+    in `tailors` keeps one primary slot for Tailoring, so it gets one."""
     out = {}
     crews = {}
     for m in members or ():
         if m.role == MAINTENANCE:
             crews.setdefault(m.guild, []).append(m)
     for _guild, crew in sorted(crews.items()):
-        counts = {s: 0 for s in GATHERING}
         crew = sorted(crew, key=lambda m: m.name)
         # What the crew already holds is counted first, so a member who
         # learned a trade on its own keeps it and the split fills round it.
+        counts = {s: sum(1 for m in crew if m.holds(s)) for s in GATHERING}
         for m in crew:
-            for s in GATHERING:
-                if m.holds(s):
-                    counts[s] += 1
-        for m in crew:
-            held = [s for s in GATHERING if m.holds(s)]
-            others = [s for s in m.primaries if s not in GATHERING]
-            room = max(0, MAX_PRIMARY - len(held) - len(others))
-            wanted = list(held)
-            while room > 0:
-                free = [s for s in GATHERING if s not in wanted]
-                if not free:
-                    break
-                pick = min(free, key=lambda s: (counts[s], GATHERING.index(s)))
-                wanted.append(pick)
-                counts[pick] += 1
-                room -= 1
-            out[m.name] = tuple(wanted)
+            out[m.name] = _fill_gathering(m, counts, m.name in tailors)
     return out
+
+
+def _fill_gathering(m, counts, tailor) -> tuple:
+    """The gathering trades one member works: what it holds, then the trade the
+    crew has fewest of while a primary slot is left (a tailor keeps one back)."""
+    wanted = [s for s in GATHERING if m.holds(s)]
+    others = [s for s in m.primaries if s not in GATHERING]
+    reserved = 1 if tailor and not m.holds(TAILORING) else 0
+    room = max(0, MAX_PRIMARY - len(wanted) - len(others) - reserved)
+    while room > 0:
+        free = [s for s in GATHERING if s not in wanted]
+        if not free:
+            break
+        pick = min(free, key=lambda s: (counts[s], GATHERING.index(s)))
+        wanted.append(pick)
+        counts[pick] += 1
+        room -= 1
+    return tuple(wanted)
+
+
+def cloth_trades(trades, tailors) -> dict:
+    """`split_trades` with the cloth trades added: Tailoring for a tailor and
+    First Aid, which takes no primary slot, for every maintenance member."""
+    return {
+        name: tuple(gathering)
+        + ((TAILORING,) if name in tailors else ())
+        + (FIRST_AID,)
+        for name, gathering in (trades or {}).items()
+    }
 
 
 def next_rank(skill: int, value: int, cap: int, level: int):
@@ -634,6 +723,76 @@ def _train_step(member, trades, cap):
         ),
     )
     return step, ""
+
+
+def _open_recipe(member, skill):
+    """The recipe this member would cast toward `skill`, cloth or not in hand.
+
+    It is the one craft.py keeps for the member's skill value (its colour
+    band), made of cloth alone: a recipe with a vendor reagent or a forge or
+    loom is left to the passes that walk there. None at the ceiling, where a
+    rank comes first.
+    """
+    value, ceiling = member.skill(skill)
+    if ceiling <= 0 or value >= ceiling:
+        return None
+    recipe = craft.recipe_for(skill, value)
+    if recipe is None or recipe.focus:
+        return None
+    if recipe.spell_id not in AUTO_LEARNED and recipe.spell_id not in member.known:
+        return None
+    return recipe if craft_rhythm.GATHERED.get(recipe.spell_id) else None
+
+
+def _craft_recipe(member, skill):
+    """(recipe, casts) this member can cast now toward `skill`, or (None, 0)."""
+    recipe = _open_recipe(member, skill)
+    if recipe is None:
+        return None, 0
+    reagents = craft_rhythm.GATHERED[recipe.spell_id]
+    casts = min(member.count(r.entry) // max(1, int(r.per_cast)) for r in reagents)
+    return (recipe, min(casts, CRAFT_BATCH)) if casts > 0 else (None, 0)
+
+
+def craft_entries(member) -> frozenset:
+    """The items this member's next cloth casts eat, which it keeps."""
+    out = set()
+    for skill in CRAFT_SKILLS:
+        recipe = _open_recipe(member, skill)
+        if recipe is not None:
+            out.update(int(r.entry) for r in craft_rhythm.GATHERED[recipe.spell_id])
+    return frozenset(out)
+
+
+def _craft_step(member):
+    """Cast what its cloth allows, to raise First Aid and Tailoring (#421).
+
+    Linen Bandage takes a Linen Cloth and Bolt of Linen Cloth two; both grant
+    skill to the cast and both are the member's own to make, where it stands.
+    The rows are `cast` rows, the verb a player has, and the trade came from a
+    trainer that was paid.
+    """
+    for skill in CRAFT_SKILLS:
+        recipe, casts = _craft_recipe(member, skill)
+        if recipe is None:
+            continue
+        return guildcorps.Step(
+            member.name,
+            "craft",
+            recipe.spell_id,
+            "%s crafts %d %s to raise its %s"
+            % (member.name, casts, recipe.name, SKILL_NAMES[skill]),
+            rows=(
+                guildcorps.Row(
+                    "cast",
+                    str(recipe.spell_id),
+                    "",
+                    source_for("craft", member.name),
+                ),
+            ),
+            repeat=casts,
+        )
+    return None
 
 
 def _tool_step(member, cap):
@@ -767,10 +926,16 @@ def bank_masters(masters: dict, banks, unclaimed) -> dict:
 def postable(member: Member, kept) -> list:
     """The material stacks this member would post, biggest first."""
     bar = POST_MIN.get(member.role, POST_MIN[RAIDER])
+    # Cloth its own next casts eat stays in the bags: a member that can still
+    # raise First Aid or Tailoring does not post away what it would cast.
+    eaten = craft_entries(member) if member.role == MAINTENANCE else frozenset()
     out = [
         c
         for c in member.carried
-        if c.material and int(c.count) >= bar and not _kept(member.name, c, kept)
+        if c.material
+        and int(c.count) >= bar
+        and int(c.entry) not in eaten
+        and not _kept(member.name, c, kept)
     ]
     out.sort(key=lambda c: (-int(c.count), int(c.entry), int(c.guid)))
     return out
@@ -970,6 +1135,10 @@ def _maintenance_step(m, trades, fields, crafters, master, kept, recent, cap):
             return step, step.said, ""
         if why:
             notes.append(why)
+    if not _cooling(m, "craft", recent):
+        step = _craft_step(m)
+        if step:
+            return step, step.said, ""
     shared = _shared_step(m, crafters, master, kept, recent, cap)
     if shared[0]:
         return shared
@@ -1088,7 +1257,8 @@ def plan(
     doors = doors or {}
     busy = {str(n) for n in busy or ()}
     pending = {str(n) for n in pending or ()}
-    trades = split_trades(members)
+    tailors = choose_tailors(members)
+    trades = cloth_trades(split_trades(members, tailors), tailors)
     steps, lines, notes = [], {}, []
     started = {}
     for m in _ordered_members(members):

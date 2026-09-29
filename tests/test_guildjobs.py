@@ -44,6 +44,12 @@ def member(name, role=guildjobs.MAINTENANCE, **over):
         eligible=True,
     )
     base.update(over)
+    # A member that already holds First Aid, so the older tests read the
+    # gathering, post and sale steps they were written for; the cloth trades
+    # have their own tests (TheClothTrades).
+    skills = dict(base.get("skills") or {})
+    skills.setdefault(guildjobs.FIRST_AID, (40, 75))
+    base["skills"] = skills
     return guildjobs.Member(**base)
 
 
@@ -99,6 +105,166 @@ class TheTradeSplit(unittest.TestCase):
         trades = guildjobs.split_trades(crew)
         self.assertEqual(trades["A"], (H, M))
         self.assertEqual(trades["B"], (H, M))
+
+
+LINEN = 2589
+FA, TAILOR = guildjobs.FIRST_AID, guildjobs.TAILORING
+
+
+def bare(name, **over):
+    """A maintenance member with no First Aid, as a natural restart leaves it."""
+    over.setdefault("skills", {})
+    m = member(name, **over)
+    return guildjobs.Member(
+        **{
+            **{f: getattr(m, f) for f in m.__dataclass_fields__},
+            "skills": dict(over["skills"]),
+        }
+    )
+
+
+class TheClothTrades(unittest.TestCase):
+    """Cloth the maintenance crew loots has a consumer that is not the family
+    (the operator, 2026-09-29): First Aid for all, Tailoring for a third."""
+
+    def test_every_maintenance_member_is_sent_to_learn_first_aid(self):
+        m = bare("Keeper", level=12, money=100, skills={H: (40, 75), 171: (10, 75)})
+        step = only_step(plan([m]), "Keeper")
+        self.assertEqual(step.action, "train")
+        self.assertEqual(step.rows[0].command, "walk-to-trainer skill:129")
+        self.assertIn("learn First Aid (up to 75, 100c)", step.said)
+
+    def test_first_aid_takes_no_primary_slot(self):
+        crew = [bare("M%02d" % i) for i in range(10)]
+        trades = plan(crew).trades
+        for held in trades.values():
+            self.assertIn(FA, held)
+            self.assertLessEqual(
+                len([s for s in held if s in guildjobs.PRIMARY_SKILLS]), 2
+            )
+
+    def test_a_third_of_a_crew_takes_tailoring_and_one_gathering_trade(self):
+        crew = [bare("M%02d" % i) for i in range(10)]
+        trades = plan(crew).trades
+        tailors = [n for n, t in trades.items() if TAILOR in t]
+        self.assertEqual(len(tailors), 3)
+        for name in tailors:
+            gathering = [s for s in trades[name] if s in guildjobs.GATHERING]
+            self.assertEqual(len(gathering), 1)
+        for name in set(trades) - set(tailors):
+            self.assertEqual(
+                len([s for s in trades[name] if s in guildjobs.GATHERING]), 2
+            )
+
+    def test_a_small_crew_has_no_tailor(self):
+        self.assertEqual(guildjobs.choose_tailors([bare("A"), bare("B")]), frozenset())
+
+    def test_a_member_with_both_primaries_taken_is_no_tailor(self):
+        crew = [bare("F%d" % i, skills={H: (5, 75), M: (5, 75)}) for i in range(3)]
+        self.assertEqual(guildjobs.choose_tailors(crew), frozenset())
+
+    def test_a_held_tailor_is_kept_a_tailor(self):
+        crew = [bare("A"), bare("B"), bare("C", skills={TAILOR: (20, 75)})]
+        self.assertEqual(guildjobs.choose_tailors(crew), frozenset({"C"}))
+
+    def test_raiders_and_summoners_learn_no_cloth_trade(self):
+        crew = [member("R", role=guildjobs.RAIDER)]
+        self.assertEqual(plan(crew).trades, {})
+
+    def test_tailoring_is_bought_at_level_5_for_ten_copper(self):
+        crew = [
+            bare("T%d" % i, level=5, money=10, skills={FA: (40, 75), H: (40, 75)})
+            for i in range(3)
+        ]
+        result = plan(crew)
+        tailor = next(n for n, t in result.trades.items() if TAILOR in t)
+        step = only_step(result, tailor)
+        self.assertEqual(step.rows[0].command, "walk-to-trainer skill:%d" % TAILOR)
+        self.assertIn("learn Tailoring (up to 75, 10c)", step.said)
+
+    def test_a_first_aider_with_linen_casts_bandages(self):
+        m = member(
+            "Medic",
+            skills={FA: (10, 75), H: (40, 75), 171: (10, 75)},
+            carried=(stack(1, LINEN, 14, subclass=5),),
+        )
+        step = only_step(plan([m]), "Medic")
+        self.assertEqual(step.action, "craft")
+        (row,) = step.rows
+        self.assertEqual((row.kind, row.command), ("cast", "3275"))
+        self.assertEqual(row.source, "guildjobs:craft:Medic")
+        self.assertEqual(step.repeat, 10)
+        self.assertIn("crafts 10 Linen Bandage to raise its First Aid", step.said)
+
+    def test_a_batch_is_what_the_cloth_allows(self):
+        m = member(
+            "Medic",
+            skills={FA: (10, 75), H: (40, 75), 171: (10, 75)},
+            carried=(stack(1, LINEN, 3, subclass=5),),
+        )
+        self.assertEqual(only_step(plan([m]), "Medic").repeat, 3)
+
+    def test_no_cloth_no_craft(self):
+        m = member("Medic", skills={FA: (10, 75), H: (40, 75), 171: (10, 75)})
+        self.assertIsNone(only_step(plan([m]), "Medic"))
+
+    def test_bandages_stop_at_the_grey_skill(self):
+        m = member(
+            "Medic",
+            skills={FA: (60, 75), H: (40, 75), 171: (10, 75)},
+            carried=(stack(1, LINEN, 14, subclass=5),),
+        )
+        step = only_step(plan([m]), "Medic")
+        self.assertTrue(step is None or step.action != "craft")
+
+    def test_a_tailor_with_linen_casts_bolts_once_first_aid_is_grey(self):
+        m = member(
+            "Sew",
+            skills={FA: (60, 75), TAILOR: (5, 75), H: (40, 75)},
+            carried=(stack(1, LINEN, 7, subclass=5),),
+        )
+        step = only_step(plan([m]), "Sew")
+        self.assertEqual(step.rows[0].command, "2963")
+        self.assertEqual(step.repeat, 3)
+
+    def test_a_craft_waits_out_its_cooldown(self):
+        m = member(
+            "Medic",
+            skills={FA: (10, 75), H: (40, 75), 171: (10, 75)},
+            carried=(stack(1, LINEN, 14, subclass=5),),
+        )
+        recent = (guildjobs.Recent("Medic", "craft", 5),)
+        self.assertIsNone(only_step(plan([m], recent=recent), "Medic"))
+
+    def test_a_recipe_the_member_does_not_know_is_not_cast(self):
+        # Bolt of Woolen Cloth is a trainer purchase, not part of Apprentice.
+        m = member(
+            "Sew",
+            skills={FA: (60, 75), TAILOR: (70, 75), H: (40, 75)},
+            carried=(stack(1, 2592, 9, subclass=5),),
+        )
+        step = only_step(plan([m]), "Sew")
+        self.assertTrue(step is None or step.action != "craft")
+        known = guildjobs.Member(
+            **{
+                **{f: getattr(m, f) for f in m.__dataclass_fields__},
+                "known": frozenset({2964}),
+            }
+        )
+        step = only_step(plan([known]), "Sew")
+        self.assertEqual(step.rows[0].command, "2964")
+
+    def test_the_bridge_reads_the_craft_spells_and_repeats_the_cast(self):
+        self.assertIn("guildjobs.CRAFT_SPELLS", BRIDGE)
+        tree = ast.parse(BRIDGE)
+        run = next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.AsyncFunctionDef) and n.name == "_run_job_step"
+        )
+        self.assertIn("step.repeat", ast.unparse(run))
+        # A batch that stops early says how many casts landed.
+        self.assertIn("stopped after %d of %d casts", ast.unparse(run))
 
 
 class TheRanks(unittest.TestCase):

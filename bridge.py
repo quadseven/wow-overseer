@@ -13181,8 +13181,15 @@ class Bridge(discord.Client):
             else:
                 log.info("guild jobs: %s", step.said)
             for row in step.rows:
-                if not await self._job_row(step, row, cap):
-                    return
+                # A craft batch is one cast row written `repeat` times, one at
+                # a time, as the corps' runner writes it.
+                casts = max(1, int(step.repeat))
+                for done in range(casts):
+                    if not await self._job_row(step, row, cap):
+                        if casts > 1:
+                            log.info("guild jobs: %s stopped after %d of %d casts",
+                                     step.holder, done, casts)
+                        return
         except pymysql.err.MySQLError:
             log.exception("guild jobs: step for %s failed", step.holder)
         finally:
@@ -21091,7 +21098,8 @@ def _fetch_job_facts(family_names: list) -> dict:
         skill_rows = _job_read(cur, "skills", _JOB_SKILLS_SQL.format(
             guids=everyone, skills=ids(_JOB_SKILL_IDS)))
         spell_rows = _job_read(cur, "spells", _JOB_SPELLS_SQL.format(
-            guids=everyone, spells=ids([guildjobs.RITUAL_OF_SUMMONING])))
+            guids=everyone,
+            spells=ids([guildjobs.RITUAL_OF_SUMMONING, *sorted(guildjobs.CRAFT_SPELLS)])))
         item_rows = _job_read(cur, "carried items", _JOB_ITEMS_SQL.format(
             guids=everyone, goods=guildjobs.TRADE_GOODS,
             subclasses=ids(sorted(guildjobs.MATERIAL_SUBCLASSES)),
