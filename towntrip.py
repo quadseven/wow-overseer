@@ -267,6 +267,11 @@ class Member:
     drink_carried: int = 0
     spells: frozenset[int] = frozenset()
     stacks: tuple[Stack, ...] = ()
+    # Units of food and drink held that the core will not let this character
+    # consume, because the item's RequiredLevel is above the character's level.
+    # Never counted in `food_carried` / `drink_carried`; kept only so `plan` can
+    # say so.
+    too_high: int = 0
 
     def carries(self, what: str) -> int:
         """Units of food or drink in the bags, however they got there."""
@@ -652,6 +657,12 @@ def plan(members, town: Town) -> Plan:
         errands.extend(got)
         notes.extend(said)
         blocked.extend(stopped)
+    for member in ordered:
+        if member.too_high:
+            notes.append(
+                f"{member.name} carries {member.too_high} food/drink above level "
+                f"{member.level}, which cannot be consumed and is not counted"
+            )
     # Food before drink because everybody eats and only the mana users drink,
     # so the first pass is the one that reaches the whole party.
     for what in (FOOD_KIND, DRINK_KIND):
@@ -900,6 +911,7 @@ def members_from_rows(rows, carried, spells, free_slots, names) -> tuple:
     stacks = {name: [] for name in wanted}
     food = {name: 0 for name in wanted}
     drink = {name: 0 for name in wanted}
+    too_high = {name: 0 for name in wanted}
     for row in carried:
         holder = row.get("holder")
         if holder not in food:
@@ -909,6 +921,17 @@ def members_from_rows(rows, carried, spells, free_slots, names) -> tuple:
             continue
         count = _int(row.get("carried"))
         if count <= 0:
+            continue
+        # A STACK THE HOLDER IS TOO LOW TO CONSUME IS NOT FOOD. The core refuses
+        # to let a character use an item above its level, so counting it kept a
+        # family of level 35-37 "stocked" on level 55 water and cinnamon rolls it
+        # could never touch: no drink was ever bought, and the between-pulls rest
+        # waited on mana that only standing still could restore. An unknown level
+        # (no worn row was read) counts everything, the same direction the rest
+        # of this seam errs: we could not see them, so we do not guess them short.
+        level = facts[holder].get("level", 0)
+        if level > 0 and _int(row.get("required_level")) > level:
+            too_high[holder] += count
             continue
         if what == FOOD_KIND:
             food[holder] += count
@@ -948,6 +971,7 @@ def members_from_rows(rows, carried, spells, free_slots, names) -> tuple:
                 drink[name],
                 frozenset(known[name]),
                 tuple(sorted(stacks[name], key=lambda s: s.guid)),
+                too_high[name],
             )
         )
     return tuple(members)

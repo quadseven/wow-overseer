@@ -24017,7 +24017,8 @@ _TOWN_WORN_SQL = (
 _TOWN_CARRIED_SQL = (
     "SELECT c.name AS holder, ii.guid AS guid, ii.itemEntry AS entry, "
     "it.name AS name, ii.count AS carried, "
-    "it.spellcategory_1 AS spell_category, it.Flags AS item_flags "
+    "it.spellcategory_1 AS spell_category, it.Flags AS item_flags, "
+    "it.RequiredLevel AS required_level "
     "FROM characters c "
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
