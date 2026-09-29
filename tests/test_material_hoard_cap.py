@@ -120,6 +120,10 @@ class TheVendorReadOffersTheSurplus(unittest.TestCase):
         over = [r for r in out if r["material_surplus"]]
         kept = [r for r in out if not r["material_surplus"]]
         self.assertEqual(sum(r["count"] for r in kept), disposition.MATERIAL_KEEP)
+        self.assertEqual(
+            {r["item_guid"] for r in kept},
+            set(disposition.material_keeps(hoard(40), materials.REAGENTS)),
+        )
         self.assertEqual(len(over), 40 - len(kept))
         self.assertGreater(len(over), 30)
 
