@@ -37,7 +37,9 @@ def _hold(jobs_now, questers=()):
         "_PACE_QUESTERS": set(questers),
     }
     module = ast.Module(body=[_source("_town_first_hold")], type_ignores=[])
-    exec(compile(ast.fix_missing_locations(module), "bridge", "exec"), ns)
+    exec(  # noqa: S102 - bridge.py's own source
+        compile(ast.fix_missing_locations(module), "bridge.py", "exec"), ns
+    )
     return ns["_town_first_hold"]
 
 
