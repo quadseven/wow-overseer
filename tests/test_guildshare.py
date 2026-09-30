@@ -618,6 +618,15 @@ class TheBridgeActuallyCallsThisTest(unittest.TestCase):
         self.assertIn("await self._write_guild_gifts(share.gifts)", body)
         self.assertIn("_insert_guild_gift", self._body("async def _write_guild_gifts"))
 
+    def test_the_surplus_pass_runs_for_every_roster_family(self):
+        loop = self._body("async def _guild_share_loop")
+        self.assertIn(
+            'await self._for_other_families("guild share", self._guild_share_once)',
+            loop,
+        )
+        body = self._body("async def _guild_share_once")
+        self.assertIn("cohort.names", body)
+
     def test_the_write_is_kind_give_with_its_own_source(self):
         start = self.source.index("def _insert_guild_gift(")
         body = self.source[start : self.source.index("\ndef ", start + 1)]

@@ -8890,7 +8890,7 @@ class Bridge(discord.Client):
             await self._for_other_families("materials", self._move_materials_once)
             await asyncio.sleep(cycle)
 
-    async def _guild_share_once(self) -> None:
+    async def _guild_share_once(self, cohort=None) -> None:
         """One pass of infra#3908: family surplus goes out to the guild.
 
         THE MIRROR OF _move_materials_once, AND THE ORDER IS THE SAME: fetch,
@@ -8911,12 +8911,16 @@ class Bridge(discord.Client):
         surplus when the run ends, and a family that stops a boss pull to hand
         a guildmate some cloth is not reading the room.
         """
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if cohort is None:
+            names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        else:
+            names = sorted(cohort.names)
         if not names:
             return
         if await self._mid_run(names):
-            log.info("guildshare: the family is in a dungeon run - "
-                     "the surplus waits")
+            family = "the family" if cohort is None else "family %s" % cohort.key
+            log.info("guildshare: %s is in a dungeon run - the surplus waits",
+                     family)
             return
 
         roster = await asyncio.to_thread(_fetch_guild_roster, names)
@@ -9350,7 +9354,8 @@ class Bridge(discord.Client):
         behind `_move_materials_loop` (90) on purpose and for a reason that
         is not about column contention at all: the family's own reagents must
         be gathered into the right bags before what is left over can honestly
-        be called spare.
+        be called spare. Other roster families get their own guarded surplus
+        pass after this family's gear hand-off has had its turn.
         """
         await self.wait_until_ready()
         cycle = float(os.environ.get("GUILD_SHARE_CYCLE_SECONDS", "600"))
@@ -9365,6 +9370,7 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("guild equip pass failed; retrying next cycle")
             await self._for_other_families("guild equip", self._guild_equip_once)
+            await self._for_other_families("guild share", self._guild_share_once)
             await asyncio.sleep(cycle)
 
     async def _settle_vendor_errand(self, names: list, leader: str) -> str:
