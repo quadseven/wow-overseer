@@ -441,7 +441,7 @@ def _wants(member: Member, what: str) -> bool:
 
 
 def _buy(member: Member, town: Town, what: str) -> tuple[list[Errand], list[str]]:
-    """Spend money on `what`, or say what stopped it. Unchanged rules."""
+    """Buy the best usable tier stocked by a reachable vendor, if any."""
     errands: list[Errand] = []
     notes: list[str] = []
     table = FOOD if what == FOOD_KIND else DRINK
@@ -450,10 +450,20 @@ def _buy(member: Member, town: Town, what: str) -> tuple[list[Errand], list[str]
     if short <= 0:
         return errands, notes
 
-    level, entry, name, price = _tier(table, member.level)
-    if entry not in town.stocks:
-        notes.append(f"no reachable vendor stocks {name} ({entry}) for {member.name}")
+    level, preferred_entry, preferred_name, _preferred_price = _tier(
+        table, member.level
+    )
+    eligible = [row for row in table if row[0] <= member.level]
+    if not eligible:
+        eligible = [table[0]]
+    stocked = [row for row in eligible if row[1] in town.stocks]
+    if not stocked:
+        notes.append(
+            f"no reachable vendor stocks {preferred_name} ({preferred_entry}) "
+            f"for {member.name}"
+        )
         return errands, notes
+    stocked_level, entry, name, price = stocked[-1]
 
     # A stack is a slot. Asking for one when there is none produces
     # "bags cannot take the item", which is true but is a sell problem
@@ -473,6 +483,8 @@ def _buy(member: Member, town: Town, what: str) -> tuple[list[Errand], list[str]
         return errands, notes
 
     why = f"carries {carried} {what}, wants a stack of {STACK}"
+    if stocked_level < level:
+        why += f"; {preferred_name} is unavailable here, using {name}"
     nxt = [row for row in table if row[0] > member.level]
     if nxt and nxt[0][0] - member.level <= 1:
         why += f"; one level short of {nxt[0][2]}"

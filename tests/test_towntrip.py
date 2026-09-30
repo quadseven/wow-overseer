@@ -100,6 +100,17 @@ class WhatTheTownCanAndCannotSupply(unittest.TestCase):
         self.assertEqual(len(drink), 1)
         self.assertIn("one level short of Sweet Nectar", drink[0].why)
 
+    def test_a_vendor_can_supply_a_lower_usable_drink_tier(self):
+        """Use available drink within the character's level when the best tier
+        is absent from the reachable vendor's stock."""
+        healer = Member("Healer", "priest", 35, 100_000, 4, (worn(1.0),))
+        town = Town(stocks=frozenset({1205, 8766}))
+        got = towntrip.plan((healer,), town)
+        drink = [e for e in got.errands if e.kind == "buy" and "1205" in e.command]
+        self.assertEqual(len(drink), 1)
+        self.assertIn("using Melon Juice", drink[0].why)
+        self.assertNotIn("8766", drink[0].command)
+
     def test_the_mage_is_sold_neither_food_nor_water(self):
         """He knows Conjure Food and Conjure Water. Selling him either is
         spending gold on something he makes for free.
