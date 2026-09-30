@@ -474,25 +474,28 @@ def _buy(member: Member, town: Town, what: str) -> tuple[list[Errand], list[str]
         )
         return errands, notes
 
-    ceiling = price * short
-    if member.money < ceiling:
+    quantity = min(short, member.money // price)
+    if quantity < 1:
         notes.append(
-            f"{member.name} cannot afford {short} x {name} "
-            f"({ceiling} copper against {member.money})"
+            f"{member.name} cannot afford 1 x {name} "
+            f"({price} copper against {member.money})"
         )
         return errands, notes
 
     why = f"carries {carried} {what}, wants a stack of {STACK}"
+    if quantity < short:
+        why += f"; can afford {quantity} of the {short} still needed"
     if stocked_level < level:
         why += f"; {preferred_name} is unavailable here, using {name}"
     nxt = [row for row in table if row[0] > member.level]
     if nxt and nxt[0][0] - member.level <= 1:
         why += f"; one level short of {nxt[0][2]}"
+    ceiling = price * quantity
     errands.append(
         Errand(
             member.name,
             BUY_KIND,
-            f"entry:{entry} count:{short} max:{ceiling}",
+            f"entry:{entry} count:{quantity} max:{ceiling}",
             why,
             ceiling,
         )
