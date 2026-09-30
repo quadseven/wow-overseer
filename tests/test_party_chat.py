@@ -23,13 +23,17 @@ since 2026-08-26 and `character_skills` gives him herbalism (mod-overseer#160,
 worse bug than the noise.
 """
 
+import ast
+import asyncio
 import inspect
 import pathlib
 import re
+import types
 import unittest
 
 import chat
 import craftpleas
+import dungeonpath
 import materials
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
@@ -173,6 +177,37 @@ class ReadTheRoomTest(unittest.TestCase):
         self.assertIn("_active_dungeon_run", body)
         self.assertIn("_roster_jobs", body)
         self.assertIn("chat.mid_run", body)
+
+    def test_fresh_instance_snapshot_holds_even_without_a_run_row(self):
+        source = ast.parse(_source())
+        bridge = next(
+            node
+            for node in source.body
+            if isinstance(node, ast.ClassDef) and node.name == "Bridge"
+        )
+        method = next(
+            node
+            for node in bridge.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_mid_run"
+        )
+        subject = ast.ClassDef(
+            name="Subject", bases=[], keywords=[], body=[method], decorator_list=[]
+        )
+        module = ast.fix_missing_locations(ast.Module(body=[subject], type_ignores=[]))
+        namespace = {
+            "asyncio": asyncio,
+            "chat": chat,
+            "dungeonpath": dungeonpath,
+            "_active_dungeon_run": lambda: None,
+            "_fetch_live_maps": lambda names: {"Zug": 389, "Oz": 389},
+            "_roster_jobs": lambda: {},
+            "log": types.SimpleNamespace(
+                debug=lambda *args: None, info=lambda *args: None
+            ),
+        }
+        exec(compile(module, "bridge.py", "exec"), namespace)  # noqa: S102
+        busy = asyncio.run(namespace["Subject"]()._mid_run(["Zug", "Oz"]))
+        self.assertTrue(busy)
 
     def test_a_craft_ask_mid_run_is_answered_with_not_now(self):
         body = _block("    async def _stood_down_for_craft(")
