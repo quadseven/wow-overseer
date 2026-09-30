@@ -213,67 +213,66 @@ def in_reach(master: dict, at: dict) -> bool:
     return dx * dx + dy * dy <= IN_REACH_YARDS**2
 
 
-def reopen_equip_attempts(history, learned, carried):
-    """Retire resolved equip attempts made before a carried weapon's skill
-    was learned.
-
-    `learned` rows carry `name`, a weapon skill-line id in `skill`, and the
-    command's terminal `learned_at` time. `carried` rows carry `holder`,
-    `entry`, and `item_subclass`. Only delivered or failed attempts are
-    retired; a queued command may still run and must remain in the retry set.
-    Newer attempts remain counted, so this reopens a candidate once instead
-    of resetting its give-up count on every pass.
-
-    Returns `(remaining_history, reopened_attempts)` for logging and tests.
-    """
+def _learned_weapon_times(rows):
+    """Most recent learning time for each character and weapon subclass."""
     subclass_by_skill = {
         skill: subclass for subclass, (skill, _spell) in WEAPON_SKILLS.items()
     }
     learned_at = {}
-    for row in learned or ():
+    for row in rows or ():
         try:
-            name = str(row["name"])
-            subclass = subclass_by_skill[int(row["skill"])]
-            at = row["learned_at"]
+            key = (str(row["name"]), subclass_by_skill[int(row["skill"])])
+            learned = row["learned_at"]
         except (KeyError, TypeError, ValueError):
             continue
-        if at is None:
-            continue
-        key = (name, subclass)
-        if key not in learned_at or at > learned_at[key]:
-            learned_at[key] = at
+        if learned is not None and (key not in learned_at or learned > learned_at[key]):
+            learned_at[key] = learned
+    return learned_at
 
-    subclass_by_command = {}
-    for row in carried or ():
+
+def _carried_weapon_commands(rows):
+    """Map each carried weapon equip command to its trained skill subclass."""
+    commands = {}
+    for row in rows or ():
         try:
-            item_class = int(row["item_class"] if "item_class" in row else row["class"])
+            item_class = int(row.get("item_class", row.get("class")))
             name = str(row.get("holder") or row["name"])
             entry = int(row["entry"])
-            subclass = int(
-                row["item_subclass"] if "item_subclass" in row else row["subclass"]
-            )
+            subclass = int(row.get("item_subclass", row.get("subclass")))
         except (KeyError, TypeError, ValueError):
             continue
         if item_class == ITEM_CLASS_WEAPON and subclass in WEAPON_SKILLS:
-            subclass_by_command[(name, "e Hitem:%d:0" % entry)] = subclass
+            commands[(name, "e Hitem:%d:0" % entry)] = subclass
+    return commands
 
+
+def _was_blocked_by_unlearned_skill(attempt, commands, learned_at) -> bool:
+    """Whether a resolved equip attempt predates learning its weapon skill."""
+    try:
+        key = (str(attempt["target_name"]), str(attempt["command"]))
+        subclass = commands[key]
+        learned = learned_at[(key[0], subclass)]
+        created = attempt["created_at"]
+        status = str(attempt["status"])
+    except (KeyError, TypeError):
+        return False
+    return (
+        status in {"delivered", "error"} and created is not None and created < learned
+    )
+
+
+def reopen_equip_attempts(history, learned, carried):
+    """Retire resolved attempts made before a carried weapon's skill was learned.
+
+    Pending and post-training attempts stay counted, so each eligible weapon
+    gets one retry without resetting its give-up count on every pass.
+    Returns `(remaining_history, reopened_attempts)`.
+    """
+    commands = _carried_weapon_commands(carried)
+    learned_at = _learned_weapon_times(learned)
     remaining, reopened = [], []
     for attempt in history or ():
-        try:
-            name = str(attempt["target_name"])
-            command = str(attempt["command"])
-            status = str(attempt["status"])
-            created_at = attempt["created_at"]
-            subclass = subclass_by_command[(name, command)]
-            trained_at = learned_at[(name, subclass)]
-        except (KeyError, TypeError):
-            remaining.append(attempt)
-            continue
-        if (
-            status in {"delivered", "error"}
-            and created_at is not None
-            and created_at < trained_at
-        ):
+        if _was_blocked_by_unlearned_skill(attempt, commands, learned_at):
             reopened.append(attempt)
         else:
             remaining.append(attempt)
