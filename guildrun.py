@@ -250,11 +250,8 @@ def why_not(
     resting: set,
     family: set,
     benched=frozenset(),
-    gear_gate: bool = True,
 ) -> str:
-    """Why this member cannot be picked now, or "". With gear_gate off the
-    gear check is skipped: the fallback for a realm where the gate alone
-    holds so many members home that no run can form at all."""
+    """Why this member cannot be picked now, or ""."""
     if member.name in family:
         return "a family member"
     if not member.online:
@@ -265,7 +262,7 @@ def why_not(
         return "resting after a run"
     if member.name in benched:
         return "refused a run just now"
-    if gear_gate and under_geared(member):
+    if under_geared(member):
         return "gear too weak for a dungeon"
     if not member.alive:
         return "dead"
@@ -276,6 +273,28 @@ def why_not(
     if member.map_id not in OPEN_WORLD_MAPS:
         return "inside an instance"
     return ""
+
+
+def free_members(
+    rows: list[dict],
+    busy: set[str],
+    resting: set[str],
+    family: set[str],
+    benched: frozenset[str] = frozenset(),
+) -> tuple[list[Member], dict[str, int]]:
+    """The free guild roster and the reasons each other member was held."""
+    free = []
+    held = {}
+    for row in rows:
+        member = member_from_row(row)
+        if member is None:
+            continue
+        why = why_not(member, busy, resting, family, benched)
+        if why:
+            held[why] = held.get(why, 0) + 1
+            continue
+        free.append(member)
+    return free, held
 
 
 def settling(uptime_seconds, settle_seconds: int = SETTLE_SECONDS) -> bool:

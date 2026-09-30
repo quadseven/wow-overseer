@@ -319,23 +319,27 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
             guildrun.why_not(member("U", 14, MAGE), set(), set(), set()), ""
         )
 
-    def test_the_gear_gate_can_be_lifted_for_the_fallback(self):
-        weak = member("Weak", 14, WARRIOR, gear_ilvl=2.0)
-        self.assertEqual(
-            guildrun.why_not(weak, set(), set(), set()), "gear too weak for a dungeon"
-        )
-        self.assertEqual(
-            guildrun.why_not(weak, set(), set(), set(), gear_gate=False), ""
-        )
-        # Lifting the gear gate lifts nothing else.
-        dead = member("Dead", 14, WARRIOR, gear_ilvl=2.0, health=0)
-        self.assertEqual(
-            guildrun.why_not(dead, set(), set(), set(), gear_gate=False), "dead"
+    def test_five_under_geared_members_cannot_form_a_dungeon_run(self):
+        rows = [
+            row("Member%d" % i, 17, WARRIOR, gear_ilvl=3.0)
+            for i in range(5)
+        ]
+        free, skipped = guildrun.free_members(
+            rows, set(), set(), set(), set()
         )
 
-    def test_the_bridge_falls_back_when_the_gear_gate_leaves_no_run(self):
-        self.assertIn("_free_members(False)", BRIDGE)
-        self.assertIn("forming without it", BRIDGE)
+        self.assertEqual(free, [])
+        self.assertEqual(skipped, {"gear too weak for a dungeon": 5})
+        self.assertEqual(guildrun.pools(free, DOORS), [])
+
+    def test_the_bridge_does_not_retry_without_the_gear_gate(self):
+        start = BRIDGE.index("    async def _guild_run_once(self)")
+        end = BRIDGE.index("\n    async def ", start + 1)
+        coordinator = BRIDGE[start:end]
+
+        self.assertIn("guildrun.free_members(", coordinator)
+        self.assertNotIn("_free_members(False)", coordinator)
+        self.assertNotIn("forming without it", coordinator)
 
     def test_the_bridge_reads_worn_item_level(self):
         sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
