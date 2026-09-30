@@ -692,11 +692,11 @@ def shop_supply_gaps(members) -> tuple[str, ...]:
     """Return member/resource pairs that need a vendor to reach one stack.
 
     This asks the same supply planner used at the counter, with every listed
-    tier hypothetically stocked and enough money and one bag slot available.
-    That isolates the question the between-run errand needs: can the family
-    cover this shortage by conjuring or handing over a spare stack, or must it
-    visit a vendor? Actual stock, purse, and bag capacity are checked again at
-    the counter before any command is written.
+    tier hypothetically stocked and enough money for a stack. It gives vendor
+    candidates a hypothetical free slot, but keeps conjurers' real bag room:
+    a full-bag conjurer needs the trip that lets the vendor pass make room.
+    Actual stock, purse, and capacity are checked again at the counter before
+    any command is written.
     """
     stocked = Town(
         vendor=True,
@@ -706,11 +706,26 @@ def shop_supply_gaps(members) -> tuple[str, ...]:
         replace(
             member,
             money=max(member.money, 100_000),
-            free_slots=max(member.free_slots, 1),
+            # A conjurer needs real bag room before its free route exists; a
+            # vendor errand can sell junk and make that room. For everyone
+            # else, one hypothetical slot isolates whether a vendor is needed.
+            free_slots=(
+                member.free_slots
+                if member.conjures(FOOD_KIND) or member.conjures(DRINK_KIND)
+                else max(member.free_slots, 1)
+            ),
         )
         for member in members
     ]
-    gaps = []
+    gaps = [
+        "%s %s" % (member.name, what)
+        for member in candidates
+        if member.free_slots < 1
+        for what in (FOOD_KIND, DRINK_KIND)
+        if _wants(member, what)
+        and member.conjures(what)
+        and member.carries(what) < STACK
+    ]
     for what in (FOOD_KIND, DRINK_KIND):
         errands, _notes = _supply(candidates, stocked, what)
         gaps.extend(

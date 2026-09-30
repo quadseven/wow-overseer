@@ -475,10 +475,21 @@ class BetweenRunSupplyNeed(unittest.TestCase):
             klass="mage",
             level=35,
             money=0,
-            free_slots=0,
+            free_slots=1,
             spells=frozenset(towntrip.CONJURE_FOOD | towntrip.CONJURE_WATER),
         )
         self.assertEqual((), towntrip.shop_supply_gaps([member]))
+
+    def test_a_full_bag_conjurer_needs_the_vendor_trip_that_frees_a_slot(self):
+        member = towntrip.Member(
+            name="Og",
+            klass="mage",
+            level=35,
+            money=0,
+            free_slots=0,
+            spells=frozenset(towntrip.CONJURE_FOOD | towntrip.CONJURE_WATER),
+        )
+        self.assertEqual(("Og food", "Og drink"), towntrip.shop_supply_gaps([member]))
 
 
 def _with_room(member):
