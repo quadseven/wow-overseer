@@ -702,15 +702,21 @@ def shop_supply_gaps(members) -> tuple[str, ...]:
         vendor=True,
         stocks=frozenset(row[1] for row in (*FOOD, *DRINK)),
     )
-    candidates = [replace(member, money=max(member.money, 100_000),
-                          free_slots=max(member.free_slots, 1))
-                  for member in members]
+    candidates = [
+        replace(
+            member,
+            money=max(member.money, 100_000),
+            free_slots=max(member.free_slots, 1),
+        )
+        for member in members
+    ]
     gaps = []
     for what in (FOOD_KIND, DRINK_KIND):
         errands, _notes = _supply(candidates, stocked, what)
         gaps.extend(
             "%s %s" % (errand.member, what)
-            for errand in errands if errand.kind == BUY_KIND
+            for errand in errands
+            if errand.kind == BUY_KIND
         )
     return tuple(gaps)
 

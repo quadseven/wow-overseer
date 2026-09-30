@@ -471,7 +471,11 @@ class BetweenRunSupplyNeed(unittest.TestCase):
 
     def test_a_mage_who_can_conjure_does_not_need_a_vendor(self):
         member = towntrip.Member(
-            name="Og", klass="mage", level=35, money=0, free_slots=0,
+            name="Og",
+            klass="mage",
+            level=35,
+            money=0,
+            free_slots=0,
             spells=frozenset(towntrip.CONJURE_FOOD | towntrip.CONJURE_WATER),
         )
         self.assertEqual((), towntrip.shop_supply_gaps([member]))

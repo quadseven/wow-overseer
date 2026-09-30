@@ -60,7 +60,11 @@ class TheStates(unittest.TestCase):
 
     def test_usable_supply_gap_starts_a_bounded_between_run_errand(self):
         why = te.should_start(
-            te.State(), now=0, in_run=False, mail_gear={}, facts={},
+            te.State(),
+            now=0,
+            in_run=False,
+            mail_gear={},
+            facts={},
             supply_gaps=("Grog drink", "Og food"),
         )
         self.assertEqual("family short of usable supplies: Grog drink, Og food", why)
@@ -69,8 +73,10 @@ class TheStates(unittest.TestCase):
         args = dict(now=100.0, mail_gear={}, facts={}, supply_gaps=("Og drink",))
         self.assertEqual("", te.should_start(te.State(), in_run=True, **args))
         self.assertEqual(
-            "", te.should_start(te.State(), in_run=False,
-                                stalled=te.HOLD_CEILING_SECONDS, **args)
+            "",
+            te.should_start(
+                te.State(), in_run=False, stalled=te.HOLD_CEILING_SECONDS, **args
+            ),
         )
 
     def test_a_short_member_with_its_own_gold_starts_it(self):
