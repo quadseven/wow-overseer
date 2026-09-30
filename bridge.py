@@ -41,6 +41,7 @@ import craftpleas
 import crossing
 import digest
 import disposition
+import dungeonpath
 import events
 import fanout
 import flightlearn

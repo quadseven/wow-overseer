@@ -181,11 +181,13 @@ class ReadTheRoomTest(unittest.TestCase):
     def test_fresh_instance_snapshot_holds_even_without_a_run_row(self):
         source = ast.parse(_source())
         bridge = next(
-            node for node in source.body
+            node
+            for node in source.body
             if isinstance(node, ast.ClassDef) and node.name == "Bridge"
         )
         method = next(
-            node for node in bridge.body
+            node
+            for node in bridge.body
             if isinstance(node, ast.AsyncFunctionDef) and node.name == "_mid_run"
         )
         subject = ast.ClassDef(
