@@ -579,7 +579,10 @@ class HoldersWalkToAMailbox(unittest.TestCase):
     def test_a_family_leader_can_walk_for_a_follower_held_guild_gift(self):
         route = replace(self.route, family=False)
         plan = guildroute.plan_mail_runs(
-            [route], {"Avenah": replace(_walker(), name="Bork")}, set(), 0,
+            [route],
+            {"Avenah": replace(_walker(), name="Bork")},
+            set(),
+            0,
             family_only=False,
         )
         self.assertEqual(len(plan.runs), 1)
@@ -594,7 +597,11 @@ class HoldersWalkToAMailbox(unittest.TestCase):
         bork = replace(_walker(), name="Bork")
         walkers = {"Avenah": bork, "Grog": bork}
         plan = guildroute.plan_mail_runs(
-            [first, second], walkers, {"Bork"}, 0, family_only=False,
+            [first, second],
+            walkers,
+            {"Bork"},
+            0,
+            family_only=False,
         )
         self.assertEqual(plan.runs, ())
         self.assertEqual(len(plan.notes), 2)
@@ -823,7 +830,7 @@ class TheBridgeWalksAndNeverGives(unittest.TestCase):
         bridge = (HERE / "bridge.py").read_text(encoding="utf-8")
         letters = bridge[bridge.index("def _route_letters_today(") :]
         letters = letters[: letters.index("\ndef _route_walks_today")]
-        self.assertIn('source = %s', letters)
+        self.assertIn("source = %s", letters)
         self.assertIn('"guildshare"', letters)
         self.assertIn('guildroute.SOURCE + ":%"', letters)
 

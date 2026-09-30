@@ -451,7 +451,9 @@ def plan_mail_runs(
         walker_name = str(getattr(walker, "name", "") or holder)
         if walker_name in busy:
             if not any((r.walker_name or r.holder) == walker_name for r in runs):
-                notes.append("%s: %s is already walking to a mailbox" % (wait, walker_name))
+                notes.append(
+                    "%s: %s is already walking to a mailbox" % (wait, walker_name)
+                )
             continue
         why = _cannot_walk(walker, holder, max_yards)
         if why:
