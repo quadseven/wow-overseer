@@ -615,7 +615,9 @@ class TheBridgeActuallyCallsThisTest(unittest.TestCase):
     def test_the_pass_writes_a_command_and_does_not_merely_log(self):
         body = self._body("async def _guild_share_once")
         self.assertIn("guildshare.plan", body)
-        self.assertIn("await self._write_guild_gifts(share.gifts)", body)
+        self.assertIn(
+            "await self._write_guild_gifts(share.gifts, cohort=cohort)", body
+        )
         self.assertIn("_insert_guild_gift", self._body("async def _write_guild_gifts"))
 
     def test_the_surplus_pass_runs_for_every_roster_family(self):

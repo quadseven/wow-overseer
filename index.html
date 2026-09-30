@@ -2406,6 +2406,8 @@
   #family { display:none; margin:0 1rem 1.5rem; }
   #fheadline { margin-bottom:.6rem; overflow-wrap:anywhere; color:var(--dim); }
   #fheadline.alarm { color:var(--warn-text); }
+  .auranote { margin:0 0 .75rem; color:var(--shell-dim);
+              font-size:.9rem; line-height:1.5; }
   /* ONE column until there is honestly room for two, then three (3+2), then
      all five in a row. Explicit stops rather than auto-fit so the shape is
      the same on every visit: a 3+2 that turns into a 4+1 as a window is
@@ -3598,6 +3600,7 @@
        separately. -->
   <div class="fsec"><span class="fsecn">01</span><span class="fsecline"></span><span class="fsecl">the family</span></div>
   <div id="fheadline">reaching the world...</div>
+  <p class="auranote">The live dashboard doesn't show current auras, so their present buff status is unconfirmed.</p>
   <!-- THE FIVE FEEDS, and nothing between them and the top of the tab
        (infra#88). One card per character: their broadcast at the full
        width of its column, then one strip of facts about them. The
@@ -3659,6 +3662,7 @@
      composes - this markup holds no sentence of its own. -->
 <section id="watch">
   <div id="wallhead">reaching the world...</div>
+  <p class="auranote">The live dashboard doesn't show current auras, so their present buff status is unconfirmed.</p>
   <div class="wbar">
     <div id="wallmodes" role="group" aria-label="wall layout"></div>
     <span class="wspacer"></span>
