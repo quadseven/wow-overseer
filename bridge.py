@@ -15293,32 +15293,10 @@ class Bridge(discord.Client):
                      ", ".join(sorted(facts["benched"])) or "them")
         doors = guildrun.doors(facts["finder_floors"])
 
-        def _free_members(gear_gate: bool):
-            free: list = []
-            held: dict = {}
-            for row in facts["rows"]:
-                member = guildrun.member_from_row(row)
-                if member is None:
-                    continue
-                why = guildrun.why_not(member, facts["busy"], facts["resting"],
-                                       facts["family"], facts["benched"], gear_gate)
-                if why:
-                    held[why] = held.get(why, 0) + 1
-                    continue
-                free.append(member)
-            return free, held
-
-        members, skipped = _free_members(True)
+        members, skipped = guildrun.free_members(
+            facts["rows"], facts["busy"], facts["resting"],
+            facts["family"], facts["benched"])
         pools = guildrun.pools(members, doors)
-        if not pools and skipped.get("gear too weak for a dungeon"):
-            # A gate that holds everyone home stalls the guild for good, and
-            # dungeon drops are how a guild gears. Try again without it.
-            open_members, open_skipped = _free_members(False)
-            open_pools = guildrun.pools(open_members, doors)
-            if open_pools:
-                log.info("guild runs: the gear gate held %d member(s) home and no run "
-                         "could form; forming without it", skipped["gear too weak for a dungeon"])
-                members, skipped, pools = open_members, open_skipped, open_pools
         if not pools:
             log.info("guild runs: %d free member(s) in %s, and no five of one guild and one "
                      "band can be seated for a door (%s)", len(members),
