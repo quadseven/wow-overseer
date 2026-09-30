@@ -21,6 +21,7 @@ import guildwork
 import mailrun
 import situation
 import townerrand as te
+import towntrip
 
 BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
     encoding="utf-8"
@@ -56,6 +57,27 @@ class TheStates(unittest.TestCase):
             te.State(), now=0, in_run=False, mail_gear={"Bork": 3}, facts={}
         )
         self.assertIn("Bork", why)
+
+    def test_usable_supply_gap_starts_a_bounded_between_run_errand(self):
+        why = te.should_start(
+            te.State(),
+            now=0,
+            in_run=False,
+            mail_gear={},
+            facts={},
+            supply_gaps=("Grog drink", "Og food"),
+        )
+        self.assertEqual("family short of usable supplies: Grog drink, Og food", why)
+
+    def test_supply_errand_still_cannot_interrupt_a_run_or_hold_past_ceiling(self):
+        args = dict(now=100.0, mail_gear={}, facts={}, supply_gaps=("Og drink",))
+        self.assertEqual("", te.should_start(te.State(), in_run=True, **args))
+        self.assertEqual(
+            "",
+            te.should_start(
+                te.State(), in_run=False, stalled=te.HOLD_CEILING_SECONDS, **args
+            ),
+        )
 
     def test_a_short_member_with_its_own_gold_starts_it(self):
         facts = {
@@ -375,6 +397,7 @@ class TheAdapter(unittest.TestCase):
             "log": types.SimpleNamespace(info=lambda *a, **k: None),
             "time": types.SimpleNamespace(monotonic=lambda: self.now),
             "townerrand": te,
+            "towntrip": towntrip,
             "mailrun": mailrun,
             "TOWN_COUNTER_YARDS": 8,
             "GIVE_RETRY_MINUTES": 10,
@@ -420,6 +443,9 @@ class TheAdapter(unittest.TestCase):
             "_fetch_mail": lambda names: letters,
             "_recent_mail_keys": lambda minutes: set(),
             "_fetch_free_slots": lambda names: {"Bork": 5, "Grug": 5},
+            "_fetch_town_worn": lambda names: [],
+            "_fetch_town_carried": lambda names: [],
+            "_fetch_town_spells": lambda names: [],
             "_insert_mail": lambda take, command: (
                 self.written.append((take.character, command)) or 1
             ),
@@ -462,6 +488,25 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual(["town run"], self.jobs)
         self.assertIn("town errand", self.fam.slot.reserved)
         self.assertEqual(("town errand", "Grug", "at:0:100,100,10"), self.fam.aims[-1])
+
+    def test_usable_vendor_supply_gap_starts_the_errand_between_runs(self):
+        self.ns["_mail_gear_holders"] = lambda names: {}
+        self.ns["_fetch_gearup_facts"] = lambda names: {
+            "Bork": {"equipped": {"mainhand": 19}, "purse": 0},
+            "Grug": {"equipped": {"mainhand": 30}, "purse": 0},
+        }
+        self.ns["_fetch_town_worn"] = lambda names: [
+            {"holder": "Bork", "klass": "rogue", "level": 35},
+            {"holder": "Grug", "klass": "warrior", "level": 39},
+        ]
+        state = self.tick()
+        self.assertEqual(te.GO, state.phase)
+        self.assertIn("short of usable supplies", state.why)
+
+    def test_supply_need_does_not_read_inventory_or_start_inside_a_run(self):
+        self.fam._mid_run = lambda names: asyncio.sleep(0, result=True)
+        state = self.tick()
+        self.assertEqual(te.IDLE, state.phase)
 
     def test_no_take_is_written_until_the_member_stands_at_the_mailbox(self):
         self.tick()

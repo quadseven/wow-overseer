@@ -13907,9 +13907,29 @@ class Bridge(discord.Client):
         """Start the errand if `townerrand.should_start` gives a reason."""
         facts = await asyncio.to_thread(_fetch_gearup_facts, names)
         mail_gear = await asyncio.to_thread(_mail_gear_holders, names)
+        stalled = _queue_stall_floor(names)
         why = townerrand.should_start(
             state, now=now, in_run=in_run, mail_gear=mail_gear, facts=facts,
-            stalled=_queue_stall_floor(names))
+            stalled=stalled)
+        if (not why and not in_run
+                and stalled < townerrand.HOLD_CEILING_SECONDS
+                and not (state.ended and now - state.ended
+                         < townerrand.COOLDOWN_SECONDS)):
+            # CONJURED SUPPLIES ARE THE FREE ROUTE AND DO NOT TRAVEL HERE.
+            # Ask towntrip whether a vendor is needed only after its hand-on
+            # and conjure routes have been accounted for. The planner repeats
+            # the decision at the counter using fresh stock, purse, and space.
+            members = towntrip.members_from_rows(
+                await asyncio.to_thread(_fetch_town_worn, names),
+                await asyncio.to_thread(_fetch_town_carried, names),
+                await asyncio.to_thread(_fetch_town_spells, names),
+                await asyncio.to_thread(_fetch_free_slots, names),
+                names,
+            )
+            why = townerrand.should_start(
+                state, now=now, in_run=in_run, mail_gear=mail_gear,
+                facts=facts, supply_gaps=towntrip.shop_supply_gaps(members),
+                stalled=stalled)
         if not why:
             return state
         # AN ABSENT HEAD IS A WAIT, NOT A FAILED START. mod-overseer holds the
