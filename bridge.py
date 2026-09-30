@@ -8758,11 +8758,33 @@ class Bridge(discord.Client):
         return {move.guid for move in equips}
 
     async def _mid_run(self, names: list) -> bool:
-        """Is any of these characters in the middle of a dungeon run?"""
+        """Is any of these characters in the middle of a dungeon run?
+
+        The durable run row is not the only evidence: family campaigns can be
+        inside a known dungeon map before or without that row being written.
+        Fresh member snapshots keep every pass from treating that gap as an
+        invitation to change jobs mid-run.
+        """
         run = await asyncio.to_thread(_active_dungeon_run)
+        live_maps = await asyncio.to_thread(_fetch_live_maps, names)
+        dungeon_maps = set(dungeonpath.PORTAL_MAPS.values())
+        inside = next(
+            (
+                int(map_id)
+                for map_id in (live_maps or {}).values()
+                if int(map_id) in dungeon_maps
+            ),
+            None,
+        )
+        if inside is not None:
+            log.debug(
+                "run: fresh family snapshot on dungeon map %s keeps activity "
+                "and other passes from changing jobs",
+                inside,
+            )
+            return True
         if not run:
             return False
-        live_maps = await asyncio.to_thread(_fetch_live_maps, names)
         if not chat.run_has_present_member(run, live_maps):
             log.info(
                 "run: ignoring stale active row %s because no named member "
