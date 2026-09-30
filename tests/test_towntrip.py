@@ -100,6 +100,29 @@ class WhatTheTownCanAndCannotSupply(unittest.TestCase):
         self.assertEqual(len(drink), 1)
         self.assertIn("one level short of Sweet Nectar", drink[0].why)
 
+    def test_level_appropriate_drink_is_bought_in_an_affordable_quantity(self):
+        """An unusable high-level stack is not stock. Buy a full stack when
+        the purse allows it, otherwise buy the affordable partial quantity."""
+        og = Member("Og", "mage", 35, 194034, 6, (), too_high=22)
+        grog = Member("Grog", "paladin", 37, 15152, 16, (), too_high=29)
+        ugga = Member("Ugga", "priest", 35, 10990, 6, (), too_high=31)
+        moonberry = Town(repairs=True, stocks=frozenset({1645}))
+
+        got = towntrip.plan((og, grog, ugga), moonberry)
+        buys = {e.member: e for e in got.errands if e.kind == "buy"}
+
+        self.assertEqual(
+            {name: e.command for name, e in buys.items()},
+            {
+                "Og": "entry:1645 count:20 max:40000",
+                "Grog": "entry:1645 count:7 max:14000",
+                "Ugga": "entry:1645 count:5 max:10000",
+            },
+        )
+        self.assertNotIn("can afford", buys["Og"].why)
+        self.assertIn("7 of the 20", buys["Grog"].why)
+        self.assertIn("5 of the 20", buys["Ugga"].why)
+
     def test_a_vendor_can_supply_a_lower_usable_drink_tier(self):
         """Use available drink within the character's level when the best tier
         is absent from the reachable vendor's stock."""
