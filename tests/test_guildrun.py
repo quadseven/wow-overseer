@@ -320,13 +320,8 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         )
 
     def test_five_under_geared_members_cannot_form_a_dungeon_run(self):
-        rows = [
-            row("Member%d" % i, 17, WARRIOR, gear_ilvl=3.0)
-            for i in range(5)
-        ]
-        free, skipped = guildrun.free_members(
-            rows, set(), set(), set(), set()
-        )
+        rows = [row("Member%d" % i, 17, WARRIOR, gear_ilvl=3.0) for i in range(5)]
+        free, skipped = guildrun.free_members(rows, set(), set(), set(), set())
 
         self.assertEqual(free, [])
         self.assertEqual(skipped, {"gear too weak for a dungeon": 5})
