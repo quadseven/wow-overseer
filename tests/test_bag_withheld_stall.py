@@ -598,6 +598,7 @@ def _run_vendor_once(queued, at_vendor=True):
             "_current_travel_npc": lambda name: "",
             "_release_trade_errand": lambda *a: False,
             "_fetch_surplus_gear": lambda names: [],
+            "_fetch_equip_candidate_gear": lambda names: [],
             "_fetch_family_equipped": lambda names: [],
             "_campaign_waiting": lambda names: queued,
             "_town_first_hold": lambda names: False,
