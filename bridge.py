@@ -5296,6 +5296,9 @@ class Bridge(discord.Client):
         # with a kind in act mode is waited on for at most
         # JEV_ACT_WAIT_SECONDS; past that it runs on and records late.
         self._jev_tasks: dict = {}
+        # The next bounded question in each family's stable item ordering.
+        # Kept in memory because these are observations, not durable choices.
+        self._jev_question_offsets: dict[tuple[str, ...], int] = {}
         # Record writers for passes that answered too late to act, held for
         # the same reason.
         self._jev_writes: set = set()
@@ -9957,7 +9960,16 @@ class Bridge(discord.Client):
         # and the vendor half read below, reused rather than fetched twice,
         # so a cycle that reaches the vendor half costs exactly what it did
         # before and a quiet cycle pays for the pass it is now running.
+        # Keep common-quality pieces out of the gift and disposal inputs, but
+        # let the holder's equip pass and Jev see every wearable carried item.
         gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
+        equip_rows = await asyncio.to_thread(_fetch_equip_candidate_gear, names)
+        jev_rows_by_guid = {int(row["item_guid"]): row for row in equip_rows}
+        jev_rows_by_guid.update({int(row["item_guid"]): row for row in gear_rows})
+        jev_rows = sorted(
+            jev_rows_by_guid.values(),
+            key=lambda row: (str(row.get("holder", "")), int(row["item_guid"])),
+        )
         worn = await asyncio.to_thread(_fetch_family_equipped, names)
         # THE HAND-OFF IS TRIED FIRST, AND IT IS TRIED WHETHER OR NOT ANYTHING
         # IS FOR SALE. A piece a sibling should be wearing is worth more on
@@ -9972,14 +9984,14 @@ class Bridge(discord.Client):
         # the equip pass do (jev_items.act_plan), through their own rows and
         # no other. A late, absent or unsure answer changes nothing. With
         # every kind in shadow nothing waits at all.
-        jev_plan = await self._jev_items_plan(gear_rows, worn, names)
+        jev_plan = await self._jev_items_plan(jev_rows, worn, names)
         await self._hand_gear(gear_rows, worn, names, jev_plan)
         # AND WHAT THE HOLDER WOULD WEAR IS PUT ON (#146). The same two reads,
         # the same opinion (`gear.claimant` naming the holder), and like the
         # hand-off it needs no vendor, leader or counter, so it runs above the
         # town-run gate. The piece it takes off is carried from then on and
         # meets the ordinary disposition on a later cycle.
-        await self._equip_upgrades(gear_rows, worn, names, jev_plan)
+        await self._equip_upgrades(equip_rows, worn, names, jev_plan)
 
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
@@ -10404,6 +10416,13 @@ class Bridge(discord.Client):
         """
         history = await asyncio.to_thread(_equip_history, EQUIP_MEMORY_HOURS,
                                           EQUIP_RETRY_MINUTES)
+        trained = await asyncio.to_thread(_weapon_skill_changes, list(names))
+        history, reopened = weaponskill.reopen_equip_attempts(
+            history, trained, gear_rows)
+        if reopened:
+            log.info(
+                "equip: weapon skill learned; reopened %d earlier attempt(s) for "
+                "currently carried weapons", len(reopened))
         # A level change re-opens every slot: attempts made at the old level
         # neither hold a piece back nor count towards giving up on it.
         changed = await asyncio.to_thread(_level_changes, list(names))
@@ -10553,18 +10572,23 @@ class Bridge(discord.Client):
         if not gear_rows or not self._jev.ready(jev_items.KIND_DISPOSITION):
             # No key: the client says so once, and no read is spent on it.
             return []
+        family_key = tuple(sorted(names))
+        offset = self._jev_question_offsets.get(family_key, 0)
+        limit = max(0, int(JEV_SHADOW_LIMIT))
         worn_items = await asyncio.to_thread(_fetch_jev_worn, names)
         entries = {int(r["entry"]) for r in gear_rows if r.get("entry")}
         entries |= {int(r["entry"]) for r in worn_items if r.get("entry")}
         describe = await self._jev_describer(entries)
         specs = jev_items.specs_for(names, bonds.FAMILY, _jev_trees_for)
-        return await jev_items.shadow_pass(
+        judgments = await jev_items.shadow_pass(
             self._jev, gear_rows=gear_rows, worn_rows=worn,
             worn_items=worn_items, names=names, describe=describe,
             specs=specs, keep_names=OWNER_KEEPS, modes=modes,
-            limit=JEV_SHADOW_LIMIT, heads=tuple(bonds.HOUSES),
+            limit=limit, offset=offset, heads=tuple(bonds.HOUSES),
             banked=await asyncio.to_thread(_bank_policy_lines_or_none, names),
         )
+        self._jev_question_offsets[family_key] = offset + limit
+        return judgments
 
     async def _jev_describer(self, entries):
         """entry -> the Armory's trimmed tooltip, over one read of the facts."""
@@ -18614,6 +18638,50 @@ def _fetch_surplus_gear(names: list) -> list:
         return [dict(row) for row in cur.fetchall()]
 
 
+# Carried weapons and armour considered only by the holder's equip/Jev pass.
+# This is deliberately separate from `_SURPLUS_GEAR_SQL`, which feeds family
+# fitting, gifts and disposal and must retain its uncommon-quality floor.
+# Common gear can still be the only upgrade its holder has in their bags.
+_EQUIP_CANDIDATE_GEAR_SQL = (
+    "SELECT c.name AS holder, c.level AS level, ii.guid AS item_guid, "
+    "ii.itemEntry AS entry, "
+    "ii.count AS count, ii.flags AS instance_flags, it.name AS name, "
+    "it.Quality AS quality, it.SellPrice AS sell_price, "
+    "it.RequiredLevel AS required_level, it.bonding AS bonding, "
+    "it.class AS item_class, it.subclass AS item_subclass, "
+    "it.BagFamily AS bag_family, "
+    "it.ItemLevel AS item_level, "
+    "it.AllowableClass AS allowable_class, "
+    "it.InventoryType AS inventory_type "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ((ci.bag = 0 AND ci.slot BETWEEN 19 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "AND it.class IN (2, 4) "
+    "AND it.InventoryType IN (1, 3, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, "
+    "17, 20, 21, 22, 23, 25, 26)"
+)
+
+
+def _fetch_equip_candidate_gear(names: list) -> list:
+    """Read every quality of carried gear with a slot the equip pass judges."""
+    if not names:
+        return []
+    sql = _EQUIP_CANDIDATE_GEAR_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("equip candidate gear facts unavailable on this world image")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
 # What each of the five is WEARING, which is the half of the family-fit gate
 # the carried-gear query cannot see (infra#3449). LEFT JOINed from
 # `characters` on purpose: a character wearing nothing must still come back
@@ -18624,7 +18692,8 @@ def _fetch_surplus_gear(names: list) -> list:
 # _SURPLUS_GEAR_SQL selects, so no item can appear in both.
 _FAMILY_EQUIPPED_SQL = (
     "SELECT c.name AS name, c.class AS class_id, c.level AS level, "
-    "it.InventoryType AS inventory_type, it.ItemLevel AS item_level "
+    "ci.slot AS equipment_slot, it.InventoryType AS inventory_type, "
+    "it.ItemLevel AS item_level "
     "FROM characters c "
     "LEFT JOIN character_inventory ci ON ci.guid = c.guid "
     "AND ci.bag = 0 AND ci.slot < 19 "
@@ -18639,7 +18708,8 @@ _FAMILY_EQUIPPED_SQL = (
 # leave the class packing to decide.
 _FAMILY_EQUIPPED_ROLES_SQL = (
     "SELECT c.name AS name, c.class AS class_id, c.level AS level, "
-    "it.InventoryType AS inventory_type, it.ItemLevel AS item_level, "
+    "ci.slot AS equipment_slot, it.InventoryType AS inventory_type, "
+    "it.ItemLevel AS item_level, "
     "r.spec_tab AS spec_tab, "
     "(SELECT COUNT(*) FROM overseer_raid_seat s "
     "WHERE s.name = c.name AND s.role = 'tank') AS tank_seat "
@@ -23911,6 +23981,35 @@ WEAPON_SKILL_CLAIMANT = "weapon master"
 # this long; the walk that closes the distance runs on the same cycle.
 WEAPON_TRAIN_RETRY_MINUTES = 10
 WEAPON_EQUIP_SOURCE = "gear:weapon-skill-equip"
+
+
+def _weapon_skill_changes(names: list) -> list:
+    """Applied weapon-training rows and the time each skill became usable.
+
+    `updated_at` is touched when the command reaches its terminal state, so it
+    records the skill-learning transition rather than the earlier request.
+    """
+    if not names:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name AS name, "
+                "CAST(SUBSTRING_INDEX(command, ':', -1) AS UNSIGNED) AS skill, "
+                "updated_at AS learned_at FROM overseer_command "
+                "WHERE kind = 'cast' AND source = %s AND status = 'applied' "
+                "AND command LIKE %s "
+                "AND updated_at > NOW() - INTERVAL %s HOUR "
+                "AND target_name IN (" + ",".join(["%s"] * len(names)) + ")",
+                [weaponskill.TRAIN_SOURCE, "train-weapon skill:%",
+                 int(EQUIP_MEMORY_HOURS), *names],
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("weapon skill: applied training history unavailable")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
 
 _BAG_WEAPONS_SQL = (
     "SELECT c.name, ii.itemEntry AS entry, it.name AS label, it.subclass, "

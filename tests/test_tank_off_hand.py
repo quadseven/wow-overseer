@@ -228,6 +228,61 @@ class TheWornOffHandIsRead(unittest.TestCase):
             {"Grug": gear.OFF_HAND_HELD, "Grog": gear.OFF_HAND_SHIELD}, got
         )
 
+    def test_generic_one_hand_weapon_uses_observed_equipment_position(self):
+        rows = [
+            dict(
+                name="Bork",
+                class_id=ROGUE,
+                level=35,
+                inventory_type=13,
+                equipment_slot=15,
+                item_level=35,
+            ),
+            dict(
+                name="Bork",
+                class_id=ROGUE,
+                level=35,
+                inventory_type=13,
+                equipment_slot=16,
+                item_level=19,
+            ),
+        ]
+        bork = gear.characters_from_rows(rows, ["Bork"])[0]
+        self.assertEqual(35, bork.equipped_level("main_hand"))
+        self.assertEqual(19, bork.equipped_level("off_hand"))
+        self.assertEqual(gear.OFF_HAND_WEAPON, bork.off_hand_kind)
+
+
+class ARoguesCarriedOneHanderCanImproveTheWeakerHand(unittest.TestCase):
+    def test_borks_carried_dagger_beats_his_offhand_and_is_selected(self):
+        bork = gear.CharacterState(
+            "Bork",
+            ROGUE,
+            35,
+            {"main_hand": 35, "off_hand": 19},
+            role=gear.ROLE_DAMAGE,
+            off_hand_kind=gear.OFF_HAND_WEAPON,
+        )
+        dagger = holding(
+            holder="Bork",
+            guid=5743667,
+            entry=6681,
+            name="Thornspike",
+            item_level=32,
+            required_level=27,
+            inventory_type=13,
+            item_class=gear.ITEM_CLASS_WEAPON,
+            item_subclass=gear.WEAPON_DAGGER,
+        )
+
+        ok, reason = gear.would_wear(dagger, bork)
+        self.assertTrue(ok)
+        self.assertIn("weaker hand", reason)
+        self.assertEqual(19, gear.worn_against(dagger, bork))
+        selected = gear.equips([dagger], [bork])
+        self.assertEqual(["Thornspike"], [equip.name for equip in selected])
+        self.assertEqual("main_hand", selected[0].slot)
+
 
 def equipped(name, class_id, spec_tab=None, tank_seat=None):
     row = dict(

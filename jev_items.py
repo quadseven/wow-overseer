@@ -474,6 +474,11 @@ def needs_weapon_question(item: dict, holding, wardrobe: Wardrobe) -> bool:
     worn = [wardrobe.worn[s] for s in _HANDS if s in wardrobe.worn]
     if not worn:
         return False
+    # A generic one-hand weapon fits either hand for a dual-wielding rogue.
+    # Item level alone cannot compare weapon damage, speed, stats, and effects
+    # across the currently equipped pair.
+    if int(holding.inventory_type) == 13 and int(wardrobe.class_id) == 4:
+        return True
     if item.get("effects") or any(w.get("effects") for w in worn):
         return True
     return int(holding.inventory_type) == _TWO_HAND and 16 in wardrobe.worn
@@ -488,26 +493,55 @@ def weapon_question(holding, item: dict, wardrobe: Wardrobe):
         (wardrobe.spec + " ") if wardrobe.spec else "",
         class_name(wardrobe.class_id),
     )
-    character = _who(
-        wardrobe, _HANDS, holding.item_level, upgrade_slots(holding.inventory_type)
+    hand_measure = (
+        _HANDS
+        if int(holding.inventory_type) == 13 and int(wardrobe.class_id) == 4
+        else upgrade_slots(holding.inventory_type)
     )
+    character = _who(wardrobe, _HANDS, holding.item_level, hand_measure)
     del character["wearing_in_those_slots"]
     state = {
         "character": character,
         "carried": item,
         "worn": worn,
+        "equipped_hands": {
+            "main_hand": wardrobe.worn.get(15),
+            "off_hand": wardrobe.worn.get(16),
+        },
     }
-    instructions = (
-        "`character` is %s. Which serves them better in the role their class "
-        "and specialization play: wielding `carried`, or keeping the weapons "
-        "in `worn`? Weigh weapon damage and speed, stats, and any on-hit or "
-        "equip effects, and what that role needs from its hands." % who
-    )
-    criteria = {
-        CARRIED: "%s wields %s instead of %s."
-        % (wardrobe.name, holding.name, worn_names),
-        WORN: "%s keeps %s." % (wardrobe.name, worn_names),
-    }
+    if int(holding.inventory_type) == 13 and int(wardrobe.class_id) == 4:
+        instructions = (
+            "`character` is %s. Compare `carried` with both equipped weapons "
+            "shown in `equipped_hands`, including their tooltip damage, speed, "
+            "stats, and effects. This is a generic one-hand weapon, so a rogue "
+            "can use it in either hand; judge whether it improves the pair "
+            "overall versus keeping both current weapons. If it should be "
+            "equipped, the normal Playerbot equip command chooses the hand "
+            "using its own scorer; this judgment does not select a hand." % who
+        )
+    else:
+        instructions = (
+            "`character` is %s. Which serves them better in the role their class "
+            "and specialization play: wielding `carried`, or keeping the weapons "
+            "in `worn`? Weigh weapon damage and speed, stats, and any on-hit or "
+            "equip effects, and what that role needs from its hands." % who
+        )
+    if int(holding.inventory_type) == 13 and int(wardrobe.class_id) == 4:
+        criteria = {
+            CARRIED: (
+                "%s uses %s in either hand, replacing one current weapon and "
+                "keeping the other; Playerbot chooses the destination hand "
+                "with its own scorer."
+            )
+            % (wardrobe.name, holding.name),
+            WORN: "%s keeps both current weapons: %s." % (wardrobe.name, worn_names),
+        }
+    else:
+        criteria = {
+            CARRIED: "%s wields %s instead of %s."
+            % (wardrobe.name, holding.name, worn_names),
+            WORN: "%s keeps %s." % (wardrobe.name, worn_names),
+        }
     return state, {"better": jev.choice(instructions, criteria)}
 
 
@@ -728,6 +762,19 @@ def _questions(family: _Family, gear_rows, describe) -> list:
     return asks
 
 
+def bounded_question_batch(asks, limit: int, offset: int = 0) -> list:
+    """Take an ordered, bounded batch starting at a deterministic rotation."""
+    questions = list(asks)
+    count = max(0, int(limit))
+    if count == 0 or not questions:
+        return []
+    if len(questions) <= count:
+        return questions
+    start = int(offset) % len(questions)
+    take = min(count, len(questions))
+    return [questions[(start + index) % len(questions)] for index in range(take)]
+
+
 async def shadow_pass(
     client: jev.Client,
     *,
@@ -740,6 +787,7 @@ async def shadow_pass(
     keep_names=(),
     modes=None,
     limit: int = 16,
+    offset: int = 0,
     heads=(),
     banked=None,
 ) -> list:
@@ -748,8 +796,9 @@ async def shadow_pass(
     `describe(entry)` returns an item description (the Armory's tooltip dict)
     or None. `modes` maps a kind to jev.OFF/SHADOW/ACT; a kind that is OFF is
     not asked at all. `limit` bounds the questions one pass may send, so a
-    newly full bag is judged over a few passes rather than in one burst; the
-    order is fixed (holder, then item guid) so every piece gets its turn.
+    newly full bag is judged over a few passes rather than in one burst. The
+    caller's per-family offset rotates bounded batches through holder/item
+    order so later entries are eventually judged too.
     """
     characters = tuple(bag_pressure.family_characters(worn_rows, names))
     family = _Family(
@@ -758,7 +807,9 @@ async def shadow_pass(
         pipeline=Pipeline.read(gear_rows, worn_rows, names, keep_names, banked),
         modes=dict(modes or {}),
     )
-    asks = _questions(family, gear_rows, describe)[: max(0, int(limit))]
+    asks = bounded_question_batch(
+        _questions(family, gear_rows, describe), limit, offset
+    )
     gate = asyncio.Semaphore(max(1, int(getattr(client, "concurrency", 1))))
     # Queued for a free slot rather than `busy` behind another kind (#267):
     # 97 of 480 answers in one day were `busy`. An act pass that waits on

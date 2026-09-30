@@ -21,6 +21,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# item_template.class for weapons. Kept local so this decision module does not
+# import gear.py and create a dependency cycle.
+ITEM_CLASS_WEAPON = 2
+
 # item_template.subclass for a weapon -> (SkillLine id, the trainer spell that
 # teaches it). Wands are left out: no trainer sells them, the class has them.
 WEAPON_SKILLS = {
@@ -207,3 +211,69 @@ def in_reach(master: dict, at: dict) -> bool:
     except (KeyError, TypeError, ValueError):
         return False
     return dx * dx + dy * dy <= IN_REACH_YARDS**2
+
+
+def _learned_weapon_times(rows):
+    """Most recent learning time for each character and weapon subclass."""
+    subclass_by_skill = {
+        skill: subclass for subclass, (skill, _spell) in WEAPON_SKILLS.items()
+    }
+    learned_at = {}
+    for row in rows or ():
+        try:
+            key = (str(row["name"]), subclass_by_skill[int(row["skill"])])
+            learned = row["learned_at"]
+        except (KeyError, TypeError, ValueError):
+            continue
+        if learned is not None and (key not in learned_at or learned > learned_at[key]):
+            learned_at[key] = learned
+    return learned_at
+
+
+def _carried_weapon_commands(rows):
+    """Map each carried weapon equip command to its trained skill subclass."""
+    commands = {}
+    for row in rows or ():
+        try:
+            item_class = int(row.get("item_class", row.get("class")))
+            name = str(row.get("holder") or row["name"])
+            entry = int(row["entry"])
+            subclass = int(row.get("item_subclass", row.get("subclass")))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if item_class == ITEM_CLASS_WEAPON and subclass in WEAPON_SKILLS:
+            commands[(name, "e Hitem:%d:0" % entry)] = subclass
+    return commands
+
+
+def _was_blocked_by_unlearned_skill(attempt, commands, learned_at) -> bool:
+    """Whether a resolved equip attempt predates learning its weapon skill."""
+    try:
+        key = (str(attempt["target_name"]), str(attempt["command"]))
+        subclass = commands[key]
+        learned = learned_at[(key[0], subclass)]
+        created = attempt["created_at"]
+        status = str(attempt["status"])
+    except (KeyError, TypeError):
+        return False
+    return (
+        status in {"delivered", "error"} and created is not None and created < learned
+    )
+
+
+def reopen_equip_attempts(history, learned, carried):
+    """Retire resolved attempts made before a carried weapon's skill was learned.
+
+    Pending and post-training attempts stay counted, so each eligible weapon
+    gets one retry without resetting its give-up count on every pass.
+    Returns `(remaining_history, reopened_attempts)`.
+    """
+    commands = _carried_weapon_commands(carried)
+    learned_at = _learned_weapon_times(learned)
+    remaining, reopened = [], []
+    for attempt in history or ():
+        if _was_blocked_by_unlearned_skill(attempt, commands, learned_at):
+            reopened.append(attempt)
+        else:
+            remaining.append(attempt)
+    return tuple(remaining), tuple(reopened)

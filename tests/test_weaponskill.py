@@ -6,6 +6,7 @@ warrior carried a Ravenwood Bow with no Bows skill and an empty ranged slot.
 """
 
 import ast
+import datetime
 import pathlib
 import unittest
 
@@ -83,6 +84,84 @@ class TheMaster(unittest.TestCase):
         self.assertFalse(ws.in_reach(master, {"map_id": 1, "pos_x": 0, "pos_y": 0}))
 
 
+class LearnedSkillReopensEquipRetries(unittest.TestCase):
+    def test_only_pre_learning_resolved_retries_for_carried_subclass_reopen(self):
+        before = datetime.datetime(2026, 9, 28, 12, 0)
+        learned_at = datetime.datetime(2026, 9, 28, 12, 5)
+        after = datetime.datetime(2026, 9, 28, 12, 6)
+        history = [
+            dict(
+                id=1,
+                target_name="Bork",
+                command="e Hitem:6681:0",
+                status="error",
+                created_at=before,
+            ),
+            dict(
+                id=2,
+                target_name="Bork",
+                command="e Hitem:6681:0",
+                status="delivered",
+                created_at=after,
+            ),
+            dict(
+                id=3,
+                target_name="Bork",
+                command="e Hitem:9999:0",
+                status="error",
+                created_at=before,
+            ),
+            dict(
+                id=4,
+                target_name="Bork",
+                command="e Hitem:6681:0",
+                status="pending",
+                created_at=before,
+            ),
+        ]
+        learned = [dict(name="Bork", skill=173, learned_at=learned_at)]
+        carried = [dict(holder="Bork", entry=6681, item_class=2, item_subclass=15)]
+
+        remaining, reopened = ws.reopen_equip_attempts(history, learned, carried)
+
+        self.assertEqual([1], [row["id"] for row in reopened])
+        self.assertEqual([2, 3, 4], [row["id"] for row in remaining])
+
+    def test_training_a_different_weapon_skill_does_not_reopen_attempt(self):
+        failed = dict(
+            target_name="Bork",
+            command="e Hitem:6681:0",
+            status="error",
+            created_at=datetime.datetime(2026, 9, 28, 12),
+        )
+        learned = [
+            dict(name="Bork", skill=44, learned_at=datetime.datetime(2026, 9, 28, 13))
+        ]
+        carried = [dict(holder="Bork", entry=6681, item_class=2, item_subclass=15)]
+
+        remaining, reopened = ws.reopen_equip_attempts([failed], learned, carried)
+
+        self.assertEqual((failed,), remaining)
+        self.assertEqual((), reopened)
+
+    def test_armor_with_matching_subclass_does_not_reopen_weapon_attempt(self):
+        failed = dict(
+            target_name="Bork",
+            command="e Hitem:6681:0",
+            status="error",
+            created_at=datetime.datetime(2026, 9, 28, 12),
+        )
+        learned = [
+            dict(name="Bork", skill=173, learned_at=datetime.datetime(2026, 9, 28, 13))
+        ]
+        carried = [dict(holder="Bork", entry=6681, item_class=4, item_subclass=15)]
+
+        remaining, reopened = ws.reopen_equip_attempts([failed], learned, carried)
+
+        self.assertEqual((failed,), remaining)
+        self.assertEqual((), reopened)
+
+
 class TheBridge(unittest.TestCase):
     def test_the_loop_runs_and_the_module_ships(self):
         self.assertEqual(2, BRIDGE.count("self._weapon_skill_loop,"))
@@ -96,6 +175,7 @@ class TheBridge(unittest.TestCase):
         }
         for fn in (
             "_weapon_skill_once",
+            "_weapon_skill_changes",
             "_fetch_bag_weapons",
             "_fetch_weapon_masters",
             "_insert_weapon_train",
@@ -103,6 +183,14 @@ class TheBridge(unittest.TestCase):
             "_insert_weapon_equip",
         ):
             self.assertIn(fn, names)
+
+    def test_equip_retry_history_reopens_after_applied_skill_training(self):
+        self.assertIn("weaponskill.reopen_equip_attempts", BRIDGE)
+        body = BRIDGE[BRIDGE.index("def _weapon_skill_changes(") :]
+        body = body[: body.index("_BAG_WEAPONS_SQL =")]
+        self.assertIn("status = 'applied'", body)
+        self.assertIn("updated_at AS learned_at", body)
+        self.assertIn("weaponskill.TRAIN_SOURCE", body)
 
     def test_the_row_is_the_verb_the_module_reads(self):
         self.assertIn("VALUES (%s, %s, 'cast', %s, %s)", BRIDGE)

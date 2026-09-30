@@ -202,6 +202,85 @@ class DestinyTest(unittest.TestCase):
             {jev_items.CARRIED, jev_items.WORN},
         )
 
+
+class QuestionBatchRotationTest(unittest.TestCase):
+    def test_later_items_are_reached_without_exceeding_the_limit(self):
+        asks = list(range(21))
+        first = jev_items.bounded_question_batch(asks, limit=16, offset=0)
+        second = jev_items.bounded_question_batch(asks, limit=16, offset=16)
+        self.assertEqual(first, asks[:16])
+        self.assertEqual(second, asks[16:] + asks[:11])
+        self.assertEqual(len(first), 16)
+        self.assertEqual(len(second), 16)
+        self.assertEqual(set(first) | set(second), set(asks))
+
+    def test_small_batches_keep_the_original_order(self):
+        asks = ["Bork", "Grog", "Og"]
+        self.assertEqual(
+            jev_items.bounded_question_batch(asks, limit=16, offset=100), asks
+        )
+
+    def test_bridge_keeps_an_independent_offset_for_each_family(self):
+        self.assertIn(
+            "self._jev_question_offsets: dict[tuple[str, ...], int] = {}", BRIDGE
+        )
+        body = BRIDGE[BRIDGE.index("    async def _jev_shadow_once(") :]
+        body = body[: body.index("\n    async def ")]
+        self.assertIn("family_key = tuple(sorted(names))", body)
+        self.assertIn("offset=offset", body)
+        self.assertIn("self._jev_question_offsets[family_key] = offset + limit", body)
+
+    def test_rogue_one_hand_weapon_compares_with_both_hands_and_keeps_one(self):
+        row = carried(
+            holder="Bork",
+            name="Thornspike",
+            entry=6681,
+            item_class=gear.ITEM_CLASS_WEAPON,
+            item_subclass=gear.WEAPON_DAGGER,
+            inventory_type=13,
+            item_level=25,
+        )
+        item = {
+            "name": "Thornspike",
+            "item_level": 25,
+            "damage": {"min": 8, "max": 15, "speed": 1.3, "dps": 8.8},
+        }
+        wardrobe = jev_items.Wardrobe(
+            "Bork",
+            ROGUE,
+            35,
+            "Combat",
+            {
+                15: {
+                    "name": "Swinetusk Shank",
+                    "item_level": 35,
+                    "damage": {"min": 20, "max": 30, "speed": 1.7, "dps": 14.7},
+                },
+                16: {
+                    "name": "Poniard",
+                    "item_level": 19,
+                    "damage": {"min": 7, "max": 15, "speed": 1.3, "dps": 8.5},
+                },
+            },
+        )
+
+        rogue = next(c for c in characters() if c.class_id == ROGUE)
+        self.assertTrue(jev_items.can_wield(holding(row), rogue))
+        self.assertTrue(jev_items.needs_weapon_question(item, holding(row), wardrobe))
+
+        state, questions = jev_items.weapon_question(holding(row), item, wardrobe)
+        self.assertEqual(
+            state["equipped_hands"]["main_hand"]["name"], "Swinetusk Shank"
+        )
+        self.assertEqual(state["equipped_hands"]["off_hand"]["name"], "Poniard")
+        self.assertIn("damage", state["equipped_hands"]["main_hand"])
+        self.assertIn("damage", state["equipped_hands"]["off_hand"])
+        self.assertEqual(state["character"]["upgrade_item_levels"], 6)
+        carried_choice = questions["better"]["criteria"][jev_items.CARRIED]
+        self.assertIn("replacing one current weapon", carried_choice)
+        self.assertIn("keeping the other", carried_choice)
+        self.assertIn("Playerbot chooses the destination hand", carried_choice)
+
     def test_a_class_that_cannot_wield_it_is_never_offered_it(self):
         offered = jev_items.options(carried(), holding(carried()), characters())
         # The paladin can equip it, the warrior can be handed it; the priest,
@@ -408,11 +487,11 @@ class BridgeWiringTest(unittest.TestCase):
         equip pass; both above the town-run gate, as before."""
         body = BRIDGE[BRIDGE.index("    async def _vendor_once(") :]
         plan = body.index(
-            "jev_plan = await self._jev_items_plan(gear_rows, worn, names)"
+            "jev_plan = await self._jev_items_plan(jev_rows, worn, names)"
         )
         give = body.index("await self._hand_gear(gear_rows, worn, names, jev_plan)")
         equip = body.index(
-            "await self._equip_upgrades(gear_rows, worn, names, jev_plan)"
+            "await self._equip_upgrades(equip_rows, worn, names, jev_plan)"
         )
         gate = body.index("self._vendor_pass_mode(", equip)
         self.assertLess(plan, give)
