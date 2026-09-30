@@ -202,6 +202,57 @@ class DestinyTest(unittest.TestCase):
             {jev_items.CARRIED, jev_items.WORN},
         )
 
+    def test_rogue_one_hand_weapon_compares_with_both_hands_and_keeps_one(self):
+        row = carried(
+            holder="Bork",
+            name="Thornspike",
+            entry=6681,
+            item_class=gear.ITEM_CLASS_WEAPON,
+            item_subclass=gear.WEAPON_DAGGER,
+            inventory_type=13,
+            item_level=25,
+        )
+        item = {
+            "name": "Thornspike",
+            "item_level": 25,
+            "damage": {"min": 8, "max": 15, "speed": 1.3, "dps": 8.8},
+        }
+        wardrobe = jev_items.Wardrobe(
+            "Bork",
+            ROGUE,
+            35,
+            "Combat",
+            {
+                15: {
+                    "name": "Swinetusk Shank",
+                    "item_level": 35,
+                    "damage": {"min": 20, "max": 30, "speed": 1.7, "dps": 14.7},
+                },
+                16: {
+                    "name": "Poniard",
+                    "item_level": 19,
+                    "damage": {"min": 7, "max": 15, "speed": 1.3, "dps": 8.5},
+                },
+            },
+        )
+
+        rogue = next(c for c in characters() if c.class_id == ROGUE)
+        self.assertTrue(jev_items.can_wield(holding(row), rogue))
+        self.assertTrue(jev_items.needs_weapon_question(item, holding(row), wardrobe))
+
+        state, questions = jev_items.weapon_question(holding(row), item, wardrobe)
+        self.assertEqual(
+            state["equipped_hands"]["main_hand"]["name"], "Swinetusk Shank"
+        )
+        self.assertEqual(state["equipped_hands"]["off_hand"]["name"], "Poniard")
+        self.assertIn("damage", state["equipped_hands"]["main_hand"])
+        self.assertIn("damage", state["equipped_hands"]["off_hand"])
+        self.assertEqual(state["character"]["upgrade_item_levels"], 6)
+        carried_choice = questions["better"]["criteria"][jev_items.CARRIED]
+        self.assertIn("replacing one current weapon", carried_choice)
+        self.assertIn("keeping the other", carried_choice)
+        self.assertIn("Playerbot chooses the destination hand", carried_choice)
+
     def test_a_class_that_cannot_wield_it_is_never_offered_it(self):
         offered = jev_items.options(carried(), holding(carried()), characters())
         # The paladin can equip it, the warrior can be handed it; the priest,

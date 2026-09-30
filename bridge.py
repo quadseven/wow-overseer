@@ -18624,7 +18624,8 @@ def _fetch_surplus_gear(names: list) -> list:
 # _SURPLUS_GEAR_SQL selects, so no item can appear in both.
 _FAMILY_EQUIPPED_SQL = (
     "SELECT c.name AS name, c.class AS class_id, c.level AS level, "
-    "it.InventoryType AS inventory_type, it.ItemLevel AS item_level "
+    "ci.slot AS equipment_slot, it.InventoryType AS inventory_type, "
+    "it.ItemLevel AS item_level "
     "FROM characters c "
     "LEFT JOIN character_inventory ci ON ci.guid = c.guid "
     "AND ci.bag = 0 AND ci.slot < 19 "
@@ -18639,7 +18640,8 @@ _FAMILY_EQUIPPED_SQL = (
 # leave the class packing to decide.
 _FAMILY_EQUIPPED_ROLES_SQL = (
     "SELECT c.name AS name, c.class AS class_id, c.level AS level, "
-    "it.InventoryType AS inventory_type, it.ItemLevel AS item_level, "
+    "ci.slot AS equipment_slot, it.InventoryType AS inventory_type, "
+    "it.ItemLevel AS item_level, "
     "r.spec_tab AS spec_tab, "
     "(SELECT COUNT(*) FROM overseer_raid_seat s "
     "WHERE s.name = c.name AND s.role = 'tank') AS tank_seat "

@@ -127,6 +127,12 @@ _SLOT_BY_INVTYPE = {
     26: _RANGED,
 }
 
+# character_inventory equipment positions (bag 0, slot < 19). InventoryType
+# 13 means a weapon that can go in either hand; the worn row's position is the
+# fact that distinguishes a main-hand copy from an off-hand copy.
+_EQUIPMENT_SLOT_MAIN_HAND = 15
+_EQUIPMENT_SLOT_OFF_HAND = 16
+
 # The slot bucket(s) that occupy a character's off hand. A two-hander
 # conflicts with any of them - the Severing Axe test (#2813).
 _OFF_HAND_SLOTS = (_OFF_HAND,)
@@ -577,6 +583,22 @@ def _slot_for(holding: Holding) -> str:
     return _SLOT_BY_INVTYPE.get(int(holding.inventory_type), "")
 
 
+def _rogue_can_dual_wield_one_hander(
+    holding: Holding, character: CharacterState
+) -> bool:
+    """Whether this generic one-hand weapon can improve a rogue's hands.
+
+    `_cannot_wear` separately checks weapon skill and class eligibility. The
+    equip command does not name a hand; Playerbot's scorer chooses the slot.
+    """
+    return (
+        int(character.class_id) == 4
+        and int(character.level) >= 10
+        and int(holding.inventory_type) == 13
+        and int(holding.item_class) == ITEM_CLASS_WEAPON
+    )
+
+
 def usable_by_class(holding: Holding, class_id: int) -> bool:
     """AllowableClass is a bitmask, bit (class_id - 1) - the same test
     mod-playerbots' CanBotUseToken (LootRollAction.cpp) applies for a token,
@@ -667,6 +689,12 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
         )
 
     current = character.equipped_level(slot)
+    weaker_hand = _rogue_can_dual_wield_one_hander(holding, character)
+    if weaker_hand:
+        current = min(
+            character.equipped_level(_MAIN_HAND),
+            character.equipped_level(_OFF_HAND),
+        )
     if current and _shield_over_other(holding, character):
         return (
             True,
@@ -677,8 +705,19 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
             ),
         )
     if current and holding.item_level <= current:
+        if weaker_hand:
+            return (
+                False,
+                f"not an upgrade (the weaker hand is item level {current})",
+            )
         return False, f"not an upgrade (currently equipped is item level {current})"
 
+    if weaker_hand:
+        return True, (
+            f"empty weaker weapon hand"
+            if not current
+            else f"item level {holding.item_level} beats the weaker hand's {current}"
+        )
     return True, (
         f"empty {slot.replace('_', ' ')} slot"
         if not current
@@ -718,6 +757,11 @@ def worn_against(holding: Holding, character: CharacterState) -> int:
     """
     slot = _slot_for(holding)
     worn = character.equipped_level(slot)
+    if _rogue_can_dual_wield_one_hander(holding, character):
+        worn = min(
+            character.equipped_level(_MAIN_HAND),
+            character.equipped_level(_OFF_HAND),
+        )
     if slot == _TWO_HAND:
         worn = max(worn, character.equipped_level(_MAIN_HAND))
     if _shield_over_other(holding, character):
@@ -1569,16 +1613,31 @@ def characters_from_rows(rows, names, roles=None) -> list:
             continue
         equipped = seen.setdefault(name, (class_id, level, {}))[2]
         try:
-            slot = _SLOT_BY_INVTYPE.get(int(row["inventory_type"]), "")
+            inventory_type = int(row["inventory_type"])
+            slot = _SLOT_BY_INVTYPE.get(inventory_type, "")
             item_level = int(row["item_level"])
         except (KeyError, TypeError, ValueError):
             continue
+        if inventory_type == 13:
+            # Generic one-hand weapons are legal in either hand. The query
+            # includes character_inventory.slot; use that observed position
+            # instead of collapsing a worn off-hand dagger into main hand.
+            try:
+                equipment_slot = int(row["equipment_slot"])
+            except (KeyError, TypeError, ValueError):
+                equipment_slot = None
+            if equipment_slot == _EQUIPMENT_SLOT_OFF_HAND:
+                slot = _OFF_HAND
+            elif equipment_slot == _EQUIPMENT_SLOT_MAIN_HAND:
+                slot = _MAIN_HAND
         if slot:
             # Two rings, two trinkets, a main hand and an off hand all land in
             # one bucket. The BEST of them is what an upgrade has to beat,
             # because the worst is the one a new piece would displace.
             equipped[slot] = max(equipped.get(slot, 0), item_level)
-        kind = _OFF_HAND_KIND.get(int(row["inventory_type"]), OFF_HAND_NONE)
+        kind = _OFF_HAND_KIND.get(inventory_type, OFF_HAND_NONE)
+        if inventory_type == 13 and slot == _OFF_HAND:
+            kind = OFF_HAND_WEAPON
         if kind:
             off_hands[name] = kind
     return [
