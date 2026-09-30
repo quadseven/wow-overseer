@@ -202,6 +202,34 @@ class DestinyTest(unittest.TestCase):
             {jev_items.CARRIED, jev_items.WORN},
         )
 
+
+class QuestionBatchRotationTest(unittest.TestCase):
+    def test_later_items_are_reached_without_exceeding_the_limit(self):
+        asks = list(range(21))
+        first = jev_items.bounded_question_batch(asks, limit=16, offset=0)
+        second = jev_items.bounded_question_batch(asks, limit=16, offset=16)
+        self.assertEqual(first, asks[:16])
+        self.assertEqual(second, asks[16:] + asks[:11])
+        self.assertEqual(len(first), 16)
+        self.assertEqual(len(second), 16)
+        self.assertEqual(set(first) | set(second), set(asks))
+
+    def test_small_batches_keep_the_original_order(self):
+        asks = ["Bork", "Grog", "Og"]
+        self.assertEqual(
+            jev_items.bounded_question_batch(asks, limit=16, offset=100), asks
+        )
+
+    def test_bridge_keeps_an_independent_offset_for_each_family(self):
+        self.assertIn(
+            "self._jev_question_offsets: dict[tuple[str, ...], int] = {}", BRIDGE
+        )
+        body = BRIDGE[BRIDGE.index("    async def _jev_shadow_once(") :]
+        body = body[: body.index("\n    async def ")]
+        self.assertIn("family_key = tuple(sorted(names))", body)
+        self.assertIn("offset=offset", body)
+        self.assertIn("self._jev_question_offsets[family_key] = offset + limit", body)
+
     def test_rogue_one_hand_weapon_compares_with_both_hands_and_keeps_one(self):
         row = carried(
             holder="Bork",
@@ -459,11 +487,11 @@ class BridgeWiringTest(unittest.TestCase):
         equip pass; both above the town-run gate, as before."""
         body = BRIDGE[BRIDGE.index("    async def _vendor_once(") :]
         plan = body.index(
-            "jev_plan = await self._jev_items_plan(gear_rows, worn, names)"
+            "jev_plan = await self._jev_items_plan(jev_rows, worn, names)"
         )
         give = body.index("await self._hand_gear(gear_rows, worn, names, jev_plan)")
         equip = body.index(
-            "await self._equip_upgrades(gear_rows, worn, names, jev_plan)"
+            "await self._equip_upgrades(equip_rows, worn, names, jev_plan)"
         )
         gate = body.index("self._vendor_pass_mode(", equip)
         self.assertLess(plan, give)

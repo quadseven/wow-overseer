@@ -21,6 +21,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# item_template.class for weapons. Kept local so this decision module does not
+# import gear.py and create a dependency cycle.
+ITEM_CLASS_WEAPON = 2
+
 # item_template.subclass for a weapon -> (SkillLine id, the trainer spell that
 # teaches it). Wands are left out: no trainer sells them, the class has them.
 WEAPON_SKILLS = {
@@ -207,3 +211,70 @@ def in_reach(master: dict, at: dict) -> bool:
     except (KeyError, TypeError, ValueError):
         return False
     return dx * dx + dy * dy <= IN_REACH_YARDS**2
+
+
+def reopen_equip_attempts(history, learned, carried):
+    """Retire resolved equip attempts made before a carried weapon's skill
+    was learned.
+
+    `learned` rows carry `name`, a weapon skill-line id in `skill`, and the
+    command's terminal `learned_at` time. `carried` rows carry `holder`,
+    `entry`, and `item_subclass`. Only delivered or failed attempts are
+    retired; a queued command may still run and must remain in the retry set.
+    Newer attempts remain counted, so this reopens a candidate once instead
+    of resetting its give-up count on every pass.
+
+    Returns `(remaining_history, reopened_attempts)` for logging and tests.
+    """
+    subclass_by_skill = {
+        skill: subclass for subclass, (skill, _spell) in WEAPON_SKILLS.items()
+    }
+    learned_at = {}
+    for row in learned or ():
+        try:
+            name = str(row["name"])
+            subclass = subclass_by_skill[int(row["skill"])]
+            at = row["learned_at"]
+        except (KeyError, TypeError, ValueError):
+            continue
+        if at is None:
+            continue
+        key = (name, subclass)
+        if key not in learned_at or at > learned_at[key]:
+            learned_at[key] = at
+
+    subclass_by_command = {}
+    for row in carried or ():
+        try:
+            item_class = int(row["item_class"] if "item_class" in row else row["class"])
+            name = str(row.get("holder") or row["name"])
+            entry = int(row["entry"])
+            subclass = int(
+                row["item_subclass"] if "item_subclass" in row else row["subclass"]
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        if item_class == ITEM_CLASS_WEAPON and subclass in WEAPON_SKILLS:
+            subclass_by_command[(name, "e Hitem:%d:0" % entry)] = subclass
+
+    remaining, reopened = [], []
+    for attempt in history or ():
+        try:
+            name = str(attempt["target_name"])
+            command = str(attempt["command"])
+            status = str(attempt["status"])
+            created_at = attempt["created_at"]
+            subclass = subclass_by_command[(name, command)]
+            trained_at = learned_at[(name, subclass)]
+        except (KeyError, TypeError):
+            remaining.append(attempt)
+            continue
+        if (
+            status in {"delivered", "error"}
+            and created_at is not None
+            and created_at < trained_at
+        ):
+            reopened.append(attempt)
+        else:
+            remaining.append(attempt)
+    return tuple(remaining), tuple(reopened)

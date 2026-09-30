@@ -65,9 +65,29 @@ def two_hander(holder, guid, item_level, allowable_class=PLATE_MELEE):
     )
 
 
-def character(name, class_id, level=25, equipped=None):
+def character(name, class_id, level=25, equipped=None, role=gear.ROLE_UNKNOWN):
     return gear.CharacterState(
-        name=name, class_id=class_id, level=level, equipped=equipped or {}
+        name=name,
+        class_id=class_id,
+        level=level,
+        equipped=equipped or {},
+        role=role,
+    )
+
+
+def staff(holder, guid, item_level, allowable_class=ALL_CLASSES):
+    return gear.Holding(
+        holder=holder,
+        guid=guid,
+        entry=guid,
+        name="Dwarven Magestaff",
+        quality=2,
+        item_level=item_level,
+        required_level=1,
+        allowable_class=allowable_class,
+        inventory_type=17,
+        item_class=gear.ITEM_CLASS_WEAPON,
+        item_subclass=gear.WEAPON_STAFF,
     )
 
 
@@ -149,6 +169,66 @@ class TheSeveringAxeTest(unittest.TestCase):
         result = gear.plan([axe], [grug, grog, character("Ugga", PRIEST)])
         self.assertEqual(len(result.grants), 1)
         self.assertEqual(result.grants[0].taker, "Grog")
+
+
+class CasterStaffOffhandSafetyTest(unittest.TestCase):
+    """A staff proposal must not silently trade away an equipped focus.
+
+    Playerbot's pinned EquipAction scores a two-hander against an empty main
+    hand before it considers the off hand. Keep the safety gate until that
+    executor compares the resulting two-hand-plus-focus setup correctly.
+    """
+
+    def test_damage_mage_with_a_focus_keeps_the_offhand_safety_gate(self):
+        focus_staff = staff("Og", 10, item_level=27)
+        og = character(
+            "Og",
+            MAGE,
+            equipped={gear._OFF_HAND: 22},
+            role=gear.ROLE_DAMAGE,
+        )
+
+        upgrade, reason = gear.would_wear(focus_staff, og)
+
+        self.assertFalse(upgrade)
+        self.assertEqual(reason, "would displace an equipped off-hand item")
+
+    def test_healer_with_a_focus_keeps_the_offhand_safety_gate(self):
+        focus_staff = staff("Ugga", 11, item_level=27)
+        healer = character(
+            "Ugga",
+            PRIEST,
+            equipped={gear._OFF_HAND: 22},
+            role=gear.ROLE_HEALER,
+        )
+
+        upgrade, reason = gear.would_wear(focus_staff, healer)
+
+        self.assertFalse(upgrade)
+        self.assertEqual(reason, "would displace an equipped off-hand item")
+
+    def test_tank_with_an_offhand_keeps_the_existing_safety_gate(self):
+        focus_staff = staff("Grug", 12, item_level=40)
+        tank = character(
+            "Grug",
+            WARRIOR,
+            equipped={gear._OFF_HAND: 20},
+            role=gear.ROLE_TANK,
+        )
+
+        upgrade, reason = gear.would_wear(focus_staff, tank)
+
+        self.assertFalse(upgrade)
+        self.assertEqual(reason, "would displace an equipped off-hand item")
+
+    def test_unknown_role_with_a_focus_keeps_the_existing_safety_gate(self):
+        focus_staff = staff("Og", 13, item_level=27)
+        unknown = character("Og", MAGE, equipped={gear._OFF_HAND: 22})
+
+        upgrade, reason = gear.would_wear(focus_staff, unknown)
+
+        self.assertFalse(upgrade)
+        self.assertEqual(reason, "would displace an equipped off-hand item")
 
 
 class UpgradeVsItemLevel(unittest.TestCase):

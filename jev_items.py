@@ -532,7 +532,8 @@ def weapon_question(holding, item: dict, wardrobe: Wardrobe):
                 "%s uses %s in either hand, replacing one current weapon and "
                 "keeping the other; Playerbot chooses the destination hand "
                 "with its own scorer."
-            ) % (wardrobe.name, holding.name),
+            )
+            % (wardrobe.name, holding.name),
             WORN: "%s keeps both current weapons: %s." % (wardrobe.name, worn_names),
         }
     else:
@@ -761,6 +762,19 @@ def _questions(family: _Family, gear_rows, describe) -> list:
     return asks
 
 
+def bounded_question_batch(asks, limit: int, offset: int = 0) -> list:
+    """Take an ordered, bounded batch starting at a deterministic rotation."""
+    questions = list(asks)
+    count = max(0, int(limit))
+    if count == 0 or not questions:
+        return []
+    if len(questions) <= count:
+        return questions
+    start = int(offset) % len(questions)
+    take = min(count, len(questions))
+    return [questions[(start + index) % len(questions)] for index in range(take)]
+
+
 async def shadow_pass(
     client: jev.Client,
     *,
@@ -773,6 +787,7 @@ async def shadow_pass(
     keep_names=(),
     modes=None,
     limit: int = 16,
+    offset: int = 0,
     heads=(),
     banked=None,
 ) -> list:
@@ -781,8 +796,9 @@ async def shadow_pass(
     `describe(entry)` returns an item description (the Armory's tooltip dict)
     or None. `modes` maps a kind to jev.OFF/SHADOW/ACT; a kind that is OFF is
     not asked at all. `limit` bounds the questions one pass may send, so a
-    newly full bag is judged over a few passes rather than in one burst; the
-    order is fixed (holder, then item guid) so every piece gets its turn.
+    newly full bag is judged over a few passes rather than in one burst. The
+    caller's per-family offset rotates bounded batches through holder/item
+    order so later entries are eventually judged too.
     """
     characters = tuple(bag_pressure.family_characters(worn_rows, names))
     family = _Family(
@@ -791,7 +807,9 @@ async def shadow_pass(
         pipeline=Pipeline.read(gear_rows, worn_rows, names, keep_names, banked),
         modes=dict(modes or {}),
     )
-    asks = _questions(family, gear_rows, describe)[: max(0, int(limit))]
+    asks = bounded_question_batch(
+        _questions(family, gear_rows, describe), limit, offset
+    )
     gate = asyncio.Semaphore(max(1, int(getattr(client, "concurrency", 1))))
     # Queued for a free slot rather than `busy` behind another kind (#267):
     # 97 of 480 answers in one day were `busy`. An act pass that waits on

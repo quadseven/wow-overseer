@@ -714,7 +714,7 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
 
     if weaker_hand:
         return True, (
-            f"empty weaker weapon hand"
+            "empty weaker weapon hand"
             if not current
             else f"item level {holding.item_level} beats the weaker hand's {current}"
         )
