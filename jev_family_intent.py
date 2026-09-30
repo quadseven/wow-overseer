@@ -99,7 +99,8 @@ MEANINGS = {
     "errand": "The leader walks to the %s in town and the family follows.",
     "respec": "The leader walks to his class trainer to reset his talents.",
     "training": "The leader walks the family to the trainer %s so a member can "
-    "learn what it has earned.",
+    "learn what it has earned. This is a campaign training stop; the next "
+    "dungeon waits for it to finish or time out.",
     "regroup": "The leader holds still until %s, who is walking back, catches up.",
     "fetch": "The leader walks back for %s, who cannot come back alone, and the "
     "family comes with him.",
@@ -376,6 +377,7 @@ class Judgment:
     probabilities: dict | None = None
     latency_ms: int = 0
     model: str = ""
+    guard_reason: str = ""
     acted: str = _HEURISTIC
     kind: str = KIND
     item_guid: int = 0
@@ -408,9 +410,12 @@ class Judgment:
             if self.acted == jev.JEV
             else "the module's order stands (%s)" % self.heuristic
         )
+        guard = (
+            "; Jev override blocked: " + self.guard_reason if self.guard_reason else ""
+        )
         return (
             "family intent: family=%s leader=%s %s; heuristic=%s %s status=%s "
-            "latency_ms=%d mode=%s acted=%s now=%r facts=%r"
+            "latency_ms=%d mode=%s acted=%s%s now=%r facts=%r"
             % (
                 self.subject,
                 self.holder,
@@ -421,6 +426,7 @@ class Judgment:
                 self.latency_ms,
                 self.mode,
                 self.acted,
+                guard,
                 self.item_name,
                 self.facts,
             )
@@ -474,6 +480,24 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
     if outcome.answers is None:
         return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
     answer = outcome.answers["intent"]
+    training_stop_active = any(a.kind == "training" for a in f.row.table)
+    override = rule.acted(
+        current, answer.choice, answer.confidence, can_act=answer.choice in offered
+    )
+    guard_reason = ""
+    # A campaign training stop exists to teach spells before the next run.
+    # Letting a lower-ranked request take over can consume the entire stop
+    # without reaching the trainer. Keep Jev's answer in the record, but leave
+    # this prerequisite under the module's intent order instead of writing a
+    # lower-priority override.
+    chosen_kind = answer.choice.partition(":")[0]
+    if (
+        training_stop_active
+        and rank(chosen_kind) < rank("training")
+        and override == jev.JEV
+    ):
+        override = jev.HEURISTIC
+        guard_reason = "an active campaign training stop outranks %s" % chosen_kind
     return replace(
         base,
         status=outcome.status,
@@ -482,7 +506,6 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
         jev=answer.choice,
         confidence=answer.confidence,
         probabilities=answer.probabilities,
-        acted=rule.acted(
-            current, answer.choice, answer.confidence, can_act=answer.choice in offered
-        ),
+        acted=override,
+        guard_reason=guard_reason,
     )
