@@ -148,6 +148,10 @@ class WhatJevSees(unittest.TestCase):
         self.assertIn("errand 2933 yd", line)
         self.assertIn("Og held where it stands", line)
 
+    def test_training_option_explains_the_campaign_prerequisite(self):
+        f = facts(on_the_table="training|training stop|914\nquest|quest drive|")
+        self.assertIn("next dungeon waits", jfi.options(f)["training:914"])
+
 
 class WhoActs(unittest.TestCase):
     def test_a_confident_different_answer_is_the_pick(self):
@@ -165,6 +169,37 @@ class WhoActs(unittest.TestCase):
         j = ask(facts(), FakeJev(picks={"intent": "fetch:Og"}, confidence=0.95))
         self.assertEqual(jev.BOTH, j.acted)
         self.assertEqual("", j.pick)
+
+    def test_lower_ranked_quest_cannot_override_training_stop(self):
+        f = facts(on_the_table=("training|training stop|914\nquest|quest drive|"))
+        j = ask(f, FakeJev(picks={"intent": "quest"}, confidence=0.9))
+        self.assertEqual("quest", j.jev)
+        self.assertEqual(jev.HEURISTIC, j.acted)
+        self.assertEqual("", j.pick)
+        self.assertIn("training stop", j.guard_reason)
+        self.assertIn("Jev override blocked", j.line())
+
+    def test_lower_ranked_maintenance_cannot_override_training_stop(self):
+        f = facts(
+            on_the_table=("training|training stop|914\neconomy|travel column|banker")
+        )
+        j = ask(f, FakeJev(picks={"intent": "economy:banker"}, confidence=0.9))
+        self.assertEqual(jev.HEURISTIC, j.acted)
+        self.assertEqual("", j.pick)
+        self.assertIn("outranks economy", j.guard_reason)
+
+    def test_higher_ranked_regroup_remains_a_jev_choice_during_training(self):
+        f = facts(on_the_table=("training|training stop|914\nregroup|regroup|Ugga"))
+        j = ask(f, FakeJev(picks={"intent": "regroup:Ugga"}, confidence=0.9))
+        self.assertEqual("regroup:Ugga", j.jev)
+        self.assertEqual(jev.BOTH, j.acted)
+        self.assertEqual("", j.guard_reason)
+
+    def test_quest_remains_a_valid_jev_choice_without_training_stop(self):
+        f = facts(on_the_table=("quest|quest drive|\neconomy|travel column|banker"))
+        j = ask(f, FakeJev(picks={"intent": "quest"}, confidence=0.9))
+        self.assertEqual(jev.JEV, j.acted)
+        self.assertEqual("quest", j.pick)
 
     def test_off_asks_nothing(self):
         self.assertIsNone(ask(facts(), environ={"JEV_MODE_FAMILY_INTENT": "off"}))
