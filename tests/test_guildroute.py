@@ -576,6 +576,50 @@ class HoldersWalkToAMailbox(unittest.TestCase):
             "(item 4909901) to Grog, +%d item levels" % (run.aim, self.route.gain),
         )
 
+    def test_a_family_leader_can_walk_for_a_follower_held_guild_gift(self):
+        route = replace(self.route, family=False)
+        plan = guildroute.plan_mail_runs(
+            [route],
+            {"Avenah": replace(_walker(), name="Bork")},
+            set(),
+            0,
+            family_only=False,
+        )
+        self.assertEqual(len(plan.runs), 1)
+        run = plan.runs[0]
+        self.assertEqual((run.holder, run.walker_name), ("Avenah", "Bork"))
+        self.assertIn("Bork walks", run.said)
+        self.assertIn("from Avenah to Grog", run.said)
+
+    def test_family_gifts_share_the_leaders_active_walk(self):
+        first = self.route
+        second = replace(self.route, holder="Grog", guid=77, name="Second")
+        bork = replace(_walker(), name="Bork")
+        walkers = {"Avenah": bork, "Grog": bork}
+        plan = guildroute.plan_mail_runs(
+            [first, second],
+            walkers,
+            {"Bork"},
+            0,
+            family_only=False,
+        )
+        self.assertEqual(plan.runs, ())
+        self.assertEqual(len(plan.notes), 2)
+        self.assertTrue(all("Bork is already walking" in note for note in plan.notes))
+
+    def test_a_family_leader_in_combat_is_named_as_the_walk_blocker(self):
+        route = replace(self.route, family=False)
+        walker = replace(_walker(state={"map_id": 1, "in_combat": 1}), name="Bork")
+        plan = guildroute.plan_mail_runs(
+            [route],
+            {"Avenah": walker},
+            set(),
+            0,
+            family_only=False,
+        )
+        self.assertEqual(plan.runs, ())
+        self.assertIn("Bork is in combat", plan.notes[0])
+
     def test_a_guild_bot_off_the_roster_walks_by_the_module_row(self):
         """#185 with mod-overseer#570: the bot walks by its own walk row."""
         plan = self.plan(_walker(leader_of={}, roster=set()))
@@ -781,9 +825,31 @@ class TheBridgeWalksAndNeverGives(unittest.TestCase):
         writer = self.body("async def _write_routes(")
         self.assertIn("self._guild_mail_runs.pop(route.holder, None)", writer)
 
+    def test_guild_gifts_walk_the_family_leader_without_changing_the_sender(self):
+        bridge = (HERE / "bridge.py").read_text(encoding="utf-8")
+        writer = self.body("async def _write_guild_gifts(")
+        self.assertIn("await self._walk_guild_gift_holders", writer)
+        escort = self.body("async def _walk_guild_gift_holders(")
+        self.assertIn("escort=(leader, key)", escort)
+        walkers = bridge[bridge.index("def _route_walkers(") :]
+        walkers = walkers[: walkers.index("\ndef _route_letters_today")]
+        self.assertIn("out[holder] = guildroute.walker_from(", walkers)
+        self.assertIn("walker_name, state, leader_of", walkers)
+        run = self.body("async def _walk_route_holders(")
+        self.assertIn("walker_name, run.aim", run)
+        self.assertIn("cohort=run.cohort or None", run)
+
+    def test_guild_gift_mail_runs_count_toward_the_daily_mailbox_cap(self):
+        bridge = (HERE / "bridge.py").read_text(encoding="utf-8")
+        letters = bridge[bridge.index("def _route_letters_today(") :]
+        letters = letters[: letters.index("\ndef _route_walks_today")]
+        self.assertIn("source = %s", letters)
+        self.assertIn('"guildshare"', letters)
+        self.assertIn('guildroute.SOURCE + ":%"', letters)
+
     def test_a_run_is_reserved_before_its_claim_is_awaited(self):
         body = self.body("async def _walk_route_holders(")
-        reserve = body.index("self._guild_mail_runs[run.holder] = now")
+        reserve = body.index("self._guild_mail_runs[walker_name] = now")
         self.assertLess(reserve, body.index("await self._claim_town_slot("))
 
     def test_the_walker_read_carries_combat(self):

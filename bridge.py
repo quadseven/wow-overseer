@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import time
+from types import SimpleNamespace
 
 import urllib.request
 
@@ -8957,9 +8958,9 @@ class Bridge(discord.Client):
             # stop the surplus below from going out.
             log.exception("guild route pass failed; retrying next cycle")
         if share.gifts:
-            await self._write_guild_gifts(share.gifts)
+            await self._write_guild_gifts(share.gifts, cohort=cohort)
 
-    async def _write_guild_gifts(self, gifts) -> None:
+    async def _write_guild_gifts(self, gifts, cohort=None) -> None:
         """Write each gift the way it can move now, then speak the written ones."""
         seen = await asyncio.to_thread(
             _recent_guild_gift_keys, GIVE_RETRY_MINUTES
@@ -8968,14 +8969,16 @@ class Bridge(discord.Client):
         # stand together, a letter when the family holder stands at a
         # mailbox, and otherwise it waits and the log says for what. Never a
         # give across a distance, which mod-overseer#566 refuses.
-        where, posting = await self._guild_gift_facts(gifts)
-        fresh, waits = [], []
+        family_names, leader = await asyncio.to_thread(_family_of, cohort)
+        where, posting = await self._guild_gift_facts(gifts, leader=leader)
+        fresh, waits, waiting = [], [], []
         for gift in gifts:
             how = handover.verdict(
                 gift.holder, gift.taker, where, posting=posting, mailable=True,
             )
             if not how.verb:
                 waits.append(handover.waiting(gift.item, gift.holder, gift.taker, how.why))
+                waiting.append(gift)
                 continue
             command = gift.post_command if how.verb == handover.MAIL else gift.command
             if (gift.holder, gift.taker, command) in seen:
@@ -8983,6 +8986,10 @@ class Bridge(discord.Client):
             if await asyncio.to_thread(_insert_guild_gift, gift, how.verb):
                 fresh.append((gift, how.verb))
         _log_capped("guildshare", waits)
+        if waiting:
+            await self._walk_guild_gift_holders(
+                waiting, family_names, leader, cohort, where,
+            )
         if not fresh:
             log.info("guildshare: %d gift(s) already queued, refused or waiting",
                      len(gifts))
@@ -8993,10 +9000,54 @@ class Bridge(discord.Client):
                      gift.holder, gift.taker, verb, gift.count, gift.item,
                      gift.reason)
             await self._say_guild_gift(gift)
+            if verb == handover.MAIL:
+                self._guild_mail_runs.pop(leader, None)
+                self._guild_mail_runs.pop(gift.holder, None)
 
-    async def _guild_gift_facts(self, gifts) -> tuple:
+    async def _walk_guild_gift_holders(self, gifts, family_names,
+                                       leader: str, cohort, where: dict) -> None:
+        """Walk the family's leader so a follower-held gift can be posted.
+
+        The item stays with its actual holder; the leader only travels. The
+        ordinary guild gift pass writes the letter after the family reaches a
+        mailbox, so it remains the sole writer for these gifts.
+        """
+        if not leader:
+            log.info("guildshare: waiting gifts have no family leader to walk")
+            return
+        leader_spot = where.get(leader)
+        together = []
+        for gift in gifts:
+            holder_spot = where.get(gift.holder)
+            if (leader_spot is not None and holder_spot is not None
+                    and int(leader_spot.map_id) == int(holder_spot.map_id)):
+                together.append(gift)
+            else:
+                log.info(
+                    "guildshare: %s stays with %s; its family leader is not "
+                    "together with the holder",
+                    gift.item, gift.holder,
+                )
+        if not together:
+            return
+        routes = [
+            SimpleNamespace(
+                holder=gift.holder, taker=gift.taker, name=gift.item,
+                guid=int(gift.guid), gain=0, family=False, alternates=(),
+            )
+            for gift in together
+        ]
+        key = _cohort_key(cohort) or ""
+        await self._walk_route_holders(
+            routes, family_names, escort=(leader, key), family_only=False,
+        )
+
+    async def _guild_gift_facts(self, gifts, leader: str = "") -> tuple:
         """Where each gift's two characters stand, and which holders are at a mailbox."""
-        names = sorted({g.holder for g in gifts} | {g.taker for g in gifts})
+        names = sorted(
+            {g.holder for g in gifts} | {g.taker for g in gifts}
+            | ({leader} if leader else set())
+        )
         positions = await asyncio.to_thread(_fetch_positions, names)
         holders = sorted({g.holder for g in gifts})
         posting = await asyncio.to_thread(_holders_at_mailbox, holders, positions)
@@ -9140,7 +9191,8 @@ class Bridge(discord.Client):
                     self._guild_mail_runs.pop(route.holder, None)
         return written
 
-    async def _walk_route_holders(self, waiting: list, family_names: list) -> None:
+    async def _walk_route_holders(self, waiting: list, family_names: list,
+                                  escort=None, family_only: bool = True) -> None:
         """Walk a waiting route's holder to the nearest mailbox (#185).
 
         guildroute.plan_mail_runs decides who walks, within its bounds: one
@@ -9165,7 +9217,7 @@ class Bridge(discord.Client):
         holders = holders[:GUILD_ROUTE_MAILBOX_CHECKS]
         row_walks = now >= self._mail_walk_unsupported_until
         walkers = await asyncio.to_thread(
-            _route_walkers, holders, family_names, row_walks
+            _route_walkers, holders, family_names, row_walks, escort
         )
         posted = max(
             await asyncio.to_thread(_route_letters_today),
@@ -9174,20 +9226,23 @@ class Bridge(discord.Client):
         plan = guildroute.plan_mail_runs(
             waiting, walkers, self._guild_mail_runs,
             guildroute.runs_today(self._guild_mail_run_starts, now, posted),
+            family_only=family_only,
         )
         _log_capped("guild route", plan.notes)
         for run in plan.runs:
             # Reserved before the await and handed back on a refusal, so the
-            # holder is never read as free while its claim is in flight.
-            self._guild_mail_runs[run.holder] = now
+            # traveller is never read as free while its claim is in flight.
+            walker_name = run.walker_name or run.holder
+            self._guild_mail_runs[walker_name] = now
             if run.by_row:
                 await self._start_mail_walk(run, now)
                 continue
             taken = await self._claim_town_slot(
-                guildroute.MAIL_RUN_CLAIMANT, run.holder, run.aim, cohort=run.cohort,
+                guildroute.MAIL_RUN_CLAIMANT, walker_name, run.aim,
+                cohort=run.cohort or None,
             )
             if not taken:
-                self._guild_mail_runs.pop(run.holder, None)
+                self._guild_mail_runs.pop(walker_name, None)
                 continue
             self._guild_mail_run_starts.append(now)
             log.info("guild route: %s", run.said)
@@ -20623,7 +20678,8 @@ _ROUTE_WALKER_SQL = (
 )
 
 
-def _route_walkers(holders: list, family_names: list, row_walks: bool = True) -> dict:
+def _route_walkers(holders: list, family_names: list, row_walks: bool = True,
+                   escort=None) -> dict:
     """holder -> guildroute.Walker; guildroute decides everything.
 
     Which roster family each holder leads comes from the same roster read the
@@ -20632,7 +20688,7 @@ def _route_walkers(holders: list, family_names: list, row_walks: bool = True) ->
     bot off the roster while `row_walks` says the worldserver can walk one
     (#185). A roster follower costs no spawn read.
     """
-    if not holders:
+    if not holders and not escort:
         return {}
     rows = _roster_cohort_rows()
     roster = {str(row.get("name") or "") for row in rows}
@@ -20640,10 +20696,17 @@ def _route_walkers(holders: list, family_names: list, row_walks: bool = True) ->
         cohort.leader: cohort.key
         for cohort in townslot.other_cohorts(rows, family_names)
     }
-    sql = _ROUTE_WALKER_SQL % ",".join(["%s"] * len(holders))
+    if escort:
+        escort_leader, escort_cohort = escort
+        leader_of[escort_leader] = escort_cohort
+        query_names = list(dict.fromkeys([*holders, escort_leader]))
+    else:
+        escort_leader = ""
+        query_names = list(holders)
+    sql = _ROUTE_WALKER_SQL % ",".join(["%s"] * len(query_names))
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(sql, holders)
+            cur.execute(sql, query_names)
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("guild route: holder positions unavailable")
@@ -20652,11 +20715,14 @@ def _route_walkers(holders: list, family_names: list, row_walks: bool = True) ->
         states = {row["name"]: dict(row) for row in cur.fetchall()}
     out = {}
     for holder in holders:
-        state = states.get(holder)
-        walkable = holder in leader_of or (row_walks and holder not in roster)
-        spawn = _nearest_mailbox(holder) if state and walkable else None
+        walker_name = escort_leader or holder
+        state = states.get(walker_name)
+        walkable = walker_name in leader_of or (
+            row_walks and walker_name not in roster
+        )
+        spawn = _nearest_mailbox(walker_name) if state and walkable else None
         out[holder] = guildroute.walker_from(
-            holder, state, leader_of, roster, spawn, row_walks=row_walks
+            walker_name, state, leader_of, roster, spawn, row_walks=row_walks
         )
     return out
 
@@ -20667,9 +20733,9 @@ def _route_letters_today() -> int:
         try:
             cur.execute(
                 "SELECT COUNT(*) AS n FROM overseer_command "
-                "WHERE source LIKE %s AND kind = %s "
+                "WHERE (source LIKE %s OR source = %s) AND kind = %s "
                 "AND created_at > NOW() - INTERVAL 1 DAY",
-                (guildroute.SOURCE + ":%", guildroute.MAIL),
+                (guildroute.SOURCE + ":%", "guildshare", guildroute.MAIL),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):

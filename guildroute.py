@@ -317,7 +317,7 @@ def walker_from(name, state, leader_of, roster, spawn, row_walks=True) -> Walker
 
 @dataclass(frozen=True)
 class MailRun:
-    """One holder walked to one mailbox to post one item to one receiver.
+    """One character walked to post one holder's item to one receiver.
 
     Shaped like a posted route where the bridge's route writer reads one
     (`verb`, `name`, `command`, `gain`), so the letter written on arrival goes
@@ -333,6 +333,7 @@ class MailRun:
     aim: str
     yards: float
     by_row: bool = False
+    walker_name: str = ""
 
     verb = MAIL
 
@@ -353,6 +354,22 @@ class MailRun:
     @property
     def said(self) -> str:
         """The log line: who walks where, with what, for whom, and the gain."""
+        walker = self.walker_name or self.holder
+        if walker != self.holder:
+            return (
+                "%s walks %d yards to the mailbox at %s to post %s (item %d) "
+                "from %s to %s, +%d item levels"
+                % (
+                    walker,
+                    int(round(self.yards)),
+                    self.aim,
+                    self.item,
+                    int(self.guid),
+                    self.holder,
+                    self.taker,
+                    int(self.gain),
+                )
+            )
         return (
             "%s walks %d yards to the mailbox at %s to post %s (item %d) to %s, +%d item levels"
             % (
@@ -408,6 +425,7 @@ def plan_mail_runs(
     spent,
     max_yards=MAIL_RUN_YARDS,
     per_day=MAIL_RUNS_PER_DAY,
+    family_only=True,
 ) -> MailRunPlan:
     """Which waiting routes start a walk to a mailbox this pass.
 
@@ -415,23 +433,29 @@ def plan_mail_runs(
     best gain first. `walkers` maps holder name to Walker. `running` holds
     the holders already on a run, `spent` the runs used today. Only a family
     receiver is posted to, because only the family's mail pass collects.
-    One note per route that does not start a run, and never a `give`.
+    One note per route that does not start a run, and never a `give`. A
+    family's leader may walk for an item held by one of its followers; the
+    `Walker.name` then owns the run while `MailRun.holder` remains the sender.
     """
     runs, notes = [], []
     busy = {str(n) for n in running or ()}
     budget = max(0, int(per_day) - int(spent))
     for route in routes or ():
         option = _family_option(route)
-        if option is None:
+        if option is None and family_only:
             continue
+        option = option or route
         holder = str(route.holder)
         wait = "%s stays with %s" % (route.name, holder)
-        if holder in busy:
-            if not any(r.holder == holder for r in runs):
-                notes.append("%s: %s is already walking to a mailbox" % (wait, holder))
-            continue
         walker = walkers.get(holder)
-        why = _cannot_walk(walker, holder, max_yards)
+        walker_name = str(getattr(walker, "name", "") or holder)
+        if walker_name in busy:
+            if not any((r.walker_name or r.holder) == walker_name for r in runs):
+                notes.append(
+                    "%s: %s is already walking to a mailbox" % (wait, walker_name)
+                )
+            continue
+        why = _cannot_walk(walker, walker_name, max_yards)
         if why:
             notes.append("%s: %s" % (wait, why))
             continue
@@ -452,9 +476,10 @@ def plan_mail_runs(
                 aim=walker.aim,
                 yards=float(walker.yards),
                 by_row=walker.by_row,
+                walker_name=walker_name,
             )
         )
-        busy.add(holder)
+        busy.add(walker_name)
     return MailRunPlan(runs=tuple(runs), notes=tuple(notes))
 
 

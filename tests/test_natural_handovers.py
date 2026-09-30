@@ -159,7 +159,7 @@ class EveryGiveWriterAsksFirst(unittest.TestCase):
 
     def test_guild_surplus_gives_together_posts_or_waits(self):
         self.assertIn(
-            "await self._write_guild_gifts(share.gifts)",
+            "await self._write_guild_gifts(share.gifts, cohort=cohort)",
             _block("    async def _guild_share_once("),
         )
         body = _block("    async def _write_guild_gifts(")
