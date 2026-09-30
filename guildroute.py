@@ -455,7 +455,7 @@ def plan_mail_runs(
                     "%s: %s is already walking to a mailbox" % (wait, walker_name)
                 )
             continue
-        why = _cannot_walk(walker, holder, max_yards)
+        why = _cannot_walk(walker, walker_name, max_yards)
         if why:
             notes.append("%s: %s" % (wait, why))
             continue

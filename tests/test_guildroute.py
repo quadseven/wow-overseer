@@ -607,6 +607,19 @@ class HoldersWalkToAMailbox(unittest.TestCase):
         self.assertEqual(len(plan.notes), 2)
         self.assertTrue(all("Bork is already walking" in note for note in plan.notes))
 
+    def test_a_family_leader_in_combat_is_named_as_the_walk_blocker(self):
+        route = replace(self.route, family=False)
+        walker = replace(_walker(state={"map_id": 1, "in_combat": 1}), name="Bork")
+        plan = guildroute.plan_mail_runs(
+            [route],
+            {"Avenah": walker},
+            set(),
+            0,
+            family_only=False,
+        )
+        self.assertEqual(plan.runs, ())
+        self.assertIn("Bork is in combat", plan.notes[0])
+
     def test_a_guild_bot_off_the_roster_walks_by_the_module_row(self):
         """#185 with mod-overseer#570: the bot walks by its own walk row."""
         plan = self.plan(_walker(leader_of={}, roster=set()))
