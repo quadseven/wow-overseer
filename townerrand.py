@@ -15,9 +15,9 @@ the rest, hand things down, then leave. That is this module.
 
 THE STATES, with a clear entry and exit:
 
-    IDLE    -> GO       `should_start` gives a reason (gear in the post, or a
-                        member short of slots with gold of its own). Members
-                        further than a walk from a home hub hearth there.
+    IDLE    -> GO       `should_start` gives a reason (gear in the post, a
+                        member short of gear, or a vendor-only food/drink gap).
+                        Members further than a walk from a home hub hearth there.
     GO      -> GATHER   the leader is read standing at the hub mailbox.
     GATHER  -> STEPS    every member is read standing within GATHER_YARDS of
                         the hub, or the gather window runs out (the steps then
@@ -152,14 +152,17 @@ def should_start(
     in_run: bool,
     mail_gear: dict,
     facts: dict,
+    supply_gaps: tuple = (),
     stalled: float = 0.0,
 ) -> str:
     """Why this family should go to town now, or '' when it should not.
 
     `mail_gear` is `mailrun.gear_waiting` (name -> letters of wearable gear in
     the post). `facts` is the gear facts per member (`equipped` slot names and
-    `purse`). A family inside a dungeon run, on an errand already, or inside
-    the cooldown since its last one does not go.
+    `purse`). `supply_gaps` lists food/drink shortages the towntrip planner
+    cannot cover by conjuring or handing over a stack. A family inside a
+    dungeon run, on an errand already, or inside the cooldown since its last
+    one does not go.
 
     `stalled` is how long the family's campaign has gone without a run
     (bridge._queue_stall_floor). THE ERRAND IS A HOLD, AND A HOLD HAS A CEILING
@@ -181,6 +184,8 @@ def should_start(
     short = short_of_gear(facts)
     if short:
         return "%s short of gear with gold to spend" % ", ".join(short)
+    if supply_gaps:
+        return "family short of usable supplies: %s" % ", ".join(supply_gaps)
     return ""
 
 

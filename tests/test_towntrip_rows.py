@@ -460,6 +460,23 @@ class AStackAboveTheHoldersLevelIsNotFood(unittest.TestCase):
         self.assertTrue(any("above level 35" in n for n in trip.notes))
 
 
+class BetweenRunSupplyNeed(unittest.TestCase):
+    def test_only_vendor_shortages_trigger_a_town_visit(self):
+        member = towntrip.Member(
+            name="Grog", klass="paladin", level=37, money=0, free_slots=0
+        )
+        self.assertEqual(
+            ("Grog food", "Grog drink"), towntrip.shop_supply_gaps([member])
+        )
+
+    def test_a_mage_who_can_conjure_does_not_need_a_vendor(self):
+        member = towntrip.Member(
+            name="Og", klass="mage", level=35, money=0, free_slots=0,
+            spells=frozenset(towntrip.CONJURE_FOOD | towntrip.CONJURE_WATER),
+        )
+        self.assertEqual((), towntrip.shop_supply_gaps([member]))
+
+
 def _with_room(member):
     from dataclasses import replace
 

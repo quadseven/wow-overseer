@@ -59,7 +59,7 @@ rather than as a purchase that will be refused.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 # Food and drink, by the level at which the next tier opens. Every row was
 # read out of item_template: class 0, subclass 5, and spellcategory_1 of 11
@@ -686,6 +686,33 @@ def plan(members, town: Town) -> Plan:
         notes.extend(said)
 
     return Plan(tuple(errands), tuple(notes), tuple(blocked))
+
+
+def shop_supply_gaps(members) -> tuple[str, ...]:
+    """Return member/resource pairs that need a vendor to reach one stack.
+
+    This asks the same supply planner used at the counter, with every listed
+    tier hypothetically stocked and enough money and one bag slot available.
+    That isolates the question the between-run errand needs: can the family
+    cover this shortage by conjuring or handing over a spare stack, or must it
+    visit a vendor? Actual stock, purse, and bag capacity are checked again at
+    the counter before any command is written.
+    """
+    stocked = Town(
+        vendor=True,
+        stocks=frozenset(row[1] for row in (*FOOD, *DRINK)),
+    )
+    candidates = [replace(member, money=max(member.money, 100_000),
+                          free_slots=max(member.free_slots, 1))
+                  for member in members]
+    gaps = []
+    for what in (FOOD_KIND, DRINK_KIND):
+        errands, _notes = _supply(candidates, stocked, what)
+        gaps.extend(
+            "%s %s" % (errand.member, what)
+            for errand in errands if errand.kind == BUY_KIND
+        )
+    return tuple(gaps)
 
 
 def counter_keys(members, trip: Plan) -> tuple[tuple[str, str], ...]:
