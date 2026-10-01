@@ -11665,6 +11665,75 @@ class Bridge(discord.Client):
         log.info("bags: %s (aim taken=%s)",
                  bag_pressure.bag_trip_report(trip, leader), aimed)
 
+    async def _bank_exit_route(self, leader: str, position: dict | None,
+                               has_banker: bool, step: str,
+                               cohort: str | None,
+                               slot: "townslot.Slot") -> bool:
+        """Route a bank errand through an instance exit when needed."""
+        if step != bank.BANK_ERRAND_AIM or position is None:
+            return False
+        column = await asyncio.to_thread(_current_travel_npc, leader)
+        if (
+            travel.is_ground_aim(column)
+            and slot.holder is not None
+            and slot.holder.claimant == "bank"
+            and slot.holder.character == leader
+            and slot.holder.aim == column
+            and await asyncio.to_thread(
+                _ground_exit_leads_to, column, int(position["map_id"]),
+            )
+        ):
+            released = await asyncio.to_thread(
+                _release_trade_errand, leader, column,
+            )
+            if released:
+                slot.forget("bank")
+                log.info(
+                    "bank: leader=%s crossed the instance exit; handing back "
+                    "%s before continuing to a banker", leader, column,
+                )
+                column = ""
+
+        if (
+            has_banker
+            or int(position["map_id"]) in _OUTDOOR_CONTINENT_MAPS
+        ):
+            return False
+        exit_route = await asyncio.to_thread(_nearest_outdoor_exit, leader)
+        if not exit_route:
+            return False
+        exit_aim = travel.ground_aim(
+            exit_route["map_id"], exit_route["x"],
+            exit_route["y"], exit_route["z"],
+        )
+        if column == "banker":
+            released = await asyncio.to_thread(
+                _release_trade_errand, leader, "banker",
+            )
+            if released:
+                slot.forget("bank")
+                log.info(
+                    "bank: leader=%s has no banker on map %s; handing back "
+                    "banker aim before walking to outdoor exit %s", leader,
+                    position["map_id"], exit_aim,
+                )
+            return True
+        if exit_aim and column in ("", exit_aim):
+            distance = math.hypot(
+                float(position["pos_x"]) - exit_route["x"],
+                float(position["pos_y"]) - exit_route["y"],
+            )
+            aimed = await self._claim_town_slot(
+                "bank", leader, exit_aim, cohort=cohort, distance=distance,
+            )
+            if not aimed:
+                log.info(
+                    "bank: leader=%s waits to walk to map %s exit; travel aim "
+                    "remains %r", leader, position["map_id"], column,
+                )
+            return True
+        return False
+
     async def _settle_bank_errand(self, names: list, leader: str,
                                   moves_unasked: bool,
                                   cohort: str | None = None) -> str:
@@ -11719,82 +11788,15 @@ class Bridge(discord.Client):
         step = bank.errand_step(
             bool(leader_town.banker), outstanding, moves_unasked,
         )
-        column = await asyncio.to_thread(_current_travel_npc, leader)
         slot = self._cohort_town_slot(cohort)
         position_rows = await asyncio.to_thread(_fetch_positions, [leader])
         position = position_rows.get(leader)
-
-        # A bank trip can cross an instance boundary without the process that
-        # owns the town-slot ledger surviving it. Only release a ground aim
-        # when this live bank claim owns that exact aim and the matching
-        # areatrigger leads to the character's current map.
-        if (
-            step == bank.BANK_ERRAND_AIM
-            and travel.is_ground_aim(column)
-            and slot.holder is not None
-            and slot.holder.claimant == "bank"
-            and slot.holder.character == leader
-            and slot.holder.aim == column
-            and position is not None
-        ):
-            arrived = await asyncio.to_thread(
-                _ground_exit_leads_to, column, int(position["map_id"]),
-            )
-            if arrived:
-                released = await asyncio.to_thread(
-                    _release_trade_errand, leader, column,
-                )
-                if released:
-                    slot.forget("bank")
-                    log.info(
-                        "bank: leader=%s crossed the instance exit; handing "
-                        "back %s before continuing to a banker", leader, column,
-                    )
-                    column = ""
-
+        routed = await self._bank_exit_route(
+            leader, position, bool(leader_town.banker), step, cohort, slot,
+        )
+        if routed:
+            return step
         if step == bank.BANK_ERRAND_AIM:
-            if (
-                not leader_town.banker
-                and position is not None
-                and int(position["map_id"]) not in _OUTDOOR_CONTINENT_MAPS
-            ):
-                exit_route = await asyncio.to_thread(
-                    _nearest_outdoor_exit, leader,
-                )
-                if exit_route:
-                    exit_aim = travel.ground_aim(
-                        exit_route["map_id"], exit_route["x"],
-                        exit_route["y"], exit_route["z"],
-                    )
-                    if column == "banker":
-                        released = await asyncio.to_thread(
-                            _release_trade_errand, leader, "banker",
-                        )
-                        if released:
-                            slot.forget("bank")
-                            log.info(
-                                "bank: leader=%s has no banker on map %s; "
-                                "handing back banker aim before walking to "
-                                "outdoor exit %s", leader,
-                                position["map_id"], exit_aim,
-                            )
-                        return step
-                    if exit_aim and column in ("", exit_aim):
-                        distance = math.hypot(
-                            float(position["pos_x"]) - exit_route["x"],
-                            float(position["pos_y"]) - exit_route["y"],
-                        )
-                        aimed = await self._claim_town_slot(
-                            "bank", leader, exit_aim, cohort=cohort,
-                            distance=distance,
-                        )
-                        if not aimed:
-                            log.info(
-                                "bank: leader=%s waits to walk to map %s exit; "
-                                "travel aim remains %r", leader,
-                                position["map_id"], column,
-                            )
-                        return step
             # THE RETURN VALUE IS READ, the same defect infra#3660 fixed in the
             # guild bank pass. An economy errand may only retask an IDLE
             # traveller, so this write is a no-op while another town pass owns
