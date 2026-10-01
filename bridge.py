@@ -14067,6 +14067,14 @@ class Bridge(discord.Client):
         hub = state.hub
         state = await self._town_errand_regroup(state, names, positions, now,
                                                 label)
+        bag_pressure_needed = False
+        if state.why == townerrand.BAG_PRESSURE_WHY:
+            free_slots = await asyncio.to_thread(_fetch_free_slots, names)
+            campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
+            bag_pressure_needed = (
+                campaign_waiting
+                and bag_pressure.family_town_run_needed(free_slots)
+            )
         leader_at_hub = townerrand.in_range(
             hub, positions.get(leader), townerrand.HUB_YARDS)
         gathered = all(
@@ -14081,6 +14089,7 @@ class Bridge(discord.Client):
         new, line = townerrand.advance(
             state, now, in_run=in_run, leader_at_hub=leader_at_hub,
             gathered=gathered, step_done=step_done,
+            bag_pressure_needed=bag_pressure_needed,
             stalled=_queue_stall_floor(names))
         if line:
             away = sorted(n for n in names if not townerrand.in_range(

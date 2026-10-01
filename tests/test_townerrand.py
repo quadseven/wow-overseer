@@ -437,6 +437,7 @@ class TheAdapter(unittest.TestCase):
                 "hearthed": self.hearthed,
             },
             "_queue_stall_floor": lambda names: self.stall,
+            "_campaign_waiting": lambda names: False,
             "_insert_hearth": lambda name, source: self.hearths.append(name) or 1,
             "_town_errand_jobs": lambda names: self.jobs.append("town run") or 2,
             "_hub_aim": lambda hub: "at:0:100,100,10",

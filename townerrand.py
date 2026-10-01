@@ -26,7 +26,9 @@ THE STATES, with a clear entry and exit:
                         reports it done or when its own window runs out.
     STEPS   -> DONE     after the last step.
     any     -> DONE     the whole errand's ceiling, a dungeon run, or a walk
-                        that never landed (GO_SECONDS).
+                        that never landed (GO_SECONDS). A campaign hold past
+                        HOLD_CEILING_SECONDS ends the errand unless bag
+                        pressure still blocks that campaign.
 
 Every transition returns a sentence, so the log reads as the errand's diary.
 
@@ -87,6 +89,7 @@ COOLDOWN_SECONDS = 7200.0
 # which the gear gate and the town-first gate already use; kept as its own
 # constant so this pure module imports nothing, and pinned equal by a test.
 HOLD_CEILING_SECONDS = 45 * 60.0
+BAG_PRESSURE_WHY = "campaign held at the dungeon door for bag room"
 
 # THE WAY THERE (wow-dev 2026-09-27). The Alliance family is bound in Ratchet,
 # which has a mailbox, armorers, a weaponsmith and two bankers beside the inn,
@@ -183,7 +186,7 @@ def should_start(
     if state.ended and now - state.ended < COOLDOWN_SECONDS:
         return ""
     if bag_pressure_needed:
-        return "campaign held at the dungeon door for bag room"
+        return BAG_PRESSURE_WHY
     if stalled >= HOLD_CEILING_SECONDS:
         return ""
     waiting = sorted(n for n, count in (mail_gear or {}).items() if count > 0)
@@ -352,18 +355,21 @@ def advance(
     gathered: bool = False,
     step_done: bool = False,
     stalled: float = 0.0,
+    bag_pressure_needed: bool = False,
 ) -> tuple:
     """The next state and one sentence about what changed ('' when nothing).
 
     The bridge measures; this decides. `leader_at_hub` and `gathered` are
     settled readings; `step_done` is the bridge's read-back for the current
-    step.
+    step. `bag_pressure_needed` is a fresh reading that the campaign still
+    waits and the family still needs the counter; it lets that errand continue
+    past the campaign ceiling until the bags can support a run.
     """
     if not state.active:
         return state, ""
     if in_run:
         return end(state, now, "a dungeon run started")
-    if stalled >= HOLD_CEILING_SECONDS:
+    if stalled >= HOLD_CEILING_SECONDS and not bag_pressure_needed:
         return end(
             state,
             now,
