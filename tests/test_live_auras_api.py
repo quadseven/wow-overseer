@@ -63,13 +63,22 @@ class AuraResponseContract(unittest.TestCase):
     def test_shape_and_unknown_spell_id_are_preserved(self):
         payload = map_server._build_auras_payload(
             {"Grug's Family": ["Ugga"]},
-            {("Grug's Family", "Ugga"): {
-                "status": "online",
-                "auras": map_server._normalize_auras([{
-                    "spell": 987654321, "stacks": 2, "remaining_ms": 45000,
-                    "positive": True, "caster": "Ugga",
-                }]),
-            }},
+            {
+                ("Grug's Family", "Ugga"): {
+                    "status": "online",
+                    "auras": map_server._normalize_auras(
+                        [
+                            {
+                                "spell": 987654321,
+                                "stacks": 2,
+                                "remaining_ms": 45000,
+                                "positive": True,
+                                "caster": "Ugga",
+                            }
+                        ]
+                    ),
+                }
+            },
             sampled_at=123,
         )
         self.assertEqual(set(payload), {"sampled_at", "members"})
@@ -78,33 +87,74 @@ class AuraResponseContract(unittest.TestCase):
         self.assertEqual(member["family"], "Grug's Family")
         self.assertEqual(member["name"], "Ugga")
         self.assertEqual(member["status"], "online")
-        self.assertEqual(member["auras"], [{
-            "spell": 987654321, "stacks": 2, "remaining_ms": 45000,
-            "positive": True, "caster": "Ugga",
-        }])
+        self.assertEqual(
+            member["auras"],
+            [
+                {
+                    "spell": 987654321,
+                    "stacks": 2,
+                    "remaining_ms": 45000,
+                    "positive": True,
+                    "caster": "Ugga",
+                }
+            ],
+        )
 
     def test_permanent_duration_sentinel_is_preserved(self):
-        aura = map_server._normalize_auras([{
-            "spell": 987654321, "stacks": 1, "remaining_ms": -1,
-            "positive": False, "caster": "",
-        }])[0]
+        aura = map_server._normalize_auras(
+            [
+                {
+                    "spell": 987654321,
+                    "stacks": 1,
+                    "remaining_ms": -1,
+                    "positive": False,
+                    "caster": "",
+                }
+            ]
+        )[0]
         self.assertEqual(aura["remaining_ms"], -1)
 
     def test_offline_and_error_members_are_explicit(self):
         roster = {"Horde": ["Zug", "Oz"]}
-        payload = map_server._build_auras_payload(roster, {
-            ("Horde", "Zug"): {"status": "offline", "error": "target not online", "auras": []},
-            ("Horde", "Oz"): {"status": "error", "error": "bad probe JSON", "auras": []},
-        }, sampled_at=456)
-        self.assertEqual([m["status"] for m in payload["members"]], ["offline", "error"])
+        payload = map_server._build_auras_payload(
+            roster,
+            {
+                ("Horde", "Zug"): {
+                    "status": "offline",
+                    "error": "target not online",
+                    "auras": [],
+                },
+                ("Horde", "Oz"): {
+                    "status": "error",
+                    "error": "bad probe JSON",
+                    "auras": [],
+                },
+            },
+            sampled_at=456,
+        )
+        self.assertEqual(
+            [m["status"] for m in payload["members"]], ["offline", "error"]
+        )
         self.assertEqual([m["auras"] for m in payload["members"]], [[], []])
         self.assertEqual(payload["members"][0]["error"], "target not online")
 
     def test_probe_command_failures_become_offline_or_error_states(self):
-        conn = FakeConnection([
-            {"id": 1, "status": "error", "detail": "target not online", "result": None},
-            {"id": 2, "status": "error", "detail": "queue rejected", "result": None},
-        ])
+        conn = FakeConnection(
+            [
+                {
+                    "id": 1,
+                    "status": "error",
+                    "detail": "target not online",
+                    "result": None,
+                },
+                {
+                    "id": 2,
+                    "status": "error",
+                    "detail": "queue rejected",
+                    "result": None,
+                },
+            ]
+        )
         with patch.object(map_server, "_connect", return_value=conn):
             responses = map_server._sample_auras({"Horde": ["Zug", "Oz"]})
         self.assertEqual(responses[("Horde", "Zug")]["status"], "offline")

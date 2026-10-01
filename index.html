@@ -6745,6 +6745,7 @@ const auraPanels = {
   family: document.getElementById("family-auras"),
   watch: document.getElementById("watch-auras")
 };
+const AURA_POLL_INTERVAL_MS = 30000;
 const auraState = { payload: null, error: false, loading: false, lastRequestAt: 0 };
 const FAMILY_BUFF_NAMES = new Set([
   "power word: fortitude", "prayer of fortitude", "divine spirit",
@@ -6929,7 +6930,7 @@ async function pollAuras() {
   if (view !== FAMILY_VIEW && view !== WATCH_VIEW) return;
   if (auraState.loading) return;
   const now = Date.now();
-  if (now - auraState.lastRequestAt < 30000) return;
+  if (now - auraState.lastRequestAt < AURA_POLL_INTERVAL_MS) return;
   auraState.lastRequestAt = now;
   auraState.loading = true;
   renderAuras();
@@ -7302,7 +7303,7 @@ wall.sound = false;
 wallSoundButton();
 setInterval(pollFamily, 5000);         // the family rides the same 5s cadence
 setInterval(refreshFamilyWatch, 5000); // and so does the watch it owns
-setInterval(pollAuras, 30000);         // aura snapshots change slower than wall state
+setInterval(pollAuras, AURA_POLL_INTERVAL_MS); // slower than wall state
 setInterval(pollQuests, 30000);        // quest rows are a save, not a stream
 setInterval(pollNeeds, 30000);         // and so are bags, gear and coin
 setInterval(pollRoute, 30000);         // a level or a finished zone moves it

@@ -547,8 +547,55 @@ def _normalize_auras(result) -> list[dict]:
     return auras
 
 
+def _aura_probe_result(row: dict) -> dict:
+    """Translate one completed probe command into the API member state."""
+    if row["status"] == "delivered" and row["result"]:
+        try:
+            parsed = json.loads(row["result"])
+            return {"status": "online", "auras": _normalize_auras(parsed)}
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            return {"status": "error", "error": str(exc), "auras": []}
+
+    detail = str(row["detail"] or row["status"])
+    offline = any(word in detail.lower() for word in ("offline", "not online", "not found"))
+    return {
+        "status": "offline" if offline else "error",
+        "error": detail,
+        "auras": [],
+    }
+
+
+def _queue_aura_probes(cur, targets: list[tuple[str, str]]) -> dict:
+    pending = {}
+    for family_name, name in targets:
+        cur.execute(
+            "INSERT INTO overseer_command "
+            "(target_name, command, kind, source) "
+            "VALUES (%s, 'auras', 'probe', 'api:auras')",
+            (name,),
+        )
+        pending[cur.lastrowid] = (family_name, name)
+    return pending
+
+
+def _read_aura_probes(cur, pending: dict, responses: dict) -> None:
+    if not pending:
+        return
+    marks = ",".join(["%s"] * len(pending))
+    query = (
+        "SELECT id, status, detail, result FROM overseer_command "
+        f"WHERE id IN ({marks})"
+    )
+    cur.execute(query, tuple(pending))  # noqa: S608 - markers contain no user input
+    for row in cur.fetchall():
+        if row["status"] in ("pending", "claimed", "verifying"):
+            continue
+        family_name, name = pending.pop(row["id"])
+        responses[(family_name, name)] = _aura_probe_result(row)
+
+
 def _sample_auras(rosters: dict, timeout: float = AURA_PROBE_TIMEOUT_SECONDS) -> dict:
-    """Ask every fixed roster member through overseer_command, then read ids back."""
+    """Ask fixed roster members through overseer_command and read the results."""
     targets = [(family_name, name) for family_name, names in rosters.items()
                for name in names]
     if not targets:
@@ -556,51 +603,13 @@ def _sample_auras(rosters: dict, timeout: float = AURA_PROBE_TIMEOUT_SECONDS) ->
     conn = _connect()
     try:
         with conn.cursor() as cur:
-            pending = {}
-            for family_name, name in targets:
-                cur.execute(
-                    "INSERT INTO overseer_command "
-                    "(target_name, command, kind, source) "
-                    "VALUES (%s, 'auras', 'probe', 'api:auras')",
-                    (name,),
-                )
-                pending[cur.lastrowid] = (family_name, name)
-
-            deadline = time.monotonic() + max(0.0, timeout)
+            pending = _queue_aura_probes(cur, targets)
             responses = {}
+            deadline = time.monotonic() + max(0.0, timeout)
             while pending and time.monotonic() < deadline:
-                marks = ",".join(["%s"] * len(pending))
-                cur.execute(
-                    "SELECT id, status, detail, result FROM overseer_command "
-                    f"WHERE id IN ({marks})",  # noqa: S608 - only literal markers
-                    tuple(pending),
-                )
-                for row in cur.fetchall():
-                    if row["status"] in ("pending", "claimed", "verifying"):
-                        continue
-                    family_name, name = pending.pop(row["id"])
-                    if row["status"] == "delivered" and row["result"]:
-                        try:
-                            parsed = json.loads(row["result"])
-                            responses[(family_name, name)] = {
-                                "status": "online", "auras": _normalize_auras(parsed)
-                            }
-                        except (json.JSONDecodeError, ValueError) as exc:
-                            responses[(family_name, name)] = {
-                                "status": "error", "error": str(exc), "auras": []
-                            }
-                    else:
-                        detail = str(row["detail"] or row["status"])
-                        offline = any(word in detail.lower()
-                                      for word in ("offline", "not online", "not found"))
-                        responses[(family_name, name)] = {
-                            "status": "offline" if offline else "error",
-                            "error": detail,
-                            "auras": [],
-                        }
+                _read_aura_probes(cur, pending, responses)
                 if pending:
                     time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
-
             for family_name, name in pending.values():
                 responses[(family_name, name)] = {
                     "status": "error",
