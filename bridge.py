@@ -11717,7 +11717,9 @@ class Bridge(discord.Client):
                     "banker aim before walking to outdoor exit %s", leader,
                     position["map_id"], exit_aim,
                 )
-            return True
+                column = ""
+            else:
+                return True
         if exit_aim and column in ("", exit_aim):
             distance = math.hypot(
                 float(position["pos_x"]) - exit_route["x"],
