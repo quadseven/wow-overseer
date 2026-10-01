@@ -6942,6 +6942,7 @@ async function pollAuras() {
     auraState.payload = payload;
     auraState.error = false;
   } catch (error) {
+    console.warn("aura poll failed", error);
     auraState.error = true;
   } finally {
     auraState.loading = false;

@@ -644,16 +644,18 @@ def _cached_auras_payload(rosters: dict) -> dict:
     """Share one short-lived live sample without changing other poll routes."""
     global _AURA_CACHE
     signature = tuple((key, tuple(names)) for key, names in sorted(rosters.items()))
-    now = time.monotonic()
     with _AURA_CACHE_LOCK:
+        now = time.monotonic()
         if (_AURA_CACHE is not None and now < _AURA_CACHE[0]
                 and signature == _AURA_CACHE[1]):
             return _AURA_CACHE[2]
-    responses = _sample_auras(rosters)
-    payload = _build_auras_payload(rosters, responses)
-    with _AURA_CACHE_LOCK:
+        # Keep one cold-cache request in flight. The sample has a fixed
+        # timeout, and callers arriving during it reuse the result rather than
+        # enqueueing the same family probes again.
+        responses = _sample_auras(rosters)
+        payload = _build_auras_payload(rosters, responses)
         _AURA_CACHE = (time.monotonic() + AURA_CACHE_SECONDS, signature, payload)
-    return payload
+        return payload
 
 
 def _all_roster_names() -> list:
@@ -4960,7 +4962,7 @@ class Handler(BaseHTTPRequestHandler):
             rosters = _fetch_families()
             payload = _cached_auras_payload(rosters)
             self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
+        except (pymysql.err.MySQLError, OSError):
             log.exception("aura probe failed")
             self._send(503, "application/json", b'{"error": "aura sample unavailable"}')
 

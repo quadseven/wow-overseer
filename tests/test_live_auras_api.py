@@ -2,8 +2,11 @@
 
 import pathlib
 import sys
+import threading
+import time
 import types
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 try:
@@ -13,6 +16,9 @@ except ModuleNotFoundError:
     # usable in the stdlib-only local check, where the production image adds it.
     pymysql_stub = types.ModuleType("pymysql")
     pymysql_stub.connections = types.SimpleNamespace(Connection=object)
+    mysql_error = type("MySQLError", (Exception,), {})
+    pymysql_stub.MySQLError = mysql_error
+    pymysql_stub.err = types.SimpleNamespace(MySQLError=mysql_error)
     sys.modules["pymysql"] = pymysql_stub
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -178,6 +184,33 @@ class AuraResponseContract(unittest.TestCase):
                 second = map_server._cached_auras_payload(roster)
             self.assertIs(first, second)
             sample.assert_called_once_with(roster)
+        finally:
+            map_server._AURA_CACHE = previous
+
+    def test_concurrent_cold_cache_requests_share_one_sample(self):
+        roster = {"Alliance": ["Grug"]}
+        previous = map_server._AURA_CACHE
+        map_server._AURA_CACHE = None
+        entered_sample = threading.Event()
+        release_sample = threading.Event()
+        try:
+
+            def sample(_roster):
+                entered_sample.set()
+                self.assertTrue(release_sample.wait(timeout=2))
+                return {}
+
+            with patch.object(
+                map_server, "_sample_auras", side_effect=sample
+            ) as mocked:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    first = pool.submit(map_server._cached_auras_payload, roster)
+                    self.assertTrue(entered_sample.wait(timeout=2))
+                    second = pool.submit(map_server._cached_auras_payload, roster)
+                    time.sleep(0.02)
+                    release_sample.set()
+                    self.assertIs(first.result(timeout=2), second.result(timeout=2))
+                mocked.assert_called_once_with(roster)
         finally:
             map_server._AURA_CACHE = previous
 
