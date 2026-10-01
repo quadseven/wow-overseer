@@ -2377,9 +2377,10 @@ def _town_errand_withholds(names, keyword):
 def _gear_gate(names, keyword):
     """Apply GEAR UP BEFORE THE DOOR (#146, #147), BUT NEVER A DEADLOCK.
 
-    Six empty stat slots hold a member in town while gear-up can spend its
-    gold; a member too poor to buy is logged and the run goes ahead. Look up
-    the reader so isolated campaign tests can load this function without it.
+    Six empty stat slots, or an empty main hand, hold a member in town while
+    gear-up can spend its gold; a member too poor to buy is logged and the
+    run goes ahead. Look up the reader so isolated campaign tests can load
+    this function without it.
     """
     errand = globals().get("_town_errand_withholds")
     reason = errand(names, keyword) if errand is not None else None
@@ -2394,10 +2395,9 @@ def _gear_gate(names, keyword):
     mailed = globals().get("_mail_gear_holders")
     waiting = mailed(names) if mailed else {}
     gear_short, gear_broke = [], []
+    empty_slots = globals().get("GEARUP_GATE_EMPTY_SLOTS", 6)
     for name, character in facts.items():
-        worn = [slot for slot in character["equipped"]
-                if slot not in ("shirt", "tabard")]
-        if 17 - len(worn) >= globals().get("GEARUP_GATE_EMPTY_SLOTS", 6):
+        if gearup.needs_gear_hold(character, empty_slots=empty_slots):
             funded = character["purse"] >= globals().get(
                 "GEARUP_GATE_MIN_PURSE", 20000) or waiting.get(name, 0) > 0
             target = gear_short if funded else gear_broke
@@ -2425,7 +2425,14 @@ def _gear_gate(names, keyword):
                  "%ds in town, past the %ds ceiling, so the run goes ahead", label,
                  ", ".join(gear_short), int(held), int(ceiling))
         return None
-    reason = "gear-up first: %s has six or more empty equipment slots" % ", ".join(gear_short)
+    gaps = []
+    for name in gear_short:
+        character = facts[name]
+        if "mainhand" not in character["equipped"]:
+            gaps.append("%s has no main-hand weapon" % name)
+        else:
+            gaps.append("%s has six or more empty equipment slots" % name)
+    reason = "gear-up first: " + ", ".join(gaps)
     log.info("goal: withholding dungeon:%s - %s", label, reason)
     return reason
 

@@ -20,6 +20,43 @@ def item(inv, subclass=0, **kw):
 
 
 class GearupTests(unittest.TestCase):
+    def test_empty_mainhand_is_a_gear_gap_even_below_the_empty_slot_threshold(self):
+        facts = {
+            "Oz": {
+                "equipped": {
+                    "head": 34,
+                    "neck": 22,
+                    "shoulder": 30,
+                    "chest": 37,
+                    "waist": 22,
+                    "legs": 32,
+                    "feet": 33,
+                    "wrist": 27,
+                    "finger1": 36,
+                    "finger2": 25,
+                    "offhand": 38,
+                },
+                "purse": 50000,
+            }
+        }
+        self.assertEqual(6, 17 - len(facts["Oz"]["equipped"]))
+        self.assertTrue(gearup.needs_gear_hold(facts["Oz"], empty_slots=7))
+        self.assertTrue(gearup.campaign_hold(facts, False, empty_slots=7))
+
+    def test_empty_mainhand_mail_item_funds_campaign_hold(self):
+        facts = {
+            "Oz": {
+                "equipped": {"head": 34, "offhand": 38},
+                "purse": 0,
+                "mail_gear": 1,
+            }
+        }
+        self.assertTrue(gearup.campaign_hold(facts, False))
+
+    def test_equipped_mainhand_uses_the_existing_empty_slot_threshold(self):
+        facts = {"T": {"equipped": {"mainhand": 30}, "purse": 20000}}
+        self.assertFalse(gearup.needs_gear_hold(facts["T"], empty_slots=17))
+
     def test_campaign_yields_for_funded_gear_short_member(self):
         facts = {"T": {"equipped": {}, "purse": 20000}}
         self.assertTrue(gearup.campaign_hold(facts, False))

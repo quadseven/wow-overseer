@@ -48,13 +48,22 @@ def campaign_hold(
     if in_run or held_seconds >= ceiling:
         return False
     for character in (facts or {}).values():
-        worn = [
-            slot for slot in character["equipped"] if slot not in ("shirt", "tabard")
-        ]
         funded = character["purse"] >= min_purse or character.get("mail_gear", 0) > 0
-        if 17 - len(worn) >= empty_slots and funded:
+        if needs_gear_hold(character, empty_slots=empty_slots) and funded:
             return True
     return False
+
+
+def needs_gear_hold(character, empty_slots=6) -> bool:
+    """Whether this member has a gear gap worth holding the next run for.
+
+    An empty main hand is a critical equipment gap on its own. Otherwise the
+    campaign keeps the existing empty-slot threshold. `equipped` is the named
+    slot mapping returned by the bridge's gear-facts reader.
+    """
+    equipped = _get(character, "equipped", default={}) or {}
+    worn = [slot for slot in equipped if slot not in ("shirt", "tabard")]
+    return "mainhand" not in worn or 17 - len(worn) >= empty_slots
 
 
 CLASS_IDS = {

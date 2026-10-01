@@ -79,8 +79,8 @@ class TheMaster(unittest.TestCase):
 
     def test_in_reach(self):
         master = {"map_id": 0, "x": 0.0, "y": 0.0}
-        self.assertTrue(ws.in_reach(master, {"map_id": 0, "pos_x": 5, "pos_y": 5}))
-        self.assertFalse(ws.in_reach(master, {"map_id": 0, "pos_x": 9, "pos_y": 0}))
+        self.assertTrue(ws.in_reach(master, {"map_id": 0, "pos_x": 3, "pos_y": 0}))
+        self.assertFalse(ws.in_reach(master, {"map_id": 0, "pos_x": 6, "pos_y": 0}))
         self.assertFalse(ws.in_reach(master, {"map_id": 1, "pos_x": 0, "pos_y": 0}))
 
 

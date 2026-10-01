@@ -71,9 +71,9 @@ MASTER_TEAM = {
     29: "horde", 68: "horde", 104: "horde", 876: "horde",
 }  # fmt: skip
 
-# How close to the weapon master's spawn a member must be read before its
-# train row is written; the module's interact gate is the real test.
-IN_REACH_YARDS = 8.0
+# Keep a margin inside the core's five-yard trainer gate: these are snapshot
+# and spawn coordinates, not the live NPC's position or interaction geometry.
+IN_REACH_YARDS = 4.0
 
 TRAIN_SOURCE = "gear:weapon-skill"
 
