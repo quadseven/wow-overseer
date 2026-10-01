@@ -121,6 +121,48 @@ class GearupTests(unittest.TestCase):
             )
         )
 
+    def test_two_hander_does_not_replace_a_stronger_offhand(self):
+        mage = {
+            "class": "mage",
+            "level": 35,
+            "purse": 100000,
+            "skills": {"weapons": {10}},
+            "equipped": {"offhand": 38},
+        }
+        staff = item(17, subclass=10, item_class=2, id=4, ilvl=24, price=1000)
+
+        self.assertEqual((), gearup.plan_buys({"Og": mage}, [staff]))
+
+    def test_two_hander_can_replace_an_offhand_when_ten_levels_better(self):
+        mage = {
+            "class": "mage",
+            "level": 35,
+            "purse": 100000,
+            "skills": {"weapons": {10}},
+            "equipped": {"offhand": 20},
+        }
+        staff = item(17, subclass=10, item_class=2, id=4, ilvl=30, price=1000)
+
+        self.assertEqual(
+            [("mainhand", 4)],
+            [(buy.slot, buy.listing_id) for buy in gearup.plan_buys({"Og": mage}, [staff])],
+        )
+
+    def test_one_hander_still_fills_empty_mainhand_beside_offhand(self):
+        mage = {
+            "class": "mage",
+            "level": 35,
+            "purse": 100000,
+            "skills": {"weapons": {15}},
+            "equipped": {"offhand": 38},
+        }
+        dagger = item(13, subclass=15, item_class=2, id=5, ilvl=30, price=1000)
+
+        self.assertEqual(
+            [("mainhand", 5)],
+            [(buy.slot, buy.listing_id) for buy in gearup.plan_buys({"Og": mage}, [dagger])],
+        )
+
     def test_tank_offhand_only_accepts_shield(self):
         c = {
             "class": "warrior",

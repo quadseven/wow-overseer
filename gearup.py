@@ -269,6 +269,7 @@ VENDOR_TRIP_EMPTY_SLOTS = 3
 VENDOR_TRIP_MAX_YARDS = 500.0
 # Standing this close to the vendor is already there: the buy waits for reach.
 VENDOR_TRIP_HERE_YARDS = 10.0
+TWO_HAND_OFFHAND_MARGIN = 10
 
 
 @dataclass(frozen=True)
@@ -423,6 +424,20 @@ def _pair_slot_open(slot, equipped, chosen):
     return first in chosen or first in equipped
 
 
+def _two_hander_beats_offhand(item, equipped, item_level):
+    """Keep a worn offhand unless a two-hander is clearly better by 10 levels."""
+    if int(_get(item, "InventoryType", "inventory_type", default=0) or 0) != 17:
+        return True
+    if "offhand" not in equipped:
+        return True
+    offhand = equipped["offhand"]
+    if isinstance(offhand, dict):
+        offhand = offhand.get("item_level")
+    if offhand is None:
+        return False
+    return int(item_level) >= int(offhand) + TWO_HAND_OFFHAND_MARGIN
+
+
 def _worn_is_better(slot, equipped, item_level, level):
     """A worn piece stays unless it is 10 or more levels behind and this is better."""
     if slot not in equipped:
@@ -452,6 +467,8 @@ def _candidate_slots(item, equipped, chosen, tank, level, dual_wields=True):
     inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
     item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
     tank_refuses = tank and not _is_shield(item, inv)
+    if not _two_hander_beats_offhand(item, equipped, item_level):
+        return
     for slot in SLOT_TYPES.get(inv, ()):
         if slot in chosen or not _pair_slot_open(slot, equipped, chosen):
             continue

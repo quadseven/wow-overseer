@@ -350,7 +350,12 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
         draft of this test passed a mutation that did exactly that."""
         self.assertIn(
             "_release_trade_errand, decision.release.character,\n"
-            "                decision.release.aim,",
+            "                    decision.release.aim,",
+            self.code,
+        )
+        self.assertIn(
+            "_release_weapon_training_aim,\n"
+            "                    decision.release.character, decision.release.aim,",
             self.code,
         )
 
@@ -403,6 +408,77 @@ class TheIdleDoorClearsWithoutAReplacement(unittest.TestCase):
 
 
 class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
+    def test_missing_mainhand_weapon_training_can_preempt_a_trainer_walk(self):
+        slot = townslot.Slot(releasable=travel.is_ground_aim)
+        decision = slot.want(
+            claimant="weapon master",
+            character="Grug",
+            leader="Grug",
+            aim="11867",
+            column="trainer:1226",
+            retaskable=("", "11867"),
+            now=100.0,
+            urgent=True,
+            trainer_route=True,
+        )
+        self.assertEqual(townslot.SLOT_PREEMPT, decision.verdict)
+        self.assertEqual("trainer:1226", decision.release.aim)
+
+    def test_native_bare_trainer_entry_can_be_preempted_when_verified(self):
+        slot = townslot.Slot(releasable=travel.is_ground_aim)
+        decision = slot.want(
+            claimant="weapon master", character="Grug", leader="Grug",
+            aim="11867", column="1226", retaskable=("", "11867"),
+            now=100.0, urgent=True, trainer_route=True,
+        )
+        self.assertEqual(townslot.SLOT_PREEMPT, decision.verdict)
+        self.assertEqual("1226", decision.release.aim)
+
+    def test_no_other_pass_can_preempt_a_trainer_walk(self):
+        slot = townslot.Slot(releasable=travel.is_ground_aim)
+        decision = slot.want(
+            claimant="economy",
+            character="Grug",
+            leader="Grug",
+            aim="vendor",
+            column="trainer:1226",
+            retaskable=("", "vendor"),
+            now=100.0,
+            urgent=True,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, decision.verdict)
+
+    def test_weapon_pass_only_preempts_a_specific_trainer_route(self):
+        slot = townslot.Slot(releasable=travel.is_ground_aim)
+        for column in ("trainer", "trainer:abc", "trainer:0", "profession:1226"):
+            with self.subTest(column=column):
+                decision = slot.want(
+                    claimant="weapon master", character="Grug", leader="Grug",
+                    aim="11867", column=column, retaskable=("", "11867"),
+                    now=100.0, urgent=True, trainer_route=True,
+                )
+                self.assertEqual(townslot.SLOT_WAIT, decision.verdict)
+
+
+    def test_trainer_release_is_exact_and_compare_and_swap_guarded(self):
+        body = _statements("def _release_weapon_training_aim(")
+        self.assertIn('travel_npc = %s', body)
+        self.assertIn('learn_skill = 0', body)
+        self.assertIn('unlearn_skill = 0', body)
+        self.assertIn('unlearn_max = 0', body)
+        route = _statements("def _is_weapon_training_route(")
+        self.assertIn('route.removeprefix("trainer:")', route)
+        self.assertIn('creature_default_trainer', route)
+        self.assertIn('trainer_spell', route)
+
+    def test_jev_can_synthesize_the_verified_weapon_errand(self):
+        body = _statements("    async def _critical_weapon_intent_option(")
+        self.assertIn('_fetch_gearup_facts', body)
+        self.assertIn('_fetch_bag_weapons', body)
+        self.assertIn('n.slot == "mainhand"', body)
+        self.assertIn('return option', body)
+        self.assertNotIn('row.table', body)
+
     def test_urgent_maintenance_can_preempt_an_orphaned_economy_aim(self):
         """Zero-room pressure cannot wait for the world's 20-minute fuse."""
         slot = townslot.Slot(releasable=travel.is_ground_aim)

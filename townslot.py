@@ -1507,6 +1507,7 @@ class Slot:
         now: float,
         urgent: bool = False,
         distance: float | None = None,
+        trainer_route: bool = False,
     ) -> Decision:
         """Decide, and register the wait if the answer is no.
 
@@ -1548,6 +1549,23 @@ class Slot:
         # full bag blocking loot. Leaving it out here would make the longer
         # lease an exemption rather than a lease.
         long_leases = {} if urgent else self.long_leases
+        releasable = self.releasable
+        if claimant == "weapon master" and trainer_route:
+            # An empty main hand with a learnable weapon is the one gear gap
+            # allowed to interrupt routine spell training. Keep this narrow:
+            # other claimants must never clear a native trainer route.
+            base_releasable = releasable
+
+            def releasable_for_weapon_training(aim):
+                if (base_releasable is not None
+                        and base_releasable(aim)):
+                    return True
+                route = str(aim)
+                if route.startswith("trainer:"):
+                    route = route.removeprefix("trainer:")
+                return route.isascii() and route.isdecimal() and int(route) > 0
+
+            releasable = releasable_for_weapon_training
         decision = decide(
             claimant=claimant,
             character=character,
@@ -1564,7 +1582,7 @@ class Slot:
             orphan_lease=orphan_lease,
             long_leases=long_leases,
             want_fresh=self.want_fresh,
-            releasable=self.releasable,
+            releasable=releasable,
             stop=stop,
         )
         if decision.verdict == SLOT_WAIT and decision.aim:
