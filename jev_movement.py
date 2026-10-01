@@ -14,7 +14,7 @@ WHAT JEV IS OFFERED. Only what can be carried out now (`options`):
 
   carry_on          change nothing. The module's own catch-up walk, regroup
                     hold, route planning and stall give-up go on. Always
-                    offered, and today's answer (`heuristic`).
+                    offered, and the ordinary answer (`heuristic`).
   hearth_straggler  one member who is far from the leader and not moving
                     uses the hearthstone (kind='hearth'). Offered only when
                     that member stands still, is alive, is out of combat, has
@@ -46,8 +46,10 @@ family spread across zones hearths to its shared inn through run recovery's
 
 ACT BY DEFAULT, behind DEFAULT_THRESHOLD (JEV_MODE_MOVEMENT and
 JEV_THRESHOLD_MOVEMENT override both). Below it, or with no answer, the
-heuristic stands, and the heuristic is carry_on, so a low-confidence answer
-changes nothing in the world.
+heuristic stands. It is normally carry_on, but after repeated deaths it
+hearths a ready family at its shared inn or drops its active non-dungeon errand.
+That safety choice also overrides a confident Jev answer in act mode. Shadow
+mode records it without carrying it out.
 
 PURE: facts in, questions and judgments out; the only I/O is the client the
 caller hands in.
@@ -281,8 +283,31 @@ def options(f: Facts) -> dict:
 
 
 def heuristic(f: Facts) -> tuple:
-    """Today's rules: the module's own drives decide. (answer, why)."""
+    """Use a safe option when repeat deaths make carrying on reckless."""
+    safety = repeated_death_action(f)
+    if safety is not None:
+        return safety
     return CARRY_ON, "the module's catch-up walk, regroup hold and stall give-up"
+
+
+def repeated_death_action(f: Facts) -> tuple | None:
+    """Regroup at a shared inn or abandon an errand after repeat deaths.
+
+    Called only outside dungeon jobs by the bridge's movement loop. The
+    existing run recovery owns dungeon movement and remains untouched.
+    """
+    deaths = int((f.where.deaths or {}).get("count", 0))
+    if deaths < DYING_DEATHS:
+        return None
+    if one_inn(f):
+        return HEARTH_FAMILY, (
+            "%d recent deaths; regroup the ready family at its shared inn" % deaths
+        )
+    if f.errand:
+        return DROP_ERRAND, "%d recent deaths; stop the walk to %s" % (
+            deaths, f.errand
+        )
+    return None
 
 
 def question(f: Facts, offered: dict):
@@ -359,9 +384,13 @@ class Judgment:
     @property
     def carried_out(self) -> str:
         """The option to carry out, or "" when nothing changes."""
-        if self.acted != jev.JEV or self.jev == CARRY_ON:
+        if self.mode != jev.ACT:
             return ""
-        return self.jev
+        if self.acted == jev.HEURISTIC:
+            return self.heuristic if self.heuristic != CARRY_ON else ""
+        if self.acted in (jev.JEV, jev.BOTH) and self.jev != CARRY_ON:
+            return self.jev
+        return ""
 
     def line(self) -> str:
         answer = (
@@ -403,6 +432,7 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
     if not why or len(offered) < 2:
         return None
     current, heuristic_why = heuristic(f)
+    safety_action = repeated_death_action(f)
     base = Judgment(
         subject=f.family,
         heuristic=current,
@@ -427,7 +457,12 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
         jev=answer.choice,
         confidence=answer.confidence,
         probabilities=answer.probabilities,
-        acted=rule.acted(
-            current, answer.choice, answer.confidence, can_act=answer.choice in offered
+        acted=(
+            _HEURISTIC
+            if safety_action is not None and rule.mode == jev.ACT
+            else rule.acted(
+                current, answer.choice, answer.confidence,
+                can_act=answer.choice in offered,
+            )
         ),
     )

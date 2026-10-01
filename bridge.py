@@ -16208,35 +16208,45 @@ class Bridge(discord.Client):
                           campaignqueue._family(key))
 
     async def _carry_out_movement(self, key: str, facts, judgment, slot) -> None:
-        """Write what Jev chose. Every road here already exists in the world:
-        kind='hearth' rows and the travel column's compare-and-swap release."""
+        """Write Jev's choice or the deterministic death-safety action.
+
+        Every road here already exists in the world: kind='hearth' rows and
+        the travel column's compare-and-swap release.
+        """
         who = campaignqueue._family(key)
         chosen = judgment.carried_out
+        actor = {
+            "jev": "Jev",
+            "both": "Jev and the heuristic",
+            "heuristic": "the deterministic safety rule",
+        }.get(judgment.acted, "unknown movement decision")
         if chosen == jev_movement.HEARTH_STRAGGLER and judgment.straggler:
             await asyncio.to_thread(_insert_hearth, judgment.straggler)
             log.info("movement: %s hearths home - far from %s and not moving "
-                     "(Jev, conf %.2f)", judgment.straggler, who,
+                     "(%s, conf %.2f)", judgment.straggler, who, actor,
                      judgment.confidence or 0.0)
         elif chosen == jev_movement.HEARTH_TO_LEADER and judgment.homeward:
             for name in judgment.homeward:
                 await asyncio.to_thread(_insert_hearth, name)
             log.info("movement: %s hearth(s) to %s's leader, who stands at "
-                     "their hearthstone point (Jev, conf %.2f)",
+                     "their hearthstone point (%s, conf %.2f)",
                      ", ".join(judgment.homeward), who,
+                     actor,
                      judgment.confidence or 0.0)
         elif chosen == jev_movement.HEARTH_FAMILY:
             for body in facts.where.bodies:
                 await asyncio.to_thread(_insert_hearth, body.name)
             log.info("movement: %s hearths home together and meets at the inn "
-                     "(Jev, conf %.2f)", who, judgment.confidence or 0.0)
+                     "(%s, conf %.2f)", who, actor,
+                     judgment.confidence or 0.0)
         elif chosen == jev_movement.DROP_ERRAND and facts.errand and slot is not None:
             leader = facts.where.leader
             released = await asyncio.to_thread(_release_trade_errand, leader,
                                                facts.errand)
             slot.abandon(facts.claimant, facts.errand, released, time.monotonic())
             log.info("movement: %s gives up the walk to %r (%s's); released=%s "
-                     "(Jev, conf %.2f)", leader, facts.errand, facts.claimant,
-                     released, judgment.confidence or 0.0)
+                     "(%s, conf %.2f)", leader, facts.errand, facts.claimant,
+                     released, actor, judgment.confidence or 0.0)
 
     async def _family_intent_loop(self) -> None:
         """Let Jev choose what each family is doing, from what the module's
