@@ -580,8 +580,8 @@ class JevPicks(unittest.TestCase):
 
 class TheBridgePass(unittest.TestCase):
     def test_the_ladder_runs_before_the_gear_hold_and_the_step(self):
-        body = BRIDGE[BRIDGE.index("    async def _campaign_queue_once") :]
-        body = body[: body.index("    async def _leave_town_when_done")]
+        body = BRIDGE[BRIDGE.index("    async def _campaign_queue_family_once") :]
+        body = body[: body.index("    async def _campaign_queue_once")]
         self.assertLess(body.index('"_queue_holds"'), body.index("campaignqueue.step("))
         holds = BRIDGE[BRIDGE.index("    async def _queue_holds(") :]
         holds = holds[: holds.index("    async def _pace_facts(")]

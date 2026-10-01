@@ -269,6 +269,7 @@ class FakeWorld:
                 "lead": r["lead"],
                 "family": r["family"],
                 "job": "quest",
+                "drive_quest": 0,
                 "dungeon_runs_done": 0,
                 "dungeon_runs_wanted": 25,
             }
@@ -327,6 +328,14 @@ class FakeWorld:
             self.row(name)["dungeon_runs_done"] = 0
         return len(names)
 
+    def clear_family_quest(self, family, quest_id, holders):
+        changed = 0
+        for row in self.family(family):
+            if row["drive_quest"]:
+                row["drive_quest"] = 0
+                changed += 1
+        return changed
+
 
 class _Log:
     def __init__(self):
@@ -344,7 +353,7 @@ def _queue_pass(world, holds=None):
     holds = holds or {}
     log = _Log()
     ns = _load(
-        ["_campaign_queue_once", "_apply_queue_move"],
+        ["_campaign_queue_family_once", "_campaign_queue_once", "_apply_queue_move"],
         {
             "asyncio": asyncio,
             "campaignqueue": campaignqueue,
@@ -362,6 +371,8 @@ def _queue_pass(world, holds=None):
             "raidrun": raidrun,
             "_insert_job": world.insert_job,
             "_reset_campaign_done": world.reset,
+            "_aim_family_quest": world.clear_family_quest,
+            "_PACE_QUESTING": {},
         },
     )
 
@@ -374,12 +385,21 @@ def _queue_pass(world, holds=None):
     async def no_town(fams):
         return None
 
+    async def no_queue_hold(key, rows, fam):
+        return False
+
     me = types.SimpleNamespace(
         _activity_holds=lambda key=None: holds.get(key, ""),
         _campaign_owns_travel=owns_travel,
+        _queue_holds=no_queue_hold,
         _leave_town_when_done=no_town,
         _plan_campaigns=no_plan,
     )
+
+    async def family_once(key, rows, fams, held):
+        await ns["_campaign_queue_family_once"](me, key, rows, fams, held)
+
+    me._campaign_queue_family_once = family_once
     asyncio.run(ns["_campaign_queue_once"](me))
     return log.lines
 
@@ -468,6 +488,46 @@ class TheQueueAdvancesByItself(unittest.TestCase):
             ["queue: Zug's family: starting Ragefire Chasm, 50 runs"],
             [ln for ln in lines if ln.startswith("queue: Zug")],
         )
+
+    def test_pending_campaign_clears_only_its_family_old_quest_aim(self):
+        """The campaign owns movement too; a stale quest must not split it."""
+        self.world.row("Zug")["drive_quest"] = 11169
+        self.world.row("Oz")["drive_quest"] = 11169
+        self.world.row("Grug")["drive_quest"] = 12345
+
+        _queue_pass(self.world)
+
+        self.assertEqual(0, self.world.row("Zug")["drive_quest"])
+        self.assertEqual(0, self.world.row("Oz")["drive_quest"])
+        self.assertEqual(12345, self.world.row("Grug")["drive_quest"])
+
+    def test_persistent_quest_goal_cannot_restore_campaigns_old_aim(self):
+        cleared, quest_writes = [], []
+        ns = _load(
+            ["_goal_drive_quest"],
+            {
+                "asyncio": asyncio,
+                "campaignqueue": campaignqueue,
+                "_cohort_of": lambda name: "Zug" if name == "Uzza" else None,
+                "_queue_owns_job": lambda family, dungeon: family == "Zug",
+                "_aim_family_quest": lambda family, quest_id, holders: (
+                    cleared.append((family, quest_id, holders)) or 2
+                ),
+                "_aim_traveller": lambda quest_id: quest_writes.append(quest_id) or 1,
+                "log": _Log(),
+            },
+        )
+
+        asyncio.run(
+            ns["_goal_drive_quest"](
+                types.SimpleNamespace(),
+                {"id": 1},
+                types.SimpleNamespace(quest_id=11169, beneficiary="Uzza"),
+            )
+        )
+
+        self.assertEqual([("Zug", 0, ())], cleared)
+        self.assertEqual([], quest_writes)
 
 
 def _drive_with_full_bags(withheld):

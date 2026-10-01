@@ -15149,6 +15149,17 @@ class Bridge(discord.Client):
         )
 
     async def _goal_drive_quest(self, row: dict, action) -> None:
+        # A PERSISTENT QUEST GOAL MUST NOT OUTLIVE A DUNGEON CAMPAIGN. The
+        # campaign queue owns the family's movement while it owns the job;
+        # otherwise this old goal reasserts drive_quest after the queue pass
+        # clears it and sends the family back toward an unrelated quest.
+        family = await asyncio.to_thread(_cohort_of, action.beneficiary)
+        if family and await asyncio.to_thread(_queue_owns_job, family, False):
+            cleared = await asyncio.to_thread(_aim_family_quest, family, 0, ())
+            log.info("goal: quest %d stands down - the dungeon campaign owns "
+                     "movement and cleared %d stale aim(s)",
+                     action.quest_id, cleared)
+            return
         aimed = await asyncio.to_thread(_aim_traveller, action.quest_id)
         # Logged every time it is renewed, with the count of rows actually
         # written: this project has been burned repeatedly by "delivered"
@@ -15392,6 +15403,52 @@ class Bridge(discord.Client):
         await asyncio.to_thread(_keep_in_town, names)
         return True
 
+    async def _campaign_queue_family_once(self, key: str, rows: list,
+                                          fams: dict, held: set) -> None:
+        """Apply one family's queue step, leaving other families independent."""
+        if key in held:
+            return
+        fam = fams.get(key)
+        if fam is None:
+            log.warning("queue: %s has queued dungeons and no enabled "
+                        "roster row, so nothing is written",
+                        campaignqueue._family(key))
+            return
+        # OLD QUEST AIMS ARE MOVEMENT ORDERS TOO. The C++ quest strategy reads
+        # drive_quest independently of `job`, so setting dungeon jobs alone can
+        # leave a family travelling toward an unrelated quest. Keep the
+        # deliberate no-dungeon fallback questing intact.
+        if key not in _PACE_QUESTING:
+            cleared = await asyncio.to_thread(_aim_family_quest, key, 0, ())
+            if cleared:
+                log.info("queue: %s's dungeon campaign clears %d stale quest "
+                         "aim(s); the queue owns movement",
+                         campaignqueue._family(key), cleared)
+        holds = getattr(self, "_queue_holds", None)
+        if holds is not None and await holds(key, rows, fam):
+            return
+        move = campaignqueue.step(rows, fam["leader"])
+        if not move.writes:
+            log.info("queue: %s: %s", campaignqueue._family(key), move.why)
+            return
+        # A JEV INTERLUDE DELAYS THE NEXT RUN, NEVER THE ORDER (#216). The
+        # entries are untouched: the start or re-assert is only held until the
+        # family's chosen activity ends, and then made as it would be.
+        activity = self._activity_holds(key)
+        if activity and move.keyword:
+            log.info("queue: %s holds %s while the family's %s interlude runs; "
+                     "the order stands", campaignqueue._family(key),
+                     move.keyword, activity)
+            return
+        try:
+            said = await asyncio.to_thread(_apply_queue_move, move,
+                                           fam["names"], key)
+            log.info("queue: %s: %s", campaignqueue._family(key), said)
+        except Exception:
+            # One family's failure must not cost the other its advance.
+            log.exception("queue: the pass for %s failed; retrying next cycle",
+                          campaignqueue._family(key))
+
     async def _campaign_queue_once(self) -> None:
         """One pass: every family with a pending entry, off its own leader."""
         # WHAT THE MODULE CAN CROSS, read before any door is judged, so a
@@ -15425,38 +15482,7 @@ class Bridge(discord.Client):
         if not pending:
             return
         for key, rows in pending.items():
-            if key in held:
-                continue
-            fam = fams.get(key)
-            if fam is None:
-                log.warning("queue: %s has queued dungeons and no enabled "
-                            "roster row, so nothing is written",
-                            campaignqueue._family(key))
-                continue
-            holds = getattr(self, "_queue_holds", None)
-            if holds is not None and await holds(key, rows, fam):
-                continue
-            move = campaignqueue.step(rows, fam["leader"])
-            if not move.writes:
-                log.info("queue: %s: %s", campaignqueue._family(key), move.why)
-                continue
-            # A JEV INTERLUDE DELAYS THE NEXT RUN, NEVER THE ORDER (#216). The
-            # entries are untouched: the start or re-assert is only held until
-            # the family's chosen activity ends, and then made as it would be.
-            held = self._activity_holds(key)
-            if held and move.keyword:
-                log.info("queue: %s holds %s while the family's %s interlude "
-                         "runs; the order stands", campaignqueue._family(key),
-                         move.keyword, held)
-                continue
-            try:
-                said = await asyncio.to_thread(_apply_queue_move, move,
-                                               fam["names"], key)
-                log.info("queue: %s: %s", campaignqueue._family(key), said)
-            except Exception:
-                # One family's failure must not cost the other its advance.
-                log.exception("queue: the pass for %s failed; retrying next "
-                              "cycle", campaignqueue._family(key))
+            await self._campaign_queue_family_once(key, rows, fams, held)
 
     async def _queue_holds(self, key: str, rows: list, fam: dict) -> bool:
         """Whether the queue's step waits this pass: the ladder took it
