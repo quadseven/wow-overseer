@@ -724,6 +724,7 @@ class TheMovementChoice(unittest.TestCase):
             "asyncio": asyncio,
             "jev_movement": jev_movement,
             "TOWN_ERRAND_CLAIMANT": "town errand",
+            "WEAPON_SKILL_CLAIMANT": "weapon master",
             "_movement_reads": lambda names: {"binds": {}, "hearthed": frozenset()},
         }
         module = ast.Module(body=_functions("_movement_facts"), type_ignores=[])
@@ -732,6 +733,9 @@ class TheMovementChoice(unittest.TestCase):
 
     def test_the_town_errand_walk_is_not_offered(self):
         self.assertEqual("", self.facts("town errand").errand)
+
+    def test_weapon_training_walk_is_not_offered_to_the_death_fallback(self):
+        self.assertEqual("", self.facts("weapon master").errand)
 
     def test_a_cast_that_never_started_is_no_hearth(self):
         start = BRIDGE.index("_MOVEMENT_HEARTHED = (")
