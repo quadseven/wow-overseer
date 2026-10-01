@@ -416,6 +416,90 @@ class ATrainerWalkThatKeepsFailing(unittest.TestCase):
         other = (guildjobs.Recent("Other", "train", 61, "error"),)
         self.assertEqual(guildjobs.train_cooldown("Keeper", other), 60)
 
+    def test_a_failed_walk_cools_only_its_skill(self):
+        recent = (guildjobs.Recent("Keeper", "train", 5, "error", S),)
+        self.assertEqual(guildjobs.train_cooldown("Keeper", recent, S), 120)
+        self.assertEqual(guildjobs.train_cooldown("Keeper", recent, TAILOR), 60)
+
+    def test_failed_skinning_walk_does_not_block_assigned_tailoring(self):
+        crew = [
+            bare("A", skills={H: (75, 75), M: (75, 75)}),
+            bare("B", skills={H: (75, 75), M: (75, 75)}),
+            bare("Keeper", level=10, money=500),
+        ]
+        initial = plan(crew)
+        self.assertIn(TAILOR, initial.trades["Keeper"])
+        self.assertIn(S, initial.trades["Keeper"])
+        recent = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Keeper",
+                    "command": "walk-to-trainer skill:%d max:20000" % S,
+                    "source": "guildjobs:train:Keeper",
+                    "status": "unchanged",
+                    "age": 5,
+                },
+            )
+        )
+
+        step = only_step(plan(crew, recent=recent), "Keeper")
+
+        self.assertIsNotNone(step)
+        self.assertEqual(step.action, "train")
+        self.assertEqual(step.rows[0].command, "walk-to-trainer skill:%d" % TAILOR)
+
+    def test_failed_herbalism_walk_does_not_block_first_aid(self):
+        medic = bare(
+            "Medic",
+            level=10,
+            money=500,
+            skills={H: (75, 75), M: (75, 75)},
+        )
+        recent = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Medic",
+                    "command": "walk-to-trainer skill:%d max:20000" % H,
+                    "source": "guildjobs:train:Medic",
+                    "status": "error",
+                    "age": 5,
+                },
+            )
+        )
+
+        step = only_step(plan([medic], recent=recent), "Medic")
+
+        self.assertEqual(step.action, "train")
+        self.assertEqual(step.rows[0].command, "walk-to-trainer skill:%d" % FA)
+
+    def test_recent_rows_read_the_training_skill_token(self):
+        (recent,) = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Keeper",
+                    "command": "walk-to-trainer skill:197 max:20000",
+                    "source": "guildjobs:train:Keeper",
+                    "status": "error",
+                    "age": 5,
+                },
+            )
+        )
+        self.assertEqual(recent.skill_id, TAILOR)
+
+        (malformed,) = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Keeper",
+                    "command": "walk-to-trainer skill:bad",
+                    "source": "guildjobs:train:Keeper",
+                    "status": "error",
+                    "age": 5,
+                },
+            )
+        )
+        self.assertIsNone(malformed.skill_id)
+        self.assertIn('"SELECT target_name, command, source, status, "', BRIDGE)
+
 
 class ASkinnersField(unittest.TestCase):
     def beast(self, spawn, x, y, level=10, name="Mottled Boar"):

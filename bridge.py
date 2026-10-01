@@ -21602,7 +21602,7 @@ _JOB_ITEMS_SQL = (
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
 )
 _JOB_RECENT_SQL = (
-    "SELECT target_name, source, status, "
+    "SELECT target_name, command, source, status, "
     "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
     "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY"
 )
