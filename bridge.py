@@ -15149,6 +15149,18 @@ class Bridge(discord.Client):
         )
 
     async def _goal_drive_quest(self, row: dict, action) -> None:
+        # A PERSISTENT QUEST GOAL MUST NOT OUTLIVE A DUNGEON CAMPAIGN. The
+        # campaign queue owns the family's movement while it owns the job;
+        # otherwise this old goal reasserts drive_quest after the queue pass
+        # clears it and sends the family back toward an unrelated quest.
+        family = await asyncio.to_thread(_cohort_of, action.beneficiary)
+        if family and await asyncio.to_thread(_queue_owns_job, family, False):
+            cleared = await asyncio.to_thread(_aim_family_quest, family, 0, ())
+            log.info("goal: quest %d for %s stands down - %s's dungeon "
+                     "campaign owns movement and cleared %d stale aim(s)",
+                     action.quest_id, action.beneficiary,
+                     campaignqueue._family(family), cleared)
+            return
         aimed = await asyncio.to_thread(_aim_traveller, action.quest_id)
         # Logged every time it is renewed, with the count of rows actually
         # written: this project has been burned repeatedly by "delivered"
@@ -15433,6 +15445,17 @@ class Bridge(discord.Client):
                             "roster row, so nothing is written",
                             campaignqueue._family(key))
                 continue
+            # OLD QUEST AIMS ARE MOVEMENT ORDERS TOO. The C++ quest strategy
+            # reads drive_quest independently of `job`, so setting dungeon jobs
+            # alone can leave a family travelling toward an unrelated quest.
+            # Keep the deliberate no-dungeon fallback questing intact.
+            if key not in _PACE_QUESTING:
+                cleared = await asyncio.to_thread(_aim_family_quest,
+                                                  key, 0, ())
+                if cleared:
+                    log.info("queue: %s's dungeon campaign clears %d stale "
+                             "quest aim(s); the queue owns movement",
+                             campaignqueue._family(key), cleared)
             holds = getattr(self, "_queue_holds", None)
             if holds is not None and await holds(key, rows, fam):
                 continue
