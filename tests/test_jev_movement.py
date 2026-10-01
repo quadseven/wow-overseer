@@ -145,6 +145,50 @@ class WhatIsOffered(unittest.TestCase):
         self.assertIn(jm.CARRY_ON, jm.options(facts()))
         self.assertEqual(jm.CARRY_ON, jm.heuristic(facts())[0])
 
+    def test_repeat_deaths_regroup_a_ready_family_at_its_shared_inn(self):
+        f = facts(where(deaths=DYING))
+        self.assertEqual(jm.HEARTH_FAMILY, jm.heuristic(f)[0])
+        self.assertIn(jm.HEARTH_FAMILY, jm.options(f))
+
+    def test_repeat_deaths_drop_an_errand_if_the_family_cannot_hearth_together(self):
+        f = facts(
+            where(moving=("Bork",), deaths=DYING),
+            errand="at:0:-8815.2,652.9,94.9",
+            claimant="towntrip",
+        )
+        self.assertFalse(jm.one_inn(f))
+        self.assertEqual(jm.DROP_ERRAND, jm.heuristic(f)[0])
+
+    def test_repeat_death_safety_overrides_confident_carry_on(self):
+        f = facts(
+            where(moving=("Bork",), deaths=DYING),
+            errand="at:0:-8815.2,652.9,94.9",
+            claimant="towntrip",
+        )
+        j = ask(f, FakeJev(picks={"movement": jm.CARRY_ON}, confidence=0.99))
+        self.assertEqual(jev.HEURISTIC, j.acted)
+        self.assertEqual(jm.DROP_ERRAND, j.carried_out)
+
+    def test_repeat_death_hearths_the_shared_inn_even_if_jev_says_carry_on(self):
+        f = facts(where(deaths=DYING))
+        j = ask(f, FakeJev(picks={"movement": jm.CARRY_ON}, confidence=0.99))
+        self.assertEqual(jev.HEURISTIC, j.acted)
+        self.assertEqual(jm.HEARTH_FAMILY, j.carried_out)
+
+    def test_repeat_death_safety_remains_shadow_only_in_shadow_mode(self):
+        f = facts(
+            where(moving=("Bork",), deaths=DYING),
+            errand="at:0:-8815.2,652.9,94.9",
+            claimant="towntrip",
+        )
+        j = ask(
+            f,
+            FakeJev(picks={"movement": jm.CARRY_ON}, confidence=0.99),
+            {"JEV_MODE_MOVEMENT": "shadow"},
+        )
+        self.assertEqual(jm.DROP_ERRAND, j.heuristic)
+        self.assertEqual("", j.carried_out)
+
 
 class WhenItIsAsked(unittest.TestCase):
     def test_a_quiet_family_is_not_asked(self):
