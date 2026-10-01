@@ -4268,6 +4268,47 @@ def _write_trade_errand(errand) -> bool:
     return True
 
 
+def _is_weapon_training_route(travel_npc: str) -> bool:
+    """Does this exact roster aim identify a creature that teaches skills?
+
+    Native training stops store the creature entry as a bare decimal. The
+    optional ``trainer:`` spelling is accepted for older bridge-written rows.
+    """
+    route = str(travel_npc)
+    if route.startswith("trainer:"):
+        route = route.removeprefix("trainer:")
+    if not route.isascii() or not route.isdecimal() or int(route) <= 0:
+        return False
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM acore_world.creature_default_trainer cdt "
+            "JOIN acore_world.trainer_spell ts ON ts.TrainerId = cdt.TrainerId "
+            "WHERE cdt.CreatureId = %s LIMIT 1",
+            (int(route),),
+        )
+        return cur.fetchone() is not None
+
+
+def _release_weapon_training_aim(character: str, travel_npc: str) -> bool:
+    """Release a routine trainer walk for critical empty-mainhand training.
+
+    Only an exact creature entry verified in the trainer tables with no
+    pending class or profession skill commands is eligible. The CAS preserves
+    any concurrent route change and never erases a live
+    ``learn_skill``/``unlearn_skill``.
+    """
+    if not _is_weapon_training_route(travel_npc):
+        return False
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_roster SET travel_npc = '' "
+            "WHERE name = %s AND travel_npc = %s AND learn_skill = 0 "
+            "AND unlearn_skill = 0 AND unlearn_max = 0",
+            (character, travel_npc),
+        )
+        return bool(cur.rowcount)
+
+
 def _release_learn_aim(character: str) -> bool:
     """Blank a trainer walk and leave `learn_skill` pending (#227).
 
@@ -6991,6 +7032,9 @@ class Bridge(discord.Client):
             claimant=claimant, character=character, aim=aim, leader=leader,
             column=column, retaskable=_retaskable_from(aim), now=now,
             urgent=urgent, distance=distance,
+            trainer_route=(claimant == WEAPON_SKILL_CLAIMANT
+                           and await asyncio.to_thread(
+                               _is_weapon_training_route, column)),
         )
         if decision.verdict == townslot.SLOT_GIVE_UP:
             released = await asyncio.to_thread(
@@ -7007,10 +7051,16 @@ class Bridge(discord.Client):
             # not being weakened here - mod-overseer#438 is why it exists. A
             # preemption is therefore two statements: give the stuck errand
             # back, then take the empty column the ordinary way.
-            released = await asyncio.to_thread(
-                _release_trade_errand, decision.release.character,
-                decision.release.aim,
-            )
+            if claimant == WEAPON_SKILL_CLAIMANT:
+                released = await asyncio.to_thread(
+                    _release_weapon_training_aim,
+                    decision.release.character, decision.release.aim,
+                )
+            else:
+                released = await asyncio.to_thread(
+                    _release_trade_errand, decision.release.character,
+                    decision.release.aim,
+                )
             if not released:
                 # Not a failure, and not a reason to stop. The column changed
                 # hands between the read and this write, so there was nothing
@@ -16289,12 +16339,46 @@ class Bridge(discord.Client):
                 log.exception("family intent: the choice for %s failed; the "
                               "module's order stands", campaignqueue._family(key))
 
+    async def _critical_weapon_intent_option(self, names: list,
+                                             row: jev_family_intent.Row) -> str:
+        """The offered weapon-master errand that repairs an empty main hand.
+
+        A campaign spell-training stop normally outranks ordinary errands.
+        An empty main hand with a carried, learnable weapon is a hard gear
+        blocker, so give Jev the exact weapon-master option and let the pure
+        intent policy keep that request ahead of the spell stop.
+        """
+        facts = await asyncio.to_thread(_fetch_gearup_facts, names)
+        needs = weaponskill.needs(
+            facts, await asyncio.to_thread(_fetch_bag_weapons, names))
+        critical = [n for n in needs if n.slot == "mainhand"
+                    and not (facts.get(n.name, {}).get("equipped") or {}).get(
+                        "mainhand")]
+        if not critical:
+            return ""
+        leader = row.leader
+        positions = await asyncio.to_thread(_fetch_positions, [leader])
+        at = positions.get(leader)
+        if not at:
+            return ""
+        teams = await asyncio.to_thread(_fetch_teams, [leader])
+        master = weaponskill.choose_master(
+            await asyncio.to_thread(
+                _fetch_weapon_masters, at,
+                sorted({n.spell for n in critical})),
+            {n.spell for n in critical}, teams.get(leader, ""),
+            int(at["map_id"]))
+        option = "errand:%d" % int(master["entry"]) if master else ""
+        return option
+
     async def _family_intent_for(self, key: str, names: list, raw: dict, rule) -> None:
         row = jev_family_intent.row_from_db(raw)
         where = await self._situation_for(key, names, row.leader)
         deaths = ((where.deaths or {}).get("count", 0) if where is not None else 0)
+        weapon_option = await self._critical_weapon_intent_option(names, row)
         facts = jev_family_intent.Facts(
-            family=key or row.leader, row=row, where=where, deaths=int(deaths or 0))
+            family=key or row.leader, row=row, where=where,
+            deaths=int(deaths or 0), critical_weapon_option=weapon_option)
         seen = self._intent_seen.setdefault(row.leader, {})
         now = time.monotonic()
         if not jev_family_intent.due(facts, seen.get("signature", ""),

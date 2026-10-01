@@ -65,8 +65,12 @@ def raw(**kw):
     return row
 
 
-def facts(**kw):
-    return jfi.Facts(family="Grug", row=jfi.row_from_db(raw(**kw)))
+def facts(critical_weapon_option="", **kw):
+    return jfi.Facts(
+        family="Grug",
+        row=jfi.row_from_db(raw(**kw)),
+        critical_weapon_option=critical_weapon_option,
+    )
 
 
 def ask(f, fake=None, environ=None):
@@ -105,6 +109,16 @@ class TheTable(unittest.TestCase):
         )
         self.assertTrue(all(len(o) <= 40 for o in jfi.options(f)))
 
+    def test_eligible_critical_weapon_option_is_offered(self):
+        f = facts(
+            on_the_table="training|campaign training|1226\nquest|quest drive|",
+            critical_weapon_option="errand:11867",
+        )
+        offered = jfi.options(f)
+        self.assertIn("errand:11867", offered)
+        self.assertIn("empty main hand", offered["errand:11867"])
+        self.assertIn("critical gear gap", offered["errand:11867"])
+
 
 class WhenItIsAsked(unittest.TestCase):
     def test_a_real_choice_is_asked_once_then_waits(self):
@@ -120,6 +134,14 @@ class WhenItIsAsked(unittest.TestCase):
         g = facts(on_the_table="regroup|regroup|Ugga\neconomy|travel column|banker")
         self.assertFalse(jfi.due(g, sig, 1000.0, 1010.0))
         self.assertTrue(jfi.due(g, sig, 1000.0, 1000.0 + jfi.EVENT_SECONDS))
+
+    def test_critical_weapon_errand_change_is_part_of_the_signature(self):
+        f = facts(on_the_table="training|campaign training|1226\nquest|quest drive|")
+        g = facts(
+            on_the_table="training|campaign training|1226\nquest|quest drive|",
+            critical_weapon_option="errand:11867",
+        )
+        self.assertNotEqual(jfi.signature(f), jfi.signature(g))
 
     def test_not_while_the_run_or_the_operator_holds_him(self):
         self.assertFalse(jfi.due(facts(current_kind="dungeon"), "", -1e9, 1000.0))
@@ -151,6 +173,21 @@ class WhatJevSees(unittest.TestCase):
     def test_training_option_explains_the_campaign_prerequisite(self):
         f = facts(on_the_table="training|training stop|914\nquest|quest drive|")
         self.assertIn("next dungeon waits", jfi.options(f)["training:914"])
+
+    def test_question_explains_critical_weapon_errand_priority(self):
+        f = facts(
+            on_the_table="training|campaign training|1226\nquest|quest drive|",
+            critical_weapon_option="errand:11867",
+        )
+        state, questions = jfi.question(f, jfi.options(f))
+        self.assertEqual(
+            "critical empty-main-hand gear gap",
+            state["doing_now"]["critical_weapon_option"]["priority"],
+        )
+        self.assertIn(
+            "choose it over a lower-value spell-training stop",
+            questions["intent"]["instructions"],
+        )
 
 
 class WhoActs(unittest.TestCase):
@@ -187,6 +224,74 @@ class WhoActs(unittest.TestCase):
         self.assertEqual(jev.HEURISTIC, j.acted)
         self.assertEqual("", j.pick)
         self.assertIn("outranks economy", j.guard_reason)
+
+    def test_critical_weapon_errand_is_persisted_over_campaign_spell_training(self):
+        f = facts(
+            on_the_table="training|campaign training|1226\nquest|quest drive|",
+            critical_weapon_option="errand:11867",
+        )
+        j = ask(
+            f,
+            FakeJev(picks={"intent": "errand:11867"}, confidence=0.9),
+        )
+        self.assertEqual("errand:11867", j.heuristic)
+        self.assertEqual("errand:11867", j.pick)
+        self.assertEqual(jev.JEV, j.acted)
+        self.assertEqual("", j.guard_reason)
+
+    def test_active_critical_weapon_errand_blocks_a_training_answer(self):
+        f = facts(
+            on_the_table="training|campaign training|1226\nquest|quest drive|",
+            critical_weapon_option="errand:11867",
+        )
+        self.assertIn("errand:11867", jfi.options(f))
+        j = ask(f, FakeJev(picks={"intent": "training:1226"}, confidence=0.9))
+        self.assertEqual("training:1226", j.jev)
+        self.assertEqual(jev.HEURISTIC, j.acted)
+        self.assertEqual("errand:11867", j.heuristic)
+        self.assertEqual("", j.pick)
+        self.assertIn("critical empty-main-hand", j.guard_reason)
+
+    def test_critical_weapon_errand_bypasses_training_guard_when_jev_picks_it(self):
+        from unittest.mock import patch
+
+        f = facts(
+            on_the_table="training|campaign training|1226\nquest|quest drive|",
+            critical_weapon_option="errand:11867",
+        )
+        # Exercise the guard's exception directly: the production heuristic
+        # also favors this option, so its normal answer is an agreement.
+        with patch.object(
+            jfi, "heuristic", return_value=("training:1226", "training route")
+        ):
+            j = ask(
+                f,
+                FakeJev(picks={"intent": "errand:11867"}, confidence=0.9),
+            )
+        self.assertEqual("errand:11867", j.pick)
+        self.assertEqual(jev.JEV, j.acted)
+        self.assertEqual("", j.guard_reason)
+
+    def test_training_guard_still_blocks_other_low_ranked_errands(self):
+        f = facts(
+            on_the_table="training|campaign training|1226\nerrand|town errand|banker",
+            critical_weapon_option="errand:11867",
+        )
+        j = ask(
+            f,
+            FakeJev(picks={"intent": "errand:banker"}, confidence=0.9),
+        )
+        self.assertEqual(jev.HEURISTIC, j.acted)
+        self.assertIn("outranks errand", j.guard_reason)
+
+    def test_heuristic_prioritizes_critical_weapon_errand_when_present(self):
+        f = facts(
+            on_the_table="training|campaign training|1226\nquest|quest drive|",
+            critical_weapon_option="errand:11867",
+        )
+        answer, why = jfi.heuristic(f)
+        self.assertEqual("errand:11867", answer)
+        self.assertIn("critical empty-main-hand", why)
 
     def test_higher_ranked_regroup_remains_a_jev_choice_during_training(self):
         f = facts(on_the_table=("training|training stop|914\nregroup|regroup|Ugga"))
@@ -235,12 +340,16 @@ class TheBridge(unittest.TestCase):
         async def no_picture(*a):
             return None
 
+        async def no_critical_weapon_option(*a):
+            return None
+
         me = types.SimpleNamespace(
             _intent_seen={},
             _jev=jev.Client(
                 "k", transport=FakeJev(picks=picks or {}, confidence=confidence)
             ),
             _situation_for=no_picture,
+            _critical_weapon_intent_option=no_critical_weapon_option,
         )
         return ns, me, written
 
