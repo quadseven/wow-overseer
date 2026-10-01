@@ -154,6 +154,7 @@ def should_start(
     facts: dict,
     supply_gaps: tuple = (),
     stalled: float = 0.0,
+    bag_pressure_needed: bool = False,
 ) -> str:
     """Why this family should go to town now, or '' when it should not.
 
@@ -165,18 +166,25 @@ def should_start(
     one does not go.
 
     `stalled` is how long the family's campaign has gone without a run
-    (bridge._queue_stall_floor). THE ERRAND IS A HOLD, AND A HOLD HAS A CEILING
-    (wow-dev 2026-09-29). The gear gate and the bag gate let a campaign go once
-    it has waited HOLD_CEILING_SECONDS; this errand had no such limit, so it
-    started 15 seconds after the run that ceiling released was requested, took
-    the family's job off `dungeon` and held it for up to another hour. Past the
-    ceiling the family goes to its run, gear or not.
+    (bridge._queue_stall_floor). `bag_pressure_needed` means the queued
+    campaign is still held because the world would evacuate the family for
+    lack of bag room. That hold cannot use the ordinary run ceiling: the same
+    world-side bag check would evacuate the family as soon as it entered. It
+    starts this bounded town errand instead, even when the queue has already
+    waited past HOLD_CEILING_SECONDS.
+
+    Other errand reasons remain behind the run ceiling (wow-dev 2026-09-29).
+    The gear gate lets a campaign go once it has waited HOLD_CEILING_SECONDS;
+    this errand must not take its job off `dungeon` after that release and hold
+    it for up to another hour.
     """
     if state.active or in_run:
         return ""
-    if stalled >= HOLD_CEILING_SECONDS:
-        return ""
     if state.ended and now - state.ended < COOLDOWN_SECONDS:
+        return ""
+    if bag_pressure_needed:
+        return "campaign held at the dungeon door for bag room"
+    if stalled >= HOLD_CEILING_SECONDS:
         return ""
     waiting = sorted(n for n, count in (mail_gear or {}).items() if count > 0)
     if waiting:

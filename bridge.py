@@ -14148,9 +14148,15 @@ class Bridge(discord.Client):
         facts = await asyncio.to_thread(_fetch_gearup_facts, names)
         mail_gear = await asyncio.to_thread(_mail_gear_holders, names)
         stalled = _queue_stall_floor(names)
+        free_slots = await asyncio.to_thread(_fetch_free_slots, names)
+        campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
+        bag_pressure_needed = (
+            campaign_waiting
+            and bag_pressure.family_town_run_needed(free_slots)
+        )
         why = townerrand.should_start(
             state, now=now, in_run=in_run, mail_gear=mail_gear, facts=facts,
-            stalled=stalled)
+            stalled=stalled, bag_pressure_needed=bag_pressure_needed)
         if (not why and not in_run
                 and stalled < townerrand.HOLD_CEILING_SECONDS
                 and not (state.ended and now - state.ended
@@ -14169,7 +14175,7 @@ class Bridge(discord.Client):
             why = townerrand.should_start(
                 state, now=now, in_run=in_run, mail_gear=mail_gear,
                 facts=facts, supply_gaps=towntrip.shop_supply_gaps(members),
-                stalled=stalled)
+                stalled=stalled, bag_pressure_needed=bag_pressure_needed)
         if not why:
             return state
         # AN ABSENT HEAD IS A WAIT, NOT A FAILED START. mod-overseer holds the
