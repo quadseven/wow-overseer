@@ -7799,8 +7799,10 @@ class Bridge(discord.Client):
         if not leader_counter:
             free = {n: 19 - len(f["equipped"]) for n, f in facts.items()}
             if any(v >= 4 for v in free.values()) and step == bag_pressure.VENDOR_ERRAND_AIM:
-                await self._claim_town_slot("gearup", leader, auction.AUCTIONEER_ROLE,
-                                             urgent=True, cohort=_cohort_key(cohort))
+                await self._claim_town_slot(
+                    "gearup", leader, auction.AUCTIONEER_ROLE,
+                    cohort=_cohort_key(cohort),
+                )
             for n in sorted(facts):
                 log.info("gearup: %s nothing yet: not at an auctioneer", n)
             return {}, {}, None

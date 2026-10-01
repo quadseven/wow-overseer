@@ -7,8 +7,11 @@ a kind='buy' town row through `gearup.vendor_command`, and a slot it bought is
 marked worn so the auction half does not buy it again.
 """
 
+import asyncio
 import pathlib
 import re
+import textwrap
+import types
 import unittest
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
@@ -55,6 +58,32 @@ class VendorHalfOfTheGearErrand(unittest.TestCase):
         self.assertIn(
             'facts[buy.character]["equipped"][buy.slot] = buy.item_level', body
         )
+
+    def test_auction_gear_trip_uses_a_normal_travel_lease(self):
+        body = textwrap.dedent(_block("    async def _gearup_house("))
+        namespace = {
+            "asyncio": asyncio,
+            "auction": types.SimpleNamespace(AUCTIONEER_ROLE="auctioneer"),
+            "bag_pressure": types.SimpleNamespace(VENDOR_ERRAND_AIM="aim"),
+            "_fetch_auctioneer": lambda _name: None,
+            "_cohort_key": lambda cohort: cohort,
+            "log": types.SimpleNamespace(info=lambda *_args: None),
+        }
+        exec(compile(body, "bridge.py", "exec"), namespace)
+        calls = []
+
+        async def claim(*args, **kwargs):
+            calls.append((args, kwargs))
+
+        fake_bridge = types.SimpleNamespace(_claim_town_slot=claim)
+        asyncio.run(namespace["_gearup_house"](
+            fake_bridge, ["Grug"], "Grug", {"Grug": {"equipped": {}}},
+            "aim", None,
+        ))
+
+        self.assertEqual(1, len(calls))
+        self.assertEqual(("gearup", "Grug", "auctioneer"), calls[0][0])
+        self.assertNotIn("urgent", calls[0][1])
 
 
 if __name__ == "__main__":
