@@ -353,7 +353,7 @@ def _queue_pass(world, holds=None):
     holds = holds or {}
     log = _Log()
     ns = _load(
-        ["_campaign_queue_once", "_apply_queue_move"],
+        ["_campaign_queue_family_once", "_campaign_queue_once", "_apply_queue_move"],
         {
             "asyncio": asyncio,
             "campaignqueue": campaignqueue,
@@ -385,12 +385,21 @@ def _queue_pass(world, holds=None):
     async def no_town(fams):
         return None
 
+    async def no_queue_hold(key, rows, fam):
+        return False
+
     me = types.SimpleNamespace(
         _activity_holds=lambda key=None: holds.get(key, ""),
         _campaign_owns_travel=owns_travel,
+        _queue_holds=no_queue_hold,
         _leave_town_when_done=no_town,
         _plan_campaigns=no_plan,
     )
+
+    async def family_once(key, rows, fams, held):
+        await ns["_campaign_queue_family_once"](me, key, rows, fams, held)
+
+    me._campaign_queue_family_once = family_once
     asyncio.run(ns["_campaign_queue_once"](me))
     return log.lines
 
@@ -504,9 +513,7 @@ class TheQueueAdvancesByItself(unittest.TestCase):
                 "_aim_family_quest": lambda family, quest_id, holders: (
                     cleared.append((family, quest_id, holders)) or 2
                 ),
-                "_aim_traveller": lambda quest_id: (
-                    quest_writes.append(quest_id) or 1
-                ),
+                "_aim_traveller": lambda quest_id: quest_writes.append(quest_id) or 1,
                 "log": _Log(),
             },
         )
