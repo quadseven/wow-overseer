@@ -7,6 +7,7 @@ a kind='buy' town row through `gearup.vendor_command`, and a slot it bought is
 marked worn so the auction half does not buy it again.
 """
 
+import ast
 import pathlib
 import re
 import unittest
@@ -55,6 +56,28 @@ class VendorHalfOfTheGearErrand(unittest.TestCase):
         self.assertIn(
             'facts[buy.character]["equipped"][buy.slot] = buy.item_level', body
         )
+
+    def test_auction_gear_trip_uses_a_normal_travel_lease(self):
+        module = ast.parse(BRIDGE.read_text(encoding="utf-8"))
+        method = next(
+            node
+            for node in ast.walk(module)
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_gearup_house"
+        )
+        calls = [
+            node
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_claim_town_slot"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "gearup"
+        ]
+
+        self.assertEqual(1, len(calls))
+        self.assertEqual("auction.AUCTIONEER_ROLE", ast.unparse(calls[0].args[2]))
+        self.assertNotIn("urgent", {keyword.arg for keyword in calls[0].keywords})
 
 
 if __name__ == "__main__":
