@@ -2408,6 +2408,44 @@
   #fheadline.alarm { color:var(--warn-text); }
   .auranote { margin:0 0 .75rem; color:var(--shell-dim);
               font-size:.9rem; line-height:1.5; }
+  .aura-panel { margin:0 0 .8rem; padding:.7rem .85rem;
+                background:var(--panel); border:1px solid var(--line);
+                border-radius:10px; min-width:0; }
+  .aura-head { display:flex; flex-wrap:wrap; align-items:baseline;
+               gap:.2rem .65rem; }
+  .aura-title { font-family:var(--mono); font-size:11px; font-weight:700;
+                letter-spacing:.12em; text-transform:uppercase; }
+  .aura-freshness { color:var(--on-card-dim); font-family:var(--mono);
+                    font-size:10px; }
+  .aura-freshness.stale, .aura-freshness.error { color:var(--caution-text); }
+  .aura-freshness.error { color:var(--warn-text); }
+  .aura-families { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));
+                   gap:.55rem .9rem; margin-top:.55rem; }
+  .aura-family { min-width:0; }
+  .aura-family-name { margin:0 0 .25rem; color:var(--on-card-dim);
+                      font-family:var(--mono); font-size:10px;
+                      letter-spacing:.1em; text-transform:uppercase; }
+  .aura-member { padding:.35rem 0; border-top:1px solid var(--line); }
+  .aura-member-head { display:flex; align-items:baseline; gap:.45rem; }
+  .aura-member-name { font-weight:700; }
+  .aura-offline { margin-left:auto; color:var(--on-card-dim);
+                  font-family:var(--mono); font-size:10px; }
+  .aura-chips { display:flex; flex-wrap:wrap; gap:.25rem; margin-top:.22rem; }
+  .aura-chip { border:1px solid var(--line); border-radius:999px;
+               padding:.08rem .45rem; color:var(--accent-text);
+               font-size:.78rem; overflow-wrap:anywhere; }
+  .aura-empty, .aura-loading { color:var(--on-card-dim); font-size:.8rem; }
+  .aura-details { margin-top:.35rem; }
+  .aura-details summary { color:var(--on-card-dim); cursor:pointer;
+                          font-family:var(--mono); font-size:10px;
+                          min-height:32px; display:flex; align-items:center; }
+  .aura-list { display:grid; gap:.15rem; padding:.1rem 0 .3rem; }
+  .aura-row { display:flex; flex-wrap:wrap; gap:.1rem .5rem;
+              color:var(--on-card-dim); font-size:.78rem; }
+  .aura-row .aura-row-name { color:var(--on-card); }
+  .aura-row .aura-caster { font-family:var(--mono); font-size:10px; }
+  .aura-message { margin:.35rem 0 0; color:var(--on-card-dim);
+                  font-size:.8rem; }
   /* ONE column until there is honestly room for two, then three (3+2), then
      all five in a row. Explicit stops rather than auto-fit so the shape is
      the same on every visit: a 3+2 that turns into a 4+1 as a window is
@@ -3600,7 +3638,7 @@
        separately. -->
   <div class="fsec"><span class="fsecn">01</span><span class="fsecline"></span><span class="fsecl">the family</span></div>
   <div id="fheadline">reaching the world...</div>
-  <p class="auranote">The live dashboard doesn't show current auras, so their present buff status is unconfirmed.</p>
+  <div class="aura-panel" id="family-auras" aria-live="polite" aria-label="Live family auras"></div>
   <!-- THE FIVE FEEDS, and nothing between them and the top of the tab
        (infra#88). One card per character: their broadcast at the full
        width of its column, then one strip of facts about them. The
@@ -3662,7 +3700,7 @@
      composes - this markup holds no sentence of its own. -->
 <section id="watch">
   <div id="wallhead">reaching the world...</div>
-  <p class="auranote">The live dashboard doesn't show current auras, so their present buff status is unconfirmed.</p>
+  <div class="aura-panel" id="watch-auras" aria-live="polite" aria-label="Live family auras"></div>
   <div class="wbar">
     <div id="wallmodes" role="group" aria-label="wall layout"></div>
     <span class="wspacer"></span>
@@ -6701,6 +6739,215 @@ async function refreshFamilyWatch() {
 // heads - so the wall shows both families side by side instead of whichever
 // one the Family tab last looked at. The eight headless members have no
 // picture and so no tile; their status is on their family's tab.
+// Auras have their own slower sample: the world/wall heartbeat keeps its five
+// second cadence, while the detail snapshot is useful at thirty seconds.
+const auraPanels = {
+  family: document.getElementById("family-auras"),
+  watch: document.getElementById("watch-auras")
+};
+const auraState = { payload: null, error: false, loading: false, lastRequestAt: 0 };
+const FAMILY_BUFF_NAMES = new Set([
+  "power word: fortitude", "prayer of fortitude", "divine spirit",
+  "prayer of spirit", "shadow protection", "prayer of shadow protection",
+  "arcane intellect", "dalaran intellect", "mark of the wild",
+  "gift of the wild", "thorns", "blessing of might",
+  "greater blessing of might", "blessing of wisdom",
+  "greater blessing of wisdom", "blessing of kings",
+  "greater blessing of kings", "blessing of light",
+  "greater blessing of light", "blessing of sanctuary",
+  "greater blessing of sanctuary", "blessing of salvation",
+  "greater blessing of salvation", "battle shout", "commanding shout",
+  "stamina", "well fed"
+]);
+
+function auraName(aura) {
+  if (typeof aura.name === "string" && aura.name.trim()) return aura.name.trim();
+  const id = aura.spell === null || aura.spell === undefined || aura.spell === ""
+    ? "unknown" : String(aura.spell);
+  return "Spell ID " + id;
+}
+
+function usefulFamilyBuff(aura) {
+  const name = auraName(aura).toLowerCase().replace(/\s+\(rank \d+\)$/, "");
+  return FAMILY_BUFF_NAMES.has(name);
+}
+
+function auraTime(aura) {
+  const ms = Number(aura.remaining_ms);
+  if (!Number.isFinite(ms)) return "duration unknown";
+  if (ms <= 0) return "expiring";
+  const seconds = Math.ceil(ms / 1000);
+  if (seconds < 60) return seconds + "s";
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return minutes + "m";
+  return Math.ceil(minutes / 60) + "h";
+}
+
+function auraOffline(member) {
+  const status = String(member.status || "").toLowerCase();
+  return ["offline", "logged out", "logged_out", "gone", "disconnected"].includes(status);
+}
+
+function auraNode(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function renderAuraPanel(container, familyFilter) {
+  if (!container) return;
+  const wasOpen = new Set(Array.from(container.querySelectorAll("details[open]"),
+    details => details.dataset.auraKey));
+  container.replaceChildren();
+  const heading = auraNode("div", "aura-head");
+  heading.append(auraNode("span", "aura-title", "Live family buffs"));
+
+  const payload = auraState.payload;
+  const sampled = payload && Number(payload.sampled_at);
+  const validSample = Number.isFinite(sampled) && sampled > 0;
+  const age = validSample ? Math.max(0, Math.floor(Date.now() / 1000 - sampled)) : null;
+  let freshness;
+  let freshnessClass = "";
+  if (!payload) {
+    freshness = auraState.error ? "unavailable - aura request failed" : "loading live aura sample";
+    freshnessClass = auraState.error ? "error" : "";
+  } else if (!validSample) {
+    freshness = "sample time unavailable";
+    freshnessClass = "stale";
+  } else if (age > 90) {
+    freshness = "stale - sampled " + ageWords(age) + (auraState.error ? "; refresh failed" : "");
+    freshnessClass = auraState.error ? "error" : "stale";
+  } else if (auraState.error) {
+    freshness = "refresh failed - last sample " + ageWords(age);
+    freshnessClass = "error";
+  } else {
+    freshness = "sampled " + ageWords(age);
+  }
+  heading.append(auraNode("span", "aura-freshness " + freshnessClass, freshness));
+  container.append(heading);
+
+  if (!payload) {
+    container.append(auraNode("p", "aura-message", auraState.error
+      ? "Live aura status could not be loaded." : "Waiting for the first aura sample."));
+    return;
+  }
+
+  const members = Array.isArray(payload.members) ? payload.members : [];
+  const selectedMembers = familyFilter
+    ? members.filter(member => String(member.family || "") === familyFilter)
+    : members;
+  const families = new Map();
+  selectedMembers.forEach(member => {
+    const family = String(member.family || "Unknown family");
+    if (!families.has(family)) families.set(family, []);
+    families.get(family).push(member);
+  });
+  if (!families.size) {
+    container.append(auraNode("p", "aura-message", familyFilter
+      ? "No aura snapshots for this family." : "No member aura snapshots in this sample."));
+    return;
+  }
+
+  const groups = auraNode("div", "aura-families");
+  families.forEach((familyMembers, familyName) => {
+    const familyNode = auraNode("section", "aura-family");
+    familyNode.append(auraNode("h3", "aura-family-name", familyName));
+    familyMembers.forEach(member => {
+      const memberNode = auraNode("div", "aura-member");
+      const memberHead = auraNode("div", "aura-member-head");
+      memberHead.append(auraNode("span", "aura-member-name", String(member.name || "Unknown member")));
+      if (auraOffline(member)) {
+        memberHead.append(auraNode("span", "aura-offline", "OFFLINE"));
+        memberNode.append(memberHead);
+        memberNode.append(auraNode("div", "aura-empty", "No current aura snapshot while offline."));
+        familyNode.append(memberNode);
+        return;
+      }
+      if (String(member.status || "").toLowerCase() !== "online") {
+        memberHead.append(auraNode("span", "aura-offline", "UNAVAILABLE"));
+        memberNode.append(memberHead);
+        memberNode.append(auraNode("div", "aura-empty",
+          String(member.error || "Aura sample unavailable.")));
+        familyNode.append(memberNode);
+        return;
+      }
+      memberNode.append(memberHead);
+      const allPositive = Array.isArray(member.auras)
+        ? member.auras.filter(aura => aura && aura.positive === true) : [];
+      const useful = allPositive.filter(usefulFamilyBuff);
+      const chips = auraNode("div", "aura-chips");
+      if (useful.length) {
+        useful.forEach(aura => {
+          const stacks = Number(aura.stacks);
+          const suffix = Number.isFinite(stacks) && stacks > 1 ? " x" + stacks : "";
+          chips.append(auraNode("span", "aura-chip", auraName(aura) + suffix));
+        });
+      } else if (allPositive.length) {
+        chips.append(auraNode("span", "aura-empty",
+          allPositive.length + " positive aura(s) not identified as family buffs; see details."));
+      } else {
+        chips.append(auraNode("span", "aura-empty", "No positive auras observed."));
+      }
+      memberNode.append(chips);
+
+      const details = auraNode("details", "aura-details");
+      const key = familyName + "/" + String(member.name || "");
+      details.dataset.auraKey = key;
+      details.open = wasOpen.has(key);
+      details.append(auraNode("summary", "", "All positive auras (" + allPositive.length + ")"));
+      const list = auraNode("div", "aura-list");
+      if (allPositive.length) {
+        allPositive.forEach(aura => {
+          const row = auraNode("div", "aura-row");
+          const stacks = Number(aura.stacks);
+          const suffix = Number.isFinite(stacks) && stacks > 1 ? " x" + stacks : "";
+          row.append(auraNode("span", "aura-row-name", auraName(aura) + suffix));
+          row.append(auraNode("span", "", auraTime(aura)));
+          row.append(auraNode("span", "aura-caster", "caster: " +
+            (typeof aura.caster === "string" && aura.caster ? aura.caster : "unknown")));
+          list.append(row);
+        });
+      } else {
+        list.append(auraNode("span", "aura-empty", "No positive auras in this sample."));
+      }
+      details.append(list);
+      memberNode.append(details);
+      familyNode.append(memberNode);
+    });
+    groups.append(familyNode);
+  });
+  container.append(groups);
+}
+
+function renderAuras() {
+  renderAuraPanel(auraPanels.family, familyKey);
+  renderAuraPanel(auraPanels.watch, null);
+}
+
+async function pollAuras() {
+  if (view !== FAMILY_VIEW && view !== WATCH_VIEW) return;
+  if (auraState.loading) return;
+  const now = Date.now();
+  if (now - auraState.lastRequestAt < 30000) return;
+  auraState.lastRequestAt = now;
+  auraState.loading = true;
+  renderAuras();
+  try {
+    const response = await fetch(u("/api/auras"), { cache: "no-store" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const payload = await response.json();
+    if (!payload || !Array.isArray(payload.members)) throw new Error("invalid aura payload");
+    auraState.payload = payload;
+    auraState.error = false;
+  } catch (error) {
+    auraState.error = true;
+  } finally {
+    auraState.loading = false;
+    renderAuras();
+  }
+}
+
 async function pollFamily() {
   if (view !== FAMILY_VIEW && view !== WATCH_VIEW) return;
   const onWatch = view === WATCH_VIEW;
@@ -6898,6 +7145,7 @@ function showView(v) {
     pollNeeds();
     pollRoute();
     refreshFamilyWatch();
+    pollAuras();
     return;
   }
   if (isWatch) {
@@ -6909,6 +7157,7 @@ function showView(v) {
     closePanel();
     startBroadcasts();
     pollFamily();
+    pollAuras();
     return;
   }
   if (isArm) {
@@ -7053,6 +7302,7 @@ wall.sound = false;
 wallSoundButton();
 setInterval(pollFamily, 5000);         // the family rides the same 5s cadence
 setInterval(refreshFamilyWatch, 5000); // and so does the watch it owns
+setInterval(pollAuras, 30000);         // aura snapshots change slower than wall state
 setInterval(pollQuests, 30000);        // quest rows are a save, not a stream
 setInterval(pollNeeds, 30000);         // and so are bags, gear and coin
 setInterval(pollRoute, 30000);         // a level or a finished zone moves it

@@ -123,6 +123,23 @@ MODEL_CACHE = modelviewer.DiskCache(
     int(os.environ.get("MODEL_CACHE_MB", "512")) * 1024 * 1024,
 )
 
+# Aura sampling is deliberately separate from /api/family and /api/wall.
+# Those endpoints are polled frequently and read cheap snapshot rows; this one
+# asks each live character through the worldserver command queue. The short
+# cache prevents overlapping page polls from turning into probe storms.
+AURA_CACHE_SECONDS = 5.0
+AURA_PROBE_TIMEOUT_SECONDS = 3.0
+_AURA_CACHE_LOCK = threading.Lock()
+_AURA_CACHE: tuple[float, tuple, dict] | None = None
+
+# This is only the local, committed talent reference. It names the small set of
+# aura spell ids that are talent ranks; every other spell stays an id. The
+# item spell text table contains descriptions, not names, and is not used here.
+_AURA_SPELL_NAMES = {
+    spell: (talent["name"], rank)
+    for spell, (talent, rank) in BOOK.by_spell.items()
+}
+
 
 def _fetch_upstream(url: str) -> tuple[int, bytes]:
     # S310: `url` is modelviewer.UPSTREAM plus an allowlisted, charset-checked
@@ -483,6 +500,151 @@ def _fetch_families() -> dict:
     first = _default_family(sorted(by_family))
     return {name: by_family[name]
             for name in [first] + sorted(k for k in by_family if k != first)}
+
+
+def _aura_name(spell: int) -> str | None:
+    """Name only spell ids present in the committed client talent tables."""
+    found = _AURA_SPELL_NAMES.get(spell)
+    if found is None:
+        return None
+    name, rank = found
+    return f"{name} (Rank {rank})"
+
+
+def _normalize_auras(result) -> list[dict]:
+    """Validate a live probe result and retain unknown spells by id."""
+    if isinstance(result, dict):
+        result = result.get("auras")
+    if not isinstance(result, list):
+        raise ValueError("probe result has no aura list")
+    auras = []
+    for aura in result:
+        if not isinstance(aura, dict):
+            raise ValueError("probe returned a malformed aura")
+        try:
+            spell = int(aura["spell"])
+            stacks = int(aura.get("stacks", 1))
+            remaining_ms = int(aura.get("remaining_ms", 0))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("probe returned an aura without valid numeric fields") from exc
+        positive = aura.get("positive")
+        if not isinstance(positive, bool):
+            raise ValueError("probe returned an aura without polarity")
+        caster = aura.get("caster")
+        item = {
+            "spell": spell,
+            "stacks": max(0, stacks),
+            # The worldserver uses -1 for permanent auras. Preserve that
+            # sentinel; turning it into zero would claim the aura just expired.
+            "remaining_ms": remaining_ms,
+            "positive": positive,
+            "caster": caster,
+        }
+        name = _aura_name(spell)
+        if name is not None:
+            item["name"] = name
+        auras.append(item)
+    return auras
+
+
+def _sample_auras(rosters: dict, timeout: float = AURA_PROBE_TIMEOUT_SECONDS) -> dict:
+    """Ask every fixed roster member through overseer_command, then read ids back."""
+    targets = [(family_name, name) for family_name, names in rosters.items()
+               for name in names]
+    if not targets:
+        return {}
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            pending = {}
+            for family_name, name in targets:
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, source) "
+                    "VALUES (%s, 'auras', 'probe', 'api:auras')",
+                    (name,),
+                )
+                pending[cur.lastrowid] = (family_name, name)
+
+            deadline = time.monotonic() + max(0.0, timeout)
+            responses = {}
+            while pending and time.monotonic() < deadline:
+                marks = ",".join(["%s"] * len(pending))
+                cur.execute(
+                    "SELECT id, status, detail, result FROM overseer_command "
+                    f"WHERE id IN ({marks})",  # noqa: S608 - only literal markers
+                    tuple(pending),
+                )
+                for row in cur.fetchall():
+                    if row["status"] in ("pending", "claimed", "verifying"):
+                        continue
+                    family_name, name = pending.pop(row["id"])
+                    if row["status"] == "delivered" and row["result"]:
+                        try:
+                            parsed = json.loads(row["result"])
+                            responses[(family_name, name)] = {
+                                "status": "online", "auras": _normalize_auras(parsed)
+                            }
+                        except (json.JSONDecodeError, ValueError) as exc:
+                            responses[(family_name, name)] = {
+                                "status": "error", "error": str(exc), "auras": []
+                            }
+                    else:
+                        detail = str(row["detail"] or row["status"])
+                        offline = any(word in detail.lower()
+                                      for word in ("offline", "not online", "not found"))
+                        responses[(family_name, name)] = {
+                            "status": "offline" if offline else "error",
+                            "error": detail,
+                            "auras": [],
+                        }
+                if pending:
+                    time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
+
+            for family_name, name in pending.values():
+                responses[(family_name, name)] = {
+                    "status": "error",
+                    "error": "timed out waiting for the worldserver",
+                    "auras": [],
+                }
+            return responses
+    finally:
+        conn.close()
+
+
+def _build_auras_payload(rosters: dict, responses: dict,
+                         sampled_at: int | None = None) -> dict:
+    members = []
+    for family_name, names in rosters.items():
+        for name in names:
+            response = responses.get((family_name, name), {})
+            member = {
+                "family": family_name,
+                "name": name,
+                "status": response.get("status", "error"),
+                "auras": response.get("auras", []),
+            }
+            if "error" in response:
+                member["error"] = response["error"]
+            members.append(member)
+    return {"sampled_at": int(time.time()) if sampled_at is None else sampled_at,
+            "members": members}
+
+
+def _cached_auras_payload(rosters: dict) -> dict:
+    """Share one short-lived live sample without changing other poll routes."""
+    global _AURA_CACHE
+    signature = tuple((key, tuple(names)) for key, names in sorted(rosters.items()))
+    now = time.monotonic()
+    with _AURA_CACHE_LOCK:
+        if (_AURA_CACHE is not None and now < _AURA_CACHE[0]
+                and signature == _AURA_CACHE[1]):
+            return _AURA_CACHE[2]
+    responses = _sample_auras(rosters)
+    payload = _build_auras_payload(rosters, responses)
+    with _AURA_CACHE_LOCK:
+        _AURA_CACHE = (time.monotonic() + AURA_CACHE_SECONDS, signature, payload)
+    return payload
 
 
 def _all_roster_names() -> list:
@@ -4774,6 +4936,25 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("wall query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _auras(self, query: dict) -> None:
+        """GET /api/auras - current aura samples for the fixed family rosters.
+
+        This endpoint deliberately takes no character or family selector. The
+        only targets are names read from the server-owned family roster, and
+        the short cache keeps this live probe separate from the fast snapshot
+        polling performed by /api/family and /api/wall.
+        """
+        if query:
+            self._send(400, "application/json", b'{"error": "no query parameters accepted"}')
+            return
+        try:
+            rosters = _fetch_families()
+            payload = _cached_auras_payload(rosters)
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            log.exception("aura probe failed")
+            self._send(503, "application/json", b'{"error": "aura sample unavailable"}')
+
     def _armory(self, query: dict) -> None:
         """GET /api/armory - what the five are wearing, and how they are specced.
 
@@ -6106,6 +6287,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/character": _character,
         "/api/family": _family,
         "/api/wall": _wall,
+        "/api/auras": _auras,
         "/api/armory": _armory,
         "/api/armory/guild": _armory_guild,
         "/api/armory/member": _armory_member,

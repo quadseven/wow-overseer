@@ -34,7 +34,7 @@ import os
 import sys
 import time
 
-PROBES = ("state", "spells", "talents", "strategies", "gear", "bags")
+PROBES = ("state", "spells", "talents", "strategies", "gear", "bags", "auras")
 
 # The module polls its command queue every COMMAND_POLL_MS (2s), so anything
 # under a few seconds is just racing the tick. Ten seconds is long enough to
