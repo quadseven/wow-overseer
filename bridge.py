@@ -16339,13 +16339,16 @@ class Bridge(discord.Client):
         reads = await asyncio.to_thread(_movement_reads, names)
         slot = self._travel_slot_of(key)
         holder = slot.holder if slot is not None else None
-        # THE TOWN ERRAND'S WALK IS NOT OFFERED TO BE DROPPED. It regroups a
-        # scattered family itself (by hearth) and its own windows end it; a
-        # drop made the town slot refuse its aim for 1800s, which outlived the
-        # errand's walk window (wow-dev 2026-09-27 21:42 and 22:35).
+        # TOWN ERRANDS AND CRITICAL WEAPON TRAINING ARE NOT OFFERED TO BE
+        # DROPPED. The town errand's own window ends it. A weapon-master walk
+        # can unblock a queued dungeon campaign; movement's generic death
+        # fallback otherwise suppresses retries for 1800s, longer than that
+        # training pass's cycle.
         mine = bool(holder is not None and holder.claimant
                     and holder.character == leader
-                    and holder.claimant != TOWN_ERRAND_CLAIMANT)
+                    and holder.claimant not in {
+                        TOWN_ERRAND_CLAIMANT, WEAPON_SKILL_CLAIMANT,
+                    })
         return jev_movement.Facts(
             family=key or leader, where=where, binds=reads["binds"],
             hearthed=reads["hearthed"], errand=holder.aim if mine else "",
