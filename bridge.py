@@ -15156,10 +15156,9 @@ class Bridge(discord.Client):
         family = await asyncio.to_thread(_cohort_of, action.beneficiary)
         if family and await asyncio.to_thread(_queue_owns_job, family, False):
             cleared = await asyncio.to_thread(_aim_family_quest, family, 0, ())
-            log.info("goal: quest %d for %s stands down - %s's dungeon "
-                     "campaign owns movement and cleared %d stale aim(s)",
-                     action.quest_id, action.beneficiary,
-                     campaignqueue._family(family), cleared)
+            log.info("goal: quest %d stands down - the dungeon campaign owns "
+                     "movement and cleared %d stale aim(s)",
+                     action.quest_id, cleared)
             return
         aimed = await asyncio.to_thread(_aim_traveller, action.quest_id)
         # Logged every time it is renewed, with the count of rows actually
