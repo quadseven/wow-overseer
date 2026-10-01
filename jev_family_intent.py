@@ -231,6 +231,10 @@ class Facts:
     row: Row
     where: situation.Situation | None = None
     deaths: int = 0
+    # A module-validated weapon-master errand that can fix a critical empty
+    # main hand. It is carried separately from the request table so Jev can
+    # rank it above an active, lower-value campaign spell-training stop.
+    critical_weapon_option: str = ""
     extra: dict = field(default_factory=dict)
 
 
@@ -248,7 +252,20 @@ def choosable(f: Facts) -> list:
             continue
         seen.add(a.option)
         out.append(a)
+    critical = _critical_weapon_ask(f)
+    if critical is not None and critical.option not in seen:
+        out.append(critical)
     return out
+
+
+def _critical_weapon_ask(f: Facts) -> Ask | None:
+    """Resolve the eligible module option, preserving its table target."""
+    option = f.critical_weapon_option or ""
+    kind, separator, target = option.partition(":")
+    if not separator or kind != "errand" or not target:
+        return None
+    on_table = next((a for a in f.row.table if a.option == option), None)
+    return on_table or Ask(kind, "weapon skill", target)
 
 
 def _member(f: Facts, name: str) -> Member | None:
@@ -256,6 +273,14 @@ def _member(f: Facts, name: str) -> Member | None:
 
 
 def _meaning(f: Facts, a: Ask) -> str:
+    critical = _critical_weapon_ask(f)
+    if critical is not None and a.option == critical.option:
+        return (
+            "Critical gear errand: walk to weapon master %s so the member with "
+            "an empty main hand can learn the weapon skill needed to equip a "
+            "usable weapon. This fixes a critical gear gap before the next "
+            "dungeon."
+        ) % (a.target or "in town")
     text = MEANINGS.get(a.kind, "")
     if "%s" in text:
         text = text % (a.target or "one of them")
@@ -275,6 +300,12 @@ def options(f: Facts) -> dict:
 
 def heuristic(f: Facts) -> tuple:
     """The module's static order: the highest-ranked request. (answer, why)."""
+    critical = _critical_weapon_ask(f)
+    if critical is not None:
+        return (
+            critical.option,
+            "a critical empty-main-hand weapon-training errand takes priority",
+        )
     asks = choosable(f)
     if not asks:
         return "", "nothing on the table"
@@ -288,14 +319,14 @@ def heuristic(f: Facts) -> tuple:
 def signature(f: Facts) -> str:
     """What has to change for this to be a new question: the current intent,
     the options on the table, and the family's deaths."""
-    return "|".join(
-        [
-            f.row.current_kind,
-            f.row.current_target,
-            ",".join(sorted(options(f))),
-            str(f.deaths),
-        ]
-    )
+    fields = [
+        f.row.current_kind,
+        f.row.current_target,
+        ",".join(sorted(options(f))),
+        str(f.deaths),
+    ]
+    fields.append("critical_weapon=" + (f.critical_weapon_option or ""))
+    return "|".join(fields)
 
 
 def due(f: Facts, last_signature: str, last_asked: float, now: float) -> bool:
@@ -323,6 +354,13 @@ def question(f: Facts, offered: dict):
             doing["for_seconds"] = f.row.current_for
     if f.row.goal_yards is not None:
         doing["leader_yards_from_his_errand"] = f.row.goal_yards
+    critical = _critical_weapon_ask(f)
+    if critical is not None:
+        doing["critical_weapon_option"] = {
+            "option": f.critical_weapon_option,
+            "target": critical.target,
+            "priority": "critical empty-main-hand gear gap",
+        }
     state = {
         "family": f.family,
         "leader": f.row.leader,
@@ -347,6 +385,12 @@ def question(f: Facts, offered: dict):
         "doing, and each member's `state` is what is being done with them."
         + situation.INSTRUCTION
     )
+    if _critical_weapon_ask(f) is not None:
+        instructions += (
+            " A critical empty-main-hand weapon errand is available; choose it "
+            "over a lower-value spell-training stop so the member can equip "
+            "a weapon before the next dungeon."
+        )
     return state, {"intent": jev.choice(instructions, dict(offered))}
 
 
@@ -491,10 +535,13 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
     # this prerequisite under the module's intent order instead of writing a
     # lower-priority override.
     chosen_kind = answer.choice.partition(":")[0]
+    critical = _critical_weapon_ask(f)
+    critical_weapon_errand = critical is not None and answer.choice == critical.option
     if (
         training_stop_active
         and rank(chosen_kind) < rank("training")
         and override == jev.JEV
+        and not critical_weapon_errand
     ):
         override = jev.HEURISTIC
         guard_reason = "an active campaign training stop outranks %s" % chosen_kind
