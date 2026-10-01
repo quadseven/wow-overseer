@@ -76,10 +76,16 @@ class VendorHalfOfTheGearErrand(unittest.TestCase):
             calls.append((args, kwargs))
 
         fake_bridge = types.SimpleNamespace(_claim_town_slot=claim)
-        asyncio.run(namespace["_gearup_house"](
-            fake_bridge, ["Grug"], "Grug", {"Grug": {"equipped": {}}},
-            "aim", None,
-        ))
+        asyncio.run(
+            namespace["_gearup_house"](
+                fake_bridge,
+                ["Grug"],
+                "Grug",
+                {"Grug": {"equipped": {}}},
+                "aim",
+                None,
+            )
+        )
 
         self.assertEqual(1, len(calls))
         self.assertEqual(("gearup", "Grug", "auctioneer"), calls[0][0])
