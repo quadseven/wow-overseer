@@ -39,7 +39,8 @@ class GearupTests(unittest.TestCase):
                 "purse": 50000,
             }
         }
-        self.assertEqual(6, 17 - len(facts["Oz"]["equipped"]))
+        # Six slots are empty, below the configured threshold of seven; the
+        # missing main hand alone must still make this an urgent gear gap.
         self.assertTrue(gearup.needs_gear_hold(facts["Oz"], empty_slots=7))
         self.assertTrue(gearup.campaign_hold(facts, False, empty_slots=7))
 

@@ -501,6 +501,31 @@ def facts_line(f: Facts, limit: int = 1000) -> str:
     return "; ".join(parts)[:limit]
 
 
+def _training_stop_guard(f: Facts, choice: str, override: str):
+    """Keep a campaign training stop unless Jev selects its critical weapon errand."""
+    if not any(a.kind == "training" for a in f.row.table):
+        return override, ""
+
+    chosen_kind = choice.partition(":")[0]
+    critical = _critical_weapon_ask(f)
+    critical_errand = critical is not None and choice == critical.option
+    if critical is not None:
+        if critical_errand and override == jev.BOTH:
+            return jev.JEV, ""
+        if not critical_errand and override == jev.JEV:
+            return (
+                jev.HEURISTIC,
+                "a critical empty-main-hand weapon errand outranks %s" % chosen_kind,
+            )
+        return override, ""
+    if rank(chosen_kind) < rank("training") and override == jev.JEV:
+        return (
+            jev.HEURISTIC,
+            "an active campaign training stop outranks %s" % chosen_kind,
+        )
+    return override, ""
+
+
 async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
     """Ask Jev what the family does now; None when there is nothing to ask."""
     if rule.mode == jev.OFF:
@@ -524,38 +549,10 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
     if outcome.answers is None:
         return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
     answer = outcome.answers["intent"]
-    training_stop_active = any(a.kind == "training" for a in f.row.table)
     override = rule.acted(
         current, answer.choice, answer.confidence, can_act=answer.choice in offered
     )
-    guard_reason = ""
-    # A campaign training stop exists to teach spells before the next run.
-    # Letting a lower-ranked request take over can consume the entire stop
-    # without reaching the trainer. Keep Jev's answer in the record, but leave
-    # this prerequisite under the module's intent order instead of writing a
-    # lower-priority override.
-    chosen_kind = answer.choice.partition(":")[0]
-    critical = _critical_weapon_ask(f)
-    critical_weapon_errand = critical is not None and answer.choice == critical.option
-    if training_stop_active and critical is not None:
-        if critical_weapon_errand and override == jev.BOTH:
-            # Persist the explicit decision: the native module may not have
-            # published its matching errand request yet.
-            override = jev.JEV
-        elif not critical_weapon_errand and override == jev.JEV:
-            # While this critical gear gap is eligible, spell training (and
-            # every other option) must not supersede the weapon-master route.
-            override = jev.HEURISTIC
-            guard_reason = (
-                "a critical empty-main-hand weapon errand outranks %s" % chosen_kind
-            )
-    elif (
-        training_stop_active
-        and rank(chosen_kind) < rank("training")
-        and override == jev.JEV
-    ):
-        override = jev.HEURISTIC
-        guard_reason = "an active campaign training stop outranks %s" % chosen_kind
+    override, guard_reason = _training_stop_guard(f, answer.choice, override)
     return replace(
         base,
         status=outcome.status,

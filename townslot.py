@@ -1173,6 +1173,20 @@ def stalled(best: float, best_at: float, distance: float, now: float) -> bool:
     return now - best_at >= STALL_SECONDS and distance > best - PROGRESS_YARDS
 
 
+def _weapon_training_releasable(base_releasable):
+    """Extend the normal release predicate to verified numeric trainer aims."""
+
+    def can_release(aim):
+        if base_releasable is not None and base_releasable(aim):
+            return True
+        route = str(aim)
+        if route.startswith("trainer:"):
+            route = route.removeprefix("trainer:")
+        return route.isascii() and route.isdecimal() and int(route) > 0
+
+    return can_release
+
+
 class Slot:
     """The ledger: who holds the traveller, who is waiting, who was served.
 
@@ -1554,17 +1568,7 @@ class Slot:
             # An empty main hand with a learnable weapon is the one gear gap
             # allowed to interrupt routine spell training. Keep this narrow:
             # other claimants must never clear a native trainer route.
-            base_releasable = releasable
-
-            def releasable_for_weapon_training(aim):
-                if base_releasable is not None and base_releasable(aim):
-                    return True
-                route = str(aim)
-                if route.startswith("trainer:"):
-                    route = route.removeprefix("trainer:")
-                return route.isascii() and route.isdecimal() and int(route) > 0
-
-            releasable = releasable_for_weapon_training
+            releasable = _weapon_training_releasable(releasable)
         decision = decide(
             claimant=claimant,
             character=character,
