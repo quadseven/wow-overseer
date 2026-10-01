@@ -500,8 +500,10 @@ def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
     """
     rows = sorted(
         (
-            r for r in recent or ()
-            if r.name == name and r.action == "train"
+            r
+            for r in recent or ()
+            if r.name == name
+            and r.action == "train"
             and (skill_id is None or r.skill_id is None or r.skill_id == skill_id)
         ),
         key=lambda r: int(r.age_minutes),
@@ -517,8 +519,10 @@ def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
 
 def _training_cooling(name: str, skill_id: int, recent) -> bool:
     rows = tuple(
-        r for r in recent or ()
-        if r.name == name and r.action == "train"
+        r
+        for r in recent or ()
+        if r.name == name
+        and r.action == "train"
         and (r.skill_id is None or r.skill_id == skill_id)
     )
     minutes = train_cooldown(name, rows, skill_id)
@@ -1608,7 +1612,7 @@ def _trainer_skill_id(command) -> int | None:
     """Read the skill line from a trainer walk, or None for legacy/malformed rows."""
     for token in str(command or "").split():
         if token.startswith("skill:"):
-            value = token[len("skill:"):]
+            value = token[len("skill:") :]
             return int(value) if value.isdecimal() else None
     return None
 

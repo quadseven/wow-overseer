@@ -430,15 +430,17 @@ class ATrainerWalkThatKeepsFailing(unittest.TestCase):
         initial = plan(crew)
         self.assertIn(TAILOR, initial.trades["Keeper"])
         self.assertIn(S, initial.trades["Keeper"])
-        recent = guildjobs.recent_from_rows((
-            {
-                "target_name": "Keeper",
-                "command": "walk-to-trainer skill:%d max:20000" % S,
-                "source": "guildjobs:train:Keeper",
-                "status": "unchanged",
-                "age": 5,
-            },
-        ))
+        recent = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Keeper",
+                    "command": "walk-to-trainer skill:%d max:20000" % S,
+                    "source": "guildjobs:train:Keeper",
+                    "status": "unchanged",
+                    "age": 5,
+                },
+            )
+        )
 
         step = only_step(plan(crew, recent=recent), "Keeper")
 
@@ -448,18 +450,22 @@ class ATrainerWalkThatKeepsFailing(unittest.TestCase):
 
     def test_failed_herbalism_walk_does_not_block_first_aid(self):
         medic = bare(
-            "Medic", level=10, money=500,
+            "Medic",
+            level=10,
+            money=500,
             skills={H: (75, 75), M: (75, 75)},
         )
-        recent = guildjobs.recent_from_rows((
-            {
-                "target_name": "Medic",
-                "command": "walk-to-trainer skill:%d max:20000" % H,
-                "source": "guildjobs:train:Medic",
-                "status": "error",
-                "age": 5,
-            },
-        ))
+        recent = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Medic",
+                    "command": "walk-to-trainer skill:%d max:20000" % H,
+                    "source": "guildjobs:train:Medic",
+                    "status": "error",
+                    "age": 5,
+                },
+            )
+        )
 
         step = only_step(plan([medic], recent=recent), "Medic")
 
@@ -467,26 +473,30 @@ class ATrainerWalkThatKeepsFailing(unittest.TestCase):
         self.assertEqual(step.rows[0].command, "walk-to-trainer skill:%d" % FA)
 
     def test_recent_rows_read_the_training_skill_token(self):
-        (recent,) = guildjobs.recent_from_rows((
-            {
-                "target_name": "Keeper",
-                "command": "walk-to-trainer skill:197 max:20000",
-                "source": "guildjobs:train:Keeper",
-                "status": "error",
-                "age": 5,
-            },
-        ))
+        (recent,) = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Keeper",
+                    "command": "walk-to-trainer skill:197 max:20000",
+                    "source": "guildjobs:train:Keeper",
+                    "status": "error",
+                    "age": 5,
+                },
+            )
+        )
         self.assertEqual(recent.skill_id, TAILOR)
 
-        (malformed,) = guildjobs.recent_from_rows((
-            {
-                "target_name": "Keeper",
-                "command": "walk-to-trainer skill:bad",
-                "source": "guildjobs:train:Keeper",
-                "status": "error",
-                "age": 5,
-            },
-        ))
+        (malformed,) = guildjobs.recent_from_rows(
+            (
+                {
+                    "target_name": "Keeper",
+                    "command": "walk-to-trainer skill:bad",
+                    "source": "guildjobs:train:Keeper",
+                    "status": "error",
+                    "age": 5,
+                },
+            )
+        )
         self.assertIsNone(malformed.skill_id)
         self.assertIn('"SELECT target_name, command, source, status, "', BRIDGE)
 
