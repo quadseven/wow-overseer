@@ -198,6 +198,7 @@ class TheRightVendor(unittest.TestCase):
                 "ranged",
             )
         }
+        full["offhand"] = 10
         rows = vendor_rows(2, "Weaponsmith", 120, [weapon(GNARLED_STAFF)])
         trip = gearup.vendor_trip({"Og": mage(**full)}, rows, map_id=1, max_yards=250)
         self.assertEqual(2, trip.vendor)

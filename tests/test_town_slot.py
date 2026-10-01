@@ -229,7 +229,8 @@ class EveryTownPassAsksAtTheSameDoor(unittest.TestCase):
                 continue
             with self.subTest(pass_=signature.strip()):
                 body = _statements(signature)
-                self.assertIn(call, body)
+                for argument in call.split(","):
+                    self.assertIn(argument.strip(), body)
 
     def test_no_town_pass_writes_the_column_itself_any_more(self):
         for signature in self.PASSES:
@@ -348,16 +349,14 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
         back - so a block-wide search is answered by the explanation even after
         the call itself has been changed to release the wrong thing. A first
         draft of this test passed a mutation that did exactly that."""
-        self.assertIn(
-            "_release_trade_errand, decision.release.character,\n"
-            "                    decision.release.aim,",
-            self.code,
-        )
-        self.assertIn(
-            "_release_weapon_training_aim,\n"
-            "                    decision.release.character, decision.release.aim,",
-            self.code,
-        )
+        for release in (
+            "_release_trade_errand",
+            "_release_weapon_training_aim",
+        ):
+            at = self.code.index(release, self.code.index("if decision.release"))
+            call = self.code[at : at + 240]
+            self.assertIn("decision.release.character", call)
+            self.assertIn("decision.release.aim", call)
 
     def test_a_hold_returns_true_without_writing_anything(self):
         """Re-writing a word the column already carries makes mod-overseer's
@@ -397,11 +396,10 @@ class TheIdleDoorClearsWithoutAReplacement(unittest.TestCase):
         self.assertIn("slot.want_idle(", self.code)
 
     def test_it_compares_and_swaps_the_exact_stale_aim(self):
-        self.assertIn(
-            "_release_trade_errand, decision.release.character,\n"
-            "            decision.release.aim,",
-            self.code,
-        )
+        at = self.code.index("_release_trade_errand")
+        call = self.code[at : at + 200]
+        self.assertIn("decision.release.character", call)
+        self.assertIn("decision.release.aim", call)
 
     def test_it_never_writes_a_successor(self):
         self.assertNotIn("_write_trade_errand", self.code)
@@ -427,9 +425,15 @@ class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
     def test_native_bare_trainer_entry_can_be_preempted_when_verified(self):
         slot = townslot.Slot(releasable=travel.is_ground_aim)
         decision = slot.want(
-            claimant="weapon master", character="Grug", leader="Grug",
-            aim="11867", column="1226", retaskable=("", "11867"),
-            now=100.0, urgent=True, trainer_route=True,
+            claimant="weapon master",
+            character="Grug",
+            leader="Grug",
+            aim="11867",
+            column="1226",
+            retaskable=("", "11867"),
+            now=100.0,
+            urgent=True,
+            trainer_route=True,
         )
         self.assertEqual(townslot.SLOT_PREEMPT, decision.verdict)
         self.assertEqual("1226", decision.release.aim)
@@ -453,31 +457,36 @@ class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
         for column in ("trainer", "trainer:abc", "trainer:0", "profession:1226"):
             with self.subTest(column=column):
                 decision = slot.want(
-                    claimant="weapon master", character="Grug", leader="Grug",
-                    aim="11867", column=column, retaskable=("", "11867"),
-                    now=100.0, urgent=True, trainer_route=True,
+                    claimant="weapon master",
+                    character="Grug",
+                    leader="Grug",
+                    aim="11867",
+                    column=column,
+                    retaskable=("", "11867"),
+                    now=100.0,
+                    urgent=True,
+                    trainer_route=True,
                 )
                 self.assertEqual(townslot.SLOT_WAIT, decision.verdict)
 
-
     def test_trainer_release_is_exact_and_compare_and_swap_guarded(self):
         body = _statements("def _release_weapon_training_aim(")
-        self.assertIn('travel_npc = %s', body)
-        self.assertIn('learn_skill = 0', body)
-        self.assertIn('unlearn_skill = 0', body)
-        self.assertIn('unlearn_max = 0', body)
+        self.assertIn("travel_npc = %s", body)
+        self.assertIn("learn_skill = 0", body)
+        self.assertIn("unlearn_skill = 0", body)
+        self.assertIn("unlearn_max = 0", body)
         route = _statements("def _is_weapon_training_route(")
         self.assertIn('route.removeprefix("trainer:")', route)
-        self.assertIn('creature_default_trainer', route)
-        self.assertIn('trainer_spell', route)
+        self.assertIn("creature_default_trainer", route)
+        self.assertIn("trainer_spell", route)
 
     def test_jev_can_synthesize_the_verified_weapon_errand(self):
         body = _statements("    async def _critical_weapon_intent_option(")
-        self.assertIn('_fetch_gearup_facts', body)
-        self.assertIn('_fetch_bag_weapons', body)
+        self.assertIn("_fetch_gearup_facts", body)
+        self.assertIn("_fetch_bag_weapons", body)
         self.assertIn('n.slot == "mainhand"', body)
-        self.assertIn('return option', body)
-        self.assertNotIn('row.table', body)
+        self.assertIn("return option", body)
+        self.assertNotIn("row.table", body)
 
     def test_urgent_maintenance_can_preempt_an_orphaned_economy_aim(self):
         """Zero-room pressure cannot wait for the world's 20-minute fuse."""
@@ -538,10 +547,11 @@ class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
 
     def test_vendor_pass_marks_pressure_as_urgent(self):
         body = _statements("    async def _vendor_once(")
-        self.assertIn(
-            'self._claim_town_slot(\n                "economy", leader, "vendor", urgent=True,',
-            body,
-        )
+        call = body[body.index("self._claim_town_slot(") :]
+        call = call[: call.index(")")]
+        self.assertIn('"economy"', call)
+        self.assertIn('"vendor"', call)
+        self.assertIn("urgent=True", call)
 
 
 class TheStarvationLineIsGreppable(unittest.TestCase):

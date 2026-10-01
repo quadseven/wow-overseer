@@ -252,7 +252,12 @@ def plan_vendor_buys(characters, offers, *, repair_floor=0):
         if not rows:
             continue
         equipped = _get(character, "equipped", "slots", default={}) or {}
-        worn_only = dict(character, equipped={slot: None for slot in equipped})
+        worn_only = dict(
+            character,
+            equipped={
+                slot: equipped[slot] if slot == "offhand" else None for slot in equipped
+            },
+        )
         output.extend(
             _plan_character(
                 name, worn_only, rows, _budget_for(name, character, repair_floor)

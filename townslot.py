@@ -1557,8 +1557,7 @@ class Slot:
             base_releasable = releasable
 
             def releasable_for_weapon_training(aim):
-                if (base_releasable is not None
-                        and base_releasable(aim)):
+                if base_releasable is not None and base_releasable(aim):
                     return True
                 route = str(aim)
                 if route.startswith("trainer:"):

@@ -145,7 +145,10 @@ class GearupTests(unittest.TestCase):
 
         self.assertEqual(
             [("mainhand", 4)],
-            [(buy.slot, buy.listing_id) for buy in gearup.plan_buys({"Og": mage}, [staff])],
+            [
+                (buy.slot, buy.listing_id)
+                for buy in gearup.plan_buys({"Og": mage}, [staff])
+            ],
         )
 
     def test_one_hander_still_fills_empty_mainhand_beside_offhand(self):
@@ -160,7 +163,10 @@ class GearupTests(unittest.TestCase):
 
         self.assertEqual(
             [("mainhand", 5)],
-            [(buy.slot, buy.listing_id) for buy in gearup.plan_buys({"Og": mage}, [dagger])],
+            [
+                (buy.slot, buy.listing_id)
+                for buy in gearup.plan_buys({"Og": mage}, [dagger])
+            ],
         )
 
     def test_tank_offhand_only_accepts_shield(self):
