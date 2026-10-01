@@ -7031,13 +7031,15 @@ class Bridge(discord.Client):
         slot = self._cohort_town_slot(cohort)
         column = await asyncio.to_thread(_current_travel_npc, leader)
         now = time.monotonic()
+        trainer_route = (
+            claimant == WEAPON_SKILL_CLAIMANT
+            and await asyncio.to_thread(_is_weapon_training_route, column)
+        )
         decision = slot.want(
             claimant=claimant, character=character, aim=aim, leader=leader,
             column=column, retaskable=_retaskable_from(aim), now=now,
             urgent=urgent, distance=distance,
-            trainer_route=(claimant == WEAPON_SKILL_CLAIMANT
-                           and await asyncio.to_thread(
-                               _is_weapon_training_route, column)),
+            trainer_route=trainer_route,
         )
         if decision.verdict == townslot.SLOT_GIVE_UP:
             released = await asyncio.to_thread(
@@ -7054,7 +7056,11 @@ class Bridge(discord.Client):
             # not being weakened here - mod-overseer#438 is why it exists. A
             # preemption is therefore two statements: give the stuck errand
             # back, then take the empty column the ordinary way.
-            if claimant == WEAPON_SKILL_CLAIMANT:
+            if (
+                claimant == WEAPON_SKILL_CLAIMANT
+                and trainer_route
+                and decision.release.aim == column
+            ):
                 released = await asyncio.to_thread(
                     _release_weapon_training_aim,
                     decision.release.character, decision.release.aim,

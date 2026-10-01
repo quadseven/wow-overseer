@@ -358,6 +358,16 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
             self.assertIn("decision.release.character", call)
             self.assertIn("decision.release.aim", call)
 
+    def test_weapon_claim_releases_only_a_verified_trainer_aim_as_training(self):
+        release_block = self.code[self.code.index("if decision.release") :]
+        self.assertIn("claimant == WEAPON_SKILL_CLAIMANT", release_block)
+        self.assertIn("and trainer_route", release_block)
+        self.assertIn("decision.release.aim == column", release_block)
+        self.assertIn(
+            "else:\n                released = await asyncio.to_thread(\n                    _release_trade_errand",
+            release_block,
+        )
+
     def test_a_hold_returns_true_without_writing_anything(self):
         """Re-writing a word the column already carries makes mod-overseer's
         aim book erase its own state and read a standing errand as a brand new
