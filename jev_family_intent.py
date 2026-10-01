@@ -537,11 +537,22 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
     chosen_kind = answer.choice.partition(":")[0]
     critical = _critical_weapon_ask(f)
     critical_weapon_errand = critical is not None and answer.choice == critical.option
-    if (
+    if training_stop_active and critical is not None:
+        if critical_weapon_errand and override == jev.BOTH:
+            # Persist the explicit decision: the native module may not have
+            # published its matching errand request yet.
+            override = jev.JEV
+        elif not critical_weapon_errand and override == jev.JEV:
+            # While this critical gear gap is eligible, spell training (and
+            # every other option) must not supersede the weapon-master route.
+            override = jev.HEURISTIC
+            guard_reason = (
+                "a critical empty-main-hand weapon errand outranks %s" % chosen_kind
+            )
+    elif (
         training_stop_active
         and rank(chosen_kind) < rank("training")
         and override == jev.JEV
-        and not critical_weapon_errand
     ):
         override = jev.HEURISTIC
         guard_reason = "an active campaign training stop outranks %s" % chosen_kind

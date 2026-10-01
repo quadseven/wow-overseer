@@ -225,7 +225,7 @@ class WhoActs(unittest.TestCase):
         self.assertEqual("", j.pick)
         self.assertIn("outranks economy", j.guard_reason)
 
-    def test_critical_weapon_errand_can_override_campaign_spell_training(self):
+    def test_critical_weapon_errand_is_persisted_over_campaign_spell_training(self):
         f = facts(
             on_the_table="training|campaign training|1226\nquest|quest drive|",
             critical_weapon_option="errand:11867",
@@ -235,8 +235,22 @@ class WhoActs(unittest.TestCase):
             FakeJev(picks={"intent": "errand:11867"}, confidence=0.9),
         )
         self.assertEqual("errand:11867", j.heuristic)
-        self.assertEqual(jev.BOTH, j.acted)
+        self.assertEqual("errand:11867", j.pick)
+        self.assertEqual(jev.JEV, j.acted)
         self.assertEqual("", j.guard_reason)
+
+    def test_active_critical_weapon_errand_blocks_a_training_answer(self):
+        f = facts(
+            on_the_table="training|campaign training|1226\nquest|quest drive|",
+            critical_weapon_option="errand:11867",
+        )
+        self.assertIn("errand:11867", jfi.options(f))
+        j = ask(f, FakeJev(picks={"intent": "training:1226"}, confidence=0.9))
+        self.assertEqual("training:1226", j.jev)
+        self.assertEqual(jev.HEURISTIC, j.acted)
+        self.assertEqual("errand:11867", j.heuristic)
+        self.assertEqual("", j.pick)
+        self.assertIn("critical empty-main-hand", j.guard_reason)
 
     def test_critical_weapon_errand_bypasses_training_guard_when_jev_picks_it(self):
         from unittest.mock import patch
