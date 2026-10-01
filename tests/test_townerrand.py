@@ -305,6 +305,18 @@ class TheHoldCeiling(unittest.TestCase):
         # 58 minutes without a run, and the run was requested 15 seconds ago.
         self.assertEqual("", self.start(58 * 60.0))
 
+    def test_bag_pressure_starts_an_errand_after_the_campaign_ceiling(self):
+        why = te.should_start(
+            te.State(),
+            now=0,
+            in_run=False,
+            mail_gear={},
+            facts=self.FACTS,
+            stalled=58 * 60.0,
+            bag_pressure_needed=True,
+        )
+        self.assertEqual(te.BAG_PRESSURE_WHY, why)
+
     def test_a_campaign_inside_the_ceiling_is_still_held_for_gear(self):
         self.assertIn("Og", self.start(10 * 60.0))
         self.assertIn("Og", self.start(0.0))
@@ -316,6 +328,17 @@ class TheHoldCeiling(unittest.TestCase):
         gone, line = te.advance(state, 100.0, stalled=46 * 60.0)
         self.assertFalse(gone.active)
         self.assertIn("waited 46 minutes", line)
+
+    def test_bag_pressure_errand_survives_the_campaign_ceiling(self):
+        state = te.start(0.0, HUB, te.BAG_PRESSURE_WHY)
+        held, line = te.advance(
+            state,
+            100.0,
+            stalled=58 * 60.0,
+            bag_pressure_needed=True,
+        )
+        self.assertTrue(held.active, line)
+        self.assertEqual("", line)
 
 
 def _functions(*names):
