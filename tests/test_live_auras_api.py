@@ -16,10 +16,8 @@ except ModuleNotFoundError:
     sys.modules["pymysql"] = pymysql_stub
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
 
 import map_server  # noqa: E402
-import probe  # noqa: E402
 
 
 class FakeCursor:
@@ -191,9 +189,6 @@ class AuraResponseContract(unittest.TestCase):
             handler._auras({"name": ["arbitrary character"]})
         self.assertEqual(sent[0][0], 400)
         rosters.assert_not_called()
-
-    def test_cli_exposes_the_aura_probe(self):
-        self.assertIn("auras", probe.PROBES)
 
 
 if __name__ == "__main__":

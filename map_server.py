@@ -584,9 +584,9 @@ def _read_aura_probes(cur, pending: dict, responses: dict) -> None:
     marks = ",".join(["%s"] * len(pending))
     query = (
         "SELECT id, status, detail, result FROM overseer_command "
-        f"WHERE id IN ({marks})"
+        f"WHERE id IN ({marks})"  # noqa: S608 - markers contain no user input
     )
-    cur.execute(query, tuple(pending))  # noqa: S608 - markers contain no user input
+    cur.execute(query, tuple(pending))
     for row in cur.fetchall():
         if row["status"] in ("pending", "claimed", "verifying"):
             continue

@@ -6800,7 +6800,7 @@ function renderAuraPanel(container, familyFilter) {
   if (!container) return;
   const wasOpen = new Set(Array.from(container.querySelectorAll("details[open]"),
     details => details.dataset.auraKey));
-  container.replaceChildren();
+  container.textContent = "";
   const heading = auraNode("div", "aura-head");
   heading.append(auraNode("span", "aura-title", "Live family buffs"));
 
