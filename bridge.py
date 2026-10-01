@@ -11665,8 +11665,8 @@ class Bridge(discord.Client):
         log.info("bags: %s (aim taken=%s)",
                  bag_pressure.bag_trip_report(trip, leader), aimed)
 
-    async def _bank_exit_route(self, leader: str, position: dict | None,
-                               has_banker: bool, step: str,
+    async def _bank_exit_route(self, names: list, leader: str,
+                               position: dict | None, has_banker: bool, step: str,
                                cohort: str | None,
                                slot: "townslot.Slot") -> bool:
         """Route a bank errand through an instance exit when needed."""
@@ -11720,13 +11720,18 @@ class Bridge(discord.Client):
                 column = ""
             else:
                 return True
-        if exit_aim and column in ("", exit_aim):
+        vendor_idle = (
+            column == "vendor"
+            and await asyncio.to_thread(_outstanding_sales, names) == 0
+        )
+        if exit_aim and (column in ("", exit_aim) or vendor_idle):
             distance = math.hypot(
                 float(position["pos_x"]) - exit_route["x"],
                 float(position["pos_y"]) - exit_route["y"],
             )
             aimed = await self._claim_town_slot(
-                "bank", leader, exit_aim, cohort=cohort, distance=distance,
+                "bank", leader, exit_aim, urgent=vendor_idle,
+                cohort=cohort, distance=distance,
             )
             if not aimed:
                 log.info(
@@ -11794,7 +11799,8 @@ class Bridge(discord.Client):
         position_rows = await asyncio.to_thread(_fetch_positions, [leader])
         position = position_rows.get(leader)
         routed = await self._bank_exit_route(
-            leader, position, bool(leader_town.banker), step, cohort, slot,
+            names, leader, position, bool(leader_town.banker), step,
+            cohort, slot,
         )
         if routed:
             return step
