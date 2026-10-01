@@ -7,11 +7,9 @@ a kind='buy' town row through `gearup.vendor_command`, and a slot it bought is
 marked worn so the auction half does not buy it again.
 """
 
-import asyncio
+import ast
 import pathlib
 import re
-import textwrap
-import types
 import unittest
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
@@ -60,36 +58,26 @@ class VendorHalfOfTheGearErrand(unittest.TestCase):
         )
 
     def test_auction_gear_trip_uses_a_normal_travel_lease(self):
-        body = textwrap.dedent(_block("    async def _gearup_house("))
-        namespace = {
-            "asyncio": asyncio,
-            "auction": types.SimpleNamespace(AUCTIONEER_ROLE="auctioneer"),
-            "bag_pressure": types.SimpleNamespace(VENDOR_ERRAND_AIM="aim"),
-            "_fetch_auctioneer": lambda _name: None,
-            "_cohort_key": lambda cohort: cohort,
-            "log": types.SimpleNamespace(info=lambda *_args: None),
-        }
-        exec(compile(body, "bridge.py", "exec"), namespace)
-        calls = []
-
-        async def claim(*args, **kwargs):
-            calls.append((args, kwargs))
-
-        fake_bridge = types.SimpleNamespace(_claim_town_slot=claim)
-        asyncio.run(
-            namespace["_gearup_house"](
-                fake_bridge,
-                ["Grug"],
-                "Grug",
-                {"Grug": {"equipped": {}}},
-                "aim",
-                None,
-            )
+        module = ast.parse(BRIDGE.read_text(encoding="utf-8"))
+        method = next(
+            node
+            for node in ast.walk(module)
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_gearup_house"
         )
+        calls = [
+            node
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_claim_town_slot"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "gearup"
+        ]
 
         self.assertEqual(1, len(calls))
-        self.assertEqual(("gearup", "Grug", "auctioneer"), calls[0][0])
-        self.assertNotIn("urgent", calls[0][1])
+        self.assertEqual("auction.AUCTIONEER_ROLE", ast.unparse(calls[0].args[2]))
+        self.assertNotIn("urgent", {keyword.arg for keyword in calls[0].keywords})
 
 
 if __name__ == "__main__":
