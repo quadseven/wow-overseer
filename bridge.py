@@ -5264,6 +5264,9 @@ class Bridge(discord.Client):
                 "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
             },
         )
+        # The town errand and weapon-training passes share one traveller and
+        # may yield the same live errand. Serialize that handoff per family.
+        self._town_errand_locks: dict[tuple[str, ...], asyncio.Lock] = {}
         # WHICH NODE HAS BEEN ASKED FOR, HOW OFTEN, AND WITH WHAT MASK BEHIND
         # IT (infra#4206). {node id: (attempts, the taximask before the last
         # one)}. In memory for the reason the town slot's own ledger is: the
@@ -13830,21 +13833,43 @@ class Bridge(discord.Client):
             await self._for_other_families("weapon skill", self._weapon_skill_once)
             await asyncio.sleep(WEAPON_SKILL_CYCLE_SECONDS)
 
-    async def _weapon_skill_once(self, cohort=None) -> None:
+    async def _weapon_skill_once(self, cohort=None, _locked=False) -> None:
         """One family: equip what was trained, train who stands in reach, or
         walk the leader to the weapon master."""
+        if not _locked and hasattr(self, "_town_errand_locks"):
+            names, _leader = await asyncio.to_thread(_family_of, cohort)
+            if not names:
+                return
+            async with self._town_errand_lock(names):
+                await self._weapon_skill_once(cohort, _locked=True)
+            return
         names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or not leader:
             return
         label = _family_label(cohort)
         await self._weapon_skill_equip(names, label)
-        if await self._mid_run(names) or _town_errand_active(names):
+        if await self._mid_run(names):
             return
         facts = await asyncio.to_thread(_fetch_gearup_facts, names)
         needs = weaponskill.needs(
             facts, await asyncio.to_thread(_fetch_bag_weapons, names))
         if not needs:
             return
+        critical = any(
+            need.slot == "mainhand" and need.why == "its mainhand is empty"
+            for need in needs
+        )
+        if _town_errand_active(names):
+            if not critical:
+                return
+            key = tuple(sorted(names))
+            state = _TOWN_ERRANDS.get(key, townerrand.State())
+            if state.phase not in (townerrand.GO, townerrand.GATHER):
+                return
+            slot = self._cohort_town_slot(_cohort_key(cohort))
+            if not await self._town_errand_yield_for_weapon(
+                    state, names, leader, slot, label):
+                return
         positions = await asyncio.to_thread(_fetch_positions, list(names))
         at = positions.get(leader)
         if not at:
@@ -13908,8 +13933,15 @@ class Bridge(discord.Client):
             await self._for_other_families("town errand", self._town_errand_once)
             await asyncio.sleep(TOWN_ERRAND_CYCLE_SECONDS)
 
-    async def _town_errand_once(self, cohort=None) -> None:
+    async def _town_errand_once(self, cohort=None, _locked=False) -> None:
         """One tick of one family's errand: start it, move it on, or end it."""
+        if not _locked and hasattr(self, "_town_errand_locks"):
+            names, _leader = await asyncio.to_thread(_family_of, cohort)
+            if not names:
+                return
+            async with self._town_errand_lock(names):
+                await self._town_errand_once(cohort, _locked=True)
+            return
         names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or not leader:
             return
@@ -13919,6 +13951,19 @@ class Bridge(discord.Client):
         in_run = await self._mid_run(names)
         slot = self._cohort_town_slot(_cohort_key(cohort))
         label = _family_label(cohort)
+        critical = False
+        if (not in_run and (not state.active or state.phase in
+                            (townerrand.GO, townerrand.GATHER))
+                and hasattr(self, "_critical_empty_mainhand_weapon_need")):
+            critical = await self._critical_empty_mainhand_weapon_need(names)
+        if critical:
+            if state.phase in (townerrand.GO, townerrand.GATHER):
+                if await self._town_errand_yield_for_weapon(
+                        state, names, leader, slot, label):
+                    _TOWN_ERRANDS[key] = townerrand.State(ended=state.ended)
+                    return
+            elif not state.active:
+                return
         if not state.active:
             state = await self._town_errand_start(
                 state, names, leader, in_run, now, label)
@@ -13961,6 +14006,50 @@ class Bridge(discord.Client):
         if new.phase == townerrand.DONE:
             await self._town_errand_release(names, leader, slot, label)
         _TOWN_ERRANDS[key] = new
+
+    async def _town_errand_yield_for_weapon(self, state, names, leader,
+                                            slot, label) -> bool:
+        """Yield an unstarted counter trip to a carried empty-slot weapon."""
+        if state.phase not in (townerrand.GO, townerrand.GATHER):
+            return False
+        if time.monotonic() < state.hearth_until:
+            return False
+        slot.unreserve(TOWN_ERRAND_CLAIMANT)
+        expected = _hub_aim(state.hub)
+        column = await asyncio.to_thread(_current_travel_npc, leader)
+        if column == expected:
+            released = await asyncio.to_thread(
+                _release_trade_errand, leader, expected)
+            log.info("town errand: yielded%s to critical weapon training "
+                     "(mailbox aim released=%s)", label, released)
+        else:
+            log.info("town errand: yielded%s to critical weapon training; "
+                     "travel aim changed, so it was left untouched", label)
+        restored = await asyncio.to_thread(_town_errand_release_jobs, names)
+        log.info("town errand: yielded%s; %s", label, restored)
+        key = tuple(sorted(names))
+        _TOWN_ERRAND_MARKS.pop(key, None)
+        _TOWN_ERRANDS[key] = townerrand.State(ended=state.ended)
+        return True
+
+    def _town_errand_lock(self, names) -> asyncio.Lock:
+        """The shared town/training transition lock for one family."""
+        key = tuple(sorted(names))
+        lock = self._town_errand_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._town_errand_locks[key] = lock
+        return lock
+
+    async def _critical_empty_mainhand_weapon_need(self, names) -> bool:
+        """Whether carried, learnable gear can fill an empty main hand."""
+        facts = await asyncio.to_thread(_fetch_gearup_facts, names)
+        needs = weaponskill.needs(
+            facts, await asyncio.to_thread(_fetch_bag_weapons, names))
+        return any(
+            need.slot == "mainhand" and need.why == "its mainhand is empty"
+            for need in needs
+        )
 
     async def _town_errand_start(self, state, names, leader, in_run, now, label):
         """Start the errand if `townerrand.should_start` gives a reason."""
