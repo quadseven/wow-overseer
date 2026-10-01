@@ -28,7 +28,10 @@ BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
 )
 NAMES = ["Grug", "Bork", "Og", "Grog", "Ugga"]
 NAKED = {"equipped": ["mainhand", "chest"], "purse": 630310}
-DRESSED = {"equipped": ["s%d" % i for i in range(17)], "purse": 630310}
+DRESSED = {
+    "equipped": ["mainhand"] + ["s%d" % i for i in range(16)],
+    "purse": 630310,
+}
 CEILING = bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS
 
 
@@ -103,6 +106,20 @@ class GearGateCeilingTest(unittest.TestCase):
         self.assertIn("gear-up first", self.gate())
         self.clock.now += CEILING - 1
         self.assertIn("gear-up first", self.gate())
+
+    def test_gate_holds_empty_mainhand_below_the_empty_slot_threshold(self):
+        self.facts = {n: dict(DRESSED) for n in NAMES}
+        self.facts["Og"] = {
+            "equipped": ["s%d" % i for i in range(10)],
+            "purse": 630310,
+        }
+        self.ns["GEARUP_GATE_EMPTY_SLOTS"] = 8
+
+        reason = self.gate()
+
+        self.assertEqual(7, 17 - len(self.facts["Og"]["equipped"]))
+        self.assertIn("Og has no main-hand weapon", reason)
+        self.assertTrue(self.hold())
 
     def test_gate_lets_the_run_go_after_the_ceiling(self):
         self.gate()
