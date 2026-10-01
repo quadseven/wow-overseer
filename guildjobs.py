@@ -454,6 +454,7 @@ class Recent:
     action: str
     age_minutes: int
     status: str = ""
+    skill_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -491,10 +492,18 @@ def _cooling(member: Member, action: str, recent) -> bool:
     )
 
 
-def train_cooldown(name: str, recent) -> int:
-    """Minutes to wait since this member's last train row (see TRAIN_FAILED)."""
+def train_cooldown(name: str, recent, skill_id: int | None = None) -> int:
+    """Minutes to wait after failed trainer rows for this skill.
+
+    Rows without a skill id predate skill-scoped cooldowns and remain
+    character-wide so older facts and callers preserve their prior behavior.
+    """
     rows = sorted(
-        (r for r in recent or () if r.name == name and r.action == "train"),
+        (
+            r for r in recent or ()
+            if r.name == name and r.action == "train"
+            and (skill_id is None or r.skill_id is None or r.skill_id == skill_id)
+        ),
         key=lambda r: int(r.age_minutes),
     )
     failed = 0
@@ -504,6 +513,16 @@ def train_cooldown(name: str, recent) -> int:
         failed += 1
     base = COOLDOWN_MINUTES["train"]
     return min(base * 2**failed, max(base, TRAIN_BACKOFF_CAP_MINUTES))
+
+
+def _training_cooling(name: str, skill_id: int, recent) -> bool:
+    rows = tuple(
+        r for r in recent or ()
+        if r.name == name and r.action == "train"
+        and (r.skill_id is None or r.skill_id == skill_id)
+    )
+    minutes = train_cooldown(name, rows, skill_id)
+    return any(int(r.age_minutes) < minutes for r in rows)
 
 
 # ---------------------------------------------------------------------------
@@ -680,17 +699,25 @@ def next_rank(skill: int, value: int, cap: int, level: int):
 # THE STEPS.
 
 
-def _train_step(member, trades, cap):
+def _train_step(member, trades, cap, recent=()):
     """Buy the next rank of one of its trades, the cheapest first."""
     if member.level < TRAIN_MIN_LEVEL and trades.get(member.name):
         return None, "%s learns a trade from level %d" % (member.name, TRAIN_MIN_LEVEL)
-    wants = []
+    wants, cooling = [], []
     for skill in trades.get(member.name, ()):
         value, ceiling = member.skill(skill)
         rank = next_rank(skill, value, ceiling, member.level)
         if rank is not None:
-            wants.append((rank.cost, skill, rank))
+            if _training_cooling(member.name, skill, recent):
+                cooling.append(skill)
+            else:
+                wants.append((rank.cost, skill, rank))
     if not wants:
+        if cooling:
+            return None, "%s waits to retry %s after a failed trainer walk" % (
+                member.name,
+                ", ".join(SKILL_NAMES[s] for s in cooling),
+            )
         return None, ""
     cost, skill, rank = min(wants)
     if member.money < cost:
@@ -1123,12 +1150,11 @@ def assign_doors(members, entrances, stones) -> dict:
 def _maintenance_step(m, trades, fields, crafters, master, kept, recent, cap):
     """(step or None, what it does now, a note or "")."""
     notes = []
-    if not _cooling(m, "train", recent):
-        step, why = _train_step(m, trades, cap)
-        if step:
-            return step, step.said, ""
-        if why:
-            notes.append(why)
+    step, why = _train_step(m, trades, cap, recent)
+    if step:
+        return step, step.said, ""
+    if why:
+        notes.append(why)
     if not _cooling(m, "tool", recent):
         step, why = _tool_step(m, cap)
         if step:
@@ -1570,9 +1596,21 @@ def recent_from_rows(rows) -> tuple:
                 action=action.replace("-walk", ""),
                 age_minutes=_int(row.get("age"), 10**6),
                 status=str(row.get("status") or ""),
+                skill_id=(
+                    _trainer_skill_id(row.get("command")) if action == "train" else None
+                ),
             )
         )
     return tuple(out)
+
+
+def _trainer_skill_id(command) -> int | None:
+    """Read the skill line from a trainer walk, or None for legacy/malformed rows."""
+    for token in str(command or "").split():
+        if token.startswith("skill:"):
+            value = token[len("skill:"):]
+            return int(value) if value.isdecimal() else None
+    return None
 
 
 def spots_from_rows(rows, kind="gameobject") -> tuple:
