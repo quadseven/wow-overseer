@@ -304,9 +304,7 @@ def repeated_death_action(f: Facts) -> tuple | None:
             "%d recent deaths; regroup the ready family at its shared inn" % deaths
         )
     if f.errand:
-        return DROP_ERRAND, "%d recent deaths; stop the walk to %s" % (
-            deaths, f.errand
-        )
+        return DROP_ERRAND, "%d recent deaths; stop the walk to %s" % (deaths, f.errand)
     return None
 
 
@@ -461,7 +459,9 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
             _HEURISTIC
             if safety_action is not None and rule.mode == jev.ACT
             else rule.acted(
-                current, answer.choice, answer.confidence,
+                current,
+                answer.choice,
+                answer.confidence,
                 can_act=answer.choice in offered,
             )
         ),
