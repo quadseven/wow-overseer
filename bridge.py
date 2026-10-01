@@ -17,6 +17,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import math
 import os
 import time
 from types import SimpleNamespace
@@ -11664,6 +11665,75 @@ class Bridge(discord.Client):
         log.info("bags: %s (aim taken=%s)",
                  bag_pressure.bag_trip_report(trip, leader), aimed)
 
+    async def _bank_exit_route(self, leader: str, position: dict | None,
+                               has_banker: bool, step: str,
+                               cohort: str | None,
+                               slot: "townslot.Slot") -> bool:
+        """Route a bank errand through an instance exit when needed."""
+        if step != bank.BANK_ERRAND_AIM or position is None:
+            return False
+        column = await asyncio.to_thread(_current_travel_npc, leader)
+        if (
+            travel.is_ground_aim(column)
+            and slot.holder is not None
+            and slot.holder.claimant == "bank"
+            and slot.holder.character == leader
+            and slot.holder.aim == column
+            and await asyncio.to_thread(
+                _ground_exit_leads_to, column, int(position["map_id"]),
+            )
+        ):
+            released = await asyncio.to_thread(
+                _release_trade_errand, leader, column,
+            )
+            if released:
+                slot.forget("bank")
+                log.info(
+                    "bank: leader=%s crossed the instance exit; handing back "
+                    "%s before continuing to a banker", leader, column,
+                )
+                column = ""
+
+        if (
+            has_banker
+            or int(position["map_id"]) in _OUTDOOR_CONTINENT_MAPS
+        ):
+            return False
+        exit_route = await asyncio.to_thread(_nearest_outdoor_exit, leader)
+        if not exit_route:
+            return False
+        exit_aim = travel.ground_aim(
+            exit_route["map_id"], exit_route["x"],
+            exit_route["y"], exit_route["z"],
+        )
+        if column == "banker":
+            released = await asyncio.to_thread(
+                _release_trade_errand, leader, "banker",
+            )
+            if released:
+                slot.forget("bank")
+                log.info(
+                    "bank: leader=%s has no banker on map %s; handing back "
+                    "banker aim before walking to outdoor exit %s", leader,
+                    position["map_id"], exit_aim,
+                )
+            return True
+        if exit_aim and column in ("", exit_aim):
+            distance = math.hypot(
+                float(position["pos_x"]) - exit_route["x"],
+                float(position["pos_y"]) - exit_route["y"],
+            )
+            aimed = await self._claim_town_slot(
+                "bank", leader, exit_aim, cohort=cohort, distance=distance,
+            )
+            if not aimed:
+                log.info(
+                    "bank: leader=%s waits to walk to map %s exit; travel aim "
+                    "remains %r", leader, position["map_id"], column,
+                )
+            return True
+        return False
+
     async def _settle_bank_errand(self, names: list, leader: str,
                                   moves_unasked: bool,
                                   cohort: str | None = None) -> str:
@@ -11718,6 +11788,14 @@ class Bridge(discord.Client):
         step = bank.errand_step(
             bool(leader_town.banker), outstanding, moves_unasked,
         )
+        slot = self._cohort_town_slot(cohort)
+        position_rows = await asyncio.to_thread(_fetch_positions, [leader])
+        position = position_rows.get(leader)
+        routed = await self._bank_exit_route(
+            leader, position, bool(leader_town.banker), step, cohort, slot,
+        )
+        if routed:
+            return step
         if step == bank.BANK_ERRAND_AIM:
             # THE RETURN VALUE IS READ, the same defect infra#3660 fixed in the
             # guild bank pass. An economy errand may only retask an IDLE
@@ -20683,6 +20761,66 @@ def _dungeon_doors(map_id) -> tuple:
             raise
     return tuple((int(row["map"]), float(row["x"]), float(row["y"]))
                  for row in rows)
+
+
+_OUTDOOR_CONTINENT_MAPS = (0, 1, 530, 571)
+
+
+def _nearest_outdoor_exit(name: str) -> dict | None:
+    """Nearest areatrigger exit from a fresh position to an outdoor continent."""
+    marks = ", ".join(["%s"] * len(_OUTDOOR_CONTINENT_MAPS))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            sql = (
+                "SELECT a.map AS map_id, a.x, a.y, a.z, t.target_map, "
+                "(POW(a.x - s.pos_x, 2) + POW(a.y - s.pos_y, 2)) AS d2 "
+                "FROM overseer_snapshot s "
+                "JOIN acore_world.areatrigger a ON a.map = s.map_id "
+                "JOIN acore_world.areatrigger_teleport t ON t.ID = a.entry "
+                "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+                "AND t.target_map IN (" + marks + ") ORDER BY d2 LIMIT 1"
+            )
+            cur.execute(
+                sql,
+                (name, *_OUTDOOR_CONTINENT_MAPS),
+            )
+            row = cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("bank: cannot find an outdoor exit for %s", name)
+                return None
+            raise
+    if not row:
+        return None
+    return {
+        "map_id": int(row["map_id"]),
+        "x": float(row["x"]),
+        "y": float(row["y"]),
+        "z": float(row["z"]),
+        "target_map": int(row["target_map"]),
+        "distance": math.sqrt(float(row["d2"])),
+    }
+
+
+def _ground_exit_leads_to(aim: str, target_map: int) -> bool:
+    """Whether an exact areatrigger ground aim exits to `target_map`."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT a.map, a.x, a.y, a.z FROM acore_world.areatrigger a "
+                "JOIN acore_world.areatrigger_teleport t ON t.ID = a.entry "
+                "WHERE t.target_map = %s",
+                (int(target_map),),
+            )
+            rows = cur.fetchall() or ()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return False
+            raise
+    return any(
+        travel.ground_aim(row["map"], row["x"], row["y"], row["z"]) == aim
+        for row in rows
+    )
 
 
 def _active_dungeon_run() -> dict | None:
