@@ -140,6 +140,20 @@ _AURA_SPELL_NAMES = {
     for spell, (talent, rank) in BOOK.by_spell.items()
 }
 
+# These party buffs are ordinary spell ranks, not talent ranks, so the talent
+# reference above cannot name them. Keep the known family-support spells
+# readable while unknown auras continue to expose their spell ID.
+_AURA_SUPPORT_SPELL_NAMES = {
+    976: "Shadow Protection",
+    1126: "Mark of the Wild",
+    1243: "Power Word: Fortitude",
+    1244: "Power Word: Fortitude",
+    1245: "Power Word: Fortitude",
+    1460: "Arcane Intellect",
+    1461: "Arcane Intellect",
+    14752: "Divine Spirit",
+}
+
 
 def _fetch_upstream(url: str) -> tuple[int, bytes]:
     # S310: `url` is modelviewer.UPSTREAM plus an allowlisted, charset-checked
@@ -503,7 +517,10 @@ def _fetch_families() -> dict:
 
 
 def _aura_name(spell: int) -> str | None:
-    """Name only spell ids present in the committed client talent tables."""
+    """Name known support spells and talent ranks from committed references."""
+    support_name = _AURA_SUPPORT_SPELL_NAMES.get(spell)
+    if support_name is not None:
+        return support_name
     found = _AURA_SPELL_NAMES.get(spell)
     if found is None:
         return None

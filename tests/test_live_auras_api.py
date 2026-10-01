@@ -64,6 +64,30 @@ class FakeConnection:
 
 
 class AuraResponseContract(unittest.TestCase):
+    def test_core_family_buffs_have_readable_names(self):
+        auras = map_server._normalize_auras(
+            [
+                {
+                    "spell": spell,
+                    "stacks": 1,
+                    "remaining_ms": 60000,
+                    "positive": True,
+                    "caster": "Ugga",
+                }
+                for spell in (976, 1126, 1245, 1461, 14752)
+            ]
+        )
+        self.assertEqual(
+            [aura["name"] for aura in auras],
+            [
+                "Shadow Protection",
+                "Mark of the Wild",
+                "Power Word: Fortitude",
+                "Arcane Intellect",
+                "Divine Spirit",
+            ],
+        )
+
     def test_shape_and_unknown_spell_id_are_preserved(self):
         payload = map_server._build_auras_payload(
             {"Grug's Family": ["Ugga"]},
