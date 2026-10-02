@@ -602,8 +602,9 @@ def other_cohorts(rows, own_names) -> tuple:
     return tuple(out)
 
 
-def urgent_ground_release(*, aim: str, pressure: bool, in_run: bool,
-                          errand_active: bool = False, ground) -> bool:
+def urgent_ground_release(
+    *, aim: str, pressure: bool, in_run: bool, errand_active: bool = False, ground
+) -> bool:
     """Whether bag pressure may interrupt a stale positional town aim.
 
     An active town errand owns its mailbox or counter aim. Releasing that aim
@@ -611,8 +612,7 @@ def urgent_ground_release(*, aim: str, pressure: bool, in_run: bool,
     the errand reacquire it on its next tick and can keep the leader circling.
     """
     return bool(
-        pressure and not in_run and not errand_active and str(aim or "")
-        and ground(aim)
+        pressure and not in_run and not errand_active and str(aim or "") and ground(aim)
     )
 
 
