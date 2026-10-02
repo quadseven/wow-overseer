@@ -14436,18 +14436,20 @@ class Bridge(discord.Client):
         return sent == 0
 
     async def _town_errand_mail(self, hub, names, positions, cohort) -> bool:
-        """Takes for every member standing at the hub mailbox; done when the
-        plan has nothing left to take for them."""
+        """Take mail for members at the hub; defer absent members to a later
+        mailbox visit so their inaccessible mail cannot hold this errand."""
         letters = mailrun.letters_from_rows(
             await asyncio.to_thread(_fetch_mail, names), names)
         seen = await asyncio.to_thread(_recent_mail_keys, GIVE_RETRY_MINUTES)
+        here = {name for name in names if townerrand.in_range(
+            hub, positions.get(name), TOWN_COUNTER_YARDS)}
+        local_letters = [letter for letter in letters if letter.holder in here]
+        free_slots = await asyncio.to_thread(_fetch_free_slots, names)
         plan = mailrun.plan(
-            letters, await asyncio.to_thread(_fetch_free_slots, names),
+            local_letters, {name: free_slots.get(name, 0) for name in here},
             mailrun.attachments_asked(seen))
-        here = [t for t in plan.takes if townerrand.in_range(
-            hub, positions.get(t.character), TOWN_COUNTER_YARDS)]
         fresh = []
-        for take in here:
+        for take in plan.takes:
             command = mailrun.command(take)
             if (take.character, command) in seen:
                 continue
@@ -14455,8 +14457,11 @@ class Bridge(discord.Client):
                 fresh.append(take)
         for line in mailrun.lines(fresh):
             log.info("town errand mail: %s", line)
+        away = sorted({letter.holder for letter in letters
+                       if letter.holder not in here})
         log.info("town errand mail: %d take(s) queued of %d planned, %d "
-                 "letter(s) left%s", len(fresh), len(plan.takes), len(letters),
+                 "letter(s) left, deferred for away: %s%s", len(fresh),
+                 len(plan.takes), len(letters), ", ".join(away) or "none",
                  _family_label(cohort))
         return not plan.takes
 

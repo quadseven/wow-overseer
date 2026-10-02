@@ -545,6 +545,36 @@ class TheAdapter(unittest.TestCase):
         self.assertEqual([("Bork", "take-item mail:9 item:77")], self.written)
         self.assertEqual(te.MAIL, state.current_step)
 
+    def test_mail_for_a_member_on_another_map_does_not_hold_the_errand(self):
+        self.ns["_fetch_mail"] = lambda names: [
+            {
+                "holder": "Ugga",
+                "mail_id": 12,
+                "money": 0,
+                "cod": 0,
+                "delivered": 1,
+                "expire_time": 5,
+                "item_guid": 88,
+                "inventory_type": 5,
+                "required_level": 30,
+                "holder_level": 36,
+            },
+        ]
+        # Ugga is online, but her settled position is on another map. Grug is
+        # at the mailbox, and the local plan has nothing left to collect.
+        done = asyncio.run(
+            self.ns["_town_errand_mail"](
+                self.fam,
+                HUB,
+                ["Grug", "Ugga"],
+                {"Grug": _at(101, 100), "Ugga": _at(12, 9, map_id=1)},
+                None,
+            )
+        )
+
+        self.assertTrue(done)
+        self.assertEqual([], self.written)
+
     def test_the_richest_member_posts_gold_before_the_post_is_taken(self):
         # wow-dev 2026-09-28: the warrior carried 54 gold, the rogue 2.
         rich = {
