@@ -289,7 +289,7 @@ class TheSweepReleasesOnlyWhatItMayRelease(unittest.TestCase):
         this defect was found in."""
         sweep = self._sweep()
         self.assertIn("_outstanding_sales, [name]", sweep)
-        self.assertIn("bag_pressure.stranded_errand_step(outstanding)", sweep)
+        self.assertIn("bag_pressure.stranded_errand_step(", sweep)
 
     def test_only_a_release_verdict_writes_anything(self):
         """Hold and release are opposite intentions, and the bug class this
@@ -477,6 +477,7 @@ class TheStrandingIsActuallyBroken(unittest.TestCase):
             step = bag_pressure.vendor_errand_step(
                 at_counter, queue[leader] + queue[follower]
             )
+
             if step == bag_pressure.VENDOR_ERRAND_RELEASE:
                 column[leader] = ""
             if sweep and not sweep_below_the_gate:
@@ -599,6 +600,92 @@ class TheStrandingIsActuallyBroken(unittest.TestCase):
         seen = self._cycles(6, sweep=False)
         self.assertEqual(self._follower(seen)[-1], "vendor")
         self.assertEqual(self._cycles(6)[-1][self.FOLLOWER], "")
+
+
+class BagPressureRetentionAndCutOffAim(unittest.TestCase):
+    def test_quiet_vendor_queue_is_held_only_while_bag_pressure_remains(self):
+        self.assertEqual(
+            bag_pressure.stranded_errand_step(0, bag_pressure_hold=True),
+            bag_pressure.VENDOR_ERRAND_HOLD,
+        )
+        self.assertEqual(
+            bag_pressure.stranded_errand_step(0, bag_pressure_hold=False),
+            bag_pressure.VENDOR_ERRAND_RELEASE,
+        )
+
+    def test_unanswered_sales_still_hold_after_bag_pressure_clears(self):
+        self.assertEqual(
+            bag_pressure.stranded_errand_step(3, bag_pressure_hold=False),
+            bag_pressure.VENDOR_ERRAND_HOLD,
+        )
+
+    def test_only_cut_off_pressured_members_below_the_floor_are_aimed(self):
+        names = ("Grug", "Ugga", "Bork", "Og")
+        positions = {
+            "Grug": {"map_id": 0},
+            "Ugga": {"map_id": 1},
+            "Bork": {"map_id": 0},
+            "Og": {"map_id": 2},
+        }
+        slots = {"Grug": 2, "Ugga": 0, "Bork": 2, "Og": 12}
+        self.assertEqual(
+            bag_pressure.stranded_vendor_aims(
+                names,
+                "Grug",
+                positions,
+                slots,
+                pressure=True,
+                in_run=False,
+            ),
+            ("Ugga",),
+        )
+
+    def test_leader_same_map_no_pressure_run_and_roomy_members_are_excluded(self):
+        names = ("Grug", "Ugga", "Bork")
+        positions = {
+            "Grug": {"map_id": 0},
+            "Ugga": {"map_id": 0},
+            "Bork": {"map_id": 1},
+        }
+        slots = {"Grug": 0, "Ugga": 0, "Bork": 8}
+        args = (names, "Grug", positions, slots)
+        self.assertEqual(
+            bag_pressure.stranded_vendor_aims(
+                *args,
+                pressure=True,
+                in_run=False,
+            ),
+            (),
+        )
+        self.assertEqual(
+            bag_pressure.stranded_vendor_aims(
+                *args,
+                pressure=False,
+                in_run=False,
+            ),
+            (),
+        )
+        self.assertEqual(
+            bag_pressure.stranded_vendor_aims(
+                *args,
+                pressure=True,
+                in_run=True,
+            ),
+            (),
+        )
+
+    def test_missing_positions_and_capacity_are_not_guessed(self):
+        self.assertEqual(
+            bag_pressure.stranded_vendor_aims(
+                ("Grug", "Ugga"),
+                "Grug",
+                {"Grug": {"map_id": 0}},
+                {"Ugga": 0},
+                pressure=True,
+                in_run=False,
+            ),
+            (),
+        )
 
 
 if __name__ == "__main__":

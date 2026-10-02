@@ -533,7 +533,45 @@ def vendor_errand_step(
     return stranded_errand_step(sales_outstanding)
 
 
-def stranded_errand_step(sales_outstanding: int) -> str:
+def stranded_vendor_aims(
+    names: Iterable[str],
+    leader: str,
+    positions: dict,
+    free_slots: dict,
+    pressure: bool,
+    in_run: bool,
+    resume: int = CAMPAIGN_RESUME_FREE_SLOTS,
+) -> tuple[str, ...]:
+    """Names of cut-off members that need their own local vendor errand."""
+    if not pressure or in_run or not leader:
+        return ()
+    leader_position = (positions or {}).get(leader)
+    if not leader_position:
+        return ()
+    try:
+        leader_map = int(leader_position.get("map_id"))
+    except (AttributeError, TypeError, ValueError):
+        return ()
+    result = []
+    for name in names or ():
+        if name == leader:
+            continue
+        position = (positions or {}).get(name)
+        free = (free_slots or {}).get(name)
+        if not position or not isinstance(free, int) or free < 0 or free >= resume:
+            continue
+        try:
+            different_map = int(position.get("map_id")) != leader_map
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if different_map:
+            result.append(str(name))
+    return tuple(sorted(result))
+
+
+def stranded_errand_step(
+    sales_outstanding: int, bag_pressure_hold: bool = False
+) -> str:
     """What to do with a `vendor` aim nobody is walking to a vendor (infra#3746).
 
     THE ERRAND THAT IS RELEASED BY NOBODY. `vendor_errand_step` above settles
@@ -588,6 +626,8 @@ def stranded_errand_step(sales_outstanding: int) -> str:
     it open because a SIBLING still has rows outstanding would leave it latched
     on exactly the realm state that produced this defect.
     """
+    if bag_pressure_hold:
+        return VENDOR_ERRAND_HOLD
     if sales_outstanding != 0:
         return VENDOR_ERRAND_HOLD
     return VENDOR_ERRAND_RELEASE

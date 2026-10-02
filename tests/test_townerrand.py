@@ -19,9 +19,11 @@ import gearup
 import guildbank
 import guildwork
 import mailrun
+import professions
 import situation
 import townerrand as te
 import towntrip
+import townslot
 
 BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
     encoding="utf-8"
@@ -755,6 +757,80 @@ class TheAdapter(unittest.TestCase):
         self.hearthed = frozenset({"Bork"})
         self.tick()
         self.assertEqual(["Bork"], self.hearths)  # its row stands; not twice
+
+
+class TheCutOffVendorAimAdapter(unittest.TestCase):
+    def setUp(self):
+        self.current = {"Ugga": ""}
+        self.writes = []
+        self.accept = True
+        self.logs = []
+        self.ledgers = {}
+        ns = {
+            "asyncio": asyncio,
+            "bag_pressure": bag_pressure,
+            "professions": professions,
+            "townslot": townslot,
+            "time": types.SimpleNamespace(monotonic=lambda: 100.0),
+            "log": types.SimpleNamespace(info=lambda *args: self.logs.append(args)),
+            "_is_economy_aim": lambda aim: aim == "vendor",
+            "_current_travel_npc": lambda name: self.current.get(name, ""),
+            "_write_trade_errand": lambda errand: (
+                self.writes.append(errand) or self.accept
+            ),
+        }
+        module = ast.Module(
+            body=_functions("_aim_stranded_bag_pressure_members"),
+            type_ignores=[],
+        )
+        exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102
+        self.ns = ns
+        self.adapter = types.SimpleNamespace()
+        self.adapter._stranded_vendor_slots = self.ledgers
+
+    def run_aim(self, positions=None, slots=None, in_run=False):
+        return asyncio.run(
+            self.ns["_aim_stranded_bag_pressure_members"](
+                self.adapter,
+                ["Grug", "Ugga"],
+                "Grug",
+                positions or {"Grug": {"map_id": 0}, "Ugga": {"map_id": 1}},
+                slots or {"Grug": 2, "Ugga": 0},
+                in_run,
+            )
+        )
+
+    def test_only_the_guarded_self_contained_vendor_aim_is_written(self):
+        self.assertEqual(self.run_aim(), 1)
+        self.assertEqual(
+            self.writes,
+            [professions.Errand(character="Ugga", travel_npc="vendor")],
+        )
+        self.assertEqual(self.ledgers["Ugga"].holder.character, "Ugga")
+        self.assertEqual(self.ledgers["Ugga"].holder.aim, "vendor")
+
+    def test_existing_vendor_aim_is_kept_and_not_rewritten(self):
+        self.current["Ugga"] = "vendor"
+        self.assertEqual(self.run_aim(), 0)
+        self.assertEqual(self.writes, [])
+
+    def test_guard_refusal_is_not_retried_with_a_different_aim(self):
+        self.accept = False
+        self.assertEqual(self.run_aim(), 0)
+        self.assertEqual(
+            self.writes,
+            [professions.Errand(character="Ugga", travel_npc="vendor")],
+        )
+
+    def test_in_run_never_reaches_the_writer(self):
+        self.assertEqual(self.run_aim(in_run=True), 0)
+        self.assertEqual(self.writes, [])
+
+    def test_town_errand_only_calls_it_under_live_bag_pressure(self):
+        body = BRIDGE[BRIDGE.index("    async def _town_errand_once(") :]
+        body = body[: body.index("    async def _town_errand_yield_for_weapon(")]
+        self.assertIn("if bag_pressure_needed and not in_run:", body)
+        self.assertIn("await self._aim_stranded_bag_pressure_members(", body)
 
 
 class TheMovementChoice(unittest.TestCase):
