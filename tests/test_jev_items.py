@@ -143,6 +143,7 @@ class FakeJev:
 def run(gear_rows, fake=None, key="k", **kw):
     client = jev.Client(key, transport=fake or FakeJev())
     kw.setdefault("specs", {"Grog": "Retribution", "Grug": "Protection"})
+    describe = kw.pop("describe", lambda entry, instance=None: CARDS.get(int(entry)))
     return asyncio.run(
         jev_items.shadow_pass(
             client,
@@ -150,7 +151,7 @@ def run(gear_rows, fake=None, key="k", **kw):
             worn_rows=WORN,
             worn_items=WORN_ITEMS,
             names=NAMES,
-            describe=lambda entry: CARDS.get(int(entry)),
+            describe=describe,
             **kw,
         )
     )
@@ -383,6 +384,27 @@ class HeuristicTest(unittest.TestCase):
 
 
 class ShadowPassTest(unittest.TestCase):
+    def test_describer_receives_the_carried_instance(self):
+        seen = []
+
+        def describe(entry, instance=None):
+            seen.append((entry, instance))
+            return CARDS.get(int(entry))
+
+        run(
+            [carried(random_property_id=-123, enchantments="1 0 0")],
+            describe=describe,
+        )
+        self.assertTrue(
+            any(
+                int(entry) == 647
+                and instance
+                and instance.get("random_property_id") == -123
+                and instance.get("enchantments") == "1 0 0"
+                for entry, instance in seen
+            )
+        )
+
     def test_no_key_keeps_every_heuristic_answer(self):
         judgments = run([chest(), carried()], key="")
         self.assertTrue(judgments)

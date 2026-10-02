@@ -370,7 +370,7 @@ def wardrobes(characters, worn_items, describe, specs, heads=()) -> dict:
         except (KeyError, TypeError, ValueError):
             continue
         if name in by_name and entry > 0:
-            described = describe(entry)
+            described = describe(entry, row)
             if described:
                 by_name[name].worn[slot] = described
     return by_name
@@ -745,7 +745,7 @@ def _questions(family: _Family, gear_rows, describe) -> list:
         row = rows.get(int(holding.guid))
         if row is None or holding.holder not in family.closet:
             continue
-        item = describe(int(holding.entry)) or {
+        item = describe(int(holding.entry), row) or {
             "name": holding.name,
             "item_level": holding.item_level,
         }

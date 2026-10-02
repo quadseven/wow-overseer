@@ -27,6 +27,19 @@ class EquipQualityScopeTest(unittest.TestCase):
         self.assertIn("it.class IN (2, 4)", sql)
         self.assertIn("it.InventoryType IN", sql)
         self.assertNotIn("it.Quality >=", sql)
+        self.assertIn("ii.randomPropertyId AS random_property_id", sql)
+        self.assertIn("ii.enchantments AS enchantments", sql)
+
+    def test_worn_comparisons_keep_their_instance_affixes(self):
+        sql = SOURCE[
+            SOURCE.index("_JEV_WORN_SQL = (") : SOURCE.index(
+                "# The template columns armory.template_tooltip",
+                SOURCE.index("_JEV_WORN_SQL = ("),
+            )
+        ]
+        self.assertIn("ii.randomPropertyId AS random_property_id", sql)
+        self.assertIn("ii.enchantments AS enchantments", sql)
+        self.assertIn("ii.guid AS item_guid", sql)
 
     def test_only_equip_and_jev_receive_the_broader_rows(self):
         body = SOURCE[SOURCE.index("    async def _vendor_once(self") :]

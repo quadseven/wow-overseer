@@ -604,6 +604,72 @@ class TheItemBookTest(unittest.TestCase):
         self.assertEqual(armory.parse_enchantments("14 0 0")[0], 14)
         self.assertEqual(len(armory.parse_enchantments("14 0 0")), 12)
 
+    def test_instance_tooltip_uses_a_resolved_suffix(self):
+        suffix_id, (suffix_name, enchants) = next(
+            (sid, value) for sid, value in ITEMS.suffixes.items() if value[1]
+        )
+        enchantments = [0] * 12
+        enchantments[0] = enchants[0][0]
+        template = {
+            "entry": 900001,
+            "item_name": "Test Belt",
+            "quality": 2,
+            "item_level": 20,
+            "max_durability": 20,
+            "class": 4,
+            "subclass": 3,
+            "inventory_type": 6,
+            "required_level": 10,
+            "allowable_class": -1,
+            "sell_price": 0,
+        }
+        tooltip = armory.instance_tooltip(
+            template,
+            {
+                "random_property_id": -suffix_id,
+                "enchantments": " ".join(map(str, enchantments)),
+            },
+            ITEMS,
+        )
+        self.assertIn(suffix_name, tooltip["name"])
+        self.assertTrue(tooltip["stats"] or tooltip["enchant"])
+
+    def test_instance_tooltip_names_an_unresolved_random_property(self):
+        template = {
+            "entry": 900001,
+            "item_name": "Test Belt",
+            "quality": 2,
+            "item_level": 20,
+            "max_durability": 20,
+            "class": 4,
+            "subclass": 3,
+            "inventory_type": 6,
+            "required_level": 10,
+            "allowable_class": -1,
+            "sell_price": 0,
+        }
+        tooltip = armory.instance_tooltip(
+            template, {"random_property_id": 987654321}, ITEMS
+        )
+        self.assertIn("unknown random property #987654321", tooltip["name"])
+
+    def test_template_tooltip_stays_free_of_instance_affixes(self):
+        template = {
+            "entry": 900001,
+            "item_name": "Test Belt",
+            "quality": 2,
+            "item_level": 20,
+            "max_durability": 20,
+            "class": 4,
+            "subclass": 3,
+            "inventory_type": 6,
+            "required_level": 10,
+            "allowable_class": -1,
+            "sell_price": 0,
+        }
+        tooltip = armory.template_tooltip(template, ITEMS)
+        self.assertEqual(tooltip["name"], "Test Belt")
+
 
 def load_generator():
     path = HERE / "tools" / "gen_items.py"

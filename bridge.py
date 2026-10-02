@@ -10667,11 +10667,19 @@ class Bridge(discord.Client):
         facts = await asyncio.to_thread(_fetch_jev_item_facts, sorted(entries))
         book = _jev_item_book()
 
-        def describe(entry: int):
+        def describe(entry: int, instance: dict | None = None):
+            if isinstance(entry, dict):
+                instance = entry
+                entry = entry.get("entry")
             row = facts.get(int(entry))
             if row is None or book is None:
                 return None
-            return jev_items.item_card(armory.template_tooltip(row, book))
+            tooltip = (
+                armory.instance_tooltip(row, instance, book)
+                if instance is not None
+                else armory.template_tooltip(row, book)
+            )
+            return jev_items.item_card(tooltip)
 
         return describe
 
@@ -19025,7 +19033,8 @@ def _fetch_surplus_gear(names: list) -> list:
 # Common gear can still be the only upgrade its holder has in their bags.
 _EQUIP_CANDIDATE_GEAR_SQL = (
     "SELECT c.name AS holder, c.level AS level, ii.guid AS item_guid, "
-    "ii.itemEntry AS entry, "
+    "ii.itemEntry AS entry, ii.randomPropertyId AS random_property_id, "
+    "ii.enchantments AS enchantments, "
     "ii.count AS count, ii.flags AS instance_flags, it.name AS name, "
     "it.Quality AS quality, it.SellPrice AS sell_price, "
     "it.RequiredLevel AS required_level, it.bonding AS bonding, "
@@ -19138,7 +19147,9 @@ def _fetch_family_equipped(names: list) -> list:
 # the shield it would sit beside. bag 0 and slot < 19 is the worn range, the
 # same one _FAMILY_EQUIPPED_SQL reads.
 _JEV_WORN_SQL = (
-    "SELECT c.name AS name, ci.slot AS slot, ii.itemEntry AS entry "
+    "SELECT c.name AS name, ci.slot AS slot, ii.guid AS item_guid, "
+    "ii.itemEntry AS entry, ii.randomPropertyId AS random_property_id, "
+    "ii.enchantments AS enchantments, ii.durability AS durability "
     "FROM characters c "
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "AND ci.bag = 0 AND ci.slot < 19 "
@@ -19152,6 +19163,7 @@ _JEV_WORN_SQL = (
 _JEV_ITEM_FACTS_SQL = (
     "SELECT it.entry, it.name AS item_name, it.Quality AS quality, "  # noqa: S608 - fixed column names from range(); the IN list is placeholders and every value is bound
     "it.ItemLevel AS item_level, it.RequiredLevel AS required_level, "
+    "it.MaxDurability AS max_durability, "
     "it.class, it.subclass, it.InventoryType AS inventory_type, "
     "it.armor, it.block, it.bonding, it.AllowableClass AS allowable_class, "
     "it.dmg_min1, it.dmg_max1, it.delay, it.dmg_min2, it.dmg_max2, it.dmg_type2, "
