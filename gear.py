@@ -1100,23 +1100,27 @@ def lines(gear_plan: Plan) -> list:
 
 @dataclass(frozen=True)
 class Spot:
-    """Where one character is standing, as the world last reported it."""
+    """Where one character is standing, including the copy of the map."""
 
     map_id: int
     x: float
     y: float
+    instance_id: int | None = 0
 
 
 def _within_trade_range(here: Spot, there: Spot) -> bool:
     """Close enough for the core to open a trade window.
 
-    THE MAP IS CHECKED BEFORE THE DISTANCE, and not as a formality: three of
-    the five hearth to Eastern Kingdoms while the dungeon is on Kalimdor, and
-    coordinates on two different maps are not comparable at all. Subtracting
-    them yields a number, and that number would have put an ocean inside
-    eleven yards.
+    MAP AND INSTANCE ARE CHECKED BEFORE THE DISTANCE. A map id names an
+    instance template, so two characters at the same coordinates in separate
+    copies of one dungeon are not together. Unknown instance ids fail closed.
     """
-    if int(here.map_id) != int(there.map_id):
+    if (
+        here.instance_id is None
+        or there.instance_id is None
+        or int(here.map_id) != int(there.map_id)
+        or int(here.instance_id) != int(there.instance_id)
+    ):
         return False
     return math.hypot(here.x - there.x, here.y - there.y) <= TRADE_YARDS
 
@@ -1133,8 +1137,12 @@ def spots_from_rows(rows) -> dict:
     spots = {}
     for name, row in dict(rows or {}).items():
         try:
+            instance = row.get("instance_id", 0)
             spots[str(name)] = Spot(
-                map_id=int(row["map_id"]), x=float(row["pos_x"]), y=float(row["pos_y"])
+                map_id=int(row["map_id"]),
+                x=float(row["pos_x"]),
+                y=float(row["pos_y"]),
+                instance_id=None if instance is None else int(instance),
             )
         except (KeyError, TypeError, ValueError):
             continue
