@@ -18651,9 +18651,10 @@ def _share_family_quests(names: list, zone: int = 0, label: str = "") -> questsh
 # REAGENTS, so it is correctly invisible to this query rather than showing up
 # as a material named NULL.
 #
-# `NOT (ci.bag = 0 AND ci.slot < 19)` excludes EQUIPMENT_SLOT_END-in-bag-0,
-# the same range _STANDING_SQL's `equipped` subquery counts - reagents are
-# never worn, so this only ever excludes gear, never a bag or backpack slot.
+# Use the same carried-bag predicate as the other item handoff queries. The
+# broader `NOT slot < 19` test includes bank slots 39-66, which are not in the
+# live inventory DoGive searches; that issued 107 gave commands for banked
+# reagent stacks on the live realm.
 #
 # UNVERIFIED AGAINST A LIVE SERVER. wow-dev is mid-RAM-swap (see the PR this
 # landed in) - this join has not been run against real character_inventory
@@ -18667,7 +18668,9 @@ _HOLDINGS_SQL = (
     "JOIN item_instance ii              ON ii.guid = ci.item "
     "JOIN acore_world.item_template it  ON it.entry = ii.itemEntry "
     "WHERE c.name IN (%s) "
-    "  AND NOT (ci.bag = 0 AND ci.slot < 19) "
+    "  AND ((ci.bag = 0 AND ci.slot BETWEEN 19 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
     "  AND it.name IN (%s)"
 )
 
@@ -18707,8 +18710,8 @@ def _fetch_holdings(names: list) -> list:
 # anybody, and this pass must never be the reason the family lost a piece of
 # gear, so it is worth stating twice and cheap to.
 #
-# The `NOT (ci.bag = 0 AND ci.slot < 19)` exclusion is _HOLDINGS_SQL's, for
-# _HOLDINGS_SQL's reason: that range is worn equipment, not carried stock.
+# Use the same bag-and-backpack scope as `_SURPLUS_GEAR_SQL`: a direct give
+# cannot reach bank slots or contents of bank bags.
 _GUILD_SURPLUS_SQL = (
     "SELECT c.name AS holder, it.name AS item, it.entry AS entry, "
     "       ii.count AS count, ii.guid AS item_guid, "
@@ -18721,7 +18724,9 @@ _GUILD_SURPLUS_SQL = (
     "JOIN item_instance ii              ON ii.guid = ci.item "
     "JOIN acore_world.item_template it  ON it.entry = ii.itemEntry "
     "WHERE c.name IN (%s) "
-    "  AND NOT (ci.bag = 0 AND ci.slot < 19) "
+    "  AND ((ci.bag = 0 AND ci.slot BETWEEN 19 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
     "  AND it.bonding = 0 "
     "  AND (it.class = 7 OR (it.class = 0 AND it.subclass IN (1, 2, 7)))"
 )
@@ -19959,7 +19964,7 @@ def _fetch_family_levels(names: list) -> dict:
 # gathering survey already calls `_fetch_positions([leader])` for the map it
 # stands on, so the zone arrives in a query that was already being run.
 _FAMILY_POSITION_SQL = (
-    "SELECT name, map_id, zone_id, pos_x, pos_y FROM overseer_snapshot "
+    "SELECT name, map_id, instance_id, zone_id, pos_x, pos_y FROM overseer_snapshot "
     "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
 )
 
