@@ -1155,6 +1155,31 @@ def template_tooltip(row: dict, book: ItemBook) -> dict | None:
     return tooltip
 
 
+def instance_tooltip(
+    template: dict,
+    instance: dict,
+    book: ItemBook,
+    worn_entries: frozenset[int] = frozenset(),
+    set_names: dict[int, str] | None = None,
+) -> dict | None:
+    """Describe a held copy using its instance affix and enchantments."""
+    if not template or "item_name" not in template:
+        return None
+    row = dict(template)
+    row["random_property_id"] = int(instance.get("random_property_id") or 0)
+    row["enchantments"] = instance.get("enchantments")
+    row["durability"] = instance.get("durability")
+    tooltip, _stats, _armor = _tooltip(row, book, worn_entries, set_names or {})
+    random_id = row["random_property_id"]
+    if random_id:
+        suffix, _pct = _random_property(row, book)
+        if not suffix:
+            tooltip["name"] = (
+                f"{tooltip['name']} (unknown random property #{random_id})"
+            )
+    return tooltip
+
+
 def _slot_payload(
     slot_name: str,
     row: dict | None,
