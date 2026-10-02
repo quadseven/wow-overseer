@@ -9973,6 +9973,7 @@ class Bridge(discord.Client):
                 pressure=bag_pressure.family_town_run_needed(
                     free_slots, sellable=sellable_counts),
                 in_run=in_run,
+                errand_active=_town_errand_active(names),
                 ground=travel.is_ground_aim):
             if await asyncio.to_thread(_release_trade_errand, leader, current_aim):
                 log.warning(
