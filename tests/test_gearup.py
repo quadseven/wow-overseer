@@ -160,11 +160,29 @@ class GearupTests(unittest.TestCase):
             "level": 35,
             "purse": 100000,
             "skills": {"weapons": {10}},
-            "equipped": {"offhand": 38},
+            "equipped": {"mainhand": 10, "offhand": 38},
         }
         staff = item(17, subclass=10, item_class=2, id=4, ilvl=24, price=1000)
 
         self.assertEqual((), gearup.plan_buys({"Og": mage}, [staff]))
+
+    def test_two_hander_fills_empty_mainhand_beside_a_worn_offhand(self):
+        mage = {
+            "class": "mage",
+            "level": 35,
+            "purse": 100000,
+            "skills": {"weapons": {10}},
+            "equipped": {"offhand": 38},
+        }
+        staff = item(17, subclass=10, item_class=2, id=4, ilvl=24, price=1000)
+
+        self.assertEqual(
+            [("mainhand", 4)],
+            [
+                (buy.slot, buy.listing_id)
+                for buy in gearup.plan_buys({"Og": mage}, [staff])
+            ],
+        )
 
     def test_two_hander_can_replace_an_offhand_when_ten_levels_better(self):
         mage = {
@@ -278,6 +296,19 @@ class GearupTests(unittest.TestCase):
         ]
         buys = gearup.plan_vendor_buys({"Og": mage}, {"Og": stock})
         self.assertEqual([303], [b.entry for b in buys])
+
+    def test_vendor_staff_fills_empty_mainhand_with_an_offhand_worn(self):
+        mage = {
+            "class": "mage",
+            "level": 35,
+            "purse": 100000,
+            "skills": {"weapons": {10}},
+            "equipped": {"offhand": 38},
+        }
+        staff = item(17, subclass=10, item_class=2, entry=304, ilvl=24, price=1000)
+
+        buys = gearup.plan_vendor_buys({"Og": mage}, {"Og": [staff]})
+        self.assertEqual([("mainhand", 304)], [(buy.slot, buy.entry) for buy in buys])
 
     def test_vendor_buys_nothing_for_a_member_with_no_vendor(self):
         mage = {"class": "mage", "level": 35, "purse": 100000, "equipped": {}}
