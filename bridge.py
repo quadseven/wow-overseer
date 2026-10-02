@@ -8021,6 +8021,10 @@ class Bridge(discord.Client):
                 continue
             written.append(gearup.BuyRow(buy.character, buy.slot, int(row_id)))
             facts[buy.character]["equipped"][buy.slot] = buy.item_level
+            facts[buy.character].setdefault("equipped_types", {})[buy.slot] = {
+                "item_class": buy.item_class,
+                "item_subclass": buy.item_subclass,
+            }
             log.info("gearup: %s buys entry %d at a vendor for %s, item level "
                      "%d, up to %d copper", buy.character, buy.entry, buy.slot,
                      buy.item_level, buy.buyout)
@@ -25137,7 +25141,8 @@ def _fetch_auction_listings(entries: list, house: int) -> list:
 # character's own purse. Listings stay scoped to the reachable auction house.
 _GEARUP_EQUIPPED_SQL = (
     "SELECT c.name, c.class AS class_id, c.level, c.money AS purse, "
-    "ci.slot, it.ItemLevel AS item_level FROM characters c "
+    "ci.slot, it.ItemLevel AS item_level, it.class AS item_class, "
+    "it.subclass AS item_subclass FROM characters c "
     "LEFT JOIN character_inventory ci ON ci.guid=c.guid AND ci.bag=0 AND ci.slot<19 "
     "LEFT JOIN item_instance ii ON ii.guid=ci.item "
     "LEFT JOIN acore_world.item_template it ON it.entry=ii.itemEntry WHERE c.name IN (%s)"
@@ -25189,9 +25194,23 @@ def _fetch_gearup_facts(names: list) -> dict:
         if row["slot"] is not None:
             slot = int(row["slot"])
             if 0 <= slot < len(slots):
-                result[name]["equipped"][slots[slot]] = (
-                    int(row["item_level"]) if row["item_level"] is not None else None
-                )
+                result[name]["equipped"][slots[slot]] = {
+                    "item_level": (
+                        int(row["item_level"])
+                        if row["item_level"] is not None
+                        else None
+                    ),
+                    "item_class": (
+                        int(row["item_class"])
+                        if row["item_class"] is not None
+                        else None
+                    ),
+                    "item_subclass": (
+                        int(row["item_subclass"])
+                        if row["item_subclass"] is not None
+                        else None
+                    ),
+                }
     return result
 
 

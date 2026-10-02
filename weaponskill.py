@@ -103,7 +103,8 @@ def needs(facts: dict, bag_rows) -> list:
     """The best untrained weapon upgrade per member, sorted by name.
 
     `facts` is bridge._fetch_gearup_facts (class name, level, `equipped` slot
-    -> item level, `skills.weapons` subclasses held). `bag_rows` are carried
+    -> item level or a worn-item mapping with `item_level`, and
+    `skills.weapons` subclasses held). `bag_rows` are carried
     weapons: name, entry, label, subclass, InventoryType, ItemLevel,
     RequiredLevel, AllowableClass. An upgrade fills an empty slot or beats the
     worn piece's item level.
@@ -152,13 +153,16 @@ def _need(name, fact, row):
     equipped = fact.get("equipped") or {}
     item_level = int(row.get("ItemLevel") or 0)
     worn = equipped.get(slot)
-    if slot in equipped and worn is not None and item_level <= int(worn):
+    worn_level = (
+        worn.get("item_level") if isinstance(worn, dict) else worn
+    )
+    if slot in equipped and worn_level is not None and item_level <= int(worn_level):
         return None
     skill, spell = WEAPON_SKILLS[int(row["subclass"])]
     why = (
         "its %s is empty" % slot
         if slot not in equipped
-        else "item level %d over %s worn" % (item_level, worn)
+        else "item level %d over %s worn" % (item_level, worn_level)
     )
     return Need(
         name,

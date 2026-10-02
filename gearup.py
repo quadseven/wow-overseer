@@ -136,6 +136,8 @@ class Buy:
     entry: int
     buyout: int
     item_level: int
+    item_class: int = 0
+    item_subclass: int = 0
 
 
 def _get(row, *keys, default=None):
@@ -452,14 +454,34 @@ def _two_hander_beats_offhand(item, equipped, item_level):
     return int(item_level) >= int(offhand) + TWO_HAND_OFFHAND_MARGIN
 
 
-def _worn_is_better(slot, equipped, item_level, level):
-    """A worn piece stays unless it is 10 or more levels behind and this is better."""
+def _armor_rank(item):
+    """Return the armor tier for cloth, leather, mail or plate."""
+    if not isinstance(item, dict):
+        return 0
+    item_class = _get(item, "class", "item_class", default=0)
+    subclass = _get(item, "subclass", "item_subclass", default=0)
+    try:
+        if int(item_class or 0) != 4:
+            return 0
+        return {1: 1, 2: 2, 3: 3, 4: 4}.get(int(subclass or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _worn_is_better(slot, equipped, item, level, tank=False, equipped_types=None):
+    """Keep worn gear for level, and preserve a tank's higher armor tier."""
     if slot not in equipped:
         return False
     worn = equipped.get(slot)
     worn_level = worn.get("item_level") if isinstance(worn, dict) else worn
     if worn_level is None:
         return True
+    worn_rank = _armor_rank(worn)
+    if not worn_rank:
+        worn_rank = _armor_rank((equipped_types or {}).get(slot))
+    if tank and worn_rank > _armor_rank(item) > 0:
+        return True
+    item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
     return int(worn_level) > level - 10 or item_level <= int(worn_level)
 
 
@@ -477,7 +499,9 @@ def _dual_wields(character) -> bool:
     return cls_id in DUAL_WIELD_FROM and level >= DUAL_WIELD_FROM[cls_id]
 
 
-def _candidate_slots(item, equipped, chosen, tank, level, dual_wields=True):
+def _candidate_slots(
+    item, equipped, chosen, tank, level, dual_wields=True, equipped_types=None
+):
     inv = int(_get(item, "InventoryType", "inventory_type", default=0) or 0)
     item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
     tank_refuses = tank and not _is_shield(item, inv)
@@ -490,7 +514,7 @@ def _candidate_slots(item, equipped, chosen, tank, level, dual_wields=True):
             continue
         if slot == "offhand" and inv == 13 and not dual_wields:
             continue
-        if _worn_is_better(slot, equipped, item_level, level):
+        if _worn_is_better(slot, equipped, item, level, tank, equipped_types):
             continue
         yield slot, item_level
 
@@ -540,6 +564,7 @@ class _Plan:
         self.character = character
         self.level = int(_get(character, "level", default=0) or 0)
         self.equipped = _get(character, "equipped", "slots", default={}) or {}
+        self.equipped_types = _get(character, "equipped_types", default={}) or {}
         self.tank = bool(_get(character, "shield_tank", "tank", default=False))
         self.purse, self.available = budget
         self.chosen, self.used, self.buys = set(), used, []
@@ -562,11 +587,23 @@ class _Plan:
             self.tank,
             self.level,
             _dual_wields(self.character),
+            self.equipped_types,
         ):
             if weapon_first and slot != "mainhand":
                 continue
             entry = int(_get(item, "entry", default=0))
-            self.buys.append(Buy(self.name, slot, listing_id, entry, price, item_level))
+            self.buys.append(
+                Buy(
+                    self.name,
+                    slot,
+                    listing_id,
+                    entry,
+                    price,
+                    item_level,
+                    int(_get(item, "class", "item_class", default=0) or 0),
+                    int(_get(item, "subclass", "item_subclass", default=0) or 0),
+                )
+            )
             self.chosen.add(slot)
             self.used.add(listing_id)
             return True
