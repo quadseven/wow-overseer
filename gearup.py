@@ -433,6 +433,8 @@ def _two_hander_beats_offhand(item, equipped, item_level):
     """Keep a worn offhand unless a two-hander is clearly better by 10 levels."""
     if int(_get(item, "InventoryType", "inventory_type", default=0) or 0) != 17:
         return True
+    if "mainhand" not in equipped:
+        return True
     if "offhand" not in equipped:
         return True
     offhand = equipped["offhand"]
