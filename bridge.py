@@ -13996,7 +13996,12 @@ class Bridge(discord.Client):
         for need in needs:
             if need.spell not in master["spells"]:
                 continue
-            if not weaponskill.in_reach(master, positions.get(need.name)):
+            # The snapshot-to-spawn distance is center-to-center; the core's
+            # trainer interaction check also includes the creature's reach.
+            # Use the existing town radius here and let the worldserver apply
+            # the exact interaction gate before charging or teaching.
+            if not weaponskill.in_reach(
+                    master, positions.get(need.name), TOWN_COUNTER_YARDS):
                 continue
             if await asyncio.to_thread(_weapon_train_asked, need):
                 continue

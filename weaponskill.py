@@ -199,8 +199,8 @@ def choose_master(masters, wanted, team: str, map_id: int) -> dict:
     )
 
 
-def in_reach(master: dict, at: dict) -> bool:
-    """Is a snapshot reading within IN_REACH_YARDS of the master's spawn."""
+def in_reach(master: dict, at: dict, yards: float = IN_REACH_YARDS) -> bool:
+    """Is a snapshot reading within `yards` of the master's spawn."""
     if not master or not at:
         return False
     try:
@@ -210,7 +210,7 @@ def in_reach(master: dict, at: dict) -> bool:
         dy = float(at["pos_y"]) - float(master["y"])
     except (KeyError, TypeError, ValueError):
         return False
-    return dx * dx + dy * dy <= IN_REACH_YARDS**2
+    return dx * dx + dy * dy <= float(yards) ** 2
 
 
 def _learned_weapon_times(rows):
