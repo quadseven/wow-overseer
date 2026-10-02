@@ -145,6 +145,35 @@ class GearupTests(unittest.TestCase):
             ["finger2"], [b.slot for b in gearup.plan_buys({"T": c}, [ring])]
         )
 
+    def test_auction_buys_a_better_occupied_slot_near_character_level(self):
+        """Do not strand a level-16 belt on a level-24 character."""
+        mage = {
+            "class": "mage",
+            "level": 24,
+            "purse": 10000,
+            "equipped": {"waist": 16},
+        }
+        belt = item(6, subclass=1, id=8, ilvl=19, price=100)
+
+        buys = gearup.plan_buys({"Oz": mage}, [belt])
+
+        self.assertEqual([("waist", 8)], [(buy.slot, buy.listing_id) for buy in buys])
+
+    def test_auction_needs_a_meaningful_gain_when_worn_gear_is_not_stale(self):
+        mage = {
+            "class": "mage",
+            "level": 24,
+            "purse": 10000,
+            "equipped": {"waist": 16},
+        }
+        belts = [
+            item(6, subclass=1, id=8, ilvl=16, price=100),
+            item(6, subclass=1, id=9, ilvl=15, price=90),
+            item(6, subclass=1, id=10, ilvl=18, price=110),
+        ]
+
+        self.assertEqual((), gearup.plan_buys({"Oz": mage}, belts))
+
     def test_weapon_requires_a_held_weapon_skill(self):
         weapon = item(13, subclass=15, item_class=2)
         self.assertFalse(gearup._allowed({"class": "rogue", "level": 35}, weapon))

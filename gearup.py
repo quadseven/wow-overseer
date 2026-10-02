@@ -159,6 +159,8 @@ NOT_GEAR_WEAPONS = frozenset({14, 20})
 # A piece this many levels below the buyer is not worth a slot or a coin: the
 # holiday masks and starting-zone whites a level 35 character should walk past.
 MAX_LEVELS_BEHIND = 25
+AUCTION_STALE_GEAR_LEVEL_GAP = 10
+AUCTION_MIN_UPGRADE_LEVELS = 3
 
 
 def _allowed(character, item):
@@ -209,7 +211,7 @@ def _weapon_ok(character, sub):
 
 
 def plan_buys(characters, listings, *, repair_floor=0):
-    """Return best affordable buyouts for empty slots (or 10-level upgrades).
+    """Return best affordable buyouts for empty slots or gear upgrades.
 
     ONE LISTING, ONE BUYER. An auction can be bought once, and every member
     reads the same listings in the same order, so two members who want the
@@ -469,7 +471,7 @@ def _armor_rank(item):
 
 
 def _worn_is_better(slot, equipped, item, level, tank=False, equipped_types=None):
-    """Keep worn gear for level, and preserve a tank's higher armor tier."""
+    """Keep worn gear unless the auction item is meaningfully better."""
     if slot not in equipped:
         return False
     worn = equipped.get(slot)
@@ -482,7 +484,11 @@ def _worn_is_better(slot, equipped, item, level, tank=False, equipped_types=None
     if tank and worn_rank > _armor_rank(item) > 0:
         return True
     item_level = int(_get(item, "ItemLevel", "item_level", default=0) or 0)
-    return int(worn_level) > level - 10 or item_level <= int(worn_level)
+    worn_level = int(worn_level)
+    if item_level <= worn_level:
+        return True
+    stale = worn_level <= level - AUCTION_STALE_GEAR_LEVEL_GAP
+    return not stale and item_level < worn_level + AUCTION_MIN_UPGRADE_LEVELS
 
 
 # A ONE-HANDED WEAPON GOES IN THE OFF HAND ONLY FOR A CLASS THAT DUAL WIELDS:
