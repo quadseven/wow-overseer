@@ -129,6 +129,33 @@ class GearGateCeilingTest(unittest.TestCase):
             any("no longer held for gear" in line for line in self.log.lines)
         )
 
+    def test_early_level_family_can_gear_through_its_dungeon_band(self):
+        self.facts = {
+            name: {
+                "level": 21,
+                "equipped": ["mainhand"] + ["slot%d" % i for i in range(9)],
+                "purse": 630310,
+            }
+            for name in NAMES
+        }
+
+        self.assertIsNone(self.gate())
+        self.assertFalse(self.hold())
+        self.assertEqual(self.inserted, [])
+
+    def test_early_level_gate_still_holds_a_member_missing_nine_slots(self):
+        self.facts = {
+            name: {
+                "level": 21,
+                "equipped": ["mainhand"] + ["slot%d" % i for i in range(7)],
+                "purse": 630310,
+            }
+            for name in NAMES
+        }
+
+        self.assertIn("gear-up first", self.gate())
+        self.assertTrue(self.hold())
+
     def test_hold_then_gate_share_one_clock(self):
         self.assertTrue(self.hold())
         self.assertEqual(len(self.inserted), len(NAMES))

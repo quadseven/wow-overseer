@@ -34,6 +34,9 @@ SLOT_TYPES = {
     28: ("ranged",),
 }
 
+EARLY_LEVEL_MAX = 24
+EARLY_LEVEL_EMPTY_SLOTS = 9
+
 
 def campaign_hold(
     facts, in_run, held_seconds=0, empty_slots=6, min_purse=20000, ceiling=45 * 60
@@ -63,7 +66,13 @@ def needs_gear_hold(character, empty_slots=6) -> bool:
     """
     equipped = _get(character, "equipped", default={}) or {}
     worn = [slot for slot in equipped if slot not in ("shirt", "tabard")]
-    return "mainhand" not in worn or 17 - len(worn) >= empty_slots
+    level = int(_get(character, "level", default=0) or 0)
+    threshold = (
+        max(empty_slots, EARLY_LEVEL_EMPTY_SLOTS)
+        if 0 < level <= EARLY_LEVEL_MAX
+        else empty_slots
+    )
+    return "mainhand" not in worn or 17 - len(worn) >= threshold
 
 
 CLASS_IDS = {

@@ -58,6 +58,38 @@ class GearupTests(unittest.TestCase):
         facts = {"T": {"equipped": {"mainhand": 30}, "purse": 20000}}
         self.assertFalse(gearup.needs_gear_hold(facts["T"], empty_slots=17))
 
+    def test_early_level_party_can_use_dungeons_to_fill_normal_empty_slots(self):
+        character = {
+            "level": 21,
+            "equipped": {"mainhand": 14, **{"slot%d" % i: 14 for i in range(9)}},
+            "purse": 20000,
+        }
+
+        self.assertFalse(gearup.needs_gear_hold(character))
+        self.assertFalse(gearup.campaign_hold({"T": character}, False))
+        character["equipped"].pop("slot8")
+        self.assertFalse(gearup.needs_gear_hold(character))
+        character["equipped"].pop("slot7")
+        self.assertTrue(gearup.needs_gear_hold(character))
+
+    def test_early_level_gate_still_holds_at_nine_empty_slots(self):
+        character = {
+            "level": 21,
+            "equipped": {"mainhand": 14, **{"slot%d" % i: 14 for i in range(7)}},
+            "purse": 20000,
+        }
+
+        self.assertTrue(gearup.needs_gear_hold(character))
+
+    def test_older_party_keeps_the_original_six_empty_slot_threshold(self):
+        character = {
+            "level": 25,
+            "equipped": {"mainhand": 14, **{"slot%d" % i: 14 for i in range(10)}},
+            "purse": 20000,
+        }
+
+        self.assertTrue(gearup.needs_gear_hold(character))
+
     def test_campaign_yields_for_funded_gear_short_member(self):
         facts = {"T": {"equipped": {}, "purse": 20000}}
         self.assertTrue(gearup.campaign_hold(facts, False))
