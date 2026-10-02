@@ -153,9 +153,7 @@ def _need(name, fact, row):
     equipped = fact.get("equipped") or {}
     item_level = int(row.get("ItemLevel") or 0)
     worn = equipped.get(slot)
-    worn_level = (
-        worn.get("item_level") if isinstance(worn, dict) else worn
-    )
+    worn_level = worn.get("item_level") if isinstance(worn, dict) else worn
     if slot in equipped and worn_level is not None and item_level <= int(worn_level):
         return None
     skill, spell = WEAPON_SKILLS[int(row["subclass"])]
