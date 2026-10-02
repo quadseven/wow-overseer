@@ -1472,6 +1472,17 @@ class ThePurityOfTheModule(unittest.TestCase):
             )
         )
 
+    def test_bag_pressure_preserves_an_active_town_errand_aim(self):
+        self.assertFalse(
+            townslot.urgent_ground_release(
+                aim="at:1:10,20,30",
+                pressure=True,
+                in_run=False,
+                errand_active=True,
+                ground=lambda value: value.startswith("at:"),
+            )
+        )
+
 
 class AWalkThatLeavesTownGetsALeaseDimensionedForIt(unittest.TestCase):
     """infra#4183. `LEASE_SECONDS` is derived for a town errand and says so -
