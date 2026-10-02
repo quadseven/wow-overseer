@@ -1098,6 +1098,8 @@
   .dgn-next { margin:.4rem 0; padding-left:.7rem; font-weight:700;
               border-left:3px solid var(--accent-text); line-height:1.5;
               overflow-wrap:anywhere; }
+  .chr-dungeon-link { display:inline-block; margin-top:.65rem; }
+  .dgn-target { outline:2px solid var(--accent-text); outline-offset:2px; }
   .dgn-list { display:grid; gap:10px; margin-top:.8rem; }
   /* Where the family stands only changes how loud a step is. Outgrown and
      unreachable steps stay on the path, quieter, so the order stays honest. */
@@ -4286,7 +4288,10 @@ function buildViewTabs() {
   const gb = document.createElement("button");
   gb.textContent = "Dungeons";
   gb.dataset.view = DUNGEONS_VIEW;
-  gb.onclick = () => showView(DUNGEONS_VIEW);
+  gb.onclick = () => {
+    dungeonTargetMap = null;
+    showView(DUNGEONS_VIEW);
+  };
   tabs.appendChild(gb);
   // Seventh, straight after the dungeons it comes after in the game: that tab
   // says which five-man is worth the walk, this says what the guild still has
@@ -7085,6 +7090,9 @@ function hashFor(v) {
   // The map carries its continent, or a link to it would forget which one
   // was being looked at - the one piece of state that view actually has.
   if (v === MAP_VIEW) return "#" + MAP_VIEW + "/" + current;
+  if (v === DUNGEONS_VIEW && dungeonTargetMap !== null) {
+    return "#" + DUNGEONS_VIEW + "/" + dungeonTargetMap;
+  }
   // A view that is one of several (a family tab) carries which one, so a
   // link to the second family's tab opens that tab and not the default.
   const key = hashKeyFor(v);
@@ -8589,6 +8597,7 @@ const dgnrunnable = document.getElementById("dgnrunnable");
 const dgnorder = document.getElementById("dgnorder");
 const dgnbasis = document.getElementById("dgnbasis");
 const dgnfamilies = document.getElementById("dgnfamilies");
+let dungeonTargetMap = null;
 
 // An empty string is a real answer from the module and means "there is
 // nothing to say here", so it draws nothing rather than an empty line.
@@ -8636,6 +8645,11 @@ function dgnChips(list) {
 // a class, so an outgrown step can be drawn quieter than the next one.
 function dgnCard(d) {
   const card = el("details", "chr-card dgn-card dgn-" + d.state);
+  card.dataset.mapId = String(d.map_id);
+  if (dungeonTargetMap === Number(d.map_id)) {
+    card.open = true;
+    card.classList.add("dgn-target");
+  }
   const head = document.createElement("summary");
   head.appendChild(el("span", "dgn-rank", d.rank));
   head.appendChild(el("span", "dgn-name", d.name));
@@ -8664,6 +8678,8 @@ function dgnOffPath(f) {
   const body = el("div", "dgn-body");
   for (const d of f.off_path) {
     const row = el("div", "dgn-who");
+    row.dataset.mapId = String(d.map_id);
+    if (dungeonTargetMap === Number(d.map_id)) row.classList.add("dgn-target");
     row.appendChild(el("div", "sect", d.name));
     row.appendChild(el("div", "dgn-why", d.line));
     row.appendChild(dgnChips(d.chips));
@@ -8748,6 +8764,16 @@ function dgnRender(p) {
   dgnbasis.textContent = p.empty_note || p.basis;
   dgnfamilies.replaceChildren();
   for (const f of p.families) dgnfamilies.appendChild(dgnFamily(f));
+  if (dungeonTargetMap !== null) {
+    const target = Array.from(dgnfamilies.querySelectorAll("[data-map-id]"))
+      .find(card => Number(card.dataset.mapId) === dungeonTargetMap);
+    if (target) {
+      for (let parent = target; parent; parent = parent.parentElement) {
+        if (parent.tagName === "DETAILS") parent.open = true;
+      }
+      target.scrollIntoView({block: "center", behavior: "smooth"});
+    }
+  }
 }
 
 // ONE PULL AT A TIME, AND A CLOCK ON IT. These are one guard and not two.
@@ -9936,6 +9962,11 @@ function chrCard(c) {
 
 function chrRunCard(c) {
   const card = chrCard(c);
+  const dungeonLink = document.createElement("a");
+  dungeonLink.className = "chr-dungeon-link";
+  dungeonLink.href = "#dungeons/" + encodeURIComponent(c.map_id);
+  dungeonLink.textContent = "See upgrade drops and who can use them in " + c.dungeon;
+  card.appendChild(dungeonLink);
   chrSect(card, c.all_together ? "all " + c.members.length + " inside" : "seen inside");
   card.appendChild(chrChips(c.members));
   // BOSSES. Confirmed ones are solid, the rest dashed and dim, and the note
@@ -9954,8 +9985,9 @@ function chrRunCard(c) {
     card.appendChild(chips);
     if (b.how === "loot") {
       card.appendChild(el("div", "note",
-        "boss kills are not recorded yet; these are inferred from the loot "
-        + "somebody equipped, so an unconfirmed boss may well have fallen"));
+        "boss kills are not recorded yet; these are inferred from gear "
+        + "first equipped or notable gear looted in the run, so an unconfirmed "
+        + "boss may well have fallen"));
     }
   }
   if (c.deaths.length) {
@@ -9964,18 +9996,37 @@ function chrRunCard(c) {
       d.who + (d.killer && d.killer !== d.who ? " (" + d.killer + ")" : "")), "dead"));
   }
   if (c.loot.length) {
-    chrSect(card, "loot " + c.loot.length);
+    chrSect(card, "gear first equipped " + c.loot.length);
     const grid = el("div", "loot");
     // Grouped by member, in roster order, so "what did Ugga get" is one
     // glance rather than a scan of the whole list.
     for (const who of c.members) {
-      for (const item of c.loot) if (item.who === who) grid.appendChild(chrItem(item, who));
+      for (const item of c.loot) if (item.who === who) {
+        const row = chrItem(item, who);
+        if (item.loot_source) row.appendChild(el("span", "who", "looted from " + item.loot_source));
+        grid.appendChild(row);
+      }
     }
     for (const item of c.loot) {
-      if (!c.members.includes(item.who)) grid.appendChild(chrItem(item, item.who));
+      if (!c.members.includes(item.who)) {
+        const row = chrItem(item, item.who);
+        if (item.loot_source) row.appendChild(el("span", "who", "looted from " + item.loot_source));
+        grid.appendChild(row);
+      }
     }
     card.appendChild(grid);
     card.appendChild(el("div", "note", c.loot_caveat));
+  }
+  if ((c.item_loot || []).length) {
+    chrSect(card, "notable gear looted " + c.item_loot.length);
+    const grid = el("div", "loot");
+    for (const drop of c.item_loot) {
+      const row = chrItem(drop.item, drop.who);
+      row.appendChild(el("span", "who", drop.source_line));
+      grid.appendChild(row);
+    }
+    card.appendChild(grid);
+    if (!c.loot.length) card.appendChild(el("div", "note", c.loot_caveat));
   }
   if (c.level_ups.length) {
     chrSect(card, "levelled inside");
@@ -12640,6 +12691,13 @@ function applyHash() {
     try { familyKey = decodeURIComponent(raw.slice(cut + 1)); } catch (e) { familyKey = ""; }
     // A typed or pasted link moves the banner now, not on its next tick.
     if (familyKey !== before) pollAgenda();
+  }
+  if (name === DUNGEONS_VIEW) {
+    const mapText = cut < 0 ? "" : raw.slice(cut + 1);
+    const map = /^\d+$/.test(mapText) ? Number(mapText) : NaN;
+    dungeonTargetMap = Number.isSafeInteger(map) && map > 0 ? map : null;
+    showView(DUNGEONS_VIEW);
+    return;
   }
   // FAMILY for anything unrecognised, deliberately: an empty hash, a typo and
   // a stale bookmark all land on the page that answers "are my five all

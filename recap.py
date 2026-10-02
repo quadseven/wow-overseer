@@ -100,9 +100,9 @@ ITEM_EQUIP = "item_equip"
 # build_recap attaches it, achievements attaches it, and a test asserts the
 # page prints the module's string rather than one of its own.
 LOOT_CAVEAT = (
-    "first worn here, which is the most the record supports. Nothing records "
-    "what was picked up, so an item can be looted here and worn in town, or "
-    "looted here and left in a bag, and neither of those shows up at all."
+    "These entries are first equips, not proof the item dropped here. "
+    "Chronicle run cards also show recorded pickup sources for notable gear "
+    "(rare quality and higher); lower-quality pickups are not tracked."
 )
 
 # A run whose coordinator has reported no progress for this long is still

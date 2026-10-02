@@ -383,8 +383,10 @@ class TheArmoryLinksBackToTheChronicle(unittest.TestCase):
     def test_the_page_never_calls_it_looted(self):
         """The event says where it was WORN. A character can loot in a
         dungeon and equip in town, and the record cannot tell those apart."""
-        self.assertNotIn("looted here", PAGE)
-        self.assertNotIn("looted in", PAGE)
+        block = PAGE[PAGE.index("function renderProvenance") :]
+        block = block[: block.index("function renderDetail")]
+        self.assertNotIn("looted here", block)
+        self.assertNotIn("looted in", block)
 
 
 class TheModuleShipsInTheImage(unittest.TestCase):

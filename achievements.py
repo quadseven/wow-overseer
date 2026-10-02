@@ -17,20 +17,20 @@ NOTHING HERE IS RECORDED AS AN ACHIEVEMENT. There is no table of them. Every
 card is assembled after the fact from three tables the module already keeps:
 
   overseer_dungeon_run   one row per instance visit (leader, map, times)
-  overseer_event         item_equip / quest_complete / quest_reward /
-                         level_up, de-duplicated per hour, each stamped with
-                         the map it happened on
+  overseer_event         item_equip / item_loot / quest_complete /
+                         quest_reward / level_up, de-duplicated per hour,
+                         each stamped with the map it happened on
   overseer_death         one row per death, with map and killer
 
 and loot is bound to a run by the only two facts they share: the run's map
-and the run's time window. An item equipped on map 36 while a Deadmines run
-was active is that run's loot. That rule is why this module exists as a pure
+and the run's time window. First equips and recorded pickups on the run's map
+are shown as separate evidence. That rule is why this module exists as a pure
 one - it is a judgement, and the judgement is what the tests reach.
 
 BOSS KILLS ARE NOT RECORDED YET. The module emits no event when a boss dies,
 so a run's bosses are INFERRED from its loot: Smite's Mighty Hammer means Mr.
 Smite fell. That is honest as far as it goes and no further - a boss whose
-drop nobody equipped is "not confirmed", never "not killed" - and every card
+drop nobody equipped or looted is "not confirmed", never "not killed" - and every card
 says which it is. mod-overseer#159 asks the module for a `boss_kill` event
 kind (subject_id = creature entry, subject_name = boss name); it slots
 straight in, because infer_bosses reads those rows first and falls back to
@@ -58,7 +58,7 @@ from datetime import datetime, timedelta
 
 from armory import QUALITY_NAMES, UNKNOWN_QUALITY, ItemBook, template_tooltip
 from core import _ALLIANCE_RACES, _HORDE_RACES
-from recap import LOOT_CAVEAT, first_equips, run_state
+from recap import LOOT_CAVEAT, first_equips, run_state, slots_for
 
 # --- the vocabulary the module writes, and this reads --------------------
 #
@@ -66,6 +66,7 @@ from recap import LOOT_CAVEAT, first_equips, run_state
 # mod_overseer.cpp actually writes today, plus the two this page is designed
 # to grow into the moment the module records them.
 ITEM_EQUIP = "item_equip"
+ITEM_LOOT = "item_loot"
 QUEST_COMPLETE = "quest_complete"  # objectives done; the log says "complete"
 QUEST_REWARD = "quest_reward"  # turned in; the reward was taken
 LEVEL_UP = "level_up"
@@ -288,7 +289,41 @@ def _loot_line(
     line["who"] = event["character_name"]
     line["at"] = _iso(event["first_seen"])
     line["slot"] = event.get("detail") or ""
+    line["item_guid"] = int(event.get("item_guid") or 0)
     return line
+
+
+def _run_item_loot(
+    inside: list[dict],
+    items: dict,
+    icons: dict,
+    book: ItemBook | None = None,
+) -> list[dict]:
+    """Notable wearable items actually recorded as looted during this run."""
+    out = []
+    for event in inside:
+        if event.get("kind") != ITEM_LOOT:
+            continue
+        entry = int(event["subject_id"])
+        template = items.get(entry) or {}
+        if not slots_for(template.get("inventory_type")):
+            continue
+        item = item_payload(entry, items, icons, book)
+        source = (event.get("source") or "").strip()
+        out.append(
+            {
+                "item": item,
+                "who": event["character_name"],
+                "at": _iso(event["first_seen"]),
+                "source": source,
+                "source_line": event.get("detail")
+                or ("looted from " + source if source else "source not recorded"),
+                "via": event.get("via") or "",
+                "item_guid": int(event.get("item_guid") or 0),
+            }
+        )
+    out.sort(key=lambda row: row["at"])
+    return out
 
 
 # --- bosses -------------------------------------------------------------------
@@ -521,11 +556,18 @@ def assemble_run(
         first_worn if first_worn is not None else first_equips(events),
         book,
     )
+    drops = _run_item_loot(inside, items, icons, book)
+    drops_by_guid = {row["item_guid"]: row for row in drops if row["item_guid"]}
+    for item in loot:
+        dropped = drops_by_guid.get(int(item.get("item_guid") or 0))
+        if dropped:
+            item["loot_source"] = dropped["source"]
+            item["loot_via"] = dropped["via"]
     levels = _run_levels(inside)
     quests = _run_quests(inside)
     bosses = infer_bosses(
         map_id,
-        {line["entry"] for line in loot},
+        {line["entry"] for line in loot} | {int(row["item"]["entry"]) for row in drops},
         boss_drops,
         [e for e in inside if e["kind"] == BOSS_KILL],
     )
@@ -556,6 +598,7 @@ def assemble_run(
         "cleared": bosses["final"],
         "deaths": _run_deaths(died),
         "loot": loot,
+        "item_loot": drops,
         # Printed under the loot list by the page. The count in the header and
         # the rows in the list are now the same rows, and this says what those
         # rows do and do not prove.
@@ -888,7 +931,9 @@ def wanted_entries(
     event_rows: list[dict], quest_rewards: dict, boss_drops: dict
 ) -> list[int]:
     """Every item entry the cards may name, so the adapter fetches them in one query."""
-    entries = {int(e["subject_id"]) for e in event_rows if e["kind"] == ITEM_EQUIP}
+    entries = {
+        int(e["subject_id"]) for e in event_rows if e["kind"] in (ITEM_EQUIP, ITEM_LOOT)
+    }
     for reward in quest_rewards.values():
         entries.update(entry for entry, _ in reward["items"])
         entries.update(reward["choices"])
