@@ -5319,6 +5319,9 @@ class Bridge(discord.Client):
         # its last observation between polls.
         # Keyed by leader since #150: each family walks to its own counter.
         self._vendor_family_movement: dict[str, vendor_stall.FamilyMovement] = {}
+        # A banker trip cannot finish while a member stays on another map.
+        # Keep the same bounded family-cohesion observation as vendor trips.
+        self._bank_family_movement: dict[str, vendor_stall.FamilyMovement] = {}
         # One town slot per OTHER family (#150), keyed by the roster's
         # `family` value. This bridge's own family keeps `self._town_slot`.
         self._cohort_town_slots: dict[str, townslot.Slot] = {}
@@ -11741,6 +11744,42 @@ class Bridge(discord.Client):
             return True
         return False
 
+    async def _bank_family_progress(
+        self, names: list, leader: str,
+    ) -> vendor_stall.FamilyProgress:
+        """Track whether the family has stayed split across bank polls."""
+        progress = vendor_stall.family_progress(
+            self._bank_family_movement.get(leader),
+            await asyncio.to_thread(_fetch_positions, names),
+            tuple(names),
+            time.monotonic(),
+        )
+        if progress.current is not None:
+            self._bank_family_movement[leader] = progress.current
+        return progress
+
+    @staticmethod
+    def _log_bank_aim_released(
+        leader: str, family_stall: vendor_stall.FamilyProgress,
+    ) -> None:
+        """Say whether a completed trip or a persistent split released it."""
+        if (
+            family_stall.readable
+            and family_stall.split
+            and family_stall.split_seconds >= bank.BANK_SPLIT_RECOVERY_SECONDS
+        ):
+            log.warning(
+                "bank: leader=%s handed back the banker aim after the family "
+                "remained split for %d seconds",
+                leader, int(family_stall.split_seconds),
+            )
+            return
+        log.info(
+            "bank: leader=%s has nothing left to ask the counter for and every "
+            "row this trip queued has been answered, so the errand is handed "
+            "back and the family walks again", leader,
+        )
+
     async def _settle_bank_errand(self, names: list, leader: str,
                                   moves_unasked: bool,
                                   cohort: str | None = None) -> str:
@@ -11792,8 +11831,14 @@ class Bridge(discord.Client):
         """
         leader_town = await asyncio.to_thread(_fetch_town, leader)
         outstanding = await asyncio.to_thread(_outstanding_bank_moves, names)
+        family_stall = await self._bank_family_progress(names, leader)
+        current_aim = await asyncio.to_thread(_current_travel_npc, leader)
         step = bank.errand_step(
             bool(leader_town.banker), outstanding, moves_unasked,
+            family_readable=family_stall.readable,
+            family_split=family_stall.split,
+            family_split_seconds=family_stall.split_seconds,
+            has_aim=current_aim == "banker",
         )
         slot = self._cohort_town_slot(cohort)
         position_rows = await asyncio.to_thread(_fetch_positions, [leader])
@@ -11823,6 +11868,13 @@ class Bridge(discord.Client):
                     "bank: leader=%s is already on somebody else's errand, so "
                     "no banker aim was taken this pass", leader,
                 )
+        elif step == bank.BANK_ERRAND_DEFER:
+            log.warning(
+                "bank: leader=%s is not taking a banker trip while the family "
+                "has remained split for %d seconds; unasked moves stay queued "
+                "until the family is together",
+                leader, int(family_stall.split_seconds),
+            )
         elif step == bank.BANK_ERRAND_HOLD:
             # THE TWO HOLDS READ IDENTICALLY IN A LOG AND ARE DIFFERENT STATES
             # (infra#3815): "rows are executing" and "the leader has just
@@ -11837,16 +11889,12 @@ class Bridge(discord.Client):
                 else "it is standing at the counter and the rows are written "
                      "below this line",
             )
-        else:
+        elif step == bank.BANK_ERRAND_RELEASE:
             released = await asyncio.to_thread(
                 _release_trade_errand, leader, "banker",
             )
             if released:
-                log.info(
-                    "bank: leader=%s has nothing left to ask the counter for "
-                    "and every row this trip queued has been answered, so the "
-                    "errand is handed back and the family walks again", leader,
-                )
+                self._log_bank_aim_released(leader, family_stall)
             else:
                 # Not a failure. The column belongs to somebody else now, and
                 # the keyword guard is what stops this pass taking it.
