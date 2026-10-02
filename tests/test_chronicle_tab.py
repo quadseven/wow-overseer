@@ -167,7 +167,10 @@ class TheChronicle(unittest.TestCase):
     def test_dungeon_run_loot_links_to_its_upgrade_plan(self):
         """The run card opens the matching in-page dungeon upgrade plan."""
         self.assertIn('dungeonLink.href = "#dungeons/"', self.tab)
-        self.assertIn('dungeonLink.textContent = "See upgrade drops and who can use them in "', self.tab)
+        self.assertIn(
+            'dungeonLink.textContent = "See upgrade drops and who can use them in "',
+            self.tab,
+        )
         self.assertIn("wow.zamimg.com/images/wow/icons/large/", self.tab)
 
     def test_the_one_link_out_still_refuses_the_opener(self):
