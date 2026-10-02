@@ -1115,9 +1115,12 @@ def _within_trade_range(here: Spot, there: Spot) -> bool:
     instance template, so two characters at the same coordinates in separate
     copies of one dungeon are not together. Unknown instance ids fail closed.
     """
-    if (here.instance_id is None or there.instance_id is None
-            or int(here.map_id) != int(there.map_id)
-            or int(here.instance_id) != int(there.instance_id)):
+    if (
+        here.instance_id is None
+        or there.instance_id is None
+        or int(here.map_id) != int(there.map_id)
+        or int(here.instance_id) != int(there.instance_id)
+    ):
         return False
     return math.hypot(here.x - there.x, here.y - there.y) <= TRADE_YARDS
 
