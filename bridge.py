@@ -13956,7 +13956,8 @@ class Bridge(discord.Client):
                 return
             key = tuple(sorted(names))
             state = _TOWN_ERRANDS.get(key, townerrand.State())
-            if state.phase not in (townerrand.GO, townerrand.GATHER):
+            if state.phase not in (
+                    townerrand.GO, townerrand.GATHER, townerrand.STEPS):
                 return
             slot = self._cohort_town_slot(_cohort_key(cohort))
             if not await self._town_errand_yield_for_weapon(
@@ -14110,8 +14111,9 @@ class Bridge(discord.Client):
 
     async def _town_errand_yield_for_weapon(self, state, names, leader,
                                             slot, label) -> bool:
-        """Yield an unstarted counter trip to a carried empty-slot weapon."""
-        if state.phase not in (townerrand.GO, townerrand.GATHER):
+        """Yield town travel or shopping for a critical empty-slot weapon."""
+        if state.phase not in (
+                townerrand.GO, townerrand.GATHER, townerrand.STEPS):
             return False
         if time.monotonic() < state.hearth_until:
             return False
