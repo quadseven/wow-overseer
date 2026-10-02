@@ -111,9 +111,11 @@ BIND_MAILBOX_YARDS = 60.0
 # during the ten second cast moves him and interrupts it.
 HEARTH_SECONDS = 45.0
 
-# How close counts as at the hub. The core opens a mailbox from about ten
-# yards; the leader lands within a few yards of a ground aim.
-HUB_YARDS = 10.0
+# How close counts as arrived at the hub. The worldserver releases a ground-aim
+# walk at 25 yards and restores the leader's previous movement. The bridge
+# samples every 30 seconds, so 35 yards catches the completed walk before the
+# leader wanders away. Mailbox operations keep their own in-range checks.
+HUB_YARDS = 35.0
 GATHER_YARDS = 12.0
 
 # The entry test: gear in the post, or a member this short of slots (or with
