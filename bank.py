@@ -1093,9 +1093,20 @@ def command(move):
 BANK_ERRAND_AIM = "aim"
 BANK_ERRAND_HOLD = "hold"
 BANK_ERRAND_RELEASE = "release"
+BANK_ERRAND_DEFER = "defer"
+BANK_SPLIT_RECOVERY_SECONDS = 20 * 60
 
 
-def errand_step(at_counter: bool, rows_outstanding: int, moves_unasked: bool) -> str:
+def errand_step(
+    at_counter: bool,
+    rows_outstanding: int,
+    moves_unasked: bool,
+    *,
+    family_readable: bool = True,
+    family_split: bool = False,
+    family_split_seconds: float = 0.0,
+    has_aim: bool = False,
+) -> str:
     """What to do with the leader's `banker` aim this pass (infra#3728).
 
     THE SAME LATCH AS THE SELL PASS'S, IN THE SAME COLUMN. `_bank_once` wrote
@@ -1146,10 +1157,11 @@ def errand_step(at_counter: bool, rows_outstanding: int, moves_unasked: bool) ->
     that it could not read the queue at all; reading that as "finished" is the
     fail-open direction and it walks the family away from rows already queued.
 
-    THE FOUR ANSWERS ARE `towntrip.errand_step`'S OWN, IN ITS ORDER, and its
-    docstring argues each of them at length rather than twice: unanswered rows
-    hold, nothing left to ask for releases, at the counter with work holds
-    because the rows are written THIS pass, and away from it with work aims.
+    THE FOUR ORIGINAL ANSWERS ARE `towntrip.errand_step`'S OWN, IN ITS ORDER,
+    and its docstring argues each of them at length rather than twice:
+    unanswered rows hold, nothing left to ask for releases, at the counter
+    with work holds because the rows are written THIS pass, and away from it
+    with work aims.
     The one that reads differently here is the terminal path - a trip that
     never arrived cannot reach it, because a move `_bank_once` held back for
     the walk is a move this pass has not asked for.
@@ -1181,9 +1193,22 @@ def errand_step(at_counter: bool, rows_outstanding: int, moves_unasked: bool) ->
     nobody can hand anything to. A holder merely FAR AWAY still counts - that
     is the walk this errand exists to make - while one not in the world is not
     this trip's work, and used to be the 17 `target not online` rows.
+
+    A FIFTH ANSWER BOUNDS A TRIP THAT CANNOT BRING THE FAMILY TOGETHER. After
+    twenty minutes of fresh, readable snapshots showing the family persistently
+    split, unanswered bank rows still hold the aim. With no unanswered rows,
+    an existing aim is released and a new one is deferred until the family is
+    cohesive. The bank pass can still handle members already at a banker.
     """
     if rows_outstanding != 0:
         return BANK_ERRAND_HOLD
+    split_expired = (
+        family_readable
+        and family_split
+        and family_split_seconds >= BANK_SPLIT_RECOVERY_SECONDS
+    )
+    if split_expired and moves_unasked:
+        return BANK_ERRAND_RELEASE if has_aim else BANK_ERRAND_DEFER
     if not moves_unasked:
         return BANK_ERRAND_RELEASE
     return BANK_ERRAND_HOLD if at_counter else BANK_ERRAND_AIM

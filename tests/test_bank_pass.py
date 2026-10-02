@@ -11,6 +11,7 @@ import pathlib
 import re
 import unittest
 
+import bank
 import towntrip
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
@@ -87,6 +88,79 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         settle = _block("    async def _settle_bank_errand(")
         self.assertIn('self._claim_town_slot("bank", leader, "banker",', settle)
         self.assertLess(body.index("_settle_bank_errand"), body.index("_insert_bank"))
+
+
+class ASplitFamilyDoesNotWaitForeverForTheBanker(unittest.TestCase):
+    def decide(self, **changes):
+        values = dict(at_counter=False, rows_outstanding=0, moves_unasked=True)
+        values.update(changes)
+        return bank.errand_step(**values)
+
+    def test_a_split_inside_the_recovery_window_keeps_the_existing_aim(self):
+        self.assertEqual(
+            self.decide(
+                family_readable=True,
+                family_split=True,
+                family_split_seconds=bank.BANK_SPLIT_RECOVERY_SECONDS - 1,
+                has_aim=True,
+            ),
+            bank.BANK_ERRAND_AIM,
+        )
+
+    def test_a_persistently_split_family_releases_an_existing_bank_aim(self):
+        self.assertEqual(
+            self.decide(
+                family_readable=True,
+                family_split=True,
+                family_split_seconds=bank.BANK_SPLIT_RECOVERY_SECONDS,
+                has_aim=True,
+            ),
+            bank.BANK_ERRAND_RELEASE,
+        )
+
+    def test_a_persistently_split_family_defers_a_new_bank_aim(self):
+        self.assertEqual(
+            self.decide(
+                family_readable=True,
+                family_split=True,
+                family_split_seconds=bank.BANK_SPLIT_RECOVERY_SECONDS + 1,
+                has_aim=False,
+            ),
+            bank.BANK_ERRAND_DEFER,
+        )
+
+    def test_unreadable_split_does_not_release_or_defer(self):
+        self.assertEqual(
+            self.decide(
+                family_readable=False,
+                family_split=True,
+                family_split_seconds=bank.BANK_SPLIT_RECOVERY_SECONDS + 1,
+                has_aim=True,
+            ),
+            bank.BANK_ERRAND_AIM,
+        )
+
+    def test_unanswered_bank_rows_still_hold_during_a_persistent_split(self):
+        self.assertEqual(
+            self.decide(
+                rows_outstanding=1,
+                family_readable=True,
+                family_split=True,
+                family_split_seconds=bank.BANK_SPLIT_RECOVERY_SECONDS + 1,
+                has_aim=True,
+            ),
+            bank.BANK_ERRAND_HOLD,
+        )
+
+    def test_bridge_measures_the_family_before_settling_the_bank_aim(self):
+        settle = _code("    async def _settle_bank_errand(")
+        self.assertIn("await self._bank_family_progress(names, leader)", settle)
+        self.assertIn("family_split_seconds=family_stall.split_seconds", settle)
+        self.assertIn("bank.BANK_ERRAND_DEFER", settle)
+        measure = _code("    async def _bank_family_progress(")
+        self.assertIn("vendor_stall.family_progress(", measure)
+        self.assertIn("_fetch_positions, names", measure)
+        self.assertIn("self._bank_family_movement[leader] = progress.current", measure)
 
     def test_the_errand_goes_to_the_family_leader(self):
         """Only the leader takes `new rpg`; followers arrive by following.
