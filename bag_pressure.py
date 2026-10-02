@@ -533,7 +533,63 @@ def vendor_errand_step(
     return stranded_errand_step(sales_outstanding)
 
 
-def stranded_errand_step(sales_outstanding: int) -> str:
+def _position_map(position: dict | None) -> int | None:
+    """Map id from a settled snapshot row, or None when it cannot be read."""
+    if not position:
+        return None
+    try:
+        return int(position.get("map_id"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _stranded_vendor_candidate(
+    name: str,
+    leader: str,
+    leader_map: int,
+    positions: dict,
+    free_slots: dict,
+    resume: int,
+) -> bool:
+    """Whether one member is away from the leader and short on bag room."""
+    if name == leader:
+        return False
+    free = (free_slots or {}).get(name)
+    if type(free) is not int or not 0 <= free < resume:
+        return False
+    member_map = _position_map((positions or {}).get(name))
+    return member_map is not None and member_map != leader_map
+
+
+def stranded_vendor_aims(
+    names: Iterable[str],
+    leader: str,
+    positions: dict,
+    free_slots: dict,
+    pressure: bool,
+    in_run: bool,
+    resume: int = CAMPAIGN_RESUME_FREE_SLOTS,
+) -> tuple[str, ...]:
+    """Names of cut-off members that need their own local vendor errand."""
+    if not pressure or in_run or not leader:
+        return ()
+    leader_map = _position_map((positions or {}).get(leader))
+    if leader_map is None:
+        return ()
+    return tuple(
+        sorted(
+            str(name)
+            for name in names or ()
+            if _stranded_vendor_candidate(
+                name, leader, leader_map, positions, free_slots, resume
+            )
+        )
+    )
+
+
+def stranded_errand_step(
+    sales_outstanding: int, bag_pressure_hold: bool = False
+) -> str:
     """What to do with a `vendor` aim nobody is walking to a vendor (infra#3746).
 
     THE ERRAND THAT IS RELEASED BY NOBODY. `vendor_errand_step` above settles
@@ -588,6 +644,8 @@ def stranded_errand_step(sales_outstanding: int) -> str:
     it open because a SIBLING still has rows outstanding would leave it latched
     on exactly the realm state that produced this defect.
     """
+    if bag_pressure_hold:
+        return VENDOR_ERRAND_HOLD
     if sales_outstanding != 0:
         return VENDOR_ERRAND_HOLD
     return VENDOR_ERRAND_RELEASE

@@ -396,6 +396,24 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         )
 
 
+class StrandedBagPressureErrandUsesExistingSalePath(unittest.TestCase):
+    def test_cut_off_walk_uses_only_guarded_self_contained_vendor_errand(self):
+        body = _statements("    async def _aim_stranded_bag_pressure_members(")
+        self.assertEqual(body.count("_write_trade_errand"), 1)
+        self.assertIn('travel_npc="vendor"', body)
+        self.assertIn("_current_travel_npc, name", body)
+        self.assertNotIn('"at:"', body)
+        self.assertNotIn('"trigger:"', body)
+
+    def test_vendor_sale_and_completion_remain_the_existing_holder_paths(self):
+        vendor = _statements("    async def _vendor_once(")
+        settle = _statements("    async def _release_stranded_vendor_errands(")
+        self.assertIn("_fetch_town, holder", vendor)
+        self.assertIn("_insert_sell", vendor)
+        self.assertIn("_outstanding_sales, [name]", settle)
+        self.assertIn("bag_pressure.stranded_errand_step(", settle)
+
+
 class TheLatchIsActuallyBroken(unittest.TestCase):
     """A SEQUENCE test, because the defect was never in any one decision.
 

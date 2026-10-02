@@ -5265,6 +5265,11 @@ class Bridge(discord.Client):
                 "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
             },
         )
+        # A cut-off follower can make one self-contained vendor walk during a
+        # bag hold. It is not the family's leader travel slot, so record these
+        # independent writes in per-character ledgers instead of replacing the
+        # leader's holder.
+        self._stranded_vendor_slots: dict[str, townslot.Slot] = {}
         # The town errand and weapon-training passes share one traveller and
         # may yield the same live errand. Serialize that handoff per family.
         self._town_errand_locks: dict[tuple[str, ...], asyncio.Lock] = {}
@@ -9709,14 +9714,36 @@ class Bridge(discord.Client):
         stranded = [name for name in holders if name != leader]
         if not stranded:
             return 0
+        in_run = await self._mid_run(names)
+        free_slots = await asyncio.to_thread(_fetch_free_slots, names)
+        campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
+        bag_pressure_hold = (
+            not in_run
+            and campaign_waiting
+            and bag_pressure.family_town_run_needed(free_slots)
+        )
         released = 0
         for name in stranded:
             # THIS CHARACTER'S OWN QUEUE, NOT THE FAMILY'S. See the docstring:
             # a sibling's unanswered rows say nothing about whether this row's
             # errand has work left, and reading them would re-latch the column.
             outstanding = await asyncio.to_thread(_outstanding_sales, [name])
-            step = bag_pressure.stranded_errand_step(outstanding)
+            free = free_slots.get(name)
+            member_bag_hold = (
+                bag_pressure_hold
+                and isinstance(free, int)
+                and 0 <= free < bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS
+            )
+            step = bag_pressure.stranded_errand_step(
+                outstanding, bag_pressure_hold=member_bag_hold,
+            )
             if step != bag_pressure.VENDOR_ERRAND_RELEASE:
+                if member_bag_hold:
+                    log.info(
+                        "economy: %s keeps its vendor walk while its campaign "
+                        "waits for bag room (%s free slots)", name, free,
+                    )
+                    continue
                 log.info(
                     "economy: %s carries a vendor errand nobody is walking, but "
                     "%s sale(s) of its own are still unanswered, so it is left "
@@ -9734,6 +9761,7 @@ class Bridge(discord.Client):
             # wrote.
             if await asyncio.to_thread(_release_trade_errand, name, "vendor"):
                 released += 1
+                self._stranded_vendor_slots.pop(name, None)
                 log.info(
                     "economy: %s was carrying a vendor errand with nothing left "
                     "to sell and is not the leader=%s anybody is walking, so the "
@@ -14142,6 +14170,10 @@ class Bridge(discord.Client):
                 campaign_waiting
                 and bag_pressure.family_town_run_needed(free_slots)
             )
+            if bag_pressure_needed and not in_run:
+                await self._aim_stranded_bag_pressure_members(
+                    names, leader, positions, free_slots, in_run,
+                )
         leader_at_hub = townerrand.in_range(
             hub, positions.get(leader), townerrand.HUB_YARDS)
         gathered = all(
@@ -14174,6 +14206,54 @@ class Bridge(discord.Client):
         if new.phase == townerrand.DONE:
             await self._town_errand_release(names, leader, slot, label)
         _TOWN_ERRANDS[key] = new
+
+    async def _aim_stranded_bag_pressure_members(
+        self, names: list, leader: str, positions: dict,
+        free_slots: dict, in_run: bool,
+    ) -> int:
+        """Give an isolated, pressured member its own same-map vendor walk."""
+        targets = bag_pressure.stranded_vendor_aims(
+            names, leader, positions, free_slots,
+            pressure=True, in_run=in_run,
+        )
+        aimed = 0
+        for name in targets:
+            current = await asyncio.to_thread(_current_travel_npc, name)
+            taken = current == "vendor"
+            if not taken:
+                taken = await asyncio.to_thread(
+                    _write_trade_errand,
+                    professions.Errand(character=name, travel_npc="vendor"),
+                )
+            if taken:
+                if current == "vendor":
+                    log.info(
+                        "town errand: %s is already walking to a vendor for "
+                        "bag pressure", name,
+                    )
+                else:
+                    aimed += 1
+                slot = self._stranded_vendor_slots.get(name)
+                if slot is None:
+                    slot = townslot.Slot(releasable=_is_economy_aim)
+                    self._stranded_vendor_slots[name] = slot
+                slot.adopt(
+                    claimant="bag pressure", character=name, aim="vendor",
+                    now=time.monotonic(),
+                )
+                if current != "vendor":
+                    log.info(
+                        "town errand: %s is cut off on another map with fewer "
+                        "than %d free slots; its guarded self-contained vendor "
+                        "aim was set", name,
+                        bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS,
+                    )
+            else:
+                log.info(
+                    "town errand: %s needs bag room, but another errand owns "
+                    "its travel aim; leaving it untouched", name,
+                )
+        return aimed
 
     async def _town_errand_yield_for_weapon(self, state, names, leader,
                                             slot, label) -> bool:
