@@ -1673,21 +1673,21 @@ def _fetch_achievements(names=None) -> dict:
             # into a 503 there while every other tab was fine. A world with
             # no death record has nothing to say about deaths, which is a
             # thinner page, not a broken one.
-            try:
-                cur.execute(
-                    "SELECT character_name, kind, subject_id, subject_name, detail, "  # noqa: S608
-                    "level, map, zone, first_seen, last_seen, occurrences "
-                    "FROM overseer_event "
-                    f"WHERE kind <> 'death' AND character_name IN ({holes}) "
-                    "ORDER BY first_seen ASC LIMIT 20000",
-                    tuple(names),
-                )
-                event_rows = list(cur.fetchall())
-            except pymysql.err.ProgrammingError as exc:
-                if not (exc.args and exc.args[0] == 1146):
-                    raise
-                log.info("overseer_event absent; achievements run without it")
-                event_rows = []
+            event_rows = _wide_guarded(
+                cur,
+                "SELECT character_name, kind, subject_id, subject_name, detail, "  # noqa: S608
+                "level, map, zone, first_seen, last_seen, occurrences, "
+                "item_guid, via, source FROM overseer_event "
+                f"WHERE kind <> 'death' AND character_name IN ({holes}) "
+                "ORDER BY first_seen ASC LIMIT 20000",
+                tuple(names),
+                "SELECT character_name, kind, subject_id, subject_name, detail, "  # noqa: S608
+                "level, map, zone, first_seen, last_seen, occurrences "
+                "FROM overseer_event "
+                f"WHERE kind <> 'death' AND character_name IN ({holes}) "
+                "ORDER BY first_seen ASC LIMIT 20000",
+                "Chronicle event source fields",
+            )
             try:
                 cur.execute(
                     "SELECT character_name, map, zone, killer_name, killer_type, "  # noqa: S608
@@ -3819,9 +3819,9 @@ def _wide_guarded(cur, sql: str, params: tuple = (), fallback: str = "",
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
-            log.info("recap: %s unavailable (%s) - trying a thinner read",
+            log.info("%s unavailable (%s) - trying a thinner read",
                      what, exc.args[0])
-    log.info("recap: %s unavailable; the recap runs without it", what)
+    log.info("%s unavailable; using an empty read", what)
     return []
 
 
