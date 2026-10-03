@@ -56,7 +56,7 @@ class MovesTheLeader(unittest.TestCase):
         town = leadcmd.for_character(
             goals.life_strategies(leads=True, in_town=True), True
         )
-        self.assertEqual([goals.FLEE_STRATEGY], town)
+        self.assertEqual([goals.GRIND_OFF, goals.FLEE_STRATEGY], town)
 
 
 class TheBridgeUsesIt(unittest.TestCase):
