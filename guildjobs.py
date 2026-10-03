@@ -103,6 +103,7 @@ import gearup
 import guildcorps
 import guildroute
 import keep
+import situation
 
 HERBALISM = guildcorps.HERBALISM
 MINING = guildcorps.MINING
@@ -875,6 +876,25 @@ def _tool_step(member, cap):
 GEAR_BUYS_PER_STEP = 4
 
 
+def friendly_vendor_rows(member, vendor_rows) -> list:
+    """The rows of vendors whose faction will deal with this member.
+
+    The module walks only to a vendor whose faction lets it serve the
+    character, and refuses the row otherwise ("no vendor on this map sells
+    that item to this character"). On wow-dev on 2026-10-03 an Alliance
+    member's first guild gear walk named Varia Hardhide, whose faction is
+    hostile to the Alliance. A row whose faction template is unread
+    (`enemy_group` None; the dbc table is partial) is kept for the module to
+    judge.
+    """
+    side = situation.side_mask([member.race])
+    return [
+        r
+        for r in vendor_rows or ()
+        if situation.hostile(r.get("enemy_group"), side) is not True
+    ]
+
+
 def gear_step(member, character, vendor_rows, cap):
     """(step or None, why not) for one gear-short member.
 
@@ -887,6 +907,7 @@ def gear_step(member, character, vendor_rows, cap):
         return None, ""
     if member.map_id is None:
         return None, "%s is short of gear; where it stands is not read" % member.name
+    vendor_rows = friendly_vendor_rows(member, vendor_rows)
     trip = gearup.vendor_trip(
         {member.name: character}, vendor_rows, map_id=member.map_id
     )

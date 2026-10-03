@@ -110,6 +110,34 @@ class AGearShortMemberShops(unittest.TestCase):
         self.assertIsNone(step)
 
 
+class OnlyAFriendlyVendor(unittest.TestCase):
+    """wow-dev 2026-10-03: an Alliance member was walked to Varia Hardhide,
+    whose faction attacks the Alliance, and the module refused the row."""
+
+    def test_a_hostile_vendor_is_never_picked(self):
+        alliance = _member(race=1)
+        hostile = [dict(r, enemy_group=2) for r in ROWS]
+        step, why = guildjobs.gear_step(alliance, _character(), hostile, 600.0)
+        self.assertIsNone(step)
+        self.assertIn("no vendor", why)
+
+    def test_a_friendly_vendor_is(self):
+        alliance = _member(race=1)
+        friendly = [dict(r, enemy_group=4) for r in ROWS]
+        step, _why = guildjobs.gear_step(alliance, _character(), friendly, 600.0)
+        self.assertEqual("gear", step.action)
+
+    def test_an_unread_faction_is_left_to_the_module(self):
+        rows = [dict(r, enemy_group=None) for r in ROWS]
+        self.assertEqual(rows, guildjobs.friendly_vendor_rows(_member(race=2), rows))
+
+    def test_the_vendor_query_reads_the_faction(self):
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
+        self.assertIn("ft.EnemyGroup AS enemy_group", source)
+
+
 class ThePlanPutsGearFirst(unittest.TestCase):
     def test_gear_step_is_started(self):
         plan = guildjobs.plan([_member()], gear={"Aurevil": (_character(), ROWS)})
