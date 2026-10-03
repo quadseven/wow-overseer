@@ -13797,12 +13797,19 @@ class Bridge(discord.Client):
             # place, for every town pass. What only this pass knows is how much
             # is sitting in the mailbox going uncollected, and that the auction
             # pass is buying reagents that arrive there.
+            #
+            # NO EARLY RETURN (wow-overseer#477). The per-taker gate below
+            # (`_mail_takes_in_reach`) already ensures a row is only written
+            # where it can work. Returning here starved the pass whenever seven
+            # other town passes held the column: the family never got aimed at
+            # a mailbox, so the gate never ran, so zero rows were ever written.
+            # Falling through lets a taker who happens to be at a mailbox (the
+            # town errand's hub, a walk past) still get their takes queued.
             log.info(
                 "mail: leader=%s could not be aimed at a mailbox (%s) this "
-                "pass, so %d letter(s) stay uncollected until the town slot "
-                "comes round", leader, post.aim, len(letters),
+                "pass, so %d letter(s) stay uncollected unless a taker is "
+                "already at a mailbox", leader, post.aim, len(letters),
             )
-            return
 
         # THE ROW IS ONLY WRITTEN WHERE IT CAN WORK, AND THE TAKER IS WHO IT HAS
         # TO WORK FOR (infra#3830; the docstring has the reasoning and the
