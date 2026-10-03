@@ -168,7 +168,11 @@ class EveryEntryIsCheckedBeforeAnythingIsWritten(unittest.TestCase):
         )
 
     def test_another_continent_is_refused(self):
-        self.assertIn("Eastern Kingdoms", self.refused("deadmines 5"))
+        # Since #471 the Deadmines is refused to the Horde for the capital,
+        # so the continent refusal is shown through Wailing Caverns: a Horde
+        # family standing on the Eastern Kingdoms cannot be queued through a
+        # Kalimdor door.
+        self.assertIn("Eastern Kingdoms", self.refused("wailing 5", HORDE, 0))
 
     def test_a_withheld_door_is_refused(self):
         self.assertIn("withheld", self.refused("stratholme live 5"))

@@ -412,7 +412,7 @@ def faction_of(members) -> str:
 # the Horde side. Zones: Durotar and Orgrimmar; Elwynn Forest and Stormwind.
 HOSTILE_HOME_ZONES = {"Alliance": frozenset({14, 1637}), "Horde": frozenset({12, 1519})}
 # The dungeon maps whose doors stand inside a capital (council._inside_capital).
-HOSTILE_CAPITAL_DUNGEONS = {"Alliance": frozenset({389}), "Horde": frozenset({34})}
+HOSTILE_CAPITAL_DUNGEONS = {"Alliance": frozenset({389}), "Horde": frozenset({34, 36})}
 
 
 def stranded(member: Member, faction: str) -> bool:

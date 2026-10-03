@@ -89,7 +89,9 @@ class TheLadderIsPerFactionAndPerLevel(unittest.TestCase):
         states = {r["keyword"]: r["state"] for r in view["rungs"]}
         self.assertEqual(states["ragefire"], dungeonladder.OUTGROWN)
         self.assertEqual(states["stockades"], dungeonladder.OTHER_SIDE)
-        self.assertEqual(states["deadmines"], dungeonladder.ACROSS)
+        # Since #471 the Deadmines is Alliance-only: for the Horde it reads
+        # as the other faction's, not merely across the sea.
+        self.assertEqual(states["deadmines"], dungeonladder.OTHER_SIDE)
         self.assertEqual(states["blackfathom"], dungeonladder.OPEN)
         self.assertEqual(states["razorfen-kraul"], dungeonladder.AHEAD)
         self.assertTrue(view["line"].startswith("Open now: Blackfathom Deeps."))
