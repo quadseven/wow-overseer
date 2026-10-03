@@ -1370,13 +1370,19 @@ def plan(
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
         master = str(masters.get(m.guild) or "")
-        step, doing, note = _gear_first(m, (gear or {}).get(m.name), recent, cap)
-        if step is None:
-            gear_note = note
-            step, doing, note = _plan_member(
-                m, trades, fields, doors, pending, crafters, master, kept, recent, cap
-            )
-            note = "; ".join(n for n in (gear_note, note) if n)
+        step, doing, note = _member_step(
+            m,
+            (gear or {}).get(m.name),
+            trades,
+            fields,
+            doors,
+            pending,
+            crafters,
+            master,
+            kept,
+            recent,
+            cap,
+        )
         lines[m.name] = doing
         if note:
             notes.append(note)
@@ -1396,6 +1402,19 @@ def plan(
         doors=doors,
         notes=tuple(notes),
     )
+
+
+def _member_step(
+    m, offer, trades, fields, doors, pending, crafters, master, kept, recent, cap
+):
+    """Gear first, then the member's ordinary job, keeping both notes."""
+    step, doing, gear_note = _gear_first(m, offer, recent, cap)
+    if step is not None:
+        return step, doing, gear_note
+    step, doing, note = _plan_member(
+        m, trades, fields, doors, pending, crafters, master, kept, recent, cap
+    )
+    return step, doing, "; ".join(n for n in (gear_note, note) if n)
 
 
 def _gear_first(m, offer, recent, cap):
