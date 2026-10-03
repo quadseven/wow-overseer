@@ -714,11 +714,11 @@ def _sample_meter(rosters: dict, timeout: float = AURA_PROBE_TIMEOUT_SECONDS) ->
             deadline = time.monotonic() + max(0.0, timeout)
             while pending and time.monotonic() < deadline:
                 marks = ",".join(["%s"] * len(pending))
-                cur.execute(
-                    "SELECT id, status, detail, result FROM overseer_command "
-                    f"WHERE id IN ({marks})",  # noqa: S608 - markers contain no user input
-                    tuple(pending),
+                query = (
+                    "SELECT id, status, detail, result FROM overseer_command "  # noqa: S608 - markers contain no user input
+                    f"WHERE id IN ({marks})"
                 )
+                cur.execute(query, tuple(pending))
                 for row in cur.fetchall():
                     if row["status"] in ("pending", "claimed", "verifying"):
                         continue
