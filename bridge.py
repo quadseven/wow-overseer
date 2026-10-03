@@ -1158,6 +1158,9 @@ def _give_them_a_life(names: list) -> int:
     # (mod-overseer#659). Per row, like `gathering`: the module reads the job
     # one row at a time and so does this.
     in_town = {name for name, mode in standing.items() if mode == jobs.TOWN_RUN}
+    # A DUNGEON JOB OWNS ITS LEADER'S ROUTE: no level grind between errands
+    # (goals.GRIND_OFF).
+    campaigning = {name for name, mode in standing.items() if jobs.is_dungeon_job(mode)}
     # A FAMILY LEADER'S `new rpg` IS mod-overseer's (mod-overseer#722). Its
     # intent book grants and removes it on the leader as the walk he is on
     # needs, and refuses the toggle from here; toggling it every cycle was one
@@ -1183,6 +1186,7 @@ def _give_them_a_life(names: list) -> int:
                 travelling=(name in travelling),
                 gathering=(name in gathering),
                 in_town=(name in in_town),
+                campaign=(name in campaigning),
             ),
             name in leads,
         ):

@@ -502,6 +502,16 @@ LIFE_STRATEGY = "nc +new rpg"
 # dying at 0.
 FLEE_STRATEGY = "co +flee"
 
+# Taken off, not merely withheld, because a granted strategy outlives the
+# pass that granted it: the leader keeps `grind` until something removes it
+# or he relogs. A campaign leader left with it fights whatever is in front of
+# him wherever he stands. On wow-dev 2026-10-03 Grug fought on alone in
+# Western Plaguelands while his four waited in Stormwind, and campaign 72
+# failed 25 attempts in a row on "the reset never became possible - still in
+# combat: Grug". Inside the instance mod-dungeon-clear suppresses `grind`
+# anyway, so removing it there changes nothing.
+GRIND_OFF = "nc -grind"
+
 
 def returned_to_ai(previous, current) -> frozenset:
     """Who has just come back under AI control since the last look.
@@ -577,6 +587,7 @@ def life_strategies(
     travelling: bool = False,
     gathering: bool = False,
     in_town: bool = False,
+    campaign: bool = False,
 ) -> list:
     """What keeps this character playing, given whether it leads the party.
 
@@ -653,10 +664,24 @@ def life_strategies(
     """
     if in_town and not travelling:
         return _in_town_strategies(leads)
+    if campaign and leads and not travelling:
+        return _with_gathering(_campaign_leader_strategies(), gathering)
     return _with_gathering(
         _life_strategies(leads=leads, aimed=aimed, travelling=travelling),
         gathering,
     )
+
+
+def _campaign_leader_strategies() -> list:
+    """A leader on a dungeon job travels on errands, never on a grind.
+
+    `campaign` IS A `dungeon:` JOB. The campaign owns where its leader goes:
+    staging, repair, reset and the door are all errands, which make him
+    `travelling` and keep the ordinary branch. Between them he waits. The
+    level strategy is the one thing this loop would otherwise add, and
+    `grind` is what kept him in combat far from the door (see GRIND_OFF).
+    """
+    return [LIFE_STRATEGY, GRIND_OFF, FLEE_STRATEGY]
 
 
 def _in_town_strategies(leads: bool) -> list:
@@ -678,7 +703,7 @@ def _in_town_strategies(leads: bool) -> list:
     `flee`. The leader is not handed `follow`; it is its own master.
     """
     if leads:
-        return ["nc -new rpg", FLEE_STRATEGY]
+        return ["nc -new rpg", GRIND_OFF, FLEE_STRATEGY]
     return ["nc -new rpg", "nc +follow", FLEE_STRATEGY]
 
 
