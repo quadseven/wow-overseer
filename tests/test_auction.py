@@ -826,9 +826,7 @@ class SalesByHouseTest(unittest.TestCase):
             self._candidate("Grug", entry=100, guid=1),
             self._candidate("Grog", entry=200, guid=2),
         ]
-        by_house = auction.sales_by_house(
-            candidates, {"Grug": auction.HOUSE_ALLIANCE}
-        )
+        by_house = auction.sales_by_house(candidates, {"Grug": auction.HOUSE_ALLIANCE})
         self.assertEqual(set(by_house), {auction.HOUSE_ALLIANCE})
         self.assertEqual(
             [c["holder"] for c in by_house[auction.HOUSE_ALLIANCE]], ["Grug"]
