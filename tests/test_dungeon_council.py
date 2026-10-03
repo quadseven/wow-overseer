@@ -425,8 +425,13 @@ class ALevelTwentyFourAllianceFamily(unittest.TestCase):
 
 
 class AHordeFamilyIsNeverSentIntoStormwind(unittest.TestCase):
-    def test_a_level_sixteen_family_never_proposes_the_stockade(self):
-        members, rows = _family(16, HORDE_RACE)
+    def test_a_level_twenty_four_family_never_proposes_the_stockade(self):
+        """At 24 a Horde family on the Eastern Kingdoms has a real proposal
+        (Shadowfang Keep); it is never the Stockade. (Since #471 the
+        Deadmines is Alliance-only, so a level-16 Horde family here has no
+        reachable dungeon at all - the honest proposal is none, which
+        test_no_level_proposes_the_stockade already sweeps.)"""
+        members, rows = _family(24, HORDE_RACE)
         proposal = council._dungeon_proposal(members, rows, [])
         self.assertIsNotNone(proposal)
         self.assertNotEqual("stockades", proposal.keyword)
