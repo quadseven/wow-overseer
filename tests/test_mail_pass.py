@@ -483,6 +483,24 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
         self.assertIn("mod-overseer#230", self.doc)
         self.assertIn("GIVE_RETRY_MINUTES", self.doc)
 
+    def test_a_lost_town_slot_does_not_starve_takers_already_at_a_mailbox(self):
+        """wow-overseer#477. The `if not aimed and not at_the_mailbox` gate
+        used to return early, which starved the pass whenever seven other town
+        passes held the column: the family never got aimed at a mailbox, so the
+        per-taker gate below never ran, so zero rows were ever written.
+
+        The per-taker gate (`_mail_takes_in_reach`) already ensures a row is
+        only written where it can work. A lost slot must fall through to it,
+        not return: a taker who happens to be standing at a mailbox (the town
+        errand's hub, a walk past) still gets their takes queued."""
+        code = _statements("    async def _mail_once(")
+        # The gate that decides which rows are written is the per-taker one.
+        gate_idx = code.index("_mail_takes_in_reach(")
+        # The lost-slot branch must not return before reaching it.
+        lost_slot = code.index("if not aimed and not at_the_mailbox:")
+        branch = code[lost_slot:gate_idx]
+        self.assertNotIn("\n            return", branch)
+
 
 class TheModuleShips(unittest.TestCase):
     def test_mailrun_is_in_the_image(self):
