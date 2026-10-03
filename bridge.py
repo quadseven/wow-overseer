@@ -8558,10 +8558,19 @@ class Bridge(discord.Client):
 
     async def _auction_sales_once(self, names: list, leader: str,
                                   step: str, cohort=None) -> None:
-        """List safe surplus BoE gear at the leader's reachable house.
+        """List safe surplus BoE gear at each holder's reachable house.
 
         `auction.plan_sales` owns the sale judgement. This adapter only reads
         facts, supplies current market prices, and queues its returned rows.
+
+        EVERY HOLDER IS ASKED WHERE THEY ARE STANDING, NOT JUST THE LEADER
+        (wow-overseer#478). The rows are per holder and `DoAuction` answers
+        each one on its holder's own range to an auctioneer
+        (`FindAuctioneerInReach(player)`), so gating every listing on the
+        leader meant a holder already at a counter never got their items
+        listed while the leader walked elsewhere - and with the family often
+        split across town, that was most cycles. A holder with no counter in
+        reach contributes no listing; the leader is still aimed for the rest.
         """
         gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
         equipped = (await asyncio.to_thread(_fetch_family_equipped, names)
@@ -8577,7 +8586,6 @@ class Bridge(discord.Client):
         # NOTHING THE BANK POLICY KEEPS IS LISTED (#320).
         banked = await asyncio.to_thread(_bank_policy, names, True)
         candidates = [c for c in candidates if int(c["item_guid"]) not in banked]
-        entries = {c["entry"] for c in candidates}
         for row in gear_rows:
             try:
                 guid = int(row["item_guid"])
@@ -8587,7 +8595,6 @@ class Bridge(discord.Client):
                 if bag_pressure.item_binding(row) != disposition.BIND_ON_EQUIP:
                     continue
                 entry = int(row["entry"])
-                entries.add(entry)
                 candidates.append({
                     "holder": row["holder"], "item_guid": guid,
                     "entry": entry, "label": row.get("name", ""),
@@ -8605,8 +8612,24 @@ class Bridge(discord.Client):
                 continue
         if not candidates:
             return
-        counter = await asyncio.to_thread(_fetch_auctioneer, leader)
-        if not counter:
+        # WHICH HOUSE EACH HOLDER REACHES, READ PER HOLDER (wow-overseer#478).
+        # The three houses are disjoint per auctioneer faction and `DoAuction`
+        # shops in exactly the one its auctioneer serves, so a candidate is
+        # only plannable against the house its own holder stands in. A holder
+        # with no auctioneer in reach, or at one whose house cannot be named,
+        # contributes nothing this pass - their items wait for the walk below.
+        teams = await asyncio.to_thread(_fetch_teams, names)
+        holder_house = {}
+        for holder in sorted({str(c["holder"]) for c in candidates}):
+            counter = await asyncio.to_thread(_fetch_auctioneer, holder)
+            if not counter:
+                continue
+            house = auction.reachable_house(
+                teams.get(holder, ""), int(counter.get("faction") or 0))
+            if house:
+                holder_house[holder] = house
+        by_house = auction.sales_by_house(candidates, holder_house)
+        if not by_house:
             # A LISTING THAT FREES A FULL BAG IS AS URGENT AS A SALE (#148).
             # The vendor pass claims the traveller urgently on bag pressure;
             # without the same standing a listing waited behind every other
@@ -8620,36 +8643,38 @@ class Bridge(discord.Client):
                          leader, len(candidates))
                 self._auction_urgency_spent(cohort, "list", pressure)
             return
-        teams = await asyncio.to_thread(_fetch_teams, [leader])
-        house = auction.reachable_house(
-            teams.get(leader, ""), int(counter.get("faction") or 0))
-        if not house:
-            log.warning("auction: no reachable house for leader=%s", leader)
-            return
-        listings = await asyncio.to_thread(
-            _fetch_auction_listings, sorted(entries), house)
-        market = {}
-        for listing in listings:
-            market[listing.entry] = min(
-                market.get(listing.entry, listing.per_unit), listing.per_unit)
-        for candidate in candidates:
-            candidate["market_price"] = market.get(candidate["entry"], 0)
-        sales = auction.plan_sales(candidates)
         seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
         queued = 0
-        for sale in sales:
-            if (sale.candidate.holder, sale.command) in seen:
-                continue
-            if await asyncio.to_thread(_insert_auction,
-                                       sale.candidate.holder, sale.command):
-                queued += 1
-                log.info("auction: %s %s - %s", sale.candidate.holder,
-                         sale.command, sale.candidate.label or "surplus BoE")
+        for house, house_candidates in sorted(by_house.items()):
+            # ONE MARKET READ PER HOUSE. The listings are per pool, so each
+            # house's candidates are priced against their own house alone -
+            # a price from the wrong pool is a row `DoAuction` refuses as
+            # `WrongHouse`.
+            house_entries = sorted({int(c["entry"]) for c in house_candidates})
+            listings = await asyncio.to_thread(
+                _fetch_auction_listings, house_entries, house)
+            market = {}
+            for listing in listings:
+                market[listing.entry] = min(
+                    market.get(listing.entry, listing.per_unit), listing.per_unit)
+            for candidate in house_candidates:
+                candidate["market_price"] = market.get(candidate["entry"], 0)
+            sales = auction.plan_sales(house_candidates)
+            house_queued = 0
+            for sale in sales:
+                if (sale.candidate.holder, sale.command) in seen:
+                    continue
+                if await asyncio.to_thread(_insert_auction,
+                                           sale.candidate.holder, sale.command):
+                    queued += 1
+                    house_queued += 1
+                    log.info("auction: %s %s - %s", sale.candidate.holder,
+                             sale.command, sale.candidate.label or "surplus BoE")
+            log.info("auction: listed %d surplus BoE item(s) at house %s%s",
+                     house_queued, house, _family_label(cohort))
         if queued:
             await self._keep_at_auctioneer(leader, cohort)
             self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
-        log.info("auction: listed %d surplus BoE item(s) at house %s%s",
-                 queued, house, _family_label(cohort))
 
     async def _keep_at_auctioneer(self, leader: str, cohort=None) -> None:
         """Hold the leader at the counter while queued auction rows run.
@@ -15263,12 +15288,19 @@ class Bridge(discord.Client):
             # place, for every town pass. What only this pass knows is how much
             # is sitting in the mailbox going uncollected, and that the auction
             # pass is buying reagents that arrive there.
+            #
+            # NO EARLY RETURN (wow-overseer#477). The per-taker gate below
+            # (`_mail_takes_in_reach`) already ensures a row is only written
+            # where it can work. Returning here starved the pass whenever seven
+            # other town passes held the column: the family never got aimed at
+            # a mailbox, so the gate never ran, so zero rows were ever written.
+            # Falling through lets a taker who happens to be at a mailbox (the
+            # town errand's hub, a walk past) still get their takes queued.
             log.info(
                 "mail: leader=%s could not be aimed at a mailbox (%s) this "
-                "pass, so %d letter(s) stay uncollected until the town slot "
-                "comes round", leader, post.aim, len(letters),
+                "pass, so %d letter(s) stay uncollected unless a taker is "
+                "already at a mailbox", leader, post.aim, len(letters),
             )
-            return
 
         # THE ROW IS ONLY WRITTEN WHERE IT CAN WORK, AND THE TAKER IS WHO IT HAS
         # TO WORK FOR (infra#3830; the docstring has the reasoning and the
