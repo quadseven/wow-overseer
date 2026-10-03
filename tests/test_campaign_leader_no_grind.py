@@ -23,7 +23,9 @@ def _code(name: str) -> str:
     tree = ast.parse((ROOT / "bridge.py").read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == name:
-            return ast.get_source_segment((ROOT / "bridge.py").read_text(encoding="utf-8"), node)
+            return ast.get_source_segment(
+                (ROOT / "bridge.py").read_text(encoding="utf-8"), node
+            )
     raise AssertionError(f"{name} not found in bridge.py")
 
 
