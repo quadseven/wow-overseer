@@ -883,7 +883,10 @@ class SalesPassWiringTest(unittest.TestCase):
         self.assertIn("auction.sales_by_house(candidates, holder_house)", body)
 
     def test_the_pass_prices_each_house_against_its_own_market(self):
-        body = self._body()
+        src = BRIDGE.read_text(encoding="utf-8", errors="ignore")
+        start = src.index("async def _auction_sell_house(")
+        end = src.index("async def _keep_at_auctioneer(")
+        body = src[start:end]
         # One market read per house: a price from the wrong pool is a row
         # DoAuction refuses as WrongHouse.
         self.assertIn("_fetch_auction_listings, house_entries, house", body)

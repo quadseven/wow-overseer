@@ -8612,22 +8612,7 @@ class Bridge(discord.Client):
                 continue
         if not candidates:
             return
-        # WHICH HOUSE EACH HOLDER REACHES, READ PER HOLDER (wow-overseer#478).
-        # The three houses are disjoint per auctioneer faction and `DoAuction`
-        # shops in exactly the one its auctioneer serves, so a candidate is
-        # only plannable against the house its own holder stands in. A holder
-        # with no auctioneer in reach, or at one whose house cannot be named,
-        # contributes nothing this pass - their items wait for the walk below.
-        teams = await asyncio.to_thread(_fetch_teams, names)
-        holder_house = {}
-        for holder in sorted({str(c["holder"]) for c in candidates}):
-            counter = await asyncio.to_thread(_fetch_auctioneer, holder)
-            if not counter:
-                continue
-            house = auction.reachable_house(
-                teams.get(holder, ""), int(counter.get("faction") or 0))
-            if house:
-                holder_house[holder] = house
+        holder_house = await self._auction_holder_houses(candidates, names)
         by_house = auction.sales_by_house(candidates, holder_house)
         if not by_house:
             # A LISTING THAT FREES A FULL BAG IS AS URGENT AS A SALE (#148).
@@ -8646,35 +8631,65 @@ class Bridge(discord.Client):
         seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
         queued = 0
         for house, house_candidates in sorted(by_house.items()):
-            # ONE MARKET READ PER HOUSE. The listings are per pool, so each
-            # house's candidates are priced against their own house alone -
-            # a price from the wrong pool is a row `DoAuction` refuses as
-            # `WrongHouse`.
-            house_entries = sorted({int(c["entry"]) for c in house_candidates})
-            listings = await asyncio.to_thread(
-                _fetch_auction_listings, house_entries, house)
-            market = {}
-            for listing in listings:
-                market[listing.entry] = min(
-                    market.get(listing.entry, listing.per_unit), listing.per_unit)
-            for candidate in house_candidates:
-                candidate["market_price"] = market.get(candidate["entry"], 0)
-            sales = auction.plan_sales(house_candidates)
-            house_queued = 0
-            for sale in sales:
-                if (sale.candidate.holder, sale.command) in seen:
-                    continue
-                if await asyncio.to_thread(_insert_auction,
-                                           sale.candidate.holder, sale.command):
-                    queued += 1
-                    house_queued += 1
-                    log.info("auction: %s %s - %s", sale.candidate.holder,
-                             sale.command, sale.candidate.label or "surplus BoE")
-            log.info("auction: listed %d surplus BoE item(s) at house %s%s",
-                     house_queued, house, _family_label(cohort))
+            queued += await self._auction_sell_house(
+                house, house_candidates, seen, cohort)
         if queued:
             await self._keep_at_auctioneer(leader, cohort)
             self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
+
+    async def _auction_holder_houses(self, candidates: list, names: list) -> dict:
+        """`{holder: house}` for each candidate holder at an auctioneer.
+
+        WHICH HOUSE EACH HOLDER REACHES, READ PER HOLDER (wow-overseer#478).
+        The three houses are disjoint per auctioneer faction and `DoAuction`
+        shops in exactly the one its auctioneer serves, so a candidate is
+        only plannable against the house its own holder stands in. A holder
+        with no auctioneer in reach, or at one whose house cannot be named,
+        contributes nothing this pass - their items wait for the walk below.
+        """
+        teams = await asyncio.to_thread(_fetch_teams, names)
+        holder_house = {}
+        for holder in sorted({str(c["holder"]) for c in candidates}):
+            counter = await asyncio.to_thread(_fetch_auctioneer, holder)
+            if not counter:
+                continue
+            house = auction.reachable_house(
+                teams.get(holder, ""), int(counter.get("faction") or 0))
+            if house:
+                holder_house[holder] = house
+        return holder_house
+
+    async def _auction_sell_house(self, house: int, house_candidates: list,
+                                  seen: set, cohort=None) -> int:
+        """Plan and queue listings for one house's candidates.
+
+        ONE MARKET READ PER HOUSE. The listings are per pool, so each house's
+        candidates are priced against their own house alone - a price from the
+        wrong pool is a row `DoAuction` refuses as `WrongHouse`. Returns the
+        number of rows queued.
+        """
+        house_entries = sorted({int(c["entry"]) for c in house_candidates})
+        listings = await asyncio.to_thread(
+            _fetch_auction_listings, house_entries, house)
+        market = {}
+        for listing in listings:
+            market[listing.entry] = min(
+                market.get(listing.entry, listing.per_unit), listing.per_unit)
+        for candidate in house_candidates:
+            candidate["market_price"] = market.get(candidate["entry"], 0)
+        sales = auction.plan_sales(house_candidates)
+        house_queued = 0
+        for sale in sales:
+            if (sale.candidate.holder, sale.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_auction,
+                                       sale.candidate.holder, sale.command):
+                house_queued += 1
+                log.info("auction: %s %s - %s", sale.candidate.holder,
+                         sale.command, sale.candidate.label or "surplus BoE")
+        log.info("auction: listed %d surplus BoE item(s) at house %s%s",
+                 house_queued, house, _family_label(cohort))
+        return house_queued
 
     async def _keep_at_auctioneer(self, leader: str, cohort=None) -> None:
         """Hold the leader at the counter while queued auction rows run.
