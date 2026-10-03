@@ -44,6 +44,7 @@ import guildroute
 import jevview
 import levelroute
 import llmmode
+import meter
 import lootcouncil
 import gearorigin
 import lootstory
@@ -672,6 +673,78 @@ def _cached_auras_payload(rosters: dict) -> dict:
         responses = _sample_auras(rosters)
         payload = _build_auras_payload(rosters, responses)
         _AURA_CACHE = (time.monotonic() + AURA_CACHE_SECONDS, signature, payload)
+        return payload
+
+
+# The meter asks ONE member per family (the probe answers for the family), on
+# the same short cache as the auras and for the same reason: the page polls,
+# and every poll must not become a row per family on the command queue.
+METER_CACHE_SECONDS = 5.0
+_METER_CACHE_LOCK = threading.Lock()
+_METER_CACHE: tuple[float, tuple, dict] | None = None
+
+
+def _meter_probe_result(row: dict) -> dict:
+    if row["status"] == "delivered" and row["result"]:
+        try:
+            return {"status": "online", "meter": meter.normalize(json.loads(row["result"]))}
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            return {"status": "error", "error": str(exc)}
+    return {"status": "error", "error": str(row["detail"] or row["status"])}
+
+
+def _sample_meter(rosters: dict, timeout: float = AURA_PROBE_TIMEOUT_SECONDS) -> dict:
+    """family -> probe response, asking each family's first (leading) member."""
+    targets = [(family_name, names[0]) for family_name, names in rosters.items() if names]
+    if not targets:
+        return {}
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            pending = {}
+            for family_name, name in targets:
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, source) "
+                    "VALUES (%s, 'meter', 'probe', 'api:meter')",
+                    (name,),
+                )
+                pending[cur.lastrowid] = family_name
+            responses = {}
+            deadline = time.monotonic() + max(0.0, timeout)
+            while pending and time.monotonic() < deadline:
+                marks = ",".join(["%s"] * len(pending))
+                query = (
+                    "SELECT id, status, detail, result FROM overseer_command "  # noqa: S608 - markers contain no user input
+                    f"WHERE id IN ({marks})"
+                )
+                cur.execute(query, tuple(pending))
+                for row in cur.fetchall():
+                    if row["status"] in ("pending", "claimed", "verifying"):
+                        continue
+                    responses[pending.pop(row["id"])] = _meter_probe_result(row)
+                if pending:
+                    time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
+            for family_name in pending.values():
+                responses[family_name] = {
+                    "status": "error",
+                    "error": "timed out waiting for the worldserver",
+                }
+            return responses
+    finally:
+        conn.close()
+
+
+def _cached_meter_payload(rosters: dict) -> dict:
+    global _METER_CACHE
+    signature = tuple((key, tuple(names)) for key, names in sorted(rosters.items()))
+    with _METER_CACHE_LOCK:
+        now = time.monotonic()
+        if (_METER_CACHE is not None and now < _METER_CACHE[0]
+                and signature == _METER_CACHE[1]):
+            return _METER_CACHE[2]
+        payload = meter.payload(list(rosters), _sample_meter(rosters), int(time.time()))
+        _METER_CACHE = (time.monotonic() + METER_CACHE_SECONDS, signature, payload)
         return payload
 
 
@@ -4983,6 +5056,22 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("aura probe failed")
             self._send(503, "application/json", b'{"error": "aura sample unavailable"}')
 
+    def _meter(self, query: dict) -> None:
+        """GET /api/meter - each family's damage, healing and threat this fight.
+
+        No selector, like /api/auras: the families come from the roster. One
+        live probe per family, cached for METER_CACHE_SECONDS.
+        """
+        if query:
+            self._send(400, "application/json", b'{"error": "no query parameters accepted"}')
+            return
+        try:
+            payload = _cached_meter_payload(_fetch_families())
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except (pymysql.err.MySQLError, OSError):
+            log.exception("meter probe failed")
+            self._send(503, "application/json", b'{"error": "meter unavailable"}')
+
     def _armory(self, query: dict) -> None:
         """GET /api/armory - what the five are wearing, and how they are specced.
 
@@ -6316,6 +6405,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/family": _family,
         "/api/wall": _wall,
         "/api/auras": _auras,
+        "/api/meter": _meter,
         "/api/armory": _armory,
         "/api/armory/guild": _armory_guild,
         "/api/armory/member": _armory_member,

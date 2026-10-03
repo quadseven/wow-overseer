@@ -2437,6 +2437,14 @@
                padding:.08rem .45rem; color:var(--accent-text);
                font-size:.78rem; overflow-wrap:anywhere; }
   .aura-empty, .aura-loading { color:var(--on-card-dim); font-size:.8rem; }
+  .meter-table { width:100%; border-collapse:collapse; margin-top:.45rem;
+                 font-variant-numeric:tabular-nums; font-size:.85rem; }
+  .meter-table th { color:var(--on-card-dim); font-family:var(--mono); font-size:10px;
+                    font-weight:400; letter-spacing:.08em; text-transform:uppercase;
+                    text-align:right; padding:.15rem .35rem; }
+  .meter-table th:first-child, .meter-table td:first-child { text-align:left; }
+  .meter-table td { text-align:right; padding:.2rem .35rem; border-top:1px solid var(--line); }
+  .meter-wrap { overflow-x:auto; }
   .aura-details { margin-top:.35rem; }
   .aura-details summary { color:var(--on-card-dim); cursor:pointer;
                           font-family:var(--mono); font-size:10px;
@@ -3641,6 +3649,7 @@
   <div class="fsec"><span class="fsecn">01</span><span class="fsecline"></span><span class="fsecl">the family</span></div>
   <div id="fheadline">reaching the world...</div>
   <div class="aura-panel" id="family-auras" aria-live="polite" aria-label="Live family auras"></div>
+  <div class="aura-panel meter-panel" id="family-meter" aria-label="Family damage, healing and threat this fight"></div>
   <!-- THE FIVE FEEDS, and nothing between them and the top of the tab
        (infra#88). One card per character: their broadcast at the full
        width of its column, then one strip of facts about them. The
@@ -6955,6 +6964,84 @@ async function pollAuras() {
   }
 }
 
+// THE FAMILY METER (/api/meter): damage, healing, damage taken and threat
+// on the leader's target, this fight or the last one. Five seconds, like the
+// other family panels; the server caches its probe for the same five.
+const meterPanel = document.getElementById("family-meter");
+const METER_POLL_INTERVAL_MS = 5000;
+const meterState = { payload: null, error: false };
+
+function meterCell(row, text) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  row.appendChild(td);
+}
+
+function renderMeter() {
+  if (!meterPanel) return;
+  meterPanel.textContent = "";
+  const head = document.createElement("div");
+  head.className = "aura-head";
+  const title = document.createElement("span");
+  title.className = "aura-title";
+  title.textContent = "Meter";
+  head.appendChild(title);
+  const fam = meterState.payload && Array.isArray(meterState.payload.families)
+    ? meterState.payload.families.find(f => f.family === familyKey) || meterState.payload.families[0]
+    : null;
+  const fresh = document.createElement("span");
+  fresh.className = "aura-freshness" + (meterState.error ? " error" : "");
+  if (meterState.error) fresh.textContent = "meter unavailable";
+  else if (!fam) fresh.textContent = "waiting for the first fight";
+  else if (fam.status !== "online") fresh.textContent = fam.error || "no answer";
+  else fresh.textContent = (fam.live ? "fighting" : "last fight") + ", " + fam.seconds + "s" +
+    (fam.target ? " on " + fam.target : "");
+  head.appendChild(fresh);
+  meterPanel.appendChild(head);
+  if (!fam || fam.status !== "online" || !fam.members.length) return;
+  const wrap = document.createElement("div");
+  wrap.className = "meter-wrap";
+  const table = document.createElement("table");
+  table.className = "meter-table";
+  const hr = document.createElement("tr");
+  for (const label of ["who", "damage", "dps", "healing", "hps", "taken", "threat"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    hr.appendChild(th);
+  }
+  table.appendChild(hr);
+  for (const m of fam.members) {
+    const tr = document.createElement("tr");
+    meterCell(tr, m.name);
+    meterCell(tr, m.damage.toLocaleString());
+    meterCell(tr, m.dps.toLocaleString());
+    meterCell(tr, m.healing.toLocaleString());
+    meterCell(tr, m.hps.toLocaleString());
+    meterCell(tr, m.taken.toLocaleString());
+    meterCell(tr, m.threat_pct >= 0 ? m.threat_pct + "%" : "-");
+    table.appendChild(tr);
+  }
+  wrap.appendChild(table);
+  meterPanel.appendChild(wrap);
+}
+
+async function pollMeter() {
+  if (view !== FAMILY_VIEW) return;
+  try {
+    const response = await fetch(u("/api/meter"), { cache: "no-store" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const payload = await response.json();
+    if (!payload || !Array.isArray(payload.families)) throw new Error("invalid meter payload");
+    meterState.payload = payload;
+    meterState.error = false;
+  } catch (error) {
+    console.warn("meter poll failed", error);
+    meterState.error = true;
+  } finally {
+    renderMeter();
+  }
+}
+
 async function pollFamily() {
   if (view !== FAMILY_VIEW && view !== WATCH_VIEW) return;
   const onWatch = view === WATCH_VIEW;
@@ -7313,6 +7400,7 @@ wallSoundButton();
 setInterval(pollFamily, 5000);         // the family rides the same 5s cadence
 setInterval(refreshFamilyWatch, 5000); // and so does the watch it owns
 setInterval(pollAuras, AURA_POLL_INTERVAL_MS); // slower than wall state
+setInterval(pollMeter, METER_POLL_INTERVAL_MS);
 setInterval(pollQuests, 30000);        // quest rows are a save, not a stream
 setInterval(pollNeeds, 30000);         // and so are bags, gear and coin
 setInterval(pollRoute, 30000);         // a level or a finished zone moves it
