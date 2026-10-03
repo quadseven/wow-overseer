@@ -99,6 +99,7 @@ import council
 import craft
 import craft_rhythm
 import dungeonpath
+import gearup
 import guildcorps
 import guildroute
 import keep
@@ -272,6 +273,7 @@ MAX_SALES = 12
 # HOW OFTEN EACH KIND OF STEP MAY BE ASKED OF ONE MEMBER, in minutes, counted
 # from the command log so a restart forgets nothing.
 COOLDOWN_MINUTES = {
+    "gear": 60,
     "train": 60,
     "tool": 60,
     "post": 60,
@@ -861,6 +863,77 @@ def _tool_step(member, cap):
     return None, ""
 
 
+# A GEAR-SHORT MEMBER BUYS WHITES OFF A COUNTER WITH ITS OWN GOLD. On wow-dev
+# on 2026-10-03, 113 of 142 guild members wore gear more than six item levels
+# under their own level, most of them in five to eight of seventeen slots, so
+# guildrun's gear gate kept every guild group out of the dungeons that would
+# have geared them. Nothing walked a guild member to a vendor: the family's
+# gear errand (gearup) is the family's. This is that errand for one member: the
+# vendor gearup.vendor_trip picks from the stock in reach, then every piece
+# gearup.plan_vendor_buys would buy there, up to GEAR_BUYS_PER_STEP. A piece
+# lands in the bags and the bot's own equip upgrade puts it on.
+GEAR_BUYS_PER_STEP = 4
+
+
+def gear_step(member, character, vendor_rows, cap):
+    """(step or None, why not) for one gear-short member.
+
+    `character` is the member's gearup facts (class, level, purse, equipped,
+    skills) and `vendor_rows` the vendor stock in reach of where it stands,
+    the rows gearup.vendor_trip reads. The walk names the first piece's
+    entry, and the module walks to the nearest friendly vendor that stocks it.
+    """
+    if not character or not gearup.gear_short(character):
+        return None, ""
+    if member.map_id is None:
+        return None, "%s is short of gear; where it stands is not read" % member.name
+    trip = gearup.vendor_trip(
+        {member.name: character}, vendor_rows, map_id=member.map_id
+    )
+    if not trip.vendor:
+        return None, "%s is short of gear: %s" % (member.name, trip.why_not)
+    stock = gearup.stock_of(vendor_rows, trip.vendor)
+    offers = [
+        r
+        for r in vendor_rows
+        if int(r.get("vendor") or 0) == trip.vendor
+        and int(r.get("entry") or 0) in stock
+    ]
+    buys = gearup.plan_vendor_buys({member.name: character}, {member.name: offers})
+    buys = buys[:GEAR_BUYS_PER_STEP]
+    if not buys:
+        return (
+            None,
+            "%s is short of gear and %s sells it nothing it can wear and afford"
+            % (member.name, trip.name),
+        )
+    said = "%s walks to %s to buy %d piece(s) for empty slots: %s" % (
+        member.name,
+        trip.name,
+        len(buys),
+        ", ".join(b.slot for b in buys),
+    )
+    step = guildcorps.Step(
+        member.name,
+        "gear",
+        buys[0].entry,
+        said,
+        rows=tuple(
+            guildcorps.Row(
+                "buy", gearup.vendor_command(b), "", source_for("gear", member.name)
+            )
+            for b in buys
+        ),
+        walk=guildcorps.Row(
+            "buy",
+            "walk-to-vendor item:%d%s" % (buys[0].entry, _cap_word(cap)),
+            "",
+            source_for("gear", member.name),
+        ),
+    )
+    return step, ""
+
+
 # A CRAFTER IS POSTED ONLY WHAT IT CAN WORK NOW (#373). Holding a trade is not
 # enough: on wow-dev on 2026-09-27 all ten family members held Cooking at 1,
 # so "the best cook" was a name tiebreak, and Bork was posted 1,190 items of
@@ -1270,6 +1343,7 @@ def plan(
     per_guild=STEPS_PER_GUILD,
     unclaimed=(),
     banks=None,
+    gear=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -1279,7 +1353,8 @@ def plan(
     `kept` keep.Reservations; `recent` Recent rows; `busy`
     names another pass has on a walk; `unclaimed` names family members with a
     materials post still unopened in their mailbox (`without_unclaimed`);
-    `banks` the guilds that own a guild bank tab, None when unread.
+    `banks` the guilds that own a guild bank tab, None when unread; `gear`
+    name -> (gearup facts, vendor rows in reach) for gear-short members.
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -1295,8 +1370,18 @@ def plan(
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
         master = str(masters.get(m.guild) or "")
-        step, doing, note = _plan_member(
-            m, trades, fields, doors, pending, crafters, master, kept, recent, cap
+        step, doing, note = _member_step(
+            m,
+            (gear or {}).get(m.name),
+            trades,
+            fields,
+            doors,
+            pending,
+            crafters,
+            master,
+            kept,
+            recent,
+            cap,
         )
         lines[m.name] = doing
         if note:
@@ -1317,6 +1402,32 @@ def plan(
         doors=doors,
         notes=tuple(notes),
     )
+
+
+def _member_step(
+    m, offer, trades, fields, doors, pending, crafters, master, kept, recent, cap
+):
+    """Gear first, then the member's ordinary job, keeping both notes."""
+    step, doing, gear_note = _gear_first(m, offer, recent, cap)
+    if step is not None:
+        return step, doing, gear_note
+    step, doing, note = _plan_member(
+        m, trades, fields, doors, pending, crafters, master, kept, recent, cap
+    )
+    return step, doing, "; ".join(n for n in (gear_note, note) if n)
+
+
+def _gear_first(m, offer, recent, cap):
+    """A natural member short of gear walks to a vendor before any other job."""
+    if not m.eligible or not offer or not m.online or m.in_combat:
+        return None, "", ""
+    if _cooling(m, "gear", recent):
+        return None, "", ""
+    character, vendor_rows = offer
+    step, why = gear_step(m, character, vendor_rows, cap)
+    if step is None:
+        return None, "", why
+    return step, step.said, ""
 
 
 def _plan_member(

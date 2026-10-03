@@ -13400,12 +13400,37 @@ class Bridge(discord.Client):
             fields=fields, doors=doors, pending=facts["pending"],
             kept=await asyncio.to_thread(_KEEP.now),
             recent=facts["recent"], busy=busy, cap=cap,
-            unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"))
+            unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"),
+            gear=await self._job_gear_offers(members, facts["recent"]))
         if facts.get("unclaimed"):
             log.info("guild jobs: no new materials post for %s until the posts "
                      "waiting unopened are collected; theirs go to the bank",
                      ", ".join(sorted(facts["unclaimed"])))
         return plan
+
+    async def _job_gear_offers(self, members, recent) -> dict:
+        """name -> (gearup facts, vendor rows in reach) for gear-short members.
+
+        Only natural members online, out of combat, placed and off the gear
+        cooldown, and at most GUILD_GEAR_READS_PER_PASS of them: each one is a
+        vendor stock read around where it stands.
+        """
+        wanted = [m for m in members
+                  if m.eligible and m.online and not m.in_combat
+                  and m.map_id is not None and m.x is not None and m.y is not None
+                  and not guildjobs._cooling(m, "gear", recent)]
+        if not wanted:
+            return {}
+        facts = await asyncio.to_thread(_fetch_gearup_facts, [m.name for m in wanted])
+        offers = {}
+        for m in wanted:
+            character = facts.get(m.name)
+            if not character or not gearup.gear_short(character):
+                continue
+            if len(offers) >= GUILD_GEAR_READS_PER_PASS:
+                break
+            offers[m.name] = (character, await asyncio.to_thread(_fetch_gear_vendors, m))
+        return offers
 
     def _log_guild_job_plan(self, members, plan):
         for guild in sorted({m.guild for m in members}):
@@ -22714,6 +22739,12 @@ _GEAR_VENDOR_SQL = (
     "it.Quality "
     "HAVING yards <= %s ORDER BY yards, vendor"
 )
+
+
+# The guild gear step's vendor reads per pass (guildjobs.gear_step): each is
+# one stock query around one member, so the pass stays bounded however many
+# members are short.
+GUILD_GEAR_READS_PER_PASS = 12
 
 
 def _fetch_gear_vendors(here) -> list:
