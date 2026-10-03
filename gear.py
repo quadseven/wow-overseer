@@ -1122,7 +1122,10 @@ def _within_trade_range(here: Spot, there: Spot) -> bool:
         or int(here.instance_id) != int(there.instance_id)
     ):
         return False
-    return math.hypot(here.x - there.x, here.y - there.y) <= TRADE_YARDS
+    # STRICTLY inside: the core's own compare is strict (mod-overseer's
+    # test_give_range.cpp pins exactly-at-11.11 as refused), so planning a
+    # hand-over at exactly TRADE_YARDS would only ever become an error row.
+    return math.hypot(here.x - there.x, here.y - there.y) < TRADE_YARDS
 
 
 def spots_from_rows(rows) -> dict:
