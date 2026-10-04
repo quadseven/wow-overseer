@@ -88,6 +88,11 @@ MAX_SOON_GAP = 75
 
 # Seats, in the order the route prefers them.
 HOLDER = "holder"
+# THE FAMILY MEMBER ASSIGNED A TRADE IS ITS MASTER (operator, 2026-10-04: "the
+# family should be the master crafters and have priority for recipes and
+# crafting"). The assignment is overseer_roster.professions, not skill: a
+# master short of a recipe's rank still outranks a backup who has it now.
+MASTER = "master"
 FAMILY = "family"
 DESIGNATED = "designated"
 GUILD = "guild"
@@ -146,6 +151,8 @@ class Person:
     level: int = 0
     family: bool = False
     online: bool = False
+    # The trades the roster assigns this family member (skill line ids).
+    assigned: frozenset = frozenset()
 
     def rank(self, skill: int) -> int:
         return _int((self.skills or {}).get(int(skill), 0))
@@ -181,11 +188,16 @@ def register(people, n: int = DEFAULT_PER_TRADE) -> dict:
     for skill in sorted(TRADES):
         trade = TRADES[skill]
         seats = [
+            Seat(trade, skill, p.name, p.rank(skill), _int(p.level), MASTER)
+            for p in people
+            if p.family and int(skill) in p.assigned
+        ]
+        seats += [
             Seat(trade, skill, p.name, p.rank(skill), _int(p.level), FAMILY)
             for p in sorted(
                 people, key=lambda p: (-p.rank(skill), -_int(p.level), p.name)
             )
-            if p.family and p.rank(skill) > 0
+            if p.family and p.rank(skill) > 0 and int(skill) not in p.assigned
         ]
         others = [p for p in people if not p.family and p.rank(skill) > 0]
         others.sort(
@@ -348,6 +360,20 @@ def _seats_by_name(reg: dict, skill: int) -> dict:
     return {s.name: (i, s.seat) for i, s in enumerate(reg.get(int(skill), ()))}
 
 
+# The route's preference, best first. The master comes before anyone else
+# whether it can learn the recipe now or soon; a backup ("designated") only
+# takes what the master cannot.
+SEAT_TIERS = {
+    (MASTER, True): 0,
+    (MASTER, False): 1,
+    (FAMILY, True): 2,
+    (DESIGNATED, True): 3,
+    (FAMILY, False): 4,
+    (DESIGNATED, False): 5,
+    (GUILD, True): 6,
+}
+
+
 def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> list:
     """Every person who could take this recipe, best first, as Pick values.
 
@@ -369,16 +395,10 @@ def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> lis
             continue
         order, seat = seats.get(person.name, (len(seats), GUILD))
         if person.family:
-            seat = FAMILY
+            seat = MASTER if int(recipe.skill) in person.assigned else FAMILY
         if seat == GUILD and not now:
             continue
-        tier = {
-            (FAMILY, True): 0,
-            (DESIGNATED, True): 1,
-            (FAMILY, False): 2,
-            (DESIGNATED, False): 3,
-            (GUILD, True): 4,
-        }[(seat, now)]
+        tier = SEAT_TIERS[(seat, now)]
         benefit = abs(have - recipe.rank)
         online = bool(person.online or person.family)
         if now:

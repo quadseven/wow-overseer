@@ -20470,13 +20470,45 @@ def _fetch_crafter_known(names: list, spells: list) -> list:
         return [dict(row) for row in cur.fetchall()]
 
 
-def _crafter_people(names: list, skills: dict, roster: list) -> list:
-    """crafters.Person for the family and every guildmate outside it."""
+def _fetch_assigned_trades(names: list) -> dict:
+    """name -> set of skill ids from overseer_roster.professions ("164,186")."""
+    if not names:
+        return {}
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT name, professions FROM overseer_roster "  # noqa: S608 - placeholders from a COUNT
+                "WHERE name IN (%s)" % marks, list(names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+        rows = cur.fetchall()
+    out = {}
+    for row in rows:
+        ids = set()
+        for part in str(row.get("professions") or "").split(","):
+            if part.strip().isdigit():
+                ids.add(int(part.strip()))
+        out[str(row["name"])] = ids
+    return out
+
+
+def _crafter_people(names: list, skills: dict, roster: list,
+                    assigned: dict | None = None) -> list:
+    """crafters.Person for the family and every guildmate outside it.
+
+    `assigned` is name -> the roster's assigned trade skill ids, which make a
+    family member that trade's master (crafters.MASTER).
+    """
     family = set(names)
+    assigned = assigned or {}
     levels = {m.name: int(m.level or 0) for m in roster}
     people = [
         crafters.Person(name=name, skills=dict(skills.get(name) or {}),
-                        level=levels.get(name, 0), family=True, online=True)
+                        level=levels.get(name, 0), family=True, online=True,
+                        assigned=frozenset(assigned.get(name, ())))
         for name in sorted(family)
     ]
     people.extend(
@@ -20512,7 +20544,7 @@ def _crafter_plan(names: list) -> CrafterPlan:
     """
     skills = _fetch_recipe_skills(names)
     roster = _fetch_guild_roster(names)
-    people = _crafter_people(names, skills, roster)
+    people = _crafter_people(names, skills, roster, _fetch_assigned_trades(names))
     reg = crafters.register(people, crafters.per_trade(os.environ))
     recipes = _fetch_crafter_recipes(names)
     known = crafters.known_from_rows(
