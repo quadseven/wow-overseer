@@ -515,9 +515,14 @@ BLOCKED_DOORS = {
 # held 117 of 132 members out of the dungeons that gear them, and no guild run
 # formed after 10-01. Real players run Deadmines in quest whites. A damage
 # dealer goes in whatever it wears; a tank or a healer needs a main-hand weapon
-# and COVERED_SLOTS of the 15 armor slots, because a naked tank or healer wipes
-# the group.
-COVERED_SLOTS = 10
+# and COVERED_SLOTS of the 8 body-armor slots (head, shoulders, chest, waist,
+# legs, feet, wrists, hands), because a naked tank or healer wipes the group.
+#
+# BODY ARMOR, NOT EVERY SLOT. The first version counted 10 of 15 slots,
+# including neck, rings, trinkets and back, which a level-15 player rarely
+# fills: live, every one of 21 tank-fit and 30 healer-fit members wore 4 to 7
+# of the 15 and none could be seated, so no run formed at all.
+COVERED_SLOTS = 4
 
 
 def covered(member: Member) -> bool:

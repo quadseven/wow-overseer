@@ -19625,10 +19625,11 @@ _GUILD_RUN_MEMBERS_SQL = (
     # shirt; gearup.stale_gear leaves them out the same way.
     "WHERE ci.guid = s.guid AND ci.bag = 0 AND ci.slot < 19 "
     "AND ci.slot NOT IN (3, 18)) AS gear_ilvl, "
-    # The coverage gate (guildrun.covered): armor slots 0 to 14 without the
-    # shirt (3), and the main hand (15).
+    # The coverage gate (guildrun.covered): the 8 body-armor slots (head 0,
+    # shoulders 2, chest 4, waist 5, legs 6, feet 7, wrists 8, hands 9), and
+    # the main hand (15).
     "(SELECT COUNT(*) FROM character_inventory ci WHERE ci.guid = s.guid "
-    "AND ci.bag = 0 AND ci.slot <= 14 AND ci.slot <> 3) AS worn_slots, "
+    "AND ci.bag = 0 AND ci.slot IN (0, 2, 4, 5, 6, 7, 8, 9)) AS worn_slots, "
     "EXISTS (SELECT 1 FROM character_inventory ci WHERE ci.guid = s.guid "
     "AND ci.bag = 0 AND ci.slot = 15) AS has_weapon, "
     # IN THE WORLD IS A FRESH SNAPSHOT, NOT characters.online. The flag reads

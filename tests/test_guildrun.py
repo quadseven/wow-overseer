@@ -316,24 +316,25 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         self.assertEqual(len(free), 5)
         self.assertEqual(skipped, {})
 
-    def test_a_tank_or_healer_needs_a_weapon_and_ten_armor_slots(self):
-        dressed = member("T", 18, WARRIOR, worn_slots=10, has_weapon=1)
+    def test_a_tank_or_healer_needs_a_weapon_and_four_body_armor_slots(self):
+        # Live 2026-10-04: tank- and healer-fit members wore 4 to 7 slots.
+        dressed = member("T", 18, WARRIOR, worn_slots=4, has_weapon=1)
         self.assertTrue(guildrun.covered(dressed))
         self.assertFalse(
-            guildrun.covered(member("T", 18, WARRIOR, worn_slots=9, has_weapon=1))
+            guildrun.covered(member("T", 18, WARRIOR, worn_slots=3, has_weapon=1))
         )
         self.assertFalse(
-            guildrun.covered(member("T", 18, WARRIOR, worn_slots=15, has_weapon=0))
+            guildrun.covered(member("T", 18, WARRIOR, worn_slots=8, has_weapon=0))
         )
         # Unread gear is never a reason to hold a member.
         self.assertTrue(guildrun.covered(member("U", 18, WARRIOR)))
 
     def test_a_bare_tank_is_not_seated_but_a_bare_damage_dealer_is(self):
         band = cave_band()
-        bare = [dataclasses.replace(m, worn_slots=3, has_weapon=True) for m in band]
+        bare = [dataclasses.replace(m, worn_slots=2, has_weapon=True) for m in band]
         self.assertEqual(guildrun.compositions(bare), [])
         dressed_tanks = [
-            dataclasses.replace(m, worn_slots=12, has_weapon=True)
+            dataclasses.replace(m, worn_slots=6, has_weapon=True)
             if m.fit(guildrun.TANK) or m.fit(guildrun.HEALER)
             else m
             for m in bare
@@ -355,6 +356,7 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         self.assertIn("AVG(it.ItemLevel)", sql)
         self.assertIn("AS gear_ilvl", sql)
         self.assertIn("AS worn_slots", sql)
+        self.assertIn("ci.slot IN (0, 2, 4, 5, 6, 7, 8, 9)) AS worn_slots", sql)
         self.assertIn("AS has_weapon", sql)
 
     def test_the_gate_skips_the_shirt_and_tabard(self):
