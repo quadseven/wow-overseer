@@ -138,6 +138,59 @@ class OnlyAFriendlyVendor(unittest.TestCase):
         self.assertIn("ft.EnemyGroup AS enemy_group", source)
 
 
+def _junk_set(ilvl=4):
+    """Every stat slot filled, all of it far below a level 20 wearer."""
+    slots = (
+        "head",
+        "chest",
+        "legs",
+        "feet",
+        "hands",
+        "wrist",
+        "waist",
+        "shoulder",
+        "back",
+        "neck",
+        "finger1",
+        "finger2",
+        "trinket1",
+        "trinket2",
+        "ranged",
+    )
+    worn = {s: {"item_level": ilvl, "item_class": 4, "item_subclass": 1} for s in slots}
+    worn["mainhand"] = {"item_level": ilvl, "item_class": 2, "item_subclass": 7}
+    return worn
+
+
+class StaleGearIsReplaced(unittest.TestCase):
+    """wow-dev 2026-10-03: guild members died at levels 10 to 21 in pieces
+    averaging item level 3 to 5. Their slots were full, so nothing counted
+    them short of gear and no vendor walk was ever planned."""
+
+    def test_a_full_set_of_junk_is_stale(self):
+        import gearup
+
+        self.assertTrue(gearup.stale_gear(_character(_junk_set())))
+        self.assertFalse(gearup.gear_short(_character(_junk_set())))
+
+    def test_gear_near_the_wearer_is_not(self):
+        import gearup
+
+        self.assertFalse(gearup.stale_gear(_character(_junk_set(ilvl=18))))
+
+    def test_the_guild_step_replaces_junk(self):
+        step, why = guildjobs.gear_step(_member(), _character(_junk_set()), ROWS, 600.0)
+        self.assertEqual("", why)
+        self.assertEqual("gear", step.action)
+        self.assertTrue(step.rows)
+
+    def test_the_family_planner_still_never_replaces(self):
+        import gearup
+
+        got = gearup.plan_vendor_buys({"Og": _character(_junk_set())}, {"Og": ROWS})
+        self.assertEqual((), got)
+
+
 class ThePlanPutsGearFirst(unittest.TestCase):
     def test_gear_step_is_started(self):
         plan = guildjobs.plan([_member()], gear={"Aurevil": (_character(), ROWS)})

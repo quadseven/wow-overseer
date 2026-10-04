@@ -903,13 +903,18 @@ def gear_step(member, character, vendor_rows, cap):
     the rows gearup.vendor_trip reads. The walk names the first piece's
     entry, and the module walks to the nearest friendly vendor that stocks it.
     """
-    if not character or not gearup.gear_short(character):
+    if not character or not (
+        gearup.gear_short(character) or gearup.stale_gear(character)
+    ):
         return None, ""
     if member.map_id is None:
         return None, "%s is short of gear; where it stands is not read" % member.name
     vendor_rows = friendly_vendor_rows(member, vendor_rows)
     trip = gearup.vendor_trip(
-        {member.name: character}, vendor_rows, map_id=member.map_id
+        {member.name: character},
+        vendor_rows,
+        map_id=member.map_id,
+        replace_stale=True,
     )
     if not trip.vendor:
         return None, "%s is short of gear: %s" % (member.name, trip.why_not)
@@ -920,7 +925,9 @@ def gear_step(member, character, vendor_rows, cap):
         if int(r.get("vendor") or 0) == trip.vendor
         and int(r.get("entry") or 0) in stock
     ]
-    buys = gearup.plan_vendor_buys({member.name: character}, {member.name: offers})
+    buys = gearup.plan_vendor_buys(
+        {member.name: character}, {member.name: offers}, replace_stale=True
+    )
     buys = buys[:GEAR_BUYS_PER_STEP]
     if not buys:
         return (
