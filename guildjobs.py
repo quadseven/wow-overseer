@@ -1035,7 +1035,7 @@ def junk_sales(member, kept) -> tuple:
     junk = sorted(
         (
             c
-            for c in member.carried
+            for c in (member.carried or ())
             if c.sellable(member.level) and not _kept(member.name, c, kept)
         ),
         key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
