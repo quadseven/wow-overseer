@@ -262,6 +262,10 @@ def why_not(
         return "resting after a run"
     if member.name in benched:
         return "refused a run just now"
+    # Where a member stands is read before its gear: a member left inside a
+    # dungeon read as "gear too weak", which hid 50 of them (2026-10-04).
+    if member.map_id not in OPEN_WORLD_MAPS:
+        return "inside an instance"
     if under_geared(member):
         return "gear too weak for a dungeon"
     if not member.alive:
@@ -270,8 +274,6 @@ def why_not(
         return "in combat"
     if member.grouped:
         return "already in a group"
-    if member.map_id not in OPEN_WORLD_MAPS:
-        return "inside an instance"
     return ""
 
 
@@ -412,13 +414,33 @@ def faction_of(members) -> str:
 # the Horde side. Zones: Durotar and Orgrimmar; Elwynn Forest and Stormwind.
 HOSTILE_HOME_ZONES = {"Alliance": frozenset({14, 1637}), "Horde": frozenset({12, 1519})}
 # The dungeon maps whose doors stand inside a capital (council._inside_capital).
-HOSTILE_CAPITAL_DUNGEONS = {"Alliance": frozenset({389}), "Horde": frozenset({34, 36})}
+HOSTILE_CAPITAL_DUNGEONS = {"Alliance": frozenset({389}), "Horde": frozenset({34})}
+
+
+# THE ONLY NON-CONTINENT MAP A MEMBER LIVES ON ALONE: Acherus, the death
+# knights' starting land, is a map of its own and no dungeon.
+SOLO_HOME_MAPS = frozenset({609})
+
+
+def left_inside(member: Member) -> bool:
+    """Alone, ungrouped, inside a dungeon: what a lost or timed-out guild run
+    leaves behind. Measured on wow-dev (2026-10-04): 30 Bonkers members alone
+    in Ragefire Chasm and 20 Cave members alone in Wailing Caverns, none
+    grouped, there since the runs of 2026-09-30 and 2026-10-01 ended without
+    them. Nothing walks a random bot out of an instance, and why_not holds
+    every one of them from the next run."""
+    return member.map_id not in OPEN_WORLD_MAPS and member.map_id not in SOLO_HOME_MAPS
 
 
 def stranded(member: Member, faction: str) -> bool:
-    """A living member standing on the other faction's home ground, or inside
-    a dungeon whose door is in the other faction's capital: it hearths home."""
-    if not faction or not member.alive or member.in_combat or member.grouped:
+    """A living member standing on the other faction's home ground, inside a
+    dungeon whose door is in the other faction's capital, or left alone inside
+    any dungeon (left_inside): it hearths home."""
+    if not member.alive or member.in_combat or member.grouped:
+        return False
+    if left_inside(member):
+        return True
+    if not faction:
         return False
     return member.zone_id in HOSTILE_HOME_ZONES.get(
         faction, ()

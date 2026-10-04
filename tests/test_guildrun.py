@@ -391,28 +391,70 @@ class TheHostileCapitalDoorIsNeverOffered(unittest.TestCase):
                     floors.append(by_keyword[offered[0]].floor)
             self.assertEqual(floors, sorted(floors), faction)
 
-    def test_an_unreadable_faction_is_offered_no_capital_door(self):
+    def test_an_unreadable_faction_is_offered_neither_capital_door(self):
         """Race 0 (a snapshot without a race) or a mixed roster reads as no
-        faction; that must not lift the filter. Since #471 the Deadmines is
-        a capital door too, so the unreadable family is offered neither it
-        nor the other two."""
+        faction; that must not lift the filter."""
         for level in range(1, 61):
             offered = self.offered(level, "")
             self.assertNotIn("ragefire", offered, level)
             self.assertNotIn("stockades", offered, level)
-            self.assertNotIn("deadmines", offered, level)
-        self.assertEqual(self.offered(19, ""), ["wailing"])
+        self.assertEqual(self.offered(19, ""), ["wailing", "deadmines"])
 
     def test_the_hostile_capital_map_ids_are_the_capital_dungeons(self):
         self.assertEqual(guildrun.HOSTILE_CAPITAL_DUNGEONS["Alliance"], {389})
-        self.assertEqual(guildrun.HOSTILE_CAPITAL_DUNGEONS["Horde"], {34, 36})
+        self.assertEqual(guildrun.HOSTILE_CAPITAL_DUNGEONS["Horde"], {34})
 
     def test_a_member_inside_the_hostile_dungeon_map_is_stranded(self):
         alliance = member("A", 19, MAGE, race=1, map_id=389)
         horde = member("H", 19, MAGE, race=2, map_id=34, guild_name="Bonkers")
         self.assertEqual(guildrun.stranded_names([alliance, horde], set()), ["A", "H"])
         own = member("O", 19, MAGE, race=1, map_id=34)
-        self.assertEqual(guildrun.stranded_names([own], set()), [])
+        self.assertEqual(guildrun.stranded_names([own], {"O"}), [])
+
+
+class MembersLeftInsideADungeonHearthOut(unittest.TestCase):
+    """50 guild members stood alone in Ragefire Chasm and Wailing Caverns on
+    wow-dev (2026-10-04), ungrouped, days after their runs ended."""
+
+    def test_a_member_alone_in_its_own_sides_dungeon_hearths_out(self):
+        bonkers = member("R", 15, MAGE, race=2, map_id=389, guild_name="Bonkers")
+        cave = member("W", 18, MAGE, race=1, map_id=43)
+        self.assertEqual(guildrun.stranded_names([bonkers, cave], set()), ["R", "W"])
+
+    def test_runs_groups_the_dead_and_the_fighting_stay(self):
+        self.assertEqual(
+            guildrun.stranded_names([member("Q", 15, MAGE, map_id=43)], {"Q"}), []
+        )
+        for kw in (
+            {"group_leader": 7},
+            {"in_combat": 1},
+            {"health": 1, "has_corpse": 1},
+        ):
+            self.assertFalse(
+                guildrun.stranded(member("Q", 15, MAGE, map_id=43, **kw), "Alliance"),
+                kw,
+            )
+
+    def test_the_continents_and_acherus_are_home(self):
+        for map_id in (0, 1, 530, 609):
+            self.assertFalse(
+                guildrun.stranded(member("Q", 15, MAGE, map_id=map_id), "Alliance"),
+                map_id,
+            )
+
+    def test_why_not_names_the_instance_before_the_gear(self):
+        weak_inside = member("Q", 15, MAGE, map_id=43, gear_ilvl=2.0)
+        self.assertEqual(
+            guildrun.why_not(weak_inside, set(), set(), set()), "inside an instance"
+        )
+
+    def test_the_bridge_never_hearths_a_family_member(self):
+        rescue = BRIDGE[BRIDGE.index("def _hearth_stranded_guild_members") :]
+        rescue = rescue[: rescue.index("\ndef ")]
+        self.assertIn("FROM overseer_roster", rescue)
+        self.assertLess(
+            rescue.index("FROM overseer_roster"), rescue.index("stranded_names(")
+        )
 
 
 class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):

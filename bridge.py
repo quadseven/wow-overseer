@@ -1616,10 +1616,15 @@ def _crafting_roster(family: str | None = None) -> list:
     scope = " AND family = %s" if cohort else ""
     scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
+        # AND THE CAMPAIGN JOBS (mod-overseer#832): a family on 'town run' or
+        # a dungeon job crafts its standing errand between runs, so its errand
+        # is written too. On wow-dev 2026-10-04 every master crafter sat on
+        # those jobs and nine of ten crafts stood at 1 of 75.
         cur.execute(
-            "SELECT name FROM overseer_roster WHERE enabled = 1 AND job = %s"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            "SELECT name FROM overseer_roster WHERE enabled = 1 "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            "AND (job = %s OR job = %s OR job = %s OR job LIKE %s)"
             + scope,
-            ("craft", *scope_args),
+            ("craft", "town run", "dungeon", "dungeon:%", *scope_args),
         )
         return [row["name"] for row in cur.fetchall()]
 
@@ -19716,7 +19721,8 @@ def _fetch_guild_run_facts(bounds) -> dict:
 
 def _hearth_stranded_guild_members() -> int:
     """Send home by hearthstone every guild member stranded on the other
-    faction's ground (guildrun.stranded), at most once an hour each: the
+    faction's ground or left alone inside a dungeon (guildrun.stranded), never
+    a family member, at most once an hour each: the
     same kind='hearth' row the movement choice writes, and the same hour."""
     bounds = guildrun.limits()
     guilds = list(bounds.guilds)
@@ -19725,6 +19731,10 @@ def _hearth_stranded_guild_members() -> int:
                     guilds)
         rows = list(cur.fetchall())
         busy = set(_guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE)))
+        # A family campaign regroups inside its dungeon; its members are
+        # never hearthed out of one by this pass.
+        cur.execute("SELECT name FROM overseer_roster")
+        busy |= {str(r["name"]) for r in cur.fetchall()}
     members = [m for m in (guildrun.member_from_row(r) for r in rows) if m]
     due = guildrun.stranded_names(members, busy)
     if not due:
@@ -19739,8 +19749,8 @@ def _hearth_stranded_guild_members() -> int:
         _insert_hearth(name, guildrun.SOURCE)
         sent += 1
     if sent:
-        log.info("guild runs: %d member(s) stranded on the other faction's ground hearth "
-                 "home (%s)", sent, ", ".join(n for n in due if n not in recent))
+        log.info("guild runs: %d member(s) stranded on the other faction's ground or "
+                 "left inside a dungeon hearth home (%s)", sent, ", ".join(n for n in due if n not in recent))
     return sent
 
 

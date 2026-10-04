@@ -202,7 +202,8 @@ class WhatIsWorthAskingFor(unittest.TestCase):
         """The case the ordering exists for: zero free slots, 4,100 copper."""
         letters = mailrun.letters_from_rows(LIVE, FAMILY)
         takes = mailrun.plan(letters, {"Og": 0, "Ugga": 0}).takes
-        self.assertEqual([mailrun.command(t) for t in takes], ["take-money mail:41"])
+        collected = [mailrun.command(t) for t in takes if t.verb != mailrun.DELETE]
+        self.assertEqual(collected, ["take-money mail:41"])
 
     def test_bag_room_stops_the_items_and_says_so(self):
         letters = mailrun.letters_from_rows(LIVE, FAMILY)
@@ -275,22 +276,38 @@ class WhatIsWorthAskingFor(unittest.TestCase):
         self.assertEqual(plan.takes, ())
         self.assertEqual(plan.notes, ())
 
-    def test_the_destructive_verbs_are_never_emitted(self):
+    def test_delete_only_ever_reaches_an_empty_letter(self):
         """`delete` DESTROYS every attachment on the letter (`Player::_SaveMail`
         issues CHAR_DEL_ITEM_INSTANCE for a mail left in MAIL_STATE_DELETED), so
-        this module has no path that can reach it however the rows read."""
-        rows = LIVE + [_row("Bork", 16, money=1, cod=1, delivered=0, item=9)]
+        it is planned only for a delivered letter with no attachment, no money
+        and no cash on delivery: a shell a take already emptied (wow-dev
+        2026-10-04, Grug 115 shells, every post to him bouncing)."""
+        rows = LIVE + [
+            _row("Bork", 16, money=1, cod=1, delivered=0, item=9),
+            _row("Bork", 17, money=50),
+            _row("Bork", 18, cod=20),
+            _row("Bork", 19, delivered=0),
+            _row("Bork", 20, item=31),
+            _row("Bork", 21),
+        ]
         plan = mailrun.plan(
             mailrun.letters_from_rows(rows, FAMILY),
             {name: 8 for name in FAMILY},
             {name: 0 for name in FAMILY},
         )
-        rendered = [mailrun.command(t) for t in plan.takes]
-        self.assertTrue(rendered)
-        for text in rendered:
-            self.assertFalse(text.startswith("delete"), text)
+        deleted = {t.mail_id for t in plan.takes if t.verb == mailrun.DELETE}
+        self.assertEqual({21, 366}, deleted)
+        for text in (mailrun.command(t) for t in plan.takes):
             self.assertFalse(text.startswith("return"), text)
             self.assertFalse(text.startswith("send"), text)
+
+    def test_deletes_are_bounded_per_visit(self):
+        rows = [_row("Grug", 1000 + i, expire=i) for i in range(115)]
+        plan = mailrun.plan(mailrun.letters_from_rows(rows, FAMILY), {"Grug": 8})
+        deletes = [t for t in plan.takes if t.verb == mailrun.DELETE]
+        self.assertEqual(mailrun.DELETES_PER_VISIT, len(deletes))
+        self.assertEqual(1000, deletes[0].mail_id)  # nearest expiry first
+        self.assertEqual("delete mail:1000", mailrun.command(deletes[0]))
 
 
 class TheWindowIsCountedInAttachments(unittest.TestCase):
