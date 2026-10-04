@@ -11,7 +11,7 @@ THE CONTRACT (other pages are built against it, so it is fixed):
 
   {"kind": "drop", "boss", "where", "map", "chance"}   chance is a percent
   {"kind": "quest", "quest", "giver", "zone"}
-  {"kind": "vendor", "npc", "zone", "copper"?, "honor"?, "items"?}
+  {"kind": "vendor", "npc", "zone", "copper"?, "honor"?, "arena"?, "items"?}
   {"kind": "craft", "profession", "skill", "recipe"}
   {"kind": "object", "object", "where"}
   {"kind": "world", "chance_max"}                      every sub-1% drop, folded
@@ -21,9 +21,13 @@ named creature outside an instance, a chest, a quest, a vendor, a craft, and
 last the one world-drop line. Each kind is capped so a very common item cannot
 crowd the others out, and the whole list is capped at MAX_SOURCES.
 
-WHAT IS NOT DECODED. `itemextendedcost_dbc` is empty on this realm, so a
-vendor that sells for honor, arena points or tokens has no readable price: it
-is listed with no `copper`, `honor` or `items` rather than with a guessed one.
+VENDOR PRICES. `itemextendedcost_dbc` is empty on this realm, so the cost of
+an ExtendedCost id comes from `itemextendedcost.json`, a projection of the
+client's ItemExtendedCost.dbc (tools/item_extended_cost_from_dbc.py). A plain
+vendor (ExtendedCost 0) charges the item's BuyPrice as `copper`; a costed one
+carries `honor`, `arena` and `items` ({"entry", "name", "count"}) for what it
+asks. An id the projection does not know is listed with no price rather than a
+guessed one.
 
 LOOT CHANCE FOLLOWS THE CORE. A row with a chance is that chance. A row with
 chance 0 inside a group (GroupId > 0) shares whatever the group's explicit
@@ -34,6 +38,9 @@ reference rows state 100 outright and 0 would make the whole table unreachable.
 """
 
 from __future__ import annotations
+
+import json
+import os
 
 import tradespec
 
@@ -246,10 +253,71 @@ def quest_sources(rows: list[dict], zones: dict) -> list[dict]:
     return sorted(seen.values(), key=lambda s: (s["_level"], s["quest"]))
 
 
+def load_costs(static_dir: str) -> dict[int, dict]:
+    """ExtendedCost id -> {"honor", "arena", "items": [(entry, count)]}.
+
+    An absent or unreadable file is an empty table, so a build that predates
+    the file lists costed vendors with no price instead of failing the route.
+    """
+    try:
+        with open(
+            os.path.join(static_dir, "itemextendedcost.json"), encoding="utf-8"
+        ) as f:
+            raw = json.load(f).get("costs", {})
+    except (OSError, ValueError):
+        return {}
+    out: dict[int, dict] = {}
+    for key, row in raw.items():
+        try:
+            out[int(key)] = {
+                "honor": _int(row[0]),
+                "arena": _int(row[1]),
+                "items": [(_int(i), _int(n)) for i, n in row[3]],
+            }
+        except (TypeError, ValueError, IndexError):
+            continue
+    return out
+
+
+def token_ids(extended_costs, costs: dict) -> list[int]:
+    """Every token item entry the given ExtendedCost ids ask for, sorted."""
+    ids = set()
+    for ec in extended_costs:
+        for entry, _count in (costs.get(_int(ec)) or {}).get("items", []):
+            ids.add(entry)
+    return sorted(ids)
+
+
+def _price(cost: dict, names: dict) -> dict:
+    """The honor, arena and items fields for one decoded ExtendedCost."""
+    out: dict = {}
+    if cost["honor"] > 0:
+        out["honor"] = cost["honor"]
+    if cost["arena"] > 0:
+        out["arena"] = cost["arena"]
+    items = [
+        {"entry": e, "name": names.get(e) or "", "count": n}
+        for e, n in cost["items"]
+        if n > 0
+    ]
+    if items:
+        out["items"] = items
+    return out
+
+
 def vendor_sources(
-    rows: list[dict], buy_price: int, dungeons: dict, zones: dict
+    rows: list[dict],
+    buy_price: int,
+    dungeons: dict,
+    zones: dict,
+    costs: dict | None = None,
+    names: dict | None = None,
 ) -> list[dict]:
-    """Vendors: npc name, map, zone, ExtendedCost. Copper only when plain gold."""
+    """Vendors: npc name, map, zone, ExtendedCost.
+
+    Copper when plain gold; honor, arena points and token items when the
+    ExtendedCost id is in `costs`; neither when it is unknown.
+    """
     seen: dict[tuple[str, str], dict] = {}
     for r in rows:
         npc = r.get("npc") or ""
@@ -257,16 +325,30 @@ def vendor_sources(
             continue
         zone = place(_int(r.get("map")), _int(r.get("zone")), dungeons, zones)
         source = {"kind": "vendor", "npc": npc, "zone": zone}
-        plain = not _int(r.get("extended_cost"))
-        if plain and buy_price > 0:
-            source["copper"] = int(buy_price)
+        ec = _int(r.get("extended_cost"))
+        if not ec:
+            if buy_price > 0:
+                source["copper"] = int(buy_price)
+        elif (costs or {}).get(ec):
+            source.update(_price(costs[ec], names or {}))
         key = (npc, zone)
-        if key not in seen or ("copper" in source and "copper" not in seen[key]):
+        if key not in seen or (_priced(source) and not _priced(seen[key])):
             seen[key] = source
-    # Cheapest plain-gold vendors first; unreadable prices last.
+    # Plain gold, cheapest first; then costed; unreadable prices last.
     return sorted(
-        seen.values(), key=lambda s: ("copper" not in s, s.get("copper", 0), s["npc"])
+        seen.values(),
+        key=lambda s: (
+            not _priced(s),
+            "copper" not in s,
+            s.get("copper", 0),
+            s.get("honor", 0),
+            s["npc"],
+        ),
     )
+
+
+def _priced(source: dict) -> bool:
+    return any(k in source for k in ("copper", "honor", "arena", "items"))
 
 
 def craft_sources(entry: int, craftbook: dict, skill_names: dict) -> list[dict]:
@@ -329,6 +411,7 @@ def build_item(
     skill_names: dict,
     dungeons: dict,
     zones: dict,
+    costs: dict | None = None,
 ) -> dict:
     """The /api/item payload. `shaped` is recap.item_payload's output (name,
     quality, tooltip, wowhead); `rows` are the world rows the adapter read.
@@ -347,7 +430,12 @@ def build_item(
         object_sources(rows.get("objects", []), dungeons, zones),
         quest_sources(rows.get("quests", []), zones),
         vendor_sources(
-            rows.get("vendors", []), _int(rows.get("buy_price")), dungeons, zones
+            rows.get("vendors", []),
+            _int(rows.get("buy_price")),
+            dungeons,
+            zones,
+            costs,
+            rows.get("token_names", {}),
         ),
         craft_sources(entry, craftbook, skill_names),
         world_max,

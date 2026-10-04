@@ -58,7 +58,7 @@ COPY core.py bridge.py voice.py transform.py \
      situation.py vision.py llmmode.py jev_movement.py jev_family_intent.py leadcmd.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json bagicons.json spells.json bagspells.json viewerdisplays.json \
-     standing.json craftbook.json taxinodes.json \
+     standing.json craftbook.json taxinodes.json itemextendedcost.json \
      index.html /app/
 
 # It stays VENDORED. map_server._jquery_file says why - the page reaches no
