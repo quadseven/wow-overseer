@@ -889,8 +889,8 @@ class TheWiring(unittest.TestCase):
         self.assertIn('"/api/guildruns": _guild_runs,', SERVER)
         listed = PAGE[PAGE.index("const HASH_VIEWS = [") :]
         self.assertIn("GUILD_VIEW", listed[: listed.index("];")])
-        layout = PAGE[PAGE.index("function tabLayout()") :]
-        self.assertIn("GUILD_VIEW", layout[: layout.index("],")])
+        layout = PAGE[PAGE.index("function hubLayout()") :]
+        self.assertIn("GUILD_VIEW", layout[: layout.index("\n}\n")])
         show = PAGE[PAGE.index("function showView") :]
         branch = show[show.index("  if (isGuild) {") :]
         self.assertIn("pollGuild();", branch[: branch.index("  }")])

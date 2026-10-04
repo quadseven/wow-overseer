@@ -445,48 +445,37 @@ class ThePageFitsThePhoneItIsReadOn(unittest.TestCase):
     document out until it fits - so the report that arrived was "all the text
     is about 7px", which points at a font size and is caused by a grid."""
 
-    def test_the_tab_row_says_it_does_not_wrap(self):
-        """#tabs is a <nav>, and the shell's generic `nav` rule is the only
-        rule on this page that declares flex-wrap at all. An ID selector does
-        not beat a type selector on a property it never sets, so the generic
-        `flex-wrap:wrap` won by default and `overflow-x:auto` had nothing left
-        to scroll. The row has to say nowrap itself."""
-        # Anchored on the declaration rather than on "#tabs {", because the
-        # phone block sets a mask on the same id and comes first in the file.
-        rule = PAGE[PAGE.index("#tabs { display:flex") :]
+    def test_the_view_row_wraps_and_never_scrolls(self):
+        """#tabs is a <nav>, and the generic `nav` rule wraps. The row used to
+        say nowrap and scroll sideways, which on a phone hid every tab past the
+        fourth; it now holds one hub's views and says wrap itself, with no
+        sideways scroll left to discover."""
+        rule = PAGE[PAGE.index("  #tabs { display:flex") :]
         rule = rule[: rule.index("}")]
-        self.assertIn("flex-wrap:nowrap", rule)
-        self.assertIn("overflow-x:auto", rule)
+        self.assertIn("flex-wrap:wrap", rule)
+        absent(self, "overflow-x", rule, "#tabs")
 
     def test_the_generic_nav_rule_still_wraps_for_everyone_else(self):
-        """The fix is stated on #tabs rather than taken off `nav`, because
-        #realmnav and #ajump are both still dressed by that rule and both
-        want to wrap. This asserts the fix did not become a deletion."""
+        """#realmnav and #ajump are both still dressed by that rule and both
+        want to wrap. This asserts the rule was not deleted along the way."""
         self.assertIn("flex-wrap:wrap; }", PAGE[PAGE.index("  nav {") :][:120])
 
     def test_a_tab_never_breaks_across_two_lines(self):
-        """ "Eastern Kingdoms" in a scrolling row with nowhere to wrap to."""
+        """ "Eastern Kingdoms" wraps to the next line whole, never in half."""
         rule = PAGE[PAGE.index("  #tabs button {") :]
         self.assertIn("white-space:nowrap", rule[: rule.index("}")])
 
-    def test_the_selected_tab_is_scrolled_back_into_its_own_row(self):
-        """Fourteen tabs on a row narrower than half of them. Opening the
-        Armory from a link used to leave the lit tab off-screen, which reads
-        as no tab being lit at all."""
-        self.assertIn("function revealTab(b) {", PAGE)
-        self.assertIn("if (on) revealTab(b);", PAGE)
-
-    def test_revealing_a_tab_can_scroll_nothing_but_the_row(self):
+    def test_nothing_scrolls_the_document_to_reach_a_tab(self):
         """scrollIntoView walks EVERY scrollable ancestor including the
-        document, and block:"nearest" does not stop it: on first paint the
-        row is below the fold, so the first version of this scrolled the page
-        430px down and left it there, every load landing halfway through the
-        header. scrollLeft touches one axis of one element."""
-        fn = PAGE[PAGE.index("function revealTab(b) {") :]
-        fn = fn[: fn.index("\n}")]
-        self.assertIn("row.scrollLeft", fn)
-        absent(self, "scrollIntoView", fn, "revealTab")
-        absent(self, "scrollTop", fn, "revealTab")
+        document: an earlier version scrolled the page 430px down on every
+        load to reveal a tab. With no scrolling row there is nothing to
+        reveal, and nothing in the navigation may scroll the page."""
+        for fn in ("function markTabs()", "function syncHubs()", "function openHub("):
+            body = PAGE[PAGE.index(fn) :]
+            body = body[: body.index("\n}")]
+            absent(self, "scrollIntoView", body, fn)
+            absent(self, "scrollTop", body, fn)
+            absent(self, "scrollLeft", body, fn)
 
     def test_the_caption_carries_the_identity_the_overlay_used_to(self):
         """The tile's overlay comes off on this view, so the caption has to
