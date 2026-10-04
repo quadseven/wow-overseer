@@ -932,7 +932,7 @@ def friendly_vendor_rows(member, vendor_rows) -> list:
     ]
 
 
-def gear_step(member, character, vendor_rows, cap):
+def gear_step(member, character, vendor_rows, cap, kept=None):
     """(step or None, why not) for one gear-short member.
 
     `character` is the member's gearup facts (class, level, purse, equipped,
@@ -979,12 +979,26 @@ def gear_step(member, character, vendor_rows, cap):
         len(buys),
         ", ".join(b.slot for b in buys),
     )
+    # ROOM FIRST: the junk it carries is sold at the same counter before the
+    # buys. On wow-dev on 2026-10-04 three of four guild members who reached
+    # their vendor were refused every piece with "bags cannot take the item".
+    junk = sorted(
+        (c for c in member.carried if c.junk and not _kept(member.name, c, kept)),
+        key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
+    )[:MAX_SALES]
+    sales = tuple(
+        guildcorps.Row(
+            "sell", "guid:%d" % int(c.guid), "", source_for("gear", member.name)
+        )
+        for c in junk
+    )
     step = guildcorps.Step(
         member.name,
         "gear",
         buys[0].entry,
         said,
-        rows=tuple(
+        rows=sales
+        + tuple(
             guildcorps.Row(
                 "buy", gearup.vendor_command(b), "", source_for("gear", member.name)
             )
@@ -1480,7 +1494,7 @@ def _member_step(
     m, offer, trades, fields, doors, pending, crafters, master, kept, recent, cap
 ):
     """Gear first, then the member's ordinary job, keeping both notes."""
-    step, doing, gear_note = _gear_first(m, offer, recent, cap)
+    step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
     if step is not None:
         return step, doing, gear_note
     step, doing, note = _plan_member(
@@ -1518,7 +1532,7 @@ def hearth_step(m):
     )
 
 
-def _gear_first(m, offer, recent, cap):
+def _gear_first(m, offer, recent, cap, kept=None):
     """A natural member short of gear walks to a vendor before any other job."""
     if not m.eligible or not m.online or m.in_combat:
         return None, "", ""
@@ -1530,7 +1544,7 @@ def _gear_first(m, offer, recent, cap):
     if not offer:
         return None, "", ""
     character, vendor_rows = offer
-    step, why = gear_step(m, character, vendor_rows, cap)
+    step, why = gear_step(m, character, vendor_rows, cap, kept)
     if step is None:
         return None, "", why
     return step, step.said, ""

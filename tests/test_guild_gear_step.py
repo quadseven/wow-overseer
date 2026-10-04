@@ -281,6 +281,27 @@ class GearHasItsOwnAllowance(unittest.TestCase):
         self.assertTrue(guildjobs._cooling(_member(), "gear", failed))
 
 
+class RoomBeforeTheBuy(unittest.TestCase):
+    """wow-dev 2026-10-04: three of four members who reached their vendor
+    were refused every piece, "bags cannot take the item"."""
+
+    def test_junk_is_sold_before_the_buys(self):
+        junk = guildjobs.Carried(guid=11, entry=900, count=1, quality=0, sell_price=50)
+        good = guildjobs.Carried(guid=12, entry=901, count=1, quality=2, sell_price=500)
+        step, _why = guildjobs.gear_step(
+            _member(carried=(junk, good)), _character(), ROWS, 600.0
+        )
+        kinds = [r.kind for r in step.rows]
+        self.assertEqual("sell", kinds[0])
+        self.assertEqual("guid:11", step.rows[0].command)
+        self.assertNotIn("guid:12", [r.command for r in step.rows])
+        self.assertEqual(kinds.index("buy"), kinds.count("sell"))
+
+    def test_no_junk_means_only_buys(self):
+        step, _why = guildjobs.gear_step(_member(), _character(), ROWS, 600.0)
+        self.assertEqual({"buy"}, {r.kind for r in step.rows})
+
+
 class ThePlanPutsGearFirst(unittest.TestCase):
     def test_gear_step_is_started(self):
         plan = guildjobs.plan([_member()], gear={"Aurevil": (_character(), ROWS)})
