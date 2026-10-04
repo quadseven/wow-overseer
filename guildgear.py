@@ -52,8 +52,8 @@ def members_from_rows(rows: list[dict]) -> list[dict]:
     """One row per member, from one row per (member, worn slot).
 
     Each row carries guild_name, name, level, class_id, money, online, dead,
-    talent_spells, and slot/item_level/item_name for one worn item (all None
-    for a member wearing nothing). Sorted worst first (`worst_first`).
+    talent_spells, and slot/item_level/item_name/item_entry for one worn item
+    (all None for a member wearing nothing). Sorted worst first (`worst_first`).
     """
     by_name: dict = {}
     for r in rows or ():
@@ -71,6 +71,7 @@ def members_from_rows(rows: list[dict]) -> list[dict]:
             if r.get("item_level") is not None
             else None,
             "name": r.get("item_name") or "",
+            "entry": r.get("item_entry"),
         }
     out = [_member(m["row"], m["worn"]) for m in by_name.values()]
     out.sort(key=worst_first)
@@ -85,7 +86,12 @@ def _weakest(worn: dict):
         if w is None or w["item_level"] is None:
             continue
         if weakest is None or w["item_level"] < weakest["item_level"]:
-            weakest = {"slot": slot, "item_level": w["item_level"], "name": w["name"]}
+            weakest = {
+                "slot": slot,
+                "item_level": w["item_level"],
+                "name": w["name"],
+                "entry": w["entry"],
+            }
     return weakest
 
 

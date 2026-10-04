@@ -3025,43 +3025,93 @@
      name then level then class, one colour per class. Wide screens get four
      boxes across so eight groups read as two rows; a phone gets one column,
      because five names on a 360px screen is already the full width. */
-  /* THE GEAR TABLE (guildgear.py). The table scrolls sideways inside its own
-     box, never the page, and the name column stays put while it does, so a
-     phone reads a row by its name. Flagged rows (no weapon, many empty
-     slots) carry a warn bar down their left edge and warn-coloured cells. */
+  /* THE GEAR TABLE (guildgear.py). A PHONE GETS ONE CARD PER MEMBER, the
+     way #555 gave the Upgrades tab one per slot: eleven columns ran off a
+     375px screen even inside their own scrolling box. On a card the name
+     heads it, every other cell draws its column name above itself, and the
+     weakest piece runs the full width at the foot, because it carries an
+     item name. The header row stays on screen as a row of sort pills, since
+     sorting is half of what this table is for. From 60rem up it is a table
+     again, where the eleven columns fit; if they ever do not, the box
+     scrolls sideways there and never the page. A flagged member (no weapon,
+     many empty slots) has a warn outline on a card, a warn bar down the
+     row's left edge in the table, and warn-coloured cells in both. */
   /* The Lineup tab keeps the page's side gutter, and a long rule label (the
      lineup's "40 raiding, 10 maintenance, ..." count) wraps instead of
      pushing the page wider than a phone. */
   #lineup { padding:0 var(--gutter) 1.2rem; }
   #lineup .ds-rule .lb { flex:0 1 auto; min-width:0; white-space:normal; }
   .lg-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%;
-               border:1px solid var(--card-line); border-radius:6px;
-               background:var(--card); margin:.3rem 0 1.2rem; }
+               margin:.3rem 0 1.2rem; }
   .lg-table { border-collapse:collapse; width:100%; font-size:.8rem;
               color:var(--on-card); font-variant-numeric:tabular-nums; }
-  .lg-table th, .lg-table td { padding:.35rem .5rem; text-align:left;
-              white-space:nowrap; border-bottom:1px solid var(--card-line); }
-  .lg-table th { position:sticky; top:0; background:var(--card); z-index:1; }
+  .lg-table thead, .lg-table tbody, .lg-table tr, .lg-table th, .lg-table td { display:block; }
+  .lg-table thead tr { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 .6rem; }
   .lg-table th button { font:inherit; font-size:.7rem; letter-spacing:.06em;
-              text-transform:uppercase; color:var(--on-card-dim); background:none;
-              border:0; padding:.3rem 0; min-height:32px; cursor:pointer; }
+              text-transform:uppercase; color:var(--text); background:none;
+              border:1px solid var(--card-line); border-radius:999px;
+              padding:0 .8rem; min-height:36px; cursor:pointer; }
+  .lg-table th button[aria-sort] { border-color:var(--accent-text); color:var(--accent-text); }
   .lg-table th button[aria-sort="ascending"]::after { content:" \25B2"; }
   .lg-table th button[aria-sort="descending"]::after { content:" \25BC"; }
-  .lg-table .n { text-align:right; }
-  .lg-table td:first-child, .lg-table th:first-child { position:sticky; left:0;
-              background:var(--card); z-index:2; }
-  .lg-table tbody tr.lg-row { cursor:pointer; }
-  .lg-table tbody tr.lg-row:hover td { background:var(--line); }
-  .lg-table tr.flag td:first-child { box-shadow:inset 3px 0 0 var(--warn-text); }
+  .lg-table th button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .lg-table tbody tr.lg-row { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr));
+              gap:.55rem .8rem; background:var(--card); border:1px solid var(--card-line);
+              border-radius:14px; padding:.7rem .9rem; margin:0 0 .6rem; cursor:pointer; }
+  .lg-table tbody tr.lg-row:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .lg-table td { padding:0; overflow-wrap:anywhere; }
+  .lg-table td::before { content:attr(data-label); display:block;
+              font-family:var(--mono); font-size:10px; letter-spacing:.12em;
+              text-transform:uppercase; color:var(--on-card-dim); font-weight:400;
+              margin-bottom:.15rem; }
+  .lg-table td.lg-name { grid-column:1 / -1; font-size:.95rem; padding-bottom:.5rem;
+              border-bottom:1px solid var(--card-line); }
+  .lg-table td.lg-name::before, .lg-table tr.lg-open td::before { content:none; }
+  .lg-table td.lg-weak { grid-column:1 / -1; order:1; }
+  .lg-table tbody tr.flag { border-color:var(--warn-text); }
   .lg-table td.bad { color:var(--warn-text); font-weight:600; }
-  .lg-table .lg-name { font-weight:700; min-width:6.5rem; }
+  .lg-table .lg-name { font-weight:700; }
   .lg-table .lg-dim { color:var(--on-card-dim); }
-  .lg-table tr.lg-open td { white-space:normal; background:var(--card); }
+  /* An opened member's frames hang off the foot of its own card. */
+  .lg-table tr.lg-row:has(+ tr.lg-open) { margin-bottom:0; border-bottom:0;
+              border-radius:14px 14px 0 0; }
+  .lg-table tr.lg-open td { background:var(--card); border:1px solid var(--card-line);
+              border-top:0; border-radius:0 0 14px 14px; padding:.2rem .9rem .8rem;
+              margin:0 0 .6rem; }
+  .lg-table tr.flag + tr.lg-open td { border-color:var(--warn-text); }
   .lg-open .lg-say { font-size:.75rem; color:var(--on-card-dim); margin-bottom:.35rem; }
-  /* The opened line stays in view while the table scrolls sideways, and is
-     no wider than the screen, so all six frame buttons are under a thumb. */
-  .lg-open .lg-say, .lg-open .vcbar { position:sticky; left:.5rem;
-              box-sizing:border-box; width:min(24rem, calc(100vw - 2 * var(--gutter) - 1.2rem)); }
+  /* Under the name it opened for, not pushed to the far edge as on a tile. */
+  .lg-open .vcbar { margin-left:0; }
+  @media (min-width:60rem) {
+    .lg-scroll { border:1px solid var(--card-line); border-radius:6px;
+                 background:var(--card); }
+    .lg-table thead { display:table-header-group; }
+    .lg-table tbody { display:table-row-group; }
+    .lg-table thead tr, .lg-table tbody tr.lg-row, .lg-table tr.lg-row:has(+ tr.lg-open) {
+      display:table-row; margin:0; padding:0; border:0; border-radius:0; background:none; }
+    .lg-table tr.lg-open { display:table-row; }
+    .lg-table th, .lg-table td { display:table-cell; padding:.35rem .5rem; text-align:left;
+                white-space:nowrap; border-bottom:1px solid var(--card-line); }
+    .lg-table td::before { content:none; }
+    .lg-table th { position:sticky; top:0; background:var(--card); z-index:1; }
+    .lg-table th button, .lg-table th button[aria-sort] { color:var(--on-card-dim);
+                border:0; border-radius:0; padding:.3rem 0; min-height:32px; }
+    .lg-table tbody tr.lg-row:focus-visible { outline-offset:-2px; }
+    .lg-table .n { text-align:right; }
+    .lg-table td:first-child, .lg-table th:first-child { position:sticky; left:0;
+                background:var(--card); z-index:2; }
+    .lg-table tbody tr.lg-row:hover td { background:var(--line); }
+    .lg-table tr.flag td:first-child { box-shadow:inset 3px 0 0 var(--warn-text); }
+    .lg-table td.lg-name { font-size:inherit; min-width:6.5rem; padding:.35rem .5rem; }
+    .lg-table td.lg-weak { white-space:normal; min-width:9rem; }
+    .lg-table tr.lg-open td { white-space:normal; margin:0; border:0; border-radius:0;
+                border-bottom:1px solid var(--card-line); padding:.35rem .5rem; }
+    .lg-table tr.flag + tr.lg-open td { border-color:var(--card-line); }
+    /* The opened line stays in view while the table scrolls sideways, and is
+       no wider than the screen, so all six frame buttons are under a thumb. */
+    .lg-open .lg-say, .lg-open .vcbar { position:sticky; left:.5rem;
+                box-sizing:border-box; width:min(24rem, calc(100vw - 2 * var(--gutter) - 1.2rem)); }
+  }
   .lg-note { font-size:.75rem; color:var(--muted); margin:.3rem 0 0; }
   #lgpick button { font:inherit; font-size:12px; cursor:pointer; min-height:36px;
               padding:0 .8rem; border-radius:999px; background:none;
@@ -4523,8 +4573,11 @@ async function loadZones() {
   shapes = sh;
   // A #map/<id> deep link arrives before this fetch finishes, so the id it
   // named is checked and adopted here, the moment there is something to check
-  // it against.
+  // it against. The address bar has said #map/<the default> since the map
+  // was shown, so it is put right as well, or a reload would lose the
+  // continent all over again.
   adoptContinent();
+  if (view === MAP_VIEW) history.replaceState(null, "", hashFor(MAP_VIEW));
   // THE CONTINENTS ARE THE WORLD HUB'S ROW: they are one kind of thing,
   // where on the map to look, and arrangeTabs puts them ahead of The Eye.
   const tabs = document.getElementById("tabs");
@@ -8120,7 +8173,8 @@ const LG_COLUMNS = [
   { key: "worn", label: "Worn", get: (m) => m.worn, num: true },
   { key: "empty", label: "Empty", get: (m) => m.empty, num: true },
   { key: "weapon", label: "Weapon", get: (m) => (m.weapon ? 1 : 0), num: true },
-  { key: "weakest", label: "Weakest", get: (m) => (m.weakest ? m.weakest.item_level : -1), num: true },
+  // Sorted by number, set as text: the cell is a slot and an item name.
+  { key: "weakest", label: "Weakest", get: (m) => (m.weakest ? m.weakest.item_level : -1), num: true, text: true },
   { key: "gold", label: "Gold", get: (m) => m.gold.total, num: true },
   { key: "state", label: "State", get: (m) => m.presence },
 ];
@@ -8147,6 +8201,24 @@ function lgMembers() {
   return out;
 }
 
+// THE WEAKEST PIECE BY NAME, and the name opens the item's tooltip like every
+// other gear name on the site. The row under it opens a member's frames on a
+// tap, so a tap or a key on the name stops here and opens only the tooltip.
+function lgWeakest(w) {
+  const td = el("td", "lg-weak lg-dim");
+  if (!w) {
+    td.textContent = "-";
+    return td;
+  }
+  td.append(w.slot + " " + w.item_level + " ");
+  if (w.name) {
+    const name = itemTipName(w, w.name, "");
+    for (const t of ["click", "keydown"]) name.addEventListener(t, (e) => e.stopPropagation());
+    td.appendChild(name);
+  }
+  return td;
+}
+
 function lgRender() {
   const p = lg.payload;
   if (!p) return;
@@ -8164,10 +8236,10 @@ function lgRender() {
   lghead.textContent = members.length + " members, " + noWeapon + " with no weapon, "
     + flagged + " flagged (no weapon, or " + p.empty_warn + "+ of " + p.slots
     + " slots empty from level " + p.empty_warn_level
-    + "). Tap a column to sort, a member to open their bags and sheet.";
+    + "). Tap a heading to sort, a member to open their bags and sheet.";
   const head = el("tr");
   for (const c of LG_COLUMNS) {
-    const th = el("th", c.num ? "n" : "");
+    const th = el("th", c.num && !c.text ? "n" : "");
     const b = el("button", "", c.label);
     b.type = "button";
     if (lg.sort === c.key) b.setAttribute("aria-sort", lg.dir > 0 ? "ascending" : "descending");
@@ -8189,7 +8261,6 @@ function lgRender() {
     name.style.color = m.class_colour || "";
     const cls = el("td", "", m["class"]);
     cls.style.color = m.class_colour || "";
-    const weak = m.weakest ? m.weakest.slot + " " + m.weakest.item_level : "-";
     tr.append(name, cls,
       el("td", "n", String(m.level)),
       el("td", "lg-dim", m.role || "-"),
@@ -8198,10 +8269,13 @@ function lgRender() {
       el("td", "n" + (m.empty >= p.empty_warn && m.level >= p.empty_warn_level ? " bad" : ""),
          String(m.empty)),
       el("td", m.weapon ? "" : "bad", m.weapon ? "yes" : "NO"),
-      el("td", "lg-dim", weak),
+      lgWeakest(m.weakest),
       el("td", "n", m.gold.text),
       el("td", m.presence === "dead" ? "bad" : "lg-dim", m.presence));
-    if (m.weakest) tr.children[8].title = m.weakest.name;
+    // ONE DOM, TWO LAYOUTS, as on the Upgrades tab: a cell carries its
+    // column's name, and a phone draws it above the cell, because there the
+    // member is a card and the header row is a row of sort pills.
+    LG_COLUMNS.forEach((c, i) => { tr.children[i].dataset.label = c.label; });
     const toggle = () => { lg.open = lg.open === m.name ? null : m.name; lgRender(); };
     tr.addEventListener("click", toggle);
     tr.addEventListener("keydown", (e) => {
@@ -13255,8 +13329,12 @@ let wantedContinent = "";
 
 function adoptContinent() {
   // Only once zones.json is in: before that there is nothing to check an id
-  // against, and adopting an unchecked one draws an empty map.
-  if (wantedContinent && zones && zones[wantedContinent]) current = wantedContinent;
+  // against, and adopting an unchecked one draws an empty map. THE REQUEST IS
+  // KEPT UNTIL THEN (#560). This used to clear it on every call, and the
+  // first call is applyHash's, before the fetch: a cold #map/0 lost its 0
+  // there, and loadZones found nothing left to adopt and opened Kalimdor.
+  if (!zones) return;
+  if (wantedContinent && zones[wantedContinent]) current = wantedContinent;
   wantedContinent = "";
 }
 
