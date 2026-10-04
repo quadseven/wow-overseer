@@ -933,6 +933,18 @@ GUILD_GEAR_VENDOR_YARDS = 1500.0
 GUILD_DOOR_FLOOR = 15
 
 
+def shield_aware(member, character):
+    """`character` with `shield_carried` set when the member holds a shield in
+    its bags: the module's equip drive wears that one, so none is bought."""
+    if not character or not character.get("shield_tank"):
+        return character
+    carried = any(
+        int(c.item_class) == ARMOR and int(c.subclass) == 6
+        for c in (member.carried or ())
+    )
+    return dict(character, shield_carried=carried)
+
+
 def gear_reads(members, facts, offsets, limit):
     """(names to read this pass, next offsets) for the guild gear step.
 
@@ -944,12 +956,19 @@ def gear_reads(members, facts, offsets, limit):
     needy = [
         m
         for m in members
-        if facts.get(m.name)
-        and (gearup.gear_short(facts[m.name]) or gearup.stale_gear(facts[m.name]))
+        if facts.get(m.name) and _gear_wanted(shield_aware(m, facts[m.name]))
     ]
     doorable = [m.name for m in needy if m.level >= GUILD_DOOR_FLOOR]
     others = [m.name for m in needy if m.level < GUILD_DOOR_FLOOR]
     return tiered_reads(doorable, others, offsets, limit)
+
+
+def _gear_wanted(character) -> bool:
+    return (
+        gearup.gear_short(character)
+        or gearup.stale_gear(character)
+        or gearup.shield_short(character)
+    )
 
 
 def tiered_reads(doorable, others, offsets, limit):
@@ -1016,7 +1035,7 @@ def junk_sales(member, kept) -> tuple:
     junk = sorted(
         (
             c
-            for c in member.carried
+            for c in (member.carried or ())
             if c.sellable(member.level) and not _kept(member.name, c, kept)
         ),
         key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
@@ -1037,9 +1056,8 @@ def gear_step(member, character, vendor_rows, cap, kept=None):
     the rows gearup.vendor_trip reads. The walk names the first piece's
     entry, and the module walks to the nearest friendly vendor that stocks it.
     """
-    if not character or not (
-        gearup.gear_short(character) or gearup.stale_gear(character)
-    ):
+    character = shield_aware(member, character)
+    if not character or not _gear_wanted(character):
         return None, ""
     if member.map_id is None:
         return None, "%s is short of gear; where it stands is not read" % member.name

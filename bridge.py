@@ -10621,8 +10621,9 @@ class Bridge(discord.Client):
         if not gear_rows:
             return
         worn = await asyncio.to_thread(_fetch_family_equipped, members)
+        tanks = await asyncio.to_thread(_fetch_shield_tanks, members)
         wanted = bag_pressure.guild_equips(
-            gear_rows, worn, members, names, keep_names=OWNER_KEEPS)
+            gear_rows, worn, members, names, keep_names=OWNER_KEEPS, tanks=tanks)
         if not wanted:
             return
         history = await asyncio.to_thread(_equip_history, EQUIP_MEMORY_HOURS,
@@ -13428,6 +13429,10 @@ class Bridge(discord.Client):
         if not wanted:
             return {}
         facts = await asyncio.to_thread(_fetch_gearup_facts, [m.name for m in wanted])
+        tanks = await asyncio.to_thread(_fetch_shield_tanks, [m.name for m in wanted])
+        for name in tanks:
+            if name in facts:
+                facts[name]["shield_tank"] = True
         by_name = {m.name: m for m in wanted}
         # The needy, door-fitting members first (guildjobs.gear_reads).
         chosen, self._gear_read_offsets = guildjobs.gear_reads(
@@ -19242,6 +19247,24 @@ _FAMILY_EQUIPPED_ROLES_SQL = (
     "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "WHERE c.name IN (%s)"
 )
+
+
+def _fetch_shield_tanks(names: list) -> set:
+    """Which of `names` tank behind a shield (bag_pressure.shield_tanks): the
+    roster's tree or a raid seat, else the raid plan's tree. Nobody on a world
+    image without overseer_raid_spec beyond what the roster says."""
+    rows = _fetch_family_equipped(names)
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT name, tree FROM overseer_raid_spec")
+            plan = {r["name"]: r["tree"] for r in cur.fetchall()}
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in (1054, 1146)):
+            raise
+        plan = {}
+    for row in rows:
+        row["target_tree"] = plan.get(row["name"], "")
+    return bag_pressure.shield_tanks(rows, names)
 
 
 def _fetch_family_equipped(names: list) -> list:

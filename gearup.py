@@ -271,6 +271,9 @@ def plan_vendor_buys(characters, offers, *, repair_floor=0, replace_stale=False)
         if not rows:
             continue
         equipped = _get(character, "equipped", "slots", default={}) or {}
+        if shield_short(character):
+            equipped = {s: v for s, v in equipped.items() if s != "offhand"}
+            character = dict(character, equipped=equipped)
         # `replace_stale` keeps what is worn, so `_worn_is_better` lets a piece
         # AUCTION_STALE_GEAR_LEVEL_GAP or more levels behind the wearer go.
         worn_only = (
@@ -351,7 +354,7 @@ def vendor_trip(
     short = {
         name: c
         for name, c in (characters or {}).items()
-        if gear_short(c) or (replace_stale and stale_gear(c))
+        if gear_short(c) or shield_short(c) or (replace_stale and stale_gear(c))
     }
     if not short:
         return VendorTrip(
@@ -445,6 +448,44 @@ def _budget_for(name, character, reserve):
     purse = int(_get(character, "purse", "money", default=0) or 0)
     amount = reserve.get(name, 0) if isinstance(reserve, dict) else reserve
     return purse, max(0, min(purse * 0.6, purse - int(amount)))
+
+
+# A WARRIOR OR PALADIN WHO TANKS CARRIES A SHIELD (#550, after #549). The guild
+# gear step asks its own question of such a member: is the off hand holding a
+# shield? `shield_tank` in the member's facts says it tanks (the roster's tree,
+# a raid seat or the raid plan's tree); `shield_carried` says a shield already
+# sits in its bags, which the module's equip drive puts on, so none is bought.
+SHIELD_TANK_CLASSES = {1, 2}
+
+
+def _class_id(character) -> int:
+    cls = _get(character, "class", "class_id")
+    return CLASS_IDS.get(str(cls).lower(), int(cls) if str(cls).isdigit() else 0)
+
+
+def _worn_shield(character) -> bool:
+    equipped = _get(character, "equipped", "slots", default={}) or {}
+    offhand = equipped.get("offhand")
+    return (
+        isinstance(offhand, dict)
+        and int(offhand.get("item_class") or 0) == 4
+        and int(offhand.get("item_subclass") or 0) == 6
+    )
+
+
+def shield_short(character) -> bool:
+    """A warrior or paladin in the tank seat with no shield worn or carried.
+
+    Its off hand then counts as an empty slot, whatever it holds: a tank's
+    off hand is a shield (gear._off_hand_refusal says the same of a held piece
+    or a weapon).
+    """
+    return (
+        bool(_get(character, "shield_tank", default=False))
+        and _class_id(character) in SHIELD_TANK_CLASSES
+        and not _worn_shield(character)
+        and not _get(character, "shield_carried", default=False)
+    )
 
 
 def _is_shield(item, inv):
