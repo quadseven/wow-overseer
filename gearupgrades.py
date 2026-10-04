@@ -241,70 +241,80 @@ def _slot_key(key: str, worn_row: dict | None, spec: str) -> str:
     return key
 
 
+def _worn_block(spec, level, key, worn_row, pool) -> dict | None:
+    """What is worn, as gearscore standing sees it (None for an empty slot)."""
+    if worn_row is None:
+        return None
+    entry = worn_row["entry"]
+    st = gearscore.standing(spec, key, entry, pool, level)
+    return {
+        "entry": entry,
+        "name": _name(entry, {entry: worn_row}),
+        "score": _round(st.score),
+        "list": st.phase,
+        "rank": st.rank,
+        "size": st.size,
+        "where": where(entry),
+    }
+
+
+def _next_block(spec, level, key, worn, worn_stats, pool, list_rows) -> dict | None:
+    """The next upgrade by gearscore.next_target, with its gain over the worn."""
+    nxt = gearscore.next_target(spec, key, worn_stats, pool, level)
+    if not nxt:
+        return None
+    phase, item_id, value = nxt
+    out = _target(item_id, value, list_rows)
+    out["phase"] = phase
+    out["gain"] = _round(value - (worn["score"] if worn else 0.0))
+    return out
+
+
+def _state(worn, best_pre, pct) -> str:
+    if worn is None:
+        return "empty"
+    if not best_pre:
+        return "no_list"
+    if pct is not None and pct >= AT_BEST:
+        return "best"
+    if pct is not None and pct >= NEAR:
+        return "near"
+    return "upgrade"
+
+
 def _slot(
     spec, level, slot_name, label, key, worn_row, worn_by_slot, list_rows, stats_by_id
 ) -> dict:
     key = _slot_key(key, worn_row, spec)
     # A pair's second slot must not be told to buy what the first one wears.
     other = worn_by_slot.get(_PAIRS.get(slot_name, ""))
-    pool = {
-        i: s
-        for i, s in stats_by_id.items()
-        if not (other is not None and i == other["entry"])
-    }
+    skip = other["entry"] if other is not None else None
+    pool = {i: s for i, s in stats_by_id.items() if i != skip}
     worn_stats = None
-    worn = None
     if worn_row is not None:
         worn_stats = gearscore.stats_from_row(worn_row)
         pool[worn_row["entry"]] = worn_stats
-        worn_score = gearscore.score(worn_stats, spec, level, key)
-        st = gearscore.standing(spec, key, worn_row["entry"], pool, level)
-        worn = {
-            "entry": worn_row["entry"],
-            "name": _name(worn_row["entry"], {worn_row["entry"]: worn_row}),
-            "score": _round(worn_score),
-            "list": st.phase,
-            "rank": st.rank,
-            "size": st.size,
-            "where": where(worn_row["entry"]),
-        }
-    targets = {}
-    for phase in gearscore.PREFER_PHASES:
-        label = gearscore.PHASE_LABEL[phase]
-        targets[label] = [
+    worn = _worn_block(spec, level, key, worn_row, pool)
+    targets = {
+        gearscore.PHASE_LABEL[phase]: [
             _target(i, s, list_rows)
             for i, s in _ranked(spec, phase, key, pool, level)[:TOP_TARGETS]
         ]
+        for phase in gearscore.PREFER_PHASES
+    }
     best_pre = _ranked(spec, "preraid", key, pool, level)
-    nxt = gearscore.next_target(spec, key, worn_stats, pool, level)
-    next_upgrade = None
-    if nxt:
-        phase, item_id, value = nxt
-        next_upgrade = _target(item_id, value, list_rows)
-        next_upgrade["phase"] = phase
-        next_upgrade["gain"] = _round(value - (worn["score"] if worn else 0.0))
     pct = None
     if worn and best_pre and best_pre[0][1] > 0:
         pct = min(1.0, gearscore.score(worn_stats, spec, level, key) / best_pre[0][1])
-    if worn is None:
-        state = "empty"
-    elif not best_pre:
-        state = "no_list"
-    elif pct is not None and pct >= AT_BEST:
-        state = "best"
-    elif pct is not None and pct >= NEAR:
-        state = "near"
-    else:
-        state = "upgrade"
     return {
         "slot": slot_name,
         "label": label,
         "list_key": key,
-        "state": state,
+        "state": _state(worn, best_pre, pct),
         "worn": worn,
         "pct_of_preraid": None if pct is None else round(pct, 3),
         "targets": targets,
-        "next": next_upgrade,
+        "next": _next_block(spec, level, key, worn, worn_stats, pool, list_rows),
         "scored": bool(best_pre),
     }
 

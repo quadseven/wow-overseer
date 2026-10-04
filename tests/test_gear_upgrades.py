@@ -103,6 +103,11 @@ class TheSlotsReadAgainstTheLists(unittest.TestCase):
         self.assertEqual(head["worn"]["entry"], 9001)
         self.assertEqual(head["worn"]["score"], round(expected, 1))
 
+    def test_a_slot_keeps_its_own_label(self):
+        out = build([worn("head", 9001, 12)])
+        self.assertEqual(slot_of(out, "head")["label"], "Head")
+        self.assertEqual(slot_of(out, "finger 2")["label"], "Ring 2")
+
     def test_targets_are_ranked_by_score_per_phase_with_sources(self):
         head = slot_of(build([worn("head", 9001, 12)]), "head")
         self.assertEqual(
@@ -228,6 +233,11 @@ class TheUpgradesEndpoint(unittest.TestCase):
         mocks[0].side_effect = lambda **k: {
             "members": [{"name": "Aldren", "present": False}]
         }
+        code, _ = get()
+        self.assertEqual(code, 404)
+
+    def test_an_empty_armory_answer_is_a_404_not_a_503(self, *mocks):
+        mocks[0].side_effect = lambda **k: {"members": []}
         code, _ = get()
         self.assertEqual(code, 404)
 

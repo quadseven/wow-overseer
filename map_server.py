@@ -6255,8 +6255,8 @@ class Handler(BaseHTTPRequestHandler):
             fetched.pop("equip_event_rows")
             payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
                                           families=[("", [wanted])])
-            member = payload["members"][0]
-            if not member.get("present"):
+            member = (payload.get("members") or [None])[0]
+            if not member or not member.get("present"):
                 self._send(404, "application/json", b'{"error": "not a guild member"}')
                 return
             spec, _note = gearupgrades.choose_spec(
