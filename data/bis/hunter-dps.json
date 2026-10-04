@@ -1,0 +1,329 @@
+{
+ "spec": "hunter-dps",
+ "class": "hunter",
+ "spec_name": "marksmanship",
+ "role": "ranged",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "ranged_hit_to_9pct",
+   "agility",
+   "stamina",
+   "intellect",
+   "spirit",
+   "strength"
+  ],
+  "caps": {
+   "ranged_hit_pct": 9
+  },
+  "source_url": "https://www.wowhead.com/classic/guide/classes/hunter/dps-stat-priority-attributes-pve"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/hunter/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Strength": 0.3,
+   "Agility": 0.64,
+   "Stamina": 0.0,
+   "Intellect": 0.02,
+   "AttackPower": 1.0,
+   "RangedAttackPower": 1.0,
+   "MeleeHit": 3.29,
+   "MeleeCrit": 4.45,
+   "SpellPower": 0.03,
+   "NaturePower": 0.01,
+   "ArcanePower": 0.01,
+   "SpellCrit": 0.01,
+   "MP5": 0.05,
+   "FireResistance": 0.5,
+   "MainHandDps": 2.11,
+   "OffHandDps": 1.39,
+   "RangedDps": 6.32,
+   "MeleeSpeedMultiplier": 1.39,
+   "RangedSpeedMultiplier": 6.32
+  }
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/hunter-dps-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     18421,
+     22013,
+     13359
+    ],
+    "neck": [
+     22340,
+     15411,
+     11933,
+     17044
+    ],
+    "shoulders": [
+     12927,
+     12082,
+     13358
+    ],
+    "back": [
+     13340,
+     13122,
+     11626
+    ],
+    "chest": [
+     11726,
+     14637,
+     12603
+    ],
+    "wrist": [
+     18375,
+     13211,
+     22011
+    ],
+    "hands": [
+     15063,
+     22015,
+     13395,
+     13255
+    ],
+    "waist": [
+     22232,
+     18393,
+     12634
+    ],
+    "legs": [
+     15062,
+     12963,
+     22017
+    ],
+    "feet": [
+     22061,
+     18506,
+     13967
+    ],
+    "finger": [
+     18500,
+     17713,
+     13098
+    ],
+    "trinket": [
+     13965,
+     18473,
+     19991
+    ],
+    "main_hand": [
+     12940,
+     18737
+    ],
+    "off_hand": [
+     12939
+    ],
+    "two_hand": [
+     22314,
+     13052,
+     18520,
+     18725
+    ],
+    "ranged": [
+     19107,
+     12651,
+     13040,
+     2099,
+     18738
+    ]
+   },
+   "best": {
+    "head": [
+     18421
+    ],
+    "neck": [
+     22340
+    ],
+    "shoulders": [
+     12927
+    ],
+    "back": [
+     13340
+    ],
+    "chest": [
+     11726
+    ],
+    "wrist": [
+     18375
+    ],
+    "hands": [
+     15063
+    ],
+    "waist": [
+     22232
+    ],
+    "legs": [
+     15062
+    ],
+    "feet": [
+     22061
+    ],
+    "finger": [
+     18500
+    ],
+    "trinket": [
+     13965,
+     18473
+    ],
+    "main_hand": [
+     12940
+    ],
+    "off_hand": [
+     12939
+    ],
+    "two_hand": [
+     22314,
+     13052
+    ],
+    "ranged": [
+     19107
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-hunter-dps-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     16939,
+     16846,
+     13359
+    ],
+    "neck": [
+     18404,
+     15411,
+     11933,
+     17044
+    ],
+    "shoulders": [
+     16848,
+     12927,
+     12082,
+     13358
+    ],
+    "back": [
+     17102,
+     13340,
+     11626,
+     13122
+    ],
+    "chest": [
+     16845,
+     11726,
+     14637,
+     12603
+    ],
+    "wrist": [
+     16850,
+     13211,
+     16710
+    ],
+    "hands": [
+     16852,
+     15063,
+     16676,
+     13395
+    ],
+    "waist": [
+     16851,
+     12634,
+     16713
+    ],
+    "legs": [
+     16938,
+     16847,
+     15062,
+     12963
+    ],
+    "feet": [
+     16849,
+     18506,
+     16675,
+     16711
+    ],
+    "finger": [
+     17063,
+     17713
+    ],
+    "trinket": [
+     13965,
+     19991,
+     19120
+    ],
+    "main_hand": [
+     12940,
+     18737,
+     18832
+    ],
+    "two_hand": [
+     18715,
+     18725,
+     13052
+    ],
+    "ranged": [
+     18713,
+     2099,
+     12651
+    ]
+   },
+   "best": {
+    "head": [
+     16939
+    ],
+    "neck": [
+     18404
+    ],
+    "shoulders": [
+     16848
+    ],
+    "back": [
+     13340
+    ],
+    "chest": [
+     16845
+    ],
+    "wrist": [
+     16850
+    ],
+    "hands": [
+     16852
+    ],
+    "waist": [
+     16851
+    ],
+    "legs": [
+     16938
+    ],
+    "feet": [
+     16849
+    ],
+    "finger": [
+     17063
+    ],
+    "trinket": [
+     13965
+    ],
+    "main_hand": [
+     12940
+    ],
+    "two_hand": [
+     18715
+    ],
+    "ranged": [
+     18713
+    ]
+   },
+   "unreachable_at_60": [
+    18404,
+    18713,
+    18715
+   ]
+  }
+ }
+}

@@ -1,0 +1,5009 @@
+{
+ "snapshot": "2026-10-04",
+ "tank_fire_resistance": {
+  "source_url": "https://www.wowhead.com/classic/guide/best-classic-wow-fire-resistance-tank-gear",
+  "sets": {
+   "warrior_pre-raid": {
+    "head": [
+     12952
+    ],
+    "neck": [
+     16309
+    ],
+    "shoulders": [
+     15055
+    ],
+    "back": [
+     12905
+    ],
+    "chest": [
+     15053
+    ],
+    "wrist": [
+     11767
+    ],
+    "hands": [
+     11814
+    ],
+    "waist": [
+     13526
+    ],
+    "legs": [
+     15054
+    ],
+    "feet": [
+     13527
+    ],
+    "finger": [
+     12017
+    ],
+    "trinket": [
+     2802,
+     13164
+    ],
+    "main_hand": [
+     14555
+    ],
+    "off_hand": [
+     12602
+    ],
+    "ranged": [
+     16996
+    ]
+   },
+   "warrior_post-raid": {
+    "head": [
+     19148
+    ],
+    "neck": [
+     18404
+    ],
+    "shoulders": [
+     19139
+    ],
+    "back": [
+     17102
+    ],
+    "chest": [
+     12895
+    ],
+    "wrist": [
+     17014
+    ],
+    "hands": [
+     19164
+    ],
+    "waist": [
+     16864
+    ],
+    "legs": [
+     17013
+    ],
+    "feet": [
+     20039
+    ],
+    "finger": [
+     12017
+    ],
+    "trinket": [
+     2802,
+     13164
+    ],
+    "main_hand": [
+     14555
+    ],
+    "off_hand": [
+     12602
+    ],
+    "ranged": [
+     16996
+    ]
+   },
+   "druid_pre-raid": {
+    "head": [
+     12960
+    ],
+    "neck": [
+     16309
+    ],
+    "shoulders": [
+     15055
+    ],
+    "back": [
+     12905
+    ],
+    "chest": [
+     15053
+    ],
+    "wrist": [
+     11764
+    ],
+    "hands": [
+     13258
+    ],
+    "waist": [
+     13526
+    ],
+    "legs": [
+     15054
+    ],
+    "feet": [
+     18043
+    ],
+    "finger": [
+     12017
+    ],
+    "trinket": [
+     2802,
+     13164
+    ],
+    "main_hand": [
+     14555
+    ],
+    "off_hand": [
+     11935
+    ]
+   },
+   "druid_post-raid": {
+    "head": [
+     16983
+    ],
+    "neck": [
+     18404
+    ],
+    "shoulders": [
+     19139
+    ],
+    "back": [
+     17102
+    ],
+    "chest": [
+     16833
+    ],
+    "wrist": [
+     11764
+    ],
+    "hands": [
+     16831
+    ],
+    "waist": [
+     19163
+    ],
+    "legs": [
+     16901
+    ],
+    "feet": [
+     16982
+    ],
+    "finger": [
+     12017
+    ],
+    "trinket": [
+     2802,
+     13164
+    ],
+    "main_hand": [
+     14555
+    ],
+    "off_hand": [
+     11935
+    ]
+   }
+  }
+ },
+ "fire_resistance_by_slot": {
+  "source": "the dev realm world DB: item_template fire_res >= 10, RequiredLevel 50-60, quality >= uncommon; item_class/subclass for armour filtering",
+  "slots": {
+   "legs": [
+    {
+     "id": 19433,
+     "fire_res": 35,
+     "ilvl": 75,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 17013,
+     "fire_res": 30,
+     "ilvl": 60,
+     "req": 55,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 19165,
+     "fire_res": 16,
+     "ilvl": 70,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 14132,
+     "fire_res": 16,
+     "ilvl": 55,
+     "req": 50,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 12614,
+     "fire_res": 14,
+     "ilvl": 62,
+     "req": 57,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 18861,
+     "fire_res": 11,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 20139,
+     "fire_res": 10,
+     "ilvl": 90,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16901,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16909,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16915,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16930,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16938,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16946,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16954,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16962,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 18875,
+     "fire_res": 10,
+     "ilvl": 64,
+     "req": 59,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 14577,
+     "fire_res": 10,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 4,
+     "item_subclass": 1
+    }
+   ],
+   "head": [
+    {
+     "id": 19148,
+     "fire_res": 35,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16983,
+     "fire_res": 29,
+     "ilvl": 60,
+     "req": 55,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 14130,
+     "fire_res": 18,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 12612,
+     "fire_res": 13,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16921,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 18817,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 18546,
+     "fire_res": 10,
+     "ilvl": 69,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16795,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16808,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16813,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16821,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16834,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16842,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16846,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16854,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16866,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 40762,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    }
+   ],
+   "two_hand": [
+    {
+     "id": 17182,
+     "fire_res": 30,
+     "ilvl": 80,
+     "req": 60,
+     "item_class": 2,
+     "item_subclass": 5
+    },
+    {
+     "id": 18881,
+     "fire_res": 30,
+     "ilvl": 80,
+     "req": 60,
+     "item_class": 2,
+     "item_subclass": 5
+    },
+    {
+     "id": 19158,
+     "fire_res": 30,
+     "ilvl": 80,
+     "req": 60,
+     "item_class": 2,
+     "item_subclass": 5
+    },
+    {
+     "id": 944,
+     "fire_res": 20,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 2,
+     "item_subclass": 10
+    },
+    {
+     "id": 18803,
+     "fire_res": 15,
+     "ilvl": 70,
+     "req": 60,
+     "item_class": 2,
+     "item_subclass": 5
+    },
+    {
+     "id": 21128,
+     "fire_res": 10,
+     "ilvl": 75,
+     "req": 60,
+     "item_class": 2,
+     "item_subclass": 10
+    },
+    {
+     "id": 19167,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 2,
+     "item_subclass": 6
+    }
+   ],
+   "chest": [
+    {
+     "id": 21527,
+     "fire_res": 30,
+     "ilvl": 77,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 19399,
+     "fire_res": 30,
+     "ilvl": 75,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 12609,
+     "fire_res": 20,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 15053,
+     "fire_res": 20,
+     "ilvl": 57,
+     "req": 52,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 11604,
+     "fire_res": 19,
+     "ilvl": 59,
+     "req": 54,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 14128,
+     "fire_res": 18,
+     "ilvl": 60,
+     "req": 55,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 19156,
+     "fire_res": 15,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 12613,
+     "fire_res": 15,
+     "ilvl": 62,
+     "req": 57,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 15047,
+     "fire_res": 12,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 11606,
+     "fire_res": 12,
+     "ilvl": 56,
+     "req": 51,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 20136,
+     "fire_res": 10,
+     "ilvl": 90,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16897,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16905,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16916,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16923,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16931,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16942,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16950,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16958,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16966,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16798,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16809,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16815,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16820,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16833,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16841,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16845,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16853,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16865,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    }
+   ],
+   "hands": [
+    {
+     "id": 19164,
+     "fire_res": 28,
+     "ilvl": 70,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16979,
+     "fire_res": 25,
+     "ilvl": 62,
+     "req": 57,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 12632,
+     "fire_res": 10,
+     "ilvl": 59,
+     "req": 54,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 12631,
+     "fire_res": 10,
+     "ilvl": 58,
+     "req": 53,
+     "item_class": 4,
+     "item_subclass": 4
+    }
+   ],
+   "feet": [
+    {
+     "id": 20039,
+     "fire_res": 28,
+     "ilvl": 70,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16984,
+     "fire_res": 24,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16982,
+     "fire_res": 24,
+     "ilvl": 59,
+     "req": 54,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 13527,
+     "fire_res": 20,
+     "ilvl": 62,
+     "req": 57,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 13369,
+     "fire_res": 15,
+     "ilvl": 63,
+     "req": 58,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 18806,
+     "fire_res": 12,
+     "ilvl": 70,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16898,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16906,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16912,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16919,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16927,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16941,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16949,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16957,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16965,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 18102,
+     "fire_res": 10,
+     "ilvl": 63,
+     "req": 58,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 12611,
+     "fire_res": 10,
+     "ilvl": 60,
+     "req": 55,
+     "item_class": 4,
+     "item_subclass": 4
+    }
+   ],
+   "waist": [
+    {
+     "id": 19149,
+     "fire_res": 26,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16989,
+     "fire_res": 24,
+     "ilvl": 59,
+     "req": 54,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 13526,
+     "fire_res": 20,
+     "ilvl": 62,
+     "req": 57,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 19162,
+     "fire_res": 12,
+     "ilvl": 70,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 19163,
+     "fire_res": 12,
+     "ilvl": 70,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16802,
+     "fire_res": 10,
+     "ilvl": 66,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    }
+   ],
+   "shoulders": [
+    {
+     "id": 16988,
+     "fire_res": 25,
+     "ilvl": 62,
+     "req": 57,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16980,
+     "fire_res": 24,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 19139,
+     "fire_res": 22,
+     "ilvl": 71,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 15055,
+     "fire_res": 18,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16832,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16902,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 16917,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16924,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16932,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 16937,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16945,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 16953,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 16961,
+     "fire_res": 10,
+     "ilvl": 76,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 18374,
+     "fire_res": 10,
+     "ilvl": 62,
+     "req": 57,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 13133,
+     "fire_res": 10,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 12610,
+     "fire_res": 10,
+     "ilvl": 60,
+     "req": 55,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 11605,
+     "fire_res": 10,
+     "ilvl": 58,
+     "req": 53,
+     "item_class": 4,
+     "item_subclass": 4
+    }
+   ],
+   "neck": [
+    {
+     "id": 17782,
+     "fire_res": 24,
+     "ilvl": 80,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 0
+    },
+    {
+     "id": 17783,
+     "fire_res": 24,
+     "ilvl": 80,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 0
+    },
+    {
+     "id": 16309,
+     "fire_res": 15,
+     "ilvl": 63,
+     "req": 50,
+     "item_class": 4,
+     "item_subclass": 0
+    },
+    {
+     "id": 17111,
+     "fire_res": 12,
+     "ilvl": 68,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 0
+    },
+    {
+     "id": 18397,
+     "fire_res": 10,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 4,
+     "item_subclass": 0
+    }
+   ],
+   "off_hand": [
+    {
+     "id": 43666,
+     "fire_res": 20,
+     "ilvl": 65,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 0
+    },
+    {
+     "id": 13524,
+     "fire_res": 15,
+     "ilvl": 62,
+     "req": 57,
+     "item_class": 4,
+     "item_subclass": 0
+    },
+    {
+     "id": 12602,
+     "fire_res": 10,
+     "ilvl": 63,
+     "req": 58,
+     "item_class": 4,
+     "item_subclass": 6
+    },
+    {
+     "id": 1168,
+     "fire_res": 10,
+     "ilvl": 59,
+     "req": 54,
+     "item_class": 4,
+     "item_subclass": 6
+    }
+   ],
+   "back": [
+    {
+     "id": 12905,
+     "fire_res": 20,
+     "ilvl": 61,
+     "req": 56,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 18811,
+     "fire_res": 18,
+     "ilvl": 71,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 15138,
+     "fire_res": 16,
+     "ilvl": 60,
+     "req": 55,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 3475,
+     "fire_res": 15,
+     "ilvl": 65,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 11812,
+     "fire_res": 12,
+     "ilvl": 58,
+     "req": 53,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 13007,
+     "fire_res": 10,
+     "ilvl": 58,
+     "req": 53,
+     "item_class": 4,
+     "item_subclass": 1
+    }
+   ],
+   "finger": [
+    {
+     "id": 17982,
+     "fire_res": 18,
+     "ilvl": 65,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 0
+    },
+    {
+     "id": 18813,
+     "fire_res": 10,
+     "ilvl": 73,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 0
+    }
+   ],
+   "wrist": [
+    {
+     "id": 17014,
+     "fire_res": 18,
+     "ilvl": 59,
+     "req": 54,
+     "item_class": 4,
+     "item_subclass": 4
+    },
+    {
+     "id": 11768,
+     "fire_res": 14,
+     "ilvl": 57,
+     "req": 52,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 11764,
+     "fire_res": 10,
+     "ilvl": 57,
+     "req": 52,
+     "item_class": 4,
+     "item_subclass": 2
+    },
+    {
+     "id": 11765,
+     "fire_res": 10,
+     "ilvl": 57,
+     "req": 52,
+     "item_class": 4,
+     "item_subclass": 3
+    },
+    {
+     "id": 11766,
+     "fire_res": 10,
+     "ilvl": 57,
+     "req": 52,
+     "item_class": 4,
+     "item_subclass": 1
+    },
+    {
+     "id": 11767,
+     "fire_res": 10,
+     "ilvl": 57,
+     "req": 52,
+     "item_class": 4,
+     "item_subclass": 4
+    }
+   ],
+   "trinket": [
+    {
+     "id": 18638,
+     "fire_res": 18,
+     "ilvl": 58,
+     "req": 53,
+     "item_class": 4,
+     "item_subclass": 0
+    },
+    {
+     "id": 23042,
+     "fire_res": 13,
+     "ilvl": 85,
+     "req": 60,
+     "item_class": 4,
+     "item_subclass": 0
+    }
+   ],
+   "main_hand": [
+    {
+     "id": 23362,
+     "fire_res": 10,
+     "ilvl": 90,
+     "req": 60,
+     "item_class": 2,
+     "item_subclass": 4
+    },
+    {
+     "id": 14555,
+     "fire_res": 10,
+     "ilvl": 63,
+     "req": 58,
+     "item_class": 2,
+     "item_subclass": 15
+    }
+   ],
+   "ranged": [
+    {
+     "id": 17077,
+     "fire_res": 10,
+     "ilvl": 63,
+     "req": 58,
+     "item_class": 2,
+     "item_subclass": 19
+    },
+    {
+     "id": 13004,
+     "fire_res": 10,
+     "ilvl": 58,
+     "req": 53,
+     "item_class": 2,
+     "item_subclass": 19
+    }
+   ]
+  }
+ },
+ "pvp_honor_by_class": {
+  "source": "the dev realm world DB: npc_vendor rows with ExtendedCost > 0 (honor only), RequiredLevel 55-60, class-locked",
+  "classes": {
+   "mage": {
+    "head": [
+     {
+      "id": 16441,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 16533,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 23263,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     },
+     {
+      "id": 23318,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     }
+    ],
+    "chest": [
+     {
+      "id": 16443,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 16535,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 22886,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     },
+     {
+      "id": 23305,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     }
+    ],
+    "shoulders": [
+     {
+      "id": 16444,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 16536,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 23264,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23319,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20061,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20176,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     }
+    ],
+    "feet": [
+     {
+      "id": 16437,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 16539,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 22860,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23291,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20054,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20159,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ],
+    "hands": [
+     {
+      "id": 16440,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 16540,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 22870,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     },
+     {
+      "id": 23290,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     }
+    ],
+    "legs": [
+     {
+      "id": 16442,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 16534,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 22883,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     },
+     {
+      "id": 23304,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     }
+    ],
+    "wrist": [
+     {
+      "id": 16486,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     },
+     {
+      "id": 18456,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     }
+    ],
+    "waist": [
+     {
+      "id": 20047,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20163,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ]
+   },
+   "druid": {
+    "shoulders": [
+     {
+      "id": 16449,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 16551,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 23254,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23309,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20059,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20060,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20175,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20194,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     }
+    ],
+    "head": [
+     {
+      "id": 16451,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 16550,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 23253,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     },
+     {
+      "id": 23308,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     }
+    ],
+    "chest": [
+     {
+      "id": 16452,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 16549,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 22877,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     },
+     {
+      "id": 23294,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     }
+    ],
+    "hands": [
+     {
+      "id": 16448,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 16555,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 22863,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     },
+     {
+      "id": 23280,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     }
+    ],
+    "legs": [
+     {
+      "id": 16450,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 16552,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 22878,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     },
+     {
+      "id": 23295,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     }
+    ],
+    "feet": [
+     {
+      "id": 16459,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 16554,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 22852,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23281,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20052,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20053,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20167,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20186,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ],
+    "wrist": [
+     {
+      "id": 18434,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     },
+     {
+      "id": 18454,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     }
+    ],
+    "waist": [
+     {
+      "id": 20045,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20046,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20171,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20190,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ]
+   },
+   "rogue": {
+    "chest": [
+     {
+      "id": 16453,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 16563,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 22879,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     },
+     {
+      "id": 23298,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     }
+    ],
+    "head": [
+     {
+      "id": 16455,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 16561,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 23257,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     },
+     {
+      "id": 23312,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     }
+    ],
+    "shoulders": [
+     {
+      "id": 16457,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 16562,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 23258,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23313,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20059,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20060,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20175,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20194,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     }
+    ],
+    "feet": [
+     {
+      "id": 16446,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 16558,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 22856,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23285,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20052,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20053,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20167,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20186,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ],
+    "hands": [
+     {
+      "id": 16454,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 16560,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 22864,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     },
+     {
+      "id": 23284,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     }
+    ],
+    "legs": [
+     {
+      "id": 16456,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 16564,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 22880,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     },
+     {
+      "id": 23299,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     }
+    ],
+    "wrist": [
+     {
+      "id": 16497,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     },
+     {
+      "id": 18452,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     }
+    ],
+    "waist": [
+     {
+      "id": 20045,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20046,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20171,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20190,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ]
+   },
+   "hunter": {
+    "head": [
+     {
+      "id": 16465,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 16566,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 23251,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     },
+     {
+      "id": 23306,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     }
+    ],
+    "chest": [
+     {
+      "id": 16466,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 16565,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 22874,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     },
+     {
+      "id": 23292,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     }
+    ],
+    "shoulders": [
+     {
+      "id": 16468,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 16568,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 23252,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23307,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20055,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20056,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20158,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20203,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     }
+    ],
+    "feet": [
+     {
+      "id": 16462,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 16569,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 22843,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23278,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20050,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20051,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20154,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20199,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ],
+    "hands": [
+     {
+      "id": 16463,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 16571,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 22862,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     },
+     {
+      "id": 23279,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     }
+    ],
+    "legs": [
+     {
+      "id": 16467,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 16567,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 22875,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     },
+     {
+      "id": 23293,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     }
+    ],
+    "wrist": [
+     {
+      "id": 16532,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     },
+     {
+      "id": 18448,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     }
+    ],
+    "waist": [
+     {
+      "id": 20043,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20044,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20150,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20195,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ]
+   },
+   "paladin": {
+    "chest": [
+     {
+      "id": 16473,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 29615,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 23272,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     },
+     {
+      "id": 29602,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     }
+    ],
+    "head": [
+     {
+      "id": 16474,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 29616,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 23276,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     },
+     {
+      "id": 29604,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     }
+    ],
+    "shoulders": [
+     {
+      "id": 16476,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 29617,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 23277,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 29605,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20057,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20058,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20184,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20212,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     }
+    ],
+    "hands": [
+     {
+      "id": 16471,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 29613,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 23274,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     },
+     {
+      "id": 29600,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     }
+    ],
+    "feet": [
+     {
+      "id": 16472,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 29612,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 23275,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 29601,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20048,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20049,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20181,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20208,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ],
+    "legs": [
+     {
+      "id": 16475,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 29614,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 23273,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     },
+     {
+      "id": 29603,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     }
+    ],
+    "wrist": [
+     {
+      "id": 18429,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     },
+     {
+      "id": 18445,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     }
+    ],
+    "waist": [
+     {
+      "id": 20041,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20042,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20177,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20204,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ]
+   },
+   "warrior": {
+    "chest": [
+     {
+      "id": 16477,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 16541,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 22872,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     },
+     {
+      "id": 23300,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     }
+    ],
+    "head": [
+     {
+      "id": 16478,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 16542,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 23244,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     },
+     {
+      "id": 23314,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     }
+    ],
+    "shoulders": [
+     {
+      "id": 16480,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 16544,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 23243,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23315,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20057,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20212,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     }
+    ],
+    "legs": [
+     {
+      "id": 16479,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 16543,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 22873,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     },
+     {
+      "id": 23301,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     }
+    ],
+    "feet": [
+     {
+      "id": 16483,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 16545,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 22858,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23287,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20048,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20208,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ],
+    "hands": [
+     {
+      "id": 16484,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 16548,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 22868,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     },
+     {
+      "id": 23286,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     }
+    ],
+    "wrist": [
+     {
+      "id": 18429,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     },
+     {
+      "id": 18445,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     }
+    ],
+    "waist": [
+     {
+      "id": 20041,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20204,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ]
+   },
+   "shaman": {
+    "chest": [
+     {
+      "id": 16577,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 29609,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 22876,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     },
+     {
+      "id": 29596,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     }
+    ],
+    "head": [
+     {
+      "id": 16578,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 29610,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 23259,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     },
+     {
+      "id": 29598,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     }
+    ],
+    "shoulders": [
+     {
+      "id": 16580,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 29611,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 23260,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 29599,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20055,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20056,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20158,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20203,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     }
+    ],
+    "feet": [
+     {
+      "id": 16573,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 29606,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 22857,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 29594,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20050,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20051,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20154,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20199,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ],
+    "hands": [
+     {
+      "id": 16574,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 29607,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 22867,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     },
+     {
+      "id": 29595,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     }
+    ],
+    "legs": [
+     {
+      "id": 16579,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 29608,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 22887,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     },
+     {
+      "id": 29597,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     }
+    ],
+    "wrist": [
+     {
+      "id": 16532,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     },
+     {
+      "id": 18448,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     }
+    ],
+    "waist": [
+     {
+      "id": 20043,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20044,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20150,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20195,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ]
+   },
+   "warlock": {
+    "head": [
+     {
+      "id": 17578,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 17591,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 23255,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     },
+     {
+      "id": 23310,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     }
+    ],
+    "shoulders": [
+     {
+      "id": 17580,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 17590,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 23256,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23311,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20061,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20176,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     }
+    ],
+    "chest": [
+     {
+      "id": 17581,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 17592,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 22884,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     },
+     {
+      "id": 23297,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     }
+    ],
+    "legs": [
+     {
+      "id": 17579,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 17593,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 22881,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     },
+     {
+      "id": 23296,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     }
+    ],
+    "feet": [
+     {
+      "id": 17583,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 17586,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 22855,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23283,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20054,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20159,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ],
+    "hands": [
+     {
+      "id": 17584,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 17588,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 22865,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     },
+     {
+      "id": 23282,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     }
+    ],
+    "wrist": [
+     {
+      "id": 16486,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     },
+     {
+      "id": 18456,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     }
+    ],
+    "waist": [
+     {
+      "id": 20047,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20163,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ]
+   },
+   "priest": {
+    "head": [
+     {
+      "id": 17602,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 17623,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 464
+     },
+     {
+      "id": 23261,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     },
+     {
+      "id": 23316,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 444
+     }
+    ],
+    "shoulders": [
+     {
+      "id": 17604,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 17622,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 23262,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23317,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20061,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     },
+     {
+      "id": 20176,
+      "ilvl": 65,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 501
+     }
+    ],
+    "chest": [
+     {
+      "id": 17605,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 17624,
+      "ilvl": 74,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 463
+     },
+     {
+      "id": 22885,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     },
+     {
+      "id": 23303,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 652
+     }
+    ],
+    "legs": [
+     {
+      "id": 17603,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 17625,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 542
+     },
+     {
+      "id": 22882,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     },
+     {
+      "id": 23302,
+      "ilvl": 68,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 653
+     }
+    ],
+    "feet": [
+     {
+      "id": 17607,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 17618,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 465
+     },
+     {
+      "id": 22859,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 23289,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20054,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20159,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ],
+    "hands": [
+     {
+      "id": 17608,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 17620,
+      "ilvl": 71,
+      "req": 60,
+      "quality": 4,
+      "faction": "both",
+      "extended_cost": 541
+     },
+     {
+      "id": 22869,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     },
+     {
+      "id": 23288,
+      "ilvl": 66,
+      "req": 60,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 428
+     }
+    ],
+    "wrist": [
+     {
+      "id": 16486,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     },
+     {
+      "id": 18456,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 492
+     }
+    ],
+    "waist": [
+     {
+      "id": 20047,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     },
+     {
+      "id": 20163,
+      "ilvl": 63,
+      "req": 58,
+      "quality": 3,
+      "faction": "both",
+      "extended_cost": 427
+     }
+    ]
+   }
+  }
+ },
+ "battleground_reputation": {
+  "source": "same query, items open to every class, ilvl >= 63",
+  "slots": {
+   "finger": [
+    {
+     "id": 27830,
+     "ilvl": 80,
+     "req": 60,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 65
+    },
+    {
+     "id": 27832,
+     "ilvl": 80,
+     "req": 60,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 65
+    },
+    {
+     "id": 27833,
+     "ilvl": 80,
+     "req": 60,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 69
+    },
+    {
+     "id": 27834,
+     "ilvl": 80,
+     "req": 60,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 69
+    },
+    {
+     "id": 19325,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 489
+    },
+    {
+     "id": 21563,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 489
+    },
+    {
+     "id": 19510,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 491
+    },
+    {
+     "id": 19514,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 491
+    },
+    {
+     "id": 19518,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 491
+    },
+    {
+     "id": 19522,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 491
+    }
+   ],
+   "main_hand": [
+    {
+     "id": 12584,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 16345,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18827,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18828,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18838,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18840,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18843,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18844,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18865,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18866,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 23451,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 23454,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 23456,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 23464,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 23466,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 23467,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 19099,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 496
+    },
+    {
+     "id": 19100,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 496
+    },
+    {
+     "id": 19103,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 496
+    },
+    {
+     "id": 19104,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 496
+    },
+    {
+     "id": 19324,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 702
+    },
+    {
+     "id": 20070,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 746
+    },
+    {
+     "id": 20214,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 746
+    },
+    {
+     "id": 19542,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 747
+    },
+    {
+     "id": 19546,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 747
+    },
+    {
+     "id": 19550,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 701
+    },
+    {
+     "id": 19554,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 747
+    }
+   ],
+   "off_hand": [
+    {
+     "id": 18825,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18826,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18847,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18848,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 23452,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 23453,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 23468,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 23469,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 19308,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 702
+    },
+    {
+     "id": 19309,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 702
+    },
+    {
+     "id": 19310,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 702
+    },
+    {
+     "id": 19311,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 702
+    },
+    {
+     "id": 19312,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 702
+    },
+    {
+     "id": 19315,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 702
+    },
+    {
+     "id": 19321,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 702
+    }
+   ],
+   "two_hand": [
+    {
+     "id": 18830,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2257
+    },
+    {
+     "id": 18831,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2257
+    },
+    {
+     "id": 18867,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2257
+    },
+    {
+     "id": 18868,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2257
+    },
+    {
+     "id": 18869,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2257
+    },
+    {
+     "id": 18871,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2257
+    },
+    {
+     "id": 18873,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2257
+    },
+    {
+     "id": 18874,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2257
+    },
+    {
+     "id": 18876,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2257
+    },
+    {
+     "id": 18877,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2257
+    },
+    {
+     "id": 23455,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2257
+    },
+    {
+     "id": 23465,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2257
+    },
+    {
+     "id": 19101,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 497
+    },
+    {
+     "id": 19102,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 497
+    },
+    {
+     "id": 19323,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 702
+    },
+    {
+     "id": 20069,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 567
+    },
+    {
+     "id": 20220,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 567
+    },
+    {
+     "id": 19566,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 490
+    },
+    {
+     "id": 19570,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 490
+    }
+   ],
+   "ranged": [
+    {
+     "id": 18833,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18835,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18836,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18837,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18855,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 18860,
+     "ilvl": 78,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 2291
+    },
+    {
+     "id": 19558,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 747
+    },
+    {
+     "id": 19562,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 747
+    }
+   ],
+   "wrist": [
+    {
+     "id": 19578,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 488
+    },
+    {
+     "id": 19582,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 488
+    },
+    {
+     "id": 19587,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 488
+    },
+    {
+     "id": 19595,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 488
+    }
+   ],
+   "back": [
+    {
+     "id": 20068,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 495
+    },
+    {
+     "id": 20073,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 495
+    },
+    {
+     "id": 16342,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 774
+    },
+    {
+     "id": 18461,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 774
+    },
+    {
+     "id": 19526,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 492
+    },
+    {
+     "id": 19530,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 492
+    }
+   ],
+   "legs": [
+    {
+     "id": 22651,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 22672,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 22673,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 22676,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 22740,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 22741,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 22747,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 22748,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 22749,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 22750,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 22752,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 22753,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 30497,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    },
+    {
+     "id": 30498,
+     "ilvl": 65,
+     "req": 60,
+     "quality": 4,
+     "faction": "both",
+     "extended_cost": 748
+    }
+   ],
+   "neck": [
+    {
+     "id": 16335,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 491
+    },
+    {
+     "id": 18443,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 491
+    },
+    {
+     "id": 19534,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 491
+    },
+    {
+     "id": 19538,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 491
+    }
+   ],
+   "trinket": [
+    {
+     "id": 20071,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 520
+    },
+    {
+     "id": 20072,
+     "ilvl": 63,
+     "req": 58,
+     "quality": 3,
+     "faction": "both",
+     "extended_cost": 520
+    }
+   ]
+  }
+ },
+ "bank_sets_by_role": {
+  "tank": [
+   "main: <class>-protection or druid-feral-tank lists",
+   "tank_fire_resistance (Molten Core: Ragnaros, Magmadar, Garr adds)",
+   "threat/dps: warrior-fury or druid-feral-dps list",
+   "pvp_honor_by_class"
+  ],
+  "healer": [
+   "main: healer list",
+   "fire_resistance_by_slot (Ragnaros healers in melee range)",
+   "pvp_honor_by_class"
+  ],
+  "melee": [
+   "main list",
+   "fire_resistance_by_slot (Ragnaros melee)",
+   "pvp_honor_by_class"
+  ],
+  "ranged_caster": [
+   "main list",
+   "fire_resistance_by_slot (low priority in MC)",
+   "pvp_honor_by_class"
+  ],
+  "hybrid": [
+   "second spec list of the same class (paladin, druid, shaman, priest)"
+  ]
+ }
+}

@@ -1,0 +1,330 @@
+{
+ "spec": "druid-feral-dps",
+ "class": "druid",
+ "spec_name": "feral",
+ "role": "melee",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "melee_hit",
+   "crit",
+   "haste",
+   "agility",
+   "strength",
+   "attack_power"
+  ],
+  "caps": {},
+  "source_url": "https://www.wowhead.com/classic/guide/classes/druid/feral/dps-stat-priority-attributes-pve"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/feral_druid/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Strength": 2.4,
+   "Agility": 2.43,
+   "Intellect": 0.61,
+   "Spirit": 0.38,
+   "MP5": 0.79,
+   "AttackPower": 1.0,
+   "MeleeHit": 26.59,
+   "MeleeCrit": 28.68,
+   "Expertise": 26.59,
+   "Mana": 0.03,
+   "FeralAttackPower": 1.0,
+   "MeleeSpeedMultiplier": 16.5
+  }
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/feral-druid-dps-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     8345
+    ],
+    "neck": [
+     22340,
+     12048,
+     22150,
+     15411,
+     12046
+    ],
+    "shoulders": [
+     12927,
+     22241,
+     12082,
+     18374,
+     11874,
+     13358
+    ],
+    "back": [
+     13340,
+     11626,
+     22269,
+     18511,
+     22337
+    ],
+    "chest": [
+     14637,
+     12757,
+     22274,
+     13944
+    ],
+    "wrist": [
+     18375,
+     22204,
+     13120,
+     12966
+    ],
+    "hands": [
+     13258,
+     15063,
+     10260,
+     15438,
+     10149
+    ],
+    "waist": [
+     13252,
+     10259,
+     15434,
+     10145,
+     10221
+    ],
+    "legs": [
+     18736,
+     15062,
+     20665,
+     16709,
+     8300
+    ],
+    "feet": [
+     22472,
+     12553,
+     18506,
+     15861,
+     12470
+    ],
+    "finger": [
+     18500,
+     12017,
+     12016,
+     10795,
+     17713,
+     22255
+    ],
+    "trinket": [
+     10725,
+     13965,
+     11815,
+     19120,
+     18537,
+     22321,
+     10418,
+     18863
+    ],
+    "two_hand": [
+     9449,
+     18420,
+     15267,
+     15266,
+     11921,
+     15265
+    ],
+    "ranged": [
+     23198
+    ]
+   },
+   "best": {
+    "head": [
+     8345
+    ],
+    "neck": [
+     22340
+    ],
+    "shoulders": [
+     12927
+    ],
+    "back": [
+     13340
+    ],
+    "chest": [
+     14637
+    ],
+    "wrist": [
+     18375,
+     22204,
+     13120
+    ],
+    "hands": [
+     13258,
+     15063
+    ],
+    "waist": [
+     13252
+    ],
+    "legs": [
+     18736,
+     15062
+    ],
+    "feet": [
+     22472
+    ],
+    "finger": [
+     18500
+    ],
+    "trinket": [
+     10725,
+     13965,
+     11815,
+     19120
+    ],
+    "two_hand": [
+     9449
+    ],
+    "ranged": [
+     23198
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-feral-druid-dps-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     8345,
+     13404,
+     12587
+    ],
+    "neck": [
+     18404,
+     15411,
+     11933,
+     17044
+    ],
+    "shoulders": [
+     12927,
+     12082
+    ],
+    "back": [
+     17102,
+     13340,
+     13397,
+     11930
+    ],
+    "chest": [
+     14637,
+     12757,
+     12603
+    ],
+    "wrist": [
+     19146,
+     12966,
+     13120
+    ],
+    "hands": [
+     15063
+    ],
+    "waist": [
+     13252,
+     14502
+    ],
+    "legs": [
+     15062
+    ],
+    "feet": [
+     12553,
+     16711
+    ],
+    "finger": [
+     18821,
+     17063,
+     2246,
+     17713
+    ],
+    "trinket": [
+     11815,
+     13965,
+     19120
+    ],
+    "main_hand": [
+     18805,
+     4091,
+     13368,
+     18044
+    ],
+    "off_hand": [
+     13385
+    ],
+    "two_hand": [
+     9449,
+     13167
+    ]
+   },
+   "best": {
+    "head": [
+     8345
+    ],
+    "neck": [
+     18404
+    ],
+    "shoulders": [
+     12927
+    ],
+    "back": [
+     17102
+    ],
+    "chest": [
+     14637
+    ],
+    "wrist": [
+     19146
+    ],
+    "hands": [
+     15063
+    ],
+    "waist": [
+     13252
+    ],
+    "legs": [
+     15062
+    ],
+    "feet": [
+     12553
+    ],
+    "finger": [
+     18821
+    ],
+    "trinket": [
+     11815
+    ],
+    "main_hand": [
+     18805
+    ],
+    "off_hand": [
+     13385
+    ],
+    "two_hand": [
+     9449
+    ]
+   },
+   "unreachable_at_60": [
+    18404
+   ]
+  }
+ },
+ "weights_alt": {
+  "source_url": "https://www.wowhead.com/classic/guide/classes/druid/feral/dps-stat-priority-attributes-pve",
+  "units": "normalized to 1 AP; pct stats per 1%",
+  "values": {
+   "attack_power": 1,
+   "feral_attack_power": 1,
+   "strength": 2.64,
+   "agility": 2.76,
+   "melee_hit_pct": 31.85,
+   "crit_pct": 30.13,
+   "haste_pct": 13.6
+  }
+ }
+}

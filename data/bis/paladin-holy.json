@@ -1,0 +1,282 @@
+{
+ "spec": "paladin-holy",
+ "class": "paladin",
+ "spec_name": "holy",
+ "role": "healer",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "healing",
+   "intellect",
+   "spell_crit",
+   "mp5",
+   "stamina",
+   "spirit"
+  ],
+  "caps": {},
+  "source_url": "https://www.wowhead.com/classic/guide/classes/paladin/healer-stat-priority-attributes-pve"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/holy_paladin/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Intellect": 0.38,
+   "Spirit": 0.34,
+   "SpellPower": 1.0,
+   "SpellCrit": 0.69,
+   "SpellHaste": 0.77,
+   "MP5": 0.0
+  },
+  "caution": "identical to restoration_druid: likely a placeholder copy"
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/paladin-healing-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     18490,
+     12633,
+     12960
+    ],
+    "neck": [
+     18723,
+     22327,
+     13141
+    ],
+    "shoulders": [
+     14548,
+     15061,
+     18681
+    ],
+    "back": [
+     18510,
+     18389,
+     13386
+    ],
+    "chest": [
+     13346,
+     15047,
+     18373
+    ],
+    "wrist": [
+     18459,
+     13969,
+     18525
+    ],
+    "hands": [
+     18527,
+     10787,
+     18309
+    ],
+    "waist": [
+     14553,
+     18327,
+     18702
+    ],
+    "legs": [
+     18386,
+     11841
+    ],
+    "feet": [
+     18507,
+     13954,
+     18318
+    ],
+    "finger": [
+     16058,
+     13178,
+     22334,
+     18395
+    ],
+    "trinket": [
+     12930,
+     11819,
+     18472
+    ],
+    "main_hand": [
+     11923,
+     22315,
+     18321
+    ],
+    "off_hand": [
+     18523,
+     22319,
+     11928
+    ],
+    "ranged": [
+     23201
+    ]
+   },
+   "best": {
+    "head": [
+     18490
+    ],
+    "neck": [
+     18723
+    ],
+    "shoulders": [
+     14548
+    ],
+    "back": [
+     18510
+    ],
+    "chest": [
+     13346
+    ],
+    "wrist": [
+     18459
+    ],
+    "hands": [
+     18527
+    ],
+    "waist": [
+     14553
+    ],
+    "legs": [
+     18386
+    ],
+    "feet": [
+     18507
+    ],
+    "finger": [
+     16058,
+     13178
+    ],
+    "trinket": [
+     12930,
+     11819
+    ],
+    "main_hand": [
+     11923
+    ],
+    "off_hand": [
+     18523
+    ],
+    "ranged": [
+     23201
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-paladin-healing-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     16955,
+     12960
+    ],
+    "neck": [
+     18814,
+     18723,
+     13141
+    ],
+    "shoulders": [
+     18810,
+     18720,
+     14548,
+     15061
+    ],
+    "back": [
+     13386
+    ],
+    "chest": [
+     13346,
+     19145,
+     15047
+    ],
+    "wrist": [
+     13969,
+     13107
+    ],
+    "hands": [
+     12554,
+     13244
+    ],
+    "waist": [
+     19162,
+     14553,
+     18702
+    ],
+    "legs": [
+     18875,
+     11841,
+     18682
+    ],
+    "feet": [
+     13954,
+     11822
+    ],
+    "finger": [
+     19140,
+     13178,
+     16058,
+     13143
+    ],
+    "trinket": [
+     17064,
+     12930,
+     11819
+    ],
+    "main_hand": [
+     17103,
+     17105,
+     11923
+    ],
+    "off_hand": [
+     17106,
+     11928
+    ]
+   },
+   "best": {
+    "head": [
+     16955
+    ],
+    "neck": [
+     18814
+    ],
+    "shoulders": [
+     18810
+    ],
+    "back": [
+     13386
+    ],
+    "chest": [
+     13346
+    ],
+    "wrist": [
+     13969
+    ],
+    "hands": [
+     12554
+    ],
+    "waist": [
+     19162
+    ],
+    "legs": [
+     18875
+    ],
+    "feet": [
+     13954
+    ],
+    "finger": [
+     19140
+    ],
+    "trinket": [
+     17064
+    ],
+    "main_hand": [
+     17103
+    ],
+    "off_hand": [
+     17106
+    ]
+   },
+   "unreachable_at_60": [
+    17064
+   ]
+  }
+ }
+}

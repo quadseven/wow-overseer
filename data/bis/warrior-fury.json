@@ -1,0 +1,337 @@
+{
+ "spec": "warrior-fury",
+ "class": "warrior",
+ "spec_name": "fury",
+ "role": "melee",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "melee_hit_to_9pct",
+   "strength",
+   "attack_power",
+   "agility",
+   "crit"
+  ],
+  "caps": {
+   "melee_hit_pct": 9
+  },
+  "source_url": "https://www.wowhead.com/classic/guide/classes/warrior/fury/dps-stat-priority-attributes-pve"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/warrior/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Strength": 2.51,
+   "Agility": 1.86,
+   "AttackPower": 1.0,
+   "MeleeHit": 28.67,
+   "MeleeCrit": 25.1,
+   "FireResistance": 0.5,
+   "MainHandDps": 11.92,
+   "OffHandDps": 4.69,
+   "MeleeSpeedMultiplier": 4.69
+  }
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/fury-warrior-dps-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     12640,
+     22411,
+     12587,
+     13404
+    ],
+    "neck": [
+     15411,
+     22340,
+     11933
+    ],
+    "shoulders": [
+     12927,
+     15051,
+     12082
+    ],
+    "back": [
+     13340,
+     11626,
+     22337
+    ],
+    "chest": [
+     11726,
+     14637,
+     13944,
+     11926
+    ],
+    "wrist": [
+     13400,
+     12936,
+     22204
+    ],
+    "hands": [
+     14551,
+     15063,
+     21998,
+     13957
+    ],
+    "waist": [
+     13959,
+     13142,
+     13252
+    ],
+    "legs": [
+     15062,
+     15052,
+     14554
+    ],
+    "feet": [
+     21995,
+     16984,
+     12555,
+     11675
+    ],
+    "finger": [
+     13098,
+     17713,
+     18500
+    ],
+    "trinket": [
+     20130,
+     13965,
+     11815,
+     19120
+    ],
+    "main_hand": [
+     11684,
+     12940,
+     811,
+     13286,
+     2244,
+     13036,
+     13006,
+     18737,
+     15806,
+     13015,
+     13368
+    ],
+    "off_hand": [
+     12939
+    ],
+    "ranged": [
+     18323,
+     12651,
+     12653
+    ]
+   },
+   "best": {
+    "head": [
+     12640
+    ],
+    "neck": [
+     15411
+    ],
+    "shoulders": [
+     12927,
+     15051
+    ],
+    "back": [
+     13340
+    ],
+    "chest": [
+     11726
+    ],
+    "wrist": [
+     13400,
+     12936
+    ],
+    "hands": [
+     14551,
+     15063,
+     21998
+    ],
+    "waist": [
+     13959,
+     13142
+    ],
+    "legs": [
+     15062,
+     15052
+    ],
+    "feet": [
+     21995
+    ],
+    "finger": [
+     13098,
+     17713
+    ],
+    "trinket": [
+     20130,
+     13965,
+     11815
+    ],
+    "main_hand": [
+     11684,
+     12940,
+     811,
+     13286,
+     2244,
+     18737
+    ],
+    "off_hand": [
+     12939
+    ],
+    "ranged": [
+     18323
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-fury-warrior-dps-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     12640,
+     12587,
+     13404
+    ],
+    "neck": [
+     18404,
+     15411,
+     11933,
+     17044
+    ],
+    "shoulders": [
+     12927,
+     12082
+    ],
+    "back": [
+     13340,
+     13397,
+     13203
+    ],
+    "chest": [
+     11726,
+     11926,
+     14637
+    ],
+    "wrist": [
+     19146,
+     12936,
+     13400,
+     12966
+    ],
+    "hands": [
+     15063,
+     19143
+    ],
+    "waist": [
+     19137,
+     13142,
+     13959
+    ],
+    "legs": [
+     15062,
+     14554
+    ],
+    "feet": [
+     14616,
+     12555
+    ],
+    "finger": [
+     18821,
+     17713,
+     13098
+    ],
+    "trinket": [
+     11815,
+     13965,
+     19120
+    ],
+    "main_hand": [
+     17075,
+     17068,
+     18832,
+     11684,
+     12940
+    ],
+    "off_hand": [
+     18805,
+     18816,
+     15806,
+     12939,
+     12535
+    ],
+    "two_hand": [
+     17076,
+     12592,
+     12784,
+     11931
+    ],
+    "ranged": [
+     17069,
+     17072,
+     12651
+    ]
+   },
+   "best": {
+    "head": [
+     12640
+    ],
+    "neck": [
+     18404
+    ],
+    "shoulders": [
+     12927
+    ],
+    "back": [
+     13340
+    ],
+    "chest": [
+     11726
+    ],
+    "wrist": [
+     19146
+    ],
+    "hands": [
+     15063
+    ],
+    "waist": [
+     19137
+    ],
+    "legs": [
+     15062
+    ],
+    "feet": [
+     14616
+    ],
+    "finger": [
+     18821
+    ],
+    "trinket": [
+     11815
+    ],
+    "main_hand": [
+     17075,
+     17068
+    ],
+    "off_hand": [
+     18805
+    ],
+    "two_hand": [
+     17076
+    ],
+    "ranged": [
+     17069
+    ]
+   },
+   "unreachable_at_60": [
+    17068,
+    17075,
+    18404
+   ]
+  }
+ }
+}

@@ -1,0 +1,327 @@
+{
+ "spec": "rogue-dps",
+ "class": "rogue",
+ "spec_name": "combat",
+ "role": "melee",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "melee_hit_to_9pct",
+   "weapon_skill_to_308",
+   "agility",
+   "strength",
+   "attack_power",
+   "crit"
+  ],
+  "caps": {
+   "melee_hit_pct": 9,
+   "weapon_skill": 308
+  },
+  "source_url": "https://www.wowhead.com/classic/guide/classes/rogue/dps-stat-priority-attributes-pve"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/rogue/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Agility": 2.38,
+   "Strength": 1.26,
+   "AttackPower": 1.0,
+   "SpellCrit": 0.41,
+   "SpellHit": 0.94,
+   "MeleeHit": 29.44,
+   "MeleeCrit": 17.92,
+   "FireResistance": 0.5,
+   "MainHandDps": 10.49,
+   "OffHandDps": 3.74,
+   "MeleeSpeedMultiplier": 18.56
+  }
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/rogue-dps-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     22005,
+     16707,
+     13404,
+     12587
+    ],
+    "neck": [
+     22340,
+     15411,
+     22150
+    ],
+    "shoulders": [
+     22008,
+     16708,
+     12927,
+     12082
+    ],
+    "back": [
+     13340,
+     22269,
+     11626
+    ],
+    "chest": [
+     22009,
+     16721,
+     14637,
+     15825
+    ],
+    "wrist": [
+     22004,
+     16710,
+     18375,
+     13120
+    ],
+    "hands": [
+     15063,
+     22006,
+     16712
+    ],
+    "waist": [
+     22002,
+     16713,
+     13252,
+     18505
+    ],
+    "legs": [
+     15062,
+     22007,
+     16709
+    ],
+    "feet": [
+     22003,
+     16711,
+     12553
+    ],
+    "finger": [
+     18500,
+     13098,
+     17713
+    ],
+    "trinket": [
+     11815,
+     13965,
+     19120,
+     18465
+    ],
+    "main_hand": [
+     12590,
+     12783,
+     12940,
+     6622,
+     13368,
+     15806
+    ],
+    "off_hand": [
+     18392,
+     12939
+    ],
+    "ranged": [
+     2100,
+     12651,
+     18323,
+     18680
+    ]
+   },
+   "best": {
+    "head": [
+     22005
+    ],
+    "neck": [
+     22340,
+     15411
+    ],
+    "shoulders": [
+     22008
+    ],
+    "back": [
+     13340
+    ],
+    "chest": [
+     22009
+    ],
+    "wrist": [
+     22004
+    ],
+    "hands": [
+     15063
+    ],
+    "waist": [
+     22002
+    ],
+    "legs": [
+     15062
+    ],
+    "feet": [
+     22003
+    ],
+    "finger": [
+     18500
+    ],
+    "trinket": [
+     11815,
+     13965
+    ],
+    "main_hand": [
+     12590,
+     12940
+    ],
+    "off_hand": [
+     18392,
+     12939
+    ],
+    "ranged": [
+     2100
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-rogue-dps-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     16908,
+     16821,
+     13404,
+     19984,
+     12587
+    ],
+    "neck": [
+     18404,
+     15411,
+     11933,
+     17044
+    ],
+    "shoulders": [
+     16823,
+     12927,
+     12082
+    ],
+    "back": [
+     13340,
+     13397,
+     13203
+    ],
+    "chest": [
+     16820,
+     14637,
+     12603,
+     12793
+    ],
+    "wrist": [
+     16825,
+     13120,
+     12966
+    ],
+    "hands": [
+     18823,
+     16826,
+     15063
+    ],
+    "waist": [
+     16827,
+     14636,
+     13252
+    ],
+    "legs": [
+     16909,
+     15062
+    ],
+    "feet": [
+     16824,
+     12553,
+     13210,
+     18506
+    ],
+    "finger": [
+     17063,
+     18821
+    ],
+    "trinket": [
+     11815,
+     13965,
+     19120
+    ],
+    "main_hand": [
+     17075,
+     12940,
+     2244,
+     18816,
+     12590,
+     12783
+    ],
+    "off_hand": [
+     18832,
+     12939,
+     15806,
+     18805,
+     14555
+    ],
+    "ranged": [
+     17069,
+     12651,
+     2100
+    ]
+   },
+   "best": {
+    "head": [
+     16908
+    ],
+    "neck": [
+     18404
+    ],
+    "shoulders": [
+     16823
+    ],
+    "back": [
+     13340
+    ],
+    "chest": [
+     16820
+    ],
+    "wrist": [
+     16825
+    ],
+    "hands": [
+     18823
+    ],
+    "waist": [
+     16827
+    ],
+    "legs": [
+     16909,
+     15062
+    ],
+    "feet": [
+     16824
+    ],
+    "finger": [
+     17063
+    ],
+    "trinket": [
+     11815
+    ],
+    "main_hand": [
+     17075,
+     18816
+    ],
+    "off_hand": [
+     18832,
+     18805
+    ],
+    "ranged": [
+     17069
+    ]
+   },
+   "unreachable_at_60": [
+    17075,
+    18404
+   ]
+  }
+ }
+}
