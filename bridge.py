@@ -21845,12 +21845,14 @@ _JOB_SPELLS_SQL = (
 _JOB_ITEMS_SQL = (
     "SELECT ci.guid AS owner, ii.guid AS item_guid, ii.itemEntry AS entry, ii.count, "
     "it.class, it.subclass, it.Quality AS quality, it.SellPrice AS sell_price, "
-    "it.name AS item_name "
+    "it.name AS item_name, it.ItemLevel AS item_level "
     "FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "WHERE ci.guid IN ({guids}) "
     "AND ((it.class = {goods} AND it.subclass IN ({subclasses})) "
-    "OR (it.Quality = 0 AND it.SellPrice > 0) OR ii.itemEntry IN ({entries})) "
+    "OR (it.Quality = 0 AND it.SellPrice > 0) OR ii.itemEntry IN ({entries}) "
+    # White weapons and armor, for guildjobs.Carried.outgrown.
+    "OR (it.class IN (2, 4) AND it.Quality = 1 AND it.SellPrice > 0)) "
     "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
     "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"

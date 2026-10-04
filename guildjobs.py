@@ -259,6 +259,20 @@ CONSUMERS = {
 # Grey loot: quality 0 with a vendor price. Nobody in any guild needs it.
 JUNK_QUALITY = 0
 
+# OUTGROWN WHITE GEAR SELLS LIKE GREY. On wow-dev on 2026-10-04 the first
+# guild mail collections were refused "no room in the bags" for 4 of 6
+# members, whose bags held the starter weapons and armor they had replaced
+# (Cudgel, Practice Sword, Simple Dagger, Scout's Boots) and no grey at all.
+# A white weapon or armor piece carried in the bags, OUTGROWN_LEVELS or more
+# item levels under its holder, is what a player sells. Never a profession
+# tool (miscellaneous weapons: the mining pick and skinning knife; fishing
+# poles) and never miscellaneous armor (shirts, rings, necks, trinkets).
+WHITE_QUALITY = 1
+OUTGROWN_LEVELS = 10
+WEAPON, ARMOR = 2, 4
+TOOL_WEAPON_SUBCLASSES = frozenset({14, 20})
+WORN_ARMOR_SUBCLASSES = frozenset({1, 2, 3, 4, 6})
+
 # THE BAR FOR A POST, per role: a stack must hold at least this many before it
 # is worth thirty copper of postage and a walk. Maintenance posts soonest, a
 # raider only a real haul. MAX_LETTERS per stand keeps one stop short.
@@ -370,6 +384,7 @@ class Carried:
     quality: int = 1
     sell_price: int = 0
     name: str = ""
+    item_level: int = 0
 
     @property
     def material(self) -> str:
@@ -380,6 +395,22 @@ class Carried:
     @property
     def junk(self) -> bool:
         return self.quality == JUNK_QUALITY and self.sell_price > 0
+
+    def outgrown(self, level) -> bool:
+        """A white weapon or armor piece this far under `level` (OUTGROWN_LEVELS)."""
+        if self.quality != WHITE_QUALITY or self.sell_price <= 0:
+            return False
+        if self.item_class == WEAPON:
+            fits = int(self.subclass) not in TOOL_WEAPON_SUBCLASSES
+        elif self.item_class == ARMOR:
+            fits = int(self.subclass) in WORN_ARMOR_SUBCLASSES
+        else:
+            return False
+        return fits and 0 < int(self.item_level) <= int(level) - OUTGROWN_LEVELS
+
+    def sellable(self, level) -> bool:
+        """Grey, or outgrown white gear: what goes over the counter."""
+        return self.junk or self.outgrown(level)
 
 
 @dataclass(frozen=True)
@@ -982,7 +1013,11 @@ def junk_sales(member, kept) -> tuple:
     stack reserved in overseer_keep, and at most MAX_SALES.
     """
     junk = sorted(
-        (c for c in member.carried if c.junk and not _kept(member.name, c, kept)),
+        (
+            c
+            for c in member.carried
+            if c.sellable(member.level) and not _kept(member.name, c, kept)
+        ),
         key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
     )[:MAX_SALES]
     return tuple(
@@ -1231,7 +1266,11 @@ def _post_step(member, crafters, master, kept, cap):
 
 
 def _sell_step(member, kept, cap):
-    junk = [c for c in member.carried if c.junk and not _kept(member.name, c, kept)]
+    junk = [
+        c
+        for c in member.carried
+        if c.sellable(member.level) and not _kept(member.name, c, kept)
+    ]
     worth = sum(int(c.sell_price) * int(c.count) for c in junk)
     bar = SELL_MIN_STACKS.get(member.role, SELL_MIN_STACKS[RAIDER])
     if not junk or (len(junk) < bar and worth < SELL_MIN_COPPER):
@@ -1242,7 +1281,7 @@ def _sell_step(member, kept, cap):
         member.name,
         "sell",
         len(junk),
-        "%s walks to a vendor to sell %d grey stack(s) worth %dc"
+        "%s walks to a vendor to sell %d grey or outgrown stack(s) worth %dc"
         % (member.name, len(junk), sum(int(c.sell_price) * int(c.count) for c in junk)),
         rows=tuple(
             guildcorps.Row(
@@ -1914,6 +1953,7 @@ def carried_from_rows(rows) -> dict:
                 quality=_int(row.get("quality"), 1),
                 sell_price=_int(row.get("sell_price")),
                 name=str(row.get("item_name") or ""),
+                item_level=_int(row.get("item_level")),
             )
         )
     return {k: tuple(v) for k, v in out.items()}
