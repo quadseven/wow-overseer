@@ -13422,15 +13422,18 @@ class Bridge(discord.Client):
         if not wanted:
             return {}
         facts = await asyncio.to_thread(_fetch_gearup_facts, [m.name for m in wanted])
+        needy = [m.name for m in wanted
+                 if facts.get(m.name) and (gearup.gear_short(facts[m.name])
+                                           or gearup.stale_gear(facts[m.name]))]
+        # A rolling window over the needy, not the front of the list
+        # (guildjobs.rotate_reads).
+        chosen, self._gear_read_offset = guildjobs.rotate_reads(
+            needy, getattr(self, "_gear_read_offset", 0), GUILD_GEAR_READS_PER_PASS)
+        by_name = {m.name: m for m in wanted}
         offers = {}
-        for m in wanted:
-            character = facts.get(m.name)
-            if not character or not (
-                    gearup.gear_short(character) or gearup.stale_gear(character)):
-                continue
-            if len(offers) >= GUILD_GEAR_READS_PER_PASS:
-                break
-            offers[m.name] = (character, await asyncio.to_thread(_fetch_gear_vendors, m))
+        for name in chosen:
+            offers[name] = (facts[name], await asyncio.to_thread(
+                _fetch_gear_vendors, by_name[name], guildjobs.GUILD_GEAR_VENDOR_YARDS))
         return offers
 
     def _log_guild_job_plan(self, members, plan):
@@ -22749,9 +22752,13 @@ _GEAR_VENDOR_SQL = (
 GUILD_GEAR_READS_PER_PASS = 12
 
 
-def _fetch_gear_vendors(here) -> list:
-    """Rows for gearup.vendor_trip, measured from the leader's Standing."""
-    cap = float(gearup.VENDOR_TRIP_MAX_YARDS)
+def _fetch_gear_vendors(here, cap_yards=None) -> list:
+    """Rows for gearup.vendor_trip, measured from the leader's Standing.
+
+    `cap_yards` widens the search for a guild member (guildjobs.
+    GUILD_GEAR_VENDOR_YARDS); the family's walk keeps VENDOR_TRIP_MAX_YARDS.
+    """
+    cap = float(gearup.VENDOR_TRIP_MAX_YARDS if cap_yards is None else cap_yards)
     x, y = float(here.x), float(here.y)
     with _connect() as conn, conn.cursor() as cur:
         try:

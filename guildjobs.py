@@ -875,6 +875,30 @@ def _tool_step(member, cap):
 # lands in the bags and the bot's own equip upgrade puts it on.
 GEAR_BUYS_PER_STEP = 4
 
+# How far a guild member may be sent for gear. Wider than the family's
+# VENDOR_TRIP_MAX_YARDS because a guild walk that cannot go straight goes by
+# the travel survey (quadseven/mod-overseer#830).
+GUILD_GEAR_VENDOR_YARDS = 1500.0
+
+
+def rotate_reads(names, offset, limit):
+    """(the names to read this pass, the offset for the next pass).
+
+    The vendor stock reads are bounded per pass. Taken from the front of the
+    list every time, the same members held every slot: a member with no
+    vendor in reach is never given a step, so it never cools down, and on
+    wow-dev on 2026-10-03 the same three filled the pass while over a hundred
+    stale members were never looked at. A rolling window reaches all of them.
+    """
+    names = list(names)
+    if not names or limit <= 0:
+        return [], 0
+    if len(names) <= limit:
+        return names, 0
+    start = offset % len(names)
+    chosen = (names[start:] + names[:start])[:limit]
+    return chosen, (start + limit) % len(names)
+
 
 def friendly_vendor_rows(member, vendor_rows) -> list:
     """The rows of vendors whose faction will deal with this member.
@@ -914,6 +938,7 @@ def gear_step(member, character, vendor_rows, cap):
         {member.name: character},
         vendor_rows,
         map_id=member.map_id,
+        max_yards=GUILD_GEAR_VENDOR_YARDS,
         replace_stale=True,
     )
     if not trip.vendor:
