@@ -191,6 +191,38 @@ class StaleGearIsReplaced(unittest.TestCase):
         self.assertEqual((), got)
 
 
+class EveryNeedyMemberGetsARead(unittest.TestCase):
+    """wow-dev 2026-10-03: the same three members held every vendor read
+    while over a hundred stale members were never looked at."""
+
+    def test_the_window_rolls_over_everyone(self):
+        names = ["m%02d" % i for i in range(30)]
+        seen, offset = set(), 0
+        for _ in range(3):
+            chosen, offset = guildjobs.rotate_reads(names, offset, 10)
+            self.assertEqual(10, len(chosen))
+            seen.update(chosen)
+        self.assertEqual(set(names), seen)
+
+    def test_a_short_list_is_read_whole(self):
+        self.assertEqual((["a", "b"], 0), guildjobs.rotate_reads(["a", "b"], 7, 12))
+
+    def test_nobody_reads_nothing(self):
+        self.assertEqual(([], 0), guildjobs.rotate_reads([], 3, 12))
+
+    def test_the_bridge_rolls_and_widens(self):
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
+        self.assertIn("guildjobs.rotate_reads(", source)
+        self.assertIn("guildjobs.GUILD_GEAR_VENDOR_YARDS", source)
+
+    def test_a_vendor_past_the_family_cap_is_chosen_for_the_guild(self):
+        far = [dict(r, yards=1200.0) for r in ROWS]
+        step, _why = guildjobs.gear_step(_member(), _character(), far, 600.0)
+        self.assertEqual("gear", step.action)
+
+
 class ThePlanPutsGearFirst(unittest.TestCase):
     def test_gear_step_is_started(self):
         plan = guildjobs.plan([_member()], gear={"Aurevil": (_character(), ROWS)})
