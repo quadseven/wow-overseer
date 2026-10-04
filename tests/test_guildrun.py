@@ -307,7 +307,7 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         self.assertIn("ragefire", horde)
 
     def test_no_item_level_gate_below_sixty(self):
-        """wo#532: the item-level gate held 117 of 132 members out of the
+        """#532: the item-level gate held 117 of 132 members out of the
         dungeons that gear them. Low item level alone never holds a member."""
         weak = member("Bramitho", 14, PRIEST, gear_ilvl=4.0)
         self.assertEqual(guildrun.why_not(weak, set(), set(), set()), "")

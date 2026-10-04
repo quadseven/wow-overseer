@@ -510,7 +510,7 @@ BLOCKED_DOORS = {
     "dire-maul-north": "finder wing match unconfirmed",
 }
 # NO ITEM-LEVEL GATE BELOW 60, A COVERAGE GATE FOR THE TWO SEATS THAT CARRY A
-# GROUP (decided in wo#532, 2026-10-04). The old gate held a member out when its
+# GROUP (decided in #532, 2026-10-04). The old gate held a member out when its
 # worn gear averaged more than 6 item levels under its level: on wow-dev that
 # held 117 of 132 members out of the dungeons that gear them, and no guild run
 # formed after 10-01. Real players run Deadmines in quest whites. A damage
