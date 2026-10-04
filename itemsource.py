@@ -28,7 +28,9 @@ is listed with no `copper`, `honor` or `items` rather than with a guessed one.
 LOOT CHANCE FOLLOWS THE CORE. A row with a chance is that chance. A row with
 chance 0 inside a group (GroupId > 0) shares whatever the group's explicit
 chances leave, equally. A row that is a reference rolls the referenced table,
-so its chance is the reference's chance times the item's chance inside it.
+so its chance is the reference's chance times the item's chance inside it. A
+reference row with chance 0 (or none) rolls for certain, as 100: the world's
+reference rows state 100 outright and 0 would make the whole table unreachable.
 """
 
 from __future__ import annotations

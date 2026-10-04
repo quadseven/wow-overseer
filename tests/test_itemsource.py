@@ -52,6 +52,14 @@ class Chance(unittest.TestCase):
         )
         self.assertAlmostEqual(out[10440], 20.0)
 
+    def test_a_reference_row_with_no_chance_rolls_for_certain(self):
+        out = itemsource.loot_chances(
+            [],
+            [{"entry": 9, "chance": 40}],
+            [{"entry": 7, "reference": 9, "chance": 0}],
+        )
+        self.assertAlmostEqual(out[7], 40.0)
+
     def test_direct_and_reference_chances_combine_as_independent_rolls(self):
         out = itemsource.loot_chances(
             [{"entry": 7, "chance": 50}],
