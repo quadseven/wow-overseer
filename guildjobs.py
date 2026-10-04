@@ -275,6 +275,7 @@ MAX_SALES = 12
 # from the command log so a restart forgets nothing.
 COOLDOWN_MINUTES = {
     "gear": 60,
+    "hearth": 60,
     "train": 60,
     "tool": 60,
     "post": 60,
@@ -1470,11 +1471,45 @@ def _member_step(
     return step, doing, "; ".join(n for n in (gear_note, note) if n)
 
 
+def last_gear_failed(name, recent) -> bool:
+    """Whether this member's newest gear row (walk or buy) failed."""
+    rows = [r for r in recent or () if r.name == name and r.action == "gear"]
+    if not rows:
+        return False
+    newest = min(rows, key=lambda r: int(r.age_minutes))
+    return newest.status in TRAIN_FAILED
+
+
+def hearth_step(m):
+    """The member uses its hearthstone, a player's own way home.
+
+    A GEAR WALK THAT CANNOT START IS A MEMBER STANDING SOMEWHERE NO STEP
+    LEAVES. On wow-dev on 2026-10-03, after the walk legs learned to follow
+    the navmesh, every guild vendor walk was still refused at its first leg:
+    the members stood on a mountain top above Northshire (z 274 where the
+    valley is 80), on the Darnassus terraces, on a Durotar ledge for hours,
+    or on the Exodar's island where no far walk goes. Their inn is in a town
+    with vendors and walkable streets, so the next gear walk starts there.
+    """
+    return guildcorps.Step(
+        m.name,
+        "hearth",
+        0,
+        "%s hearths home: its last walk to a vendor could not start" % m.name,
+        rows=(guildcorps.Row("hearth", "use", "", source_for("hearth", m.name)),),
+    )
+
+
 def _gear_first(m, offer, recent, cap):
     """A natural member short of gear walks to a vendor before any other job."""
-    if not m.eligible or not offer or not m.online or m.in_combat:
+    if not m.eligible or not m.online or m.in_combat:
         return None, "", ""
     if _cooling(m, "gear", recent):
+        if last_gear_failed(m.name, recent) and not _cooling(m, "hearth", recent):
+            step = hearth_step(m)
+            return step, step.said, ""
+        return None, "", ""
+    if not offer:
         return None, "", ""
     character, vendor_rows = offer
     step, why = gear_step(m, character, vendor_rows, cap)

@@ -223,6 +223,45 @@ class EveryNeedyMemberGetsARead(unittest.TestCase):
         self.assertEqual("gear", step.action)
 
 
+class AStrandedMemberHearthsHome(unittest.TestCase):
+    """wow-dev 2026-10-03: every guild vendor walk was refused at its first
+    leg, from a mountain top above Northshire, the Darnassus terraces and a
+    Durotar ledge. The member hearths to its inn and walks from there."""
+
+    def test_a_failed_gear_walk_sends_it_home(self):
+        recent = [guildjobs.Recent("Aurevil", "gear", 5, status="error")]
+        plan = guildjobs.plan([_member()], recent=recent)
+        self.assertEqual(["hearth"], [s.action for s in plan.steps])
+        row = plan.steps[0].rows[0]
+        self.assertEqual(("hearth", "use"), (row.kind, row.command))
+        self.assertEqual("guildjobs:hearth:Aurevil", row.source)
+
+    def test_not_twice_in_an_hour(self):
+        recent = [
+            guildjobs.Recent("Aurevil", "gear", 5, status="error"),
+            guildjobs.Recent("Aurevil", "hearth", 4, status="delivered"),
+        ]
+        plan = guildjobs.plan([_member()], recent=recent)
+        self.assertNotIn("hearth", [s.action for s in plan.steps])
+
+    def test_a_gear_walk_that_worked_does_not(self):
+        recent = [guildjobs.Recent("Aurevil", "gear", 5, status="delivered")]
+        plan = guildjobs.plan([_member()], recent=recent)
+        self.assertNotIn("hearth", [s.action for s in plan.steps])
+
+    def test_the_newest_gear_row_decides(self):
+        recent = [
+            guildjobs.Recent("Aurevil", "gear", 50, status="error"),
+            guildjobs.Recent("Aurevil", "gear", 2, status="delivered"),
+        ]
+        self.assertFalse(guildjobs.last_gear_failed("Aurevil", recent))
+
+    def test_an_unnatural_member_never_hearths(self):
+        recent = [guildjobs.Recent("Aurevil", "gear", 5, status="error")]
+        plan = guildjobs.plan([_member(eligible=False)], recent=recent)
+        self.assertEqual((), plan.steps)
+
+
 class ThePlanPutsGearFirst(unittest.TestCase):
     def test_gear_step_is_started(self):
         plan = guildjobs.plan([_member()], gear={"Aurevil": (_character(), ROWS)})
