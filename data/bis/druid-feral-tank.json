@@ -1,0 +1,352 @@
+{
+ "spec": "druid-feral-tank",
+ "class": "druid",
+ "spec_name": "feral",
+ "role": "tank",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "melee_hit",
+   "haste",
+   "crit",
+   "strength",
+   "stamina",
+   "agility",
+   "attack_power",
+   "defense",
+   "armor",
+   "dodge"
+  ],
+  "caps": {},
+  "source_url": "https://www.wowhead.com/classic/guide/classes/druid/feral/tank-stat-priority-attributes-pve"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/feral_tank_druid/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Armor": 3.5665,
+   "BonusArmor": 0.5187,
+   "Stamina": 7.3021,
+   "Strength": 2.3786,
+   "Agility": 4.4974,
+   "AttackPower": 1.0,
+   "MeleeHit": 2.9282,
+   "MeleeCrit": 1.5143,
+   "Defense": 1.8171,
+   "Dodge": 2.0196,
+   "Health": 0.4465,
+   "MainHandDps": 0.0,
+   "MeleeSpeedMultiplier": 0.0
+  }
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/feral-druid-tank-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     13404,
+     8345,
+     16707,
+     18698,
+     12587
+    ],
+    "neck": [
+     22150,
+     22340,
+     17044,
+     15411
+    ],
+    "shoulders": [
+     12927,
+     10783,
+     18374
+    ],
+    "back": [
+     18689,
+     13397,
+     12551,
+     22337,
+     18413
+    ],
+    "chest": [
+     12757,
+     13944,
+     22113,
+     12793,
+     14637,
+     15064
+    ],
+    "wrist": [
+     12966,
+     18375,
+     22204,
+     18700,
+     11764
+    ],
+    "hands": [
+     15063,
+     13258,
+     13957
+    ],
+    "waist": [
+     13252,
+     13118,
+     14502,
+     11686,
+     18505,
+     14636
+    ],
+    "legs": [
+     20665,
+     15062,
+     18736,
+     14638,
+     16709
+    ],
+    "feet": [
+     22472,
+     13210,
+     14641,
+     22107,
+     11675
+    ],
+    "finger": [
+     2246,
+     17713,
+     12544,
+     15855,
+     18522,
+     18500,
+     11118,
+     13098
+    ],
+    "trinket": [
+     10725,
+     13965,
+     13966,
+     17774,
+     19120,
+     11811,
+     10418,
+     18863
+    ],
+    "two_hand": [
+     9449,
+     18531,
+     11921,
+     13167,
+     18420
+    ],
+    "ranged": [
+     23198
+    ]
+   },
+   "best": {
+    "head": [
+     13404,
+     8345
+    ],
+    "neck": [
+     22150
+    ],
+    "shoulders": [
+     12927,
+     10783
+    ],
+    "back": [
+     18689
+    ],
+    "chest": [
+     12757
+    ],
+    "wrist": [
+     12966
+    ],
+    "hands": [
+     15063,
+     13258
+    ],
+    "waist": [
+     13252
+    ],
+    "legs": [
+     20665,
+     15062
+    ],
+    "feet": [
+     22472
+    ],
+    "finger": [
+     2246,
+     17713,
+     12544,
+     15855
+    ],
+    "trinket": [
+     10725,
+     13965,
+     13966,
+     17774
+    ],
+    "two_hand": [
+     9449,
+     18531
+    ],
+    "ranged": [
+     23198
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-feral-druid-tank-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     13404,
+     14539
+    ],
+    "neck": [
+     18404,
+     17065,
+     13177,
+     11755
+    ],
+    "shoulders": [
+     19139,
+     10783,
+     12927
+    ],
+    "back": [
+     12551,
+     13397,
+     11930
+    ],
+    "chest": [
+     12757,
+     15064,
+     12793
+    ],
+    "wrist": [
+     12966,
+     18700
+    ],
+    "hands": [
+     13258,
+     15063
+    ],
+    "waist": [
+     19163,
+     19149,
+     14502,
+     13252
+    ],
+    "legs": [
+     11821,
+     15062
+    ],
+    "feet": [
+     18716,
+     14641,
+     16711
+    ],
+    "finger": [
+     17063,
+     18879,
+     15855,
+     12544,
+     11669
+    ],
+    "trinket": [
+     11811,
+     13966,
+     17774,
+     19120
+    ],
+    "main_hand": [
+     868,
+     11805,
+     18044
+    ],
+    "off_hand": [
+     13385
+    ],
+    "two_hand": [
+     943,
+     9449
+    ]
+   },
+   "best": {
+    "head": [
+     13404
+    ],
+    "neck": [
+     18404
+    ],
+    "shoulders": [
+     19139
+    ],
+    "back": [
+     12551
+    ],
+    "chest": [
+     12757
+    ],
+    "wrist": [
+     12966
+    ],
+    "hands": [
+     13258
+    ],
+    "waist": [
+     19163
+    ],
+    "legs": [
+     11821
+    ],
+    "feet": [
+     18716
+    ],
+    "finger": [
+     17063
+    ],
+    "trinket": [
+     11811
+    ],
+    "main_hand": [
+     868
+    ],
+    "off_hand": [
+     13385
+    ],
+    "two_hand": [
+     943
+    ]
+   },
+   "unreachable_at_60": [
+    18404
+   ]
+  }
+ },
+ "weights_alt": {
+  "source_url": "https://www.wowhead.com/classic/guide/classes/druid/feral/tank-stat-priority-attributes-pve",
+  "units": "normalized to 1 AP; pct stats per 1%",
+  "values": {
+   "attack_power": 1,
+   "feral_attack_power": 1,
+   "strength": 2.2,
+   "agility": 1.57,
+   "melee_hit_pct": 36.1,
+   "crit_pct": 25.8,
+   "haste_pct": 26.6,
+   "health": 0.167,
+   "stamina": 2.2,
+   "armor_gear": 0.33,
+   "armor_enchant": 0.069,
+   "defense": 0.46,
+   "dodge_pct": 0.0
+  }
+ }
+}

@@ -1,0 +1,320 @@
+{
+ "spec": "paladin-protection",
+ "class": "paladin",
+ "spec_name": "protection",
+ "role": "tank",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [],
+  "caps": {},
+  "source_url": null,
+  "note": "no classic stat guide for this spec on the source; rank by weights"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/protection_paladin/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Strength": 3.23,
+   "Agility": 18.57,
+   "Stamina": 0.0,
+   "Intellect": 0.05,
+   "SpellPower": 0.38,
+   "HolyPower": 0.29,
+   "SpellHit": 8.2,
+   "SpellCrit": 3.35,
+   "AttackPower": 1.0,
+   "MeleeHit": 0.0,
+   "MeleeCrit": 39.75,
+   "Mana": 0.0,
+   "Armor": 1.0,
+   "Defense": 29.97,
+   "Block": 0.0,
+   "BlockValue": 17.72,
+   "Dodge": 219.45,
+   "Parry": 217.72,
+   "Health": 0.0,
+   "ArcaneResistance": 0.0,
+   "FireResistance": 0.0,
+   "FrostResistance": 0.0,
+   "NatureResistance": 0.0,
+   "ShadowResistance": 0.0,
+   "BonusArmor": 0.96,
+   "HealingPower": 0.0,
+   "MainHandDps": 10.12,
+   "MeleeSpeedMultiplier": 0.0
+  },
+  "caution": "Dodge/Parry ~218 vs Armor 1: scale looks unnormalized; do not use unreviewed"
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-paladin-tank-pre-raid-best-in-slot-gear",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     12620,
+     12952,
+     11746,
+     18313
+    ],
+    "neck": [
+     13091,
+     13177,
+     11755,
+     18381
+    ],
+    "shoulders": [
+     14552,
+     13405,
+     13955,
+     16733
+    ],
+    "back": [
+     11930,
+     16342,
+     18495
+    ],
+    "chest": [
+     14624,
+     15413,
+     12618,
+     18503
+    ],
+    "wrist": [
+     13951,
+     16735,
+     16722,
+     18754
+    ],
+    "hands": [
+     14622,
+     14525,
+     13072,
+     13963,
+     18383
+    ],
+    "waist": [
+     14620,
+     12115,
+     16723
+    ],
+    "legs": [
+     14623,
+     12619,
+     11927,
+     11910
+    ],
+    "feet": [
+     14621,
+     11787,
+     14549,
+     13381
+    ],
+    "finger": [
+     11669,
+     15855,
+     18674,
+     2246
+    ],
+    "trinket": [
+     11810,
+     4130,
+     17904,
+     17774,
+     18370,
+     18371
+    ],
+    "main_hand": [
+     871,
+     18048,
+     11784,
+     18498,
+     15806
+    ],
+    "off_hand": [
+     12602,
+     18499,
+     13243,
+     2040
+    ]
+   },
+   "best": {
+    "head": [
+     12620
+    ],
+    "neck": [
+     13091
+    ],
+    "shoulders": [
+     14552
+    ],
+    "back": [
+     11930
+    ],
+    "chest": [
+     14624
+    ],
+    "wrist": [
+     13951
+    ],
+    "hands": [
+     14622
+    ],
+    "waist": [
+     14620
+    ],
+    "legs": [
+     14623
+    ],
+    "feet": [
+     14621
+    ],
+    "finger": [
+     11669
+    ],
+    "trinket": [
+     11810
+    ],
+    "main_hand": [
+     871
+    ],
+    "off_hand": [
+     12602
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-paladin-tank-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     16955,
+     12620,
+     12952,
+     11746
+    ],
+    "neck": [
+     17065,
+     13091,
+     13177,
+     11755
+    ],
+    "shoulders": [
+     14552,
+     13405,
+     13955,
+     16733
+    ],
+    "back": [
+     11930
+    ],
+    "chest": [
+     14624,
+     15413,
+     12618
+    ],
+    "wrist": [
+     18812,
+     13951,
+     16735
+    ],
+    "hands": [
+     14622,
+     14525,
+     13072,
+     13963
+    ],
+    "waist": [
+     14620,
+     12115,
+     16723
+    ],
+    "legs": [
+     16954,
+     14623,
+     12619,
+     11927,
+     11910
+    ],
+    "feet": [
+     18806,
+     14621,
+     11787,
+     14549
+    ],
+    "finger": [
+     11669,
+     18674,
+     15855,
+     2246
+    ],
+    "trinket": [
+     18406,
+     11810,
+     4130,
+     17774
+    ],
+    "main_hand": [
+     17105,
+     871,
+     18048,
+     11784
+    ],
+    "off_hand": [
+     17066,
+     18168,
+     12602,
+     17106
+    ]
+   },
+   "best": {
+    "head": [
+     16955
+    ],
+    "neck": [
+     17065
+    ],
+    "shoulders": [
+     14552
+    ],
+    "back": [
+     11930
+    ],
+    "chest": [
+     14624
+    ],
+    "wrist": [
+     18812
+    ],
+    "hands": [
+     14622
+    ],
+    "waist": [
+     14620
+    ],
+    "legs": [
+     16954
+    ],
+    "feet": [
+     18806
+    ],
+    "finger": [
+     11669
+    ],
+    "trinket": [
+     18406
+    ],
+    "main_hand": [
+     17105
+    ],
+    "off_hand": [
+     17066
+    ]
+   },
+   "unreachable_at_60": [
+    18406
+   ]
+  }
+ }
+}

@@ -1,0 +1,413 @@
+{
+ "spec": "warrior-protection",
+ "class": "warrior",
+ "spec_name": "protection",
+ "role": "tank",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "melee_hit_to_9pct"
+  ],
+  "caps": {
+   "melee_hit_pct": 9
+  },
+  "source_url": "https://www.wowhead.com/classic/guide/classes/warrior/tank-stat-priority-attributes-pve",
+  "note": "source lists only the hit cap; rank the rest by weights"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/tank_warrior/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Armor": 0.174,
+   "BonusArmor": 0.155,
+   "Stamina": 2.336,
+   "Strength": 1.555,
+   "Agility": 2.771,
+   "AttackPower": 0.32,
+   "MeleeHit": 1.432,
+   "MeleeCrit": 0.925,
+   "Block": 1.32,
+   "BlockValue": 1.373,
+   "Dodge": 2.606,
+   "Parry": 2.649,
+   "Defense": 3.305,
+   "MainHandDps": 11.92,
+   "OffHandDps": 4.69,
+   "MeleeSpeedMultiplier": 4.69
+  }
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/warrior-tank-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     21999,
+     12640,
+     22411,
+     13359,
+     16731,
+     11746,
+     18313,
+     10749
+    ],
+    "neck": [
+     22150,
+     15411,
+     22340,
+     19097,
+     17044,
+     18443
+    ],
+    "shoulders": [
+     22001,
+     16733,
+     14552,
+     13166,
+     12557
+    ],
+    "back": [
+     13397,
+     18511,
+     11930,
+     18689,
+     13203,
+     18495
+    ],
+    "chest": [
+     21997,
+     11726,
+     12895,
+     16730,
+     18530,
+     15413,
+     18503
+    ],
+    "wrist": [
+     21996,
+     12936,
+     13951,
+     12966,
+     13211,
+     13400,
+     16735
+    ],
+    "hands": [
+     14551,
+     21998,
+     13963,
+     13162,
+     18366,
+     18383
+    ],
+    "waist": [
+     18505,
+     13142,
+     13959,
+     20041,
+     13502,
+     21994
+    ],
+    "legs": [
+     14554,
+     18380,
+     20671,
+     22000,
+     16732,
+     22328,
+     18690
+    ],
+    "feet": [
+     21995,
+     14616,
+     13259,
+     13070,
+     16734,
+     14549
+    ],
+    "finger": [
+     19325,
+     2246,
+     17713,
+     18500,
+     13098,
+     12548,
+     18522,
+     13373,
+     22331,
+     11669
+    ],
+    "trinket": [
+     20130,
+     13965,
+     11815,
+     19120,
+     18537,
+     18370,
+     17904,
+     17774,
+     11810
+    ],
+    "main_hand": [
+     11684,
+     19168,
+     19104,
+     13006,
+     15806,
+     18376,
+     19103,
+     12798,
+     18737,
+     18498,
+     13015,
+     10837,
+     12590,
+     19324,
+     12783,
+     5267,
+     19100,
+     13368,
+     13984
+    ],
+    "off_hand": [
+     18392,
+     19321,
+     18168,
+     1979,
+     18756,
+     12602,
+     16998,
+     14002
+    ],
+    "ranged": [
+     18323,
+     12651,
+     19107,
+     16996,
+     18738
+    ]
+   },
+   "best": {
+    "head": [
+     21999,
+     12640
+    ],
+    "neck": [
+     22150,
+     18443
+    ],
+    "shoulders": [
+     22001,
+     14552
+    ],
+    "back": [
+     13397,
+     18511
+    ],
+    "chest": [
+     21997,
+     11726,
+     12895
+    ],
+    "wrist": [
+     21996,
+     12936,
+     13951
+    ],
+    "hands": [
+     21998,
+     18383
+    ],
+    "waist": [
+     13502
+    ],
+    "legs": [
+     22328
+    ],
+    "feet": [
+     21995,
+     14549
+    ],
+    "finger": [
+     19325,
+     13373
+    ],
+    "trinket": [
+     20130,
+     18370,
+     17904
+    ],
+    "main_hand": [
+     19324
+    ],
+    "off_hand": [
+     18392,
+     19321,
+     18168,
+     18756
+    ],
+    "ranged": [
+     19107,
+     16996
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-warrior-tank-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     16963,
+     12640,
+     16866,
+     11746,
+     12952
+    ],
+    "neck": [
+     18404,
+     17065,
+     13091,
+     11755
+    ],
+    "shoulders": [
+     16868,
+     16733,
+     14552,
+     13405
+    ],
+    "back": [
+     17102,
+     17107,
+     13397,
+     11930
+    ],
+    "chest": [
+     11726,
+     16865,
+     12895,
+     15413
+    ],
+    "wrist": [
+     16861,
+     18812,
+     16735,
+     13951,
+     13400
+    ],
+    "hands": [
+     16863,
+     14525,
+     13072,
+     13963
+    ],
+    "waist": [
+     19137,
+     16864,
+     13142,
+     13502,
+     14620
+    ],
+    "legs": [
+     16962,
+     16867,
+     14554,
+     12935
+    ],
+    "feet": [
+     16862,
+     14616,
+     13259
+    ],
+    "finger": [
+     17063,
+     2246,
+     17713,
+     13373
+    ],
+    "trinket": [
+     11815,
+     17774,
+     13965,
+     11810,
+     19120
+    ],
+    "main_hand": [
+     18203,
+     15806,
+     11684,
+     13015
+    ],
+    "off_hand": [
+     18805,
+     18832,
+     12939,
+     12535,
+     12590,
+     17066,
+     12602,
+     1168,
+     13529
+    ],
+    "ranged": [
+     17072,
+     16996,
+     12651,
+     12653
+    ]
+   },
+   "best": {
+    "head": [
+     16963
+    ],
+    "neck": [
+     18404
+    ],
+    "shoulders": [
+     16868
+    ],
+    "back": [
+     17102
+    ],
+    "chest": [
+     11726
+    ],
+    "wrist": [
+     16861
+    ],
+    "hands": [
+     16863
+    ],
+    "waist": [
+     19137
+    ],
+    "legs": [
+     16962
+    ],
+    "feet": [
+     16862
+    ],
+    "finger": [
+     17063
+    ],
+    "trinket": [
+     11815
+    ],
+    "main_hand": [
+     18203
+    ],
+    "off_hand": [
+     18805,
+     17066
+    ],
+    "ranged": [
+     17072
+    ]
+   },
+   "unreachable_at_60": [
+    18404
+   ]
+  }
+ }
+}

@@ -52,7 +52,7 @@ COPY core.py bridge.py voice.py transform.py \
      vendor_stall.py \
      campaignqueue.py dungeonpace.py \
      campaignplan.py dungeonladder.py levelroute.py \
-     preraid.py \
+     preraid.py gearscore.py \
      runtimeline.py \
      vclient.py guildgear.py \
      situation.py vision.py llmmode.py jev_movement.py jev_family_intent.py leadcmd.py \
@@ -65,6 +65,9 @@ COPY core.py bridge.py voice.py transform.py \
 # third host for it - and moving it to a CDN to save the same bytes would have
 # traded that away. Same file, same served path, same origin.
 COPY jquery.min.js /app/
+
+# gearscore.py reads its curated lists and weights from data/bis/.
+COPY data /app/data
 
 USER 10000
 CMD ["python", "-u", "bridge.py"]

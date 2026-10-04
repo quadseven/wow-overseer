@@ -1,0 +1,314 @@
+{
+ "spec": "shaman-elemental",
+ "class": "shaman",
+ "spec_name": "elemental",
+ "role": "caster",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "spell_crit",
+   "spell_hit_to_cap",
+   "spell_damage",
+   "mp5",
+   "intellect",
+   "spell_penetration",
+   "stamina"
+  ],
+  "caps": {},
+  "source_url": "https://www.wowhead.com/classic/guide/classes/shaman/elemental/dps-stat-priority-attributes-pve"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/elemental_shaman/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Intellect": 0.14,
+   "SpellPower": 1.0,
+   "SpellDamage": 1.0,
+   "FirePower": 0.1,
+   "NaturePower": 1.0,
+   "SpellHit": 12.37,
+   "SpellCrit": 7.57,
+   "SpellHaste": 1.49,
+   "MP5": 0.02,
+   "Strength": 0.01,
+   "AttackPower": 0.01,
+   "FireResistance": 0.01
+  }
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/elemental-shaman-dps-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     22267,
+     18727,
+     18807
+    ],
+    "neck": [
+     18289,
+     22403,
+     12103
+    ],
+    "shoulders": [
+     18681,
+     13013,
+     18494
+    ],
+    "back": [
+     20697,
+     18350,
+     18496,
+     19121
+    ],
+    "chest": [
+     12624,
+     18385,
+     18373
+    ],
+    "wrist": [
+     18497,
+     18458,
+     22095,
+     16840
+    ],
+    "hands": [
+     13253,
+     2564,
+     13344
+    ],
+    "waist": [
+     18676,
+     11662,
+     18721
+    ],
+    "legs": [
+     13170,
+     18378,
+     12965
+    ],
+    "feet": [
+     11822,
+     18322,
+     22231,
+     13954
+    ],
+    "finger": [
+     22339,
+     13001,
+     12545,
+     18103
+    ],
+    "trinket": [
+     12930,
+     18471,
+     13968,
+     22268,
+     20503
+    ],
+    "main_hand": [
+     13964,
+     18321
+    ],
+    "off_hand": [
+     22329,
+     22336,
+     11904,
+     17718
+    ],
+    "two_hand": [
+     18534
+    ],
+    "ranged": [
+     23199,
+     22345
+    ]
+   },
+   "best": {
+    "head": [
+     22267
+    ],
+    "neck": [
+     18289
+    ],
+    "shoulders": [
+     18681
+    ],
+    "back": [
+     20697
+    ],
+    "chest": [
+     12624,
+     18385,
+     18373
+    ],
+    "wrist": [
+     18497
+    ],
+    "hands": [
+     13253
+    ],
+    "waist": [
+     18676,
+     11662
+    ],
+    "legs": [
+     13170
+    ],
+    "feet": [
+     11822,
+     18322
+    ],
+    "finger": [
+     22339,
+     13001,
+     12545,
+     18103
+    ],
+    "trinket": [
+     12930,
+     18471
+    ],
+    "main_hand": [
+     13964
+    ],
+    "off_hand": [
+     22329
+    ],
+    "ranged": [
+     23199
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-elemental-shaman-dps-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     16947,
+     10504,
+     18727,
+     18807
+    ],
+    "neck": [
+     18814,
+     12103
+    ],
+    "shoulders": [
+     18829,
+     18681
+    ],
+    "back": [
+     17078,
+     11623,
+     19121
+    ],
+    "chest": [
+     19145,
+     12624
+    ],
+    "wrist": [
+     11765
+    ],
+    "hands": [
+     13253,
+     2564,
+     13344
+    ],
+    "waist": [
+     19136,
+     11662,
+     18721,
+     18740
+    ],
+    "legs": [
+     13170,
+     12965
+    ],
+    "feet": [
+     11822,
+     13954
+    ],
+    "finger": [
+     19147,
+     13001,
+     12545,
+     18103,
+     11824
+    ],
+    "trinket": [
+     18820,
+     12930,
+     13968,
+     11832
+    ],
+    "main_hand": [
+     17105,
+     13964
+    ],
+    "off_hand": [
+     11904,
+     17718,
+     16998
+    ],
+    "two_hand": [
+     18842,
+     13161,
+     873
+    ]
+   },
+   "best": {
+    "head": [
+     16947
+    ],
+    "neck": [
+     18814
+    ],
+    "shoulders": [
+     18829
+    ],
+    "back": [
+     17078
+    ],
+    "chest": [
+     19145
+    ],
+    "wrist": [
+     11765
+    ],
+    "hands": [
+     13253
+    ],
+    "waist": [
+     19136
+    ],
+    "legs": [
+     13170
+    ],
+    "feet": [
+     11822
+    ],
+    "finger": [
+     19147
+    ],
+    "trinket": [
+     18820
+    ],
+    "main_hand": [
+     17105
+    ],
+    "off_hand": [
+     11904
+    ],
+    "two_hand": [
+     18842
+    ]
+   },
+   "unreachable_at_60": [
+    17078
+   ]
+  }
+ }
+}
