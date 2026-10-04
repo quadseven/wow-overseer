@@ -1074,6 +1074,13 @@ CRAFTER_FLOOR = 5
 # The subject every post carries, which is also how an unopened one is found.
 POST_SUBJECT = "Guild materials"
 
+# A mailbox this full refuses the next letter: the core caps an inbox at 100
+# ("recipient mailbox is full"). On wow-dev on 2026-10-04, 46 of 47 material
+# posts in a day bounced off Grug, who held 113 letters already emptied but
+# never deleted, because only an unopened post counted as waiting. A holder
+# this full is treated as one with a post waiting: nothing more is sent to it.
+MAILBOX_FULL_LETTERS = 95
+
 
 def consumes_at(skill: int, value: int, entry: int) -> bool:
     """Whether a recipe of `skill` castable at `value` eats item `entry`."""
