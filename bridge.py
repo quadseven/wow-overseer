@@ -1616,10 +1616,15 @@ def _crafting_roster(family: str | None = None) -> list:
     scope = " AND family = %s" if cohort else ""
     scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
+        # AND THE CAMPAIGN JOBS (mod-overseer#832): a family on 'town run' or
+        # a dungeon job crafts its standing errand between runs, so its errand
+        # is written too. On wow-dev 2026-10-04 every master crafter sat on
+        # those jobs and nine of ten crafts stood at 1 of 75.
         cur.execute(
-            "SELECT name FROM overseer_roster WHERE enabled = 1 AND job = %s"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            "SELECT name FROM overseer_roster WHERE enabled = 1 "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            "AND (job = %s OR job = %s OR job = %s OR job LIKE %s)"
             + scope,
-            ("craft", *scope_args),
+            ("craft", "town run", "dungeon", "dungeon:%", *scope_args),
         )
         return [row["name"] for row in cur.fetchall()]
 
