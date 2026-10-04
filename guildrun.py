@@ -188,6 +188,10 @@ class Member:
     zone_id: int = 0
     # Average item level of what it wears (None when unread).
     gear_ilvl: float | None = None
+    # Armor slots it wears (head to back, no shirt), and whether it holds a
+    # main-hand weapon; None when unread.
+    worn_slots: int | None = None
+    has_weapon: bool | None = None
 
     @property
     def played_tree(self) -> str:
@@ -241,6 +245,8 @@ def member_from_row(row: dict) -> Member | None:
         race=int(row.get("race") or 0),
         zone_id=int(row.get("zone_id") or 0),
         gear_ilvl=None if row.get("gear_ilvl") is None else float(row["gear_ilvl"]),
+        worn_slots=None if row.get("worn_slots") is None else int(row["worn_slots"]),
+        has_weapon=None if row.get("has_weapon") is None else bool(row["has_weapon"]),
     )
 
 
@@ -266,8 +272,6 @@ def why_not(
     # dungeon read as "gear too weak", which hid 50 of them (2026-10-04).
     if member.map_id not in OPEN_WORLD_MAPS:
         return "inside an instance"
-    if under_geared(member):
-        return "gear too weak for a dungeon"
     if not member.alive:
         return "dead"
     if member.in_combat:
@@ -505,14 +509,22 @@ BLOCKED_DOORS = {
     "dire-maul-west-north": "finder wing match unconfirmed",
     "dire-maul-north": "finder wing match unconfirmed",
 }
-# A member whose worn gear averages more than this many item levels under its
-# own level is not sent into a dungeon: at levels 10 to 16 the guilds wore
-# item level 2 to 5 and every run that entered wiped or was lost.
-GEAR_GAP = 6
+# NO ITEM-LEVEL GATE BELOW 60, A COVERAGE GATE FOR THE TWO SEATS THAT CARRY A
+# GROUP (decided in #532, 2026-10-04). The old gate held a member out when its
+# worn gear averaged more than 6 item levels under its level: on wow-dev that
+# held 117 of 132 members out of the dungeons that gear them, and no guild run
+# formed after 10-01. Real players run Deadmines in quest whites. A damage
+# dealer goes in whatever it wears; a tank or a healer needs a main-hand weapon
+# and COVERED_SLOTS of the 15 armor slots, because a naked tank or healer wipes
+# the group.
+COVERED_SLOTS = 10
 
 
-def under_geared(member: Member) -> bool:
-    return member.gear_ilvl is not None and member.gear_ilvl < member.level - GEAR_GAP
+def covered(member: Member) -> bool:
+    """May this member take a tank or healer seat? Unread gear is not held."""
+    if member.worn_slots is None or member.has_weapon is None:
+        return True
+    return bool(member.has_weapon) and int(member.worn_slots) >= COVERED_SLOTS
 
 
 def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
@@ -645,11 +657,11 @@ def compositions(window: list) -> list:
     tank and a healer who fit at least by class gives nothing.
     """
     tanks = sorted(
-        (m for m in window if m.fit(TANK)),
+        (m for m in window if m.fit(TANK) and covered(m)),
         key=lambda m: (_seat_rank(m, TANK), -m.level, m.name),
     )
     healers = sorted(
-        (m for m in window if m.fit(HEALER)),
+        (m for m in window if m.fit(HEALER) and covered(m)),
         key=lambda m: (_seat_rank(m, HEALER), -m.level, m.name),
     )
     out = []

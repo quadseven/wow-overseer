@@ -10,6 +10,7 @@ the wiring in the bridge, the map server and the page as source.
 """
 
 import asyncio
+import dataclasses
 import pathlib
 import unittest
 
@@ -305,27 +306,39 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         self.assertLessEqual(horde, guildrun.GUILD_DOORS["Horde"])
         self.assertIn("ragefire", horde)
 
-    def test_an_under_geared_member_is_not_sent(self):
+    def test_no_item_level_gate_below_sixty(self):
+        """#532: the item-level gate held 117 of 132 members out of the
+        dungeons that gear them. Low item level alone never holds a member."""
         weak = member("Bramitho", 14, PRIEST, gear_ilvl=4.0)
-        self.assertEqual(
-            guildrun.why_not(weak, set(), set(), set()), "gear too weak for a dungeon"
-        )
-        # Exactly GEAR_GAP under is still sent; only more than that is not.
-        edge = member("Edge", 16, WARRIOR, gear_ilvl=10.0)
-        self.assertEqual(guildrun.why_not(edge, set(), set(), set()), "")
-        ready = member("Selie", 14, WARRIOR, gear_ilvl=9.0)
-        self.assertEqual(guildrun.why_not(ready, set(), set(), set()), "")
-        self.assertEqual(
-            guildrun.why_not(member("U", 14, MAGE), set(), set(), set()), ""
-        )
-
-    def test_five_under_geared_members_cannot_form_a_dungeon_run(self):
+        self.assertEqual(guildrun.why_not(weak, set(), set(), set()), "")
         rows = [row("Member%d" % i, 17, WARRIOR, gear_ilvl=3.0) for i in range(5)]
         free, skipped = guildrun.free_members(rows, set(), set(), set(), set())
+        self.assertEqual(len(free), 5)
+        self.assertEqual(skipped, {})
 
-        self.assertEqual(free, [])
-        self.assertEqual(skipped, {"gear too weak for a dungeon": 5})
-        self.assertEqual(guildrun.pools(free, DOORS), [])
+    def test_a_tank_or_healer_needs_a_weapon_and_ten_armor_slots(self):
+        dressed = member("T", 18, WARRIOR, worn_slots=10, has_weapon=1)
+        self.assertTrue(guildrun.covered(dressed))
+        self.assertFalse(
+            guildrun.covered(member("T", 18, WARRIOR, worn_slots=9, has_weapon=1))
+        )
+        self.assertFalse(
+            guildrun.covered(member("T", 18, WARRIOR, worn_slots=15, has_weapon=0))
+        )
+        # Unread gear is never a reason to hold a member.
+        self.assertTrue(guildrun.covered(member("U", 18, WARRIOR)))
+
+    def test_a_bare_tank_is_not_seated_but_a_bare_damage_dealer_is(self):
+        band = cave_band()
+        bare = [dataclasses.replace(m, worn_slots=3, has_weapon=True) for m in band]
+        self.assertEqual(guildrun.compositions(bare), [])
+        dressed_tanks = [
+            dataclasses.replace(m, worn_slots=12, has_weapon=True)
+            if m.fit(guildrun.TANK) or m.fit(guildrun.HEALER)
+            else m
+            for m in bare
+        ]
+        self.assertTrue(guildrun.compositions(dressed_tanks))
 
     def test_the_bridge_does_not_retry_without_the_gear_gate(self):
         start = BRIDGE.index("    async def _guild_run_once(self)")
@@ -341,6 +354,8 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         sql = sql[: sql.index("\n)\n")]
         self.assertIn("AVG(it.ItemLevel)", sql)
         self.assertIn("AS gear_ilvl", sql)
+        self.assertIn("AS worn_slots", sql)
+        self.assertIn("AS has_weapon", sql)
 
     def test_the_gate_skips_the_shirt_and_tabard(self):
         """wow-dev 2026-10-04: an item level 1 shirt pulled members under the
