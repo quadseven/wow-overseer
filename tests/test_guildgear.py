@@ -42,6 +42,7 @@ def worn(name, slot, ilvl, item="", **kw):
         "slot": slot,
         "item_level": ilvl,
         "item_name": item or "piece",
+        "item_entry": 1000 + (slot or 0),
     }
     row.update(kw)
     return row
@@ -60,6 +61,8 @@ class TheRows(unittest.TestCase):
         self.assertEqual(mage["flags"], ["no weapon", "10 empty"])
         self.assertIn("main hand", mage["empty_slots"])
         self.assertEqual(mage["weakest"]["slot"], "chest")
+        # The entry rides along, so the page's tooltip can read the item.
+        self.assertEqual(mage["weakest"]["entry"], 1004)
         self.assertEqual(
             mage["avg_item_level"],
             round(sum(20 + s for s in (4, 7, 9, 10, 11, 14, 16)) / 7, 1),
@@ -182,8 +185,13 @@ class ThePage(unittest.TestCase):
         ):
             self.assertIn('key: "%s"' % key, PAGE)
 
-    def test_the_table_scrolls_in_its_own_box_on_a_phone(self):
+    def test_the_table_scrolls_in_its_own_box_never_the_page(self):
+        """On a phone it is cards (tests/test_lineup_cards.py); on a wide
+        screen whose columns do not fit, the box scrolls, never the page."""
         self.assertRegex(PAGE, r"\.lg-scroll \{ overflow-x:auto;")
+
+    def test_the_read_carries_each_worn_items_entry(self):
+        self.assertIn("it.entry AS item_entry", map_server._GUILD_GEAR)
 
     def test_frames_open_in_the_section_they_were_opened_from(self):
         open_ = js("function vcOpen(kind, name, anchor) {", "\n}")

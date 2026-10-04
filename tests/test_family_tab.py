@@ -906,7 +906,11 @@ class TheFamilyIsTheFrontDoor(unittest.TestCase):
         self.assertIn("adoptContinent();", self.page[: self.page.index("markTabs();")])
         adopt = self.route[self.route.index("function adoptContinent") :]
         adopt = adopt[: adopt.index("function applyHash")]
-        self.assertIn("zones && zones[wantedContinent]", adopt)
+        # And the request waits with it rather than being dropped (#560,
+        # tests/test_map_deep_link.py runs it).
+        self.assertLess(
+            adopt.index("if (!zones) return;"), adopt.index("zones[wantedContinent]")
+        )
 
     def test_switching_tabs_does_not_pile_up_history(self):
         """Five taps must not mean five presses of Back to leave the site -
