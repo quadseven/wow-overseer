@@ -1,0 +1,714 @@
+{
+ "snapshot": "2026-10-04",
+ "sample": "every pre-raid best pick of the 18 specs (220 items)",
+ "classic_source": "https://nether.wowhead.com/classic/tooltip/item/<id> (Wowhead Classic tooltip JSON, stats parsed to numbers)",
+ "server_source": "acore_world.item_template stat_type/stat_value, armor, dmg, block, resistances and equip spells (spells.json text, Spell.dbc aura school masks)",
+ "items": {
+  "942": [
+   "school_dmg 21->spell_power 18"
+  ],
+  "2100": [
+   "dmg_min 38->48",
+   "dmg_max 45->56"
+  ],
+  "8345": [
+   "agility 0->10",
+   "spirit 10->0"
+  ],
+  "11669": [
+   "defense 5->8 rating (5.33)"
+  ],
+  "11726": [
+   "armor 369->421",
+   "strength 13->0",
+   "ap 0->26"
+  ],
+  "11782": [
+   "school_dmg 29->spell_power 23"
+  ],
+  "11810": [
+   "defense 7->10 rating (6.67)"
+  ],
+  "11819": [
+   "healing 22->spell_power 12 (x0.55)"
+  ],
+  "11923": [
+   "healing 31->spell_power 16 (x0.52)"
+  ],
+  "12554": [
+   "healing 33->spell_power 18 (x0.55)"
+  ],
+  "12620": [
+   "defense 9->13 rating (8.67)"
+  ],
+  "12624": [
+   "school_dmg 34->spell_power 28"
+  ],
+  "12640": [
+   "armor 565->645"
+  ],
+  "12757": [
+   "armor 190->217",
+   "dodge 1%->12 rating (0.87%)"
+  ],
+  "12895": [
+   "armor 706->806"
+  ],
+  "12939": [
+   "defense 7->10 rating (6.67)"
+  ],
+  "12966": [
+   "agility 0->10",
+   "shadow_res 10->0"
+  ],
+  "13102": [
+   "healing 44->spell_power 23 (x0.52)"
+  ],
+  "13178": [
+   "mp5 5->6",
+   "healing 29->spell_power 15 (x0.52)"
+  ],
+  "13346": [
+   "healing 68->spell_power 36 (x0.53)"
+  ],
+  "13349": [
+   "school_dmg 19->spell_power 15"
+  ],
+  "13386": [
+   "mp5 4->5"
+  ],
+  "13396": [
+   "school_dmg 14->spell_power 12"
+  ],
+  "13954": [
+   "healing 37->spell_power 28 (x0.76)"
+  ],
+  "13966": [
+   "dodge 1%->12 rating (0.87%)"
+  ],
+  "13969": [
+   "healing 33->spell_power 18 (x0.55)"
+  ],
+  "14112": [
+   "school_dmg 26->spell_power 21"
+  ],
+  "14136": [
+   "school_dmg 80->spell_power 33"
+  ],
+  "14152": [
+   "armor 96->109"
+  ],
+  "14154": [
+   "armor 96->109",
+   "mp5 6->8",
+   "healing 73->spell_power 39 (x0.53)"
+  ],
+  "14548": [
+   "healing 26->spell_power 14 (x0.54)"
+  ],
+  "14549": [
+   "armor 360->411",
+   "dodge 2%->24 rating (1.74%)"
+  ],
+  "14551": [
+   "armor 201->230",
+   "weapon_skill +7->expertise rating 17 (6.8 expertise)",
+   "hit_rating new 19"
+  ],
+  "14552": [
+   "armor 472->539"
+  ],
+  "14553": [
+   "armor 105->120",
+   "healing 53->spell_power 28 (x0.53)"
+  ],
+  "14620": [
+   "mp5 4->5",
+   "defense 9->14 rating (9.33)"
+  ],
+  "14621": [
+   "mp5 6->8"
+  ],
+  "14622": [
+   "mp5 4->5"
+  ],
+  "14623": [
+   "mp5 5->6",
+   "defense 13->20 rating (13.33)"
+  ],
+  "14624": [
+   "mp5 5->6",
+   "defense 17->25 rating (16.67)"
+  ],
+  "15047": [
+   "healing 66->spell_power 35 (x0.53)"
+  ],
+  "15051": [
+   "fire_res 6->0",
+   "hit_rating new 8"
+  ],
+  "15052": [
+   "armor 320->310",
+   "stamina 8->12",
+   "fire_res 13->0",
+   "crit_rating new 11"
+  ],
+  "15061": [
+   "stamina 8->0",
+   "intellect 0->10",
+   "spirit 13->10",
+   "nature_res 3->5",
+   "healing 31->spell_power 16 (x0.52)"
+  ],
+  "16058": [
+   "healing 37->spell_power 20 (x0.54)"
+  ],
+  "16838": [
+   "armor 237->271",
+   "mp5 4->5",
+   "healing 18->spell_power 9 (x0.50)"
+  ],
+  "16984": [
+   "armor 270->308"
+  ],
+  "16996": [
+   "dmg_min 55->70",
+   "dmg_max 104->131"
+  ],
+  "17904": [
+   "dodge 2%->24 rating (1.74%)"
+  ],
+  "18103": [
+   "mp5 5->6"
+  ],
+  "18168": [
+   "armor 2548->2916",
+   "block_value 44->58"
+  ],
+  "18289": [
+   "school_dmg 17->spell_power 14"
+  ],
+  "18323": [
+   "dmg_min 50->64",
+   "dmg_max 93->119"
+  ],
+  "18327": [
+   "mp5 6->8",
+   "healing 31->spell_power 16 (x0.52)"
+  ],
+  "18370": [
+   "dodge 2%->24 rating (1.74%)"
+  ],
+  "18371": [
+   "mp5 11->14"
+  ],
+  "18372": [
+   "school_dmg 19->spell_power 15"
+  ],
+  "18383": [
+   "defense 7->10 rating (6.67)"
+  ],
+  "18386": [
+   "mp5 6->8",
+   "healing 42->spell_power 22 (x0.52)"
+  ],
+  "18392": [
+   "weapon_skill +6->expertise rating 14 (5.6 expertise)"
+  ],
+  "18407": [
+   "school_dmg 33->spell_power 27"
+  ],
+  "18459": [
+   "healing 29->spell_power 15 (x0.52)"
+  ],
+  "18469": [
+   "mp5 4->5",
+   "healing 33->spell_power 18 (x0.55)"
+  ],
+  "18470": [
+   "healing 44->spell_power 23 (x0.52)"
+  ],
+  "18490": [
+   "healing 33->spell_power 18 (x0.55)"
+  ],
+  "18507": [
+   "healing 26->spell_power 14 (x0.54)"
+  ],
+  "18510": [
+   "armor 48->55",
+   "healing 42->spell_power 22 (x0.52)"
+  ],
+  "18511": [
+   "armor 48->55",
+   "dodge 1%->12 rating (0.87%)"
+  ],
+  "18523": [
+   "healing 37->spell_power 20 (x0.54)"
+  ],
+  "18527": [
+   "healing 51->spell_power 27 (x0.53)"
+  ],
+  "18532": [
+   "mp5 10->13"
+  ],
+  "18676": [
+   "school_dmg 29->spell_power 23"
+  ],
+  "18691": [
+   "school_dmg 20->spell_power 16"
+  ],
+  "18723": [
+   "healing 33->spell_power 18 (x0.55)"
+  ],
+  "18735": [
+   "school_dmg 27->spell_power 22"
+  ],
+  "19107": [
+   "dmg_min 85->108",
+   "dmg_max 128->162"
+  ],
+  "19108": [
+   "school_dmg 16->spell_power 13"
+  ],
+  "19157": [
+   "armor 279->318",
+   "crit 2%->21 rating (1.50%)"
+  ],
+  "19162": [
+   "armor 118->135",
+   "healing 62->spell_power 33 (x0.53)"
+  ],
+  "19165": [
+   "armor 94->107"
+  ],
+  "19310": [
+   "school_dmg 34->spell_power 28"
+  ],
+  "19321": [
+   "armor 2468->2836",
+   "block_value 71->112"
+  ],
+  "19578": [
+   "armor 323->368"
+  ],
+  "19595": [
+   "armor 44->50"
+  ],
+  "20073": [
+   "armor 50->57"
+  ],
+  "20717": [
+   "healing 51->spell_power 27 (x0.53)"
+  ],
+  "21995": [
+   "armor 470->537"
+  ],
+  "21996": [
+   "defense 3->4 rating (2.67)"
+  ],
+  "21997": [
+   "armor 684->781"
+  ],
+  "21998": [
+   "armor 393->488",
+   "strength 18->20",
+   "stamina 12->13",
+   "crit 1%->15 rating (1.07%)"
+  ],
+  "21999": [
+   "armor 556->634"
+  ],
+  "22003": [
+   "armor 127->145"
+  ],
+  "22005": [
+   "armor 150->171"
+  ],
+  "22009": [
+   "armor 185->211"
+  ],
+  "22061": [
+   "armor 266->303",
+   "agility 24->16",
+   "ap 0->32"
+  ],
+  "22066": [
+   "armor 54->66",
+   "stamina 12->13",
+   "intellect 14->15",
+   "spirit 10->11",
+   "spell_hit 1%->9 rating (1.12% spell)",
+   "spell_dmg 12->spell_power 13"
+  ],
+  "22077": [
+   "armor 54->66",
+   "stamina 16->18",
+   "intellect 13->14",
+   "spell_hit 1%->9 rating (1.12% spell)",
+   "spell_dmg 13->spell_power 14"
+  ],
+  "22079": [
+   "mp5 2->3"
+  ],
+  "22084": [
+   "armor 64->73",
+   "mp5 7->9"
+  ],
+  "22234": [
+   "mp5 3->4",
+   "healing 26->spell_power 14 (x0.54)"
+  ],
+  "22247": [
+   "healing 26->spell_power 14 (x0.54)"
+  ],
+  "22254": [
+   "mp5 2->3",
+   "healing 9->spell_power 5 (x0.56)"
+  ],
+  "22319": [
+   "mp5 4->5",
+   "healing 26->spell_power 14 (x0.54)"
+  ],
+  "22328": [
+   "defense 15->22 rating (14.67)"
+  ],
+  "22334": [
+   "healing 31->spell_power 16 (x0.52)"
+  ],
+  "22342": [
+   "school_dmg 34->spell_power 28"
+  ],
+  "22406": [
+   "healing 66->spell_power 35 (x0.53)"
+  ],
+  "22672": [
+   "armor 646->737"
+  ]
+ },
+ "ep_delta_by_spec": {
+  "druid-balance": {
+   "n": 11,
+   "weaker_over_2pct": [],
+   "stronger_over_2pct": 0,
+   "within_2pct": 11
+  },
+  "druid-feral-dps": {
+   "n": 18,
+   "weaker_over_2pct": [],
+   "stronger_over_2pct": 1,
+   "within_2pct": 17
+  },
+  "druid-feral-tank": {
+   "n": 22,
+   "weaker_over_2pct": [],
+   "stronger_over_2pct": 3,
+   "within_2pct": 19
+  },
+  "druid-restoration": {
+   "n": 15,
+   "weaker_over_2pct": [
+    {
+     "id": 13178,
+     "classic_ep": 15.4,
+     "server_ep": 15.0,
+     "delta_pct": -2.8
+    },
+    {
+     "id": 11923,
+     "classic_ep": 16.5,
+     "server_ep": 16.0,
+     "delta_pct": -3.0
+    }
+   ],
+   "stronger_over_2pct": 2,
+   "within_2pct": 11
+  },
+  "hunter-dps": {
+   "n": 18,
+   "weaker_over_2pct": [],
+   "stronger_over_2pct": 3,
+   "within_2pct": 15
+  },
+  "mage-dps": {
+   "n": 18,
+   "weaker_over_2pct": [
+    {
+     "id": 11782,
+     "classic_ep": 32.9,
+     "server_ep": 26.9,
+     "delta_pct": -18.2
+    },
+    {
+     "id": 19310,
+     "classic_ep": 38.4,
+     "server_ep": 32.4,
+     "delta_pct": -15.6
+    },
+    {
+     "id": 19108,
+     "classic_ep": 16.0,
+     "server_ep": 13.0,
+     "delta_pct": -18.8
+    },
+    {
+     "id": 942,
+     "classic_ep": 21.0,
+     "server_ep": 18.0,
+     "delta_pct": -14.3
+    }
+   ],
+   "stronger_over_2pct": 2,
+   "within_2pct": 12
+  },
+  "paladin-holy": {
+   "n": 16,
+   "weaker_over_2pct": [
+    {
+     "id": 18459,
+     "classic_ep": 20.7,
+     "server_ep": 20.3,
+     "delta_pct": -2.1
+    },
+    {
+     "id": 11923,
+     "classic_ep": 16.5,
+     "server_ep": 16.0,
+     "delta_pct": -3.0
+    },
+    {
+     "id": 13178,
+     "classic_ep": 15.4,
+     "server_ep": 15.0,
+     "delta_pct": -2.8
+    }
+   ],
+   "stronger_over_2pct": 2,
+   "within_2pct": 11
+  },
+  "paladin-protection": {
+   "n": 14,
+   "weaker_over_2pct": [
+    {
+     "id": 11810,
+     "classic_ep": 209.8,
+     "server_ep": 199.8,
+     "delta_pct": -4.8
+    }
+   ],
+   "stronger_over_2pct": 2,
+   "within_2pct": 11
+  },
+  "paladin-retribution": {
+   "n": 16,
+   "weaker_over_2pct": [
+    {
+     "id": 11726,
+     "classic_ep": 51.0,
+     "server_ep": 44.2,
+     "delta_pct": -13.5
+    }
+   ],
+   "stronger_over_2pct": 3,
+   "within_2pct": 12
+  },
+  "priest-holy": {
+   "n": 20,
+   "weaker_over_2pct": [
+    {
+     "id": 11923,
+     "classic_ep": 16.5,
+     "server_ep": 16.0,
+     "delta_pct": -3.0
+    }
+   ],
+   "stronger_over_2pct": 10,
+   "within_2pct": 9
+  },
+  "priest-shadow": {
+   "n": 19,
+   "weaker_over_2pct": [
+    {
+     "id": 14112,
+     "classic_ep": 26.1,
+     "server_ep": 21.1,
+     "delta_pct": -19.2
+    },
+    {
+     "id": 14136,
+     "classic_ep": 41.9,
+     "server_ep": 34.9,
+     "delta_pct": -16.7
+    },
+    {
+     "id": 18407,
+     "classic_ep": 33.0,
+     "server_ep": 27.0,
+     "delta_pct": -18.2
+    },
+    {
+     "id": 22342,
+     "classic_ep": 36.6,
+     "server_ep": 30.6,
+     "delta_pct": -16.4
+    },
+    {
+     "id": 18735,
+     "classic_ep": 28.4,
+     "server_ep": 23.4,
+     "delta_pct": -17.6
+    },
+    {
+     "id": 13349,
+     "classic_ep": 19.0,
+     "server_ep": 15.0,
+     "delta_pct": -21.1
+    },
+    {
+     "id": 13396,
+     "classic_ep": 14.0,
+     "server_ep": 12.0,
+     "delta_pct": -14.3
+    },
+    {
+     "id": 18691,
+     "classic_ep": 21.1,
+     "server_ep": 17.1,
+     "delta_pct": -18.9
+    }
+   ],
+   "stronger_over_2pct": 0,
+   "within_2pct": 11
+  },
+  "rogue-dps": {
+   "n": 19,
+   "weaker_over_2pct": [],
+   "stronger_over_2pct": 2,
+   "within_2pct": 17
+  },
+  "shaman-elemental": {
+   "n": 22,
+   "weaker_over_2pct": [
+    {
+     "id": 18289,
+     "classic_ep": 17.8,
+     "server_ep": 14.8,
+     "delta_pct": -16.8
+    },
+    {
+     "id": 12624,
+     "classic_ep": 34.0,
+     "server_ep": 28.0,
+     "delta_pct": -17.6
+    },
+    {
+     "id": 18676,
+     "classic_ep": 30.0,
+     "server_ep": 24.0,
+     "delta_pct": -20.0
+    }
+   ],
+   "stronger_over_2pct": 0,
+   "within_2pct": 19
+  },
+  "shaman-enhancement": {
+   "n": 21,
+   "weaker_over_2pct": [],
+   "stronger_over_2pct": 9,
+   "within_2pct": 12
+  },
+  "shaman-restoration": {
+   "n": 24,
+   "weaker_over_2pct": [
+    {
+     "id": 13178,
+     "classic_ep": 15.8,
+     "server_ep": 15.5,
+     "delta_pct": -2.2
+    },
+    {
+     "id": 11923,
+     "classic_ep": 16.5,
+     "server_ep": 16.0,
+     "delta_pct": -3.0
+    },
+    {
+     "id": 16838,
+     "classic_ep": 14.9,
+     "server_ep": 14.4,
+     "delta_pct": -3.3
+    },
+    {
+     "id": 22334,
+     "classic_ep": 18.3,
+     "server_ep": 17.8,
+     "delta_pct": -2.7
+    }
+   ],
+   "stronger_over_2pct": 5,
+   "within_2pct": 15
+  },
+  "warlock-dps": {
+   "n": 13,
+   "weaker_over_2pct": [
+    {
+     "id": 18407,
+     "classic_ep": 29.8,
+     "server_ep": 27.1,
+     "delta_pct": -9.1
+    },
+    {
+     "id": 18735,
+     "classic_ep": 26.5,
+     "server_ep": 24.2,
+     "delta_pct": -8.7
+    },
+    {
+     "id": 18372,
+     "classic_ep": 17.2,
+     "server_ep": 15.1,
+     "delta_pct": -12.2
+    },
+    {
+     "id": 13396,
+     "classic_ep": 12.6,
+     "server_ep": 12.0,
+     "delta_pct": -4.8
+    }
+   ],
+   "stronger_over_2pct": 2,
+   "within_2pct": 7
+  },
+  "warrior-fury": {
+   "n": 27,
+   "weaker_over_2pct": [
+    {
+     "id": 11726,
+     "classic_ep": 108.9,
+     "server_ep": 102.2,
+     "delta_pct": -6.1
+    }
+   ],
+   "stronger_over_2pct": 4,
+   "within_2pct": 22
+  },
+  "warrior-protection": {
+   "n": 31,
+   "weaker_over_2pct": [
+    {
+     "id": 18370,
+     "classic_ep": 5.2,
+     "server_ep": 4.5,
+     "delta_pct": -13.0
+    },
+    {
+     "id": 17904,
+     "classic_ep": 5.2,
+     "server_ep": 4.5,
+     "delta_pct": -13.0
+    }
+   ],
+   "stronger_over_2pct": 12,
+   "within_2pct": 17
+  }
+ }
+}

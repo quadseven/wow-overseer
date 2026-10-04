@@ -23,6 +23,12 @@ Snapshot taken 2026-10-04. Server facts were read from the wow-dev world DB (`ac
 - For stat weights, use wowsims/classic (MIT). Sixty Upgrades' terms forbid reusing its data or
   preset weights. Wowhead's stat guides supply the priority order and caps, plus numeric weights
   for feral only.
+- The server's items carry their 3.3.5 stats: ratings, spell power, and changed armor and
+  mp5. 108 of the 220 pre-raid best picks differ from their classic version. Under each spec's
+  weights, 25 distinct items score more than 2% below their classic version (34 item-spec
+  pairs out of 344). The weakest are the school-damage caster items, which drop 15-20%. Score
+  each list item from this server's own `item_template`, with level-60 rating conversions
+  (section 8).
 - Storage: one JSON file per spec, `data/bis/<class>-<spec>.json`, plus `items.json`,
   `situational.json` and `weights-wowsims.json`. Refresh the guide lists by a manual,
   rate-limited snapshot once per content change. Regenerate the server sources from the DB on
@@ -140,9 +146,10 @@ vendor npc and ExtendedCost, quest ids, recipe spell and profession, and contain
 - **No source row at all:** Rhok'delar 18713 and Lok'delar 18715 (quest 7636 now rewards only
   18707), Benediction 18608 (made from Anathema by a spell), Sulfuras 17182, Egan's Blaster
   13289 (a quest tool), and Major Spellstone 13603 (conjured, DEPRECATED name).
-- **Item stats are classic-shaped.** Hit, crit and healing on old items are equip spells
-  (Lionheart Helm 12640: spells 7598 and 15465), not 3.3.5 ratings. Classic weights apply
-  unchanged through the committed `spells.json`.
+- **Item stats are the 3.3.5 versions, not the classic ones.** Old percentage stats are now
+  ratings, and +healing is now spell power. Lionheart Helm 12640, for example, carries equip
+  spells 7598 and 15465, which give 28 crit rating and 20 hit rating instead of 2% crit and 2% hit.
+  See section 8.
 - **`spell_dbc` has no create-item rows** for any of the 770 items. Crafted sources come from
   `craftbook.json`, which maps each skill line to spell and created item, built from the DBCs.
 
@@ -248,6 +255,7 @@ data/bis/<class>-<spec>.json
 data/bis/items.json          id -> name, ilvl, req, slot, quality, fire_res, sources[], reachable_at_60
 data/bis/situational.json    fire resistance, PvP honor, battleground reputation, bank sets by role
 data/bis/weights-wowsims.json  all 18 weight sets with the MIT notice and commit
+data/bis/ratings-l60.json      level-60 rating per 1% by class, from the server's own DBCs
 ```
 
 The format follows these rules:
@@ -276,6 +284,130 @@ That keeps one source of truth. It is a separate implementation ticket.
    research.
 3. **Weights:** pin a wowsims commit and bump it by hand. Review the flagged sets before
    enabling them.
+
+## 8. Classic stats against this server's 3.3.5 stats
+
+### Rating conversion at level 60
+
+The conversion comes from `gtCombatRatings.dbc` and `gtOCTClassCombatRatingScalar.dbc`, copied
+read-only from the worldserver data directory. The md5 of each copy matched the pod's own md5.
+The core's formula is rating per 1% = `gtCombatRatings[cr*100 + 59] / classScalar`. Full table:
+`research/bis/ratings-l60.json`.
+
+| Rating | Rating per 1% at 60 | Classic stat it replaced | Effect of the conversion |
+| --- | --- | --- | --- |
+| Hit (melee, ranged) | 10 | +1% hit = 10 rating | Same |
+| Hit (spell) | 8 | +1% spell hit = 8 rating | Same; one hit rating now serves melee and spells |
+| Crit (melee, ranged, spell) | 14 | +1% crit = 14 rating | Same |
+| Haste (melee) | 10; 7.69 for paladin, shaman and druid (class scalar 1.3) | none at 60 | New |
+| Defense | 1.5 rating per defense point | +N defense = floor(1.5 N) rating | Slightly weaker, by rounding (+7 became 10 = 6.67) |
+| Dodge | 13.8 | +1% dodge = 12 rating | Weaker: 0.87% |
+| Parry | 13.8 | +1% parry | none in the sample |
+| Block | 5 | +1% block = 5 rating | Same |
+| Expertise | 2.5 rating per expertise point | +N weapon skill | Different mechanic: weapon skill on items is gone |
+
+Sixty Upgrades' WotLK mode ([sixtyupgrades.com/wotlk](https://sixtyupgrades.com/wotlk/)) uses
+the same level-60 base values to convert ratings to percent in its stats panel:
+
+- hit 10, spell hit 8, crit 14, haste 10, expertise 2.5 and defense 1.5;
+- dodge and parry 13.8, against 12 and 15 in TBC;
+- physical haste rating x1.3 for hybrid classes.
+
+Its standard level curve gives the level-80 values (hit 32.79, crit 45.91).
+
+The site weights EP per raw stat point: the weights go to its server keyed `hitRating`,
+`critRating` and so on. Its Era and Forever modes keep flat-percent keys (`hit`, `crit`,
+`spellHit`, plus weapon skills). Its EP export is a flat `{"key": number}` in camelCase. These
+facts come from its public script bundle. They were read only to cross-check this table, since
+the site's terms forbid reuse. This server's DBC is the source of record.
+
+### Sample comparison
+
+The sample is all 220 pre-raid best picks. Classic stats were parsed from Wowhead's classic tooltip JSON
+(`nether.wowhead.com/classic/tooltip/item/<id>`, 220 requests, 1 per second). Server stats come
+from `item_template`: stat_type/stat_value 1-10, armor, damage, block and resistances, plus the
+equip spells, resolved through `spells.json` and the Spell.dbc aura school masks. Per-item diffs
+are in `research/bis/classic-vs-server.json`.
+
+108 of 220 items differ from their classic version in at least one stat:
+
+| Change | Items | Example |
+| --- | --- | --- |
+| Armor raised | 34 (1 lowered) | Lionheart Helm 565 -> 645 |
+| +healing became spell power at about 0.53x | 34 | Hammer of Grace 31 healing -> 16 spell power |
+| mp5 raised by about 25% | 20 | Mindtap Talisman 11 -> 14 |
+| One-school damage became all-school spell power, a smaller number | 16 | Freezing Band 21 frost -> 18 spell power |
+| Defense rounding | 10 | Force of Will +7 -> 10 rating (6.67) |
+| 1% dodge became 12 rating (0.87%) | 6 | Mark of Tyranny |
+| Weapon skill became expertise rating | 2 | Edgemaster's Handguards +7 skill -> 17 expertise rating and 19 hit rating |
+| Two classic stats merged into one rating | 2 | Chromatic Gauntlets 1% crit and 1% spell crit -> 21 crit rating (1.5% of each) |
+| Spell hit 1% became 9 rating (1.12%) | 2 | Sorcerer's Gloves |
+| Primary stats or fire resistance changed | 13 | Savage Gladiator Chain -13 Str, +26 AP; PvP silk walkers -20 Stamina; Black Dragonscale Shoulders -6 fire resistance, +8 hit rating |
+
+Two of these changes are neutral by design:
+
+- **Healing.** The server's `spell_bonus_data` gives Greater Heal (2060) a coefficient of 1.611,
+  against 0.857 in classic. That is the 1.88x rescale from patch 3.0, so 16 spell power heals
+  about as much as 30 classic +healing. Shadow Bolt (686) keeps 0.857 at its top rank.
+- **One-school damage items.** These now add to every school (aura 13, school mask 126), so a
+  frost ring also feeds fire.
+
+Two other changes have no item replacement on this server:
+
+- **Weapon skill.** Rogue and warrior priorities reach 308 weapon skill through items. On
+  3.3.5, items give expertise instead, so that cap cannot be reached through gear.
+- **Fire resistance.** Some classic fire resistance pieces lost it (Black Dragonscale Shoulders
+  and Leggings). Fire resistance sets must be read from `fire_resistance_by_slot`, which comes
+  from the server, not from the classic lists.
+
+### Weight scoring
+
+Each item was scored twice under its spec's wowsims weights:
+
+- **Classic score:** percentages at face value, +healing / 1.88 as spell power, and one-school
+  damage at that school's weight.
+- **Server score:** ratings converted with the table above.
+
+The table counts item-spec pairs that score more than 2% below their classic version.
+
+| Spec | Pairs scored | >2% weaker | >2% stronger | Weakest items (delta) |
+| --- | --- | --- | --- | --- |
+| priest-shadow | 19 | 8 | 0 | Robe of Winter Night -16.7%, Scepter of the Unholy -21.1%, Felcloth Shoulders -19.2% |
+| mage-dps | 18 | 4 | 2 | Wand of Biting Cold -18.8%, Boreal Mantle -18.2%, Tome of the Ice Lord -15.6% |
+| warlock-dps | 13 | 4 | 2 | Blade of the New Moon -12.2%, Felcloth Gloves -9.1% |
+| shaman-elemental | 22 | 3 | 0 | Sash of the Windreaver -20.0%, Wildthorn Mail -17.6% |
+| shaman-restoration | 24 | 4 | 5 | Earthfury Belt -3.3%, Hammer of Grace -3.0% |
+| paladin-holy | 16 | 3 | 2 | Hammer of Grace -3.0%, Rosewine Circle -2.8% |
+| druid-restoration | 15 | 2 | 2 | Hammer of Grace -3.0%, Rosewine Circle -2.8% |
+| priest-holy | 20 | 1 | 10 | Hammer of Grace -3.0% |
+| warrior-protection | 31 | 2 | 12 | Vigilance Charm -13.0%, Stormpike Insignia Rank 6 -13.0% (dodge) |
+| paladin-protection | 14 | 1 | 2 | Force of Will -4.8% |
+| paladin-retribution | 16 | 1 | 3 | Savage Gladiator Chain -13.5% |
+| warrior-fury | 27 | 1 | 4 | Savage Gladiator Chain -6.1% |
+| other 6 specs | 109 | 0 | 18 | none |
+
+The caster losses come from one-school items. Classic "+21 shadow damage" became "+18 spell
+power", worth less to a single-school caster. The healer losses (2-3%) are rounding in the
+healing conversion. Tank and melee items mostly gained, through armor, mp5 and rounding.
+
+### Scoring rule
+
+1. Take the guide lists only as the shopping list: which items to aim for and the alternatives
+   in each slot. Never take the guide's rank as the score.
+2. Score every candidate from this server's `item_template`:
+   - primary stats, armor, block, resistances and weapon DPS from the row;
+   - ratings from stat_type and equip spells, converted to percent with `ratings-l60.json` for
+     the member's class (the hybrid haste scalar included);
+   - spell power counted once for damage and once for healing. A healer's classic weight for
+     +healing applies to spell power x 1.88.
+3. Apply the spec's per-percent weights (wowsims), capped where the spec has a cap: melee hit
+   9%, spell hit 16%, defense 440 for raid tanks.
+4. Re-rank each slot by that score. A list item whose 3.3.5 version scores below the next
+   alternative, or below what the member wears, drops down the list. This catches every
+   weaker item in the table above without hand edits.
+5. Flag what the weights cannot see: expertise in place of weapon skill, and set bonuses (the
+   Black Dragonscale set's hit and crit moved into its pieces). These need a reviewer, not a
+   number.
 
 ## Method and caveats
 

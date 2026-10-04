@@ -1,0 +1,357 @@
+{
+ "source": "gtCombatRatings.dbc and gtOCTClassCombatRatingScalar.dbc from the wow-dev worldserver data directory (md5 31e2bec67c218d11910906bfb8466973, 1ae8cec5526f722f90957b802a8c5f4b), read 2026-10-04",
+ "formula": "rating_per_pct = gtCombatRatings[cr*100 + level-1] / gtOCTClassCombatRatingScalar[(class-1)*32 + cr + 1]; defense, weapon skill and expertise are per point, not per percent",
+ "level": 60,
+ "ratings": {
+  "weapon_skill": {
+   "gt_l60": 2.5,
+   "rating_per_pct_by_class": {
+    "warrior": 2.5,
+    "paladin": 2.5,
+    "hunter": 2.5,
+    "rogue": 2.5,
+    "priest": 2.5,
+    "shaman": 2.5,
+    "mage": 2.5,
+    "warlock": 2.5,
+    "druid": 2.5
+   }
+  },
+  "defense": {
+   "gt_l60": 1.5,
+   "rating_per_pct_by_class": {
+    "warrior": 1.5,
+    "paladin": 1.5,
+    "hunter": 1.5,
+    "rogue": 1.5,
+    "priest": 1.5,
+    "shaman": 1.5,
+    "mage": 1.5,
+    "warlock": 1.5,
+    "druid": 1.5
+   }
+  },
+  "dodge": {
+   "gt_l60": 13.8,
+   "rating_per_pct_by_class": {
+    "warrior": 13.8,
+    "paladin": 13.8,
+    "hunter": 13.8,
+    "rogue": 13.8,
+    "priest": 13.8,
+    "shaman": 13.8,
+    "mage": 13.8,
+    "warlock": 13.8,
+    "druid": 13.8
+   }
+  },
+  "parry": {
+   "gt_l60": 13.8,
+   "rating_per_pct_by_class": {
+    "warrior": 13.8,
+    "paladin": 13.8,
+    "hunter": 13.8,
+    "rogue": 13.8,
+    "priest": 13.8,
+    "shaman": 13.8,
+    "mage": 13.8,
+    "warlock": 13.8,
+    "druid": 13.8
+   }
+  },
+  "block": {
+   "gt_l60": 5.0,
+   "rating_per_pct_by_class": {
+    "warrior": 5.0,
+    "paladin": 5.0,
+    "hunter": 5.0,
+    "rogue": 5.0,
+    "priest": 5.0,
+    "shaman": 5.0,
+    "mage": 5.0,
+    "warlock": 5.0,
+    "druid": 5.0
+   }
+  },
+  "hit_melee": {
+   "gt_l60": 10.0,
+   "rating_per_pct_by_class": {
+    "warrior": 10.0,
+    "paladin": 10.0,
+    "hunter": 10.0,
+    "rogue": 10.0,
+    "priest": 10.0,
+    "shaman": 10.0,
+    "mage": 10.0,
+    "warlock": 10.0,
+    "druid": 10.0
+   }
+  },
+  "hit_ranged": {
+   "gt_l60": 10.0,
+   "rating_per_pct_by_class": {
+    "warrior": 10.0,
+    "paladin": 10.0,
+    "hunter": 10.0,
+    "rogue": 10.0,
+    "priest": 10.0,
+    "shaman": 10.0,
+    "mage": 10.0,
+    "warlock": 10.0,
+    "druid": 10.0
+   }
+  },
+  "hit_spell": {
+   "gt_l60": 8.0,
+   "rating_per_pct_by_class": {
+    "warrior": 8.0,
+    "paladin": 8.0,
+    "hunter": 8.0,
+    "rogue": 8.0,
+    "priest": 8.0,
+    "shaman": 8.0,
+    "mage": 8.0,
+    "warlock": 8.0,
+    "druid": 8.0
+   }
+  },
+  "crit_melee": {
+   "gt_l60": 14.0,
+   "rating_per_pct_by_class": {
+    "warrior": 14.0,
+    "paladin": 14.0,
+    "hunter": 14.0,
+    "rogue": 14.0,
+    "priest": 14.0,
+    "shaman": 14.0,
+    "mage": 14.0,
+    "warlock": 14.0,
+    "druid": 14.0
+   }
+  },
+  "crit_ranged": {
+   "gt_l60": 14.0,
+   "rating_per_pct_by_class": {
+    "warrior": 14.0,
+    "paladin": 14.0,
+    "hunter": 14.0,
+    "rogue": 14.0,
+    "priest": 14.0,
+    "shaman": 14.0,
+    "mage": 14.0,
+    "warlock": 14.0,
+    "druid": 14.0
+   }
+  },
+  "crit_spell": {
+   "gt_l60": 14.0,
+   "rating_per_pct_by_class": {
+    "warrior": 14.0,
+    "paladin": 14.0,
+    "hunter": 14.0,
+    "rogue": 14.0,
+    "priest": 14.0,
+    "shaman": 14.0,
+    "mage": 14.0,
+    "warlock": 14.0,
+    "druid": 14.0
+   }
+  },
+  "hit_taken_melee": {
+   "gt_l60": 10.0,
+   "rating_per_pct_by_class": {
+    "warrior": 10.0,
+    "paladin": 10.0,
+    "hunter": 10.0,
+    "rogue": 10.0,
+    "priest": 10.0,
+    "shaman": 10.0,
+    "mage": 10.0,
+    "warlock": 10.0,
+    "druid": 10.0
+   }
+  },
+  "hit_taken_ranged": {
+   "gt_l60": 10.0,
+   "rating_per_pct_by_class": {
+    "warrior": 10.0,
+    "paladin": 10.0,
+    "hunter": 10.0,
+    "rogue": 10.0,
+    "priest": 10.0,
+    "shaman": 10.0,
+    "mage": 10.0,
+    "warlock": 10.0,
+    "druid": 10.0
+   }
+  },
+  "hit_taken_spell": {
+   "gt_l60": 8.0,
+   "rating_per_pct_by_class": {
+    "warrior": 8.0,
+    "paladin": 8.0,
+    "hunter": 8.0,
+    "rogue": 8.0,
+    "priest": 8.0,
+    "shaman": 8.0,
+    "mage": 8.0,
+    "warlock": 8.0,
+    "druid": 8.0
+   }
+  },
+  "crit_taken_melee": {
+   "gt_l60": 28.75,
+   "rating_per_pct_by_class": {
+    "warrior": 28.75,
+    "paladin": 28.75,
+    "hunter": 28.75,
+    "rogue": 28.75,
+    "priest": 28.75,
+    "shaman": 28.75,
+    "mage": 28.75,
+    "warlock": 28.75,
+    "druid": 28.75
+   }
+  },
+  "crit_taken_ranged": {
+   "gt_l60": 28.75,
+   "rating_per_pct_by_class": {
+    "warrior": 28.75,
+    "paladin": 28.75,
+    "hunter": 28.75,
+    "rogue": 28.75,
+    "priest": 28.75,
+    "shaman": 28.75,
+    "mage": 28.75,
+    "warlock": 28.75,
+    "druid": 28.75
+   }
+  },
+  "crit_taken_spell": {
+   "gt_l60": 28.75,
+   "rating_per_pct_by_class": {
+    "warrior": 28.75,
+    "paladin": 28.75,
+    "hunter": 28.75,
+    "rogue": 28.75,
+    "priest": 28.75,
+    "shaman": 28.75,
+    "mage": 28.75,
+    "warlock": 28.75,
+    "druid": 28.75
+   }
+  },
+  "haste_melee": {
+   "gt_l60": 10.0,
+   "rating_per_pct_by_class": {
+    "warrior": 10.0,
+    "paladin": 7.692,
+    "hunter": 10.0,
+    "rogue": 10.0,
+    "priest": 10.0,
+    "shaman": 7.692,
+    "mage": 10.0,
+    "warlock": 10.0,
+    "druid": 7.692
+   }
+  },
+  "haste_ranged": {
+   "gt_l60": 10.0,
+   "rating_per_pct_by_class": {
+    "warrior": 10.0,
+    "paladin": 10.0,
+    "hunter": 10.0,
+    "rogue": 10.0,
+    "priest": 10.0,
+    "shaman": 10.0,
+    "mage": 10.0,
+    "warlock": 10.0,
+    "druid": 10.0
+   }
+  },
+  "haste_spell": {
+   "gt_l60": 10.0,
+   "rating_per_pct_by_class": {
+    "warrior": 10.0,
+    "paladin": 10.0,
+    "hunter": 10.0,
+    "rogue": 10.0,
+    "priest": 10.0,
+    "shaman": 10.0,
+    "mage": 10.0,
+    "warlock": 10.0,
+    "druid": 10.0
+   }
+  },
+  "weapon_skill_mh": {
+   "gt_l60": 2.5,
+   "rating_per_pct_by_class": {
+    "warrior": 2.5,
+    "paladin": 2.5,
+    "hunter": 2.5,
+    "rogue": 2.5,
+    "priest": 2.5,
+    "shaman": 2.5,
+    "mage": 2.5,
+    "warlock": 2.5,
+    "druid": 2.5
+   }
+  },
+  "weapon_skill_oh": {
+   "gt_l60": 2.5,
+   "rating_per_pct_by_class": {
+    "warrior": 2.5,
+    "paladin": 2.5,
+    "hunter": 2.5,
+    "rogue": 2.5,
+    "priest": 2.5,
+    "shaman": 2.5,
+    "mage": 2.5,
+    "warlock": 2.5,
+    "druid": 2.5
+   }
+  },
+  "weapon_skill_ranged": {
+   "gt_l60": 2.5,
+   "rating_per_pct_by_class": {
+    "warrior": 2.5,
+    "paladin": 2.5,
+    "hunter": 2.5,
+    "rogue": 2.5,
+    "priest": 2.5,
+    "shaman": 2.5,
+    "mage": 2.5,
+    "warlock": 2.5,
+    "druid": 2.5
+   }
+  },
+  "expertise": {
+   "gt_l60": 2.5,
+   "rating_per_pct_by_class": {
+    "warrior": 2.5,
+    "paladin": 2.5,
+    "hunter": 2.5,
+    "rogue": 2.5,
+    "priest": 2.5,
+    "shaman": 2.5,
+    "mage": 2.5,
+    "warlock": 2.5,
+    "druid": 2.5
+   }
+  },
+  "armor_penetration": {
+   "gt_l60": 4.6951,
+   "rating_per_pct_by_class": {
+    "warrior": 4.268,
+    "paladin": 4.268,
+    "hunter": 4.268,
+    "rogue": 4.268,
+    "priest": 4.268,
+    "shaman": 4.268,
+    "mage": 4.268,
+    "warlock": 4.268,
+    "druid": 4.268
+   }
+  }
+ }
+}
