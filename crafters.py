@@ -374,6 +374,22 @@ SEAT_TIERS = {
 }
 
 
+def _why(recipe: Recipe, name: str, have: int, seat: str) -> str:
+    """The reason a candidate is named, as the pick carries it."""
+    trade = TRADES.get(recipe.skill, "skill")
+    if have >= recipe.rank:
+        why = "%s %s %d, learns it now at %d" % (name, trade, have, recipe.rank)
+    else:
+        why = "%s %s %d, %d short of %d" % (
+            name,
+            trade,
+            have,
+            recipe.rank - have,
+            recipe.rank,
+        )
+    return why + (", %s crafter" % seat if seat != GUILD else "")
+
+
 def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> list:
     """Every person who could take this recipe, best first, as Pick values.
 
@@ -401,23 +417,7 @@ def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> lis
         tier = SEAT_TIERS[(seat, now)]
         benefit = abs(have - recipe.rank)
         online = bool(person.online or person.family)
-        if now:
-            why = "%s %s %d, learns it now at %d" % (
-                person.name,
-                TRADES.get(recipe.skill, "skill"),
-                have,
-                recipe.rank,
-            )
-        else:
-            why = "%s %s %d, %d short of %d" % (
-                person.name,
-                TRADES.get(recipe.skill, "skill"),
-                have,
-                recipe.rank - have,
-                recipe.rank,
-            )
-        if seat != GUILD:
-            why += ", %s crafter" % seat
+        why = _why(recipe, person.name, have, seat)
         if person.name == recipe.holder:
             seat = HOLDER
         ranked.append(
