@@ -109,6 +109,7 @@ STANDING = standing.StandingBook.load(HERE)
 # empty on this realm - and the same read-once-at-import shape. Built by
 # tools/craftbook_from_dbc.py.
 CRAFTBOOK = tradespec.load_craftbook(HERE)
+ITEM_COSTS = itemsource.load_costs(HERE)
 PORT = int(os.environ.get("PORT", "8080"))
 # WHERE THIS COPY IS MOUNTED. "" at the root, "/dev" under a path. Read
 # once at import exactly as PORT is, and deliberately allowed to raise:
@@ -1272,6 +1273,17 @@ def _fetch_item_sources(entry: int) -> dict | None:
                 (entry,),
             )
             rows["vendors"] = list(cur.fetchall())
+            tokens = itemsource.token_ids(
+                [v.get("extended_cost") for v in rows["vendors"]], ITEM_COSTS)
+            rows["token_names"] = {}
+            if tokens:
+                cur.execute(
+                    "SELECT entry, name FROM acore_world.item_template "  # noqa: S608
+                    f"WHERE entry IN ({_holes(tokens)})",
+                    tuple(tokens),
+                )
+                rows["token_names"] = {
+                    int(t["entry"]): t["name"] for t in cur.fetchall()}
     finally:
         conn.close()
     return {"item": item, "rows": rows}
@@ -1292,7 +1304,8 @@ def _item_payload(entry: int) -> dict | None:
     payload = itemsource.build_item(
         entry, shaped, fetched["rows"], craftbook=CRAFTBOOK,
         skill_names={v: k.title() for k, v in goals.SKILL_IDS.items()},
-        dungeons=achievements.MAP_NAMES, zones=recap.zone_names(GEO.continents))
+        dungeons=achievements.MAP_NAMES, zones=recap.zone_names(GEO.continents),
+        costs=ITEM_COSTS)
     with _ITEM_CACHE_LOCK:
         _ITEM_CACHE.put(entry, payload)
     return payload
