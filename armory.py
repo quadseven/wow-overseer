@@ -982,6 +982,48 @@ def _instance_enchants(
     return named
 
 
+# The enchantment slots whose stats make an item worth more worn: the permanent
+# enchant, the three gems, the socket bonus, the prismatic socket and the five
+# a random suffix fills. The temporary slot (a poison, an oil, a stone) is a
+# consumable, not the gear, and is left out.
+SCORED_ENCHANT_SLOTS = (
+    PERMANENT_ENCHANT_SLOT,
+    *GEM_SLOTS,
+    BONUS_ENCHANT_SLOT,
+    PRISMATIC_ENCHANT_SLOT,
+    *PROPERTY_ENCHANT_SLOTS,
+)
+
+
+def instance_stats(row: dict, book: ItemBook) -> tuple[dict[int, int], list[str]]:
+    """What the item INSTANCE adds to its template: ({stat type: amount}, names).
+
+    Reads the permanent enchant, gems and socket bonus, and the stats a random
+    property or suffix applied (scaled by RandPropPoints for a suffix), by the
+    same arithmetic the tooltip uses. `names` are the permanent enchant and
+    gem enchant names, for a short "what is on it" line. Template stats are
+    not in the result, and neither are procs, equip spells or the temporary
+    enchant (#561).
+    """
+    _suffix, pct_by_enchant = _random_property(row, book)
+    ids = parse_enchantments(row.get("enchantments"))
+    stats: dict[int, int] = {}
+    names: list[str] = []
+    for slot in SCORED_ENCHANT_SLOTS:
+        enchant_id = ids[slot]
+        if not enchant_id:
+            continue
+        from_property = slot in PROPERTY_ENCHANT_SLOTS
+        pct = pct_by_enchant.get(enchant_id) if from_property else None
+        _lines, added = _enchant_lines(enchant_id, row, book, pct)
+        for kind, amount in added.items():
+            stats[kind] = stats.get(kind, 0) + amount
+        entry = book.enchants.get(enchant_id)
+        if not from_property and entry and entry[0]:
+            names.append(entry[0])
+    return {k: v for k, v in stats.items() if v}, names
+
+
 def _spell_effects(row: dict, book: ItemBook) -> list[str]:
     """spellid_1..5 -> the green "Equip:" / "Use:" / "Chance on hit:" lines."""
     lines: list[str] = []

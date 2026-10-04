@@ -35,6 +35,13 @@ documented 3.x curve scales the rating needed per percent by (level - 8) / 52
 (floor of 2 / 52 under level 10), so the same rating is worth more percent to
 a low level. Above 60 the level-60 values hold.
 
+ENCHANTS AND RANDOM SUFFIXES (#561). A worn item's instance adds stats the
+template does not have: its permanent enchant, gems, and the stats of "of the
+Tiger". `armory.instance_stats` resolves them from the committed client
+tables in `items.json`; `add_stats` folds them into the template stats before
+`score`. Only a WORN item has an instance, so a list entry is scored bare.
+Equip procs and the temporary enchant (poisons, oils) are not folded in.
+
 PURE MODULE: dicts in, numbers and dicts out. Callers read item_template.
 """
 
@@ -90,6 +97,9 @@ STAT_TYPES = {
     19: "crit_melee_rating",
     20: "crit_ranged_rating",
     21: "crit_spell_rating",
+    28: "haste_rating",
+    29: "haste_rating",
+    30: "haste_rating",
     31: "hit_rating",
     32: "crit_rating",
     35: "resilience_rating",
@@ -97,6 +107,9 @@ STAT_TYPES = {
     37: "expertise_rating",
     38: "attack_power",
     39: "ranged_attack_power",
+    40: "feral_attack_power",
+    41: "spell_power",
+    42: "spell_power",
     43: "mp5",
     45: "spell_power",
     48: "block_value",
@@ -237,6 +250,18 @@ def stats_from_row(row: dict) -> dict:
         mid = (_flt(row.get("dmg_min1")) + _flt(row.get("dmg_max1"))) / 2.0
         if mid > 0:
             out["weapon_dps"] = mid / (delay / 1000.0)
+    return out
+
+
+def add_stats(base: dict, extra: dict) -> dict:
+    """`base` plus `extra` ({item_template stat type: amount}, as
+    `armory.instance_stats` returns), as a new dict of normalized stats.
+    A stat type this module has no name for is dropped, never scored as 0."""
+    out = dict(base)
+    for kind, amount in extra.items():
+        name = STAT_TYPES.get(_int(kind))
+        if name and amount:
+            out[name] = out.get(name, 0) + amount
     return out
 
 

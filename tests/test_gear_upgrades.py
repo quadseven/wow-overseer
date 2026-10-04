@@ -276,5 +276,90 @@ class ThePageDrawsIt(unittest.TestCase):
         self.assertNotIn("innerHTML", block)
 
 
+INTELLECT_ENCHANT, SUFFIX_ENCHANT, TEMP_ENCHANT = 7001, 7002, 7003
+BOOK = armory.ItemBook(
+    icons={},
+    spells={},
+    sets={},
+    enchants={
+        # [name, [[effect type, amount, stat type]]]; type 5 is a stat.
+        INTELLECT_ENCHANT: ["Mighty Intellect", [[5, 30, SPELL_POWER]]],
+        # A suffix's enchant has amount 0 and takes its size from RandPropPoints.
+        SUFFIX_ENCHANT: ["+Intellect", [[5, 0, INTELLECT]]],
+        TEMP_ENCHANT: ["Brilliant Wizard Oil", [[5, 36, SPELL_POWER]]],
+    },
+    suffixes={5: ["of the Owl", [[SUFFIX_ENCHANT, 6666]]]},
+    properties={},
+    # item level -> column (epic, rare, uncommon) -> group; a rare head reads 150.
+    points={60: [[0] * 5, [150, 0, 0, 0, 0], [0] * 5]},
+)
+
+
+def enchanted(slot_name, entry, spell_power, enchantments, random_property_id=0):
+    r = worn(slot_name, entry, spell_power)
+    r.update(
+        enchantments=enchantments,
+        random_property_id=random_property_id,
+        inventory_type=1,
+        quality=3,
+        item_level=60,
+    )
+    return r
+
+
+def build_with_book(equipment):
+    return gearupgrades.build(
+        MAGE, equipment, LIST_ROWS, list(armory.EQUIPPED_SLOTS), book=BOOK
+    )
+
+
+def triples(*ids):
+    """item_instance.enchantments: twelve (id, duration, charges) triples."""
+    ids = list(ids) + [0] * (12 - len(ids))
+    return " ".join(f"{i} 0 0" for i in ids)
+
+
+class TheWornInstanceAddsItsEnchants(unittest.TestCase):
+    def test_a_permanent_enchant_raises_the_worn_score(self):
+        bare = build_with_book([enchanted("head", 9001, 12, "")])
+        out = build_with_book([enchanted("head", 9001, 12, triples(INTELLECT_ENCHANT))])
+        head = slot_of(out, "head")["worn"]
+        weight = gearscore.score({"spell_power": 1}, "mage-dps", 60, "head")
+        self.assertAlmostEqual(
+            head["score"] - slot_of(bare, "head")["worn"]["score"], 30 * weight, 0
+        )
+        self.assertEqual(head["bonus"]["enchants"], ["Mighty Intellect"])
+        self.assertEqual(head["bonus"]["stats"], {"spell_power": 30})
+        self.assertGreater(head["bonus"]["score"], 0)
+
+    def test_a_random_suffix_is_scaled_by_item_level_and_scored(self):
+        slots = [0] * 7 + [SUFFIX_ENCHANT]
+        out = build_with_book(
+            [enchanted("head", 9001, 0, triples(*slots), random_property_id=-5)]
+        )
+        bonus = slot_of(out, "head")["worn"]["bonus"]
+        # 6666 / 10000 of the rare head's 150 points.
+        self.assertEqual(bonus["stats"], {"intellect": 99})
+        self.assertGreater(slot_of(out, "head")["worn"]["score"], 0)
+
+    def test_a_temporary_enchant_is_not_the_gear(self):
+        out = build_with_book([enchanted("head", 9001, 12, triples(0, TEMP_ENCHANT))])
+        self.assertIsNone(slot_of(out, "head")["worn"]["bonus"])
+
+    def test_without_a_book_only_the_template_scores(self):
+        r = enchanted("head", 9001, 12, triples(INTELLECT_ENCHANT))
+        out = build([r])
+        plain = gearscore.score({"spell_power": 12}, "mage-dps", 60, "head")
+        self.assertEqual(slot_of(out, "head")["worn"]["score"], round(plain, 1))
+
+    def test_the_basis_note_no_longer_denies_enchants(self):
+        self.assertNotIn("Enchants, gems", gearupgrades.SCORED_FROM)
+        self.assertIn("enchant", gearupgrades.SCORED_FROM)
+
+    def test_gearscore_names_haste_and_healing_stat_types(self):
+        got = gearscore.add_stats({}, {30: 10, 41: 5, 999: 3})
+        self.assertEqual(got, {"haste_rating": 10, "spell_power": 5})
+
+
 if __name__ == "__main__":
     unittest.main()
