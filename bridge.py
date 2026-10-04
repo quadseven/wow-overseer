@@ -22749,7 +22749,7 @@ _GEAR_VENDOR_SQL = (
 # The guild gear step's vendor reads per pass (guildjobs.gear_step): each is
 # one stock query around one member, so the pass stays bounded however many
 # members are short.
-GUILD_GEAR_READS_PER_PASS = 12
+GUILD_GEAR_READS_PER_PASS = 24
 
 
 def _fetch_gear_vendors(here, cap_yards=None) -> list:

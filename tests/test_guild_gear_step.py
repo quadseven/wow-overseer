@@ -70,7 +70,7 @@ class AGearShortMemberShops(unittest.TestCase):
         self.assertEqual("", why)
         self.assertEqual("gear", step.action)
         self.assertTrue(step.walk.command.startswith("walk-to-vendor item:"))
-        self.assertEqual(guildjobs.GEAR_BUYS_PER_STEP, len(step.rows))
+        self.assertEqual(min(guildjobs.GEAR_BUYS_PER_STEP, len(ROWS)), len(step.rows))
         self.assertTrue(all(r.kind == "buy" for r in step.rows))
         self.assertTrue(all(r.source == "guildjobs:gear:Aurevil" for r in step.rows))
         self.assertEqual("guildjobs:gear:Aurevil", step.walk.source)
@@ -260,6 +260,25 @@ class AStrandedMemberHearthsHome(unittest.TestCase):
         recent = [guildjobs.Recent("Aurevil", "gear", 5, status="error")]
         plan = guildjobs.plan([_member(eligible=False)], recent=recent)
         self.assertEqual((), plan.steps)
+
+
+class GearHasItsOwnAllowance(unittest.TestCase):
+    """wow-dev 2026-10-04: gear steps queued behind posts, sales and training
+    in 4 steps per guild per pass, and 119 members stayed under the gate."""
+
+    def test_gear_steps_do_not_spend_the_job_allowance(self):
+        members = [_member(name="m%02d" % i) for i in range(10)]
+        gear = {m.name: (_character(), ROWS) for m in members}
+        plan = guildjobs.plan(members, gear=gear)
+        gearing = [s for s in plan.steps if s.action == "gear"]
+        self.assertEqual(guildjobs.GEAR_STEPS_PER_GUILD, len(gearing))
+        self.assertGreater(len(gearing), guildjobs.STEPS_PER_GUILD)
+
+    def test_a_successful_step_follows_sooner(self):
+        ok = [guildjobs.Recent("Aurevil", "gear", 20, status="delivered")]
+        failed = [guildjobs.Recent("Aurevil", "gear", 20, status="error")]
+        self.assertFalse(guildjobs._cooling(_member(), "gear", ok))
+        self.assertTrue(guildjobs._cooling(_member(), "gear", failed))
 
 
 class ThePlanPutsGearFirst(unittest.TestCase):

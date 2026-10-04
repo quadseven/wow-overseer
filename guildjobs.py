@@ -490,6 +490,8 @@ def _cooling(member: Member, action: str, recent) -> bool:
     minutes = COOLDOWN_MINUTES.get(action, 60)
     if action == "train":
         minutes = train_cooldown(member.name, recent)
+    elif action == "gear" and not last_gear_failed(member.name, recent):
+        minutes = GEAR_SUCCESS_COOLDOWN_MINUTES
     return any(
         r.name == member.name and r.action == action and int(r.age_minutes) < minutes
         for r in recent or ()
@@ -874,7 +876,17 @@ def _tool_step(member, cap):
 # vendor gearup.vendor_trip picks from the stock in reach, then every piece
 # gearup.plan_vendor_buys would buy there, up to GEAR_BUYS_PER_STEP. A piece
 # lands in the bags and the bot's own equip upgrade puts it on.
-GEAR_BUYS_PER_STEP = 4
+GEAR_BUYS_PER_STEP = 6
+
+# GEAR HAS ITS OWN ALLOWANCE PER GUILD PER PASS, beside STEPS_PER_GUILD. Measured
+# on wow-dev 2026-10-04: the job pass started 4 steps per guild every 15
+# minutes, gear steps among the posts, sales and training, and in 8 hours 24
+# members got 31 pieces while 119 stayed under guildrun's gear gate. No guild
+# group can run until the gate opens, so gear does not queue behind the rest.
+GEAR_STEPS_PER_GUILD = 6
+# A gear step that bought something may follow on the next pass; only a failed
+# one waits the full COOLDOWN_MINUTES["gear"].
+GEAR_SUCCESS_COOLDOWN_MINUTES = 15
 
 # How far a guild member may be sent for gear. Wider than the family's
 # VENDOR_TRIP_MAX_YARDS because a guild walk that cannot go straight goes by
@@ -1442,11 +1454,18 @@ def plan(
             notes.append(note)
         if step is None:
             continue
-        why = _step_refusal(m, busy, started, per_guild)
+        gearing = step.action in ("gear", "hearth")
+        key = (m.guild, "gear") if gearing else m.guild
+        why = _step_refusal(
+            m,
+            busy,
+            {m.guild: started.get(key, 0)},
+            GEAR_STEPS_PER_GUILD if gearing else per_guild,
+        )
         if why:
             notes.append(why)
             continue
-        started[m.guild] = started.get(m.guild, 0) + 1
+        started[key] = started.get(key, 0) + 1
         busy.add(m.name)
         steps.append(step)
     return JobsPlan(
