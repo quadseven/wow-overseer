@@ -124,21 +124,38 @@ class TheViewsLiveInFiveHubs(unittest.TestCase):
         """Every view id an address could name before is still a routed name,
         the renamed #achievements included, and the map keeps its own route."""
         for name in (
-            "family", "watch", "armory", "bags", "chronicle", "dungeons",
-            "raid", "lineup", "guild", "upgrades", "trades", "council",
-            "eye", "decree", "map",
+            "family",
+            "watch",
+            "armory",
+            "bags",
+            "chronicle",
+            "dungeons",
+            "raid",
+            "lineup",
+            "guild",
+            "upgrades",
+            "trades",
+            "council",
+            "eye",
+            "decree",
+            "map",
         ):
             self.assertRegex(PAGE, r'const [A-Z]+_VIEW = "' + name + '";', name)
         self.assertIn('new Map([["achievements", CHRONICLE_VIEW]])', PAGE)
-        self.assertIn("if (name === MAP_VIEW) {", between(PAGE, "function applyHash()", "\n}\n"))
+        self.assertIn(
+            "if (name === MAP_VIEW) {", between(PAGE, "function applyHash()", "\n}\n")
+        )
 
     def test_the_continents_are_the_world_hubs_row(self):
         load = between(PAGE, "async function loadZones()", "\n}\n")
         self.assertIn('const tabs = document.getElementById("tabs");', load)
         self.assertLess(
-            load.index("for (const id of CONTINENT_ORDER)"), load.index("arrangeTabs();")
+            load.index("for (const id of CONTINENT_ORDER)"),
+            load.index("arrangeTabs();"),
         )
-        self.assertIn("return b.dataset.view ? hubOf(b.dataset.view) : WORLD_HUB;", PAGE)
+        self.assertIn(
+            "return b.dataset.view ? hubOf(b.dataset.view) : WORLD_HUB;", PAGE
+        )
         arrange = between(PAGE, "function arrangeTabs()", "\n}\n")
         self.assertIn("v === MAP_VIEW ? !b.dataset.view", arrange)
 
