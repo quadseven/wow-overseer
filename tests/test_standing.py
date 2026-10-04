@@ -246,6 +246,8 @@ class WhatATradeCanMake(unittest.TestCase):
         # The link goes to the ITEM, because that is the thing a person
         # wants the tooltip for.
         self.assertEqual(made["wowhead"], standing.wowhead("item", 30816))
+        # And names that item by entry, so the page opens its tooltip.
+        self.assertEqual(made["entry"], 30816)
 
     def test_a_gathering_trade_says_it_makes_nothing_by_design(self):
         """Herbalism has no recipes at all. '0 of 0' reads as a fault where

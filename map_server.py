@@ -38,6 +38,7 @@ import dungeonplan
 import eye
 import family
 import frames
+import goals
 import guildbank
 import guildcraft
 import guildgear
@@ -56,6 +57,7 @@ import questlog
 import raidgoals
 import guildwork
 import holdings
+import itemsource
 import crafters
 import guildcorps
 import guildjobs
@@ -1145,6 +1147,155 @@ def _fetch_upgrade_items(ids: list[int]) -> dict[int, dict]:
             return {int(r["entry"]): r for r in cur.fetchall()}
     finally:
         conn.close()
+
+
+# --- /api/item: where one item comes from ---------------------------------
+#
+# Item data is static, so the answer is kept in-process, bounded. A restart
+# empties it; the world database is the only source of truth.
+_ITEM_CACHE = itemsource.BoundedCache(2048)
+_ITEM_CACHE_LOCK = threading.Lock()
+# Loot tables name an item once per creature or chest, and a common item is in
+# thousands. Only the best of them are looked up for spawn maps.
+_ITEM_LOOT_LOOKUP_CAP = 300
+
+
+def _holes(values) -> str:
+    return ", ".join(["%s"] * len(values))
+
+
+def _fetch_item_sources(entry: int) -> dict | None:
+    """item_template row plus every world row that says where it comes from.
+
+    None when the world does not know the item. Every value is bound; the
+    only interpolated text is runs of "%s" sized by lists this function built.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT it.entry, {_ITEM_TEMPLATE_COLUMNS}, it.BuyPrice AS buy_price "  # noqa: S608
+                "FROM acore_world.item_template it WHERE it.entry = %s",
+                (entry,),
+            )
+            item = cur.fetchone()
+            if not item:
+                return None
+            rows: dict = {"buy_price": item.get("buy_price")}
+            # S608 below: group counts are scalar subqueries over the same
+            # table, keyed by its own primary key prefix.
+            cur.execute(
+                "SELECT l.Entry AS entry, l.Chance AS chance, l.GroupId AS group_id, "  # noqa: S608
+                "(SELECT SUM(s.Chance = 0) FROM acore_world.{t} s "
+                " WHERE s.Entry = l.Entry AND s.GroupId = l.GroupId AND s.Reference = 0) AS zeros, "
+                "(SELECT SUM(s.Chance) FROM acore_world.{t} s "
+                " WHERE s.Entry = l.Entry AND s.GroupId = l.GroupId AND s.Reference = 0) AS explicit "
+                "FROM acore_world.{t} l WHERE l.Item = %s AND l.Reference = 0".format(
+                    t="creature_loot_template"),
+                (entry,),
+            )
+            rows["loot_direct"] = list(cur.fetchall())
+            cur.execute(
+                "SELECT l.Entry AS entry, l.Chance AS chance, l.GroupId AS group_id, "  # noqa: S608
+                "(SELECT SUM(s.Chance = 0) FROM acore_world.reference_loot_template s "
+                " WHERE s.Entry = l.Entry AND s.GroupId = l.GroupId AND s.Reference = 0) AS zeros, "
+                "(SELECT SUM(s.Chance) FROM acore_world.reference_loot_template s "
+                " WHERE s.Entry = l.Entry AND s.GroupId = l.GroupId AND s.Reference = 0) AS explicit "
+                "FROM acore_world.reference_loot_template l "
+                "WHERE l.Item = %s AND l.Reference = 0",
+                (entry,),
+            )
+            rows["loot_via_ref"] = list(cur.fetchall())
+            refs = sorted({int(r["entry"]) for r in rows["loot_via_ref"]})
+            rows["ref_users"] = []
+            if refs:
+                cur.execute(
+                    "SELECT Entry AS entry, Reference AS reference, Chance AS chance "  # noqa: S608
+                    "FROM acore_world.creature_loot_template "
+                    f"WHERE Reference IN ({_holes(refs)})",
+                    tuple(refs),
+                )
+                rows["ref_users"] = list(cur.fetchall())
+            chances = itemsource.loot_chances(
+                rows["loot_direct"], rows["loot_via_ref"], rows["ref_users"])
+            lootids = sorted(chances, key=lambda k: -chances[k])[:_ITEM_LOOT_LOOKUP_CAP]
+            rows["creatures"] = []
+            if lootids:
+                cur.execute(
+                    "SELECT ct.entry, ct.name, ct.lootid, "  # noqa: S608
+                    "MIN(cr.map) AS map, MIN(cr.zoneId) AS zone "
+                    "FROM acore_world.creature_template ct "
+                    "LEFT JOIN acore_world.creature cr ON cr.id = ct.entry "
+                    f"WHERE ct.lootid IN ({_holes(lootids)}) "
+                    "GROUP BY ct.entry, ct.name, ct.lootid",
+                    tuple(lootids),
+                )
+                rows["creatures"] = list(cur.fetchall())
+            cur.execute(
+                "SELECT got.name, l.Chance AS chance, l.GroupId AS group_id, "  # noqa: S608
+                "(SELECT SUM(s.Chance = 0) FROM acore_world.gameobject_loot_template s "
+                " WHERE s.Entry = l.Entry AND s.GroupId = l.GroupId AND s.Reference = 0) AS zeros, "
+                "(SELECT SUM(s.Chance) FROM acore_world.gameobject_loot_template s "
+                " WHERE s.Entry = l.Entry AND s.GroupId = l.GroupId AND s.Reference = 0) AS explicit, "
+                "MIN(go.map) AS map, MIN(go.zoneId) AS zone "
+                "FROM acore_world.gameobject_loot_template l "
+                "JOIN acore_world.gameobject_template got ON got.type = 3 AND got.Data1 = l.Entry "
+                "LEFT JOIN acore_world.gameobject go ON go.id = got.entry "
+                "WHERE l.Item = %s AND l.Reference = 0 "
+                "GROUP BY got.entry, got.name, l.Entry, l.Chance, l.GroupId LIMIT 40",
+                (entry,),
+            )
+            rows["objects"] = list(cur.fetchall())
+            reward_cols = ("RewardItem1", "RewardItem2", "RewardItem3", "RewardItem4",
+                           "RewardChoiceItemID1", "RewardChoiceItemID2",
+                           "RewardChoiceItemID3", "RewardChoiceItemID4",
+                           "RewardChoiceItemID5", "RewardChoiceItemID6")
+            cur.execute(
+                "SELECT q.ID AS id, q.LogTitle AS title, q.QuestLevel AS level, "  # noqa: S608
+                "q.QuestSortID AS zone_id, MIN(ct.name) AS giver "
+                "FROM acore_world.quest_template q "
+                "LEFT JOIN acore_world.creature_queststarter qs ON qs.quest = q.ID "
+                "LEFT JOIN acore_world.creature_template ct ON ct.entry = qs.id "
+                "WHERE " + " OR ".join(f"q.{c} = %s" for c in reward_cols)
+                + " GROUP BY q.ID, q.LogTitle, q.QuestLevel, q.QuestSortID LIMIT 40",
+                (entry,) * len(reward_cols),
+            )
+            rows["quests"] = list(cur.fetchall())
+            cur.execute(
+                "SELECT ct.name AS npc, v.ExtendedCost AS extended_cost, "
+                "MIN(cr.map) AS map, MIN(cr.zoneId) AS zone "
+                "FROM acore_world.npc_vendor v "
+                "JOIN acore_world.creature_template ct ON ct.entry = v.entry "
+                "LEFT JOIN acore_world.creature cr ON cr.id = ct.entry "
+                "WHERE v.item = %s "
+                "GROUP BY ct.entry, ct.name, v.ExtendedCost LIMIT 60",
+                (entry,),
+            )
+            rows["vendors"] = list(cur.fetchall())
+    finally:
+        conn.close()
+    return {"item": item, "rows": rows}
+
+
+def _item_payload(entry: int) -> dict | None:
+    """The /api/item answer for one entry, from cache or the world."""
+    with _ITEM_CACHE_LOCK:
+        hit = _ITEM_CACHE.get(entry)
+    if hit is not None:
+        return hit
+    fetched = _fetch_item_sources(entry)
+    if fetched is None:
+        return None
+    # recap.item_payload is what the Armory's own item lists use, so the
+    # tooltip and the wowhead link are the ones it already draws.
+    shaped = recap.item_payload(entry, fetched["item"], ITEMS.icons, ITEMS)
+    payload = itemsource.build_item(
+        entry, shaped, fetched["rows"], craftbook=CRAFTBOOK,
+        skill_names={v: k.title() for k, v in goals.SKILL_IDS.items()},
+        dungeons=achievements.MAP_NAMES, zones=recap.zone_names(GEO.continents))
+    with _ITEM_CACHE_LOCK:
+        _ITEM_CACHE.put(entry, payload)
+    return payload
 
 
 def _fetch_family_groups() -> list[tuple[str, list[str]]]:
@@ -6465,6 +6616,28 @@ class Handler(BaseHTTPRequestHandler):
     # The tables sit at the foot of the class so every method they name is
     # already defined. Values are plain functions, called with the handler
     # instance - a new endpoint is one row, and an unknown path is one miss.
+    def _item(self, query: dict) -> None:
+        """GET /api/item?entry=N - one item, with where it comes from.
+
+        `entry` must be a positive integer (400 otherwise) and the world must
+        know it (404 otherwise). Item data is static, so answers are cached in
+        process. The same refusal to take a name as /api/armory: this answers
+        about items and nothing else.
+        """
+        wanted = query.get("entry", [""])[0]
+        if not (wanted.isascii() and wanted.isdigit() and 0 < int(wanted) < 2**31):
+            self._send(400, "application/json", b'{"error": "not an item entry"}')
+            return
+        try:
+            payload = _item_payload(int(wanted))
+            if payload is None:
+                self._send(404, "application/json", b'{"error": "no such item"}')
+                return
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            log.exception("item query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     GET_ROUTES = {
         # First, because it is the question every other row here answers
         # inside of (quadseven/mod-overseer#184).
@@ -6479,6 +6652,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/armory/guild": _armory_guild,
         "/api/armory/member": _armory_member,
         "/api/upgrades": _upgrades,
+        "/api/item": _item,
         "/api/client/bags": _client_bags,
         "/api/client/bank": _client_bank,
         "/api/client/guildbank": _client_guild_bank,

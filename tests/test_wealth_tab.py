@@ -261,7 +261,8 @@ class NothingOnThisTabDecidesAnything(unittest.TestCase):
         built server side, where the module that knows the reason for a link
         also holds the URL."""
         self.assertNotIn("https://", self.tab)
-        self.assertIn("a.href = it.wowhead;", self.tab)
+        # An item's page address rides in its payload to the tooltip panel.
+        self.assertIn("itemTipName(Object.assign({}, it, {note: it.tip})", self.tab)
         self.assertIn("a.href = s.ticket.url;", self.tab)
 
 
@@ -353,7 +354,7 @@ class TheBagGrid(unittest.TestCase):
     def test_the_tooltip_line_is_composed_in_the_module(self):
         """ "no vendor value" is a sentence about what a SellPrice of 0 means,
         which is the same judgement stack_value() already makes."""
-        self.assertIn("a.title = it.tip;", self.tab)
+        self.assertIn("{note: it.tip}", self.tab)
         self.assertNotIn("no vendor value", self.tab)
 
     def test_the_bag_is_named_in_its_own_quality_colour(self):
@@ -362,7 +363,7 @@ class TheBagGrid(unittest.TestCase):
         the quality colour is what makes the row identifiable. The colours are
         the Armory's .q0-.q7 and not a second set."""
         self.assertIn(
-            'head.appendChild(el("span", "n " + wquality(bag.quality), bag.name));',
+            'head.appendChild(itemTipName(bag, bag.name, "n " + wquality(bag.quality)));',
             self.tab,
         )
         self.assertNotIn(".q3 {", self.css)

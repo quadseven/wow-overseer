@@ -91,6 +91,7 @@
        here, and every rule that asked for "warning text" follows the ground
        without being edited. */
     --warn-text:#FF7A5E; --caution-text:#E8B33D; --accent-text:#2FD46F;
+    --item-ground:transparent; --item-pad:0;
     background:var(--bg); color:var(--text);
   }
   /* The same five, plus the roles the redesign draws with. A card inside this
@@ -106,6 +107,7 @@
     --mortal:#7ee787; --thought:#a371f7;
     --on-card:#E6F5EC; --on-card-dim:#8FA795;
     --warn-text:#FF7A5E; --caution-text:#E8B33D; --accent-text:#2FD46F;
+    --item-ground:transparent; --item-pad:0;
     background:var(--bg); color:var(--text);
   }
   /* --- the redesign palette -------------------------------------------------
@@ -201,6 +203,13 @@
        a game capture reads as a blown-out picture, and the handoff draws these
        as dark green rectangles for the same reason. */
     --shot:#0E1A12;
+    /* THE GROUND A QUALITY-COLOURED GEAR NAME SITS ON. The quality colours
+       were drawn for the game's near-black tooltip, and #1eff00 uncommon or
+       #ffffff common on a white card is unreadable. On a pale card the name
+       gets a small dark plate of its own, the same argument that keeps the
+       Armory and Bags dark; on a dark ground (the dark theme, those two tabs,
+       the tooltip panel) the plate is nothing at all. */
+    --item-ground:var(--shot); --item-pad:.3em;
   }
 
   /* Dark is the default this page has always had, so an unset preference keeps
@@ -234,6 +243,7 @@
          and infra#3265 is the same failure one step earlier: a role used and
          never defined at all. */
       --info-text:#5BC8FF;
+      --item-ground:transparent; --item-pad:0;
     }
   }
   :root[data-theme="dark"] {
@@ -248,6 +258,7 @@
     --warn-bg:#2A1710; --warn-text:#FFB59E;
     --caution-text:#E8B33D; --accent-text:#2FD46F;
     --info-text:#5BC8FF;
+    --item-ground:transparent; --item-pad:0;
   }
   * { box-sizing:border-box; margin:0; }
   /* THE FACES WERE LOADING AND NOTHING WAS USING THEM. Measured on the live
@@ -898,6 +909,18 @@
   .rr-table th { text-align:left; font-weight:500; color:var(--on-card-dim);
                  padding:2px .6rem 2px 0; }
   .rr-table td { padding:2px .6rem 2px 0; border-top:1px solid var(--card-line); }
+  /* THE PRE-RAID SLOT LIST. Five columns of sentences ran off a phone as a
+     table, so it is a list at every width, like the rest of this tab: one
+     block per slot, each cell under its own column name. No breakpoint. */
+  .rr-cards, .rr-cards tbody, .rr-cards tr, .rr-cards td { display:block; }
+  .rr-cards { white-space:normal; }
+  .rr-cards tr.rr-head { display:none; }
+  .rr-cards tr { padding:.4rem 0; border-top:1px solid var(--card-line); }
+  .rr-cards td { border-top:0; padding:.1rem 0; overflow-wrap:anywhere; }
+  .rr-cards td:first-child { font-weight:600; }
+  .rr-cards td:not(:first-child)::before { content:attr(data-label) ": ";
+                                           color:var(--on-card-dim); }
+  .rr-cards td:empty { display:none; }
   .rr-card .ds-tile.up .v { color:var(--accent-text); }
   .rr-card .ds-tile.no .v { color:var(--caution-text); }
   /* The guild switches: the Raid tab's consumables and the Trades tab. */
@@ -945,6 +968,7 @@
     --dim:#8FA795;
     --on-dark:#E8EFE6; --on-dark-dim:#B9C9BC; --on-dark-faint:#8FA396;
     --warn-text:#FF7A5E; --caution-text:#E8B33D; --accent-text:#2FD46F;
+    --item-ground:transparent; --item-pad:0;
     position:fixed; z-index:40; left:0; right:0; bottom:0;
     display:flex; flex-direction:column; max-height:min(70vh, 34rem);
     border-top:1px solid var(--line); border-radius:12px 12px 0 0;
@@ -988,8 +1012,39 @@
   .iname { font:inherit; color:inherit; padding:0; border:0; background:none;
            cursor:pointer; text-align:left; overflow-wrap:anywhere;
            touch-action:manipulation; -webkit-touch-callout:none; }
-  .iname:hover { text-decoration:underline; }
+  /* A DOTTED RULE UNDER EVERY GEAR NAME, because a thumb has no hover to
+     find out which words open something. Faint, in the name's own colour,
+     so a quality colour still reads as its quality; solid on hover. */
+  .iname { text-decoration:underline dotted;
+           text-decoration-color:color-mix(in srgb, currentColor 50%, transparent);
+           text-underline-offset:.22em; }
+  .iname:hover { text-decoration:underline; text-decoration-color:currentColor; }
+  .iname:is(.q0, .q1, .q2, .q3, .q4, .q5, .q6, .q7) {
+    background:var(--item-ground); padding:0 var(--item-pad); border-radius:4px;
+    -webkit-box-decoration-break:clone; box-decoration-break:clone; }
   .iname:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
+  /* An item with no page to send anybody to has no row for it. */
+  #itemtipout[hidden] { display:none; }
+  /* WHERE IT COMES FROM, under the item's own lines, in the panel, the
+     Armory's card and the bank's slot tooltip alike. Ruled off and labelled
+     in the same mono caps as the rest of the site's section labels, because
+     it is this site's answer and not a line the game draws. The rule is
+     mixed from the text colour, so it reads on every ground it lands on. */
+  .adetail .src { margin-top:.55rem; padding-top:.5rem;
+                  border-top:1px solid color-mix(in srgb, currentColor 20%, transparent); }
+  .adetail .srch { font-family:var(--mono); font-size:.68rem; letter-spacing:.08em;
+                   text-transform:uppercase; color:var(--on-dark-faint);
+                   margin-bottom:.2rem; }
+  .adetail .srcl { color:var(--on-dark); }
+  .adetail .srcl + .srcl { margin-top:.15rem; }
+  .adetail .srcl.none { color:var(--on-dark-faint); }
+  .adetail .srcl .money { margin:0; font-size:inherit; white-space:nowrap; }
+  /* The read in flight, and the read that failed. A line of text in the
+     reading's own place rather than a spinner over it: the name above it is
+     already drawn and already says what is being read. */
+  .adetail .tipwait { margin-top:.45rem; font-family:var(--mono); font-size:.72rem;
+                      color:var(--on-dark-faint); }
+  .adetail .tipwait.bad { color:var(--warn-text); font-family:inherit; font-size:.8rem; }
 
   /* --- what the guild can make (infra#3507) --------------------------------
      FOURTEEN TRADES, EACH WITH A LIST OF RECIPES UNDER IT, on a phone. The
@@ -1428,7 +1483,7 @@
   /* ONE CHAPTER PER FAMILY (#135), side by side where there is room for
      two and stacked on a phone. */
   #chrline { display:grid; gap:14px; align-items:start;
-             grid-template-columns:repeat(auto-fit, minmax(340px, 1fr)); }
+             grid-template-columns:repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
   .chr-chapter { display:grid; gap:8px; min-width:0; }
   .chr-chapter-head { font-family:var(--display); font-weight:800;
                       font-stretch:125%; font-size:1.2rem; line-height:1.2;
@@ -1560,7 +1615,7 @@
      which is what bonds.speaking_order exists to prevent. */
   #council { display:none; padding:.9rem 1rem 1.2rem; }
   .cn-cols { display:grid; gap:14px;
-             grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));
+             grid-template-columns:repeat(auto-fit, minmax(min(100%, 320px), 1fr));
              align-items:start; }
   .cn-lines { display:grid; gap:8px; }
   /* Tighter than the shared card: a council line is one sentence, and eight
@@ -2215,8 +2270,8 @@
   .sttalent .r { color:var(--thought); }
   .stmakes { color:var(--dim); font-size:.85rem; margin:.1rem 0 .3rem 1.6rem;
              overflow-wrap:anywhere; }
-  .stmakes a { color:var(--text); text-decoration:none; }
-  .stmakes a:hover { text-decoration:underline; }
+  .stmakes a, .stmakes .iname { color:var(--text); text-decoration:none; }
+  .stmakes a:hover, .stmakes .iname:hover { text-decoration:underline; }
   .stnone { color:var(--dim); }
   .stspec { color:var(--thought); margin-bottom:.35rem; overflow-wrap:anywhere; }
   .stspec .un { color:#ffd100; }
@@ -2394,8 +2449,7 @@
            min-width:0; font-size:.9rem; }
   .witem img { width:26px; height:26px; border-radius:6px; flex-shrink:0;
                border:1px solid var(--line); }
-  .witem a { text-decoration:none; overflow-wrap:anywhere; min-width:0; }
-  .witem a:hover { text-decoration:underline; }
+  .witem .iname { overflow-wrap:anywhere; min-width:0; }
   .witem .w { margin-left:auto; white-space:nowrap; font-family:var(--mono);
               font-size:11px; letter-spacing:.05em; color:var(--on-card-dim); }
   .witem .w.t-caution { color:var(--caution-text); }
@@ -2416,7 +2470,7 @@
           border-top:1px solid var(--line); }
   .wauc img { width:26px; height:26px; border-radius:6px;
               border:1px solid var(--line); }
-  .wauc a { text-decoration:none; overflow-wrap:anywhere; }
+  .wauc .iname { overflow-wrap:anywhere; min-width:0; }
   .wauc .m { font-family:var(--mono); font-size:11px; letter-spacing:.05em;
              color:var(--on-card-dim); }
   .wauc .k, .wstep .v { display:inline-block; }
@@ -3077,15 +3131,46 @@
   .up-note { font-size:.78rem; color:var(--on-card-dim); margin:.3rem 0;
              overflow-wrap:anywhere; }
   .up-scroll { overflow-x:auto; }
+  /* A PHONE GETS ONE CARD PER SLOT. Five columns of item names do not fit
+     375px; as a table they ran three columns off the right edge. So the rows
+     are cards here and a table only from 60rem up, where the columns fit
+     without a sideways scroll. The header row is kept for a screen reader
+     and taken off the screen; each cell draws its own column name instead. */
   .up-table { width:100%; border-collapse:collapse; font-size:.8rem; }
-  .up-table th, .up-table td { text-align:left; vertical-align:top;
-                               padding:.45rem .5rem;
-                               border-bottom:1px solid var(--card-line); }
-  .up-table th { font-family:var(--mono); font-size:10px; letter-spacing:.12em;
-                 text-transform:uppercase; color:var(--on-card-dim);
-                 font-weight:400; white-space:nowrap; }
-  .up-table td { min-width:9rem; color:var(--on-card); }
-  .up-table td.up-slot { min-width:0; font-weight:600; white-space:nowrap; }
+  .up-table caption { text-align:left; }
+  .up-table thead { position:absolute; width:1px; height:1px; overflow:hidden;
+                    clip-path:inset(50%); white-space:nowrap; }
+  .up-table tbody, .up-table tr, .up-table th, .up-table td { display:block; }
+  .up-table tr { background:var(--card); border:1px solid var(--card-line);
+                 border-radius:14px; padding:.7rem .9rem; margin:0 0 .6rem; }
+  .up-table td { padding:.5rem 0 0; margin-top:.5rem;
+                 border-top:1px solid var(--card-line); color:var(--on-card); }
+  .up-table td::before { content:attr(data-label); display:block;
+                         font-family:var(--mono); font-size:10px;
+                         letter-spacing:.12em; text-transform:uppercase;
+                         color:var(--on-card-dim); margin-bottom:.15rem; }
+  .up-table th.up-slot { display:flex; align-items:baseline; gap:.6rem;
+                         text-align:left; font-weight:600; color:var(--on-card); }
+  .up-table th.up-slot .up-state { margin-left:auto; }
+  @media (min-width:60rem) {
+    .up-table thead { position:static; width:auto; height:auto; overflow:visible;
+                      clip-path:none; display:table-header-group; }
+    .up-table tbody { display:table-row-group; }
+    .up-table tr { display:table-row; background:none; border:0; padding:0; }
+    .up-table th, .up-table td { display:table-cell; text-align:left;
+                                 vertical-align:top; padding:.45rem .5rem; margin:0;
+                                 border-top:0; border-bottom:1px solid var(--card-line); }
+    .up-table td::before { content:none; }
+    .up-table thead th { font-family:var(--mono); font-size:10px;
+                         letter-spacing:.12em; text-transform:uppercase;
+                         color:var(--on-card-dim); font-weight:400;
+                         white-space:nowrap; }
+    .up-table td { min-width:9rem; }
+    .up-table th.up-slot { display:table-cell; white-space:nowrap; }
+    .up-table th.up-slot .up-state { display:block; margin:0; }
+  }
+  .up-slotname { overflow-wrap:anywhere; }
+  .up-item + .up-also { margin-top:.15rem; }
   .up-sc { font-family:var(--mono); color:var(--on-card-dim); }
   .up-where { display:block; font-size:.72rem; color:var(--on-card-dim); }
   .up-state { display:block; font-family:var(--mono); font-size:10px;
@@ -3386,6 +3471,7 @@
     /* The tooltip's reading is the Armory's .adetail, which reads these. */
     --on-dark:#E8EFE6; --on-dark-dim:#B9C9BC; --on-dark-faint:#8FA396;
     --caution-text:#E8B33D; --warn-text:#FF7A5E; --accent-text:#2FD46F;
+    --item-ground:transparent; --item-pad:0;
   }
   /* THE ACTION BAR sits in the tile's control row, under the caption (#363),
      so no button covers the picture. The frame styling stays: it is the
@@ -7639,25 +7725,48 @@ async function upFillPicker() {
   }
 }
 
+// ONE PIECE: its name as the site's gear-name control (the item's own lines
+// and where it comes from, on tap or hover), its score against the spec's
+// list, and the payload's own words for where it drops. The payload names a
+// piece by entry and does not carry its quality, so the name is drawn in the
+// card's text colour and the panel shows the quality once it has read it.
 function upItem(t, withGain) {
-  const d = el("div", "");
-  d.appendChild(document.createTextNode(t.name + " "));
+  const d = el("div", "up-item");
+  d.appendChild(itemTipName(t, t.name, ""));
+  d.appendChild(document.createTextNode(" "));
   d.appendChild(el("span", "up-sc", "(" + t.score + (withGain ? ", +" + t.gain : "") + ")"));
   const labels = (t.where || []).map((w) => w.label).join("; ");
   if (labels) d.appendChild(el("span", "up-where", labels));
   return d;
 }
 
-function upTargets(list) {
+// The runners-up under a target, each a control of its own: "also" is a list
+// of items somebody may want to compare, not a sentence about them.
+function upAlso(list) {
+  const also = el("span", "up-also", "also ");
+  list.forEach((t, i) => {
+    if (i) also.appendChild(document.createTextNode(", "));
+    also.appendChild(itemTipName(t, t.name, ""));
+  });
+  return also;
+}
+
+// A cell carries its column's name as data-label: the phone layout draws it
+// above the cell's content, because there the header row is not on screen.
+function upCell(label) {
   const td = el("td", "");
+  td.dataset.label = label;
+  return td;
+}
+
+function upTargets(list, label) {
+  const td = upCell(label);
   if (!list || !list.length) {
     td.appendChild(el("span", "up-sc", "no list"));
     return td;
   }
   td.appendChild(upItem(list[0], false));
-  if (list.length > 1) {
-    td.appendChild(el("span", "up-also", "also " + list.slice(1).map((t) => t.name).join(", ")));
-  }
+  if (list.length > 1) td.appendChild(upAlso(list.slice(1)));
   return td;
 }
 
@@ -7686,10 +7795,16 @@ function upRender(p) {
   meter.min = 0; meter.max = 1; meter.value = p.ready.pct || 0;
   meter.setAttribute("aria-label", p.ready.line);
   upready.replaceChildren(strip, el("p", "up-note", p.ready.line), meter);
+  // ONE DOM, TWO LAYOUTS. A wide screen reads the slots as a table; a phone
+  // cannot fit five columns of item names, so the stylesheet turns each row
+  // into a card: the slot and how it stands on top, then each column stacked
+  // under its own label. Nothing is hidden on the phone and nothing scrolls
+  // sideways on it.
   const table = el("table", "up-table");
   table.appendChild(el("caption", "ds-head", "worn gear against the " + p.spec.id + " lists"));
+  const cols = ["slot", "wearing", "pre-raid target", "raid target", "next upgrade"];
   const head = el("tr");
-  for (const h of ["slot", "wearing", "pre-raid target", "raid target", "next upgrade"]) {
+  for (const h of cols) {
     const th = el("th", "", h);
     th.scope = "col";
     head.appendChild(th);
@@ -7700,19 +7815,20 @@ function upRender(p) {
   const body = el("tbody");
   for (const s of p.slots) {
     const tr = el("tr");
-    const th = el("th", "up-slot", s.label);
+    // The slot's state lives beside its name, so a card's first line says
+    // which slot it is and whether it needs anything.
+    const th = el("th", "up-slot");
     th.scope = "row";
+    th.append(el("span", "up-slotname", s.label),
+              el("span", "up-state " + s.state, s.state === "no_list" ? "no list" : s.state));
     tr.appendChild(th);
-    const w = el("td", "");
-    if (s.worn) {
-      w.appendChild(el("div", "", s.worn.name + " "));
-      w.firstChild.appendChild(el("span", "up-sc", "(" + s.worn.score + ")"));
-    }
-    w.appendChild(el("span", "up-state " + s.state, s.state === "no_list" ? "no list" : s.state));
+    const w = upCell(cols[1]);
+    if (s.worn) w.appendChild(upItem(s.worn, false));
+    else w.appendChild(el("span", "up-sc", "nothing worn"));
     tr.appendChild(w);
-    tr.appendChild(upTargets(s.targets.preraid));
-    tr.appendChild(upTargets(s.targets.raid));
-    const n = el("td", "");
+    tr.appendChild(upTargets(s.targets.preraid, cols[2]));
+    tr.appendChild(upTargets(s.targets.raid, cols[3]));
+    const n = upCell(cols[4]);
     if (s.next) {
       n.appendChild(upItem(s.next, true));
       n.appendChild(el("span", "up-also", s.next.phase));
@@ -8320,13 +8436,19 @@ function rrCard(g) {
       const who = el("details", "rr-raiders");
       who.appendChild(el("summary", "", m.line));
       const box = el("div", "rr-scroll");
-      const grid = el("table", "rr-table");
-      const top = el("tr");
+      // A block per slot, like the Upgrades tab on a phone: each cell
+      // carries its column's name for the stylesheet to draw beside it.
+      const grid = el("table", "rr-table rr-cards");
+      const top = el("tr", "rr-head");
       for (const label of pre.columns) top.appendChild(el("th", "", label));
       grid.appendChild(top);
       for (const r of m.rows) {
         const tr = el("tr");
-        for (const cell of r.cells) tr.appendChild(el("td", "", cell));
+        r.cells.forEach((cell, i) => {
+          const td = rrItemCell(cell, (r.items || [])[i]);
+          td.dataset.label = pre.columns[i] || "";
+          tr.appendChild(td);
+        });
         grid.appendChild(tr);
       }
       box.appendChild(grid);
@@ -8339,6 +8461,22 @@ function rrCard(g) {
     rgNote(card, pre.basis);
   }
   return card;
+}
+
+// A pre-raid cell that names an item starts with that item's name, and the
+// name becomes the site's gear-name control; the rest of the sentence (item
+// level, where it drops) stays text after it. A cell whose words do not start
+// with the name is drawn as it came, rather than guessed at.
+function rrItemCell(cell, item) {
+  const td = el("td", "");
+  if (!item || !cell.startsWith(item.name)) {
+    td.textContent = cell;
+    return td;
+  }
+  // In the card's own text colour, like the Upgrades tab: this tab draws on
+  // a pale card in the light theme. The panel shows the quality.
+  td.append(itemTipName(item, item.name, ""), cell.slice(item.name.length));
+  return td;
 }
 
 // THE MOLTEN CORE SUPPLY (#275): a night's consumables against what the guild
@@ -8509,6 +8647,14 @@ function closeItemTip() {
 // it away again, and neither may touch one a tap put up. Without it, moving
 // a mouse across the list on the way to the close button would take the panel
 // away under the cursor.
+//
+// TWO KINDS OF NAME OPEN IT. One arrives with its reading already in the
+// payload (the Chronicle, the loot board) and is drawn at once; the other
+// arrives with nothing but its entry (an upgrade target, a council award, a
+// bank slot) and is drawn from /api/item when it is first opened. Either way
+// the panel goes up immediately with the item's name in it, so a tap is never
+// answered by nothing, and either way "where it comes from" is read from the
+// same endpoint underneath.
 function openItemTip(at, item, pinned) {
   if (tipShown.at && tipShown.at !== at) {
     tipShown.at.setAttribute("aria-expanded", "false");
@@ -8517,28 +8663,107 @@ function openItemTip(at, item, pinned) {
   tipShown.pinned = pinned;
   at.setAttribute("aria-expanded", "true");
   tipBody.replaceChildren();
-  itemTipLines(tipBody, item.tooltip, null);
-  tipOut.href = item.wowhead;
+  const note = item.note ? el("div", "st", item.note) : null;
+  if (item.tooltip) itemTipLines(tipBody, item.tooltip, note);
+  else tipBody.appendChild(itemTipHead(item));
+  itemTipLink(item.wowhead);
   tipPanel.hidden = false;
   // A new item is read from its name down, not from wherever the last one
   // was left scrolled to.
   tipBody.scrollTop = 0;
+  const entry = itemTipEntry(item);
+  if (entry === null) return;
+  itemTipMore(tipBody, entry, () => tipShown.at === at, item.tooltip ? null : (info) => {
+    tipBody.replaceChildren();
+    if (info.tooltip) itemTipLines(tipBody, info.tooltip, note);
+    else tipBody.appendChild(itemTipHead(info));
+    if (!item.wowhead) itemTipLink(info.wowhead);
+  });
+}
+
+// THE FULL PAGE IS ONE ROW, AND ONLY WHEN THERE IS AN ADDRESS FOR IT. The
+// address is always the payload's; nothing here composes one.
+function itemTipLink(href) {
+  tipOut.hidden = !href;
+  if (href) tipOut.href = href;
+}
+
+// The name line drawn while the reading is on its way, in the quality colour
+// when the caller knew one.
+function itemTipHead(item) {
+  const q = item.quality === null || item.quality === undefined ? "" : " q" + item.quality;
+  return el("div", "nm" + q, item.name || "item " + itemTipEntry(item));
+}
+
+// AN ENTRY IS A POSITIVE WHOLE NUMBER OR IT IS NOTHING. Payloads write an
+// unknown item as 0 or null, and asking /api/item about either would put a
+// loading line up that can only ever end in an error.
+function itemTipEntry(item) {
+  const n = Number(item.entry);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+// ONE READ PER ITEM PER PAGE LOAD. The same sword is on the Armory, the bank
+// and three loot lines, and an item's lines and its sources do not change
+// while the page is open. A failed read is not kept, so opening the name
+// again asks again rather than showing the same error forever.
+const tipItems = new Map();
+function itemTipRead(entry) {
+  let p = tipItems.get(entry);
+  if (!p) {
+    p = fetch(u("/api/item?entry=" + entry), {signal: AbortSignal.timeout(15000)})
+      .then((r) => {
+        if (r.status === 404) throw new Error("this world does not know the item");
+        if (!r.ok) throw new Error("the server answered " + r.status);
+        return r.json();
+      });
+    p.catch(() => tipItems.delete(entry));
+    tipItems.set(entry, p);
+  }
+  return p;
+}
+
+// THE LAZY HALF OF A READING, appended to `node`: a status line first, then,
+// when /api/item answers, whatever `onItem` draws from it followed by where
+// the item comes from. `live` is asked before anything is drawn, because by
+// the time the answer lands the reader may be looking at another item, and a
+// late answer must never paint one item's sources under another's name.
+// `done` runs after either outcome, for a caller that places its panel by
+// the panel's own size.
+function itemTipMore(node, entry, live, onItem, done) {
+  const wait = el("div", "tipwait", onItem ? "reading the item..." : "reading where it comes from...");
+  node.appendChild(wait);
+  itemTipRead(entry).then((info) => {
+    if (!live()) return;
+    wait.remove();
+    if (onItem) onItem(info);
+    itemTipSources(node, info.sources);
+    if (done) done();
+  }, (err) => {
+    if (!live()) return;
+    wait.className = "tipwait bad";
+    wait.textContent = (onItem ? "the item could not be read: " : "where it comes from could not be read: ")
+      + err.message + ". Close it and open it again to retry.";
+    if (done) done();
+  });
 }
 
 // THE NAME, AS A CONTROL. A button and not an anchor, which is the change
 // itself: an anchor with an href is what raises the browser's own menu on a
 // long press, and no amount of cancelling the click takes that away.
 //
-// A NAME WITH NOTHING BEHIND IT IS PLAIN TEXT. An item the world database no
-// longer knows, and a row read too narrowly to carry the columns, both arrive
-// with no tooltip; an affordance that opens an empty panel is worse than no
-// affordance, and the item still renders and still says its own name.
+// A NAME WITH NOTHING BEHIND IT IS PLAIN TEXT. A name that carries neither a
+// reading nor an entry (an item the world database no longer knows) has
+// nothing for the panel to draw; an affordance that opens an empty panel is
+// worse than no affordance, and the item still renders and still says its
+// own name. A name with only an entry IS a control: its reading is one read
+// away, and that read happens on the first open.
 //
 // THE QUALITY CLASS IS THE CALLER'S. Each surface already works out its own,
 // and a control that imposed one would be deciding how an item reads on a tab
 // it knows nothing about.
 function itemTipName(item, label, cls) {
-  if (!item.tooltip) return el("span", cls, label);
+  if (!item.tooltip && itemTipEntry(item) === null) return el("span", cls, label);
   const b = el("button", "iname " + cls, label);
   b.type = "button";
   b.setAttribute("aria-controls", "itemtip");
@@ -10427,7 +10652,10 @@ function chrCouncilLine(a) {
   const row = el("div", "chr-line chr-loot");
   row.appendChild(el("span", "chr-when", chrWhen(a.at)));
   const head = el("div", "chr-loot-item");
-  head.appendChild(el("span", "q" + (a.quality || 0), a.item_name));
+  // The award names its item by entry, which is all the tooltip needs.
+  head.appendChild(itemTipName(
+    {entry: a.item_entry, name: a.item_name, quality: a.quality},
+    a.item_name, "q" + (a.quality || 0)));
   head.appendChild(el("span", "who", "to " + (a.to || "nobody") +
     (a.source ? " from " + a.source : "")));
   row.appendChild(head);
@@ -10780,7 +11008,18 @@ function renderPlaces(into, places) {
     box.appendChild(top);
     if (p.drops.length) {
       const chips = el("div", "drops");
-      for (const drop of p.drops) chips.appendChild(el("span", "drop", drop));
+      // Each drop is a gear name like any other, and opens the same panel.
+      // drop_items runs beside drops, same order; a payload without it
+      // still draws the names.
+      const items = p.drop_items || [];
+      p.drops.forEach((drop, i) => {
+        const chip = el("span", "drop");
+        const it = items[i];
+        chip.appendChild(it && it.name === drop
+          ? itemTipName(it, drop, it.quality === null || it.quality === undefined ? "" : "q" + it.quality)
+          : document.createTextNode(drop));
+        chips.appendChild(chip);
+      });
       if (p.more_drops) {
         chips.appendChild(el("span", "drop", "+" + p.more_drops + " more"));
       }
@@ -11239,6 +11478,7 @@ function renderProvenance(c, s) {
 
 function renderDetail(c, s) {
   c.detail.textContent = "";
+  c.detailShown = null;
   // THE CARD IS ONLY ON THE CHARACTER WHILE THERE IS AN ITEM IN IT. With
   // nothing chosen it comes off the stage entirely rather than sitting there
   // empty, because an empty panel over a character is a panel that has to be
@@ -11258,6 +11498,14 @@ function renderDetail(c, s) {
     return;
   }
   itemTipLines(c.detail, s.tooltip, renderProvenance(c, s));
+  // WHERE IT COMES FROM is not in the slot's payload and is read on first
+  // open, exactly as it is for every other gear name. The token is replaced
+  // on every draw, so an answer that lands after the reader has moved to
+  // another slot (or after the next poll redrew this one) is dropped.
+  const shown = {};
+  c.detailShown = shown;
+  const entry = itemTipEntry(s);
+  if (entry !== null) itemTipMore(c.detail, entry, () => c.detailShown === shown, null);
 }
 
 // EVERY LINE THE GAME DRAWS FOR ONE ITEM, in the order it draws them, and
@@ -11337,6 +11585,83 @@ function itemTipLines(node, t, note) {
       m.appendChild(el("span", "coin " + k));
     }
     node.appendChild(m);
+  }
+}
+
+// WHERE AN ITEM COMES FROM, under its lines, for every gear name on the page
+// (the panel, the Armory's card and the bank's slots all call this). Each
+// entry in `sources` is one way into the world - a boss, a quest, a vendor,
+// a trade, a chest, or the world drop table - and is drawn as one sentence in
+// the order /api/item listed them. Nothing is ranked or dropped here.
+//
+// AN EMPTY LIST IS SAID, NOT LEFT BLANK. "No source in this world's tables" is
+// an answer (a starting item, a removed one, a custom one); a heading with
+// nothing under it would read as a page that forgot to finish.
+function itemTipSources(node, sources) {
+  const box = el("div", "src");
+  box.appendChild(el("div", "srch", "Where it comes from"));
+  const list = sources || [];
+  if (!list.length) box.appendChild(el("div", "srcl none", "No source in this world's tables."));
+  for (const one of list) {
+    const line = el("div", "srcl");
+    itemTipSource(line, one);
+    box.appendChild(line);
+  }
+  node.appendChild(box);
+}
+
+// A chance as the loot tables write it, a percentage: whole above ten, one
+// decimal under it, so a 0.4% world drop does not round to "0%".
+function itemTipChance(chance) {
+  const n = Number(chance);
+  if (chance === null || chance === undefined || !Number.isFinite(n)) return "";
+  return (n >= 10 ? String(Math.round(n)) : n.toFixed(1)) + "%";
+}
+
+// Joins the parts that are present with " - ", so a source missing its zone
+// reads as a shorter sentence rather than one with a hole in it.
+function itemTipParts(parts) {
+  return parts.filter((x) => x !== null && x !== undefined && x !== "").join(" - ");
+}
+
+function itemTipSource(line, one) {
+  if (one.kind === "drop") {
+    line.textContent = itemTipParts(["Drops from " + (one.boss || "a creature"),
+      one.where || one.map, itemTipChance(one.chance)]);
+  } else if (one.kind === "quest") {
+    const who = [one.giver, one.zone].filter(Boolean).join(", ");
+    line.textContent = "Quest reward: " + (one.quest || "a quest") + (who ? " (" + who + ")" : "");
+  } else if (one.kind === "vendor") {
+    line.append("Sold by " + (one.npc || "a vendor") + (one.zone ? " in " + one.zone : ""));
+    const cost = [];
+    if (one.honor) cost.push(one.honor + " honor");
+    for (const it of one.items || []) {
+      cost.push((it.count > 1 ? it.count + " x " : "") + (it.name || "item " + it.entry));
+    }
+    if (one.copper || cost.length) line.append(" for ");
+    if (one.copper) {
+      const money = el("span", "money");
+      const coins = [["g", Math.floor(one.copper / 10000)],
+                     ["s", Math.floor(one.copper / 100) % 100], ["c", one.copper % 100]];
+      for (const [k, v] of coins) {
+        if (!v) continue;
+        money.append(el("span", "", String(v)), el("span", "coin " + k));
+      }
+      line.append(money);
+      if (cost.length) line.append(" and ");
+    }
+    if (cost.length) line.append(cost.join(", "));
+  } else if (one.kind === "craft") {
+    line.textContent = "Crafted: " + itemTipParts([
+      (one.profession || "a trade") + (one.skill ? " " + one.skill : ""), one.recipe]);
+  } else if (one.kind === "object") {
+    line.textContent = "Found in " + itemTipParts([one.object || "a container", one.where]);
+  } else if (one.kind === "world") {
+    const most = itemTipChance(one.chance_max);
+    line.textContent = "World drop" + (most ? ", up to " + most : "");
+  } else {
+    // A kind this page was not written for still says that it exists.
+    line.textContent = "Also: " + (one.kind || "another source");
   }
 }
 
@@ -12139,6 +12464,12 @@ function stMakes(parent, trade) {
     + (r.known ? " recipes: " : " recipes")));
   r.makes.forEach((m, i) => {
     if (i) line.appendChild(el("span", "", ", "));
+    // A recipe that makes an item names it by entry and opens the item's
+    // panel; an enchant makes nothing and still links to its spell.
+    if (m.entry) {
+      line.appendChild(itemTipName(m, m.name, ""));
+      return;
+    }
     const a = document.createElement("a");
     a.href = m.wowhead;
     a.target = "_blank";
@@ -12494,18 +12825,12 @@ function wrule(node, sec) {
   node.append(el("span", "blab", sec.label));
 }
 
-// A link to the item's page, for the tooltip this site does not carry. The
-// title line is composed in the module, because the phrase for an unsellable
-// stack is a sentence about what a SellPrice of 0 means.
+// The item's name as the site's one gear-name control: it opens the item's
+// own lines and where it comes from. The module's one-line summary (stack,
+// kind, what the stack is worth) rides along as the panel's note, because
+// the stack's value is the one thing the item's own lines do not say.
 function wlink(it) {
-  const a = document.createElement("a");
-  a.href = it.wowhead;
-  a.target = "_blank";
-  a.rel = "noopener";
-  a.title = it.tip;
-  a.className = wquality(it.quality);
-  a.textContent = it.stack;
-  return a;
+  return itemTipName(Object.assign({}, it, {note: it.tip}), it.stack, wquality(it.quality));
 }
 
 // ONE SQUARE PER SLOT, ELEVEN PIXELS, ink for a full one and a hairline for an
@@ -12533,7 +12858,8 @@ function wslotCell(it) {
 function wbag(bag) {
   const box = el("div", wtone("wbag", bag.tone));
   const head = el("div", "wbh");
-  head.appendChild(el("span", "n " + wquality(bag.quality), bag.name));
+  // The bag is an item too (the backpack is not, and has no entry).
+  head.appendChild(itemTipName(bag, bag.name, "n " + wquality(bag.quality)));
   head.appendChild(el("span", "of", bag.room_label));
   const grid = el("div", "wgrid");
   const cells = new Array(bag.slots).fill(null);
@@ -13586,6 +13912,12 @@ async function vcShowTip(at, item, tip) {
   // Why it is in this bank, or where the bank policy sends it (#320), or,
   // on the character sheet, where the worn item came from (#371).
   if (item.why) t.appendChild(el("div", "vcsub vcwhy", item.why));
+  // Where it comes from, read from /api/item like every other gear name on
+  // the page; the frame is placed again once that line has its height.
+  const entry = itemTipEntry(item);
+  if (entry !== null) {
+    itemTipMore(t, entry, () => vc.tipAt === at && !t.hidden, null, () => vcTipPlace(at));
+  }
   vcTipPlace(at);
 }
 
