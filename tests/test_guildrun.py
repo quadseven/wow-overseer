@@ -329,6 +329,31 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         # Unread gear is never a reason to hold a member.
         self.assertTrue(guildrun.covered(member("U", 18, WARRIOR)))
 
+    def test_a_warrior_or_paladin_tank_needs_a_shield(self):
+        dressed = dict(worn_slots=6, has_weapon=1)
+        self.assertFalse(
+            guildrun.tank_ready(member("W", 18, WARRIOR, has_shield=0, **dressed))
+        )
+        self.assertTrue(
+            guildrun.tank_ready(member("W", 18, WARRIOR, has_shield=1, **dressed))
+        )
+        self.assertFalse(
+            guildrun.tank_ready(member("P", 18, PALADIN, has_shield=0, **dressed))
+        )
+        # A druid tanks in bear form; unread gear never holds a member.
+        self.assertTrue(
+            guildrun.tank_ready(member("D", 18, DRUID, has_shield=0, **dressed))
+        )
+        self.assertTrue(guildrun.tank_ready(member("U", 18, WARRIOR)))
+
+    def test_a_shieldless_warrior_is_not_seated_as_tank(self):
+        band = [
+            dataclasses.replace(m, worn_slots=6, has_weapon=True, has_shield=False)
+            for m in cave_band()
+        ]
+        for comp in guildrun.compositions(band):
+            self.assertNotIn(comp.tank.class_id, guildrun.SHIELD_TANK_CLASSES)
+
     def test_a_bare_tank_is_not_seated_but_a_bare_damage_dealer_is(self):
         band = cave_band()
         bare = [dataclasses.replace(m, worn_slots=2, has_weapon=True) for m in band]
@@ -358,6 +383,7 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         self.assertIn("AS worn_slots", sql)
         self.assertIn("ci.slot IN (0, 2, 4, 5, 6, 7, 8, 9)) AS worn_slots", sql)
         self.assertIn("AS has_weapon", sql)
+        self.assertIn("AS has_shield", sql)
 
     def test_the_gate_skips_the_shirt_and_tabard(self):
         """wow-dev 2026-10-04: an item level 1 shirt pulled members under the
