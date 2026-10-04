@@ -3033,6 +3033,39 @@
   .gd-rec { display:flex; flex-wrap:wrap; gap:.2rem .6rem; font-size:.78rem;
             padding:.3rem 0; border-bottom:1px solid var(--card-line); }
   .gd-rec .v { font-family:var(--mono); color:var(--on-card); }
+  /* THE UPGRADE TRACKER (#541). The Guild tab's frame, the Lineup's ink rule
+     and strip, and a plain table: nothing here paints a colour of its own,
+     only the text roles above. A slot's state is always a WORD as well as a
+     hue, so it reads without colour. */
+  #upgrades { display:none; padding:.9rem var(--gutter) 1.2rem; }
+  .up-pick { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem .7rem;
+             margin-bottom:.6rem; }
+  .up-pick label { font-family:var(--mono); font-size:11px; letter-spacing:.12em;
+                   text-transform:uppercase; color:var(--on-card-dim); }
+  .up-pick select { background:var(--panel); color:var(--text);
+                    border:1px solid var(--line); border-radius:6px;
+                    font:inherit; padding:.4rem .5rem; min-height:44px;
+                    max-width:100%; }
+  .up-note { font-size:.78rem; color:var(--on-card-dim); margin:.3rem 0;
+             overflow-wrap:anywhere; }
+  .up-scroll { overflow-x:auto; }
+  .up-table { width:100%; border-collapse:collapse; font-size:.8rem; }
+  .up-table th, .up-table td { text-align:left; vertical-align:top;
+                               padding:.45rem .5rem;
+                               border-bottom:1px solid var(--card-line); }
+  .up-table th { font-family:var(--mono); font-size:10px; letter-spacing:.12em;
+                 text-transform:uppercase; color:var(--on-card-dim);
+                 font-weight:400; white-space:nowrap; }
+  .up-table td { min-width:9rem; color:var(--on-card); }
+  .up-table td.up-slot { min-width:0; font-weight:600; white-space:nowrap; }
+  .up-sc { font-family:var(--mono); color:var(--on-card-dim); }
+  .up-where { display:block; font-size:.72rem; color:var(--on-card-dim); }
+  .up-state { display:block; font-family:var(--mono); font-size:10px;
+              letter-spacing:.1em; text-transform:uppercase; }
+  .up-state.best, .up-state.near { color:var(--accent-text); }
+  .up-state.upgrade { color:var(--caution-text); }
+  .up-state.empty { color:var(--warn-text); }
+  .up-also { display:block; font-size:.7rem; color:var(--on-card-dim); }
   #tabs { display:flex; flex-wrap:nowrap; gap:.2rem;
           padding:0 calc(var(--gutter) - .8rem);
           background:var(--card); border-bottom:1px solid var(--card-line);
@@ -3866,6 +3899,20 @@
   <div id="gdrecords"></div>
 </section>
 
+<section id="upgrades">
+  <div id="uphead" class="ds-head">pick a guild member</div>
+  <div class="up-pick">
+    <label for="upsel">guild member</label>
+    <select id="upsel" disabled><option value="">reaching the world...</option></select>
+  </div>
+  <div id="upnote" class="up-note" role="status"></div>
+  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">pre-raid readiness</span></div>
+  <div id="upready"></div>
+  <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">slot by slot</span></div>
+  <div id="uptable" class="up-scroll" role="region" aria-label="gear slots against best in slot" tabindex="0"></div>
+  <p id="upbasis" class="up-note"></p>
+</section>
+
 <section id="lineup">
   <div id="lnhead" class="ds-head">reaching the world...</div>
   <!-- EVERY MEMBER'S GEAR (guildgear.py): both family guilds, one sortable
@@ -4114,6 +4161,9 @@ const LINEUP_VIEW = "lineup";
 // which groups the coordinator has out, the dungeon Jev chose for each and how
 // sure it was, and how every group came back.
 const GUILD_VIEW = "guild";
+// THE GEAR UPGRADE TRACKER (#541): one guildmate's slots against their spec's
+// pre-raid and raid best in slot, with the next upgrade and where it drops.
+const UPGRADES_VIEW = "upgrades";
 const TRADES_VIEW = "trades";
 const DECREE_VIEW = "decree";
 const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
@@ -4325,6 +4375,13 @@ function buildViewTabs() {
   gdb.dataset.view = GUILD_VIEW;
   gdb.onclick = () => showView(GUILD_VIEW);
   tabs.appendChild(gdb);
+  // Lands in More (it is not in tabLayout's primary list): read when a
+  // member is being kitted out, not on every visit.
+  const upb = document.createElement("button");
+  upb.textContent = "Upgrades";
+  upb.dataset.view = UPGRADES_VIEW;
+  upb.onclick = () => showView(UPGRADES_VIEW);
+  tabs.appendChild(upb);
   // Seventh, straight after the dungeon plan, because it is the same kind of
   // question about the same five: that one says which place is worth walking
   // to for a drop, this one says which place is worth walking to for a recipe
@@ -7211,6 +7268,7 @@ function showView(v) {
   const isRaid = v === RAID_VIEW;
   const isLineup = v === LINEUP_VIEW;
   const isGuild = v === GUILD_VIEW;
+  const isUp = v === UPGRADES_VIEW;
   const isTrd = v === TRADES_VIEW;
   const isDec = v === DECREE_VIEW;
   fsection.style.display = isFam ? "block" : "none";
@@ -7224,6 +7282,7 @@ function showView(v) {
   rgsection.style.display = isRaid ? "block" : "none";
   lnsection.style.display = isLineup ? "block" : "none";
   gdsection.style.display = isGuild ? "block" : "none";
+  upsection.style.display = isUp ? "block" : "none";
   gcrsection.style.display = isTrd ? "block" : "none";
   dcrSection.style.display = isDec ? "block" : "none";
   // Every non-map view hides the canvas and its legend. This used to read
@@ -7347,6 +7406,13 @@ function showView(v) {
     stopBroadcasts();
     pollLineup();
     pollGuildGear();
+    return;
+  }
+  if (isUp) {
+    // A read, like the Guild tab: nothing to start or stop.
+    closePanel();
+    stopBroadcasts();
+    upOpen();
     return;
   }
   if (isGuild) {
@@ -7546,6 +7612,175 @@ async function pollGuild() {
   }
 }
 setInterval(() => { if (view === GUILD_VIEW) pollGuild(); }, 30000);
+
+// --- the Upgrades tab (the gear upgrade tracker, /api/upgrades, #541) -------
+//
+// Every word that says WHAT an item is, where it comes from or how a slot
+// stands arrives in the payload (gearupgrades.py, scored by gearscore.py);
+// this only lays it out. The picker lists the two families (/api/armory) and
+// each family guild's other members (/api/armory/guild), the same names the
+// Armory can open, and the server refuses any other.
+const upsection = document.getElementById("upgrades");
+const uphead = document.getElementById("uphead");
+const upsel = document.getElementById("upsel");
+const upnote = document.getElementById("upnote");
+const upready = document.getElementById("upready");
+const uptable = document.getElementById("uptable");
+const upbasis = document.getElementById("upbasis");
+let upPickerReady = false, upPickerLoading = false, upSeq = 0;
+
+function upGroup(label, names) {
+  const g = el("optgroup");
+  g.label = label;
+  for (const n of names) {
+    const o = el("option", "", n);
+    o.value = n;
+    g.appendChild(o);
+  }
+  return g;
+}
+
+async function upFillPicker() {
+  if (upPickerReady || upPickerLoading) return;
+  upPickerLoading = true;
+  try {
+    const r = await fetch(u("/api/armory"), {signal: AbortSignal.timeout(20000)});
+    if (!r.ok) throw new Error(r.status);
+    const p = await r.json();
+    const groups = [el("option", "", "choose a member")];
+    groups[0].value = "";
+    for (const s of p.sides || []) groups.push(upGroup(s.heading, s.names || []));
+    upsel.replaceChildren(...groups);
+    upsel.disabled = false;
+    upPickerReady = true;
+    // The guilds are a second read each and only add names; a failure
+    // leaves the families usable.
+    for (const gd of p.guilds || []) {
+      try {
+        const gr = await fetch(u("/api/armory/guild?guild=" + encodeURIComponent(gd.name)));
+        if (!gr.ok) continue;
+        const gj = await gr.json();
+        if ((gj.members || []).length) upsel.appendChild(upGroup(gd.name, gj.members.map((m) => m.name)));
+      } catch (e) { /* the families stay */ }
+    }
+  } catch (e) {
+    uphead.textContent = "the world is unreachable - this may be stale";
+    uphead.className = "ds-head alarm";
+  } finally {
+    upPickerLoading = false;
+  }
+}
+
+function upItem(t, withGain) {
+  const d = el("div", "");
+  d.appendChild(document.createTextNode(t.name + " "));
+  d.appendChild(el("span", "up-sc", "(" + t.score + (withGain ? ", +" + t.gain : "") + ")"));
+  const labels = (t.where || []).map((w) => w.label).join("; ");
+  if (labels) d.appendChild(el("span", "up-where", labels));
+  return d;
+}
+
+function upTargets(list) {
+  const td = el("td", "");
+  if (!list || !list.length) {
+    td.appendChild(el("span", "up-sc", "no list"));
+    return td;
+  }
+  td.appendChild(upItem(list[0], false));
+  if (list.length > 1) {
+    td.appendChild(el("span", "up-also", "also " + list.slice(1).map((t) => t.name).join(", ")));
+  }
+  return td;
+}
+
+function upRender(p) {
+  uphead.className = "ds-head";
+  uphead.textContent = p.name + " - level " + p.level + " " + p.class
+    + (p.spec && p.spec.id ? " - " + p.spec.id : "");
+  upnote.textContent = (p.spec && p.spec.note) || "";
+  upbasis.textContent = p.scored_from || "";
+  if (!p.ready) {
+    upready.replaceChildren(el("p", "chr-body", (p.spec && p.spec.note) || "no gear lists for this class"));
+    uptable.replaceChildren();
+    return;
+  }
+  const strip = el("div", "ds-strip");
+  const tile = (v, k) => {
+    const t = el("div", "ds-tile");
+    t.append(el("span", "v", v), el("span", "k", k));
+    return t;
+  };
+  strip.append(
+    tile(p.ready.slots_ready + " / " + p.ready.slots_scored, "slots at or near pre-raid best"),
+    tile(p.ready.pct === null ? "n/a" : Math.round(p.ready.pct * 100) + "%", "pre-raid ready"),
+  );
+  const meter = el("meter");
+  meter.min = 0; meter.max = 1; meter.value = p.ready.pct || 0;
+  meter.setAttribute("aria-label", p.ready.line);
+  upready.replaceChildren(strip, el("p", "up-note", p.ready.line), meter);
+  const table = el("table", "up-table");
+  table.appendChild(el("caption", "ds-head", "worn gear against the " + p.spec.id + " lists"));
+  const head = el("tr");
+  for (const h of ["slot", "wearing", "pre-raid target", "raid target", "next upgrade"]) {
+    const th = el("th", "", h);
+    th.scope = "col";
+    head.appendChild(th);
+  }
+  const thead = el("thead");
+  thead.appendChild(head);
+  table.appendChild(thead);
+  const body = el("tbody");
+  for (const s of p.slots) {
+    const tr = el("tr");
+    const th = el("th", "up-slot", s.label);
+    th.scope = "row";
+    tr.appendChild(th);
+    const w = el("td", "");
+    if (s.worn) {
+      w.appendChild(el("div", "", s.worn.name + " "));
+      w.firstChild.appendChild(el("span", "up-sc", "(" + s.worn.score + ")"));
+    }
+    w.appendChild(el("span", "up-state " + s.state, s.state === "no_list" ? "no list" : s.state));
+    tr.appendChild(w);
+    tr.appendChild(upTargets(s.targets.preraid));
+    tr.appendChild(upTargets(s.targets.raid));
+    const n = el("td", "");
+    if (s.next) {
+      n.appendChild(upItem(s.next, true));
+      n.appendChild(el("span", "up-also", s.next.phase));
+    } else {
+      n.appendChild(el("span", "up-sc", s.scored ? "nothing better listed" : "-"));
+    }
+    tr.appendChild(n);
+    body.appendChild(tr);
+  }
+  table.appendChild(body);
+  uptable.replaceChildren(table);
+}
+
+async function upLoad(name) {
+  const mine = ++upSeq;
+  if (!name) return;
+  uphead.textContent = "reading " + name + "...";
+  try {
+    const r = await fetch(u("/api/upgrades?name=" + encodeURIComponent(name)),
+                          {signal: AbortSignal.timeout(20000)});
+    if (!r.ok) throw new Error(r.status);
+    const p = await r.json();
+    if (mine === upSeq) upRender(p);
+  } catch (e) {
+    // Whatever is drawn stays drawn, as on the Guild tab.
+    if (mine !== upSeq) return;
+    uphead.textContent = "the world is unreachable - this may be stale";
+    uphead.className = "ds-head alarm";
+  }
+}
+
+function upOpen() {
+  upFillPicker();
+  if (upsel.value) upLoad(upsel.value);
+}
+upsel.addEventListener("change", () => upLoad(upsel.value));
 
 // --- what the guild still needs before it can raid (infra#3508) -------------
 //
@@ -12744,7 +12979,7 @@ function adoptContinent() {
 // carries state (which continent) and so needs more than a name.
 const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, BAGS_VIEW,
                     CHRONICLE_VIEW, DUNGEONS_VIEW, RAID_VIEW, LINEUP_VIEW,
-                    GUILD_VIEW, TRADES_VIEW,
+                    GUILD_VIEW, UPGRADES_VIEW, TRADES_VIEW,
                     COUNCIL_VIEW, EYE_VIEW, DECREE_VIEW];
 
 // ADDRESSES A VIEW USED TO HAVE. The Achievements tab was renamed to the

@@ -52,7 +52,7 @@ COPY core.py bridge.py voice.py transform.py \
      vendor_stall.py \
      campaignqueue.py dungeonpace.py \
      campaignplan.py dungeonladder.py levelroute.py \
-     preraid.py gearscore.py \
+     preraid.py gearscore.py gearupgrades.py \
      runtimeline.py \
      vclient.py guildgear.py \
      situation.py vision.py llmmode.py jev_movement.py jev_family_intent.py leadcmd.py \
