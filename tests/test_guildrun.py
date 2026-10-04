@@ -342,6 +342,13 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
         self.assertIn("AVG(it.ItemLevel)", sql)
         self.assertIn("AS gear_ilvl", sql)
 
+    def test_the_gate_skips_the_shirt_and_tabard(self):
+        """wow-dev 2026-10-04: an item level 1 shirt pulled members under the
+        gate; the gear step's own stale test already leaves both slots out."""
+        sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
+        sql = sql[: sql.index("\n)\n")]
+        self.assertIn("ci.slot NOT IN (3, 18)", sql)
+
 
 class TheHostileCapitalDoorIsNeverOffered(unittest.TestCase):
     """Cave (Alliance) never runs Ragefire Chasm (map 389) and Bonkers (Horde)

@@ -19617,7 +19617,11 @@ _GUILD_RUN_MEMBERS_SQL = (
     "(SELECT AVG(it.ItemLevel) FROM character_inventory ci "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-    "WHERE ci.guid = s.guid AND ci.bag = 0 AND ci.slot < 19) AS gear_ilvl, "
+    # The shirt and the tabard (slots 3 and 18) carry no stats and are item
+    # level 1, so counting them pulled a member under the gate for wearing a
+    # shirt; gearup.stale_gear leaves them out the same way.
+    "WHERE ci.guid = s.guid AND ci.bag = 0 AND ci.slot < 19 "
+    "AND ci.slot NOT IN (3, 18)) AS gear_ilvl, "
     # IN THE WORLD IS A FRESH SNAPSHOT, NOT characters.online. The flag reads
     # 0 for random bots that are in the world (8 guild members flipped to 0 at
     # once on the dev realm while their snapshots kept updating), and the
