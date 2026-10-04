@@ -932,6 +932,26 @@ def friendly_vendor_rows(member, vendor_rows) -> list:
     ]
 
 
+def junk_sales(member, kept) -> tuple:
+    """The sell rows a gear step opens with: room first.
+
+    The junk the member carries is sold at the same counter before the buys.
+    On wow-dev on 2026-10-04 three of four guild members who reached their
+    vendor were refused every piece with "bags cannot take the item". Never a
+    stack reserved in overseer_keep, and at most MAX_SALES.
+    """
+    junk = sorted(
+        (c for c in member.carried if c.junk and not _kept(member.name, c, kept)),
+        key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
+    )[:MAX_SALES]
+    return tuple(
+        guildcorps.Row(
+            "sell", "guid:%d" % int(c.guid), "", source_for("gear", member.name)
+        )
+        for c in junk
+    )
+
+
 def gear_step(member, character, vendor_rows, cap, kept=None):
     """(step or None, why not) for one gear-short member.
 
@@ -979,19 +999,7 @@ def gear_step(member, character, vendor_rows, cap, kept=None):
         len(buys),
         ", ".join(b.slot for b in buys),
     )
-    # ROOM FIRST: the junk it carries is sold at the same counter before the
-    # buys. On wow-dev on 2026-10-04 three of four guild members who reached
-    # their vendor were refused every piece with "bags cannot take the item".
-    junk = sorted(
-        (c for c in member.carried if c.junk and not _kept(member.name, c, kept)),
-        key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
-    )[:MAX_SALES]
-    sales = tuple(
-        guildcorps.Row(
-            "sell", "guid:%d" % int(c.guid), "", source_for("gear", member.name)
-        )
-        for c in junk
-    )
+    sales = junk_sales(member, kept)
     step = guildcorps.Step(
         member.name,
         "gear",
