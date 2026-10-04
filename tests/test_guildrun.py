@@ -409,7 +409,52 @@ class TheHostileCapitalDoorIsNeverOffered(unittest.TestCase):
         horde = member("H", 19, MAGE, race=2, map_id=34, guild_name="Bonkers")
         self.assertEqual(guildrun.stranded_names([alliance, horde], set()), ["A", "H"])
         own = member("O", 19, MAGE, race=1, map_id=34)
-        self.assertEqual(guildrun.stranded_names([own], set()), [])
+        self.assertEqual(guildrun.stranded_names([own], {"O"}), [])
+
+
+class MembersLeftInsideADungeonHearthOut(unittest.TestCase):
+    """50 guild members stood alone in Ragefire Chasm and Wailing Caverns on
+    wow-dev (2026-10-04), ungrouped, days after their runs ended."""
+
+    def test_a_member_alone_in_its_own_sides_dungeon_hearths_out(self):
+        bonkers = member("R", 15, MAGE, race=2, map_id=389, guild_name="Bonkers")
+        cave = member("W", 18, MAGE, race=1, map_id=43)
+        self.assertEqual(guildrun.stranded_names([bonkers, cave], set()), ["R", "W"])
+
+    def test_runs_groups_the_dead_and_the_fighting_stay(self):
+        self.assertEqual(
+            guildrun.stranded_names([member("Q", 15, MAGE, map_id=43)], {"Q"}), []
+        )
+        for kw in (
+            {"group_leader": 7},
+            {"in_combat": 1},
+            {"health": 1, "has_corpse": 1},
+        ):
+            self.assertFalse(
+                guildrun.stranded(member("Q", 15, MAGE, map_id=43, **kw), "Alliance"),
+                kw,
+            )
+
+    def test_the_continents_and_acherus_are_home(self):
+        for map_id in (0, 1, 530, 609):
+            self.assertFalse(
+                guildrun.stranded(member("Q", 15, MAGE, map_id=map_id), "Alliance"),
+                map_id,
+            )
+
+    def test_why_not_names_the_instance_before_the_gear(self):
+        weak_inside = member("Q", 15, MAGE, map_id=43, gear_ilvl=2.0)
+        self.assertEqual(
+            guildrun.why_not(weak_inside, set(), set(), set()), "inside an instance"
+        )
+
+    def test_the_bridge_never_hearths_a_family_member(self):
+        rescue = BRIDGE[BRIDGE.index("def _hearth_stranded_guild_members") :]
+        rescue = rescue[: rescue.index("\ndef ")]
+        self.assertIn("FROM overseer_roster", rescue)
+        self.assertLess(
+            rescue.index("FROM overseer_roster"), rescue.index("stranded_names(")
+        )
 
 
 class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):

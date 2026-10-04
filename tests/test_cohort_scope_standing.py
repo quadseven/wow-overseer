@@ -91,7 +91,8 @@ from test_cohort_scope import (
 # the audit said they would.
 
 HISTORIC_CRAFTING_ROSTER = (
-    "SELECT name FROM overseer_roster WHERE enabled = 1 AND job = %s"
+    "SELECT name FROM overseer_roster WHERE enabled = 1 "
+    "AND (job = %s OR job = %s OR job = %s OR job LIKE %s)"
 )
 HISTORIC_STANDING_JOBS = "SELECT name, job FROM overseer_roster WHERE enabled = 1"
 HISTORIC_STANDING_TRAVEL_AIMS = (
@@ -224,7 +225,11 @@ class TheCraftCandidatePoolUsedToCrossCohorts(RosterCase):
     def test_the_old_statement_puts_the_other_guilds_crafter_in_the_pool(self):
         db = self.roster(_WITH_OWN_CRAFTER)
 
-        got = self.names(db, _sqlite(HISTORIC_CRAFTING_ROSTER), (CRAFT,))
+        got = self.names(
+            db,
+            _sqlite(HISTORIC_CRAFTING_ROSTER),
+            (CRAFT, "town run", "dungeon", "dungeon:%"),
+        )
 
         self.assertEqual(
             ["Blammo", "Thok"],
@@ -255,7 +260,9 @@ class TheCraftCandidatePoolUsedToCrossCohorts(RosterCase):
         sql, params = _emit("_crafting_roster")
         db = self.roster(_WITH_OWN_CRAFTER)
 
-        self.assertEqual((CRAFT, CAVE), params)
+        # The campaign jobs craft between runs too (mod-overseer#832), so
+        # they are in the predicate, still bound, still with the cohort.
+        self.assertEqual((CRAFT, "town run", "dungeon", "dungeon:%", CAVE), params)
         self.assertNotIn("Grug", self.names(db, _sqlite(sql), params))
 
 
@@ -482,7 +489,12 @@ class AgainstTheOnlyCohortThatExistsTodayNothingChangesAtAll(RosterCase):
     """
 
     CASES = (
-        ("_crafting_roster", HISTORIC_CRAFTING_ROSTER, (CRAFT,), {}),
+        (
+            "_crafting_roster",
+            HISTORIC_CRAFTING_ROSTER,
+            (CRAFT, "town run", "dungeon", "dungeon:%"),
+            {},
+        ),
         ("_standing_jobs", HISTORIC_STANDING_JOBS, (), {}),
         ("_standing_travel_aims", HISTORIC_STANDING_TRAVEL_AIMS, (), {}),
         ("_activate_training", HISTORIC_ACTIVATE_TRAINING, (), {}),
@@ -530,7 +542,12 @@ class UntilTheColumnShipsTheStatementsAreUnchangedCharacterForCharacter(
     """
 
     DEGRADED = (
-        ("_crafting_roster", HISTORIC_CRAFTING_ROSTER, (CRAFT,), {}),
+        (
+            "_crafting_roster",
+            HISTORIC_CRAFTING_ROSTER,
+            (CRAFT, "town run", "dungeon", "dungeon:%"),
+            {},
+        ),
         ("_standing_jobs", HISTORIC_STANDING_JOBS, (), {}),
         ("_standing_travel_aims", HISTORIC_STANDING_TRAVEL_AIMS, (), {}),
         ("_activate_training", HISTORIC_ACTIVATE_TRAINING, (), {}),
