@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Azeroth Overseer</title>
 <!-- THE THREE TYPEFACES THE DESIGN IS SET IN. Archivo for display, Zen Kaku
      Gothic New for body, Space Mono for every number, label and status word.
@@ -483,10 +483,61 @@
                border:1px solid var(--shell-line);
                padding:.3rem .8rem; border-radius:6px; cursor:pointer; font:inherit; }
   nav button.on { border-color:var(--alliance); color:var(--alliance); }
-  /* THE TAB BAR IS STICKY (#363). On a phone the views are long and the tab
-     row was a scroll to the top away; now it rides the top edge. z-index 5
-     keeps it under the character panel (10) and the client frames (60). */
-  #tabbar { position:sticky; top:0; z-index:5; }
+  /* THE NAVIGATION: FIVE HUBS, THEN THE VIEWS OF THE HUB YOU ARE IN. On a
+     wide screen both sit in one sticky bar along the top edge: the hubs on
+     the left as underlined words, the views beside them as pills, wrapping
+     under the hubs when the row runs out. Nothing in it scrolls sideways.
+     z-index 5 keeps it under the character panel (10), the item card (40)
+     and the client frames (60). The phone layout is in the block below. */
+  #tabbar { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap;
+            align-items:center; column-gap:var(--s3);
+            padding:0 calc(var(--gutter) - .7rem);
+            background:var(--card); border-bottom:1px solid var(--card-line); }
+  #hubs { display:flex; flex-wrap:nowrap; gap:.2rem; padding:0; }
+  /* Mono and uppercase, the page's voice for a label rather than a sentence,
+     so a hub reads as a place and the pills beside it as views. */
+  #hubs button { min-height:44px; padding:0 .7rem; border:0; border-radius:0;
+                 background:transparent; color:var(--on-card-dim);
+                 font-family:var(--mono); font-size:12px; font-weight:700;
+                 letter-spacing:.12em; text-transform:uppercase;
+                 white-space:nowrap; cursor:pointer;
+                 border-bottom:2px solid transparent;
+                 transition:color .15s ease-out, border-color .15s ease-out; }
+  #hubs button:hover { color:var(--on-card); }
+  #hubs button.on { color:var(--on-card); border-bottom-color:var(--accent); }
+  #hubs button:focus-visible, #tabs button:focus-visible {
+    outline:2px solid var(--accent); outline-offset:-2px; }
+  /* LIVE FIRST: the Watch hub carries a red dot while any family member is
+     on the air, the one signal a viewer wants before choosing where to go.
+     Steady rather than pulsing: it sits in view on every screen, and the
+     dot's presence is the whole message. */
+  #hubs button.live::before { content:""; display:inline-block; width:.5em;
+    height:.5em; margin-right:.45em; vertical-align:.08em; border-radius:50%;
+    background:var(--vermilion); }
+  #subnav { display:flex; flex:1 1 auto; flex-wrap:wrap; align-items:center;
+            gap:var(--s2) var(--s3); min-width:0; padding:var(--s2) 0; }
+  #subnav[hidden] { display:none; }
+  /* WRAPS, NEVER SCROLLS. A hub holds at most seven buttons (the World's six
+     continents and The Eye), so a second line is the worst case, and a line
+     you can see beats a strip you have to discover by pushing it. */
+  #tabs { display:flex; flex-wrap:wrap; gap:6px; padding:0; }
+  #tabs[hidden] { display:none; }
+  /* The Lineup's own pick pills (#lgpick): a hairline when idle, the accent
+     when chosen, so a lit view says so in its outline as well as its hue. */
+  #tabs button { min-height:36px; padding:0 .8rem; border-radius:999px;
+                 border:1px solid var(--card-line); background:transparent;
+                 color:var(--on-card-dim); font:inherit; font-size:.88rem;
+                 font-weight:600; white-space:nowrap; cursor:pointer;
+                 transition:color .15s ease-out, border-color .15s ease-out; }
+  #tabs button:hover { color:var(--on-card); }
+  #tabs button.on { border-color:var(--accent-text); color:var(--accent-text); }
+  /* The realm switcher rides the World hub, pushed to the far end. */
+  #realmnav { margin-left:auto; }
+  #realmnav[hidden] { display:none; }
+  /* viewport-fit=cover lets the bar reach the home indicator; these keep
+     the page itself out from under a notch in landscape. */
+  body { padding-left:env(safe-area-inset-left);
+         padding-right:env(safe-area-inset-right); }
   /* A #watch or #armory link lands the browser on that <section>; the margin
      keeps its first line clear of the sticky bar instead of under it. */
   body > section { scroll-margin-top:56px; }
@@ -523,26 +574,20 @@
        looking for rather than a thing you read. It keeps its place and stops
        taking three lines of the first screen to hold it. */
     #rkbuild { margin-top:5px; font-size:10.5px; line-height:1.45; }
-    /* The header wrapped into three rows: the mark, the census, then the
-       realm pills and the theme button. It still wraps - there is no width
-       for it not to - but the rows are tight and the gap between them is the
-       scale's, not a rem of body text. */
+    /* The header wraps into two rows: the mark and the theme button, then
+       the census. The realm pills moved to the World hub. The rows are tight
+       and the gap between them is the scale's, not a rem of body text. */
     header { gap:var(--s2) var(--s3); padding:var(--s2) var(--gutter); }
     #census { font-size:11px; letter-spacing:.04em; }
-    /* The switcher and the theme button share the last row. margin-left:auto
-       on #recordings already pushes that group right; this keeps the group
-       from being taller than the 44px its own controls need. */
     #theme { min-height:44px; padding:0 .65rem; }
     /* THE THEME BUTTON JOINS THE MARK (#363) instead of wrapping onto a row
-       of its own at the foot of the header; the census and the realm pills
-       follow, sharing a row when the census is short enough. The pills are
-       44px here, for a thumb. */
+       of its own at the foot of the header; the census follows. The realm
+       pills, now on the World hub, are 44px here, for a thumb. */
     header .mark { order:1; }
     #theme { order:2; margin-left:auto; }
     #census { order:3; flex:1 1 auto; min-width:0; }
     .hgap { display:none; }
-    #realmnav { order:4; }
-    #recordings { order:5; }
+    #recordings { order:4; }
     .rn-pill { min-height:44px; }
     .ftile button.ffull { min-height:44px; min-width:44px; }
     /* The goal banner is the feature and keeps the largest text on the page.
@@ -553,19 +598,29 @@
        moved, then when the goal was set, each readable without the others. */
     #agwhen { margin-top:var(--s2); gap:var(--s1) var(--s3); font-size:12.5px;
               flex-direction:column; align-items:flex-start; }
-    /* THE TAB ROW SAYS THAT IT SCROLLS. A row of words clipped flat by the
-       edge of the screen reads as a row that was cut off, not as one you can
-       push - which is how the fourteen tabs beyond "Chronicle" stayed
-       undiscovered. Fading the last few pixels is the difference.
-
-       Confined to this breakpoint because it is only honest here: fourteen
-       tabs are about 1280px wide, so below 640 the row ALWAYS overflows and
-       the fade is always telling the truth. On a wide screen the row can end
-       before the edge does, and a fade there would dim a tab for no reason.
-       Only the far edge fades: the near one is where the selected tab starts
-       from on load, and it has to read as a hard edge. */
-    #tabs { mask-image:linear-gradient(to right, #000 calc(100% - 28px),
-                                       transparent 100%); }
+    /* THE HUBS ARE THE BOTTOM BAR, the way a phone's own apps put them: five
+       equal cells under the thumb, above the home indicator, and the side
+       insets kept clear in landscape. The page is padded by the bar's height
+       so the last line of every view, the wall's controls included, scrolls
+       clear of it. */
+    #hubs { position:fixed; left:0; right:0; bottom:0; z-index:5; gap:0;
+            padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom)
+                    env(safe-area-inset-left);
+            background:var(--card); border-top:1px solid var(--card-line); }
+    #hubs button { flex:1 1 0; min-width:0; min-height:52px; padding:0 2px;
+                   font-size:11px; letter-spacing:.06em;
+                   border-bottom:0; border-top:2px solid transparent; }
+    #hubs button.on { border-top-color:var(--accent); }
+    body { padding-bottom:calc(53px + env(safe-area-inset-bottom)); }
+    /* The views sit at the top of the content and scroll away with it: the
+       hubs below are always in reach, so the row does not need to stick and
+       take a band of the screen from the streams. */
+    #tabbar { position:static; padding:0; background:transparent;
+              border-bottom:0; }
+    #subnav { flex-basis:100%; padding:var(--s2) var(--gutter);
+              background:var(--card); border-bottom:1px solid var(--card-line); }
+    #tabs button { min-height:44px; }
+    #realmnav { margin-left:0; }
   }
   #wrap { position:relative; margin:0 1rem 1rem; }
   canvas { width:100%; background:var(--panel); border:1px solid var(--line);
@@ -2912,33 +2967,6 @@
      would be walking straight back into that. It is back as a CHOICE, and
      below the breakpoint it collapses into the stacked column rather than
      shrinking four tiles into a rail nobody can see. */
-  /* THE TAB BAR. Outlined boxes made every tab look equally like a control
-     and nothing look like the page you were on; an underline says "you are
-     here" using the one axis a row of words has spare. Scrolls sideways
-     rather than wrapping, because a wrapped tab row changes height when the
-     view changes and shoves the content under the thumb reaching for it.
-
-     flex-wrap:nowrap IS THE WHOLE POINT AND IT WAS MISSING (infra#3482). This
-     rule has said "scrolls sideways rather than wrapping" since the redesign
-     and did not do it, because #tabs is a <nav> and the shell's generic
-     `nav { ... flex-wrap:wrap }` is the only rule on this page that declares
-     flex-wrap at all. An ID selector does not beat a type selector on a
-     property it never sets: the generic rule won by default, the row wrapped,
-     and overflow-x:auto had nothing left to scroll. On a phone that is four
-     ragged lines of tabs, 187px of them, above every view.
-
-     So it is stated here rather than fixed by deleting the generic rule,
-     which #realmnav and #ajump are both still dressed by.
-
-     SNAP AND scroll-margin BECAUSE THE ROW IS NOW SCROLLED BY A THUMB. The
-     eleventh tab is off-screen on a phone, and showTab scrolls the selected
-     one back into view; the margin keeps it off the very edge when it lands,
-     so a tab arriving from the right does not read as clipped. */
-  /* THE GUTTER MINUS THE BUTTON'S OWN PADDING, so that the WORD "Watch"
-     starts on the same left edge as "THE OVERSEER" and the goal headline
-     above it, rather than the tab's invisible box starting there and the
-     word sitting .8rem further in. A tap target that reaches nearer the
-     screen edge is the right trade on the row a thumb drives. */
   /* THE LINEUP, DRAWN THE WAY THE GAME DRAWS A RAID: small boxes of five,
      name then level then class, one colour per class. Wide screens get four
      boxes across so eight groups read as two rows; a phone gets one column,
@@ -3066,61 +3094,6 @@
   .up-state.upgrade { color:var(--caution-text); }
   .up-state.empty { color:var(--warn-text); }
   .up-also { display:block; font-size:.7rem; color:var(--on-card-dim); }
-  #tabs { display:flex; flex-wrap:nowrap; gap:.2rem;
-          padding:0 calc(var(--gutter) - .8rem);
-          background:var(--card); border-bottom:1px solid var(--card-line);
-          overflow-x:auto; overscroll-behavior-x:contain;
-          scrollbar-width:none;
-          -webkit-overflow-scrolling:touch; }
-  #tabs::-webkit-scrollbar { display:none; }
-  /* COMPACT, THE WAY A STREAMING SITE'S CHANNEL BAR IS: 40px and a step
-     smaller type, so the two sticky rows cost 74px of a phone rather than
-     88 and the page keeps the screen. The hit area is the full row height and
-     .7rem either side, which is still a comfortable thumb target. */
-  #tabs button { flex:none; min-height:40px; padding:0 .7rem; border:0;
-                 background:transparent; color:var(--on-card-dim);
-                 font:inherit; font-size:.9rem; font-weight:600; cursor:pointer;
-                 white-space:nowrap;
-                 border-bottom:2px solid transparent; }
-  /* LIVE FIRST: the Watch tab carries a red dot while any family member is
-     on the air, the one signal a viewer wants before choosing a tab. */
-  #tabs button.live::before { content:""; display:inline-block; width:.5em;
-    height:.5em; margin-right:.45em; vertical-align:.08em; border-radius:50%;
-    background:#ff4d4d; animation:tab-live 2s ease-in-out infinite; }
-  @keyframes tab-live { 50% { opacity:.35; } }
-  @media (prefers-reduced-motion:reduce) {
-    #tabs button.live::before { animation:none; }
-  }
-  #tabs button:hover { color:var(--on-card); }
-  #tabs button.on { color:var(--on-card); border-bottom-color:var(--accent); }
-  #tabs button:focus-visible { outline:2px solid var(--accent);
-                               outline-offset:-2px; }
-  /* THE GROUP ROW (Maps, More). The same scrolling strip as the tab row and
-     the same buttons, one step quieter, directly under the row so the toggle
-     that opened it is right above it. A chevron on the toggle says it opens
-     something rather than going somewhere. */
-  .tabpanel { display:flex; flex-wrap:nowrap; gap:.2rem;
-              padding:0 calc(var(--gutter) - .8rem);
-              background:var(--panel); border-bottom:1px solid var(--card-line);
-              overflow-x:auto; overscroll-behavior-x:contain;
-              scrollbar-width:none; -webkit-overflow-scrolling:touch; }
-  .tabpanel[hidden] { display:none; }
-  .tabpanel::-webkit-scrollbar { display:none; }
-  .tabpanel button { flex:none; min-height:36px; padding:0 .7rem; border:0;
-                     background:transparent; color:var(--dim);
-                     font:inherit; font-size:.85rem; cursor:pointer;
-                     white-space:nowrap;
-                     border-bottom:2px solid transparent; }
-  .tabpanel button:hover { color:var(--text); }
-  .tabpanel button.on { color:var(--text); border-bottom-color:var(--accent); }
-  .tabpanel button:focus-visible { outline:2px solid var(--accent);
-                                   outline-offset:-2px; }
-  #tabs button.tabgroup::after { content:""; display:inline-block;
-    width:.4em; height:.4em; margin-left:.45em; vertical-align:.2em;
-    border-right:2px solid currentColor; border-bottom:2px solid currentColor;
-    transform:rotate(45deg); transition:transform .15s ease; }
-  #tabs button.tabgroup[aria-expanded="true"]::after {
-    transform:rotate(-135deg); vertical-align:-.05em; }
 
   /* THE WALL. Three modes, one breakpoint at 640px, and the numbers are the
      handoff's rather than mine: what shipped first was auto-fit minmax(320px)
@@ -3613,11 +3586,6 @@
   <span class="mark"><span class="dot" aria-hidden="true"></span><h1>THE OVERSEER</h1></span>
   <span id="census">reaching the world...</span>
   <span class="hgap"></span>
-  <!-- Built from __OVERSEER_NAV__, which basepath substitutes beside the mount
-       point in the same pass, so the pill that is lit and the realm the page
-       is actually reading can never disagree. -->
-  <nav id="realmnav" aria-label="realm"></nav>
-  <script id="realmnav-data" type="application/json">__OVERSEER_NAV__</script>
   <!-- SAME ORIGIN, AND HIDDEN UNTIL PROVEN. The footage is on the recorder
        box, which a pod cannot reach, so the ingress proxies a recordings
        path on this origin straight to that box - which also keeps the link
@@ -3667,12 +3635,19 @@
      read as "the second family is part of the first". -->
 <div id="agother"></div>
 </div>
-<!-- THE TAB BAR STAYS ON SCREEN (#363). One sticky wrapper for the row and
-     the group row under it, so an opened group travels with the row that
-     opened it instead of scrolling away beneath it. -->
+<!-- FIVE HUBS, AND THE VIEWS OF THE ONE YOU ARE IN. #hubs is the bottom bar
+     on a phone and the top row on a wide screen; #subnav holds the current
+     hub's views and, on the World hub, the realm switcher. -->
 <div id="tabbar">
+<nav id="hubs" aria-label="sections"></nav>
+<div id="subnav">
 <nav id="tabs"></nav>
-<div id="tabsub"></div>
+<!-- Built from __OVERSEER_NAV__, which basepath substitutes beside the mount
+     point in the same pass, so the pill that is lit and the realm the page
+     is actually reading can never disagree. -->
+<nav id="realmnav" aria-label="realm"></nav>
+<script id="realmnav-data" type="application/json">__OVERSEER_NAV__</script>
+</div>
 </div>
 <section id="family">
   <!-- FOUR BLOCKS, ONE SEPARATOR. The mono index, the ink rule and the
@@ -4177,117 +4152,150 @@ let hoverZone = null;
 const canvas = document.getElementById("map"), ctx = canvas.getContext("2d");
 const tip = document.getElementById("tip");
 
-// --- the tab groups (Maps, More) ------------------------------------------
+// --- the hubs (Watch, Families, Guild, Gear, World) ------------------------
 //
-// TWENTY TABS IN ONE ROW WAS THE COMPLAINT. On a phone the row was four
-// screens wide and the Horde's family tab was somewhere past Kalimdor. So the
-// row holds the views asked for most, and two groups hold the rest: More for
-// the named views that are read now and then, Maps for the six continents.
-//
-// A GROUP IS A DISCLOSURE, NOT A MENU. Its toggle is an ordinary button with
-// aria-expanded, and its buttons are ordinary buttons in a second row placed
-// straight after this one, so Tab walks into them and Escape walks back out.
-// A floating dropdown would have to escape the row's own horizontal scroll,
-// and a clipped menu is a menu that does not work.
+// A SCROLLING STRIP WAS THE COMPLAINT. Eight tabs and two group toggles in a
+// row four screens wide, and a second scrolling row under it for whatever a
+// group held: the operator called it "terrible layout, massive scroll nav".
+// So every view now belongs to exactly one of five hubs. The hubs are the
+// bottom bar on a phone and the top row on a wide screen; the views of the
+// hub you are in sit at the top of the content as a row that wraps rather
+// than scrolls.
 //
 // ROUTING IS UNTOUCHED. HASH_VIEWS at the foot of the file is still the one
-// list of what an address can name; this only decides where a button sits.
-// A view with no place in tabLayout lands in More rather than nowhere.
-const MAPS_GROUP = "maps";
-const MORE_GROUP = "more";
+// list of what an address can name, and every old address still opens its
+// view; this only decides which hub lights and which buttons show.
 
 // A function rather than a constant because WATCH_VIEW and FAMILY_VIEW are
 // declared further down the file, and a top-level constant read here would be
-// a temporal-dead-zone error before any of this ran.
-function tabLayout() {
-  return {
-    primary: [WATCH_VIEW, FAMILY_VIEW, LINEUP_VIEW, GUILD_VIEW, ARMORY_VIEW, BAGS_VIEW,
-              DUNGEONS_VIEW, DECREE_VIEW],
-    groups: [[MORE_GROUP, "More"], [MAPS_GROUP, "Maps"]],
-  };
+// a temporal-dead-zone error before any of this ran. Within a hub, the order
+// here is the order of the row.
+const WORLD_HUB = "world";
+function hubLayout() {
+  return [
+    ["watch", "Watch", [WATCH_VIEW]],
+    ["families", "Families", [FAMILY_VIEW, LINEUP_VIEW, CHRONICLE_VIEW]],
+    ["guild", "Guild", [GUILD_VIEW, DUNGEONS_VIEW, RAID_VIEW, COUNCIL_VIEW, DECREE_VIEW]],
+    ["gear", "Gear", [ARMORY_VIEW, BAGS_VIEW, UPGRADES_VIEW, TRADES_VIEW]],
+    [WORLD_HUB, "World", [MAP_VIEW, EYE_VIEW]],
+  ];
 }
 
-const tabGroups = new Map();
-// Which group a person opened by hand: "" means none was, so the group
-// holding the current view is the one shown; "none" means they closed it.
-let tabGroupOpen = "";
+function hubOf(v) {
+  for (const [key, , views] of hubLayout()) if (views.indexOf(v) >= 0) return key;
+  return "";
+}
 
-function tabGroupPanel(key) {
-  const have = tabGroups.get(key);
-  if (have) return have.panel;
-  const label = new Map(tabLayout().groups).get(key) || key;
-  const toggle = document.createElement("button");
-  toggle.type = "button";
-  toggle.className = "tabgroup";
-  toggle.dataset.label = label;
-  toggle.textContent = label;
-  toggle.setAttribute("aria-expanded", "false");
-  toggle.setAttribute("aria-controls", "tabs-" + key);
-  const panel = document.createElement("div");
-  panel.id = "tabs-" + key;
-  panel.className = "tabpanel";
-  panel.setAttribute("role", "group");
-  panel.setAttribute("aria-label", label);
-  panel.hidden = true;
-  toggle.onclick = () => {
-    tabGroupOpen = panel.hidden ? key : "none";
-    syncTabGroups();
-  };
-  panel.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
-    tabGroupOpen = "none";
-    syncTabGroups();
-    toggle.focus();
+// A continent button names no view: it is the map, on that continent.
+function buttonHub(b) {
+  return b.dataset.view ? hubOf(b.dataset.view) : WORLD_HUB;
+}
+
+// The button last lit in each hub, so going back to a hub returns to the view
+// left there rather than to its first one.
+const hubLast = new Map();
+
+function openHub(key) {
+  const last = hubLast.get(key);
+  if (last && last.isConnected) { last.click(); return; }
+  const views = hubLayout().find(([k]) => k === key)[2];
+  const first = document.querySelector('#tabs button[data-view="' + views[0] + '"]');
+  if (first) { first.click(); return; }
+  // The map has no button of its own, only its continents: it opens on the
+  // continent already chosen, as a #map link does.
+  showView(views[0]);
+  if (views[0] === MAP_VIEW) render();
+}
+
+// Left and Right walk a row, Home and End jump to its ends. Tab still visits
+// every button, so this is a shortcut and never the only way through.
+function arrowWalk(row) {
+  row.addEventListener("keydown", (e) => {
+    if (["ArrowLeft", "ArrowRight", "Home", "End"].indexOf(e.key) < 0) return;
+    const items = [...row.querySelectorAll("button")].filter((b) => !b.hidden);
+    const at = items.indexOf(document.activeElement);
+    if (at < 0) return;
+    e.preventDefault();
+    const step = e.key === "ArrowRight" ? 1 : -1;
+    const next = e.key === "Home" ? 0
+      : e.key === "End" ? items.length - 1
+        : (at + step + items.length) % items.length;
+    items[next].focus();
   });
-  document.getElementById("tabs").appendChild(toggle);
-  document.getElementById("tabsub").appendChild(panel);
-  tabGroups.set(key, { toggle, panel });
-  return panel;
 }
 
-// Primary views to the front in tabLayout's order, everything else with a
-// view into More, and the group toggles last so that Tab from a toggle lands
-// in the panel it opened.
+function buildHubs() {
+  const bar = document.getElementById("hubs");
+  for (const [key, label] of hubLayout()) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.dataset.hub = key;
+    b.onclick = () => openHub(key);
+    bar.appendChild(b);
+  }
+  arrowWalk(bar);
+  const row = document.getElementById("tabs");
+  arrowWalk(row);
+  // Escape from a view button goes back up to the hub it belongs to.
+  row.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const lit = bar.querySelector("button.on");
+    if (lit) lit.focus();
+  });
+}
+
+// The buttons in hub order, continents where the map sits. Run again when
+// the continents arrive, so it has to be safe to repeat.
 function arrangeTabs() {
   const row = document.getElementById("tabs");
-  const layout = tabLayout();
-  for (const [key] of layout.groups) tabGroupPanel(key);
-  const buttons = [...row.querySelectorAll("button[data-view]")];
-  for (const b of buttons) {
-    if (layout.primary.indexOf(b.dataset.view) < 0) tabGroupPanel(MORE_GROUP).appendChild(b);
-  }
-  for (const v of layout.primary) {
-    for (const b of buttons) if (b.dataset.view === v) row.appendChild(b);
-  }
-  for (const [key] of layout.groups) row.appendChild(tabGroups.get(key).toggle);
-}
-
-// The toggle is lit when the view on screen is inside its group, and names
-// that view, so a person on Kalimdor can see where they are without opening
-// anything. Open is whatever was chosen by hand, else the lit group.
-function syncTabGroups() {
-  for (const [key, g] of tabGroups) {
-    const lit = g.panel.querySelector("button.on");
-    g.toggle.classList.toggle("on", !!lit);
-    const text = lit ? g.toggle.dataset.label + ": " + lit.textContent : g.toggle.dataset.label;
-    if (g.toggle.textContent !== text) g.toggle.textContent = text;
-    if (lit) revealTab(g.toggle);
-    const open = tabGroupOpen ? tabGroupOpen === key : !!lit;
-    if (g.panel.hidden === open) g.panel.hidden = !open;
-    g.toggle.setAttribute("aria-expanded", String(open));
+  const buttons = [...row.querySelectorAll("button")];
+  for (const [, , views] of hubLayout()) {
+    for (const v of views) {
+      for (const b of buttons) {
+        if (v === MAP_VIEW ? !b.dataset.view : b.dataset.view === v) row.appendChild(b);
+      }
+    }
   }
 }
 
-// --- the tab row (built at once, then grouped) ---------------------------
+// Called from markTabs, which render() runs five times a second, so every
+// write is guarded and a quiet tick touches nothing.
+function syncHubs() {
+  const hub = hubOf(view);
+  for (const b of document.querySelectorAll("#hubs button")) {
+    const on = b.dataset.hub === hub;
+    b.classList.toggle("on", on);
+    if (on && b.getAttribute("aria-current") !== "page") b.setAttribute("aria-current", "page");
+    if (!on && b.hasAttribute("aria-current")) b.removeAttribute("aria-current");
+  }
+  const row = document.getElementById("tabs");
+  let shown = 0;
+  for (const b of row.querySelectorAll("button")) {
+    const mine = buttonHub(b) === hub;
+    if (b.hidden === mine) b.hidden = !mine;
+    if (mine) shown++;
+  }
+  // A hub with one view needs no row: the hub button already names it.
+  const solo = shown < 2;
+  if (row.hidden !== solo) row.hidden = solo;
+  const realms = document.getElementById("realmnav");
+  const noRealms = hub !== WORLD_HUB || !realms.childElementCount;
+  if (realms.hidden !== noRealms) realms.hidden = noRealms;
+  const sub = document.getElementById("subnav");
+  const empty = solo && noRealms;
+  if (sub.hidden !== empty) sub.hidden = empty;
+}
+
+// --- the view buttons (built at once, then arranged by hub) -------------
 //
 // BUILT THE MOMENT THE SCRIPT RUNS, not after zones.json. The named views need
 // no map data, and building them inside loadZones meant the first screen had
 // no way to go anywhere until two JSON files had arrived. Only the continent
 // buttons wait, because only they are named by that file.
 //
-// Every button is still appended to the row in the order it always was, and
-// arrangeTabs() then moves the ones that belong in a group into it. The order
-// below is the order within a group; tabLayout decides which group.
+// Every button is appended in the order it always was, and arrangeTabs()
+// then puts them in hubLayout's order; syncHubs shows the current hub's.
 function buildViewTabs() {
   const tabs = document.getElementById("tabs");
   tabs.setAttribute("aria-label", "views");
@@ -4375,8 +4383,7 @@ function buildViewTabs() {
   gdb.dataset.view = GUILD_VIEW;
   gdb.onclick = () => showView(GUILD_VIEW);
   tabs.appendChild(gdb);
-  // Lands in More (it is not in tabLayout's primary list): read when a
-  // member is being kitted out, not on every visit.
+  // Read when a member is being kitted out, not on every visit.
   const upb = document.createElement("button");
   upb.textContent = "Upgrades";
   upb.dataset.view = UPGRADES_VIEW;
@@ -4417,6 +4424,7 @@ function buildViewTabs() {
   db.dataset.view = DECREE_VIEW;
   db.onclick = () => showView(DECREE_VIEW);
   tabs.appendChild(db);
+  buildHubs();
   arrangeTabs();
 }
 
@@ -4431,9 +4439,9 @@ async function loadZones() {
   // named is checked and adopted here, the moment there is something to check
   // it against.
   adoptContinent();
-  // THE CONTINENTS LIVE IN THE MAPS GROUP. Six of them made the row twice as
-  // long as a phone, and they are one kind of thing: where on the map to look.
-  const tabs = tabGroupPanel(MAPS_GROUP);
+  // THE CONTINENTS ARE THE WORLD HUB'S ROW: they are one kind of thing,
+  // where on the map to look, and arrangeTabs puts them ahead of The Eye.
+  const tabs = document.getElementById("tabs");
   for (const id of CONTINENT_ORDER) {
     const b = document.createElement("button");
     b.textContent = zones[id].name;
@@ -4441,6 +4449,7 @@ async function loadZones() {
     b.onclick = () => { current = id; showView("map"); render(); };
     tabs.appendChild(b);
   }
+  arrangeTabs();
   markTabs();
 }
 
@@ -6074,7 +6083,8 @@ function renderBroadcasts(p) {
   wallLines.clear();
   for (const t of (p.wall && p.wall.tiles) || []) wallLines.set(t.name, t.line);
   const onAir = p.members.some((m) => m.broadcast_url && m.present);
-  const watchTab = document.querySelector('#tabs button[data-view="' + WATCH_VIEW + '"]');
+  // On the hub button: the Watch hub has one view, so it shows no row.
+  const watchTab = document.querySelector('#hubs button[data-hub="' + hubOf(WATCH_VIEW) + '"]');
   if (watchTab) watchTab.classList.toggle("live", onAir);
   for (const m of p.members) {
     // NOBODY WITHOUT A STREAM GETS A TILE. A character that is not streamed has
@@ -7166,7 +7176,7 @@ function syncFamilyTabs(payload) {
 }
 
 function markTabs() {
-  for (const b of document.querySelectorAll("#tabs button:not(.tabgroup), #tabsub button")) {
+  for (const b of document.querySelectorAll("#tabs button")) {
     // This was a two-view ternary hard-coded to the Family tab, which meant a
     // third button fell into the map branch, compared an undefined dataset.id
     // against `current`, and could never light up at all. Now a button either
@@ -7180,50 +7190,11 @@ function markTabs() {
         && (!b.dataset.family || b.dataset.family === familyKey)
       : view === MAP_VIEW && b.dataset.id === current;
     b.classList.toggle("on", on);
-    if (on) revealTab(b);
+    if (on && b.getAttribute("aria-current") !== "page") b.setAttribute("aria-current", "page");
+    if (!on && b.hasAttribute("aria-current")) b.removeAttribute("aria-current");
+    if (on) hubLast.set(buttonHub(b), b);
   }
-  syncTabGroups();
-}
-
-// THE SELECTED TAB IS BROUGHT BACK INTO ITS OWN ROW (infra#3482). Fourteen
-// buttons on a row narrower than half of them, so the lit tab is routinely
-// off-screen: opening the Armory from a link used to leave you looking at a
-// row of tabs with no underline anywhere on it.
-//
-// WRITTEN AGAINST scrollLeft RATHER THAN scrollIntoView, and that is the
-// whole reason this is a function. scrollIntoView walks EVERY scrollable
-// ancestor, the document included, and `block:"nearest"` did not stop it: on
-// first paint the row is below the fold, so the page scrolled 430px down and
-// stayed there - every load landing halfway through the header. Setting
-// scrollLeft touches one axis of one element and can move nothing else.
-//
-// ONCE PER SELECTION, NOT ONCE PER REDRAW. render() calls markTabs() five
-// times a second for the combat pulse, and every call used to run this, so a
-// finger dragging the row was pulled back to the lit tab within 200ms: the
-// row could not be scrolled at all. A row now remembers which tab it last
-// brought into view and moves again only when the lit tab is a different one.
-const revealedTab = new WeakMap();
-function revealTab(b) {
-  const row = b.parentElement;
-  if (!row) return;
-  if (revealedTab.get(row) === b) return;
-  const rr = row.getBoundingClientRect();
-  // A hidden row measures zero: nothing to reveal yet, and the tab must not
-  // count as revealed or it would never be brought in once the row shows.
-  if (!rr.width) return;
-  revealedTab.set(row, b);
-  const br = b.getBoundingClientRect();
-  // A tab already inside the row does not move. The gutter of slack keeps a
-  // tab that has just arrived off the very edge, where it reads as clipped
-  // rather than as the end of the row.
-  // 32 rather than 12 since the row fades its last 28px on a phone (#363):
-  // a lit tab parked inside the fade read as half hidden.
-  const slack = 32;
-  if (br.left < rr.left + slack) {
-    row.scrollLeft -= (rr.left + slack) - br.left;
-  } else if (br.right > rr.right - slack) {
-    row.scrollLeft += br.right - (rr.right - slack);
-  }
+  syncHubs();
 }
 
 // The view IS the address (infra#3110). Before this the page had no routing
@@ -7252,9 +7223,6 @@ function hashFor(v) {
 // the case that actually matters.
 function showView(v) {
   view = v;
-  // Choosing a view closes a group opened by hand; the group holding the new
-  // view, if any, is the one left showing.
-  tabGroupOpen = "";
   const want = hashFor(v);
   if (location.hash !== want) history.replaceState(null, "", want);
   const isFam = v === FAMILY_VIEW;

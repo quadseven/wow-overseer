@@ -384,10 +384,14 @@ class EachFamilyIsItsOwnCard(unittest.TestCase):
         for child in ("agfam", "agline", "agdetail", "agwhen"):
             self.assertEqual(parents[child], "agenda", child)
 
-    def test_the_tab_row_rides_a_sticky_bar(self):
+    def test_the_navigation_rides_one_bar(self):
+        """The hubs and the current hub's views share one wrapper, sticky on a
+        wide screen; on a phone the hubs leave it for the bottom edge."""
         parents = self._parents()
-        self.assertEqual(parents["tabs"], "tabbar")
-        self.assertEqual(parents["tabsub"], "tabbar")
+        self.assertEqual(parents["hubs"], "tabbar")
+        self.assertEqual(parents["subnav"], "tabbar")
+        self.assertEqual(parents["tabs"], "subnav")
+        self.assertEqual(parents["realmnav"], "subnav")
         rule = self.page[self.page.index("#tabbar {") :]
         self.assertIn("position:sticky", rule[: rule.index("}")])
 

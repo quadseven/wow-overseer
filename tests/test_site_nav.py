@@ -1,4 +1,4 @@
-"""The tab row, the Watch wall of heads, and the headless family cards.
+"""The hubs, the Watch wall of heads, and the headless family cards.
 
 Asserted against index.html as source, the way test_family_tab.py and
 test_raid_tab.py do: map_server.py imports pymysql and the page has no other
@@ -6,8 +6,8 @@ test seam.
 
 What the operator asked for, and what each class pins:
 
-  - twenty tabs in one row became a primary row plus two groups (Maps, More),
-    with every address still routed by HASH_VIEWS;
+  - a scrolling tab row with More and Maps groups became five hubs (a bottom
+    bar on a phone), with every address still routed by HASH_VIEWS;
   - the Watch tab shows both families' heads, from one endpoint that reads
     every family, instead of whichever family the Family tab last looked at;
   - a family member with no game client has no empty video box and no
@@ -40,63 +40,77 @@ def view_constants():
     return set(re.findall(r"^const ([A-Z]+_VIEW) = ", PAGE, re.M))
 
 
-class TheTabsAreGrouped(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.LAYOUT = between(PAGE, "function tabLayout()", "\n}\n")
+def hubs():
+    """[(key, label, [view constant, ...]), ...] as hubLayout() lists them."""
+    layout = between(PAGE, "function hubLayout()", "\n}\n")
+    rows = re.findall(r'\[\s*(\w+|"\w+")\s*,\s*"([^"]+)"\s*,\s*\[([^\]]*)\]', layout)
+    return [
+        (key.strip('"'), label, re.findall(r"\b[A-Z]+_VIEW\b", views))
+        for key, label, views in rows
+    ]
 
-    def test_the_primary_row_is_the_views_asked_for(self):
-        primary = between(self.LAYOUT, "primary:", "],")
-        for view in (
-            "WATCH_VIEW",
-            "FAMILY_VIEW",
-            "LINEUP_VIEW",
-            "ARMORY_VIEW",
-            "BAGS_VIEW",
-            "DUNGEONS_VIEW",
-            "DECREE_VIEW",
-        ):
-            self.assertIn(view, primary, view)
-        for view in (
-            "CHRONICLE_VIEW",
-            "RAID_VIEW",
-            "TRADES_VIEW",
-            "COUNCIL_VIEW",
-            "EYE_VIEW",
-            "MAP_VIEW",
-        ):
-            self.assertNotIn(view, primary, view)
 
-    def test_there_are_two_groups_maps_and_more(self):
-        self.assertIn('[MORE_GROUP, "More"]', self.LAYOUT)
-        self.assertIn('[MAPS_GROUP, "Maps"]', self.LAYOUT)
+def phone_block():
+    """The shell's phone rules: the first max-width:640px block."""
+    at = PAGE.index("  @media (max-width:640px) {")
+    return PAGE[at : PAGE.index("\n  }\n", at)]
 
-    def test_the_continents_go_into_the_maps_group(self):
-        load = between(PAGE, "async function loadZones()", "\n}\n")
-        self.assertIn("const tabs = tabGroupPanel(MAPS_GROUP);", load)
-        self.assertLess(
-            load.index("tabGroupPanel(MAPS_GROUP)"),
-            load.index("for (const id of CONTINENT_ORDER)"),
+
+def rule(selector, text=PAGE):
+    """The declarations of the first rule that starts with `selector {`."""
+    at = text.index(selector + " {")
+    return text[at : text.index("}", at)]
+
+
+class TheViewsLiveInFiveHubs(unittest.TestCase):
+    """The operator: "terrible layout, massive scroll nav". Eight tabs, a More
+    group and a Maps group, each opening a second scrolling row, became five
+    hubs with the views of the current one beside or above the content."""
+
+    def test_there_are_five_hubs_in_the_chosen_order(self):
+        self.assertEqual(
+            [label for _key, label, _views in hubs()],
+            ["Watch", "Families", "Guild", "Gear", "World"],
         )
 
-    def test_a_view_nobody_placed_lands_in_more_not_nowhere(self):
-        arrange = between(PAGE, "function arrangeTabs()", "\n}\n")
-        self.assertIn("layout.primary.indexOf(b.dataset.view) < 0", arrange)
-        self.assertIn("tabGroupPanel(MORE_GROUP).appendChild(b)", arrange)
+    def test_each_hub_holds_the_views_the_operator_chose(self):
+        self.assertEqual(
+            {label: views for _key, label, views in hubs()},
+            {
+                "Watch": ["WATCH_VIEW"],
+                "Families": ["FAMILY_VIEW", "LINEUP_VIEW", "CHRONICLE_VIEW"],
+                "Guild": [
+                    "GUILD_VIEW",
+                    "DUNGEONS_VIEW",
+                    "RAID_VIEW",
+                    "COUNCIL_VIEW",
+                    "DECREE_VIEW",
+                ],
+                "Gear": ["ARMORY_VIEW", "BAGS_VIEW", "UPGRADES_VIEW", "TRADES_VIEW"],
+                "World": ["MAP_VIEW", "EYE_VIEW"],
+            },
+        )
+
+    def test_every_view_belongs_to_exactly_one_hub(self):
+        """A view in no hub has no way in; a view in two lights two hubs."""
+        placed = [v for _k, _l, views in hubs() for v in views]
+        self.assertEqual(sorted(placed), sorted(set(placed)), "a view is in two hubs")
+        self.assertEqual(set(placed), view_constants())
 
     def test_every_routed_view_has_a_button(self):
-        """HASH_VIEWS is what an address can name; each of them needs a tab
-        to light, wherever the grouping puts it."""
+        """HASH_VIEWS is what an address can name; each of them needs a
+        button to light, in whichever hub it sits."""
         build = between(PAGE, "function buildViewTabs()", "\n}\n")
         for view in routed_views():
             self.assertIn(".dataset.view = " + view + ";", build, view)
 
     def test_routing_is_still_the_table(self):
-        """Grouping moves buttons; it must not become a second router."""
+        """Hubs show and hide buttons; they must not become a second router."""
         for fn in (
+            "function hubLayout()",
             "function arrangeTabs()",
-            "function syncTabGroups()",
-            "function tabGroupPanel(",
+            "function syncHubs()",
+            "function openHub(",
         ):
             body = between(PAGE, fn, "\n}\n")
             self.assertNotIn("location.hash", body, fn)
@@ -106,40 +120,144 @@ class TheTabsAreGrouped(unittest.TestCase):
     def test_the_whole_view_list_is_still_routed(self):
         self.assertEqual(routed_views(), view_constants() - {"MAP_VIEW"})
 
+    def test_old_addresses_still_open_their_view(self):
+        """Every view id an address could name before is still a routed name,
+        the renamed #achievements included, and the map keeps its own route."""
+        for name in (
+            "family", "watch", "armory", "bags", "chronicle", "dungeons",
+            "raid", "lineup", "guild", "upgrades", "trades", "council",
+            "eye", "decree", "map",
+        ):
+            self.assertRegex(PAGE, r'const [A-Z]+_VIEW = "' + name + '";', name)
+        self.assertIn('new Map([["achievements", CHRONICLE_VIEW]])', PAGE)
+        self.assertIn("if (name === MAP_VIEW) {", between(PAGE, "function applyHash()", "\n}\n"))
 
-class TheGroupsWorkFromAKeyboard(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.PANEL = between(PAGE, "function tabGroupPanel(", "\n}\n")
-
-    def test_the_toggle_is_a_disclosure_button(self):
-        self.assertIn('toggle.type = "button";', self.PANEL)
-        self.assertIn('toggle.setAttribute("aria-expanded", "false");', self.PANEL)
-        self.assertIn(
-            'toggle.setAttribute("aria-controls", "tabs-" + key);', self.PANEL
+    def test_the_continents_are_the_world_hubs_row(self):
+        load = between(PAGE, "async function loadZones()", "\n}\n")
+        self.assertIn('const tabs = document.getElementById("tabs");', load)
+        self.assertLess(
+            load.index("for (const id of CONTINENT_ORDER)"), load.index("arrangeTabs();")
         )
-
-    def test_escape_closes_the_group_and_returns_focus(self):
-        self.assertIn('e.key !== "Escape"', self.PANEL)
-        self.assertIn("toggle.focus();", self.PANEL)
-
-    def test_the_toggles_come_last_so_tab_walks_into_the_panel(self):
+        self.assertIn("return b.dataset.view ? hubOf(b.dataset.view) : WORLD_HUB;", PAGE)
         arrange = between(PAGE, "function arrangeTabs()", "\n}\n")
-        self.assertIn("row.appendChild(tabGroups.get(key).toggle)", arrange)
-        self.assertLess(PAGE.index('<nav id="tabs">'), PAGE.index('<div id="tabsub">'))
+        self.assertIn("v === MAP_VIEW ? !b.dataset.view", arrange)
 
-    def test_the_expanded_state_is_kept_true(self):
-        sync = between(PAGE, "function syncTabGroups()", "\n}\n")
-        self.assertIn('g.toggle.setAttribute("aria-expanded", String(open));', sync)
+    def test_the_group_mechanics_are_gone(self):
+        for gone in (
+            "MORE_GROUP",
+            "MAPS_GROUP",
+            "function tabLayout()",
+            "function tabGroupPanel(",
+            "function syncTabGroups()",
+            "tabGroupOpen",
+            'id="tabsub"',
+            ".tabpanel",
+            "function revealTab(",
+        ):
+            self.assertNotIn(gone, PAGE, gone)
 
-    def test_the_lit_group_says_which_view_is_inside_it(self):
-        sync = between(PAGE, "function syncTabGroups()", "\n}\n")
-        self.assertIn('": " + lit.textContent', sync)
+    def test_a_hub_with_one_view_shows_no_row(self):
+        sync = between(PAGE, "function syncHubs()", "\n}\n")
+        self.assertIn("const solo = shown < 2;", sync)
+        self.assertIn("row.hidden = solo", sync)
 
-    def test_marking_tabs_reaches_into_the_groups(self):
+    def test_the_realm_switcher_rides_the_world_hub(self):
+        """It left the header, where it cost a phone a row on every view."""
+        header = between(PAGE, "<header>", "</header>")
+        self.assertNotIn('id="realmnav"', header)
+        subnav = between(PAGE, '<div id="subnav">', "</div>")
+        self.assertIn('<nav id="realmnav" aria-label="realm"></nav>', subnav)
+        self.assertIn('<script id="realmnav-data" type="application/json">', subnav)
+        sync = between(PAGE, "function syncHubs()", "\n}\n")
+        self.assertIn("hub !== WORLD_HUB || !realms.childElementCount", sync)
+
+    def test_the_watch_live_dot_is_on_the_hub(self):
+        """The Watch hub has one view and so no row: a dot on a hidden button
+        would say nothing."""
+        self.assertIn(
+            "document.querySelector('#hubs button[data-hub=\"' + hubOf(WATCH_VIEW) + '\"]')",
+            PAGE,
+        )
+        self.assertIn("#hubs button.live::before", PAGE)
+
+
+class TheHubsSitWhereAThumbIs(unittest.TestCase):
+    def test_on_a_phone_the_hubs_are_fixed_to_the_bottom(self):
+        hubs_rule = rule("    #hubs", phone_block())
+        self.assertIn("position:fixed", hubs_rule)
+        self.assertIn("bottom:0", hubs_rule)
+        self.assertIn("env(safe-area-inset-bottom)", hubs_rule)
+
+    def test_the_bar_can_reach_the_home_indicator(self):
+        """Without viewport-fit=cover every safe-area inset reads as zero."""
+        self.assertIn("viewport-fit=cover", between(PAGE, '<meta name="viewport"', ">"))
+
+    def test_the_page_is_padded_clear_of_the_bar(self):
+        body = rule("    body", phone_block())
+        self.assertIn("padding-bottom:calc(53px + env(safe-area-inset-bottom))", body)
+
+    def test_five_equal_cells(self):
+        self.assertIn("flex:1 1 0", rule("    #hubs button", phone_block()))
+
+    def test_on_a_wide_screen_the_hubs_ride_the_top(self):
+        bar = rule("  #tabbar")
+        self.assertIn("position:sticky", bar)
+        self.assertIn("top:0", bar)
+        self.assertLess(PAGE.index('<nav id="hubs"'), PAGE.index('<nav id="tabs"'))
+
+    def test_no_row_scrolls_sideways(self):
+        for sel in ("  #hubs", "  #tabs", "  #subnav", "  #tabbar"):
+            body = rule(sel)
+            self.assertNotIn("overflow-x", body, sel)
+        self.assertIn("flex-wrap:wrap", rule("  #tabs"))
+        self.assertIn("flex-wrap:wrap", rule("  #subnav"))
+        self.assertNotIn("mask-image", phone_block())
+
+    def test_a_view_button_never_breaks_across_two_lines(self):
+        self.assertIn("white-space:nowrap", rule("  #tabs button"))
+        self.assertIn("white-space:nowrap", rule("  #hubs button"))
+
+
+class TheHubsWorkFromAKeyboard(unittest.TestCase):
+    def test_hubs_are_buttons_that_say_where_you_are(self):
+        build = between(PAGE, "function buildHubs()", "\n}\n")
+        self.assertIn('b.type = "button";', build)
+        sync = between(PAGE, "function syncHubs()", "\n}\n")
+        self.assertIn('b.setAttribute("aria-current", "page")', sync)
+        self.assertIn('b.removeAttribute("aria-current")', sync)
+
+    def test_the_lit_view_says_so_too(self):
         mark = between(PAGE, "function markTabs()", "\n}\n")
-        self.assertIn('"#tabs button:not(.tabgroup), #tabsub button"', mark)
-        self.assertIn("syncTabGroups();", mark)
+        self.assertIn('b.setAttribute("aria-current", "page")', mark)
+        self.assertIn('"#tabs button"', mark)
+        self.assertIn("syncHubs();", mark)
+
+    def test_arrows_walk_both_rows(self):
+        walk = between(PAGE, "function arrowWalk(row)", "\n}\n")
+        for key in ("ArrowLeft", "ArrowRight", "Home", "End"):
+            self.assertIn('"' + key + '"', walk)
+        self.assertIn("!b.hidden", walk)
+        build = between(PAGE, "function buildHubs()", "\n}\n")
+        self.assertIn("arrowWalk(bar);", build)
+        self.assertIn("arrowWalk(row);", build)
+
+    def test_escape_goes_back_up_to_the_hub(self):
+        build = between(PAGE, "function buildHubs()", "\n}\n")
+        self.assertIn('e.key !== "Escape"', build)
+        self.assertIn("lit.focus();", build)
+
+    def test_a_hub_returns_to_the_view_left_there(self):
+        mark = between(PAGE, "function markTabs()", "\n}\n")
+        self.assertIn("hubLast.set(buttonHub(b), b);", mark)
+        hub = between(PAGE, "function openHub(key)", "\n}\n")
+        self.assertIn("last.click()", hub)
+
+    def test_quiet_ticks_write_nothing(self):
+        """render() calls markTabs five times a second; an unguarded write per
+        button per tick is churn a screen reader hears."""
+        sync = between(PAGE, "function syncHubs()", "\n}\n")
+        self.assertIn("if (b.hidden === mine)", sync)
+        self.assertIn("if (row.hidden !== solo)", sync)
 
 
 class TheShellDrawsAtOnce(unittest.TestCase):
