@@ -939,7 +939,8 @@ def shield_aware(member, character):
     if not character or not character.get("shield_tank"):
         return character
     carried = any(
-        int(c.item_class) == ARMOR and int(c.subclass) == 6 for c in member.carried
+        int(c.item_class) == ARMOR and int(c.subclass) == 6
+        for c in (member.carried or ())
     )
     return dict(character, shield_carried=carried)
 

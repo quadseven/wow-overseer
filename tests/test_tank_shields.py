@@ -175,6 +175,9 @@ class ATankWithoutAShieldBuysOne(unittest.TestCase):
         bag = guildjobs.Carried(guid=5, entry=1204, item_class=4, subclass=6)
         holder = guildjobs.Member(**dict(member.__dict__, carried=(bag,)))
         self.assertIsNone(guildjobs.gear_step(holder, tank, [row], 600.0)[0])
+        # An unread bag is no bag, not a failure.
+        unread = guildjobs.Member(**dict(member.__dict__, carried=None))
+        self.assertIsNotNone(guildjobs.gear_step(unread, tank, [row], 600.0)[0])
         # And the same dressed warrior who does not tank is not sent.
         plain = _character("warrior", False, equipped)
         self.assertIsNone(guildjobs.gear_step(member, plain, [row], 600.0)[0])
