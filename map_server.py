@@ -22,6 +22,7 @@ import pymysql
 import achievements
 import agenda
 import armory
+import gearupgrades
 import bag_pressure
 import bankpolicy
 import basepath
@@ -1115,6 +1116,35 @@ _ITEM_TEMPLATE_COLUMNS = (
     + ", ".join(f"it.stat_type{n}, it.stat_value{n}" for n in range(1, 11)) + ", "
     + ", ".join(f"it.spellid_{n}, it.spelltrigger_{n}" for n in range(1, 6))
 )
+
+
+def _fetch_upgrade_items(ids: list[int]) -> dict[int, dict]:
+    """item_template rows for every item a spec's lists name, by entry.
+
+    Read from the world database like the tooltip columns above, and like
+    /api/armory not subject to the 60s freshness rule: the lists are a fixed
+    snapshot and the template is static. `ids` comes from the committed lists
+    in data/bis, never from the request.
+    """
+    if not ids:
+        return {}
+    holes = ", ".join(["%s"] * len(ids))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608: placeholders only, one per list entry; the values are bound.
+            cur.execute(
+                "SELECT it.entry, it.name AS item_name, it.InventoryType AS inventory_type, "  # noqa: S608
+                "it.armor, it.block, it.dmg_min1, it.dmg_max1, it.delay, "
+                "it.holy_res, it.fire_res, it.nature_res, it.frost_res, "
+                "it.shadow_res, it.arcane_res, "
+                + ", ".join(f"it.stat_type{n}, it.stat_value{n}" for n in range(1, 11))
+                + f" FROM acore_world.item_template it WHERE it.entry IN ({holes})",
+                tuple(ids),
+            )
+            return {int(r["entry"]): r for r in cur.fetchall()}
+    finally:
+        conn.close()
 
 
 def _fetch_family_groups() -> list[tuple[str, list[str]]]:
@@ -6201,6 +6231,45 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("armory member query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _upgrades(self, query: dict) -> None:
+        """GET /api/upgrades?name=X - one guildmate's gear against their spec's lists.
+
+        The upgrade tracker (#541). The same gate as /api/armory/member: `name`
+        must pass the world's name rule AND be on the roster of a family guild
+        as the database reports it; anything else is a 404. Like /api/armory it
+        reads saved gear, not overseer_snapshot, so it is not subject to the
+        60s freshness rule and answers for someone offline. Every score is
+        gearscore's; gearupgrades only lays the slots out.
+        """
+        try:
+            wanted = query.get("name", [""])[0]
+            if not _NAME_RE.fullmatch(wanted):
+                self._send(404, "application/json", b'{"error": "not a guild member"}')
+                return
+            groups = _fetch_family_groups()
+            names = [n for _key, group in groups for n in group]
+            if not _is_family_guildmate(wanted, names):
+                self._send(404, "application/json", b'{"error": "not a guild member"}')
+                return
+            fetched = _fetch_armory([wanted])
+            fetched.pop("equip_event_rows")
+            payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
+                                          families=[("", [wanted])])
+            member = payload["members"][0]
+            if not member.get("present"):
+                self._send(404, "application/json", b'{"error": "not a guild member"}')
+                return
+            spec, _note = gearupgrades.choose_spec(
+                member.get("class"), (member.get("spec") or {}).get("primary"))
+            ids = gearupgrades.all_list_ids(spec) if spec else []
+            result = gearupgrades.build(
+                member, fetched["equipment_rows"], _fetch_upgrade_items(ids),
+                list(armory.EQUIPPED_SLOTS))
+            self._send(200, "application/json", json.dumps(result).encode())
+        except Exception:
+            log.exception("upgrades query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     # --- the virtual game client (vclient.py) ---------------------------
     # Below _armory_member for the same reason it sits here: several suites
     # slice this class between two handlers and assert that no request
@@ -6409,6 +6478,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/armory": _armory,
         "/api/armory/guild": _armory_guild,
         "/api/armory/member": _armory_member,
+        "/api/upgrades": _upgrades,
         "/api/client/bags": _client_bags,
         "/api/client/bank": _client_bank,
         "/api/client/guildbank": _client_guild_bank,
