@@ -70,7 +70,7 @@ class Step:
 PATH: tuple[Step, ...] = (
     Step(389, 13, 21, inside=HORDE, city="Orgrimmar"),  # Ragefire Chasm
     Step(43, 17, 24),  # Wailing Caverns
-    Step(36, 17, 26, inside=ALLIANCE),  # The Deadmines
+    Step(36, 17, 26),  # The Deadmines
     Step(33, 22, 30),  # Shadowfang Keep
     Step(48, 24, 32),  # Blackfathom Deeps
     Step(34, 24, 32, inside=ALLIANCE, city="Stormwind"),  # The Stockade
