@@ -1468,6 +1468,29 @@ def _cells(slot: SlotPlan) -> list:
     ]
 
 
+def _cell_item(piece: Item | None) -> dict | None:
+    """The item a cell names, so the page can open its tooltip from the name."""
+    if piece is None:
+        return None
+    return {"entry": piece.entry, "name": piece.name, "quality": piece.quality}
+
+
+def _cell_items(slot: SlotPlan) -> list:
+    """One entry per cell of _cells, None where the cell names no item.
+
+    Parallel to the cells rather than folded into them, so the cells stay the
+    sentences they were and a reader of the payload that ignores this list
+    loses nothing. Each named cell starts with its item's name.
+    """
+    return [
+        None,
+        _cell_item(slot.worn),
+        _cell_item(slot.next.item) if slot.next else None,
+        None,
+        _cell_item(slot.target.item) if slot.target else None,
+    ]
+
+
 def member_view(member_plan: MemberPlan, reachable) -> dict:
     """One member's block on the Raid tab: the line, the next few upgrades
     and where they drop, and the slot table."""
@@ -1505,7 +1528,9 @@ def member_view(member_plan: MemberPlan, reachable) -> dict:
         "next": [
             {"said": u.said, "where": _where(u.item), "gain": u.gain} for u in nxt
         ],
-        "rows": [{"cells": _cells(s)} for s in member_plan.slots],
+        "rows": [
+            {"cells": _cells(s), "items": _cell_items(s)} for s in member_plan.slots
+        ],
     }
 
 

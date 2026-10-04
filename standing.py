@@ -396,6 +396,9 @@ def trade_entry(
                     "spell": s,
                     "name": book.recipes[s]["name"],
                     "rank": book.recipes[s]["rank"],
+                    # The item it makes, by entry, so the page can open that
+                    # item's tooltip from the name. None for an enchant.
+                    "entry": book.recipes[s]["creates"] or None,
                     # The recipe links to the ITEM it makes when it makes one,
                     # because that is the thing a person wants the tooltip for.
                     # An enchant makes no item and links to the spell instead.
