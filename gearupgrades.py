@@ -15,9 +15,16 @@ book (`spec.primary`). `choose_spec` maps class and tree to a data file in
 first spec, and the payload says so in `spec.note`. A feral druid is scored as
 damage, because the tree alone cannot tell the cat from the bear.
 
-WHAT IS NOT SEEN. Scores come from item_template stats. Enchants, gems, random
-suffixes ("of the Tiger") and equip-spell stats are not folded in, so a piece
-that leans on them scores low. `scored_from` says so, and the page prints it.
+WHAT IS SEEN (#561). A worn piece scores its item_template stats plus what its
+instance adds: the permanent enchant, gems and socket bonus, and a random
+suffix's stats (`armory.instance_stats`, from the committed client tables).
+Each worn block carries `bonus` with those stats and what they are worth.
+Listed targets have no instance and are scored bare, so a gain over a worn
+piece is shown net of the enchant it wears. Gems: no classic item has a
+socket, so gem slots are read but empty on this realm.
+
+WHAT IS NOT SEEN. Equip-spell stats, procs and the temporary enchant (a poison
+or an oil). `scored_from` says so, and the page prints it.
 
 PURE: dicts in, a dict out. The caller reads item_template.
 """
@@ -27,6 +34,7 @@ from __future__ import annotations
 import functools
 import json
 
+import armory
 import gearscore
 
 # A slot is "near" pre-raid best in slot when it scores at least this share of
@@ -38,8 +46,9 @@ AT_BEST = 0.99
 TOP_TARGETS = 3
 
 SCORED_FROM = (
-    "Scores use item template stats only. Enchants, gems, random suffixes "
-    "and equip effects are not counted."
+    "Scores use item template stats plus the worn item's enchant, gems and "
+    "random suffix. Listed targets are scored bare. Equip effects and "
+    "temporary enchants are not counted."
 )
 
 # (class, tree) -> spec file. A class with one data file for every tree is
@@ -241,13 +250,22 @@ def _slot_key(key: str, worn_row: dict | None, spec: str) -> str:
     return key
 
 
-def _worn_block(spec, level, key, worn_row, pool) -> dict | None:
+def _bonus(spec, level, key, base, extra, names) -> dict:
+    """What the worn instance adds: enchant names, stats by name, score gained."""
+    stats = gearscore.add_stats({}, extra)
+    gained = gearscore.score(gearscore.add_stats(base, extra), spec, level, key)
+    gained -= gearscore.score(base, spec, level, key)
+    return {"enchants": names, "stats": stats, "score": _round(gained)}
+
+
+def _worn_block(spec, level, key, worn_row, pool, bonus=None) -> dict | None:
     """What is worn, as gearscore standing sees it (None for an empty slot)."""
     if worn_row is None:
         return None
     entry = worn_row["entry"]
     st = gearscore.standing(spec, key, entry, pool, level)
     return {
+        "bonus": bonus,
         "entry": entry,
         "name": _name(entry, {entry: worn_row}),
         "score": _round(st.score),
@@ -283,7 +301,16 @@ def _state(worn, best_pre, pct) -> str:
 
 
 def _slot(
-    spec, level, slot_name, label, key, worn_row, worn_by_slot, list_rows, stats_by_id
+    spec,
+    level,
+    slot_name,
+    label,
+    key,
+    worn_row,
+    worn_by_slot,
+    list_rows,
+    stats_by_id,
+    book=None,
 ) -> dict:
     key = _slot_key(key, worn_row, spec)
     # A pair's second slot must not be told to buy what the first one wears.
@@ -291,10 +318,16 @@ def _slot(
     skip = other["entry"] if other is not None else None
     pool = {i: s for i, s in stats_by_id.items() if i != skip}
     worn_stats = None
+    bonus = None
     if worn_row is not None:
         worn_stats = gearscore.stats_from_row(worn_row)
+        if book is not None:
+            extra, names = armory.instance_stats(worn_row, book)
+            if extra or names:
+                bonus = _bonus(spec, level, key, worn_stats, extra, names)
+            worn_stats = gearscore.add_stats(worn_stats, extra)
         pool[worn_row["entry"]] = worn_stats
-    worn = _worn_block(spec, level, key, worn_row, pool)
+    worn = _worn_block(spec, level, key, worn_row, pool, bonus)
     targets = {
         gearscore.PHASE_LABEL[phase]: [
             _target(i, s, list_rows)
@@ -320,14 +353,19 @@ def _slot(
 
 
 def build(
-    member: dict, equipment_rows: list[dict], list_rows: dict, slot_names: list[str]
+    member: dict,
+    equipment_rows: list[dict],
+    list_rows: dict,
+    slot_names: list[str],
+    book=None,
 ) -> dict:
     """The tracker payload for one member.
 
     `member` is armory's member dict (name, class, level, spec.primary).
     `equipment_rows` are the worn rows as _fetch_armory reads them (`slot` is
     the paper-doll index into `slot_names`). `list_rows` maps item id to an
-    item_template row for every id the spec's lists name.
+    item_template row for every id the spec's lists name. `book` is armory's
+    ItemBook; without it only template stats are scored.
     """
     level = int(member.get("level") or 1)
     tree = (member.get("spec") or {}).get("primary")
@@ -363,6 +401,7 @@ def build(
             worn_by_slot,
             list_rows,
             stats_by_id,
+            book,
         )
         for name, label, key in ROWS
     ]

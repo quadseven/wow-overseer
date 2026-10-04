@@ -7737,6 +7737,12 @@ function upItem(t, withGain) {
   d.appendChild(el("span", "up-sc", "(" + t.score + (withGain ? ", +" + t.gain : "") + ")"));
   const labels = (t.where || []).map((w) => w.label).join("; ");
   if (labels) d.appendChild(el("span", "up-where", labels));
+  // What the worn instance adds (enchant, gems, random suffix), when it adds any.
+  const b = t.bonus;
+  if (b && b.score) {
+    const named = (b.enchants || []).join(", ");
+    d.appendChild(el("span", "up-where", "enchants, gems and suffix +" + b.score + (named ? ": " + named : "")));
+  }
   return d;
 }
 

@@ -6415,7 +6415,7 @@ class Handler(BaseHTTPRequestHandler):
             ids = gearupgrades.all_list_ids(spec) if spec else []
             result = gearupgrades.build(
                 member, fetched["equipment_rows"], _fetch_upgrade_items(ids),
-                list(armory.EQUIPPED_SLOTS))
+                list(armory.EQUIPPED_SLOTS), book=ITEMS)
             self._send(200, "application/json", json.dumps(result).encode())
         except Exception:
             log.exception("upgrades query failed")
