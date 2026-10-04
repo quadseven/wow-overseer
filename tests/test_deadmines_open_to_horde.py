@@ -27,7 +27,9 @@ class OnlyCapitalDoorsAreClosed(unittest.TestCase):
 
     def test_the_guild_run_closes_only_the_stockade_to_the_horde(self):
         self.assertEqual(frozenset({34}), guildrun.HOSTILE_CAPITAL_DUNGEONS["Horde"])
-        self.assertEqual(frozenset({389}), guildrun.HOSTILE_CAPITAL_DUNGEONS["Alliance"])
+        self.assertEqual(
+            frozenset({389}), guildrun.HOSTILE_CAPITAL_DUNGEONS["Alliance"]
+        )
 
 
 if __name__ == "__main__":
