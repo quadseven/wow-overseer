@@ -7741,7 +7741,7 @@ function upItem(t, withGain) {
   const b = t.bonus;
   if (b && b.score) {
     const named = (b.enchants || []).join(", ");
-    d.appendChild(el("span", "up-where", "enchants and suffix +" + b.score + (named ? ": " + named : "")));
+    d.appendChild(el("span", "up-where", "enchants, gems and suffix +" + b.score + (named ? ": " + named : "")));
   }
   return d;
 }
