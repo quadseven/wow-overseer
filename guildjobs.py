@@ -900,6 +900,25 @@ GUILD_GEAR_VENDOR_YARDS = 1500.0
 GUILD_DOOR_FLOOR = 15
 
 
+def gear_reads(members, facts, offsets, limit):
+    """(names to read this pass, next offsets) for the guild gear step.
+
+    `members` are the candidates (natural, online, out of combat, placed, off
+    the gear cooldown) and `facts` their gearup facts by name. A member is
+    needy when it is short of gear or wears stale gear; the needy are read
+    door-fitting first (tiered_reads).
+    """
+    needy = [
+        m
+        for m in members
+        if facts.get(m.name)
+        and (gearup.gear_short(facts[m.name]) or gearup.stale_gear(facts[m.name]))
+    ]
+    doorable = [m.name for m in needy if m.level >= GUILD_DOOR_FLOOR]
+    others = [m.name for m in needy if m.level < GUILD_DOOR_FLOOR]
+    return tiered_reads(doorable, others, offsets, limit)
+
+
 def tiered_reads(doorable, others, offsets, limit):
     """(names to read, next offsets): members who fit a door first.
 
@@ -910,7 +929,8 @@ def tiered_reads(doorable, others, offsets, limit):
     (doorable offset, others offset).
     """
     first, next_first = rotate_reads(doorable, offsets[0], limit)
-    rest, next_rest = rotate_reads(others, offsets[1], limit - len(first))
+    rest_limit = max(0, limit - len(first))
+    rest, next_rest = rotate_reads(others, offsets[1], rest_limit)
     return first + rest, (next_first, next_rest if rest else offsets[1])
 
 

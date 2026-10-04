@@ -214,7 +214,7 @@ class EveryNeedyMemberGetsARead(unittest.TestCase):
         import pathlib
 
         source = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
-        self.assertIn("guildjobs.tiered_reads(", source)
+        self.assertIn("guildjobs.gear_reads(", source)
         self.assertIn("guildjobs.GUILD_GEAR_VENDOR_YARDS", source)
 
     def test_a_vendor_past_the_family_cap_is_chosen_for_the_guild(self):
@@ -323,8 +323,49 @@ class MembersWhoFitADoorAreReadFirst(unittest.TestCase):
         import pathlib
 
         source = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
-        self.assertIn("guildjobs.tiered_reads(", source)
-        self.assertIn(">= guildjobs.GUILD_DOOR_FLOOR", source)
+        self.assertIn("guildjobs.gear_reads(", source)
+
+
+class GearReadsPickTheNeedy(unittest.TestCase):
+    def test_needy_door_fitting_members_first(self):
+        import gearup
+
+        low = _member(name="Low", level=11)
+        high = _member(name="High", level=17)
+        geared = _member(name="Fine", level=17)
+        full = {
+            s: {"item_level": 17, "item_class": 4, "item_subclass": 1}
+            for s in (
+                "head",
+                "chest",
+                "legs",
+                "feet",
+                "hands",
+                "wrist",
+                "waist",
+                "shoulder",
+                "back",
+                "neck",
+                "finger1",
+                "finger2",
+                "trinket1",
+                "trinket2",
+                "ranged",
+                "mainhand",
+            )
+        }
+        facts = {
+            "Low": _character(),
+            "High": _character(),
+            "Fine": dict(_character(full), level=17),
+        }
+        self.assertFalse(gearup.stale_gear(facts["Fine"]))
+        chosen, _ = guildjobs.gear_reads([low, high, geared], facts, (0, 0), 1)
+        self.assertEqual(["High"], chosen)
+
+    def test_the_leftover_never_goes_negative(self):
+        chosen, _ = guildjobs.tiered_reads(list("abcdef"), ["x"], (0, 0), 3)
+        self.assertNotIn("x", chosen)
 
 
 class ThePlanPutsGearFirst(unittest.TestCase):
