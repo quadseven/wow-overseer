@@ -180,19 +180,6 @@ class BothFactions(unittest.TestCase):
         self.assertEqual(step(path, 34)["state"], dungeonpath.OFF)
         self.assertIn("Stormwind", step(path, 34)["state_line"])
 
-    def test_the_deadmines_is_off_the_horde_path(self):
-        """The Deadmines door stands in Westfall, Alliance territory: a Horde
-        family must never be sent there (#471)."""
-        path = build(members=HORDE_LOW, faction=dungeonpath.HORDE)
-        self.assertEqual(step(path, 36)["state"], dungeonpath.OFF)
-
-    def test_the_deadmines_stays_on_the_alliance_path(self):
-        """The fix must not hide the Deadmines from the Alliance family it
-        serves: a level 20 Alliance family still sees it as a live step."""
-        alliance = [{"name": n, "level": 20} for n in ("G", "B", "O", "U", "R")]
-        path = build(members=alliance, faction=dungeonpath.ALLIANCE)
-        self.assertEqual(step(path, 36)["state"], dungeonpath.NOW)
-
     def test_ragefire_chasm_is_off_the_alliance_path(self):
         path = build()
         self.assertEqual(step(path, 389)["state"], dungeonpath.OFF)

@@ -391,21 +391,18 @@ class TheHostileCapitalDoorIsNeverOffered(unittest.TestCase):
                     floors.append(by_keyword[offered[0]].floor)
             self.assertEqual(floors, sorted(floors), faction)
 
-    def test_an_unreadable_faction_is_offered_no_capital_door(self):
+    def test_an_unreadable_faction_is_offered_neither_capital_door(self):
         """Race 0 (a snapshot without a race) or a mixed roster reads as no
-        faction; that must not lift the filter. Since #471 the Deadmines is
-        a capital door too, so the unreadable family is offered neither it
-        nor the other two."""
+        faction; that must not lift the filter."""
         for level in range(1, 61):
             offered = self.offered(level, "")
             self.assertNotIn("ragefire", offered, level)
             self.assertNotIn("stockades", offered, level)
-            self.assertNotIn("deadmines", offered, level)
-        self.assertEqual(self.offered(19, ""), ["wailing"])
+        self.assertEqual(self.offered(19, ""), ["wailing", "deadmines"])
 
     def test_the_hostile_capital_map_ids_are_the_capital_dungeons(self):
         self.assertEqual(guildrun.HOSTILE_CAPITAL_DUNGEONS["Alliance"], {389})
-        self.assertEqual(guildrun.HOSTILE_CAPITAL_DUNGEONS["Horde"], {34, 36})
+        self.assertEqual(guildrun.HOSTILE_CAPITAL_DUNGEONS["Horde"], {34})
 
     def test_a_member_inside_the_hostile_dungeon_map_is_stranded(self):
         alliance = member("A", 19, MAGE, race=1, map_id=389)

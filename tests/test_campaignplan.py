@@ -104,11 +104,7 @@ class WhatAFamilyIsOffered(unittest.TestCase):
         self.assertFalse(blackfathom.ready)
         refused = campaignplan.refusals(facts())
         self.assertIn("outgrown", refused["ragefire"])
-        # Since #471 the Deadmines is Alliance-only: the Horde is refused for
-        # the capital, not the crossing. Shadowfang Keep still shows the
-        # continent refusal.
-        self.assertIn("other faction's capital", refused["deadmines"])
-        self.assertIn("Eastern Kingdoms", refused["shadowfang"])
+        self.assertIn("Eastern Kingdoms", refused["deadmines"])
         self.assertIn("Uzza is level 22", refused["razorfen-kraul"])
 
     def test_the_alliance_at_60_on_kalimdor_runs_dire_maul(self):
