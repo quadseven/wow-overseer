@@ -25,7 +25,9 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 
 BANNER = "// --- the item tooltip, on every gear name (infra#3501)"
-BLOCK = PAGE[PAGE.index(BANNER) : PAGE.index("// --- what the guild can make (infra#3507)")]
+BLOCK = PAGE[
+    PAGE.index(BANNER) : PAGE.index("// --- what the guild can make (infra#3507)")
+]
 
 
 def fn(name):
@@ -317,8 +319,10 @@ class TheUpgradesTabFitsAPhone(unittest.TestCase):
     CSS = PAGE[PAGE.index("  .up-scroll {") : PAGE.index("  .up-sc {")]
 
     def test_the_base_layout_is_one_card_per_slot(self):
-        self.assertIn(".up-table tbody, .up-table tr, .up-table th, .up-table td { display:block; }",
-                      self.CSS)
+        self.assertIn(
+            ".up-table tbody, .up-table tr, .up-table th, .up-table td { display:block; }",
+            self.CSS,
+        )
         self.assertIn("content:attr(data-label)", self.CSS)
 
     def test_the_table_comes_back_only_where_it_fits(self):

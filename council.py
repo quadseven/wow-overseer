@@ -1297,7 +1297,9 @@ def prospects(level_rows: list[dict], cards: list[dict]) -> list[dict]:
         return []
     who, level = weakest
     drop_items = _drop_items_seen(cards)
-    drops = {map_id: [it["name"] for it in items] for map_id, items in drop_items.items()}
+    drops = {
+        map_id: [it["name"] for it in items] for map_id, items in drop_items.items()
+    }
     been = set(drops)
     # A door inside the other faction's capital is not a place this family
     # can go (#202). Only skipped when the faction is KNOWN: this list is

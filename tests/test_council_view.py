@@ -557,7 +557,9 @@ class TheyOnlyKnowWhatTheyHaveSeen(unittest.TestCase):
     def test_a_drop_without_an_entry_is_still_named(self):
         cards = [run_card(36, [("a green", 2)])]
         places = {p["map_id"]: p for p in council.prospects(levels(Grug=20), cards)}
-        self.assertEqual(places[36]["drop_items"], [{"entry": None, "name": "a green", "quality": 2}])
+        self.assertEqual(
+            places[36]["drop_items"], [{"entry": None, "name": "a green", "quality": 2}]
+        )
 
     def test_the_better_drop_is_named_first(self):
         cards = [run_card(36, [("a green", 2), ("a blue", 3)])]
@@ -757,7 +759,8 @@ class ThePageOnlyDraws(unittest.TestCase):
         """Mobile-first: auto-fit turns two columns into one without anybody
         choosing where that happens, and "left" becomes "first"."""
         self.assertIn(
-            "grid-template-columns:repeat(auto-fit, minmax(min(100%, 320px), 1fr))", self.css
+            "grid-template-columns:repeat(auto-fit, minmax(min(100%, 320px), 1fr))",
+            self.css,
         )
         self.assertNotIn("@media", self.css)
 
