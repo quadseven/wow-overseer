@@ -13425,7 +13425,8 @@ class Bridge(discord.Client):
         offers = {}
         for m in wanted:
             character = facts.get(m.name)
-            if not character or not gearup.gear_short(character):
+            if not character or not (
+                    gearup.gear_short(character) or gearup.stale_gear(character)):
                 continue
             if len(offers) >= GUILD_GEAR_READS_PER_PASS:
                 break

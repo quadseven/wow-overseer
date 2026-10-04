@@ -237,7 +237,7 @@ def plan_buys(characters, listings, *, repair_floor=0):
     return tuple(output)
 
 
-def plan_vendor_buys(characters, offers, *, repair_floor=0):
+def plan_vendor_buys(characters, offers, *, repair_floor=0, replace_stale=False):
     """Buy vendor equipment for EMPTY slots only, from each member's own reach.
 
     THE VENDOR IS THE PATH THAT IS ALWAYS OPEN. The auction house needs a walk
@@ -252,6 +252,12 @@ def plan_vendor_buys(characters, offers, *, repair_floor=0):
     vendor is rarely better than a worn green, so a worn slot is never
     replaced here: every worn slot reads as better than anything on offer. The
     same class, level, armour and budget rules as `plan_buys` apply.
+
+    `replace_stale` is the exception, for guild members (guildjobs.gear_step):
+    on wow-dev on 2026-10-03 they died at levels 10 to 21 in seven pieces
+    averaging item level 3 to 5, a full set of slots nothing would replace. A
+    worn piece AUCTION_STALE_GEAR_LEVEL_GAP or more levels behind its wearer
+    may then be replaced by anything better.
     """
     output = []
     for name, character in sorted(characters.items()):
@@ -265,11 +271,18 @@ def plan_vendor_buys(characters, offers, *, repair_floor=0):
         if not rows:
             continue
         equipped = _get(character, "equipped", "slots", default={}) or {}
-        worn_only = dict(
-            character,
-            equipped={
-                slot: equipped[slot] if slot == "offhand" else None for slot in equipped
-            },
+        # `replace_stale` keeps what is worn, so `_worn_is_better` lets a piece
+        # AUCTION_STALE_GEAR_LEVEL_GAP or more levels behind the wearer go.
+        worn_only = (
+            character
+            if replace_stale
+            else dict(
+                character,
+                equipped={
+                    slot: equipped[slot] if slot == "offhand" else None
+                    for slot in equipped
+                },
+            )
         )
         output.extend(
             _plan_character(
@@ -310,6 +323,7 @@ def vendor_trip(
     repair_floor=0,
     max_yards=VENDOR_TRIP_MAX_YARDS,
     skip=frozenset(),
+    replace_stale=False,
 ):
     """The vendor on the leader's map worth the walk for the short members.
 
@@ -334,7 +348,11 @@ def vendor_trip(
     counts, and a vendor counts only if `plan_vendor_buys` would buy that
     member something there with its own gold, under the same budget rules.
     """
-    short = {name: c for name, c in (characters or {}).items() if gear_short(c)}
+    short = {
+        name: c
+        for name, c in (characters or {}).items()
+        if gear_short(c) or (replace_stale and stale_gear(c))
+    }
     if not short:
         return VendorTrip(
             why_not="nobody on the leader's map has %d or more empty slots"
@@ -343,7 +361,10 @@ def vendor_trip(
     ranked = []
     for vendor, (name, yards, stock) in _vendors(rows, map_id, max_yards, skip).items():
         buys = plan_vendor_buys(
-            short, {n: stock for n in short}, repair_floor=repair_floor
+            short,
+            {n: stock for n in short},
+            repair_floor=repair_floor,
+            replace_stale=replace_stale,
         )
         if buys:
             weapons = sum(1 for b in buys if b.slot == "mainhand")
@@ -638,6 +659,32 @@ class Gift:
     taker: str
     copper: int
     why: str
+
+
+# The gap guildrun's gear gate keeps a member out of dungeons at
+# (guildrun.GEAR_GAP): a worn average this many levels under its own level.
+STALE_GEAR_GAP = 6
+
+
+def stale_gear(character) -> bool:
+    """Every stat slot filled, perhaps, but with gear far below the wearer.
+
+    The average item level of what is worn, the shirt and tabard aside (they
+    carry no stats), under the wearer's level by more than STALE_GEAR_GAP.
+    Nothing worn is not stale; it is `gear_short`.
+    """
+    equipped = _get(character, "equipped", "slots", default={}) or {}
+    levels = []
+    for slot, worn in equipped.items():
+        if slot in ("shirt", "tabard"):
+            continue
+        level = worn.get("item_level") if isinstance(worn, dict) else worn
+        if level is not None:
+            levels.append(int(level))
+    if not levels:
+        return False
+    level = int(_get(character, "level", default=0) or 0)
+    return sum(levels) / len(levels) < level - STALE_GEAR_GAP
 
 
 def gear_short(character) -> bool:
