@@ -267,11 +267,12 @@ JUNK_QUALITY = 0
 # item levels under its holder, is what a player sells. Never a profession
 # tool (miscellaneous weapons: the mining pick and skinning knife; fishing
 # poles) and never miscellaneous armor (shirts, rings, necks, trinkets).
+# Armor subclasses 1 to 6: cloth, leather, mail, plate, buckler, shield.
 WHITE_QUALITY = 1
 OUTGROWN_LEVELS = 10
 WEAPON, ARMOR = 2, 4
 TOOL_WEAPON_SUBCLASSES = frozenset({14, 20})
-WORN_ARMOR_SUBCLASSES = frozenset({1, 2, 3, 4, 6})
+WORN_ARMOR_SUBCLASSES = frozenset({1, 2, 3, 4, 5, 6})
 
 # THE BAR FOR A POST, per role: a stack must hold at least this many before it
 # is worth thirty copper of postage and a walk. Maintenance posts soonest, a
