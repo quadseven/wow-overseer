@@ -1522,6 +1522,42 @@ def tree_tanks(equipped_rows, names) -> tuple:
     return tanks, named
 
 
+# Warrior and paladin, guildrun.SHIELD_TANK_CLASSES: the classes that tank
+# behind a shield.
+_SHIELD_TANK_CLASSES = frozenset({1, 2})
+
+
+def shield_tanks(equipped_rows, names) -> set:
+    """Who plays, or is planned to play, the tank seat behind a shield.
+
+    A warrior or paladin that `tree_tanks` names (the roster's tree or a raid
+    tank seat), or whose raid plan tree (`target_tree`, overseer_raid_spec)
+    tanks when no tree is chosen yet: guildrun's `Member.fit(TANK) == "spec"`
+    over the same `raidroles` tables. A druid tanks in bear form and holds no
+    shield, so it never counts.
+    """
+    tanks, named = tree_tanks(equipped_rows, names)
+    wanted = {str(n) for n in names or ()}
+    classes = {}
+    for row in equipped_rows or ():
+        try:
+            name, class_id = str(row["name"]), int(row["class_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if name not in wanted:
+            continue
+        classes[name] = class_id
+        if (
+            name not in named
+            and class_id in _SHIELD_TANK_CLASSES
+            and raidroles.fits_seat(
+                class_id, row.get("target_tree"), raidroles.SEAT_TANK
+            )
+        ):
+            tanks.add(name)
+    return {n for n in tanks if classes.get(n) in _SHIELD_TANK_CLASSES}
+
+
 def family_fits(gear_rows, equipped_rows, names) -> dict:
     """item guid -> disposition.FIT_*, from the one gear opinion.
 
@@ -1649,7 +1685,7 @@ def holder_equips(gear_rows, equipped_rows, names, keep_names=()) -> tuple:
 
 
 def guild_equips(
-    gear_rows, equipped_rows, member_names, family_names, keep_names=()
+    gear_rows, equipped_rows, member_names, family_names, keep_names=(), tanks=()
 ) -> tuple:
     """The carried pieces each non-family guild member should put on now.
 
@@ -1659,6 +1695,10 @@ def guild_equips(
     on), and no party role is packed across a guild the way a family's is.
     The family is skipped because `holder_equips` already serves it with its
     roles and Jev's plan. The owner's never-dispose mark is honoured.
+
+    `tanks` is who plays the tank seat (`shield_tanks`). A shield tank carrying
+    a shield wears it, as a player does; every other member keeps the unknown
+    role and is judged as before.
     """
     family = {str(name) for name in (family_names or ())}
     names = [str(n) for n in (member_names or ()) if str(n) not in family]
@@ -1666,7 +1706,8 @@ def guild_equips(
         row for row in gear_rows if not owner_keeps(row.get("name", ""), keep_names)
     ]
     holdings = gear.holdings_from_rows(kept)
-    characters = gear.characters_from_rows(equipped_rows, names)
+    roles = {str(n): gear.ROLE_TANK for n in tanks or ()}
+    characters = gear.characters_from_rows(equipped_rows, names, roles=roles)
     out = []
     for character in characters:
         mine = [h for h in holdings if h.holder == character.name]
