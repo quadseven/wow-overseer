@@ -542,6 +542,25 @@ class TheyOnlyKnowWhatTheyHaveSeen(unittest.TestCase):
         self.assertIn("Cruel Barb", places[36]["drops"])
         self.assertTrue(places[36]["been"])
 
+    def test_each_drop_carries_its_entry_for_the_tooltip(self):
+        """drop_items runs beside drops, same names, same order, each with the
+        entry the page opens the item's tooltip from."""
+        cards = [run_card(36, [("a green", 2), ("a blue", 3)])]
+        cards[0]["loot"][0]["entry"] = 11
+        cards[0]["loot"][1]["entry"] = 12
+        places = {p["map_id"]: p for p in council.prospects(levels(Grug=20), cards)}
+        items = places[36]["drop_items"]
+        self.assertEqual([it["name"] for it in items], places[36]["drops"])
+        self.assertEqual([it["entry"] for it in items], [12, 11])
+        self.assertEqual(items[0]["quality"], 3)
+
+    def test_a_drop_without_an_entry_is_still_named(self):
+        cards = [run_card(36, [("a green", 2)])]
+        places = {p["map_id"]: p for p in council.prospects(levels(Grug=20), cards)}
+        self.assertEqual(
+            places[36]["drop_items"], [{"entry": None, "name": "a green", "quality": 2}]
+        )
+
     def test_the_better_drop_is_named_first(self):
         cards = [run_card(36, [("a green", 2), ("a blue", 3)])]
         places = {p["map_id"]: p for p in council.prospects(levels(Grug=20), cards)}
@@ -740,7 +759,8 @@ class ThePageOnlyDraws(unittest.TestCase):
         """Mobile-first: auto-fit turns two columns into one without anybody
         choosing where that happens, and "left" becomes "first"."""
         self.assertIn(
-            "grid-template-columns:repeat(auto-fit, minmax(320px, 1fr))", self.css
+            "grid-template-columns:repeat(auto-fit, minmax(min(100%, 320px), 1fr))",
+            self.css,
         )
         self.assertNotIn("@media", self.css)
 

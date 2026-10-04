@@ -287,6 +287,25 @@ class ThePlan(unittest.TestCase):
         plan = preraid.plan(self.by["Grug"], self.found, set(preraid.PLACES))
         self.assertNotIn(105, {u.item.entry for u in plan.upgrades})
 
+    def test_each_named_cell_carries_its_item_for_the_tooltip(self):
+        """The slot table's cells are sentences; the items they name ride
+        beside them by entry, so the page can open each one's tooltip."""
+        plan = preraid.plan(self.by["Grug"], self.found, {"dire-maul-north"})
+        view = preraid.member_view(plan, {"dire-maul-north"})
+        chest = next(r for r in view["rows"] if r["cells"][0] == preraid.SLOT_NAMES[4])
+        self.assertEqual(len(chest["items"]), len(chest["cells"]))
+        worn, nxt, target = chest["items"][1], chest["items"][2], chest["items"][4]
+        self.assertEqual(worn["name"], "Jouster's Chestplate")
+        self.assertEqual(nxt["name"], "Kromcrush's Chestplate")
+        self.assertEqual(target["name"], "Breastplate of Valor")
+        for i in (1, 2, 4):
+            item = chest["items"][i]
+            self.assertTrue(chest["cells"][i].startswith(item["name"]), i)
+            self.assertIsInstance(item["entry"], int)
+            self.assertIn("quality", item)
+        self.assertIsNone(chest["items"][0])
+        self.assertIsNone(chest["items"][3])
+
     def test_a_run_is_worth_its_chance_times_the_item_levels(self):
         plans = [preraid.plan(m, self.found) for m in family()]
         gains = preraid.run_gains(plans)

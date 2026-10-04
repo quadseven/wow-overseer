@@ -186,7 +186,7 @@ class TheChronicle(unittest.TestCase):
         index.html holds itself to naming a fixed list of outside hosts."""
         opener = self.page[self.page.index("function openItemTip") :]
         opener = opener[: opener.index("\n}")]
-        self.assertIn("tipOut.href = item.wowhead;", opener)
+        self.assertIn("itemTipLink(item.wowhead);", opener)
 
     def test_a_failed_poll_keeps_the_cards_and_says_so(self):
         poll = self.tab[self.tab.index("async function pollChronicle") :]

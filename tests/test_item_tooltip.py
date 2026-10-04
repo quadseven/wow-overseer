@@ -526,10 +526,14 @@ class TheNameIsNoLongerALink(unittest.TestCase):
         self.assertIn("touch-action:manipulation", rule)
 
     def test_a_name_with_nothing_behind_it_is_not_a_control(self):
-        """An affordance that opens an empty panel is worse than none."""
+        """An affordance that opens an empty panel is worse than none. A
+        name with an entry is not empty: its reading is one read away."""
         fn = BLOCK[BLOCK.index("function itemTipName") :]
         fn = fn[: fn.index("\n}\n")]
-        self.assertIn('if (!item.tooltip) return el("span", cls, label);', fn)
+        self.assertIn(
+            'if (!item.tooltip && itemTipEntry(item) === null) return el("span", cls, label);',
+            fn,
+        )
 
     def test_the_chronicles_loot_line_goes_through_it(self):
         fn = PAGE[PAGE.index("function chrItem") :]
@@ -577,7 +581,11 @@ class TheInteractionIsPredictable(unittest.TestCase):
         """The same sword can be on the page twice, worn by two members.
         Keyed by entry, tapping the second would close the first's panel."""
         self.assertIn("openItemTip(b, item", BLOCK)
-        self.assertNotIn("item.entry", BLOCK)
+        self.assertIn("tipShown.at = at;", BLOCK)
+        # The entry keys the READ cache (one fetch per item) and never which
+        # name is open.
+        self.assertNotIn("tipShown.entry", BLOCK)
+        self.assertNotIn("tipShown.at === entry", BLOCK)
 
     def test_the_control_says_what_it_opens(self):
         self.assertIn('b.setAttribute("aria-controls", "itemtip");', BLOCK)
@@ -594,7 +602,8 @@ class ThereIsOnlyOneRenderer(unittest.TestCase):
         self.assertIn("itemTipLines(c.detail, s.tooltip, renderProvenance(c, s));", fn)
 
     def test_the_panel_draws_through_the_same_one(self):
-        self.assertIn("itemTipLines(tipBody, item.tooltip, null);", BLOCK)
+        self.assertIn("itemTipLines(tipBody, item.tooltip, note);", BLOCK)
+        self.assertIn("itemTipLines(tipBody, info.tooltip, note);", BLOCK)
 
     def test_it_is_declared_exactly_once(self):
         self.assertEqual(PAGE.count("\nfunction itemTipLines("), 1)
@@ -646,7 +655,9 @@ class TheWayOutIsStillThere(unittest.TestCase):
     deliberate row inside the panel rather than the default tap."""
 
     def test_the_address_is_the_modules_and_not_composed_here(self):
-        self.assertIn("tipOut.href = item.wowhead;", BLOCK)
+        self.assertIn("itemTipLink(item.wowhead);", BLOCK)
+        self.assertIn("itemTipLink(info.wowhead);", BLOCK)
+        self.assertIn("if (href) tipOut.href = href;", BLOCK)
         self.assertNotIn("https://", BLOCK)
 
     def test_it_refuses_the_opener(self):

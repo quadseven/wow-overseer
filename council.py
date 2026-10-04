@@ -1249,14 +1249,18 @@ def verdict(short: int, been: bool, drops: list[str], who: str) -> str:
     )
 
 
-def _drops_seen(cards: list[dict]) -> dict:
-    """map id -> what the family has actually watched drop there.
+def _drop_items_seen(cards: list[dict]) -> dict:
+    """map id -> what the family has actually watched drop there, as items.
 
     Their OWN knowledge, and deliberately nothing else. A wiki would list what
     every boss in the game can drop; this lists what came out of the runs
     these five have actually done, which is the only thing they can be said to
     know. A place they have never been reports nothing, and that is the honest
     answer rather than an empty state.
+
+    Each item keeps its entry so the page can open its tooltip from the name;
+    best quality first, then by name. One line per name: the same piece seen
+    twice is one thing the family knows drops there.
     """
     found: dict = {}
     for card in cards:
@@ -1265,13 +1269,18 @@ def _drops_seen(cards: list[dict]) -> dict:
         bucket = found.setdefault(int(card.get("map_id") or 0), {})
         for item in card.get("loot") or []:
             name = str(item.get("name") or "")
-            if name:
-                bucket[name] = max(bucket.get(name, -1), int(item.get("quality") or 0))
+            if not name:
+                continue
+            quality = int(item.get("quality") or 0)
+            seen = bucket.get(name)
+            if seen is None or quality > seen["quality"]:
+                bucket[name] = {
+                    "entry": int(item.get("entry") or 0) or None,
+                    "name": name,
+                    "quality": quality,
+                }
     return {
-        map_id: [
-            name
-            for name, _ in sorted(bucket.items(), key=lambda pair: (-pair[1], pair[0]))
-        ]
+        map_id: sorted(bucket.values(), key=lambda it: (-it["quality"], it["name"]))
         for map_id, bucket in found.items()
     }
 
@@ -1287,7 +1296,10 @@ def prospects(level_rows: list[dict], cards: list[dict]) -> list[dict]:
     if weakest is None:
         return []
     who, level = weakest
-    drops = _drops_seen(cards)
+    drop_items = _drop_items_seen(cards)
+    drops = {
+        map_id: [it["name"] for it in items] for map_id, items in drop_items.items()
+    }
     been = set(drops)
     # A door inside the other faction's capital is not a place this family
     # can go (#202). Only skipped when the faction is KNOWN: this list is
@@ -1314,6 +1326,9 @@ def prospects(level_rows: list[dict], cards: list[dict]) -> list[dict]:
                 "ready": short <= 0,
                 "been": map_id in been,
                 "drops": seen[:DROPS_SHOWN],
+                # The same names as items, in the same order, so the page
+                # can open each one's tooltip.
+                "drop_items": drop_items.get(map_id, [])[:DROPS_SHOWN],
                 "more_drops": max(len(seen) - DROPS_SHOWN, 0),
                 "verdict": verdict(short, map_id in been, seen, who),
             }
