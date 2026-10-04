@@ -894,6 +894,26 @@ GEAR_SUCCESS_COOLDOWN_MINUTES = 15
 GUILD_GEAR_VENDOR_YARDS = 1500.0
 
 
+# The lowest level a guild group may enter any door at (Ragefire Chasm and
+# the Deadmines' floors, guildrun.LEVEL_MARGIN 0). A member below it fits no
+# door yet, so gear that lifts it over guildrun's gate seats nobody today.
+GUILD_DOOR_FLOOR = 15
+
+
+def tiered_reads(doorable, others, offsets, limit):
+    """(names to read, next offsets): members who fit a door first.
+
+    On wow-dev on 2026-10-04 the gate passed 12 members at levels 10 to 14,
+    who fit no door, and 4 at 15 to 19, while 67 members at 15 to 19 waited
+    their turn behind them. `doorable` rotate among themselves for every read
+    they can fill; the reads left over rotate through `others`. `offsets` is
+    (doorable offset, others offset).
+    """
+    first, next_first = rotate_reads(doorable, offsets[0], limit)
+    rest, next_rest = rotate_reads(others, offsets[1], limit - len(first))
+    return first + rest, (next_first, next_rest if rest else offsets[1])
+
+
 def rotate_reads(names, offset, limit):
     """(the names to read this pass, the offset for the next pass).
 

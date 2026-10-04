@@ -13425,11 +13425,14 @@ class Bridge(discord.Client):
         needy = [m.name for m in wanted
                  if facts.get(m.name) and (gearup.gear_short(facts[m.name])
                                            or gearup.stale_gear(facts[m.name]))]
-        # A rolling window over the needy, not the front of the list
-        # (guildjobs.rotate_reads).
-        chosen, self._gear_read_offset = guildjobs.rotate_reads(
-            needy, getattr(self, "_gear_read_offset", 0), GUILD_GEAR_READS_PER_PASS)
         by_name = {m.name: m for m in wanted}
+        # Members who fit a door first, each tier a rolling window
+        # (guildjobs.tiered_reads).
+        doorable = [n for n in needy if by_name[n].level >= guildjobs.GUILD_DOOR_FLOOR]
+        others = [n for n in needy if by_name[n].level < guildjobs.GUILD_DOOR_FLOOR]
+        chosen, self._gear_read_offsets = guildjobs.tiered_reads(
+            doorable, others, getattr(self, "_gear_read_offsets", (0, 0)),
+            GUILD_GEAR_READS_PER_PASS)
         offers = {}
         for name in chosen:
             offers[name] = (facts[name], await asyncio.to_thread(
