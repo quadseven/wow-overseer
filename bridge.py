@@ -21827,7 +21827,10 @@ _JOB_PENDING_SUMMONS_SQL = (
 # new until it collects what it was sent.
 _JOB_UNCLAIMED_SQL = (
     "SELECT DISTINCT c.name FROM mail m JOIN characters c ON c.guid = m.receiver "
-    "WHERE m.subject = %s AND m.has_items = 1"
+    "WHERE m.subject = %s AND m.has_items = 1 "
+    # A FULL MAILBOX IS A POST WAITING TOO (guildjobs.MAILBOX_FULL_LETTERS).
+    "UNION SELECT c.name FROM mail m JOIN characters c ON c.guid = m.receiver "
+    "GROUP BY c.name HAVING COUNT(*) >= %s"
 )
 _JOB_BANK_TABS_SQL = (
     "SELECT DISTINCT g.name FROM guild g JOIN guild_bank_tab t ON t.guildid = g.guildid"
@@ -21883,7 +21886,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                 (guildjobs.SOURCE + ":%",))
         pending_rows = _job_read(cur, "summons", _JOB_PENDING_SUMMONS_SQL)
         unclaimed_rows = _job_read(cur, "unopened material posts", _JOB_UNCLAIMED_SQL,
-                                   (guildjobs.POST_SUBJECT,))
+                                   (guildjobs.POST_SUBJECT, guildjobs.MAILBOX_FULL_LETTERS))
         bank_rows = _job_read(cur, "guild bank tabs", _JOB_BANK_TABS_SQL)
         if not _JOB_STONES:
             _JOB_STONES.extend(_job_read(cur, "meeting stones", _JOB_STONES_SQL,
