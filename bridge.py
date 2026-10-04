@@ -19625,6 +19625,12 @@ _GUILD_RUN_MEMBERS_SQL = (
     # shirt; gearup.stale_gear leaves them out the same way.
     "WHERE ci.guid = s.guid AND ci.bag = 0 AND ci.slot < 19 "
     "AND ci.slot NOT IN (3, 18)) AS gear_ilvl, "
+    # The coverage gate (guildrun.covered): armor slots 0 to 14 without the
+    # shirt (3), and the main hand (15).
+    "(SELECT COUNT(*) FROM character_inventory ci WHERE ci.guid = s.guid "
+    "AND ci.bag = 0 AND ci.slot <= 14 AND ci.slot <> 3) AS worn_slots, "
+    "EXISTS (SELECT 1 FROM character_inventory ci WHERE ci.guid = s.guid "
+    "AND ci.bag = 0 AND ci.slot = 15) AS has_weapon, "
     # IN THE WORLD IS A FRESH SNAPSHOT, NOT characters.online. The flag reads
     # 0 for random bots that are in the world (8 guild members flipped to 0 at
     # once on the dev realm while their snapshots kept updating), and the
