@@ -1,0 +1,372 @@
+{
+ "spec": "warlock-dps",
+ "class": "warlock",
+ "spec_name": "destruction",
+ "role": "caster",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "spell_damage",
+   "spell_hit",
+   "spell_crit",
+   "spell_penetration",
+   "intellect",
+   "stamina"
+  ],
+  "caps": {},
+  "source_url": "https://www.wowhead.com/classic/guide/classes/warlock/dps-stat-priority-attributes-pve"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/warlock/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Mana": 0.01,
+   "Intellect": 0.23,
+   "Spirit": 0.0,
+   "MP5": 0.14,
+   "SpellPower": 1.0,
+   "SpellDamage": 1.0,
+   "FirePower": 0.1,
+   "ShadowPower": 0.9,
+   "SpellHit": 12.79,
+   "SpellCrit": 7.92,
+   "SpellHaste": 7.83,
+   "Stamina": 0.01,
+   "FireResistance": 0.0
+  }
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/warlock-dps-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     22267,
+     23255,
+     22074,
+     10504,
+     14111,
+     18727,
+     12752,
+     10025,
+     10041,
+     18526
+    ],
+    "neck": [
+     22403,
+     18691,
+     12103,
+     18317,
+     18728
+    ],
+    "shoulders": [
+     23311,
+     14112,
+     18681,
+     11624,
+     22412,
+     18720,
+     22073,
+     10028,
+     14538
+    ],
+    "back": [
+     13386,
+     22330,
+     18350,
+     18496,
+     11623,
+     19121,
+     19086
+    ],
+    "chest": [
+     14153,
+     14136,
+     14106,
+     22075,
+     18385,
+     11924,
+     10021,
+     10004
+    ],
+    "wrist": [
+     16804,
+     18497,
+     22071
+    ],
+    "hands": [
+     18407,
+     22077,
+     13253,
+     14146,
+     21318,
+     23282,
+     22256,
+     10019,
+     10023
+    ],
+    "waist": [
+     11662,
+     20047,
+     16806,
+     19094,
+     18405,
+     13956,
+     22070,
+     4329
+    ],
+    "legs": [
+     19165,
+     22342,
+     13170,
+     23296,
+     14107,
+     22072,
+     10002
+    ],
+    "feet": [
+     18735,
+     11822,
+     18102,
+     23283,
+     22076,
+     20054,
+     10031
+    ],
+    "finger": [
+     22339,
+     22433,
+     12543,
+     13001,
+     1980,
+     18103,
+     7553,
+     11824
+    ],
+    "trinket": [
+     19812,
+     12930,
+     22268,
+     13968,
+     18467,
+     11832
+    ],
+    "main_hand": [
+     18372,
+     13964,
+     17780,
+     17719,
+     7714,
+     11784,
+     11922
+    ],
+    "off_hand": [
+     22329,
+     19309,
+     19315,
+     10796,
+     22253,
+     11904,
+     13029,
+     15108,
+     7685,
+     19115,
+     7749
+    ],
+    "two_hand": [
+     22335,
+     18534,
+     873
+    ],
+    "ranged": [
+     13603,
+     13396,
+     13938,
+     22408,
+     18301
+    ]
+   },
+   "best": {
+    "head": [
+     22267
+    ],
+    "neck": [
+     22403
+    ],
+    "back": [
+     13386
+    ],
+    "hands": [
+     18407,
+     22077
+    ],
+    "waist": [
+     11662
+    ],
+    "legs": [
+     19165
+    ],
+    "feet": [
+     18735
+    ],
+    "finger": [
+     22339,
+     22433
+    ],
+    "main_hand": [
+     18372
+    ],
+    "off_hand": [
+     22329
+    ],
+    "ranged": [
+     13396
+    ]
+   },
+   "unreachable_at_60": [
+    13603
+   ]
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-warlock-dps-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     10504,
+     16929
+    ],
+    "neck": [
+     18814,
+     12103,
+     18691
+    ],
+    "shoulders": [
+     14112,
+     18681
+    ],
+    "back": [
+     13386,
+     10249,
+     17078
+    ],
+    "chest": [
+     19145,
+     14153,
+     14136,
+     10246
+    ],
+    "wrist": [
+     13409,
+     11766,
+     10248,
+     16804
+    ],
+    "hands": [
+     13253,
+     16805
+    ],
+    "waist": [
+     19136,
+     11662,
+     13956
+    ],
+    "legs": [
+     19165,
+     13170,
+     16810
+    ],
+    "feet": [
+     10247,
+     18735,
+     11822,
+     18102
+    ],
+    "finger": [
+     19147,
+     12545,
+     13001,
+     1980
+    ],
+    "trinket": [
+     18820,
+     12930,
+     13968
+    ],
+    "main_hand": [
+     17103,
+     18878,
+     15247
+    ],
+    "off_hand": [
+     10796,
+     11904
+    ],
+    "two_hand": [
+     18842,
+     15278,
+     873
+    ],
+    "ranged": [
+     13396,
+     13938,
+     15283,
+     22408
+    ]
+   },
+   "best": {
+    "head": [
+     10504
+    ],
+    "neck": [
+     18814
+    ],
+    "shoulders": [
+     14112
+    ],
+    "back": [
+     13386
+    ],
+    "chest": [
+     19145
+    ],
+    "wrist": [
+     13409
+    ],
+    "hands": [
+     13253
+    ],
+    "waist": [
+     19136
+    ],
+    "legs": [
+     19165
+    ],
+    "feet": [
+     10247
+    ],
+    "finger": [
+     19147
+    ],
+    "trinket": [
+     18820
+    ],
+    "main_hand": [
+     17103
+    ],
+    "off_hand": [
+     10796
+    ],
+    "two_hand": [
+     18842
+    ],
+    "ranged": [
+     13396
+    ]
+   },
+   "unreachable_at_60": [
+    17078
+   ]
+  }
+ }
+}

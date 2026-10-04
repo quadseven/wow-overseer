@@ -1,0 +1,315 @@
+{
+ "spec": "druid-restoration",
+ "class": "druid",
+ "spec_name": "restoration",
+ "role": "healer",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "healing"
+  ],
+  "caps": {},
+  "source_url": "https://www.wowhead.com/classic/guide/classes/druid/healer-stat-priority-attributes-pve",
+  "note": "source gives healing first, the rest by talent build and fight length"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/restoration_druid/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Intellect": 0.38,
+   "Spirit": 0.34,
+   "SpellPower": 1.0,
+   "SpellCrit": 0.69,
+   "SpellHaste": 0.77,
+   "MP5": 0.0
+  },
+  "caution": "identical to holy_paladin: likely a placeholder copy"
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/druid-healing-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     10504,
+     13102,
+     18490,
+     22267,
+     12960,
+     18727,
+     2721
+    ],
+    "neck": [
+     18723,
+     18317,
+     19096,
+     13141
+    ],
+    "shoulders": [
+     15061,
+     22405,
+     18681
+    ],
+    "back": [
+     18510,
+     19526,
+     18389
+    ],
+    "chest": [
+     13346,
+     22272,
+     15059,
+     13314,
+     18385,
+     18373
+    ],
+    "wrist": [
+     19595,
+     18525,
+     13208,
+     18263
+    ],
+    "hands": [
+     12554,
+     10787,
+     18309,
+     13253,
+     13184,
+     12547
+    ],
+    "waist": [
+     14553,
+     18327,
+     18391
+    ],
+    "legs": [
+     18386,
+     11841,
+     18682
+    ],
+    "feet": [
+     22247,
+     18507,
+     13954,
+     18322,
+     11822
+    ],
+    "finger": [
+     13178,
+     16058,
+     22334,
+     19518,
+     13001,
+     18395
+    ],
+    "trinket": [
+     18470,
+     18371,
+     12930,
+     11819,
+     13968,
+     11832
+    ],
+    "main_hand": [
+     11923,
+     22315,
+     7721,
+     18321
+    ],
+    "off_hand": [
+     19312,
+     18523,
+     19315,
+     22319,
+     11928,
+     9393
+    ],
+    "two_hand": [
+     22406,
+     11932,
+     20069,
+     22458,
+     18534,
+     873,
+     18717
+    ],
+    "ranged": [
+     22398
+    ]
+   },
+   "best": {
+    "head": [
+     10504,
+     13102
+    ],
+    "neck": [
+     18723
+    ],
+    "shoulders": [
+     15061
+    ],
+    "back": [
+     18510
+    ],
+    "chest": [
+     13346
+    ],
+    "hands": [
+     12554,
+     10787
+    ],
+    "waist": [
+     14553
+    ],
+    "legs": [
+     18386
+    ],
+    "feet": [
+     22247
+    ],
+    "finger": [
+     13178,
+     16058
+    ],
+    "trinket": [
+     18470
+    ],
+    "main_hand": [
+     11923
+    ],
+    "two_hand": [
+     22406
+    ],
+    "ranged": [
+     22398
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-druid-healing-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     16900,
+     10504,
+     13102
+    ],
+    "neck": [
+     18814,
+     18723
+    ],
+    "shoulders": [
+     18810,
+     16836,
+     15061,
+     18681
+    ],
+    "back": [
+     13386,
+     11623
+    ],
+    "chest": [
+     13346,
+     19145,
+     16833,
+     13314
+    ],
+    "wrist": [
+     13208,
+     16830,
+     18263,
+     13107
+    ],
+    "hands": [
+     12554,
+     13253,
+     16831
+    ],
+    "waist": [
+     19162,
+     14553
+    ],
+    "legs": [
+     18875,
+     16901,
+     16835,
+     11841,
+     18682
+    ],
+    "feet": [
+     13954,
+     16829
+    ],
+    "finger": [
+     19140,
+     13178,
+     16058,
+     13001
+    ],
+    "trinket": [
+     17064,
+     12930
+    ],
+    "main_hand": [
+     17105,
+     11923,
+     13964,
+     17710
+    ],
+    "off_hand": [
+     11928
+    ],
+    "two_hand": [
+     18842,
+     11932
+    ]
+   },
+   "best": {
+    "head": [
+     16900
+    ],
+    "neck": [
+     18814
+    ],
+    "shoulders": [
+     18810
+    ],
+    "chest": [
+     13346
+    ],
+    "wrist": [
+     13208
+    ],
+    "hands": [
+     12554
+    ],
+    "waist": [
+     19162
+    ],
+    "legs": [
+     18875
+    ],
+    "feet": [
+     13954
+    ],
+    "finger": [
+     19140
+    ],
+    "trinket": [
+     17064
+    ],
+    "main_hand": [
+     17105
+    ],
+    "two_hand": [
+     18842
+    ]
+   },
+   "unreachable_at_60": [
+    17064
+   ]
+  }
+ }
+}

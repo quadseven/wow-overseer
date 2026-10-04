@@ -1,0 +1,335 @@
+{
+ "spec": "mage-dps",
+ "class": "mage",
+ "spec_name": "fire_frost",
+ "role": "caster",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "spell_hit_to_16pct",
+   "spell_damage",
+   "spell_crit",
+   "intellect",
+   "spell_penetration",
+   "spirit"
+  ],
+  "caps": {
+   "spell_hit_pct": 16
+  },
+  "source_url": "https://www.wowhead.com/classic/guide/classes/mage/dps-stat-priority-attributes-pve"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/mage/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Intellect": 0.49,
+   "SpellPower": 1.0,
+   "SpellDamage": 1.0,
+   "ArcanePower": 1.0,
+   "FirePower": 1.0,
+   "FrostPower": 1.0,
+   "SpellHit": 18.59,
+   "SpellCrit": 13.91,
+   "SpellHaste": 6.85,
+   "MP5": 0.11,
+   "FireResistance": 0.5
+  }
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/mage-dps-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     22267,
+     23263,
+     18727,
+     14332
+    ],
+    "neck": [
+     22403,
+     20037,
+     12103
+    ],
+    "shoulders": [
+     11782,
+     23264,
+     14335
+    ],
+    "back": [
+     13386,
+     10249,
+     18350
+    ],
+    "chest": [
+     14152,
+     14340,
+     22886,
+     18385
+    ],
+    "wrist": [
+     19595,
+     13409,
+     11766,
+     10248,
+     18497
+    ],
+    "hands": [
+     22066,
+     13253,
+     21318,
+     13870
+    ],
+    "waist": [
+     11662,
+     20163,
+     13956,
+     18740
+    ],
+    "legs": [
+     22883,
+     13170,
+     13871
+    ],
+    "feet": [
+     22860,
+     10247,
+     11822,
+     18102
+    ],
+    "finger": [
+     22339,
+     942,
+     12545,
+     13001
+    ],
+    "trinket": [
+     12930,
+     22268,
+     13968,
+     11832
+    ],
+    "main_hand": [
+     20214,
+     15247,
+     13964
+    ],
+    "off_hand": [
+     19310,
+     19315,
+     22329,
+     11904
+    ],
+    "two_hand": [
+     20220,
+     22335,
+     15278,
+     18534
+    ],
+    "ranged": [
+     19108,
+     15283,
+     13938,
+     7514
+    ]
+   },
+   "best": {
+    "head": [
+     22267
+    ],
+    "neck": [
+     22403
+    ],
+    "shoulders": [
+     11782
+    ],
+    "back": [
+     13386
+    ],
+    "chest": [
+     14152
+    ],
+    "wrist": [
+     19595
+    ],
+    "hands": [
+     22066
+    ],
+    "waist": [
+     11662
+    ],
+    "legs": [
+     22883
+    ],
+    "feet": [
+     22860
+    ],
+    "finger": [
+     22339,
+     942
+    ],
+    "trinket": [
+     12930,
+     22268,
+     13968
+    ],
+    "main_hand": [
+     20214
+    ],
+    "off_hand": [
+     19310
+    ],
+    "two_hand": [
+     20220
+    ],
+    "ranged": [
+     19108
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-mage-dps-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     16795,
+     16914,
+     14332
+    ],
+    "neck": [
+     18814,
+     17109,
+     12103
+    ],
+    "shoulders": [
+     11782,
+     14335,
+     18681
+    ],
+    "back": [
+     13386,
+     17078,
+     10249
+    ],
+    "chest": [
+     14152,
+     14340,
+     19145,
+     10246
+    ],
+    "wrist": [
+     16799,
+     13409,
+     11766,
+     10248
+    ],
+    "hands": [
+     16801,
+     13253,
+     13870,
+     21318
+    ],
+    "waist": [
+     19136,
+     11662,
+     13956,
+     18740
+    ],
+    "legs": [
+     13170,
+     16796,
+     13871
+    ],
+    "feet": [
+     10247,
+     11822
+    ],
+    "finger": [
+     19147,
+     942,
+     12545,
+     13001
+    ],
+    "trinket": [
+     18820,
+     12930,
+     13968,
+     11832
+    ],
+    "main_hand": [
+     17103,
+     15247,
+     13964
+    ],
+    "off_hand": [
+     10796,
+     11904
+    ],
+    "two_hand": [
+     18842,
+     15278
+    ],
+    "ranged": [
+     15283,
+     13938,
+     7514
+    ]
+   },
+   "best": {
+    "head": [
+     16795
+    ],
+    "neck": [
+     18814
+    ],
+    "shoulders": [
+     11782
+    ],
+    "back": [
+     13386
+    ],
+    "chest": [
+     14152
+    ],
+    "wrist": [
+     16799
+    ],
+    "hands": [
+     16801
+    ],
+    "waist": [
+     19136
+    ],
+    "legs": [
+     13170
+    ],
+    "feet": [
+     10247
+    ],
+    "finger": [
+     19147
+    ],
+    "trinket": [
+     18820
+    ],
+    "main_hand": [
+     17103
+    ],
+    "off_hand": [
+     10796
+    ],
+    "two_hand": [
+     18842
+    ],
+    "ranged": [
+     15283
+    ]
+   },
+   "unreachable_at_60": [
+    17078
+   ]
+  }
+ }
+}

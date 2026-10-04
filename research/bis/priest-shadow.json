@@ -1,0 +1,353 @@
+{
+ "spec": "priest-shadow",
+ "class": "priest",
+ "spec_name": "shadow",
+ "role": "caster",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "spell_hit_to_16pct",
+   "spell_damage",
+   "mp5",
+   "intellect",
+   "spirit"
+  ],
+  "caps": {
+   "spell_hit_pct": 16
+  },
+  "source_url": "https://www.wowhead.com/classic/guide/classes/priest/shadow/dps-stat-priority-attributes-pve"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/shadow_priest/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Intellect": 0.16,
+   "Spirit": 0.01,
+   "SpellPower": 1.0,
+   "SpellDamage": 1.0,
+   "ShadowPower": 1.0,
+   "SpellHit": 5.51,
+   "SpellCrit": 5.99,
+   "SpellHaste": 1.65,
+   "MP5": 0.0,
+   "FireResistance": 0.5
+  }
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/shadow-priest-dps-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     22267,
+     18727,
+     14332,
+     10504,
+     10041,
+     14111,
+     10025,
+     22080
+    ],
+    "neck": [
+     22403,
+     18691,
+     23125,
+     22149,
+     18728,
+     13141,
+     14558
+    ],
+    "shoulders": [
+     14112,
+     18681,
+     10028,
+     11624,
+     14538,
+     13013,
+     22082
+    ],
+    "back": [
+     13386,
+     18350,
+     11623,
+     10249
+    ],
+    "chest": [
+     14136,
+     14106,
+     18385,
+     1716,
+     10004,
+     22083
+    ],
+    "wrist": [
+     11766,
+     18497,
+     10461,
+     13958,
+     22079
+    ],
+    "hands": [
+     18407,
+     13253,
+     23128,
+     18306,
+     21318,
+     10019,
+     10023,
+     22081
+    ],
+    "waist": [
+     11662,
+     18740,
+     18475,
+     13956,
+     22078
+    ],
+    "legs": [
+     22342,
+     13170,
+     12965,
+     14107,
+     22085
+    ],
+    "feet": [
+     18735,
+     11822,
+     18102,
+     22084
+    ],
+    "finger": [
+     22339,
+     13001,
+     12545,
+     12543,
+     1980,
+     7553,
+     11824
+    ],
+    "trinket": [
+     22268,
+     12930,
+     18371,
+     11819,
+     11832,
+     13968,
+     19990,
+     10659
+    ],
+    "main_hand": [
+     13349,
+     13964,
+     18048
+    ],
+    "off_hand": [
+     10796,
+     22329,
+     22253,
+     11904,
+     13029
+    ],
+    "ranged": [
+     13396,
+     13938,
+     22408,
+     20082,
+     15283,
+     18301
+    ]
+   },
+   "best": {
+    "head": [
+     22267
+    ],
+    "neck": [
+     22403,
+     18691
+    ],
+    "shoulders": [
+     14112
+    ],
+    "back": [
+     13386
+    ],
+    "chest": [
+     14136
+    ],
+    "wrist": [
+     11766,
+     18497
+    ],
+    "hands": [
+     18407
+    ],
+    "waist": [
+     11662
+    ],
+    "legs": [
+     22342
+    ],
+    "feet": [
+     18735
+    ],
+    "finger": [
+     22339,
+     13001,
+     12545,
+     12543
+    ],
+    "trinket": [
+     22268,
+     12930,
+     18371
+    ],
+    "main_hand": [
+     13349
+    ],
+    "off_hand": [
+     10796
+    ],
+    "ranged": [
+     13396
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-shadow-priest-dps-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     10504,
+     18727,
+     14111
+    ],
+    "neck": [
+     18814,
+     18691,
+     18728
+    ],
+    "shoulders": [
+     14112,
+     18681,
+     13013
+    ],
+    "back": [
+     17078,
+     13386
+    ],
+    "chest": [
+     14136,
+     13314,
+     14106
+    ],
+    "wrist": [
+     13409,
+     11766,
+     10248
+    ],
+    "hands": [
+     13253,
+     10019
+    ],
+    "waist": [
+     18809,
+     11662,
+     13956,
+     18740
+    ],
+    "legs": [
+     13170,
+     12965
+    ],
+    "feet": [
+     18735,
+     11822,
+     18697
+    ],
+    "finger": [
+     19147,
+     12545,
+     13001,
+     1980,
+     7553
+    ],
+    "trinket": [
+     18820,
+     12930,
+     13968,
+     11832,
+     11819
+    ],
+    "main_hand": [
+     17105,
+     13349,
+     13964
+    ],
+    "off_hand": [
+     10796,
+     11904
+    ],
+    "two_hand": [
+     873
+    ],
+    "ranged": [
+     13396,
+     13938,
+     15283
+    ]
+   },
+   "best": {
+    "head": [
+     10504
+    ],
+    "neck": [
+     18814
+    ],
+    "shoulders": [
+     14112
+    ],
+    "back": [
+     17078
+    ],
+    "chest": [
+     14136
+    ],
+    "wrist": [
+     13409
+    ],
+    "hands": [
+     13253
+    ],
+    "waist": [
+     18809
+    ],
+    "legs": [
+     13170
+    ],
+    "feet": [
+     18735
+    ],
+    "finger": [
+     19147
+    ],
+    "trinket": [
+     18820
+    ],
+    "main_hand": [
+     17105
+    ],
+    "off_hand": [
+     10796
+    ],
+    "ranged": [
+     13396
+    ]
+   },
+   "unreachable_at_60": [
+    17078
+   ]
+  }
+ }
+}

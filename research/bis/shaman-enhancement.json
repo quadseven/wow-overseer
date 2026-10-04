@@ -1,0 +1,311 @@
+{
+ "spec": "shaman-enhancement",
+ "class": "shaman",
+ "spec_name": "enhancement",
+ "role": "melee",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "weapon_skill_first_5",
+   "crit",
+   "melee_hit_to_cap",
+   "strength",
+   "agility",
+   "mp5",
+   "intellect",
+   "stamina"
+  ],
+  "caps": {},
+  "source_url": "https://www.wowhead.com/classic/guide/classes/shaman/enhancement/dps-stat-priority-attributes-pve"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/enhancement_shaman/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Intellect": 0.02,
+   "Agility": 1.12,
+   "Strength": 2.29,
+   "SpellPower": 1.15,
+   "SpellDamage": 1.15,
+   "FirePower": 0.63,
+   "NaturePower": 0.48,
+   "SpellHit": 0.03,
+   "SpellCrit": 1.94,
+   "MP5": 0.01,
+   "AttackPower": 1.0,
+   "MeleeHit": 9.62,
+   "MeleeCrit": 14.8,
+   "FireResistance": 0.5,
+   "MainHandDps": 8.15,
+   "OffHandDps": 5.81,
+   "MeleeSpeedMultiplier": 5.81
+  }
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/enhancement-shaman-dps-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     13359,
+     12587,
+     18421
+    ],
+    "neck": [
+     15411,
+     11933,
+     17044
+    ],
+    "shoulders": [
+     15051,
+     12927,
+     12082
+    ],
+    "back": [
+     13340,
+     22337,
+     11626
+    ],
+    "chest": [
+     11726,
+     15050,
+     14637
+    ],
+    "wrist": [
+     18375,
+     12966,
+     13135,
+     13211
+    ],
+    "hands": [
+     19157,
+     15063,
+     13963
+    ],
+    "waist": [
+     13252,
+     14614,
+     18393
+    ],
+    "legs": [
+     15052,
+     15062,
+     15065
+    ],
+    "feet": [
+     16984,
+     14616,
+     13967
+    ],
+    "finger": [
+     18500,
+     17713,
+     13098,
+     18522,
+     2246
+    ],
+    "trinket": [
+     13965,
+     11815,
+     19120
+    ],
+    "main_hand": [
+     12798
+    ],
+    "off_hand": [
+     22336,
+     17718
+    ],
+    "two_hand": [
+     19169,
+     19323,
+     18538,
+     20696,
+     12784,
+     13372
+    ],
+    "ranged": [
+     22395,
+     22345
+    ]
+   },
+   "best": {
+    "head": [
+     13359
+    ],
+    "neck": [
+     15411
+    ],
+    "shoulders": [
+     15051
+    ],
+    "back": [
+     13340
+    ],
+    "chest": [
+     11726
+    ],
+    "wrist": [
+     18375
+    ],
+    "hands": [
+     19157,
+     15063
+    ],
+    "waist": [
+     13252
+    ],
+    "legs": [
+     15052,
+     15062
+    ],
+    "feet": [
+     16984,
+     14616
+    ],
+    "finger": [
+     18500,
+     17713,
+     13098
+    ],
+    "trinket": [
+     13965,
+     11815
+    ],
+    "main_hand": [
+     12798
+    ],
+    "off_hand": [
+     22336
+    ],
+    "two_hand": [
+     19169
+    ],
+    "ranged": [
+     22395
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-enhancement-shaman-dps-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     18817,
+     13359
+    ],
+    "neck": [
+     18404,
+     15411,
+     11933
+    ],
+    "shoulders": [
+     12927,
+     15051
+    ],
+    "back": [
+     13340,
+     11626
+    ],
+    "chest": [
+     11726,
+     15050,
+     14637
+    ],
+    "wrist": [
+     18812,
+     13135
+    ],
+    "hands": [
+     19157,
+     15063
+    ],
+    "waist": [
+     13252,
+     12634,
+     14614
+    ],
+    "legs": [
+     15062,
+     15052
+    ],
+    "feet": [
+     19144,
+     14616,
+     16984
+    ],
+    "finger": [
+     18821,
+     17063,
+     17713,
+     13098
+    ],
+    "trinket": [
+     11815,
+     13965,
+     19120
+    ],
+    "main_hand": [
+     12798,
+     17068,
+     12590,
+     18737
+    ],
+    "two_hand": [
+     19169,
+     17182,
+     17104,
+     12784
+    ]
+   },
+   "best": {
+    "head": [
+     18817
+    ],
+    "neck": [
+     18404
+    ],
+    "shoulders": [
+     12927
+    ],
+    "chest": [
+     11726
+    ],
+    "wrist": [
+     18812
+    ],
+    "hands": [
+     19157
+    ],
+    "waist": [
+     13252
+    ],
+    "legs": [
+     15062
+    ],
+    "feet": [
+     19144
+    ],
+    "finger": [
+     18821
+    ],
+    "trinket": [
+     11815
+    ],
+    "main_hand": [
+     12798
+    ],
+    "two_hand": [
+     19169
+    ]
+   },
+   "unreachable_at_60": [
+    17068,
+    17182,
+    18404
+   ]
+  }
+ }
+}

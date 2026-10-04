@@ -1,0 +1,330 @@
+{
+ "spec": "druid-balance",
+ "class": "druid",
+ "spec_name": "balance",
+ "role": "caster",
+ "snapshot": "2026-10-04",
+ "stat_priority": {
+  "order": [
+   "spell_hit_to_16pct",
+   "spell_crit",
+   "spell_damage",
+   "intellect",
+   "spirit",
+   "stamina"
+  ],
+  "caps": {
+   "spell_hit_pct": 16
+  },
+  "source_url": "https://www.wowhead.com/classic/guide/classes/druid/balance/dps-stat-priority-attributes-pve"
+ },
+ "weights": {
+  "source": "wowsims/classic (MIT, Copyright (c) 2024 wowsims team)",
+  "source_url": "https://github.com/wowsims/classic/blob/7779ebbf79dc7f1341e6ab939b28a3402c9a730a/ui/balance_druid/sim.ts",
+  "units": "per point; *Hit/*Crit/*Haste per 1%; *Dps per weapon DPS point",
+  "values": {
+   "Intellect": 0.16,
+   "Spirit": 0.0,
+   "SpellPower": 1.0,
+   "SpellDamage": 1.0,
+   "ArcanePower": 0.62,
+   "NaturePower": 0.38,
+   "SpellHit": 11.75,
+   "SpellCrit": 7.5,
+   "SpellHaste": 0.8,
+   "MP5": 0.0,
+   "FireResistance": 0.5
+  }
+ },
+ "lists": {
+  "preraid": {
+   "source_url": "https://www.wowhead.com/classic/guide/balance-druid-dps-pre-raid-best-in-slot-bis-gear-wow-classic",
+   "phase": "preraid",
+   "slots": {
+    "head": [
+     22267,
+     18727,
+     10504,
+     10041
+    ],
+    "neck": [
+     22403,
+     12103,
+     18317,
+     14558,
+     1443,
+     13141
+    ],
+    "shoulders": [
+     18681,
+     11624,
+     18528
+    ],
+    "back": [
+     13386,
+     11623,
+     18350,
+     19085,
+     19121
+    ],
+    "chest": [
+     18385,
+     18373,
+     1716,
+     13314
+    ],
+    "wrist": [
+     19595,
+     11766,
+     18497,
+     18709
+    ],
+    "hands": [
+     13253,
+     21318,
+     12464,
+     10019
+    ],
+    "waist": [
+     11662,
+     19090,
+     18475,
+     4329,
+     18740
+    ],
+    "legs": [
+     13170,
+     9484,
+     11823
+    ],
+    "feet": [
+     18322,
+     11822,
+     18102
+    ],
+    "finger": [
+     22339,
+     13001,
+     12543,
+     19518,
+     7553
+    ],
+    "trinket": [
+     12930,
+     13968,
+     11832
+    ],
+    "main_hand": [
+     20214,
+     13964,
+     18048,
+     18321
+    ],
+    "off_hand": [
+     19308,
+     19315,
+     22329,
+     10796,
+     11904,
+     22253,
+     7685
+    ],
+    "two_hand": [
+     22335,
+     20069,
+     18534,
+     873,
+     22458,
+     18082,
+     10844
+    ],
+    "ranged": [
+     23197
+    ]
+   },
+   "best": {
+    "head": [
+     22267
+    ],
+    "neck": [
+     22403
+    ],
+    "shoulders": [
+     18681
+    ],
+    "back": [
+     13386
+    ],
+    "chest": [
+     18385
+    ],
+    "hands": [
+     13253
+    ],
+    "waist": [
+     11662
+    ],
+    "legs": [
+     13170
+    ],
+    "feet": [
+     18322
+    ],
+    "finger": [
+     22339
+    ],
+    "trinket": [
+     12930
+    ],
+    "two_hand": [
+     22335
+    ],
+    "ranged": [
+     23197
+    ]
+   },
+   "unreachable_at_60": []
+  },
+  "mc": {
+   "source_url": "https://www.wowhead.com/classic/guide/wow-classic-balance-druid-dps-molten-core-best-in-slot-gear",
+   "phase": "mc",
+   "slots": {
+    "head": [
+     18727,
+     10250,
+     15999
+    ],
+    "neck": [
+     18814,
+     17109,
+     12103,
+     15856
+    ],
+    "shoulders": [
+     18681,
+     11624,
+     14335,
+     13013
+    ],
+    "back": [
+     17078,
+     11623,
+     13386,
+     10249
+    ],
+    "chest": [
+     19145,
+     13314,
+     10246
+    ],
+    "wrist": [
+     18263,
+     13409,
+     11766,
+     10248
+    ],
+    "hands": [
+     13253,
+     21318
+    ],
+    "waist": [
+     19136,
+     11662,
+     13956,
+     18740
+    ],
+    "legs": [
+     19165,
+     13170
+    ],
+    "feet": [
+     11822,
+     10247
+    ],
+    "finger": [
+     19147,
+     12545,
+     13001
+    ],
+    "trinket": [
+     18820,
+     12930,
+     13968,
+     11832,
+     17064
+    ],
+    "main_hand": [
+     18878,
+     15247,
+     13964
+    ],
+    "off_hand": [
+     10796,
+     11904
+    ],
+    "two_hand": [
+     18842,
+     15278
+    ],
+    "ranged": [
+     13289
+    ]
+   },
+   "best": {
+    "head": [
+     18727
+    ],
+    "neck": [
+     18814
+    ],
+    "shoulders": [
+     18681
+    ],
+    "back": [
+     17078
+    ],
+    "chest": [
+     19145
+    ],
+    "wrist": [
+     18263
+    ],
+    "hands": [
+     13253
+    ],
+    "waist": [
+     19136
+    ],
+    "legs": [
+     19165
+    ],
+    "feet": [
+     11822
+    ],
+    "finger": [
+     19147
+    ],
+    "trinket": [
+     18820
+    ],
+    "main_hand": [
+     18878
+    ],
+    "off_hand": [
+     10796
+    ],
+    "two_hand": [
+     18842
+    ],
+    "ranged": [
+     13289
+    ]
+   },
+   "unreachable_at_60": [
+    13289,
+    17064,
+    17078
+   ]
+  }
+ }
+}
