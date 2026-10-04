@@ -1431,7 +1431,9 @@ def plan(
     tailors = choose_tailors(members)
     trades = cloth_trades(split_trades(members, tailors), tailors)
     steps, lines, notes = [], {}, []
-    started = {}
+    # One counter per allowance, each keyed by guild: STEPS_PER_GUILD for
+    # every job, GEAR_STEPS_PER_GUILD for gear and hearth steps.
+    started_jobs, started_gear = {}, {}
     for m in _ordered_members(members):
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
@@ -1455,17 +1457,14 @@ def plan(
         if step is None:
             continue
         gearing = step.action in ("gear", "hearth")
-        key = (m.guild, "gear") if gearing else m.guild
+        started = started_gear if gearing else started_jobs
         why = _step_refusal(
-            m,
-            busy,
-            {m.guild: started.get(key, 0)},
-            GEAR_STEPS_PER_GUILD if gearing else per_guild,
+            m, busy, started, GEAR_STEPS_PER_GUILD if gearing else per_guild
         )
         if why:
             notes.append(why)
             continue
-        started[key] = started.get(key, 0) + 1
+        started[m.guild] = started.get(m.guild, 0) + 1
         busy.add(m.name)
         steps.append(step)
     return JobsPlan(
