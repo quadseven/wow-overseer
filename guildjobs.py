@@ -275,6 +275,7 @@ MAX_SALES = 12
 # from the command log so a restart forgets nothing.
 COOLDOWN_MINUTES = {
     "gear": 60,
+    "collect": 60,
     "hearth": 60,
     "train": 60,
     "tool": 60,
@@ -1479,6 +1480,7 @@ def plan(
     unclaimed=(),
     banks=None,
     gear=None,
+    mail=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -1489,7 +1491,8 @@ def plan(
     names another pass has on a walk; `unclaimed` names family members with a
     materials post still unopened in their mailbox (`without_unclaimed`);
     `banks` the guilds that own a guild bank tab, None when unread; `gear`
-    name -> (gearup facts, vendor rows in reach) for gear-short members.
+    name -> (gearup facts, vendor rows in reach) for gear-short members;
+    `mail` name -> the mail commands (mailrun) waiting at its mailbox.
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -1510,6 +1513,7 @@ def plan(
         step, doing, note = _member_step(
             m,
             (gear or {}).get(m.name),
+            (mail or {}).get(m.name, ()),
             trades,
             fields,
             doors,
@@ -1545,13 +1549,54 @@ def plan(
     )
 
 
+def collect_step(m, commands, cap):
+    """The member opens its post: a walk to a mailbox, then every take.
+
+    GUILD MEMBERS NEVER OPENED THEIR MAIL. On wow-dev on 2026-10-04 the
+    family's cloth and gear sat unopened in guild members' mailboxes for up to
+    157 hours (Aalall 33 letters, Argam 25, Bezki and Cigtek 24 each), every
+    one still carrying its items: bandage cloth for the First Aid crafters
+    and pieces to wear, posted and never collected. `commands` are mailrun's,
+    the same takes and empty-letter deletes the family's own pass writes.
+    """
+    if not commands:
+        return None
+    return guildcorps.Step(
+        m.name,
+        "collect",
+        len(commands),
+        "%s walks to a mailbox to open %d piece(s) of post" % (m.name, len(commands)),
+        rows=tuple(
+            guildcorps.Row("mail", command, "", source_for("collect", m.name))
+            for command in commands
+        ),
+        walk=guildcorps.Row(
+            "mail",
+            guildroute.mailbox_walk_command(cap),
+            "",
+            source_for("collect-walk", m.name),
+        ),
+    )
+
+
+def _collect_first(m, commands, recent, cap):
+    if not commands or not m.eligible or not m.online or m.in_combat:
+        return None
+    if _cooling(m, "collect", recent):
+        return None
+    return collect_step(m, commands, cap)
+
+
 def _member_step(
-    m, offer, trades, fields, doors, pending, crafters, master, kept, recent, cap
+    m, offer, mail, trades, fields, doors, pending, crafters, master, kept, recent, cap
 ):
-    """Gear first, then the member's ordinary job, keeping both notes."""
+    """Gear, then the post, then the member's ordinary job, keeping the notes."""
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
     if step is not None:
         return step, doing, gear_note
+    step = _collect_first(m, mail, recent, cap)
+    if step is not None:
+        return step, step.said, gear_note
     step, doing, note = _plan_member(
         m, trades, fields, doors, pending, crafters, master, kept, recent, cap
     )

@@ -13406,7 +13406,8 @@ class Bridge(discord.Client):
             kept=await asyncio.to_thread(_KEEP.now),
             recent=facts["recent"], busy=busy, cap=cap,
             unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"),
-            gear=await self._job_gear_offers(members, facts["recent"]))
+            gear=await self._job_gear_offers(members, facts["recent"]),
+            mail=await asyncio.to_thread(_job_mail_commands, members))
         if facts.get("unclaimed"):
             log.info("guild jobs: no new materials post for %s until the posts "
                      "waiting unopened are collected; theirs go to the bank",
@@ -23799,6 +23800,26 @@ def _mail_gear_holders(names: list) -> dict:
     wear now; `mailrun.gear_waiting` judges."""
     return mailrun.gear_waiting(
         mailrun.letters_from_rows(_fetch_mail(names), names))
+
+
+def _job_mail_commands(members) -> dict:
+    """name -> the mail commands waiting for each natural guild member.
+
+    mailrun plans them exactly as it does for the family: money first, items
+    within the bag room left, then the empty letters. Read for natural members
+    only, the ones guildjobs may give a step to.
+    """
+    names = [m.name for m in members if m.eligible]
+    if not names:
+        return {}
+    letters = mailrun.letters_from_rows(_fetch_mail(names), names)
+    if not letters:
+        return {}
+    plan = mailrun.plan(letters, _fetch_free_slots(names))
+    out: dict = {}
+    for take in plan.takes:
+        out.setdefault(take.character, []).append(mailrun.command(take))
+    return {name: tuple(commands) for name, commands in out.items()}
 
 
 def _fetch_mail(names: list) -> list:
