@@ -192,6 +192,8 @@ class Member:
     # main-hand weapon; None when unread.
     worn_slots: int | None = None
     has_weapon: bool | None = None
+    # A shield worn in the off hand; None when unread.
+    has_shield: bool | None = None
 
     @property
     def played_tree(self) -> str:
@@ -247,6 +249,7 @@ def member_from_row(row: dict) -> Member | None:
         gear_ilvl=None if row.get("gear_ilvl") is None else float(row["gear_ilvl"]),
         worn_slots=None if row.get("worn_slots") is None else int(row["worn_slots"]),
         has_weapon=None if row.get("has_weapon") is None else bool(row["has_weapon"]),
+        has_shield=None if row.get("has_shield") is None else bool(row["has_shield"]),
     )
 
 
@@ -525,6 +528,22 @@ BLOCKED_DOORS = {
 COVERED_SLOTS = 4
 
 
+# A WARRIOR OR PALADIN TANKS BEHIND A SHIELD (the operator, on #544). A druid
+# tanks in bear form and needs none. Live 2026-10-04: 7 of 35 warriors and
+# paladins in the two guilds wore one, 3 more carried one in their bags.
+SHIELD_TANK_CLASSES = frozenset({1, 2})
+
+
+def tank_ready(member: Member) -> bool:
+    """May this member take the tank seat: covered, and a warrior or paladin
+    wears a shield. Unread gear is not held."""
+    if not covered(member):
+        return False
+    if int(member.class_id) not in SHIELD_TANK_CLASSES or member.has_shield is None:
+        return True
+    return bool(member.has_shield)
+
+
 def covered(member: Member) -> bool:
     """May this member take a tank or healer seat? Unread gear is not held."""
     if member.worn_slots is None or member.has_weapon is None:
@@ -662,7 +681,7 @@ def compositions(window: list) -> list:
     tank and a healer who fit at least by class gives nothing.
     """
     tanks = sorted(
-        (m for m in window if m.fit(TANK) and covered(m)),
+        (m for m in window if m.fit(TANK) and tank_ready(m)),
         key=lambda m: (_seat_rank(m, TANK), -m.level, m.name),
     )
     healers = sorted(

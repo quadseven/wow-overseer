@@ -19632,6 +19632,10 @@ _GUILD_RUN_MEMBERS_SQL = (
     "AND ci.bag = 0 AND ci.slot IN (0, 2, 4, 5, 6, 7, 8, 9)) AS worn_slots, "
     "EXISTS (SELECT 1 FROM character_inventory ci WHERE ci.guid = s.guid "
     "AND ci.bag = 0 AND ci.slot = 15) AS has_weapon, "
+    # A shield in the off hand (slot 16, armor subclass 6), for guildrun.tank_ready.
+    "EXISTS (SELECT 1 FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry WHERE ci.guid = s.guid "
+    "AND ci.bag = 0 AND ci.slot = 16 AND it.class = 4 AND it.subclass = 6) AS has_shield, "
     # IN THE WORLD IS A FRESH SNAPSHOT, NOT characters.online. The flag reads
     # 0 for random bots that are in the world (8 guild members flipped to 0 at
     # once on the dev realm while their snapshots kept updating), and the
