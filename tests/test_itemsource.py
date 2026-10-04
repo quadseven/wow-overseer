@@ -214,39 +214,65 @@ class Vendors(unittest.TestCase):
         costs = {77: {"honor": 13000, "arena": 50, "items": [(26045, 40)]}}
         got = itemsource.vendor_sources(
             [{"npc": "Quartermaster", "map": 0, "zone": 10, "extended_cost": 77}],
-            0, DUNGEONS, ZONES, costs, {26045: "Halaa Battle Token"},
+            0,
+            DUNGEONS,
+            ZONES,
+            costs,
+            {26045: "Halaa Battle Token"},
         )
         self.assertEqual(
             got,
-            [{
-                "kind": "vendor", "npc": "Quartermaster", "zone": "Duskwood",
-                "honor": 13000, "arena": 50,
-                "items": [{"entry": 26045, "name": "Halaa Battle Token", "count": 40}],
-            }],
+            [
+                {
+                    "kind": "vendor",
+                    "npc": "Quartermaster",
+                    "zone": "Duskwood",
+                    "honor": 13000,
+                    "arena": 50,
+                    "items": [
+                        {"entry": 26045, "name": "Halaa Battle Token", "count": 40}
+                    ],
+                }
+            ],
         )
 
     def test_a_costed_vendor_never_borrows_the_buy_price(self):
         costs = {77: {"honor": 5, "arena": 0, "items": []}}
         got = itemsource.vendor_sources(
-            [{"npc": "Q", "map": 0, "extended_cost": 77}], 999, {}, {}, costs)
+            [{"npc": "Q", "map": 0, "extended_cost": 77}], 999, {}, {}, costs
+        )
         self.assertNotIn("copper", got[0])
         self.assertNotIn("arena", got[0])
 
     def test_costed_vendors_sort_before_unpriced_ones(self):
         costs = {1: {"honor": 5, "arena": 0, "items": []}}
         got = itemsource.vendor_sources(
-            [{"npc": "Z", "map": 0, "extended_cost": 9},
-             {"npc": "A", "map": 0, "extended_cost": 1}], 0, {}, {}, costs)
+            [
+                {"npc": "Z", "map": 0, "extended_cost": 9},
+                {"npc": "A", "map": 0, "extended_cost": 1},
+            ],
+            0,
+            {},
+            {},
+            costs,
+        )
         self.assertEqual([g["npc"] for g in got], ["A", "Z"])
 
     def test_build_item_threads_costs_and_names_through(self):
         shaped = {"name": "C", "quality": 3, "tooltip": {}, "wowhead": ""}
         got = itemsource.build_item(
-            1, shaped,
-            {"vendors": [{"npc": "Q", "map": 0, "extended_cost": 5}],
-             "token_names": {26045: "Token"}},
-            craftbook={}, skill_names={}, dungeons={}, zones={},
-            costs={5: {"honor": 0, "arena": 0, "items": [(26045, 2)]}})
+            1,
+            shaped,
+            {
+                "vendors": [{"npc": "Q", "map": 0, "extended_cost": 5}],
+                "token_names": {26045: "Token"},
+            },
+            craftbook={},
+            skill_names={},
+            dungeons={},
+            zones={},
+            costs={5: {"honor": 0, "arena": 0, "items": [(26045, 2)]}},
+        )
         self.assertEqual(got["sources"][0]["items"][0]["name"], "Token")
 
     def test_the_committed_projection_loads_and_knows_a_pvp_cost(self):
