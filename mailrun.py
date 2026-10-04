@@ -84,6 +84,20 @@ from dataclasses import dataclass
 # gained: an uncollected letter expires on its own after thirty days.
 TAKE_ITEM = "take-item"
 TAKE_MONEY = "take-money"
+# AND `delete` IS NOW EMITTED, FOR A LETTER ALREADY EMPTY ONLY. The argument
+# above was right about what deleting destroys and wrong that nothing is gained:
+# the core caps an inbox at 100 letters, and on wow-dev on 2026-10-04 Grug held
+# 115, Bork 110 and Oz 105, every one already emptied by a take and kept as a
+# shell, so each guild materials post to them bounced "recipient mailbox is
+# full". A letter is planned for deletion only with no attachment, no money and
+# no cash on delivery; the executor refuses `mail still carries an attachment`
+# and `mail still carries money` on its own as well, so the two guards are
+# independent.
+DELETE = "delete"
+# Empty letters cleared per character per visit. Deleting costs no bag room
+# and moves nothing, so this is far above VISIT_LIMIT; it is still a bound, so
+# one arrival never queues a hundred rows.
+DELETES_PER_VISIT = 25
 
 # How many takes one visit to a mailbox is allowed to queue per character.
 #
@@ -140,7 +154,7 @@ class Take:
     """One mail command, with the reason it is worth sending written into it."""
 
     character: str
-    verb: str  # TAKE_ITEM or TAKE_MONEY
+    verb: str  # TAKE_ITEM, TAKE_MONEY or DELETE
     mail_id: int
     item_guid: int  # 0 for TAKE_MONEY
     why: str
@@ -486,8 +500,41 @@ def plan(letters, free_slots, already_asked=None, *, visit_limit=VISIT_LIMIT):
         )
         takes.extend(money_takes)
         takes.extend(item_takes)
+        takes.extend(
+            empty_deletes([letter for letter in letters if letter.holder == holder])
+        )
         notes.extend(mine_notes)
     return Plan(takes=tuple(takes), notes=tuple(dict.fromkeys(notes)))
+
+
+def empty_deletes(letters, limit=DELETES_PER_VISIT) -> list:
+    """The deletes for one character's letters that already carry nothing.
+
+    Delivered, no attachment, no money, no cash on delivery: a shell a take
+    already emptied. Oldest first, so the shell nearest expiry goes first, and
+    at most `limit`.
+    """
+    empty = sorted(
+        (
+            letter
+            for letter in letters
+            if letter.delivered
+            and not letter.attachments
+            and letter.money <= 0
+            and letter.cod <= 0
+        ),
+        key=lambda letter: (letter.expire_time, letter.mail_id),
+    )
+    return [
+        Take(
+            character=letter.holder,
+            verb=DELETE,
+            mail_id=letter.mail_id,
+            item_guid=0,
+            why="the letter is empty, and an inbox full of shells refuses new post",
+        )
+        for letter in empty[: max(0, int(limit))]
+    ]
 
 
 def command(take):
@@ -503,6 +550,8 @@ def command(take):
     """
     if take.verb == TAKE_MONEY:
         return "%s mail:%d" % (TAKE_MONEY, take.mail_id)
+    if take.verb == DELETE:
+        return "%s mail:%d" % (DELETE, take.mail_id)
     return "%s mail:%d item:%d" % (TAKE_ITEM, take.mail_id, take.item_guid)
 
 
