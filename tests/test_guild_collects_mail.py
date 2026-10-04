@@ -45,6 +45,19 @@ class AMemberOpensItsPost(unittest.TestCase):
         self.assertTrue(all(r.kind == "mail" for r in step.rows))
         self.assertEqual("guildjobs:collect:Argam", step.rows[0].source)
 
+    def test_the_walk_row_is_a_mailbox_walk_at_the_cap(self):
+        step = guildjobs.collect_step(_member(), TAKES, 900)
+        self.assertEqual("mail", step.walk.kind)
+        self.assertEqual("walk-to-mailbox max:900", step.walk.command)
+        self.assertEqual("guildjobs:collect-walk:Argam", step.walk.source)
+        self.assertEqual(len(TAKES), step.key)
+        self.assertIsNone(guildjobs.collect_step(_member(), (), 900))
+
+    def test_offline_or_fighting_members_do_not_walk(self):
+        for kw in ({"online": False}, {"in_combat": True}):
+            plan = guildjobs.plan([_member(**kw)], mail={"Argam": TAKES})
+            self.assertNotIn("collect", [s.action for s in plan.steps], kw)
+
     def test_not_twice_in_an_hour(self):
         recent = [guildjobs.Recent("Argam", "collect", 10, status="delivered")]
         plan = guildjobs.plan([_member()], mail={"Argam": TAKES}, recent=recent)
