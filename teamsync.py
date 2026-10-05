@@ -161,7 +161,13 @@ def plan(
     names = {m["name"] for m in members}
     seated = recruits_in_guild(guild, members)
     actions = _removals(guild, names, pending)
-    actions += _invites(guild, members, seated, candidates, pending)
+    # NO INVITE IN A PASS THAT REMOVES: the worldserver runs both rows in the
+    # same moment, and an invite checks the roster's size after it adds, so a
+    # removal beside it reads as a mismatch and the invite is refused
+    # (2026-10-05: 3 of the first 4 invites). Invites follow once the guild's
+    # leavers have gone.
+    if not actions:
+        actions += _invites(guild, members, seated, candidates, pending)
     if renames_on:
         actions += _renames(guild, names, seated, pending)
     return actions
