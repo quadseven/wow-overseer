@@ -1449,9 +1449,16 @@ def _spoken(board: _Board, still: list) -> set:
 
 
 def _replies(board: _Board, still: list, complete: set, spoken: set) -> list:
-    """New yeses to every ask still short, oldest ask first."""
+    """New yeses to every ask still short, the ask nearest a full group first.
+
+    NEAREST FULL FIRST, THEN OLDEST (2026-10-05). Oldest first sent Bonkers'
+    one free tank to an older ask with no healer while a newer one held its
+    healer and three damage dealers and lacked only the tank, so neither ever
+    formed. The ask with the fewest open seats takes the scarce answer.
+    """
     replies = []
-    for ask in sorted(still, key=lambda a: a.id):
+    order = sorted(still, key=lambda a: (len(_open_seats(a, board.current(a))), a.id))
+    for ask in order:
         if ask.id not in complete and ask.asker in board.free_mates:
             replies += _answers_to(board, ask, spoken)
     return replies

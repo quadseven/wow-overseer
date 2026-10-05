@@ -369,6 +369,27 @@ class WhoAnswers(unittest.TestCase):
             self.assertTrue(reply.said)
             self.assertEqual(reply.ask_id, 7)
 
+    def test_the_ask_nearest_a_full_group_takes_the_scarce_tank(self):
+        """2026-10-05: the one free tank went to the older ask, which also
+        lacked a healer, and neither group ever formed."""
+        crowd = [
+            mate("Auren", 20, ROGUE),
+            mate("Bram", 20, ROGUE),
+            mate("Healy", 20, PRIEST, talent_spells=HOLY),
+            mate("Zappy", 19, MAGE),
+            mate("Locky", 20, WARLOCK),
+            mate("Tanky", 21, WARRIOR, talent_spells=PROTECTION, has_shield=1),
+        ]
+        asks = [ask(6, "Auren"), ask(7, "Bram")]
+        answers = [
+            yes(1, 7, "Healy", "healer"),
+            yes(2, 7, "Zappy", "dps"),
+            yes(3, 7, "Locky", "dps"),
+        ]
+        out = plan(crowd, asks=asks, answers=answers)
+        tank = [(r.ask_id, r.member) for r in out.replies if r.role == "tank"]
+        self.assertEqual(tank, [(7, "Tanky")])
+
     def test_answers_trickle_until_the_seats_are_full(self):
         crowd = five()
         answers = [yes(1, 7, "Tanky", "tank"), yes(2, 7, "Healy", "healer")]
