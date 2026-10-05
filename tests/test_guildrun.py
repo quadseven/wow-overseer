@@ -87,9 +87,17 @@ class TheSwitchAndTheLimits(unittest.TestCase):
         )
         self.assertEqual(guildrun.limits({"GUILD_RUNS_MAX": "x"}).max_groups, 2)
         self.assertEqual(guildrun.limits({}).guilds, ("Cave", "Bonkers"))
-        self.assertGreaterEqual(
-            guildrun.limits({"GUILD_RUNS_EVERY_SECONDS": "1"}).form_every_seconds, 60
+        self.assertEqual(
+            guildrun.limits({"GUILD_RUNS_EVERY_SECONDS": "-5"}).form_every_seconds, 0
         )
+
+    def test_no_practical_limit_when_the_operator_lifts_it(self):
+        # 2026-10-05: "let all groups run stuff at the same time, no limits".
+        lifted = guildrun.limits(
+            {"GUILD_RUNS_MAX": "30", "GUILD_RUNS_EVERY_SECONDS": "0"}
+        )
+        self.assertEqual(lifted.max_groups, 30)
+        self.assertEqual(lifted.form_every_seconds, 0)
 
 
 class WhoCanGo(unittest.TestCase):
