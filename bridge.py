@@ -2370,6 +2370,75 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
         ", ".join(short), bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS)
 
 
+# THE HOLD AT THE FLOOR, PER FAMILY (bag_pressure.bag_hold_progress), keyed
+# like the clocks above. In-process for their reason: a restart begins the hold
+# again, which costs one more window in town and never a run into full bags.
+_BAG_HOLD: dict = {}
+
+
+def _bag_hold_stuck(names, free_slots: dict) -> tuple:
+    """Members held at the floor once the hold is released (no town pass gave
+    any of them a slot in bag_pressure.BAG_HOLD_STUCK_SECONDS); () while room
+    is still being made or nobody is at the floor.
+
+    Records this reading, so every caller that judges the hold keeps it fresh.
+    """
+    key = tuple(sorted(names))
+    now = time.monotonic()
+    progress = bag_pressure.bag_hold_progress(_BAG_HOLD.get(key), free_slots, now)
+    if progress is None:
+        _BAG_HOLD.pop(key, None)
+        return ()
+    _BAG_HOLD[key] = progress
+    return bag_pressure.bag_hold_stuck(progress)
+
+
+def _quest_while_stuck(names: list, mode: str, stuck) -> int:
+    """Send a family no town pass can make room for back to questing.
+
+    THE WAY OUT OF THE HOLD AT THE FLOOR. The module opens no run while a
+    member is at the floor, so going in is not the exit; standing in town on
+    the town run job earns nothing either. A player in that spot goes back out
+    and plays, and the campaign stays queued: `_drive_dungeon` sends it in as
+    soon as every member has room. Only the rows the hold wrote are moved (the
+    campaign's own job, or a town run with TOWN_FIRST_SOURCE), so an
+    operator's own orders stand. Returns the rows written.
+    """
+    moved = [n for n, job in _jobs_of(names).items()
+             if job == mode or (job == jobs.TOWN_RUN
+                                and _last_job_source(n) == TOWN_FIRST_SOURCE)]
+    written = 0
+    for name in moved:
+        try:
+            _insert_job(name, jobs.DEFAULT, TOWN_FIRST_SOURCE)
+            written += 1
+        except Exception:
+            log.exception("town first: quest job insert failed for %s", name)
+    if written:
+        log.warning(
+            "town first: %s %s at %d or fewer free slots and no town pass has "
+            "made room in %d minutes, so %s go back to job=%s; the campaign "
+            "stays queued and goes in when every member has room",
+            ", ".join(stuck), "is" if len(stuck) == 1 else "are",
+            bag_pressure.TOWN_RUN_FREE_SLOTS,
+            int(bag_pressure.BAG_HOLD_STUCK_SECONDS // 60), ", ".join(moved),
+            jobs.DEFAULT,
+        )
+    return written
+
+
+def _bag_errand_needed(names, free_slots: dict, campaign_waiting: bool) -> bool:
+    """Whether the town errand still runs for bag room past its ceiling.
+
+    Not once the hold is stuck: the family is questing then, and an errand
+    that took it back to town every cooldown for an hour would be the same
+    wait in instalments.
+    """
+    return (bool(campaign_waiting)
+            and bag_pressure.family_town_run_needed(free_slots)
+            and not _bag_hold_stuck(names, free_slots))
+
+
 def _insert_family_jobs(names: list, mode: str, source: str) -> int:
     """One job row per name; how many landed. One failed insert must not cost
     the rest of the family, for _set_job's identical reasoning."""
@@ -2557,6 +2626,15 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
         return _withheld(withheld, reason)
 
     free_slots = _fetch_free_slots(names)
+    # Looked up for the same reason as the gear gate: the campaign tests load
+    # this function in isolation.
+    hold_stuck = globals().get("_bag_hold_stuck")
+    stuck = hold_stuck(names, free_slots) if hold_stuck else ()
+    if stuck:
+        globals()["_quest_while_stuck"](names, mode, stuck)
+        return _withheld(withheld, "%s at the bag floor and no town pass has "
+                         "made room, so the family quests until there is "
+                         "room" % ", ".join(stuck))
     if bag_pressure.family_town_run_needed(free_slots):
         log.info(
             "goal: withholding dungeon:%s for %d enabled character(s) - bags "
@@ -14353,10 +14431,8 @@ class Bridge(discord.Client):
         if state.why == townerrand.BAG_PRESSURE_WHY:
             free_slots = await asyncio.to_thread(_fetch_free_slots, names)
             campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
-            bag_pressure_needed = (
-                campaign_waiting
-                and bag_pressure.family_town_run_needed(free_slots)
-            )
+            bag_pressure_needed = _bag_errand_needed(names, free_slots,
+                                                     campaign_waiting)
             if bag_pressure_needed and not in_run:
                 await self._aim_stranded_bag_pressure_members(
                     names, leader, positions, free_slots, in_run,
@@ -14494,10 +14570,8 @@ class Bridge(discord.Client):
         stalled = _queue_stall_floor(names)
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
         campaign_waiting = await asyncio.to_thread(_campaign_waiting, names)
-        bag_pressure_needed = (
-            campaign_waiting
-            and bag_pressure.family_town_run_needed(free_slots)
-        )
+        bag_pressure_needed = _bag_errand_needed(names, free_slots,
+                                                 campaign_waiting)
         why = townerrand.should_start(
             state, now=now, in_run=in_run, mail_gear=mail_gear, facts=facts,
             stalled=stalled, bag_pressure_needed=bag_pressure_needed)
@@ -14637,7 +14711,13 @@ class Bridge(discord.Client):
             if leader not in positions or not at.banker:
                 return False
             if step not in marks:
+                # BOTH BANKS, while the family stands at the counter. The
+                # errand owns the traveller, so the ten-minute bank and guild
+                # bank passes are refused it while the errand runs; this step
+                # is their turn, and a member short of bag room is exactly
+                # who needs the guild vault as well as its own bank.
                 await self._bank_passing_once(cohort)
+                await self._guild_bank_passing_once(cohort)
                 marks[step] = now
             return ran_for >= TOWN_ERRAND_SETTLE_SECONDS
         if step == townerrand.TIDY:
@@ -23856,9 +23936,15 @@ def _plan_bank(names: list) -> "bank.Plan":
         guild_later=dict(_GUILD_BANK_KEEPS),
         policy=_bank_policy(names),
     )
+    # WHILE A CAMPAIGN WAITS, BAGS ARE KEPT AT RUN ROOM: a member short of
+    # the resume floor puts its trade goods down, and nothing is fetched back
+    # below it. The town hold's floor is the bank's floor, so the bank makes
+    # exactly the room the hold is waiting for.
+    room_floor = (bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS
+                  if _campaign_waiting(names) else 0)
     return bank.plan(
         bank.members_from_rows(rows, names), bank.family_from_skills(held),
-        storage=storage,
+        storage=storage, room_floor=room_floor,
     )
 
 

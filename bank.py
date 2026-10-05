@@ -872,6 +872,53 @@ def _deposit_candidates(member, family, totals, storage):
     return candidates
 
 
+# WHAT A MEMBER SHORT OF RUN ROOM MAY PUT DOWN. The
+# keeper rule leaves a crafter's own stock in the bags, and that is right
+# while the crafter crafts. While a dungeon campaign waits on the family it is
+# the wrong answer: measured on the dev realm 2026-10-05, Grog stood at 0 free slots
+# with nothing a vendor would take, the campaign was held in town for bag room
+# for over three hours, and the bank that could have taken his stock was never
+# asked to. Only goods nobody uses inside a dungeon: trade goods and gems.
+# Never food, drink, reagents, keys, quest items, gear or bags, and never the
+# hearthstone (a misc item, which is why misc is not on this list).
+ROOM_CLASSES = frozenset({ITEM_CLASS_TRADE_GOODS, ITEM_CLASS_GEM})
+
+
+def _room_candidates(member, chosen, storage, room_floor):
+    """(holding, why, keeper) for a member under `room_floor` free slots.
+
+    Biggest stacks first (`member.carried` is already in that order), and no
+    more than the slots the member is short of: deposits from the ordinary
+    candidates count, because each of those hands a slot back too. Personal
+    bank only (`keeper` False): the holder keeps its own stock, and the
+    withdrawal floor in `plan` brings it back once the bags have room again.
+    """
+    need = room_floor - member.bag_free - len(chosen)
+    if need <= 0:
+        return []
+    routed = storage.routed if storage else {}
+    out = []
+    for holding in member.carried:
+        if len(out) >= need:
+            break
+        if holding.guid in chosen or holding.guid in routed:
+            continue
+        if holding.container_slots > 0 or holding.start_quest > 0:
+            continue
+        if holding.item.quest_item or holding.item.item_class not in ROOM_CLASSES:
+            continue
+        out.append(
+            (
+                holding,
+                "%s is not used inside a dungeon, and %s has %d free slot(s) "
+                "of the %d a run needs"
+                % (holding.item.name, member.name, member.bag_free, room_floor),
+                False,
+            )
+        )
+    return out
+
+
 def _deposit(member, holding, why, to=PERSONAL, tab=0):
     return Move(
         character=member.name,
@@ -1017,7 +1064,7 @@ def _room_by_tab(storage):
     return room
 
 
-def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None):
+def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None, room_floor=0):
     """Every bank move worth making, in the order it should be sent.
 
     DEPOSITS BEFORE WITHDRAWALS, per character, and the withdrawal budget is
@@ -1037,12 +1084,24 @@ def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None):
     are deposited first - tradable ones into `Plan.guild` while the guild can
     take them, the rest into `Plan.moves` - and a stack the rule stores is
     never withdrawn, so the two halves cannot undo each other.
+
+    `room_floor` is the free slots a member is kept at while a dungeon
+    campaign waits on the family; 0, the default, is the
+    plan as it was. A member under it also deposits its trade goods and gems
+    (`_room_candidates`) up to the floor, and no withdrawal takes anybody below
+    it, so a stack put down for room is not fetched straight back.
     """
     totals = reagent_totals(members)
     moves, notes, guild = [], [], []
     guild_room = _room_by_tab(storage)
     for member in sorted(members, key=lambda m: m.name):
         candidates = _deposit_candidates(member, family, totals, storage)
+        candidates += _room_candidates(
+            member,
+            {holding.guid for holding, _why, _keeper in candidates},
+            storage,
+            room_floor,
+        )
         deposits, sent, guild_room = _plan_deposits(
             member, candidates, storage, guild_room, visit_limit, notes
         )
@@ -1054,7 +1113,7 @@ def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None):
             family,
             totals,
             storage,
-            member.bag_free + len(deposits),
+            member.bag_free + len(deposits) - max(0, room_floor),
             visit_limit - len(deposits),
             notes,
         )

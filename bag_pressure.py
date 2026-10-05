@@ -415,6 +415,84 @@ def town_first_trip_worth(
     )
 
 
+# THE HOLD AT THE FLOOR HAS A WAY OUT. A member at or below
+# TOWN_RUN_FREE_SLOTS shuts the dungeon door (the module will not open a run
+# for a party that cannot loot), and the bridge kept the family in town on the
+# town run job until a town pass made room. Nothing bounded that wait. Measured
+# on the dev realm 2026-10-05: Grog at 0 free slots with nothing a vendor would
+# take, both campaigns held in town for over three hours, and the family
+# earned almost no experience. So the hold is judged on evidence: while some
+# member is at the floor, the clock restarts whenever any of them gains a slot
+# over the most it has had in this hold, and once BAG_HOLD_STUCK_SECONDS pass
+# with no gain no town pass is making room. The hold is then released: the
+# family goes back to questing, and stays released until nobody is at the
+# floor, so a slot freed by eating does not walk it back to town. The
+# campaign stays queued and goes in the moment every member has room.
+BAG_HOLD_STUCK_SECONDS = CAMPAIGN_RESUME_CEILING_SECONDS
+
+# A reading this much older than the last one starts the hold again: the
+# queue reads the bags every minute while it holds, so a gap this long is a
+# hold that ended (a run, a restart of the queue) and not one still going.
+BAG_HOLD_GAP_SECONDS = 600.0
+
+
+@dataclass(frozen=True)
+class BagHoldProgress:
+    """One family's hold at the floor: the best free slots each held member
+    has had in it, when one last gained, when it was last read, and whether
+    the hold has been released for want of any gain."""
+
+    best: tuple = ()
+    since: float = 0.0
+    seen: float = 0.0
+    released: bool = False
+
+
+def bag_hold_progress(
+    previous: BagHoldProgress | None,
+    free_slots: dict,
+    now: float,
+    floor: int = TOWN_RUN_FREE_SLOTS,
+    window: float = BAG_HOLD_STUCK_SECONDS,
+) -> BagHoldProgress | None:
+    """The hold after this reading, or None when nobody is at the floor.
+
+    A member is held at `free <= floor`; an unknown or negative reading holds
+    nobody, the same fail-open rule `campaign_resume_short` keeps. A member
+    who joins the hold is not a gain, and one who drops back is not a loss:
+    the best each has had is what a gain is measured against, so a slot won
+    and lost again does not keep restarting the clock. `window` seconds with
+    no gain releases the hold, and a released hold stays released.
+    """
+    held = {
+        str(name): free
+        for name, free in (free_slots or {}).items()
+        if isinstance(free, int) and 0 <= free <= floor
+    }
+    if not held:
+        return None
+    if previous is None or now - previous.seen > BAG_HOLD_GAP_SECONDS:
+        return BagHoldProgress(best=tuple(sorted(held.items())), since=now, seen=now)
+    before = dict(previous.best)
+    gained = any(free > before.get(name, free) for name, free in held.items())
+    best = {name: max(free, before.get(name, free)) for name, free in held.items()}
+    since = now if gained else previous.since
+    return BagHoldProgress(
+        best=tuple(sorted(best.items())),
+        since=since,
+        seen=now,
+        released=previous.released or now - since >= window,
+    )
+
+
+def bag_hold_stuck(progress: BagHoldProgress | None) -> tuple:
+    """The held members, sorted, once the hold is released; () while it is
+    still making room or nobody is held."""
+    if progress is None or not progress.released:
+        return ()
+    return tuple(name for name, _free in progress.best)
+
+
 VENDOR_MODE_TRIP = "trip"
 VENDOR_MODE_COUNTER = "counter"
 VENDOR_MODE_NONE = "none"

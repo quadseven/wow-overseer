@@ -463,6 +463,8 @@ class TheAdapter(unittest.TestCase):
             },
             "_queue_stall_floor": lambda names: self.stall,
             "_campaign_waiting": lambda names: False,
+            "bag_pressure": bag_pressure,
+            "_BAG_HOLD": {},
             "_insert_hearth": lambda name, source: self.hearths.append(name) or 1,
             "_town_errand_jobs": lambda names: self.jobs.append("town run") or 2,
             "_hub_aim": lambda hub: "at:0:100,100,10",
@@ -486,6 +488,8 @@ class TheAdapter(unittest.TestCase):
                 "_town_errand_fund",
                 "_tab_gifts",
                 "_town_errand_regroup",
+                "_bag_errand_needed",
+                "_bag_hold_stuck",
             ),
             type_ignores=[],
         )
