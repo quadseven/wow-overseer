@@ -146,6 +146,50 @@ def step(facts: Facts, floor=None):
     ), ""
 
 
+def _worn_guids(bag_rows) -> dict:
+    """holder -> the item guids of the bags it wears."""
+    out: dict = {}
+    for r in bag_rows or ():
+        if _int(r.get("bag")) == 0 and _int(r.get("slot")) in WORN_POSITIONS:
+            out.setdefault(str(r.get("holder")), set()).add(_int(r.get("item_guid")))
+    return out
+
+
+def _where(row, worn_guids) -> str:
+    """ "worn", "banked", "carried" or "" for one container row."""
+    bag, slot = _int(row.get("bag")), _int(row.get("slot"))
+    if bag == 0 and slot in WORN_POSITIONS:
+        return "worn"
+    if bag == 0 and slot in BANK_BAG_POSITIONS:
+        return "banked"
+    if (bag == 0 and slot in BACKPACK_SLOTS) or bag in worn_guids:
+        return "carried"
+    return ""
+
+
+def _facts_for(person, rows, worn_guids, crafters) -> Facts:
+    name = str(person["name"])
+    worn, spare, placed = [], [], 0
+    for r in rows:
+        where = _where(r, worn_guids)
+        bag = Bag(_int(r.get("item_guid")), _int(r.get("entry")), _int(r.get("slots")))
+        if where == "worn":
+            worn.append(bag.slots)
+        elif where == "banked":
+            placed += 1
+        elif where == "carried" and bag.guid > 0:
+            spare.append(bag)
+    return Facts(
+        name=name,
+        money=_int(person.get("money")),
+        bought=min(BANK_BAG_SLOTS, _int(person.get("bank_slots"))),
+        placed=placed,
+        worn=tuple(sorted(worn)),
+        spare=tuple(spare),
+        crafter=name in crafters,
+    )
+
+
 def facts_from_rows(people, bag_rows, crafters=frozenset()) -> list:
     """Facts per character, from the bridge's two reads.
 
@@ -155,42 +199,16 @@ def facts_from_rows(people, bag_rows, crafters=frozenset()) -> list:
     character's own slots). A bag inside a worn bag is carried; one inside a
     bank bag or in a bank slot is not.
     """
-    by_name = {str(p["name"]): p for p in people or ()}
-    worn_guids = {n: set() for n in by_name}
+    worn = _worn_guids(bag_rows)
+    by_holder: dict = {}
     for r in bag_rows or ():
-        n = str(r.get("holder"))
-        if (
-            n in worn_guids
-            and _int(r.get("bag")) == 0
-            and _int(r.get("slot")) in WORN_POSITIONS
-        ):
-            worn_guids[n].add(_int(r.get("item_guid")))
-    out = []
-    for name, p in sorted(by_name.items()):
-        worn, spare, placed = [], [], 0
-        for r in bag_rows or ():
-            if str(r.get("holder")) != name:
-                continue
-            bag, slot = _int(r.get("bag")), _int(r.get("slot"))
-            b = Bag(
-                _int(r.get("item_guid")), _int(r.get("entry")), _int(r.get("slots"))
-            )
-            if bag == 0 and slot in WORN_POSITIONS:
-                worn.append(b.slots)
-            elif bag == 0 and slot in BANK_BAG_POSITIONS:
-                placed += 1
-            elif (bag == 0 and slot in BACKPACK_SLOTS) or bag in worn_guids[name]:
-                if b.guid > 0:
-                    spare.append(b)
-        out.append(
-            Facts(
-                name=name,
-                money=_int(p.get("money")),
-                bought=min(BANK_BAG_SLOTS, _int(p.get("bank_slots"))),
-                placed=placed,
-                worn=tuple(sorted(worn)),
-                spare=tuple(spare),
-                crafter=name in crafters,
-            )
+        by_holder.setdefault(str(r.get("holder")), []).append(r)
+    return [
+        _facts_for(
+            p,
+            by_holder.get(str(p["name"]), []),
+            worn.get(str(p["name"]), set()),
+            crafters,
         )
-    return out
+        for p in sorted(people or (), key=lambda p: str(p["name"]))
+    ]
