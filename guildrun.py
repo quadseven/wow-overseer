@@ -74,7 +74,10 @@ import raidroles
 
 ENV_SWITCH = "GUILD_RUNS"
 MAX_GROUPS = 2
-HARD_MAX_GROUPS = 4
+# The operator wants every guild group that forms to run at once (2026-10-05:
+# "let all groups run stuff at the same time, no limits"). Thirty covers every
+# member of both guilds in five-man groups; GUILD_RUNS_MAX sets the live cap.
+HARD_MAX_GROUPS = 30
 FORM_EVERY_SECONDS = 300
 COOLDOWN_MINUTES = 40
 BAND_SPREAD = 4
@@ -162,7 +165,7 @@ def limits(environ=None) -> Limits:
     return Limits(
         max_groups=_int_env(env, "GUILD_RUNS_MAX", MAX_GROUPS, 0, HARD_MAX_GROUPS),
         form_every_seconds=_int_env(
-            env, "GUILD_RUNS_EVERY_SECONDS", FORM_EVERY_SECONDS, 60, 86400
+            env, "GUILD_RUNS_EVERY_SECONDS", FORM_EVERY_SECONDS, 0, 86400
         ),
         cooldown_minutes=_int_env(
             env, "GUILD_RUNS_COOLDOWN_MINUTES", COOLDOWN_MINUTES, 0, 1440
