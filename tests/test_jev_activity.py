@@ -468,6 +468,14 @@ class FakeFamily:
         self.jobs.append((name, mode, source))
 
 
+async def _no_history(facts, *_args):
+    return facts
+
+
+async def _noted(world, judgment, before):
+    world.__dict__.setdefault("overrides", []).append((judgment.acted, before))
+
+
 def _bridge(world, fake_jev, holds=None):
     """The activity methods, bound to a fake bridge over `world`."""
     log = _Log()
@@ -487,6 +495,11 @@ def _bridge(world, fake_jev, holds=None):
         "_insert_jev_judgment": world.records.append,
         "_insert_speak": world.speak.append,
         "relay": __import__("relay"),
+        # The override record (#584) is the bridge's I/O; here it is noted.
+        "_with_jev_history": _no_history,
+        "_jev_override_recorded": lambda judgment, before: _noted(
+            world, judgment, before
+        ),
     }
     names = [
         "_activity_holds",
@@ -581,6 +594,11 @@ class TheBridgeCarriesItOut(unittest.TestCase):
         )
         self.assertEqual(ja.SELL, me._activity_holds("Zug"))
         self.assertTrue(any("Jev chose sell" in line for line in log.lines), log.lines)
+        # #584: the override goes to the outcome record with its snapshot.
+        [(acted, before)] = world.overrides
+        self.assertEqual(
+            (acted, before["withheld"], before["free"]), (jev.JEV, True, 36)
+        )
 
     def test_a_family_waiting_in_town_sells_on_its_town_job(self):
         """mod-overseer#659. Sell writes the default job, and the default job

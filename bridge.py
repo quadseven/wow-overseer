@@ -16859,16 +16859,9 @@ class Bridge(discord.Client):
         # WHAT FOLLOWED EARLIER PICKS (#584): this family's are scored once
         # their window has passed, and the kind's recent ones go into the
         # question.
-        try:
-            history = await asyncio.to_thread(
-                _jev_outcome_history, jev_family_intent.KIND, facts.family,
-                lambda before, minutes: jev_family_intent.outcome_words(
-                    before, facts, minutes),
-                jev_family_intent.OUTCOME_MINUTES)
-            facts = dataclasses.replace(facts, history=tuple(history))
-        except Exception:
-            log.exception("family intent: the pick history for %s was not read; "
-                          "asked without it", campaignqueue._family(key))
+        facts = await _with_jev_history(
+            facts, jev_family_intent.KIND, jev_family_intent.outcome_words,
+            jev_family_intent.OUTCOME_MINUTES)
         judgment = await jev_family_intent.ask(self._jev, facts, rule)
         if judgment is None:
             return
@@ -16880,12 +16873,8 @@ class Bridge(discord.Client):
         except Exception:
             log.exception("family intent: the choice for %s was not recorded",
                           campaignqueue._family(key))
-        try:
-            await asyncio.to_thread(_record_jev_override, judgment,
-                                    jev_family_intent.snapshot(facts, judgment.jev))
-        except Exception:
-            log.exception("family intent: the pick for %s was not recorded for "
-                          "scoring", campaignqueue._family(key))
+        await _jev_override_recorded(
+            judgment, jev_family_intent.snapshot(facts, judgment.jev))
         if judgment.pick:
             kind, target = jev_family_intent.pick_of(judgment.pick)
             written = await asyncio.to_thread(
@@ -17045,15 +17034,9 @@ class Bridge(discord.Client):
             situation=where)
         # WHAT FOLLOWED EARLIER OVERRIDES (#584): this family's are scored
         # against now, and the kind's recent ones go into the question.
-        try:
-            history = await asyncio.to_thread(
-                _jev_outcome_history, jev_activity.KIND, facts.family,
-                lambda before, minutes: jev_activity.outcome_words(before, facts, minutes),
-                jev_activity.OUTCOME_MINUTES)
-            facts = dataclasses.replace(facts, history=tuple(history))
-        except Exception:
-            log.exception("activity: the override history for %s was not read; "
-                          "asked without it", campaignqueue._family(key))
+        facts = await _with_jev_history(
+            facts, jev_activity.KIND, jev_activity.outcome_words,
+            jev_activity.OUTCOME_MINUTES)
         judgment = await jev_activity.ask(self._jev, facts, rule)
         self._activity_seen[key]["asked"] = now
         if judgment is None:
@@ -17064,12 +17047,7 @@ class Bridge(discord.Client):
         except Exception:
             log.exception("activity: the choice for %s was not recorded",
                           campaignqueue._family(key))
-        try:
-            await asyncio.to_thread(_record_jev_override, judgment,
-                                    jev_activity.snapshot(facts))
-        except Exception:
-            log.exception("activity: the override for %s was not recorded for "
-                          "scoring", campaignqueue._family(key))
+        await _jev_override_recorded(judgment, jev_activity.snapshot(facts))
         if judgment.carried_out:
             await self._carry_out_activity(key, fam, judgment.carried_out, own, job)
 
@@ -19709,6 +19687,30 @@ def _record_jev_override(judgment, before: dict) -> None:
         return
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(jev_outcomes.INSERT_SQL, args)
+
+
+async def _with_jev_history(facts, kind: str, words, wait_minutes: int):
+    """`facts` with `history` (_jev_outcome_history for its family, scored by
+    words(before, facts, minutes)), or `facts` unchanged when the record
+    cannot be read: the question is then asked without it."""
+    try:
+        history = await asyncio.to_thread(
+            _jev_outcome_history, kind, facts.family,
+            lambda before, minutes: words(before, facts, minutes), wait_minutes)
+    except Exception:
+        log.exception("%s: the override history for %s was not read; asked "
+                      "without it", kind, facts.family)
+        return facts
+    return dataclasses.replace(facts, history=tuple(history))
+
+
+async def _jev_override_recorded(judgment, before: dict) -> None:
+    """_record_jev_override off the loop; a failure is logged, never raised."""
+    try:
+        await asyncio.to_thread(_record_jev_override, judgment, before)
+    except Exception:
+        log.exception("%s: the override for %s was not recorded for scoring",
+                      judgment.kind, judgment.subject)
 
 
 def _insert_jev_judgment(judgment) -> None:

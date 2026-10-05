@@ -253,6 +253,44 @@ class TheBridgeScoresAndRecords(unittest.TestCase):
             )
         self.assertEqual([s for s, _a in sql], [jo.INSERT_SQL])
 
+    def test_history_goes_into_the_facts_and_a_failure_leaves_them(self):
+        f = activity_facts()
+        with mock.patch.object(
+            self.bridge, "_jev_outcome_history", lambda *a: jo.history(SCORED)
+        ):
+            out = asyncio.run(
+                self.bridge._with_jev_history(f, ja.KIND, ja.outcome_words, 5)
+            )
+        self.assertEqual(len(out.history), 2)
+
+        def broken(*_a):
+            raise RuntimeError("boom")
+
+        with mock.patch.object(self.bridge, "_jev_outcome_history", broken):
+            with self.assertLogs(self.bridge.log, "ERROR"):
+                same = asyncio.run(
+                    self.bridge._with_jev_history(f, ja.KIND, ja.outcome_words, 5)
+                )
+        self.assertIs(same, f)
+
+    def test_a_failed_override_record_is_logged_not_raised(self):
+        judgment = ja.Judgment(
+            subject="Zug",
+            heuristic=ja.CAMPAIGN,
+            heuristic_why="",
+            mode=jev.ACT,
+            status="answered",
+            jev=ja.SELL,
+            acted=jev.JEV,
+        )
+
+        def broken(*_a):
+            raise RuntimeError("boom")
+
+        with mock.patch.object(self.bridge, "_record_jev_override", broken):
+            with self.assertLogs(self.bridge.log, "ERROR"):
+                asyncio.run(self.bridge._jev_override_recorded(judgment, {}))
+
     def test_both_kinds_are_wired(self):
         for start, end in (
             ("async def _activity_for", "async def _activity_can"),
@@ -261,10 +299,9 @@ class TheBridgeScoresAndRecords(unittest.TestCase):
             body = BRIDGE[BRIDGE.index(start) :]
             body = body[: body.index(end)]
             self.assertLess(
-                body.index("_jev_outcome_history"), body.index(".ask(self._jev")
+                body.index("_with_jev_history("), body.index(".ask(self._jev")
             )
-            self.assertIn("_record_jev_override", body)
-            self.assertIn("history=tuple(history)", body)
+            self.assertIn("_jev_override_recorded(", body)
         store = BRIDGE[BRIDGE.index("def _create_jev_store") :]
         store = store[: store.index("\ndef ")]
         self.assertIn("jev_outcomes.TABLE_SQL", store)
