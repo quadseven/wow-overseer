@@ -121,6 +121,7 @@ import recipebook
 import raidteams
 import recruit
 import relay
+import retire
 import situation
 import skillgoal
 import tabard
@@ -5583,6 +5584,7 @@ class Bridge(discord.Client):
                 self._weapon_skill_loop,
                 self._recruit_loop,
                 self._team_sync_loop,
+                self._retire_loop,
                 self._raid_spec_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
@@ -12804,6 +12806,36 @@ class Bridge(discord.Client):
                     await self._team_sync_once()
                 except Exception:
                     log.exception("team sync pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _retire_once(self) -> None:
+        """One retire pass (retire.py): a few `retire` rows for the factory
+        bots still eligible, none for a name already in flight, and the
+        progress line."""
+        eligible = await asyncio.to_thread(_retire_eligible)
+        in_flight, refused, done = await asyncio.to_thread(_retire_rows)
+        per_pass = int(os.environ.get("RETIRE_ROWS_PER_PASS", str(retire.ROWS_PER_PASS)))
+        names = retire.plan(eligible, in_flight, refused, per_pass)
+        queued = 0
+        for name in names:
+            row = await asyncio.to_thread(_insert_job, name, retire.COMMAND, retire.SOURCE)
+            if row:
+                queued += 1
+            else:
+                log.warning("retire: the row for %s was not written", name)
+        log.info("%s", retire.progress_line(done, len(eligible), queued, len(in_flight) + queued))
+
+    async def _retire_loop(self) -> None:
+        """Retire the factory bots a few rows a pass. OFF unless
+        RETIRE_FACTORY=on: every row is an irreversible delete."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("RETIRE_CYCLE_SECONDS", str(retire.CYCLE_SECONDS)))
+        while not self.is_closed():
+            if _retire_on():
+                try:
+                    await self._retire_once()
+                except Exception:
+                    log.exception("retire pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _recruit_loop(self) -> None:
@@ -25295,6 +25327,24 @@ def _team_sync_on() -> bool:
     return os.environ.get("TEAM_SYNC", "off") == "on"
 
 
+def _retire_on() -> bool:
+    return os.environ.get("RETIRE_FACTORY", "off") == "on"
+
+
+def _retire_eligible() -> list:
+    """The factory bots retire.py's rules still pick, oldest first. READ-ONLY."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(retire.ELIGIBLE_SQL, retire.eligible_params())
+        return [str(r["name"]) for r in cur.fetchall() if r.get("name")]
+
+
+def _retire_rows() -> tuple:
+    """(in flight, recently refused, done) from the retire rows already written."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(retire.ROWS_SQL, retire.rows_params())
+        return retire.read_rows(cur.fetchall())
+
+
 def _team_members(guild: str) -> list:
     """name, class_id, race, level for every member of `guild`."""
     with _connect() as conn, conn.cursor() as cur:
@@ -28016,6 +28066,7 @@ class HeadlessBridge(Bridge):
                 self._weapon_skill_loop,
                 self._recruit_loop,
                 self._team_sync_loop,
+                self._retire_loop,
                 self._raid_spec_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,

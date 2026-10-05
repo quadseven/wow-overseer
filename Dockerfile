@@ -20,7 +20,7 @@ COPY core.py bridge.py voice.py transform.py \
      map_core.py map_server.py events.py \
      panel.py family.py goals.py protect.py fanout.py chat.py \
      kin.py keep.py cast.py bonds.py council.py persona.py \
-     bonkers.py \
+     bonkers.py retire.py \
      quests.py overhear.py questbook.py \
      questshare.py travel.py stream.py frames.py \
      professions.py craft.py craft_supply.py auction.py gearup.py weaponskill.py jobs.py trainjob.py \
