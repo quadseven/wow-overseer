@@ -1403,6 +1403,18 @@ def _best_askers(board: _Board, guild: str, barred: set, asked: set) -> list:
     return sorted(choices, key=lambda c: (c[0], c[1]))
 
 
+def _turn_order(guilds, asks: list) -> list:
+    """The guilds in the order they ask: the one whose last ask is oldest first,
+    one that has never asked before any. Alphabetical order let Bonkers take the
+    realm's room every pass and Cave asked nothing for an hour (2026-10-05)."""
+    last: dict = {}
+    for a in asks:
+        when = a.created_at
+        if when is not None and (a.guild not in last or when > last[a.guild]):
+            last[a.guild] = when
+    return sorted(guilds, key=lambda g: (g in last, last.get(g) or 0, g))
+
+
 def _new_asks(board: _Board, asks: list, still: list, spoken: set, room: int) -> list:
     """The free member with the strongest need asks, per guild, while the
     realm has room for another group and its guild has room for another ask."""
@@ -1412,7 +1424,7 @@ def _new_asks(board: _Board, asks: list, still: list, spoken: set, room: int) ->
     # Every live ask may become a group, so they count against the room.
     spare = max(0, int(room) - len(still))
     posts = []
-    for guild in sorted({m.member.guild for m in board.free_mates.values()}):
+    for guild in _turn_order({m.member.guild for m in board.free_mates.values()}, asks):
         if spare <= 0:
             break
         if open_in[guild] >= MAX_OPEN_ASKS_PER_GUILD:
