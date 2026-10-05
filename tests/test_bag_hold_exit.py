@@ -46,6 +46,7 @@ NAMES = ["Bork", "Grog", "Grug", "Og", "Ugga"]
 MEASURED = {"Bork": 15, "Grog": 0, "Grug": 19, "Og": 10, "Ugga": 6}
 WINDOW = bag_pressure.BAG_HOLD_STUCK_SECONDS
 TOWN_FIRST = "overseer:town-first"
+TOWN_ERRAND = "overseer:town-errand"
 
 
 def _functions(*names):
@@ -338,6 +339,7 @@ def _drive(world, clock, log):
         "time": clock,
         "log": log,
         "TOWN_FIRST_SOURCE": TOWN_FIRST,
+        "TOWN_ERRAND_SOURCE": TOWN_ERRAND,
         "_TOWN_FIRST_SINCE": {},
         "_BAG_HOLD": {},
         "_fetch_enabled_names": lambda: list(NAMES),
@@ -430,6 +432,13 @@ class TheHoldEnds(unittest.TestCase):
         self._minutes(46)
         self.assertEqual(jobs.TOWN_RUN, self.world.jobs["Og"])
         self.assertEqual(jobs.DEFAULT, self.world.jobs["Grog"])
+
+    def test_a_town_run_the_errand_left_standing_goes_questing_too(self):
+        # The errand ends and hands the family back with its own town run
+        # still standing; the hold's exit moves that row like its own.
+        self.world.sources.update({n: TOWN_ERRAND for n in NAMES})
+        self._minutes(46)
+        self.assertEqual({jobs.DEFAULT}, set(self.world.jobs.values()))
 
     def test_the_bag_room_errand_stops_once_the_hold_is_released(self):
         needed = self.ns["_bag_errand_needed"]
