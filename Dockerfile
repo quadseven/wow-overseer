@@ -33,7 +33,7 @@ COPY core.py bridge.py voice.py transform.py \
      armory.py wealth.py questlog.py modelviewer.py \
      relay.py digest.py \
      achievements.py recap.py standing.py agenda.py eye.py decree.py meter.py \
-     dungeonplan.py dungeonpath.py raidgoals.py raidcraft.py raidprep.py raidlineup.py raidgear.py raidroles.py attunestep.py raidready.py raidrun.py raidsupply.py \
+     dungeonplan.py dungeonpath.py raidgoals.py raidcraft.py raidprep.py raidlineup.py raidgear.py raidroles.py raidteams.py attunestep.py raidready.py raidrun.py raidsupply.py \
      dungeonprogression.py dungeonquests.py \
      dungeonprogression.py dungeonquests.py \
      guildcraft.py tradespec.py guildbank.py guildshare.py guildroute.py guildwork.py natural.py guildcorps.py guildjobs.py guildrun.py guildpug.py guildsocial.py crafters.py recruit.py \

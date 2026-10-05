@@ -487,6 +487,52 @@ def _approved_seat(member: dict, seat, number: int) -> dict:
     return out
 
 
+def _approved_groups(team: str, find) -> tuple:
+    """(groups, open seats, names used): each approved group seated with the
+    members found for it; a seat whose member is not in the guild is open."""
+    groups, open_seats, used = [], [], set()
+    for number, approved in enumerate(raidteams.GROUPS[team], start=1):
+        seated, gaps = [], []
+        for seat in approved:
+            member = find(seat.name, seat.was)
+            if member is None:
+                gaps.append(seat)
+                continue
+            used.add(member["name"])
+            seated.append(_approved_seat(member, seat, number))
+        open_seats += gaps
+        groups.append(
+            {
+                "number": number,
+                "members": seated,
+                "buffs": [b for b in BUFFS if b in _buffs(seated)],
+                "missing_buffs": [b for b in BUFFS if b not in _buffs(seated)],
+                "open_seats": [s.name for s in gaps],
+            }
+        )
+    return groups, open_seats, used
+
+
+def _approved_listed(pairs, role: str, find, used: set) -> list:
+    """The members of an approved list (summoners, maintenance) found in the
+    guild, each marked with its role and approved name."""
+    out = []
+    for old, new in pairs:
+        member = find(new, old)
+        if member is not None:
+            used.add(member["name"])
+            out.append(dict(member, role=role, approved_name=new))
+    return out
+
+
+def _seat_counts(seats) -> dict:
+    return {
+        "tanks": sum(1 for s in seats if s.seat == raidroles.SEAT_TANK),
+        "healers": sum(1 for s in seats if s.seat == raidroles.SEAT_HEALER),
+        "damage": sum(1 for s in seats if s.seat == raidroles.SEAT_DAMAGE),
+    }
+
+
 def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
     """The approved lineup for `team`, in build_lineup's own shape.
 
@@ -495,68 +541,29 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
     guild yet (a recruit still to come) is an open seat: it counts as a gap and
     names the class to recruit. Summoners and maintenance are the approved
     lists; everyone else, the leavers first, is surplus, the kick list."""
-    by_name = {}
-    for m in members:
-        if m.get("name"):
-            by_name[m["name"]] = raidroles.with_spec(m)
+    by_name = {m["name"]: raidroles.with_spec(m) for m in members if m.get("name")}
 
     def find(name, was=""):
         return by_name.get(name) or (by_name.get(was) if was else None)
 
-    groups, open_seats, used = [], [], set()
-    for number, approved in enumerate(raidteams.GROUPS[team], start=1):
-        seated = []
-        for seat in approved:
-            member = find(seat.name, seat.was)
-            if member is None:
-                open_seats.append(seat)
-                continue
-            used.add(member["name"])
-            seated.append(_approved_seat(member, seat, number))
-        groups.append(
-            {
-                "number": number,
-                "members": seated,
-                "buffs": [b for b in BUFFS if b in _buffs(seated)],
-                "missing_buffs": [b for b in BUFFS if b not in _buffs(seated)],
-                "open_seats": [s.name for s in approved if s in open_seats],
-            }
-        )
-
-    def listed(pairs, role):
-        out = []
-        for old, new in pairs:
-            member = find(new, old)
-            if member is not None:
-                used.add(member["name"])
-                out.append(dict(member, role=role, approved_name=new))
-        return out
-
-    summoners = listed(raidteams.SUMMONERS[team], "summoner")
-    upkeep = listed(raidteams.MAINTENANCE[team], "maintenance")
+    groups, open_seats, used = _approved_groups(team, find)
+    summoners = _approved_listed(raidteams.SUMMONERS[team], "summoner", find, used)
+    upkeep = _approved_listed(raidteams.MAINTENANCE[team], "maintenance", find, used)
     leaving = set(raidteams.LEAVING[team])
     surplus = sorted(
         (m for n, m in by_name.items() if n not in used),
         key=lambda m: (m["name"] not in leaving, m["name"]),
     )
     placed = [m for g in groups for m in g["members"]]
-    count = len(groups)
-    raiders = sum(len(g) for g in raidteams.GROUPS[team])
+    raiders = len(raidteams.seats(team))
     wanted = _wanted(
-        raiders, len(raidteams.MAINTENANCE[team]), len(raidteams.SUMMONERS[team]), count
+        raiders,
+        len(raidteams.MAINTENANCE[team]),
+        len(raidteams.SUMMONERS[team]),
+        len(groups),
     )
-    wanted.update(
-        tanks=sum(1 for s in raidteams.seats(team) if s.seat == raidroles.SEAT_TANK),
-        healers=sum(
-            1 for s in raidteams.seats(team) if s.seat == raidroles.SEAT_HEALER
-        ),
-        damage=sum(1 for s in raidteams.seats(team) if s.seat == raidroles.SEAT_DAMAGE),
-    )
-    gaps = {
-        "tanks": sum(1 for s in open_seats if s.seat == raidroles.SEAT_TANK),
-        "healers": sum(1 for s in open_seats if s.seat == raidroles.SEAT_HEALER),
-        "damage": sum(1 for s in open_seats if s.seat == raidroles.SEAT_DAMAGE),
-    }
+    wanted.update(_seat_counts(raidteams.seats(team)))
+    gaps = _seat_counts(open_seats)
     cover = _buff_cover(groups, placed)
     recruit = list(dict.fromkeys(s.class_id for s in open_seats))
     return {
@@ -586,7 +593,7 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
         },
         "composition": _composition(placed),
         "roles_line": roles_line(groups, wanted),
-        "gap_line": gap_line(gaps, recruit, cover, count),
+        "gap_line": gap_line(gaps, recruit, cover, len(groups)),
     }
 
 
