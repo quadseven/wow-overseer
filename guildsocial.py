@@ -115,6 +115,9 @@ CAPITAL_ZONES = frozenset({1519, 1537, 1657, 1637, 1638, 1497, 3487, 3557})
 TANK, HEALER, DPS = "tank", "healer", "dps"
 SEATS = (TANK, HEALER, DPS, DPS, DPS)
 NEED, HELPS = "need", "help"
+# A random bot from outside the guild who answered the asker's call in
+# LookingForGroup for a tank or a healer (guildpug.py, #591).
+PUG = "pug"
 
 # Ask and answer states, as the tables hold them.
 OPEN, FILLED, RAN, EXPIRED, CANCELLED = "open", "filled", "ran", "expired", "cancelled"
@@ -843,12 +846,23 @@ class Formation:
     declined: tuple  # answer ids
     helpers: tuple  # names
     said: str
+    # Seated members from outside the guild (guildpug, #591).
+    pugs: tuple = ()
 
     @property
     def key(self) -> str:
-        """The learning record's composition key, with its helpers counted."""
+        """The learning record's composition key, with its helpers and pugs
+        counted."""
         base = self.composition.key
-        return base + ("+%dhelp" % len(self.helpers) if self.helpers else "")
+        base += "+%dhelp" % len(self.helpers) if self.helpers else ""
+        return base + ("+%dpug" % len(self.pugs) if self.pugs else "")
+
+    @property
+    def speaker(self) -> str:
+        """Who says the group is heading in, in guild chat: the tank, unless
+        the tank is a pug, who is not in the guild; then the asker."""
+        tank = self.composition.tank.name
+        return self.ask.asker if tank in self.pugs else tank
 
     @property
     def band(self) -> str:
@@ -879,6 +893,16 @@ def _minutes_since(when, now) -> float:
     if when is None or now is None:
         return 1e9
     return (now - when).total_seconds() / 60.0
+
+
+def seats_so_far(ask: Ask, answers: list, free: dict) -> tuple | None:
+    """({tank, healer} -> (member, answer) or None, [damage (member, answer)])
+    for the asker and its yeses from members free now, as `seat` fills them;
+    None when the asker is not free (guildpug reads which seat is short)."""
+    asker = free.get(ask.asker)
+    if asker is None:
+        return None
+    return _seats(asker, _yeses(answers, free), free)
 
 
 def _yeses(answers: list, free: dict) -> list:
@@ -1056,6 +1080,11 @@ def _form(board: _Board, still: list, can_form: bool) -> tuple:
                 filled.append(ask.id)
             continue
         comp, used, declined, helpers = seated
+        pugs = tuple(
+            a.member for a in board.current(ask) if a.id in used and a.stance == PUG
+        )
+        # A pug tank is not in the guild, so the asker says the group is in.
+        speaker = ask.asker if comp.tank.name in pugs else comp.tank.name
         form = Formation(
             ask=ask,
             door=door,
@@ -1063,7 +1092,8 @@ def _form(board: _Board, still: list, can_form: bool) -> tuple:
             seated=used,
             declined=declined,
             helpers=helpers,
-            said=formed_line(ask.asker, comp.tank.name, door),
+            said=formed_line(ask.asker, speaker, door),
+            pugs=pugs,
         )
     return form, filled
 

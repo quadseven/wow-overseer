@@ -65,6 +65,7 @@ import natural
 import guildcorps
 import guildjobs
 import guildrun
+import guildpug
 import guildsocial
 import holdings
 import handover
@@ -15840,6 +15841,20 @@ class Bridge(discord.Client):
                    | set(getattr(self, "_crafter_walks", ())))
         doors = guildrun.doors(facts["finder_floors"])
         mates, held, needs = _guild_social_mates(facts, mid_job, doors)
+        # PICK-UP GROUPS (guildpug, #591): random bots are read only for asks
+        # that may want one, and a pug who said yes counts as free this pass.
+        pugs_on = guildpug.enabled()
+        pug_rows, pug_all = [], []
+        if pugs_on:
+            watch = guildpug.watching(facts["asks"], facts.get("pug_calls", {}),
+                                      facts["answers"], facts["now"])
+            span = guildpug.levels_to_read(watch, {d.keyword: d for d in doors})
+            if span:
+                pug_rows = await asyncio.to_thread(_fetch_guild_pugs, span, bounds)
+            pug_all, answered, pug_held = guildpug.pug_mates(
+                pug_rows, facts["answers"], facts["busy"], facts["family"])
+            mates = mates + answered
+            held = dict(held, **pug_held)
         # THE DOOR'S RECORD BY SHAPE (#584): no member asks for a door failing
         # for the group its guild can seat, the runs never let in counted.
         records = guildrun.shape_records(facts.get("history", []), facts["now"])
@@ -15850,7 +15865,21 @@ class Bridge(discord.Client):
             can_form=spaced and in_flight < bounds.max_groups,
             campaigns=facts["campaigns"], records=records)
         social = await _guild_social_doors(getattr(self, "_jev", None), social)
+        pug_pass = None
+        if pugs_on:
+            pug_pass = guildpug.plan(
+                social, facts["asks"], facts["answers"], facts.get("pug_calls", {}),
+                {m.name: m.member for m in mates if m.name not in held}, pug_all,
+                {d.keyword: d for d in doors}, guildpug.factions(mates, bounds.guilds),
+                guildjobs.entrances(), facts["now"], busy=facts["busy"],
+                family=facts["family"])
         run_id = await asyncio.to_thread(_write_guild_social, social)
+        if pug_pass is not None and (pug_pass.calls or pug_pass.joins):
+            await asyncio.to_thread(_write_guild_pugs, pug_pass)
+            log.info("guild pugs: %d call(s) in LookingForGroup, %d pug(s) answered%s",
+                     len(pug_pass.calls), len(pug_pass.joins),
+                     "".join("; %s for %s's ask %d" % (j.member, j.asker, j.ask_id)
+                             for j in pug_pass.joins))
         if run_id:
             self._guild_run_formed_at = now
             self._guild_run_names |= set(social.form.composition.names)
@@ -19737,6 +19766,24 @@ def _ensure_guild_run_store() -> None:
     except pymysql.err.MySQLError:
         log.exception("guild social: the ask and answer tables are unavailable; "
                       "no guild member asks or answers")
+    # Pick-up groups (guildpug, #591): the call table, the pug stance on an
+    # answer and who was a pug on a run. Only with GUILD_PUGS on.
+    if guildpug.enabled():
+        try:
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(guildpug.CALL_TABLE_SQL)
+                cur.execute(guildpug.ANSWER_STANCE_SQL)
+                cur.execute(
+                    "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() "
+                    "  AND TABLE_NAME = 'overseer_guild_run' AND COLUMN_NAME = 'pugs'"
+                )
+                if not (cur.fetchone() or {}).get("n"):
+                    cur.execute(guildpug.RUN_PUGS_COLUMN_SQL)
+                    log.info("overseer_guild_run: added pugs")
+        except pymysql.err.MySQLError:
+            log.exception("guild pugs: the call table is unavailable; no guild "
+                          "group calls for a pug")
 
 
 _GUILD_RUN_MEMBERS_SQL = (
@@ -19774,6 +19821,26 @@ _GUILD_RUN_MEMBERS_SQL = (
     "WHERE s.updated_at > NOW() - INTERVAL 60 SECOND AND s.is_bot = 1 "
     "AND g.name IN ({holes})"
 )
+# A PUG'S READ (guildpug, #591): the same columns for random bots in the
+# world outside the configured guilds (in no guild, or another), in the open
+# world and in the level range of the asks that may want one.
+_GUILD_PUGS_SQL = (
+    _GUILD_RUN_MEMBERS_SQL[: _GUILD_RUN_MEMBERS_SQL.index("FROM overseer_snapshot s")]
+    + "FROM overseer_snapshot s JOIN characters c ON c.guid = s.guid "
+    "LEFT JOIN guild g ON g.guildid = s.guild_id "
+    "WHERE s.updated_at > NOW() - INTERVAL 60 SECOND AND s.is_bot = 1 "
+    "AND (g.name IS NULL OR g.name NOT IN ({holes})) "
+    "AND s.level BETWEEN %s AND %s AND s.map_id IN (0, 1, 530)"
+)
+
+
+def _fetch_guild_pugs(span: tuple, bounds) -> list:
+    """The random bots a pug may come from, in the level range `span`."""
+    guilds = list(bounds.guilds)
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_GUILD_PUGS_SQL.format(holes=",".join(["%s"] * len(guilds))),  # noqa: S608 - placeholders only
+                    guilds + [int(span[0]), int(span[1])])
+        return list(cur.fetchall())
 
 
 def _guild_run_state_names(cur, states) -> list:
@@ -20068,11 +20135,19 @@ def _fetch_guild_social_facts(bounds) -> dict:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
         drops = _guild_social_drops(cur)
+        pug_calls = {}
+        if guildpug.enabled():
+            try:
+                cur.execute(guildpug.CALLS_SQL)
+                pug_calls = {c.ask_id: c for c in map(guildpug.call_from_row, cur.fetchall())}
+            except pymysql.err.MySQLError as exc:
+                if not (exc.args and exc.args[0] == 1146):
+                    raise
     facts.update({
         "now": now, "asks": asks, "answers": answers,
         "quests": guildsocial.quests_by_name(quest_rows),
         "gear": guildsocial.gear_by_name(facts["rows"], worn, skills),
-        "campaigns": campaigns, "drops": drops,
+        "campaigns": campaigns, "drops": drops, "pug_calls": pug_calls,
     })
     return facts
 
@@ -20177,7 +20252,7 @@ def _write_guild_social(social) -> int:
             lines.append((reply.member, reply.said))
     run_id = _start_social_run(social.form) if social.form else 0
     if run_id:
-        lines.append((social.form.composition.tank.name, social.form.said))
+        lines.append((social.form.speaker, social.form.said))
     for name, text in lines:
         try:
             _insert_speak(relay.SpeakCommand(name, "guild", text, "", guildsocial.SOURCE))
@@ -20202,10 +20277,13 @@ def _start_social_run(form) -> int:
              guildrun.members_text(comp)[:255]),
         )
         run_id = int(cur.lastrowid)
+        if form.pugs:
+            cur.execute(guildpug.RUN_PUGS_SQL, (",".join(form.pugs)[:40], run_id))
         cur.execute(
             "INSERT INTO overseer_command (target_name, command, kind, source) "
             "VALUES (%s, %s, 'guild', %s)",
-            (comp.tank.name, comp.command(door.keyword), guildrun.SOURCE),
+            (comp.tank.name, comp.command(door.keyword) + guildpug.pug_tail(form.pugs),
+             guildrun.SOURCE),
         )
         command_id = int(cur.lastrowid)
         cur.execute("UPDATE overseer_guild_run SET command_id = %s WHERE id = %s",
@@ -20216,6 +20294,30 @@ def _start_social_run(form) -> int:
         for answer_id in form.declined:
             cur.execute(guildsocial.ANSWER_STATE_SQL, (guildsocial.DECLINED, answer_id))
     return run_id
+
+
+def _write_guild_pugs(pugs) -> None:
+    """Write one guildpug.PugPass: each call once (the asker says it in the
+    faction's public channel), each pug's yes as an answer with stance pug
+    (the pug whispers the asker; the asker tells the guild)."""
+    lines = []
+    with _connect() as conn, conn.cursor() as cur:
+        for call in pugs.calls:
+            cur.execute(guildpug.INSERT_CALL_SQL, (
+                call.ask_id, call.asker[:12], guildsocial.roles_text(call.seats)[:32],
+                guildpug.CHANNEL, call.said[:255]))
+            if cur.rowcount:
+                lines.append((call.asker, guildpug.CHANNEL, call.said, ""))
+        for join in pugs.joins:
+            cur.execute(guildsocial.INSERT_ANSWER_SQL, (
+                join.ask_id, join.member[:12], join.role, guildsocial.PUG, join.said[:255]))
+            lines.append((join.member, "whisper", join.said, join.asker))
+            lines.append((join.asker, "guild", join.told_guild, ""))
+    for name, channel, text, to in lines:
+        try:
+            _insert_speak(relay.SpeakCommand(name, channel, text, to, guildpug.SOURCE))
+        except pymysql.err.MySQLError:
+            log.exception("guild pugs: %s's line was not said: %r", name, text)
 
 
 # RUN RECOVERY (jev_recovery). mod-overseer writes one overseer_run_recovery row

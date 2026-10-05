@@ -90,6 +90,9 @@ COLLATIONS = {
     # guildsocial.ASK_TABLE_SQL and ANSWER_TABLE_SQL the same way.
     "overseer_guild_ask": "utf8mb4_0900_ai_ci",
     "overseer_guild_answer": "utf8mb4_0900_ai_ci",
+    # Bridge-owned (a guild group's call for a pug, #591), named in
+    # guildpug.CALL_TABLE_SQL the same way.
+    "overseer_guild_pug_call": "utf8mb4_0900_ai_ci",
     # Bridge-owned (mod-overseer#767), named in dungeonpace.CREATE_SQL.
     "overseer_dungeon_pace": "utf8mb4_0900_ai_ci",
     # Bridge-owned (the Bags tab's week), named in
@@ -262,11 +265,14 @@ STRING_COLUMNS = {
             "members",
             "outcome",
             "proposer",
+            "pugs",
             "state",
             "tank",
             "why",
         }
     ),
+    # From its own DDL (guildpug.CALL_TABLE_SQL): every VARCHAR column.
+    "overseer_guild_pug_call": frozenset({"asker", "seats", "channel", "said"}),
     # From their own DDL (guildsocial.ASK_TABLE_SQL, ANSWER_TABLE_SQL): every
     # VARCHAR and ENUM column.
     # From its own DDL (dungeonpace.CREATE_SQL): every VARCHAR column.
