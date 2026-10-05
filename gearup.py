@@ -473,18 +473,53 @@ def _worn_shield(character) -> bool:
     )
 
 
+# WEAPON SUBCLASSES THAT TAKE BOTH HANDS: axe, mace, polearm, sword, staff
+# and fishing pole (item_template class 2). A worn piece carries its class and
+# subclass, not its InventoryType, so this is how a two-hander is read.
+TWO_HAND_SUBCLASSES = {1, 5, 6, 8, 10, 20}
+
+
+def holds_two_hander(character) -> bool:
+    worn = (_get(character, "equipped", "slots", default={}) or {}).get("mainhand")
+    return (
+        isinstance(worn, dict)
+        and int(worn.get("item_class") or 0) == 2
+        and int(worn.get("item_subclass") or -1) in TWO_HAND_SUBCLASSES
+    )
+
+
+def _shield_tank(character) -> bool:
+    return (
+        bool(_get(character, "shield_tank", default=False))
+        and _class_id(character) in SHIELD_TANK_CLASSES
+    )
+
+
+def tank_two_hander(character) -> bool:
+    """A shield tank holding a two-hander: its main hand counts as empty, so a
+    one-handed weapon is bought first and the shield can go on beside it.
+    Measured on the dev realm 2026-10-05: Aradak, a level 17 Protection
+    warrior, held its starting Practice Sword with a Dented Buckler in its bags
+    that the equip drive could never put on."""
+    return _shield_tank(character) and holds_two_hander(character)
+
+
 def shield_short(character) -> bool:
-    """A warrior or paladin in the tank seat with no shield worn or carried.
+    """A warrior or paladin in the tank seat with no shield worn, and none
+    carried that it can put on (a two-hander in its main hand keeps a carried
+    shield in the bag).
 
     Its off hand then counts as an empty slot, whatever it holds: a tank's
     off hand is a shield (gear._off_hand_refusal says the same of a held piece
     or a weapon).
     """
     return (
-        bool(_get(character, "shield_tank", default=False))
-        and _class_id(character) in SHIELD_TANK_CLASSES
+        _shield_tank(character)
         and not _worn_shield(character)
-        and not _get(character, "shield_carried", default=False)
+        and (
+            not _get(character, "shield_carried", default=False)
+            or holds_two_hander(character)
+        )
     )
 
 
@@ -614,8 +649,7 @@ def _plan_character(name, character, listings, budget, taken=frozenset()):
     and only then do the other empty slots share what is left, a fifth each.
     """
     plan = _Plan(name, character, budget, set(taken))
-    equipped = _get(character, "equipped", "slots", default={}) or {}
-    if "mainhand" not in equipped:
+    if "mainhand" not in plan.equipped:
         for item in listings:
             if plan.consider(item, weapon_first=True):
                 break
@@ -636,6 +670,12 @@ class _Plan:
         self.tank = bool(_get(character, "shield_tank", "tank", default=False))
         self.purse, self.available = budget
         self.chosen, self.used, self.buys = set(), used, []
+        if tank_two_hander(character):
+            # The two-hander goes when a one-hander comes, and a shield already
+            # carried goes on then: none is bought for the off hand.
+            self.equipped = {s: v for s, v in self.equipped.items() if s != "mainhand"}
+            if _get(character, "shield_carried", default=False):
+                self.chosen.add("offhand")
 
     def consider(self, item, weapon_first):
         """Buy `item` for the first open slot it suits and the budget allows."""
