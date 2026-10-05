@@ -17,10 +17,11 @@ operator's (the roster's spec tab).
 ALREADY ON THE WAY. The talents read from the database lag the game: a
 character saves its talents some minutes after the trainer, so a respec that
 just came back applied still reads as the old tree. A respec row from this
-pass that came back applied (RESPEC_COUNTED_MINUTES) or is still waiting
-(PENDING_MINUTES) counts as the seat it walked for, and so does a member with
-no points outside the tree its raid plan target names (overseer_raid_spec):
-mod-overseer spends its free points there at its next login or level.
+pass that came back applied (within the day the job pass's recent rows reach)
+or is still waiting (PENDING_MINUTES) counts as the seat it walked for, and so
+does a member with no points outside the tree its raid plan target names
+(overseer_raid_spec): mod-overseer spends its free points there at its next
+login or level.
 
 WHO RESPECS. A member of a class that can take the seat (warrior, paladin or
 druid to tank; priest, paladin, shaman or druid to heal), at RESPEC_LEVEL or
