@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import council
+
 try:
     from zoneinfo import ZoneInfo
 
@@ -63,6 +65,57 @@ _EVENT_TONES = {
     "reset_retry": "warn",
     "evacuated": "warn",
 }
+
+
+# The coordinator's phase names (mod_overseer.cpp, DungeonRunPhase) as a reader
+# says them (#567). A phase this table does not know is shown lower-cased with
+# its underscores as spaces, never dropped.
+PHASES = {
+    "IDLE": "waiting",
+    "RESET": "resetting the dungeon",
+    "REPAIRING": "repairing",
+    "GATHERING": "walking to the door",
+    "BARRIER": "waiting for everyone at the door",
+    "ENTER": "going in together",
+    "STAGED_INSIDE": "everyone inside",
+    "CLEARING": "clearing",
+    "EXIT": "walking out",
+    "RECOVERING": "recovering",
+}
+
+# How a run ended, from the outcome word the module writes (#567). Same
+# fallback as PHASES.
+OUTCOMES = {
+    "complete": "cleared",
+    "left": "walked out",
+    "emptied": "the dungeon was already empty",
+    "wipe": "wiped",
+    "split_failed": "the family split",
+    "staging_failed": "the family never gathered at the door",
+    "reset_failed": "the dungeon would not reset",
+    "evacuated": "pulled out",
+}
+
+
+def _words(table: dict, key: str) -> str:
+    key = str(key or "").strip()
+    return table.get(key) or key.lower().replace("_", " ")
+
+
+def phase_line(detail: str) -> str:
+    """ "IDLE -> RESET (gnomeregan, ...)" as "now resetting the dungeon"."""
+    head = detail.split(" (", 1)[0]
+    if " -> " not in head:
+        return detail
+    return "now " + _words(PHASES, head.split(" -> ", 1)[1])
+
+
+def ended_line(detail: str) -> str:
+    """ "split_failed: the family is split ..." with the outcome in words."""
+    outcome, _, reason = str(detail or "").partition(":")
+    said = _words(OUTCOMES, outcome)
+    reason = reason.strip().replace("BARRIER", "the wait at the door")
+    return "%s: %s" % (said, reason) if reason else said
 
 
 def _outcome(detail: str) -> str:
@@ -141,22 +194,16 @@ def _ago(age_seconds) -> str:
 
 
 def _title(run: dict) -> str:
-    campaign, number = run["key"]
+    """ "Gnomeregan, run 9" (#567).
+
+    The campaign id and the run row id are the module's record numbers and
+    stay out of the title; the run number counts this campaign's runs, which
+    is the number the home banner's queue line counts too.
+    """
+    _campaign, number = run["key"]
     portal = next((r.get("portal") for r in run["rows"] if r.get("portal")), "")
-    run_id = next(
-        (int(r.get("run_id") or 0) for r in reversed(run["rows"]) if r.get("run_id")), 0
-    )
-    parts = []
-    if number:
-        parts.append("run %d" % number)
-    if campaign:
-        parts.append("of campaign %d" % campaign)
-    title = " ".join(parts) or "a run"
-    if portal:
-        title += ", " + portal
-    if run_id:
-        title += " (run row %d)" % run_id
-    return title[:1].upper() + title[1:]
+    place = council.keyword_place(portal) if portal else "A dungeon"
+    return "%s, run %d" % (place, number) if number else place
 
 
 def _summary(run: dict, latest: bool) -> tuple[str, str]:
@@ -167,8 +214,10 @@ def _summary(run: dict, latest: bool) -> tuple[str, str]:
         age = _ago(ended.get("age_seconds"))
         if ended.get("kind") == "released":
             return "let go %s: %s" % (age, ended.get("detail") or ""), "bad"
-        return "ended %s - %s" % (age, ended.get("detail") or ""), _tone(ended)
-    phase = last.get("phase") or "IDLE"
+        return "ended %s: %s" % (age, ended_line(ended.get("detail") or "")), _tone(
+            ended
+        )
+    phase = _words(PHASES, last.get("phase") or "IDLE")
     if latest:
         return (
             "under way, now %s (last change %s)"
@@ -176,16 +225,21 @@ def _summary(run: dict, latest: bool) -> tuple[str, str]:
             "live",
         )
     return (
-        "no end was written; the last row was %s in %s. A worldserver restart "
-        "ends a run without a row" % (_ago(last.get("age_seconds")), phase)
+        "no end was recorded; the last step was %s, %s. A server restart "
+        "ends a run without recording it" % (_ago(last.get("age_seconds")), phase)
     ), "plain"
 
 
 def _event(row: dict, now: datetime) -> dict:
     who = ("%s: " % row["character_name"]) if row.get("character_name") else ""
+    said = row.get("detail") or row.get("kind") or ""
+    if row.get("kind") == "phase":
+        said = phase_line(said)
+    elif row.get("kind") == "ended":
+        said = ended_line(said)
     return {
         "at": _clock(row.get("age_seconds"), now),
-        "line": who + (row.get("detail") or row.get("kind") or ""),
+        "line": who + said,
         "tone": _tone(row),
     }
 
@@ -233,9 +287,9 @@ def build_run_timeline(
         now = now.replace(tzinfo=timezone.utc)
     if not present:
         return {
-            "line": "No run timeline yet: this realm's worldserver has not created "
-            "overseer_dungeon_run_event. It arrives with the module image "
-            "that writes it.",
+            # overseer_dungeon_run_event does not exist yet on this realm.
+            "line": "No run timeline yet: this realm's world server does not "
+            "record runs step by step until it is updated.",
             "families": [],
         }
 
@@ -245,8 +299,8 @@ def build_run_timeline(
 
     names = list(families) + sorted(f for f in by_family if f and f not in families)
     return {
-        "line": "Each run's phase changes and decisions as the worldserver wrote "
-        "them, times in %s. Rows are kept 14 days." % _ZONE_LABEL,
+        "line": "Each run step by step, as the world server recorded it, times "
+        "in %s. Kept for 14 days." % _ZONE_LABEL,
         "families": [
             _family_block(f, by_family.get(f, []), now, runs_per_family) for f in names
         ],

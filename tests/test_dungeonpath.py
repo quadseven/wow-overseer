@@ -238,7 +238,7 @@ class WhatTheOverseerCanRun(unittest.TestCase):
         )
         overseer = step(build(), 329)["overseer"]
         self.assertFalse(overseer["can"])
-        self.assertIn("withheld", overseer["line"])
+        self.assertIn("held back", overseer["line"])
         self.assertIn("portcullis", overseer["line"])
         self.assertNotIn(
             "Stratholme", dungeonpath.runnable_line(PORTALS, {329: "Stratholme"})
@@ -250,7 +250,7 @@ class WhatTheOverseerCanRun(unittest.TestCase):
         for map_id in (48, 47, 129, 90, 70, 209, 109, 230, 229, 329, 349, 289, 429):
             self.assertIn(map_id, dungeonpath.PORTAL_CAVEATS, map_id)
         line = step(build(), 90)["overseer"]["line"]
-        self.assertIn("gnomeregan, gnomeregan-depot", line)
+        self.assertNotIn("gnomeregan-depot", line)
         self.assertIn("Workshop Key", line)
 
     def test_a_dungeon_without_a_portal_says_so(self):
@@ -261,15 +261,13 @@ class WhatTheOverseerCanRun(unittest.TestCase):
             {"text": "overseer cannot run it yet", "tone": "no"}, molten_core["chips"]
         )
 
-    def test_scarlet_names_all_four_wings(self):
+    def test_the_line_never_spells_a_portal_keyword(self):
+        """The keywords are the module's spelling, not a reader's (#567)."""
         line = step(build(), 189)["overseer"]["line"]
-        for wing in (
-            "scarlet",
-            "scarlet-library",
-            "scarlet-armory",
-            "scarlet-cathedral",
-        ):
-            self.assertIn(wing, line)
+        self.assertTrue(step(build(), 189)["overseer"]["can"])
+        for wing in ("scarlet-library", "scarlet-armory", "scarlet-cathedral"):
+            self.assertNotIn(wing, line)
+        self.assertNotIn("mod-overseer", line)
 
     def test_the_page_line_counts_dungeons_not_portals(self):
         line = dungeonpath.runnable_line(PORTALS, {36: "The Deadmines"})

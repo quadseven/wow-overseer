@@ -494,7 +494,7 @@ class TheFamilyWideGap(unittest.TestCase):
         gap = standing.trade_gap({"alchemy", "herbalism"}, BOOK)
         self.assertTrue(gap["enchanting"])
         self.assertIn("vendor trash", gap["enchanting_why"])
-        self.assertIn("mod-overseer#160", gap["enchanting_why"])
+        self.assertNotIn("mod-overseer#", gap["enchanting_why"])
         enchanting = [m for m in gap["missing"] if m["trade"] == "enchanting"][0]
         self.assertEqual(enchanting["why"], gap["enchanting_why"])
         others = [m for m in gap["missing"] if m["trade"] != "enchanting"]

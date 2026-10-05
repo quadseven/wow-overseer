@@ -182,17 +182,18 @@ class TheTabIsReachable(unittest.TestCase):
             self.assertIn(element, SECTION, element)
 
     def test_the_markup_holds_no_sentence_of_its_own(self):
-        """Two section labels and the loading word, and nothing else: every
-        other word on this tab arrives from the module."""
+        """Two section labels, the loading word and the method fold's label,
+        and nothing else: every other word on this tab arrives from the
+        module."""
         text = re.sub(r"<[^>]+>", " ", SECTION)
+        text = text.replace("how this is worked out", " ")
         words = [
             w
             for w in text.split()
             if w
             not in (
-                "reaching",
+                "loading...",
                 "the",
-                "world...",
                 "01",
                 "02",
                 "consumables,",

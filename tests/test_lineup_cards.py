@@ -109,6 +109,7 @@ def run():
     script = (
         FAKE_DOM
         + fn("el")
+        + fn("classInk")
         + block("const lgpick = ", "\nasync function pollGuildGear")
         + SCENARIO
     )

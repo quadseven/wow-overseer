@@ -628,7 +628,7 @@ class TheBrokenButtonMustNotBeSpendable(unittest.TestCase):
     def test_it_says_why_rather_than_just_being_dead(self):
         tag = self.page[self.page.index('id="pwcam"') :]
         self.assertIn(
-            "2887",
+            "Not implemented yet: a follow-cam needs",
             tag[: tag.index("</button>")],
             "a disabled control must carry its reason",
         )

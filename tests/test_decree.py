@@ -99,15 +99,15 @@ class AnUnwiredJobStandsTheQuestDriveDown(unittest.TestCase):
     def test_an_unwired_mode_says_it_stands_the_drive_down(self):
         choice = decree.job_choice("farm")
         self.assertTrue(choice["stands_down"])
-        self.assertIn("stands the quest drive down", choice["says"])
-        self.assertIn("nothing positive replaces it", choice["says"])
+        self.assertIn("only stops questing", choice["says"])
+        self.assertIn("nothing in its place", choice["says"])
 
     def test_the_sentence_is_the_modules_own_and_not_a_second_copy(self):
-        """The bridge answers a job order in the overseer's channel with
-        jobs.describe. A console that phrased the warning in its own words
-        would be a copy free to soften on its own."""
+        """jobs.say is the reader's sentence for a mode (#567). A console
+        that phrased the warning in its own words would be a copy free to
+        soften on its own."""
         for mode in jobs.MODES:
-            self.assertEqual(decree.job_choice(mode)["says"], jobs.describe(mode))
+            self.assertEqual(decree.job_choice(mode)["says"], jobs.say(mode))
 
     def test_a_wired_mode_does_not_carry_the_warning(self):
         for mode in sorted(jobs.IMPLEMENTED):
@@ -197,7 +197,8 @@ class TheCanonicalUnchangedRow(unittest.TestCase):
         the live lists the verdict was made against."""
         line = decree.outcome(command(id=4184, status="unchanged"))
         self.assertEqual(line["id"], 4184)
-        self.assertIn("`result`", line["evidence"])
+        self.assertIn("checked against", line["evidence"])
+        self.assertNotIn("`", line["evidence"])
 
     def test_every_line_carries_its_row_id_not_only_the_interesting_ones(self):
         for status in decree.OUTCOMES:
@@ -373,19 +374,14 @@ class WhatThisConsoleMayWrite(unittest.TestCase):
         order = decree.plan_order({"section": decree.WILL}, roster())
         self.assertEqual(order.refusal, decree.ORDER_REFUSALS["will"])
 
-    def test_every_card_names_the_table_or_column_it_writes(self):
-        """The candour the refusals used to carry, now that the buttons work.
-        An operator who has to press one to find out what it writes is being
-        asked to experiment on a live realm."""
-        named = {
-            decree.JOB: "overseer_command",
-            decree.CAMPAIGN: "overseer_roster.dungeon_runs_wanted",
-            decree.TRAVEL: "overseer_roster.travel_npc",
-        }
+    def test_every_card_says_what_it_does_in_plain_words(self):
+        """An operator who has to press a button to find out what it does is
+        being asked to experiment on a live realm, so every card says it. In
+        a player's words (#567): the tables it writes stay in the comments."""
         for section in decree.SECTIONS:
             self.assertTrue(section.does, section.key)
-            if section.key in named:
-                self.assertIn(named[section.key], section.does, section.key)
+            self.assertNotIn("overseer_", section.does, section.key)
+            self.assertNotIn(".py", section.does, section.key)
 
     def test_a_card_that_could_not_send_would_still_say_how_it_is_done(self):
         """The refusal machinery is kept, not deleted: a control that loses
@@ -509,8 +505,11 @@ class WhatIsStoppingThem(unittest.TestCase):
         entry = next(b for b in decree.backlog() if first in b["what"])
         self.assertIn(owed, entry["what"])
 
-    def test_it_says_nothing_crafts(self):
-        self.assertTrue(any("crafts" in b["what"] for b in decree.backlog()))
+    def test_it_no_longer_says_nothing_crafts(self):
+        """`craft` is wired (jobs.IMPLEMENTED) and its drive casts recipes,
+        so the old "Nothing crafts" entry was false (#567)."""
+        self.assertIn("craft", jobs.IMPLEMENTED)
+        self.assertFalse(any("Nothing crafts" in b["what"] for b in decree.backlog()))
 
     def test_every_entry_carries_a_reason(self):
         for entry in decree.backlog():
@@ -610,7 +609,7 @@ class AJobOrderIsReadBack(unittest.TestCase):
         line = decree.outcome(job_row(5, "Ugga"), {"Ugga": "farm"}, {"Ugga": 9}, NOW)
         self.assertEqual(line["word"], "replaced")
         self.assertFalse(line["success"])
-        self.assertIn("row 9", line["means"])
+        self.assertIn("number 9", line["means"])
 
     def test_the_newest_order_that_the_column_disagrees_with_did_not_take(self):
         line = decree.outcome(job_row(5, "Ugga"), {"Ugga": "farm"}, {"Ugga": 5}, NOW)
@@ -682,7 +681,7 @@ class BothFamilies(unittest.TestCase):
         fams = {f["key"]: f for f in payload["families"]}
         self.assertEqual(set(fams), {"Grug", "Zug"})
         self.assertEqual(fams["Zug"]["leader"], "Zug")
-        self.assertIn("Zug's row", fams["Zug"]["job"]["line"])
+        self.assertIn("as Zug, the leader", fams["Zug"]["job"]["line"])
         self.assertEqual(fams["Zug"]["campaign"]["wanted"], 5)
         self.assertEqual(fams["Grug"]["campaign"]["wanted"], 30)
 

@@ -220,21 +220,22 @@ class TheStandingJob(unittest.TestCase):
                 self.assertEqual(order.rows, (), mode)
 
     def test_the_refusal_opens_with_the_modules_own_sentence(self):
-        """jobs.describe has one author. A second copy here would be free to
+        """jobs.say has one author. A second copy here would be free to
         soften the stand-down warning it carries."""
         why = decree.unwired_refusal("farm")
-        self.assertTrue(why.startswith(jobs.describe("farm")))
-        self.assertIn("NOT BUILT YET", why)
+        self.assertTrue(why.startswith(jobs.say("farm")))
+        self.assertIn("not built yet", why)
 
-    def test_the_refusal_names_the_way_it_is_done_anyway(self):
-        """A refusal with no way forward is a dead end. The explicit form in
-        the overseer's own channel still sets any mode in MODES."""
+    def test_the_refusal_no_longer_points_at_discord(self):
+        """Discord orders are retired, so a refusal must not send the reader
+        to the overseer's channel to do it anyway (#567)."""
         why = decree.unwired_refusal("grind")
-        self.assertIn('"job grind"', why)
+        self.assertNotIn('"job grind"', why)
+        self.assertNotIn("channel", why)
 
     def test_what_it_says_is_what_the_bridge_says(self):
         order = decree.plan_order({"section": decree.JOB, "mode": "dungeon"}, roster())
-        self.assertEqual(order.says, jobs.describe("dungeon"))
+        self.assertEqual(order.says, jobs.say("dungeon"))
 
 
 class TheCampaignCounter(unittest.TestCase):
@@ -487,7 +488,7 @@ class WhatCameOfIt(unittest.TestCase):
 
     def test_the_job_sentence_names_the_schema_that_would_refuse_it(self):
         note = decree.ORDER_NOTHING[decree.JOB]
-        self.assertIn("overseer_command.kind", note)
+        self.assertIn("too old to take job orders", note)
 
 
 class TheAdapterRunsAndDoesNotDecide(unittest.TestCase):
@@ -896,7 +897,7 @@ class TheEndpointFromTheOutside(unittest.TestCase):
         self.assertEqual(handler.payload["section"], decree.JOB)
         self.assertEqual(handler.payload["asked"], 5)
         self.assertTrue(handler.payload["ok"])
-        self.assertEqual(handler.payload["says"], jobs.describe("dungeon"))
+        self.assertEqual(handler.payload["says"], jobs.say("dungeon"))
 
     def test_a_refused_order_is_a_400_and_never_reaches_a_write(self):
         handler = order(section=decree.JOB, mode="farm")
