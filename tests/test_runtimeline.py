@@ -129,7 +129,8 @@ class ThePayload(unittest.TestCase):
         run = fam["runs"][0]
         self.assertIn(
             "the family never gathered at the door: the wait at the door held "
-            "for more than 12 minutes", run["line"]
+            "for more than 12 minutes",
+            run["line"],
         )
         self.assertEqual(run["tone"], "bad")
 
