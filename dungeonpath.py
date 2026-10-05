@@ -139,9 +139,8 @@ PORTAL_MAPS = {
 # line, because a portal row is not the same claim as a run that works.
 PORTAL_CAVEATS = {
     43: (
-        "mod-overseer's portal table notes the entrance is on Kalimdor and a "
-        "family living on the Eastern Kingdoms has no crossing yet, so a run "
-        "is refused until one exists"
+        "the entrance is on Kalimdor and a family living on the Eastern "
+        "Kingdoms has no crossing yet, so a run is refused until one exists"
     ),
     189: (
         "the Armory and Cathedral doors need the Scarlet Key, which drops in "
@@ -342,9 +341,10 @@ def _overseer(step: Step, portals: dict) -> dict:
         return {
             "can": False,
             "line": (
-                "The overseer will not run this one yet: mod-overseer has a "
-                "portal for it (%s), but it is withheld because %s."
-                % (", ".join(keywords), WITHHELD_DOORS[keywords[0]])
+                # Plain words (#567): mod-overseer has a portal row (the
+                # keywords), and WITHHELD_DOORS holds it back.
+                "The overseer will not run this one yet: it knows the way "
+                "in, but it is held back because %s." % WITHHELD_DOORS[keywords[0]]
             ),
         }
     if keywords:
@@ -352,17 +352,15 @@ def _overseer(step: Step, portals: dict) -> dict:
         return {
             "can": True,
             "line": (
-                "The overseer can run this one: mod-overseer has a "
-                "portal for it (%s)%s."
-                % (", ".join(_open_doors(keywords)), "; " + caveat if caveat else "")
+                "The overseer can run this one on its own%s."
+                % ("; " + caveat if caveat else "")
             ),
         }
     return {
         "can": False,
         "line": (
-            "The overseer cannot run this one yet: mod-overseer has no "
-            "portal for it, so a dungeon goal naming it is refused "
-            "and it has to be run by hand."
+            "The overseer cannot run this one yet: it does not know the "
+            "way in, so it has to be run by hand."
         ),
     }
 
@@ -744,18 +742,18 @@ def runnable_line(portals: dict, names: dict) -> str:
     if not listed:
         return "The overseer cannot run any dungeon on its own yet."
     return (
-        "The overseer can run %s on its own today, through the portals "
-        "mod-overseer carries: %s. Every other step is marked as one it "
-        "cannot run yet." % (_plural(len(listed), "dungeon"), _names(listed))
+        "The overseer can run %s on its own today: %s. Every other step is "
+        "marked as one it cannot run yet."
+        % (_plural(len(listed), "dungeon"), _names(listed))
     )
 
 
 BASIS = (
-    "The families are the roster's own family column, and each is placed by "
-    "the lowest level among its members. The bands are this module's PATH "
-    "table, floored by the council's recommendations. What the overseer can "
-    "run is the list of dungeon portals mod-overseer carries. Runs are this "
-    "family's rows in the dungeon run ledger, led by any of its members, and "
+    "Each family is placed by the lowest level among its members. The level "
+    "bands are the overseer's own dungeon path, raised where the council "
+    "recommends. What the overseer can run is the list of dungeons it knows "
+    "the way into. Runs are this family's entries in the dungeon run record, "
+    "led by any of its members, and "
     "a run counts as cleared only when its outcome says complete. The guild "
     "count uses the same upgrade verdict as the family's, over every member of "
     "the guild. Each character's list is cut to the best piece per slot, and "

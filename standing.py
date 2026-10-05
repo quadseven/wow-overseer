@@ -196,7 +196,7 @@ FLAG_INVISIBLE_FORCED = 0x08
 ENCHANTING = "enchanting"
 ENCHANTING_WHY = (
     "nobody can disenchant, so every green and blue none of the five can "
-    "wear is vendor trash instead of dust (mod-overseer#160)"
+    "wear is vendor trash instead of dust"
 )
 
 WOWHEAD = "https://www.wowhead.com/wotlk/%s=%d"

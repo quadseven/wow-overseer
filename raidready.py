@@ -882,7 +882,7 @@ def build_readiness(groups: list) -> dict:
     elif len(ready) == len(groups):
         line = "every guild could form its first raid today"
     else:
-        line = "%d of %s could form its first raid today" % (
+        line = "%d of %s could form their first raid today" % (
             len(ready),
             _count(len(groups), "guild", "guilds"),
         )

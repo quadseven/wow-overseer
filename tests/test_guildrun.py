@@ -842,14 +842,15 @@ class TheGuildTab(unittest.TestCase):
             ),
         ]
         page = guildrun.page(rows)
-        self.assertEqual(page["head"], "1 group(s) out, 1 back")
+        self.assertEqual(page["head"], "1 group out, 1 back")
         card = page["active"][0]
         self.assertEqual(card["title"], "Cave - Ragefire Chasm")
         self.assertIn(
-            "Jev chose ragefire at 0.81 confidence, and Jev's answer acted",
+            "Jev chose Ragefire Chasm, 81% sure",
             card["lines"][0],
         )
-        self.assertIn("the prior acted", card["lines"][1])
+        self.assertIn("the usual rule chose", card["lines"][1])
+        self.assertIn("lineup ", card["lines"][1])
         self.assertEqual(
             card["members"][0],
             {"name": "Tanky", "seat": "tank", "class": "warrior", "level": 16},

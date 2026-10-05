@@ -24,7 +24,9 @@ and nobody has ever put the pieces beside each other:
     instance.completedEncounters        the bosses-down bitmask, which is the
                                         only boss-progress number on this
                                         realm that is not a guess (see below)
-    overseer_goal                       a Discord order aimed at one character
+    overseer_goal                       a goal aimed at one character (the
+                                        family council's, since Discord
+                                        orders were retired)
     overseer_trade                      an errand the council decided on
     overseer_event                      the movement feed, which is what makes
                                         a stall detectable at all
@@ -61,6 +63,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import achievements
+import campaignqueue
 import goals
 import jobs
 import travel
@@ -212,15 +215,10 @@ def job_split(rows: list[dict]) -> dict | None:
 
 
 def split_sentence(split: dict) -> str:
-    """ "3 on quest, 2 on dungeon" - a split rendered for a person.
-
-    The values are printed as they are stored. Every key in jobs.MODES is
-    already an English phrase a person says out loud ("gear hunt", "town
-    run"), so translating them here would only be a second vocabulary to
-    keep in step with the first.
-    """
+    """ "3 on quest, 2 on Shadowfang Keep runs" - a split rendered for a person."""
     return ", ".join(
-        "%d on %s" % (len(g["names"]), g["value"]) for g in split["groups"]
+        "%d on %s" % (len(g["names"]), campaignqueue.job_words(g["value"]))
+        for g in split["groups"]
     )
 
 
@@ -550,17 +548,17 @@ def errand_headline(err: dict) -> str:
 def orders(goal_rows: list[dict], quest_titles: dict, err: dict | None) -> dict | None:
     """Where the current aim CAME FROM, when it came from an instruction.
 
-    Two things can put an order into this world, and both record who asked: a
-    Discord goal (overseer_goal, which carries the channel it was set in) and
-    a council errand (overseer_trade, which carries its reason). Anything else
+    Two things can put an order into this world, and both come from the
+    family council: a goal (overseer_goal, see _goal_order) and an errand
+    (overseer_trade, which carries its reason). Anything else
     the family is doing, it chose for itself, and saying so is better than
     implying an order nobody gave.
 
     WHEN BOTH EXIST, THE ONE THE HEADLINE IS ABOUT WINS. The family can be
-    under a standing Discord quest order AND have the leader out on a council
+    under a standing quest goal AND have the leader out on a council
     errand at the same time - that is the live state on 2026-09-03, with Grug
     ordered onto The Totem of Infliction while Og walks to a tailoring
-    trainer. Reporting the Discord goal there would put "from a Discord order"
+    trainer. Reporting the goal there would put its source label
     under a headline about a trainer, crediting the sentence on screen to an
     instruction that did not produce it. So a LEADING errand, which is what
     _decide will headline, is preferred; a side errand is not, because then
@@ -571,14 +569,32 @@ def orders(goal_rows: list[dict], quest_titles: dict, err: dict | None) -> dict 
     live = [g for g in goal_rows if str(g.get("status") or "") == "active"]
     if live:
         newest = max(live, key=lambda g: g.get("created_at") or datetime.min)
-        return _discord_order(newest, quest_titles)
+        return _goal_order(newest, quest_titles)
     if err and err["reason"]:
         return _errand_order(err)
     return None
 
 
-def _discord_order(row: dict, quest_titles: dict) -> dict:
-    """One overseer_goal row, said the way the bridge says it."""
+# Who an order on the banner came from, said for the page (#567). The page
+# prints the label as it is and nothing else, so this is the whole set of
+# sources the banner can name; tests/test_plain_copy.py pins it.
+SOURCE_LABELS = {
+    "council": "set by the family council",
+    "errand": "set by the family council",
+}
+
+
+def _goal_order(row: dict, quest_titles: dict) -> dict:
+    """One overseer_goal row, said for the reader.
+
+    THE FAMILY COUNCIL WROTE IT. The one writer of overseer_goal left in the
+    bridge is _persist_council_plan; _insert_goal, which the retired Discord
+    goal command wrote through, has no caller left. The row still carries a channel_id,
+    because the council stamps the overseer's reporting channel on it, so a
+    channel on the row says where the decision was announced and not that a
+    person ordered it in Discord. This used to be labelled "from a Discord
+    order", which credited the council's own decision to an operator.
+    """
     quest_id = int(row.get("quest_id") or 0)
     title = quest_titles.get(quest_id)
     # goals.py owns how a goal is said out loud, kind by kind; borrowing it
@@ -587,14 +603,14 @@ def _discord_order(row: dict, quest_titles: dict) -> dict:
         str(row["kind"]), row.get("skill_name"), int(row.get("target") or 0), quest_id
     )
     return {
-        "kind": "discord",
+        "kind": "council",
         "who": str(row["character_name"]),
         "what": what,
         "channel_id": str(row.get("channel_id") or "") or None,
         "at": _iso(row.get("created_at")),
         "_at": row.get("created_at"),
         "objectives_left": _objectives_left(row),
-        "text": "Ordered in Discord: %s is on %s" % (row["character_name"], what),
+        "text": "The family council put %s on %s." % (row["character_name"], what),
     }
 
 
@@ -617,9 +633,9 @@ def _errand_order(err: dict) -> dict:
         "kind": "errand",
         "who": err["name"],
         "what": err["skill"] or err["target_text"],
-        # None, not the empty string: the page shows its Discord badge on the
-        # presence of a channel, and an errand was decided by the council in
-        # world, not asked for in a channel.
+        # No channel: an errand was decided by the council in world. The
+        # page's source label comes from `source` (SOURCE_LABELS), never from
+        # whether a channel is present.
         "channel_id": None,
         "at": err["decided_at"],
         "_at": err["_decided_at"],
@@ -788,6 +804,11 @@ def build_agenda(
         "stall_after_seconds": int(STALL_AFTER.total_seconds()),
         "stall_line": stall_line(moved_at, now) if is_stalled else "",
         "orders": _public(order),
+        # WHO SET WHAT THE HEADLINE SAYS, or "" when no order produced it.
+        # Only when the headline is about the order: a council goal for one
+        # member said under "in town" would credit the sentence on screen to
+        # a decision that did not make it, the trap orders() already avoids.
+        "source": _source(activity, order),
         "job_split": jsplit,
         "quest_split": qsplit,
         "campaign": counter,
@@ -807,6 +828,15 @@ def _public(order: dict | None) -> dict | None:
     if order is None:
         return None
     return {k: v for k, v in order.items() if not k.startswith("_")}
+
+
+def _source(activity: str, order: dict | None) -> str:
+    """The banner's source label, from SOURCE_LABELS, or ""."""
+    if order is None:
+        return ""
+    if (activity, order["kind"]) in ((QUEST, "council"), (TRAVEL, "errand")):
+        return SOURCE_LABELS[order["kind"]]
+    return ""
 
 
 def _order_at(order: dict | None):
@@ -888,9 +918,9 @@ def _in_a_run(run, instance_rows, counter, names, jsplit, is_stalled):
         )
     if is_stalled:
         detail.append(
-            "Nothing has happened for a while. The run still reads active, but "
-            "its heartbeat only proves somebody is standing inside - not that "
-            "anything is being killed (quadseven/mod-overseer#171)."
+            "Nothing has happened for a while. The run still reads as under "
+            "way, but that only means somebody is standing inside, not that "
+            "anything is being killed."
         )
     if counter["disagrees"]:
         detail.append(_counter_disagreement(counter))
@@ -922,14 +952,14 @@ def _on_an_errand(err, names):
 
 
 def _another_job(mode):
-    """Branch 6. A mode that is not quest and not dungeon."""
-    detail = [jobs.describe(mode)]
-    if mode not in jobs.IMPLEMENTED:
-        detail.append(
-            "Nothing is wired behind that mode yet, so the quest drive is "
-            "stood down and nothing has replaced it."
-        )
-    return JOB, "The family is set to %s." % mode, detail, None
+    """Branch 6. A mode that is not quest and not dungeon.
+
+    Said in a player's words (#567): jobs.say, not jobs.describe, whose
+    sentence names the module's functions and issue numbers for the log.
+    jobs.say already says when a mode is a name with nothing built behind it.
+    """
+    headline = jobs.DOING.get(mode) or "The family is set to %s." % mode
+    return JOB, headline, [jobs.say(mode)], None
 
 
 def _questing(rows, err, qsplit, quest_titles, order):
@@ -965,8 +995,8 @@ def _questing(rows, err, qsplit, quest_titles, order):
 
 
 def _order_lines(order) -> list:
-    """What a standing Discord order adds under a quest headline."""
-    if order is None or order["kind"] != "discord":
+    """What a standing council goal adds under a quest headline."""
+    if order is None or order["kind"] != "council":
         return []
     lines = [order["text"]]
     left = order["objectives_left"]
@@ -1005,7 +1035,8 @@ def _between_runs(run_rows: list, counter: dict):
             counter["wanted"],
         )
         detail = [
-            "Set the leader's dungeon_runs_done back to 0 to start another campaign."
+            "Start the count again on the Decree tab, or queue more dungeons "
+            "there, to go again."
         ]
     else:
         headline = "Between dungeon runs: %d of %d done." % (

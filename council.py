@@ -773,6 +773,21 @@ DUNGEON_KEYWORDS = {
 }
 
 
+def _job_said(job) -> str:
+    """The leader's job as a reader says it, for the in-effect line (#567).
+
+    The dungeon form carries a portal keyword, said here as its place; any
+    other keyed job is said by its kind alone. campaignqueue has the full
+    version; this module does not import it, because campaignqueue imports
+    this one.
+    """
+    text = str(job or "").strip()
+    if jobs.is_dungeon_job(text):
+        keyword = text.split(":", 1)[1] if ":" in text else ""
+        return "%s runs" % keyword_place(keyword) if keyword else "dungeon runs"
+    return text.split(":", 1)[0]
+
+
 def keyword_place(keyword: str) -> str:
     """A dungeon job keyword as a reader would say the place.
 
@@ -1057,13 +1072,14 @@ def _in_effect(row: dict, standing: dict | None) -> tuple[bool | None, str]:
         of = standing.get("wanted")
         tally = " %d of %d runs done." % (done, of) if done is not None and of else ""
         return True, (
-            "In effect: %s's job reads %s, so the run coordinator is "
-            "working on it.%s" % (leader, job, tally)
+            "In effect: %s is leading the family on %s.%s"
+            % (leader, _job_said(job), tally)
         )
+    # Plain words (#567): the leader's job column is what the run
+    # coordinator reads, and it starts the dungeon only on dungeon:<keyword>.
     return False, (
-        "Not in effect yet: %s's job still reads %s, and the run "
-        "coordinator starts %s only when it reads %s. Nobody is "
-        "heading there." % (leader, job, place, sorted(wanted)[0])
+        "Not in effect yet: %s still has the family on %s, so nobody is "
+        "heading to %s." % (leader, _job_said(job), place)
     )
 
 

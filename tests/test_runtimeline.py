@@ -119,7 +119,8 @@ class ThePayload(unittest.TestCase):
         rows = a_failed_run(1, run_id=11) + a_failed_run(2, run_id=12)
         fam = self.build(rows)["families"][0]
         self.assertEqual(len(fam["runs"]), 2)
-        self.assertIn("run row 12", fam["runs"][0]["title"])
+        self.assertIn("Ragefire Chasm, run 2", fam["runs"][0]["title"])
+        self.assertNotIn("row", fam["runs"][0]["title"])
         self.assertTrue(fam["runs"][0]["open"])
         self.assertFalse(fam["runs"][1]["open"])
 
@@ -127,14 +128,16 @@ class ThePayload(unittest.TestCase):
         fam = self.build(a_failed_run())["families"][0]
         run = fam["runs"][0]
         self.assertIn(
-            "staging_failed: BARRIER held for more than 12 minutes", run["line"]
+            "the family never gathered at the door: the wait at the door held "
+            "for more than 12 minutes",
+            run["line"],
         )
         self.assertEqual(run["tone"], "bad")
 
     def test_a_run_still_going_says_where_it_is(self):
         rows = a_failed_run()[:3]
         run = self.build(rows)["families"][0]["runs"][0]
-        self.assertIn("under way, now BARRIER", run["line"])
+        self.assertIn("under way, now waiting for everyone at the door", run["line"])
         self.assertEqual(run["tone"], "live")
 
     def test_only_the_last_few_runs_are_drawn(self):
@@ -171,7 +174,7 @@ class ThePayload(unittest.TestCase):
         payload = runtimeline.build_run_timeline(
             [], {"Zug": ["Zug"]}, now=NOW, present=False
         )
-        self.assertIn("overseer_dungeon_run_event", payload["line"])
+        self.assertIn("No run timeline yet", payload["line"])
         self.assertEqual(payload["families"], [])
 
 
