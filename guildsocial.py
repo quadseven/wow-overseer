@@ -84,9 +84,13 @@ ASK_MINUTES = 10
 # A filled ask waits for the realm's run spacing; it is given this much longer.
 FILLED_GRACE_MINUTES = 10
 ASK_COOLDOWN_MINUTES = 15
-MAX_OPEN_ASKS_PER_GUILD = 2
-NEW_ASKS_PER_PASS = 1
-ANSWERS_PER_PASS = 2
+# MANY GROUPS AT ONCE (operator, 2026-10-05: "let all groups run stuff at the
+# same time"). With the realm cap lifted to 30, two open asks per guild, one
+# new ask a pass and two answers per ask a pass still let only one group form
+# at a time from guilds with 40 to 50 members free.
+MAX_OPEN_ASKS_PER_GUILD = 8
+NEW_ASKS_PER_PASS = 2
+ANSWERS_PER_PASS = 4
 
 # --- who may answer -----------------------------------------------------------
 
