@@ -19,6 +19,12 @@ existing rest after a run (guildrun's resting set). At most
 MAX_OPEN_ASKS_PER_GUILD asks are open in a guild, one new one a pass, and none
 while every group the realm may run is already out or waiting.
 
+THE DOOR'S RECORD AND JEV (#584). A member never asks for a door that is failing
+for the shape of group its guild can seat now (a real tank or not, a real healer
+or not; guildrun.shape_records, the runs the finder turned away counted). When
+it could ask for more than one door, Jev chooses which (choose_door) at
+guildrun's floor; below it the best need's door stands.
+
 The families' campaigns post too: when a family's queue starts a dungeon, its
 head says so in guild chat once. The campaign itself runs exactly as before
 (the family is its own group), so that ask is recorded as ran at once, with
@@ -56,15 +62,17 @@ and writes the finder row exactly as the old coordinator did.
 from __future__ import annotations
 
 import collections
+import json
 import math
 import os
 import zlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import campaignplan
 import gearscore
 import gearupgrades
 import guildrun
+import jev
 import recap
 
 ENV_SWITCH = "GUILD_SOCIAL"
@@ -780,8 +788,23 @@ def expired_line(asker: str, door) -> str:
 
 
 @dataclass(frozen=True)
+class DoorOption:
+    """One door an asker could ask for: what it would gain there, and the
+    door's record for the shape of group its guild can seat (#584)."""
+
+    need: Need
+    door: object  # guildrun.Door
+    record: guildrun.ShapeRecord = guildrun.NO_SHAPE_RECORD
+
+
+@dataclass(frozen=True)
 class Post:
-    """A new ask to write, and say in guild chat."""
+    """A new ask to write, and say in guild chat.
+
+    `options` are every door the asker could ask for, best need first (the
+    first is `target`); `band` and `shape` are what their records are keyed
+    by. Jev chooses among them (`choose_door`). None of the three is written.
+    """
 
     guild: str
     asker: str
@@ -793,6 +816,9 @@ class Post:
     said: str
     state: str = OPEN
     minutes: int = ASK_MINUTES
+    options: tuple = ()
+    band: str = ""
+    shape: str = ""
 
 
 @dataclass(frozen=True)
@@ -936,6 +962,8 @@ class _Board:
     entrances: dict
     now: object
     gone: set = field(default_factory=set)
+    # guildrun.shape_records: (keyword, band, shape) -> ShapeRecord.
+    records: dict = field(default_factory=dict)
 
     @property
     def free(self) -> dict:
@@ -949,7 +977,9 @@ class _Board:
         return [a for a in self.by_ask.get(ask.id, []) if a.id not in self.gone]
 
 
-def _board(mates, held, answers, needs, all_doors, entrances, now) -> _Board:
+def _board(
+    mates, held, answers, needs, all_doors, entrances, now, records=None
+) -> _Board:
     by_ask: dict = {}
     for answer in answers:
         by_ask.setdefault(answer.ask_id, []).append(answer)
@@ -966,6 +996,7 @@ def _board(mates, held, answers, needs, all_doors, entrances, now) -> _Board:
         needs=dict(needs),
         entrances=entrances,
         now=now,
+        records=dict(records or {}),
     )
 
 
@@ -1096,31 +1127,196 @@ def _answers_to(board: _Board, ask: Ask, spoken: set) -> list:
     return out
 
 
+def ask_shape(board: _Board, mate: Mate, guild: str) -> str:
+    """The shape of group this asker's guild can seat now: a free member within
+    BAND_SPREAD of it (itself included) that takes the tank seat, and one that
+    takes the healer seat (can_take: a real tank, a real healer)."""
+    level = int(mate.member.level)
+    near = [
+        m
+        for m in board.free.values()
+        if m.guild == guild and abs(int(m.level) - level) <= guildrun.BAND_SPREAD
+    ]
+    return guildrun.shape_key(
+        any(can_take(m, TANK) for m in near), any(can_take(m, HEALER) for m in near)
+    )
+
+
 def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
-    """(rank, name, mate, need, door) for this member's best ask, or None."""
+    """(rank, name, mate, options, band, shape) for this member's ask, or None.
+
+    `options` are DoorOptions, best need first, one per door: never a door the
+    guild already has an ask out for, and never one that is failing for the
+    shape of group the guild can seat (guildrun.ShapeRecord.failing).
+    """
     faction = board.factions.get(guild, "")
+    band = guildrun.band_of([mate.member.level])
+    shape = ask_shape(board, mate, guild)
+    options, seen = [], set()
     for need in board.needs.get(name, []):
         door = board.doors.get(need.keyword)
-        if door is None or (guild, door.keyword) in asked:
+        if door is None or door.keyword in seen or (guild, door.keyword) in asked:
             continue
-        if guildrun.fitting_doors([mate.member.level], [door], faction):
-            return (need.rank, name, mate, need, door)
-    return None
+        if not guildrun.fitting_doors([mate.member.level], [door], faction):
+            continue
+        record = board.records.get(
+            (door.keyword, band, shape), guildrun.NO_SHAPE_RECORD
+        )
+        if record.failing:
+            continue
+        seen.add(door.keyword)
+        options.append(DoorOption(need, door, record))
+    if not options:
+        return None
+    return (options[0].need.rank, name, mate, tuple(options), band, shape)
 
 
-def _post(guild: str, name: str, mate: Mate, need: Need, door) -> Post:
+def _post(
+    guild: str, name: str, mate: Mate, options: tuple, band: str = "", shape: str = ""
+) -> Post:
     roles = list(SEATS)
     roles.remove(role_of(mate.member))
-    return Post(
+    post = Post(
         guild=guild,
         asker=name,
         kind=KIND_DUNGEON,
+        target="",
+        target_label="",
+        roles_needed=roles_text(roles),
+        reason="",
+        said="",
+        options=tuple(options),
+        band=band,
+        shape=shape,
+    )
+    return asking_for(post, options[0])
+
+
+def asking_for(post: Post, option: DoorOption) -> Post:
+    """The post, asking for `option`'s door with its own need and line."""
+    door, need = option.door, option.need
+    return replace(
+        post,
         target=door.keyword,
         target_label=door.place[:96],
-        roles_needed=roles_text(roles),
         reason=ask_reason(need),
-        said=ask_line(name, door, roles, need),
+        said=ask_line(post.asker, door, list(roles_of(post.roles_needed)), need),
     )
+
+
+# --- which door to ask for: Jev (#584) -----------------------------------------
+#
+# The asker's best need picks the door (the heuristic). When it could ask for
+# more than one door, Jev is asked which, once, the way guildrun.decide asks:
+# the same client, a two-second queue for a slot, act at guildrun's floor, and
+# below the floor or with no answer the heuristic's door stands. Each option
+# carries what the asker would gain there and the door's record for the shape
+# of group its guild can seat, the runs the finder turned away included.
+
+KIND_ASK_DOOR = "guild_ask_door"
+
+
+def door_criteria(post: Post) -> dict:
+    """keyword -> what asking for that door means, with its record."""
+    out = {}
+    for option in post.options:
+        door, need = option.door, option.need
+        gain = ask_reason(need) or "experience at this level"
+        out[door.keyword] = (
+            "%s, for levels %d to %d; the asker would gain %s; record for groups "
+            "of shape %s at band %s: %s"
+            % (
+                door.place,
+                door.floor,
+                door.ceiling,
+                gain,
+                post.shape,
+                post.band,
+                option.record.words(),
+            )
+        )
+    return out
+
+
+def door_state(post: Post) -> dict:
+    return {
+        "guild": post.guild,
+        "asker": post.asker,
+        "level_band": post.band,
+        "group_shape": post.shape,
+        "how_runs_are_judged": (
+            "cleared = the dungeon finder marks the dungeon finished; a wipe, an "
+            "abandoned run or a timeout is a failure; a group the finder turns "
+            "away never got in"
+        ),
+    }
+
+
+def door_question(post: Post) -> dict:
+    return {
+        "door": jev.choice(
+            "A member of a World of Warcraft guild is about to ask guildmates in "
+            "guild chat to run a dungeon with it. Choose the dungeon it should "
+            "ask for: one a group of this shape can clear and get into, where it "
+            "gains the most. Each option says what the asker would gain and how "
+            "groups of this shape have done there. Prefer a dungeon with a good "
+            "record; a dungeon groups of this shape keep wiping in, or that the "
+            "dungeon finder keeps turning away, is a poor ask whatever it drops.",
+            door_criteria(post),
+        )
+    }
+
+
+async def choose_door(client, post: Post, environ=None) -> tuple:
+    """(post, judgment or None): the post asking for the door Jev chose when
+    its answer reaches the floor, else the heuristic's. None when there is no
+    choice to make (fewer than two doors) or the kind is off."""
+    if len(post.options) < 2:
+        return post, None
+    rule = guildrun.policy(KIND_ASK_DOOR, environ)
+    if rule.mode == jev.OFF:
+        return post, None
+    criteria = door_criteria(post)
+    base = guildrun.GuildJudgment(
+        kind=KIND_ASK_DOOR,
+        subject=post.guild[:12],
+        holder=post.asker[:12],
+        heuristic=post.target,
+        heuristic_why="the asker's best need: %s" % (post.reason or "its level"),
+        mode=rule.mode,
+        item_name=("band %s %s: %s" % (post.band, post.shape, ", ".join(criteria)))[
+            :120
+        ],
+        facts=json.dumps(criteria, separators=(",", ":"))[:1000],
+    )
+    outcome = await client.ask(
+        KIND_ASK_DOOR, door_state(post), door_question(post), 2.0
+    )
+    if outcome.answers is None:
+        return post, replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
+    answer = outcome.answers["door"]
+    judgment = replace(
+        base,
+        status=outcome.status,
+        latency_ms=outcome.latency_ms,
+        model=outcome.model,
+        jev=answer.choice,
+        confidence=answer.confidence,
+        probabilities=answer.probabilities,
+        acted=rule.acted(
+            post.target,
+            answer.choice,
+            answer.confidence,
+            can_act=answer.choice in criteria,
+        ),
+    )
+    # jev.parse admits only an offered option and `can_act` gates JEV on it,
+    # so the chosen door is always one of the options; a door that is not
+    # still keeps the heuristic's rather than failing the pass.
+    option = next((o for o in post.options if o.door.keyword == judgment.chosen), None)
+    if judgment.chosen == post.target or option is None:
+        return post, judgment
+    return asking_for(post, option), judgment
 
 
 def _recent_askers(asks: list, now) -> set:
@@ -1159,10 +1355,10 @@ def _new_asks(board: _Board, asks: list, still: list, spoken: set, room: int) ->
             break
         if open_in[guild] >= MAX_OPEN_ASKS_PER_GUILD:
             continue
-        for _rank, name, mate, need, door in _best_askers(board, guild, barred, asked)[
-            :NEW_ASKS_PER_PASS
-        ]:
-            posts.append(_post(guild, name, mate, need, door))
+        for _rank, name, mate, options, band, shape in _best_askers(
+            board, guild, barred, asked
+        )[:NEW_ASKS_PER_PASS]:
+            posts.append(_post(guild, name, mate, options, band, shape))
             spare -= 1
     return posts
 
@@ -1195,6 +1391,7 @@ def plan_pass(
     room: int,
     can_form: bool,
     campaigns=(),
+    records=None,
 ) -> Pass:
     """One pass of the social layer.
 
@@ -1208,11 +1405,13 @@ def plan_pass(
               live asks count against it, and no new ask is posted without it
     can_form  whether the realm's spacing lets a group start this pass
     campaigns family campaign rows (CAMPAIGNS_SQL)
+    records   guildrun.shape_records over the guild's runs: no member asks
+              for a door failing for the shape its guild can seat
 
     In order: asks that end now close, a full ask forms, the asks still short
     draw yeses, and members with a need ask.
     """
-    board = _board(mates, held, answers, needs, all_doors, entrances, now)
+    board = _board(mates, held, answers, needs, all_doors, entrances, now, records)
     live = [a for a in asks if a.state in LIVE_ASKS and a.kind == KIND_DUNGEON]
     expire, cancel, withdraw, still = _close(board, live)
     board.gone = set(withdraw)

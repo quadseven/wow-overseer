@@ -11,6 +11,7 @@ the wiring in the bridge, the map server and the page as source.
 
 import asyncio
 import dataclasses
+import datetime
 from dataclasses import replace
 import pathlib
 import unittest
@@ -697,6 +698,49 @@ class TheRecord(unittest.TestCase):
         self.assertEqual(guildrun.rates(rows), {})
 
 
+class TheRecordByShape(unittest.TestCase):
+    """#584: the social layer's record, keyed by (door, band, shape) with the
+    runs the finder turned away counted."""
+
+    def test_turned_away_runs_count_and_a_lost_one_does_not(self):
+        rows = [
+            ended("ragefire", "not entered", band="10-14"),
+            ended("ragefire", "refused", band="10-14"),
+            ended("ragefire", "lost", band="10-14"),
+            ended("ragefire", "wiped", band="10-14", deaths=3),
+        ]
+        rec = guildrun.shape_records(rows)[
+            ("ragefire", "10-14", "spec-tank/spec-healer")
+        ]
+        self.assertEqual((rec.went_in, rec.turned_away, rec.streak), (1, 2, 2))
+        self.assertIn("turned 2 groups away", rec.words())
+
+    def test_a_helper_does_not_change_the_shape(self):
+        rows = [ended("ragefire", "cleared", comp="spec-tank/class-healer+1help")]
+        self.assertIn(
+            ("ragefire", "15-19", "spec-tank/class-healer"),
+            guildrun.shape_records(rows),
+        )
+
+    def test_failing_by_wipes_or_by_a_turned_away_streak(self):
+        wipes = [ended("ragefire", "wiped")] * guildrun.FAILING_RUNS
+        away = [ended("ragefire", "not entered")] * guildrun.TURNED_AWAY_RUNS
+        broken = [ended("ragefire", "not entered")] * 4 + [ended("ragefire", "wiped")]
+        key = ("ragefire", "15-19", "spec-tank/spec-healer")
+        self.assertTrue(guildrun.shape_records(wipes)[key].failing)
+        self.assertTrue(guildrun.shape_records(away)[key].failing)
+        self.assertFalse(guildrun.shape_records(broken)[key].failing)
+
+    def test_an_old_run_ages_out(self):
+        now = datetime.datetime(2026, 10, 4, 20, 0, 0)
+        old = dict(
+            ended("ragefire", "wiped"),
+            ended_at=now - datetime.timedelta(days=guildrun.RECORD_DAYS + 1),
+        )
+        self.assertEqual(guildrun.shape_records([old] * 6, now), {})
+        self.assertEqual(guildrun.shape_key(True, False), "spec-tank/class-healer")
+
+
 def plan(table_rows=()):
     pool = guildrun.Pool("Cave", tuple(cave_band()))
     return guildrun.plan_for(pool, DOORS, guildrun.rates(list(table_rows)))
@@ -717,7 +761,23 @@ class TheHeuristicIsThePrior(unittest.TestCase):
         self.assertIn("best record", why)
 
     def test_too_few_runs_do_not(self):
-        rows = [ended("ragefire", "wiped")] * 4 + [ended("wailing", "cleared")] * 2
+        # Under MIN_SAMPLES runs a door scores the untried prior, as the level
+        # fit does with none: a tie, and the level fit keeps it.
+        rows = [ended("wailing", "cleared")] * 2
+        p = plan(rows)
+        self.assertEqual(guildrun.heuristic_door(p, p.options[0])[0], "ragefire")
+
+    def test_an_untried_door_beats_a_long_losing_record(self):
+        # #583: Wailing Caverns went 0 of 48 and still beat the door nobody
+        # had tried, because a door under MIN_SAMPLES runs was left out.
+        rows = [ended("ragefire", "wiped")] * 4
+        p = plan(rows)
+        keyword, why = guildrun.heuristic_door(p, p.options[0])
+        self.assertNotEqual(keyword, "ragefire")
+        self.assertIn("untried", why)
+
+    def test_a_winning_record_still_beats_an_untried_door(self):
+        rows = [ended("ragefire", "cleared")] * 3
         p = plan(rows)
         self.assertEqual(guildrun.heuristic_door(p, p.options[0])[0], "ragefire")
 
@@ -798,6 +858,24 @@ class JevChoosesWithAConfidence(unittest.TestCase):
         self.assertEqual(decision.dungeon.jev, "wailing")
         self.assertEqual(decision.dungeon.confidence, 0.3)
         self.assertEqual(decision.composition.chosen, "a")
+
+    def test_an_agreement_below_the_floor_is_the_heuristics(self):
+        # #584: 30 Wailing Caverns runs at 0.02 to 0.64 were credited to Jev.
+        fake = FakeJev(
+            picks={"dungeon": "ragefire", "composition": "a"}, confidence=0.3
+        )
+        decision = self.decide(fake)
+        self.assertEqual(decision.dungeon.chosen, "ragefire")
+        self.assertEqual(decision.dungeon.acted, jev.HEURISTIC)
+        self.assertEqual(decision.dungeon.chosen_by, jev.HEURISTIC)
+        self.assertTrue(decision.dungeon.agree)
+        self.assertEqual(decision.composition.acted, jev.HEURISTIC)
+
+    def test_an_agreement_at_the_floor_is_both(self):
+        fake = FakeJev(
+            picks={"dungeon": "ragefire", "composition": "a"}, confidence=0.6
+        )
+        self.assertEqual(self.decide(fake).dungeon.acted, jev.BOTH)
 
     def test_no_answer_is_the_prior(self):
         decision = self.decide(FakeJev(), key="")

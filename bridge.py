@@ -15840,12 +15840,16 @@ class Bridge(discord.Client):
                    | set(getattr(self, "_crafter_walks", ())))
         doors = guildrun.doors(facts["finder_floors"])
         mates, held, needs = _guild_social_mates(facts, mid_job, doors)
+        # THE DOOR'S RECORD BY SHAPE (#584): no member asks for a door failing
+        # for the group its guild can seat, the runs never let in counted.
+        records = guildrun.shape_records(facts.get("history", []), facts["now"])
         social = guildsocial.plan_pass(
             mates, held, facts["asks"], facts["answers"], needs, doors,
             guildjobs.entrances(), facts["now"],
             room=max(0, bounds.max_groups - in_flight),
             can_form=spaced and in_flight < bounds.max_groups,
-            campaigns=facts["campaigns"])
+            campaigns=facts["campaigns"], records=records)
+        social = await _guild_social_doors(getattr(self, "_jev", None), social)
         run_id = await asyncio.to_thread(_write_guild_social, social)
         if run_id:
             self._guild_run_formed_at = now
@@ -19832,7 +19836,7 @@ def _fetch_guild_run_facts(bounds) -> dict:
         )
         by_guild = {r["guild"]: int(r["n"]) for r in cur.fetchall()}
         cur.execute(
-            "SELECT keyword, band, composition, state, outcome, deaths "
+            "SELECT keyword, band, composition, state, outcome, deaths, ended_at "
             "FROM overseer_guild_run WHERE state = 'ended' ORDER BY id DESC LIMIT 2000"
         )
         history = list(cur.fetchall())
@@ -20097,6 +20101,32 @@ def _guild_social_mates(facts: dict, mid_job: set, doors: list) -> tuple:
                                            facts["quests"].get(m.name, ()))
              for m in mates if m.name not in held}
     return mates, held, needs
+
+
+async def _guild_social_doors(client, social):
+    """Each new ask with more than one door to ask for, the door Jev chose
+    (guildsocial.choose_door, #584), each judgment recorded. A failure of any
+    kind keeps the heuristic's door."""
+    if client is None or not social.posts:
+        return social
+    posts = []
+    for post in social.posts:
+        try:
+            post, judgment = await guildsocial.choose_door(client, post)
+        except Exception:
+            log.exception("guild social: the door for %s's ask was not asked of "
+                          "Jev; the best need's door stands", post.asker)
+            judgment = None
+        posts.append(post)
+        if judgment is None:
+            continue
+        log.info("guild social: %s", judgment.line())
+        try:
+            await asyncio.to_thread(_insert_jev_judgment, judgment)
+        except Exception:
+            log.exception("guild social: the door judgment for %s was not recorded",
+                          post.asker)
+    return dataclasses.replace(social, posts=tuple(posts))
 
 
 def _guild_social_names() -> set:

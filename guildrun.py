@@ -59,6 +59,7 @@ writes; the only I/O here is the Jev client the caller hands in.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 from dataclasses import dataclass, field, replace
@@ -851,6 +852,123 @@ def door_rate(table: dict, keyword: str, band: str, composition: str = "") -> Ra
     return Rate(runs, cleared, deaths)
 
 
+# THE RECORD BY SHAPE, COUNTING THE RUNS THAT NEVER GOT IN (#583, #584). The
+# social layer asks for a door before any group exists, so the only group it
+# can judge is the shape the asker's guild can seat: a real tank or not, a real
+# healer or not (Member.plays). `rates` drops a run the finder turned away, yet
+# Ragefire at 10 to 14 ran 92 times and 72 never got in; that is the strongest
+# record there is, so it is counted here. A door is closed for a shape after
+# FAILING_RUNS runs in with no clear, or TURNED_AWAY_RUNS turn-aways in a row.
+# Only RECORD_DAYS of runs count: the record moves only when the door is run,
+# so a door closed for a shape opens again a week after its last run.
+RECORD_DAYS = 7
+TURNED_AWAY = ("not entered", "refused")
+TURNED_AWAY_RUNS = 5
+
+
+def shape_key(real_tank: bool, real_healer: bool) -> str:
+    """The shape a record is kept under, in Composition.key's words."""
+    return "%s-tank/%s-healer" % (
+        "spec" if real_tank else "class",
+        "spec" if real_healer else "class",
+    )
+
+
+@dataclass(frozen=True)
+class ShapeRecord:
+    """One (door, band, shape)'s runs: those that went in, and those the
+    finder turned away (`streak` of them newest first, before any run in)."""
+
+    went_in: int = 0
+    cleared: int = 0
+    deaths: int = 0
+    turned_away: int = 0
+    streak: int = 0
+
+    @property
+    def rate(self) -> Rate:
+        return Rate(self.went_in, self.cleared, self.deaths)
+
+    @property
+    def failing(self) -> bool:
+        return (
+            self.went_in >= FAILING_RUNS and self.cleared == 0
+        ) or self.streak >= TURNED_AWAY_RUNS
+
+    def words(self) -> str:
+        text = self.rate.words()
+        if self.turned_away:
+            text += "; the dungeon finder turned %s away" % _n(
+                self.turned_away, "group"
+            )
+        return text
+
+
+NO_SHAPE_RECORD = ShapeRecord()
+
+
+def _shape_row(row: dict, oldest) -> tuple | None:
+    """(key, entered) for a run the shape record counts, or None: not ended,
+    lost, or older than `oldest`. The helper suffix ("+1help") is dropped
+    from the composition, since helpers do not change the shape."""
+    if str(row.get("state") or "") != ENDED:
+        return None
+    outcome = str(row.get("outcome") or "")
+    entered = outcome in WENT_IN
+    if not entered and outcome not in TURNED_AWAY:
+        return None
+    ended_at = row.get("ended_at")
+    if oldest is not None and ended_at is not None and ended_at < oldest:
+        return None
+    key = (
+        str(row.get("keyword") or ""),
+        str(row.get("band") or ""),
+        str(row.get("composition") or "").split("+", 1)[0],
+    )
+    return key, entered
+
+
+def _counted(rec: ShapeRecord, row: dict, entered: bool, streaking: bool):
+    """`rec` with one more run: in (and how it went) or turned away."""
+    if entered:
+        outcome = str(row.get("outcome") or "")
+        return replace(
+            rec,
+            went_in=rec.went_in + 1,
+            cleared=rec.cleared + (1 if outcome == CLEARED else 0),
+            deaths=rec.deaths + int(row.get("deaths") or 0),
+        )
+    return replace(
+        rec, turned_away=rec.turned_away + 1, streak=rec.streak + int(streaking)
+    )
+
+
+def shape_records(
+    rows: list, now=None, rolling: int = ROLLING, days: int = RECORD_DAYS
+) -> dict:
+    """(keyword, band, shape) -> ShapeRecord over the last `rolling` ended runs
+    of each within `days` of `now` (every run when `now` or a row's ended_at is
+    unknown). Rows are overseer_guild_run rows, newest first; a lost run says
+    nothing either way and is skipped (_shape_row)."""
+    counted: dict = {}
+    got_in: set = set()
+    out: dict = {}
+    oldest = None if now is None else now - datetime.timedelta(days=days)
+    for row in rows:
+        seen = _shape_row(row, oldest)
+        if seen is None:
+            continue
+        key, entered = seen
+        if counted.get(key, 0) >= rolling:
+            continue
+        counted[key] = counted.get(key, 0) + 1
+        rec = out.get(key, NO_SHAPE_RECORD)
+        out[key] = _counted(rec, row, entered, key not in got_in)
+        if entered:
+            got_in.add(key)
+    return out
+
+
 def comp_rate(table: dict, composition: str, band: str) -> Rate:
     runs = cleared = deaths = 0
     for (_k, b, c), rate in table.items():
@@ -922,37 +1040,46 @@ def failing_doors(plan: Plan) -> set:
     return out
 
 
+# AN UNTRIED DOOR CAN WIN (#583, #584). Every door is scored by its smoothed
+# rate at the band, and a door with fewer than MIN_SAMPLES runs scores the
+# untried prior (Rate.smoothed of no runs, 0.5) instead of being left out. So a
+# door at 0 cleared of 10 loses to a door nobody has run, where before the
+# known failure won every time (Wailing Caverns, 0 of 48). The level fit
+# breaks a tie.
+UNTRIED_PRIOR = NO_RATE.smoothed
+
+
+def _door_score(rate: Rate) -> float:
+    return rate.smoothed if rate.runs >= MIN_SAMPLES else UNTRIED_PRIOR
+
+
 def heuristic_door(plan: Plan, composition: Composition) -> tuple:
-    """(keyword, why). The best smoothed rate among doors with MIN_SAMPLES
-    runs at this band, when it beats the level fit's own; else the level fit.
-    A failing door (failing_doors) is skipped while another door fits."""
+    """(keyword, why). The best score among the doors that fit (_door_score:
+    the smoothed rate at this band, or the untried prior under MIN_SAMPLES
+    runs), the closest level fit on a tie. A failing door (failing_doors) is
+    skipped while another door fits."""
     failing = failing_doors(plan)
     healthy = [d for d in plan.doors if d.keyword not in failing]
     # Only failing doors fit: still go (FAILING_RUNS says why).
     doors = healthy if healthy else list(plan.doors)
-    fit = doors[0]
-    known = []
+    scored = []
     for door in doors:
         rate = door_rate(plan.table, door.keyword, plan.band, composition.key)
-        if rate.runs >= MIN_SAMPLES:
-            known.append((rate.smoothed, door, rate))
-    if known:
-        known.sort(key=lambda t: (-t[0], plan.doors.index(t[1])))
-        smoothed, door, rate = known[0]
-        fit_rate = door_rate(plan.table, fit.keyword, plan.band, composition.key)
-        if (
-            door.keyword == fit.keyword
-            or fit_rate.runs < MIN_SAMPLES
-            or smoothed > fit_rate.smoothed
-        ):
-            return door.keyword, "the best record at band %s: %s" % (
-                plan.band,
-                rate.words(),
-            )
-    return fit.keyword, "the closest level fit (%s wants %d to %d)" % (
-        fit.place,
-        fit.floor,
-        fit.ceiling,
+        scored.append((_door_score(rate), door, rate))
+    # Stable: on a tie the earlier door, the closer level fit, stays first.
+    scored.sort(key=lambda t: -t[0])
+    _score, door, rate = scored[0]
+    if rate.runs >= MIN_SAMPLES:
+        return door.keyword, "the best record at band %s: %s" % (
+            plan.band,
+            rate.words(),
+        )
+    if door.keyword != doors[0].keyword:
+        return door.keyword, "untried at band %s, over records that lose" % plan.band
+    return door.keyword, "the closest level fit (%s wants %d to %d)" % (
+        door.place,
+        door.floor,
+        door.ceiling,
     )
 
 
@@ -979,13 +1106,19 @@ def heuristic_composition(plan: Plan) -> tuple:
 
 
 def policy(kind: str, environ=None) -> jev.Policy:
-    """Act by default, at a 0.6 floor; an agreement is Jev's (#356)."""
+    """Act by default, at a 0.6 floor.
+
+    AN AGREEMENT BELOW THE FLOOR IS THE HEURISTIC'S (#584). #356 credited Jev
+    with any agreement; #583 then found 30 Wailing Caverns runs recorded
+    dungeon_by=both at confidence 0.02 to 0.64, a coin flip or worse, so a read
+    of overseer_guild_run by chooser credited Jev with picks it was not sure
+    of. The action is the same either way; only the record changes, and the
+    `agree` column still says the two answers matched."""
     return jev.policy(
         kind,
         environ=environ,
         default_mode=jev.ACT,
         default_threshold=DEFAULT_THRESHOLD,
-        on_agreement=True,
     )
 
 

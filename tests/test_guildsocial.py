@@ -8,12 +8,16 @@ leading and the proposer credited. Nobody is ever seated who did not say yes.
 These pin the pure decisions in guildsocial.py, and the bridge wiring as source.
 """
 
+import asyncio
 import datetime
 import pathlib
 import unittest
+from dataclasses import replace
 
 import guildrun
 import guildsocial as gs
+import jev
+from test_jev_items import FakeJev
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -668,6 +672,148 @@ class WhatAMemberNeeds(unittest.TestCase):
         quest = gs.Need("A", "wailing", "z", quest=9)
         self.assertEqual(
             sorted([quest, plain, pick], key=lambda n: n.rank), [pick, plain, quest]
+        )
+
+
+def ended(keyword, outcome, shape="class-tank/class-healer", band="20-24"):
+    return {
+        "keyword": keyword,
+        "band": band,
+        "composition": shape,
+        "state": "ended",
+        "outcome": outcome,
+        "deaths": 4,
+        "ended_at": NOW - datetime.timedelta(hours=1),
+    }
+
+
+def robe_need(name):
+    return gs.Need(name, "wailing", "Robe", entry=2, gain=6.0, slot="chest")
+
+
+class TheDoorsRecordGatesTheAsk(unittest.TestCase):
+    """#584: an ask consults the door's record for the shape of group the
+    guild can seat (a real tank or not, a real healer or not), counting the
+    runs the finder turned away, and never asks for a door failing for it."""
+
+    def asks_for(self, rows, mates=None):
+        out = plan(
+            mates or [mate("Auren", 20, ROGUE)],
+            needs={"Auren": [cape_need("Auren"), robe_need("Auren")]},
+            records=guildrun.shape_records(rows, NOW),
+        )
+        return [p.target for p in out.posts if p.asker == "Auren"]
+
+    def test_a_door_failing_for_the_shape_is_not_asked_for(self):
+        rows = [ended("deadmines", "wiped")] * guildrun.FAILING_RUNS
+        self.assertEqual(self.asks_for(rows), ["wailing"])
+
+    def test_the_finder_turning_groups_away_closes_the_door(self):
+        rows = [ended("deadmines", "not entered")] * guildrun.TURNED_AWAY_RUNS
+        self.assertEqual(self.asks_for(rows), ["wailing"])
+
+    def test_another_shapes_failures_do_not(self):
+        # Five free guildmates seat a real tank and a real healer: the class
+        # tank's wipes are not this group's record.
+        rows = [ended("deadmines", "wiped")] * guildrun.FAILING_RUNS
+        self.assertEqual(self.asks_for(rows, five()), ["deadmines"])
+        shaped = [
+            ended("deadmines", "wiped", shape="spec-tank/spec-healer")
+        ] * guildrun.FAILING_RUNS
+        self.assertEqual(self.asks_for(shaped, five()), ["wailing"])
+
+    def test_every_door_failing_means_no_ask(self):
+        rows = [ended("deadmines", "wiped")] * guildrun.FAILING_RUNS + [
+            ended("wailing", "refused")
+        ] * guildrun.TURNED_AWAY_RUNS
+        self.assertEqual(self.asks_for(rows), [])
+
+    def test_the_post_carries_each_door_and_its_record(self):
+        rows = [ended("wailing", "not entered")] * 2
+        out = plan(
+            [mate("Auren", 20, ROGUE)],
+            needs={"Auren": [cape_need("Auren"), robe_need("Auren")]},
+            records=guildrun.shape_records(rows, NOW),
+        )
+        post = out.posts[0]
+        self.assertEqual((post.band, post.shape), ("20-24", "class-tank/class-healer"))
+        self.assertEqual(
+            [o.door.keyword for o in post.options], ["deadmines", "wailing"]
+        )
+        self.assertEqual(post.options[1].record.turned_away, 2)
+
+
+def two_door_post():
+    """Auren's ask: Deadmines first by its need, Wailing Caverns also open,
+    with two groups the finder turned away there."""
+    rows = [ended("wailing", "not entered")] * 2
+    out = plan(
+        [mate("Auren", 20, ROGUE)],
+        needs={"Auren": [cape_need("Auren"), robe_need("Auren")]},
+        records=guildrun.shape_records(rows, NOW),
+    )
+    return out.posts[0]
+
+
+class JevChoosesTheDoor(unittest.TestCase):
+    """#584: one Jev question per new ask with more than one door, at
+    guildrun's floor; below it the best need's door stands."""
+
+    def post(self):
+        return two_door_post()
+
+    def choose(self, fake, post=None):
+        client = jev.Client("k", transport=fake)
+        return asyncio.run(gs.choose_door(client, post or self.post(), environ={}))
+
+    def test_a_confident_answer_changes_the_door_and_the_line(self):
+        fake = FakeJev(picks={"door": "wailing"}, confidence=0.9)
+        post, judgment = self.choose(fake)
+        self.assertEqual(len(fake.requests), 1)
+        criteria = fake.requests[0]["questions"]["door"]["criteria"]
+        self.assertEqual(set(criteria), {"deadmines", "wailing"})
+        self.assertIn("turned 2 groups away", criteria["wailing"])
+        self.assertIn("class-tank/class-healer", criteria["deadmines"])
+        self.assertEqual(post.target, "wailing")
+        self.assertIn("Robe", post.said)
+        self.assertEqual(post.reason, "Robe for my chest slot")
+        self.assertEqual((judgment.kind, judgment.acted), (gs.KIND_ASK_DOOR, jev.JEV))
+
+    def test_below_the_floor_the_best_need_stands(self):
+        post, judgment = self.choose(FakeJev(picks={"door": "wailing"}, confidence=0.3))
+        self.assertEqual(post.target, "deadmines")
+        self.assertEqual(judgment.acted, jev.HEURISTIC)
+        self.assertEqual(judgment.jev, "wailing")
+
+    def test_an_answer_naming_a_door_not_offered_keeps_the_heuristics(self):
+        # jev.parse admits only offered options; a client that returned one
+        # anyway must still leave the best need's door, never fail the pass.
+        class Stray:
+            async def ask(self, *_a, **_k):
+                stray = jev.Choice("ragefire", {"ragefire": 1.0}, 0.99)
+                return jev.Outcome(jev.ANSWERED, 5, answers={"door": stray})
+
+        post, judgment = asyncio.run(gs.choose_door(Stray(), self.post(), environ={}))
+        self.assertEqual(post.target, "deadmines")
+        self.assertEqual(judgment.acted, jev.HEURISTIC)
+
+    def test_one_door_asks_nothing(self):
+        fake = FakeJev()
+        one = self.post()
+        one = replace(one, options=one.options[:1])
+        post, judgment = self.choose(fake, one)
+        self.assertIsNone(judgment)
+        self.assertEqual(fake.requests, [])
+        self.assertEqual(post, one)
+
+    def test_the_bridge_asks_before_it_writes(self):
+        once = BRIDGE[BRIDGE.index("async def _guild_social_once") :]
+        once = once[: once.index("async def _campaign_queue_loop")]
+        self.assertIn("records=records", once)
+        self.assertIn("guildrun.shape_records(", once)
+        self.assertLess(
+            once.index("_guild_social_doors("),
+            once.index("_write_guild_social"),
         )
 
 

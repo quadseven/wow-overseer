@@ -17,7 +17,10 @@ sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import guildrun  # noqa: E402
 import guildsocial as gs  # noqa: E402
+import jev  # noqa: E402
 from test_guildsocial import NOW, ask, five_yeses  # noqa: E402
+from test_guildsocial import two_door_post  # noqa: E402
+from test_jev_items import FakeJev  # noqa: E402
 
 
 def _import_bridge():
@@ -253,3 +256,35 @@ class TheBridgeWrites(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheBridgeAsksJevTheDoor(unittest.TestCase):
+    """#584: each new ask with two doors goes to Jev once before it is
+    written, and the judgment is recorded."""
+
+    def test_the_post_is_rewritten_and_the_judgment_recorded(self):
+        post = two_door_post()
+        recorded = []
+        client = jev.Client(
+            "k", transport=FakeJev(picks={"door": "wailing"}, confidence=0.9)
+        )
+        with mock.patch.object(bridge, "_insert_jev_judgment", recorded.append):
+            out = asyncio.run(
+                bridge._guild_social_doors(client, gs.Pass(posts=(post,)))
+            )
+        self.assertEqual(out.posts[0].target, "wailing")
+        self.assertEqual([j.kind for j in recorded], [gs.KIND_ASK_DOOR])
+
+    def test_a_failure_keeps_the_heuristics_door(self):
+        post = two_door_post()
+
+        def broken(*_a):
+            raise RuntimeError("boom")
+
+        client = jev.Client("k", transport=FakeJev())
+        with mock.patch.object(gs, "choose_door", side_effect=broken):
+            with self.assertLogs(bridge.log, "ERROR"):
+                out = asyncio.run(
+                    bridge._guild_social_doors(client, gs.Pass(posts=(post,)))
+                )
+        self.assertEqual(out.posts, (post,))
