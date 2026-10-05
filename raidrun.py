@@ -103,10 +103,11 @@ SPEC_TABLE = "overseer_raid_spec"
 # short of (raidroles.GUILD_DUTY, guildrespec, #580) is kept: it is not the
 # lineup's to drop. The lineup's INSERT still replaces it for a raider it
 # places, whose seat then follows the tree it now plays.
+# The duty words are raidroles.GUILD_DUTY's, written out so the statement is
+# one constant (tests/test_guildrespec.py holds the two equal).
 DELETE_SPECS_SQL = (
-    "DELETE FROM overseer_raid_spec WHERE guild = %s AND duty NOT IN ("
-    + ", ".join("'%s'" % d for d in sorted(raidroles.GUILD_DUTY.values()))
-    + ")"
+    "DELETE FROM overseer_raid_spec WHERE guild = %s "
+    "AND duty NOT IN ('guild healer', 'guild tank')"
 )
 INSERT_SPEC_SQL = (
     "INSERT INTO overseer_raid_spec (name, guild, class, tab, tree, duty, subgroup) "

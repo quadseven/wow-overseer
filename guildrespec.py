@@ -401,7 +401,7 @@ def plan(mates, recent_rows=(), per_guild: int = RESPECS_PER_GUILD) -> Plan:
                     fee=int(m.fee) if reset else 0,
                     reset=reset,
                     said=saying(m.name, seat, tree, reset),
-                    line="%s %s has %d tank(s), %d healer(s), %d damage of %d; %s goes %s "
+                    line="%s %s has %d tank(s), %d healer(s), %d damage dealer(s) of %d; %s goes %s "
                     "(%d point(s) to move%s)"
                     % (
                         guild,
@@ -427,6 +427,35 @@ def plan(mates, recent_rows=(), per_guild: int = RESPECS_PER_GUILD) -> Plan:
     return Plan(choices=tuple(choices), notes=tuple(notes), counts=counts)
 
 
+def is_free(member, busy) -> bool:
+    """Online, out of combat, in the open world, natural and not on another walk."""
+    return (
+        bool(member.eligible)
+        and bool(member.online)
+        and not member.in_combat
+        and member.map_id is not None
+        and int(member.map_id) in guildrun.OPEN_WORLD_MAPS
+        and member.name not in busy
+    )
+
+
+def mate_from(member, row, target, free, family, now) -> Mate:
+    """One Mate from a guildjobs.Member and its member row."""
+    points = raidroles.points_by_tree(member.class_id, row.get(raidroles.KEY))
+    return Mate(
+        name=member.name,
+        guild=member.guild,
+        level=int(member.level),
+        class_id=int(member.class_id),
+        points=tuple(sorted(points.items())),
+        money=int(member.money),
+        fee=reset_fee(row.get("resettalents_cost"), row.get("resettalents_time"), now),
+        target_tree=str(target or ""),
+        free=free,
+        family=family,
+    )
+
+
 def mates_from(job_members, rows, targets, family, busy, now) -> list:
     """Mates from the job pass's members (guildjobs.Member) and its member rows
     (talent_spells, resettalents_cost, resettalents_time), with `targets` name
@@ -434,32 +463,15 @@ def mates_from(job_members, rows, targets, family, busy, now) -> list:
     by_name = {str(r.get("name") or ""): r for r in rows or ()}
     family = {str(n) for n in family or ()}
     busy = {str(n) for n in busy or ()}
-    out = []
-    for m in job_members or ():
-        row = by_name.get(m.name) or {}
-        points = raidroles.points_by_tree(m.class_id, row.get(raidroles.KEY))
-        free = (
-            bool(m.eligible)
-            and bool(m.online)
-            and not m.in_combat
-            and m.map_id is not None
-            and int(m.map_id) in guildrun.OPEN_WORLD_MAPS
-            and m.name not in busy
+    targets = targets or {}
+    return [
+        mate_from(
+            m,
+            by_name.get(m.name) or {},
+            targets.get(m.name),
+            is_free(m, busy),
+            m.name in family,
+            now,
         )
-        out.append(
-            Mate(
-                name=m.name,
-                guild=m.guild,
-                level=int(m.level),
-                class_id=int(m.class_id),
-                points=tuple(sorted(points.items())),
-                money=int(m.money),
-                fee=reset_fee(
-                    row.get("resettalents_cost"), row.get("resettalents_time"), now
-                ),
-                target_tree=str((targets or {}).get(m.name) or ""),
-                free=free,
-                family=m.name in family,
-            )
-        )
-    return out
+        for m in job_members or ()
+    ]

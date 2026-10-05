@@ -359,7 +359,9 @@ class FromTheJobPassRows(unittest.TestCase):
 class TheRaidPlanKeepsTheTree(unittest.TestCase):
     def test_the_lineups_rewrite_keeps_a_guild_respecs_row(self):
         self.assertIn(
-            "duty NOT IN ('guild healer', 'guild tank')", raidrun.DELETE_SPECS_SQL
+            "duty NOT IN (%s)"
+            % ", ".join("'%s'" % d for d in sorted(guildrespec.GUILD_DUTY.values())),
+            raidrun.DELETE_SPECS_SQL,
         )
         self.assertEqual(1, raidrun.DELETE_SPECS_SQL.count("%s"))
 
