@@ -798,14 +798,20 @@ def reagents_to_count(
     if bags_wanted > 0 and "tailoring" in trades:
         wanted.update((BOLT_OF_LINEN, LINEN_CLOTH))
     if floor is not None and "tailoring" in trades:
-        # Every ladder bag's own reagents and its bolt's cloth: which bag is
-        # chosen depends on what is held, so all of them are counted first.
-        for bag in guildcorps.BAGS:
-            wanted.update(int(entry) for entry, _ in bag.reagents)
-            bolt = guildcorps.BOLT_OF.get(int(bag.reagents[0][0]))
-            if bolt is not None:
-                wanted.update(int(entry) for entry, _ in bolt.reagents)
+        wanted |= _guild_bag_entries()
     return wanted
+
+
+def _guild_bag_entries() -> set:
+    """Every ladder bag's own reagents and its bolt's cloth: which bag is
+    chosen depends on what is held, so all of them are counted first."""
+    out = set()
+    for bag in guildcorps.BAGS:
+        out.update(int(entry) for entry, _ in bag.reagents)
+        bolt = guildcorps.BOLT_OF.get(int(bag.reagents[0][0]))
+        if bolt is not None:
+            out.update(int(entry) for entry, _ in bolt.reagents)
+    return out
 
 
 def errand(
