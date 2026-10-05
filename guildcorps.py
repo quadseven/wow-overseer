@@ -237,6 +237,7 @@ COOLDOWN_MINUTES = {
     "post": 30,
     "supply": 120,
     "fetch": 180,
+    "shop": 120,
 }
 
 # A BAG IS CRAFTED AT A MAILBOX AND POSTED IN THE SAME STAND (2026-09-24).
@@ -985,6 +986,102 @@ def supply_steps(
     return steps
 
 
+# THE CREW SHOPS FOR THE MASTERS (operator, 2026-10-05: "getting thread and
+# stuff for crafting is for the maintenance guild members, coordinating
+# shopping and farming"). A family master never walks to a vendor for the
+# corps; the cloth reaches it in the crew's material letters (guildjobs), and
+# the thread its next bags take is bought by a maintenance member standing on
+# a map whose vendor sells it, and posted. SHOP_BAGS bags' worth at a time.
+SHOP_BAGS = 5
+
+
+def master_bag(tailor):
+    """The biggest classic trainer bag this master's skill has reached."""
+    value, _ = tailor.skill(TAILORING)
+    reached = [
+        b
+        for b in BAGS
+        if b.source == "trainer" and b.learn_rank <= value and _classic(b)
+    ]
+    return max(reached, key=lambda b: b.slots, default=None)
+
+
+def _shopper(crew, entry, vendors_by_map, busy):
+    """The maintenance member who buys `entry`: online, free, on a classic
+    map whose vendor sells it; the lowest name, for a stable answer."""
+    return min(
+        (
+            m
+            for m in crew
+            if m.maintenance
+            and not m.family
+            and m.online
+            and m.name not in busy
+            and not classic.is_expansion_map(m.map_id)
+            and int(entry) in (vendors_by_map or {}).get(m.map_id, ())
+        ),
+        key=lambda m: m.name,
+        default=None,
+    )
+
+
+def _shop_step(shopper, master, bag, entry, count, cap) -> Step:
+    return Step(
+        shopper.name,
+        "shop",
+        int(entry),
+        "%s buys %d thread (item %d) for %s's %s and posts it"
+        % (shopper.name, count, int(entry), master.name, bag.name),
+        rows=(
+            Row(
+                "buy",
+                "entry:%d count:%d max:%d"
+                % (int(entry), count, _ceiling(THREAD_PRICE[int(entry)] * count)),
+                "",
+                source_for("shop", entry),
+            ),
+            _walk_to_mailbox("shop", entry, cap),
+            send_by_entry(
+                entry, "Thread for the guild tailor", master.name, "shop", entry
+            ),
+        ),
+        walk=Row(
+            "buy",
+            "walk-to-vendor item:%d%s" % (int(entry), guildroute.errand_cap_word(cap)),
+            "",
+            source_for("shop-walk", entry),
+        ),
+    )
+
+
+def shop_steps(master, crew, vendors_by_map, busy, recent=None, cap=NEAR) -> list:
+    """The crew's shopping for one family master: thread, bought and posted.
+
+    Nothing is bought twice inside the shop cooldown: `recent` holds
+    ("to:<master>", "shop", entry) for every purchase already made for it.
+    """
+    bag = master_bag(master)
+    if bag is None:
+        return []
+    steps = []
+    for entry, need in bag.reagents:
+        if not _vendor_reagent(entry):
+            continue
+        if master.count(entry) + master.incoming(entry) >= int(need):
+            continue
+        asked = (recent or {}).get(("to:" + master.name, "shop", int(entry)))
+        if asked is not None and asked < COOLDOWN_MINUTES["shop"]:
+            continue
+        shopper = _shopper(crew, entry, vendors_by_map, busy)
+        if shopper is None:
+            continue
+        steps.append(
+            _shop_step(shopper, master, bag, entry, int(need) * SHOP_BAGS, cap)
+        )
+        busy.add(shopper.name)
+    return steps
+
+
 def master_step(tailor, members, at_mailbox=frozenset()):
     """(Step or None, note): a family master's one corps step.
 
@@ -1231,6 +1328,10 @@ def _guild_steps(
         trainable = frozenset((trainable_by_map or {}).get(tailor.map_id, ()))
         vendors = frozenset((vendors_by_map or {}).get(tailor.map_id, ()))
         by_post = patterns_by_post(tailor, crew, vendors_by_map)
+        if tailor.family and tailor.online:
+            steps.extend(
+                shop_steps(tailor, crew, vendors_by_map, busy, recent, travel[0])
+            )
         step, why = tailor_step(
             tailor,
             crew,
@@ -1509,8 +1610,8 @@ def recent_from_rows(rows, prefix=SOURCE) -> dict:
         action = parts[1][: -len("-walk")] if parts[1].endswith("-walk") else parts[1]
         key, age = _int(parts[2], -1), _int(row.get("age"), 0)
         note((str(row.get("target_name") or ""), action, key), age)
-        if action == "supply" and row.get("target_arg"):
-            note(("to:" + str(row["target_arg"]), "supply", key), age)
+        if action in ("supply", "shop") and row.get("target_arg"):
+            note(("to:" + str(row["target_arg"]), action, key), age)
     return out
 
 

@@ -733,6 +733,69 @@ class TheGuildGetsTheBags(unittest.TestCase):
         )
 
 
+class TheCrewShopsForTheMasters(unittest.TestCase):
+    """Operator, 2026-10-05: getting thread for crafting is the maintenance
+    members' work, shopping and farming; the family master only sews."""
+
+    FINE_THREAD = 2321
+
+    def og(self, **over):
+        base = dict(maintenance=False, family=True, skills={gc.TAILORING: (90, 150)})
+        base.update(over)
+        return member("Og", **base)
+
+    def test_a_crew_member_on_a_vendor_map_buys_the_thread_and_posts_it(self):
+        og = self.og()
+        crew = [og, member("Arran"), member("Baldam", map_id=999)]
+        vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
+        (step,) = gc.shop_steps(og, crew, vendors, set())
+        self.assertEqual((step.holder, step.action, step.key), ("Arran", "shop", 2321))
+        self.assertTrue(step.walk.command.startswith("walk-to-vendor item:2321"))
+        buy, walk, letter = step.rows
+        self.assertEqual(buy.command.split(" max:")[0], "entry:2321 count:5")
+        self.assertTrue(walk.command.startswith("walk-to-mailbox"))
+        self.assertEqual(
+            letter.command, "send entry:2321 subject:Thread for the guild tailor"
+        )
+        self.assertEqual(letter.target_arg, "Og")
+
+    def test_nothing_is_bought_while_the_master_has_thread_or_it_is_on_its_way(self):
+        crew = [member("Arran")]
+        vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
+        carried = self.og(carried=(held(self.FINE_THREAD, 1),))
+        self.assertEqual(gc.shop_steps(carried, crew, vendors, set()), [])
+        posted = self.og(mail=(gc.Letter(1, 2, self.FINE_THREAD, 5),))
+        self.assertEqual(gc.shop_steps(posted, crew, vendors, set()), [])
+
+    def test_a_purchase_is_not_repeated_inside_its_cooldown(self):
+        og = self.og()
+        vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
+        recent = {("to:Og", "shop", self.FINE_THREAD): 10}
+        self.assertEqual(
+            gc.shop_steps(og, [member("Arran")], vendors, set(), recent), []
+        )
+        rows = [
+            {
+                "source": "guildcorps:shop:2321",
+                "target_name": "Arran",
+                "target_arg": "Og",
+                "age": 7,
+            }
+        ]
+        self.assertEqual(gc.recent_from_rows(rows)[("to:Og", "shop", 2321)], 7)
+
+    def test_the_family_never_shops_and_a_busy_member_is_not_asked(self):
+        og = self.og()
+        vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
+        crew = [og, member("Ugga", maintenance=False, family=True), member("Arran")]
+        self.assertEqual(gc.shop_steps(og, crew, vendors, {"Arran"}), [])
+
+    def test_a_master_below_the_first_bag_needs_nothing(self):
+        og = self.og(skills={gc.TAILORING: (20, 75)})
+        vendors = {EVERLOOK: frozenset({2320})}
+        self.assertEqual(gc.shop_steps(og, [member("Arran")], vendors, set()), [])
+
+
 class APatternFromAnotherMap(unittest.TestCase):
     """Measured on dev 2026-09-24: both guilds' tailors stood on the Eastern
     Kingdoms, where no vendor sells the Runecloth Bag pattern, and every pass
