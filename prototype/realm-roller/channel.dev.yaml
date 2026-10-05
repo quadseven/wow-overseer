@@ -1,0 +1,38 @@
+# PROTOTYPE. Not read by anything. Shape of the dev channel file.
+#
+# The channel says which release the realm should run. The roller is the only
+# writer of `current`/`previous`; a person edits `queue`, `paused` and `policy`.
+
+channel: dev
+realm: wow-dev
+
+current:  r2026.10.04-1      # verified
+previous: r2026.10.03-3      # rollback target, always a verified release
+queue:                       # oldest first; only the head is ever rolled
+  - r2026.10.04-2
+
+# Pause. A person sets it in git (or with the site button, which opens and
+# merges a one-line PR). The roller still builds and proves while paused; it
+# never starts a roll.
+paused: false
+paused_reason: ""
+
+policy:
+  min_interval: 60m          # between two roll starts
+  window:
+    no_family_in_instance: [Grug, Zug]   # /api/family: every member's `instance` is empty
+    settle: 5m               # the families must stay out this long before the roll starts
+    max_wait: 6h             # past this the roll is skipped and the page says why
+  coalesce: true             # if several releases are queued and proven, roll only the newest
+  verify:
+    ready_within: 15m        # worldserver Ready after the new pod starts
+    grace: 60m               # longest `within` of any change
+  rollback:
+    auto: true
+    when:
+      - not_ready_after: 15m
+      - restarts_over: {count: 2, in: 30m}
+      - log_signature: ["ASSERTION FAILED", "Segmentation fault", "db-import exited"]
+      - verify_missing_after_grace: true
+      - bots_online_drop: {below_pct: 50, for: 10m}
+    # A rollback ignores min_interval and the dungeon gate: the realm is already broken.

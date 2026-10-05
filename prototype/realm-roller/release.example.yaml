@@ -1,0 +1,58 @@
+# PROTOTYPE. Not read by anything. Shape of one release manifest.
+#
+# A release is a named set of source SHAs. One build turns it into one coupled
+# worldserver + db-import image pair (plus the site image when it changes).
+# The roller moves `state` forward and appends to `history`; a person writes
+# everything above `images`.
+
+release: r2026.10.04-2
+summary: auction history, guild deaths and levels, heads answer trades, no free raid buffs
+proposed_by: wow-overseer#NNN        # the PR or issue that asked for it
+
+# Source. Every key is a full 40-char SHA on the named repo's remote.
+# Unchanged modules are copied from the previous release so a release is
+# always complete on its own (no "inherit from main").
+sources:
+  core:             47960183bb03b83e8943eb2f0f39c16df9710c9d   # mod-playerbots/azerothcore-wotlk Playerbot
+  playerbots:       60e6555e4e4b552ee4c6551b466aff648916f38b   # quadseven/mod-playerbots
+  mod-overseer:     8cdbd029c3c5b86e0311fa6d0ce9b7b526a96524
+  mod-dungeon-clear: b9bdae002a2bb2fbfc464075819c85a2a793e426
+  mod-ollama-chat:  8ba5e791f0a84ee04636f0b19b62d3c4aff3dce1
+  site:             ce4cad9000000000000000000000000000000000   # wow-overseer merge commit
+
+# What changed since the previous release, one entry per merged PR.
+# `prove` runs against the built binary before the roll (throwaway pod).
+# `verify` must appear in the live worldserver (or site) log after the roll.
+changes:
+  - pr: mod-overseer#838
+    what: heads answer trades
+    prove:  {image: worldserver, grep: "answered the trade"}
+    verify: {log: worldserver, grep: "answered the trade", within: 45m}
+  - pr: mod-overseer#839
+    what: auction history from OnAuctionSuccessful / OnAuctionExpire
+    prove:  {image: worldserver, grep: "auction_history"}
+    verify: {log: worldserver, grep: "AUCTION_HISTORY", within: 60m}
+  - pr: mod-dungeon-clear#16
+    what: no free raid buffs
+    prove:  {image: worldserver, grep: "worldbuff disabled"}
+    verify: {log: worldserver, absent: "casting worldbuff", within: 30m}
+  - pr: infra#4992
+    what: AH bot off (config only, rides the same restart)
+    verify: {log: worldserver, absent: "AuctionHouseBot: buying", within: 30m}
+
+# Filled by the roller after the build. Empty while proposed/building.
+build:
+  run: 0                     # build workflow run id
+  images:
+    worldserver: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    db-import:   sha256:2222222222222222222222222222222222222222222222222222222222222222
+    site:        sha256:3333333333333333333333333333333333333333333333333333333333333333
+
+# proposed -> building -> built -> proven -> rolling -> live -> verified
+# Side exits: build_failed, prove_failed (from building/built), rolled_back (from rolling/live).
+state: proven
+
+history:
+  - {at: 2026-10-04T19:02:00-04:00, to: building, by: roller, note: "build run dispatched"}
+  - {at: 2026-10-04T19:41:00-04:00, to: built,    by: roller, note: "both digests read from one run"}
+  - {at: 2026-10-04T19:44:00-04:00, to: proven,   by: roller, note: "3 of 3 prove greps found"}

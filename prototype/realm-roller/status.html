@@ -1,0 +1,32 @@
+<!-- PROTOTYPE. Static mock of a "Roller" tab on the overseer site. Sample data only. -->
+<section id="roller">
+  <h2>Realm roller: dev channel</h2>
+  <p class="state ok">Running. Not paused. <button disabled>Pause rolls</button></p>
+
+  <table>
+    <tr><th>Current</th><td>r2026.10.04-1</td><td>verified 18:12, 4 of 4 checks seen</td></tr>
+    <tr><th>Rollback to</th><td>r2026.10.03-3</td><td>verified</td></tr>
+    <tr><th>Next window</th><td>after 20:00</td><td>one roll per hour; Grug's family is in Wailing Caverns (3 members)</td></tr>
+  </table>
+
+  <h3>Queue</h3>
+  <table>
+    <tr><th>Release</th><th>State</th><th>Changes</th><th>Waiting on</th></tr>
+    <tr><td>r2026.10.04-2</td><td>proven</td><td>mod-overseer#838, #839, mod-dungeon-clear#16, infra#4992</td><td>window</td></tr>
+    <tr><td>r2026.10.04-3</td><td>building</td><td>wow-overseer#580</td><td>build run (12 of ~40 min)</td></tr>
+  </table>
+
+  <h3>Last verification (r2026.10.04-1)</h3>
+  <ul>
+    <li>OK "guild death recorded" seen 18:04 (3 min after Ready)</li>
+    <li>OK "levelup recorded" seen 18:09</li>
+    <li>OK absent "casting worldbuff" for 30 min</li>
+    <li>OK worldserver Ready in 6 min, 0 restarts</li>
+  </ul>
+
+  <h3>Recent rolls</h3>
+  <ol>
+    <li>18:00 r2026.10.04-1 rolled, verified 18:12 (commit abc1234)</li>
+    <li>14:31 r2026.10.03-4 rolled back at 14:48: "never seen: AUCTION_HISTORY" (commit def5678)</li>
+  </ol>
+</section>
