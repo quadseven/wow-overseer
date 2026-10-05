@@ -66,6 +66,7 @@ import weaponskill
 import natural
 import guildcorps
 import guildjobs
+import guildlevel
 import guildrun
 import guildpug
 import guildsocial
@@ -13849,7 +13850,10 @@ class Bridge(discord.Client):
             unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"),
             gear=await self._job_gear_offers(members, facts["recent"]),
             mail=await asyncio.to_thread(_job_mail_commands, members),
-            pvp=await self._job_pvp_moves(members, facts["recent"]))
+            pvp=await self._job_pvp_moves(members, facts["recent"]),
+            # The level step is a spawn walk too (guildlevel.py).
+            leveling=(await asyncio.to_thread(_job_leveling, facts)
+                      if spawn_walks else None))
         if facts.get("unclaimed"):
             log.info("guild jobs: no new materials post for %s until the posts "
                      "waiting unopened are collected; theirs go to the bank",
@@ -22965,6 +22969,7 @@ def _insert_corps_row(holder: str, row) -> int:
 _JOB_MEMBERS_SQL = (
     "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, "
     "c.level, c.money, c.online, c.map AS map_id, s.pos_x, s.pos_y, s.in_combat, "
+    "s.zone_id, "
     "lc.name AS master, " + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
@@ -23035,6 +23040,20 @@ _JOB_ENTRIES = sorted(
     {e for tools in guildjobs.TOOL_ENTRIES.values() for e in tools} | {guildjobs.SOUL_SHARD})
 # The world's meeting stones, read once per process: spawns do not move.
 _JOB_STONES: list = []
+# The flight masters on the two continents, for the level step's hub walk
+# (guildlevel.hub_masters picks each hub's own), with the faction's EnemyGroup
+# so a hub is never matched to the other side's master. Read once per process.
+_JOB_HUB_MASTERS_SQL = (
+    "SELECT c.guid, c.map AS map_id, c.position_x AS x, c.position_y AS y, "
+    "ct.name, ft.EnemyGroup AS enemy_group FROM acore_world.creature c "
+    "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE c.map IN (%s, %s) AND (ct.npcflag & %s) <> 0"
+)
+_JOB_HUB_MASTERS: list = []
+# Every roster family member, of every family: the level step leaves them to
+# levelroute.py, which walks a family as one.
+_JOB_ROSTER_SQL = "SELECT name FROM overseer_roster WHERE enabled = 1"
 
 
 def _job_read(cur, what: str, sql: str, params=()) -> list:
@@ -23077,6 +23096,11 @@ def _fetch_job_facts(family_names: list) -> dict:
         if not _JOB_STONES:
             _JOB_STONES.extend(_job_read(cur, "meeting stones", _JOB_STONES_SQL,
                                          (MEETING_STONE_GO_TYPE,)))
+        if not _JOB_HUB_MASTERS:
+            _JOB_HUB_MASTERS.extend(_job_read(
+                cur, "hub flight masters", _JOB_HUB_MASTERS_SQL,
+                (*classic.CLASSIC_CONTINENTS, flightlearn.FLIGHT_MASTER_NPC_FLAG)))
+        roster_rows = _job_read(cur, "roster names", _JOB_ROSTER_SQL)
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)
@@ -23086,7 +23110,20 @@ def _fetch_job_facts(family_names: list) -> dict:
     # Guilds that own a bank tab (#395). A schema without the table reads as
     # none, so a post never goes to a bank this world cannot show exists.
     facts["banks"] = {str(r.get("name") or "") for r in bank_rows} - {""}
+    facts["hub_masters"] = list(_JOB_HUB_MASTERS)
+    # Plus this pass's own family names, so an unread roster still leaves
+    # the family to levelroute.
+    facts["roster"] = ({str(r.get("name") or "") for r in roster_rows}
+                       | set(family_names)) - {""}
     return facts
+
+
+def _job_leveling(facts):
+    """guildlevel.World for the level step: levelroute's hub quests (read once
+    per process by `_level_world`), the hub flight masters and the roster.
+    None while the quests are unread, which takes no level step."""
+    quests, _spawns = _level_world()
+    return guildlevel.world(quests, facts.get("hub_masters"), facts.get("roster", ()))
 
 
 def _guild_gathering_skills(member):
@@ -23127,6 +23164,16 @@ def _guild_skills_and_spells(skill_rows, spell_rows):
     return skills, known
 
 
+def _row_int(row, key):
+    """`row[key]` as an int, or None when the read had none."""
+    return None if row.get(key) is None else int(row[key])
+
+
+def _row_float(row, key):
+    """`row[key]` as a float, or None when the read had none."""
+    return None if row.get(key) is None else float(row[key])
+
+
 def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible):
     members, crafters = [], {}
     for r in rows:
@@ -23144,9 +23191,10 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             in_combat=bool(int(r.get("in_combat") or 0)),
             # The saved map even when the snapshot is stale; the position only
             # from a fresh snapshot, so a walk is never judged from an old one.
-            map_id=None if r.get("map_id") is None else int(r["map_id"]),
-            x=None if r.get("pos_x") is None else float(r["pos_x"]),
-            y=None if r.get("pos_y") is None else float(r["pos_y"]),
+            map_id=_row_int(r, "map_id"),
+            x=_row_float(r, "pos_x"),
+            y=_row_float(r, "pos_y"),
+            zone_id=_row_int(r, "zone_id"),
             money=int(r.get("money") or 0), skills=skills.get(guid, {}),
             known=frozenset(known.get(guid, ())), carried=carried.get(guid, ()),
             eligible=name in eligible))
