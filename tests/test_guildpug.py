@@ -435,5 +435,67 @@ class TheBridgeWrites(unittest.TestCase):
         self.assertIn("AS has_shield", sql)
 
 
+class WhyNobodyAnswers(unittest.TestCase):
+    """wow-dev, 2026-10-05: ten calls between 06:14 and 08:04 UTC, no pug,
+    and nothing said why. No random bot stood between level 8 and 49."""
+
+    def silences(self, pugs):
+        return pug_plan(
+            guild_four(), [old_ask()], four_yeses(), calls={7: call()}, pugs=pugs
+        ).silences
+
+    def test_an_empty_read_says_no_random_bot_is_in_range(self):
+        (s,) = self.silences([])
+        self.assertEqual((7, "Auren", "healer", 0), (s.ask_id, s.asker, s.seat, s.read))
+        self.assertIn("no random bot is online in its level range", s.line)
+        self.assertIn("Deadmines", s.line)
+
+    def test_the_commonest_reasons_first(self):
+        pugs = [
+            pug("Grom", race=ORC),
+            pug("Thok", race=ORC),
+            pug("Dark", talent_spells=SHADOW),
+        ]
+        (s,) = self.silences(pugs)
+        self.assertEqual(3, s.read)
+        self.assertEqual(("the other side", 2), s.reasons[0])
+        self.assertIn("3 random bot(s) read, 2 the other side, 1 does not play", s.line)
+        self.assertTrue(s.line.isascii())
+
+    def test_an_answered_seat_is_not_silent(self):
+        self.assertEqual((), self.silences([pug("Mercy")]))
+
+    def test_an_ask_not_yet_called_is_not_silent(self):
+        out = pug_plan(guild_four(), [old_ask()], four_yeses(), pugs=[])
+        self.assertEqual((), out.silences)
+        self.assertEqual(1, len(out.calls))
+
+    def test_the_bridge_says_it_once_per_reason(self):
+        bridge._PUG_SILENCES.clear()
+        (s,) = self.silences([])
+        with self.assertLogs("wow-overseer", level="INFO") as said:
+            bridge._log_pug_silences([s])
+            bridge._log_pug_silences([s])
+        self.assertEqual(1, len(said.output))
+        self.assertIn("guild pugs: nobody answers Auren's call", said.output[0])
+        (other,) = self.silences([pug("Grom", race=ORC)])
+        with self.assertLogs("wow-overseer", level="INFO") as said:
+            bridge._log_pug_silences([other])
+        self.assertIn("1 the other side", said.output[0])
+        bridge._log_pug_silences([])
+        self.assertEqual({}, bridge._PUG_SILENCES)
+
+    def test_the_pass_hands_its_silences_to_the_log(self):
+        self.assertIn("_log_pug_silences(pug_pass.silences)", bridge_source())
+
+
+def bridge_source():
+    import pathlib
+
+    return (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
+        encoding="utf-8"
+    )
+
+
 if __name__ == "__main__":
     unittest.main()
