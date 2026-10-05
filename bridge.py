@@ -2400,13 +2400,15 @@ def _quest_while_stuck(names: list, mode: str, stuck) -> int:
     member is at the floor, so going in is not the exit; standing in town on
     the town run job earns nothing either. A player in that spot goes back out
     and plays, and the campaign stays queued: `_drive_dungeon` sends it in as
-    soon as every member has room. Only the rows the hold wrote are moved (the
-    campaign's own job, or a town run with TOWN_FIRST_SOURCE), so an
-    operator's own orders stand. Returns the rows written.
+    soon as every member has room. Only the rows the overseer wrote are moved
+    (the campaign's own job, or a town run from the hold or the town errand:
+    an errand that ends hands the family back with its town run standing),
+    so an operator's own orders stand. Returns the rows written.
     """
     moved = [n for n, job in _jobs_of(names).items()
              if job == mode or (job == jobs.TOWN_RUN
-                                and _last_job_source(n) == TOWN_FIRST_SOURCE)]
+                                and _last_job_source(n) in (
+                                    TOWN_FIRST_SOURCE, TOWN_ERRAND_SOURCE))]
     written = 0
     for name in moved:
         try:
