@@ -57,6 +57,7 @@ import campaignqueue
 import classic
 import guildbank
 import guildshare
+import guildpost
 import guildroute
 import guildwork
 import gearup
@@ -5536,6 +5537,10 @@ class Bridge(discord.Client):
         self._crafter_routed: dict = {}
         self._crafter_said: dict = {}
         self._crafter_walks: dict = {}
+        # THE GUILD'S OWN POST (#625): who is on a walk to take its letters
+        # out, and when each grounded walker last used its hearthstone.
+        self._post_walks: dict = {}
+        self._ground_hearths: dict = {}
         # THE ACTIVITY CHOICE (#216). Per family key: what the last cycle saw
         # (breakpoint marks, when Jev was last asked, since when the family has
         # been on its job) and the interlude Jev chose, if one is running. In
@@ -5615,6 +5620,7 @@ class Bridge(discord.Client):
                 self._guild_bank_loop,
                 self._guild_dues_loop,
                 self._crafter_mail_loop,
+                self._guild_post_loop,
                 self._guild_corps_loop,
                 self._guild_jobs_loop,
                 self._mail_loop,
@@ -9570,7 +9576,31 @@ class Bridge(discord.Client):
             self._far_walk_unsupported_until = (
                 time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS)
             log.warning("guild walk: %s", answer.said)
+        if guildroute.grounded(answer):
+            await self._hearth_grounded(holder)
         return answer
+
+    async def _hearth_grounded(self, holder: str) -> None:
+        """A guild bot whose walk the ground refused uses its hearthstone (#625).
+
+        Under the world or in a lake no walk takes a first step, and every
+        pass would ask again for ever. A player hearths out; so does the bot,
+        once an hour (guildroute.hearth_due). A roster member is left to its
+        family's own movement choice.
+        """
+        now = time.monotonic()
+        on_roster = await asyncio.to_thread(_on_roster, holder)
+        if not guildroute.hearth_due(holder, self._ground_hearths, now, on_roster):
+            return
+        self._ground_hearths[holder] = now
+        try:
+            row_id = await asyncio.to_thread(
+                _insert_hearth, holder, guildroute.GROUND_HEARTH_SOURCE)
+        except pymysql.err.MySQLError:
+            log.exception("guild walk: the hearth row for %s failed", holder)
+            return
+        log.info("guild walk: %s cannot take a first step toward anything, so it "
+                 "uses its hearthstone (hearth row %d)", holder, row_id)
 
     def _guild_walk_cap(self) -> float:
         """The cap a guild pass's walk rows ask for this pass (#633)."""
@@ -13226,6 +13256,124 @@ class Bridge(discord.Client):
             if status not in ("", "pending", "claimed", "verifying"):
                 return status, str((row or {}).get("detail") or "")
         return "", ""
+
+    async def _guild_post_loop(self) -> None:
+        """The guild's own post (#625), on its own clock."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("GUILD_POST_CYCLE_SECONDS", "600"))
+        await asyncio.sleep(min(cycle, 420.0))
+        while not self.is_closed():
+            try:
+                await self._guild_post_once()
+            except Exception:
+                log.exception("%s pass failed; retrying next cycle",
+                              guildpost.LOG_PREFIX)
+            await asyncio.sleep(cycle)
+
+    async def _guild_post_once(self) -> None:
+        """Walk guild members off the roster to a mailbox to take out their post.
+
+        guildpost.visits decides who; the rows are the module's own, the ones
+        a player's actions map to: a `walk-to-mailbox` row
+        (quadseven/mod-overseer#570), then a `take-item` row per attachment.
+        Never a give.
+        """
+        own = sorted((await asyncio.to_thread(_protected_guids)).values())
+        families = [own] if own else []
+        families += [list(c.names)
+                     for c in await asyncio.to_thread(_other_cohorts, own)]
+        now = time.monotonic()
+        self._post_walks = guildroute.live_runs(
+            self._post_walks, now, guildroute.GUILD_STEP_SECONDS)
+        roster = {n for names in families for n in names}
+        for names in families:
+            try:
+                await self._guild_post_for(names, roster, now)
+            except pymysql.err.MySQLError:
+                log.exception("%s pass failed for %s; retrying next cycle",
+                              guildpost.LOG_PREFIX, ",".join(names))
+
+    async def _guild_post_for(self, names: list, roster: set, now: float) -> None:
+        """One family guild's part of `_guild_post_once`."""
+        rows = await asyncio.to_thread(_fetch_guild_post, names)
+        letters = [x for x in map(guildpost.letter_from_row, rows) if x]
+        if not letters:
+            return
+        online = {str(r["receiver"]) for r in rows if int(r.get("online") or 0)}
+        receivers = sorted({x.receiver for x in letters} & online)
+        free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
+        busy = (set(getattr(self, "_guild_run_names", ())) | set(self._post_walks)
+                | set(self._crafter_walks) | set(self._guild_mail_runs)
+                | set(self._dues_walks) | set(self._corps_steps))
+        plan, notes = guildpost.visits(letters, online, busy, free_slots, roster)
+        log.info("%s %d letter(s) with items wait for %d guild member(s) of %s's "
+                 "guild; %d walk(s) this pass", guildpost.LOG_PREFIX, len(letters),
+                 len({x.receiver for x in letters}), names[0] if names else "?",
+                 len(plan))
+        notes += await self._start_post_walks(plan, names, now)
+        _log_capped(guildpost.LOG_PREFIX.rstrip(":"), notes)
+
+    async def _start_post_walks(self, plan, names: list, now: float) -> list:
+        """Write a walk row per visit a walker allows; the refusals as notes."""
+        if not plan:
+            return []
+        cap = self._guild_walk_cap()
+        row_walks = now >= self._mail_walk_unsupported_until
+        walkers = await asyncio.to_thread(
+            _route_walkers, [v.receiver for v in plan], names, row_walks)
+        notes = []
+        for visit in plan:
+            refused = guildpost.walk_refusal(
+                visit.receiver, walkers.get(visit.receiver), cap)
+            if refused:
+                notes.append(refused)
+                continue
+            self._post_walks[visit.receiver] = now
+            row_id = await asyncio.to_thread(
+                _insert_crafter_row, visit.receiver, visit.walk_command(cap),
+                "mail", "%s:%s" % (guildpost.WALK_SOURCE, visit.receiver))
+            if not row_id:
+                self._post_walks.pop(visit.receiver, None)
+                continue
+            log.info("%s (walk row %d)", visit.said, row_id)
+            task = asyncio.create_task(self._follow_post_visit(visit, row_id, cap))
+            self._mail_walk_tasks.add(task)
+            task.add_done_callback(self._mail_walk_task_done)
+        return notes
+
+    async def _follow_post_visit(self, visit, row_id: int, cap: float) -> None:
+        """Take each attachment out once the walk arrives."""
+        try:
+            answer = await self._await_mail_walk(visit.receiver, row_id, cap)
+            if answer.state == guildroute.UNSUPPORTED:
+                self._mail_walk_unsupported_until = (
+                    time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS)
+            if answer.state != guildroute.ARRIVED:
+                log.info("%s walk row %d for %s: %s; the post stays in the "
+                         "mailbox", guildpost.LOG_PREFIX, row_id, visit.receiver,
+                         answer.said or answer.state)
+                return
+            taken = 0
+            for take in visit.takes:
+                take_id = await asyncio.to_thread(
+                    _insert_crafter_row, take.receiver, take.command, "mail",
+                    "%s:%s" % (guildpost.TAKE_SOURCE, take.receiver))
+                if not take_id:
+                    return
+                status, detail = await self._crafter_row_answer(take_id)
+                if status != "delivered":
+                    log.info("%s %s could not take %s out (row %d, %s: %s)",
+                             guildpost.LOG_PREFIX, take.receiver, take.name,
+                             take_id, status or "no answer", detail)
+                    break
+                taken += 1
+            log.info("%s %s took %d of %d item(s) out of the mailbox",
+                     guildpost.LOG_PREFIX, visit.receiver, taken, len(visit.takes))
+        except pymysql.err.MySQLError:
+            log.exception("%s following walk row %d failed",
+                          guildpost.LOG_PREFIX, row_id)
+        finally:
+            self._post_walks.pop(visit.receiver, None)
 
     async def _crafter_mail_loop(self) -> None:
         """The designated crafters' recipe pickup (#248), on its own clock."""
@@ -21456,6 +21604,49 @@ def _fetch_crafter_letters(receivers: list, senders: list) -> list:
         return [dict(row) for row in cur.fetchall()]
 
 
+# Every attachment waiting for a member of the family's guild (#625), oldest
+# letter first. `delivered` is whether the delivery delay has passed; a letter
+# with cash on delivery is read and never taken from (guildpost).
+_GUILD_POST_SQL = (
+    "SELECT r.name AS receiver, r.online AS online, m.id AS mail_id, "
+    "mi.item_guid AS item_guid, it.name AS name, "
+    "(m.deliver_time <= UNIX_TIMESTAMP()) AS delivered, m.cod AS cod "
+    "FROM mail m "
+    "JOIN mail_items mi ON mi.mail_id = m.id "
+    "JOIN characters r ON r.guid = m.receiver "
+    "JOIN guild_member gm ON gm.guid = r.guid "
+    "JOIN item_instance ii ON ii.guid = mi.item_guid "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s)) "
+    "ORDER BY m.id"
+)
+
+
+def _fetch_guild_post(names: list) -> list:
+    """Rows for guildpost.letter_from_row; no judgement here."""
+    if not names:
+        return []
+    sql = _GUILD_POST_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, list(names))  # noqa: S608 - placeholders from a COUNT
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("guild post: the mail tables cannot be read")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _on_roster(name: str) -> bool:
+    """Whether this character is an enabled roster family member."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM overseer_roster WHERE enabled = 1 AND name = %s",
+                    (name,))
+        return cur.fetchone() is not None
+
+
 def _insert_crafter_row(holder: str, command: str, kind: str, source: str) -> int:
     """One pickup row for a designated crafter (#248): a walk or a take."""
     if kind in _DISPOSAL_KINDS and _KEEP.blocks(holder, command):
@@ -28101,6 +28292,7 @@ class HeadlessBridge(Bridge):
                 self._guild_bank_loop,
                 self._guild_dues_loop,
                 self._crafter_mail_loop,
+                self._guild_post_loop,
                 self._guild_corps_loop,
                 self._guild_jobs_loop,
                 self._mail_loop,
