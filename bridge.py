@@ -118,11 +118,13 @@ import raidroles
 import raidrun
 import raidsupply
 import recipebook
+import raidteams
 import recruit
 import relay
 import situation
 import skillgoal
 import tabard
+import teamsync
 import towntrip
 import townerrand
 import townslot
@@ -5502,6 +5504,7 @@ class Bridge(discord.Client):
                 self._town_errand_loop,
                 self._weapon_skill_loop,
                 self._recruit_loop,
+                self._team_sync_loop,
                 self._raid_spec_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
@@ -12627,6 +12630,11 @@ class Bridge(discord.Client):
         acting guild's eight raid groups are short of goes first
         (raidlineup's `recruit_classes`, _recruit_prefer).
         """
+        if _team_sync_on():
+            # THE APPROVED TEAMS OWN RECRUITING (teamsync): a recruit must fit
+            # its seat's class and race, which this sweep does not ask.
+            log.info("recruit: nothing this pass - the team sync recruits for the approved teams")
+            return
         actors = await asyncio.to_thread(_online_guild_members)
         prefer = await asyncio.to_thread(_recruit_prefer, sorted(actors)[0]) if actors else ()
         result, age = await asyncio.to_thread(_latest_guild_shortlist)
@@ -12668,6 +12676,54 @@ class Bridge(discord.Client):
             "shortlist reported it",
             action.command, action.actor, action.reason, members, target,
         )
+
+    async def _team_sync_once(self) -> None:
+        """One pass toward each approved guild's teams (teamsync, raidteams):
+        leavers removed, recruits invited, approved names asked for.
+
+        ACTS THROUGH THE GUILD'S FAMILY HEAD, who must be in the world: the
+        guild verbs run on the acting character and resolve the guild from it.
+        Renames wait for TEAM_RENAMES=on, because a `rename-to` row reaching a
+        module without the verb (mod-overseer#852) would be read as a job.
+        """
+        renames_on = os.environ.get("TEAM_RENAMES", "off") == "on"
+        pending = await asyncio.to_thread(_team_pending)
+        for guild in raidteams.GROUPS:
+            actor = await asyncio.to_thread(_team_actor, guild)
+            members = await asyncio.to_thread(_team_members, guild)
+            if not members:
+                continue
+            candidates = await asyncio.to_thread(_team_candidates, guild)
+            actions = teamsync.plan(guild, members, candidates, pending, renames_on)
+            if not actions:
+                log.info("team sync: %s matches its approved teams as far as this pass can move it", guild)
+                continue
+            for action in actions:
+                if action.kind == "rename":
+                    row = await asyncio.to_thread(
+                        _insert_job, action.target, "rename-to " + action.new_name, TEAM_SYNC_SOURCE)
+                elif not actor:
+                    log.info("team sync: %s - %s %s waits: the family head is not in the world",
+                             guild, action.kind, action.target)
+                    continue
+                else:
+                    row = await asyncio.to_thread(
+                        _insert_guild, actor, action.kind, TEAM_SYNC_SOURCE, action.target)
+                log.info("team sync: %s - %s %s%s (%s)%s", guild, action.kind, action.target,
+                         " to " + action.new_name if action.new_name else "", action.why,
+                         "" if row else "; the row was not written")
+
+    async def _team_sync_loop(self) -> None:
+        """Move each approved guild toward its teams, a few rows a pass."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("TEAM_SYNC_CYCLE_SECONDS", "120"))
+        while not self.is_closed():
+            if _team_sync_on():
+                try:
+                    await self._team_sync_once()
+                except Exception:
+                    log.exception("team sync pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
 
     async def _recruit_loop(self) -> None:
         """Recruit toward the guild's target size, unattended (infra#3651).
@@ -25142,6 +25198,70 @@ def _recruit_prefer(actor: str) -> tuple:
     return prefer
 
 
+TEAM_SYNC_SOURCE = "teams"
+
+
+def _team_sync_on() -> bool:
+    return os.environ.get("TEAM_SYNC", "off") == "on"
+
+
+def _team_members(guild: str) -> list:
+    """name, class_id, race, level for every member of `guild`."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.name AS name, c.class AS class_id, c.race AS race, c.level AS level "
+            "FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
+            "JOIN guild g ON g.guildid = gm.guildid WHERE g.name = %s",
+            (guild,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def _team_candidates(guild: str) -> list:
+    """Characters in no guild, at or under the recruit level, of a class and
+    race one of `guild`'s open seats wants."""
+    wanted = {(s.class_id, teamsync.RACE_IDS[s.race]) for s in raidteams.seats(guild) if not s.was}
+    if not wanted:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.name AS name, c.class AS class_id, c.race AS race, c.level AS level "
+            "FROM characters c LEFT JOIN guild_member gm ON gm.guid = c.guid "
+            "WHERE gm.guid IS NULL AND c.level <= %s AND c.deleteInfos_Account IS NULL",
+            (teamsync.RECRUIT_MAX_LEVEL,),
+        )
+        return [dict(r) for r in cur.fetchall()
+                if (int(r["class_id"]), int(r["race"])) in wanted]
+
+
+def _team_pending() -> set:
+    """Names a team-sync row is still in flight for, or was written for in
+    the last ten minutes: never asked twice while the first is running."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT target_name, target_arg FROM overseer_command WHERE source = %s "
+            "AND (status IN ('pending', 'claimed') OR created_at > NOW() - INTERVAL 10 MINUTE)",
+            (TEAM_SYNC_SOURCE,),
+        )
+        out = set()
+        for r in cur.fetchall():
+            arg = str(r["target_arg"] or "")
+            out.add(arg if arg else str(r["target_name"] or ""))
+        return {n for n in out if n}
+
+
+def _team_actor(guild: str) -> str:
+    """The guild's family head when it is in the world, else ""."""
+    head = raidteams.GROUPS[guild][0][0].name
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM overseer_snapshot WHERE name = %s "
+            "AND updated_at > NOW() - INTERVAL 60 SECOND",
+            (head,),
+        )
+        return head if cur.fetchone() else ""
+
+
 def _online_guild_members() -> list:
     """Family names that are in a guild AND in the world right now.
 
@@ -27805,6 +27925,7 @@ class HeadlessBridge(Bridge):
                 self._town_errand_loop,
                 self._weapon_skill_loop,
                 self._recruit_loop,
+                self._team_sync_loop,
                 self._raid_spec_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
