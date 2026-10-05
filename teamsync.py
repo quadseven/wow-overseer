@@ -87,61 +87,81 @@ def recruits_in_guild(guild: str, members: list) -> dict:
     return out
 
 
+def _removals(guild: str, names: set, pending: set) -> list:
+    leaving = [
+        n for n in raidteams.LEAVING.get(guild, ()) if n in names and n not in pending
+    ]
+    return [
+        Action("remove", name, why="leaves for a recruit (approved teams)")
+        for name in leaving[:REMOVES_PER_PASS]
+    ]
+
+
+def _best_candidate(seat, candidates: list, taken: set):
+    fit = sorted(
+        (
+            c
+            for c in candidates
+            if _fits(c, seat)
+            and int(c.get("level") or 0) <= RECRUIT_MAX_LEVEL
+            and c["name"] not in taken
+        ),
+        key=lambda c: (int(c.get("level") or 0), c["name"]),
+    )
+    return fit[0] if fit else None
+
+
+def _invites(
+    guild: str, members: list, seated: dict, candidates: list, pending: set
+) -> list:
+    """One invite per open seat no member fits, while the guild has room.
+    Room is counted from who is in the guild now: a leaver asked to go this
+    pass still holds its place until the row has run."""
+    names = {m["name"] for m in members}
+    limit = min(INVITES_PER_PASS, max(0, GUILD_SIZE - len(members)))
+    actions, taken = [], set(pending)
+    for seat in open_seats(guild, names):
+        if len(actions) >= limit:
+            break
+        if seat.name in seated:
+            continue
+        pick = _best_candidate(seat, candidates, taken)
+        if pick is None:
+            continue
+        actions.append(
+            Action("invite", pick["name"], why="recruit for %s's seat" % seat.name)
+        )
+        taken.add(pick["name"])
+    return actions
+
+
+def _renames(guild: str, names: set, seated: dict, pending: set) -> list:
+    wanted = [(old, new) for old, new in raidteams.renames(guild) if old in names]
+    wanted += [(m["name"], seat) for seat, m in seated.items() if m["name"] != seat]
+    wanted = [
+        (old, new) for old, new in wanted if old not in pending and new not in names
+    ]
+    return [
+        Action("rename", old, new_name=new, why="approved name")
+        for old, new in wanted[:RENAMES_PER_PASS]
+    ]
+
+
 def plan(
     guild: str, members: list, candidates: list, pending: set, renames_on: bool
 ) -> list:
-    """The actions for one pass over one approved guild.
+    """The actions for one pass over one approved guild: removals, then
+    invites, then (when the module's rename verb is live) renames.
 
     members     the guild's members: name, class_id, race, level
     candidates  characters in no guild: name, class_id, race, level
     pending     names a row is already in flight for (any of these actions)
     renames_on  whether the module's rename verb is live
     """
-    actions: list = []
     names = {m["name"] for m in members}
-
-    leaving = [
-        n for n in raidteams.LEAVING.get(guild, ()) if n in names and n not in pending
-    ]
-    for name in leaving[:REMOVES_PER_PASS]:
-        actions.append(
-            Action("remove", name, why="leaves for a recruit (approved teams)")
-        )
-
     seated = recruits_in_guild(guild, members)
-    still_open = [s for s in open_seats(guild, names) if s.name not in seated]
-    # Room is counted from who is in the guild now: a leaver asked to go
-    # this pass still holds its place until the row has run.
-    room = GUILD_SIZE - len(members)
-    invited = 0
-    taken = set(pending)
-    for seat in still_open:
-        if invited >= min(INVITES_PER_PASS, max(0, room)):
-            break
-        fit = sorted(
-            (
-                c
-                for c in candidates
-                if _fits(c, seat)
-                and int(c.get("level") or 0) <= RECRUIT_MAX_LEVEL
-                and c["name"] not in taken
-            ),
-            key=lambda c: (int(c.get("level") or 0), c["name"]),
-        )
-        if not fit:
-            continue
-        actions.append(
-            Action("invite", fit[0]["name"], why="recruit for %s's seat" % seat.name)
-        )
-        taken.add(fit[0]["name"])
-        invited += 1
-
+    actions = _removals(guild, names, pending)
+    actions += _invites(guild, members, seated, candidates, pending)
     if renames_on:
-        wanted = [(old, new) for old, new in raidteams.renames(guild) if old in names]
-        wanted += [(m["name"], seat) for seat, m in seated.items() if m["name"] != seat]
-        wanted = [
-            (old, new) for old, new in wanted if old not in pending and new not in names
-        ]
-        for old, new in wanted[:RENAMES_PER_PASS]:
-            actions.append(Action("rename", old, new_name=new, why="approved name"))
+        actions += _renames(guild, names, seated, pending)
     return actions
