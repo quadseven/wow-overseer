@@ -65,6 +65,7 @@ import natural
 import guildcorps
 import guildjobs
 import guildrun
+import guildsocial
 import holdings
 import handover
 import craft
@@ -5357,6 +5358,9 @@ class Bridge(discord.Client):
         # while they are in a dungeon, and when the last group was formed.
         self._guild_run_names: set = set()
         self._guild_run_formed_at: float | None = None
+        # Askers and yeses of the guild's live asks (guildsocial); folded into
+        # _guild_run_names so no guild job or walk takes them meanwhile.
+        self._guild_social_names: set = set()
         # The last comparison written per (kind, subject, item guid), so an
         # unchanged answer is recorded once rather than every economy cycle.
         self._jev_recorded: dict = {}
@@ -15715,11 +15719,18 @@ class Bridge(discord.Client):
             try:
                 await asyncio.to_thread(_follow_guild_runs)
                 active = await asyncio.to_thread(_active_guild_run_names)
-                self._guild_run_names = set(active)
+                self._guild_run_names = set(active) | set(
+                    getattr(self, "_guild_social_names", ()))
                 await asyncio.to_thread(_hearth_stranded_guild_members)
                 if guildrun.enabled():
                     said_off = False
-                    await self._guild_run_once()
+                    # ONE PICKER, NEVER BOTH (#569): with GUILD_SOCIAL on, a
+                    # group forms only from an ask and its yeses; off, the
+                    # old coordinator picks members as it did.
+                    if guildsocial.enabled():
+                        await self._guild_social_once()
+                    else:
+                        await self._guild_run_once()
                 elif not said_off:
                     log.info("guild runs: GUILD_RUNS is off; runs in flight are still "
                              "followed, nothing new is formed")
@@ -15780,6 +15791,67 @@ class Bridge(discord.Client):
                  run_id, plan.pool.guild, ", ".join(decision.chosen.names),
                  decision.door.place, plan.band, decision.chosen.key,
                  decision.prior.words())
+
+    async def _guild_social_once(self) -> None:
+        """One pass of the guild's asks and answers (guildsocial, #568, #569).
+
+        guildsocial decides who asks, who answers and which ask forms a group;
+        this reads the facts, writes the rows and says each line in guild chat
+        from the member who says it. The cap, the restart settle and the
+        realm-wide spacing are the old coordinator's; the finder row is too.
+        """
+        bounds = guildrun.limits()
+        gate = await asyncio.to_thread(_guild_run_gate)
+        if guildrun.settling(gate["uptime"]):
+            log.info("guild social: the worldserver has been up %ds; nobody asks "
+                     "before %ds", gate["uptime"], guildrun.SETTLE_SECONDS)
+            return
+        in_flight = await asyncio.to_thread(_guild_runs_in_flight)
+        now = time.monotonic()
+        spaced = (self._guild_run_formed_at is None
+                  or now - self._guild_run_formed_at >= bounds.form_every_seconds)
+        facts = await asyncio.to_thread(_fetch_guild_social_facts, bounds)
+        mid_job = (set(getattr(self, "_job_steps", ())) | set(getattr(self, "_corps_steps", ()))
+                   | set(getattr(self, "_dues_walks", ())) | set(getattr(self, "_guild_mail_runs", ()))
+                   | set(getattr(self, "_crafter_walks", ())))
+        doors = guildrun.doors(facts["finder_floors"])
+        held = {}
+        mates = []
+        for row in facts["rows"]:
+            mate = guildsocial.mate_from_row(row, facts["gear"].get(row.get("name")))
+            if mate is None:
+                continue
+            mates.append(mate)
+            why = guildrun.why_not(mate.member, facts["busy"], facts["resting"],
+                                   facts["family"], facts["benched"])
+            if not why and mate.name in mid_job:
+                why = "on a guild job"
+            if why:
+                held[mate.name] = why
+        factions = {g: guildrun.faction_of([m.member for m in mates if m.member.guild == g])
+                    for g in {m.member.guild for m in mates}}
+        needs = {m.name: guildsocial.needs_for(m, facts["drops"], doors,
+                                               factions.get(m.member.guild, ""),
+                                               facts["quests"].get(m.name, ()))
+                 for m in mates if m.name not in held}
+        social = guildsocial.plan_pass(
+            mates, held, facts["asks"], facts["answers"], needs, doors,
+            guildjobs.entrances(), facts["now"],
+            room=max(0, bounds.max_groups - in_flight),
+            can_form=spaced and in_flight < bounds.max_groups,
+            campaigns=facts["campaigns"])
+        run_id = await asyncio.to_thread(_write_guild_social, social)
+        if run_id:
+            self._guild_run_formed_at = now
+            self._guild_run_names |= set(social.form.composition.names)
+        self._guild_social_names = await asyncio.to_thread(_guild_social_names)
+        log.info("guild social: %d ask(s) said, %d yes(es), %d expired, %d cancelled, "
+                 "%d withdrawn%s%s", len(social.posts), len(social.replies),
+                 len(social.expire), len(social.cancel), len(social.withdraw),
+                 "; run %d - %s's %s group: %s" % (
+                     run_id, social.form.ask.asker, social.form.door.place,
+                     ", ".join(social.form.composition.names)) if run_id else "",
+                 "; " + "; ".join(social.notes) if social.notes else "")
 
     async def _campaign_queue_loop(self) -> None:
         """Advance every family's queue on its own clock.
@@ -19635,11 +19707,31 @@ def _ensure_guild_run_store() -> None:
     except pymysql.err.MySQLError:
         log.exception("guild runs: overseer_guild_run unavailable; no guild group "
                       "will be formed")
+    # The social layer's asks and answers (guildsocial), and who proposed a
+    # run, added to overseer_guild_run the way the Jev store adds a column.
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(guildsocial.ASK_TABLE_SQL)
+            cur.execute(guildsocial.ANSWER_TABLE_SQL)
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() "
+                "  AND TABLE_NAME = 'overseer_guild_run' AND COLUMN_NAME = 'proposer'"
+            )
+            if not (cur.fetchone() or {}).get("n"):
+                cur.execute(
+                    "ALTER TABLE overseer_guild_run "
+                    "ADD COLUMN proposer VARCHAR(12) NOT NULL DEFAULT '' AFTER tank"
+                )
+                log.info("overseer_guild_run: added proposer")
+    except pymysql.err.MySQLError:
+        log.exception("guild social: the ask and answer tables are unavailable; "
+                      "no guild member asks or answers")
 
 
 _GUILD_RUN_MEMBERS_SQL = (
     "SELECT s.name, s.level, s.class AS class_id, s.map_id, s.in_combat, s.health, "
-    "s.race, s.zone_id, "
+    "s.race, s.zone_id, s.pos_x, s.pos_y, "
     "(SELECT AVG(it.ItemLevel) FROM character_inventory ci "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -19902,6 +19994,169 @@ def _follow_guild_runs() -> int:
                      seen.get("deaths", 0), seen.get("bosses_done", 0),
                      seen.get("bosses_total", 0), seen.get("seconds_inside", 0))
     return changed
+
+
+# THE SOCIAL LAYER (guildsocial, #568, #569). Bridge-owned state like
+# overseer_guild_run: one row per ask a member says in guild chat and one per
+# yes, which the site's guild-chat feed reads. Every line is said through the
+# same guild-chat row any other speech uses (_insert_speak, channel "guild"),
+# from the member who says it. A run formed from an ask is written exactly as
+# the old coordinator wrote one, with its proposer.
+_GUILD_SOCIAL_DROPS: dict | None = None
+
+
+def _guild_social_drops(cur) -> dict:
+    """guildsocial.index_drops over every door's map, read once per process:
+    the world's bosses and loot do not change under a running bridge."""
+    global _GUILD_SOCIAL_DROPS
+    if _GUILD_SOCIAL_DROPS is not None:
+        return _GUILD_SOCIAL_DROPS
+    maps = sorted({d.map_id for d in guildrun.doors()})
+    holes = ",".join(["%s"] * len(maps))
+    cur.execute(guildsocial.ENCOUNTERS_SQL.format(holes=holes), maps)  # noqa: S608 - placeholders only
+    encounters = list(cur.fetchall())
+    cur.execute(guildsocial.LOOT_SQL.format(holes=holes), maps)  # noqa: S608 - placeholders only
+    found = guildsocial.index_drops(encounters, list(cur.fetchall()))
+    if found:
+        _GUILD_SOCIAL_DROPS = found
+    return found
+
+
+def _fetch_guild_social_facts(bounds) -> dict:
+    """The formation pass's facts (_fetch_guild_run_facts) plus what the
+    social layer reads: the asks and answers, what each member wears and
+    which dungeon quests it holds, the families' running campaigns, the
+    bosses' loot, and the database's own clock."""
+    facts = _fetch_guild_run_facts(bounds)
+    names = sorted({str(r["name"]) for r in facts["rows"] if r.get("name")})
+    worn, skills, quest_rows, campaigns = [], [], [], []
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT NOW() AS now")
+        now = (cur.fetchone() or {}).get("now")
+        cur.execute(guildsocial.ASKS_SQL, (guildsocial.ASK_COOLDOWN_MINUTES,))
+        asks = [guildsocial.ask_from_row(r) for r in cur.fetchall()]
+        answers = []
+        if asks:
+            ids = [a.id for a in asks]
+            cur.execute(guildsocial.ANSWERS_SQL.format(holes=",".join(["%s"] * len(ids))),  # noqa: S608 - placeholders only
+                        ids)
+            answers = [guildsocial.answer_from_row(r) for r in cur.fetchall()]
+        if names:
+            holes = ",".join(["%s"] * len(names))
+            cur.execute(guildsocial.WORN_SQL.format(holes=holes), names)  # noqa: S608 - placeholders only
+            worn = list(cur.fetchall())
+            cur.execute(guildsocial.SKILLS_SQL.format(holes=holes), names)  # noqa: S608 - placeholders only
+            skills = list(cur.fetchall())
+            zones = sorted(set(guildsocial.guildrun_zones().values()))
+            cur.execute(guildsocial.QUESTS_SQL.format(  # noqa: S608 - placeholders only
+                holes=holes, zones=",".join(["%s"] * len(zones))), names + zones)
+            quest_rows = list(cur.fetchall())
+        try:
+            cur.execute(guildsocial.CAMPAIGNS_SQL)
+            campaigns = list(cur.fetchall())
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+        drops = _guild_social_drops(cur)
+    quests: dict = {}
+    for row in quest_rows:
+        quests.setdefault(str(row["name"]), []).append(
+            (int(row["quest"]), str(row.get("title") or ""), int(row.get("zone") or 0)))
+    facts.update({
+        "now": now, "asks": asks, "answers": answers, "quests": quests,
+        "gear": guildsocial.gear_by_name(facts["rows"], worn, skills),
+        "campaigns": campaigns, "drops": drops,
+    })
+    return facts
+
+
+def _guild_social_names() -> set:
+    """Askers of live asks and their yeses: members spoken for, whom no guild
+    job or walk should take meanwhile."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT asker AS name FROM overseer_guild_ask "
+                "WHERE state IN ('open', 'filled') UNION "
+                "SELECT w.member AS name FROM overseer_guild_answer w "
+                "JOIN overseer_guild_ask a ON a.id = w.ask_id "
+                "WHERE a.state IN ('open', 'filled') AND w.state = 'yes'"
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1146:
+                return set()
+            raise
+        return {str(r["name"]) for r in cur.fetchall()}
+
+
+def _write_guild_social(social) -> int:
+    """Write one guildsocial.Pass: close what closed, record the asks and the
+    yeses, start the run an ask formed, then say every line in guild chat
+    from its speaker. The run's id, or 0 when none formed."""
+    lines = []
+    with _connect() as conn, conn.cursor() as cur:
+        for ask_id, asker, line in social.expire:
+            cur.execute(guildsocial.ASK_STATE_SQL, (guildsocial.EXPIRED, ask_id))
+            if line and cur.rowcount:
+                lines.append((asker, line))
+        for ask_id in social.cancel:
+            cur.execute(guildsocial.ASK_STATE_SQL, (guildsocial.CANCELLED, ask_id))
+        for answer_id in social.withdraw:
+            cur.execute(guildsocial.ANSWER_STATE_SQL, (guildsocial.WITHDRAWN, answer_id))
+        for ask_id in social.filled:
+            cur.execute(guildsocial.ASK_STATE_SQL, (guildsocial.FILLED, ask_id))
+        for post in social.posts:
+            cur.execute(guildsocial.INSERT_ASK_SQL, (
+                post.guild[:32], post.asker[:12], post.kind, post.target[:64],
+                post.target_label[:96], post.roles_needed[:32], post.reason[:160],
+                post.said[:255], post.minutes, post.state))
+            lines.append((post.asker, post.said))
+        for reply in social.replies:
+            cur.execute(guildsocial.INSERT_ANSWER_SQL, (
+                reply.ask_id, reply.member[:12], reply.role, reply.stance,
+                reply.said[:255]))
+            lines.append((reply.member, reply.said))
+    run_id = _start_social_run(social.form) if social.form else 0
+    if run_id:
+        lines.append((social.form.composition.tank.name, social.form.said))
+    for name, text in lines:
+        try:
+            _insert_speak(relay.SpeakCommand(name, "guild", text, "", guildsocial.SOURCE))
+        except pymysql.err.MySQLError:
+            log.exception("guild social: %s's line was not said: %r", name, text)
+    return run_id
+
+
+def _start_social_run(form) -> int:
+    """The run an ask formed: its overseer_guild_run row (crediting the
+    proposer), the module's finder row exactly as _start_guild_run writes it,
+    the ask marked ran, and each yes seated or declined."""
+    comp = form.composition
+    door = form.door
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_guild_run (guild, band, composition, keyword, tank, "
+            "proposer, members, dungeon_by, composition_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'ask', 'answers')",
+            (form.ask.guild[:24], form.band[:8], form.key[:40], door.keyword[:32],
+             comp.tank.name[:12], form.ask.asker[:12],
+             guildrun.members_text(comp)[:255]),
+        )
+        run_id = int(cur.lastrowid)
+        cur.execute(
+            "INSERT INTO overseer_command (target_name, command, kind, source) "
+            "VALUES (%s, %s, 'guild', %s)",
+            (comp.tank.name, comp.command(door.keyword), guildrun.SOURCE),
+        )
+        command_id = int(cur.lastrowid)
+        cur.execute("UPDATE overseer_guild_run SET command_id = %s WHERE id = %s",
+                    (command_id, run_id))
+        cur.execute(guildsocial.ASK_RAN_SQL, (run_id, form.ask.id))
+        for answer_id in form.seated:
+            cur.execute(guildsocial.ANSWER_STATE_SQL, (guildsocial.SEATED, answer_id))
+        for answer_id in form.declined:
+            cur.execute(guildsocial.ANSWER_STATE_SQL, (guildsocial.DECLINED, answer_id))
+    return run_id
 
 
 # RUN RECOVERY (jev_recovery). mod-overseer writes one overseer_run_recovery row
