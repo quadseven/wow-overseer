@@ -9411,7 +9411,8 @@ class Bridge(discord.Client):
             log.exception("guild route: following walk row %d failed", row_id)
 
     async def _await_mail_walk(self, holder: str, row_id: int,
-                               cap: float = guildroute.MAIL_RUN_YARDS):
+                               cap: float = guildroute.MAIL_RUN_YARDS,
+                               goal: str = "a mailbox"):
         """Read one walk row until it answers; the last answer read.
 
         Shared by the gear route's walks and the guild dues walks (#234), so
@@ -9419,7 +9420,8 @@ class Bridge(discord.Client):
         MAIL_WALK_POLL_SECONDS, one read each, judged by guildroute.judge_walk.
         A row asking the far cap (quadseven/mod-overseer#633) is followed for
         the far ceiling instead. A database fault is raised to the caller,
-        which owns the log line.
+        which owns the log line. `goal` names where the walk goes, for the
+        line when it cannot (guildroute.judge_walk).
         """
         far = float(cap) > guildroute.TRAINER_WALK_YARDS
         answer = guildroute.WalkAnswer(guildroute.WALKING)
@@ -9433,7 +9435,7 @@ class Bridge(discord.Client):
                 )
             answer = guildroute.judge_walk(
                 holder, row.get("status"), row.get("detail"), row.get("result"),
-                far=far,
+                far=far, goal=goal,
             )
             if answer.state != guildroute.WALKING:
                 break
@@ -9449,16 +9451,17 @@ class Bridge(discord.Client):
             time.monotonic() >= self._far_walk_unsupported_until)
 
     async def _follow_guild_walk(self, label: str, holder: str, row_id: int,
-                                 cap: float, insert) -> tuple:
+                                 cap: float, insert, goal: str = "a mailbox") -> tuple:
         """(answer, row id) of a guild walk row, written once more if a fight
         ended it (#633); the row id is the last one written.
 
         The module pauses a walk for a fight since quadseven/mod-overseer#633,
         so a fight ending one is the rarer case: a fight longer than the walk's
         allowance, or a worldserver older than the pause. `insert` writes the
-        row again. Bounded: at most WALK_COMBAT_RETRIES more rows.
+        row again. Bounded: at most WALK_COMBAT_RETRIES more rows. `goal`
+        names where it walks, for the line when it cannot.
         """
-        answer = await self._await_mail_walk(holder, row_id, cap)
+        answer = await self._await_mail_walk(holder, row_id, cap, goal)
         for attempt in range(1, guildroute.WALK_COMBAT_RETRIES + 1):
             if not guildroute.retry_after_combat(answer, attempt):
                 break
@@ -9470,7 +9473,7 @@ class Bridge(discord.Client):
             if not again:
                 break
             row_id = again
-            answer = await self._await_mail_walk(holder, row_id, cap)
+            answer = await self._await_mail_walk(holder, row_id, cap, goal)
         return answer, row_id
 
     async def _end_mail_walk(self, run, row_id: int, answer) -> None:
@@ -13267,7 +13270,8 @@ class Bridge(discord.Client):
                 log.info("guild corps: %s (walk row %d)", step.said, walk_id)
                 answer, walk_id = await self._follow_guild_walk(
                     "guild corps", step.holder, walk_id, cap,
-                    lambda: _insert_corps_row(step.holder, step.walk))
+                    lambda: _insert_corps_row(step.holder, step.walk),
+                    step.goal or guildroute.walk_goal(step.walk.command))
                 if answer.state != guildroute.ARRIVED:
                     log.info("guild corps: walk row %d for %s ended without "
                              "arriving: %s", walk_id, step.holder,
@@ -13645,7 +13649,8 @@ class Bridge(discord.Client):
                 log.info("guild jobs: %s (walk row %d)", step.said, walk_id)
                 answer, walk_id = await self._follow_guild_walk(
                     "guild jobs", step.holder, walk_id, cap,
-                    lambda: _insert_corps_row(step.holder, step.walk))
+                    lambda: _insert_corps_row(step.holder, step.walk),
+                    step.goal or guildroute.walk_goal(step.walk.command))
                 if answer.state != guildroute.ARRIVED:
                     detail = str(getattr(answer, "said", "") or answer.state)
                     self._note_job_walk_unsupported(step, step.walk, detail)

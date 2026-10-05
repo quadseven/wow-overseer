@@ -42,7 +42,7 @@ def ring(entry, agility, name="Ring", required=0):
     }
 
 
-def member_row(name="Auren", level=60, honor=0, race=HUMAN, guild="Cave"):
+def member_row(name="Auren", level=60, honor=0, race=HUMAN, guild="Cave", map_id=0):
     return {
         "name": name,
         "guild_name": guild,
@@ -51,6 +51,7 @@ def member_row(name="Auren", level=60, honor=0, race=HUMAN, guild="Cave"):
         "race": race,
         "honor": honor,
         "talent_spells": None,
+        "snapshot_map": map_id,
     }
 
 
@@ -66,9 +67,17 @@ def worn_rings(name, agility):
     ]
 
 
-def offer(entry=DON_JULIOS_BAND, agility=15, vendor=STORMPIKE, honor=5000, required=60):
+def offer(
+    entry=DON_JULIOS_BAND, agility=15, vendor=STORMPIKE, honor=5000, required=60,
+    maps=(0,),
+):  # fmt: skip
     return pvpgear.Offer(
-        entry, vendor, honor, ring(entry, agility, "Don Julio's Band", required)
+        entry,
+        vendor,
+        honor,
+        ring(entry, agility, "Don Julio's Band", required),
+        frozenset(maps),
+        "Thanthaldis Snowgleam",
     )
 
 
@@ -337,6 +346,129 @@ class NotStranded(unittest.TestCase):
         self.assertTrue(
             guildrun.left_inside(guildrun.Member("Auren", "Cave", 30, ROGUE, map_id=36))
         )
+
+
+KALIMDOR, EASTERN_KINGDOMS, OUTLAND = 1, 0, 530
+SILVERWING, WARSONG = 14753, 14754
+
+
+class OnlyWhatItCanBuy(unittest.TestCase):
+    """wow-dev, 2026-10-05: ten Cave and five Bonkers members held the honor
+    for a Warsong Gulch reward for an hour and bought nothing. The supply
+    officers stand on Kalimdor; the buyers stood on maps 0 and 530, and every
+    vendor walk came back "no vendor on this map sells that item"."""
+
+    def wsg(self, maps=(KALIMDOR,)):
+        return offer(vendor=SILVERWING, honor=300, required=18, maps=maps)
+
+    def test_a_vendor_on_another_continent_is_not_its_upgrade(self):
+        for map_id in (EASTERN_KINGDOMS, OUTLAND):
+            (s,) = seekers([member_row(level=20, map_id=map_id)], 5, 8, [self.wsg()])
+            self.assertFalse(s.upgrade.pvp, map_id)
+            self.assertEqual({}, pvpgear.plan_aims([s]))
+
+    def test_on_the_vendors_continent_it_is(self):
+        (s,) = seekers([member_row(level=20, map_id=KALIMDOR)], 5, 8, [self.wsg()])
+        self.assertTrue(s.upgrade.pvp)
+        self.assertIn("Auren", pvpgear.plan_aims([s]))
+
+    def test_inside_a_battleground_its_aim_holds(self):
+        (s,) = seekers([member_row(level=20, map_id=489)], 5, 8, [self.wsg()])
+        self.assertTrue(s.upgrade.pvp)
+
+    def test_an_unread_map_counts_nothing(self):
+        (s,) = seekers([member_row(level=20, map_id=None)], 5, 8, [self.wsg()])
+        self.assertFalse(s.upgrade.pvp)
+
+    def test_the_stock_reads_where_its_vendor_stands_and_its_name(self):
+        rows = [
+            dict(ring(20440, 15), vendor=SILVERWING, extended_cost=826,
+                 vendor_maps="1", vendor_name="Illiyana Moonblaze"),
+        ]  # fmt: skip
+        (o,) = pvpgear.offers_from_rows(rows, {826: {"honor": 300}})
+        self.assertEqual(frozenset({KALIMDOR}), o.maps)
+        self.assertEqual("Illiyana Moonblaze", o.vendor_name)
+        self.assertTrue(o.sold_on(KALIMDOR))
+        self.assertFalse(o.sold_on(EASTERN_KINGDOMS))
+        self.assertFalse(o.sold_on(None))
+
+    def test_a_reputation_or_rank_gate_is_never_picked(self):
+        base = dict(ring(20440, 15), vendor=SILVERWING, extended_cost=826,
+                    vendor_maps="1")  # fmt: skip
+        rows = [
+            dict(base, required_reputation_faction=890),
+            dict(base, required_honor_rank=5),
+            dict(base, required_reputation_faction=0, required_honor_rank=0),
+        ]
+        offers = pvpgear.offers_from_rows(rows, {826: {"honor": 300}})
+        self.assertEqual(1, len(offers))
+
+    def test_the_stock_sql_reads_the_gates_the_vendor_and_its_maps(self):
+        for column in ("RequiredReputationFaction", "RequiredHonorRank",
+                       "vendor_name", "vendor_maps", "cr.id = nv.entry"):  # fmt: skip
+            self.assertIn(column, pvpgear.STOCK_SQL)
+
+    def test_the_buy_line_names_the_vendor(self):
+        a = pvpgear.Aim("Auren", "Cave", 20, 20440, "Protector's Sword", 300, 300,
+                        pvpgear.WSG, "Illiyana Moonblaze")  # fmt: skip
+        move = pvpgear.next_move(a, KALIMDOR, False, ())
+        self.assertEqual(pvpgear.BUY, move.kind)
+        self.assertIn("walks to Illiyana Moonblaze", move.said)
+        (step,) = guildjobs.plan([job_member()], pvp={"Auren": (a, move)}).steps
+        self.assertEqual("Illiyana Moonblaze", step.goal)
+
+
+def walk_rows(*statuses, age=0):
+    """Failed or delivered PvP walk rows, newest first, `age` minutes apart."""
+    return tuple(
+        guildjobs.Recent("Auren", "pvp", age + 70 * n, status, walk=True)
+        for n, status in enumerate(statuses)
+    )
+
+
+class AFailedWalkIsNotAskedAgainAtOnce(unittest.TestCase):
+    """wow-dev, 2026-10-05: Ahgeathou's walk to Illiyana Moonblaze died, then
+    stopped getting nearer, then was refused by the far-walk budget (2 per
+    bot per 3600s): the PvP cooldown asked again every 15 minutes."""
+
+    def plan_at(self, rows):
+        return guildjobs.plan(
+            [job_member()], pvp=pvp_for(held=6000, rows=rows), recent=rows
+        )
+
+    def test_a_failed_walk_waits_out_the_budget_window(self):
+        rows = walk_rows("error", age=20)
+        self.assertEqual(60, guildjobs.pvp_walk_cooldown("Auren", rows))
+        self.assertEqual((), self.plan_at(rows).steps)
+
+    def test_each_failure_in_a_row_doubles_the_wait(self):
+        self.assertEqual(
+            120, guildjobs.pvp_walk_cooldown("Auren", walk_rows("unchanged", "error"))
+        )
+        self.assertEqual(
+            guildjobs.TRAIN_BACKOFF_CAP_MINUTES,
+            guildjobs.pvp_walk_cooldown("Auren", walk_rows(*["error"] * 9)),
+        )
+
+    def test_after_the_wait_it_walks_again(self):
+        rows = walk_rows("error", age=61)
+        (step,) = self.plan_at(rows).steps
+        self.assertIsNotNone(step.walk)
+
+    def test_a_walk_that_arrived_resets_it(self):
+        self.assertEqual(
+            0, guildjobs.pvp_walk_cooldown("Auren", walk_rows("delivered", "error"))
+        )
+
+    def test_the_walk_row_is_told_from_the_buy_row(self):
+        (walk, buy) = guildjobs.recent_from_rows([
+            {"target_name": "Auren", "source": "guildjobs:pvp-walk:Auren",
+             "status": "error", "age": 3},
+            {"target_name": "Auren", "source": "guildjobs:pvp:Auren",
+             "status": "error", "age": 3},
+        ])  # fmt: skip
+        self.assertEqual(("pvp", True), (walk.action, walk.walk))
+        self.assertEqual(("pvp", False), (buy.action, buy.walk))
 
 
 class TheWiring(unittest.TestCase):

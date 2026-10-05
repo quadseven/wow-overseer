@@ -389,7 +389,9 @@ class Step:
 
     `walk` is written first; `rows` are written once the walk arrives (or at
     once when there is no walk). `repeat` asks the bridge to write `rows[0]`
-    that many times in a row, one at a time, for a craft batch.
+    that many times in a row, one at a time, for a craft batch. `goal` names
+    where the walk goes for the log ("Kelm Hargunth"); empty, the walk's verb
+    names it (guildroute.walk_goal).
     """
 
     holder: str
@@ -399,6 +401,7 @@ class Step:
     rows: tuple = ()
     walk: Row | None = None
     repeat: int = 1
+    goal: str = ""
 
 
 def source_for(action, key) -> str:

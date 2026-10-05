@@ -860,5 +860,36 @@ class TheBridgeWalksAndNeverGives(unittest.TestCase):
         self.assertIn("map_id", sql)
 
 
+class AWalkNamesWhereItGoes(unittest.TestCase):
+    """wow-dev, 2026-10-05: a PvP buyer's vendor walk refusal was logged as
+    "cannot walk to a mailbox"."""
+
+    def test_a_vendor_walk_refusal_names_the_vendor(self):
+        answer = guildroute.judge_walk(
+            "Aellen", "error", "no vendor on this map sells that item", None,
+            goal="Kelm Hargunth",
+        )  # fmt: skip
+        self.assertIn("Aellen cannot walk to Kelm Hargunth:", answer.said)
+        self.assertNotIn("mailbox", answer.said)
+
+    def test_the_verb_names_it_when_nothing_else_does(self):
+        self.assertEqual(
+            "a vendor", guildroute.walk_goal("walk-to-vendor item:3 max:1")
+        )
+        self.assertEqual("a trainer", guildroute.walk_goal("walk-to-trainer skill:129"))
+        self.assertEqual(
+            "a mailbox", guildroute.walk_goal(guildroute.mailbox_walk_command())
+        )
+
+    def test_the_bridge_passes_the_goal_down(self):
+        bridge = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            2, bridge.count("step.goal or guildroute.walk_goal(step.walk.command))")
+        )
+        self.assertIn("far=far, goal=goal,", bridge)
+
+
 if __name__ == "__main__":
     unittest.main()

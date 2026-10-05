@@ -29,13 +29,38 @@ guildmate already queued for one this pass, so they go in together, else the
 first of HONOR_ORDER its level fits. Brackets are this realm's own (#520):
 Alterac Valley 51-60, Warsong Gulch from 10, Arathi Basin from 20.
 
+ONLY AN ITEM IT CAN BUY WHERE IT STANDS (`offers_on`). On wow-dev on
+2026-10-05 ten Cave and five Bonkers members held the 300 honor for a Warsong
+Gulch reward from 07:00 to 08:01 UTC and bought nothing. Both supply officers
+stand on Kalimdor (map 1), while the Undead buyers were in Tirisfal and
+Silverpine (map 0), the Draenei and the Blood Elf on map 530 and the Humans in
+Elwynn: every walk came back "no vendor on this map sells that item to this
+character", because a vendor walk stays on its map and no guild walk boards
+a boat. So a member counts only the stock whose vendor has a spawn on the
+map it stands on; on another continent it levels and travels as before,
+and PvP takes over when its travels bring it to the vendor's continent.
+Inside a battleground the rule is not read: the member plays out its game.
+An unread map is not a continent, so a member without a fresh snapshot
+counts nothing.
+
+A REPUTATION OR RANK GATE IS NEVER PICKED. Nothing here reads whether a
+member meets one (character_reputation holds standing relative to a race's
+base, which lives in Faction.dbc), so a line whose item asks for a
+reputation faction or an honor rank is left out of the stock. Read on wow-dev
+on 2026-10-05: none of the 739 honor lines of these vendors asks for either
+(item_template RequiredReputationFaction and RequiredHonorRank are 0, and no
+`conditions` row gates the two Warsong Gulch officers), so this leaves out
+nothing today.
+
 WHAT IT DOES NEXT (`next_move`):
   inside    standing in a battleground (the snapshot's map): it plays; nothing
             else is asked of it.
   carried   the bought item sits in its bags; the module's equip drive wears
             it, so nothing is bought or queued again.
   buy       its honor covers the price: walk to the vendor that stocks the
-            item and buy it with an `honor:` ceiling at the price.
+            item, named in the line, and buy it with an `honor:` ceiling at
+            the price. A walk to it that failed is not asked again at once
+            (guildjobs.pvp_walk_cooldown).
   waiting   it queued less than QUEUE_MINUTES ago and the row did not fail:
             it waits in the queue, the way a player waits for the call.
   queue     otherwise: `bg-queue <key>` (quadseven/mod-overseer, kind
@@ -116,11 +141,18 @@ PVP_VENDORS = {
 
 # The PvP stock: every weapon and armor line the vendors above sell through
 # an ExtendedCost, with the columns guildsocial.drop_gain reads.
+# The vendor's name and the maps its spawns stand on (`cr.id` is the spawn's
+# template on this world), and the item's reputation and rank gates.
 STOCK_SQL = (
     # S608: _ITEM_COLUMNS is a constant column list; every value is bound.
     "SELECT nv.entry AS vendor, nv.ExtendedCost AS extended_cost, "  # noqa: S608
+    "ct.name AS vendor_name, (SELECT GROUP_CONCAT(DISTINCT cr.map) "
+    "FROM acore_world.creature cr WHERE cr.id = nv.entry) AS vendor_maps, "
+    "it.RequiredReputationFaction AS required_reputation_faction, "
+    "it.RequiredHonorRank AS required_honor_rank, "
     "it.entry AS Item, " + guildsocial._ITEM_COLUMNS + " "
     "FROM acore_world.npc_vendor nv "
+    "JOIN acore_world.creature_template ct ON ct.entry = nv.entry "
     "JOIN acore_world.item_template it ON it.entry = nv.item "
     "WHERE nv.entry IN ({holes}) AND nv.ExtendedCost > 0 AND it.class IN (2, 4) "
     "AND it.RequiredLevel <= %s"
@@ -142,6 +174,13 @@ class Offer:
     vendor: int
     honor: int
     row: dict
+    # The maps the vendor's spawns stand on; empty when unread.
+    maps: frozenset = frozenset()
+    vendor_name: str = ""
+
+    def sold_on(self, map_id) -> bool:
+        """Whether a member standing on `map_id` can walk to this vendor."""
+        return map_id is not None and int(map_id) in self.maps
 
     @property
     def battleground(self) -> str:
@@ -160,15 +199,37 @@ class Offer:
         return int(self.row.get("required_level") or 0)
 
 
+def _maps(value) -> frozenset:
+    """STOCK_SQL's vendor_maps ("1", "0,1") as a set of map ids."""
+    out = set()
+    for part in str(value if value is not None else "").split(","):
+        part = part.strip()
+        if part.isdecimal():
+            out.add(int(part))
+    return frozenset(out)
+
+
+def gated(row: dict) -> bool:
+    """Whether the item asks for a reputation or an honor rank, which
+    nothing here can read a member's standing in (see the module notes)."""
+    return bool(
+        int(row.get("required_reputation_faction") or 0)
+        or int(row.get("required_honor_rank") or 0)
+    )
+
+
 def offers_from_rows(rows, costs: dict) -> list:
     """Offers from STOCK_SQL rows. `costs` is itemsource.load_costs: a line
-    whose cost asks for arena points or a token, or no honor, is left out."""
+    whose cost asks for arena points or a token, or no honor, is left out, and
+    so is an item gated by reputation or honor rank."""
     out = []
     for row in rows or ():
         try:
             vendor = int(row["vendor"])
             entry = int(row["Item"])
             cost = costs.get(int(row["extended_cost"])) or {}
+            if gated(row):
+                continue
         except (KeyError, TypeError, ValueError):
             continue
         if vendor not in PVP_VENDORS:
@@ -176,13 +237,31 @@ def offers_from_rows(rows, costs: dict) -> list:
         honor = int(cost.get("honor") or 0)
         if honor <= 0 or cost.get("arena") or cost.get("items"):
             continue
-        out.append(Offer(entry, vendor, honor, dict(row)))
+        out.append(
+            Offer(
+                entry,
+                vendor,
+                honor,
+                dict(row),
+                _maps(row.get("vendor_maps")),
+                str(row.get("vendor_name") or ""),
+            )
+        )
     return out
 
 
 def offers_for(side: str, offers) -> list:
     """The offers a member of `side` can buy: its own side's vendors."""
     return [o for o in offers if o.side == side]
+
+
+def offers_on(map_id, offers) -> list:
+    """The offers a member standing on `map_id` can walk to: every one inside
+    a battleground (it plays its game out), else those whose vendor stands on
+    that map, and none on an unread map."""
+    if map_id is not None and int(map_id) in BATTLEGROUND_MAPS:
+        return list(offers)
+    return [o for o in offers if o.sold_on(map_id)]
 
 
 def list_ids(spec: str, phase: str) -> frozenset:
@@ -291,6 +370,12 @@ class Aim:
     honor: int
     held: int
     battleground: Battleground
+    vendor_name: str = ""
+
+    @property
+    def vendor(self) -> str:
+        """The vendor's name for a line, "the vendor" when unread."""
+        return self.vendor_name or "the vendor"
 
     @property
     def short(self) -> int:
@@ -336,7 +421,7 @@ def plan_aims(seekers) -> dict:
         chosen.setdefault(s.guild, bg.key)
         out[s.name] = Aim(
             s.name, s.guild, s.level, offer.entry, offer.name, offer.honor,
-            int(s.honor), bg,
+            int(s.honor), bg, offer.vendor_name,
         )  # fmt: skip
     return out
 
@@ -374,8 +459,8 @@ def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
     if aim.held >= aim.honor:
         return Move(
             BUY,
-            "%s has the %d honor for %s and walks to the vendor"
-            % (aim.name, aim.honor, aim.item),
+            "%s has the %d honor for %s and walks to %s"
+            % (aim.name, aim.honor, aim.item, aim.vendor),
         )
     rows = _pvp_rows(aim.name, recent)
     if rows:
@@ -476,10 +561,12 @@ def spec_of_row(row: dict) -> str | None:
 def seekers_from_rows(member_rows, gear_by_name: dict, list_rows: dict, offers) -> list:
     """A Seeker per member row whose level could use any offer.
 
-    `member_rows` carry name, guild_name, level, class_id, race, honor and
-    talent_spells; `gear_by_name` is guildsocial.gear_by_name over them;
-    `list_rows` item id -> item_template row for every list id their specs
-    name; `offers` every Offer, both sides (each member sees its own side's).
+    `member_rows` carry name, guild_name, level, class_id, race, honor,
+    talent_spells and snapshot_map (the map it stands on, None unread);
+    `gear_by_name` is guildsocial.gear_by_name over them; `list_rows` item id
+    -> item_template row for every list id their specs name; `offers` every
+    Offer, both sides (each member sees its own side's, on its own map:
+    offers_on).
     """
     floor = min((o.required_level for o in offers or ()), default=LEVEL_CAP + 1)
     out = []
@@ -491,7 +578,9 @@ def seekers_from_rows(member_rows, gear_by_name: dict, list_rows: dict, offers) 
         spec = guildsocial.spec_of(member)
         if not gear or not spec:
             continue
-        mine = offers_for(guildrun.faction_of([member]), offers)
+        mine = offers_on(
+            row.get("snapshot_map"), offers_for(guildrun.faction_of([member]), offers)
+        )
         upgrade = next_upgrade(gear, spec, member.level, list_rows, mine)
         honor = int(row.get("honor") or 0)
         out.append(Seeker(member.name, member.guild, member.level, honor, upgrade))

@@ -495,6 +495,8 @@ class Recent:
     age_minutes: int
     status: str = ""
     skill_id: int | None = None
+    # Whether the row is the step's walk (its source ends "-walk").
+    walk: bool = False
 
 
 @dataclass(frozen=True)
@@ -1698,6 +1700,44 @@ def _member_step(
 PVP_STEPS_PER_GUILD = 10
 
 
+# A WALK TO A PVP VENDOR THAT FAILED IS NOT ASKED AGAIN AT ONCE. On wow-dev on
+# 2026-10-05 Ahgeathou, a level 21 Alliance member in Mulgore with the honor
+# for Protector's Sword, was sent to Illiyana Moonblaze 3,965 yards off across
+# ground the other side guards: the walk died at 07:24, the next stopped
+# getting nearer, and the one after was "refused by the budget: 2 per bot per
+# 3600s (#633)", because the PvP cooldown asks again every QUEUE_MINUTES. Each
+# failed walk in a row (newest first, until one that did not fail) doubles the
+# wait from the module's far-walk budget window, up to the trainer walks' cap.
+PVP_WALK_BACKOFF_MINUTES = 60
+
+
+def pvp_walk_cooldown(name, recent) -> int:
+    """Minutes to wait after this member's failed walks to a PvP vendor, 0
+    when its newest such walk did not fail."""
+    rows = sorted(
+        (r for r in recent or () if r.name == name and r.action == pvpgear.ACTION
+         and r.walk),
+        key=lambda r: int(r.age_minutes),
+    )  # fmt: skip
+    failed = 0
+    for r in rows:
+        if r.status not in TRAIN_FAILED:
+            break
+        failed += 1
+    if not failed:
+        return 0
+    return min(PVP_WALK_BACKOFF_MINUTES * 2 ** (failed - 1), TRAIN_BACKOFF_CAP_MINUTES)
+
+
+def _pvp_walk_cooling(name, recent) -> bool:
+    minutes = pvp_walk_cooldown(name, recent)
+    return any(
+        r.name == name and r.action == pvpgear.ACTION and r.walk
+        and int(r.age_minutes) < minutes
+        for r in recent or ()
+    )  # fmt: skip
+
+
 def pvp_step(m, aim, move, cap, kept=None):
     """The step for a PvP move: the queue row, or the walk to the vendor that
     stocks the item and the honor buy, after selling junk for room."""
@@ -1731,6 +1771,7 @@ def pvp_step(m, aim, move, cap, kept=None):
                 "",
                 source_for("pvp-walk", m.name),
             ),
+            goal=aim.vendor,
         )
     return None
 
@@ -1740,7 +1781,8 @@ def _pvp_first(m, pvp, recent, cap, kept=None):
 
     Inside a battleground or waiting in its queue the member is HELD: it does
     nothing else this pass. A queue or a buy whose last row failed inside the
-    PvP cooldown waits it out doing its ordinary job. A bought item still in
+    PvP cooldown waits it out doing its ordinary job, and so does a buy whose
+    walks to the vendor failed, for pvp_walk_cooldown. A bought item still in
     the bags is the equip drive's, and the member goes about its job.
     """
     if not pvp or not m.eligible or not m.online:
@@ -1751,6 +1793,8 @@ def _pvp_first(m, pvp, recent, cap, kept=None):
     if move.kind not in (pvpgear.QUEUE, pvpgear.BUY) or m.in_combat:
         return None, "", False
     if _cooling(m, pvpgear.ACTION, recent):
+        return None, "", False
+    if move.kind == pvpgear.BUY and _pvp_walk_cooling(m.name, recent):
         return None, "", False
     step = pvp_step(m, aim, move, cap, kept)
     return step, (aim.line + ": " + move.said) if step else "", False
@@ -2088,6 +2132,7 @@ def recent_from_rows(rows) -> tuple:
                 skill_id=(
                     _trainer_skill_id(row.get("command")) if action == "train" else None
                 ),
+                walk=action.endswith("-walk"),
             )
         )
     return tuple(out)
