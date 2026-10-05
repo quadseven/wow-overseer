@@ -1005,7 +1005,7 @@ def stand(name: str, craft_spell: int, held: dict) -> Stand:
     )
 
 
-def standing_mode(job_by_name: dict) -> str:
+def standing_mode(job_by_name: dict, exempt=()) -> str:
     """The one mode the whole family is currently in, or '' if they disagree.
 
     A JOB IS FAMILY-WIDE BY CONSTRUCTION (jobs.py's docstring has the full
@@ -1017,8 +1017,17 @@ def standing_mode(job_by_name: dict) -> str:
     transition from a mode that is not uniformly held would write over whatever
     half-landed order is still settling. '' means "ask again next pass", which
     is the honest answer and costs one cycle.
+
+    `exempt` names members left out of the vote: a member sitting out the
+    family's campaign to craft (standin.py) keeps its own job='craft' while
+    the rest of the family runs, and that is not a half-landed order.
     """
-    modes = {str(mode or "").strip() for mode in job_by_name.values()}
+    skip = set(exempt or ())
+    modes = {
+        str(mode or "").strip()
+        for name, mode in job_by_name.items()
+        if name not in skip
+    }
     if len(modes) != 1:
         return ""
     return modes.pop()

@@ -122,6 +122,10 @@ COLLATIONS = {
     # Module-owned (2026_09_24_06_overseer_keep.sql), named in its own CREATE
     # TABLE the same way. The bridge reads it, joined to `characters` by name.
     "overseer_keep": "utf8mb4_unicode_ci",
+    # Shared with the module (a family member's stand-in), named in
+    # standin.TABLE_SQL as the module's own tables name theirs, so either side
+    # may create it first and its names join the roster without a COLLATE.
+    "overseer_family_standin": "utf8mb4_unicode_ci",
     # Not an overseer table, and the reason every join to it is safe. A binary
     # collation wins against any non-binary one of the same charset without
     # anybody writing COLLATE.
@@ -240,6 +244,10 @@ STRING_COLUMNS = {
         {"before_state", "chose", "instead_of", "kind", "outcome", "subject"}
     ),
     "overseer_dungeon_queue": frozenset({"family", "keyword", "status", "source"}),
+    # From its own DDL (standin.TABLE_SQL): every VARCHAR and ENUM column.
+    "overseer_family_standin": frozenset(
+        {"family", "out_name", "in_name", "seat", "reason"}
+    ),
     # From its own DDL (bridge._ensure_guild_run_store): every VARCHAR column.
     # The guild chat feed's two tables (#570), from their contract: every
     # string column. Re-check against the bridge DDL when it lands.

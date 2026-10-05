@@ -126,6 +126,7 @@ import relay
 import retire
 import situation
 import skillgoal
+import standin
 import tabard
 import teamsync
 import towntrip
@@ -2492,11 +2493,34 @@ def _bag_errand_needed(names, free_slots: dict, campaign_waiting: bool) -> bool:
             and not _bag_hold_stuck(names, free_slots))
 
 
+# THE FAMILY STAND-IN (standin.py). Who sits out its family's campaign to
+# craft, and the guildmates seated for them, as the last stand-in pass read
+# the rows. A member sitting out keeps its own job and is left out of every
+# family-wide job write and campaign gate; a guest never gets a job.
+_STANDIN_OUT: frozenset = frozenset()
+_STANDIN_GUESTS: frozenset = frozenset()
+
+
+def _standin_out() -> frozenset:
+    """The members sitting out their family's campaign to craft."""
+    return _STANDIN_OUT
+
+
+def _standin_running(names) -> list:
+    """`names` without anyone sitting out to craft or standing in as a guest:
+    the members a family-wide job or campaign gate is for."""
+    skip = _STANDIN_OUT | _STANDIN_GUESTS
+    return [name for name in names if name not in skip]
+
+
 def _insert_family_jobs(names: list, mode: str, source: str) -> int:
     """One job row per name; how many landed. One failed insert must not cost
-    the rest of the family, for _set_job's identical reasoning."""
+    the rest of the family, for _set_job's identical reasoning. A member
+    sitting out to craft keeps its own job, and a guest never gets one
+    (standin.py); looked up, as the campaign tests load this in isolation."""
+    running = globals().get("_standin_running")
     written = 0
-    for name in names:
+    for name in running(names) if running else names:
         try:
             _insert_job(name, mode, source)
             written += 1
@@ -2666,6 +2690,13 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
         return _withheld(withheld, "no dungeon portal answers to %s" % keyword)
 
     names = _fetch_enabled_names() if names is None else list(names)
+    # A MEMBER SITTING OUT TO CRAFT IS NOT SENT AND NOT GATED ON (standin.py):
+    # its gear, its bags and its town errands do not hold the family that runs
+    # without it, and it keeps its own job. Looked up for the same reason as
+    # the gear gate below.
+    running = globals().get("_standin_running")
+    if running is not None:
+        names = running(names)
     if not names:
         return _withheld(withheld, "no enabled character to send")
 
@@ -5677,6 +5708,7 @@ class Bridge(discord.Client):
         await asyncio.to_thread(_ensure_trade_store)
         await asyncio.to_thread(_ensure_jev_store)
         await asyncio.to_thread(_ensure_guild_run_store)
+        await asyncio.to_thread(_ensure_standin_store)
         await asyncio.to_thread(_ensure_queue_store)
 
     async def on_message(self, message: discord.Message) -> None:
@@ -7015,7 +7047,8 @@ class Bridge(discord.Client):
             return
 
         mode = craft_rhythm.standing_mode(
-            await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None))
+            await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None)),
+            exempt=_standin_out(),
         )
         if mode not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER):
             log.info(
@@ -7590,7 +7623,8 @@ class Bridge(discord.Client):
         if not names:
             return
         standing = craft_rhythm.standing_mode(
-            await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None))
+            await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None)),
+            exempt=_standin_out(),
         )
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
         primaries = _primaries_for(cohort, names, skills)
@@ -7781,14 +7815,16 @@ class Bridge(discord.Client):
                      "queue owns its job", mode, source, cohort.key)
             return 0
         written = 0
-        for name in sorted(cohort.names):
+        # A member sitting out to craft keeps its own job (standin.py).
+        names = _standin_running(sorted(cohort.names))
+        for name in names:
             try:
                 await asyncio.to_thread(_insert_job, name, mode, source)
                 written += 1
             except Exception:
                 log.exception("job: insert failed for %s (mode=%s)", name, mode)
         log.info("job: family %s told %s by %s (%d/%d)", cohort.key, mode,
-                 source, written, len(cohort.names))
+                 source, written, len(names))
         if mode == craft.MODE and written:
             await self._craft_once(cohort)
         return written
@@ -16456,6 +16492,97 @@ class Bridge(discord.Client):
             log.exception("queue: the pass for %s failed; retrying next cycle",
                           campaignqueue._family(key))
 
+    async def _standin_pass(self, pending: dict, fams: dict) -> dict:
+        """Seat a guildmate for a family member sitting out to craft (standin.py).
+
+        Writes or deletes each family's overseer_family_standin row, logs who
+        sits out and who stands in, and returns `fams` with every member
+        sitting out left out of its family's names. A failed pass keeps the
+        last rows read, so a family is never driven on a half-read answer.
+        """
+        global _STANDIN_OUT, _STANDIN_GUESTS
+        asked = standin.orders()
+        try:
+            rows = await asyncio.to_thread(_fetch_standin_rows)
+            if asked or rows:
+                seated = await self._standin_families(asked, rows, pending, fams)
+            else:
+                seated = {}
+            _STANDIN_OUT = frozenset(s.out_name for s in seated.values())
+            _STANDIN_GUESTS = frozenset(s.in_name for s in seated.values())
+        except Exception:
+            log.exception("standin: the pass failed; the rows read last stand")
+        return {key: dict(fam, names=_standin_running(fam["names"]))
+                for key, fam in fams.items()}
+
+    async def _standin_families(self, asked: dict, rows: dict, pending: dict,
+                                fams: dict) -> dict:
+        """Step every family with an order or a row; family -> the seat it holds."""
+        gfacts = await asyncio.to_thread(_fetch_guild_run_facts, guildrun.limits())
+        doors = {d.keyword: d for d in guildrun.doors(gfacts["finder_floors"])}
+        candidates = tuple(m for m in map(guildrun.member_from_row, gfacts["rows"]) if m)
+        seated = dict(rows)
+        for key in sorted(set(asked) | set(rows)):
+            # In a guild run, or the guest of another family (this pass's
+            # seats included); never busy by its own family's row.
+            busy = set(gfacts["in_runs"]) | {s.in_name for f, s in seated.items() if f != key}
+            try:
+                facts = await self._standin_facts(
+                    key, asked.get(key, ""), rows.get(key), pending.get(key) or [],
+                    fams.get(key), dict(gfacts, busy=busy), doors, candidates)
+                step = standin.step(facts)
+                await asyncio.to_thread(_write_standin, key, step)
+            except Exception:
+                log.exception("standin: the pass for %s failed; its row stands",
+                              campaignqueue._family(key))
+                continue
+            if step.action == standin.SEAT:
+                seated[key] = step.seat
+                log.info("standin: %s: %s sits out, %s stands in - %s",
+                         campaignqueue._family(key), step.seat.out_name,
+                         step.seat.in_name, step.why)
+            elif step.action == standin.CLEAR:
+                gone = seated.pop(key)
+                log.info("standin: %s: %s is released and %s rejoins - %s",
+                         campaignqueue._family(key), gone.in_name, gone.out_name,
+                         step.why)
+                await asyncio.to_thread(_standin_rejoin, key, gone.out_name,
+                                        fams.get(key))
+            else:
+                log.info("standin: %s: %s", campaignqueue._family(key), step.why)
+            if key in seated and not facts.mid_run:
+                await asyncio.to_thread(_standin_crafts, seated[key].out_name, key)
+        return seated
+
+    async def _standin_facts(self, key: str, ordered: str, current, rows: list,
+                             fam, gfacts: dict, doors: dict, candidates: tuple):
+        """standin.Facts for one family. Reads only."""
+        roster = tuple(fam["names"]) if fam else ()
+        leader = str(fam["leader"].get("name") or "") if fam else ""
+        skills, out_member, levels, guild, faction = {}, None, (), "", ""
+        if ordered and ordered in roster:
+            skills = (await asyncio.to_thread(_fetch_trade_skills, [ordered])).get(ordered, {})
+            read = await asyncio.to_thread(_fetch_standin_members, list(roster))
+            members = {n: guildrun.member_from_row(r) for n, r in read.items()}
+            out_member = members.get(ordered)
+            levels = tuple(m.level for n, m in sorted(members.items())
+                           if m is not None and n != ordered)
+            head = members.get(key) or members.get(leader)
+            guild = head.guild if head is not None else ""
+            faction = guildrun.faction_of([m for m in members.values() if m is not None])
+        door = None
+        keyword = str(rows[0].get("keyword") or "") if rows else ""
+        if keyword and not raidrun.is_raid(keyword):
+            door = doors.get(keyword)
+        mid_run = bool(roster and (current is not None or ordered in roster)
+                       and await self._mid_run(list(roster)))
+        return standin.Facts(
+            family=key, leader=leader, ordered=ordered, roster=roster, skills=skills,
+            out_member=out_member, family_levels=levels, guild=guild, faction=faction,
+            door=door, candidates=candidates, busy=frozenset(gfacts["busy"]),
+            resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
+            every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current)
+
     async def _campaign_queue_once(self) -> None:
         """One pass: every family with a pending entry, off its own leader."""
         # WHAT THE MODULE CAN CROSS, read before any door is judged, so a
@@ -16470,6 +16597,12 @@ class Bridge(discord.Client):
         pending = campaignqueue.pending_by_family(
             await asyncio.to_thread(_fetch_queue_rows))
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        # THE STAND-IN BEFORE ANYTHING DRIVES THE FAMILY (standin.py): a member
+        # sitting out to craft leaves every family's names here, so no hold,
+        # gate or job write below reaches it.
+        standin_pass = getattr(self, "_standin_pass", None)
+        if standin_pass is not None:
+            fams = await standin_pass(pending, fams)
         # THE PLANNER BEFORE THE STEP: a family whose queue is empty or on its
         # last finished entry gets its next dungeon appended here, so the step
         # below moves on to it instead of sending the family back to quest.
@@ -18131,7 +18264,7 @@ class Bridge(discord.Client):
             _fetch_skill_cap, action.beneficiary, action.skill_id
         )
         standing = craft_rhythm.standing_mode(
-            await asyncio.to_thread(_standing_jobs)
+            await asyncio.to_thread(_standing_jobs), exempt=_standin_out()
         )
         # NOT WHILE THE FAMILY WAITS IN TOWN FOR ITS CAMPAIGN (mod-overseer#659).
         # A gathered skill's plan writes job=quest and walks the family to a
@@ -18325,6 +18458,12 @@ class Bridge(discord.Client):
         if not names:
             await channel.send("Nobody is on the roster to give a job to.")
             return
+        # A member sitting out to craft keeps its own job (standin.py).
+        sitting = sorted(set(names) - set(_standin_running(names)))
+        if sitting:
+            log.info("job: mode=%r leaves %s on its own job - sitting out the "
+                     "campaign to craft (%s)", d.mode, ", ".join(sitting), standin.ENV)
+            names = _standin_running(names)
         written = 0
         for name in names:
             try:
@@ -20227,6 +20366,106 @@ def _insert_jev_judgment(judgment) -> None:
         )
 
 
+# THE FAMILY STAND-IN (standin.py): one row per family, shared with the
+# worldserver module, which seats the guest at the family's next idle point.
+# Either side may create the table first.
+def _ensure_standin_store() -> None:
+    """overseer_family_standin, created if missing. A failure is logged and
+    swallowed: without the table nobody stands in, and nothing else stops."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(standin.TABLE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("standin: overseer_family_standin unavailable; nobody "
+                      "stands in for a family member")
+
+
+def _fetch_standin_rows() -> dict:
+    """family -> standin.Seat for every row; none on a world without the table."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(standin.ROWS_SQL)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1146:
+                return {}
+            raise
+        seats = [standin.seat_from_row(dict(r)) for r in cur.fetchall()]
+    return {s.family: s for s in seats if s.family}
+
+
+# A family's own members as guildrun reads a guild member: level, class, race,
+# guild and spent talents, from the characters table (a family member may not
+# be in the snapshot's guild read).
+_STANDIN_MEMBERS_SQL = (
+    "SELECT c.name, c.level, c.class AS class_id, c.race, g.name AS guild_name, "
+    + raidroles.TALENTS_COLUMN + " "
+    "FROM characters c LEFT JOIN guild_member gm ON gm.guid = c.guid "
+    "LEFT JOIN guild g ON g.guildid = gm.guildid WHERE c.name IN ({holes})"
+)
+
+
+def _fetch_standin_members(names: list) -> dict:
+    """name -> the member row for each of a family's names that exists."""
+    if not names:
+        return {}
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_STANDIN_MEMBERS_SQL.format(holes=",".join(["%s"] * len(names))),  # noqa: S608 - placeholders only
+                    list(names))
+        return {str(r["name"]): dict(r) for r in cur.fetchall()}
+
+
+def _write_standin(family: str, step) -> None:
+    """Apply one standin.Step: SEAT replaces the family's row, CLEAR deletes it."""
+    if step.action not in (standin.SEAT, standin.CLEAR):
+        return
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(standin.DELETE_SQL, (family[:standin.NAME_WIDTH],))
+        if step.action == standin.SEAT:
+            cur.execute(standin.INSERT_SQL, step.seat.args())
+
+
+# name -> when the stand-in pass last wrote its craft job or its rejoin, so a
+# job the module has not applied yet is asked again at most this often.
+_STANDIN_TOLD: dict = {}
+STANDIN_RETELL_SECONDS = 600
+
+
+def _standin_tell(name: str, mode: str, now: float) -> bool:
+    """Write `mode` as `name`'s own job, at most once per STANDIN_RETELL_SECONDS."""
+    told = _STANDIN_TOLD.get(name)
+    if told is not None and told[0] == mode and now - told[1] < STANDIN_RETELL_SECONDS:
+        return False
+    _insert_job(name, mode, standin.SOURCE)
+    _STANDIN_TOLD[name] = (mode, now)
+    return True
+
+
+def _standin_crafts(name: str, family: str) -> None:
+    """Put the member sitting out on job='craft', its own job, between runs:
+    it tailors, learns its recipes and banks while its family runs."""
+    job = str(_standing_jobs(family).get(name) or "").strip()
+    if job == craft.MODE:
+        return
+    if _standin_tell(name, craft.MODE, time.monotonic()):
+        log.info("standin: %s goes to job=%s while its family runs (was %s)",
+                 name, craft.MODE, job or "none")
+
+
+def _standin_rejoin(family: str, name: str, fam) -> None:
+    """Give the member who sat out its family's job back once the guest is
+    released, so the next run takes it along."""
+    _STANDIN_TOLD.pop(name, None)
+    if not fam or name not in fam["names"]:
+        return
+    leader_job = str(fam["leader"].get("job") or "").strip()
+    job = str(_standing_jobs(family).get(name) or "").strip()
+    if not leader_job or job == leader_job:
+        return
+    _insert_job(name, leader_job, standin.SOURCE)
+    log.info("standin: %s rejoins %s on job=%s (was %s)", name,
+             campaignqueue._family(family), leader_job, job or "none")
+
+
 # THE GUILD COORDINATOR (guildrun). Bridge-owned state: one row per guild
 # run, the decision that made it and the outcome mod-overseer read back, which
 # is what the learning loop and the Guild tab read. The worldserver never reads
@@ -20451,14 +20690,29 @@ def _guild_run_state_names(cur, states) -> list:
     return names
 
 
+def _standin_guest_names(cur) -> set:
+    """The guildmates standing in for a family member (standin.py): busy for
+    guild runs, asks, jobs and walks while their row exists. None on a world
+    without the table."""
+    try:
+        cur.execute("SELECT in_name FROM overseer_family_standin")
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] == 1146:
+            return set()
+        raise
+    return {str(r["in_name"]) for r in cur.fetchall() if r.get("in_name")}
+
+
 def _active_guild_run_names() -> list:
     with _connect() as conn, conn.cursor() as cur:
         try:
-            return _guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE))
+            names = _guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE))
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1146:
-                return []
-            raise
+                names = []
+            else:
+                raise
+        return names + sorted(_standin_guest_names(cur))
 
 
 def _guild_runs_in_flight() -> int:
@@ -20481,7 +20735,9 @@ def _fetch_guild_run_facts(bounds) -> dict:
             row["target_tree"] = spec.get(row["name"], "")
         cur.execute("SELECT name FROM overseer_roster")
         family = {r["name"] for r in cur.fetchall()}
-        busy = set(_guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE)))
+        in_runs = set(_guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE)))
+        # A guest standing in for a family member is busy too (standin.py).
+        busy = in_runs | _standin_guest_names(cur)
         # Only a run that went in rests its members: a refused or lost run
         # did nothing to them (guildrun.WENT_IN).
         cur.execute(
@@ -20514,7 +20770,8 @@ def _fetch_guild_run_facts(bounds) -> dict:
             (guildrun.BENCH_MINUTES,),
         )
         benched = guildrun.benched(list(cur.fetchall()))
-    return {"rows": rows, "family": family, "busy": busy, "resting": resting,
+    return {"rows": rows, "family": family, "busy": busy, "in_runs": in_runs,
+            "resting": resting,
             "benched": benched, "in_flight_by_guild": by_guild, "history": history,
             "finder_floors": floors}
 
@@ -20535,7 +20792,9 @@ def _hearth_stranded_guild_members() -> int:
         # never hearthed out of one by this pass.
         cur.execute("SELECT name FROM overseer_roster")
         busy |= {str(r["name"]) for r in cur.fetchall()}
-    members = [m for m in (guildrun.member_from_row(r) for r in rows) if m]
+        # A guest regroups inside its family's dungeon the same way.
+        busy |= _standin_guest_names(cur)
+    members =[m for m in (guildrun.member_from_row(r) for r in rows) if m]
     due = guildrun.stranded_names(members, busy)
     if not due:
         return 0
@@ -28414,6 +28673,7 @@ class HeadlessBridge(Bridge):
         await asyncio.to_thread(_ensure_trade_store)
         await asyncio.to_thread(_ensure_jev_store)
         await asyncio.to_thread(_ensure_guild_run_store)
+        await asyncio.to_thread(_ensure_standin_store)
         await asyncio.to_thread(_ensure_queue_store)
 
         loops = [
