@@ -103,6 +103,7 @@ import gearup
 import guildcorps
 import guildroute
 import keep
+import pvpgear
 import situation
 
 HERBALISM = guildcorps.HERBALISM
@@ -299,6 +300,8 @@ COOLDOWN_MINUTES = {
     "farm": 45,
     "door": 45,
     "craft": 15,
+    # PvP for upgrades (#589): a queue row waits this long for its battle.
+    "pvp": pvpgear.QUEUE_MINUTES,
 }
 
 # A TRAINER WALK THAT KEEPS FAILING IS ASKED LESS OFTEN (#766). Measured on the
@@ -1539,6 +1542,7 @@ def plan(
     banks=None,
     gear=None,
     mail=None,
+    pvp=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -1550,7 +1554,9 @@ def plan(
     materials post still unopened in their mailbox (`without_unclaimed`);
     `banks` the guilds that own a guild bank tab, None when unread; `gear`
     name -> (gearup facts, vendor rows in reach) for gear-short members;
-    `mail` name -> the mail commands (mailrun) waiting at its mailbox.
+    `mail` name -> the mail commands (mailrun) waiting at its mailbox;
+    `pvp` name -> (pvpgear.Aim, pvpgear.Move) for members playing PvP for an
+    upgrade (#589).
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -1561,9 +1567,8 @@ def plan(
     tailors = choose_tailors(members)
     trades = cloth_trades(split_trades(members, tailors), tailors)
     steps, lines, notes = [], {}, []
-    # One counter per allowance, each keyed by guild: STEPS_PER_GUILD for
-    # every job, GEAR_STEPS_PER_GUILD for gear and hearth steps.
-    started_jobs, started_gear = {}, {}
+    # One counter per allowance, each keyed by guild (_allowance).
+    counters = {"jobs": {}, "gear": {}, "pvp": {}}
     for m in _ordered_members(members):
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
@@ -1581,17 +1586,15 @@ def plan(
             kept,
             recent,
             cap,
+            (pvp or {}).get(m.name),
         )
         lines[m.name] = doing
         if note:
             notes.append(note)
         if step is None:
             continue
-        gearing = step.action in ("gear", "hearth")
-        started = started_gear if gearing else started_jobs
-        why = _step_refusal(
-            m, busy, started, GEAR_STEPS_PER_GUILD if gearing else per_guild
-        )
+        started, allowance = _allowance(step, counters, per_guild)
+        why = _step_refusal(m, busy, started, allowance)
         if why:
             notes.append(why)
             continue
@@ -1605,6 +1608,17 @@ def plan(
         doors=doors,
         notes=tuple(notes),
     )
+
+
+def _allowance(step, counters, per_guild):
+    """(the counter, the cap) a step is started against: STEPS_PER_GUILD for
+    every job, GEAR_STEPS_PER_GUILD for gear and hearth steps, and
+    PVP_STEPS_PER_GUILD for PvP queues and honor buys."""
+    if step.action == pvpgear.ACTION:
+        return counters["pvp"], PVP_STEPS_PER_GUILD
+    if step.action in ("gear", "hearth"):
+        return counters["gear"], GEAR_STEPS_PER_GUILD
+    return counters["jobs"], per_guild
 
 
 def collect_step(m, commands, cap):
@@ -1646,11 +1660,27 @@ def _collect_first(m, commands, recent, cap):
 
 
 def _member_step(
-    m, offer, mail, trades, fields, doors, pending, crafters, master, kept, recent, cap
+    m,
+    offer,
+    mail,
+    trades,
+    fields,
+    doors,
+    pending,
+    crafters,
+    master,
+    kept,
+    recent,
+    cap,
+    pvp=None,
 ):
-    """Gear, then the post, then the member's ordinary job, keeping the notes."""
+    """Gear, then PvP for an upgrade, then the post, then the member's
+    ordinary job, keeping the notes."""
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
     if step is not None:
+        return step, doing, gear_note
+    step, doing, held = _pvp_first(m, pvp, recent, cap, kept)
+    if step is not None or held:
         return step, doing, gear_note
     step = _collect_first(m, mail, recent, cap)
     if step is not None:
@@ -1659,6 +1689,71 @@ def _member_step(
         m, trades, fields, doors, pending, crafters, master, kept, recent, cap
     )
     return step, doing, "; ".join(n for n in (gear_note, note) if n)
+
+
+# PVP FOR UPGRADES (#589). A member whose next upgrade is PvP gear
+# (pvpgear.plan_aims) queues its battleground, waits in the queue, plays, and
+# walks to the vendor once its honor covers the price. Queue rows are cheap and
+# a battleground wants a team, so PvP has its own allowance per guild per pass.
+PVP_STEPS_PER_GUILD = 10
+
+
+def pvp_step(m, aim, move, cap, kept=None):
+    """The step for a PvP move: the queue row, or the walk to the vendor that
+    stocks the item and the honor buy, after selling junk for room."""
+    if move.kind == pvpgear.QUEUE:
+        return guildcorps.Step(
+            m.name,
+            pvpgear.ACTION,
+            aim.entry,
+            move.said,
+            rows=(
+                guildcorps.Row(
+                    "guild", pvpgear.queue_command(aim), "", source_for("pvp", m.name)
+                ),
+            ),
+        )
+    if move.kind == pvpgear.BUY:
+        return guildcorps.Step(
+            m.name,
+            pvpgear.ACTION,
+            aim.entry,
+            move.said,
+            rows=junk_sales(m, kept)
+            + (
+                guildcorps.Row(
+                    "buy", pvpgear.buy_command(aim), "", source_for("pvp", m.name)
+                ),
+            ),
+            walk=guildcorps.Row(
+                "buy",
+                "walk-to-vendor item:%d%s" % (aim.entry, _cap_word(cap)),
+                "",
+                source_for("pvp-walk", m.name),
+            ),
+        )
+    return None
+
+
+def _pvp_first(m, pvp, recent, cap, kept=None):
+    """(step, doing, held): a member playing PvP for an upgrade.
+
+    Inside a battleground or waiting in its queue the member is HELD: it does
+    nothing else this pass. A queue or a buy whose last row failed inside the
+    PvP cooldown waits it out doing its ordinary job. A bought item still in
+    the bags is the equip drive's, and the member goes about its job.
+    """
+    if not pvp or not m.eligible or not m.online:
+        return None, "", False
+    aim, move = pvp
+    if move.kind in (pvpgear.INSIDE, pvpgear.WAITING):
+        return None, aim.line + ": " + move.said, True
+    if move.kind not in (pvpgear.QUEUE, pvpgear.BUY) or m.in_combat:
+        return None, "", False
+    if _cooling(m, pvpgear.ACTION, recent):
+        return None, "", False
+    step = pvp_step(m, aim, move, cap, kept)
+    return step, (aim.line + ": " + move.said) if step else "", False
 
 
 def last_gear_failed(name, recent) -> bool:

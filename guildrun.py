@@ -445,14 +445,24 @@ HOSTILE_CAPITAL_DUNGEONS = {"Alliance": frozenset({389}), "Horde": frozenset({34
 SOLO_HOME_MAPS = frozenset({609})
 
 
+# Alterac Valley, Warsong Gulch and Arathi Basin. A member playing one for
+# honor (pvpgear, #589) is not stranded: a hearthstone out of a battleground
+# would end its game and mark it a deserter.
+BATTLEGROUND_MAPS = frozenset({30, 489, 529})
+
+
 def left_inside(member: Member) -> bool:
     """Alone, ungrouped, inside a dungeon: what a lost or timed-out guild run
     leaves behind. Measured on wow-dev (2026-10-04): 30 Bonkers members alone
     in Ragefire Chasm and 20 Cave members alone in Wailing Caverns, none
     grouped, there since the runs of 2026-09-30 and 2026-10-01 ended without
     them. Nothing walks a random bot out of an instance, and why_not holds
-    every one of them from the next run."""
-    return member.map_id not in OPEN_WORLD_MAPS and member.map_id not in SOLO_HOME_MAPS
+    every one of them from the next run. A battleground is not a dungeon."""
+    return (
+        member.map_id not in OPEN_WORLD_MAPS
+        and member.map_id not in SOLO_HOME_MAPS
+        and member.map_id not in BATTLEGROUND_MAPS
+    )
 
 
 def stranded(member: Member, faction: str) -> bool:
