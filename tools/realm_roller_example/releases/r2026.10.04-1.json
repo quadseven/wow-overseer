@@ -1,7 +1,7 @@
 {
   "release": "r2026.10.04-1",
   "summary": "example: the release the realm runs",
-  "proposed_by": "example#2",
+  "proposed_by": "#102",
   "sources": {
     "core": "1111111111111111111111111111111111111111",
     "playerbots": "2222222222222222222222222222222222222222",
@@ -12,7 +12,7 @@
   },
   "changes": [
     {
-      "pr": "example#2",
+      "pr": "#102",
       "what": "guild deaths recorded",
       "prove": {
         "image": "worldserver",

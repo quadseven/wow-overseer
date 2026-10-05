@@ -390,12 +390,12 @@ class Watch(unittest.TestCase):
         )
 
     GREP = {
-        "pr": "x#1",
+        "pr": "#1",
         "what": "w",
         "verify": {"log": "worldserver", "grep": "answered the trade", "within": "45m"},
     }
     ABSENT = {
-        "pr": "x#2",
+        "pr": "#2",
         "what": "w",
         "verify": {
             "log": "worldserver",

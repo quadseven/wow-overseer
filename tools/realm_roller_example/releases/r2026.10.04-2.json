@@ -1,7 +1,7 @@
 {
   "release": "r2026.10.04-2",
   "summary": "example: proven and waiting for its window",
-  "proposed_by": "example#3",
+  "proposed_by": "#103",
   "sources": {
     "core": "1111111111111111111111111111111111111111",
     "playerbots": "2222222222222222222222222222222222222222",
@@ -12,7 +12,7 @@
   },
   "changes": [
     {
-      "pr": "example#3",
+      "pr": "#103",
       "what": "no free raid buffs",
       "prove": {
         "image": "worldserver",
@@ -25,7 +25,7 @@
       }
     },
     {
-      "pr": "example#4",
+      "pr": "#104",
       "what": "a config-only change rides the same restart",
       "verify": {
         "log": "worldserver",

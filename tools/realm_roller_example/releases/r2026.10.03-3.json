@@ -1,7 +1,7 @@
 {
   "release": "r2026.10.03-3",
   "summary": "example: the verified rollback target",
-  "proposed_by": "example#1",
+  "proposed_by": "#101",
   "sources": {
     "core": "1111111111111111111111111111111111111111",
     "playerbots": "2222222222222222222222222222222222222222",
@@ -12,7 +12,7 @@
   },
   "changes": [
     {
-      "pr": "example#1",
+      "pr": "#101",
       "what": "a logged trade answer",
       "prove": {
         "image": "worldserver",
