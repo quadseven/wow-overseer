@@ -694,16 +694,16 @@ class SpendOrSmelt(unittest.TestCase):
         self.assertFalse(chosen.smelting)
 
     def test_nothing_changes_for_a_character_with_no_gathering_trade(self):
-        for name, skills, spell in (
-            # 8776, not 2963: at Tailoring 50 the bolt is grey. Linen Belt's
-            # reagents are bought and own-crafted, so this pass has no opinion
-            # about him either way - which is the branch being tested.
-            ("Og", {"tailoring": 50, "enchanting": 1}, 8776),
-            ("Ugga", {"alchemy": 14, "herbalism": 132}, 2330),
-            ("Bork", {"leatherworking": 1, "skinning": 12}, 2881),
+        for name, skills, held, spell in (
+            # 8776, not 2963: at Tailoring 50 the bolt is grey. Og holds the
+            # one Bolt of Linen Cloth a belt eats, so the rung stands; with
+            # none he weaves first (BoltFedRungs below).
+            ("Og", {"tailoring": 50, "enchanting": 1}, {2996: 1}, 8776),
+            ("Ugga", {"alchemy": 14, "herbalism": 132}, {}, 2330),
+            ("Bork", {"leatherworking": 1, "skinning": 12}, {}, 2881),
         ):
             with self.subTest(name=name):
-                chosen = craft_rhythm.errand(name, skills, {})
+                chosen = craft_rhythm.errand(name, skills, held)
                 self.assertEqual(chosen.spell, spell)
                 self.assertFalse(chosen.smelting)
                 self.assertIn("no smeltable gathering trade", chosen.why)
@@ -773,6 +773,65 @@ class TheOreEntryTheForgeChangeLands(unittest.TestCase):
         self.assertEqual(craft_rhythm.GATHERED[2657][0].entry, 2770)
         for stone_recipe in (2660, 3918):  # Grug's and Grog's own brackets
             self.assertEqual(craft_rhythm.GATHERED[stone_recipe][0].entry, 2835)
+
+
+class BoltFedRungs(unittest.TestCase):
+    """A rung that eats the tailor's own bolts weaves them first when short.
+
+    Without this a tailor at Woolen Bag (or Linen Belt) with no bolts in hand
+    was aimed at a cast DriveCraft refuses for reagents on every poll, and the
+    skill stood still with cloth in the bags.
+    """
+
+    OG = {"tailoring": 101, "enchanting": 1}
+    WOOL, WOOL_BOLT, LINEN_BOLT = 2592, 2997, 2996
+
+    def test_short_of_bolts_the_woolen_bag_tailor_weaves(self):
+        for held in ({}, {self.WOOL_BOLT: 2, self.WOOL: 30}):
+            with self.subTest(held=held):
+                chosen = craft_rhythm.errand("Og", self.OG, held)
+                self.assertEqual(chosen.spell, 2964)
+                self.assertIn("weaves Bolt of Woolen Cloth", chosen.why)
+
+    def test_with_a_bags_worth_of_bolts_it_sews_the_bag(self):
+        chosen = craft_rhythm.errand("Og", self.OG, {self.WOOL_BOLT: 3})
+        self.assertEqual(chosen.spell, 3757)
+
+    def test_linen_belt_is_fed_the_same_way(self):
+        skills = {"tailoring": 50, "enchanting": 1}
+        self.assertEqual(craft_rhythm.errand("Og", skills, {}).spell, 2963)
+        self.assertEqual(
+            craft_rhythm.errand("Og", skills, {self.LINEN_BOLT: 1}).spell, 8776
+        )
+
+    def test_a_weaver_with_no_cloth_reads_short_so_the_family_gathers(self):
+        spell = craft_rhythm.errand("Og", self.OG, {}).spell
+        got = craft_rhythm.stand("Og", spell, {self.WOOL: 0})
+        self.assertEqual(got.verdict, craft_rhythm.SHORT)
+        self.assertEqual(got.thinnest, "Wool Cloth")
+
+    def test_the_bolts_and_their_cloth_are_counted(self):
+        wanted = craft_rhythm.reagents_to_count("Og", self.OG)
+        self.assertLessEqual({self.WOOL_BOLT, self.WOOL}, wanted)
+
+    def test_every_fed_rung_matches_the_recipe_tables(self):
+        """Each rung is a tailoring ladder entry whose note names the bolt and
+        count, and each weave spell is the bolt recipe the guild corps
+        measured as making that bolt."""
+        import guildcorps
+
+        tailoring = craft.RECIPES[craft.SKILL_IDS["tailoring"]]
+        by_spell = {r.spell_id: r for r in tailoring}
+        for rung, (weave, bolt) in sorted(craft_rhythm.BOLT_FED.items()):
+            with self.subTest(rung=rung):
+                self.assertIn(rung, by_spell)
+                self.assertIn(weave, by_spell)
+                self.assertIn(
+                    "%dx %s (%d" % (bolt.per_cast, bolt.label, bolt.entry),
+                    by_spell[rung].note,
+                )
+                self.assertEqual(guildcorps.BOLT_OF[bolt.entry].spell, weave)
+                self.assertIn(weave, craft_rhythm.GATHERED)
 
 
 if __name__ == "__main__":

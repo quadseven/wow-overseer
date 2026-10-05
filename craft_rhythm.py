@@ -721,6 +721,47 @@ BAG_FEED: dict[int, tuple[Reagent, ...]] = {
 }
 
 
+# A LADDER RUNG THAT EATS THE TAILOR'S OWN BOLTS, and the bolt that feeds it
+# (the operator, 2026-10-05: "we need Og to level up tailoring"). Linen Belt
+# and Woolen Bag each consume a bolt the tailor weaves itself, and no gathering
+# trip returns with a bolt, so GATHERED cannot judge them. Before this table a
+# tailor who reached either rung with no bolts in hand was aimed at it anyway,
+# DriveCraft refused the cast for reagents on every poll, and the skill stood
+# still with cloth in the bags. Now `errand` weaves the bolt first: the bolt
+# rung's own stand judges the cloth, so a tailor with no cloth reads SHORT and
+# the family goes out to kill the humanoids that drop it.
+#
+# Every count is Spell.dbc's (md5 543b9fe61355b6a77a01714d52fea2e5), read with
+# craft.py's two anchors asserted first:
+#   8776 Linen Belt   1x Bolt of Linen Cloth (2996), from 2963
+#   3757 Woolen Bag   3x Bolt of Woolen Cloth (2997), from 2964
+# A bolt woven past its own grey grants no point; it is cast for the rung it
+# feeds, which does.
+BOLT_FED: dict[int, tuple[int, Reagent]] = {
+    8776: (2963, Reagent(2996, "Bolt of Linen Cloth", 1)),
+    3757: (2964, Reagent(2997, "Bolt of Woolen Cloth", 3)),
+}
+
+
+def _bolt_first(name: str, spend: int, held: dict):
+    """(spell, why) for a bolt-fed rung: the bolt while short, else the rung.
+
+    `why` is '' when nothing changed, so a caller keeps its own sentence.
+    """
+    fed = BOLT_FED.get(int(spend or 0))
+    if fed is None:
+        return spend, ""
+    weave, bolt = fed
+    bolts = int(held.get(bolt.entry, 0) or 0)
+    if bolts >= bolt.per_cast:
+        return spend, ""
+    return weave, (
+        "%s weaves %s (spell %d) first: its ladder rung (spell %d) eats %d a "
+        "cast and %d is in hand"
+        % (name, bolt.label, weave, spend, bolt.per_cast, bolts)
+    )
+
+
 def feeds(craft_spell: int) -> tuple:
     """The reagents a stand on this recipe counts: GATHERED, then BAG_FEED."""
     spell = int(craft_spell or 0)
@@ -744,24 +785,33 @@ def reagents_to_count(
     entries costs nothing per character.
     """
     wanted = set()
-    for spell in (
-        craft.craft_errand(name, skills, primaries),
-        craft.smelt_errand(name, skills, primaries),
-    ):
+    spend = craft.craft_errand(name, skills, primaries)
+    fed = BOLT_FED.get(int(spend or 0))
+    if fed is not None:
+        weave, bolt = fed
+        wanted.add(bolt.entry)
+        wanted.update(r.entry for r in GATHERED.get(weave, ()))
+    for spell in (spend, craft.smelt_errand(name, skills, primaries)):
         for reagent in GATHERED.get(int(spell or 0), ()):
             wanted.add(reagent.entry)
     trades = professions.assigned(name) if primaries is None else primaries
     if bags_wanted > 0 and "tailoring" in trades:
         wanted.update((BOLT_OF_LINEN, LINEN_CLOTH))
     if floor is not None and "tailoring" in trades:
-        # Every ladder bag's own reagents and its bolt's cloth: which bag is
-        # chosen depends on what is held, so all of them are counted first.
-        for bag in guildcorps.BAGS:
-            wanted.update(int(entry) for entry, _ in bag.reagents)
-            bolt = guildcorps.BOLT_OF.get(int(bag.reagents[0][0]))
-            if bolt is not None:
-                wanted.update(int(entry) for entry, _ in bolt.reagents)
+        wanted |= _guild_bag_entries()
     return wanted
+
+
+def _guild_bag_entries() -> set:
+    """Every ladder bag's own reagents and its bolt's cloth: which bag is
+    chosen depends on what is held, so all of them are counted first."""
+    out = set()
+    for bag in guildcorps.BAGS:
+        out.update(int(entry) for entry, _ in bag.reagents)
+        bolt = guildcorps.BOLT_OF.get(int(bag.reagents[0][0]))
+        if bolt is not None:
+            out.update(int(entry) for entry, _ in bolt.reagents)
+    return out
 
 
 def errand(
@@ -821,16 +871,20 @@ def errand(
     bag = bag_errand(name, skills, held, primaries, bags_wanted, floor)
     if bag is not None:
         return bag
-    spend = craft.craft_errand(name, skills, primaries)
+    spend, weaving = _bolt_first(
+        name, craft.craft_errand(name, skills, primaries), held
+    )
     smelt = craft.smelt_errand(name, skills, primaries)
 
     if not smelt:
         return Errand(
             name=name,
             spell=spend,
-            why="%s has no smeltable gathering trade at a value any bracket "
+            why=weaving
+            or "%s has no smeltable gathering trade at a value any bracket "
             "covers, so there is no choice to make and its craft errand "
-            "(spell %d) stands" % (name, spend),
+            "(spell %d) stands"
+            % (name, spend),
         )
 
     ore = casts_in_hand(smelt, held) or 0

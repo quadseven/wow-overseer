@@ -57,6 +57,7 @@ MEASURED_FOCUS = {
     2963: 0,
     8776: 0,
     2964: 0,
+    3757: 0,
     3839: 0,
     3865: 0,
     18401: 0,
@@ -150,6 +151,7 @@ MEASURED_BANDS = {
     2963: (1, 25, 50),
     8776: (1, 50, 85),
     2964: (1, 90, 105),
+    3757: (1, 105, 140),
     3839: (1, 135, 145),
     3865: (1, 180, 185),
     18401: (1, 255, 260),
@@ -240,13 +242,31 @@ FOCUS_WITHOUT_A_WALK = {
 
 class RecipeForTests(unittest.TestCase):
     def test_returns_none_in_the_gap_between_two_bolt_brackets(self):
-        # 101-124 is a still-deliberate gap: Silk Headband and the rest of
-        # the guide's later thread/dye Tailoring recipes are deferred past
-        # infra#3609's own minimum ask (Linen Belt, added directly below).
-        # recipe_for must not fall back to the Silk bolt just because it is
-        # close by.
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 101))
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 124))
+        # 145-174 is a still-deliberate gap: Silk Headband and the rest of
+        # the guide's later thread/dye Tailoring recipes are deferred.
+        # recipe_for must not fall back to the Mageweave bolt just because it
+        # is close by. (101-124 was the gap this test named until Woolen Bag
+        # filled it, below.)
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 145))
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 174))
+
+    def test_woolen_bag_carries_tailoring_from_101_to_124(self):
+        """The operator's 2026-10-05 ask: Og levels tailoring, and the family
+        gets bigger bags. Woolen Bag is both, and its edges are the realm's:
+        taught at 80, grey at 140, handing off to Bolt of Silk Cloth at 125."""
+        tailoring = goals.SKILL_IDS["tailoring"]
+        for value in (101, 110, 124):
+            with self.subTest(value=value):
+                self.assertEqual(craft.recipe_for(tailoring, value).spell_id, 3757)
+        self.assertEqual(craft.recipe_for(tailoring, 100).spell_id, 2964)
+        self.assertEqual(craft.recipe_for(tailoring, 125).spell_id, 3839)
+
+    def test_tailoring_climbs_without_a_break_from_1_to_144(self):
+        """Every value from 1 to Bolt of Silk Cloth's last point has a recipe,
+        so a tailor is never left at a value with nothing to cast below 145."""
+        tailoring = goals.SKILL_IDS["tailoring"]
+        missing = [v for v in range(1, 145) if craft.recipe_for(tailoring, v) is None]
+        self.assertEqual(missing, [])
 
     def test_finds_linen_belt_bracket(self):
         # infra#3609's own acceptance criteria: the first Tailoring bracket
