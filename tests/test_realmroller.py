@@ -177,6 +177,20 @@ class ReleaseFile(unittest.TestCase):
         del d["sources"]["mod-ollama-chat"]
         self.bad(d, "sources lacks mod-ollama-chat")
 
+    def test_a_fold_names_a_pr_and_is_a_boolean(self):
+        ch = rr.parse_channel(_channel_data())
+        d = _release_data("r2026.10.04-2")
+        self.assertTrue(rr.parse_release(d, ch).changes[1].fold)
+        self.assertEqual(rr.fold_number("#5010"), 5010)
+        for bad_pr, bad_fold, want in (
+            ("PR 104", True, "fold needs pr like"),
+            ("#104", "yes", "fold must be true or false"),
+        ):
+            d = _release_data("r2026.10.04-2")
+            d["changes"][1].update(pr=bad_pr, fold=bad_fold)
+            with self.assertRaisesRegex(rr.Invalid, want):
+                rr.parse_release(d, ch)
+
     def test_a_short_sha_is_refused(self):
         d = _release_data("r2026.10.04-2")
         d["sources"]["core"] = "47960183"
@@ -363,6 +377,15 @@ class Watch(unittest.TestCase):
             (a.kind, a.target, a.pause), ("rollback", "r2026.10.04-1", True)
         )
         self.assertEqual(a.why, "not Ready within 15m")
+
+    def test_the_ready_window_counts_from_the_merge_when_known(self):
+        # The roll PR opened 40 minutes ago and merged 5 minutes ago: the
+        # restart has had 5 minutes, not 40.
+        ch, rels = self.on_realm("rolling", rolled=T0 - timedelta(minutes=40))
+        w = _clear(ready=False, rolled_at=T0 - timedelta(minutes=5))
+        self.assertEqual(rr.tick(ch, rels, w).why, "restarting")
+        w = _clear(ready=False, rolled_at=T0 - timedelta(minutes=16))
+        self.assertEqual(rr.tick(ch, rels, w).kind, "rollback")
 
     def test_still_starting_waits(self):
         ch, rels = self.on_realm("rolling")

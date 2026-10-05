@@ -7,7 +7,8 @@
 `--roller-dir` holds channel.json and releases/*.json (in the deploy repo,
 beside the overlay they change). `dry-run` reads the live gates, runs one
 tick and prints what the roller WOULD do. It acts on nothing: no build, no
-commit, no PR, no realm write. There is no act mode in this phase.
+commit, no PR, no realm write. The act side (phase 2) is
+`realmroller_act.py`, which the scheduled job runs.
 
 `--status` is the previous tick's status JSON; only its `out_since` is read,
 so the settle gate can see how long everyone has been out. Without it the

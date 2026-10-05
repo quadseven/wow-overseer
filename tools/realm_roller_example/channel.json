@@ -59,5 +59,134 @@
       "path": "overlay/kustomization.yaml",
       "pattern": "digest: sha256:"
     }
+  },
+  "act": {
+    "base": "main",
+    "branch_prefix": "realm-roller/",
+    "required_checks": [
+      "ci"
+    ],
+    "builds": {
+      "worldserver": {
+        "workflow": "build.yml",
+        "ref": "main",
+        "pin_keys": {
+          "core": "CORE_SHA",
+          "playerbots": "PLAYERBOTS_SHA",
+          "mod-overseer": "OVERSEER_SHA",
+          "mod-dungeon-clear": "DUNGEON_CLEAR_SHA",
+          "mod-ollama-chat": "OLLAMA_CHAT_SHA"
+        },
+        "image_repos": {
+          "worldserver": "registry.example/worldserver",
+          "db-import": "registry.example/db-import"
+        },
+        "tag_pattern": "core-[0-9a-f]{12}-mod-[0-9a-f]{12}"
+      }
+    },
+    "prove": {
+      "namespace": "roller-prove",
+      "within": "10m",
+      "binaries": {
+        "worldserver": "/app/bin/worldserver"
+      }
+    },
+    "watch": {
+      "worldserver": {
+        "namespace": "dev-realm",
+        "deployment": "worldserver",
+        "container": "worldserver",
+        "image": "worldserver",
+        "selector": "app=worldserver"
+      },
+      "site": {
+        "namespace": "dev-realm",
+        "deployment": "site",
+        "container": "site",
+        "image": "site",
+        "selector": "app=site"
+      }
+    },
+    "logs": {
+      "worldserver": {
+        "namespace": "dev-realm",
+        "selector": "app=worldserver",
+        "container": "worldserver"
+      }
+    },
+    "edits": [
+      {
+        "if_source": "core",
+        "path": "build/pins.env",
+        "pattern": "^CORE_SHA={source:core}$",
+        "replace": "CORE_SHA={source:core}"
+      },
+      {
+        "if_source": "playerbots",
+        "path": "build/pins.env",
+        "pattern": "^PLAYERBOTS_SHA={source:playerbots}$",
+        "replace": "PLAYERBOTS_SHA={source:playerbots}"
+      },
+      {
+        "if_source": "mod-overseer",
+        "path": "build/pins.env",
+        "pattern": "^OVERSEER_SHA={source:mod-overseer}$",
+        "replace": "OVERSEER_SHA={source:mod-overseer}"
+      },
+      {
+        "if_source": "mod-dungeon-clear",
+        "path": "build/pins.env",
+        "pattern": "^DUNGEON_CLEAR_SHA={source:mod-dungeon-clear}$",
+        "replace": "DUNGEON_CLEAR_SHA={source:mod-dungeon-clear}"
+      },
+      {
+        "if_source": "mod-ollama-chat",
+        "path": "build/pins.env",
+        "pattern": "^OLLAMA_CHAT_SHA={source:mod-ollama-chat}$",
+        "replace": "OLLAMA_CHAT_SHA={source:mod-ollama-chat}"
+      },
+      {
+        "if_component": "worldserver",
+        "path": "overlay/kustomization.yaml",
+        "pattern": "(  - name: registry\\.example/worldserver\\n)(?:    #[^\\n]*\\n)*    digest: {image:worldserver}",
+        "replace": "\\g<1>    # Build {run}: release {release}, written by the realm roller.\n    digest: {image:worldserver}"
+      },
+      {
+        "if_component": "worldserver",
+        "path": "overlay/kustomization.yaml",
+        "pattern": "(  - name: registry\\.example/db-import\\n    digest: ){image:db-import}",
+        "replace": "\\g<1>{image:db-import}"
+      },
+      {
+        "if_source": "mod-overseer",
+        "path": "overlay/banner.yaml",
+        "pattern": "value: \"{source:mod-overseer}\"",
+        "replace": "value: \"{source:mod-overseer}\""
+      },
+      {
+        "if_source": "mod-overseer",
+        "path": "checks/drift.py",
+        "pattern": "\"dev\": \"{source:mod-overseer}\"",
+        "replace": "\"dev\": \"{source:mod-overseer}\""
+      },
+      {
+        "if_source": "mod-overseer",
+        "path": "checks/drift.py",
+        "pattern": "\"deployed_dev\": \"{source:mod-overseer}\"",
+        "replace": "\"deployed_dev\": \"{source:mod-overseer}\""
+      },
+      {
+        "if_source": "mod-overseer",
+        "path": "overlay/tests/test_banner.py",
+        "pattern": "\"{source:mod-overseer}\"",
+        "replace": "\"{source:mod-overseer}\""
+      }
+    ],
+    "gitlinks": [
+      {
+        "path": "modules/mod-overseer",
+        "source": "mod-overseer"
+      }
+    ]
   }
 }

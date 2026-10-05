@@ -31,7 +31,8 @@
         "log": "worldserver",
         "absent": "AuctionHouseBot: buying",
         "within": "30m"
-      }
+      },
+      "fold": true
     }
   ],
   "build": {

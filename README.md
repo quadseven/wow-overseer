@@ -46,6 +46,13 @@ extraction `mod-overseer` went through on 2026-08-27, one repo later.
   deploy repo; `tools/realm_roller_example/` shows their shape with
   placeholder values. The two modules ship in the image, as every top-level
   module does; the bridge does not import them.
+- `realmroller_plan.py`, `realmroller_act.py` - the roller's act side (#590
+  phase 2). The plan module is pure: build inputs, the paired digests read
+  from a build log, the ONE roll commit's files (from the regex edits in the
+  channel file's `act` block), the revert of a roll, and the merge verdict on
+  a PR. The act module holds the GitHub, Kubernetes and status adapters and
+  `Roller.step`, which a scheduled job runs as
+  `python3 realmroller_act.py ...`. A paused channel makes it act on nothing.
 - `patches/mod-playerbots/` - a vendored copy of the three upstream
   mod-playerbots patches a handful of tests assert content against
   (`0004`, `0005`, `0016`). The authoritative copies live in
