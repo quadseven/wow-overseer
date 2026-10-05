@@ -67,6 +67,10 @@ COPY core.py bridge.py voice.py transform.py \
 # traded that away. Same file, same served path, same origin.
 COPY jquery.min.js /app/
 
+# The Home Screen files: the manifest and the icons tools/gen_app_icons.py
+# draws from the site's mark. Served by map_server beside the page.
+COPY manifest.webmanifest apple-touch-icon.png icon-192.png icon-512.png /app/
+
 # gearscore.py reads its curated lists and weights from data/bis/.
 COPY data /app/data
 

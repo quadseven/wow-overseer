@@ -5204,6 +5204,22 @@ class Handler(BaseHTTPRequestHandler):
         # so the page reaches no third host for it.
         self._send_file("jquery.min.js", "text/javascript; charset=utf-8")
 
+    # THE HOME SCREEN FILES (the page's <link rel="manifest"> and its
+    # apple-touch-icon). Same bytes on every realm, like the files above: the
+    # manifest's URLs are relative, so each realm's copy resolves against the
+    # path it was fetched under and opens that realm, not the root.
+    def _manifest_file(self, _query: dict) -> None:
+        self._send_file("manifest.webmanifest", "application/manifest+json")
+
+    def _touch_icon(self, _query: dict) -> None:
+        self._send_file("apple-touch-icon.png", "image/png")
+
+    def _icon_192(self, _query: dict) -> None:
+        self._send_file("icon-192.png", "image/png")
+
+    def _icon_512(self, _query: dict) -> None:
+        self._send_file("icon-512.png", "image/png")
+
     def _shapes_file(self, _query: dict) -> None:
         # The zone REGIONS, built from zones.json by tools/gen_shapes.py.
         # Served rather than inlined so the page and the dots keep reading
@@ -6830,6 +6846,10 @@ class Handler(BaseHTTPRequestHandler):
         "/zones.json": _zones_file,
         "/shapes.json": _shapes_file,
         "/jquery.min.js": _jquery_file,
+        "/manifest.webmanifest": _manifest_file,
+        "/apple-touch-icon.png": _touch_icon,
+        "/icon-192.png": _icon_192,
+        "/icon-512.png": _icon_512,
         "/api/frame": _frame_get,
         "/healthz": _healthz,
     }
