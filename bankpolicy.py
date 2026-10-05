@@ -52,6 +52,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 
 import disposition
+import gearscore
 import goals
 import guildbank
 import raidsupply
@@ -181,6 +182,9 @@ class Piece:
     bound: bool = True
     fire_res: int = 0
     stats: tuple = ()  # (stat name, value) pairs
+    # gearscore's normalized stats (stat name -> amount), the same numbers the
+    # upgrade tracker scores. Empty when the row carried no template columns.
+    scored: tuple = ()
     armor: int = 0
     pvp: bool = False
     place: str = "bags"
@@ -279,6 +283,75 @@ def role_scores(piece: Piece, class_id: int) -> dict:
     return out
 
 
+_KIND_OF_SPEC_ROLE = {
+    "tank": "tank",
+    "healer": "healer",
+    "melee": "damage",
+    "ranged": "damage",
+    "caster": "damage",
+}
+# The word a kind of second set goes by, and the word for "plays it".
+KIND_SET = {"tank": "tank set", "healer": "healing set", "damage": "damage set"}
+
+
+def _specs_by_kind(class_id) -> dict:
+    """kind (tank, healer, damage) -> gearscore spec ids of the holder's class."""
+    import raidlineup  # local: raidlineup imports the party packing
+
+    name = str(raidlineup.CLASS_NAMES.get(class_id, "")).lower()
+    out: dict = {}
+    if not name:
+        return out
+    for spec in gearscore.spec_ids():
+        if not spec.startswith(name + "-"):
+            continue
+        kind = _KIND_OF_SPEC_ROLE.get(gearscore.load_spec(spec).get("role"))
+        if kind:
+            out.setdefault(kind, []).append(spec)
+    return out
+
+
+def situational_score(piece: Piece, class_id, level, kind=None) -> float:
+    """What the piece is worth to the holder's class, by gearscore: the best
+    over its specs of `kind` (tank, healer or damage), or over all of them.
+
+    Zero when the piece carries no scored stats or the class has no gear lists.
+    """
+    stats = dict(piece.scored)
+    if not stats:
+        return 0.0
+    by_kind = _specs_by_kind(class_id)
+    specs = by_kind.get(kind, []) if kind else [s for v in by_kind.values() for s in v]
+    return max((gearscore.score(stats, s, _int(level, 60)) for s in specs), default=0.0)
+
+
+def off_kind(piece: Piece, keeper: Keeper) -> str:
+    """The kind (tank, healer, damage) this piece is a second set for, by
+    gearscore (#540), or '' when it is not one.
+
+    Decision #532: members keep alternative and situational pieces, scored by
+    the same per-spec weights as the upgrade tracker. A piece is another
+    role's when the class's specs for that role score it above zero and above
+    every spec of the holder's role today. A class with no gear lists for
+    both roles, or a piece with no scored stats, falls back to statweights
+    (`off_role`).
+    """
+    mine = _PARTY_KIND.get(keeper.role, "")
+    if not mine:
+        return ""
+    by_kind = _specs_by_kind(keeper.class_id)
+    if not piece.scored or mine not in by_kind or len(by_kind) < 2:
+        return _KIND.get(off_role(piece, keeper), "")
+    scores = {
+        k: situational_score(piece, keeper.class_id, keeper.level, k) for k in by_kind
+    }
+    others = {k: v for k, v in scores.items() if k != mine}
+    best = max(sorted(others), key=lambda k: others[k])
+    if others[best] <= 0 or others[best] <= scores[mine]:
+        return ""
+    return best
+
+
 def off_role(piece: Piece, keeper: Keeper) -> str:
     """The statweights role this piece is for, when it is not the holder's
     role today and its class can play it; '' otherwise."""
@@ -329,6 +402,12 @@ def claimed_from_rows(item_rows, worn_rows, names) -> frozenset:
     return frozenset(out)
 
 
+def _worth(piece: Piece, keeper: Keeper) -> float:
+    """The piece's gearscore for the holder's class: the tie-break that picks
+    the best fire resistance or PvP piece of a slot."""
+    return round(situational_score(piece, keeper.class_id, keeper.level), 3)
+
+
 def _second_set(piece, keeper):
     """(set kind, score, why) when this piece is one of the holder's second
     sets, else None. Gear it grows back into first, then fire resistance,
@@ -349,10 +428,10 @@ def _second_set(piece, keeper):
             piece.fire_res,
             piece.holder,
         )
-        return FIRE_SET, (piece.fire_res, piece.item_level), why
+        return FIRE_SET, (piece.fire_res, _worth(piece, keeper), piece.item_level), why
     if piece.pvp:
         why = "%s keeps it as a PvP set: it comes from an honor source" % piece.holder
-        return PVP_SET, (piece.item_level, 0), why
+        return PVP_SET, (_worth(piece, keeper), piece.item_level), why
     item = disposition.Item(
         name=piece.name,
         known=True,
@@ -363,11 +442,18 @@ def _second_set(piece, keeper):
     )
     if disposition.outgrown(item, keeper.level):
         return None
-    role = off_role(piece, keeper)
-    if not role:
+    kind = off_kind(piece, keeper)
+    if not kind:
         return None
-    why = "%s keeps a %s for when it plays %s" % (piece.holder, ROLE_SET[role], role)
-    return ROLE_SET[role], (piece.item_level, 0), why
+    why = "%s keeps a %s for when it plays %s" % (piece.holder, KIND_SET[kind], kind)
+    return (
+        KIND_SET[kind],
+        (
+            situational_score(piece, keeper.class_id, keeper.level, kind),
+            piece.item_level,
+        ),
+        why,
+    )
 
 
 def _personal(pieces, family, reach, claimed) -> dict:
@@ -594,6 +680,16 @@ def place(facts: Facts) -> dict:
     return out
 
 
+def kept_pairs(placed: dict) -> list:
+    """(holder, item guid) for every stack this policy keeps, for keep.with_guids.
+
+    Every sell pass that reads the operator's reservations reads these too, so
+    a piece the policy banks (a second set, a raid supply, gear for later) is
+    never sold from the bags before the bank pass carries it away.
+    """
+    return [(p.holder, p.guid) for p in placed.values()]
+
+
 def why_stored(row: dict) -> str:
     """Why an item already in the guild bank is there, from its tab and kind.
 
@@ -661,7 +757,11 @@ ITEMS_SQL = (
     "it.subclass AS item_subclass, it.InventoryType AS inventory_type, "
     "it.RequiredLevel AS required_level, it.AllowableClass AS allowable_class, "
     "it.ItemLevel AS item_level, it.bonding AS bonding, it.fire_res AS fire_res, "
-    "it.armor AS armor, it.ContainerSlots AS container_slots, "
+    "it.armor AS armor, it.block AS block, it.dmg_min1 AS dmg_min1, "
+    "it.dmg_max1 AS dmg_max1, it.delay AS delay, it.holy_res AS holy_res, "
+    "it.nature_res AS nature_res, it.frost_res AS frost_res, "
+    "it.shadow_res AS shadow_res, it.arcane_res AS arcane_res, "
+    "it.ContainerSlots AS container_slots, "
     "it.requiredhonorrank AS honor_rank, "
     "it.RequiredReputationFaction AS rep_faction, "
     "(it.spellid_1 > 0 OR it.spellid_2 > 0) AS has_effect, "
@@ -770,6 +870,7 @@ def pieces_from_rows(rows) -> tuple:
                     ),
                     fire_res=_int(row.get("fire_res")),
                     stats=tuple(stats),
+                    scored=tuple(sorted(gearscore.stats_from_row(row).items())),
                     armor=_int(row.get("armor")),
                     pvp=(
                         _int(row.get("honor_rank")) > 0

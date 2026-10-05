@@ -13394,21 +13394,24 @@ class Bridge(discord.Client):
                 | set(self._guild_mail_runs) | set(self._crafter_walks))
         cap = self._guild_walk_cap()
         spawn_walks = now >= self._job_walks_unsupported.get("spawn", 0.0)
-        plan = await self._plan_guild_jobs(members, facts, busy, cap, spawn_walks)
+        plan = await self._plan_guild_jobs(
+            members, facts, busy, cap, spawn_walks, cohort)
         self._log_guild_job_plan(members, plan)
         _log_capped("guild jobs", plan.notes)
         sale_walks = now >= self._job_walks_unsupported.get("sale", 0.0)
         started = self._start_guild_job_steps(plan, now, cap, sale_walks)
         log.info("guild jobs: started %d step(s)%s", started, _family_label(cohort))
 
-    async def _plan_guild_jobs(self, members, facts, busy, cap, spawn_walks):
+    async def _plan_guild_jobs(self, members, facts, busy, cap, spawn_walks,
+                               cohort=None):
+        kept = await asyncio.to_thread(_kept_with_bank_policy, cohort)
         fields = await self._job_fields(members) if spawn_walks else {}
         doors = (guildjobs.assign_doors(members, guildjobs.entrances(), facts["stones"])
                  if spawn_walks else {})
         plan = guildjobs.plan(
             members, masters=facts["masters"], crafters=facts["crafters"],
             fields=fields, doors=doors, pending=facts["pending"],
-            kept=await asyncio.to_thread(_KEEP.now),
+            kept=kept,
             recent=facts["recent"], busy=busy, cap=cap,
             unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"),
             gear=await self._job_gear_offers(members, facts["recent"]),
@@ -23424,6 +23427,23 @@ def _bank_policy(names: list, fresh: bool = False) -> dict:
     _log_capped("bank policy", ["%s's %s -> %s: %s" % (p.holder, p.item, p.where, p.why)
                                 for p in placed.values()])
     return placed
+
+
+def _kept_with_bank_policy(cohort=None):
+    """keep.Reservations plus every stack the bank policy keeps (#540).
+
+    The guild jobs pass sells grey and outgrown gear (guildjobs.Carried.sellable)
+    and reads `kept` before it sells. Handing it the policy's keeps as
+    reservations means it never sells a second set (tank, healing, fire
+    resistance, PvP) or raid supply the bank pass is about to carry away. A
+    policy that cannot be read raises, so no sale goes ahead without it.
+    """
+    reserved = _KEEP.now()
+    names = _names_of(cohort)
+    if not names:
+        return reserved
+    placed = _bank_policy(names, True)
+    return keep.with_guids(reserved, bankpolicy.kept_pairs(placed))
 
 
 def _bank_policy_lines(names: list) -> dict:

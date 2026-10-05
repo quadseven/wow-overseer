@@ -66,6 +66,18 @@ def from_rows(rows) -> Reservations:
     return Reservations(frozenset(guids), frozenset(entries))
 
 
+def with_guids(reservations: Reservations, pairs) -> Reservations:
+    """The reservations plus (holder name, item guid) pairs, so a pass that
+    already skips what is reserved skips these too. Used for what the bank
+    policy keeps (#540): a piece it banks must not be sold from the bags."""
+    extra = {
+        (str(name).strip().lower(), int(guid))
+        for name, guid in pairs
+        if str(name).strip() and int(guid)
+    }
+    return Reservations(reservations.guids | extra, reservations.entries)
+
+
 def items_named(command: str) -> tuple:
     """The (guids, entries) a command string names."""
     text = command or ""
