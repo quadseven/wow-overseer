@@ -575,6 +575,36 @@ def walk_goal(command) -> str:
     return "a mailbox"
 
 
+# A WALK WHOSE FIRST STEP THE GROUND REFUSED (#625). Measured on wow-dev
+# 2026-10-05: both guild tailors' mailbox walks ended "the ground toward the
+# mailbox does not hold", seven of seven, one standing at z -474 under
+# Kalimdor and one in Lordamere Lake. A walk cannot leave that spot; a player
+# stuck there uses the hearthstone, and so does the bot, at most once in
+# GROUND_HEARTH_SECONDS (the stone's own hour).
+GROUND_REFUSALS = ("does not hold", "gave no step")
+GROUND_HEARTH_SECONDS = 3600.0
+GROUND_HEARTH_SOURCE = "guildwalk:ground"
+
+
+def grounded(answer) -> bool:
+    """True when a walk ended because the ground gave it no first step."""
+    return answer.state == ENDED and any(
+        words in str(answer.said or "") for words in GROUND_REFUSALS
+    )
+
+
+def hearth_due(name, last_hearths, now, on_roster) -> bool:
+    """Should this grounded walker use its hearthstone now?
+
+    Never a roster family member: its family's own movement choice owns its
+    hearthstone. Otherwise once per GROUND_HEARTH_SECONDS.
+    """
+    if on_roster:
+        return False
+    last = last_hearths.get(name)
+    return last is None or now - last >= GROUND_HEARTH_SECONDS
+
+
 def judge_walk(
     holder, status, detail, result, far=False, goal="a mailbox"
 ) -> WalkAnswer:
