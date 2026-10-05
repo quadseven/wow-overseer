@@ -1567,10 +1567,8 @@ def plan(
     tailors = choose_tailors(members)
     trades = cloth_trades(split_trades(members, tailors), tailors)
     steps, lines, notes = [], {}, []
-    # One counter per allowance, each keyed by guild: STEPS_PER_GUILD for
-    # every job, GEAR_STEPS_PER_GUILD for gear and hearth steps,
-    # PVP_STEPS_PER_GUILD for PvP queues and honor buys.
-    started_jobs, started_gear, started_pvp = {}, {}, {}
+    # One counter per allowance, each keyed by guild (_allowance).
+    counters = {"jobs": {}, "gear": {}, "pvp": {}}
     for m in _ordered_members(members):
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
@@ -1595,13 +1593,7 @@ def plan(
             notes.append(note)
         if step is None:
             continue
-        gearing = step.action in ("gear", "hearth")
-        if step.action == pvpgear.ACTION:
-            started, allowance = started_pvp, PVP_STEPS_PER_GUILD
-        elif gearing:
-            started, allowance = started_gear, GEAR_STEPS_PER_GUILD
-        else:
-            started, allowance = started_jobs, per_guild
+        started, allowance = _allowance(step, counters, per_guild)
         why = _step_refusal(m, busy, started, allowance)
         if why:
             notes.append(why)
@@ -1616,6 +1608,17 @@ def plan(
         doors=doors,
         notes=tuple(notes),
     )
+
+
+def _allowance(step, counters, per_guild):
+    """(the counter, the cap) a step is started against: STEPS_PER_GUILD for
+    every job, GEAR_STEPS_PER_GUILD for gear and hearth steps, and
+    PVP_STEPS_PER_GUILD for PvP queues and honor buys."""
+    if step.action == pvpgear.ACTION:
+        return counters["pvp"], PVP_STEPS_PER_GUILD
+    if step.action in ("gear", "hearth"):
+        return counters["gear"], GEAR_STEPS_PER_GUILD
+    return counters["jobs"], per_guild
 
 
 def collect_step(m, commands, cap):
