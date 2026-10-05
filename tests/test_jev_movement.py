@@ -85,9 +85,16 @@ def facts(w=None, binds=None, hearthed=(), errand="", claimant=""):
     )
 
 
+ACT = {"JEV_MODE_MOVEMENT": "act"}
+
+
 def ask(f, fake=None, environ=None):
+    """Asked in act mode unless `environ` says otherwise: these tests pin what
+    Jev's answer does when it may act (shadow is the default since #584)."""
     client = jev.Client("k", transport=fake or FakeJev())
-    return asyncio.run(jm.ask(client, f, jm.policy(environ or {})))
+    return asyncio.run(
+        jm.ask(client, f, jm.policy(ACT if environ is None else environ))
+    )
 
 
 DYING = [
@@ -175,7 +182,7 @@ class WhatIsOffered(unittest.TestCase):
         self.assertEqual(jev.HEURISTIC, j.acted)
         self.assertEqual(jm.HEARTH_FAMILY, j.carried_out)
 
-    def test_repeat_death_safety_remains_shadow_only_in_shadow_mode(self):
+    def test_repeat_death_safety_still_acts_in_shadow_mode(self):
         f = facts(
             where(moving=("Bork",), deaths=DYING),
             errand="at:0:-8815.2,652.9,94.9",
@@ -187,6 +194,34 @@ class WhatIsOffered(unittest.TestCase):
             {"JEV_MODE_MOVEMENT": "shadow"},
         )
         self.assertEqual(jm.DROP_ERRAND, j.heuristic)
+        self.assertEqual(jm.DROP_ERRAND, j.carried_out)
+
+
+class ShadowByDefault(unittest.TestCase):
+    """#584: over 907 judgments movement agreed 37% to 46% in every confidence
+    bucket (#583); its confidence carries no signal, so it does not act."""
+
+    def test_the_default_is_shadow(self):
+        self.assertEqual(jm.policy({}).mode, jev.SHADOW)
+
+    def test_a_confident_disagreement_is_recorded_and_not_carried_out(self):
+        j = ask(
+            facts(),
+            FakeJev(picks={"movement": jm.HEARTH_STRAGGLER}, confidence=0.99),
+            {},
+        )
+        self.assertEqual(jm.HEARTH_STRAGGLER, j.jev)
+        self.assertEqual(jev.HEURISTIC, j.acted)
+        self.assertEqual("", j.carried_out)
+
+    def test_off_still_carries_out_nothing(self):
+        j = jm.Judgment(
+            subject="Grug",
+            heuristic=jm.HEARTH_FAMILY,
+            heuristic_why="",
+            mode=jev.OFF,
+            status="",
+        )
         self.assertEqual("", j.carried_out)
 
 
@@ -236,7 +271,7 @@ class JevActs(unittest.TestCase):
 
     def test_the_threshold_is_the_operators_to_move(self):
         fake = FakeJev(picks={"movement": jm.HEARTH_STRAGGLER}, confidence=0.7)
-        j = ask(facts(), fake, {"JEV_THRESHOLD_MOVEMENT": "0.6"})
+        j = ask(facts(), fake, dict(ACT, JEV_THRESHOLD_MOVEMENT="0.6"))
         self.assertEqual(jm.HEARTH_STRAGGLER, j.carried_out)
 
     def test_the_record_line_and_view_name_the_kind(self):

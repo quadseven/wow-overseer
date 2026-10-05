@@ -44,12 +44,13 @@ those belong to run recovery and the campaign's own staging. A dungeon
 family spread across zones hearths to its shared inn through run recovery's
 `hearth_regroup` (jev_recovery), not through this kind.
 
-ACT BY DEFAULT, behind DEFAULT_THRESHOLD (JEV_MODE_MOVEMENT and
-JEV_THRESHOLD_MOVEMENT override both). Below it, or with no answer, the
-heuristic stands. It is normally carry_on, but after repeated deaths it
-hearths a ready family at its shared inn or drops its active non-dungeon errand.
-That safety choice also overrides a confident Jev answer in act mode. Shadow
-mode records it without carrying it out.
+SHADOW BY DEFAULT (#584): Jev's confidence carries no signal for this kind
+(#583), so its answer is recorded and the heuristic acts. JEV_MODE_MOVEMENT=act
+lets Jev act above DEFAULT_THRESHOLD (JEV_THRESHOLD_MOVEMENT). Below it, or
+with no answer, the heuristic stands. It is normally carry_on, but after
+repeated deaths it hearths a ready family at its shared inn or drops its active
+non-dungeon errand, in shadow and in act mode alike; that safety choice also
+overrides a confident Jev answer in act mode.
 
 PURE: facts in, questions and judgments out; the only I/O is the client the
 caller hands in.
@@ -94,10 +95,15 @@ LOST = frozenset({situation.STUCK, situation.CIRCLING})
 
 
 def policy(environ=None) -> jev.Policy:
+    """Shadow by default (#584): over 907 judgments Jev agreed with the
+    heuristic 37% to 46% of the time in every confidence bucket (#583), so its
+    confidence carries no signal for this kind and a confident disagreement is
+    no better than a low one. It is still asked and recorded beside the
+    heuristic; JEV_MODE_MOVEMENT=act restores acting."""
     return jev.policy(
         KIND,
         environ=environ,
-        default_mode=jev.ACT,
+        default_mode=jev.SHADOW,
         default_threshold=DEFAULT_THRESHOLD,
         # #356: an agreement below the floor is recorded as Jev's (18 of 68
         # calls in 24 hours). It changes no action.
@@ -381,10 +387,14 @@ class Judgment:
 
     @property
     def carried_out(self) -> str:
-        """The option to carry out, or "" when nothing changes."""
-        if self.mode != jev.ACT:
+        """The option to carry out, or "" when nothing changes.
+
+        In shadow the heuristic still acts (jev.SHADOW's contract) and Jev's
+        answer never does. Shadow is the default since #584, and the
+        heuristic's repeat-death safety (#441) must not go quiet with it."""
+        if self.mode == jev.OFF:
             return ""
-        if self.acted == jev.HEURISTIC:
+        if self.mode != jev.ACT or self.acted == jev.HEURISTIC:
             return self.heuristic if self.heuristic != CARRY_ON else ""
         if self.acted in (jev.JEV, jev.BOTH) and self.jev != CARRY_ON:
             return self.jev

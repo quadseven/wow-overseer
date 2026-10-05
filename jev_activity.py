@@ -159,6 +159,29 @@ def policy(environ=None) -> jev.Policy:
     )
 
 
+# SELL OVER A RUN THAT CAN START HAS ITS OWN FLOOR (#583, #584). At 0.8 and up
+# Jev agreed with the heuristic only 32% of the time, and the largest override
+# was `campaign -> sell` at a mean confidence of 0.92, carried out 230 times in
+# a week with no record of whether it helped. Raising the kind's floor to the
+# audit's 0.85 would leave most of those standing, so this pair needs 0.95
+# (JEV_THRESHOLD_ACTIVITY_CHOICE_SELL_OVER_CAMPAIGN moves it). It applies only
+# while the campaign is offered: when the run is withheld for bag space,
+# selling is the way back to it, and the kind's own floor stands.
+SELL_OVER_CAMPAIGN = "activity_choice_sell_over_campaign"
+SELL_OVER_CAMPAIGN_THRESHOLD = 0.95
+
+
+def rule_for(
+    rule: jev.Policy, current: str, answer: str, offered, environ=None
+) -> jev.Policy:
+    """`rule`, with the sell-over-campaign floor when Jev would sell instead
+    of a campaign run that can start now."""
+    if answer != SELL or current != CAMPAIGN or CAMPAIGN not in offered:
+        return rule
+    floor = jev.threshold(SELL_OVER_CAMPAIGN, environ, SELL_OVER_CAMPAIGN_THRESHOLD)
+    return replace(rule, threshold=max(rule.threshold, floor))
+
+
 @dataclass(frozen=True)
 class Member:
     """One family member as the choice sees them.
@@ -198,6 +221,9 @@ class Facts:
     # (dungeonpace.py, mod-overseer#767), or "". The campaign is not offered
     # then, so the choice is among questing, training, crafting and gathering.
     paused: str = ""
+    # jev_outcomes.history: Jev's recent overrides of this kind, every family,
+    # and what followed each (#584). Empty leaves the question as it was.
+    history: tuple = ()
 
     @property
     def levels(self) -> list:
@@ -487,6 +513,8 @@ def question(f: Facts, offered: dict):
     }
     if f.situation is not None:
         state["situation"] = f.situation.state()
+    if f.history:
+        state["recent_jev_overrides_and_what_followed"] = list(f.history)
     instructions = (
         "`family` is a group of World of Warcraft (3.3.5a) adventurers who "
         "play together the way a group of real human players does. Choose "
@@ -499,7 +527,54 @@ def question(f: Facts, offered: dict):
         "unwind by fishing when nothing presses, and let each member's role "
         "and persona color the choice."
     ) + (situation.INSTRUCTION if f.situation is not None else "")
+    if f.history:
+        instructions += HISTORY_INSTRUCTION
     return state, {"activity": jev.choice(instructions, dict(offered))}
+
+
+# ---------------------------------------------------------------------------
+# WHAT FOLLOWED AN OVERRIDE (#584, jev_outcomes)
+
+HISTORY_INSTRUCTION = (
+    " `recent_jev_overrides_and_what_followed` is what happened after earlier "
+    "choices that overrode today's rules: weigh an override that kept leaving "
+    "bags no emptier or the queue no further along before choosing it again."
+)
+# An override is scored at the family's next question once its interlude has
+# had this long; the question is not asked while the interlude runs anyway.
+OUTCOME_MINUTES = 5
+
+
+def snapshot(f: Facts) -> dict:
+    """What an override is later judged against: free bag slots (the members
+    read), the run withheld or not, the family's level total and the queue."""
+    known = [m.free_slots for m in f.members if m.free_slots is not None]
+    return {
+        "free": sum(known) if known else None,
+        "withheld": bool(f.withheld),
+        "levels": sum(int(m.level) for m in f.members),
+        "queue": str(f.queue or "")[:80],
+    }
+
+
+def outcome_words(before: dict, f: Facts, minutes: int) -> str:
+    """One line: what changed between the override and now."""
+    now = snapshot(f)
+    parts = ["after %d min" % int(minutes)]
+    if before.get("free") is not None and now["free"] is not None:
+        parts.append("free bag slots %s -> %s" % (before["free"], now["free"]))
+    if before.get("withheld") != now["withheld"]:
+        parts.append(
+            "the run %s"
+            % ("can start again" if not now["withheld"] else "is now withheld for bags")
+        )
+    if before.get("levels") is not None and before["levels"] != now["levels"]:
+        parts.append("%+d levels" % (now["levels"] - int(before["levels"])))
+    if before.get("queue", "") != now["queue"]:
+        parts.append("queue now %s" % (now["queue"] or "empty"))
+    else:
+        parts.append("the queue did not move")
+    return "; ".join(parts)[:255]
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +661,7 @@ class Judgment:
         )
 
 
-async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
+async def ask(client, f: Facts, rule: jev.Policy, environ=None) -> Judgment | None:
     """Ask Jev what the family does next; None when there is nothing to ask.
 
     Nothing to ask is the kind switched off, or a single option that is
@@ -620,7 +695,7 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
         jev=answer.choice,
         confidence=answer.confidence,
         probabilities=answer.probabilities,
-        acted=rule.acted(
+        acted=rule_for(rule, current, answer.choice, offered, environ).acted(
             current, answer.choice, answer.confidence, can_act=answer.choice in offered
         ),
     )

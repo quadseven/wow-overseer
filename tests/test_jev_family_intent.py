@@ -320,7 +320,14 @@ class WhoActs(unittest.TestCase):
 
 class TheBridge(unittest.TestCase):
     def load(self, picks=None, confidence=0.9):
-        written = {"pick": [], "clear": [], "judgment": []}
+        written = {"pick": [], "clear": [], "judgment": [], "override": []}
+
+        async def no_history(facts, *_a):
+            return facts
+
+        async def noted(judgment, before):
+            written["override"].append((judgment.acted, before))
+
         ns = _load(
             ["_family_intent_for"],
             {
@@ -334,6 +341,8 @@ class TheBridge(unittest.TestCase):
                 "_insert_jev_judgment": written["judgment"].append,
                 "_write_family_pick": lambda *a: written["pick"].append(a) or 1,
                 "_clear_family_pick": written["clear"].append,
+                "_with_jev_history": no_history,
+                "_jev_override_recorded": noted,
             },
         )
 
@@ -359,6 +368,11 @@ class TheBridge(unittest.TestCase):
             ns["_family_intent_for"](me, "Grug", ["Grug"], raw(), jfi.policy({}))
         )
         self.assertEqual(1, len(written["judgment"]))
+        # #584: the pick is handed to the override record with its snapshot.
+        self.assertEqual(
+            [(jev.JEV, "economy:banker")],
+            [(a, b["pick"]) for a, b in written["override"]],
+        )
         self.assertEqual("Grug", written["pick"][0][0])
         self.assertEqual(("economy", "banker"), written["pick"][0][1:3])
 
