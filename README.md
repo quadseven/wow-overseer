@@ -40,6 +40,12 @@ extraction `mod-overseer` went through on 2026-08-27, one repo later.
   `UPSTREAM-PINS.env`). Not part of the built image; only `tests/` reads it.
 - `tools/` - one-off/maintenance scripts (DBC extraction, roster seeding,
   probes). Not part of the built image.
+- `realmroller.py`, `realmroller_world.py`, `tools/realm_roller.py` - the
+  realm roller (#590): release and channel file formats, the pure roll
+  decision, its gate readers and a dry run. The files it reads live in the
+  deploy repo; `tools/realm_roller_example/` shows their shape with
+  placeholder values. The two modules ship in the image, as every top-level
+  module does; the bridge does not import them.
 - `patches/mod-playerbots/` - a vendored copy of the three upstream
   mod-playerbots patches a handful of tests assert content against
   (`0004`, `0005`, `0016`). The authoritative copies live in

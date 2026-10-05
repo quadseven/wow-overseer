@@ -1,0 +1,75 @@
+{
+  "release": "r2026.10.03-3",
+  "summary": "example: the verified rollback target",
+  "proposed_by": "example#1",
+  "sources": {
+    "core": "1111111111111111111111111111111111111111",
+    "playerbots": "2222222222222222222222222222222222222222",
+    "mod-overseer": "3333333333333333333333333333333333333333",
+    "mod-dungeon-clear": "4444444444444444444444444444444444444444",
+    "mod-ollama-chat": "5555555555555555555555555555555555555555",
+    "site": "6666666666666666666666666666666666666666"
+  },
+  "changes": [
+    {
+      "pr": "example#1",
+      "what": "a logged trade answer",
+      "prove": {
+        "image": "worldserver",
+        "grep": "answered the trade"
+      },
+      "verify": {
+        "log": "worldserver",
+        "grep": "answered the trade",
+        "within": "45m"
+      }
+    }
+  ],
+  "build": {
+    "run": 101,
+    "images": {
+      "worldserver": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "db-import": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "site": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  },
+  "state": "verified",
+  "history": [
+    {
+      "at": "2026-10-03T19:02:00-04:00",
+      "to": "building",
+      "by": "roller",
+      "note": "build run dispatched"
+    },
+    {
+      "at": "2026-10-03T19:41:00-04:00",
+      "to": "built",
+      "by": "roller",
+      "note": "both digests read from one run"
+    },
+    {
+      "at": "2026-10-03T19:44:00-04:00",
+      "to": "proven",
+      "by": "roller",
+      "note": "1 of 1 prove grep found"
+    },
+    {
+      "at": "2026-10-03T20:05:00-04:00",
+      "to": "rolling",
+      "by": "roller",
+      "note": "roll commit"
+    },
+    {
+      "at": "2026-10-03T20:11:00-04:00",
+      "to": "live",
+      "by": "roller",
+      "note": "Ready"
+    },
+    {
+      "at": "2026-10-03T20:55:00-04:00",
+      "to": "verified",
+      "by": "roller",
+      "note": "1 of 1 checks seen"
+    }
+  ]
+}

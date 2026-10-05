@@ -1,0 +1,63 @@
+{
+  "channel": "dev",
+  "realm": "dev-realm",
+  "current": "r2026.10.04-1",
+  "previous": "r2026.10.03-3",
+  "queue": [
+    "r2026.10.04-2"
+  ],
+  "paused": true,
+  "paused_reason": "example: the roller is off until a person sets paused to false",
+  "components": {
+    "worldserver": {
+      "sources": [
+        "core",
+        "playerbots",
+        "mod-overseer",
+        "mod-dungeon-clear",
+        "mod-ollama-chat"
+      ],
+      "images": [
+        "worldserver",
+        "db-import"
+      ],
+      "gated": true
+    },
+    "site": {
+      "sources": [
+        "site"
+      ],
+      "images": [
+        "site"
+      ],
+      "gated": false
+    }
+  },
+  "policy": {
+    "min_interval": "60m",
+    "settle": "5m",
+    "ready_within": "15m",
+    "families": [
+      "Grug",
+      "Zug"
+    ],
+    "guild_run_states": [
+      "inside"
+    ],
+    "rollback": {
+      "restarts_over": 2,
+      "restarts_window": "30m",
+      "log_signatures": [
+        "ASSERTION FAILED",
+        "Segmentation fault",
+        "db-import exited"
+      ],
+      "bots_below_pct": 50,
+      "bots_below_for": "10m"
+    },
+    "roll_marker": {
+      "path": "overlay/kustomization.yaml",
+      "pattern": "digest: sha256:"
+    }
+  }
+}
