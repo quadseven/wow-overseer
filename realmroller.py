@@ -26,6 +26,7 @@ THE ANSWERS #522 APPROVED, and where each lives here:
 
 from __future__ import annotations
 
+import itertools
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -187,36 +188,10 @@ def parse_channel(data: object) -> Channel:
         raise Invalid("channel", ["must be a JSON object"])
     name = _need(data, "channel", str, problems) or ""
     realm = _need(data, "realm", str, problems) or ""
-    current = _need(data, "current", str, problems) or ""
-    previous = _need(data, "previous", str, problems) or ""
-    for key, value in (("current", current), ("previous", previous)):
-        if value and not _NAME.match(value):
-            problems.append(
-                "%s %r is not a release name like r2026.10.04-1" % (key, value)
-            )
-    queue = data.get("queue", [])
-    if not isinstance(queue, list) or not all(isinstance(q, str) for q in queue):
-        problems.append("queue must be a list of release names")
-        queue = []
-    for q in queue:
-        if not _NAME.match(q):
-            problems.append("queue entry %r is not a release name" % q)
-    if len(set(queue)) != len(queue):
-        problems.append("queue names a release twice")
-    if current and current in queue:
-        problems.append("current %s is also queued" % current)
-    # PAUSED UNLESS SAID OTHERWISE. A missing or non-boolean flag is paused:
-    # the roller is turned on by a reviewed `"paused": false`, never by an
-    # omission or a typo.
-    paused_raw = data.get("paused", True)
-    if not isinstance(paused_raw, bool):
-        problems.append("paused must be true or false")
-    paused = paused_raw is not False
-    reason = data.get("paused_reason", "")
-    if not isinstance(reason, str):
-        problems.append("paused_reason must be a string")
-        reason = ""
-
+    current = _release_name(data, "current", problems)
+    previous = _release_name(data, "previous", problems)
+    queue = _parse_queue(data.get("queue", []), current, problems)
+    paused, reason = _parse_paused(data, problems)
     components = _parse_components(data.get("components"), problems)
     policy = _parse_policy(data.get("policy"), problems)
     if problems:
@@ -224,6 +199,43 @@ def parse_channel(data: object) -> Channel:
     return Channel(
         name, realm, current, previous, tuple(queue), paused, reason, components, policy
     )
+
+
+def _release_name(data: dict, key: str, problems: list[str]) -> str:
+    value = _need(data, key, str, problems) or ""
+    if value and not _NAME.match(value):
+        problems.append("%s %r is not a release name like r2026.10.04-1" % (key, value))
+    return value
+
+
+def _parse_queue(queue: object, current: str, problems: list[str]) -> list[str]:
+    if not isinstance(queue, list) or not all(isinstance(q, str) for q in queue):
+        problems.append("queue must be a list of release names")
+        return []
+    problems.extend(
+        "queue entry %r is not a release name" % q for q in queue if not _NAME.match(q)
+    )
+    if len(set(queue)) != len(queue):
+        problems.append("queue names a release twice")
+    if current and current in queue:
+        problems.append("current %s is also queued" % current)
+    return queue
+
+
+def _parse_paused(data: dict, problems: list[str]) -> tuple[bool, str]:
+    """PAUSED UNLESS SAID OTHERWISE. A missing or non-boolean flag is paused.
+
+    The roller is turned on by a reviewed `"paused": false`, never by an
+    omission or a typo.
+    """
+    raw = data.get("paused", True)
+    if not isinstance(raw, bool):
+        problems.append("paused must be true or false")
+    reason = data.get("paused_reason", "")
+    if not isinstance(reason, str):
+        problems.append("paused_reason must be a string")
+        reason = ""
+    return raw is not False, reason
 
 
 def _parse_components(raw: object, problems: list[str]) -> tuple[Component, ...]:
@@ -360,47 +372,11 @@ def parse_release(data: object, channel: Channel) -> Release:
         problems.append("release %r is not a name like r2026.10.04-1" % name)
     summary = _need(data, "summary", str, problems) or ""
     proposed_by = _need(data, "proposed_by", str, problems) or ""
-
-    sources = data.get("sources")
-    if not isinstance(sources, dict):
-        problems.append("sources must be an object")
-        sources = {}
-    # EVERY SOURCE, EVERY TIME. A release is complete on its own; nothing is
-    # inherited from a branch or from the release before it.
-    missing = [s for s in channel.sources if s not in sources]
-    if missing:
-        problems.append("sources lacks %s" % ", ".join(missing))
-    extra = [s for s in sources if s not in channel.sources]
-    if extra:
-        problems.append(
-            "sources names %s, which no component builds" % ", ".join(extra)
-        )
-    for key, sha in sources.items():
-        if not isinstance(sha, str) or not _SHA.match(sha):
-            problems.append("sources.%s must be a full 40-character SHA" % key)
-
+    sources = _parse_sources(data.get("sources"), channel, problems)
     images_all = {i for c in channel.components for i in c.images}
     logs = images_all | {c.name for c in channel.components}
     changes = _parse_changes(data.get("changes"), images_all, logs, problems)
-
-    build = data.get("build", {})
-    if not isinstance(build, dict):
-        problems.append("build must be an object")
-        build = {}
-    run = build.get("run", 0)
-    if not isinstance(run, int) or isinstance(run, bool) or run < 0:
-        problems.append("build.run must be a non-negative integer")
-        run = 0
-    images = build.get("images", {})
-    if not isinstance(images, dict):
-        problems.append("build.images must be an object")
-        images = {}
-    for key, digest in images.items():
-        if key not in images_all:
-            problems.append("build.images.%s is not an image of any component" % key)
-        if not isinstance(digest, str) or not _DIGEST.match(digest):
-            problems.append("build.images.%s must be sha256:<64 hex>" % key)
-
+    run, images = _parse_build(data.get("build", {}), images_all, problems)
     state = data.get("state")
     if state not in STATES:
         problems.append(
@@ -410,16 +386,53 @@ def parse_release(data: object, channel: Channel) -> Release:
     if problems:
         raise Invalid("release %s" % (name or "?"), problems)
     return Release(
-        name,
-        summary,
-        proposed_by,
-        dict(sources),
-        changes,
-        run,
-        dict(images),
-        state,
-        history,
+        name, summary, proposed_by, sources, changes, run, images, state, history
     )
+
+
+def _parse_sources(raw: object, channel: Channel, problems: list[str]) -> dict:
+    """EVERY SOURCE, EVERY TIME. A release is complete on its own.
+
+    Nothing is inherited from a branch or from the release before it.
+    """
+    if not isinstance(raw, dict):
+        problems.append("sources must be an object")
+        return {}
+    missing = [s for s in channel.sources if s not in raw]
+    if missing:
+        problems.append("sources lacks %s" % ", ".join(missing))
+    extra = [s for s in raw if s not in channel.sources]
+    if extra:
+        problems.append(
+            "sources names %s, which no component builds" % ", ".join(extra)
+        )
+    problems.extend(
+        "sources.%s must be a full 40-character SHA" % key
+        for key, sha in raw.items()
+        if not isinstance(sha, str) or not _SHA.match(sha)
+    )
+    return dict(raw)
+
+
+def _parse_build(build: object, images_all: set, problems: list[str]):
+    """(run id, {image: digest}) from the release's `build` block."""
+    if not isinstance(build, dict):
+        problems.append("build must be an object")
+        return 0, {}
+    run = build.get("run", 0)
+    if not isinstance(run, int) or isinstance(run, bool) or run < 0:
+        problems.append("build.run must be a non-negative integer")
+        run = 0
+    images = build.get("images", {})
+    if not isinstance(images, dict):
+        problems.append("build.images must be an object")
+        return run, {}
+    for key, digest in images.items():
+        if key not in images_all:
+            problems.append("build.images.%s is not an image of any component" % key)
+        if not isinstance(digest, str) or not _DIGEST.match(digest):
+            problems.append("build.images.%s must be sha256:<64 hex>" % key)
+    return run, dict(images)
 
 
 def _parse_changes(raw, images, logs, problems) -> tuple[Change, ...]:
@@ -510,7 +523,7 @@ def _parse_history(raw, state, problems) -> tuple[Event, ...]:
         here = e.to
     if state in STATES and here != state:
         problems.append("history ends at %s but state is %s" % (here, state))
-    for a, b in zip(events, events[1:]):
+    for a, b in itertools.pairwise(events):
         if b.at < a.at:
             problems.append("history goes back in time at %s" % b.to)
     return tuple(events)
@@ -527,11 +540,19 @@ def touched(channel: Channel, release: Release, base: Release) -> tuple[Componen
 
 def check_set(channel: Channel, releases: dict[str, Release]) -> None:
     """The channel and its releases, checked as one: what one file cannot see alone."""
-    problems = []
-    for key in ("current", "previous"):
-        name = getattr(channel, key)
-        if name not in releases:
-            problems.append("%s %s has no release file" % (key, name))
+    problems = _check_refs(channel, releases)
+    if not problems:
+        problems = _check_images(channel, releases)
+    if problems:
+        raise Invalid("channel %s" % channel.channel, problems)
+
+
+def _check_refs(channel: Channel, releases: dict[str, Release]) -> list[str]:
+    problems = [
+        "%s %s has no release file" % (key, getattr(channel, key))
+        for key in ("current", "previous")
+        if getattr(channel, key) not in releases
+    ]
     for q in channel.queue:
         if q not in releases:
             problems.append("queued %s has no release file" % q)
@@ -552,12 +573,19 @@ def check_set(channel: Channel, releases: dict[str, Release]) -> None:
             "current %s is %s; it must be rolling, live or verified"
             % (cur.name, cur.state)
         )
-    if problems:
-        raise Invalid("channel %s" % channel.channel, problems)
-    # A COUPLED PAIR LEAVES BUILT TOGETHER OR NOT AT ALL. Every image of every
-    # component a release touches must be present once it is built.
+    return problems
+
+
+def _check_images(channel: Channel, releases: dict[str, Release]) -> list[str]:
+    """A COUPLED PAIR LEAVES BUILT TOGETHER OR NOT AT ALL.
+
+    Every image of every component a release touches must be present once it
+    is built. Called only after _check_refs found `current`.
+    """
+    cur = releases[channel.current]
+    problems = []
     for name, rel in releases.items():
-        if rel.state not in HAS_IMAGES or cur is None or name == channel.current:
+        if rel.state not in HAS_IMAGES or name == channel.current:
             continue
         want = [i for c in touched(channel, rel, cur) for i in c.images]
         lacking = [i for i in want if i not in rel.images]
@@ -566,8 +594,7 @@ def check_set(channel: Channel, releases: dict[str, Release]) -> None:
                 "%s is %s without the %s digest(s)"
                 % (name, rel.state, ", ".join(lacking))
             )
-    if problems:
-        raise Invalid("channel %s" % channel.channel, problems)
+    return problems
 
 
 # --- the tick -------------------------------------------------------------
@@ -584,8 +611,9 @@ class World:
     now: datetime
     family_in_instance: int | None
     guild_groups_inside: int | None
-    # When the families and guild groups were last seen to leave, carried
-    # from the previous tick (see realmroller_world.carry_out_since).
+    # When the families and guild groups were last seen to leave. The tick
+    # only reads this; the CALLER carries it from one tick to the next
+    # (realmroller_world.carry_out_since).
     out_since: datetime | None
     last_roll_started: datetime | None
     ready: bool | None = None  # the restarted component reports Ready
@@ -635,8 +663,29 @@ def tick(channel: Channel, releases: dict[str, Release], w: World) -> Action:
     cur = releases[channel.current]
     if cur.state in ON_REALM:
         return _watch(channel, cur, w)
+    step = _pipeline_step(channel, releases)
+    if step is not None:
+        return step
 
-    # Build and prove run even while paused or gated: only the roll waits.
+    proven = [n for n in channel.queue if releases[n].state == "proven"]
+    if not proven:
+        return Action("wait", None, "nothing proven")
+    head = proven[-1]  # coalesce: the newest proven release rolls
+    older = tuple(proven[:-1])
+    parts = touched(channel, releases[head], cur)
+    gated = any(c.gated for c in parts)
+    held = _held(channel, w, gated)
+    if held:
+        return Action("wait", head, held, supersedes=older, gated=gated)
+    names = ", ".join(c.name for c in parts) or "nothing"
+    why = "one commit: %s digests + banner + deployed_dev" % names
+    if not gated:
+        why += " (ungated: restarts %s only)" % names
+    return Action("roll", head, why, supersedes=older, gated=gated)
+
+
+def _pipeline_step(channel: Channel, releases: dict[str, Release]) -> Action | None:
+    """Build and prove, oldest queued first. These run even while paused or gated."""
     for name in channel.queue:
         rel = releases[name]
         if rel.state == "proposed":
@@ -648,101 +697,102 @@ def tick(channel: Channel, releases: dict[str, Release], w: World) -> Action:
             return Action(
                 "prove", name, "throwaway pod greps the binary (%d grep(s))" % greps
             )
+    return None
 
-    proven = [n for n in channel.queue if releases[n].state == "proven"]
-    if not proven:
-        return Action("wait", None, "nothing proven")
-    head = proven[-1]  # coalesce: the newest proven release rolls
-    older = tuple(proven[:-1])
-    parts = touched(channel, releases[head], cur)
-    gated = any(c.gated for c in parts)
-    names = ", ".join(c.name for c in parts) or "nothing"
 
-    def wait(why: str) -> Action:
-        return Action("wait", head, why, supersedes=older, gated=gated)
-
+def _held(channel: Channel, w: World, gated: bool) -> str:
+    """Why the roll waits, or "" when every gate is open. Pause holds every roll."""
     if channel.paused:
-        return wait(
-            "channel paused"
-            + (": %s" % channel.paused_reason if channel.paused_reason else "")
-        )
-    if gated:
-        p = channel.policy
-        if w.last_roll_started and w.now - w.last_roll_started < p.min_interval:
-            nxt = w.last_roll_started + p.min_interval
-            return wait(
-                "one roll start per %s; next at %s"
-                % (
-                    _span(p.min_interval),
-                    nxt.astimezone(timezone.utc).strftime("%H:%MZ"),
-                )
-            )
-        if w.family_in_instance is None:
-            return wait("family API unreachable: treat as inside")
-        if w.family_in_instance > 0:
-            return wait("%d family member(s) in an instance" % w.family_in_instance)
-        if w.guild_groups_inside is None:
-            return wait("guild runs unreadable: treat as inside")
-        if w.guild_groups_inside > 0:
-            return wait("%d guild group(s) in an instance" % w.guild_groups_inside)
-        if w.out_since is None or w.now - w.out_since < p.settle:
-            return wait("everyone out, settling for %s" % _span(p.settle))
-    why = "one commit: %s digests + banner + deployed_dev" % names
+        reason = channel.paused_reason
+        return "channel paused" + (": %s" % reason if reason else "")
     if not gated:
-        why += " (ungated: restarts %s only)" % names
-    return Action("roll", head, why, supersedes=older, gated=gated)
+        return ""
+    p = channel.policy
+    if w.last_roll_started and w.now - w.last_roll_started < p.min_interval:
+        nxt = (w.last_roll_started + p.min_interval).astimezone(timezone.utc)
+        return "one roll start per %s; next at %s" % (
+            _span(p.min_interval),
+            nxt.strftime("%H:%MZ"),
+        )
+    for count, unreadable, what in (
+        (w.family_in_instance, "family API unreachable", "family member(s)"),
+        (w.guild_groups_inside, "guild runs unreadable", "guild group(s)"),
+    ):
+        if count is None:
+            return "%s: treat as inside" % unreadable
+        if count > 0:
+            return "%d %s in an instance" % (count, what)
+    if w.out_since is None or w.now - w.out_since < p.settle:
+        return "everyone out, settling for %s" % _span(p.settle)
+    return ""
 
 
 def _watch(channel: Channel, rel: Release, w: World) -> Action:
-    """A release on the realm: roll back on any failure, else move it forward."""
-    rb = channel.policy.rollback
+    """A release on the realm: roll back on any failure, else move it forward.
 
-    def back(why: str) -> Action:
-        # A rollback skips the hourly and the instance gates (the realm is
-        # already broken) and pauses the channel so the next release does not
-        # roll over an unexplained failure.
-        return Action("rollback", rel.name, why, target=channel.previous, pause=True)
-
-    if w.bad_signature:
-        return back("log signature: %s" % w.bad_signature)
-    if w.restarts > rb.restarts_over:
-        return back("%d restarts in %s" % (w.restarts, _span(rb.restarts_window)))
+    A rollback skips the hourly and the instance gates (the realm is already
+    broken) and pauses the channel so the next release does not roll over an
+    unexplained failure.
+    """
+    pending: list[str] = []
+    flagged: list[str] = []
+    failed = _realm_failure(channel, rel, w)
+    if failed is None and rel.state == "live":
+        failed, pending, flagged = _verify(rel, w)
+    if failed:
+        return Action("rollback", rel.name, failed, target=channel.previous, pause=True)
     if rel.state == "rolling":
-        started = rel.entered("rolling") or w.now
-        if w.ready:
-            return Action("mark_live", rel.name, "Ready")
-        if w.now - started > channel.policy.ready_within:
-            return back("not Ready within %s" % _span(channel.policy.ready_within))
-        return Action("wait", rel.name, "restarting")
-
-    live_at = rel.entered("live") or w.now
-    if w.bots_low_since is not None and w.now - w.bots_low_since >= rb.bots_below_for:
-        return back(
-            "bots online under %d%% for %s"
-            % (rb.bots_below_pct, _span(rb.bots_below_for))
+        return (
+            Action("mark_live", rel.name, "Ready")
+            if w.ready
+            else Action("wait", rel.name, "restarting")
         )
-    pending, flagged = [], []
-    for check in (c.verify for c in rel.changes if c.verify):
-        hit = bool(w.seen.get(check.label))
-        over = w.now - live_at >= check.within
-        if check.absent and hit:
-            if check.soft:
-                flagged.append(check.label)
-                continue
-            return back("seen %s" % check.label)
-        if not check.absent and not hit and over:
-            if check.soft:
-                flagged.append(check.label)
-                continue
-            return back("never seen %s" % check.label)
-        if not over and not (hit and not check.absent):
-            pending.append(check.label)
     if pending:
         return Action("wait", rel.name, "verifying: %d check(s) open" % len(pending))
     why = "every check passed"
     if flagged:
         why += "; soft check(s) flagged: %s" % ", ".join(flagged)
     return Action("mark_verified", rel.name, why)
+
+
+def _realm_failure(channel: Channel, rel: Release, w: World) -> str | None:
+    """A failure that rolls back in any on-realm state, or None."""
+    rb = channel.policy.rollback
+    if w.bad_signature:
+        return "log signature: %s" % w.bad_signature
+    if w.restarts > rb.restarts_over:
+        return "%d restarts in %s" % (w.restarts, _span(rb.restarts_window))
+    if rel.state == "rolling" and not w.ready:
+        started = rel.entered("rolling") or w.now
+        if w.now - started > channel.policy.ready_within:
+            return "not Ready within %s" % _span(channel.policy.ready_within)
+    if rel.state == "live" and w.bots_low_since is not None:
+        if w.now - w.bots_low_since >= rb.bots_below_for:
+            return "bots online under %d%% for %s" % (
+                rb.bots_below_pct,
+                _span(rb.bots_below_for),
+            )
+    return None
+
+
+def _verify(rel: Release, w: World) -> tuple[str | None, list[str], list[str]]:
+    """(failure, open checks, flagged soft checks) for a live release."""
+    live_at = rel.entered("live") or w.now
+    pending, flagged = [], []
+    for check in (c.verify for c in rel.changes if c.verify):
+        hit = bool(w.seen.get(check.label))
+        over = w.now - live_at >= check.within
+        # An absent text seen fails at once; a grep fails only once its window
+        # has passed unseen.
+        failed = hit if check.absent else (over and not hit)
+        if failed:
+            if not check.soft:
+                verb = "seen" if check.absent else "never seen"
+                return "%s %s" % (verb, check.label), pending, flagged
+            flagged.append(check.label)
+        elif not over and (check.absent or not hit):
+            pending.append(check.label)
+    return None, pending, flagged
 
 
 def _span(td: timedelta) -> str:

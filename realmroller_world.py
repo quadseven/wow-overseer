@@ -25,9 +25,17 @@ _TIMEOUT = 20  # seconds; the family API answers in well under one
 
 
 def fetch_json(url: str, timeout: float = _TIMEOUT) -> object | None:
-    """GET `url` as JSON, or None (logged) on any failure to read or parse it."""
+    """GET `url` as JSON, or None (logged) on any failure to read or parse it.
+
+    Only http and https: the site URL comes from the command line, and a
+    `file:` or custom scheme there is a mistake to refuse, not a read.
+    """
+    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+        log.warning("refusing %s: only http and https are read", url)
+        return None
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
+        # Scheme checked above, so S310's file: and custom-scheme risk is closed.
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
             if resp.status != 200:
                 log.warning("GET %s answered %s", url, resp.status)
                 return None

@@ -82,6 +82,16 @@ class FamilyReader(unittest.TestCase):
         self.assertIsNone(world.family_in_instance(BASE, ("Grug",), Fake(a)))
 
 
+class FetchJson(unittest.TestCase):
+    def test_only_http_and_https_are_read(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as f:
+            f.write('{"family": "Grug"}')
+            f.flush()
+            with self.assertLogs("realmroller", "WARNING") as logs:
+                self.assertIsNone(world.fetch_json("file://" + f.name))
+        self.assertIn("only http and https are read", logs.output[0])
+
+
 class GuildReader(unittest.TestCase):
     def test_counts_groups_in_the_named_states(self):
         active = [{"state": "inside"}, {"state": "queued"}, {"state": "inside"}]
