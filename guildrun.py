@@ -205,6 +205,15 @@ class Member:
     def played_tree(self) -> str:
         return self.tree or self.target_tree
 
+    def plays(self, seat: str) -> bool:
+        """Does this member actually PLAY the seat: its spent talents are a tree
+        that tanks or heals. The raid plan's target tree does not count, and a
+        class that only could tank or heal does not either (#575): Cave seated
+        Enhancement shamans, Retribution paladins and Balance druids in the tank
+        and healer seats, they played as damage dealers, and dungeon clear
+        logged "no tank in the party" in 7 of 9 of its runs."""
+        return bool(self.tree) and raidroles.fits_seat(self.class_id, self.tree, seat)
+
     def fit(self, seat: str) -> str:
         """ "spec" when the tree plays the seat, "class" when only the class
         can, "" when it cannot take the seat at all."""
@@ -687,11 +696,11 @@ def compositions(window: list) -> list:
     tank and a healer who fit at least by class gives nothing.
     """
     tanks = sorted(
-        (m for m in window if m.fit(TANK) and tank_ready(m)),
+        (m for m in window if m.plays(TANK) and tank_ready(m)),
         key=lambda m: (_seat_rank(m, TANK), -m.level, m.name),
     )
     healers = sorted(
-        (m for m in window if m.fit(HEALER) and covered(m)),
+        (m for m in window if m.plays(HEALER) and covered(m)),
         key=lambda m: (_seat_rank(m, HEALER), -m.level, m.name),
     )
     out = []
@@ -889,12 +898,34 @@ def plan_for(pool: Pool, all_doors: list, table: dict) -> Plan | None:
     )
 
 
+# A DOOR THAT KEEPS FAILING IS RETIRED AT THAT BAND (#575). Wailing Caverns
+# was 0 cleared of 48 runs over 30 days, and the heuristic kept re-picking it by
+# level fit because no single composition had MIN_SAMPLES runs. A door with at
+# least FAILING_RUNS runs at the band, pooled over compositions, and no clear is
+# skipped while any other door fits.
+FAILING_RUNS = 6
+
+
+def failing_doors(plan: Plan) -> set:
+    """Keywords of doors that have failed FAILING_RUNS times at this band with
+    no clear."""
+    out = set()
+    for door in plan.doors:
+        rate = door_rate(plan.table, door.keyword, plan.band)
+        if rate.runs >= FAILING_RUNS and rate.cleared == 0:
+            out.add(door.keyword)
+    return out
+
+
 def heuristic_door(plan: Plan, composition: Composition) -> tuple:
     """(keyword, why). The best smoothed rate among doors with MIN_SAMPLES
-    runs at this band, when it beats the level fit's own; else the level fit."""
-    fit = plan.doors[0]
+    runs at this band, when it beats the level fit's own; else the level fit.
+    A failing door (failing_doors) is skipped while another door fits."""
+    failing = failing_doors(plan)
+    doors = [d for d in plan.doors if d.keyword not in failing] or list(plan.doors)
+    fit = doors[0]
     known = []
-    for door in plan.doors:
+    for door in doors:
         rate = door_rate(plan.table, door.keyword, plan.band, composition.key)
         if rate.runs >= MIN_SAMPLES:
             known.append((rate.smoothed, door, rate))
@@ -1166,6 +1197,8 @@ async def decide(client, plan: Plan, environ=None) -> Decision:
     )
     chosen = plan.composition(comp.chosen)
     fits = {d.keyword for d in fitting_doors(chosen.levels, list(plan.doors))}
+    # Jev may not send a group to a door that keeps failing either.
+    fits = (fits - failing_doors(plan)) or fits
     if door_keyword not in fits and fits:
         # The heuristic's door, re-asked for the composition that was chosen.
         door_keyword, door_why = heuristic_door(plan, chosen)

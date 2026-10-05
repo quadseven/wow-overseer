@@ -59,7 +59,9 @@ def cave_band():
         member("Tanky", 20, WARRIOR, talent_spells=PROTECTION_TALENT),
         member("Furio", 19, WARRIOR, talent_spells="61216"),
         member("Healy", 19, PRIEST, talent_spells=HOLY_TALENT),
-        member("Pally", 19, PALADIN, target_tree="Holy"),
+        # Holy Shock (20473) spent: a paladin that heals. #575 seats only a
+        # member whose spent talents play the seat.
+        member("Pally", 19, PALADIN, talent_spells="20473"),
         member("Stabby", 19, ROGUE),
         member("Zappy", 18, MAGE),
         member("Locky", 17, WARLOCK),
@@ -633,8 +635,14 @@ class TheCompositions(unittest.TestCase):
         self.assertNotIn(comp.tank.name, command)
 
     def test_pools_never_share_a_member(self):
+        talents = {"W": PROTECTION_TALENT, "P": HOLY_TALENT}
         horde = [
-            guildrun.member_from_row(dict(row(n + "h", lvl, c), guild_name="Bonkers"))
+            guildrun.member_from_row(
+                dict(
+                    row(n + "h", lvl, c, talent_spells=talents.get(n)),
+                    guild_name="Bonkers",
+                )
+            )
             for n, lvl, c in (
                 ("W", 19, WARRIOR),
                 ("P", 18, PRIEST),
@@ -711,6 +719,42 @@ class TheHeuristicIsThePrior(unittest.TestCase):
         rows = [ended("ragefire", "wiped")] * 4 + [ended("wailing", "cleared")] * 2
         p = plan(rows)
         self.assertEqual(guildrun.heuristic_door(p, p.options[0])[0], "ragefire")
+
+
+class OnlyRealTanksAndHealersAreSeated(unittest.TestCase):
+    """#575: Cave seated damage-specced shamans, paladins and druids in the
+    tank and healer seats; dungeon clear logged no tank in 7 of 9 runs."""
+
+    def test_a_class_that_could_heal_but_does_not_is_not_a_healer(self):
+        ret = member("Ret", 19, PALADIN, talent_spells="20375")
+        planned = member("Plan", 19, PALADIN, target_tree="Holy")
+        holy = member("Holy", 19, PALADIN, talent_spells="20473")
+        self.assertFalse(ret.plays(guildrun.HEALER))
+        self.assertFalse(planned.plays(guildrun.HEALER))
+        self.assertTrue(holy.plays(guildrun.HEALER))
+
+    def test_no_real_healer_no_group(self):
+        crowd = [
+            member("Tanky", 20, WARRIOR, talent_spells=PROTECTION_TALENT),
+            member("Ret", 19, PALADIN, talent_spells="20375"),
+            member("Plan", 19, PALADIN, target_tree="Holy"),
+            member("Stabby", 19, ROGUE),
+            member("Zappy", 18, MAGE),
+        ]
+        self.assertEqual(guildrun.compositions(crowd), [])
+
+
+class AFailingDoorIsRetired(unittest.TestCase):
+    def test_six_wipes_and_no_clear_retire_a_door_at_the_band(self):
+        rows = [ended("ragefire", "wiped")] * 6
+        p = plan(rows)
+        self.assertEqual(guildrun.failing_doors(p), {"ragefire"})
+        keyword, _why = guildrun.heuristic_door(p, p.options[0])
+        self.assertNotEqual(keyword, "ragefire")
+
+    def test_one_clear_keeps_it(self):
+        rows = [ended("ragefire", "wiped")] * 6 + [ended("ragefire", "cleared")]
+        self.assertEqual(guildrun.failing_doors(plan(rows)), set())
 
 
 class JevChoosesWithAConfidence(unittest.TestCase):
