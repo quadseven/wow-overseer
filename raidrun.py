@@ -99,7 +99,15 @@ GUILD_MEMBERS_SQL = (
 # talent frame's order, 0 to 2). A family character's row is written for the
 # page and the log; the module leaves the family to its roster tree.
 SPEC_TABLE = "overseer_raid_spec"
-DELETE_SPECS_SQL = "DELETE FROM overseer_raid_spec WHERE guild = %s"
+# A row a member wrote when it respecced to fill a dungeon seat its guild was
+# short of (raidroles.GUILD_DUTY, guildrespec, #580) is kept: it is not the
+# lineup's to drop. The lineup's INSERT still replaces it for a raider it
+# places, whose seat then follows the tree it now plays.
+DELETE_SPECS_SQL = (
+    "DELETE FROM overseer_raid_spec WHERE guild = %s AND duty NOT IN ("
+    + ", ".join("'%s'" % d for d in sorted(raidroles.GUILD_DUTY.values()))
+    + ")"
+)
 INSERT_SPEC_SQL = (
     "INSERT INTO overseer_raid_spec (name, guild, class, tab, tree, duty, subgroup) "
     "VALUES (%s, %s, %s, %s, %s, %s, %s) "

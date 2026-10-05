@@ -64,6 +64,7 @@ import weaponskill
 import natural
 import guildcorps
 import guildjobs
+import guildrespec
 import guildrun
 import guildsocial
 import holdings
@@ -2598,6 +2599,16 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
 # every pass: the fix is a migration, and a warning every ten minutes would
 # bury everything else the bridge says.
 _RAID_SPEC_MISSING_SAID = False
+
+
+def _record_guild_respec(choice) -> None:
+    """The tree a member respecced to for its guild, in overseer_raid_spec, so
+    mod-overseer spends every point it earns later there (#580). The lineup's
+    rewrite of the guild keeps the row (raidrun.DELETE_SPECS_SQL)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(raidrun.INSERT_SPEC_SQL, (
+            choice.name, choice.guild[:24], int(choice.class_id), int(choice.tab),
+            choice.tree[:16], raidroles.GUILD_DUTY[choice.seat], 0))
 
 
 def _write_raid_specs(names: list) -> str:
@@ -13400,6 +13411,57 @@ class Bridge(discord.Client):
         sale_walks = now >= self._job_walks_unsupported.get("sale", 0.0)
         started = self._start_guild_job_steps(plan, now, cap, sale_walks)
         log.info("guild jobs: started %d step(s)%s", started, _family_label(cohort))
+        self._start_guild_respecs(facts, members, busy | set(self._job_steps), now, cap)
+
+    def _start_guild_respecs(self, facts, members, busy, now, cap):
+        """A guild short of tanks or healers in a band grows one (guildrespec, #580).
+
+        The member says why in guild chat, walks to its class trainer and pays
+        for the reset (`walk-to-trainer talents:<tab>`, quadseven/mod-overseer#692),
+        and once that is applied its overseer_raid_spec row names the tree so
+        every point it earns later goes there too.
+        """
+        if not guildrespec.enabled():
+            return
+        mates = guildrespec.mates_from(
+            members, facts.get("rows", ()), facts.get("raid_trees", {}), (), busy,
+            int(time.time()))
+        plan = guildrespec.plan(mates, facts.get("recent_rows", ()))
+        _log_capped("guild respec", plan.notes)
+        for choice in plan.choices:
+            log.info("guild respec: %s", choice.line)
+            self._job_steps[choice.name] = now
+            task = asyncio.create_task(self._run_guild_respec(choice, cap))
+            self._mail_walk_tasks.add(task)
+            task.add_done_callback(self._mail_walk_task_done)
+
+    async def _run_guild_respec(self, choice, cap: float) -> None:
+        """Say it, walk to the trainer and pay, then keep the tree in the raid plan."""
+        try:
+            try:
+                await asyncio.to_thread(_insert_speak, relay.SpeakCommand(
+                    choice.name, "guild", choice.said, "",
+                    guildrespec.say_source_for(choice.name)))
+            except pymysql.err.MySQLError:
+                log.exception("guild respec: %s's line was not said: %r", choice.name,
+                              choice.said)
+            if choice.reset:
+                step = guildcorps.Step(
+                    choice.name, guildrespec.ACTION, choice.tab, choice.line,
+                    rows=(guildcorps.Row("cast", choice.command(cap), "",
+                                         guildrespec.source_for(choice.name)),))
+                if not await self._job_row(step, step.rows[0], cap):
+                    log.info("guild respec: %s did not respec to %s; it is asked again "
+                             "after %d minutes", choice.name, choice.tree,
+                             guildrespec.RETRY_MINUTES)
+                    return
+            await asyncio.to_thread(_record_guild_respec, choice)
+            log.info("guild respec: %s now plays %s for %s (%s), and its raid plan "
+                     "tree says so", choice.name, choice.tree, choice.guild, choice.band)
+        except pymysql.err.MySQLError:
+            log.exception("guild respec: %s's respec failed", choice.name)
+        finally:
+            self._job_steps.pop(choice.name, None)
 
     async def _plan_guild_jobs(self, members, facts, busy, cap, spawn_walks):
         fields = await self._job_fields(members) if spawn_walks else {}
@@ -22118,6 +22180,8 @@ def _insert_corps_row(holder: str, row) -> int:
 _JOB_MEMBERS_SQL = (
     "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, "
     "c.level, c.money, c.online, c.map AS map_id, s.pos_x, s.pos_y, s.in_combat, "
+    # The trainer's talent reset price (guildrespec.reset_fee, #580).
+    "c.resettalents_cost, c.resettalents_time, "
     "lc.name AS master, " + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
@@ -22227,6 +22291,7 @@ def _fetch_job_facts(family_names: list) -> dict:
         unclaimed_rows = _job_read(cur, "unopened material posts", _JOB_UNCLAIMED_SQL,
                                    (guildjobs.POST_SUBJECT, guildjobs.MAILBOX_FULL_LETTERS))
         bank_rows = _job_read(cur, "guild bank tabs", _JOB_BANK_TABS_SQL)
+        spec_rows = _job_read(cur, "raid plan trees", "SELECT name, tree FROM overseer_raid_spec")
         if not _JOB_STONES:
             _JOB_STONES.extend(_job_read(cur, "meeting stones", _JOB_STONES_SQL,
                                          (MEETING_STONE_GO_TYPE,)))
@@ -22239,6 +22304,13 @@ def _fetch_job_facts(family_names: list) -> dict:
     # Guilds that own a bank tab (#395). A schema without the table reads as
     # none, so a post never goes to a bank this world cannot show exists.
     facts["banks"] = {str(r.get("name") or "") for r in bank_rows} - {""}
+    # What guildrespec reads beside the members (#580): the talents and the
+    # reset price on each member row, the raid plan's trees, and this pass's
+    # own recent rows with their commands.
+    facts["rows"] = rows
+    facts["recent_rows"] = recent_rows
+    facts["raid_trees"] = {str(r.get("name") or ""): str(r.get("tree") or "")
+                           for r in spec_rows}
     return facts
 
 
