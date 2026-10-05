@@ -32,6 +32,7 @@ world.
 from __future__ import annotations
 
 import raidroles
+import raidteams
 
 # WotLK class ids, as the realm's own `characters.class` column stores them.
 WARRIOR, PALADIN, HUNTER, ROGUE, PRIEST = 1, 2, 3, 4, 5
@@ -395,6 +396,11 @@ def build_lineup(
     (the classes to recruit for them) and `buff_cover`.
     """
     guaranteed = frozenset(guaranteed)
+    # AN APPROVED GUILD IS SEATED AS APPROVED (raidteams, 2026-10-05): the
+    # operator's Molten Core lineup, not this function's five-man shape.
+    team = raidteams.guild_of(m.get("name") for m in members)
+    if team:
+        return _approved_lineup(members, team, guaranteed)
     pool = sorted(
         (raidroles.with_spec(m) for m in members if m.get("name")),
         key=lambda m: _sort_key(m, guaranteed),
@@ -449,6 +455,134 @@ def build_lineup(
             "surplus": len(pool),
             "considered": len(members),
             "respec": len([m for m in placed if m.get("respec")]),
+        },
+        "composition": _composition(placed),
+        "roles_line": roles_line(groups, wanted),
+        "gap_line": gap_line(gaps, recruit, cover, count),
+    }
+
+
+def _approved_seat(member: dict, seat, number: int) -> dict:
+    """A member in the seat the approved lineup gives it, playing the tree
+    that seat names. Nobody respecs: the approved tree is the one it plays."""
+    if seat.seat == raidroles.SEAT_TANK:
+        duty = MAIN_TANK if number == 1 else OFF_TANK
+    elif seat.seat == raidroles.SEAT_HEALER:
+        duty = HEALER_WORD
+    else:
+        duty = raidroles.seat_duty(seat.class_id, seat.tree) or DAMAGE_WORD
+    out = dict(
+        member,
+        role=_SEAT_ROLE[seat.seat],
+        seat=seat.seat,
+        duty=duty,
+        target_spec=seat.tree,
+        target_tab=raidroles.tree_tab(seat.class_id, seat.tree),
+        respec=False,
+        buff=BUFF_OF.get(seat.class_id, ""),
+        approved_name=seat.name,
+        fire_resistance=seat.fire_resistance,
+    )
+    out["label"] = _label(out)
+    return out
+
+
+def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
+    """The approved lineup for `team`, in build_lineup's own shape.
+
+    Each seat is filled by the member it names, found under its approved name
+    or the name it has until the rename. A seat whose member is not in the
+    guild yet (a recruit still to come) is an open seat: it counts as a gap and
+    names the class to recruit. Summoners and maintenance are the approved
+    lists; everyone else, the leavers first, is surplus, the kick list."""
+    by_name = {}
+    for m in members:
+        if m.get("name"):
+            by_name[m["name"]] = raidroles.with_spec(m)
+
+    def find(name, was=""):
+        return by_name.get(name) or (by_name.get(was) if was else None)
+
+    groups, open_seats, used = [], [], set()
+    for number, approved in enumerate(raidteams.GROUPS[team], start=1):
+        seated = []
+        for seat in approved:
+            member = find(seat.name, seat.was)
+            if member is None:
+                open_seats.append(seat)
+                continue
+            used.add(member["name"])
+            seated.append(_approved_seat(member, seat, number))
+        groups.append(
+            {
+                "number": number,
+                "members": seated,
+                "buffs": [b for b in BUFFS if b in _buffs(seated)],
+                "missing_buffs": [b for b in BUFFS if b not in _buffs(seated)],
+                "open_seats": [s.name for s in approved if s in open_seats],
+            }
+        )
+
+    def listed(pairs, role):
+        out = []
+        for old, new in pairs:
+            member = find(new, old)
+            if member is not None:
+                used.add(member["name"])
+                out.append(dict(member, role=role, approved_name=new))
+        return out
+
+    summoners = listed(raidteams.SUMMONERS[team], "summoner")
+    upkeep = listed(raidteams.MAINTENANCE[team], "maintenance")
+    leaving = set(raidteams.LEAVING[team])
+    surplus = sorted(
+        (m for n, m in by_name.items() if n not in used),
+        key=lambda m: (m["name"] not in leaving, m["name"]),
+    )
+    placed = [m for g in groups for m in g["members"]]
+    count = len(groups)
+    raiders = sum(len(g) for g in raidteams.GROUPS[team])
+    wanted = _wanted(
+        raiders, len(raidteams.MAINTENANCE[team]), len(raidteams.SUMMONERS[team]), count
+    )
+    wanted.update(
+        tanks=sum(1 for s in raidteams.seats(team) if s.seat == raidroles.SEAT_TANK),
+        healers=sum(
+            1 for s in raidteams.seats(team) if s.seat == raidroles.SEAT_HEALER
+        ),
+        damage=sum(1 for s in raidteams.seats(team) if s.seat == raidroles.SEAT_DAMAGE),
+    )
+    gaps = {
+        "tanks": sum(1 for s in open_seats if s.seat == raidroles.SEAT_TANK),
+        "healers": sum(1 for s in open_seats if s.seat == raidroles.SEAT_HEALER),
+        "damage": sum(1 for s in open_seats if s.seat == raidroles.SEAT_DAMAGE),
+    }
+    cover = _buff_cover(groups, placed)
+    recruit = list(dict.fromkeys(s.class_id for s in open_seats))
+    return {
+        "groups": groups,
+        "maintenance": upkeep,
+        "summoners": summoners,
+        "surplus": surplus,
+        "wanted": wanted,
+        "shortfall": {
+            "raiders": max(0, raiders - len(placed)),
+            "maintenance": max(0, len(raidteams.MAINTENANCE[team]) - len(upkeep)),
+            "summoners": max(0, len(raidteams.SUMMONERS[team]) - len(summoners)),
+            **gaps,
+        },
+        "gaps": gaps,
+        "recruit_classes": recruit,
+        "recruits": [s._asdict() for s in open_seats],
+        "approved": team,
+        "buff_cover": cover,
+        "counts": {
+            "raiders": len(placed),
+            "maintenance": len(upkeep),
+            "summoners": len(summoners),
+            "surplus": len(surplus),
+            "considered": len(members),
+            "respec": 0,
         },
         "composition": _composition(placed),
         "roles_line": roles_line(groups, wanted),
