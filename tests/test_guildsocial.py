@@ -395,10 +395,12 @@ class WhoAnswers(unittest.TestCase):
             out = plan(crowd, asks=[ask(7, "Auren")], held={"Zappy": why})
             self.assertEqual(out.replies, (), why)
 
-    def test_far_away_and_busy_questing_means_no(self):
+    def test_far_away_and_questing_still_answers_the_finder_brings_it(self):
+        # 2026-10-05: the walk to the door made every far member say no, but
+        # a guild run goes in by the dungeon finder and nobody walks.
         far = mate("Zappy", 20, MAGE, map_id=1, zone_id=DARKSHORE, at=(6400.0, 400.0))
         out = plan([mate("Auren", 20, ROGUE), far], asks=[ask(7, "Auren")])
-        self.assertEqual(out.replies, ())
+        self.assertEqual([r.member for r in out.replies], ["Zappy"])
 
     def test_idle_in_town_on_the_same_continent_means_yes(self):
         town = mate("Zappy", 20, MAGE, zone_id=STORMWIND, at=(-8800.0, 640.0))
@@ -437,11 +439,10 @@ class WhoAnswers(unittest.TestCase):
         )
         self.assertEqual(more.replies, ())
 
-    def test_an_upgrade_there_is_worth_the_trip(self):
-        # Idle in Darnassus, across the sea: the XP alone is not worth it.
+    def test_an_upgrade_there_is_said_in_the_answer(self):
+        # Idle in Darnassus, across the sea: the finder brings it in, and an
+        # upgrade there is what it says yes for.
         far = mate("Zappy", 20, MAGE, map_id=1, zone_id=DARNASSUS, at=(9900.0, 2400.0))
-        out = plan([mate("Auren", 20, ROGUE), far], asks=[ask(7, "Auren")])
-        self.assertEqual(out.replies, ())
         out = plan(
             [mate("Auren", 20, ROGUE), far],
             asks=[ask(7, "Auren")],
@@ -939,6 +940,33 @@ class TheGuildTabSaysWhoAsked(unittest.TestCase):
         lines = view["active"][0]["lines"]
         self.assertEqual(lines[0], "dungeon: Auren asked for it in guild chat")
         self.assertIn("answered yes", lines[1])
+
+
+class AFinderRunCostsNoWalk(unittest.TestCase):
+    """2026-10-05: a member far from the door, or across the sea, valued a
+    finder run below what it was already doing, so asks drew nobody."""
+
+    def far_mate(self, map_id):
+        return mate(
+            "Auren", 20, ROGUE, map_id=map_id, zone_id=DARKSHORE, at=(6400.0, 400.0)
+        )
+
+    def test_across_the_sea_a_member_still_values_the_xp(self):
+        door = DEADMINES
+        entrances = {str(door.map_id): {"map": 0, "x": -11208.5, "y": 1685.34}}
+        net = gs.worth(self.far_mate(1), door, gs.XP_BAND, entrances)
+        self.assertGreater(net, 0)
+        self.assertEqual(net, gs.XP_BAND - gs.QUESTING)
+
+    def test_the_walk_counts_again_if_runs_ever_walk_in(self):
+        door = DEADMINES
+        entrances = {str(door.map_id): {"map": 0, "x": -11208.5, "y": 1685.34}}
+        old = gs.FINDER_TELEPORTS
+        gs.FINDER_TELEPORTS = False
+        try:
+            self.assertLess(gs.worth(self.far_mate(1), door, gs.XP_BAND, entrances), 0)
+        finally:
+            gs.FINDER_TELEPORTS = old
 
 
 if __name__ == "__main__":
