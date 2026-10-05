@@ -19984,8 +19984,28 @@ def _guild_pug_plan(social, facts: dict, mates: list, held: dict, doors: list,
         family=facts["family"])
 
 
+# ask id -> the last guildpug.Silence line logged for it, so a call nobody
+# answers is explained once and again only when the reasons change.
+_PUG_SILENCES: dict = {}
+
+
+def _log_pug_silences(silences) -> None:
+    """Log why nobody answered each called ask (guildpug.silence), once per
+    reason; asks no longer silent are forgotten."""
+    current = {s.ask_id: s.line for s in silences}
+    for ask_id in [a for a in _PUG_SILENCES if a not in current]:
+        del _PUG_SILENCES[ask_id]
+    for ask_id, line in sorted(current.items()):
+        if _PUG_SILENCES.get(ask_id) != line:
+            _PUG_SILENCES[ask_id] = line
+            log.info("guild pugs: %s", line)
+
+
 async def _say_guild_pugs(pug_pass) -> None:
-    """Write and say one guildpug.PugPass, when it has anything."""
+    """Write and say one guildpug.PugPass, when it has anything, and say
+    why nobody answered a call."""
+    if pug_pass is not None:
+        _log_pug_silences(pug_pass.silences)
     if pug_pass is None or not (pug_pass.calls or pug_pass.joins):
         return
     await asyncio.to_thread(_write_guild_pugs, pug_pass)

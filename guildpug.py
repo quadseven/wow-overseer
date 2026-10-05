@@ -29,7 +29,20 @@ no guild or another guild) that is:
            social layer weighs a guildmate.
 
 The best answers first: the most worth, then the level nearest the asker's,
-then the name. It answers at least ANSWER_AFTER_MINUTES after the call, by a
+then the name.
+
+WHEN NOBODY ANSWERS (`silence`). On wow-dev on 2026-10-05 Bonkers called for
+a healer for Ragefire Chasm and a tank and healer for Wailing Caverns ten
+times from 06:14 to 08:04 UTC, and no pug ever answered. The bridge read no
+random bot at all: of the realm's 2,069 random bot characters none stood
+between level 8 and 49, online or not. The 880 made that day level from 1
+(the realm's natural start) and had reached level 7 in at most five hours of
+play; the rest are 50 to 60. The qualification itself works: on the same
+pass's live read, 8 Horde random bots qualified to tank Blackrock Depths and
+5 to heal it. Nothing said so, because a pass with no call and no join logs
+nothing. So each called ask nobody answers carries a Silence: how many random
+bots were read and the commonest reasons each could not answer, and the
+bridge logs it whenever the reasons change. It answers at least ANSWER_AFTER_MINUTES after the call, by a
 whisper to the asker ("I can heal Deadmines, inv"), one pug an ask a pass, and
 the asker tells the guild ("Got a healer from LFG, Thrall's coming."). The
 answer is an overseer_guild_answer row with stance `pug`, so the social layer
@@ -135,9 +148,39 @@ class Join:
 
 
 @dataclass(frozen=True)
+class Silence:
+    """A called ask whose seat no random bot answered this pass, and why:
+    how many random bots were read and the commonest reasons each could not."""
+
+    ask_id: int
+    asker: str
+    seat: str
+    place: str
+    read: int
+    reasons: tuple = ()  # ((why, count), ...), commonest first
+
+    @property
+    def line(self) -> str:
+        head = "nobody answers %s's call for a %s for %s (ask %d)" % (
+            self.asker,
+            self.seat,
+            self.place,
+            self.ask_id,
+        )
+        if not self.read:
+            return head + ": no random bot is online in its level range"
+        return "%s: %d random bot(s) read, %s" % (
+            head,
+            self.read,
+            ", ".join("%d %s" % (n, why) for why, n in self.reasons),
+        )
+
+
+@dataclass(frozen=True)
 class PugPass:
     calls: tuple = ()
     joins: tuple = ()
+    silences: tuple = ()
 
 
 def call_from_row(row: dict) -> Call:
@@ -252,6 +295,41 @@ def worth(mate, door, entrances: dict) -> float:
     """What the run is worth to a pug: its level's experience, less what it
     is doing and the walk (guildsocial.worth with XP_BAND)."""
     return guildsocial.worth(mate, door, guildsocial.XP_BAND, entrances)
+
+
+# How many reasons a Silence names.
+SILENCE_REASONS = 3
+
+
+def silence(
+    ask,
+    seat: str,
+    door,
+    pugs: list,
+    asker_level: int,
+    faction: str,
+    entrances: dict,
+    busy=frozenset(),
+    family=frozenset(),
+) -> Silence:
+    """Why no random bot of `pugs` answers this ask's seat: each one's
+    why_not_pug, counted, the commonest first."""
+    tally: dict = {}
+    for m in pugs:
+        why = why_not_pug(
+            m, seat, door, asker_level, faction, ask.guild, entrances, busy, family
+        )
+        if why:
+            tally[why] = tally.get(why, 0) + 1
+    reasons = sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
+    return Silence(
+        ask.id,
+        ask.asker,
+        seat,
+        guildsocial.short_place(door.place),
+        len(pugs),
+        tuple(reasons[:SILENCE_REASONS]),
+    )
 
 
 def best_pug(
@@ -421,7 +499,7 @@ def plan(
     by_ask: dict = {}
     for answer in current:
         by_ask.setdefault(answer.ask_id, []).append(answer)
-    new_calls, joins = [], []
+    new_calls, joins, silences = [], [], []
     for ask in sorted(asks, key=lambda a: a.id):
         if not _live(ask) or ask.id in closing:
             continue
@@ -442,18 +520,33 @@ def plan(
         if _minutes_since(call.created_at, now) < ANSWER_AFTER_MINUTES:
             continue
         for seat in short[:PUGS_PER_ASK_PER_PASS]:
+            open_pugs = [m for m in pugs if m.name not in spoken]
+            faction = factions.get(ask.guild, "")
             pug = best_pug(
-                [m for m in pugs if m.name not in spoken],
+                open_pugs,
                 seat,
                 door,
                 asker.level,
-                factions.get(ask.guild, ""),
+                faction,
                 ask.guild,
                 entrances,
                 busy,
                 family,
             )
             if pug is None:
+                silences.append(
+                    silence(
+                        ask,
+                        seat,
+                        door,
+                        open_pugs,
+                        asker.level,
+                        faction,
+                        entrances,
+                        busy,
+                        family,
+                    )
+                )
                 continue
             spoken.add(pug.name)
             joins.append(
@@ -466,7 +559,7 @@ def plan(
                     told_guild=told_line(ask.asker, pug.name, seat),
                 )
             )
-    return PugPass(calls=tuple(new_calls), joins=tuple(joins))
+    return PugPass(calls=tuple(new_calls), joins=tuple(joins), silences=tuple(silences))
 
 
 def pug_tail(pugs) -> str:
