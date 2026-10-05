@@ -1183,6 +1183,7 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
     tier that has any: doors the guild has not cleared with a good record,
     then ones it has not cleared that are failing for the shape of group it
     can seat (guildrun.ShapeRecord.failing), then doors it has cleared.
+    Within an uncleared tier only the lowest door is offered: level order.
     Failing is a preference, not a ban: a failing door reopens only
     RECORD_DAYS after its last run and cannot be run while closed, so a ban
     stopped Cave asking for anything at levels 15 to 19. Cleared ranks last
@@ -1211,6 +1212,12 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
         else:
             options.append(option)
     options = options or failing or done
+    # LEVEL ORDER WITHIN A TIER: of the doors a guild has not cleared, only the
+    # lowest is offered, so Jev cannot skip ahead (it chose Shadowfang Keep for
+    # Cave over the Deadmines it had never cleared). Cleared doors keep them all.
+    if options and options is not done:
+        lowest = min(o.door.floor for o in options)
+        options = [o for o in options if o.door.floor == lowest]
     if not options:
         return None
     return (options[0].need.rank, name, mate, tuple(options), band, shape)
