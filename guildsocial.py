@@ -988,6 +988,8 @@ class _Board:
     gone: set = field(default_factory=set)
     # guildrun.shape_records: (keyword, band, shape) -> ShapeRecord.
     records: dict = field(default_factory=dict)
+    # guildrun.cleared_doors: (guild, keyword) for doors a guild has cleared.
+    cleared: set = field(default_factory=set)
 
     @property
     def free(self) -> dict:
@@ -1002,7 +1004,7 @@ class _Board:
 
 
 def _board(
-    mates, held, answers, needs, all_doors, entrances, now, records=None
+    mates, held, answers, needs, all_doors, entrances, now, records=None, cleared=None
 ) -> _Board:
     by_ask: dict = {}
     for answer in answers:
@@ -1021,6 +1023,7 @@ def _board(
         entrances=entrances,
         now=now,
         records=dict(records or {}),
+        cleared=set(cleared or ()),
     )
 
 
@@ -1176,16 +1179,20 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
     """(rank, name, mate, options, band, shape) for this member's ask, or None.
 
     `options` are DoorOptions, best need first, one per door: never a door the
-    guild already has an ask out for. A door failing for the shape of group
-    the guild can seat (guildrun.ShapeRecord.failing) is a preference, not a
-    ban: it is offered only when every fitting door is failing. A failing door
-    reopens only RECORD_DAYS after its last run, and it cannot be run while
-    closed, so a ban stopped Cave asking for anything at levels 15 to 19.
+    guild already has an ask out for. Doors are offered in tiers, the first
+    tier that has any: doors the guild has not cleared with a good record,
+    then ones it has not cleared that are failing for the shape of group it
+    can seat (guildrun.ShapeRecord.failing), then doors it has cleared.
+    Failing is a preference, not a ban: a failing door reopens only
+    RECORD_DAYS after its last run and cannot be run while closed, so a ban
+    stopped Cave asking for anything at levels 15 to 19. Cleared ranks last
+    because guilds clear dungeons in level order: Jev, offered Ragefire beside
+    Wailing Caverns, kept sending Bonkers back to the Ragefire it had cleared.
     """
     faction = board.factions.get(guild, "")
     band = guildrun.band_of([mate.member.level])
     shape = ask_shape(board, mate, guild)
-    options, failing, seen = [], [], set()
+    options, failing, done, seen = [], [], [], set()
     for need in board.needs.get(name, []):
         door = board.doors.get(need.keyword)
         if door is None or door.keyword in seen or (guild, door.keyword) in asked:
@@ -1196,8 +1203,14 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
             (door.keyword, band, shape), guildrun.NO_SHAPE_RECORD
         )
         seen.add(door.keyword)
-        (failing if record.failing else options).append(DoorOption(need, door, record))
-    options = options or failing
+        option = DoorOption(need, door, record)
+        if (guild, door.keyword) in board.cleared:
+            done.append(option)
+        elif record.failing:
+            failing.append(option)
+        else:
+            options.append(option)
+    options = options or failing or done
     if not options:
         return None
     return (options[0].need.rank, name, mate, tuple(options), band, shape)
@@ -1424,6 +1437,7 @@ def plan_pass(
     can_form: bool,
     campaigns=(),
     records=None,
+    cleared=None,
 ) -> Pass:
     """One pass of the social layer.
 
@@ -1443,7 +1457,9 @@ def plan_pass(
     In order: asks that end now close, a full ask forms, the asks still short
     draw yeses, and members with a need ask.
     """
-    board = _board(mates, held, answers, needs, all_doors, entrances, now, records)
+    board = _board(
+        mates, held, answers, needs, all_doors, entrances, now, records, cleared
+    )
     live = [a for a in asks if a.state in LIVE_ASKS and a.kind == KIND_DUNGEON]
     expire, cancel, withdraw, still = _close(board, live)
     board.gone = set(withdraw)

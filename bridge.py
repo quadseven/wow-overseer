@@ -15908,12 +15908,14 @@ class Bridge(discord.Client):
         # THE DOOR'S RECORD BY SHAPE (#584): no member asks for a door failing
         # for the group its guild can seat, the runs never let in counted.
         records = guildrun.shape_records(facts.get("history", []), facts["now"])
+        # LEVEL ORDER: a door a guild has cleared ranks below one it has not.
+        cleared = guildrun.cleared_doors(facts.get("history", []))
         social = guildsocial.plan_pass(
             mates, held, facts["asks"], facts["answers"], needs, doors,
             guildjobs.entrances(), facts["now"],
             room=max(0, bounds.max_groups - in_flight),
             can_form=spaced and in_flight < bounds.max_groups,
-            campaigns=facts["campaigns"], records=records)
+            campaigns=facts["campaigns"], records=records, cleared=cleared)
         social = await _guild_social_doors(getattr(self, "_jev", None), social)
         pug_pass = (_guild_pug_plan(social, facts, mates, held, doors, pug_all, bounds)
                     if pugs_on else None)
@@ -20089,7 +20091,7 @@ def _fetch_guild_run_facts(bounds) -> dict:
         )
         by_guild = {r["guild"]: int(r["n"]) for r in cur.fetchall()}
         cur.execute(
-            "SELECT keyword, band, composition, state, outcome, deaths, ended_at "
+            "SELECT guild, keyword, band, composition, state, outcome, deaths, ended_at "
             "FROM overseer_guild_run WHERE state = 'ended' ORDER BY id DESC LIMIT 2000"
         )
         history = list(cur.fetchall())

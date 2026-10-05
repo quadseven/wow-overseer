@@ -979,6 +979,17 @@ def shape_records(
     return out
 
 
+def cleared_doors(rows: list) -> set:
+    """(guild, keyword) for every door a guild has cleared in `rows`
+    (overseer_guild_run rows). Guilds clear dungeons in level order, so a
+    door a guild has cleared ranks below one it has not (guildsocial)."""
+    return {
+        (str(r.get("guild") or ""), str(r.get("keyword") or ""))
+        for r in rows
+        if str(r.get("outcome") or "") == "cleared" and r.get("guild")
+    }
+
+
 def comp_rate(table: dict, composition: str, band: str) -> Rate:
     runs = cleared = deaths = 0
     for (_k, b, c), rate in table.items():
