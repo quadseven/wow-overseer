@@ -141,7 +141,9 @@ def visits(letters, online, busy=frozenset(), free_slots=None, roster=frozenset(
         room = _int(free_slots.get(receiver), -1)
         limit = TAKES_PER_VISIT if room < 0 else min(TAKES_PER_VISIT, room)
         if limit <= 0:
-            notes.append("%s has %d letter(s) and no free bag slot" % (receiver, len(waiting)))
+            notes.append(
+                "%s has %d letter(s) and no free bag slot" % (receiver, len(waiting))
+            )
             continue
         takes = tuple(
             Take(x.receiver, x.mail_id, x.item_guid, x.name)
