@@ -433,14 +433,21 @@ class TheReads(unittest.TestCase):
         ):
             self.assertIn(column, sql, column)
 
-    def test_the_worn_read_selects_the_resistance_and_nothing_else(self):
-        """Five more resistance columns would invite the five sentences this
-        view has not earned: it asks about Molten Core, which is fire."""
-        sql = SERVER[SERVER.index("_RAID_WORN = (") :]
-        sql = sql[: sql.index(")\n")]
-        self.assertIn("it.fire_res", sql)
-        for other in ("frost_res", "nature_res", "shadow_res", "arcane_res"):
-            self.assertNotIn(other, sql, other)
+    def test_the_worn_read_carries_what_pre_raid_readiness_scores(self):
+        """Seats and the gate score gearscore's stats on every worn item
+        (#542), so the read carries the entry, the inventory type, the stat
+        columns and fire resistance, and no item level average is computed."""
+        self.assertIn("_RAID_WORN = raidgear.WORN_SQL", SERVER)
+        import raidgear
+
+        sql = raidgear.WORN_SQL
+        for column in (
+            "it.fire_res",
+            "itemEntry AS entry",
+            "stat_type1",
+            "stat_value10",
+        ):
+            self.assertIn(column, sql, column)
 
     def test_the_loot_source_reads_ignore_reference_rows(self):
         """A loot row with a Reference holds a reference id in `Item`, not an

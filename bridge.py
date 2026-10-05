@@ -107,6 +107,7 @@ import questbook
 import questshare
 import quests
 import raidcraft
+import raidgear
 import raidlineup
 import raidprep
 import raidroles
@@ -2600,6 +2601,26 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
 _RAID_SPEC_MISSING_SAID = False
 
 
+def _with_readiness(cur, members: list) -> list:
+    """The members with `readiness`, the share of their slots at or near their
+    spec's pre-raid best in slot (raidgear, #542), so the seats written are
+    the ones the Lineup and Raid tabs show. A read that fails on this schema
+    leaves every member unread and the lineup falls back to level order."""
+    names = sorted({m["name"] for m in members if m.get("name")})
+    if not names:
+        return members
+    worn = _corps_read(
+        cur, "worn gear for raid seats",
+        raidgear.WORN_SQL.format(holes=",".join(["%s"] * len(names))),  # noqa: S608
+        (len(armory.EQUIPPED_SLOTS), *names))
+    ids = raidgear.every_list_id()
+    listed = _corps_read(
+        cur, "gear lists for raid seats",
+        raidgear.LIST_SQL.format(holes=",".join(["%s"] * len(ids))),  # noqa: S608
+        tuple(ids)) if ids else []
+    return raidgear.attach(members, worn, {int(r["entry"]): r for r in listed})
+
+
 def _write_raid_specs(names: list) -> str:
     """Plan the family's guild as eight groups and write each raider's target
     tree to overseer_raid_spec (raidrun.spec_rows). Returns the log line.
@@ -2620,7 +2641,7 @@ def _write_raid_specs(names: list) -> str:
         if not guild:
             return "raid spec: the family %s is in no guild, so no seat targets are written" % names[0]
         cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes), tuple(names))  # noqa: S608
-        members = [dict(r) for r in cur.fetchall()]
+        members = _with_readiness(cur, [dict(r) for r in cur.fetchall()])
         lineup = raidlineup.build_lineup(members, guaranteed=list(names))
         rows = raidrun.spec_rows(guild, lineup)
         try:
@@ -2663,7 +2684,7 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(raidrun.GUILD_MEMBERS_SQL.format(holes=holes),  # noqa: S608
                     tuple(names))
-        members = [dict(row) for row in cur.fetchall()]
+        members = _with_readiness(cur, [dict(row) for row in cur.fetchall()])
         lineup = raidlineup.build_lineup(members, guaranteed=list(names))
         seats = raidrun.seat_rows(family, keyword, lineup)
         if not seats:

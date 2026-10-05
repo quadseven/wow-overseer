@@ -12,6 +12,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import armory  # noqa: E402
+import gearscore  # noqa: E402
 import raidready  # noqa: E402
 from raidlineup import (
     DRUID,
@@ -26,6 +28,49 @@ from raidlineup import (
 )
 
 NO_GOALS = {"goals": []}
+
+# PRE-RAID READINESS FIXTURE (#542). A class with no talents is scored on its
+# first spec, so a warrior head is scored against warrior-fury. Listed pieces
+# carry strength 80 and the weak ones 1.
+_SPEC = "warrior-fury"
+_BODY = (
+    "head",
+    "shoulders",
+    "back",
+    "chest",
+    "wrist",
+    "hands",
+    "waist",
+    "legs",
+    "feet",
+)
+
+
+def _gear_row(entry, strength):
+    return {
+        "entry": entry,
+        "item_name": "Item %d" % entry,
+        "stat_type1": 4,
+        "stat_value1": strength,
+    }
+
+
+ITEM_ROWS = {
+    i: _gear_row(i, 80) for k in _BODY for i in gearscore.slot_list(_SPEC, "preraid", k)
+}
+
+
+def _geared(name, pieces, **extra):
+    """Worn rows for `name`: `pieces` body slots in pre-raid best, the rest weak."""
+    out = []
+    for index, key in enumerate(_BODY):
+        slot = armory.EQUIPPED_SLOTS.index("wrists" if key == "wrist" else key)
+        if index < pieces:
+            row = _gear_row(gearscore.slot_list(_SPEC, "preraid", key)[0], 80)
+        else:
+            row = _gear_row(900000 + index, 1)
+        out.append(dict(row, name=name, slot=slot, **extra))
+    return out
 
 
 def _guild(name, guildid, spec, level=60, race=1):
@@ -72,6 +117,7 @@ def _card(
     chars=(),
     quest_rows=(),
     holding_rows=(),
+    item_rows=None,
 ):
     group = raidready.group_guilds(rows, {"Head": family_names})[0]
     raids = frozenset({raidready.RAID_PORTAL}) if runnable else frozenset()
@@ -88,6 +134,7 @@ def _card(
             goals,
             quest_rows=list(quest_rows),
             holding_rows=list(holding_rows),
+            item_rows=item_rows,
         )
 
 
@@ -237,7 +284,8 @@ class SoftBlockersStopNothing(unittest.TestCase):
         card = _card(
             self.rows,
             [self.rows[0]["name"]],
-            worn=[{"name": r["name"], "slot": 0, "item_level": 40} for r in self.rows],
+            worn=[row for r in self.rows for row in _geared(r["name"], 0)],
+            item_rows=ITEM_ROWS,
             goals={"goals": [{"name": "Healing potions", "status": "short"}]},
         )
         self.assertTrue(card["ready"], card["blockers"])
@@ -245,19 +293,12 @@ class SoftBlockersStopNothing(unittest.TestCase):
         self.assertEqual(tones, {raidready.SOFT})
         text = " ".join(b["text"] for b in card["blockers"])
         self.assertIn("below level 60", text)
-        self.assertIn("below item level 55", text)
+        self.assertNotIn("item level", text)
+        self.assertIn("fewer than 50% of their slots at or near pre-raid best", text)
         self.assertIn("summoners short", text)
         self.assertIn("Attunement to the Core", text)
         self.assertIn("healing potions", text)
         self.assertIn("could form its first Molten Core raid today", card["headline"])
-
-    def test_the_shirt_and_tabard_do_not_drag_the_gear_average(self):
-        worn = [
-            {"name": "A", "slot": 0, "item_level": 60},
-            {"name": "A", "slot": 3, "item_level": 1},
-            {"name": "A", "slot": 18, "item_level": 1},
-        ]
-        self.assertEqual(raidready.worn_item_levels(worn), {"A": 60})
 
 
 def _held(holder, name, count, slot=23):
@@ -279,6 +320,27 @@ def _held(holder, name, count, slot=23):
     }
 
 
+class SeatsAreChosenByPreRaidReadiness(unittest.TestCase):
+    """Ten warriors, eight tank seats: the two who wear pre-raid best in slot
+    take seats from warriors who sort ahead of them by name."""
+
+    def test_the_best_geared_warriors_get_the_tank_seats(self):
+        rows = _guild("Cave", 23, FULL)
+        head = rows[0]["name"]
+        geared = ["Cave1_8", "Cave1_9"]
+        worn = [r for name in geared for r in _geared(name, 9)]
+        card = _card(rows, [head], worn=worn, item_rows=ITEM_ROWS)
+        tanks = {r["name"] for r in card["raiders"] if r["role"] == "tank"}
+        self.assertTrue(set(geared) <= tanks, tanks)
+        self.assertIn(head, tanks)
+
+    def test_without_gear_reads_the_old_level_and_name_order_holds(self):
+        rows = _guild("Cave", 23, FULL)
+        card = _card(rows, [rows[0]["name"]])
+        tanks = {r["name"] for r in card["raiders"] if r["role"] == "tank"}
+        self.assertNotIn("Cave1_9", tanks)
+
+
 class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
     """Per raider: gear against the floor, fire resistance against the role's
     target, and the night's supplies carried against what the role wants."""
@@ -293,6 +355,7 @@ class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
             [self.head],
             worn=worn,
             holding_rows=held,
+            item_rows=ITEM_ROWS,
             clears=False,
         )
 
@@ -311,16 +374,15 @@ class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
         ]
 
     def test_a_geared_stocked_main_tank_is_ready(self):
-        worn = [
-            {"name": self.head, "slot": 0, "item_level": 62, "fire_res": 120},
-            {"name": self.head, "slot": 1, "item_level": 60, "fire_res": 80},
-        ]
+        worn = _geared(self.head, 9, fire_res=0)
+        worn[0]["fire_res"], worn[1]["fire_res"] = 120, 80
         card = self._card_for(worn, self._tank_night())
         head = next(r for r in card["raiders"] if r["name"] == self.head)
         self.assertTrue(head["ready"], head["short"])
         self.assertEqual("yes", head["cells"][-1])
         self.assertEqual("200 of 200", head["cells"][5])
         self.assertEqual("14 of 14", head["cells"][8])
+        self.assertEqual("100%", head["cells"][4])
         self.assertIn("1 ready for the core", card["raiders_line"])
 
     def test_a_big_stack_does_not_stand_in_for_a_missing_flask(self):
@@ -328,7 +390,8 @@ class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
             _held(self.head, "Major Healing Potion", 40, slot=23),
             _held(self.head, "Greater Fire Protection Potion", 4, slot=24),
         ]
-        worn = [{"name": self.head, "slot": 0, "item_level": 62, "fire_res": 200}]
+        worn = _geared(self.head, 9, fire_res=0)
+        worn[0]["fire_res"] = 200
         head = next(
             r for r in self._card_for(worn, held)["raiders"] if r["name"] == self.head
         )
@@ -346,7 +409,7 @@ class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
         dps = by_role[("dps", False)]
         self.assertEqual(0, dps["fire_target"])
         self.assertNotIn(" of ", dps["cells"][5])
-        self.assertIn("gear not read", dps["short"])
+        self.assertIn("pre-raid gear not read", dps["short"])
 
 
 class EachRaiderIsReported(unittest.TestCase):
@@ -369,16 +432,15 @@ class EachRaiderIsReported(unittest.TestCase):
                     "online": 0 if index == 2 else 1,
                 }
             )
-        self.worn = [
-            {"name": self.head, "slot": 0, "item_level": 45, "fire_res": 0},
-            {"name": self.head, "slot": 1, "item_level": 45, "fire_res": 10},
-            {"name": self.head, "slot": 2, "item_level": 45, "fire_res": 7},
-        ]
+        # Two pre-raid pieces of nine body slots; fire resistance 17 in all.
+        self.worn = _geared(self.head, 2, fire_res=0)
+        self.worn[1]["fire_res"], self.worn[2]["fire_res"] = 10, 7
         self.card = _card(
             self.rows,
             [self.head],
             chars=chars,
             worn=self.worn,
+            item_rows=ITEM_ROWS,
             attuned=[self.head],
             clears=False,
         )
@@ -396,7 +458,7 @@ class EachRaiderIsReported(unittest.TestCase):
         self.assertEqual(1, head["group"])
         self.assertEqual("tank", head["role"])
         self.assertEqual(60, head["level"])
-        self.assertEqual(45, head["gear"])
+        self.assertLess(head["gear"], raidready.GEAR_CONVENTION)
         self.assertEqual(17, head["fire_res"])
         self.assertTrue(head["attuned"])
         self.assertEqual("Eastern Kingdoms", head["where"])
@@ -406,13 +468,14 @@ class EachRaiderIsReported(unittest.TestCase):
                 self.head,
                 "main tank, Protection",
                 "60",
-                "45",
+                "22%",
                 "17 of 200",
                 "yes",
                 "0",
                 "0 of 14",
                 "Eastern Kingdoms",
-                "no: gear 45 of 55; fire resistance 17 of 200; supplies 0 of 14",
+                "no: pre-raid gear 22%, needs 50%; fire resistance 17 of 200; "
+                "supplies 0 of 14",
             ],
             head["cells"],
         )
