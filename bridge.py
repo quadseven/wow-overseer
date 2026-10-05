@@ -15841,20 +15841,11 @@ class Bridge(discord.Client):
                    | set(getattr(self, "_crafter_walks", ())))
         doors = guildrun.doors(facts["finder_floors"])
         mates, held, needs = _guild_social_mates(facts, mid_job, doors)
-        # PICK-UP GROUPS (guildpug, #591): random bots are read only for asks
-        # that may want one, and a pug who said yes counts as free this pass.
+        # PICK-UP GROUPS (guildpug, #591): a pug who said yes counts as free.
         pugs_on = guildpug.enabled()
-        pug_rows, pug_all = [], []
+        pug_all = []
         if pugs_on:
-            watch = guildpug.watching(facts["asks"], facts.get("pug_calls", {}),
-                                      facts["answers"], facts["now"])
-            span = guildpug.levels_to_read(watch, {d.keyword: d for d in doors})
-            if span:
-                pug_rows = await asyncio.to_thread(_fetch_guild_pugs, span, bounds)
-            pug_all, answered, pug_held = guildpug.pug_mates(
-                pug_rows, facts["answers"], facts["busy"], facts["family"])
-            mates = mates + answered
-            held = dict(held, **pug_held)
+            mates, held, pug_all = await _guild_pug_read(facts, doors, bounds, mates, held)
         # THE DOOR'S RECORD BY SHAPE (#584): no member asks for a door failing
         # for the group its guild can seat, the runs never let in counted.
         records = guildrun.shape_records(facts.get("history", []), facts["now"])
@@ -15865,21 +15856,10 @@ class Bridge(discord.Client):
             can_form=spaced and in_flight < bounds.max_groups,
             campaigns=facts["campaigns"], records=records)
         social = await _guild_social_doors(getattr(self, "_jev", None), social)
-        pug_pass = None
-        if pugs_on:
-            pug_pass = guildpug.plan(
-                social, facts["asks"], facts["answers"], facts.get("pug_calls", {}),
-                {m.name: m.member for m in mates if m.name not in held}, pug_all,
-                {d.keyword: d for d in doors}, guildpug.factions(mates, bounds.guilds),
-                guildjobs.entrances(), facts["now"], busy=facts["busy"],
-                family=facts["family"])
+        pug_pass = (_guild_pug_plan(social, facts, mates, held, doors, pug_all, bounds)
+                    if pugs_on else None)
         run_id = await asyncio.to_thread(_write_guild_social, social)
-        if pug_pass is not None and (pug_pass.calls or pug_pass.joins):
-            await asyncio.to_thread(_write_guild_pugs, pug_pass)
-            log.info("guild pugs: %d call(s) in LookingForGroup, %d pug(s) answered%s",
-                     len(pug_pass.calls), len(pug_pass.joins),
-                     "".join("; %s for %s's ask %d" % (j.member, j.asker, j.ask_id)
-                             for j in pug_pass.joins))
+        await _say_guild_pugs(pug_pass)
         if run_id:
             self._guild_run_formed_at = now
             self._guild_run_names |= set(social.form.composition.names)
@@ -19834,6 +19814,53 @@ _GUILD_PUGS_SQL = (
 )
 
 
+def _fetch_guild_pug_calls(cur) -> dict:
+    """ask id -> guildpug.Call for the asks still in play; none on a world
+    without the call table."""
+    try:
+        cur.execute(guildpug.CALLS_SQL)
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] == 1146):
+            raise
+        return {}
+    return {c.ask_id: c for c in map(guildpug.call_from_row, cur.fetchall())}
+
+
+async def _guild_pug_read(facts: dict, doors: list, bounds, mates: list, held: dict) -> tuple:
+    """(mates, held, every random bot read) for one social pass. Random bots
+    are read only for the asks that may want a pug (guildpug.watching); one
+    who said yes joins the mates, held for its own reason when not free."""
+    watch = guildpug.watching(facts["asks"], facts.get("pug_calls", {}),
+                              facts["answers"], facts["now"])
+    span = guildpug.levels_to_read(watch, {d.keyword: d for d in doors})
+    rows = await asyncio.to_thread(_fetch_guild_pugs, span, bounds) if span else []
+    pug_all, answered, pug_held = guildpug.pug_mates(
+        rows, facts["answers"], facts["busy"], facts["family"])
+    return mates + answered, dict(held, **pug_held), pug_all
+
+
+def _guild_pug_plan(social, facts: dict, mates: list, held: dict, doors: list,
+                    pug_all: list, bounds):
+    """guildpug.plan over one social pass's board."""
+    return guildpug.plan(
+        social, facts["asks"], facts["answers"], facts.get("pug_calls", {}),
+        {m.name: m.member for m in mates if m.name not in held}, pug_all,
+        {d.keyword: d for d in doors}, guildpug.factions(mates, bounds.guilds),
+        guildjobs.entrances(), facts["now"], busy=facts["busy"],
+        family=facts["family"])
+
+
+async def _say_guild_pugs(pug_pass) -> None:
+    """Write and say one guildpug.PugPass, when it has anything."""
+    if pug_pass is None or not (pug_pass.calls or pug_pass.joins):
+        return
+    await asyncio.to_thread(_write_guild_pugs, pug_pass)
+    log.info("guild pugs: %d call(s) in LookingForGroup, %d pug(s) answered%s",
+             len(pug_pass.calls), len(pug_pass.joins),
+             "".join("; %s for %s's ask %d" % (j.member, j.asker, j.ask_id)
+                     for j in pug_pass.joins))
+
+
 def _fetch_guild_pugs(span: tuple, bounds) -> list:
     """The random bots a pug may come from, in the level range `span`."""
     guilds = list(bounds.guilds)
@@ -20135,14 +20162,7 @@ def _fetch_guild_social_facts(bounds) -> dict:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
         drops = _guild_social_drops(cur)
-        pug_calls = {}
-        if guildpug.enabled():
-            try:
-                cur.execute(guildpug.CALLS_SQL)
-                pug_calls = {c.ask_id: c for c in map(guildpug.call_from_row, cur.fetchall())}
-            except pymysql.err.MySQLError as exc:
-                if not (exc.args and exc.args[0] == 1146):
-                    raise
+        pug_calls = _fetch_guild_pug_calls(cur) if guildpug.enabled() else {}
     facts.update({
         "now": now, "asks": asks, "answers": answers,
         "quests": guildsocial.quests_by_name(quest_rows),

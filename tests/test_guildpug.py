@@ -178,6 +178,15 @@ class WhenToLook(unittest.TestCase):
         self.assertIsNone(gp.levels_to_read([], DOORS_BY_KEY))
 
 
+class TheCallRow(unittest.TestCase):
+    def test_a_call_read_back_names_its_asker_and_seats(self):
+        c = gp.call_from_row(
+            {"ask_id": 7, "asker": "Auren", "seats": "tank,healer", "said": "LF"}
+        )
+        self.assertEqual((c.ask_id, c.asker, c.seats), (7, "Auren", ("tank", "healer")))
+        self.assertIn("c.asker", gp.CALLS_SQL)
+
+
 class WhoAnswers(unittest.TestCase):
     def joins(self, pugs, **kw):
         return pug_plan(

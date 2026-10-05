@@ -88,7 +88,8 @@ RUN_PUGS_COLUMN_SQL = (
 RUN_PUGS_SQL = "UPDATE overseer_guild_run SET pugs = %s WHERE id = %s"
 # The calls of the asks still in play.
 CALLS_SQL = (
-    "SELECT c.ask_id, c.seats, c.said, c.created_at FROM overseer_guild_pug_call c "
+    "SELECT c.ask_id, c.asker, c.seats, c.said, c.created_at "
+    "FROM overseer_guild_pug_call c "
     "JOIN overseer_guild_ask a ON a.id = c.ask_id "
     "WHERE a.state IN ('open', 'filled')"
 )
@@ -142,7 +143,7 @@ class PugPass:
 def call_from_row(row: dict) -> Call:
     return Call(
         ask_id=int(row["ask_id"]),
-        asker="",
+        asker=str(row.get("asker") or ""),
         seats=guildsocial.roles_of(row.get("seats")),
         said=str(row.get("said") or ""),
         created_at=row.get("created_at"),
