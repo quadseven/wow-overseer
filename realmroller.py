@@ -61,6 +61,7 @@ _NAME = re.compile(r"^r\d{4}\.\d{2}\.\d{2}-\d+$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _DURATION = re.compile(r"^(\d+)([smh])$")
+_FOLD_PR = re.compile(r"^[A-Za-z0-9_.-]*#(\d+)$")
 _UNITS = {"s": "seconds", "m": "minutes", "h": "hours"}
 
 
@@ -334,6 +335,10 @@ class Change:
     what: str
     prove: tuple[str, str] | None  # (image, grep) run against the built binary
     verify: Check | None
+    # A queued config-only PR in the deploy repo whose diff rides the roll
+    # commit, so it lands in the same restart. `pr` names it as `#N` or
+    # `repo#N`.
+    fold: bool = False
 
 
 @dataclass(frozen=True)
@@ -464,7 +469,13 @@ def _parse_changes(raw, images, logs, problems) -> tuple[Change, ...]:
         verify = None
         if "verify" in c:
             verify = _parse_check(c["verify"], logs, where + "verify.", problems)
-        out.append(Change(pr, what, prove, verify))
+        fold = c.get("fold", False)
+        if not isinstance(fold, bool):
+            problems.append("%sfold must be true or false" % where)
+            fold = False
+        elif fold and not _FOLD_PR.match(pr):
+            problems.append("%sfold needs pr like #123 or repo#123" % where)
+        out.append(Change(pr, what, prove, verify, fold))
     return tuple(out)
 
 
@@ -527,6 +538,14 @@ def _parse_history(raw, state, problems) -> tuple[Event, ...]:
         if b.at < a.at:
             problems.append("history goes back in time at %s" % b.to)
     return tuple(events)
+
+
+def fold_number(pr: str) -> int:
+    """The deploy-repo PR number a folded change names (`#5` or `repo#5` -> 5)."""
+    m = _FOLD_PR.match(pr)
+    if not m:
+        raise ValueError("not a PR reference like #123 or repo#123: %r" % pr)
+    return int(m.group(1))
 
 
 def touched(channel: Channel, release: Release, base: Release) -> tuple[Component, ...]:
@@ -623,6 +642,11 @@ class World:
     # the release went live.
     seen: dict[str, bool] = field(default_factory=dict)
     bots_low_since: datetime | None = None  # bots online under the threshold
+    # When the roll commit landed on the deploy repo's base branch. The release
+    # history's `rolling` time is when the roll PR was opened, and checks and
+    # review can hold that PR for longer than ready_within; the Ready window
+    # counts from the merge when it is known.
+    rolled_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -763,7 +787,7 @@ def _realm_failure(channel: Channel, rel: Release, w: World) -> str | None:
     if w.restarts > rb.restarts_over:
         return "%d restarts in %s" % (w.restarts, _span(rb.restarts_window))
     if rel.state == "rolling" and not w.ready:
-        started = rel.entered("rolling") or w.now
+        started = w.rolled_at or rel.entered("rolling") or w.now
         if w.now - started > channel.policy.ready_within:
             return "not Ready within %s" % _span(channel.policy.ready_within)
     if rel.state == "live" and w.bots_low_since is not None:
