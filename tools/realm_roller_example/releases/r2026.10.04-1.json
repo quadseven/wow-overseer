@@ -1,0 +1,76 @@
+{
+  "release": "r2026.10.04-1",
+  "summary": "example: the release the realm runs",
+  "proposed_by": "#102",
+  "sources": {
+    "core": "1111111111111111111111111111111111111111",
+    "playerbots": "2222222222222222222222222222222222222222",
+    "mod-overseer": "7777777777777777777777777777777777777777",
+    "mod-dungeon-clear": "4444444444444444444444444444444444444444",
+    "mod-ollama-chat": "5555555555555555555555555555555555555555",
+    "site": "6666666666666666666666666666666666666666"
+  },
+  "changes": [
+    {
+      "pr": "#102",
+      "what": "guild deaths recorded",
+      "prove": {
+        "image": "worldserver",
+        "grep": "guild death recorded"
+      },
+      "verify": {
+        "log": "worldserver",
+        "grep": "guild death recorded",
+        "within": "60m",
+        "soft": true
+      }
+    }
+  ],
+  "build": {
+    "run": 102,
+    "images": {
+      "worldserver": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "db-import": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "site": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  },
+  "state": "verified",
+  "history": [
+    {
+      "at": "2026-10-04T19:02:00-04:00",
+      "to": "building",
+      "by": "roller",
+      "note": "build run dispatched"
+    },
+    {
+      "at": "2026-10-04T19:41:00-04:00",
+      "to": "built",
+      "by": "roller",
+      "note": "both digests read from one run"
+    },
+    {
+      "at": "2026-10-04T19:44:00-04:00",
+      "to": "proven",
+      "by": "roller",
+      "note": "1 of 1 prove grep found"
+    },
+    {
+      "at": "2026-10-04T20:05:00-04:00",
+      "to": "rolling",
+      "by": "roller",
+      "note": "roll commit"
+    },
+    {
+      "at": "2026-10-04T20:11:00-04:00",
+      "to": "live",
+      "by": "roller",
+      "note": "Ready"
+    },
+    {
+      "at": "2026-10-04T20:55:00-04:00",
+      "to": "verified",
+      "by": "roller",
+      "note": "1 of 1 checks seen"
+    }
+  ]
+}

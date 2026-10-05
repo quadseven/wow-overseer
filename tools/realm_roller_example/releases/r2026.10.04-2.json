@@ -1,0 +1,65 @@
+{
+  "release": "r2026.10.04-2",
+  "summary": "example: proven and waiting for its window",
+  "proposed_by": "#103",
+  "sources": {
+    "core": "1111111111111111111111111111111111111111",
+    "playerbots": "2222222222222222222222222222222222222222",
+    "mod-overseer": "8888888888888888888888888888888888888888",
+    "mod-dungeon-clear": "4444444444444444444444444444444444444444",
+    "mod-ollama-chat": "5555555555555555555555555555555555555555",
+    "site": "6666666666666666666666666666666666666666"
+  },
+  "changes": [
+    {
+      "pr": "#103",
+      "what": "no free raid buffs",
+      "prove": {
+        "image": "worldserver",
+        "grep": "worldbuff disabled"
+      },
+      "verify": {
+        "log": "worldserver",
+        "absent": "casting worldbuff",
+        "within": "30m"
+      }
+    },
+    {
+      "pr": "#104",
+      "what": "a config-only change rides the same restart",
+      "verify": {
+        "log": "worldserver",
+        "absent": "AuctionHouseBot: buying",
+        "within": "30m"
+      }
+    }
+  ],
+  "build": {
+    "run": 103,
+    "images": {
+      "worldserver": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "db-import": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  },
+  "state": "proven",
+  "history": [
+    {
+      "at": "2026-10-04T21:02:00-04:00",
+      "to": "building",
+      "by": "roller",
+      "note": "build run dispatched"
+    },
+    {
+      "at": "2026-10-04T21:41:00-04:00",
+      "to": "built",
+      "by": "roller",
+      "note": "both digests read from one run"
+    },
+    {
+      "at": "2026-10-04T21:44:00-04:00",
+      "to": "proven",
+      "by": "roller",
+      "note": "1 of 1 prove grep found"
+    }
+  ]
+}
