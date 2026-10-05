@@ -2796,6 +2796,76 @@ _GUILD_RUNS_SQL = (
 )
 
 
+# THE GUILD CHAT FEED (#570). The asks a guild's members made in guild chat,
+# newest first, and the answers to them. The guild name is a bound parameter
+# and is only ever one of the configured guilds (guildrun.limits); `limit` is
+# an int the handler clamped. The run an ask became is read by its ids.
+_GUILD_ASKS_SQL = (
+    "SELECT id, guild, asker, kind, target, target_label, roles_needed, reason, "
+    "said, created_at, expires_at, state, run_id "
+    "FROM overseer_guild_ask WHERE guild = %s ORDER BY id DESC LIMIT %s"
+)
+_GUILD_ANSWERS_SQL = (
+    "SELECT id, ask_id, member, role, stance, said, created_at, state "
+    "FROM overseer_guild_answer WHERE ask_id IN ({holes}) ORDER BY id"
+)
+_GUILD_ASK_RUNS_SQL = (
+    "SELECT id, state, outcome, bosses_done, bosses_total, deaths, ended_at "
+    "FROM overseer_guild_run WHERE id IN ({holes})"
+)
+GUILDCHAT_DEFAULT_LIMIT = 30
+GUILDCHAT_MAX_LIMIT = 100
+
+
+def _guildchat_limit(raw: str) -> int:
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return GUILDCHAT_DEFAULT_LIMIT
+    return max(1, min(GUILDCHAT_MAX_LIMIT, n))
+
+
+def _fetch_guild_chat(guild: str, limit: int) -> dict:
+    """The guild's recent asks, each with its answers and, once run, its run.
+
+    A world without the ask tables answers an empty feed with `ready: false`
+    (the handler catches error 1146 only; a missing column is a real fault)
+    rather than 503.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # Not _wide_guarded: a missing table (1146) must reach the
+            # handler, which turns it into the `ready: false` answer.
+            cur.execute(_GUILD_ASKS_SQL, (guild, limit))
+            asks = list(cur.fetchall())
+            if not asks:
+                return {"guild": guild, "ready": True, "asks": []}
+            ids = [a["id"] for a in asks]
+            answers = _wide_guarded(
+                cur, _GUILD_ANSWERS_SQL.format(holes=", ".join(["%s"] * len(ids))),
+                tuple(ids), "", "overseer_guild_answer")
+            run_ids = sorted({a["run_id"] for a in asks if a.get("run_id")})
+            runs = []
+            if run_ids:
+                runs = _wide_guarded(
+                    cur, _GUILD_ASK_RUNS_SQL.format(holes=", ".join(["%s"] * len(run_ids))),
+                    tuple(run_ids), "", "overseer_guild_run")
+    finally:
+        conn.close()
+    by_ask: dict = {}
+    for ans in answers:
+        by_ask.setdefault(ans["ask_id"], []).append(dict(ans))
+    by_run = {r["id"]: dict(r) for r in runs}
+    out = []
+    for a in asks:
+        row = dict(a)
+        row["answers"] = by_ask.get(a["id"], [])
+        row["run"] = by_run.get(a.get("run_id")) if a.get("run_id") else None
+        out.append(row)
+    return {"guild": guild, "ready": True, "asks": out}
+
+
 def _fetch_lineup() -> dict:
     """Every guild the roster is in, with the class of every member.
 
@@ -6568,6 +6638,35 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("guild runs query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _guild_chat(self, query: dict) -> None:
+        """GET /api/guildchat?guild=X&limit=N - the guild's asks and answers.
+
+        `guild` must be one of the configured guilds (guildrun.limits), else
+        400; absent, it is the first one. `limit` is clamped to 1..100 and
+        defaults to 30. Newest ask first, each with its answers and, for an
+        ask that became a run, that run's outcome. A world without the ask
+        tables answers an empty list with `ready: false`, not a 503.
+        """
+        try:
+            guilds = guildrun.limits().guilds
+            wanted = query.get("guild", [""])[0] or guilds[0]
+            if wanted not in guilds:
+                self._send(400, "application/json", b'{"error": "not a guild"}')
+                return
+            limit = _guildchat_limit(query.get("limit", [""])[0])
+            try:
+                payload = _fetch_guild_chat(wanted, limit)
+                payload["guilds"] = list(guilds)
+            except pymysql.err.MySQLError as exc:
+                if not (exc.args and exc.args[0] == 1146):
+                    raise
+                payload = {"guild": wanted, "guilds": list(guilds),
+                           "ready": False, "asks": []}
+            self._send(200, "application/json", json.dumps(payload, default=str).encode())
+        except Exception:
+            log.exception("guild chat query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _read_json_body(self) -> dict | None:
         """The POST body as a dict, or None after sending the error itself."""
         try:
@@ -6692,6 +6791,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/levelroute": _levelroute,
         "/api/party-status": _party_status,
         "/api/guildruns": _guild_runs,
+        "/api/guildchat": _guild_chat,
         "/api/decree": _decree,
         "/api/thoughts": _thoughts,
         "/api/watch": _watch_state,

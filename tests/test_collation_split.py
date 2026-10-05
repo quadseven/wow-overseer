@@ -232,6 +232,22 @@ STRING_COLUMNS = {
     ),
     "overseer_dungeon_queue": frozenset({"family", "keyword", "status", "source"}),
     # From its own DDL (bridge._ensure_guild_run_store): every VARCHAR column.
+    # The guild chat feed's two tables (#570), from their contract: every
+    # string column. Re-check against the bridge DDL when it lands.
+    "overseer_guild_ask": frozenset(
+        {
+            "guild",
+            "asker",
+            "kind",
+            "target",
+            "target_label",
+            "roles_needed",
+            "reason",
+            "said",
+            "state",
+        }
+    ),
+    "overseer_guild_answer": frozenset({"member", "role", "stance", "said", "state"}),
     "overseer_guild_run": frozenset(
         {
             "band",
@@ -253,20 +269,6 @@ STRING_COLUMNS = {
     ),
     # From their own DDL (guildsocial.ASK_TABLE_SQL, ANSWER_TABLE_SQL): every
     # VARCHAR and ENUM column.
-    "overseer_guild_ask": frozenset(
-        {
-            "asker",
-            "guild",
-            "kind",
-            "reason",
-            "roles_needed",
-            "said",
-            "state",
-            "target",
-            "target_label",
-        }
-    ),
-    "overseer_guild_answer": frozenset({"member", "role", "said", "stance", "state"}),
     # From its own DDL (dungeonpace.CREATE_SQL): every VARCHAR column.
     "overseer_dungeon_pace": frozenset(
         {
