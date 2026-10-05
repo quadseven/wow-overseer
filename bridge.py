@@ -34,6 +34,7 @@ import bag_market
 import bag_pressure
 import bag_upgrade
 import bank
+import bankbags
 import bankpolicy
 import chat
 import clearance
@@ -12318,6 +12319,34 @@ class Bridge(discord.Client):
                 fresh.append(move)
         return fresh, walking
 
+    async def _bank_bag_slots(self, names: list, seen: set, cohort=None) -> None:
+        """Buy a bank bag slot, or put a spare bag in one, at a banker (#625).
+
+        bankbags.step decides one step per character; the row is written only
+        for a character standing at a banker now, the same gate the item moves
+        use, and never twice inside the retry window.
+        """
+        facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+        floor = bankbags.family_floor(facts)
+        notes = []
+        for f in facts:
+            step, why = bankbags.step(f, floor)
+            if step is None:
+                notes.append(why)
+                continue
+            if (step.name, step.command) in seen:
+                continue
+            town = await asyncio.to_thread(_fetch_town, step.name)
+            if not town.banker:
+                notes.append("%s; it waits for a banker" % step.why)
+                continue
+            move = bank.Move(step.name, step.command.split(" ")[0], 0,
+                             "bank bag slot", 1, step.why)
+            if await asyncio.to_thread(_insert_bank, move, step.command):
+                log.info("bank bags: %s (%s)%s", step.why, step.command,
+                         _family_label(cohort))
+        _log_capped("bank bags", notes)
+
     async def _bank_passing_once(self, cohort=None) -> None:
         """The quick look: bank for whoever is at a banker, nothing else.
 
@@ -12328,10 +12357,11 @@ class Bridge(discord.Client):
         names, _leader = await asyncio.to_thread(_family_of, cohort)
         if not names:
             return
+        seen = await asyncio.to_thread(_recent_bank_keys, GIVE_RETRY_MINUTES)
+        await self._bank_bag_slots(names, seen, cohort)
         bank_plan = await asyncio.to_thread(_plan_bank, names)
         if not bank_plan.moves:
             return
-        seen = await asyncio.to_thread(_recent_bank_keys, GIVE_RETRY_MINUTES)
         planned = [(move, bank.command(move)) for move in bank_plan.moves]
         fresh, _walking = await self._bank_at_the_counter(planned, seen)
         if fresh:
@@ -25736,6 +25766,41 @@ def _recent_bank_keys(minutes: int) -> set:
                 return set()
             raise
         return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+# Each character's purse and bank bag slots bought, every container it owns
+# (`bag` is the holding bag's item guid, 0 for its own slots), and who holds
+# tailoring (bankbags: a crafter's ladder bags are the guild's).
+_BANK_BAG_PEOPLE_SQL = (
+    "SELECT name, money, bankSlots AS bank_slots FROM characters WHERE name IN (%s)"
+)
+_BANK_BAG_ROWS_SQL = (
+    "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
+    "it.ContainerSlots AS slots, ci.bag, ci.slot FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND it.class = 1 AND it.ContainerSlots > 0"
+)
+_BANK_BAG_CRAFTERS_SQL = (
+    "SELECT c.name FROM character_skills cs JOIN characters c ON c.guid = cs.guid "
+    "WHERE cs.skill = 197 AND cs.value > 0 AND c.name IN (%s)"
+)
+
+
+def _fetch_bank_bag_facts(names: list) -> list:
+    """bankbags.Facts per character; no judgement here."""
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_BANK_BAG_PEOPLE_SQL % marks, list(names))
+        people = cur.fetchall()
+        cur.execute(_BANK_BAG_ROWS_SQL % marks, list(names))
+        bags = cur.fetchall()
+        cur.execute(_BANK_BAG_CRAFTERS_SQL % marks, list(names))
+        crafters = {str(r["name"]) for r in cur.fetchall()}
+    return bankbags.facts_from_rows(people, bags, crafters)
 
 
 def _insert_bank(move, command: str) -> int:

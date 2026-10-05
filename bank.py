@@ -55,13 +55,10 @@ deposit is never planned for an item the character is not carrying, because
 the executor's answer to that is `item not carried` and a queue full of those
 is indistinguishable from a broken bank.
 
-WHAT IS DELIBERATELY NOT HERE. `buy slot` is in the executor's grammar and is
-not emitted by this module. Buying a bank BAG slot buys a place to put a bag,
-and a bank bag position with no bag in it holds nothing at all; the family's
-spare bags are already being handed to whoever has an empty bag position
-(bag_upgrade), which is worth strictly more than parking one in the bank. When
-there is a spare bag with nowhere better to go AND the 28 base slots are full,
-that is the change that should add it, with the purse read at the time.
+WHAT IS DELIBERATELY NOT HERE. `buy slot` and `place-bag` are in the
+executor's grammar and are not emitted by this module: bankbags.py buys a bank
+bag slot when the purse affords it and puts a spare bag nobody in the family
+would wear into it (#625), at the same banker visit.
 
 PURE MODULE: no MySQL, no core, no auction house, no browser. Every number
 here is arithmetic over rows somebody else fetched.

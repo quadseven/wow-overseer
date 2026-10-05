@@ -144,12 +144,57 @@ class TheBankLookWritesOnlyForWhoeverIsAtABanker(unittest.TestCase):
         class Me:
             _bank_at_the_counter = ns["_bank_at_the_counter"]
 
+            async def _bank_bag_slots(self, names, seen, cohort=None):
+                return None
+
         asyncio.run(ns["_bank_passing_once"](Me(), None))
         self.assertEqual(["deposit Grog"], world["written"])
         self.assertTrue(
             any(ln.startswith("bank passing: Grog at a banker") for ln in log.lines),
             log.lines,
         )
+
+
+class TheBankBagSlotIsBoughtOnlyAtABanker(unittest.TestCase):
+    """#625: a slot bought, or a spare bag put in one, only by a character
+    standing at a banker, and never twice inside the retry window."""
+
+    def run_slots(self, seen=frozenset()):
+        import bank
+        import bankbags
+
+        world, log = {"written": []}, _Log()
+        ns = _base(world)
+        ns.update(
+            {
+                "log": log,
+                "bank": bank,
+                "bankbags": bankbags,
+                "_fetch_bank_bag_facts": lambda names: [
+                    bankbags.Facts("Bork", money=10**6, worn=(10, 10, 10, 10)),
+                    bankbags.Facts("Grog", money=10**6, worn=(10, 10, 10, 10)),
+                ],
+                "_fetch_town": lambda who: types.SimpleNamespace(banker=who == "Grog"),
+                "_insert_bank": lambda m, command: (
+                    world["written"].append((m.character, command)) or 1
+                ),
+            }
+        )
+        ns["_log_capped"] = lambda label, notes: None
+        ns = _load(["_bank_bag_slots", *HELPERS], ns)
+        asyncio.run(ns["_bank_bag_slots"](object(), ["Bork", "Grog"], set(seen)))
+        return world, log
+
+    def test_only_the_character_at_a_banker_buys(self):
+        world, log = self.run_slots()
+        self.assertEqual([("Grog", "buy slot")], world["written"])
+        self.assertTrue(
+            any("Grog buys bank bag slot 1" in ln for ln in log.lines), log.lines
+        )
+
+    def test_a_slot_already_asked_for_is_not_asked_again(self):
+        world, _ = self.run_slots(seen={("Grog", "buy slot")})
+        self.assertEqual([], world["written"])
 
 
 class TheVaultLookDepositsOnlyForWhoeverIsAtAVault(unittest.TestCase):
