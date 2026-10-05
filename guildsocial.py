@@ -1550,3 +1550,20 @@ def campaign_posts(campaigns, asks: list, doors: dict, now) -> list:
     run row: run_id stays NULL) and nobody is asked to answer it."""
     posts = (_campaign_post(row, asks, doors, now) for row in campaigns or ())
     return [p for p in posts if p is not None]
+
+
+def census(mates: list, held: dict) -> str:
+    """Per guild: members read, how many are free to answer an ask, and why
+    the rest are held, most common first. An ask that draws no tank or healer
+    is explained by this line, not by guessing (2026-10-05)."""
+    out = []
+    for guild in sorted({m.member.guild for m in mates}):
+        names = [m.name for m in mates if m.member.guild == guild]
+        reasons = collections.Counter(held[n] for n in names if n in held)
+        free = len(names) - sum(reasons.values())
+        detail = ", ".join("%s %d" % (why, n) for why, n in reasons.most_common(5))
+        out.append(
+            "%s %d read, %d free%s"
+            % (guild, len(names), free, "; held: " + detail if detail else "")
+        )
+    return " | ".join(out) or "no guild member was read"
