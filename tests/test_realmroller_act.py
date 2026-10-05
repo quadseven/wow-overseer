@@ -36,7 +36,7 @@ DI = "sha256:" + "d" * 64
 
 
 def _h(*parts) -> str:
-    return hashlib.sha1(repr(parts).encode()).hexdigest()
+    return hashlib.sha256(repr(parts).encode()).hexdigest()[:40]
 
 
 # --- the fake deploy repo ---------------------------------------------------------
@@ -71,7 +71,7 @@ class FakeGitHub:
 
     # storage
     def _blob(self, data: bytes) -> str:
-        sha = hashlib.sha1(b"blob" + data).hexdigest()
+        sha = hashlib.sha256(b"blob" + data).hexdigest()[:40]
         self.blobs[sha] = data
         return sha
 
@@ -395,8 +395,6 @@ def _roller_files(paused=False, queue_extra=()):
     ch = json.loads((EXAMPLE / "channel.json").read_text())
     ch["paused"] = paused
     ch["paused_reason"] = "" if not paused else "example pause"
-    for name, watch in ch["act"]["watch"].items():
-        watch["namespace"] = "dev-realm"
     files = {"%s/channel.json" % ROLLER: plan.dumps(ch)}
     for p in sorted((EXAMPLE / "releases").glob("*.json")):
         files["%s/releases/%s" % (ROLLER, p.name)] = p.read_text()

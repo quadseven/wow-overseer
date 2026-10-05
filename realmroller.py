@@ -337,7 +337,7 @@ class Change:
     verify: Check | None
     # A queued config-only PR in the deploy repo whose diff rides the roll
     # commit, so it lands in the same restart. `pr` names it as `#N` or
-    # `repo#N`.
+    # a repository name followed by `#N`.
     fold: bool = False
 
 
@@ -474,7 +474,9 @@ def _parse_changes(raw, images, logs, problems) -> tuple[Change, ...]:
             problems.append("%sfold must be true or false" % where)
             fold = False
         elif fold and not _FOLD_PR.match(pr):
-            problems.append("%sfold needs pr like #123 or repo#123" % where)
+            problems.append(
+                "%sfold needs pr like #123, optionally after a repository name" % where
+            )
         out.append(Change(pr, what, prove, verify, fold))
     return tuple(out)
 
@@ -541,10 +543,10 @@ def _parse_history(raw, state, problems) -> tuple[Event, ...]:
 
 
 def fold_number(pr: str) -> int:
-    """The deploy-repo PR number a folded change names (`#5` or `repo#5` -> 5)."""
+    """The deploy-repo PR number a folded change names (`#5` -> 5, with or without a repository name before it)."""
     m = _FOLD_PR.match(pr)
     if not m:
-        raise ValueError("not a PR reference like #123 or repo#123: %r" % pr)
+        raise ValueError("not a PR reference like #123: %r" % pr)
     return int(m.group(1))
 
 

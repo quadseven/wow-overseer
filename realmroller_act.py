@@ -1041,7 +1041,7 @@ class Roller:
     def _roll_files(
         self, ctx: Context, action: rr.Action, now: datetime
     ) -> tuple[list[dict], list[str], list[str]]:
-        """The tree entries of the ONE roll commit."""
+        """The tree entries of the ONE roll commit, the components it restarts, its folds."""
         head = ctx.releases[_named(action)]
         cur = ctx.releases[ctx.channel.current]
         changed = {s for s in head.sources if head.sources[s] != cur.sources.get(s)}
@@ -1049,46 +1049,10 @@ class Roller:
         entries: dict[str, dict] = {}
         texts: dict[str, str] = {}
         modes: dict[str, str] = {}
-        forbidden = (self.roller_path,) + tuple(g.path for g in ctx.act.gitlinks)
         # Folded config PRs first: the edits below apply on top of them.
-        folds = []
-        for c in head.changes:
-            if not c.fold:
-                continue
-            n = rr.fold_number(c.pr)
-            folds.append(c.pr)
-            pr = self.gh.pull(n)
-            if pr["state"] != "open":
-                raise plan.PlanError("folded %s is %s" % (c.pr, pr["state"]))
-            mbase = self.gh.merge_base(ctx.base_sha, pr["head"]["sha"])
-            files = []
-            for f in self.gh.pull_files(n):
-                for path in {
-                    f["filename"],
-                    f.get("previous_filename") or f["filename"],
-                }:
-                    at_head = entry_at(self.gh, pr["head"]["sha"], path)
-                    if at_head:
-                        modes[path] = at_head["mode"]
-                    files.append(
-                        plan.FoldFile(
-                            path=path,
-                            at_merge_base=_sha(entry_at(self.gh, mbase, path)),
-                            on_base=_sha(entry_at(self.gh, ctx.base_sha, path)),
-                            at_head=_sha(at_head),
-                            gitlink=bool(at_head and at_head["mode"] == "160000"),
-                        )
-                    )
-            for path, blob in plan.fold_entries(c.pr, files, forbidden).items():
-                if blob is None:
-                    entries[path] = {
-                        "path": path,
-                        "mode": "100644",
-                        "type": "blob",
-                        "sha": None,
-                    }
-                else:
-                    texts[path] = self.gh.blob(blob).decode()
+        folds = [c.pr for c in head.changes if c.fold]
+        for pr_ref in folds:
+            self._fold(ctx, pr_ref, entries, texts, modes)
         for e in ctx.act.edits:
             if plan.applies(e, changed, touched) and e.path not in texts:
                 text = text_at(self.gh, ctx.base_sha, e.path)
@@ -1101,30 +1065,10 @@ class Roller:
         for path, text in edited.items():
             entry = entry_at(self.gh, ctx.base_sha, path)
             mode = modes.get(path) or (entry["mode"] if entry else "100644")
-            entries[path] = {
-                "path": path,
-                "mode": mode,
-                "type": "blob",
-                "content": text,
-            }
+            entries[path] = _content(path, text, mode)
         for g in ctx.act.gitlinks:
-            if g.source not in changed:
-                continue
-            entry = entry_at(self.gh, ctx.base_sha, g.path)
-            if (
-                not entry
-                or entry["mode"] != "160000"
-                or entry["sha"] != cur.sources[g.source]
-            ):
-                raise plan.PlanError(
-                    "%s does not point at the current %s" % (g.path, g.source)
-                )
-            entries[g.path] = {
-                "path": g.path,
-                "mode": "160000",
-                "type": "commit",
-                "sha": head.sources[g.source],
-            }
+            if g.source in changed:
+                entries[g.path] = self._gitlink(ctx, g, cur, head)
         roller = plan.roll_roller_files(
             self.roller_path,
             ctx.channel_raw,
@@ -1134,13 +1078,61 @@ class Roller:
             now,
         )
         for path, text in roller.items():
-            entries[path] = {
-                "path": path,
-                "mode": "100644",
-                "type": "blob",
-                "content": text,
-            }
+            entries[path] = _content(path, text)
         return list(entries.values()), sorted(touched), folds
+
+    def _fold(self, ctx: Context, pr_ref: str, entries, texts, modes) -> None:
+        """Take a queued config PR's files into the roll, if nothing moved under them."""
+        n = rr.fold_number(pr_ref)
+        pr = self.gh.pull(n)
+        if pr["state"] != "open":
+            raise plan.PlanError("folded %s is %s" % (pr_ref, pr["state"]))
+        head_sha = pr["head"]["sha"]
+        mbase = self.gh.merge_base(ctx.base_sha, head_sha)
+        files = []
+        for f in self.gh.pull_files(n):
+            for path in {f["filename"], f.get("previous_filename") or f["filename"]}:
+                at_head = entry_at(self.gh, head_sha, path)
+                if at_head:
+                    modes[path] = at_head["mode"]
+                files.append(
+                    plan.FoldFile(
+                        path=path,
+                        at_merge_base=_sha(entry_at(self.gh, mbase, path)),
+                        on_base=_sha(entry_at(self.gh, ctx.base_sha, path)),
+                        at_head=_sha(at_head),
+                        gitlink=bool(at_head and at_head["mode"] == "160000"),
+                    )
+                )
+        forbidden = (self.roller_path,) + tuple(g.path for g in ctx.act.gitlinks)
+        for path, blob in plan.fold_entries(pr_ref, files, forbidden).items():
+            if blob is None:
+                entries[path] = {
+                    "path": path,
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": None,
+                }
+            else:
+                texts[path] = self.gh.blob(blob).decode()
+
+    def _gitlink(self, ctx: Context, g: plan.Gitlink, cur, head) -> dict:
+        """The submodule entry, moved only from the current release's commit."""
+        entry = entry_at(self.gh, ctx.base_sha, g.path)
+        if (
+            not entry
+            or entry["mode"] != "160000"
+            or entry["sha"] != cur.sources[g.source]
+        ):
+            raise plan.PlanError(
+                "%s does not point at the current %s" % (g.path, g.source)
+            )
+        return {
+            "path": g.path,
+            "mode": "160000",
+            "type": "commit",
+            "sha": head.sources[g.source],
+        }
 
     def _open_roll(
         self, ctx: Context, action: rr.Action, branch: str, now: datetime
@@ -1254,6 +1246,10 @@ class Roller:
         pr = self.gh.create_pull(title, branch, ctx.act.base, body)
         ctx.status.get("releases", {}).pop(name, None)
         ctx.notes.append("opened rollback PR #%d: %s" % (pr["number"], action.why))
+
+
+def _content(path: str, text: str, mode: str = "100644") -> dict:
+    return {"path": path, "mode": mode, "type": "blob", "content": text}
 
 
 def _named(action: rr.Action, attr: str = "release") -> str:

@@ -304,46 +304,60 @@ def _parse_edits(raw, sources, components, problems) -> tuple[Edit, ...]:
         if not isinstance(e, dict):
             problems.append("%s must be an object" % where[:-1])
             continue
-        if_source = e.get("if_source", "")
-        if_component = e.get("if_component", "")
-        if bool(if_source) == bool(if_component):
-            problems.append("%s needs exactly one of if_source or if_component" % where)
-        if if_source and if_source not in sources:
-            problems.append("%sif_source %s is not a source" % (where, if_source))
-        if if_component and if_component not in components:
-            problems.append(
-                "%sif_component %s is not a component" % (where, if_component)
-            )
-        pattern = _str(e, "pattern", problems, where)
-        replace = e.get("replace")
-        if not isinstance(replace, str):
-            problems.append("%sreplace must be a string" % where)
-            replace = ""
-        for text in (pattern, replace):
-            for m in _PLACE.finditer(text):
-                if m.group(1) == "source" and m.group(2) not in sources:
-                    problems.append(
-                        "%s{source:%s} is not a source" % (where, m.group(2))
-                    )
-        try:
-            re.compile(_fill(pattern, _probe_values(pattern), escape=True))
-        except re.error as exc:
-            problems.append("%spattern: %s" % (where, exc))
-        count = e.get("count", 1)
-        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
-            problems.append("%scount must be a positive integer" % where)
-            count = 1
-        out.append(
-            Edit(
-                path=_str(e, "path", problems, where),
-                pattern=pattern,
-                replace=replace,
-                count=count,
-                if_source=if_source or "",
-                if_component=if_component or "",
-            )
-        )
+        out.append(_parse_edit(e, where, sources, components, problems))
     return tuple(out)
+
+
+def _edit_condition(
+    e: dict, where: str, sources, components, problems
+) -> tuple[str, str]:
+    """(if_source, if_component): exactly one set, and naming what exists."""
+    if_source = e.get("if_source", "") or ""
+    if_component = e.get("if_component", "") or ""
+    if bool(if_source) == bool(if_component):
+        problems.append("%s needs exactly one of if_source or if_component" % where)
+    if if_source and if_source not in sources:
+        problems.append("%sif_source %s is not a source" % (where, if_source))
+    if if_component and if_component not in components:
+        problems.append("%sif_component %s is not a component" % (where, if_component))
+    return if_source, if_component
+
+
+def _edit_texts(e: dict, where: str, sources, problems) -> tuple[str, str]:
+    """(pattern, replace), with every placeholder naming a source and the regex compiling."""
+    pattern = _str(e, "pattern", problems, where)
+    replace = e.get("replace")
+    if not isinstance(replace, str):
+        problems.append("%sreplace must be a string" % where)
+        replace = ""
+    problems.extend(
+        "%s{source:%s} is not a source" % (where, m.group(2))
+        for text in (pattern, replace)
+        for m in _PLACE.finditer(text)
+        if m.group(1) == "source" and m.group(2) not in sources
+    )
+    try:
+        re.compile(_fill(pattern, _probe_values(pattern), escape=True))
+    except re.error as exc:
+        problems.append("%spattern: %s" % (where, exc))
+    return pattern, replace
+
+
+def _parse_edit(e: dict, where: str, sources, components, problems) -> Edit:
+    if_source, if_component = _edit_condition(e, where, sources, components, problems)
+    pattern, replace = _edit_texts(e, where, sources, problems)
+    count = e.get("count", 1)
+    if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+        problems.append("%scount must be a positive integer" % where)
+        count = 1
+    return Edit(
+        path=_str(e, "path", problems, where),
+        pattern=pattern,
+        replace=replace,
+        count=count,
+        if_source=if_source,
+        if_component=if_component,
+    )
 
 
 def _probe_values(text: str) -> dict[str, str]:
@@ -488,12 +502,30 @@ def read_digests(log_text: str, build: Build) -> dict[str, str]:
     (its build tag and :latest must agree), no push under the build's tag, or
     images pushed under different tags (not one build pair).
     """
+    pushes, problems = _pushes(log_text)
+    out, tags = {}, {}
+    for image, want in sorted(build.image_repos.items()):
+        found = _pushed_digest(want, pushes, build.tag_pattern, problems)
+        if found:
+            tags[image], out[image] = found
+    if len(set(tags.values())) > 1:
+        problems.append(
+            "images pushed under different tags: %s"
+            % ", ".join("%s=%s" % kv for kv in sorted(tags.items()))
+        )
+    if problems:
+        raise PairingError("; ".join(problems))
+    return out
+
+
+def _pushes(log_text: str) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """[(repository, tag, digest)] from the filtered log, each digest paired with
+    the refers line directly before it, and the pairing problems found."""
     lines = [_LOG_TIME.sub("", raw).strip() for raw in log_text.splitlines()]
-    lines = [ln for ln in lines if _PAIR_LINE.search(ln)]
-    pushes: list[tuple[str, str, str]] = []  # (repository, tag, digest)
-    problems = []
+    pushes: list[tuple[str, str, str]] = []
+    problems: list[str] = []
     repo = None
-    for ln in lines:
+    for ln in (ln for ln in lines if _PAIR_LINE.search(ln)):
         m = _REFERS.search(ln)
         if m:
             if repo is not None:
@@ -510,28 +542,21 @@ def read_digests(log_text: str, build: Build) -> dict[str, str]:
         repo = None
     if repo is not None:
         problems.append("push to %s has no digest line" % repo)
-    out, tags = {}, {}
-    for image, want in sorted(build.image_repos.items()):
-        mine = [(t, d) for r, t, d in pushes if r == want]
-        tagged = [(t, d) for t, d in mine if re.fullmatch(build.tag_pattern, t)]
-        digests = {d for _, d in mine}
-        if not tagged:
-            problems.append("no push of %s under a build tag" % want)
-        elif len(digests) != 1:
-            problems.append(
-                "%s pushed with %d different digests" % (want, len(digests))
-            )
-        else:
-            out[image] = tagged[0][1]
-            tags[image] = tagged[0][0]
-    if len(set(tags.values())) > 1:
-        problems.append(
-            "images pushed under different tags: %s"
-            % ", ".join("%s=%s" % kv for kv in sorted(tags.items()))
-        )
-    if problems:
-        raise PairingError("; ".join(problems))
-    return out
+    return pushes, problems
+
+
+def _pushed_digest(repo, pushes, tag_pattern, problems) -> tuple[str, str] | None:
+    """(tag, digest) for one repository: one digest across its build tag and :latest."""
+    mine = [(t, d) for r, t, d in pushes if r == repo]
+    tagged = [(t, d) for t, d in mine if re.fullmatch(tag_pattern, t)]
+    digests = {d for _, d in mine}
+    if not tagged:
+        problems.append("no push of %s under a build tag" % repo)
+        return None
+    if len(digests) != 1:
+        problems.append("%s pushed with %d different digests" % (repo, len(digests)))
+        return None
+    return tagged[0]
 
 
 # --- the prove pod --------------------------------------------------------------
@@ -853,28 +878,14 @@ def pr_verdict(
         return Verdict("closed", "closed without merging")
     if pr.get("mergeable") is False or pr.get("mergeable_state") == "dirty":
         return Verdict("conflict", "conflicts with the base branch")
-    failed = sorted(
-        {
-            c["name"]
-            for c in checks
-            if c.get("status") == "completed" and c.get("conclusion") in _FAILED
-        }
-        | {s["context"] for s in statuses if s.get("state") in ("failure", "error")}
-    )
+    failed = _failed(checks, statuses)
     if failed:
         return Verdict("failed", "failing: %s" % ", ".join(failed))
     names = {c["name"] for c in checks} | {s["context"] for s in statuses}
     missing = [r for r in required if r not in names]
     if missing:
         return Verdict("pending", "waiting for %s" % ", ".join(missing))
-    running = sorted(
-        {
-            c["name"]
-            for c in checks
-            if c.get("status") != "completed" or c.get("conclusion") not in _PASSED
-        }
-        | {s["context"] for s in statuses if s.get("state") != "success"}
-    )
+    running = _running(checks, statuses)
     if running:
         return Verdict("pending", "running: %s" % ", ".join(running))
     if threads_block and open_threads:
@@ -882,6 +893,29 @@ def pr_verdict(
     if pr.get("mergeable") is None:
         return Verdict("pending", "mergeability not computed yet")
     return Verdict("ready", "checks passed")
+
+
+def _failed(checks: list[dict], statuses: list[dict]) -> list[str]:
+    runs = {
+        c["name"]
+        for c in checks
+        if c.get("status") == "completed" and c.get("conclusion") in _FAILED
+    }
+    return sorted(
+        runs
+        | {s["context"] for s in statuses if s.get("state") in ("failure", "error")}
+    )
+
+
+def _running(checks: list[dict], statuses: list[dict]) -> list[str]:
+    runs = {
+        c["name"]
+        for c in checks
+        if c.get("status") != "completed" or c.get("conclusion") not in _PASSED
+    }
+    return sorted(
+        runs | {s["context"] for s in statuses if s.get("state") != "success"}
+    )
 
 
 def roll_body(

@@ -181,7 +181,7 @@ class ReleaseFile(unittest.TestCase):
         ch = rr.parse_channel(_channel_data())
         d = _release_data("r2026.10.04-2")
         self.assertTrue(rr.parse_release(d, ch).changes[1].fold)
-        self.assertEqual(rr.fold_number("infra#5010"), 5010)
+        self.assertEqual(rr.fold_number("#5010"), 5010)
         for bad_pr, bad_fold, want in (
             ("PR 104", True, "fold needs pr like"),
             ("#104", "yes", "fold must be true or false"),
