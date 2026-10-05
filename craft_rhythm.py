@@ -596,11 +596,25 @@ def guild_bag(value: int, floor, held: dict):
 
 
 def _guild_bag_errand(name: str, value: int, bag, held: dict, floor: int):
-    """Sew `bag` with its bolts in hand, else weave the bolts toward it."""
+    """Sew `bag` with its bolts in hand, else weave the bolts toward it.
+
+    THE THREAD COMES BY POST (operator, 2026-10-05: shopping is the
+    maintenance crew's work). The family never walks to a vendor for it;
+    guildcorps.shop_steps has a crew member buy it and post it. So a bag is
+    sewn only with its thread already in the bags, and with the bolts in hand
+    and the thread still on its way there is no bag errand: the tailor's
+    ladder goes on until the letter is taken out.
+    """
     bolt_entry, need = bag.reagents[0]
     bolt = guildcorps.BOLT_OF[int(bolt_entry)]
     bolts = int(held.get(bolt_entry, 0) or 0)
     if bolts >= need:
+        if any(
+            int(held.get(entry, 0) or 0) < int(count)
+            for entry, count in bag.reagents[1:]
+            if guildcorps._vendor_reagent(entry)
+        ):
+            return None
         return Errand(
             name=name,
             spell=bag.spell,

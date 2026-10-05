@@ -16,6 +16,8 @@ WOOL_BOLT = 2997
 WOOL = 2592
 SILK_BOLT = 4305
 HEAVY_LEATHER = 4234
+FINE_THREAD = 2321
+COARSE_THREAD = 2320
 
 
 def errand(value, floor, held=None, bags_wanted=0):
@@ -26,7 +28,7 @@ def errand(value, floor, held=None, bags_wanted=0):
 
 class TheTailorSewsForTheGuild(unittest.TestCase):
     def test_bolts_in_hand_sew_the_biggest_bag_that_beats_the_floor(self):
-        chosen = errand(90, 6, {WOOL_BOLT: 3})
+        chosen = errand(90, 6, {WOOL_BOLT: 3, FINE_THREAD: 1})
         self.assertEqual(chosen.spell, 3757)
         self.assertIn("Woolen Bag (8 slots) for the guild", chosen.why)
 
@@ -36,14 +38,14 @@ class TheTailorSewsForTheGuild(unittest.TestCase):
         self.assertIn("1 of the 3", chosen.why)
 
     def test_an_empty_bag_position_takes_a_linen_bag_at_low_skill(self):
-        self.assertEqual(errand(50, 0, {2996: 3}).spell, 3755)
+        self.assertEqual(errand(50, 0, {2996: 3, COARSE_THREAD: 3}).spell, 3755)
 
     def test_no_bag_beats_the_floor_and_the_ladder_goes_on(self):
         chosen = errand(50, 8)
         self.assertNotIn(chosen.spell, craft_rhythm.BAG_FEED)
 
     def test_a_reagent_that_is_neither_bolt_nor_thread_must_be_in_hand(self):
-        held = {SILK_BOLT: 3, WOOL_BOLT: 3}
+        held = {SILK_BOLT: 3, WOOL_BOLT: 3, FINE_THREAD: 3}
         self.assertEqual(
             errand(160, 6, held).spell,
             3757,
@@ -60,9 +62,20 @@ class TheTailorSewsForTheGuild(unittest.TestCase):
         stand = craft_rhythm.stand("Og", 3757, {WOOL_BOLT: 6})
         self.assertEqual((stand.verdict, stand.casts), (craft_rhythm.STOCKED, 2))
 
-    def test_every_bag_the_tailor_may_sew_has_its_thread_bought(self):
-        for spell in craft_rhythm.BAG_FEED:
-            self.assertIn(spell, craft_supply.REAGENTS)
+    def test_the_family_never_shops_for_the_bigger_bags(self):
+        # Operator, 2026-10-05: thread is the maintenance crew's errand,
+        # bought and posted by guildcorps.shop_steps.
+        import craft
+
+        self.assertEqual(craft.CREW_SUPPLIED, {3757, 3813, 12065})
+        for spell in craft.CREW_SUPPLIED:
+            self.assertNotIn(spell, craft_supply.REAGENTS)
+
+    def test_bolts_without_thread_wait_for_the_crews_letter(self):
+        chosen = craft_rhythm.errand(
+            "Og", {"tailoring": 90}, {WOOL_BOLT: 3}, TAILOR, 0, 6
+        )
+        self.assertNotEqual(chosen.spell, 3757)
 
     def test_the_bolts_and_cloth_are_counted_before_the_choice(self):
         wanted = craft_rhythm.reagents_to_count("Og", {"tailoring": 90}, TAILOR, 0, 6)

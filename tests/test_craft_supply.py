@@ -490,6 +490,8 @@ class CraftReagentErrandsTests(unittest.TestCase):
             bought_entries.update(entry for entry, _l, _p, _q in reagents)
 
         for recipe in craft.known_recipes():
+            if recipe.spell_id in craft.CREW_SUPPLIED:
+                continue  # the maintenance crew posts their thread
             wanted = {entry for entry in bought_entries if "(%d" % entry in recipe.note}
             if not wanted:
                 continue
