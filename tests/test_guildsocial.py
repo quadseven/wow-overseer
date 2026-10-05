@@ -722,11 +722,24 @@ class TheDoorsRecordGatesTheAsk(unittest.TestCase):
         ] * guildrun.FAILING_RUNS
         self.assertEqual(self.asks_for(shaped, five()), ["wailing"])
 
-    def test_every_door_failing_means_no_ask(self):
+    def test_every_door_failing_still_asks_for_the_best_need(self):
+        # A failing door is a preference, not a ban: with every fitting door
+        # failing, the guild still asks (Cave sat silent at 15 to 19 for hours
+        # with Wailing Caverns failing for every shape).
         rows = [ended("deadmines", "wiped")] * guildrun.FAILING_RUNS + [
             ended("wailing", "refused")
         ] * guildrun.TURNED_AWAY_RUNS
-        self.assertEqual(self.asks_for(rows), [])
+        self.assertEqual(self.asks_for(rows), ["deadmines"])
+
+    def test_a_healthy_door_still_wins_over_a_failing_better_need(self):
+        rows = [ended("deadmines", "wiped")] * guildrun.FAILING_RUNS
+        out = plan(
+            [mate("Auren", 20, ROGUE)],
+            needs={"Auren": [cape_need("Auren"), robe_need("Auren")]},
+            records=guildrun.shape_records(rows, NOW),
+        )
+        post = [p for p in out.posts if p.asker == "Auren"][0]
+        self.assertEqual([o.door.keyword for o in post.options], ["wailing"])
 
     def test_the_post_carries_each_door_and_its_record(self):
         rows = [ended("wailing", "not entered")] * 2

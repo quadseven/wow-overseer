@@ -1176,13 +1176,16 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
     """(rank, name, mate, options, band, shape) for this member's ask, or None.
 
     `options` are DoorOptions, best need first, one per door: never a door the
-    guild already has an ask out for, and never one that is failing for the
-    shape of group the guild can seat (guildrun.ShapeRecord.failing).
+    guild already has an ask out for. A door failing for the shape of group
+    the guild can seat (guildrun.ShapeRecord.failing) is a preference, not a
+    ban: it is offered only when every fitting door is failing. A failing door
+    reopens only RECORD_DAYS after its last run, and it cannot be run while
+    closed, so a ban stopped Cave asking for anything at levels 15 to 19.
     """
     faction = board.factions.get(guild, "")
     band = guildrun.band_of([mate.member.level])
     shape = ask_shape(board, mate, guild)
-    options, seen = [], set()
+    options, failing, seen = [], [], set()
     for need in board.needs.get(name, []):
         door = board.doors.get(need.keyword)
         if door is None or door.keyword in seen or (guild, door.keyword) in asked:
@@ -1192,10 +1195,9 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
         record = board.records.get(
             (door.keyword, band, shape), guildrun.NO_SHAPE_RECORD
         )
-        if record.failing:
-            continue
         seen.add(door.keyword)
-        options.append(DoorOption(need, door, record))
+        (failing if record.failing else options).append(DoorOption(need, door, record))
+    options = options or failing
     if not options:
         return None
     return (options[0].need.rank, name, mate, tuple(options), band, shape)
