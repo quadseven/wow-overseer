@@ -58,6 +58,11 @@ _TABS: dict | None = None
 # The seat words.
 SEAT_TANK, SEAT_HEALER, SEAT_DAMAGE = "tank", "healer", "dps"
 
+# The duty an overseer_raid_spec row carries when a guild member respecced to
+# fill a dungeon seat its guild was short of (guildrespec, #580) rather than
+# for a raid seat. The lineup's own rewrite of a guild's rows keeps these.
+GUILD_DUTY = {SEAT_TANK: "guild tank", SEAT_HEALER: "guild healer"}
+
 # The tree each class plays a seat in, by class id. A class missing from a
 # table cannot take that seat. A druid tanks as a bear, which is the Feral
 # Combat tree; statweights calls that tree melee, so a seat's role comes from
@@ -117,16 +122,16 @@ def _spells(text) -> list:
     return out
 
 
-def tree_of(class_id, talent_spells) -> str:
-    """The talent tree with the most points, or "" when none or a tie.
+def points_by_tree(class_id, talent_spells) -> dict:
+    """tree name -> talent points spent in it, from this class's trees only.
 
     A spell the book does not know, or one from another class's trees, is
-    not counted: it cannot say which of this class's trees is played.
+    not counted.
     """
     try:
         cid = int(class_id)
     except (TypeError, ValueError):
-        return ""
+        return {}
     book = _book()
     points: dict = {}
     for spell in _spells(talent_spells):
@@ -134,10 +139,23 @@ def tree_of(class_id, talent_spells) -> str:
         if not found or found[0] != cid:
             continue
         points[found[1]] = points.get(found[1], 0) + found[2]
-    if not points:
-        return ""
-    ranked = sorted(points.items(), key=lambda kv: (-kv[1], kv[0]))
-    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+    return points
+
+
+def tree_of(class_id, talent_spells) -> str:
+    """The talent tree with the most points, or "" when none or a tie.
+
+    A spell the book does not know, or one from another class's trees, is
+    not counted: it cannot say which of this class's trees is played.
+    """
+    return top_tree(points_by_tree(class_id, talent_spells))
+
+
+def top_tree(points: dict) -> str:
+    """The tree holding the most of `points` (tree -> points), "" when none or
+    a tie."""
+    ranked = sorted((points or {}).items(), key=lambda kv: (-kv[1], kv[0]))
+    if not ranked or (len(ranked) > 1 and ranked[0][1] == ranked[1][1]):
         return ""
     return ranked[0][0]
 
