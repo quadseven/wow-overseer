@@ -13698,7 +13698,7 @@ function applyHash() {
   // the view, and puts the view's own hash back so a reload stays here.
   if (raw && view && HASH_VIEWS.indexOf(name) < 0 && name !== MAP_VIEW) {
     let target = null;
-    try { target = document.getElementById(decodeURIComponent(raw)); } catch (e) { target = null; }
+    try { target = document.getElementById(decodeURIComponent(raw)); } catch (e) { if (!(e instanceof URIError)) throw e; target = null; }
     // Only a card on a view that is showing: a cold load with an anchor
     // routes as before.
     const host = target && target.closest("section");
