@@ -2824,6 +2824,12 @@ _GUILD_ASK_RUNS_SQL = (
     "SELECT id, state, outcome, bosses_done, bosses_total, deaths, ended_at "
     "FROM overseer_guild_run WHERE id IN ({holes})"
 )
+# The asker's call for a pug in the faction's public channel (guildpug, #591);
+# a world without the table reads none.
+_GUILD_PUG_CALLS_SQL = (
+    "SELECT ask_id, asker, seats, channel, said, created_at "
+    "FROM overseer_guild_pug_call WHERE ask_id IN ({holes})"
+)
 GUILDCHAT_DEFAULT_LIMIT = 30
 GUILDCHAT_MAX_LIMIT = 100
 
@@ -2856,6 +2862,9 @@ def _fetch_guild_chat(guild: str, limit: int) -> dict:
             answers = _wide_guarded(
                 cur, _GUILD_ANSWERS_SQL.format(holes=", ".join(["%s"] * len(ids))),
                 tuple(ids), "", "overseer_guild_answer")
+            calls = _wide_guarded(
+                cur, _GUILD_PUG_CALLS_SQL.format(holes=", ".join(["%s"] * len(ids))),
+                tuple(ids), "", "overseer_guild_pug_call")
             run_ids = sorted({a["run_id"] for a in asks if a.get("run_id")})
             runs = []
             if run_ids:
@@ -2868,10 +2877,12 @@ def _fetch_guild_chat(guild: str, limit: int) -> dict:
     for ans in answers:
         by_ask.setdefault(ans["ask_id"], []).append(dict(ans))
     by_run = {r["id"]: dict(r) for r in runs}
+    by_call = {c["ask_id"]: dict(c) for c in calls}
     out = []
     for a in asks:
         row = dict(a)
         row["answers"] = by_ask.get(a["id"], [])
+        row["pug_call"] = by_call.get(a["id"])
         row["run"] = by_run.get(a.get("run_id")) if a.get("run_id") else None
         out.append(row)
     return {"guild": guild, "ready": True, "asks": out}

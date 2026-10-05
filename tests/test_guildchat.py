@@ -147,6 +147,48 @@ def serve(missing=()):
     )
 
 
+class APugInTheFeed(unittest.TestCase):
+    """#591: the asker's call in LookingForGroup and the pug who joined."""
+
+    def test_the_call_rides_on_its_ask(self):
+        calls = [
+            {
+                "ask_id": 7,
+                "asker": "Tanka",
+                "seats": "healer",
+                "channel": "lfg",
+                "said": "LF healer for Deadmines, 4/5",
+                "created_at": "2026-10-04 12:05:00",
+            }
+        ]
+        cur = FakeCursor(
+            {
+                "overseer_guild_ask": ASKS,
+                "overseer_guild_answer": ANSWERS,
+                "overseer_guild_run": RUNS,
+                "overseer_guild_pug_call": calls,
+            }
+        )
+        with mock.patch.object(map_server, "_connect", return_value=FakeConn(cur)):
+            out = map_server._fetch_guild_chat("Cave", 30)
+        self.assertEqual(
+            out["asks"][0]["pug_call"]["said"], "LF healer for Deadmines, 4/5"
+        )
+        self.assertIsNone(out["asks"][1]["pug_call"])
+
+    def test_a_world_without_the_call_table_still_answers(self):
+        cur, patch = serve(missing=("overseer_guild_pug_call",))
+        with patch:
+            h = get("/api/guildchat?guild=Cave")
+        self.assertEqual(h.code, 200)
+        self.assertIsNone(h.payload["asks"][0]["pug_call"])
+
+    def test_the_view_says_a_pug_joined_as_its_seat(self):
+        self.assertIn('a.stance === "pug"', PAGE)
+        self.assertIn('" (pug) joined as " + a.role', PAGE)
+        self.assertIn('" in LookingForGroup: "', PAGE)
+
+
 class TheEndpoint(unittest.TestCase):
     def test_asks_come_back_with_answers_and_the_run(self):
         cur, patch = serve()

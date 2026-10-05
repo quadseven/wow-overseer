@@ -36,7 +36,7 @@ COPY core.py bridge.py voice.py transform.py \
      dungeonplan.py dungeonpath.py raidgoals.py raidcraft.py raidprep.py raidlineup.py raidgear.py raidroles.py attunestep.py raidready.py raidrun.py raidsupply.py \
      dungeonprogression.py dungeonquests.py \
      dungeonprogression.py dungeonquests.py \
-     guildcraft.py tradespec.py guildbank.py guildshare.py guildroute.py guildwork.py natural.py guildcorps.py guildjobs.py guildrun.py guildsocial.py crafters.py recruit.py \
+     guildcraft.py tradespec.py guildbank.py guildshare.py guildroute.py guildwork.py natural.py guildcorps.py guildjobs.py guildrun.py guildpug.py guildsocial.py crafters.py recruit.py \
      bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py disposition.py bagfate.py tidy.py \
      lockbox.py clearance.py \
      item_plan.py \

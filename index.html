@@ -8252,12 +8252,28 @@ function gcMessage(ask) {
   if (ask.reason) meta.appendChild(document.createTextNode(" - " + ask.reason));
   box.appendChild(meta);
   const answers = ask.answers || [];
-  if (answers.length) {
+  // The asker's call for a pug in the faction's public channel (#591).
+  const call = ask.pug_call;
+  if (answers.length || call) {
     const list = el("div", "gc-replies");
+    if (call) {
+      const r = el("div", "gc-reply");
+      r.appendChild(el("span", "gc-who", call.asker || ask.asker));
+      r.appendChild(document.createTextNode(" in LookingForGroup: "));
+      gcSaid(r, call.said);
+      list.appendChild(r);
+    }
     for (const a of answers) {
       const r = el("div", "gc-reply");
       r.appendChild(el("span", "gc-who", a.member));
-      r.appendChild(document.createTextNode(" (" + a.role + ", " + a.stance + ", " + a.state + ") "));
+      // A pug is from outside the guild: "Thrall (pug) joined as healer".
+      if (a.stance === "pug") {
+        r.appendChild(document.createTextNode(a.state === "seated"
+          ? " (pug) joined as " + a.role + ". "
+          : " (pug, " + a.role + ", " + a.state + ") "));
+      } else {
+        r.appendChild(document.createTextNode(" (" + a.role + ", " + a.stance + ", " + a.state + ") "));
+      }
       gcSaid(r, a.said);
       list.appendChild(r);
     }
