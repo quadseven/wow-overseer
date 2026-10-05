@@ -82,6 +82,16 @@ SKILL_NAMES = {
 # page and the cooldowns read back. Its own, so no other pass's window counts it.
 SOURCE = "guildcorps"
 
+# THE FAMILY ARE THE MASTER CRAFTERS (operator, 2026-10-05). A family member
+# who holds a crafting trade takes that trade's post ahead of any maintenance
+# member: on the natural realm the maintenance recruits start at 1 while Og
+# and Oz already sew. A master never walks for the corps, because a roster
+# character moves with its family: it crafts with the family's own craft
+# rhythm, its guild posts the materials to it, and the corps posts the bags it
+# made only while it stands at a mailbox. Gathering posts stay maintenance
+# work; the family gathers as it quests.
+MASTER_ROLES = frozenset({"tailor"})
+
 # THE CORPS, IN THE ORDER A GUILD OFFICER FILLS IT. Tailors first, because bags
 # are the point; then the skinners, whose Rugged Leather is in every Runecloth
 # Bag; then miners and herbalists for the guild's other crafters. Two of each:
@@ -227,6 +237,7 @@ COOLDOWN_MINUTES = {
     "post": 30,
     "supply": 120,
     "fetch": 180,
+    "shop": 120,
 }
 
 # A BAG IS CRAFTED AT A MAILBOX AND POSTED IN THE SAME STAND (2026-09-24).
@@ -315,10 +326,12 @@ class Post:
     skill: int
     value: int
     cap: int
+    master: bool = False
 
     @property
     def said(self) -> str:
-        return "%s %s %d/%d" % (
+        return "%s%s %s %d/%d" % (
+            "master " if self.master else "",
             self.role,
             SKILL_NAMES.get(self.skill, "?"),
             self.value,
@@ -345,25 +358,37 @@ def _rank_for(member: Member, skill: int) -> tuple:
     return (known, cap, value, 1 if member.online else 0)
 
 
-def plan_corps(members) -> dict:
-    """guild -> tuple of Post, from each guild's maintenance members.
+def _may_hold(member: Member, role: str) -> bool:
+    """A maintenance member may hold any post; a family member a master's."""
+    return member.maintenance or (member.family and role in MASTER_ROLES)
 
-    Each member takes at most one post; a role is filled by whoever holds the
-    trade highest, and a member who holds none of them keeps the dues job.
+
+def plan_corps(members) -> dict:
+    """guild -> tuple of Post, from each guild's maintenance and family members.
+
+    Each member takes at most one post; a role is filled by the family's
+    master crafters first (MASTER_ROLES), then by whoever holds the trade
+    highest, and a member who holds none of them keeps the dues job.
     """
     guilds = {}
     for member in members or ():
-        if member.maintenance:
+        if member.maintenance or member.family:
             guilds.setdefault(member.guild, []).append(member)
     out = {}
     for guild, crew in sorted(guilds.items()):
         taken, posts = set(), []
         for role, skill, want in ROLES:
-            holders = [m for m in crew if m.name not in taken and m.skill(skill)[0] > 0]
-            holders.sort(key=lambda m: (_rank_for(m, skill), m.name), reverse=True)
+            holders = [
+                m
+                for m in crew
+                if m.name not in taken and _may_hold(m, role) and m.skill(skill)[0] > 0
+            ]
+            holders.sort(
+                key=lambda m: (m.family, _rank_for(m, skill), m.name), reverse=True
+            )
             for m in holders[:want]:
                 value, cap = m.skill(skill)
-                posts.append(Post(m.name, role, skill, value, cap))
+                posts.append(Post(m.name, role, skill, value, cap, m.family))
                 taken.add(m.name)
         out[guild] = tuple(posts)
     return out
@@ -567,11 +592,25 @@ def _smallest_soon(member) -> int:
     return min(worn) if worn else 0
 
 
-def _recipient(bag, family):
-    """The family member whose smallest bag, counting the bags already on
+def _takers(tailor, members):
+    """Who a tailor's bag may be posted to: the whole guild (operator,
+    2026-10-05), never the tailor itself, and only members whose worn bags
+    were read. A master's own family is left to the family's bag hand-over,
+    which trades a bag across the camp fire instead of posting it."""
+    return [
+        m
+        for m in members or ()
+        if m.name != tailor.name
+        and (m.worn_bags or m.family)
+        and not (tailor.family and m.family)
+    ]
+
+
+def _recipient(bag, takers):
+    """The guild member whose smallest bag, counting the bags already on
     their way, this bag improves most."""
     best = None
-    for member in family or ():
+    for member in takers or ():
         smallest = _smallest_soon(member)
         if smallest >= bag.slots:
             continue
@@ -581,12 +620,17 @@ def _recipient(bag, family):
     return best[1] if best else None
 
 
-def _post_step(tailor, family, cap=NEAR):
+def _post_step(tailor, takers, cap=NEAR, walk=True):
+    """Post one carried ladder bag to the guildmate it helps most.
+
+    `walk` False is a master's: it is already standing at a mailbox, and a
+    roster character is never walked to one by a row.
+    """
     for held in tailor.carried:
         bag = BAG_ITEMS.get(int(held.entry))
         if bag is None:
             continue
-        taker = _recipient(bag, family)
+        taker = _recipient(bag, takers)
         if taker is None:
             continue
         return Step(
@@ -603,7 +647,7 @@ def _post_step(tailor, family, cap=NEAR):
                     source_for("post", bag.makes),
                 ),
             ),
-            walk=_walk_to_mailbox("post", bag.makes, cap),
+            walk=_walk_to_mailbox("post", bag.makes, cap) if walk else None,
         )
     return None
 
@@ -800,17 +844,17 @@ def _craft_and_post(tailor, bag, taker, cap=NEAR) -> Step:
     )
 
 
-def _bag_steps(tailor, bag, reach, trainable, vendors, cap=NEAR, family=()):
+def _bag_steps(tailor, bag, reach, trainable, vendors, cap=NEAR, takers=()):
     """The steps toward crafting `bag`, in order; the first that applies wins.
 
-    The bag itself is crafted only for a family member it improves, and only
+    The bag itself is crafted only for a guild member it improves, and only
     at a mailbox, posted at once (BAG_CRAFT_MINUTES says why). A pattern on its
     way by post leaves the tailor making the bolts meanwhile.
     """
     if reach in ("pattern", "vendor"):
         return _pattern_step(tailor, bag, reach, vendors, cap)
     if reach != "post" and _can_make(tailor, bag):
-        taker = _recipient(bag, family)
+        taker = _recipient(bag, takers)
         return _craft_and_post(tailor, bag, taker, cap) if taker else None
     step = _bolt_step(tailor, bag)
     if step or reach == "post":
@@ -942,13 +986,138 @@ def supply_steps(
     return steps
 
 
-def tailor_step(
-    tailor, members, family, trainable, vendors, cap=NEAR, by_post=frozenset()
-):
-    """(Step or None, note): this tailor's one step this pass, and why."""
+# THE CREW SHOPS FOR THE MASTERS (operator, 2026-10-05: "getting thread and
+# stuff for crafting is for the maintenance guild members, coordinating
+# shopping and farming"). A family master never walks to a vendor for the
+# corps; the cloth reaches it in the crew's material letters (guildjobs), and
+# the thread its next bags take is bought by a maintenance member standing on
+# a map whose vendor sells it, and posted. SHOP_BAGS bags' worth at a time.
+SHOP_BAGS = 5
+
+
+def master_bag(tailor):
+    """The biggest classic trainer bag this master's skill has reached."""
+    value, _ = tailor.skill(TAILORING)
+    reached = [
+        b
+        for b in BAGS
+        if b.source == "trainer" and b.learn_rank <= value and _classic(b)
+    ]
+    return max(reached, key=lambda b: b.slots, default=None)
+
+
+def _shopper(crew, entry, vendors_by_map, busy):
+    """The maintenance member who buys `entry`: online, free, on a classic
+    map whose vendor sells it; the lowest name, for a stable answer."""
+    return min(
+        (
+            m
+            for m in crew
+            if m.maintenance
+            and not m.family
+            and m.online
+            and m.name not in busy
+            and not classic.is_expansion_map(m.map_id)
+            and int(entry) in (vendors_by_map or {}).get(m.map_id, ())
+        ),
+        key=lambda m: m.name,
+        default=None,
+    )
+
+
+def _shop_step(shopper, master, bag, entry, count, cap) -> Step:
+    return Step(
+        shopper.name,
+        "shop",
+        int(entry),
+        "%s buys %d thread (item %d) for %s's %s and posts it"
+        % (shopper.name, count, int(entry), master.name, bag.name),
+        rows=(
+            Row(
+                "buy",
+                "entry:%d count:%d max:%d"
+                % (int(entry), count, _ceiling(THREAD_PRICE[int(entry)] * count)),
+                "",
+                source_for("shop", entry),
+            ),
+            _walk_to_mailbox("shop", entry, cap),
+            send_by_entry(
+                entry, "Thread for the guild tailor", master.name, "shop", entry
+            ),
+        ),
+        walk=Row(
+            "buy",
+            "walk-to-vendor item:%d%s" % (int(entry), guildroute.errand_cap_word(cap)),
+            "",
+            source_for("shop-walk", entry),
+        ),
+    )
+
+
+def shop_steps(master, crew, vendors_by_map, busy, recent=None, cap=NEAR) -> list:
+    """The crew's shopping for one family master: thread, bought and posted.
+
+    Nothing is bought twice inside the shop cooldown: `recent` holds
+    ("to:<master>", "shop", entry) for every purchase already made for it.
+    """
+    bag = master_bag(master)
+    if bag is None:
+        return []
+    steps = []
+    for entry, need in bag.reagents:
+        if not _vendor_reagent(entry):
+            continue
+        if master.count(entry) + master.incoming(entry) >= int(need):
+            continue
+        asked = (recent or {}).get(("to:" + master.name, "shop", int(entry)))
+        if asked is not None and asked < COOLDOWN_MINUTES["shop"]:
+            continue
+        shopper = _shopper(crew, entry, vendors_by_map, busy)
+        if shopper is None:
+            continue
+        steps.append(
+            _shop_step(shopper, master, bag, entry, int(need) * SHOP_BAGS, cap)
+        )
+        busy.add(shopper.name)
+    return steps
+
+
+def master_step(tailor, members, at_mailbox=frozenset()):
+    """(Step or None, note): a family master's one corps step.
+
+    A master crafts with its family's own craft rhythm and collects its post
+    with the family's mail pass, so the corps only posts the bags it made,
+    and only while it already stands at a mailbox.
+    """
     if not tailor.online:
         return None, "%s is offline" % tailor.name
-    step = _post_step(tailor, family, cap)
+    if tailor.name not in at_mailbox:
+        return None, (
+            "%s sews with its family; its bags go out from the next mailbox "
+            "it stands at" % tailor.name
+        )
+    step = _post_step(tailor, _takers(tailor, members), walk=False)
+    if step:
+        return step, ""
+    return None, "%s stands at a mailbox with no bag a guildmate needs" % tailor.name
+
+
+def tailor_step(
+    tailor,
+    members,
+    family,
+    trainable,
+    vendors,
+    cap=NEAR,
+    by_post=frozenset(),
+    at_mailbox=frozenset(),
+):
+    """(Step or None, note): this tailor's one step this pass, and why."""
+    if tailor.family:
+        return master_step(tailor, members, at_mailbox)
+    if not tailor.online:
+        return None, "%s is offline" % tailor.name
+    step = _post_step(tailor, _takers(tailor, members), cap)
     if step:
         return step, ""
     step = _collect_step(tailor, cap)
@@ -960,13 +1129,15 @@ def tailor_step(
     if step:
         return step, ""
     if bag is not None:
-        step = _bag_steps(tailor, bag, reach, trainable, vendors, cap, family)
+        step = _bag_steps(
+            tailor, bag, reach, trainable, vendors, cap, _takers(tailor, members)
+        )
         if step:
             return step, ""
         if reach == "post":
             return None, "%s waits for the %s pattern by post" % (tailor.name, bag.name)
         if _can_make(tailor, bag):
-            return None, "%s can make a %s and nobody in the family would wear it" % (
+            return None, "%s can make a %s and nobody in the guild would wear it" % (
                 tailor.name,
                 bag.name,
             )
@@ -1127,31 +1298,56 @@ def _supply_for(tailor, crew, facts, busy, room, recent, travel) -> list:
     return out
 
 
+def _working_tailor(post, named, busy, notes):
+    """The tailor a post names, or None with the note saying why it sits out."""
+    if post.role != "tailor":
+        return None
+    tailor = named.get(post.name)
+    if tailor is None:
+        notes.append("%s holds a post and is missing from the crew" % post.name)
+    elif tailor.name in busy:
+        notes.append("%s is already on a corps errand" % tailor.name)
+    elif classic.is_expansion_map(tailor.map_id):
+        notes.append(classic.outside_note(tailor.name, tailor.map_id))
+    else:
+        return tailor
+    return None
+
+
 def _guild_steps(
-    guild_facts, posts, recent, busy, steps, notes, travel=(NEAR, None)
+    guild_facts,
+    posts,
+    recent,
+    busy,
+    steps,
+    notes,
+    travel=(NEAR, None),
+    at_mailbox=frozenset(),
 ) -> None:
     """One guild's tailors: a step each, or letters from their guildmates."""
     crew, family, trainable_by_map, vendors_by_map = guild_facts
     named = {m.name: m for m in crew}
     letters = 0
     for post in posts:
-        if post.role != "tailor":
-            continue
-        tailor = named.get(post.name)
+        tailor = _working_tailor(post, named, busy, notes)
         if tailor is None:
-            notes.append("%s holds a post and is missing from the crew" % post.name)
-            continue
-        if tailor.name in busy:
-            notes.append("%s is already on a corps errand" % tailor.name)
-            continue
-        if classic.is_expansion_map(tailor.map_id):
-            notes.append(classic.outside_note(tailor.name, tailor.map_id))
             continue
         trainable = frozenset((trainable_by_map or {}).get(tailor.map_id, ()))
         vendors = frozenset((vendors_by_map or {}).get(tailor.map_id, ()))
         by_post = patterns_by_post(tailor, crew, vendors_by_map)
+        if tailor.family and tailor.online:
+            steps.extend(
+                shop_steps(tailor, crew, vendors_by_map, busy, recent, travel[0])
+            )
         step, why = tailor_step(
-            tailor, crew, family, trainable, vendors, travel[0], by_post
+            tailor,
+            crew,
+            family,
+            trainable,
+            vendors,
+            travel[0],
+            by_post,
+            at_mailbox,
         )
         if step is not None and not _cooling(step, recent):
             steps.append(step)
@@ -1179,6 +1375,7 @@ def plan(
     busy,
     walk_yards=guildroute.MAIL_RUN_YARDS,
     mailbox_yards=None,
+    at_mailbox=frozenset(),
 ) -> CorpsPlan:
     """Every guild's corps, and each tailor's step this pass.
 
@@ -1189,7 +1386,8 @@ def plan(
     (holder, action, key) to the minutes since the last row of that step; `busy`
     holds names already on a walk. `walk_yards` is the cap the walk rows ask for
     (`guildroute.walk_cap`), and `mailbox_yards` maps a member to its nearest
-    mailbox's distance, so the nearest sender is asked first.
+    mailbox's distance, so the nearest sender is asked first. `at_mailbox`
+    names the family masters standing at a mailbox now (`master_step`).
     """
     corps = plan_corps(members)
     by_guild = {}
@@ -1205,7 +1403,16 @@ def plan(
             trainable_by_map,
             vendors_by_map,
         )
-        _guild_steps(facts, posts, recent, busy, steps, notes, travel)
+        _guild_steps(
+            facts,
+            posts,
+            recent,
+            busy,
+            steps,
+            notes,
+            travel,
+            frozenset(at_mailbox or ()),
+        )
     return CorpsPlan(
         corps=corps, steps=tuple(steps), notes=tuple(n for n in notes if n)
     )
@@ -1410,8 +1617,8 @@ def recent_from_rows(rows, prefix=SOURCE) -> dict:
         action = parts[1][: -len("-walk")] if parts[1].endswith("-walk") else parts[1]
         key, age = _int(parts[2], -1), _int(row.get("age"), 0)
         note((str(row.get("target_name") or ""), action, key), age)
-        if action == "supply" and row.get("target_arg"):
-            note(("to:" + str(row["target_arg"]), "supply", key), age)
+        if action in ("supply", "shop") and row.get("target_arg"):
+            note(("to:" + str(row["target_arg"]), action, key), age)
     return out
 
 

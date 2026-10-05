@@ -71,7 +71,8 @@ def family(name, bags, guild="Cave"):
 def step_of(t, members=(), fam=(), trainable=None, vendors=None):
     trainable = TRAINABLE.get(t.map_id, frozenset()) if trainable is None else trainable
     vendors = VENDORS.get(t.map_id, frozenset()) if vendors is None else vendors
-    return gc.tailor_step(t, [t, *members], fam, trainable, vendors)
+    # The crew is the whole guild, family included, as the bridge reads it.
+    return gc.tailor_step(t, [t, *members, *fam], fam, trainable, vendors)
 
 
 class TheMeasuredRecipes(unittest.TestCase):
@@ -123,14 +124,33 @@ class ThePosts(unittest.TestCase):
         self.assertNotIn("Behodiir", roles)
         self.assertEqual(len(roles), len(posts), "one post per member")
 
-    def test_only_maintenance_members_hold_posts(self):
+    def test_the_family_tailor_is_the_master_ahead_of_a_better_crew_tailor(self):
         crew = [
             member(
                 "Og", maintenance=False, family=True, skills={gc.TAILORING: (50, 150)}
             ),
             member("Derred", skills={gc.TAILORING: (300, 300)}),
         ]
-        self.assertEqual([p.name for p in gc.plan_corps(crew)["Cave"]], ["Derred"])
+        posts = gc.plan_corps(crew)["Cave"]
+        self.assertEqual([p.name for p in posts], ["Og", "Derred"])
+        self.assertTrue(posts[0].master)
+        self.assertEqual(posts[0].said, "master tailor Tailoring 50/150")
+
+    def test_a_family_member_holds_no_gathering_post(self):
+        crew = [
+            member(
+                "Ugga",
+                maintenance=False,
+                family=True,
+                skills={gc.HERBALISM: (153, 225)},
+            ),
+            member("Baldam", skills={gc.HERBALISM: (52, 75)}),
+        ]
+        self.assertEqual([p.name for p in gc.plan_corps(crew)["Cave"]], ["Baldam"])
+
+    def test_a_guild_member_off_the_family_is_never_a_master(self):
+        crew = [member("Bob", maintenance=False, skills={gc.TAILORING: (300, 300)})]
+        self.assertEqual(gc.plan_corps(crew), {})
 
     def test_the_post_reads_as_a_sentence(self):
         post = gc.Post("Derred", "tailor", gc.TAILORING, 300, 300)
@@ -638,11 +658,11 @@ class ABagIsPostedTheMomentItIsMade(unittest.TestCase):
         self.assertEqual(letter.target_arg, "Ugga")
         self.assertEqual(letter.source, "guildcorps:post:14046")
 
-    def test_no_bag_is_crafted_that_nobody_in_the_family_would_wear(self):
+    def test_no_bag_is_crafted_that_nobody_in_the_guild_would_wear(self):
         t = tailor(known=KNOWN_300 | {18405}, carried=self.READY)
         step, why = step_of(t, fam=[family("Grug", (16, 16, 16, 16))])
         self.assertIsNone(step)
-        self.assertIn("nobody in the family would wear", why)
+        self.assertIn("nobody in the guild would wear", why)
 
     def test_a_bag_already_on_its_way_counts_as_worn(self):
         t = tailor(known=KNOWN_300 | {18405}, carried=self.READY)
@@ -660,12 +680,120 @@ class ABagIsPostedTheMomentItIsMade(unittest.TestCase):
     def test_a_bag_craft_waits_longer_than_a_bolt(self):
         t = tailor(known=KNOWN_300 | {18405}, carried=self.READY)
         fam = {"Cave": (family("Ugga", (6, 8, 8, 8)),)}
+        crew = [t, *fam["Cave"]]
         recent = {("Derred", "craft", 18405): 10}
-        plan = gc.plan([t], fam, TRAINABLE, VENDORS, recent, set())
+        plan = gc.plan(crew, fam, TRAINABLE, VENDORS, recent, set())
         self.assertNotIn("craft", [s.action for s in plan.steps])
         recent = {("Derred", "craft", 18405): gc.BAG_CRAFT_MINUTES}
-        plan = gc.plan([t], fam, TRAINABLE, VENDORS, recent, set())
+        plan = gc.plan(crew, fam, TRAINABLE, VENDORS, recent, set())
         self.assertEqual([s.action for s in plan.steps], ["craft"])
+
+
+class TheGuildGetsTheBags(unittest.TestCase):
+    """Operator, 2026-10-05: bags go to whoever in the guild needs the slots,
+    and the family are the master crafters."""
+
+    BAG = (held(14046, 1, 4242),)
+
+    def test_a_crew_tailor_posts_to_the_guildmate_with_the_smallest_bag(self):
+        t = tailor(carried=self.BAG)
+        raider = member("Bodo", maintenance=False, worn_bags=(6, 6, 6, 6))
+        fam = [family("Ugga", (8, 8, 8, 8))]
+        step, _ = step_of(t, members=[raider], fam=fam)
+        self.assertEqual(step.action, "post")
+        self.assertEqual(step.rows[0].target_arg, "Bodo")
+
+    def test_a_guildmate_whose_bags_were_not_read_gets_nothing(self):
+        t = tailor(carried=self.BAG)
+        step, _ = step_of(t, members=[member("Bodo", maintenance=False)])
+        self.assertIsNone(step)
+
+    def test_a_master_posts_only_from_a_mailbox_and_never_walks(self):
+        og = member(
+            "Og",
+            maintenance=False,
+            family=True,
+            online=True,
+            carried=self.BAG,
+            skills={gc.TAILORING: (50, 150)},
+        )
+        raider = member("Bodo", maintenance=False, worn_bags=(6, 8, 8, 8))
+        crew = [og, raider, family("Ugga", (6, 6, 6, 6))]
+        away, why = gc.tailor_step(og, crew, (), frozenset(), frozenset())
+        self.assertIsNone(away)
+        self.assertIn("next mailbox", why)
+        step, _ = gc.tailor_step(
+            og, crew, (), frozenset(), frozenset(), at_mailbox=frozenset({"Og"})
+        )
+        self.assertIsNone(step.walk)
+        self.assertEqual(
+            step.rows[0].target_arg,
+            "Bodo",
+            "Ugga is family: the family hand-over trades it",
+        )
+
+
+class TheCrewShopsForTheMasters(unittest.TestCase):
+    """Operator, 2026-10-05: getting thread for crafting is the maintenance
+    members' work, shopping and farming; the family master only sews."""
+
+    FINE_THREAD = 2321
+
+    def og(self, **over):
+        base = dict(maintenance=False, family=True, skills={gc.TAILORING: (90, 150)})
+        base.update(over)
+        return member("Og", **base)
+
+    def test_a_crew_member_on_a_vendor_map_buys_the_thread_and_posts_it(self):
+        og = self.og()
+        crew = [og, member("Arran"), member("Baldam", map_id=999)]
+        vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
+        (step,) = gc.shop_steps(og, crew, vendors, set())
+        self.assertEqual((step.holder, step.action, step.key), ("Arran", "shop", 2321))
+        self.assertTrue(step.walk.command.startswith("walk-to-vendor item:2321"))
+        buy, walk, letter = step.rows
+        self.assertEqual(buy.command.split(" max:")[0], "entry:2321 count:5")
+        self.assertTrue(walk.command.startswith("walk-to-mailbox"))
+        self.assertEqual(
+            letter.command, "send entry:2321 subject:Thread for the guild tailor"
+        )
+        self.assertEqual(letter.target_arg, "Og")
+
+    def test_nothing_is_bought_while_the_master_has_thread_or_it_is_on_its_way(self):
+        crew = [member("Arran")]
+        vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
+        carried = self.og(carried=(held(self.FINE_THREAD, 1),))
+        self.assertEqual(gc.shop_steps(carried, crew, vendors, set()), [])
+        posted = self.og(mail=(gc.Letter(1, 2, self.FINE_THREAD, 5),))
+        self.assertEqual(gc.shop_steps(posted, crew, vendors, set()), [])
+
+    def test_a_purchase_is_not_repeated_inside_its_cooldown(self):
+        og = self.og()
+        vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
+        recent = {("to:Og", "shop", self.FINE_THREAD): 10}
+        self.assertEqual(
+            gc.shop_steps(og, [member("Arran")], vendors, set(), recent), []
+        )
+        rows = [
+            {
+                "source": "guildcorps:shop:2321",
+                "target_name": "Arran",
+                "target_arg": "Og",
+                "age": 7,
+            }
+        ]
+        self.assertEqual(gc.recent_from_rows(rows)[("to:Og", "shop", 2321)], 7)
+
+    def test_the_family_never_shops_and_a_busy_member_is_not_asked(self):
+        og = self.og()
+        vendors = {EVERLOOK: frozenset({self.FINE_THREAD})}
+        crew = [og, member("Ugga", maintenance=False, family=True), member("Arran")]
+        self.assertEqual(gc.shop_steps(og, crew, vendors, {"Arran"}), [])
+
+    def test_a_master_below_the_first_bag_needs_nothing(self):
+        og = self.og(skills={gc.TAILORING: (20, 75)})
+        vendors = {EVERLOOK: frozenset({2320})}
+        self.assertEqual(gc.shop_steps(og, [member("Arran")], vendors, set()), [])
 
 
 class APatternFromAnotherMap(unittest.TestCase):
@@ -793,10 +921,17 @@ class EveryFamilysGuild(unittest.TestCase):
             once.index("if cohort is not None:"), once.index("self._raid_supply_once(")
         )
 
-    def test_the_family_letters_are_read(self):
+    def test_every_guildmates_letters_and_bags_are_read(self):
         fetch = BRIDGE[BRIDGE.index("def _fetch_corps_facts(") :]
         fetch = fetch[: fetch.index("\ndef ")]
-        self.assertIn("for g in (crew, kin)", fetch)
+        self.assertIn("_CORPS_LETTERS_SQL.format(\n            guids=everyone", fetch)
+        self.assertIn("_CORPS_BAGS_SQL.format(guids=everyone)", fetch)
+        self.assertIn("maintenance | family", fetch)
+
+    def test_the_masters_at_a_mailbox_reach_the_plan(self):
+        once = BRIDGE[BRIDGE.index("async def _guild_corps_once(") :]
+        once = once[: once.index("\n    async def ")]
+        self.assertIn("at_mailbox=masters", once)
 
 
 if __name__ == "__main__":
