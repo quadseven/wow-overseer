@@ -146,9 +146,11 @@ class UggasEightRecipes(unittest.TestCase):
                 13: ("Achevar", "designated", "now"),
                 16: ("Amilyn", "designated", "now"),
                 22: ("Aehuurn", "designated", "now"),
-                25: ("", "", ""),
+                # Nobody learns these now or soon; Ugga holds alchemy without
+                # them, so she keeps them for later (the forever rule).
+                25: ("Ugga", "holder", "later"),
                 31: ("Annian", "designated", "now"),
-                33: ("", "", ""),
+                33: ("Ugga", "holder", "later"),
                 38: ("Aehuurn", "designated", "now"),
                 45: ("Aehuurn", "designated", "now"),
             },
@@ -167,8 +169,13 @@ class UggasEightRecipes(unittest.TestCase):
         """Without the known check the 300 alchemists would take Purification."""
         unknown = routes(known=crafters.Known())
         self.assertEqual(unknown[25].taker, "Aehuurn")
-        self.assertEqual(routes()[25].taker, "")
-        self.assertIn("without already knowing it", routes()[25].why)
+        self.assertNotIn(routes()[25].taker, ("Aehuurn", "Alindy", "Goraraa"))
+        everyone_knows = [
+            p for p in PEOPLE if p.rank(ALCHEMY) in (0,) or p.rank(ALCHEMY) >= 285
+        ]
+        pick = routes(people=everyone_knows)[25]
+        self.assertEqual(pick.taker, "")
+        self.assertIn("nobody in the guild needs it", pick.why)
 
     def test_a_use_verb_already_knows_answer_counts_too(self):
         verdicts = [
@@ -225,11 +232,38 @@ class UggasEightRecipes(unittest.TestCase):
             (pick.taker, pick.seat, pick.when), ("Brewer", "designated", "soon")
         )
         far = crafters.choose(UGGA_RECIPES[3], register(people), people, KNOWN, 10)
-        self.assertEqual(far.taker, "")
+        self.assertEqual(far.when, "later", "too far for soon; still needed, so later")
 
     def test_a_guildmate_off_the_register_is_sent_only_what_they_learn_now(self):
-        """Arehr is 30 short and not a designated alchemist: never 'soon'."""
-        self.assertEqual(routes(gap=40)[25].taker, "")
+        """Arehr is 30 short and not a designated alchemist: never 'soon'.
+        The family's own alchemist, further short, comes first for later."""
+        pick = routes(gap=40)[25]
+        self.assertEqual((pick.taker, pick.when), ("Ugga", "later"))
+
+    def test_master_then_second_then_third_forever(self):
+        """Operator, 2026-10-05: masters first, then secondary, then third,
+        until nobody in the guild needs it. A recipe far above everyone goes
+        to the family master, then down the register, then any holder."""
+        pattern = crafters.Recipe(
+            "Arran", 77, 14468, "Pattern: Runecloth Bag", TAILORING, 260, 18405
+        )
+        og = person("Og", {TAILORING: 50}, family=True)
+        crew = person("Dianore", {TAILORING: 20})
+        third = person("Inhen", {TAILORING: 1})
+        holder = person("Arran", {})
+        chain = [og, crew, third, holder]
+        order = []
+        while True:
+            pick = crafters.choose(
+                pattern, register(chain, n=1), chain, crafters.Known(), 25
+            )
+            if not pick.taker:
+                break
+            order.append((pick.taker, pick.when))
+            chain = [p for p in chain if p.name != pick.taker]
+        self.assertEqual(
+            order, [("Og", "later"), ("Dianore", "later"), ("Inhen", "later")]
+        )
 
     def test_the_benefit_is_the_closest_skill(self):
         people = [*FAMILY, person("Hi", {ALCHEMY: 300}), person("Mid", {ALCHEMY: 245})]
@@ -239,7 +273,8 @@ class UggasEightRecipes(unittest.TestCase):
     def test_the_summary_line_carries_the_log_prefix(self):
         line = crafters.summary(routes())
         self.assertTrue(line.startswith("crafter-route: 8 recipe(s)"))
-        self.assertIn("6 routed to a crafter, 2 with nobody", line)
+        self.assertIn("2 kept by a holder who learns them now or later", line)
+        self.assertIn("6 routed to a crafter, 0 nobody in the guild needs", line)
 
 
 def stack(guid, name, skill, rank, holder="Ugga"):
@@ -278,13 +313,17 @@ class TheClearanceRouteTakesThePick(unittest.TestCase):
         self.assertNotIn(new[25].route, clearance.GIVEN)
 
     def test_a_recipe_placed_with_nobody_is_still_listed_or_sold(self):
+        """Only once nobody in the guild needs it does it go to the house."""
         purification = stack(25, "Recipe: Purification Potion", ALCHEMY, 285)
+        everyone_knows = [
+            p for p in PEOPLE if p.rank(ALCHEMY) in (0,) or p.rank(ALCHEMY) >= 285
+        ]
         got = {
             r.stack.guid: r
             for r in clearance.plan(
                 [purification],
                 [cperson(p) for p in PEOPLE],
-                picks=routes(),
+                picks=routes(people=everyone_knows),
                 market={1: 50_000},
                 auction_open=True,
             )

@@ -33,6 +33,14 @@ THE ROUTE for one recipe. The first tier with a candidate wins:
     3. a family member within RECIPE_SOON_GAP skill points of it
     4. a designated crafter within that gap
     5. any other guildmate who can learn it now
+    6. LATER, and forever (operator, 2026-10-05: "give to master crafters
+       then secondary then third so on and so forth forever until no one in
+       guild needs them"): anyone in the guild who holds the trade and has not
+       learned it, however far below its rank, in the same order - the
+       family's masters, the family, the designated crafters, then every
+       other holder - the closest first. They keep it until they can learn
+       it. Only a recipe nobody in the guild still needs goes to the auction
+       house (clearance.py).
 
 Learning now outranks family-soon because the rule asks for the recipe to be
 learned promptly. Within a tier the candidate who benefits most wins: the
@@ -98,6 +106,7 @@ DESIGNATED = "designated"
 GUILD = "guild"
 NOW = "now"
 SOON = "soon"
+LATER = "later"
 
 # The log prefix every line of this module's pass carries.
 LOG_PREFIX = "crafter-route:"
@@ -372,6 +381,8 @@ SEAT_TIERS = {
     (DESIGNATED, False): 5,
     (GUILD, True): 6,
 }
+# Tier 6 of the docstring, after every tier above, in the same seat order.
+LATER_TIERS = {MASTER: 7, FAMILY: 8, DESIGNATED: 9, GUILD: 10}
 
 
 def _why(recipe: Recipe, name: str, have: int, seat: str) -> str:
@@ -407,14 +418,14 @@ def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> lis
         if have <= 0:
             continue
         now = have >= recipe.rank
-        if not now and recipe.rank - have > int(gap):
-            continue
+        soon = not now and recipe.rank - have <= int(gap)
         order, seat = seats.get(person.name, (len(seats), GUILD))
         if person.family:
             seat = MASTER if int(recipe.skill) in person.assigned else FAMILY
-        if seat == GUILD and not now:
-            continue
-        tier = SEAT_TIERS[(seat, now)]
+        if now or (soon and seat != GUILD):
+            tier, when = SEAT_TIERS[(seat, now)], NOW if now else SOON
+        else:
+            tier, when = LATER_TIERS[seat], LATER
         benefit = abs(have - recipe.rank)
         online = bool(person.online or person.family)
         why = _why(recipe, person.name, have, seat)
@@ -423,7 +434,7 @@ def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> lis
         ranked.append(
             (
                 (tier, benefit, not online, order, person.name),
-                Pick(recipe, person.name, seat, NOW if now else SOON, why, online),
+                Pick(recipe, person.name, seat, when, why, online),
             )
         )
     ranked.sort(key=lambda pair: pair[0])
@@ -448,13 +459,12 @@ def choose(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> Pick:
         return found[0]
     return Pick(
         recipe,
-        why="nobody in the family or guild can learn %s (%s %d) now or within %d "
-        "points without already knowing it"
+        why="nobody in the family or guild holds %s without already knowing %s "
+        "(%d), so nobody in the guild needs it"
         % (
-            recipe.name,
             TRADES.get(recipe.skill, "skill"),
+            recipe.name,
             recipe.rank,
-            int(gap),
         ),
     )
 
@@ -469,8 +479,8 @@ def summary(picks: dict) -> str:
     """The pass's one log line."""
     values = list(picks.values())
     return (
-        "%s %d recipe(s): %d kept by a holder who learns them, %d routed to a "
-        "crafter, %d with nobody"
+        "%s %d recipe(s): %d kept by a holder who learns them now or later, "
+        "%d routed to a crafter, %d nobody in the guild needs"
         % (
             LOG_PREFIX,
             len(values),
