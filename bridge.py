@@ -19691,13 +19691,14 @@ def _record_jev_override(judgment, before: dict) -> None:
 
 async def _with_jev_history(facts, kind: str, words, wait_minutes: int):
     """`facts` with `history` (_jev_outcome_history for its family, scored by
-    words(before, facts, minutes)), or `facts` unchanged when the record
-    cannot be read: the question is then asked without it."""
+    words(before, facts, minutes)), or `facts` unchanged when the database
+    fails: the question is then asked without it. Any other error is a bug
+    and rises to the pass's own handler."""
     try:
         history = await asyncio.to_thread(
             _jev_outcome_history, kind, facts.family,
             lambda before, minutes: words(before, facts, minutes), wait_minutes)
-    except Exception:
+    except pymysql.err.MySQLError:
         log.exception("%s: the override history for %s was not read; asked "
                       "without it", kind, facts.family)
         return facts
@@ -19705,10 +19706,11 @@ async def _with_jev_history(facts, kind: str, words, wait_minutes: int):
 
 
 async def _jev_override_recorded(judgment, before: dict) -> None:
-    """_record_jev_override off the loop; a failure is logged, never raised."""
+    """_record_jev_override off the loop. A database failure is logged and
+    the pass goes on; any other error is a bug and rises."""
     try:
         await asyncio.to_thread(_record_jev_override, judgment, before)
-    except Exception:
+    except pymysql.err.MySQLError:
         log.exception("%s: the override for %s was not recorded for scoring",
                       judgment.kind, judgment.subject)
 

@@ -207,10 +207,30 @@ class _Conn:
         return False
 
 
+class _DbError(Exception):
+    pass
+
+
+_PYMYSQL = types.SimpleNamespace(err=types.SimpleNamespace(MySQLError=_DbError))
+
+
+def _db_down(*_a):
+    raise _DbError("gone")
+
+
+def _bug(*_a):
+    raise KeyError("bug")
+
+
 class TheBridgeScoresAndRecords(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.bridge = _import_bridge()
+
+    def setUp(self):
+        patcher = mock.patch.object(self.bridge, "pymysql", _PYMYSQL)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_open_rows_past_their_wait_are_scored_then_history_read(self):
         sql = []
@@ -262,18 +282,20 @@ class TheBridgeScoresAndRecords(unittest.TestCase):
                 self.bridge._with_jev_history(f, ja.KIND, ja.outcome_words, 5)
             )
         self.assertEqual(len(out.history), 2)
-
-        def broken(*_a):
-            raise RuntimeError("boom")
-
-        with mock.patch.object(self.bridge, "_jev_outcome_history", broken):
+        with mock.patch.object(self.bridge, "_jev_outcome_history", _db_down):
             with self.assertLogs(self.bridge.log, "ERROR"):
                 same = asyncio.run(
                     self.bridge._with_jev_history(f, ja.KIND, ja.outcome_words, 5)
                 )
         self.assertIs(same, f)
+        # A bug is not a database failure: it rises to the pass's handler.
+        with mock.patch.object(self.bridge, "_jev_outcome_history", _bug):
+            with self.assertRaises(KeyError):
+                asyncio.run(
+                    self.bridge._with_jev_history(f, ja.KIND, ja.outcome_words, 5)
+                )
 
-    def test_a_failed_override_record_is_logged_not_raised(self):
+    def test_a_database_failure_is_logged_and_a_bug_rises(self):
         judgment = ja.Judgment(
             subject="Zug",
             heuristic=ja.CAMPAIGN,
@@ -283,12 +305,11 @@ class TheBridgeScoresAndRecords(unittest.TestCase):
             jev=ja.SELL,
             acted=jev.JEV,
         )
-
-        def broken(*_a):
-            raise RuntimeError("boom")
-
-        with mock.patch.object(self.bridge, "_record_jev_override", broken):
+        with mock.patch.object(self.bridge, "_record_jev_override", _db_down):
             with self.assertLogs(self.bridge.log, "ERROR"):
+                asyncio.run(self.bridge._jev_override_recorded(judgment, {}))
+        with mock.patch.object(self.bridge, "_record_jev_override", _bug):
+            with self.assertRaises(KeyError):
                 asyncio.run(self.bridge._jev_override_recorded(judgment, {}))
 
     def test_both_kinds_are_wired(self):
