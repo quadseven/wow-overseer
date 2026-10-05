@@ -25,7 +25,7 @@ WHAT THIS DECIDES, one family at a time (`step`):
                  seat (guildsocial.can_take; the seat is the one its spent
                  talents play: tank, healer, else dps), who fits the
                  campaign's current door alongside the family
-                 (guildrun.fitting_doors) and is within guildrun.BAND_SPREAD
+                 (fits_door, the door's own band) and is within guildrun.BAND_SPREAD
                  of the family's average level. Best fit first: a member
                  whose talents play the seat, then the level nearest the
                  sitting-out member's, then the name.
@@ -147,6 +147,28 @@ def _average(levels) -> float:
     return sum(levels) / len(levels) if levels else 0.0
 
 
+def fits_door(family_levels, guest_level: int, door) -> bool:
+    """The guest fits the family's campaign door.
+
+    THE CAMPAIGN'S BAND, NOT THE GUILD'S DOOR LIST. A family campaign is not
+    a guild run: its door is a wing keyword such as `scarlet-library`, which
+    the guild-run list (guildrun.GUILD_DOORS, `scarlet`) does not name, and a
+    wing is outgrown only when the family's weakest member outgrows it, so
+    Grug's family runs the Library (ceiling 38) with Grug at 41 (2026-10-05).
+    The guest is held to that: at or over the finder's minimum, no higher than
+    the door's ceiling or the family's own top level, and the party's average
+    at least the door's floor.
+    """
+    family = [int(x) for x in family_levels]
+    guest = int(guest_level)
+    if guest < int(door.finder_floor):
+        return False
+    if guest > max([int(door.ceiling)] + family):
+        return False
+    party = family + [guest]
+    return sum(party) / len(party) >= int(door.floor) + guildrun.LEVEL_MARGIN
+
+
 def unfit(
     member: guildrun.Member, seat: str, family_levels, door, faction: str, guild: str
 ) -> str:
@@ -164,7 +186,7 @@ def unfit(
     if door is None:
         return "no dungeon door to fit"
     levels = [int(x) for x in family_levels]
-    if not guildrun.fitting_doors(levels + [member.level], [door], faction):
+    if not fits_door(levels, member.level, door):
         return "the family does not fit %s with it" % door.keyword
     if levels and abs(member.level - _average(levels)) > guildrun.BAND_SPREAD:
         return "more than %d levels from the family" % guildrun.BAND_SPREAD

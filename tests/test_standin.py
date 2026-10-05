@@ -593,3 +593,16 @@ class TheBridgePass(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AScarletWingTakesAGuest(unittest.TestCase):
+    """2026-10-05: Grug's family ran the Scarlet Monastery Library, a wing the
+    guild-run door list does not name, and no guest could ever fit it."""
+
+    def test_the_wing_fits_by_its_own_band(self):
+        library = guildrun.Door("scarlet-library", "Library", 33, 38, 189, 33)
+        family = [41, 39, 38, 38]
+        self.assertTrue(standin.fits_door(family, 38, library))
+        self.assertTrue(standin.fits_door(family, 40, library), "no higher than Grug")
+        self.assertFalse(standin.fits_door(family, 32, library), "under the finder")
+        self.assertFalse(standin.fits_door(family, 42, library), "past family and door")
