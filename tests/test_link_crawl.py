@@ -152,8 +152,10 @@ class EveryLinkIsClassified(unittest.TestCase):
         self.assertEqual(unknown, [], "a link with no row in LINKS: classify it")
 
     def test_the_crawl_found_the_links_it_should(self):
-        # A crawl that finds nothing passes the test above vacuously.
-        self.assertGreaterEqual(len(page_hrefs()), len(LINKS))
+        # A crawl that finds nothing passes the test above vacuously, so every
+        # row of the table has to be a link the crawl actually found.
+        found = {rhs for rhs, _n in page_hrefs()}
+        self.assertEqual(sorted(set(LINKS) - found), [], "rows the crawl did not find")
 
     def test_the_built_hrefs_are_built_where_the_table_says(self):
         self.assertIn(

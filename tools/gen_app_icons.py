@@ -52,7 +52,7 @@ def draw(size: int) -> bytes:
                     if dx * dx + dy * dy <= radius * radius:
                         hits += 1
             a = hits / (SUPERSAMPLE * SUPERSAMPLE)
-            row.extend(round(g + (d - g) * a) for g, d in zip(GROUND, DOT))
+            row.extend(round(g + (d - g) * a) for g, d in zip(GROUND, DOT, strict=True))
         rows.append(bytes(row))
     raw = b"".join(rows)
     header = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)

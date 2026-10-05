@@ -99,7 +99,7 @@ def tapped(href, **kw):
         """
 const link = Object.create(Element.prototype);
 link.getAttribute = () => %s;
-link.closest = () => link;
+link.closest = (sel) => sel === 'a[href^="#"]' ? link : null;
 let prevented = false;
 clickHandler({ defaultPrevented: false, button: 0, target: link,
                preventDefault: () => { prevented = true; } });
