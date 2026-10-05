@@ -565,18 +565,20 @@ def guildrun_zones() -> dict:
 
 def role_of(member: guildrun.Member) -> str:
     """The seat a member plays by its tree, gated as guildrun gates it."""
-    if member.fit(guildrun.TANK) == "spec" and guildrun.tank_ready(member):
+    if member.plays(guildrun.TANK) and guildrun.tank_ready(member):
         return TANK
-    if member.fit(guildrun.HEALER) == "spec" and guildrun.covered(member):
+    if member.plays(guildrun.HEALER) and guildrun.covered(member):
         return HEALER
     return DPS
 
 
 def can_take(member: guildrun.Member, seat: str) -> bool:
+    """Only a member whose spent talents play the seat takes a tank or healer
+    seat (guildrun.Member.plays, #575)."""
     if seat == TANK:
-        return bool(member.fit(guildrun.TANK)) and guildrun.tank_ready(member)
+        return member.plays(guildrun.TANK) and guildrun.tank_ready(member)
     if seat == HEALER:
-        return bool(member.fit(guildrun.HEALER)) and guildrun.covered(member)
+        return member.plays(guildrun.HEALER) and guildrun.covered(member)
     return True
 
 
