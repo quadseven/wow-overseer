@@ -113,6 +113,9 @@ SHIELD = {
 GREATSWORD = dict(SHIELD, entry=2201, InventoryType=17, subclass=8, **{"class": 2})
 GREATSWORD["ItemLevel"] = 40
 WORN_DAGGER = {"item_level": 20, "item_class": 2, "item_subclass": 15}
+# Practice Sword (8177): a two-handed sword, InventoryType 17, subclass 8.
+WORN_PRACTICE_SWORD = {"item_level": 2, "item_class": 2, "item_subclass": 8}
+ONE_HAND_SWORD = dict(SHIELD, entry=2202, InventoryType=13, subclass=7, **{"class": 2})
 
 
 class ATankWithoutAShieldBuysOne(unittest.TestCase):
@@ -138,6 +141,44 @@ class ATankWithoutAShieldBuysOne(unittest.TestCase):
         )
         carrying = dict(_character("warrior", True), shield_carried=True)
         self.assertFalse(gearup.shield_short(carrying))
+
+    def test_a_carried_shield_behind_a_two_hander_still_counts_short(self):
+        # Aradak: Practice Sword worn, Dented Buckler in the bags.
+        aradak = dict(
+            _character("warrior", True, {"mainhand": WORN_PRACTICE_SWORD}),
+            shield_carried=True,
+        )
+        self.assertTrue(gearup.tank_two_hander(aradak))
+        self.assertTrue(gearup.shield_short(aradak))
+
+    def test_a_tank_holding_a_two_hander_buys_a_one_hander_not_a_shield(self):
+        aradak = dict(
+            _character("warrior", True, {"mainhand": WORN_PRACTICE_SWORD}),
+            shield_carried=True,
+        )
+        buys = gearup.plan_vendor_buys(
+            {"A": aradak}, {"A": [SHIELD, ONE_HAND_SWORD]}, replace_stale=True
+        )
+        self.assertEqual(
+            [("A", "mainhand", 2202)], [(b.character, b.slot, b.entry) for b in buys]
+        )
+
+    def test_a_tank_with_neither_buys_both(self):
+        bare = _character("warrior", True, {"mainhand": WORN_PRACTICE_SWORD})
+        buys = gearup.plan_vendor_buys(
+            {"A": bare}, {"A": [SHIELD, ONE_HAND_SWORD]}, replace_stale=True
+        )
+        self.assertEqual(
+            {("mainhand", 2202), ("offhand", 2200)}, {(b.slot, b.entry) for b in buys}
+        )
+
+    def test_a_non_tank_keeps_its_two_hander(self):
+        arms = dict(
+            _character("warrior", False, {"mainhand": WORN_PRACTICE_SWORD}),
+            shield_carried=True,
+        )
+        self.assertFalse(gearup.tank_two_hander(arms))
+        self.assertFalse(gearup.shield_short(arms))
 
     def test_it_uses_only_its_own_purse(self):
         broke = dict(_character("warrior", True), purse=100)
