@@ -98,6 +98,38 @@ class ThePlan(unittest.TestCase):
         self.assertEqual(retire.plan([], set(), set()), [])
 
 
+class ThePace(unittest.TestCase):
+    def test_the_defaults(self):
+        self.assertEqual(retire.pace(None, None), (10, 120.0))
+
+    def test_set_values_are_kept(self):
+        self.assertEqual(retire.pace("5", "60"), (5, 60.0))
+
+    def test_a_bad_value_falls_back(self):
+        for rows, cycle in (
+            ("x", "y"),
+            ("0", "0"),
+            ("-3", "-1"),
+            ("2", "nan"),
+            ("2", "inf"),
+        ):
+            with self.subTest(rows=rows, cycle=cycle):
+                got_rows, got_cycle = retire.pace(rows, cycle)
+                self.assertGreater(got_rows, 0)
+                self.assertGreater(got_cycle, 0)
+                self.assertLess(got_cycle, float("inf"))
+
+    def test_the_bridge_reads_its_pace_through_it(self):
+        self.assertIn(
+            'retire.pace(None, os.environ.get("RETIRE_CYCLE_SECONDS"))',
+            _block("async def _retire_loop(self)"),
+        )
+        self.assertIn(
+            'retire.pace(os.environ.get("RETIRE_ROWS_PER_PASS"), None)',
+            _block("async def _retire_once(self)"),
+        )
+
+
 class TheProgressLine(unittest.TestCase):
     def test_done_of_total(self):
         line = retire.progress_line(120, 757, 10, 10)

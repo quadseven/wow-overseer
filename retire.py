@@ -23,6 +23,8 @@ PURE: plain values in, names and lines out.
 
 from __future__ import annotations
 
+import math
+
 SOURCE = "retire"
 COMMAND = "retire"
 ROWS_PER_PASS = 10
@@ -46,6 +48,25 @@ ELIGIBLE_SQL = (
     "AND NOT EXISTS (SELECT 1 FROM overseer_roster r WHERE r.name = c.name) "
     "ORDER BY c.guid"
 )
+
+
+def pace(rows_raw, cycle_raw) -> tuple:
+    """(rows per pass, seconds per cycle) from the two environment values.
+    Anything unreadable, not finite or not above zero falls back to the
+    default, so a typo slows nothing down to zero and never kills the loop."""
+    try:
+        rows = int(rows_raw)
+    except (TypeError, ValueError):
+        rows = ROWS_PER_PASS
+    if rows <= 0:
+        rows = ROWS_PER_PASS
+    try:
+        cycle = float(cycle_raw)
+    except (TypeError, ValueError):
+        cycle = float(CYCLE_SECONDS)
+    if not math.isfinite(cycle) or cycle <= 0:
+        cycle = float(CYCLE_SECONDS)
+    return rows, cycle
 
 
 def eligible_params() -> tuple:

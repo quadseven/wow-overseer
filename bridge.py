@@ -12814,7 +12814,7 @@ class Bridge(discord.Client):
         progress line."""
         eligible = await asyncio.to_thread(_retire_eligible)
         in_flight, refused, done = await asyncio.to_thread(_retire_rows)
-        per_pass = int(os.environ.get("RETIRE_ROWS_PER_PASS", str(retire.ROWS_PER_PASS)))
+        per_pass, _ = retire.pace(os.environ.get("RETIRE_ROWS_PER_PASS"), None)
         names = retire.plan(eligible, in_flight, refused, per_pass)
         queued = 0
         for name in names:
@@ -12829,7 +12829,7 @@ class Bridge(discord.Client):
         """Retire the factory bots a few rows a pass. OFF unless
         RETIRE_FACTORY=on: every row is an irreversible delete."""
         await self.wait_until_ready()
-        cycle = float(os.environ.get("RETIRE_CYCLE_SECONDS", str(retire.CYCLE_SECONDS)))
+        _, cycle = retire.pace(None, os.environ.get("RETIRE_CYCLE_SECONDS"))
         while not self.is_closed():
             if _retire_on():
                 try:
