@@ -586,9 +586,11 @@ def guild_bag(value: int, floor, held: dict):
             continue
         if bag.learn_rank > value or bag.slots <= int(floor):
             continue
-        if all(int(held.get(entry, 0) or 0) >= need
-               for entry, need in bag.reagents[1:]
-               if not guildcorps._vendor_reagent(entry)):
+        if all(
+            int(held.get(entry, 0) or 0) >= need
+            for entry, need in bag.reagents[1:]
+            if not guildcorps._vendor_reagent(entry)
+        ):
             return bag
     return None
 
@@ -603,8 +605,8 @@ def _guild_bag_errand(name: str, value: int, bag, held: dict, floor: int):
             name=name,
             spell=bag.spell,
             why="%s sews a %s (%d slots) for the guild, whose smallest bag is "
-            "%d slots; %s holds %d %s" % (name, bag.name, bag.slots, floor,
-                                          name, bolts, bolt.name),
+            "%d slots; %s holds %d %s"
+            % (name, bag.name, bag.slots, floor, name, bolts, bolt.name),
         )
     if value < bolt.learn_rank:
         return None
@@ -618,7 +620,11 @@ def _guild_bag_errand(name: str, value: int, bag, held: dict, floor: int):
 
 
 def bag_errand(
-    name: str, skills: dict, held: dict, primaries=None, bags_wanted: int = 0,
+    name: str,
+    skills: dict,
+    held: dict,
+    primaries=None,
+    bags_wanted: int = 0,
     floor=None,
 ):
     """A tailor's bag errand, ahead of its ladder, or None (#215).
@@ -685,12 +691,18 @@ BAG_FEED: dict[int, tuple[Reagent, ...]] = {
     ),
     # The guild's bigger bags (`guild_bag`), each judged on its own bolts.
     **{
-        bag.spell: (Reagent(int(bag.reagents[0][0]),
-                            guildcorps.BOLT_OF[int(bag.reagents[0][0])].name,
-                            int(bag.reagents[0][1])),)
+        bag.spell: (
+            Reagent(
+                int(bag.reagents[0][0]),
+                guildcorps.BOLT_OF[int(bag.reagents[0][0])].name,
+                int(bag.reagents[0][1]),
+            ),
+        )
         for bag in guildcorps.BAGS
-        if bag.source == "trainer" and bag.spell != craft.LINEN_BAG.spell_id
-        and guildcorps._classic(bag) and int(bag.reagents[0][0]) in guildcorps.BOLT_OF
+        if bag.source == "trainer"
+        and bag.spell != craft.LINEN_BAG.spell_id
+        and guildcorps._classic(bag)
+        and int(bag.reagents[0][0]) in guildcorps.BOLT_OF
     },
 }
 
@@ -739,7 +751,11 @@ def reagents_to_count(
 
 
 def errand(
-    name: str, skills: dict, held: dict, primaries=None, bags_wanted: int = 0,
+    name: str,
+    skills: dict,
+    held: dict,
+    primaries=None,
+    bags_wanted: int = 0,
     floor=None,
 ) -> Errand:
     """Spend, or smelt? The one `craft_spell` this character should carry.

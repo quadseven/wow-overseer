@@ -44,8 +44,11 @@ class TheTailorSewsForTheGuild(unittest.TestCase):
 
     def test_a_reagent_that_is_neither_bolt_nor_thread_must_be_in_hand(self):
         held = {SILK_BOLT: 3, WOOL_BOLT: 3}
-        self.assertEqual(errand(160, 6, held).spell, 3757,
-                         "no Heavy Leather: the Small Silk Pack waits")
+        self.assertEqual(
+            errand(160, 6, held).spell,
+            3757,
+            "no Heavy Leather: the Small Silk Pack waits",
+        )
         held[HEAVY_LEATHER] = 2
         self.assertEqual(errand(160, 6, held).spell, 3813)
 
@@ -62,8 +65,7 @@ class TheTailorSewsForTheGuild(unittest.TestCase):
             self.assertIn(spell, craft_supply.REAGENTS)
 
     def test_the_bolts_and_cloth_are_counted_before_the_choice(self):
-        wanted = craft_rhythm.reagents_to_count("Og", {"tailoring": 90}, TAILOR,
-                                                0, 6)
+        wanted = craft_rhythm.reagents_to_count("Og", {"tailoring": 90}, TAILOR, 0, 6)
         self.assertTrue({WOOL_BOLT, WOOL, HEAVY_LEATHER} <= wanted)
 
 
