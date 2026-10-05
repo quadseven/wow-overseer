@@ -1408,6 +1408,10 @@
   .rtl-run > summary .dgn-sum { grid-column:1; }
   .rtl-run.rtl-bad > summary .dgn-sum { color:var(--warn-text); }
   .rtl-run.rtl-good > summary .dgn-sum { color:var(--accent-text); }
+  .rtl-run > summary .rtl-story, .rtl-run > summary .rtl-cause {
+    grid-column:1; font-size:13px; line-height:1.45; overflow-wrap:anywhere; }
+  .rtl-run > summary .rtl-story { color:var(--on-card); }
+  .rtl-run > summary .rtl-cause { color:var(--on-card-dim); }
   .rtl-event { display:grid; grid-template-columns:auto minmax(0, 1fr);
                gap:.7rem; margin-top:6px; font-size:13px; line-height:1.45;
                color:var(--on-card); overflow-wrap:anywhere; }
@@ -3323,6 +3327,12 @@
   .gd-state.bad { color:var(--warn-text); }
   .gd-line { font-size:.74rem; color:var(--on-card-dim); margin-top:.3rem;
              overflow-wrap:anywhere; }
+  /* WHY THE RUN WENT THAT WAY (runstory). The story in the card's own text
+     colour, the cause line under it in the dim one; both plain sentences. */
+  .gd-story { font-size:.8rem; line-height:1.45; color:var(--on-card);
+              margin:.4rem 0 .1rem; overflow-wrap:anywhere; }
+  .gd-cause { font-size:.74rem; color:var(--on-card-dim); margin-bottom:.3rem;
+              overflow-wrap:anywhere; }
   .gd-rec { display:flex; flex-wrap:wrap; gap:.2rem .6rem; font-size:.78rem;
             padding:.3rem 0; border-bottom:1px solid var(--card-line); }
   .gd-rec .v { font-family:var(--mono); color:var(--on-card); }
@@ -8108,7 +8118,8 @@ window.addEventListener("resize", render);
 // Every word comes from the server (guildrun.page); this only draws it. A
 // group's card: its guild and dungeon, its band, where it stands, its five in
 // their seats, then the module's lines (what Jev chose and how sure it was,
-// and how the run went).
+// and how the run went). A run that came back opens with runstory's story of
+// why it went that way and its cause line.
 const gdsection = document.getElementById("guild");
 const gdhead = document.getElementById("gdhead");
 const gdactive = document.getElementById("gdactive");
@@ -8122,6 +8133,8 @@ function gdCard(run) {
   head.appendChild(el("span", "", run.band_line));
   head.appendChild(el("span", "gd-state" + (run.tone ? " " + run.tone : ""), run.status));
   box.appendChild(head);
+  if (run.story) box.appendChild(el("p", "gd-story", run.story));
+  if (run.cause) box.appendChild(el("p", "gd-cause", run.cause));
   for (const m of run.members || []) {
     const r = el("div", "ln-row r-" + (m.seat === "tank" || m.seat === "healer" ? m.seat : "dps"));
     r.appendChild(el("span", "ln-name", m.name));
@@ -8225,6 +8238,8 @@ function gcOutcome(ask) {
     a.href = href;
     box.appendChild(a);
   }
+  if (run.story) box.appendChild(el("p", "gd-story", run.story));
+  if (run.cause) box.appendChild(el("p", "gd-cause", run.cause));
   return box;
 }
 
@@ -10073,6 +10088,9 @@ function rtlRender(p) {
       const summary = document.createElement("summary");
       summary.appendChild(el("span", "dgn-name", run.title));
       summary.appendChild(el("span", "dgn-sum", run.line));
+      // Why it went that way (runstory), shown while the card is closed too.
+      if (run.story) summary.appendChild(el("span", "rtl-story", run.story));
+      if (run.cause) summary.appendChild(el("span", "rtl-cause", run.cause));
       card.appendChild(summary);
       for (const ev of run.events) {
         const line = el("div", "rtl-event rtl-" + ev.tone);
