@@ -1839,7 +1839,39 @@ LINEN_BAG = Recipe(
     note="3x Bolt of Linen Cloth (2996), 3x Coarse Thread (2320, "
     "vendor-bought) -> 1x Linen Bag (item 4238, 6 slots), no focus needed",
 )
-BAG_RECIPES: dict = {SKILL_IDS["tailoring"]: (LINEN_BAG,)}
+# THE GUILD'S BIGGER BAGS (operator, 2026-10-05; craft_rhythm.guild_bag picks
+# among them). The trainer-taught rungs of guildcorps.BAGS, the ladder the
+# corps measured against this realm's tables; listed here so every spell the
+# family may carry is one this module names.
+WOOLEN_BAG = Recipe(
+    3757,
+    "Woolen Bag",
+    min_skill=80,
+    max_skill=450,
+    note="3x Bolt of Woolen Cloth (2997), 1x Fine Thread (2321, "
+    "vendor-bought) -> 1x Woolen Bag (item 4240, 8 slots), no focus needed",
+)
+SMALL_SILK_PACK = Recipe(
+    3813,
+    "Small Silk Pack",
+    min_skill=150,
+    max_skill=450,
+    note="3x Bolt of Silk Cloth (4305), 2x Heavy Leather (4234), 3x Fine "
+    "Thread (2321, vendor-bought) -> 1x Small Silk Pack (item 4245, 10 "
+    "slots), no focus needed",
+)
+MAGEWEAVE_BAG = Recipe(
+    12065,
+    "Mageweave Bag",
+    min_skill=225,
+    max_skill=450,
+    note="4x Bolt of Mageweave (4339), 2x Silken Thread (4291, "
+    "vendor-bought) -> 1x Mageweave Bag (item 10050, 12 slots), no focus "
+    "needed",
+)
+BAG_RECIPES: dict = {
+    SKILL_IDS["tailoring"]: (LINEN_BAG, WOOLEN_BAG, SMALL_SILK_PACK, MAGEWEAVE_BAG)
+}
 
 
 def known_recipes():

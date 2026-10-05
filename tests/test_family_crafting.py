@@ -236,6 +236,7 @@ def _rhythm_self(world, log):
             "_standing_jobs": world.standing_jobs,
             "_fetch_trade_skills": world.skills,
             "_bags_wanted_for": lambda cohort=None: 0,
+            "_guild_bag_floor_for": lambda cohort=None: None,
             "_fetch_item_counts": world.counts,
             "_insert_job": world.insert_job,
         },
@@ -314,6 +315,7 @@ class TheCraftErrandIsWrittenForAnotherFamily(unittest.TestCase):
                 ),
                 "_fetch_trade_skills": lambda names: {"Oz": {"tailoring": 55}},
                 "_bags_wanted_for": lambda cohort=None: 5 if cohort is HORDE else 0,
+                "_guild_bag_floor_for": lambda cohort=None: None,
                 "_fetch_item_counts": lambda pairs: {("Oz", BOLT): 3},
                 "_write_craft_errand": lambda name, spell: written.append(
                     (name, spell)

@@ -1702,6 +1702,44 @@ def _bags_wanted_for(cohort=None) -> int:
     return sum(bag_pressure.open_bag_positions(members).values())
 
 
+# Each member of the family's guild: how many bag positions it fills and its
+# smallest worn bag, for the tailor's guild bag (craft_rhythm.guild_bag).
+_GUILD_BAG_FLOOR_SQL = (
+    "SELECT gm.guid, COUNT(it.entry) AS worn, MIN(it.ContainerSlots) AS smallest "
+    "FROM guild_member gm "
+    "LEFT JOIN character_inventory ci ON ci.guid = gm.guid AND ci.bag = 0 "
+    "AND ci.slot BETWEEN 19 AND 22 "
+    "LEFT JOIN item_instance ii ON ii.guid = ci.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s)) "
+    "GROUP BY gm.guid"
+)
+
+
+def _guild_bag_floor_for(cohort=None):
+    """The smallest bag anybody in the family's guild wears, 0 for an empty
+    bag position; None when the family is in no guild or the read failed.
+
+    The family are the guild's master crafters (operator, 2026-10-05), so its
+    tailor sews for the guild's smallest bag, not only the family's.
+    """
+    names = (sorted(_protected_guids().values()) if cohort is None
+             else sorted(cohort.names))
+    if not names:
+        return None
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_GUILD_BAG_FLOOR_SQL % ",".join(["%s"] * len(names)),
+                        names)
+            rows = cur.fetchall()
+    except pymysql.err.MySQLError:
+        log.exception("craft: the guild's bags could not be read, so the "
+                      "tailor sews for the family alone this pass")
+        return None
+    return bag_upgrade.guild_floor(rows, len(bag_upgrade.BAG_POSITIONS))
+
+
 def _standing_jobs(family: str | None = None) -> dict:
     """name -> `job` for every enabled roster row (infra#3696).
 
@@ -6814,6 +6852,7 @@ class Bridge(discord.Client):
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
         primaries = _primaries_for(cohort, names, skills)
         bags_wanted = await asyncio.to_thread(_bags_wanted_for, cohort)
+        floor = await asyncio.to_thread(_guild_bag_floor_for, cohort)
         # BOTH CANDIDATES' REAGENTS, FETCHED BEFORE EITHER IS CHOSEN. The choice
         # compares what is held for the spend against what is held for the
         # smelt, so counting only the chosen recipe's reagents would need the
@@ -6822,14 +6861,15 @@ class Bridge(discord.Client):
             (name, entry)
             for name in names
             for entry in craft_rhythm.reagents_to_count(
-                name, skills.get(name, {}), primaries.get(name), bags_wanted)
+                name, skills.get(name, {}), primaries.get(name), bags_wanted,
+                floor)
         }
         counts = await asyncio.to_thread(_fetch_item_counts, sorted(wanted))
         for name in names:
             held = {entry: count for (who, entry), count in counts.items()
                     if who == name}
             chosen = craft_rhythm.errand(name, skills.get(name, {}), held,
-                                         primaries.get(name), bags_wanted)
+                                         primaries.get(name), bags_wanted, floor)
             await asyncio.to_thread(_write_craft_errand, name, chosen.spell)
             if chosen.spell:
                 log.info("craft: %s aimed at %s spell %s - %s",
@@ -7534,6 +7574,7 @@ class Bridge(discord.Client):
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
         primaries = _primaries_for(cohort, names, skills)
         bags_wanted = await asyncio.to_thread(_bags_wanted_for, cohort)
+        floor = await asyncio.to_thread(_guild_bag_floor_for, cohort)
 
         # ONE BATCH FOR THE WHOLE FAMILY, the same discipline
         # `_craft_supply_once` already holds `_fetch_item_counts` to: one round
@@ -7550,7 +7591,8 @@ class Bridge(discord.Client):
             (name, entry)
             for name in names
             for entry in craft_rhythm.reagents_to_count(
-                name, skills.get(name, {}), primaries.get(name), bags_wanted)
+                name, skills.get(name, {}), primaries.get(name), bags_wanted,
+                floor)
         }
         counts = await asyncio.to_thread(_fetch_item_counts, sorted(wanted))
         # `carried` and not `held`: the gather branch at the foot of this
@@ -7565,7 +7607,7 @@ class Bridge(discord.Client):
         spells = {
             name: craft_rhythm.errand(
                 name, skills.get(name, {}), carried[name],
-                primaries.get(name), bags_wanted).spell
+                primaries.get(name), bags_wanted, floor).spell
             for name in names
         }
 

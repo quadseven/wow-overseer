@@ -535,3 +535,18 @@ def members_from_rows(rows, names, positions=len(BAG_POSITIONS)):
         )
         for name in sorted(by_name)
     ]
+
+
+def guild_floor(rows, positions=len(BAG_POSITIONS)):
+    """The smallest bag across a guild's members, 0 for an empty position.
+
+    `rows` carry `worn` (bag positions filled) and `smallest` (ContainerSlots
+    of the smallest worn bag) per member. None for no rows: nobody was read,
+    which is not the same as everybody wearing nothing.
+    """
+    floor = None
+    for row in rows or ():
+        worn = int(row.get("worn") or 0)
+        low = 0 if worn < positions else int(row.get("smallest") or 0)
+        floor = low if floor is None else min(floor, low)
+    return floor

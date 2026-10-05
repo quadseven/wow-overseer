@@ -50,6 +50,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import craft
+import guildcorps
 import jobs
 import professions
 
@@ -566,8 +567,59 @@ LINEN_PER_BOLT = 2
 BOLT_OF_LINEN_SPELL = 2963
 
 
+def guild_bag(value: int, floor, held: dict):
+    """The biggest bag this tailor can sew that beats the guild's smallest.
+
+    THE GUILD'S BAGS (operator, 2026-10-05): the family are the guild's master
+    crafters, and a tailor sews the biggest bag its skill allows for whoever
+    in the guild wears the smallest one. `floor` is that smallest bag in
+    slots, 0 for an empty bag position, None when it was not read. The
+    ladder is guildcorps.BAGS: trainer-taught (a playerbot's trainer recipes
+    reach it without a pattern), inside the classic ruleset, and a bag whose
+    reagent is neither a bolt nor vendor thread (Small Silk Pack's Heavy
+    Leather) only while that reagent is in hand. None: no such bag.
+    """
+    if floor is None:
+        return None
+    for bag in sorted(guildcorps.BAGS, key=lambda b: b.slots, reverse=True):
+        if bag.source != "trainer" or not guildcorps._classic(bag):
+            continue
+        if bag.learn_rank > value or bag.slots <= int(floor):
+            continue
+        if all(int(held.get(entry, 0) or 0) >= need
+               for entry, need in bag.reagents[1:]
+               if not guildcorps._vendor_reagent(entry)):
+            return bag
+    return None
+
+
+def _guild_bag_errand(name: str, value: int, bag, held: dict, floor: int):
+    """Sew `bag` with its bolts in hand, else weave the bolts toward it."""
+    bolt_entry, need = bag.reagents[0]
+    bolt = guildcorps.BOLT_OF[int(bolt_entry)]
+    bolts = int(held.get(bolt_entry, 0) or 0)
+    if bolts >= need:
+        return Errand(
+            name=name,
+            spell=bag.spell,
+            why="%s sews a %s (%d slots) for the guild, whose smallest bag is "
+            "%d slots; %s holds %d %s" % (name, bag.name, bag.slots, floor,
+                                          name, bolts, bolt.name),
+        )
+    if value < bolt.learn_rank:
+        return None
+    return Errand(
+        name=name,
+        spell=bolt.spell,
+        why="%s weaves %s toward a %s (%d slots) for the guild, whose smallest "
+        "bag is %d slots; %d of the %d it takes are in hand"
+        % (name, bolt.name, bag.name, bag.slots, floor, bolts, need),
+    )
+
+
 def bag_errand(
-    name: str, skills: dict, held: dict, primaries=None, bags_wanted: int = 0
+    name: str, skills: dict, held: dict, primaries=None, bags_wanted: int = 0,
+    floor=None,
 ):
     """A tailor's bag errand, ahead of its ladder, or None (#215).
 
@@ -587,13 +639,22 @@ def bag_errand(
     hand-over (`bag_upgrade.plan_family_bags`) gives it to whoever has the
     empty position. None means no bag errand: nobody wants a bag, this
     character is no tailor, or its skill has not reached the recipe.
+
+    THE GUILD COMES FIRST WHEN ITS BAGS WERE READ (`floor`, `guild_bag`): a
+    bigger bag than the guild's smallest, sewn or woven toward, and posted by
+    the corps (guildcorps.master_step) from the next mailbox.
     """
-    if bags_wanted <= 0:
-        return None
     trades = professions.assigned(name) if primaries is None else primaries
     if "tailoring" not in trades:
         return None
     value = int(skills.get("tailoring", 0) or 0)
+    guild = guild_bag(value, floor, held)
+    if guild is not None:
+        made = _guild_bag_errand(name, value, guild, held, int(floor))
+        if made is not None:
+            return made
+    if bags_wanted <= 0:
+        return None
     bag = craft.LINEN_BAG
     if value < bag.min_skill:
         return None
@@ -622,6 +683,15 @@ BAG_FEED: dict[int, tuple[Reagent, ...]] = {
     craft.LINEN_BAG.spell_id: (
         Reagent(BOLT_OF_LINEN, "Bolt of Linen Cloth", BOLTS_PER_BAG),
     ),
+    # The guild's bigger bags (`guild_bag`), each judged on its own bolts.
+    **{
+        bag.spell: (Reagent(int(bag.reagents[0][0]),
+                            guildcorps.BOLT_OF[int(bag.reagents[0][0])].name,
+                            int(bag.reagents[0][1])),)
+        for bag in guildcorps.BAGS
+        if bag.source == "trainer" and bag.spell != craft.LINEN_BAG.spell_id
+        and guildcorps._classic(bag) and int(bag.reagents[0][0]) in guildcorps.BOLT_OF
+    },
 }
 
 
@@ -632,7 +702,7 @@ def feeds(craft_spell: int) -> tuple:
 
 
 def reagents_to_count(
-    name: str, skills: dict, primaries=None, bags_wanted: int = 0
+    name: str, skills: dict, primaries=None, bags_wanted: int = 0, floor=None
 ) -> set:
     """Every item entry a decision about this character could need to count.
 
@@ -657,11 +727,20 @@ def reagents_to_count(
     trades = professions.assigned(name) if primaries is None else primaries
     if bags_wanted > 0 and "tailoring" in trades:
         wanted.update((BOLT_OF_LINEN, LINEN_CLOTH))
+    if floor is not None and "tailoring" in trades:
+        # Every ladder bag's own reagents and its bolt's cloth: which bag is
+        # chosen depends on what is held, so all of them are counted first.
+        for bag in guildcorps.BAGS:
+            wanted.update(int(entry) for entry, _ in bag.reagents)
+            bolt = guildcorps.BOLT_OF.get(int(bag.reagents[0][0]))
+            if bolt is not None:
+                wanted.update(int(entry) for entry, _ in bolt.reagents)
     return wanted
 
 
 def errand(
-    name: str, skills: dict, held: dict, primaries=None, bags_wanted: int = 0
+    name: str, skills: dict, held: dict, primaries=None, bags_wanted: int = 0,
+    floor=None,
 ) -> Errand:
     """Spend, or smelt? The one `craft_spell` this character should carry.
 
@@ -709,7 +788,7 @@ def errand(
     `primaries` and `bags_wanted` serve another family (#215): its members'
     trades are the ones they hold, and a tailor's `bag_errand` comes first.
     """
-    bag = bag_errand(name, skills, held, primaries, bags_wanted)
+    bag = bag_errand(name, skills, held, primaries, bags_wanted, floor)
     if bag is not None:
         return bag
     spend = craft.craft_errand(name, skills, primaries)
@@ -785,7 +864,7 @@ def stand(name: str, craft_spell: int, held: dict) -> Stand:
             verdict=STOCKED if casts >= 1 else SHORT,
             casts=casts,
             thinnest=bag[0].label,
-            why="%s holds %d %s, enough for %d family bag(s) (spell %d)"
+            why="%s holds %d %s, enough for %d bag(s) for the guild (spell %d)"
             % (name, bolts, bag[0].label, casts, spell),
         )
 
