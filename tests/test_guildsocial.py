@@ -10,6 +10,7 @@ These pin the pure decisions in guildsocial.py, and the bridge wiring as source.
 
 import asyncio
 import datetime
+import types
 import pathlib
 import unittest
 from dataclasses import replace
@@ -967,6 +968,24 @@ class AFinderRunCostsNoWalk(unittest.TestCase):
             self.assertLess(gs.worth(self.far_mate(1), door, gs.XP_BAND, entrances), 0)
         finally:
             gs.FINDER_TELEPORTS = old
+
+
+class GuildsTakeTurns(unittest.TestCase):
+    """2026-10-05: with room for one ask, Bonkers asked 13 times in an hour and
+    Cave not once, because guilds were asked in alphabetical order."""
+
+    def test_the_guild_that_asked_last_waits(self):
+        earlier = NOW - datetime.timedelta(minutes=30)
+        later = NOW - datetime.timedelta(minutes=5)
+        asks = [
+            types.SimpleNamespace(guild="Bonkers", created_at=later),
+            types.SimpleNamespace(guild="Cave", created_at=earlier),
+        ]
+        self.assertEqual(gs._turn_order({"Bonkers", "Cave"}, asks), ["Cave", "Bonkers"])
+
+    def test_a_guild_that_never_asked_goes_first(self):
+        asks = [types.SimpleNamespace(guild="Bonkers", created_at=NOW)]
+        self.assertEqual(gs._turn_order({"Bonkers", "Cave"}, asks), ["Cave", "Bonkers"])
 
 
 if __name__ == "__main__":
