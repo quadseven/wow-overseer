@@ -15959,6 +15959,7 @@ class Bridge(discord.Client):
                    | {n for n, held in getattr(self, "_pvp_held", {}).items() if held})
         doors = guildrun.doors(facts["finder_floors"])
         mates, held, needs = _guild_social_mates(facts, mid_job, doors)
+        log.info("guild social: %s", guildsocial.census(mates, held))
         # PICK-UP GROUPS (guildpug, #591): a pug who said yes counts as free.
         pugs_on = guildpug.enabled()
         pug_all = []
