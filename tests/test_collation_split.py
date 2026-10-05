@@ -235,8 +235,17 @@ STRING_COLUMNS = {
     # The guild chat feed's two tables (#570), from their contract: every
     # string column. Re-check against the bridge DDL when it lands.
     "overseer_guild_ask": frozenset(
-        {"guild", "asker", "kind", "target", "target_label", "roles_needed",
-         "reason", "said", "state"}
+        {
+            "guild",
+            "asker",
+            "kind",
+            "target",
+            "target_label",
+            "roles_needed",
+            "reason",
+            "said",
+            "state",
+        }
     ),
     "overseer_guild_answer": frozenset({"member", "role", "stance", "said", "state"}),
     "overseer_guild_run": frozenset(

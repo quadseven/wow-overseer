@@ -58,21 +58,60 @@ class FakeConn:
 
 
 ASKS = [
-    {"id": 7, "guild": "Cave", "asker": "Tanka", "kind": "dungeon", "target": "36",
-     "target_label": "Deadmines", "roles_needed": "healer,dps", "reason": "gear",
-     "said": "LFM Deadmines need healer", "created_at": "2026-10-04 12:00:00",
-     "expires_at": "2026-10-04 12:30:00", "state": "ran", "run_id": 3},
-    {"id": 6, "guild": "Cave", "asker": "Bolt", "kind": "quest", "target": "99",
-     "target_label": "A quest", "roles_needed": "dps", "reason": "",
-     "said": "anyone for a quest", "created_at": "2026-10-04 11:00:00",
-     "expires_at": "2026-10-04 11:30:00", "state": "open", "run_id": None},
+    {
+        "id": 7,
+        "guild": "Cave",
+        "asker": "Tanka",
+        "kind": "dungeon",
+        "target": "36",
+        "target_label": "Deadmines",
+        "roles_needed": "healer,dps",
+        "reason": "gear",
+        "said": "LFM Deadmines need healer",
+        "created_at": "2026-10-04 12:00:00",
+        "expires_at": "2026-10-04 12:30:00",
+        "state": "ran",
+        "run_id": 3,
+    },
+    {
+        "id": 6,
+        "guild": "Cave",
+        "asker": "Bolt",
+        "kind": "quest",
+        "target": "99",
+        "target_label": "A quest",
+        "roles_needed": "dps",
+        "reason": "",
+        "said": "anyone for a quest",
+        "created_at": "2026-10-04 11:00:00",
+        "expires_at": "2026-10-04 11:30:00",
+        "state": "open",
+        "run_id": None,
+    },
 ]
 ANSWERS = [
-    {"id": 1, "ask_id": 7, "member": "Pip", "role": "healer", "stance": "help",
-     "said": "omw", "created_at": "2026-10-04 12:01:00", "state": "seated"},
+    {
+        "id": 1,
+        "ask_id": 7,
+        "member": "Pip",
+        "role": "healer",
+        "stance": "help",
+        "said": "omw",
+        "created_at": "2026-10-04 12:01:00",
+        "state": "seated",
+    },
 ]
-RUNS = [{"id": 3, "state": "ended", "outcome": "cleared", "bosses_done": 5,
-         "bosses_total": 5, "deaths": 1, "ended_at": "2026-10-04 12:40:00"}]
+RUNS = [
+    {
+        "id": 3,
+        "state": "ended",
+        "outcome": "cleared",
+        "bosses_done": 5,
+        "bosses_total": 5,
+        "deaths": 1,
+        "ended_at": "2026-10-04 12:40:00",
+    }
+]
 
 
 class _Both:
@@ -89,12 +128,23 @@ class _Both:
 
 
 def serve(missing=()):
-    cur = FakeCursor({"overseer_guild_ask": ASKS, "overseer_guild_answer": ANSWERS,
-                      "overseer_guild_run": RUNS}, missing)
+    cur = FakeCursor(
+        {
+            "overseer_guild_ask": ASKS,
+            "overseer_guild_answer": ANSWERS,
+            "overseer_guild_run": RUNS,
+        },
+        missing,
+    )
     return cur, _Both(
         mock.patch.object(map_server, "_connect", return_value=FakeConn(cur)),
-        mock.patch.object(map_server.pymysql, "err",
-                          types.SimpleNamespace(MySQLError=MySQLError), create=True))
+        mock.patch.object(
+            map_server.pymysql,
+            "err",
+            types.SimpleNamespace(MySQLError=MySQLError),
+            create=True,
+        ),
+    )
 
 
 class TheEndpoint(unittest.TestCase):
@@ -146,7 +196,15 @@ class TheEndpoint(unittest.TestCase):
         with patch:
             h = get("/api/guildchat?guild=Cave")
         self.assertEqual(h.code, 200)
-        self.assertEqual(h.payload, {"guild": "Cave", "guilds": ["Cave", "Bonkers"], "ready": False, "asks": []})
+        self.assertEqual(
+            h.payload,
+            {
+                "guild": "Cave",
+                "guilds": ["Cave", "Bonkers"],
+                "ready": False,
+                "asks": [],
+            },
+        )
 
     def test_an_unreachable_world_is_a_503(self):
         with mock.patch.object(map_server, "_connect", side_effect=OSError("down")):
@@ -157,25 +215,27 @@ class TheEndpoint(unittest.TestCase):
 class TheView(unittest.TestCase):
     def test_it_is_a_view_in_the_guild_hub_and_an_address(self):
         self.assertIn('const GUILDCHAT_VIEW = "guildchat";', PAGE)
-        hub = PAGE[PAGE.index('["guild", "Guild", ['):]
+        hub = PAGE[PAGE.index('["guild", "Guild", [') :]
         self.assertIn("GUILDCHAT_VIEW", hub[: hub.index("]")])
-        listed = PAGE[PAGE.index("const HASH_VIEWS = ["):]
+        listed = PAGE[PAGE.index("const HASH_VIEWS = [") :]
         self.assertIn("GUILDCHAT_VIEW", listed[: listed.index("]")])
         self.assertIn("gcb.dataset.view = GUILDCHAT_VIEW;", PAGE)
 
     def test_showview_toggles_it_and_fetches_on_the_way_in(self):
-        show = PAGE[PAGE.index("function showView"):]
+        show = PAGE[PAGE.index("function showView") :]
         show = show[: show.index("setInterval(pollFamily")]
         self.assertIn('gcsection.style.display = isGc ? "block" : "none";', show)
-        self.assertIn("pollGuildChat();", show[show.index("if (isGc) {"):])
+        self.assertIn("pollGuildChat();", show[show.index("if (isGc) {") :])
 
     def test_it_reads_the_endpoint_per_guild_and_refreshes(self):
-        poll = PAGE[PAGE.index("async function pollGuildChat"):]
+        poll = PAGE[PAGE.index("async function pollGuildChat") :]
         poll = poll[: poll.index("\n}\n")]
         self.assertIn('"?guild=" + encodeURIComponent(guild)', poll)
         self.assertIn("if (view !== GUILDCHAT_VIEW", poll)
         self.assertIn("gcGuilds = data.guilds;", PAGE)
-        self.assertIn("setInterval(() => { if (view === GUILDCHAT_VIEW) pollGuildChat(); }", PAGE)
+        self.assertIn(
+            "setInterval(() => { if (view === GUILDCHAT_VIEW) pollGuildChat(); }", PAGE
+        )
 
     def test_items_in_a_line_use_the_site_tooltip_and_outcomes_link_the_dungeon(self):
         self.assertIn("itemTipName({entry: Number(m[1])}", PAGE)
