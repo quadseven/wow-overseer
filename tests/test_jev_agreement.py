@@ -17,7 +17,9 @@ import jev_recovery
 class AgreementIsJevs(unittest.TestCase):
     def policies(self):
         return (
-            jev_movement.policy({}),
+            # Movement is shadow by default since #584; in act mode its
+            # agreement is still Jev's.
+            jev_movement.policy({"JEV_MODE_MOVEMENT": "act"}),
             jev_activity.policy({}),
             jev_recovery.policy(jev_recovery.KIND_RECOVERY, {}),
             jev_recovery.policy(jev_recovery.KIND_STALL, {}),

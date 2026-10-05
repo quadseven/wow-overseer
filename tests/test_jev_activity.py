@@ -66,7 +66,7 @@ def facts(**kw):
 
 def ask(f, fake=None, key="k", environ=None):
     client = jev.Client(key, transport=fake or FakeJev())
-    return asyncio.run(ja.ask(client, f, ja.policy(environ or {})))
+    return asyncio.run(ja.ask(client, f, ja.policy(environ or {}), environ or {}))
 
 
 class Slow:
@@ -867,3 +867,36 @@ class TheRecordAndTheCard(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SellOverACampaignNeedsMore(unittest.TestCase):
+    """#584: `campaign -> sell` acted 230 times in a week at a mean 0.92 while
+    confidence at 0.8 and up agreed only 32% of the time (#583)."""
+
+    def sell(self, confidence, environ=None, **kw):
+        return ask(
+            facts(**kw),
+            FakeJev(picks={"activity": ja.SELL}, confidence=confidence),
+            environ=environ,
+        )
+
+    def test_a_confident_sell_over_a_run_that_can_start_does_not_act(self):
+        j = self.sell(0.92)
+        self.assertEqual((j.heuristic, j.jev), (ja.CAMPAIGN, ja.SELL))
+        self.assertEqual(j.acted, jev.HEURISTIC)
+        self.assertEqual(j.carried_out, "")
+
+    def test_above_its_own_floor_it_acts(self):
+        self.assertEqual(self.sell(0.97).carried_out, ja.SELL)
+
+    def test_the_floor_is_the_operators_to_move(self):
+        environ = {"JEV_THRESHOLD_ACTIVITY_CHOICE_SELL_OVER_CAMPAIGN": "0.8"}
+        self.assertEqual(self.sell(0.92, environ).carried_out, ja.SELL)
+
+    def test_a_withheld_run_keeps_the_kinds_floor(self):
+        # Bags too full to loot: selling is the way back to the run.
+        self.assertEqual(self.sell(0.7, withheld=True).carried_out, ja.SELL)
+
+    def test_other_overrides_keep_the_kinds_floor(self):
+        j = ask(facts(), FakeJev(picks={"activity": ja.QUEST}, confidence=0.7))
+        self.assertEqual(j.carried_out, ja.QUEST)

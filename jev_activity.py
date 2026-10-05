@@ -159,6 +159,29 @@ def policy(environ=None) -> jev.Policy:
     )
 
 
+# SELL OVER A RUN THAT CAN START HAS ITS OWN FLOOR (#583, #584). At 0.8 and up
+# Jev agreed with the heuristic only 32% of the time, and the largest override
+# was `campaign -> sell` at a mean confidence of 0.92, carried out 230 times in
+# a week with no record of whether it helped. Raising the kind's floor to the
+# audit's 0.85 would leave most of those standing, so this pair needs 0.95
+# (JEV_THRESHOLD_ACTIVITY_CHOICE_SELL_OVER_CAMPAIGN moves it). It applies only
+# while the campaign is offered: when the run is withheld for bag space,
+# selling is the way back to it, and the kind's own floor stands.
+SELL_OVER_CAMPAIGN = "activity_choice_sell_over_campaign"
+SELL_OVER_CAMPAIGN_THRESHOLD = 0.95
+
+
+def rule_for(
+    rule: jev.Policy, current: str, answer: str, offered, environ=None
+) -> jev.Policy:
+    """`rule`, with the sell-over-campaign floor when Jev would sell instead
+    of a campaign run that can start now."""
+    if answer != SELL or current != CAMPAIGN or CAMPAIGN not in offered:
+        return rule
+    floor = jev.threshold(SELL_OVER_CAMPAIGN, environ, SELL_OVER_CAMPAIGN_THRESHOLD)
+    return replace(rule, threshold=max(rule.threshold, floor))
+
+
 @dataclass(frozen=True)
 class Member:
     """One family member as the choice sees them.
@@ -586,7 +609,7 @@ class Judgment:
         )
 
 
-async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
+async def ask(client, f: Facts, rule: jev.Policy, environ=None) -> Judgment | None:
     """Ask Jev what the family does next; None when there is nothing to ask.
 
     Nothing to ask is the kind switched off, or a single option that is
@@ -620,7 +643,7 @@ async def ask(client, f: Facts, rule: jev.Policy) -> Judgment | None:
         jev=answer.choice,
         confidence=answer.confidence,
         probabilities=answer.probabilities,
-        acted=rule.acted(
+        acted=rule_for(rule, current, answer.choice, offered, environ).acted(
             current, answer.choice, answer.confidence, can_act=answer.choice in offered
         ),
     )
