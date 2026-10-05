@@ -785,6 +785,18 @@ class JevChoosesTheDoor(unittest.TestCase):
         self.assertEqual(judgment.acted, jev.HEURISTIC)
         self.assertEqual(judgment.jev, "wailing")
 
+    def test_an_answer_naming_a_door_not_offered_keeps_the_heuristics(self):
+        # jev.parse admits only offered options; a client that returned one
+        # anyway must still leave the best need's door, never fail the pass.
+        class Stray:
+            async def ask(self, *_a, **_k):
+                stray = jev.Choice("ragefire", {"ragefire": 1.0}, 0.99)
+                return jev.Outcome(jev.ANSWERED, 5, answers={"door": stray})
+
+        post, judgment = asyncio.run(gs.choose_door(Stray(), self.post(), environ={}))
+        self.assertEqual(post.target, "deadmines")
+        self.assertEqual(judgment.acted, jev.HEURISTIC)
+
     def test_one_door_asks_nothing(self):
         fake = FakeJev()
         one = self.post()

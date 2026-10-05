@@ -1310,9 +1310,12 @@ async def choose_door(client, post: Post, environ=None) -> tuple:
             can_act=answer.choice in criteria,
         ),
     )
-    if judgment.chosen == post.target:
+    # jev.parse admits only an offered option and `can_act` gates JEV on it,
+    # so the chosen door is always one of the options; a door that is not
+    # still keeps the heuristic's rather than failing the pass.
+    option = next((o for o in post.options if o.door.keyword == judgment.chosen), None)
+    if judgment.chosen == post.target or option is None:
         return post, judgment
-    option = next(o for o in post.options if o.door.keyword == judgment.chosen)
     return asking_for(post, option), judgment
 
 

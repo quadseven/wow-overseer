@@ -907,52 +907,65 @@ class ShapeRecord:
 NO_SHAPE_RECORD = ShapeRecord()
 
 
+def _shape_row(row: dict, oldest) -> tuple | None:
+    """(key, entered) for a run the shape record counts, or None: not ended,
+    lost, or older than `oldest`. The helper suffix ("+1help") is dropped
+    from the composition, since helpers do not change the shape."""
+    if str(row.get("state") or "") != ENDED:
+        return None
+    outcome = str(row.get("outcome") or "")
+    entered = outcome in WENT_IN
+    if not entered and outcome not in TURNED_AWAY:
+        return None
+    ended_at = row.get("ended_at")
+    if oldest is not None and ended_at is not None and ended_at < oldest:
+        return None
+    key = (
+        str(row.get("keyword") or ""),
+        str(row.get("band") or ""),
+        str(row.get("composition") or "").split("+", 1)[0],
+    )
+    return key, entered
+
+
+def _counted(rec: ShapeRecord, row: dict, entered: bool, streaking: bool):
+    """`rec` with one more run: in (and how it went) or turned away."""
+    if entered:
+        outcome = str(row.get("outcome") or "")
+        return replace(
+            rec,
+            went_in=rec.went_in + 1,
+            cleared=rec.cleared + (1 if outcome == CLEARED else 0),
+            deaths=rec.deaths + int(row.get("deaths") or 0),
+        )
+    return replace(
+        rec, turned_away=rec.turned_away + 1, streak=rec.streak + int(streaking)
+    )
+
+
 def shape_records(
     rows: list, now=None, rolling: int = ROLLING, days: int = RECORD_DAYS
 ) -> dict:
     """(keyword, band, shape) -> ShapeRecord over the last `rolling` ended runs
     of each within `days` of `now` (every run when `now` or a row's ended_at is
-    unknown). Rows are overseer_guild_run rows, newest first. A lost run says
-    nothing either way and is skipped; a helper suffix ("+1help") is dropped
-    from the composition, since helpers do not change the shape."""
+    unknown). Rows are overseer_guild_run rows, newest first; a lost run says
+    nothing either way and is skipped (_shape_row)."""
     counted: dict = {}
     got_in: set = set()
     out: dict = {}
     oldest = None if now is None else now - datetime.timedelta(days=days)
     for row in rows:
-        if str(row.get("state") or "") != ENDED:
+        seen = _shape_row(row, oldest)
+        if seen is None:
             continue
-        outcome = str(row.get("outcome") or "")
-        entered = outcome in WENT_IN
-        if not entered and outcome not in TURNED_AWAY:
+        key, entered = seen
+        if counted.get(key, 0) >= rolling:
             continue
-        ended_at = row.get("ended_at")
-        if oldest is not None and ended_at is not None and ended_at < oldest:
-            continue
-        key = (
-            str(row.get("keyword") or ""),
-            str(row.get("band") or ""),
-            str(row.get("composition") or "").split("+", 1)[0],
-        )
-        n = counted.get(key, 0)
-        if n >= rolling:
-            continue
-        counted[key] = n + 1
+        counted[key] = counted.get(key, 0) + 1
         rec = out.get(key, NO_SHAPE_RECORD)
+        out[key] = _counted(rec, row, entered, key not in got_in)
         if entered:
             got_in.add(key)
-            out[key] = replace(
-                rec,
-                went_in=rec.went_in + 1,
-                cleared=rec.cleared + (1 if outcome == CLEARED else 0),
-                deaths=rec.deaths + int(row.get("deaths") or 0),
-            )
-        else:
-            out[key] = replace(
-                rec,
-                turned_away=rec.turned_away + 1,
-                streak=rec.streak + (0 if key in got_in else 1),
-            )
     return out
 
 
