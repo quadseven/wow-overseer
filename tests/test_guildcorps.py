@@ -138,8 +138,12 @@ class ThePosts(unittest.TestCase):
 
     def test_a_family_member_holds_no_gathering_post(self):
         crew = [
-            member("Ugga", maintenance=False, family=True,
-                   skills={gc.HERBALISM: (153, 225)}),
+            member(
+                "Ugga",
+                maintenance=False,
+                family=True,
+                skills={gc.HERBALISM: (153, 225)},
+            ),
             member("Baldam", skills={gc.HERBALISM: (52, 75)}),
         ]
         self.assertEqual([p.name for p in gc.plan_corps(crew)["Cave"]], ["Baldam"])
@@ -705,18 +709,28 @@ class TheGuildGetsTheBags(unittest.TestCase):
         self.assertIsNone(step)
 
     def test_a_master_posts_only_from_a_mailbox_and_never_walks(self):
-        og = member("Og", maintenance=False, family=True, online=True,
-                    carried=self.BAG, skills={gc.TAILORING: (50, 150)})
+        og = member(
+            "Og",
+            maintenance=False,
+            family=True,
+            online=True,
+            carried=self.BAG,
+            skills={gc.TAILORING: (50, 150)},
+        )
         raider = member("Bodo", maintenance=False, worn_bags=(6, 8, 8, 8))
         crew = [og, raider, family("Ugga", (6, 6, 6, 6))]
         away, why = gc.tailor_step(og, crew, (), frozenset(), frozenset())
         self.assertIsNone(away)
         self.assertIn("next mailbox", why)
-        step, _ = gc.tailor_step(og, crew, (), frozenset(), frozenset(),
-                                 at_mailbox=frozenset({"Og"}))
+        step, _ = gc.tailor_step(
+            og, crew, (), frozenset(), frozenset(), at_mailbox=frozenset({"Og"})
+        )
         self.assertIsNone(step.walk)
-        self.assertEqual(step.rows[0].target_arg, "Bodo",
-                         "Ugga is family: the family hand-over trades it")
+        self.assertEqual(
+            step.rows[0].target_arg,
+            "Bodo",
+            "Ugga is family: the family hand-over trades it",
+        )
 
 
 class APatternFromAnotherMap(unittest.TestCase):

@@ -377,10 +377,14 @@ def plan_corps(members) -> dict:
     for guild, crew in sorted(guilds.items()):
         taken, posts = set(), []
         for role, skill, want in ROLES:
-            holders = [m for m in crew if m.name not in taken
-                       and _may_hold(m, role) and m.skill(skill)[0] > 0]
-            holders.sort(key=lambda m: (m.family, _rank_for(m, skill), m.name),
-                         reverse=True)
+            holders = [
+                m
+                for m in crew
+                if m.name not in taken and _may_hold(m, role) and m.skill(skill)[0] > 0
+            ]
+            holders.sort(
+                key=lambda m: (m.family, _rank_for(m, skill), m.name), reverse=True
+            )
             for m in holders[:want]:
                 value, cap = m.skill(skill)
                 posts.append(Post(m.name, role, skill, value, cap, m.family))
@@ -593,8 +597,10 @@ def _takers(tailor, members):
     were read. A master's own family is left to the family's bag hand-over,
     which trades a bag across the camp fire instead of posting it."""
     return [
-        m for m in members or ()
-        if m.name != tailor.name and (m.worn_bags or m.family)
+        m
+        for m in members or ()
+        if m.name != tailor.name
+        and (m.worn_bags or m.family)
         and not (tailor.family and m.family)
     ]
 
@@ -1000,7 +1006,13 @@ def master_step(tailor, members, at_mailbox=frozenset()):
 
 
 def tailor_step(
-    tailor, members, family, trainable, vendors, cap=NEAR, by_post=frozenset(),
+    tailor,
+    members,
+    family,
+    trainable,
+    vendors,
+    cap=NEAR,
+    by_post=frozenset(),
     at_mailbox=frozenset(),
 ):
     """(Step or None, note): this tailor's one step this pass, and why."""
@@ -1020,8 +1032,9 @@ def tailor_step(
     if step:
         return step, ""
     if bag is not None:
-        step = _bag_steps(tailor, bag, reach, trainable, vendors, cap,
-                          _takers(tailor, members))
+        step = _bag_steps(
+            tailor, bag, reach, trainable, vendors, cap, _takers(tailor, members)
+        )
         if step:
             return step, ""
         if reach == "post":
@@ -1189,7 +1202,13 @@ def _supply_for(tailor, crew, facts, busy, room, recent, travel) -> list:
 
 
 def _guild_steps(
-    guild_facts, posts, recent, busy, steps, notes, travel=(NEAR, None),
+    guild_facts,
+    posts,
+    recent,
+    busy,
+    steps,
+    notes,
+    travel=(NEAR, None),
     at_mailbox=frozenset(),
 ) -> None:
     """One guild's tailors: a step each, or letters from their guildmates."""
@@ -1213,7 +1232,13 @@ def _guild_steps(
         vendors = frozenset((vendors_by_map or {}).get(tailor.map_id, ()))
         by_post = patterns_by_post(tailor, crew, vendors_by_map)
         step, why = tailor_step(
-            tailor, crew, family, trainable, vendors, travel[0], by_post,
+            tailor,
+            crew,
+            family,
+            trainable,
+            vendors,
+            travel[0],
+            by_post,
             at_mailbox,
         )
         if step is not None and not _cooling(step, recent):
@@ -1270,8 +1295,16 @@ def plan(
             trainable_by_map,
             vendors_by_map,
         )
-        _guild_steps(facts, posts, recent, busy, steps, notes, travel,
-                     frozenset(at_mailbox or ()))
+        _guild_steps(
+            facts,
+            posts,
+            recent,
+            busy,
+            steps,
+            notes,
+            travel,
+            frozenset(at_mailbox or ()),
+        )
     return CorpsPlan(
         corps=corps, steps=tuple(steps), notes=tuple(n for n in notes if n)
     )
