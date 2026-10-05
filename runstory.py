@@ -434,6 +434,241 @@ def _range_clause(levels: list, door) -> tuple:
     return said, False
 
 
+class _Tale:
+    """A story being told: its sentences, its cause tags, and the words a
+    tag takes when this run knows more than TAGS says."""
+
+    def __init__(self):
+        self.sentences: list = []
+        self.tags: list = []
+        self.facts: dict = {}
+
+    def say(self, sentence: str) -> None:
+        if sentence:
+            self.sentences.append(sentence)
+
+    def tag(self, tag: str, fact: str = "", first: bool = False) -> None:
+        if tag in self.tags:
+            return
+        if first:
+            self.tags.insert(0, tag)
+        else:
+            self.tags.append(tag)
+        if fact:
+            self.facts[tag] = fact
+
+    def way_in(self, way: list, zones: dict) -> None:
+        if way:
+            self.say(_way_in_line(way, zones))
+            self.tag("died_on_the_way")
+
+    def fights(self, inside: list, classes: dict, wiped: bool, lead: str = "") -> None:
+        """The told fights, with `lead` (the bosses line) joined onto a first
+        boss fight or said before the fights."""
+        lines, tags, boss_at = _tell_fights(inside, classes, wiped)
+        if lead and boss_at == 0 and lines:
+            lines[0] = "%s, and %s" % (lead, lines[0])
+        elif lead:
+            lines.insert(0, lead)
+        for line in lines:
+            self.say(line)
+        for tag in tags:
+            fact = "burst from %s" % _burst_boss(inside) if tag == "boss_burst" else ""
+            self.tag(tag, fact)
+
+    def unexplained_if(self, wiped: bool, explaining: tuple) -> None:
+        if wiped and not any(t in self.tags for t in explaining):
+            self.tag("unexplained")
+
+    def story(self) -> str:
+        sentences = self.sentences
+        # The bosses line and the last fight matter more than the way in when
+        # there is room for only four sentences.
+        if len(sentences) > MAX_SENTENCES:
+            sentences = [s for s in sentences if not s.startswith("lost ")]
+        return _story(sentences)
+
+    def told(self, cause: str | None = None) -> dict:
+        if cause is None:
+            cause = _cause_line(self.tags, self.facts) if self.tags else ""
+        return Story(self.story(), cause, tuple(self.tags)).payload()
+
+
+@dataclass(frozen=True)
+class _GuildRun:
+    """What one ended guild run's rows say, read once."""
+
+    place: str
+    door: object
+    outcome: str
+    why: str
+    classes: dict
+    levels: list
+    healers: list
+    seconds_inside: int
+    deaths: int
+    done: int
+    total: int
+    way: list
+    inside: list
+
+
+def _read_guild_run(run: dict, deaths: list, bosses: frozenset) -> _GuildRun:
+    keyword = str(run.get("keyword") or "")
+    door = _door(keyword)
+    members = _members(run)
+    inside_secs = _int(run.get("seconds_inside"))
+    start = _clock(run.get("created_at"))
+    end = _clock(run.get("ended_at"))
+    end = start if end is None else end
+    way, inside = [], []
+    if start is not None and end is not None:
+        way, inside = _guild_deaths(run, deaths, bosses, end - inside_secs, start, end)
+    return _GuildRun(
+        place=door.place if door else (run.get("place") or keyword or "the dungeon"),
+        door=door,
+        outcome=str(run.get("outcome") or ""),
+        why=str(run.get("why") or ""),
+        classes={m["name"]: str(m.get("class") or "") for m in members},
+        levels=[_int(m.get("level")) for m in members if _int(m.get("level"))],
+        healers=[m for m in members if m.get("seat") == guildrun.HEALER],
+        seconds_inside=inside_secs,
+        deaths=_int(run.get("deaths")),
+        done=_int(run.get("bosses_done")),
+        total=_int(run.get("bosses_total")),
+        way=way,
+        inside=inside,
+    )
+
+
+def _deaths_said(n: int) -> str:
+    return "%s death%s" % (_num(n), "" if n == 1 else "s")
+
+
+def _tell_cleared(g: _GuildRun, zones: dict) -> dict:
+    tale = _Tale()
+    minutes = round(g.seconds_inside / 60.0)
+    tale.say(
+        "cleared %s%s%s with %s"
+        % (
+            g.place,
+            " in %d minutes" % minutes if minutes else "",
+            " at " + _levels(g.levels) if g.levels else "",
+            "nobody dying" if g.deaths == 0 else _deaths_said(g.deaths),
+        )
+    )
+    if "finder" in g.why and g.total:
+        tale.say(
+            "the finder called it finished after %d of %d bosses" % (g.done, g.total)
+        )
+    elif g.total:
+        tale.say("all %d bosses went down" % g.total)
+    tale.way_in(g.way, zones)
+    lines, _tags, _ = _tell_fights(g.inside, g.classes, wiped=False)
+    for line in lines[:1]:
+        tale.say(line)
+    return tale.told("Cleared: %s." % (g.why or "the run finished"))
+
+
+def _tell_lost(g: _GuildRun, zones: dict) -> dict:
+    tale = _Tale()
+    tale.say("no result ever came back from the world server for this run")
+    if g.way:
+        tale.say(_way_in_line(g.way, zones))
+    tale.tag("restart_lost")
+    return tale.told()
+
+
+def _tell_refused(g: _GuildRun, zones: dict) -> dict:
+    tale = _Tale()
+    said = _plain(g.why) or "no reason given"
+    tale.say("the world server would not start the %s run: %s" % (g.place, said))
+    if "in combat" in g.why:
+        tale.tag("refused_in_combat", said + " when the run was formed")
+    else:
+        tale.tag("refused", "the world server refused the run (%s)" % said)
+    return tale.told()
+
+
+def _tell_not_entered(g: _GuildRun, zones: dict) -> dict:
+    tale = _Tale()
+    tale.say("never got into %s: %s" % (g.place, _plain(g.why) or "no reason given"))
+    tale.tag("never_entered")
+    tale.way_in(g.way, zones)
+    return tale.told()
+
+
+def _healer_low(g: _GuildRun) -> int:
+    """The lone healer's level when it was at or under the door's floor, or
+    the lowest in a mixed group; 0 otherwise."""
+    if len(g.healers) != 1 or not g.levels:
+        return 0
+    level = _int(g.healers[0].get("level"))
+    floor = g.door.floor if g.door else 0
+    low = level <= floor or (level == min(g.levels) < max(g.levels))
+    return level if low else 0
+
+
+def _bosses_said(g: _GuildRun) -> str:
+    if not g.total:
+        return ""
+    if g.done:
+        return "got %d of %d bosses down" % (g.done, g.total)
+    return "got none of the %d bosses down" % g.total
+
+
+_ABANDONED = (
+    ("group is gone", "group_gone"),
+    ("nobody has been inside", "left_dungeon"),
+)
+
+
+def _tell_went_in(g: _GuildRun, zones: dict) -> dict:
+    """A run that went in and did not clear: wiped, abandoned or timed out."""
+    tale = _Tale()
+    range_said, under = _range_clause(g.levels, g.door)
+    healer = _healer_low(g)
+    tale.say(
+        "went into %s%s%s"
+        % (g.place, range_said, ", with one level %d healer" % healer if healer else "")
+    )
+    if under:
+        tale.tag("under_levelled")
+    if healer:
+        tale.tag("single_healer", "a lone level %d healer" % healer)
+    if g.way:
+        tale.say(_way_in_line(g.way, zones))
+    wiped = g.outcome == "wiped"
+    tale.fights(g.inside, g.classes, wiped, _bosses_said(g))
+    if g.way:
+        tale.tag("died_on_the_way")
+    if g.outcome == "abandoned":
+        tag = next((t for said, t in _ABANDONED if said in g.why), "roles_down")
+        tale.tag(tag, first=True)
+        tale.say("the run was called off: %s" % _plain(g.why))
+    elif g.outcome == "timed out":
+        tale.tag("timed_out", first=True)
+        tale.say(
+            "the run was called off after %d minutes inside"
+            % round(g.seconds_inside / 60.0)
+        )
+    elif wiped and not g.inside:
+        counted = " (%s)" % _deaths_said(g.deaths) if g.deaths else ""
+        tale.say("everybody inside died%s, and no death record says to what" % counted)
+    tale.unexplained_if(
+        wiped, ("under_levelled", "single_healer", "boss_burst", "pack_wipe")
+    )
+    return tale.told()
+
+
+_GUILD_TELLERS = {
+    guildrun.CLEARED: _tell_cleared,
+    "lost": _tell_lost,
+    "refused": _tell_refused,
+    "not entered": _tell_not_entered,
+}
+
+
 def guild_story(run: dict, deaths: list, bosses=frozenset(), zones=None) -> dict:
     """One ended guild run (a guildrun.page view, or an overseer_guild_run
     row) as {story, cause, causes}. `deaths` are overseer_death rows of any
@@ -441,167 +676,9 @@ def guild_story(run: dict, deaths: list, bosses=frozenset(), zones=None) -> dict
     A run that has not ended has no story yet."""
     if str(run.get("state") or "") != guildrun.ENDED:
         return dict(NO_STORY)
-    zones = zones or {}
-    bosses = frozenset(bosses)
-    keyword = str(run.get("keyword") or "")
-    door = _door(keyword)
-    place = door.place if door else (run.get("place") or keyword or "the dungeon")
-    outcome = str(run.get("outcome") or "")
-    why = str(run.get("why") or "")
-    members = _members(run)
-    classes = {m["name"]: str(m.get("class") or "") for m in members}
-    levels = [_int(m.get("level")) for m in members if _int(m.get("level"))]
-    healers = [m for m in members if m.get("seat") == guildrun.HEALER]
-    inside_secs = _int(run.get("seconds_inside"))
-    done, total = _int(run.get("bosses_done")), _int(run.get("bosses_total"))
-    end = _clock(run.get("ended_at"))
-    start = _clock(run.get("created_at"))
-    if end is None:
-        end = start
-    entered = (end - inside_secs) if end is not None else None
-    way, inside = ([], [])
-    if end is not None and start is not None:
-        way, inside = _guild_deaths(run, deaths, bosses, entered, start, end)
-
-    tags: list = []
-    facts: dict = {}
-    sentences: list = []
-
-    if outcome == guildrun.CLEARED:
-        minutes = round(inside_secs / 60.0)
-        n = _int(run.get("deaths"))
-        who = (
-            "nobody dying"
-            if n == 0
-            else "%s death%s" % (_num(n), "" if n == 1 else "s")
-        )
-        sentences.append(
-            "cleared %s%s%s with %s"
-            % (
-                place,
-                " in %d minutes" % minutes if minutes else "",
-                " at " + _levels(levels) if levels else "",
-                who,
-            )
-        )
-        if "finder" in why and total:
-            sentences.append(
-                "the finder called it finished after %d of %d bosses" % (done, total)
-            )
-        elif total:
-            sentences.append("all %d bosses went down" % total)
-        if way:
-            sentences.append(_way_in_line(way, zones))
-            tags.append("died_on_the_way")
-        if inside:
-            lines, _fight_tags, _ = _tell_fights(inside, classes, wiped=False)
-            sentences.extend(lines[:1])
-        cause = "Cleared: %s." % (why or "the run finished")
-        return Story(_story(sentences), cause, tuple(tags)).payload()
-
-    if outcome == "lost":
-        sentences.append("no result ever came back from the world server for this run")
-        if way:
-            sentences.append(_way_in_line(way, zones))
-        tags.append("restart_lost")
-        return Story(_story(sentences), _cause_line(tags, facts), tuple(tags)).payload()
-
-    if outcome == "refused":
-        said = _plain(why) or "no reason given"
-        sentences.append(
-            "the world server would not start the %s run: %s" % (place, said)
-        )
-        if "in combat" in why:
-            tags.append("refused_in_combat")
-            facts["refused_in_combat"] = said + " when the run was formed"
-        else:
-            tags.append("refused")
-            facts["refused"] = "the world server refused the run (%s)" % said
-        return Story(_story(sentences), _cause_line(tags, facts), tuple(tags)).payload()
-
-    if outcome == "not entered":
-        sentences.append(
-            "never got into %s: %s" % (place, _plain(why) or "no reason given")
-        )
-        if way:
-            sentences.append(_way_in_line(way, zones))
-            tags.append("died_on_the_way")
-        tags.insert(0, "never_entered")
-        return Story(_story(sentences), _cause_line(tags, facts), tuple(tags)).payload()
-
-    # The run went in and did not clear: wiped, abandoned or timed out.
-    range_said, under = _range_clause(levels, door)
-    healer_low = False
-    if len(healers) == 1 and levels:
-        level = _int(healers[0].get("level"))
-        floor = door.floor if door else 0
-        healer_low = level <= floor or (level == min(levels) < max(levels))
-    opener = "went into %s%s" % (place, range_said)
-    if healer_low:
-        opener += ", with one level %d healer" % _int(healers[0].get("level"))
-    sentences.append(opener)
-    if under:
-        tags.append("under_levelled")
-    if healer_low:
-        tags.append("single_healer")
-        facts["single_healer"] = "a lone level %d healer" % _int(
-            healers[0].get("level")
-        )
-
-    if way:
-        sentences.append(_way_in_line(way, zones))
-
-    wiped = outcome == "wiped"
-    lines, fight_tags, boss_at = _tell_fights(inside, classes, wiped)
-    bosses_said = ""
-    if total:
-        bosses_said = (
-            "got %d of %d bosses down" % (done, total)
-            if done
-            else "got none of the %d bosses down" % total
-        )
-    if bosses_said and boss_at == 0 and lines:
-        lines[0] = "%s, and %s" % (bosses_said, lines[0])
-    elif bosses_said:
-        lines.insert(0, bosses_said)
-    sentences.extend(lines)
-    for tag in fight_tags:
-        if tag == "boss_burst":
-            facts["boss_burst"] = "burst from %s" % _burst_boss(inside)
-        tags.append(tag)
-    if way:
-        tags.append("died_on_the_way")
-
-    if outcome == "abandoned":
-        if "group is gone" in why:
-            tags.insert(0, "group_gone")
-        elif "nobody has been inside" in why:
-            tags.insert(0, "left_dungeon")
-        else:
-            tags.insert(0, "roles_down")
-        sentences.append("the run was called off: %s" % _plain(why))
-    elif outcome == "timed out":
-        tags.insert(0, "timed_out")
-        sentences.append(
-            "the run was called off after %d minutes inside" % round(inside_secs / 60.0)
-        )
-    elif wiped and not inside:
-        n = _int(run.get("deaths"))
-        sentences.append(
-            "everybody inside died%s, and no death record says to what"
-            % (" (%s death%s)" % (_num(n), "" if n == 1 else "s") if n else "")
-        )
-
-    if wiped and not any(
-        t in tags
-        for t in ("under_levelled", "single_healer", "boss_burst", "pack_wipe")
-    ):
-        tags.append("unexplained")
-    # Keep the narrative short: the bosses line and the last fight matter
-    # more than the way in when there is room for only four sentences.
-    if len(sentences) > MAX_SENTENCES and way:
-        sentences = [s for s in sentences if not s.startswith("lost ")]
-    return Story(_story(sentences), _cause_line(tags, facts), tuple(tags)).payload()
+    g = _read_guild_run(run, deaths, frozenset(bosses))
+    teller = _GUILD_TELLERS.get(g.outcome, _tell_went_in)
+    return teller(g, zones or {})
 
 
 def tell_guild_runs(views: list, deaths: list, bosses=frozenset(), zones=None) -> list:
@@ -639,6 +716,79 @@ def _boss_counts(rows: list) -> tuple:
     return credited, max(credited, in_all)
 
 
+def _age(row: dict) -> float:
+    """A row's moment on one axis: minus its age in seconds."""
+    return -float(_int(row.get("age_seconds")))
+
+
+def _family_deaths(
+    rows: list, ended, deaths: list, names: list, bosses, dungeon: int
+) -> tuple:
+    """(on the way in, inside, whether the family got in) for one run."""
+    start = _age(rows[0])
+    end = _age(ended) if ended is not None else _age(rows[-1])
+    went_in = next((_age(r) for r in rows if r.get("phase") in INSIDE_PHASES), None)
+    family = set(names)
+    way, inside = [], []
+    for row in deaths:
+        if row.get("character_name") not in family or row.get("age_seconds") is None:
+            continue
+        when = _age(row)
+        if not (start <= when <= end + SLACK_SECONDS):
+            continue
+        d = _death(row, when, bosses)
+        if dungeon and d.map_id == dungeon:
+            inside.append(d)
+        elif went_in is None or when < went_in:
+            way.append(d)
+    return way, inside, went_in is not None
+
+
+def _family_outcome(ended) -> tuple:
+    """(outcome word, reason) of an `ended` or `released` row."""
+    if ended is None:
+        return "", ""
+    if ended.get("kind") == "released":
+        return "released", str(ended.get("detail") or "")
+    word, _, reason = str(ended.get("detail") or "").partition(":")
+    return word.strip(), reason
+
+
+def _family_opener(place: str, outcome: str, credited: int, got_in: bool) -> str:
+    down = "%s boss%s down" % (_num(credited), "" if credited == 1 else "es")
+    if outcome == "complete":
+        return "cleared %s, %s" % (place, down) if credited else "cleared %s" % place
+    if not got_in:
+        return "never got inside %s" % place
+    return "went into %s and got %s" % (place, down)
+
+
+def _family_ending(tale: _Tale, outcome: str, reason: str, ended, inside: list) -> None:
+    if outcome in _FAMILY_ENDS:
+        said, tag = _FAMILY_ENDS[outcome]
+        reason = _plain(reason.replace("BARRIER", "the wait at the door"))
+        tale.say(said + (" (%s)" % reason if reason else ""))
+        if tag:
+            tale.tag(tag, "%s (%s)" % (TAGS[tag], reason) if reason else "", first=True)
+    elif outcome == "released":
+        tale.say("the run was let go: %s" % _plain(reason))
+        tale.tag("released", first=True)
+    elif outcome == "wipe" and not inside:
+        tale.say("everybody died, and no death record says to what")
+    elif ended is None:
+        tale.say("no end was recorded")
+        tale.tag("restart_lost")
+
+
+def _family_cause(tale: _Tale, outcome: str) -> str:
+    if outcome == "complete":
+        cause = "Cleared: every encounter the map credits went down."
+        return cause + (" " + _cause_line(tale.tags, tale.facts) if tale.tags else "")
+    if outcome in ("left", "emptied") and not tale.tags:
+        return "Cause: %s." % _FAMILY_ENDS[outcome][0]
+    return _cause_line(tale.tags, tale.facts) if tale.tags else ""
+
+
 def family_story(
     run: dict,
     deaths: list,
@@ -651,103 +801,29 @@ def family_story(
     causes}. `deaths` are overseer_death rows with an `age_seconds` column;
     `names` are the family's members. A run still under way has no story."""
     rows = run.get("rows") or []
-    if not rows:
-        return dict(NO_STORY)
-    zones = zones or {}
-    bosses = frozenset(bosses)
     ended = run.get("ended")
-    if ended is None and latest:
+    if not rows or (ended is None and latest):
         return dict(NO_STORY)
     portal = next((r.get("portal") for r in rows if r.get("portal")), "")
     door = _door(portal) if portal else None
-    place = door.place if door else "the dungeon"
-    dungeon = door.map_id if door else 0
-
-    def at(row) -> float:
-        return -float(_int(row.get("age_seconds")))
-
-    start = at(rows[0])
-    end = at(ended) if ended is not None else at(rows[-1])
-    went_in = next((at(r) for r in rows if r.get("phase") in INSIDE_PHASES), None)
-    family = set(names)
-    way, inside = [], []
-    for row in deaths:
-        if row.get("character_name") not in family or row.get("age_seconds") is None:
-            continue
-        when = at(row)
-        if not (start <= when <= end + SLACK_SECONDS):
-            continue
-        d = _death(row, when, bosses)
-        if dungeon and d.map_id == dungeon:
-            inside.append(d)
-        elif went_in is None or when < went_in:
-            way.append(d)
-    outcome = ""
-    reason = ""
-    if ended is not None:
-        if ended.get("kind") == "released":
-            outcome, reason = "released", str(ended.get("detail") or "")
-        else:
-            word, _, reason = str(ended.get("detail") or "").partition(":")
-            outcome = word.strip()
-
-    tags: list = []
-    facts: dict = {}
-    sentences: list = []
-    credited, in_all = _boss_counts(rows)
-    bosses_said = "%s boss%s down" % (_num(credited), "" if credited == 1 else "es")
-
-    if outcome == "complete":
-        sentences.append(
-            "cleared %s, %s" % (place, bosses_said)
-            if credited
-            else "cleared %s" % place
+    way, inside, got_in = _family_deaths(
+        rows, ended, deaths, names, frozenset(bosses), door.map_id if door else 0
+    )
+    outcome, reason = _family_outcome(ended)
+    credited, _in_all = _boss_counts(rows)
+    tale = _Tale()
+    tale.say(
+        _family_opener(
+            door.place if door else "the dungeon",
+            outcome,
+            credited,
+            got_in or bool(inside),
         )
-    elif went_in is None and not inside:
-        sentences.append("never got inside %s" % place)
-    else:
-        sentences.append("went into %s and got %s" % (place, bosses_said))
-    if way:
-        sentences.append(_way_in_line(way, zones))
-        tags.append("died_on_the_way")
-    wiped = outcome == "wipe"
-    lines, fight_tags, _ = _tell_fights(inside, {}, wiped)
-    sentences.extend(lines)
-    for tag in fight_tags:
-        if tag == "boss_burst":
-            facts["boss_burst"] = "burst from %s" % _burst_boss(inside)
-        tags.append(tag)
-
-    if outcome in _FAMILY_ENDS:
-        said, tag = _FAMILY_ENDS[outcome]
-        reason = _plain(reason.replace("BARRIER", "the wait at the door"))
-        sentences.append(said + (" (%s)" % reason if reason else ""))
-        if tag:
-            tags.insert(0, tag)
-            if reason:
-                facts[tag] = "%s (%s)" % (TAGS[tag], reason)
-    elif outcome == "released":
-        sentences.append("the run was let go: %s" % _plain(reason))
-        tags.insert(0, "released")
-    elif wiped and not inside:
-        sentences.append("everybody died, and no death record says to what")
-    elif ended is None:
-        sentences.append("no end was recorded")
-        tags.append("restart_lost")
-    if any(r.get("kind") == "stalled" for r in rows) and outcome != "complete":
-        tags.append("stalled")
-    if wiped and not any(t in tags for t in ("boss_burst", "pack_wipe")):
-        tags.append("unexplained")
-    if len(sentences) > MAX_SENTENCES and way:
-        sentences = [s for s in sentences if not s.startswith("lost ")]
-    if outcome == "complete":
-        cause = "Cleared: every encounter the map credits went down."
-        if tags:
-            cause += " %s" % _cause_line(tags, facts)
-    elif outcome in ("left", "emptied") and not tags:
-        cause = "Cause: %s." % _FAMILY_ENDS[outcome][0]
-    elif tags:
-        cause = _cause_line(tags, facts)
-    else:
-        cause = ""
-    return Story(_story(sentences), cause, tuple(tags)).payload()
+    )
+    tale.way_in(way, zones or {})
+    tale.fights(inside, {}, outcome == "wipe")
+    _family_ending(tale, outcome, reason, ended, inside)
+    if outcome != "complete" and any(r.get("kind") == "stalled" for r in rows):
+        tale.tag("stalled")
+    tale.unexplained_if(outcome == "wipe", ("boss_burst", "pack_wipe"))
+    return tale.told(_family_cause(tale, outcome))
