@@ -305,7 +305,7 @@ class TheWiring(unittest.TestCase):
         self.assertIn("_JOB_HUB_MASTERS_SQL", reads)
         self.assertIn("EnemyGroup", reads)
         self.assertIn("overseer_roster", reads)
-        self.assertIn('zone_id=None if r.get("zone_id") is None', BRIDGE)
+        self.assertIn('zone_id=_row_int(r, "zone_id")', BRIDGE)
 
     def test_the_pass_hands_the_world_to_the_plan_from_levelroutes_reads(self):
         self.assertIn("leveling=(await asyncio.to_thread(_job_leveling, facts)", BRIDGE)
