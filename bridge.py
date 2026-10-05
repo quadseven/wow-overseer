@@ -67,6 +67,8 @@ import guildjobs
 import guildrun
 import guildsocial
 import holdings
+import itemsource
+import pvpgear
 import handover
 import craft
 import crafters
@@ -13421,6 +13423,7 @@ class Bridge(discord.Client):
         _log_capped("guild jobs", plan.notes)
         sale_walks = now >= self._job_walks_unsupported.get("sale", 0.0)
         started = self._start_guild_job_steps(plan, now, cap, sale_walks)
+        await self._say_pvp_lines(plan, facts["recent"])
         log.info("guild jobs: started %d step(s)%s", started, _family_label(cohort))
 
     async def _plan_guild_jobs(self, members, facts, busy, cap, spawn_walks,
@@ -13436,12 +13439,61 @@ class Bridge(discord.Client):
             recent=facts["recent"], busy=busy, cap=cap,
             unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"),
             gear=await self._job_gear_offers(members, facts["recent"]),
-            mail=await asyncio.to_thread(_job_mail_commands, members))
+            mail=await asyncio.to_thread(_job_mail_commands, members),
+            pvp=await self._job_pvp_moves(members, facts["recent"]))
         if facts.get("unclaimed"):
             log.info("guild jobs: no new materials post for %s until the posts "
                      "waiting unopened are collected; theirs go to the bank",
                      ", ".join(sorted(facts["unclaimed"])))
         return plan
+
+    async def _job_pvp_moves(self, members, recent) -> dict:
+        """name -> (pvpgear.Aim, pvpgear.Move) for members playing PvP for an
+        upgrade (#589). pvpgear decides; this reads.
+
+        Off unless PVP_FOR_UPGRADES is set: until the realm's playerbots run
+        level 60 battlegrounds a queue opens and never fills. Members held in
+        a battleground or its queue are remembered for the guild social pass,
+        which then does not ask them to a dungeon.
+        """
+        held = getattr(self, "_pvp_held", None)
+        if held is None:
+            held = self._pvp_held = {}
+        for m in members:
+            held.pop(m.name, None)
+        self._pvp_pass = ({}, {})
+        if not pvpgear.enabled():
+            return {}
+        wanted = [m for m in members if m.eligible and m.online]
+        if not wanted:
+            return {}
+        facts = await asyncio.to_thread(_fetch_pvp_facts, [m.name for m in wanted])
+        aims = pvpgear.plan_aims(facts["seekers"])
+        moves = {
+            name: pvpgear.next_move(aim, facts["maps"].get(name),
+                                    aim.entry in facts["carried"].get(name, ()), recent)
+            for name, aim in aims.items()
+        }
+        for name, move in moves.items():
+            if move.kind in (pvpgear.INSIDE, pvpgear.WAITING):
+                held[name] = True
+        self._pvp_pass = (aims, moves)
+        if aims:
+            log.info("pvp: %d member(s) playing for an upgrade: %s", len(aims),
+                     "; ".join("%s %s (%s)" % (n, aims[n].line, moves[n].kind)
+                               for n in sorted(aims)))
+        return {name: (aims[name], moves[name]) for name in aims}
+
+    async def _say_pvp_lines(self, plan, recent) -> None:
+        """Say pvpgear.chat_lines in guild chat for the PvP steps that started,
+        through the social layer's own chat path."""
+        aims, moves = getattr(self, "_pvp_pass", ({}, {}))
+        started = {s.holder for s in plan.steps if s.action == pvpgear.ACTION}
+        lines = pvpgear.chat_lines(
+            {n: moves[n] for n in started if n in moves}, aims, recent)
+        for name, text in lines:
+            await asyncio.to_thread(
+                _insert_speak, relay.SpeakCommand(name, "guild", text, "", guildsocial.SOURCE))
 
     async def _job_gear_offers(self, members, recent) -> dict:
         """name -> (gearup facts, vendor rows in reach) for gear-short members.
@@ -15837,7 +15889,8 @@ class Bridge(discord.Client):
         facts = await asyncio.to_thread(_fetch_guild_social_facts, bounds)
         mid_job = (set(getattr(self, "_job_steps", ())) | set(getattr(self, "_corps_steps", ()))
                    | set(getattr(self, "_dues_walks", ())) | set(getattr(self, "_guild_mail_runs", ()))
-                   | set(getattr(self, "_crafter_walks", ())))
+                   | set(getattr(self, "_crafter_walks", ()))
+                   | {n for n, held in getattr(self, "_pvp_held", {}).items() if held})
         doors = guildrun.doors(facts["finder_floors"])
         mates, held, needs = _guild_social_mates(facts, mid_job, doors)
         # THE DOOR'S RECORD BY SHAPE (#584): no member asks for a door failing
@@ -23169,6 +23222,88 @@ def _fetch_gear_vendors(here, cap_yards=None) -> list:
                 return []
             raise
         return [dict(row) for row in cur.fetchall()]
+
+
+# PvP for upgrades (#589): what pvpgear reads. The member rows carry the
+# saved honor and the snapshot's map (a character's saved map is its
+# battleground entry point while it plays one).
+_PVP_MEMBERS_SQL = (
+    "SELECT c.name, g.name AS guild_name, c.level, c.class AS class_id, c.race, "
+    "c.totalHonorPoints AS honor, s.map_id AS snapshot_map, "
+    + raidroles.TALENTS_COLUMN + " "
+    "FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "LEFT JOIN overseer_snapshot s ON s.name = c.name "
+    "AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "WHERE c.name IN ({holes})"
+)
+# A PvP item a member holds anywhere but on its body: bought, not yet worn.
+_PVP_CARRIED_SQL = (
+    "SELECT c.name, ii.itemEntry AS entry FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE c.name IN ({holes}) AND ii.itemEntry IN ({entries}) "
+    "AND NOT (ci.bag = 0 AND ci.slot < 19)"
+)
+_PVP_LIST_ROWS_SQL = (
+    # S608: _ITEM_COLUMNS is a constant column list; every value is bound.
+    "SELECT it.entry AS Item, " + guildsocial._ITEM_COLUMNS + " "  # noqa: S608
+    "FROM acore_world.item_template it WHERE it.entry IN ({holes})"
+)
+# The world's PvP stock and the lists' item rows do not change under a
+# running bridge, so each is read once per process.
+_PVP_OFFERS: list = []
+_PVP_LIST_ROWS: dict = {}
+
+
+def _pvp_offers(cur) -> list:
+    if not _PVP_OFFERS:
+        vendors = sorted(pvpgear.PVP_VENDORS)
+        cur.execute(pvpgear.STOCK_SQL.format(holes=",".join(["%s"] * len(vendors))),  # noqa: S608 - placeholders only
+                    vendors + [pvpgear.LEVEL_CAP])
+        costs = itemsource.load_costs(os.path.dirname(os.path.abspath(__file__)))
+        _PVP_OFFERS.extend(pvpgear.offers_from_rows(list(cur.fetchall()), costs))
+    return _PVP_OFFERS
+
+
+def _pvp_list_rows(cur, ids) -> dict:
+    missing = [i for i in ids if i not in _PVP_LIST_ROWS]
+    if missing:
+        cur.execute(_PVP_LIST_ROWS_SQL.format(holes=",".join(["%s"] * len(missing))),  # noqa: S608 - placeholders only
+                    missing)
+        for row in cur.fetchall():
+            _PVP_LIST_ROWS[int(row["Item"])] = dict(row)
+    return {i: _PVP_LIST_ROWS[i] for i in ids if i in _PVP_LIST_ROWS}
+
+
+def _fetch_pvp_facts(names: list) -> dict:
+    """pvpgear's facts for these members: a Seeker each (pvpgear.
+    seekers_from_rows), where each stands (the snapshot's map) and the PvP
+    items each holds off its body."""
+    holes = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_PVP_MEMBERS_SQL.format(holes=holes), names)  # noqa: S608 - placeholders only
+        rows = list(cur.fetchall())
+        cur.execute(guildsocial.WORN_SQL.format(holes=holes), names)  # noqa: S608 - placeholders only
+        worn = list(cur.fetchall())
+        cur.execute(guildsocial.SKILLS_SQL.format(holes=holes), names)  # noqa: S608 - placeholders only
+        skills = list(cur.fetchall())
+        offers = _pvp_offers(cur)
+        list_rows = _pvp_list_rows(
+            cur, pvpgear.specs_list_ids(pvpgear.spec_of_row(r) for r in rows))
+        carried: dict = {}
+        entries = sorted({o.entry for o in offers})
+        if entries:
+            cur.execute(_PVP_CARRIED_SQL.format(  # noqa: S608 - placeholders only
+                holes=holes, entries=",".join(str(int(e)) for e in entries)), names)
+            for row in cur.fetchall():
+                carried.setdefault(str(row["name"]), set()).add(int(row["entry"]))
+    gear = guildsocial.gear_by_name(rows, worn, skills)
+    return {
+        "seekers": pvpgear.seekers_from_rows(rows, gear, list_rows, offers),
+        "maps": {str(r["name"]): r.get("snapshot_map") for r in rows},
+        "carried": carried,
+    }
 
 
 def _fetch_bag_vendors(here) -> list:

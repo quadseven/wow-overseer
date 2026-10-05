@@ -494,10 +494,11 @@ class TheTreeIsRead(unittest.TestCase):
         self.assertIn(raidroles.KEY, raidrun.GUILD_MEMBERS_SQL)
         # bridge.py: the dues read, the corps read and the guild jobs' read
         # (#194), each of which builds the same lineup the page draws, and the
-        # guild coordinator's read, which seats a tank and a healer by tree.
+        # guild coordinator's read, which seats a tank and a healer by tree,
+        # and the PvP read (#589), which scores each member's gear by its spec.
         # map_server.py: the lineup, the raid goals and the Lineup tab's gear
         # table, which names each member's role.
-        for name, count in (("map_server.py", 3), ("bridge.py", 4)):
+        for name, count in (("map_server.py", 3), ("bridge.py", 5)):
             with open(os.path.join(root, name)) as f:
                 self.assertEqual(
                     f.read().count("raidroles.TALENTS_COLUMN"), count, name
