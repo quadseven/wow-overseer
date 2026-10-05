@@ -4,6 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Azeroth Overseer</title>
+<!-- ON THE HOME SCREEN IT OPENS LIKE AN APP: full screen, no browser bars, its
+     own icon. The manifest and icon links are added by the script beside u(),
+     because their URLs go through the mount point like every other one this
+     page emits: the copy added from one realm opens that realm.
+     black-translucent puts the status bar over the page, which is safe here
+     because the band under it (#realm, and the strip body::before keeps there
+     once it has scrolled away) is dark in both themes, so the bar's white
+     text always reads. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Overseer">
+<meta name="format-detection" content="telephone=no">
+<meta name="theme-color" content="#0A140E">
 <!-- THE THREE TYPEFACES THE DESIGN IS SET IN. Archivo for display, Zen Kaku
      Gothic New for body, Space Mono for every number, label and status word.
 
@@ -644,6 +658,107 @@
               background:var(--card); border-bottom:1px solid var(--card-line); }
     #tabs button { min-height:44px; }
     #realmnav { margin-left:0; }
+  }
+
+  /* --- THE PARTS A PHONE DRAWS AROUND AN APP ---------------------------------
+     Added to the Home Screen this page opens full screen (the manifest and the
+     apple-mobile-web-app tags in the head), so the things Safari used to draw
+     around it are now this page's to draw: the status bar's strip, the
+     pressed state of a control, the edges a scroll stops at. Placed with the
+     shell's own rules, ahead of the tab suites' banners, for the reason the
+     phone block above gives.
+
+     THE NATIVE CONTROLS FOLLOW THE THEME. A scrollbar, a select and a text
+     box draw in the browser's own light or dark; without this a forced light
+     page on a dark phone gets dark controls on a pale card. */
+  :root { color-scheme:light; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { color-scheme:dark; } }
+  :root[data-theme="dark"] { color-scheme:dark; }
+  /* No text inflation on rotation, and no rubber band at the page's ends: in
+     the standalone app there is no pull to refresh, and a page that stretches
+     past its last line carries the header and the bottom bar off with it. */
+  html { -webkit-text-size-adjust:100%; text-size-adjust:100%;
+         overscroll-behavior-y:none; }
+  body { overscroll-behavior-y:none; }
+  /* THE STATUS BAR'S STRIP. black-translucent draws the clock over the page;
+     the body starts below it, and this strip is what the white clock sits on
+     once the dark realm band has scrolled away. Zero tall in a browser tab and
+     on a phone without a notch, so it costs nothing there. */
+  body { padding-top:env(safe-area-inset-top); }
+  body::before { content:""; position:fixed; z-index:90; top:0; left:0; right:0;
+                 height:env(safe-area-inset-top); background:#0A140E;
+                 pointer-events:none; }
+  /* :root IN FRONT, HERE AND BELOW, because these rules sit ahead of the
+     component rules they amend (the banner note above says why they must),
+     and a later rule of equal weight would win. */
+  :root :is(#tabbar, #ajump, #stjump) { top:env(safe-area-inset-top); }
+  /* A TAP IS ANSWERED BY THE CONTROL, NOT BY A GREY BOX. The browser's tap
+     flash is a rectangle that ignores the control's own shape and colour; it
+     goes, and every control dims while the finger is on it instead, the way a
+     native one does. Only on a device with no hover, so a mouse click keeps
+     the hover state it already has. touch-action takes the double-tap zoom
+     wait off every control. */
+  a, button, summary, select, label, .aslot, tr[tabindex] {
+    -webkit-tap-highlight-color:transparent; }
+  a, button, summary, .aslot { touch-action:manipulation; }
+  @media (hover: none) {
+    :is(a, button, summary, .aslot, tr[tabindex]):active:not(:disabled) {
+      opacity:.6; transition:opacity 0s; }
+  }
+  /* 16px IN EVERY FIELD, or iOS zooms the page in on the first tap and leaves
+     it zoomed. Only where a thumb is the pointer, so the desktop keeps its
+     denser controls. */
+  @media (pointer: coarse) {
+    :root :is(input, select, textarea, #pinput, #dcrtext, #dcrqueuetext) {
+      font-size:max(16px, 1em); }
+  }
+  /* A VIEW ARRIVES, IT DOES NOT POP. Opacity alone: a transform here would
+     make the section the containing block for the fixed client frames inside
+     the Watch view for as long as it ran, and they would jump. */
+  @keyframes view-in { from { opacity:0; } to { opacity:1; } }
+  body > section.view-in, #wrap.view-in {
+    animation:view-in .18s cubic-bezier(.16, 1, .3, 1); }
+
+  /* THE SHEETS. On a phone the item panel and the character panel rise from
+     the bottom edge with a grab handle, follow a finger dragged down, and go
+     when it is let go far or fast enough (sheetGestures). The handle is drawn
+     here; it is a picture of the gesture, the whole top of the sheet takes it. */
+  @keyframes sheet-up { from { transform:translateY(100%); } to { transform:none; } }
+  .sheet-grip { display:none; }
+  @media (max-width:640px) {
+    .sheet-grip { display:block; flex:0 0 auto; height:22px; position:relative;
+                  touch-action:none; cursor:grab; }
+    .sheet-grip::before { content:""; position:absolute; left:50%; top:8px;
+                          width:36px; height:5px; margin-left:-18px;
+                          border-radius:3px; background:var(--dim); opacity:.7; }
+    #itemtip:not([hidden]), #panel.sheet-open {
+      animation:sheet-up .32s cubic-bezier(.32, .72, 0, 1); }
+    :root #itemtip { padding-bottom:env(safe-area-inset-bottom); }
+    #itemtipbody, #panel { overscroll-behavior:contain; }
+    :root #panel { top:auto; left:0; right:0; width:auto; max-height:85vh;
+             max-height:85dvh; border-left:0; border-top:1px solid var(--line);
+             border-radius:12px 12px 0 0; padding-top:0;
+             padding-bottom:calc(.8rem + env(safe-area-inset-bottom)); }
+    :root #pclose { min-width:44px; min-height:44px; }
+    /* 44 POINTS FOR EVERY CONTROL A THUMB AIMS AT. Measured at 390px across
+       every view: these were the ones under it (the pick pills at 25 and 36,
+       a talent chip at 26, the reload at 32). A gear name in a sentence keeps
+       its line and reaches with its ::after instead, as .iname does. */
+    :root :is(#pagereload, #lgpick button, #rgpick button, #gcrpick button) {
+      min-height:44px; }
+    :root #stjump a { min-width:44px; justify-content:center; }
+    :root a.stchip { display:inline-flex; align-items:center; min-height:44px; }
+    :root .stgap-list a { min-height:44px; }
+    .strow .nm { position:relative; }
+    .strow .nm::after { content:""; position:absolute; left:0; right:0;
+                        top:-11px; bottom:-11px; }
+    .sheet-dragging { transition:none; }
+    .sheet-settling { transition:transform .28s cubic-bezier(.32, .72, 0, 1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #itemtip:not([hidden]), #panel.sheet-open { animation:none; }
+    .sheet-settling { transition:none; }
   }
   #wrap { position:relative; margin:0 1rem 1rem; }
   canvas { width:100%; background:var(--panel); border:1px solid var(--line);
@@ -2263,7 +2378,8 @@
      in #ajump, so the two navigations stay independent. */
   #stjump { position:sticky; top:0; z-index:5; display:flex; gap:.4rem;
             flex-wrap:wrap; padding:.4rem 0; background:var(--bg); }
-  #stjump a { color:var(--text); text-decoration:none; border:1px solid var(--line);
+  #stjump a { display:inline-flex; align-items:center; min-height:44px;
+              color:var(--text); text-decoration:none; border:1px solid var(--line);
               border-radius:6px; padding:.2rem .6rem; font-size:.9rem; }
   #stjump a:hover { border-color:var(--alliance); }
   /* ONE COLUMN PER FAMILY, Alliance left and Horde right, by the same rule
@@ -3582,6 +3698,21 @@
   // at the call site: u("/api/map") reads as the endpoint it is.
   function u(path) { return BASE + path; }
 
+  // THE HOME SCREEN FILES (the meta tags at the top of the head say why). A
+  // relative href would resolve against the document's path, which is the
+  // realm's own with a trailing slash and the ROOT realm's without one, so
+  // the icon added from the dev realm could open production. Built with u()
+  // instead, here in the head, before anything reads them.
+  [["manifest", u("/manifest.webmanifest"), ""],
+   ["apple-touch-icon", u("/apple-touch-icon.png"), ""],
+   ["icon", u("/icon-192.png"), "192x192"]].forEach(function (row) {
+    var link = document.createElement("link");
+    link.rel = row[0];
+    link.href = row[1];
+    if (row[2]) link.sizes = row[2];
+    document.head.appendChild(link);
+  });
+
 </script>
 <!-- THE VIRTUAL GAME CLIENT (vclient.py). Its own block, so it can be read and
      deleted with the overlay it dresses. The frames are dark in both themes
@@ -4267,6 +4398,7 @@
 </section>
 <div id="wrap"><canvas id="map"></canvas><div id="tip"></div></div>
 <aside id="panel">
+  <div class="sheet-grip" aria-hidden="true"></div>
   <div id="phead"><h2 id="pname"></h2><button id="pclose" title="close">x</button></div>
   <div id="pbody"></div>
   <div class="sect">watch live</div>
@@ -4323,6 +4455,7 @@
      Armory's item card, because it is the same reading and there is only one
      of it. -->
 <div id="itemtip" hidden>
+  <div class="sheet-grip" aria-hidden="true"></div>
   <div id="itemtipbody" class="adetail" aria-live="polite"></div>
   <a id="itemtipout" target="_blank" rel="noopener">open on wowhead</a>
   <button id="itemtipclose" type="button">close</button>
@@ -4453,7 +4586,7 @@ function buildHubs() {
     b.type = "button";
     b.textContent = label;
     b.dataset.hub = key;
-    b.onclick = () => openHub(key);
+    b.onclick = () => tapHub(key);
     bar.appendChild(b);
   }
   arrowWalk(bar);
@@ -4466,6 +4599,185 @@ function buildHubs() {
     if (lit) lit.focus();
   });
 }
+
+// --- the app on a phone: where a view was left, jumps, sheets --------------
+//
+// Added to the Home Screen this page runs full screen, with no browser bar and
+// no back button of its own, so the habits a native app has are this page's
+// to keep. Three of them live here.
+
+// iOS draws :active (the pressed state the stylesheet gives every control)
+// only on a page that listens for touches. The listener does nothing else.
+document.addEventListener("touchstart", () => {}, { passive: true });
+
+const PHONE = window.matchMedia("(max-width: 640px)");
+const STILL = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+// EACH VIEW KEEPS ITS OWN PLACE. The views share one scrolling page, so before
+// this a hub tapped from the foot of a long Chronicle opened the Guild view at
+// the same offset: halfway down a page nobody had scrolled. A view now opens
+// where it was left, and at the top the first time.
+const viewScroll = new Map();
+
+function viewNode(v) {
+  return v === MAP_VIEW ? document.getElementById("wrap") : document.getElementById(v);
+}
+
+// Called by showView on a change of view, after the old view has been hidden;
+// showView noted where the old one was before hiding it shortened the page.
+function arriveAt(v) {
+  window.scrollTo(0, viewScroll.get(v) || 0);
+  const node = viewNode(v);
+  if (!node) return;
+  node.classList.remove("view-in");
+  void node.offsetWidth;
+  node.classList.add("view-in");
+}
+
+// THE HUB YOU ARE IN, TAPPED AGAIN, GOES TO THE TOP, which is what every tab
+// bar on the phone does. Any other hub opens as before.
+function tapHub(key) {
+  if (hubOf(view) === key) {
+    window.scrollTo({ top: 0, behavior: STILL.matches ? "auto" : "smooth" });
+    return;
+  }
+  openHub(key);
+}
+
+// IN-PAGE JUMPS. The Armory's member chips (#aprof-Grog) and the standing
+// panel's (#stcard-Grog) are links to a card on the page. A tap is handled
+// here and never reaches the address bar: no history entry for a scroll, no
+// hashchange for the router to read as a view. A route link (#dungeons/33,
+// #chronicle) is left alone and opens its view through the hashchange
+// listener, so Back returns from it.
+//
+// The sticky bars are measured, not assumed: on a phone ten names wrap to
+// three rows, and a fixed scroll-margin left the card's head under them. Only
+// a bar that is sticky now (the view row is, on a wide screen only) and that
+// sits above the card in the same scroller counts; they pin at the same edge,
+// so the tallest is what covers it.
+function jumpTo(target) {
+  const bars = [...document.querySelectorAll("#tabbar, #ajump, #stjump")].filter((bar) =>
+    getComputedStyle(bar).position === "sticky"
+    && bar.parentElement && bar.parentElement.contains(target) && !bar.contains(target)
+    && (bar.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING));
+  const cover = bars.reduce((most, bar) => Math.max(most, bar.offsetHeight), 0);
+  const inset = parseFloat(getComputedStyle(document.body).paddingTop) || 0;
+  const top = target.getBoundingClientRect().top + window.scrollY - cover - inset - 8;
+  window.scrollTo({ top: Math.max(0, top), behavior: STILL.matches ? "auto" : "smooth" });
+}
+
+// A card is built by its view's first poll, so an anchor that arrives cold
+// (a pasted #aprof-Grog) waits for it: a few seconds, and only while the
+// view it was asked for is still the one showing.
+let jumpTicket = 0;
+function jumpWhenDrawn(id) {
+  const ticket = ++jumpTicket;
+  const at = view;
+  let tries = 0;
+  const attempt = () => {
+    if (ticket !== jumpTicket || view !== at) return;
+    const t = document.getElementById(id);
+    if (t && t.getClientRects().length) { jumpTo(t); return; }
+    tries += 1;
+    if (tries < 40) setTimeout(attempt, 250);
+  };
+  attempt();
+}
+
+document.addEventListener("click", (e) => {
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = e.target instanceof Element ? e.target.closest('a[href^="#"]') : null;
+  if (!a) return;
+  const raw = a.getAttribute("href").slice(1);
+  if (!raw || isRoute(routeName(raw))) return;
+  let id = raw;
+  try { id = decodeURIComponent(raw); } catch (err) { if (!(err instanceof URIError)) throw err; id = raw; }
+  if (!document.getElementById(id)) return;
+  if (openAnchor(id)) e.preventDefault();
+});
+
+// THE SHEETS. On a phone the item panel and the character panel come up from
+// the bottom edge; a finger on the grab handle, or on the reading while it is
+// scrolled to its top, drags the sheet down, and letting go far enough or fast
+// enough puts it away. Short of that it settles back. A drag that starts by
+// going up scrolls the reading, as it always did.
+function sheetRise(sheet) {
+  sheet.classList.remove("sheet-open");
+  void sheet.offsetWidth;
+  sheet.classList.add("sheet-open");
+}
+
+function sheetGestures(sheet, scroller, dismiss) {
+  let y0 = 0, dy = 0, lastY = 0, lastT = 0, speed = 0;
+  let armed = false, dragging = false;
+  sheet.addEventListener("touchstart", (e) => {
+    armed = false;
+    if (!PHONE.matches || e.touches.length !== 1) return;
+    const onGrip = e.target instanceof Element && e.target.closest(".sheet-grip");
+    armed = !!onGrip || scroller.scrollTop <= 0;
+    y0 = lastY = e.touches[0].clientY;
+    lastT = e.timeStamp;
+    dy = 0; speed = 0; dragging = false;
+  }, { passive: true });
+  sheet.addEventListener("touchmove", (e) => {
+    if (!armed) return;
+    const y = e.touches[0].clientY;
+    const d = y - y0;
+    if (!dragging) {
+      if (d < -4) { armed = false; return; }
+      if (d <= 4) return;
+      dragging = true;
+      // Off with the entrance, or ending the drag would replay it. It comes
+      // back when the sheet is next put away (sheetReset).
+      sheet.style.animation = "none";
+      sheet.classList.add("sheet-dragging");
+    }
+    e.preventDefault();
+    const dt = Math.max(1, e.timeStamp - lastT);
+    speed = (y - lastY) / dt;
+    lastY = y; lastT = e.timeStamp;
+    dy = Math.max(0, d);
+    sheet.style.transform = "translateY(" + dy + "px)";
+  }, { passive: false });
+  const end = () => {
+    armed = false;
+    if (!dragging) return;
+    dragging = false;
+    sheet.classList.remove("sheet-dragging");
+    // A flick (half a pixel a millisecond, past a nudge) or a long pull.
+    const away = (speed > 0.5 && dy > 24) || dy > Math.min(140, sheet.offsetHeight * 0.3);
+    const wait = STILL.matches ? 0 : 280;
+    sheet.classList.add("sheet-settling");
+    sheet.style.transform = away ? "translateY(100%)" : "";
+    setTimeout(() => {
+      sheet.classList.remove("sheet-settling");
+      if (away) { dismiss(); sheetReset(sheet); }
+    }, wait);
+  };
+  sheet.addEventListener("touchend", end);
+  sheet.addEventListener("touchcancel", end);
+}
+
+// A put-away sheet forgets its drag, so the next one rises from the bottom.
+function sheetReset(sheet) {
+  sheet.style.transform = "";
+  sheet.style.animation = "";
+  sheet.classList.remove("sheet-open");
+}
+
+// Wired here rather than in each panel's own block, so those blocks still run
+// on their own (the tooltip's suite runs it under node without this one). The
+// item panel is put away by its `hidden` attribute from four places, so its
+// reset follows the attribute rather than each of them.
+(function () {
+  const tip = document.getElementById("itemtip");
+  const panelEl = document.getElementById("panel");
+  sheetGestures(tip, document.getElementById("itemtipbody"), () => closeItemTip());
+  sheetGestures(panelEl, panelEl, () => closePanel());
+  new MutationObserver(() => { if (tip.hidden) sheetReset(tip); })
+    .observe(tip, { attributes: true, attributeFilter: ["hidden"] });
+})();
 
 // The buttons in hub order, continents where the map sits. Run again when
 // the continents arrive, so it has to be safe to repeat.
@@ -5023,6 +5335,7 @@ canvas.addEventListener("click", (e) => {
     // which is the exact confusion this whole feature exists to remove.
     stopPlayer();
     selected = best.name; pname.textContent = best.name; panel.style.display = "block";
+    sheetRise(panel);
     watchNote(""); fetchPanel(); openMind(best.name); refreshWatch(); refreshFrame();
   } else closePanel();
 });
@@ -5473,6 +5786,7 @@ function closePanel() {
   // stopping the stream - the heartbeat above decides that.
   stopPlayer();
   selected = null; panel.style.display = "none";
+  sheetReset(panel);
   pwframe.style.display = "none";
   pwimg.removeAttribute("src");
   frameSeen = { name: null, ago: null, token: frameSeen.token };
@@ -7479,6 +7793,8 @@ function hashFor(v) {
 // arrive through the hashchange listener at the foot of the file, which is
 // the case that actually matters.
 function showView(v) {
+  const from = view;
+  if (from !== v) viewScroll.set(from, window.scrollY);
   view = v;
   const want = hashFor(v);
   if (location.hash !== want) history.replaceState(null, "", want);
@@ -7518,6 +7834,7 @@ function showView(v) {
   wrapEl.style.display = view === MAP_VIEW ? "block" : "none";
   legend.style.display = view === MAP_VIEW ? "" : "none";
   markTabs();
+  if (from !== v) arriveAt(v);
   if (isFam) {
     // The panel is a map thing, and leaving it open behind a hidden canvas
     // would keep a second heartbeat and a second player alive off screen.
@@ -9480,6 +9797,10 @@ const dgnorder = document.getElementById("dgnorder");
 const dgnbasis = document.getElementById("dgnbasis");
 const dgnfamilies = document.getElementById("dgnfamilies");
 let dungeonTargetMap = null;
+// The dungeon the page last scrolled to. The view redraws every minute, and
+// scrolling on every redraw pulled a reader who had moved on back to the card
+// the link named, once a minute, for as long as the view was open.
+let dungeonScrolledTo = null;
 
 // An empty string is a real answer from the module and means "there is
 // nothing to say here", so it draws nothing rather than an empty line.
@@ -9646,14 +9967,17 @@ function dgnRender(p) {
   setBasis(dgnbasis, p.empty_note || p.basis, !!p.empty_note);
   dgnfamilies.replaceChildren();
   for (const f of p.families) dgnfamilies.appendChild(dgnFamily(f));
-  if (dungeonTargetMap !== null) {
+  if (dungeonTargetMap !== null && dungeonScrolledTo !== dungeonTargetMap) {
     const target = Array.from(dgnfamilies.querySelectorAll("[data-map-id]"))
       .find(card => Number(card.dataset.mapId) === dungeonTargetMap);
     if (target) {
       for (let parent = target; parent; parent = parent.parentElement) {
         if (parent.tagName === "DETAILS") parent.open = true;
       }
-      target.scrollIntoView({block: "center", behavior: "smooth"});
+      dungeonScrolledTo = dungeonTargetMap;
+      // Its head, not its middle: the card opens, and an open one is taller
+      // than a phone's screen, so centring it put the name above the top.
+      jumpTo(target);
     }
   }
 }
@@ -13663,11 +13987,66 @@ const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, BAGS_VIEW,
 // view name.
 const HASH_ALIASES = new Map([["achievements", CHRONICLE_VIEW]]);
 
-function applyHash() {
-  const raw = (location.hash || "").replace(/^#/, "");
+// The view a hash names, through the aliases: "dungeons/33" is "dungeons".
+function routeName(raw) {
   const cut = raw.indexOf("/");
   const asked = cut < 0 ? raw : raw.slice(0, cut);
   const name = HASH_ALIASES.get(asked) || asked;
+  return name;
+}
+
+function isRoute(name) {
+  return HASH_VIEWS.indexOf(name) >= 0 || name === MAP_VIEW;
+}
+
+// THE VIEW A CARD LIVES IN. Every view is a <section> whose id is the view's
+// name, and the map is #wrap; anything else on the page belongs to no view.
+function viewHolding(node) {
+  const host = node.closest("body > section");
+  if (host && HASH_VIEWS.indexOf(host.id) >= 0) return host.id;
+  if (node.closest("#wrap")) return MAP_VIEW;
+  return null;
+}
+
+// A CARD THAT IS NOT DRAWN YET still names its view: the Armory builds its
+// profile and standing cards on its first poll, so on a cold load there is no
+// element to ask. These are the prefixes those cards' ids are built from.
+const ANCHOR_VIEWS = [["aprof-", ARMORY_VIEW], ["stcard-", ARMORY_VIEW]];
+
+function anchorView(id) {
+  const hit = ANCHOR_VIEWS.find(([prefix]) => id.startsWith(prefix));
+  return hit ? hit[1] : null;
+}
+
+// Opens the view that holds an in-page card, then scrolls to it. The address
+// goes back to the view's own, so a reload stays on the view. False when the
+// id names no card in any view, drawn or yet to be drawn.
+function openAnchor(id) {
+  const target = document.getElementById(id);
+  const owner = target ? viewHolding(target) : anchorView(id);
+  if (!owner) return false;
+  if (owner && owner !== view) showView(owner);
+  else history.replaceState(null, "", hashFor(view));
+  jumpWhenDrawn(id);
+  return true;
+}
+
+function applyHash() {
+  const raw = (location.hash || "").replace(/^#/, "");
+  const cut = raw.indexOf("/");
+  const name = routeName(raw);
+  // AN IN-PAGE ANCHOR IS NOT A ROUTE. The Armory's member chips (#aprof-Grog)
+  // and the other jump bars (#ajump, #stjump) are links to a card on a page.
+  // Read as a route, "aprof-Grog" is no view and fell back to the family page,
+  // so tapping Grog in the Armory opened Grug's family. A tap is now caught by
+  // the click handler beside jumpTo and never gets here; what does is a typed,
+  // pasted or bookmarked anchor, which opens the view that holds the card and
+  // scrolls to it once it is drawn.
+  if (raw && !isRoute(name)) {
+    let id = raw;
+    try { id = decodeURIComponent(raw); } catch (e) { if (!(e instanceof URIError)) throw e; id = raw; }
+    if (openAnchor(id)) return;
+  }
   if (name === MAP_VIEW) {
     wantedContinent = cut < 0 ? "" : raw.slice(cut + 1);
     adoptContinent();
@@ -13684,30 +14063,12 @@ function applyHash() {
     if (familyKey !== before) pollAgenda();
   }
   if (name === DUNGEONS_VIEW) {
+    dungeonScrolledTo = null;
     const mapText = cut < 0 ? "" : raw.slice(cut + 1);
     const map = /^\d+$/.test(mapText) ? Number(mapText) : NaN;
     dungeonTargetMap = Number.isSafeInteger(map) && map > 0 ? map : null;
     showView(DUNGEONS_VIEW);
     return;
-  }
-  // AN IN-PAGE ANCHOR IS NOT A ROUTE. The Armory's member chips (#aprof-Grog)
-  // and the other jump bars (#ajump, #stjump) are links to a card on the page
-  // the reader is on. Read as a route, "aprof-Grog" is no view and fell back
-  // to the family page, so tapping Grog in the Armory opened Grug's family.
-  // A hash that names no view but an element on the page scrolls to it, keeps
-  // the view, and puts the view's own hash back so a reload stays here.
-  if (raw && view && HASH_VIEWS.indexOf(name) < 0 && name !== MAP_VIEW) {
-    let target = null;
-    try { target = document.getElementById(decodeURIComponent(raw)); } catch (e) { if (!(e instanceof URIError)) throw e; target = null; }
-    // Only a card on a view that is showing: a cold load with an anchor
-    // routes as before.
-    const host = target && target.closest("section");
-    if (target && !(host && host.hidden)) {
-      const still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      target.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
-      history.replaceState(null, "", hashFor(view));
-      return;
-    }
   }
   // FAMILY for anything unrecognised, deliberately: an empty hash, a typo and
   // a stale bookmark all land on the page that answers "are my five all
