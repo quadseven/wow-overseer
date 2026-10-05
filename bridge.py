@@ -21543,7 +21543,7 @@ _GUILD_POST_SQL = (
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
     "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s)) "
-    "ORDER BY m.id LIMIT 2000"
+    "ORDER BY m.id"
 )
 
 

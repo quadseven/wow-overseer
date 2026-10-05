@@ -111,6 +111,35 @@ class Visit:
         )
 
 
+def _waiting_by_receiver(letters, roster) -> dict:
+    """receiver -> its ready letters, a roster member's left to its family."""
+    out: dict = {}
+    for letter in letters or ():
+        if letter.receiver not in roster and letter.ready:
+            out.setdefault(letter.receiver, []).append(letter)
+    return out
+
+
+def _visit_for(receiver, waiting, online, busy, free_slots):
+    """(Visit or None, note) for one receiver with letters waiting."""
+    if receiver not in online:
+        return None, ""
+    if receiver in busy:
+        return None, "%s is already on a walk" % receiver
+    room = _int(free_slots.get(receiver), -1)
+    limit = TAKES_PER_VISIT if room < 0 else min(TAKES_PER_VISIT, room)
+    if limit <= 0:
+        return None, "%s has %d letter(s) and no free bag slot" % (
+            receiver,
+            len(waiting),
+        )
+    takes = tuple(
+        Take(x.receiver, x.mail_id, x.item_guid, x.name)
+        for x in sorted(waiting, key=lambda x: (x.mail_id, x.item_guid))[:limit]
+    )
+    return Visit(receiver, takes, len(waiting)), ""
+
+
 def visits(letters, online, busy=frozenset(), free_slots=None, roster=frozenset()):
     """(visits, notes): which guild members walk to take out their post.
 
@@ -120,36 +149,21 @@ def visits(letters, online, busy=frozenset(), free_slots=None, roster=frozenset(
     absent when unread (then TAKES_PER_VISIT stands).
     """
     free_slots = free_slots or {}
-    online, busy, roster = set(online or ()), set(busy or ()), set(roster or ())
-    by_receiver: dict = {}
-    for letter in letters or ():
-        if letter.receiver in roster or not letter.ready:
-            continue
-        by_receiver.setdefault(letter.receiver, []).append(letter)
+    online, busy = set(online or ()), set(busy or ())
+    by_receiver = _waiting_by_receiver(letters, set(roster or ()))
     order = sorted(by_receiver, key=lambda n: (-len(by_receiver[n]), n))
     out, notes = [], []
     for receiver in order:
-        waiting = by_receiver[receiver]
         if len(out) >= WALKS_PER_PASS:
             notes.append("%s waits: %d walks this pass" % (receiver, WALKS_PER_PASS))
             continue
-        if receiver not in online:
-            continue
-        if receiver in busy:
-            notes.append("%s is already on a walk" % receiver)
-            continue
-        room = _int(free_slots.get(receiver), -1)
-        limit = TAKES_PER_VISIT if room < 0 else min(TAKES_PER_VISIT, room)
-        if limit <= 0:
-            notes.append(
-                "%s has %d letter(s) and no free bag slot" % (receiver, len(waiting))
-            )
-            continue
-        takes = tuple(
-            Take(x.receiver, x.mail_id, x.item_guid, x.name)
-            for x in sorted(waiting, key=lambda x: (x.mail_id, x.item_guid))[:limit]
+        visit, note = _visit_for(
+            receiver, by_receiver[receiver], online, busy, free_slots
         )
-        out.append(Visit(receiver, takes, len(waiting)))
+        if visit is not None:
+            out.append(visit)
+        elif note:
+            notes.append(note)
     return out, notes
 
 
