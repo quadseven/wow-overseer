@@ -7,6 +7,7 @@ targeted at the tank), and says every line in guild chat from its speaker.
 """
 
 import asyncio
+import contextlib
 import datetime
 import sys
 import types
@@ -224,6 +225,7 @@ class TheBridgeWrites(unittest.TestCase):
         with mock.patch.multiple(
             bridge,
             _connect=lambda: _Conn(sql),
+            _wait_out_of_combat=lambda names: [],
             _insert_speak=lambda cmd: said.append(
                 (cmd.target_name, cmd.channel, cmd.text)
             ),
@@ -288,3 +290,59 @@ class TheBridgeAsksJevTheDoor(unittest.TestCase):
                     bridge._guild_social_doors(client, gs.Pass(posts=(post,)))
                 )
         self.assertEqual(out.posts, (post,))
+
+
+class AFightDoesNotCostTheGroup(unittest.TestCase):
+    """2026-10-05: 5 of Bonkers' last 14 guild runs were refused at the door
+    because one member was in a fight. The start waits it out."""
+
+    def test_nobody_is_started_while_a_member_fights(self):
+        started = []
+        social = gs.Pass(
+            form=types.SimpleNamespace(
+                composition=types.SimpleNamespace(names=("Tanky", "Healy")),
+                ask=types.SimpleNamespace(asker="Cole"),
+                speaker="Cole",
+                said="Off we go",
+            )
+        )
+        with mock.patch.multiple(
+            bridge,
+            _connect=lambda: _Conn([]),
+            _wait_out_of_combat=lambda names: ["Healy"],
+            _start_social_run=lambda form: started.append(form) or 5,
+            _insert_speak=lambda cmd: None,
+        ):
+            self.assertEqual(bridge._write_guild_social(social), 0)
+        self.assertEqual(started, [])
+
+    def test_the_wait_reads_until_nobody_fights(self):
+        reads = iter([[{"name": "Healy"}], []])
+
+        class Cur:
+            def execute(self, sql, args):
+                self.rows = next(reads)
+
+            def fetchall(self):
+                return self.rows
+
+        class Conn:
+            def cursor(self):
+                return contextlib.nullcontext(Cur())
+
+        with (
+            mock.patch.object(
+                bridge, "_connect", lambda: contextlib.nullcontext(Conn())
+            ),
+            mock.patch.object(bridge.time, "sleep", lambda s: None),
+        ):
+            self.assertEqual(
+                bridge._wait_out_of_combat(["Tanky", "Healy"], wait=60, poll=0), []
+            )
+
+    def test_a_fight_benches_nobody(self):
+        rows = [
+            {"outcome": "refused", "why": "'Amony' is in combat"},
+            {"outcome": "refused", "why": "'Daidanden' is dead"},
+        ]
+        self.assertEqual(guildrun.benched(rows), {"Daidanden"})

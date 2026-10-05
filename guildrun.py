@@ -343,12 +343,19 @@ def refused_member(why: str) -> str:
     return text[1:end] if end > 1 else ""
 
 
+# A refusal over something that passes in seconds benches nobody: a member
+# refused for being in a fight is free again the moment the fight ends.
+PASSING_REFUSALS = ("in combat",)
+
+
 def benched(recent: list) -> set:
     """Members named by refusals in `recent` (overseer_guild_run rows ended
-    within BENCH_MINUTES)."""
+    within BENCH_MINUTES), except a refusal that passes (PASSING_REFUSALS)."""
     out = set()
     for row in recent:
         if str(row.get("outcome") or "") != "refused":
+            continue
+        if any(word in str(row.get("why") or "") for word in PASSING_REFUSALS):
             continue
         name = refused_member(row.get("why"))
         if name:

@@ -20839,7 +20839,18 @@ def _write_guild_social(social) -> int:
                 reply.ask_id, reply.member[:12], reply.role, reply.stance,
                 reply.said[:255]))
             lines.append((reply.member, reply.said))
-    run_id = _start_social_run(social.form) if social.form else 0
+    run_id = 0
+    if social.form:
+        fighting = _wait_out_of_combat(social.form.composition.names)
+        if fighting:
+            # Refused at the door for a fight that passes in seconds (5 of
+            # Bonkers' 14 runs on 2026-10-05): the ask stays filled, and the
+            # next pass forms the group again once nobody is fighting.
+            log.info("guild social: %s's group waits: %s still in combat after "
+                     "%ds", social.form.ask.asker, ", ".join(fighting),
+                     int(START_COMBAT_WAIT_SECONDS))
+        else:
+            run_id = _start_social_run(social.form)
     if run_id:
         lines.append((social.form.speaker, social.form.said))
     for name, text in lines:
@@ -20848,6 +20859,37 @@ def _write_guild_social(social) -> int:
         except pymysql.err.MySQLError:
             log.exception("guild social: %s's line was not said: %r", name, text)
     return run_id
+
+
+# How long a formed group waits for every member to leave combat before its
+# start row is written; the module refuses a start with anybody in a fight.
+START_COMBAT_WAIT_SECONDS = 60.0
+START_COMBAT_POLL_SECONDS = 5.0
+_IN_COMBAT_SQL = (
+    "SELECT name FROM overseer_snapshot WHERE in_combat = 1 AND name IN (%s) "
+    "AND updated_at > NOW() - INTERVAL 120 SECOND"
+)
+
+
+def _wait_out_of_combat(names, wait=None, poll=None) -> list:
+    """The members still in combat after waiting; [] when every one is out.
+
+    Read from the snapshot every START_COMBAT_POLL_SECONDS for at most
+    START_COMBAT_WAIT_SECONDS. Runs in the pass's worker thread.
+    """
+    names = [str(n) for n in names or ()]
+    if not names:
+        return []
+    wait = START_COMBAT_WAIT_SECONDS if wait is None else wait
+    poll = START_COMBAT_POLL_SECONDS if poll is None else poll
+    deadline = time.monotonic() + wait
+    while True:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_IN_COMBAT_SQL % ",".join(["%s"] * len(names)), names)
+            fighting = sorted(str(r["name"]) for r in cur.fetchall())
+        if not fighting or time.monotonic() >= deadline:
+            return fighting
+        time.sleep(poll)
 
 
 def _start_social_run(form) -> int:
