@@ -1276,19 +1276,30 @@ def _member_list(text: str) -> list:
     return out
 
 
+def _n(count: int, word: str) -> str:
+    """ "1 death", "3 deaths": the count with its noun agreeing."""
+    return "%d %s%s" % (count, word, "" if count == 1 else "s")
+
+
 def _choice_line(label: str, by: str, answer: str, confidence) -> str:
+    """Who chose the dungeon or the group, in words (#567).
+
+    A group answer is an option letter ("a"), so it is said as "lineup a";
+    a dungeon answer is a portal keyword and is said as its place. "The
+    prior" is the usual rule, the heuristic Jev is measured against.
+    """
     if not by:
         return "%s: not recorded" % label
     if answer and confidence is not None:
-        return "%s: Jev chose %s at %.2f confidence, and %s" % (
-            label,
-            answer,
-            float(confidence),
-            "the prior acted (below the floor)"
-            if by == _HEURISTIC
-            else "Jev's answer acted",
-        )
-    return "%s: no answer from Jev, so the prior chose" % label
+        said = _place(answer) if label == "dungeon" else "lineup %s" % answer
+        sure = round(100 * float(confidence))
+        if by == _HEURISTIC:
+            return (
+                "%s: the usual rule chose; Jev suggested %s but was only %d%% sure"
+                % (label, said, sure)
+            )
+        return "%s: Jev chose %s, %d%% sure" % (label, said, sure)
+    return "%s: no answer from Jev, so the usual rule chose" % label
 
 
 def _minutes(seconds) -> str:
@@ -1313,8 +1324,8 @@ def _run_lines(view: dict) -> list:
     ]
     if view["prior_runs"]:
         lines.append(
-            "record before this run: %d%% over %d run(s)"
-            % (round(100 * (view["prior"] or 0.0)), view["prior_runs"])
+            "record before this run: %d%% over %s"
+            % (round(100 * (view["prior"] or 0.0)), _n(view["prior_runs"], "run"))
         )
     bosses = (
         "%d of %d bosses" % (view["bosses_done"], view["bosses_total"])
@@ -1323,14 +1334,14 @@ def _run_lines(view: dict) -> list:
     )
     if view["state"] == ENDED:
         parts = [
-            "%d death(s)" % view["deaths"],
+            _n(view["deaths"], "death"),
             _minutes(view["seconds_inside"]) + " inside",
         ]
         if bosses:
             parts.append(bosses)
-        parts.append("%d item(s) looted" % view["loot_items"])
+        parts.append(_n(view["loot_items"], "item") + " looted")
         if view["levels_gained"]:
-            parts.append("%d level(s) gained" % view["levels_gained"])
+            parts.append(_n(view["levels_gained"], "level") + " gained")
         if view["ilvl_gained"]:
             parts.append("%d item levels gained" % view["ilvl_gained"])
         lines.append(", ".join(parts))
@@ -1339,7 +1350,7 @@ def _run_lines(view: dict) -> list:
     elif view["state"] == INSIDE:
         parts = [
             _minutes(view["seconds_inside"]) + " inside",
-            "%d death(s)" % view["deaths"],
+            _n(view["deaths"], "death"),
         ]
         if bosses:
             parts.append(bosses)
@@ -1430,7 +1441,7 @@ def page(rows: list) -> dict:
             table.items(), key=lambda kv: (kv[0][1], kv[0][0], kv[0][2])
         )
     ]
-    head = "%d group(s) out, %d back" % (len(active), len(recent))
+    head = "%s out, %d back" % (_n(len(active), "group"), len(recent))
     return {
         "head": head,
         "active": active,

@@ -245,14 +245,14 @@ NOT_TAKEN = "not taken"
 IN_LOG_STATUSES = frozenset({1, 3})
 
 STEPS = (
-    "The attunement step (attunestep.py) walks the family to Lothos "
-    "Riftwaker, creature %d, once every member is at level 55 or more, all "
-    "are on the Eastern Kingdoms and the family's queued runs are done; the "
-    "planner waits for the walk. Each member standing at him takes Attunement "
-    "to the Core in person through a kind='quest' row (the Alliance quest "
-    "cannot be shared)." % LOTHOS,
-    "Queue the family into Blackrock Depths: queue <family>: blackrock depths "
-    "1. The Core Fragment chest stands beside the Molten Bridge in the back "
+    # attunestep.py walks them to creature LOTHOS; each member takes the
+    # quest through a kind='quest' command row.
+    "The family walks to Lothos Riftwaker once every member is at level 55 "
+    "or more, all are on the Eastern Kingdoms and the family's queued runs "
+    "are done. Each member standing at him takes Attunement to the Core in "
+    "person (the Alliance quest cannot be shared).",
+    "Queue the family into Blackrock Depths, one run, from the Decree tab. "
+    "The Core Fragment chest stands beside the Molten Bridge in the back "
     "half of the dungeon, past the Lyceum; it opens only for a member holding "
     "the quest, one fragment each.",
     "With a fragment carried, the attunement step walks the family back to "

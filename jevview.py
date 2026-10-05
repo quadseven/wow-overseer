@@ -36,6 +36,15 @@ KINDS = {
     "movement": "How a family gets moving again",
     "family_intent": "What a family's leader is doing now",
     "item_keep": "What to do with a protected non-gear item",
+    # Kinds added after this table was written, which the page showed by
+    # their key ("raid_supply") until #567.
+    "raid_supply": "Raid supplies to make or buy",
+    "loot_council": "Who gets a dropped item",
+    "guild_composition": "Which guild members form a group",
+    "guild_dungeon": "Which dungeon a guild group runs",
+    "run_recovery": "How a dungeon run recovers",
+    "staging_stall": "What to do when a run cannot gather",
+    "dungeon_step": "Whether a wiping family steps down to an easier dungeon",
 }
 
 # The protected non-gear items (#232) get their own short list: only where

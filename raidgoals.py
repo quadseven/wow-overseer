@@ -814,8 +814,9 @@ def _recipe_blockers(
     skill = professions.skill_id(recipe.trade)
     if rank is None:
         unknown.append(
-            "this realm states no %s rank for this recipe, in item_template "
-            "or in trainer_spell, so whether anybody is high enough is not a "
+            # Neither item_template nor trainer_spell carries a rank.
+            "this realm states no %s rank for this recipe, on the recipe or "
+            "at a trainer, so whether anybody is high enough is not a "
             "question this page can answer" % recipe.trade
         )
     else:
@@ -1013,8 +1014,8 @@ def _rank_line(recipe: Recipe, rank) -> str:
     """
     if rank is None:
         return (
-            "this realm states no %s rank for it, in item_template or in "
-            "trainer_spell" % recipe.trade
+            "this realm states no %s rank for it, on the recipe or at a "
+            "trainer" % recipe.trade
         )
     return "this realm asks for %s %d" % (recipe.trade, rank)
 

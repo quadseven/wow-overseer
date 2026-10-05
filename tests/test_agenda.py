@@ -362,7 +362,7 @@ class Errands(unittest.TestCase):
             ],
         )
         self.assertEqual(out["activity"], agenda.QUEST)
-        self.assertEqual(out["orders"]["kind"], "discord")
+        self.assertEqual(out["orders"]["kind"], "council")
 
     def test_a_run_outranks_an_errand(self):
         """The coordinator parks escorted members with a travel aim and they
@@ -436,7 +436,7 @@ class Staleness(unittest.TestCase):
             event_rows=[{"kind": "item_equip", "last_seen": NOW - timedelta(hours=1)}],
         )
         self.assertTrue(out["stalled"])
-        self.assertIn("mod-overseer#171", " ".join(out["detail"]))
+        self.assertIn("only means somebody is standing inside", " ".join(out["detail"]))
 
     def test_no_events_at_all_is_unknown_and_not_stalled(self):
         """A realm predating overseer_event hands in nothing. Shouting
@@ -544,9 +544,13 @@ class DiscordOrders(unittest.TestCase):
         }
     ]
 
-    def test_an_active_order_is_credited_to_discord(self):
+    def test_an_active_goal_is_credited_to_the_family_council(self):
+        """The council is the one writer of overseer_goal left (#567). Its rows
+        carry the reporting channel, which is not a Discord order."""
         out = build(goal_rows=self.GOAL)
-        self.assertEqual(out["orders"]["kind"], "discord")
+        self.assertEqual(out["orders"]["kind"], "council")
+        self.assertEqual(out["source"], "set by the family council")
+        self.assertNotIn("Discord", out["orders"]["text"])
         self.assertEqual(out["orders"]["who"], "Grug")
         self.assertEqual(out["orders"]["channel_id"], "154305710")
 
@@ -572,13 +576,13 @@ class OtherJobs(unittest.TestCase):
         out = build(roster({n: {"job": "farm"} for n in FAMILY}))
         self.assertEqual(out["activity"], agenda.JOB)
         self.assertIn("farm", out["headline"])
-        self.assertIn("Nothing is wired behind that mode yet", " ".join(out["detail"]))
+        self.assertIn("not built yet", " ".join(out["detail"]))
 
     def test_dungeon_is_never_described_as_unbuilt(self):
         """It is the sole trigger for the whole run coordinator. Saying it is
         not built would be the page contradicting the thing it is watching."""
         out = build(roster({n: {"job": "dungeon"} for n in FAMILY}))
-        self.assertNotIn("Nothing is wired behind", " ".join(out["detail"]))
+        self.assertNotIn("not built yet", " ".join(out["detail"]))
         self.assertIn("dungeon", jobs.IMPLEMENTED)
 
     def test_every_mode_the_roster_accepts_produces_a_headline(self):

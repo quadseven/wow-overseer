@@ -114,14 +114,13 @@ SECTIONS = (
         why_not="",
         instead="",
         does=(
-            "Writes one kind='job' overseer_command row per ENABLED "
-            "character of the family picked above - the same table, row shape and worldserver poller the "
-            "bridge uses when it hears a job order in Discord "
-            "(bridge._insert_job). No column is set from here: "
-            "mod_overseer.cpp's DoJob is what moves overseer_roster.job, and "
-            "it needs the character in the world to act on the row. What "
-            "came back reads that column afterwards and says whether the "
-            "order is in effect."
+            # Plain words (#567): one kind='job' overseer_command row per
+            # enabled character, the bridge's own row shape; the module's
+            # DoJob moves overseer_roster.job and needs the character online.
+            "Tells every member of the family picked above to switch to "
+            "this job. Each one has to be in the world to pick the order "
+            "up. The result below reads their job back afterwards and says "
+            "whether the order took."
         ),
     ),
     Section(
@@ -131,13 +130,13 @@ SECTIONS = (
         why_not="",
         instead="",
         does=(
-            "Writes overseer_roster.dungeon_runs_wanted and "
-            "dungeon_runs_done on EVERY enabled row of the family picked "
-            "above, not only the leader's. "
-            "The coordinator reads the leader's row and the count does not "
-            "travel with the crown, so a cap set on one row is a campaign "
-            "that appears to restart the moment somebody else takes the "
-            "lead - which is the disagreement this card already reports."
+            # dungeon_runs_wanted/_done on EVERY enabled row: the
+            # coordinator reads the leader's row and the count does not
+            # travel with the crown.
+            "Sets how many dungeon runs the family wants and how many are "
+            "done, on every member of the family picked above and not only "
+            "the leader, so the count stays right when somebody else takes "
+            "the lead."
         ),
     ),
     Section(
@@ -147,16 +146,16 @@ SECTIONS = (
         why_not="",
         instead="",
         does=(
-            "Replaces the picked family's pending rows in "
-            "overseer_dungeon_queue with the dungeons named, in order (#209). "
-            "No job or column is written from here: the bridge's queue pass "
-            "starts the first entry within a minute - job=dungeon:<keyword> "
-            "and the run cap on every enabled member, the count back to 0 - "
-            "moves on when the leader's dungeon_runs_done reaches the entry's "
-            "runs, and returns the family to quest when the list is empty. "
-            "Every entry is checked first: a door the overseer has, not "
-            "withheld, not in the other faction's capital, not above the "
-            "weakest member's level, and on their continent."
+            # overseer_dungeon_queue (#209); the bridge's queue pass writes
+            # job=dungeon:<keyword> and the run cap, and moves on when the
+            # leader's dungeon_runs_done reaches the entry's runs.
+            "Replaces the family's waiting dungeons with the ones named, in "
+            "order. The first starts within a minute; the family moves to "
+            "the next when its runs are done, and goes back to questing "
+            "when the list is empty. Every dungeon is checked first: the "
+            "overseer must be able to run it, it must be open to the "
+            "family's faction, within the weakest member's level, and on "
+            "their continent."
         ),
     ),
     Section(
@@ -166,13 +165,13 @@ SECTIONS = (
         why_not="",
         instead="",
         does=(
-            "Writes overseer_roster.travel_npc for ONE named character, and "
-            "only while that column is free - the same WHERE clause the "
-            "bridge guards its vendor pass with, widened here to every role, "
-            "because a console aim must not erase an errand the profession "
-            "planner wrote. Standing somebody down clears the column "
-            "outright, which is the one write on this page that removes an "
-            "intent rather than replacing one."
+            # overseer_roster.travel_npc, only while the column is free (the
+            # bridge's vendor-pass WHERE clause, widened to every role).
+            "Sends one named character to a person or place, but only when "
+            "they are not already on an errand, so a profession errand is "
+            "never overwritten. Standing somebody down clears their errand "
+            "outright, the one control here that removes an aim rather "
+            "than replacing it."
         ),
     ),
     Section(
@@ -182,11 +181,10 @@ SECTIONS = (
         why_not="",
         instead="",
         does=(
-            "Persists the words, then asks the inner voice once per "
-            "character. At most one allowlisted playerbot command is queued "
-            "per answer and WHICH one is the voice's decision, not the "
-            "operator's - so this is the one card whose order is a "
-            "conversation rather than a column."
+            "Saves the words, then asks each character's inner voice once. "
+            "Each answer can start at most one action, and the character "
+            "decides which, so this card starts a conversation rather than "
+            "giving an order."
         ),
     ),
 )
@@ -222,10 +220,11 @@ def job_chips() -> tuple:
     "this one works" is a decision the stylesheet makes, and a module that
     handed the page a hex would be deciding it twice.
 
-    `says` is jobs.describe verbatim, which is also exactly what the bridge
-    answers in the overseer's channel when the same mode is set there. One
-    sentence, one author: a console that phrased the stand-down warning in
-    its own words would be a second copy free to soften.
+    `says` is jobs.say verbatim: the reader's sentence for the mode, with no
+    code names in it (#567). jobs.describe keeps the maintainer's sentence
+    for the log. One sentence, one author: a console that phrased the
+    stand-down warning in its own words would be a second copy free to
+    soften.
 
     `sendable` is the same fact as `wired` said in the vocabulary the send
     button uses, and it is here so the page never compares a mode against a
@@ -235,14 +234,14 @@ def job_chips() -> tuple:
     return tuple(
         {
             "mode": mode,
-            "what": what,
+            "what": jobs.plain_what(mode),
             "state": WIRED if mode in jobs.IMPLEMENTED else UNWIRED,
             "wired": mode in jobs.IMPLEMENTED,
             "sendable": mode in jobs.IMPLEMENTED,
             "why_not": "" if mode in jobs.IMPLEMENTED else unwired_refusal(mode),
-            "says": jobs.describe(mode),
+            "says": jobs.say(mode),
         }
-        for mode, what in jobs.MODES.items()
+        for mode in jobs.MODES
     )
 
 
@@ -254,9 +253,9 @@ def job_line(mode: str, leader: str | None) -> str:
     """
     if leader is None:
         return "Nobody is on the roster, so no job is set."
-    return (
-        "Set to %s, read off %s's row - which is the row the run "
-        "coordinator reads." % (mode, leader)
+    return "Set to %s, as %s, the leader, carries it." % (
+        campaignqueue.job_words(mode),
+        leader,
     )
 
 
@@ -281,8 +280,15 @@ def job_choice(mode: str) -> dict | None:
         "wired": wired,
         "state": WIRED if wired else UNWIRED,
         "stands_down": not wired,
-        "says": jobs.describe(resolved),
+        "says": jobs.say(resolved, _door(resolved)),
     }
+
+
+def _door(mode: str) -> str | None:
+    """How a dungeon or raid job's door is said, for jobs.say, or None."""
+    if jobs.is_dungeon_job(mode) or jobs.is_raid_job(mode):
+        return campaignqueue._place(mode.split(":", 1)[1] if ":" in mode else "")
+    return None
 
 
 def unwired_modes() -> tuple:
@@ -321,21 +327,24 @@ def campaign_view(counter: dict) -> dict:
     if by is None:
         line = "Nobody is on the roster, so there is no campaign to count."
     else:
-        line = "%d of %d runs done, counted on %s's row." % (done, wanted, by)
+        line = "%d of %d runs done, as %s, the leader, counts them." % (
+            done,
+            wanted,
+            by,
+        )
     if wanted == CAMPAIGN_STOP:
         means = (
-            "Wanted is 0, which stops the campaign outright: the coordinator "
-            "asks whether done is at least wanted before it starts a run, so "
-            "no run begins at all."
+            "The number of runs wanted is 0, which stops the campaign "
+            "outright: no run begins at all."
         )
     elif counter.get("over"):
         means = (
-            "The campaign is over: done has reached wanted, and the "
-            "coordinator will not start another run."
+            "The campaign is over: every run wanted is done, and no other "
+            "run will start."
         )
     else:
         left = wanted - done
-        means = "%d run%s left before the coordinator stops." % (
+        means = "%d run%s left in this campaign." % (
             left,
             "" if left == 1 else "s",
         )
@@ -486,9 +495,8 @@ WILL_TARGETS = (
         "reachable": False,
         "needs_name": False,
         "why_not": (
-            "The chat path this page speaks through takes ONE character name. "
-            "Widening an order to a guild is fanout.py's job and it runs on "
-            "the bridge, not here."
+            "This page speaks to one character at a time. Speaking to a "
+            "whole guild at once is not something it can do."
         ),
         "what": "",
     },
@@ -649,7 +657,7 @@ OUTCOMES = {
             "hand-off, and they agreed. The only status that has ever meant "
             "the character changed."
         ),
-        evidence="`result` on the row carries the lists it was judged against.",
+        evidence="The order's record keeps what it was checked against.",
     ),
     "unchanged": Outcome(
         word="changed nothing",
@@ -658,16 +666,13 @@ OUTCOMES = {
             "Accepted, and the live list is exactly what it was. Nothing "
             "failed and nothing happened."
         ),
-        evidence=(
-            "`result` on the row carries the live lists the verdict was made "
-            "against, so the diagnosis needs no second trip to a probe."
-        ),
+        evidence="The order's record keeps what it was checked against.",
     ),
     "error": Outcome(
         word="refused",
         tone=FAILED,
-        means="It did not happen, and the row says why.",
-        evidence="`detail` on the row carries the reason.",
+        means="It did not happen, and the order's record says why.",
+        evidence="The reason is given with the result.",
     ),
 }
 
@@ -756,37 +761,37 @@ READBACK = {
         tone=VERIFIED,
         means="%(name)s's job column reads %(now)s now, which is what this order set.",
         evidence=(
-            "Read off overseer_roster.job for %(name)s just now. The module "
-            "itself reports only that it accepted the row."
+            "Read off %(name)s's job just now. The world itself only reports "
+            "that it accepted the order."
         ),
     ),
     REPLACED: Outcome(
         word="replaced",
         tone=INERT,
         means=(
-            "%(name)s's job reads %(now)s now: a later order (row %(newest)d) "
-            "set something else after this one."
+            "%(name)s's job reads %(now)s now: a later order (number "
+            "%(newest)d) set something else after this one."
         ),
-        evidence="Read off overseer_roster.job and the newest job row for %(name)s.",
+        evidence="Read off %(name)s's job and the newest job order for them.",
     ),
     DID_NOT_TAKE: Outcome(
         word="did not take",
         tone=FAILED,
         means=(
             "This is the newest job order for %(name)s, and their job reads "
-            "%(now)s rather than %(asked)s. The module accepted the row and the "
-            "column did not change."
+            "%(now)s rather than %(asked)s. The world accepted the order and "
+            "the job did not change."
         ),
-        evidence="Read off overseer_roster.job for %(name)s just now.",
+        evidence="Read off %(name)s's job just now.",
     ),
     NO_ROW: Outcome(
         word="changed nothing",
         tone=FAILED,
         means=(
-            "%(name)s has no overseer_roster row, so the module's column write "
-            "matched nothing even though it reported the row delivered."
+            "%(name)s is not on the family roster, so the order reached "
+            "nobody even though the world reported it delivered."
         ),
-        evidence="No overseer_roster row carries that name.",
+        evidence="No member of the roster carries that name.",
     ),
 }
 
@@ -1021,8 +1026,14 @@ def backlog() -> tuple:
     and jobs.IMPLEMENTED, so wiring a mode moves the number without anybody
     remembering to edit a sentence; who is owed the family's first trade is
     read off professions.OPEN_ORDER and the assignment table rather than
-    typed. The rest are facts about C++ that does not exist, and they carry
-    the module whose own docstring says so, so a reader can go and check.
+    typed.
+
+    TWO ENTRIES WENT FALSE AND WERE REMOVED (#567). "Nothing crafts" said no
+    verb turns a tradeskill into an item while jobs.IMPLEMENTED carries
+    `craft` and its drive casts recipes; "Travel does not transact" said
+    buying and repairing had no verb while the command kinds include buy,
+    repair and mail and the town run's vendor pass uses them (jobs.py, the
+    BLOCKED comment). A backlog line that is false is worse than none.
     """
     unwired = unwired_modes()
     first_trade = professions.OPEN_ORDER[0]
@@ -1031,15 +1042,6 @@ def backlog() -> tuple:
         "",
     )
     return (
-        {
-            "what": "Nothing crafts.",
-            "why": (
-                "mod-overseer has no verb that turns a tradeskill into an "
-                "item, so a character can be asked for a bag, can agree, and "
-                "no bag can ever appear. craftpleas.py says so in its own "
-                "docstring rather than routing around it."
-            ),
-        },
         {
             "what": "%s does not hold %s."
             % (owed_to or "The family's crafter", first_trade),
@@ -1051,20 +1053,11 @@ def backlog() -> tuple:
             ),
         },
         {
-            "what": "Travel does not transact.",
-            "why": (
-                "An aimed character walks to the role and stands in front of "
-                "it. Buying, repairing and signing a charter have no verb at "
-                "all; the one transaction that exists fires only for a "
-                "character the profession errand planner sent with a plan."
-            ),
-        },
-        {
             "what": "%d of %d jobs are a name and nothing else."
             % (len(unwired), len(jobs.MODES)),
             "why": (
-                "Setting one of them stands the quest drive down and puts "
-                "nothing in its place: %s." % ", ".join(unwired)
+                "Setting one of them stops questing and puts nothing in its "
+                "place: %s." % ", ".join(unwired)
             ),
         },
     )
@@ -1131,14 +1124,12 @@ TRAVEL_REASSERT = (
 def unwired_refusal(mode: str) -> str:
     """Why a named but unimplemented mode will not be sent from this page.
 
-    Opens with jobs.describe rather than restating it: the stand-down warning
+    Opens with jobs.say rather than restating it: the stand-down warning
     has one author, and a second copy here would be free to soften.
     """
     return (
-        "%s That is a name and nothing else, so this console will not send "
-        "it - one tap is too cheap for an order that stands the family down. "
-        'Say "job %s" in the overseer\'s own channel if you mean it anyway.'
-        % (jobs.describe(mode), mode)
+        "%s So this console will not send it: one tap is too cheap for an "
+        "order that stops the family." % jobs.say(mode)
     )
 
 
@@ -1257,7 +1248,7 @@ def _plan_job(request: dict, standing: dict) -> Order:
         refusal="",
         rows=tuple(Row(name, mode, JOB_KIND) for name in names),
         updates=(),
-        says=jobs.describe(mode),
+        says=jobs.say(mode, _door(mode)),
     )
 
 
@@ -1464,23 +1455,24 @@ ORDER_SOME = (
 )
 ORDER_NOTHING = {
     JOB: (
-        "No row was written. overseer_command.kind has no 'job' value on this "
-        "realm, which needs the worldserver image carrying mod-overseer's SQL."
+        # overseer_command.kind has no 'job' value: the worldserver image
+        # predates mod-overseer's SQL for it.
+        "Nothing was sent. This realm's world server is too old to take job "
+        "orders; it needs updating first."
     ),
     CAMPAIGN: (
-        "Nothing changed. Either every enabled row already carried those "
-        "numbers, or this realm's overseer_roster predates the campaign "
-        "columns."
+        "Nothing changed. Either every member already carried those "
+        "numbers, or this realm's roster is too old to hold a campaign "
+        "count."
     ),
     TRAVEL: (
-        "Nothing changed. Either they are already walking there, or the "
-        "column carries an errand and this console will not erase one. The "
-        "live line above says which."
+        "Nothing changed. Either they are already walking there, or they "
+        "are on an errand and this console will not erase one. The live "
+        "line above says which."
     ),
     QUEUE: (
         "Nothing changed. Either there was no queue to clear, or this realm "
-        "has no overseer_dungeon_queue yet - the bridge creates it when it "
-        "starts."
+        "has no dungeon queue yet; it appears once the overseer has started."
     ),
 }
 

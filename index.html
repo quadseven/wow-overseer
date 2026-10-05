@@ -129,6 +129,13 @@
     --rust:#B0330F;         /* warning body text                            */
     --amber:#D29922;        /* maxed talents, "name only" states            */
     --amber-text:#8A6100;   /* warning text on light                        */
+    --stale-text:#FFD9A0;   /* warning text on the fixed rust band           */
+    --deep-green-text:#00692E; /* small green text on --pale-green (6:1)    */
+    /* How much of a class colour survives on a card (#563). The class
+       colours are the game's, picked for a dark frame: Rogue yellow and Priest
+       white vanish on a white card. On light they are mixed toward black far
+       enough to pass 4.5:1 and keep their hue; dark keeps them whole. */
+    --class-mix:50%;
     --muted:#5C6F60;        /* secondary text                               */
     --hairline:#DDE6D6;     /* bars, dividers                               */
     --divider:#EDF2E9;      /* card-internal rules                          */
@@ -244,6 +251,7 @@
          never defined at all. */
       --info-text:#5BC8FF;
       --item-ground:transparent; --item-pad:0;
+      --class-mix:100%;
     }
   }
   :root[data-theme="dark"] {
@@ -259,6 +267,7 @@
     --caution-text:#E8B33D; --accent-text:#2FD46F;
     --info-text:#5BC8FF;
     --item-ground:transparent; --item-pad:0;
+    --class-mix:100%;
   }
   * { box-sizing:border-box; margin:0; }
   /* THE FACES WERE LOADING AND NOTHING WAS USING THEM. Measured on the live
@@ -328,10 +337,13 @@
            cursor:pointer; }
   #theme:hover { color:var(--shell-text); }
   #theme:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
-  #stale { display:none; background:#6e2c00; color:var(--amber-text); padding:.3rem 1rem; }
+  /* Pale amber on the rust band: --amber-text is a print ink for a light
+     ground and read 1.9:1 here (#563). The band is the same in both themes,
+     so its ink is fixed too. */
+  #stale { display:none; background:#6e2c00; color:var(--stale-text); padding:.3rem 1rem; }
   /* An open tab running an older copy of this page than the server now
      serves. Same colours as #stale: it is the same kind of warning. */
-  #pagestale { background:#6e2c00; color:var(--amber-text); padding:.3rem 1rem; }
+  #pagestale { background:#6e2c00; color:var(--stale-text); padding:.3rem 1rem; }
   #pagestale[hidden] { display:none; }
   #pagestale button { font:inherit; margin-left:.6rem; cursor:pointer;
                       background:none; color:inherit; border:1px solid currentColor;
@@ -446,7 +458,7 @@
   #agenda.idle #agline { color:var(--dim); }
   /* An honest label rather than a silent one: an answer the server could not
      refresh must not look like an answer it just gave. */
-  .agstale { color:var(--amber-text); }
+  .agstale { color:var(--caution-text); }
   @media (max-width:600px) { #agline { font-size:1.12rem; } }
   /* WHOSE GOAL, said small above it, now that there are two families. */
   #agfam { color:var(--dim); font-family:var(--mono); font-size:.72rem;
@@ -681,7 +693,7 @@
   #pwfnote.warn { color:#d29922; }
   #pwnote.live { color:#7ee787; }
   #pwnote.warn { color:#d29922; }
-  #panel .gone { color:var(--amber-text); }
+  #panel .gone { color:var(--caution-text); }
   /* Thought timeline (infra#2604): one stream, both surfaces. The left
      border is the source, so a Discord line and a web line are told apart
      at a glance without reading them. */
@@ -727,9 +739,12 @@
   .ds-rule .ix { flex:none; font-size:11px; font-weight:700;
                  letter-spacing:.14em; color:var(--on-card); }
   .ds-rule .ln { flex:1 1 auto; height:2px; background:var(--on-card); }
-  .ds-rule .lb { flex:none; font-size:11px; letter-spacing:.14em;
-                 text-transform:uppercase; color:var(--on-card-dim);
-                 text-align:right; }
+  /* A long label wraps rather than widening the page (#563): Chronicle's
+     "the loot council: who got what, and why" ran 17px past a 375px phone.
+     The Lineup tab had this fix on its own; every view has it now. */
+  .ds-rule .lb { flex:0 1 auto; min-width:0; font-size:11px;
+                 letter-spacing:.14em; text-transform:uppercase;
+                 color:var(--on-card-dim); text-align:right; }
   /* THE STAT STRIP. 2px gaps, and the gap IS the border: the grid's own
      background shows through between the tiles, so five tiles read as one
      object rather than as five cards that happen to be adjacent. auto-fit
@@ -900,7 +915,8 @@
      than widening the page. */
   .rr-raiders { margin-top:.5rem; }
   .rr-raiders > summary { cursor:pointer; font-size:13px; color:var(--on-card);
-                          overflow-wrap:anywhere; }
+                          overflow-wrap:anywhere; min-height:44px;
+                          display:flex; align-items:center; }
   .rr-raiders > summary:focus-visible { outline:2px solid var(--accent);
                                         outline-offset:3px; }
   .rr-scroll { overflow-x:auto; margin-top:.4rem; }
@@ -1023,6 +1039,13 @@
     background:var(--item-ground); padding:0 var(--item-pad); border-radius:4px;
     -webkit-box-decoration-break:clone; box-decoration-break:clone; }
   .iname:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
+  /* A TALLER HIT AREA THAN THE LINE (#563). The name keeps its line height,
+     so a run of text does not grow; a transparent ::after reaches 6px above
+     and below it, which takes a 20px name to a 32px target without letting
+     two stacked names' targets overlap. */
+  .iname { position:relative; }
+  .iname::after { content:""; position:absolute; left:0; right:0;
+                  top:-6px; bottom:-6px; }
   /* An item with no page to send anybody to has no row for it. */
   #itemtipout[hidden] { display:none; }
   /* WHERE IT COMES FROM, under the item's own lines, in the panel, the
@@ -1512,6 +1535,18 @@
                       font-weight:700; letter-spacing:.12em;
                       text-transform:uppercase; }
   #rcfold a { color:inherit; }
+  /* HOW A NUMBER IS WORKED OUT, FOLDED (#567). Every view's note on where its
+     data comes from sits in one of these, collapsed, so the view leads with
+     what is happening and the method is one tap away. setBasis() fills it,
+     hides it when there is nothing to say, and opens it when the text is a
+     warning (an empty or failed read) rather than a method. */
+  details.basis { margin:.9rem 0 0; max-width:72ch; }
+  details.basis > summary { min-height:44px; display:flex; align-items:center;
+                            cursor:pointer; font-family:var(--mono);
+                            font-size:11px; font-weight:700;
+                            letter-spacing:.12em; text-transform:uppercase;
+                            color:var(--on-card-dim); }
+  details.basis > p { margin-top:0; }
   /* .chr-card takes the shared card recipe from the furniture above. */
   .chr-top { display:flex; align-items:center; gap:.85rem; flex-wrap:wrap;
              font-family:var(--mono); font-size:11px; font-weight:700;
@@ -1550,8 +1585,10 @@
                         border:1px solid var(--card-line); flex-shrink:0; }
   .chr-card .item a { text-decoration:none; overflow-wrap:anywhere; }
   .chr-card .item a:hover { text-decoration:underline; }
+  /* Wraps (#562): "won on a greed roll from Razorclaw the Butcher" ran
+     past its card, and past the page at 1920px, on one line. */
   .chr-card .item .who { color:var(--on-card-dim); font-size:12px;
-                         white-space:nowrap; }
+                         min-width:0; overflow-wrap:anywhere; }
   .chr-card .note { margin-top:.5rem; color:var(--on-card-dim); font-size:12px;
                     line-height:1.5; }
   /* .q0 to .q7 are the Armory's rules, below; an item here is drawn in the
@@ -1633,7 +1670,7 @@
   .cn-agreed { background:var(--pale-green); border:1px solid var(--accent);
                border-radius:14px; padding:16px 18px; }
   .cn-agreed .lbl { font-family:var(--mono); font-size:10px; font-weight:700;
-                    letter-spacing:.14em; color:var(--deep-green); }
+                    letter-spacing:.14em; color:var(--deep-green-text); }
   .cn-agreed .what { margin-top:6px; font-family:var(--display);
                      font-weight:700; font-stretch:125%; font-size:1.05rem;
                      line-height:1.3; color:var(--ink); }
@@ -1644,18 +1681,19 @@
   .cn-agreed .who, .cn-agreed .when, .cn-agreed .next {
     margin-top:8px; color:var(--ink); font-size:13px; line-height:1.55; }
   .cn-agreed .when { font-family:var(--mono); font-size:11px;
-                     letter-spacing:.08em; color:var(--deep-green); }
+                     letter-spacing:.08em; color:var(--deep-green-text); }
   /* In effect or not is said in words first; the colour only repeats it.
      Both inks are fixed tokens because this panel keeps one ground in both
      themes (below). */
   .cn-agreed .next { font-weight:700; }
-  .cn-agreed .next.is-on { color:var(--deep-green); }
+  .cn-agreed .next.is-on { color:var(--deep-green-text); }
   .cn-agreed .next.is-off { color:var(--amber-text); }
   .cn-agreed .older { margin:8px 0 0; padding-left:1.1rem; color:var(--ink);
                       font-size:12px; line-height:1.5; }
   .cn-agreed details { margin-top:10px; color:var(--ink); font-size:13px; }
   .cn-agreed summary { cursor:pointer; font-family:var(--mono); font-size:11px;
-                       letter-spacing:.08em; color:var(--deep-green); }
+                       letter-spacing:.08em; color:var(--deep-green-text);
+                       min-height:44px; display:flex; align-items:center; }
   .cn-agreed .said { margin-top:6px; line-height:1.5; }
   /* ONE BLOCK PER FAMILY, both factions, one above the other. */
   .cn-family + .cn-family { margin-top:26px; }
@@ -2201,10 +2239,12 @@
      shows that nobody can disenchant, which is what turns every unusable
      green into vendor trash (mod-overseer#160). An absence has to be given
      a shape or it is not read at all. */
-  #stgap, .stgap { background:var(--panel); border:1px solid var(--line);
-           border-left:3px solid var(--horde); border-radius:8px;
-           padding:.7rem .9rem; margin-bottom:1rem; }
-  #stgap.ok, .stgap.ok { border-left-color:var(--mortal); }
+  /* The whole outline carries the alarm colour, not a thick left stripe
+     (#563): the stripe read as decoration, and the head already says it in
+     words and in rust. */
+  #stgap, .stgap { background:var(--panel); border:1px solid var(--horde);
+           border-radius:8px; padding:.7rem .9rem; margin-bottom:1rem; }
+  #stgap.ok, .stgap.ok { border-color:var(--mortal); }
   .stgap-head { color:var(--rust); }
   #stgap.ok .stgap-head, .stgap.ok .stgap-head { color:var(--mortal); }
   .stgap-why { color:var(--dim); margin-top:.25rem; overflow-wrap:anywhere; }
@@ -2556,8 +2596,8 @@
   .meter-wrap { overflow-x:auto; }
   .aura-details { margin-top:.35rem; }
   .aura-details summary { color:var(--on-card-dim); cursor:pointer;
-                          font-family:var(--mono); font-size:10px;
-                          min-height:32px; display:flex; align-items:center; }
+                          font-family:var(--mono); font-size:11px;
+                          min-height:44px; display:flex; align-items:center; }
   .aura-list { display:grid; gap:.15rem; padding:.1rem 0 .3rem; }
   .aura-row { display:flex; flex-wrap:wrap; gap:.1rem .5rem;
               color:var(--on-card-dim); font-size:.78rem; }
@@ -2819,7 +2859,7 @@
   .pt.hand_in .disc { border-color:var(--mortal); box-shadow:0 0 0 2px #7ee78733; }
   .pt.hand_in .ptn { color:var(--mortal); }
   .pt.helping .disc { border-color:#d29922; border-style:dashed; }
-  .pt.helping .ptn { color:var(--amber-text); }
+  .pt.helping .ptn { color:var(--caution-text); }
   /* Dimmed, so "everyone else already did this one" is a thing a person can
      SEE across a row rather than count. */
   .pt.done { opacity:.35; }
@@ -2998,6 +3038,11 @@
             background:var(--sunken); border:1px solid var(--line);
             overflow:hidden; }
   .fbdfill { height:100%; background:var(--green); transition:width .3s linear; }
+  /* A reader who asked for less motion gets the bar at its new width at once
+     (#563). The width still changes, so the state change is kept. */
+  @media (prefers-reduced-motion: reduce) {
+    .ffill, .fneedf, .fbdfill { transition:none; }
+  }
   .fbd.s-counting .fbdfill { background:var(--amber); }
   .fbd.s-stopped .fbdfill { background:var(--vermilion); }
   /* The rule under the rows, said once. In `what wants to move` it is the
@@ -3112,7 +3157,7 @@
     .lg-open .lg-say, .lg-open .vcbar { position:sticky; left:.5rem;
                 box-sizing:border-box; width:min(24rem, calc(100vw - 2 * var(--gutter) - 1.2rem)); }
   }
-  .lg-note { font-size:.75rem; color:var(--muted); margin:.3rem 0 0; }
+  .lg-note { font-size:.75rem; color:var(--on-card-dim); margin:.3rem 0 0; }
   #lgpick button { font:inherit; font-size:12px; cursor:pointer; min-height:36px;
               padding:0 .8rem; border-radius:999px; background:none;
               color:var(--text); border:1px solid var(--card-line); }
@@ -3128,22 +3173,22 @@
   .ln-box { border:1px solid var(--card-line); border-radius:6px; padding:.45rem .55rem;
             background:var(--card); }
   .ln-boxhead { font-size:.72rem; letter-spacing:.08em; text-transform:uppercase;
-                color:var(--muted); margin-bottom:.3rem; }
-  .ln-note { font-size:.68rem; color:var(--muted); margin:-.15rem 0 .3rem; }
-  .ln-work { font-size:.66rem; color:var(--muted); margin:0 0 .25rem .6rem; }
+                color:var(--on-card-dim); margin-bottom:.3rem; }
+  .ln-note { font-size:.68rem; color:var(--on-card-dim); margin:-.15rem 0 .3rem; }
+  .ln-work { font-size:.66rem; color:var(--on-card-dim); margin:0 0 .25rem .6rem; }
   .ln-row { display:flex; align-items:baseline; gap:.4rem; padding:.1rem 0;
             font-size:.82rem; }
   .ln-name { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
              white-space:nowrap; }
-  .ln-lvl { flex:none; font-variant-numeric:tabular-nums; color:var(--muted); }
-  .ln-cls { flex:none; font-size:.7rem; color:var(--muted); }
+  .ln-lvl { flex:none; font-variant-numeric:tabular-nums; color:var(--on-card-dim); }
+  .ln-cls { flex:none; font-size:.7rem; color:var(--on-card-dim); }
   /* The tank and the healer are what make five people a group rather than a
      crowd, so they are marked. Everyone else is deliberately unmarked. */
   .ln-row.r-tank .ln-cls::after { content:" tank"; color:var(--accent); }
   .ln-row.r-healer .ln-cls::after { content:" heal"; color:var(--accent); }
   /* A placed raider with a duty says it in full instead. */
   .ln-row.has-duty .ln-cls::after { content:none; }
-  .ln-duty { flex:none; font-size:.66rem; color:var(--muted); }
+  .ln-duty { flex:none; font-size:.66rem; color:var(--on-card-dim); }
   .ln-row.r-tank .ln-duty, .ln-row.r-healer .ln-duty { color:var(--accent); }
   .ln-short { font-size:.76rem; color:var(--rust); margin:.2rem 0 .5rem; }
   .ln-gname { font-weight:600; }
@@ -3720,7 +3765,7 @@
   type="button" id="pagereload">reload</button></div>
 <header>
   <span class="mark"><span class="dot" aria-hidden="true"></span><h1>THE OVERSEER</h1></span>
-  <span id="census">reaching the world...</span>
+  <span id="census">loading...</span>
   <span class="hgap"></span>
   <!-- SAME ORIGIN, AND HIDDEN UNTIL PROVEN. The footage is on the recorder
        box, which a pod cannot reach, so the ingress proxies a recordings
@@ -3760,7 +3805,7 @@
 <div id="agstack">
 <div id="agenda">
   <div id="agfam"></div>
-  <div id="agline">reaching the world...</div>
+  <div id="agline">loading...</div>
   <div id="agdetail"></div>
   <div id="agwhen"></div>
 </div>
@@ -3791,8 +3836,8 @@
        reads as one document rather than four features that landed
        separately. -->
   <div class="fsec"><span class="fsecn">01</span><span class="fsecline"></span><span class="fsecl">the family</span></div>
-  <div id="fheadline">reaching the world...</div>
-  <div class="aura-panel" id="family-auras" aria-live="polite" aria-label="Live family auras"></div>
+  <div id="fheadline">loading...</div>
+  <div class="aura-panel" id="family-auras" aria-live="polite" aria-label="Live family buffs"></div>
   <div class="aura-panel meter-panel" id="family-meter" aria-label="Family damage, healing and threat this fight"></div>
   <!-- THE FIVE FEEDS, and nothing between them and the top of the tab
        (infra#88). One card per character: their broadcast at the full
@@ -3854,8 +3899,7 @@
      Everything inside is drawn from /api/family's `wall` key, which watchwall
      composes - this markup holds no sentence of its own. -->
 <section id="watch">
-  <div id="wallhead">reaching the world...</div>
-  <div class="aura-panel" id="watch-auras" aria-live="polite" aria-label="Live family auras"></div>
+  <div id="wallhead">loading...</div>
   <div class="wbar">
     <div id="wallmodes" role="group" aria-label="wall layout"></div>
     <span class="wspacer"></span>
@@ -3865,9 +3909,12 @@
   </div>
   <details id="wallwarn" hidden></details>
   <div id="wall"></div>
+  <!-- The buffs come after the wall (#563): the view is named Watch, and on
+       a phone ten buff blocks above it put the streams three screens down. -->
+  <div class="aura-panel" id="watch-auras" aria-live="polite" aria-label="Live family buffs"></div>
 </section>
 <section id="armory">
-  <div id="aheadline">reaching the world...</div>
+  <div id="aheadline">loading...</div>
   <div id="asaved"></div>
   <nav id="ajump"></nav>
   <div id="asides"></div>
@@ -3920,7 +3967,7 @@
      rail cost every card an inch of left margin on a phone, which is the
      device this is read on. -->
 <section id="chronicle">
-  <div id="chrhead" class="ds-head">reaching the world...</div>
+  <div id="chrhead" class="ds-head">loading...</div>
   <p id="chrnote" hidden></p>
   <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">what is happening right now</span></div>
   <div id="rcbox"></div>
@@ -3932,13 +3979,13 @@
        the families' guilds looted, who it went to and when it went on, one
        sentence per item. The sentences come from lootstory.py. -->
   <div class="ds-rule"><span class="ix">03</span><span class="ln"></span><span class="lb">notable loot, and where it went</span></div>
-  <p id="chrlootbasis" class="chr-body"></p>
+  <details class="basis"><summary>how this is worked out</summary><p id="chrlootbasis" class="chr-body"></p></details>
   <div id="chrloot"></div>
   <!-- THE LOOT COUNCIL (#194). Every weapon and armor drop a family's party
        or raid handed out: who got it and why. The sentences come from
        lootcouncil.py; the reason is Jev's chosen option, or the heuristic's. -->
   <div class="ds-rule"><span class="ix">04</span><span class="ln"></span><span class="lb">the loot council: who got what, and why</span></div>
-  <p id="chrcouncilbasis" class="chr-body"></p>
+  <details class="basis"><summary>how this is worked out</summary><p id="chrcouncilbasis" class="chr-body"></p></details>
   <div id="chrcouncil"></div>
   <!-- THE LOOT BOARD, FOLDED AWAY (#135). It is gear comparison for the last
        dungeon run, and it used to sit between "what is happening" and the
@@ -3957,12 +4004,12 @@
      this markup holds no judgement of its own, and the rule the path follows
      is printed on the page rather than left implied. -->
 <section id="dungeons">
-  <div id="dgnhead" class="ds-head">reaching the world...</div>
+  <div id="dgnhead" class="ds-head">loading...</div>
   <p id="dgnrunnable" class="chr-body"></p>
   <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">the path, family by family</span></div>
   <p id="dgnorder" class="chr-body"></p>
   <div id="dgnfamilies"></div>
-  <p id="dgnbasis" class="chr-body"></p>
+  <details class="basis"><summary>how this is worked out</summary><p id="dgnbasis" class="chr-body"></p></details>
   <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">run timeline</span></div>
   <p id="rtlline" class="chr-body"></p>
   <div id="rtlfamilies"></div>
@@ -3975,10 +4022,10 @@
      that separates what this realm's database said from what a community of
      players agreed on is the most important thing on the page. -->
 <section id="raid">
-  <div id="rghead" class="ds-head">reaching the world...</div>
+  <div id="rghead" class="ds-head">loading...</div>
   <p id="rrgoal" class="chr-body"></p>
   <div id="rrlist"></div>
-  <p id="rrbasis" class="chr-body"></p>
+  <details class="basis"><summary>how this is worked out</summary><p id="rrbasis" class="chr-body"></p></details>
   <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">consumables, per guild</span></div>
   <div id="rgpick" class="rg-chips"></div>
   <div id="rgline" class="ds-head"></div>
@@ -3990,7 +4037,7 @@
   <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">the rest of the tier</span></div>
   <p id="rgothers" class="chr-body"></p>
   <div id="rgotherlist"></div>
-  <p id="rgbasis" class="chr-body"></p>
+  <details class="basis"><summary>how this is worked out</summary><p id="rgbasis" class="chr-body"></p></details>
 </section>
 <!-- WHAT THE GUILD CAN MAKE (infra#3507). The operator asked for a guild
      profession view and, in the same breath, for farm runs for the recipes it
@@ -4001,7 +4048,7 @@
      own, and the rule the list is in is printed on the page rather than left
      implied. -->
 <section id="guild">
-  <div id="gdhead" class="ds-head">reaching the world...</div>
+  <div id="gdhead" class="ds-head">loading...</div>
   <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">groups out now</span></div>
   <div id="gdactive" class="gd-list"></div>
   <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">how they came back</span></div>
@@ -4014,7 +4061,7 @@
   <div id="uphead" class="ds-head">pick a guild member</div>
   <div class="up-pick">
     <label for="upsel">guild member</label>
-    <select id="upsel" disabled><option value="">reaching the world...</option></select>
+    <select id="upsel" disabled><option value="">loading guild members...</option></select>
   </div>
   <div id="upnote" class="up-note" role="status"></div>
   <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">pre-raid readiness</span></div>
@@ -4025,7 +4072,7 @@
 </section>
 
 <section id="lineup">
-  <div id="lnhead" class="ds-head">reaching the world...</div>
+  <div id="lnhead" class="ds-head">loading...</div>
   <!-- EVERY MEMBER'S GEAR (guildgear.py): both family guilds, one sortable
        table, worst first. A row opens the same game frames a family member's
        tile has (bags, bank, guild bank, character, social, quest log). -->
@@ -4038,7 +4085,7 @@
 </section>
 
 <section id="trades">
-  <div id="gcrhead" class="ds-head">reaching the world...</div>
+  <div id="gcrhead" class="ds-head">loading...</div>
   <!-- One guild per family: Alliance first, then Horde. The switch picks
        which one the sections below are drawn for. -->
   <div id="gcrpick" class="rg-chips"></div>
@@ -4054,14 +4101,14 @@
   <p id="gclorder" class="chr-body"></p>
   <p id="gcllimit" class="chr-body"></p>
   <div id="gclladder"></div>
-  <p id="gclbasis" class="chr-body"></p>
+  <details class="basis"><summary>how this is worked out</summary><p id="gclbasis" class="chr-body"></p></details>
   <div class="ds-rule"><span class="ix">04</span><span class="ln"></span><span class="lb">what nobody holds</span></div>
   <p id="gcrgapsline" class="chr-body"></p>
   <div id="gcrgaps"></div>
   <div class="ds-rule"><span class="ix">05</span><span class="ln"></span><span class="lb">what each trade still needs</span></div>
   <p id="gcrorder" class="chr-body"></p>
   <div id="gcrlist"></div>
-  <p id="gcrbasis" class="chr-body"></p>
+  <details class="basis"><summary>how this is worked out</summary><p id="gcrbasis" class="chr-body"></p></details>
 </section>
 <!-- THE COUNCIL. One block per family, both factions: what the family last
      decided and whether it is in effect, the last sitting in the family's own
@@ -4069,7 +4116,7 @@
      word and the ORDER of the transcript come from council.py; this markup
      holds no judgement of its own. -->
 <section id="council">
-  <div id="cnhead" class="ds-head">reaching the world...</div>
+  <div id="cnhead" class="ds-head">loading...</div>
   <div id="cnfamilies"></div>
 </section>
 <!-- THE EYE. A server rollup for a server that is one family, and the point
@@ -4077,7 +4124,7 @@
      no faction split. Each rung says whether it is real and, when it is not,
      what would turn it on. eye.py counts the rows and picks the words. -->
 <section id="eye">
-  <div id="eyehead" class="ds-head">reaching the world...</div>
+  <div id="eyehead" class="ds-head">loading...</div>
   <div id="eyestrip" class="ds-strip"></div>
   <p id="eyehonest"></p>
   <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">what is actually here</span></div>
@@ -4091,7 +4138,7 @@
      headings the module does not name - every other word arrives from
      /api/decree. -->
 <section id="decree">
-  <div id="dcrhead">reaching the world...</div>
+  <div id="dcrhead">loading...</div>
   <div id="dcrgrid">
     <div class="dcrcard">
       <h2 id="dcrjobtitle"></h2>
@@ -4200,7 +4247,7 @@
            must not be spendable. It stays visible because it is a real planned
            mode, and the title says why it is off. -->
       <button id="pwpov" title="Log in as them with the AI playing. Their own hotbars, bags and camera - the Twitch view.">be them</button>
-      <button id="pwcam" disabled title="Not implemented yet: a follow-cam needs a dedicated GM account that is not one of the family, because using one of theirs would turn that character into a selfbot - the exact thing a follow-cam exists to avoid (infra#2887).">watch them (not yet)</button>
+      <button id="pwcam" disabled title="Not implemented yet: a follow-cam needs a dedicated GM account that is not one of the family, because using one of theirs would turn that character into a selfbot - the exact thing a follow-cam exists to avoid.">watch them (not yet)</button>
       <button id="pwshot" title="Log a client in as them just long enough for one picture, then let it go. Costs a login, so it is not free - but it needs nobody to sit and watch.">look at them</button>
       <button id="pwstop" style="display:none">stop watching</button>
     </div>
@@ -4600,7 +4647,9 @@ async function poll() {
     dots = p.dots; freshest = p.freshest_seconds;
     const mortals = dots.filter(d => !d.bot).length;
     document.getElementById("census").textContent =
-      `${dots.length} souls (${mortals} mortal) - ${p.unplaced} unplaced - ${new Date().toLocaleTimeString()}`;
+      // The Eye's words for the same count (#567): "in world", and a human
+      // player is "human", not "mortal".
+      `${dots.length} in world, ${mortals} human, ${p.unplaced} off the map - ${new Date().toLocaleTimeString()}`;
     banner(dots.length === 0 && freshest === null ? "empty" : freshest);
   } catch (e) {
     banner("unreachable");
@@ -5406,6 +5455,30 @@ function el(tag, cls, text) {
   if (cls) n.className = cls;
   if (text !== undefined) n.textContent = text;
   return n;
+}
+
+// A view's "how this is worked out" note (#567). The paragraph sits in a
+// collapsed details.basis; an empty note hides the fold, and `open` shows it
+// unfolded when the text is a warning (an empty or failed read) rather than a
+// method, because a warning folded away is a warning nobody reads.
+// A class colour as a card can show it (#563). The game's class colours are
+// picked for a dark frame, and Rogue yellow or Priest white is unreadable on a
+// white card, so on the light theme the colour is mixed toward black by
+// --class-mix (100% on dark, which keeps it whole). A var() inside the inline
+// value resolves at paint time, so a theme switch needs no re-render. The
+// game-client frames (vcGrid, vcPerson) stay dark in both themes and keep the
+// raw colour, and so do the Armory, Standing and Wealth cards, which sit in
+// the dark section in both themes.
+function classInk(hex) {
+  return hex ? "color-mix(in oklab, " + hex + " var(--class-mix), #000)" : "";
+}
+
+function setBasis(node, text, open) {
+  node.textContent = text || "";
+  const fold = node.closest("details.basis");
+  if (!fold) return;
+  fold.hidden = !text;
+  fold.open = !!open;
 }
 
 function row(parent, k, v) {
@@ -7108,7 +7181,7 @@ function renderAuraPanel(container, familyFilter) {
         chips.append(auraNode("span", "aura-empty",
           allPositive.length + " positive aura(s) not identified as family buffs; see details."));
       } else {
-        chips.append(auraNode("span", "aura-empty", "No positive auras observed."));
+        chips.append(auraNode("span", "aura-empty", "No buffs seen."));
       }
       memberNode.append(chips);
 
@@ -7116,7 +7189,7 @@ function renderAuraPanel(container, familyFilter) {
       const key = familyName + "/" + String(member.name || "");
       details.dataset.auraKey = key;
       details.open = wasOpen.has(key);
-      details.append(auraNode("summary", "", "All positive auras (" + allPositive.length + ")"));
+      details.append(auraNode("summary", "", "All buffs (" + allPositive.length + ")"));
       const list = auraNode("div", "aura-list");
       if (allPositive.length) {
         allPositive.forEach(aura => {
@@ -7130,7 +7203,7 @@ function renderAuraPanel(container, familyFilter) {
           list.append(row);
         });
       } else {
-        list.append(auraNode("span", "aura-empty", "No positive auras in this sample."));
+        list.append(auraNode("span", "aura-empty", "No buffs in this reading."));
       }
       details.append(list);
       memberNode.append(details);
@@ -7970,7 +8043,7 @@ function lnCard(m, classes) {
   name.textContent = m.name || "";
   // The colour comes from the server, exactly as the Family cards and the
   // watch wall take theirs - there is no class palette in this page.
-  name.style.color = m.class_colour || "";
+  name.style.color = classInk(m.class_colour);
   const lvl = document.createElement("span");
   lvl.className = "ln-lvl";
   lvl.textContent = m.level == null ? "" : m.level;
@@ -8264,9 +8337,9 @@ function lgRender() {
     const tr = el("tr", "lg-row" + (m.flags.length ? " flag" : ""));
     tr.tabIndex = 0;
     const name = el("td", "lg-name", m.name);
-    name.style.color = m.class_colour || "";
+    name.style.color = classInk(m.class_colour);
     const cls = el("td", "", m["class"]);
-    cls.style.color = m.class_colour || "";
+    cls.style.color = classInk(m.class_colour);
     tr.append(name, cls,
       el("td", "n", String(m.level)),
       el("td", "lg-dim", m.role || "-"),
@@ -8442,7 +8515,7 @@ function rgRender(p) {
   for (const raid of p.others) rgotherlist.appendChild(rgOther(raid));
   // The basis describes how a list was built, so it must not stand over one
   // that was not built at all.
-  rgbasis.textContent = p.empty_note || p.basis;
+  setBasis(rgbasis, p.empty_note || p.basis, !!p.empty_note);
 }
 
 // ONE GUILD'S READINESS CARD. The headline, every tile, every blocker and
@@ -8617,7 +8690,7 @@ function rrRender(p) {
   rrgoal.textContent = p.goal_line;
   rrlist.replaceChildren();
   for (const g of p.guilds) rrlist.appendChild(rrCard(g));
-  rrbasis.textContent = p.basis;
+  setBasis(rrbasis, p.basis);
   rrPick(p.guilds);
 }
 
@@ -8627,7 +8700,7 @@ function rrRender(p) {
 // flight at once and nothing orders their replies. A flag alone would turn
 // that into a worse failure: a world server that accepts the connection and
 // never answers leaves the promise pending for ever, the catch never runs, the
-// flag is never cleared, and the tab sits on "reaching the world..." with no
+// flag is never cleared, and the tab sits on "loading..." with no
 // later poll able to replace it. The timeout is what gives the flag something
 // to be released by.
 let rgPulling = false;
@@ -9021,7 +9094,7 @@ function gcrRender(p) {
   gcrorder.textContent = p.order;
   // The basis describes how a list was built, so it must not stand over one
   // that was not built at all.
-  gcrbasis.textContent = p.empty_note || p.basis;
+  setBasis(gcrbasis, p.empty_note || p.basis, !!p.empty_note);
   gcrlist.replaceChildren();
   for (const t of p.trades) gcrlist.appendChild(gcrTrade(t));
   gclRender(p.goal);
@@ -9116,7 +9189,7 @@ function gclRender(g) {
   gclorder.textContent = g.order;
   gcllimit.textContent = g.limit_line;
   gclgrant.textContent = g.grant_line;
-  gclbasis.textContent = g.basis;
+  setBasis(gclbasis, g.basis);
   gclbars.replaceChildren();
   for (const row of g.professions) gclbars.appendChild(gclBar(row));
   gclspecs.replaceChildren();
@@ -9357,7 +9430,7 @@ function dgnRender(p) {
   dgnorder.textContent = p.order;
   // The basis describes how a path was built, so it must not stand under a
   // page where none was.
-  dgnbasis.textContent = p.empty_note || p.basis;
+  setBasis(dgnbasis, p.empty_note || p.basis, !!p.empty_note);
   dgnfamilies.replaceChildren();
   for (const f of p.families) dgnfamilies.appendChild(dgnFamily(f));
   if (dungeonTargetMap !== null) {
@@ -9381,7 +9454,7 @@ function dgnRender(p) {
 // A flag alone would turn that into a worse failure. It is the heaviest read
 // on the site, so a world server that accepts the connection and never answers
 // leaves the promise pending for ever, the catch never runs, and the flag is
-// never cleared - the tab would sit on "reaching the world..." and no later
+// never cleared - the tab would sit on "loading..." and no later
 // poll could ever replace it. The timeout is what gives the flag something to
 // be released by, which is why the two arrived together. Twenty seconds is
 // a third of the cadence, so a read that hits it is reported as stale well
@@ -10310,9 +10383,13 @@ function renderAgenda(p) {
   if (p.changed_seconds !== null && p.changed_seconds !== undefined) {
     agWhen.appendChild(agStamp("goal set", p.changed_seconds, false));
   }
-  if (p.orders && p.orders.channel_id) {
+  // WHO SET IT, as agenda.SOURCE_LABELS words it, and only when the headline
+  // is about that order (#567). This used to credit the order to Discord
+  // whenever the goal row carried a channel, and the council stamps its own
+  // decisions with one, so the council's choice read as an operator's order.
+  if (p.source) {
     const o = document.createElement("span");
-    o.textContent = "from a Discord order";
+    o.textContent = p.source;
     agWhen.appendChild(o);
   }
   agEl.classList.remove(...AG_STATES);
@@ -10745,7 +10822,7 @@ function chrCouncilLine(a) {
 
 function renderChrCouncil(c) {
   if (!c) return;
-  chrcouncilbasis.textContent = c.basis || "";
+  setBasis(chrcouncilbasis, c.basis || "");
   chrcouncil.replaceChildren();
   for (const a of c.awards || []) chrcouncil.appendChild(chrCouncilLine(a));
   if (!(c.awards || []).length) {
@@ -10758,7 +10835,7 @@ async function pollChrLoot() {
     const r = await fetch(u("/api/loot"));
     if (!r.ok) throw new Error(r.status);
     const p = await r.json();
-    chrlootbasis.textContent = p.basis || "";
+    setBasis(chrlootbasis, p.basis || "");
     chrloot.replaceChildren();
     for (const s of p.stories || []) chrloot.appendChild(chrLootLine(s));
     if (!(p.stories || []).length) {
@@ -10769,7 +10846,7 @@ async function pollChrLoot() {
     // Keep the lines already drawn and say they may be old, as the head
     // above does for the story. A quiet fortnight and a failed read must
     // not look the same.
-    chrlootbasis.textContent = "the loot record could not be read - this may be stale";
+    setBasis(chrlootbasis, "the loot record could not be read - this may be stale", true);
   }
 }
 

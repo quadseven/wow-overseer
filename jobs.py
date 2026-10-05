@@ -478,6 +478,92 @@ def parse_order(text: str) -> str | None:
     return None
 
 
+# What each wired mode does, said for a person reading the site (#567).
+# DRIVES above names the code that does it, for the log and for maintainers;
+# these say the same facts in a player's words, with no file, function, column
+# or issue number in them. tests/test_plain_copy.py requires one entry per
+# IMPLEMENTED mode and checks every sentence for code references.
+SAYS = {
+    "quest": "The family follows its quest log.",
+    "dungeon": (
+        "The family runs a dungeon: the leader resets it, gathers everyone at "
+        "the door, clears it and comes back out, then goes again until the "
+        "planned number of runs is done."
+    ),
+    "train": (
+        "Whoever has a profession rank to learn walks to the nearest trainer "
+        "and buys it, and the family goes along."
+    ),
+    "craft": (
+        "Each crafter makes the recipe picked for their skill, and missing "
+        "vendor reagents are bought on the way."
+    ),
+    "raid prep": (
+        "The family gets ready to raid: collecting mail, working professions "
+        "toward raid recipes and moving spare gold to the guild bank."
+    ),
+    "fish": (
+        "The family fishes for food and reagents, learning Fishing from a "
+        "trainer first if they need to."
+    ),
+    "town run": (
+        "The family stays together in town to sell, repair, restock and check "
+        "the mail. Gathering, flights and the leveling route wait until they "
+        "are done."
+    ),
+}
+
+# The headline the home banner shows for a family on a wired mode that is not
+# questing or a dungeon (agenda._another_job). A mode with no entry falls back
+# to its plain name.
+DOING = {
+    "train": "The family is off to a trainer.",
+    "craft": "The family is crafting.",
+    "raid prep": "The family is getting ready to raid.",
+    "fish": "The family is fishing.",
+    "town run": (
+        "The family is in town: repairing, restocking and checking the mail "
+        "before the next run."
+    ),
+}
+
+NOT_BUILT = (
+    "This one is not built yet: setting it only stops questing, with nothing "
+    "in its place."
+)
+
+
+def plain_what(mode: str) -> str:
+    """MODES' description of `mode` without its issue references."""
+    what = MODES.get(mode, "")
+    return re.sub(r"\s*\((?:infra#|mod-|The operator)[^)]*\)", "", what).strip()
+
+
+def say(mode: str, place: str | None = None) -> str:
+    """What setting `mode` does, in a player's words, for the site (#567).
+
+    `describe` is the maintainer's sentence and names the code; this is the
+    reader's. `place` is how the caller says a dungeon or raid door ("The
+    Deadmines"); without it the sentence says "a dungeon".
+    """
+    if is_raid_job(mode):
+        where = place or "the raid"
+        return (
+            "The raid forms, walks to %s and goes in, then holds at the "
+            "entrance. It does not clear the raid yet." % where
+        )
+    if is_dungeon_job(mode):
+        text = SAYS["dungeon"]
+        if place and place != "a dungeon":
+            text = text.replace("runs a dungeon", "runs " + place, 1)
+        return text
+    if mode in SAYS:
+        return SAYS[mode]
+    what = plain_what(mode)
+    lead = (what[:1].upper() + what[1:] + ". ") if what else ""
+    return lead + NOT_BUILT
+
+
 def describe(mode: str) -> str:
     """One sentence for what setting `mode` actually does right now."""
     if mode.startswith("dungeon:"):

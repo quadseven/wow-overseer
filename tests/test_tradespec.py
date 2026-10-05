@@ -155,7 +155,9 @@ class TheCatalogue(unittest.TestCase):
             if not spec.unreachable:
                 continue
             self.assertEqual(spec.grant, 0, spec.key)
-            self.assertIn("RewardSpell", spec.unreachable, spec.key)
+            # The evidence in words (#567): the quest rewards nothing.
+            self.assertIn("rewards nothing", spec.unreachable, spec.key)
+            self.assertNotIn("RewardSpell", spec.unreachable, spec.key)
 
     def test_a_reachable_row_names_a_grant_a_quest_and_an_npc(self):
         for spec in tradespec.SPECS:
@@ -709,7 +711,8 @@ class TheWholeView(unittest.TestCase):
             self.assertTrue(self.out[key], key)
 
     def test_the_limit_names_the_roster_and_the_number_it_leaves_out(self):
-        self.assertIn("overseer_roster", tradespec.STEERING_LIMIT)
+        self.assertIn("Only the family", tradespec.STEERING_LIMIT)
+        self.assertNotIn("overseer_roster", tradespec.STEERING_LIMIT)
         self.assertIn("RECRUITING TARGET", tradespec.STEERING_LIMIT)
 
     def test_the_basis_admits_which_half_of_the_count_is_not_observed(self):

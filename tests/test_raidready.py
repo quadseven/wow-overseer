@@ -452,7 +452,7 @@ class EachRaiderIsReported(unittest.TestCase):
         self.assertIn("1 of 1 attuned", att["line"])
         self.assertEqual(3, len(att["steps"]))
         self.assertIn("Lothos Riftwaker", att["steps"][0])
-        self.assertIn("blackrock depths", att["steps"][1])
+        self.assertIn("Blackrock Depths", att["steps"][1])
 
 
 class TheAttunementIsReadNotAssumed(unittest.TestCase):
@@ -485,7 +485,7 @@ class TheTopLine(unittest.TestCase):
     def test_it_counts_the_guilds_that_could_raid(self):
         self.assertEqual(
             raidready.build_readiness([{"ready": True}, {"ready": False}])["line"],
-            "1 of 2 guilds could form its first raid today",
+            "1 of 2 guilds could form their first raid today",
         )
         self.assertIn("no family", raidready.build_readiness([])["line"])
 

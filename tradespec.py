@@ -319,11 +319,12 @@ SPECS = (
         req_rank=250,
         req_level=50,
         unreachable=(
-            "quest 5307 Corruption exists at Seril Scourgebane and its "
-            "RewardSpell is 0, and no trainer_spell row, quest reward or item "
-            "in this world database teaches 17039 Master Swordsmith. The "
-            "eight crafts behind it cannot be reached by anybody on this "
-            "realm until a world-data fix lands"
+            # quest 5307's RewardSpell is 0 and no trainer_spell row, quest
+            # reward or item teaches spell 17039.
+            "the quest Corruption exists at Seril Scourgebane but rewards "
+            "nothing, and nothing in this world teaches Master Swordsmith. "
+            "The eight crafts behind it cannot be reached by anybody on this "
+            "realm until the world data is fixed"
         ),
     ),
     Spec(
@@ -341,10 +342,10 @@ SPECS = (
         req_rank=250,
         req_level=50,
         unreachable=(
-            "quest 5305 Sweet Serenity exists at Lilith the Lithe and its "
-            "RewardSpell is 0, and nothing in this world database teaches "
-            "17040 Master Hammersmith. Its eight crafts are out of everyone's "
-            "reach"
+            # quest 5305's RewardSpell is 0; nothing teaches spell 17040.
+            "the quest Sweet Serenity exists at Lilith the Lithe but rewards "
+            "nothing, and nothing in this world teaches Master Hammersmith. "
+            "Its eight crafts are out of everyone's reach"
         ),
     ),
     Spec(
@@ -362,10 +363,10 @@ SPECS = (
         req_rank=250,
         req_level=50,
         unreachable=(
-            "quest 5306 Snakestone of the Shadow Huntress exists at Kilram "
-            "and its RewardSpell is 0, and nothing in this world database "
-            "teaches 17041 Master Axesmith. Its eight crafts are out of "
-            "everyone's reach"
+            # quest 5306's RewardSpell is 0; nothing teaches spell 17041.
+            "the quest Snakestone of the Shadow Huntress exists at Kilram but "
+            "rewards nothing, and nothing in this world teaches Master "
+            "Axesmith. Its eight crafts are out of everyone's reach"
         ),
     ),
     # ---- leatherworking (165) -----------------------------------------------
@@ -605,12 +606,12 @@ _LIVE_FAMILY_SLOTS = (
         why=(
             "the only one of the three leatherworking branches whose best work "
             "Bork can both WEAR and WANT, which is what decided it against the "
-            "branch with more recipes. Bork is a rogue, so he wears LEATHER "
-            "(item_template subclass 2). Dragonscale's eight crafts are every one "
-            "of them MAIL (subclass 3) - the Netherstrike and Ebon Netherscale "
+            "branch with more recipes. Bork is a rogue, so he wears LEATHER. "
+            "Dragonscale's eight crafts are every one "
+            "of them MAIL - the Netherstrike and Ebon Netherscale "
             "sets - so he could never equip a single thing he made. Tribal's five "
-            "are leather but the Windhawk set is Intellect and Spirit (stat types "
-            "5 and 6), which is a caster druid's and worth nothing to a rogue. "
+            "are leather but the Windhawk set is Intellect and Spirit, which is a "
+            "caster druid's and worth nothing to a rogue. "
             "Elemental's five are leather AND agility: the Primalstrike set is "
             "epic, item level 115 to 120, and Primalstrike Vest carries Agility "
             "38, Stamina 39 and hit rating 12, which is rogue itemization exactly. "
@@ -639,11 +640,11 @@ _LIVE_FAMILY_SLOTS = (
             "thing that is measurable today. Gnomish and Goblin unlock NINETEEN "
             "crafts each, and Grog is a paladin, so neither makes armour he wears "
             "- rules 1 and 2 above are silent and rule 3 is a draw. What is not a "
-            "draw is where the two trainers stand: Nixx Sprocketspring is on MAP 1 "
-            "in Gadgetzan, which is the continent all five of the family are "
-            "standing on, and Tinkmaster Overspark is on map 0 in Ironforge, which "
-            "ResolveTravelTarget refuses outright because there is no navmesh "
-            "across an ocean. One of the two is a walk and the other is not "
+            "draw is where the two trainers stand: Nixx Sprocketspring is in "
+            "Gadgetzan on Kalimdor, which is the continent all five of the family "
+            "are standing on, and Tinkmaster Overspark is in Ironforge on the "
+            "Eastern Kingdoms, which the overseer cannot walk them to because "
+            "there is no path across an ocean. One of the two is a walk and the other is not "
             "reachable at all, and they unlock the same number of recipes"
         ),
     ),
@@ -654,8 +655,8 @@ _LIVE_FAMILY_SLOTS = (
             "chosen last and worth the least, and that is stated rather than "
             "dressed up: no alchemy specialization gates a single craft on this "
             "realm, so this slot moves the 100% goal by exactly zero recipes. "
-            "Measured - nothing in trainer_spell carries ReqAbility1 28672, 28675 "
-            "or 28677 and no recipe item requires one. What the three do is add "
+            "Measured: no trainer and no recipe on this realm asks for any of the "
+            "three. What the three do is add "
             "output to a craft the alchemist could already make, so the choice is "
             "about what the family DRINKS rather than what it can learn. Ugga is "
             "the priest and the healer, and an elixir or a flask is the thing a "
@@ -726,7 +727,8 @@ _BACKUP_KEYS = (
 # success while doing nothing, which is the failure this repository has the
 # most scar tissue about.
 STEERING_LIMIT = (
-    "ONLY THE FIVE IN overseer_roster CAN BE TOLD TO DO ANYTHING. The other "
+    # The five are the overseer_roster rows; everyone else is a playerbot.
+    "Only the family can be told to do anything. The other "
     "guild members play their own AI: nothing in this system can send one to a "
     "trainer, make one take a specialization, or ask one to craft. So every "
     "backup slot below is a RECRUITING TARGET for a person to fill by hand and "
@@ -744,13 +746,12 @@ STEERING_LIMIT = (
 # quest-drive verbs cover an NPC quest hand-in is a question about C++ that
 # this module cannot answer and must not assume.
 GRANT_REFUSAL = (
-    "Taking a specialization is a QUEST TURN-IN at a named NPC, not a trainer "
-    "purchase, so mod-overseer's TrainOnArrival does not cover it: that verb "
-    "buys a skill through Trainer::TeachSpell. Whether the quest drive can be "
-    "aimed at one of these NPCs and made to hand in is a C++ question, and a "
-    "C++ change needs a worldserver promotion that restarts the realm. Until "
-    "somebody answers it, every specialization below is a goal this page "
-    "TRACKS and not one it can take."
+    "Taking a specialization is a quest turn-in at a named NPC, not a trainer "
+    "purchase, and the overseer can so far only buy skills from trainers. "
+    "Whether it can be sent to hand in one of these quests is not known yet, "
+    "and finding out needs a world server change that restarts the realm. "
+    "Until then, every specialization below is a goal this page tracks and "
+    "not one it can take."
 )
 
 
@@ -866,12 +867,11 @@ def spec_line(
     where = reach_line(spec, on_map, holder)
     if not gates:
         opening = (
-            "%s meets everything quest %d %s asks for, and %s is who "
-            "hands it over" % (holder, spec.quest, spec.quest_title, spec.npc_name)
+            "%s meets everything the quest %s asks for, and %s is who "
+            "hands it over" % (holder, spec.quest_title, spec.npc_name)
         )
         return opening + (". " + where if where else "")
-    return "quest %d %s asks for %s. %s is who hands it over%s" % (
-        spec.quest,
+    return "the quest %s asks for %s. %s is who hands it over%s" % (
         spec.quest_title,
         ", and ".join(gates),
         spec.npc_name,
@@ -890,12 +890,25 @@ def reach_line(spec: Spec, on_map: int, holder: str) -> str:
     """
     if not on_map or int(on_map) == int(spec.npc_map):
         return ""
+    # mod-overseer's ResolveTravelTarget refuses another map outright: no
+    # navmesh crosses an ocean.
     return (
-        "%s stands on map %d and %s is on map %d, which "
-        "ResolveTravelTarget refuses outright: there is no navmesh across "
-        "an ocean, so this is not a long walk, it is a refusal"
-        % (spec.npc_name, spec.npc_map, holder, int(on_map))
+        "%s stands on %s and %s is on %s, and the overseer cannot walk "
+        "anybody across an ocean, so this is not a long walk, it is a refusal"
+        % (spec.npc_name, _continent(spec.npc_map), holder, _continent(int(on_map)))
     )
+
+
+CONTINENTS = {
+    0: "the Eastern Kingdoms",
+    1: "Kalimdor",
+    530: "Outland",
+    571: "Northrend",
+}
+
+
+def _continent(map_id: int) -> str:
+    return CONTINENTS.get(int(map_id), "another continent")
 
 
 # ----------------------------------------------------------- the 100% figure --

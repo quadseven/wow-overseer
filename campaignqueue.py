@@ -211,6 +211,23 @@ def keyword_for(text: str) -> str | None:
     return _names().get(said) or raidrun.keyword_for(said)
 
 
+def job_words(job) -> str:
+    """A stored job as a person says it: "Shadowfang Keep runs" (#567).
+
+    Every key in jobs.MODES is already an English phrase ("gear hunt", "town
+    run") and is printed as it is. Only the dungeon and raid forms carry a
+    portal keyword ("dungeon:shadowfang"), which is the module's spelling and
+    not a reader's.
+    """
+    text = str(job or "").strip()
+    if jobs.is_raid_job(text):
+        return "the %s raid" % raidrun.place(text.split(":", 1)[1])
+    if jobs.is_dungeon_job(text):
+        keyword = text.split(":", 1)[1] if ":" in text else ""
+        return "%s runs" % council.keyword_place(keyword) if keyword else "dungeon runs"
+    return text
+
+
 def _place(keyword: str) -> str:
     """How a queue entry's door is said: a raid by name, a dungeon as council says."""
     if raidrun.is_raid(keyword):
