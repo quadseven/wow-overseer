@@ -643,6 +643,25 @@ class WhatAMemberNeeds(unittest.TestCase):
     def test_a_door_above_its_level_is_no_need(self):
         self.assertEqual(self.needs(mate("Auren", 15, ROGUE), self.drop()), [])
 
+    def test_a_dungeon_quest_in_the_log_is_a_need(self):
+        quests = gs.quests_by_name(
+            [
+                {
+                    "name": "Auren",
+                    "quest": 214,
+                    "title": "Red Silk Bandanas",
+                    "zone": 1581,
+                }
+            ]
+        )
+        found = gs.needs_for(
+            mate("Auren", 20, ROGUE), {}, DOORS, "Alliance", quests["Auren"]
+        )
+        self.assertEqual([(n.keyword, n.quest) for n in found], [("deadmines", 214)])
+        line = gs.ask_line("Auren", DEADMINES, ["tank", "healer"], found[0])
+        self.assertIn("Red Silk Bandanas", line)
+        self.assertEqual(gs.ask_reason(found[0]), "the quest Red Silk Bandanas")
+
     def test_a_pre_raid_pick_ranks_first(self):
         plain = gs.Need("A", "deadmines", "x", entry=1, gain=50.0)
         pick = gs.Need("A", "scholomance", "y", entry=2, gain=1.0, preraid=True)

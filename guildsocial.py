@@ -1,4 +1,4 @@
-"""The guild's social layer: members ask in guild chat, free guildmates answer (#568, #569).
+"""The guild social layer: members ask in guild chat, guildmates answer (#568, #569).
 
 WHY THIS EXISTS. Decided in #521: nothing in a guild is assigned like a unit.
 A member with a real need says so in guild chat ("Anyone up for The Deadmines?
@@ -55,6 +55,7 @@ and writes the finder row exactly as the old coordinator did.
 
 from __future__ import annotations
 
+import collections
 import math
 import os
 import zlib
@@ -198,7 +199,8 @@ _ITEM_COLUMNS = (
     + ", ".join("it.stat_type%d, it.stat_value%d" % (n, n) for n in range(1, 11))
 )
 WORN_SQL = (
-    "SELECT c.name, ci.slot, ii.itemEntry AS entry, " + _ITEM_COLUMNS + " "
+    # S608: _ITEM_COLUMNS is a constant column list; every value is bound.
+    "SELECT c.name, ci.slot, ii.itemEntry AS entry, " + _ITEM_COLUMNS + " "  # noqa: S608
     "FROM characters c JOIN character_inventory ci ON ci.guid = c.guid "
     "AND ci.bag = 0 AND ci.slot < 19 JOIN item_instance ii ON ii.guid = ci.item "
     "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -227,7 +229,8 @@ ENCOUNTERS_SQL = (
     "WHERE ie.creditType = 0 AND cr.map IN ({holes})"
 )
 LOOT_SQL = (
-    "SELECT clt.Item, ct.entry AS creature, " + _ITEM_COLUMNS + " "
+    # S608: _ITEM_COLUMNS is a constant column list; every value is bound.
+    "SELECT clt.Item, ct.entry AS creature, " + _ITEM_COLUMNS + " "  # noqa: S608
     "FROM acore_world.creature_loot_template clt "
     "JOIN acore_world.creature_template ct ON ct.lootid = clt.Entry "
     "JOIN acore_world.item_template it ON it.entry = clt.Item "
@@ -378,6 +381,16 @@ def gear_by_name(member_rows: list, worn_rows: list, skill_rows: list) -> dict:
     return {
         m["name"]: m for m in recap.family_members(chars, worn_rows, names, skill_rows)
     }
+
+
+def quests_by_name(rows: list) -> dict:
+    """name -> [(quest id, title, zone)] from QUESTS_SQL rows."""
+    out: dict = {}
+    for row in rows:
+        out.setdefault(str(row["name"]), []).append(
+            (int(row["quest"]), str(row.get("title") or ""), int(row.get("zone") or 0))
+        )
+    return out
 
 
 def mate_from_row(row: dict, gear: dict | None = None) -> Mate | None:
@@ -761,7 +774,7 @@ def expired_line(asker: str, door) -> str:
     return _fit(_pick(_EXPIRED, asker, door.keyword).format(place=door.place), 255)
 
 
-# --- one pass ----------------------------------------------------------------------------
+# --- one pass ---------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -840,6 +853,48 @@ def _minutes_since(when, now) -> float:
     return (now - when).total_seconds() / 60.0
 
 
+def _yeses(answers: list, free: dict) -> list:
+    """The yeses from members free now, oldest first, with only the first
+    MAX_HELPERS helpers."""
+    yes = sorted(
+        (a for a in answers if a.state == YES and a.member in free), key=lambda a: a.id
+    )
+    helpers = {a.id for a in yes if a.stance == HELPS}
+    keep = set(sorted(helpers)[:MAX_HELPERS])
+    return [a for a in yes if a.stance != HELPS or a.id in keep]
+
+
+def _seats(asker: guildrun.Member, yes: list, free: dict) -> tuple:
+    """({tank, healer} -> (member, answer or None), [damage (member, answer)]):
+    the asker in the seat its tree plays, then each yes in the seat it said."""
+    seats = {TANK: None, HEALER: None}
+    damage = []
+    mine = role_of(asker)
+    if mine in seats:
+        seats[mine] = (asker, None)
+    else:
+        damage.append((asker, None))
+    for answer in yes:
+        member = free[answer.member]
+        open_seat = answer.role in seats and seats[answer.role] is None
+        if open_seat and can_take(member, answer.role):
+            seats[answer.role] = (member, answer)
+        elif answer.role == DPS and len(damage) < 3:
+            damage.append((member, answer))
+    return seats, damage
+
+
+def _chosen(seats: dict, damage: list) -> list | None:
+    """[tank, healer, damage x3] as (member, answer) pairs, or None short."""
+    if seats[TANK] is None or seats[HEALER] is None or len(damage) < 3:
+        return None
+    return [seats[TANK], seats[HEALER]] + damage[:3]
+
+
+def _helping(answer) -> bool:
+    return answer is not None and answer.stance == HELPS
+
+
 def seat(ask: Ask, answers: list, free: dict, door, faction: str):
     """(Composition, seated answers, declined answers, helpers) from the
     asker and its yeses only, or None when they do not seat a group.
@@ -850,43 +905,280 @@ def seat(ask: Ask, answers: list, free: dict, door, faction: str):
     asker = free.get(ask.asker)
     if asker is None:
         return None
-    yes = [a for a in answers if a.state == YES and a.member in free]
-    yes.sort(key=lambda a: a.id)
-    helpers = [a for a in yes if a.stance == HELPS][:MAX_HELPERS]
-    helper_ids = {a.id for a in helpers}
-    yes = [a for a in yes if a.stance != HELPS or a.id in helper_ids]
-    mine = role_of(asker)
-    seats = {TANK: None, HEALER: None}
-    damage = []
-    if mine in seats:
-        seats[mine] = (asker, None)
-    else:
-        damage.append((asker, None))
-    for answer in yes:
-        member = free[answer.member]
-        if (
-            answer.role in seats
-            and seats[answer.role] is None
-            and can_take(member, answer.role)
-        ):
-            seats[answer.role] = (member, answer)
-        elif answer.role == DPS and len(damage) < 3:
-            damage.append((member, answer))
-    if seats[TANK] is None or seats[HEALER] is None or len(damage) < 3:
+    chosen = _chosen(*_seats(asker, _yeses(answers, free), free))
+    if chosen is None:
         return None
-    chosen = [seats[TANK], seats[HEALER]] + damage[:3]
-    used = {a.id for _m, a in chosen if a is not None}
-    helper_names = tuple(
-        m.name for m, a in chosen if a is not None and a.stance == HELPS
-    )
-    beneficiaries = [m.level for m, a in chosen if a is None or a.stance != HELPS]
+    beneficiaries = [m.level for m, a in chosen if not _helping(a)]
     if not guildrun.fitting_doors(beneficiaries, [door], faction):
         return None
+    used = {a.id for _m, a in chosen if a is not None}
+    helper_names = tuple(m.name for m, a in chosen if _helping(a))
     comp = guildrun.Composition(
-        seats[TANK][0], seats[HEALER][0], tuple(m for m, _a in damage[:3])
+        chosen[0][0], chosen[1][0], tuple(m for m, _a in chosen[2:])
     )
     declined = tuple(a.id for a in answers if a.state == YES and a.id not in used)
     return comp, tuple(sorted(used)), declined, helper_names
+
+
+@dataclass
+class _Board:
+    """What every phase of one pass reads: who is free, the doors, the
+    answers by ask, each guild's side, and the clock."""
+
+    free_mates: dict
+    held: dict
+    doors: dict
+    by_ask: dict
+    factions: dict
+    needs: dict
+    entrances: dict
+    now: object
+    gone: set = field(default_factory=set)
+
+    @property
+    def free(self) -> dict:
+        return {name: m.member for name, m in self.free_mates.items()}
+
+    def passing(self, name: str) -> bool:
+        """Held for a moment only (combat): waited out, not closed over."""
+        return self.held.get(name, "offline") in PASSING
+
+    def current(self, ask: Ask) -> list:
+        return [a for a in self.by_ask.get(ask.id, []) if a.id not in self.gone]
+
+
+def _board(mates, held, answers, needs, all_doors, entrances, now) -> _Board:
+    by_ask: dict = {}
+    for answer in answers:
+        by_ask.setdefault(answer.ask_id, []).append(answer)
+    factions = {
+        guild: guildrun.faction_of([m.member for m in mates if m.member.guild == guild])
+        for guild in {m.member.guild for m in mates}
+    }
+    return _Board(
+        free_mates={m.name: m for m in mates if m.name not in held},
+        held=dict(held),
+        doors={d.keyword: d for d in all_doors},
+        by_ask=by_ask,
+        factions=factions,
+        needs=dict(needs),
+        entrances=entrances,
+        now=now,
+    )
+
+
+def _ending(board: _Board, ask: Ask) -> tuple | None:
+    """("expire", line) or ("cancel", "") for an ask that ends now, or None."""
+    door = board.doors.get(ask.target)
+    if ask.state == OPEN and _past(ask.expires_at, board.now):
+        said = door is not None and ask.asker in board.free_mates
+        return "expire", expired_line(ask.asker, door) if said else ""
+    late = _minutes_since(ask.expires_at, board.now) > FILLED_GRACE_MINUTES
+    if ask.state == FILLED and late:
+        return "expire", ""
+    asker_gone = ask.asker not in board.free_mates and not board.passing(ask.asker)
+    if door is None or asker_gone:
+        return "cancel", ""
+    return None
+
+
+def _close(board: _Board, live: list) -> tuple:
+    """(expire, cancel, withdraw, still): the asks that end now, the yeses
+    they or their members' leaving take back, and the asks still in play."""
+    expire, cancel, withdraw, still = [], [], [], []
+    for ask in live:
+        ending = _ending(board, ask)
+        yeses = [a for a in board.by_ask.get(ask.id, []) if a.state == YES]
+        if ending is None:
+            still.append(ask)
+            withdraw += [
+                a.id
+                for a in yeses
+                if a.member not in board.free_mates and not board.passing(a.member)
+            ]
+            continue
+        how, line = ending
+        if how == "expire":
+            expire.append((ask.id, ask.asker, line))
+        else:
+            cancel.append(ask.id)
+        withdraw += [a.id for a in yeses]
+    return expire, cancel, withdraw, still
+
+
+def _form(board: _Board, still: list, can_form: bool) -> tuple:
+    """(Formation or None, filled ask ids): the first ask whose yeses seat a
+    group forms when the realm lets it; any other full ask waits as filled."""
+    form, filled = None, []
+    free = board.free
+    for ask in still:
+        door = board.doors[ask.target]
+        seated = seat(
+            ask, board.current(ask), free, door, board.factions.get(ask.guild, "")
+        )
+        if seated is None:
+            continue
+        if not can_form or form is not None:
+            if ask.state == OPEN:
+                filled.append(ask.id)
+            continue
+        comp, used, declined, helpers = seated
+        form = Formation(
+            ask=ask,
+            door=door,
+            composition=comp,
+            seated=used,
+            declined=declined,
+            helpers=helpers,
+            said=formed_line(ask.asker, comp.tank.name, door),
+        )
+    return form, filled
+
+
+def _open_seats(ask: Ask, current: list) -> list:
+    open_seats = list(ask.roles_needed)
+    for answer in current:
+        if answer.state == YES and answer.role in open_seats:
+            open_seats.remove(answer.role)
+    return open_seats
+
+
+def _candidates(board: _Board, ask: Ask, open_seats: list, spoken: set) -> list:
+    """Who would say yes to this ask, scarce seats first, then by worth."""
+    door = board.doors[ask.target]
+    faction = board.factions.get(ask.guild, "")
+    before = {a.member for a in board.current(ask)}
+    asker_level = board.free_mates[ask.asker].member.level
+    options = []
+    for name, mate in board.free_mates.items():
+        if mate.member.guild != ask.guild or name in spoken or name in before:
+            continue
+        stance, value, need = stance_of(
+            mate, door, asker_level, faction, board.needs.get(name, [])
+        )
+        net = worth(mate, door, value, board.entrances) if stance else 0.0
+        if net <= 0:
+            continue
+        # The scarce seats first: a tank or healer for an open seat of its
+        # own answers before another damage dealer.
+        scarce = 0 if _seat_for(mate.member, open_seats) in (TANK, HEALER) else 1
+        options.append((scarce, -net, name, mate, stance, need))
+    options.sort(key=lambda o: o[:3])
+    return options
+
+
+def _answers_to(board: _Board, ask: Ask, spoken: set) -> list:
+    """Up to ANSWERS_PER_PASS new yeses to one ask; each answerer joins
+    `spoken`."""
+    door = board.doors[ask.target]
+    current = board.current(ask)
+    open_seats = _open_seats(ask, current)
+    helpers = sum(1 for a in current if a.state == YES and a.stance == HELPS)
+    out = []
+    for _scarce, _neg, name, mate, stance, need in _candidates(
+        board, ask, open_seats, spoken
+    ):
+        if len(out) >= ANSWERS_PER_PASS:
+            break
+        role = _seat_for(mate.member, open_seats)
+        if not role or (stance == HELPS and helpers >= MAX_HELPERS):
+            continue
+        open_seats.remove(role)
+        helpers += 1 if stance == HELPS else 0
+        out.append(
+            Reply(
+                ask.id, name, role, stance, answer_line(name, role, stance, door, need)
+            )
+        )
+        spoken.add(name)
+    return out
+
+
+def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
+    """(rank, name, mate, need, door) for this member's best ask, or None."""
+    faction = board.factions.get(guild, "")
+    for need in board.needs.get(name, []):
+        door = board.doors.get(need.keyword)
+        if door is None or (guild, door.keyword) in asked:
+            continue
+        if guildrun.fitting_doors([mate.member.level], [door], faction):
+            return (need.rank, name, mate, need, door)
+    return None
+
+
+def _post(guild: str, name: str, mate: Mate, need: Need, door) -> Post:
+    roles = list(SEATS)
+    roles.remove(role_of(mate.member))
+    return Post(
+        guild=guild,
+        asker=name,
+        kind=KIND_DUNGEON,
+        target=door.keyword,
+        target_label=door.place[:96],
+        roles_needed=roles_text(roles),
+        reason=ask_reason(need),
+        said=ask_line(name, door, roles, need),
+    )
+
+
+def _recent_askers(asks: list, now) -> set:
+    """Members whose last ask came to nothing within ASK_COOLDOWN_MINUTES."""
+    return {
+        a.asker
+        for a in asks
+        if a.state not in LIVE_ASKS
+        and _minutes_since(a.created_at, now) < ASK_COOLDOWN_MINUTES
+    }
+
+
+def _best_askers(board: _Board, guild: str, barred: set, asked: set) -> list:
+    """This guild's members with a need to ask for, strongest first."""
+    choices = []
+    for name, mate in board.free_mates.items():
+        if mate.member.guild != guild or name in barred:
+            continue
+        choice = _asker_choice(board, name, mate, guild, asked)
+        if choice:
+            choices.append(choice)
+    return sorted(choices, key=lambda c: (c[0], c[1]))
+
+
+def _new_asks(board: _Board, asks: list, still: list, spoken: set, room: int) -> list:
+    """The free member with the strongest need asks, per guild, while the
+    realm has room for another group and its guild has room for another ask."""
+    barred = spoken | _recent_askers(asks, board.now)
+    asked = {(a.guild, a.target) for a in still}
+    open_in = collections.Counter(a.guild for a in still)
+    # Every live ask may become a group, so they count against the room.
+    spare = max(0, int(room) - len(still))
+    posts = []
+    for guild in sorted({m.member.guild for m in board.free_mates.values()}):
+        if spare <= 0:
+            break
+        if open_in[guild] >= MAX_OPEN_ASKS_PER_GUILD:
+            continue
+        for _rank, name, mate, need, door in _best_askers(board, guild, barred, asked)[
+            :NEW_ASKS_PER_PASS
+        ]:
+            posts.append(_post(guild, name, mate, need, door))
+            spare -= 1
+    return posts
+
+
+def _spoken(board: _Board, still: list) -> set:
+    """Spoken for: an asker with a live ask, a member with a live yes."""
+    return {a.asker for a in still} | {
+        ans.member for a in still for ans in board.current(a) if ans.state == YES
+    }
+
+
+def _replies(board: _Board, still: list, complete: set, spoken: set) -> list:
+    """New yeses to every ask still short, oldest ask first."""
+    replies = []
+    for ask in sorted(still, key=lambda a: a.id):
+        if ask.id not in complete and ask.asker in board.free_mates:
+            replies += _answers_to(board, ask, spoken)
+    return replies
 
 
 def plan_pass(
@@ -910,209 +1202,30 @@ def plan_pass(
     asks      Ask rows: the live ones and every one made within the cooldown
     answers   Answer rows for those asks
     needs     name -> [Need], best first (needs_for)
-    room      groups the realm may still start (cap less runs out and filled
-              asks); no new ask is posted without room
+    room      groups the realm may still start (the cap less the runs out);
+              live asks count against it, and no new ask is posted without it
     can_form  whether the realm's spacing lets a group start this pass
     campaigns family campaign rows (CAMPAIGNS_SQL)
+
+    In order: asks that end now close, a full ask forms, the asks still short
+    draw yeses, and members with a need ask.
     """
-    free_mates = {m.name: m for m in mates if m.name not in held}
-    free = {name: m.member for name, m in free_mates.items()}
-    doors = {d.keyword: d for d in all_doors}
-    by_ask: dict = {}
-    for answer in answers:
-        by_ask.setdefault(answer.ask_id, []).append(answer)
-    factions = {
-        guild: guildrun.faction_of([m.member for m in mates if m.member.guild == guild])
-        for guild in {m.member.guild for m in mates}
-    }
+    board = _board(mates, held, answers, needs, all_doors, entrances, now)
     live = [a for a in asks if a.state in LIVE_ASKS and a.kind == KIND_DUNGEON]
-    expire, cancel, withdraw, filled, notes = [], [], [], [], []
-    still: list = []
-    for ask in live:
-        door = doors.get(ask.target)
-        if ask.state == OPEN and _past(ask.expires_at, now):
-            line = expired_line(ask.asker, door) if door and ask.asker in free else ""
-            expire.append((ask.id, ask.asker, line))
-            continue
-        if ask.state == FILLED and _minutes_since(ask.expires_at, now) > (
-            FILLED_GRACE_MINUTES
-        ):
-            expire.append((ask.id, ask.asker, ""))
-            continue
-        if door is None or (
-            ask.asker not in free and held.get(ask.asker, "offline") not in PASSING
-        ):
-            cancel.append(ask.id)
-            continue
-        still.append(ask)
-    closed = {e[0] for e in expire} | set(cancel)
-    for ask in live:
-        if ask.id in closed:
-            withdraw += [a.id for a in by_ask.get(ask.id, []) if a.state == YES]
-    for ask in still:
-        withdraw += [
-            a.id
-            for a in by_ask.get(ask.id, [])
-            if a.state == YES
-            and a.member not in free
-            and held.get(a.member, "offline") not in PASSING
-        ]
-    gone = set(withdraw)
-
-    # Who is spoken for: an asker with a live ask, a member with a live yes.
-    asking = {a.asker for a in still}
-    counted = {
-        ans.member
-        for a in still
-        for ans in by_ask.get(a.id, [])
-        if ans.state == YES and ans.id not in gone
-    }
-
-    # Forming first: an ask whose yeses seat a group.
-    form = None
-    for ask in still:
-        door = doors[ask.target]
-        current = [a for a in by_ask.get(ask.id, []) if a.id not in gone]
-        seated = seat(ask, current, free, door, factions.get(ask.guild, ""))
-        if seated is None:
-            continue
-        comp, used, declined, helpers = seated
-        if not can_form or form is not None:
-            if ask.state == OPEN:
-                filled.append(ask.id)
-            continue
-        form = Formation(
-            ask=ask,
-            door=door,
-            composition=comp,
-            seated=used,
-            declined=declined,
-            helpers=helpers,
-            said=formed_line(ask.asker, comp.tank.name, door),
-        )
+    expire, cancel, withdraw, still = _close(board, live)
+    board.gone = set(withdraw)
+    form, filled = _form(board, still, can_form)
     complete = set(filled) | ({form.ask.id} if form else set())
-
-    # Answers: free members who would gain, to the asks still short.
-    replies = []
-    answered_now: set = set()
-    for ask in sorted(still, key=lambda a: a.id):
-        if ask.id in complete or ask.asker not in free:
-            continue
-        door = doors[ask.target]
-        faction = factions.get(ask.guild, "")
-        current = [a for a in by_ask.get(ask.id, []) if a.id not in gone]
-        taken = [a.role for a in current if a.state == YES]
-        open_seats = list(ask.roles_needed)
-        for role in taken:
-            if role in open_seats:
-                open_seats.remove(role)
-        helpers = sum(1 for a in current if a.state == YES and a.stance == HELPS)
-        before = {a.member for a in current}
-        asker_level = free[ask.asker].level
-        options = []
-        for name, mate in free_mates.items():
-            if mate.member.guild != ask.guild or name == ask.asker:
-                continue
-            if name in asking or name in counted or name in answered_now:
-                continue
-            if name in before:
-                continue
-            stance, value, need = stance_of(
-                mate, door, asker_level, faction, needs.get(name, [])
-            )
-            if not stance:
-                continue
-            net = worth(mate, door, value, entrances)
-            if net <= 0:
-                continue
-            # The scarce seats first: a tank or healer for an open seat of
-            # its own answers before another damage dealer.
-            scarce = 0 if _seat_for(mate.member, open_seats) in (TANK, HEALER) else 1
-            options.append((scarce, -net, name, mate, stance, need))
-        options.sort(key=lambda o: o[:3])
-        added = 0
-        for _scarce, _neg, name, mate, stance, need in options:
-            if added >= ANSWERS_PER_PASS or not open_seats:
-                break
-            if stance == HELPS and helpers >= MAX_HELPERS:
-                continue
-            role = _seat_for(mate.member, open_seats)
-            if not role:
-                continue
-            open_seats.remove(role)
-            if stance == HELPS:
-                helpers += 1
-            replies.append(
-                Reply(
-                    ask_id=ask.id,
-                    member=name,
-                    role=role,
-                    stance=stance,
-                    said=answer_line(name, role, stance, door, need),
-                )
-            )
-            answered_now.add(name)
-            added += 1
-
-    # Asks: the free member with the strongest need, per guild, while the
-    # realm has room for another group.
-    posts = []
-    open_by_guild: dict = {}
-    for ask in still:
-        open_by_guild[ask.guild] = open_by_guild.get(ask.guild, 0) + 1
-    recent = {
-        a.asker
-        for a in asks
-        if a.state not in LIVE_ASKS
-        and _minutes_since(a.created_at, now) < ASK_COOLDOWN_MINUTES
-    }
-    doors_asked = {(a.guild, a.target) for a in still}
-    # Every live ask may become a group, so they count against the room.
-    spare = max(0, int(room) - len(still))
-    for guild in sorted({m.member.guild for m in free_mates.values()}):
-        if spare <= 0:
-            break
-        if open_by_guild.get(guild, 0) >= MAX_OPEN_ASKS_PER_GUILD:
-            continue
-        faction = factions.get(guild, "")
-        choices = []
-        for name, mate in free_mates.items():
-            if mate.member.guild != guild:
-                continue
-            if name in asking or name in counted or name in answered_now:
-                continue
-            if name in recent:
-                continue
-            for need in needs.get(name, []):
-                door = doors.get(need.keyword)
-                if door is None or (guild, door.keyword) in doors_asked:
-                    continue
-                if not guildrun.fitting_doors([mate.member.level], [door], faction):
-                    continue
-                choices.append((need.rank, name, mate, need, door))
-                break
-        choices.sort(key=lambda c: (c[0], c[1]))
-        for _rank, name, mate, need, door in choices[:NEW_ASKS_PER_PASS]:
-            mine = role_of(mate.member)
-            roles = list(SEATS)
-            roles.remove(mine)
-            posts.append(
-                Post(
-                    guild=guild,
-                    asker=name,
-                    kind=KIND_DUNGEON,
-                    target=door.keyword,
-                    target_label=door.place[:96],
-                    roles_needed=roles_text(roles),
-                    reason=ask_reason(need),
-                    said=ask_line(name, door, roles, need),
-                )
-            )
-            spare -= 1
-
-    posts += campaign_posts(campaigns, asks, doors, now)
-    if not posts and not replies and form is None and still:
-        notes.append("%d ask(s) open, nobody new to answer" % len(still))
+    spoken = _spoken(board, still)
+    replies = _replies(board, still, complete, spoken)
+    posts = _new_asks(board, asks, still, spoken, room)
+    posts += campaign_posts(campaigns, asks, board.doors, now)
+    quiet = not (posts or replies or form)
+    notes = (
+        ("%d ask(s) open, nobody new to answer" % len(still),)
+        if quiet and still
+        else ()
+    )
     return Pass(
         expire=tuple(expire),
         cancel=tuple(cancel),
@@ -1121,7 +1234,7 @@ def plan_pass(
         posts=tuple(posts),
         replies=tuple(replies),
         form=form,
-        notes=tuple(notes),
+        notes=notes,
     )
 
 
@@ -1138,45 +1251,46 @@ def _seat_for(member: guildrun.Member, open_seats: list) -> str:
     return DPS if DPS in open_seats else ""
 
 
+def _said_since(asks: list, head: str, keyword: str, started) -> bool:
+    return started is not None and any(
+        a.asker == head
+        and a.target == keyword
+        and a.created_at is not None
+        and a.created_at >= started
+        for a in asks
+    )
+
+
+def _campaign_post(row: dict, asks: list, doors: dict, now) -> Post | None:
+    head = str(row.get("family") or "")
+    keyword = str(row.get("keyword") or "")
+    guild = str(row.get("guild_name") or "")
+    started = row.get("started_at")
+    door = doors.get(keyword)
+    if not head or not guild or door is None:
+        return None
+    if _minutes_since(started, now) >= ASK_MINUTES:
+        return None
+    if _said_since(asks, head, keyword, started):
+        return None
+    line = _pick(_ASK_CAMPAIGN, head, keyword).format(place=door.place)
+    return Post(
+        guild=guild,
+        asker=head[:12],
+        kind=KIND_DUNGEON,
+        target=keyword,
+        target_label=door.place[:96],
+        roles_needed="",
+        reason=_fit("%s's family campaign" % head, 160),
+        said=_fit(line, 255),
+        state=RAN,
+    )
+
+
 def campaign_posts(campaigns, asks: list, doors: dict, now) -> list:
     """A family head says its campaign's dungeon in guild chat, once, within
     ASK_MINUTES of the queue starting it. The family is its own group and its
     campaign runs as before, so the ask is recorded as ran at once (no guild
     run row: run_id stays NULL) and nobody is asked to answer it."""
-    out = []
-    for row in campaigns or ():
-        head = str(row.get("family") or "")
-        keyword = str(row.get("keyword") or "")
-        guild = str(row.get("guild_name") or "")
-        started = row.get("started_at")
-        door = doors.get(keyword)
-        if not head or not guild or door is None:
-            continue
-        if _minutes_since(started, now) >= ASK_MINUTES:
-            continue
-        said_since = any(
-            a.asker == head
-            and a.target == keyword
-            and a.created_at is not None
-            and started is not None
-            and a.created_at >= started
-            for a in asks
-        )
-        if said_since:
-            continue
-        out.append(
-            Post(
-                guild=guild,
-                asker=head[:12],
-                kind=KIND_DUNGEON,
-                target=keyword,
-                target_label=door.place[:96],
-                roles_needed="",
-                reason=_fit("%s's family campaign" % head, 160),
-                said=_fit(
-                    _pick(_ASK_CAMPAIGN, head, keyword).format(place=door.place), 255
-                ),
-                state=RAN,
-            )
-        )
-    return out
+    posts = (_campaign_post(row, asks, doors, now) for row in campaigns or ())
+    return [p for p in posts if p is not None]

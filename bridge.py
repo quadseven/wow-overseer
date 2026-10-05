@@ -15815,25 +15815,7 @@ class Bridge(discord.Client):
                    | set(getattr(self, "_dues_walks", ())) | set(getattr(self, "_guild_mail_runs", ()))
                    | set(getattr(self, "_crafter_walks", ())))
         doors = guildrun.doors(facts["finder_floors"])
-        held = {}
-        mates = []
-        for row in facts["rows"]:
-            mate = guildsocial.mate_from_row(row, facts["gear"].get(row.get("name")))
-            if mate is None:
-                continue
-            mates.append(mate)
-            why = guildrun.why_not(mate.member, facts["busy"], facts["resting"],
-                                   facts["family"], facts["benched"])
-            if not why and mate.name in mid_job:
-                why = "on a guild job"
-            if why:
-                held[mate.name] = why
-        factions = {g: guildrun.faction_of([m.member for m in mates if m.member.guild == g])
-                    for g in {m.member.guild for m in mates}}
-        needs = {m.name: guildsocial.needs_for(m, facts["drops"], doors,
-                                               factions.get(m.member.guild, ""),
-                                               facts["quests"].get(m.name, ()))
-                 for m in mates if m.name not in held}
+        mates, held, needs = _guild_social_mates(facts, mid_job, doors)
         social = guildsocial.plan_pass(
             mates, held, facts["asks"], facts["answers"], needs, doors,
             guildjobs.entrances(), facts["now"],
@@ -20058,16 +20040,39 @@ def _fetch_guild_social_facts(bounds) -> dict:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
         drops = _guild_social_drops(cur)
-    quests: dict = {}
-    for row in quest_rows:
-        quests.setdefault(str(row["name"]), []).append(
-            (int(row["quest"]), str(row.get("title") or ""), int(row.get("zone") or 0)))
     facts.update({
-        "now": now, "asks": asks, "answers": answers, "quests": quests,
+        "now": now, "asks": asks, "answers": answers,
+        "quests": guildsocial.quests_by_name(quest_rows),
         "gear": guildsocial.gear_by_name(facts["rows"], worn, skills),
         "campaigns": campaigns, "drops": drops,
     })
     return facts
+
+
+def _guild_social_mates(facts: dict, mid_job: set, doors: list) -> tuple:
+    """(mates, held, needs) for one social pass: every member read, why each
+    held one is held (guildrun.why_not, or a guild job in hand), and what each
+    free one would gain at a door its level fits."""
+    held = {}
+    mates = []
+    for row in facts["rows"]:
+        mate = guildsocial.mate_from_row(row, facts["gear"].get(row.get("name")))
+        if mate is None:
+            continue
+        mates.append(mate)
+        why = guildrun.why_not(mate.member, facts["busy"], facts["resting"],
+                               facts["family"], facts["benched"])
+        if not why and mate.name in mid_job:
+            why = "on a guild job"
+        if why:
+            held[mate.name] = why
+    factions = {g: guildrun.faction_of([m.member for m in mates if m.member.guild == g])
+                for g in {m.member.guild for m in mates}}
+    needs = {m.name: guildsocial.needs_for(m, facts["drops"], doors,
+                                           factions.get(m.member.guild, ""),
+                                           facts["quests"].get(m.name, ()))
+             for m in mates if m.name not in held}
+    return mates, held, needs
 
 
 def _guild_social_names() -> set:
