@@ -68,6 +68,28 @@ class Order(unittest.TestCase):
         self.assertEqual([a for a in acts if a.kind == "remove"], [])
 
 
+class NoInviteBesideARemoval(unittest.TestCase):
+    def test_a_pass_that_removes_does_not_invite(self):
+        # Room for invites (67 members) while two leavers remain.
+        members = [
+            m
+            for m in _bonkers_now()
+            if m["name"] not in raidteams.LEAVING["Bonkers"][:6]
+        ]
+        acts = teamsync.plan(
+            "Bonkers", members, [ORC_SHAMAN, TROLL_SHAMAN], set(), False
+        )
+        self.assertTrue([a for a in acts if a.kind == "remove"])
+        self.assertEqual([a for a in acts if a.kind == "invite"], [])
+
+    def test_invites_follow_once_the_leavers_are_gone(self):
+        members = [
+            m for m in _bonkers_now() if m["name"] not in raidteams.LEAVING["Bonkers"]
+        ]
+        acts = teamsync.plan("Bonkers", members, [ORC_SHAMAN], set(), False)
+        self.assertEqual([a.target for a in acts if a.kind == "invite"], ["Randomorc"])
+
+
 class Renames(unittest.TestCase):
     def test_no_rename_until_the_verb_is_live(self):
         acts = teamsync.plan("Bonkers", _bonkers_now(), [], set(), False)
