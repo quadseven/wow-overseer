@@ -956,10 +956,10 @@ RECIPES: dict = {
             min_skill=101,
             max_skill=124,
             note="3x Bolt of Woolen Cloth (2997, own Tailoring output), "
-            "1x Fine Thread (2321, vendor-bought - see "
-            "craft_supply.REAGENTS) -> 1x Woolen Bag (item 4240, 8 "
-            "slots), no focus needed. trainer_spell rank 80, yellow "
-            "105, grey 140",
+            "1x Fine Thread (2321, posted by the maintenance crew - "
+            "craft.CREW_SUPPLIED, guildcorps.shop_steps) -> 1x Woolen "
+            "Bag (item 4240, 8 slots), no focus needed. trainer_spell "
+            "rank 80, yellow 105, grey 140",
         ),
         Recipe(
             3839,
