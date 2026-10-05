@@ -722,11 +722,61 @@ class TheDoorsRecordGatesTheAsk(unittest.TestCase):
         ] * guildrun.FAILING_RUNS
         self.assertEqual(self.asks_for(shaped, five()), ["wailing"])
 
-    def test_every_door_failing_means_no_ask(self):
+    def test_every_door_failing_still_asks_for_the_best_need(self):
+        # A failing door is a preference, not a ban: with every fitting door
+        # failing, the guild still asks (Cave sat silent at 15 to 19 for hours
+        # with Wailing Caverns failing for every shape).
         rows = [ended("deadmines", "wiped")] * guildrun.FAILING_RUNS + [
             ended("wailing", "refused")
         ] * guildrun.TURNED_AWAY_RUNS
-        self.assertEqual(self.asks_for(rows), [])
+        self.assertEqual(self.asks_for(rows), ["deadmines"])
+
+    def cleared_asks(self, rows, cleared):
+        out = plan(
+            [mate("Auren", 20, ROGUE)],
+            needs={"Auren": [cape_need("Auren"), robe_need("Auren")]},
+            records=guildrun.shape_records(rows, NOW),
+            cleared=cleared,
+        )
+        return [p.target for p in out.posts if p.asker == "Auren"]
+
+    def test_a_cleared_door_ranks_below_one_the_guild_has_not_cleared(self):
+        # Bonkers cleared Ragefire twice and Jev kept choosing it over
+        # Wailing Caverns: level order means the uncleared door is asked for.
+        self.assertEqual(self.cleared_asks([], {("Cave", "deadmines")}), ["wailing"])
+
+    def test_an_uncleared_failing_door_beats_a_cleared_one(self):
+        rows = [ended("wailing", "wiped")] * guildrun.FAILING_RUNS
+        self.assertEqual(self.cleared_asks(rows, {("Cave", "deadmines")}), ["wailing"])
+
+    def test_another_guilds_clear_does_not_count(self):
+        self.assertEqual(
+            self.cleared_asks([], {("Bonkers", "deadmines")}), ["deadmines"]
+        )
+
+    def test_a_cleared_door_is_still_asked_for_when_nothing_else_fits(self):
+        self.assertEqual(
+            self.cleared_asks([], {("Cave", "deadmines"), ("Cave", "wailing")}),
+            ["deadmines"],
+        )
+
+    def test_cleared_doors_reads_each_guilds_clears(self):
+        rows = [
+            dict(ended("ragefire", "cleared"), guild="Bonkers"),
+            dict(ended("wailing", "wiped"), guild="Bonkers"),
+            dict(ended("deadmines", "cleared"), guild=""),
+        ]
+        self.assertEqual(guildrun.cleared_doors(rows), {("Bonkers", "ragefire")})
+
+    def test_a_healthy_door_still_wins_over_a_failing_better_need(self):
+        rows = [ended("deadmines", "wiped")] * guildrun.FAILING_RUNS
+        out = plan(
+            [mate("Auren", 20, ROGUE)],
+            needs={"Auren": [cape_need("Auren"), robe_need("Auren")]},
+            records=guildrun.shape_records(rows, NOW),
+        )
+        post = [p for p in out.posts if p.asker == "Auren"][0]
+        self.assertEqual([o.door.keyword for o in post.options], ["wailing"])
 
     def test_the_post_carries_each_door_and_its_record(self):
         rows = [ended("wailing", "not entered")] * 2
