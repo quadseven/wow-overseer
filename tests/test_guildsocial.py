@@ -287,7 +287,7 @@ class WhoAsks(unittest.TestCase):
         )
         self.assertEqual(out.posts, ())
 
-    def test_one_new_ask_a_guild_a_pass_the_strongest_need_first(self):
+    def test_new_asks_a_pass_go_strongest_need_first(self):
         weak = gs.Need("Bree", "deadmines", "Gloves", entry=1, gain=2.0, slot="gloves")
         strong = gs.Need(
             "Cole", "wailing", "Robe", entry=2, gain=1.0, preraid=True, slot="chest"
@@ -296,7 +296,8 @@ class WhoAsks(unittest.TestCase):
             [mate("Bree", 20, ROGUE), mate("Cole", 20, MAGE)],
             needs={"Bree": [weak], "Cole": [strong]},
         )
-        self.assertEqual([p.asker for p in out.posts], ["Cole"])
+        # Two new asks a guild a pass (NEW_ASKS_PER_PASS), strongest need first.
+        self.assertEqual([p.asker for p in out.posts], ["Cole", "Bree"])
 
     def test_a_door_the_guild_does_not_use_is_never_asked_for(self):
         # Ragefire Chasm stands in Orgrimmar: never an Alliance guild's door.
@@ -357,11 +358,13 @@ class AFamilyCampaignIsSaidToo(unittest.TestCase):
 class WhoAnswers(unittest.TestCase):
     def test_free_guildmates_who_would_gain_say_yes_by_their_tree(self):
         out = plan(five(), asks=[ask(7, "Auren")])
-        # The scarce seats answer first, each by the tree it plays.
+        # The scarce seats answer first, each by the tree it plays, and one
+        # pass now fills the rest of the ask (ANSWERS_PER_PASS).
         self.assertEqual(
-            [(r.member, r.role, r.stance) for r in out.replies],
+            [(r.member, r.role, r.stance) for r in out.replies][:2],
             [("Healy", "healer", "need"), ("Tanky", "tank", "need")],
         )
+        self.assertEqual({r.role for r in out.replies[2:]}, {"dps"})
         for reply in out.replies:
             self.assertTrue(reply.said)
             self.assertEqual(reply.ask_id, 7)
@@ -986,6 +989,18 @@ class GuildsTakeTurns(unittest.TestCase):
     def test_a_guild_that_never_asked_goes_first(self):
         asks = [types.SimpleNamespace(guild="Bonkers", created_at=NOW)]
         self.assertEqual(gs._turn_order({"Bonkers", "Cave"}, asks), ["Cave", "Bonkers"])
+
+
+class ManyGroupsAtOnce(unittest.TestCase):
+    """2026-10-05: with the realm cap lifted, the pacing still let one group
+    form at a time; a guild with 40 or more free members asks in parallel."""
+
+    def test_a_guild_may_have_several_asks_open(self):
+        self.assertGreaterEqual(gs.MAX_OPEN_ASKS_PER_GUILD, 8)
+        self.assertGreaterEqual(gs.NEW_ASKS_PER_PASS, 2)
+
+    def test_one_pass_can_fill_an_ask(self):
+        self.assertGreaterEqual(gs.ANSWERS_PER_PASS, 4)
 
 
 if __name__ == "__main__":
