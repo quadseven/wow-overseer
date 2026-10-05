@@ -81,6 +81,7 @@ class TheViewsLiveInFiveHubs(unittest.TestCase):
                 "Families": ["FAMILY_VIEW", "LINEUP_VIEW", "CHRONICLE_VIEW"],
                 "Guild": [
                     "GUILD_VIEW",
+                    "GUILDCHAT_VIEW",
                     "DUNGEONS_VIEW",
                     "RAID_VIEW",
                     "COUNCIL_VIEW",

@@ -3165,6 +3165,36 @@
   .gd-rec { display:flex; flex-wrap:wrap; gap:.2rem .6rem; font-size:.78rem;
             padding:.3rem 0; border-bottom:1px solid var(--card-line); }
   .gd-rec .v { font-family:var(--mono); color:var(--on-card); }
+  /* THE GUILD CHAT FEED (#570). A log, not a grid: one column at every width,
+     the ask as the message and its answers indented under it. Colour only
+     from the text roles; a state is always a word as well. */
+  #guildchat { display:none; padding:.9rem var(--gutter) 1.2rem; }
+  .gc-pick { display:flex; gap:.4rem; margin:.2rem 0 .8rem; }
+  .gc-pick button { min-height:44px; padding:0 1rem; }
+  .gc-pick button[aria-pressed="true"] { color:var(--accent-text); border-color:var(--accent-text); }
+  .gc-log { display:grid; gap:.7rem; max-width:44rem; }
+  .gc-msg { background:var(--card); border:1px solid var(--card-line); border-radius:6px;
+            padding:.6rem .75rem; }
+  .gc-top { display:flex; flex-wrap:wrap; align-items:baseline; gap:.2rem .6rem; }
+  .gc-who { font-weight:600; color:var(--on-card); }
+  .gc-time { font-family:var(--mono); font-size:11px; color:var(--on-card-dim);
+             font-variant-numeric:tabular-nums; }
+  .gc-state { font-family:var(--mono); font-size:11px; letter-spacing:.1em;
+              text-transform:uppercase; color:var(--on-card-dim); margin-left:auto; }
+  .gc-state.good { color:var(--accent-text); }
+  .gc-state.bad { color:var(--warn-text); }
+  .gc-said { margin-top:.25rem; color:var(--on-card); overflow-wrap:anywhere; }
+  .gc-meta { margin-top:.3rem; font-size:.78rem; color:var(--on-card-dim);
+             overflow-wrap:anywhere; }
+  .gc-replies { margin:.5rem 0 0 .4rem; padding-left:.7rem; display:grid; gap:.4rem;
+                border-left:1px solid var(--card-line); }
+  .gc-reply { font-size:.85rem; overflow-wrap:anywhere; }
+  .gc-reply .gc-who { font-weight:500; }
+  .gc-out { margin-top:.5rem; padding-top:.4rem; border-top:1px solid var(--card-line);
+            font-size:.82rem; color:var(--on-card); }
+  .gc-out a { color:var(--accent-text); }
+  .gc-pick button:focus-visible, .gc-out a:focus-visible { outline:2px solid var(--accent-text);
+            outline-offset:2px; }
   /* THE UPGRADE TRACKER (#541). The Guild tab's frame, the Lineup's ink rule
      and strip, and a plain table: nothing here paints a colour of its own,
      only the text roles above. A slot's state is always a WORD as well as a
@@ -4010,6 +4040,12 @@
   <div id="gdrecords"></div>
 </section>
 
+<section id="guildchat">
+  <div id="gchead" class="ds-head">reaching the world...</div>
+  <div id="gcpick" class="gc-pick" role="group" aria-label="guild"></div>
+  <div id="gclog" class="gc-log" aria-live="polite"></div>
+</section>
+
 <section id="upgrades">
   <div id="uphead" class="ds-head">pick a guild member</div>
   <div class="up-pick">
@@ -4272,6 +4308,9 @@ const LINEUP_VIEW = "lineup";
 // which groups the coordinator has out, the dungeon Jev chose for each and how
 // sure it was, and how every group came back.
 const GUILD_VIEW = "guild";
+// THE GUILD CHAT FEED (#570): what members asked for in guild chat, who answered,
+// and the runs those asks became. Reads /api/guildchat.
+const GUILDCHAT_VIEW = "guildchat";
 // THE GEAR UPGRADE TRACKER (#541): one guildmate's slots against their spec's
 // pre-raid and raid best in slot, with the next upgrade and where it drops.
 const UPGRADES_VIEW = "upgrades";
@@ -4311,7 +4350,7 @@ function hubLayout() {
   return [
     ["watch", "Watch", [WATCH_VIEW]],
     ["families", "Families", [FAMILY_VIEW, LINEUP_VIEW, CHRONICLE_VIEW]],
-    ["guild", "Guild", [GUILD_VIEW, DUNGEONS_VIEW, RAID_VIEW, COUNCIL_VIEW, DECREE_VIEW]],
+    ["guild", "Guild", [GUILD_VIEW, GUILDCHAT_VIEW, DUNGEONS_VIEW, RAID_VIEW, COUNCIL_VIEW, DECREE_VIEW]],
     ["gear", "Gear", [ARMORY_VIEW, BAGS_VIEW, UPGRADES_VIEW, TRADES_VIEW]],
     [WORLD_HUB, "World", [MAP_VIEW, EYE_VIEW]],
   ];
@@ -4519,6 +4558,12 @@ function buildViewTabs() {
   gdb.dataset.view = GUILD_VIEW;
   gdb.onclick = () => showView(GUILD_VIEW);
   tabs.appendChild(gdb);
+  // What the guild asked for in chat, beside the groups it became.
+  const gcb = document.createElement("button");
+  gcb.textContent = "Guild chat";
+  gcb.dataset.view = GUILDCHAT_VIEW;
+  gcb.onclick = () => showView(GUILDCHAT_VIEW);
+  tabs.appendChild(gcb);
   // Read when a member is being kitted out, not on every visit.
   const upb = document.createElement("button");
   upb.textContent = "Upgrades";
@@ -7375,6 +7420,7 @@ function showView(v) {
   const isRaid = v === RAID_VIEW;
   const isLineup = v === LINEUP_VIEW;
   const isGuild = v === GUILD_VIEW;
+  const isGc = v === GUILDCHAT_VIEW;
   const isUp = v === UPGRADES_VIEW;
   const isTrd = v === TRADES_VIEW;
   const isDec = v === DECREE_VIEW;
@@ -7389,6 +7435,7 @@ function showView(v) {
   rgsection.style.display = isRaid ? "block" : "none";
   lnsection.style.display = isLineup ? "block" : "none";
   gdsection.style.display = isGuild ? "block" : "none";
+  gcsection.style.display = isGc ? "block" : "none";
   upsection.style.display = isUp ? "block" : "none";
   gcrsection.style.display = isTrd ? "block" : "none";
   dcrSection.style.display = isDec ? "block" : "none";
@@ -7527,6 +7574,13 @@ function showView(v) {
     closePanel();
     stopBroadcasts();
     pollGuild();
+    return;
+  }
+  if (isGc) {
+    // The Guild tab's treatment and reasons: a read, fetched on the way in.
+    closePanel();
+    stopBroadcasts();
+    pollGuildChat();
     return;
   }
   if (isDec) {
@@ -7719,6 +7773,165 @@ async function pollGuild() {
   }
 }
 setInterval(() => { if (view === GUILD_VIEW) pollGuild(); }, 30000);
+
+// --- the Guild chat view (what the guild asked for, /api/guildchat, #570) ---
+//
+// Every ask is a message from the asker, in their own words (`said`), with the
+// answers threaded under it and, once it became a run, how that run went. The
+// item links the game puts in chat (|Hitem:N|h[Name]|h) become the site's item
+// control; nothing else in a line is ever treated as markup.
+const gcsection = document.getElementById("guildchat");
+const gchead = document.getElementById("gchead");
+const gcpick = document.getElementById("gcpick");
+const gclog = document.getElementById("gclog");
+// The guilds come from the server (the first read names none and gets the
+// first configured one back), so no guild is spelled in this script.
+let gcGuilds = [], gcGuild = "", gcPulling = false, gcSeq = 0;
+
+function gcSaid(parent, text) {
+  const re = /\|c[0-9a-fA-F]{8}\|Hitem:(\d+)[^|]*\|h\[([^\]]*)\]\|h\|r/g;
+  let at = 0, m;
+  const t = String(text || "");
+  while ((m = re.exec(t)) !== null) {
+    if (m.index > at) parent.appendChild(document.createTextNode(t.slice(at, m.index)));
+    parent.appendChild(itemTipName({entry: Number(m[1])}, m[2], ""));
+    at = m.index + m[0].length;
+  }
+  if (at < t.length) parent.appendChild(document.createTextNode(t.slice(at)));
+  return parent;
+}
+
+function gcStamp(v) {
+  // The server's own timestamp, minute precision: "10-04 12:00".
+  return String(v || "").replace("T", " ").slice(5, 16);
+}
+
+function gcDungeonHref(ask) {
+  return ask.kind === "dungeon" && /^\d+$/.test(String(ask.target)) ? "#dungeons/" + ask.target : "";
+}
+
+function gcOutcome(ask) {
+  const run = ask.run;
+  if (!run) return null;
+  const box = el("div", "gc-out");
+  const done = Number(run.bosses_done), of = Number(run.bosses_total);
+  let words, tone = "";
+  if (run.outcome === "cleared") {
+    words = of > 0 ? "cleared " + done + " of " + of : "cleared";
+    tone = "good";
+  } else if (run.outcome === "wiped") {
+    words = "wiped" + (of > 0 ? " after " + done + " of " + of : "");
+    tone = "bad";
+  } else if (run.outcome) {
+    words = String(run.outcome).replace(/_/g, " ");
+  } else {
+    words = "run " + String(run.state || "under way").replace(/_/g, " ");
+  }
+  box.appendChild(el("span", "gc-state " + tone, words));
+  const href = gcDungeonHref(ask);
+  if (href) {
+    box.appendChild(document.createTextNode(" "));
+    const a = el("a", "", "see it on the Dungeons view");
+    a.href = href;
+    box.appendChild(a);
+  }
+  return box;
+}
+
+function gcMessage(ask) {
+  const box = el("article", "gc-msg");
+  const top = el("div", "gc-top");
+  top.appendChild(el("span", "gc-who", ask.asker));
+  top.appendChild(el("span", "gc-time", gcStamp(ask.created_at)));
+  const tone = ask.state === "ran" || ask.state === "filled" ? "good"
+    : ask.state === "cancelled" || ask.state === "expired" ? "bad" : "";
+  top.appendChild(el("span", "gc-state " + tone, ask.state));
+  box.appendChild(top);
+  box.appendChild(gcSaid(el("div", "gc-said"), ask.said));
+  const meta = el("div", "gc-meta");
+  const href = gcDungeonHref(ask);
+  if (href) {
+    const a = el("a", "", ask.target_label || ask.kind);
+    a.href = href;
+    meta.appendChild(a);
+  } else {
+    meta.appendChild(document.createTextNode(ask.target_label || ask.kind));
+  }
+  const roles = String(ask.roles_needed || "").split(",").filter(Boolean).join(", ");
+  meta.appendChild(document.createTextNode(" - " + ask.kind + (roles ? " - needs " + roles : "")));
+  if (ask.reason) meta.appendChild(document.createTextNode(" - " + ask.reason));
+  box.appendChild(meta);
+  const answers = ask.answers || [];
+  if (answers.length) {
+    const list = el("div", "gc-replies");
+    for (const a of answers) {
+      const r = el("div", "gc-reply");
+      r.appendChild(el("span", "gc-who", a.member));
+      r.appendChild(document.createTextNode(" (" + a.role + ", " + a.stance + ", " + a.state + ") "));
+      gcSaid(r, a.said);
+      list.appendChild(r);
+    }
+    box.appendChild(list);
+  }
+  const out = gcOutcome(ask);
+  if (out) box.appendChild(out);
+  return box;
+}
+
+function gcBuildPicker() {
+  gcpick.replaceChildren(...gcGuilds.map((g) => {
+    const b = el("button", "", g);
+    b.type = "button";
+    b.setAttribute("aria-pressed", g === gcGuild ? "true" : "false");
+    b.onclick = () => {
+      gcGuild = g;
+      gcPulling = false;
+      gcBuildPicker();
+      gclog.replaceChildren();
+      pollGuildChat();
+    };
+    return b;
+  }));
+}
+
+function gcRender(data) {
+  if (data.guilds && data.guilds.join() !== gcGuilds.join()) {
+    gcGuilds = data.guilds;
+    gcGuild = gcGuild || data.guild;
+    gcBuildPicker();
+  }
+  if (data.ready === false) {
+    gchead.className = "ds-head";
+    gchead.textContent = "the guild chat feed is not set up on this realm yet";
+    gclog.replaceChildren();
+    return;
+  }
+  const asks = data.asks || [];
+  gchead.className = "ds-head";
+  gchead.textContent = asks.length ? asks.length + " recent asks in " + data.guild : "";
+  gclog.replaceChildren(...(asks.length ? asks.map(gcMessage)
+    : [el("p", "chr-body", "Nobody in " + data.guild + " has asked for a group in guild chat lately.")]));
+}
+
+async function pollGuildChat() {
+  if (view !== GUILDCHAT_VIEW || gcPulling) return;
+  gcPulling = true;
+  const mine = ++gcSeq, guild = gcGuild;
+  try {
+    const r = await fetch(u("/api/guildchat" + (guild ? "?guild=" + encodeURIComponent(guild) : "")),
+                          {signal: AbortSignal.timeout(20000)});
+    if (!r.ok) throw new Error(r.status);
+    const data = await r.json();
+    if (mine === gcSeq && guild === gcGuild) gcRender(data);
+  } catch (e) {
+    // Whatever is drawn stays drawn, as on the Guild tab.
+    gchead.textContent = "the world is unreachable - this may be stale";
+    gchead.className = "ds-head alarm";
+  } finally {
+    gcPulling = false;
+  }
+}
+setInterval(() => { if (view === GUILDCHAT_VIEW) pollGuildChat(); }, 20000);
 
 // --- the Upgrades tab (the gear upgrade tracker, /api/upgrades, #541) -------
 //
@@ -13357,7 +13570,7 @@ function adoptContinent() {
 // carries state (which continent) and so needs more than a name.
 const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, BAGS_VIEW,
                     CHRONICLE_VIEW, DUNGEONS_VIEW, RAID_VIEW, LINEUP_VIEW,
-                    GUILD_VIEW, UPGRADES_VIEW, TRADES_VIEW,
+                    GUILD_VIEW, GUILDCHAT_VIEW, UPGRADES_VIEW, TRADES_VIEW,
                     COUNCIL_VIEW, EYE_VIEW, DECREE_VIEW];
 
 // ADDRESSES A VIEW USED TO HAVE. The Achievements tab was renamed to the

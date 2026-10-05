@@ -86,6 +86,10 @@ COLLATIONS = {
     # Bridge-owned (the guild coordinator), named in
     # bridge._ensure_guild_run_store the same way overseer_jev_judgment is.
     "overseer_guild_run": "utf8mb4_0900_ai_ci",
+    # Bridge-owned (the guild chat feed, #570): the same bridge-owned
+    # collation, which its CREATE TABLE must name.
+    "overseer_guild_ask": "utf8mb4_0900_ai_ci",
+    "overseer_guild_answer": "utf8mb4_0900_ai_ci",
     # Bridge-owned (mod-overseer#767), named in dungeonpace.CREATE_SQL.
     "overseer_dungeon_pace": "utf8mb4_0900_ai_ci",
     # Bridge-owned (the Bags tab's week), named in
@@ -228,6 +232,13 @@ STRING_COLUMNS = {
     ),
     "overseer_dungeon_queue": frozenset({"family", "keyword", "status", "source"}),
     # From its own DDL (bridge._ensure_guild_run_store): every VARCHAR column.
+    # The guild chat feed's two tables (#570), from their contract: every
+    # string column. Re-check against the bridge DDL when it lands.
+    "overseer_guild_ask": frozenset(
+        {"guild", "asker", "kind", "target", "target_label", "roles_needed",
+         "reason", "said", "state"}
+    ),
+    "overseer_guild_answer": frozenset({"member", "role", "stance", "said", "state"}),
     "overseer_guild_run": frozenset(
         {
             "band",
