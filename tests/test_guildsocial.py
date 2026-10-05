@@ -747,9 +747,7 @@ class TheDoorsRecordGatesTheAsk(unittest.TestCase):
 
     def test_an_uncleared_failing_door_beats_a_cleared_one(self):
         rows = [ended("wailing", "wiped")] * guildrun.FAILING_RUNS
-        self.assertEqual(
-            self.cleared_asks(rows, {("Cave", "deadmines")}), ["wailing"]
-        )
+        self.assertEqual(self.cleared_asks(rows, {("Cave", "deadmines")}), ["wailing"])
 
     def test_another_guilds_clear_does_not_count(self):
         self.assertEqual(
