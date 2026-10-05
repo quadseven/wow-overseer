@@ -236,6 +236,9 @@ class Facts:
     # rank it above an active, lower-value campaign spell-training stop.
     critical_weapon_option: str = ""
     extra: dict = field(default_factory=dict)
+    # jev_outcomes.history: Jev's recent picks of this kind, every family, and
+    # what followed each (#584). Empty leaves the question as it was.
+    history: tuple = ()
 
 
 def choosable(f: Facts) -> list:
@@ -372,6 +375,8 @@ def question(f: Facts, offered: dict):
     }
     if f.where is not None:
         state["situation"] = f.where.state()
+    if f.history:
+        state["recent_jev_picks_and_what_followed"] = list(f.history)
     instructions = (
         "`family` is a group of World of Warcraft (3.3.5a) adventurers who play "
         "together the way a group of real human players does, following their "
@@ -391,7 +396,48 @@ def question(f: Facts, offered: dict):
             "over a lower-value spell-training stop so the member can equip "
             "a weapon before the next dungeon."
         )
+    if f.history:
+        instructions += HISTORY_INSTRUCTION
     return state, {"intent": jev.choice(instructions, dict(offered))}
+
+
+# ---------------------------------------------------------------------------
+# WHAT FOLLOWED A PICK (#584, jev_outcomes)
+
+HISTORY_INSTRUCTION = (
+    " `recent_jev_picks_and_what_followed` is what happened after earlier "
+    "picks that overrode the module's order: weigh a kind of pick that kept "
+    "being left unfinished or kept the family dying before choosing it again."
+)
+# A pick is scored once the module has honoured it for its whole window.
+OUTCOME_MINUTES = PICK_SECONDS // 60
+
+
+def _doing(f: Facts) -> str:
+    kind, target = f.row.current_kind, f.row.current_target
+    return kind if not target else "%s:%s" % (kind, target)
+
+
+def snapshot(f: Facts, pick: str) -> dict:
+    """What a pick is later judged against: the pick, what the leader was
+    doing, and the family's recent deaths."""
+    return {"pick": pick[:OPTION_MAX], "doing": _doing(f)[:60], "deaths": int(f.deaths)}
+
+
+def outcome_words(before: dict, f: Facts, minutes: int) -> str:
+    """One line: whether the pick is still being done, still asked for, or no
+    longer requested, and the deaths before and now."""
+    pick = str(before.get("pick") or "")
+    if pick and _doing(f)[:OPTION_MAX] == pick:
+        where = "the leader is still on it"
+    elif pick in {a.option for a in f.row.table}:
+        where = "still requested, the leader is on %s" % _doing(f)
+    else:
+        where = "no longer requested, the leader is on %s" % _doing(f)
+    return (
+        "after %d min: %s; recent deaths %s -> %d"
+        % (int(minutes), where, before.get("deaths", "?"), int(f.deaths))
+    )[:255]
 
 
 def pick_of(option: str) -> tuple:

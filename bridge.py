@@ -85,6 +85,7 @@ import jev_activity
 import jev_keep
 import jev_family_intent
 import jev_movement
+import jev_outcomes
 import jobs
 import keep
 import kin
@@ -16859,6 +16860,12 @@ class Bridge(discord.Client):
         if not jev_family_intent.due(facts, seen.get("signature", ""),
                                      seen.get("asked", -1e9), now):
             return
+        # WHAT FOLLOWED EARLIER PICKS (#584): this family's are scored once
+        # their window has passed, and the kind's recent ones go into the
+        # question.
+        facts = await _with_jev_history(
+            facts, jev_family_intent.KIND, jev_family_intent.outcome_words,
+            jev_family_intent.OUTCOME_MINUTES)
         judgment = await jev_family_intent.ask(self._jev, facts, rule)
         if judgment is None:
             return
@@ -16870,6 +16877,8 @@ class Bridge(discord.Client):
         except Exception:
             log.exception("family intent: the choice for %s was not recorded",
                           campaignqueue._family(key))
+        await _jev_override_recorded(
+            judgment, jev_family_intent.snapshot(facts, judgment.jev))
         if judgment.pick:
             kind, target = jev_family_intent.pick_of(judgment.pick)
             written = await asyncio.to_thread(
@@ -17027,6 +17036,11 @@ class Bridge(discord.Client):
             minutes_since_fishing=self._activity_minutes_since_fishing(key, now),
             paused=globals().get("_PACE_QUESTING", {}).get(key, ""),
             situation=where)
+        # WHAT FOLLOWED EARLIER OVERRIDES (#584): this family's are scored
+        # against now, and the kind's recent ones go into the question.
+        facts = await _with_jev_history(
+            facts, jev_activity.KIND, jev_activity.outcome_words,
+            jev_activity.OUTCOME_MINUTES)
         judgment = await jev_activity.ask(self._jev, facts, rule)
         self._activity_seen[key]["asked"] = now
         if judgment is None:
@@ -17037,6 +17051,7 @@ class Bridge(discord.Client):
         except Exception:
             log.exception("activity: the choice for %s was not recorded",
                           campaignqueue._family(key))
+        await _jev_override_recorded(judgment, jev_activity.snapshot(facts))
         if judgment.carried_out:
             await self._carry_out_activity(key, fam, judgment.carried_out, own, job)
 
@@ -19636,6 +19651,72 @@ def _create_jev_store() -> None:
             "WHERE created_at < NOW() - INTERVAL %s DAY",
             (JEV_RETENTION_DAYS,),
         )
+        # What followed each override (jev_outcomes, #584), kept as long as
+        # the judgments it follows.
+        cur.execute(jev_outcomes.TABLE_SQL)
+        cur.execute(
+            "DELETE FROM overseer_jev_outcome "
+            "WHERE created_at < NOW() - INTERVAL %s DAY",
+            (JEV_RETENTION_DAYS,),
+        )
+
+
+def _jev_outcome_history(kind: str, subject: str, score, wait_minutes: int) -> list:
+    """Score `subject`'s open overrides of `kind` that have waited
+    `wait_minutes` (score(before, minutes) -> the outcome line), then the
+    kind's recent scored history for the question (jev_outcomes, #584).
+    A world without the table has no history."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(jev_outcomes.OPEN_SQL, (kind, subject[:24]))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1146:
+                return []
+            raise
+        for row in list(cur.fetchall()):
+            minutes = int(row.get("minutes") or 0)
+            if minutes < wait_minutes:
+                continue
+            line = score(jev_outcomes.before_of(row), minutes)
+            cur.execute(jev_outcomes.SCORE_SQL, (str(line)[:255], row["id"]))
+        cur.execute(jev_outcomes.HISTORY_SQL, (kind, jev_outcomes.HISTORY_LIMIT))
+        return jev_outcomes.history(list(cur.fetchall()))
+
+
+def _record_jev_override(judgment, before: dict) -> None:
+    """One overseer_jev_outcome row for a judgment carried out over the
+    heuristic; nothing for any other (jev_outcomes.record_args)."""
+    args = jev_outcomes.record_args(judgment, before)
+    if args is None:
+        return
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(jev_outcomes.INSERT_SQL, args)
+
+
+async def _with_jev_history(facts, kind: str, words, wait_minutes: int):
+    """`facts` with `history` (_jev_outcome_history for its family, scored by
+    words(before, facts, minutes)), or `facts` unchanged when the database
+    fails: the question is then asked without it. Any other error is a bug
+    and rises to the pass's own handler."""
+    try:
+        history = await asyncio.to_thread(
+            _jev_outcome_history, kind, facts.family,
+            lambda before, minutes: words(before, facts, minutes), wait_minutes)
+    except pymysql.err.MySQLError:
+        log.exception("%s: the override history for %s was not read; asked "
+                      "without it", kind, facts.family)
+        return facts
+    return dataclasses.replace(facts, history=tuple(history))
+
+
+async def _jev_override_recorded(judgment, before: dict) -> None:
+    """_record_jev_override off the loop. A database failure is logged and
+    the pass goes on; any other error is a bug and rises."""
+    try:
+        await asyncio.to_thread(_record_jev_override, judgment, before)
+    except pymysql.err.MySQLError:
+        log.exception("%s: the override for %s was not recorded for scoring",
+                      judgment.kind, judgment.subject)
 
 
 def _insert_jev_judgment(judgment) -> None:
