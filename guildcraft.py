@@ -1332,6 +1332,75 @@ def _dungeons_basis() -> str:
     )
 
 
+def _drops_by_dungeon(recipes: dict, drop_rows: list[dict]) -> dict:
+    """map id -> recipe entry -> its drop rows, for drops inside an instance."""
+    by_map: dict = {}
+    for row in drop_rows:
+        entry = int(row.get("item") or 0)
+        map_id = row.get("map")
+        if entry not in recipes or map_id is None or int(map_id) in CONTINENT_MAPS:
+            continue
+        by_map.setdefault(int(map_id), {}).setdefault(entry, []).append(row)
+    return by_map
+
+
+def _dungeon_recipe_card(entry: int, recipe: dict, rows: list[dict], reads) -> dict:
+    """One recipe's card inside a dungeon: trade, rank, rarity, who needs it."""
+    holders_by_skill, known_spells, icons, book = reads
+    skill = int(recipe.get("RequiredSkill") or 0)
+    word = _skill_word(skill)
+    rank = int(recipe.get("RequiredSkillRank") or 0)
+    holders = holders_by_skill.get(skill, [])
+    spell = int(recipe.get("spellid_2") or 0)
+    needers = sorted(
+        holder["who"]
+        for holder in holders
+        if not (spell and spell in known_spells.get(holder["who"], ()))
+    )
+    rows = sorted(rows, key=lambda r: (-_chance_of(r), r.get("name") or ""))
+    chance = _chance_of(rows[0])
+    quality = recipe.get("quality", recipe.get("Quality"))
+    rare = is_rare(quality, chance)
+    payload = recap.item_payload(entry, recipe, icons, book)
+    payload.update(
+        trade=word,
+        rank=rank,
+        chance=chance,
+        rare=rare,
+        rare_line=_rare_line(quality, chance),
+        needed_by=needers,
+        need_line=_need_line(word, rank, holders, needers),
+        creatures=[_creature_line(row) for row in rows[:SOURCES_SHOWN]],
+        chips=_dungeon_recipe_chips(word, rank, rare, chance, needers, bool(holders)),
+    )
+    return payload
+
+
+def _dungeon_card(map_id: int, items: dict, recipes: dict, names: dict, reads) -> dict:
+    """One dungeon's card: its recipes, rarest and most wanted first."""
+    cards = [
+        _dungeon_recipe_card(entry, recipes[entry], rows, reads)
+        for entry, rows in items.items()
+    ]
+    cards.sort(key=lambda c: (not c["rare"], not c["needed_by"], c["rank"], c["name"]))
+    every_row = [row for rows in items.values() for row in rows]
+    place, level_line = _dungeon_level(map_id, every_row)
+    rare_count = len([c for c in cards if c["rare"]])
+    wanted_count = len([c for c in cards if c["needed_by"]])
+    return {
+        "map": map_id,
+        "name": names.get(map_id) or "map %d" % map_id,
+        "place": place,
+        "level_line": level_line,
+        "line": _dungeon_line(len(cards), rare_count, wanted_count, LISTED_PER_DUNGEON),
+        "recipe_count": len(cards),
+        "rare_count": rare_count,
+        "wanted_count": wanted_count,
+        "chips": _dungeon_chips(rare_count, wanted_count),
+        "recipes": cards[:LISTED_PER_DUNGEON],
+    }
+
+
 def build_dungeon_recipes(
     recipe_rows: list[dict],
     drop_rows: list[dict],
@@ -1358,75 +1427,12 @@ def build_dungeon_recipes(
     list and those cards cannot disagree about who knows what.
     """
     recipes = {int(row["entry"]): row for row in recipe_rows}
-    by_map: dict = {}
-    for row in drop_rows:
-        entry = int(row.get("item") or 0)
-        map_id = row.get("map")
-        if entry not in recipes or map_id is None:
-            continue
-        map_id = int(map_id)
-        if map_id in CONTINENT_MAPS:
-            continue
-        by_map.setdefault(map_id, {}).setdefault(entry, []).append(row)
-
-    dungeons = []
-    for map_id, items in by_map.items():
-        cards = []
-        for entry, rows in items.items():
-            recipe = recipes[entry]
-            skill = int(recipe.get("RequiredSkill") or 0)
-            word = _skill_word(skill)
-            rank = int(recipe.get("RequiredSkillRank") or 0)
-            holders = holders_by_skill.get(skill, [])
-            spell = int(recipe.get("spellid_2") or 0)
-            needers = sorted(
-                holder["who"]
-                for holder in holders
-                if not (spell and spell in known_spells.get(holder["who"], ()))
-            )
-            rows = sorted(rows, key=lambda r: (-_chance_of(r), r.get("name") or ""))
-            chance = _chance_of(rows[0])
-            quality = recipe.get("quality", recipe.get("Quality"))
-            rare = is_rare(quality, chance)
-            payload = recap.item_payload(entry, recipe, icons, book)
-            payload.update(
-                trade=word,
-                rank=rank,
-                chance=chance,
-                rare=rare,
-                rare_line=_rare_line(quality, chance),
-                needed_by=needers,
-                need_line=_need_line(word, rank, holders, needers),
-                creatures=[_creature_line(row) for row in rows[:SOURCES_SHOWN]],
-                chips=_dungeon_recipe_chips(
-                    word, rank, rare, chance, needers, bool(holders)
-                ),
-            )
-            cards.append(payload)
-        cards.sort(
-            key=lambda c: (not c["rare"], not c["needed_by"], c["rank"], c["name"])
-        )
-        every_row = [row for rows in items.values() for row in rows]
-        place, level_line = _dungeon_level(map_id, every_row)
-        name = names.get(map_id) or "map %d" % map_id
-        rare_count = len([c for c in cards if c["rare"]])
-        wanted_count = len([c for c in cards if c["needed_by"]])
-        dungeons.append(
-            {
-                "map": map_id,
-                "name": name,
-                "place": place,
-                "level_line": level_line,
-                "line": _dungeon_line(
-                    len(cards), rare_count, wanted_count, LISTED_PER_DUNGEON
-                ),
-                "recipe_count": len(cards),
-                "rare_count": rare_count,
-                "wanted_count": wanted_count,
-                "chips": _dungeon_chips(rare_count, wanted_count),
-                "recipes": cards[:LISTED_PER_DUNGEON],
-            }
-        )
+    by_map = _drops_by_dungeon(recipes, drop_rows)
+    reads = (holders_by_skill, known_spells, icons, book)
+    dungeons = [
+        _dungeon_card(map_id, items, recipes, names, reads)
+        for map_id, items in by_map.items()
+    ]
     dungeons.sort(key=lambda d: (d["place"], d["name"]))
     for rank, dungeon in enumerate(dungeons, start=1):
         dungeon["rank"] = rank
