@@ -768,6 +768,33 @@ class TheDoorsRecordGatesTheAsk(unittest.TestCase):
         ]
         self.assertEqual(guildrun.cleared_doors(rows), {("Bonkers", "ragefire")})
 
+    def test_only_the_lowest_uncleared_door_is_offered(self):
+        # Cave's ask went to Shadowfang Keep (floor 22) over the Deadmines
+        # (floor 17) it had never cleared: level order offers only the lowest.
+        sfk = gs.Need(
+            "Auren", "shadowfang", "Sword", entry=3, gain=9.0, slot="mainhand"
+        )
+        out = plan(
+            [mate("Auren", 24, ROGUE)],
+            needs={"Auren": [sfk, cape_need("Auren")]},
+            records=guildrun.shape_records([], NOW),
+        )
+        post = [p for p in out.posts if p.asker == "Auren"][0]
+        self.assertEqual([o.door.keyword for o in post.options], ["deadmines"])
+
+    def test_a_cleared_lower_door_lets_the_next_one_up_be_asked(self):
+        sfk = gs.Need(
+            "Auren", "shadowfang", "Sword", entry=3, gain=9.0, slot="mainhand"
+        )
+        out = plan(
+            [mate("Auren", 24, ROGUE)],
+            needs={"Auren": [sfk, cape_need("Auren")]},
+            records=guildrun.shape_records([], NOW),
+            cleared={("Cave", "deadmines")},
+        )
+        post = [p for p in out.posts if p.asker == "Auren"][0]
+        self.assertEqual([o.door.keyword for o in post.options], ["shadowfang"])
+
     def test_a_healthy_door_still_wins_over_a_failing_better_need(self):
         rows = [ended("deadmines", "wiped")] * guildrun.FAILING_RUNS
         out = plan(
