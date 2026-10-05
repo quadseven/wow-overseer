@@ -11,6 +11,7 @@ the wiring in the bridge, the map server and the page as source.
 
 import asyncio
 import dataclasses
+from dataclasses import replace
 import pathlib
 import unittest
 
@@ -751,6 +752,13 @@ class AFailingDoorIsRetired(unittest.TestCase):
         self.assertEqual(guildrun.failing_doors(p), {"ragefire"})
         keyword, _why = guildrun.heuristic_door(p, p.options[0])
         self.assertNotEqual(keyword, "ragefire")
+
+    def test_the_only_fitting_door_is_still_chosen(self):
+        # A preference, not a ban: the record only moves when the door is run.
+        rows = [ended("ragefire", "wiped")] * 6
+        p = plan(rows)
+        only = replace(p, doors=tuple(d for d in p.doors if d.keyword == "ragefire"))
+        self.assertEqual(guildrun.heuristic_door(only, only.options[0])[0], "ragefire")
 
     def test_one_clear_keeps_it(self):
         rows = [ended("ragefire", "wiped")] * 6 + [ended("ragefire", "cleared")]

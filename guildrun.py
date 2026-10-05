@@ -903,12 +903,17 @@ def plan_for(pool: Pool, all_doors: list, table: dict) -> Plan | None:
 # level fit because no single composition had MIN_SAMPLES runs. A door with at
 # least FAILING_RUNS runs at the band, pooled over compositions, and no clear is
 # skipped while any other door fits.
+#
+# IT IS A PREFERENCE, NOT A BAN. When the failing door is the ONLY door that
+# fits the band it is still chosen: the record is a rolling window that only
+# moves when the door is run, so a hard ban would retire it for good, and the
+# failures behind it were made by groups #575 found misseated.
 FAILING_RUNS = 6
 
 
 def failing_doors(plan: Plan) -> set:
     """Keywords of doors that have failed FAILING_RUNS times at this band with
-    no clear."""
+    no clear. Callers prefer other doors over these; see FAILING_RUNS."""
     out = set()
     for door in plan.doors:
         rate = door_rate(plan.table, door.keyword, plan.band)
@@ -922,7 +927,9 @@ def heuristic_door(plan: Plan, composition: Composition) -> tuple:
     runs at this band, when it beats the level fit's own; else the level fit.
     A failing door (failing_doors) is skipped while another door fits."""
     failing = failing_doors(plan)
-    doors = [d for d in plan.doors if d.keyword not in failing] or list(plan.doors)
+    healthy = [d for d in plan.doors if d.keyword not in failing]
+    # Only failing doors fit: still go (FAILING_RUNS says why).
+    doors = healthy if healthy else list(plan.doors)
     fit = doors[0]
     known = []
     for door in doors:
@@ -1197,8 +1204,11 @@ async def decide(client, plan: Plan, environ=None) -> Decision:
     )
     chosen = plan.composition(comp.chosen)
     fits = {d.keyword for d in fitting_doors(chosen.levels, list(plan.doors))}
-    # Jev may not send a group to a door that keeps failing either.
-    fits = (fits - failing_doors(plan)) or fits
+    # Jev may not send a group to a door that keeps failing either, unless only
+    # failing doors fit (FAILING_RUNS says why).
+    healthy_fits = fits - failing_doors(plan)
+    if healthy_fits:
+        fits = healthy_fits
     if door_keyword not in fits and fits:
         # The heuristic's door, re-asked for the composition that was chosen.
         door_keyword, door_why = heuristic_door(plan, chosen)
