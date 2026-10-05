@@ -2469,6 +2469,16 @@ def _quest_while_stuck(names: list, mode: str, stuck) -> int:
     return written
 
 
+def _town_errand_heartbeat(said, now: float):
+    """Log that a full town errand pass ran, at most once a heartbeat; the
+    time of the last line, for the next pass."""
+    if said is not None and now - said < TOWN_ERRAND_HEARTBEAT_SECONDS:
+        return said
+    log.info("town errand: pass ran for every family; %d errand(s) under way",
+             sum(1 for state in _TOWN_ERRANDS.values() if state.active))
+    return now
+
+
 def _bag_errand_needed(names, free_slots: dict, campaign_waiting: bool) -> bool:
     """Whether the town errand still runs for bag room past its ceiling.
 
@@ -14601,12 +14611,14 @@ class Bridge(discord.Client):
         """Run each family's town errand, every TOWN_ERRAND_CYCLE_SECONDS."""
         await self.wait_until_ready()
         await asyncio.sleep(TOWN_ERRAND_CYCLE_SECONDS)
+        said = None
         while not self.is_closed():
             try:
                 await self._town_errand_once()
             except Exception:
                 log.exception("town errand: pass failed; retrying next cycle")
             await self._for_other_families("town errand", self._town_errand_once)
+            said = _town_errand_heartbeat(said, time.monotonic())
             await asyncio.sleep(TOWN_ERRAND_CYCLE_SECONDS)
 
     async def _town_errand_once(self, cohort=None, _locked=False) -> None:
@@ -24800,6 +24812,12 @@ _MAIL_SQL = (
 TOWN_ERRAND_CLAIMANT = "town errand"
 TOWN_ERRAND_SOURCE = "overseer:town-errand"
 TOWN_ERRAND_CYCLE_SECONDS = 30.0
+# THE LOOP SAYS IT RAN (wow-dev 2026-10-05). An errand is due only now and
+# then, so a loop with nothing to run wrote nothing for two hours and the
+# "town errand loop has gone quiet" monitor could not tell idle from hung. One
+# line every TOWN_ERRAND_HEARTBEAT_SECONDS after a full pass is the liveness
+# that monitor reads.
+TOWN_ERRAND_HEARTBEAT_SECONDS = 900.0
 TOWN_ERRAND_SETTLE_SECONDS = 60.0
 TOWN_ERRAND_VENDOR_YARDS = 250.0
 # family key -> townerrand.State, and family key -> {step: first run}.
