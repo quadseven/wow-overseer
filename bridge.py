@@ -23164,6 +23164,16 @@ def _guild_skills_and_spells(skill_rows, spell_rows):
     return skills, known
 
 
+def _row_int(row, key):
+    """`row[key]` as an int, or None when the read had none."""
+    return None if row.get(key) is None else int(row[key])
+
+
+def _row_float(row, key):
+    """`row[key]` as a float, or None when the read had none."""
+    return None if row.get(key) is None else float(row[key])
+
+
 def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible):
     members, crafters = [], {}
     for r in rows:
@@ -23181,10 +23191,10 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             in_combat=bool(int(r.get("in_combat") or 0)),
             # The saved map even when the snapshot is stale; the position only
             # from a fresh snapshot, so a walk is never judged from an old one.
-            map_id=None if r.get("map_id") is None else int(r["map_id"]),
-            x=None if r.get("pos_x") is None else float(r["pos_x"]),
-            y=None if r.get("pos_y") is None else float(r["pos_y"]),
-            zone_id=None if r.get("zone_id") is None else int(r["zone_id"]),
+            map_id=_row_int(r, "map_id"),
+            x=_row_float(r, "pos_x"),
+            y=_row_float(r, "pos_y"),
+            zone_id=_row_int(r, "zone_id"),
             money=int(r.get("money") or 0), skills=skills.get(guid, {}),
             known=frozenset(known.get(guid, ())), carried=carried.get(guid, ()),
             eligible=name in eligible))
