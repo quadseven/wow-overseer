@@ -462,7 +462,8 @@ FOCUS_AIMS = {
 # each bolt (a leveling guide's "worth casting here" bracket, same kind of
 # source the existing Linen entry's 1-60 already leaned on before this pass
 # extended it slightly past the guide's stated 1-45). Gaps between brackets
-# (146-174, 186-249, 261-300) are exactly where the still-deferred thread/
+# (145-174, 185-249, 260-300; 101-124 is Woolen Bag's now, see its own
+# comment) are exactly where the still-deferred thread/
 # dye recipes belong (infra#3609's own body: "Reinforced Linen Cape, Silk
 # Headband, Crimson Silk Vest, Runecloth Belt/Bag/Gloves, and more") -
 # `recipe_for` correctly returns None there rather than inventing a bolt
@@ -922,6 +923,43 @@ RECIPES: dict = {
             "needed; min_skill shifted from the guide's 61 to make "
             "room for Linen Belt directly above, see this table's "
             "own header comment",
+        ),
+        # 101-124 WAS A DEAD ZONE AND A BAG FILLS IT (the operator, 2026-10-05:
+        # "we need Og to level up tailoring ... we need big bags"). With
+        # nothing here, a tailor walked off the top of Bolt of Woolen Cloth at
+        # 100 and `recipe_for` answered None for twenty-four points, so the
+        # ladder ended at 100 for anyone without an operator's hand on it.
+        #
+        # Woolen Bag is the one recipe in that window whose every fact this
+        # repo already holds from the realm itself, three ways:
+        #
+        #   Spell.dbc (md5 543b9fe61355b6a77a01714d52fea2e5, both anchors
+        #   asserted first: 2963 -> Reagent[0]=2589 x2, 2657 -> focus 3):
+        #     3757 "Woolen Bag"  RequiresSpellFocus 0  EquippedItemClass -1
+        #     3x Bolt of Woolen Cloth (2997) + 1x Fine Thread (2321) -> 4240
+        #   SkillLineAbility.dbc: yellow 105 (craftbook.json), grey 140
+        #     (guildcorps.BAGS, measured 2026-09-23)
+        #   trainer_spell: taught at Tailoring 80 (bag_economy.LADDER and
+        #     guildcorps.BAGS agree), so 101 is well past the learn floor
+        #
+        # 101-104 is ORANGE and 124 still yellow-to-green against a grey of
+        # 140, so every point in the bracket can roll a skill-up; it stops at
+        # 124 because Bolt of Silk Cloth owns 125. Every cast is also an
+        # 8-slot bag, which the family hand-over passes to whoever has an
+        # empty bag position. The bolts it eats come off this table's own
+        # Woolen bolt rung; `craft_rhythm.BOLT_FED` weaves more when they run
+        # out, because a bag rung with no bolts in hand would otherwise sit
+        # refused on every poll.
+        Recipe(
+            3757,
+            "Woolen Bag",
+            min_skill=101,
+            max_skill=124,
+            note="3x Bolt of Woolen Cloth (2997, own Tailoring output), "
+            "1x Fine Thread (2321, vendor-bought - see "
+            "craft_supply.REAGENTS) -> 1x Woolen Bag (item 4240, 8 "
+            "slots), no focus needed. trainer_spell rank 80, yellow "
+            "105, grey 140",
         ),
         Recipe(
             3839,
