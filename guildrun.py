@@ -47,6 +47,12 @@ refused over one named member is formed again at once without that member
 (BENCH_MINUTES), up to MAX_SWAPS times in a row. mod-overseer has its own
 switch and cap (Overseer.GuildFinder.Enable, .MaxGroups) behind this one.
 
+WITH THE SOCIAL LAYER ON (GUILD_SOCIAL, the default), none of the picking
+above runs: a group forms only from a member's ask in guild chat and the yeses
+it drew (guildsocial.py, #569), and this module lends it the doors, the level
+fit, the coverage and shield gates, the finder row and the record. Off, the
+picking above is the fallback; the bridge never runs both.
+
 PURE: facts in, groups, questions and judgments out. The bridge reads and
 writes; the only I/O here is the Jev client the caller hands in.
 """
@@ -1306,7 +1312,22 @@ def _minutes(seconds) -> str:
     return "%d min" % round(int(seconds or 0) / 60.0)
 
 
+# A run formed from a guild-chat ask (guildsocial) records who chose instead
+# of a Jev judgment: the proposer chose the dungeon, the yeses the group.
+ASKED, ANSWERED = "ask", "answers"
+
+
+def _asked_lines(view: dict) -> list:
+    who = view.get("proposer") or "a member"
+    return [
+        "dungeon: %s asked for it in guild chat" % who,
+        "group: the guildmates who answered yes (%s)" % view["composition"],
+    ]
+
+
 def _run_lines(view: dict) -> list:
+    if view["dungeon"]["by"] == ASKED:
+        return _asked_lines(view) + _outcome_lines(view)
     lines = [
         _choice_line(
             "dungeon",
@@ -1327,6 +1348,11 @@ def _run_lines(view: dict) -> list:
             "record before this run: %d%% over %s"
             % (round(100 * (view["prior"] or 0.0)), _n(view["prior_runs"], "run"))
         )
+    return lines + _outcome_lines(view)
+
+
+def _outcome_lines(view: dict) -> list:
+    lines = []
     bosses = (
         "%d of %d bosses" % (view["bosses_done"], view["bosses_total"])
         if view["bosses_total"]
@@ -1391,6 +1417,7 @@ def _run_view(row: dict) -> dict:
     view.update(
         {
             "id": row.get("id"),
+            "proposer": str(row.get("proposer") or ""),
             "place": _place(view["keyword"]),
             "members": _member_list(row.get("members")),
             "dungeon": _judged(row, "dungeon"),
