@@ -59,6 +59,7 @@ writes; the only I/O here is the Jev client the caller hands in.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 from dataclasses import dataclass, field, replace
@@ -849,6 +850,110 @@ def door_rate(table: dict, keyword: str, band: str, composition: str = "") -> Ra
             cleared += rate.cleared
             deaths += rate.deaths
     return Rate(runs, cleared, deaths)
+
+
+# THE RECORD BY SHAPE, COUNTING THE RUNS THAT NEVER GOT IN (#583, #584). The
+# social layer asks for a door before any group exists, so the only group it
+# can judge is the shape the asker's guild can seat: a real tank or not, a real
+# healer or not (Member.plays). `rates` drops a run the finder turned away, yet
+# Ragefire at 10 to 14 ran 92 times and 72 never got in; that is the strongest
+# record there is, so it is counted here. A door is closed for a shape after
+# FAILING_RUNS runs in with no clear, or TURNED_AWAY_RUNS turn-aways in a row.
+# Only RECORD_DAYS of runs count: the record moves only when the door is run,
+# so a door closed for a shape opens again a week after its last run.
+RECORD_DAYS = 7
+TURNED_AWAY = ("not entered", "refused")
+TURNED_AWAY_RUNS = 5
+
+
+def shape_key(real_tank: bool, real_healer: bool) -> str:
+    """The shape a record is kept under, in Composition.key's words."""
+    return "%s-tank/%s-healer" % (
+        "spec" if real_tank else "class",
+        "spec" if real_healer else "class",
+    )
+
+
+@dataclass(frozen=True)
+class ShapeRecord:
+    """One (door, band, shape)'s runs: those that went in, and those the
+    finder turned away (`streak` of them newest first, before any run in)."""
+
+    went_in: int = 0
+    cleared: int = 0
+    deaths: int = 0
+    turned_away: int = 0
+    streak: int = 0
+
+    @property
+    def rate(self) -> Rate:
+        return Rate(self.went_in, self.cleared, self.deaths)
+
+    @property
+    def failing(self) -> bool:
+        return (
+            self.went_in >= FAILING_RUNS and self.cleared == 0
+        ) or self.streak >= TURNED_AWAY_RUNS
+
+    def words(self) -> str:
+        text = self.rate.words()
+        if self.turned_away:
+            text += "; the dungeon finder turned %s away" % _n(
+                self.turned_away, "group"
+            )
+        return text
+
+
+NO_SHAPE_RECORD = ShapeRecord()
+
+
+def shape_records(
+    rows: list, now=None, rolling: int = ROLLING, days: int = RECORD_DAYS
+) -> dict:
+    """(keyword, band, shape) -> ShapeRecord over the last `rolling` ended runs
+    of each within `days` of `now` (every run when `now` or a row's ended_at is
+    unknown). Rows are overseer_guild_run rows, newest first. A lost run says
+    nothing either way and is skipped; a helper suffix ("+1help") is dropped
+    from the composition, since helpers do not change the shape."""
+    counted: dict = {}
+    got_in: set = set()
+    out: dict = {}
+    oldest = None if now is None else now - datetime.timedelta(days=days)
+    for row in rows:
+        if str(row.get("state") or "") != ENDED:
+            continue
+        outcome = str(row.get("outcome") or "")
+        entered = outcome in WENT_IN
+        if not entered and outcome not in TURNED_AWAY:
+            continue
+        ended_at = row.get("ended_at")
+        if oldest is not None and ended_at is not None and ended_at < oldest:
+            continue
+        key = (
+            str(row.get("keyword") or ""),
+            str(row.get("band") or ""),
+            str(row.get("composition") or "").split("+", 1)[0],
+        )
+        n = counted.get(key, 0)
+        if n >= rolling:
+            continue
+        counted[key] = n + 1
+        rec = out.get(key, NO_SHAPE_RECORD)
+        if entered:
+            got_in.add(key)
+            out[key] = replace(
+                rec,
+                went_in=rec.went_in + 1,
+                cleared=rec.cleared + (1 if outcome == CLEARED else 0),
+                deaths=rec.deaths + int(row.get("deaths") or 0),
+            )
+        else:
+            out[key] = replace(
+                rec,
+                turned_away=rec.turned_away + 1,
+                streak=rec.streak + (0 if key in got_in else 1),
+            )
+    return out
 
 
 def comp_rate(table: dict, composition: str, band: str) -> Rate:

@@ -11,6 +11,7 @@ the wiring in the bridge, the map server and the page as source.
 
 import asyncio
 import dataclasses
+import datetime
 from dataclasses import replace
 import pathlib
 import unittest
@@ -695,6 +696,49 @@ class TheRecord(unittest.TestCase):
             ended("ragefire", "lost"),
         ]
         self.assertEqual(guildrun.rates(rows), {})
+
+
+class TheRecordByShape(unittest.TestCase):
+    """#584: the social layer's record, keyed by (door, band, shape) with the
+    runs the finder turned away counted."""
+
+    def test_turned_away_runs_count_and_a_lost_one_does_not(self):
+        rows = [
+            ended("ragefire", "not entered", band="10-14"),
+            ended("ragefire", "refused", band="10-14"),
+            ended("ragefire", "lost", band="10-14"),
+            ended("ragefire", "wiped", band="10-14", deaths=3),
+        ]
+        rec = guildrun.shape_records(rows)[
+            ("ragefire", "10-14", "spec-tank/spec-healer")
+        ]
+        self.assertEqual((rec.went_in, rec.turned_away, rec.streak), (1, 2, 2))
+        self.assertIn("turned 2 groups away", rec.words())
+
+    def test_a_helper_does_not_change_the_shape(self):
+        rows = [ended("ragefire", "cleared", comp="spec-tank/class-healer+1help")]
+        self.assertIn(
+            ("ragefire", "15-19", "spec-tank/class-healer"),
+            guildrun.shape_records(rows),
+        )
+
+    def test_failing_by_wipes_or_by_a_turned_away_streak(self):
+        wipes = [ended("ragefire", "wiped")] * guildrun.FAILING_RUNS
+        away = [ended("ragefire", "not entered")] * guildrun.TURNED_AWAY_RUNS
+        broken = [ended("ragefire", "not entered")] * 4 + [ended("ragefire", "wiped")]
+        key = ("ragefire", "15-19", "spec-tank/spec-healer")
+        self.assertTrue(guildrun.shape_records(wipes)[key].failing)
+        self.assertTrue(guildrun.shape_records(away)[key].failing)
+        self.assertFalse(guildrun.shape_records(broken)[key].failing)
+
+    def test_an_old_run_ages_out(self):
+        now = datetime.datetime(2026, 10, 4, 20, 0, 0)
+        old = dict(
+            ended("ragefire", "wiped"),
+            ended_at=now - datetime.timedelta(days=guildrun.RECORD_DAYS + 1),
+        )
+        self.assertEqual(guildrun.shape_records([old] * 6, now), {})
+        self.assertEqual(guildrun.shape_key(True, False), "spec-tank/class-healer")
 
 
 def plan(table_rows=()):
