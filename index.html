@@ -13668,6 +13668,25 @@ function applyHash() {
   const cut = raw.indexOf("/");
   const asked = cut < 0 ? raw : raw.slice(0, cut);
   const name = HASH_ALIASES.get(asked) || asked;
+  // AN IN-PAGE ANCHOR IS NOT A ROUTE. The Armory's member chips (#aprof-Grog)
+  // and the other jump bars (#ajump, #stjump) are links to a card on the page
+  // the reader is on. Read as a route, "aprof-Grog" is no view and fell back
+  // to the family page, so tapping Grog in the Armory opened Grug's family.
+  // A hash that names no view but an element on the page scrolls to it, keeps
+  // the view, and puts the view's own hash back so a reload stays here.
+  if (raw && view && HASH_VIEWS.indexOf(name) < 0 && name !== MAP_VIEW) {
+    let target = null;
+    try { target = document.getElementById(decodeURIComponent(raw)); } catch (e) { target = null; }
+    // Only a card on a view that is showing: a cold load with an anchor
+    // routes as before.
+    const host = target && target.closest("section");
+    if (target && !(host && host.hidden)) {
+      const still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
+      history.replaceState(null, "", hashFor(view));
+      return;
+    }
+  }
   if (name === MAP_VIEW) {
     wantedContinent = cut < 0 ? "" : raw.slice(cut + 1);
     adoptContinent();
