@@ -63,6 +63,7 @@ database.
 
 from __future__ import annotations
 
+import dungeonpath
 import goals
 import professions
 import recap
@@ -102,6 +103,18 @@ LISTED_KNOWN = 20
 # recipe can be on thirty vendors, and printing them is not a farm plan, it is
 # a wall.
 SOURCES_SHOWN = 3
+
+# WHAT MAKES A DUNGEON RECIPE "RARE", and both halves are the operator's rule
+# (2026-10-05) rather than a judgement made here. The item's own Quality column
+# at uncommon (2) or better, OR a drop chance on the loot table's own row under
+# five per cent. Either alone is enough: a green recipe at 20% is still the one
+# the guild cannot buy, and a white one at 1% is still a farm.
+RARE_QUALITY = 2
+RARE_CHANCE = 5.0
+
+# How many recipes one dungeon card lists before it says how many more there
+# are. Read on a phone, where a long list is a list nobody scrolls.
+LISTED_PER_DUNGEON = 10
 
 # The three ways a recipe ITEM reaches a character in this database. ROLE
 # NAMES rather than display words: the sentence beside each one is written
@@ -1115,6 +1128,317 @@ def _place_them(trades: list[dict]) -> None:
         trade["rank"] = place
 
 
+def _chance_of(row: dict) -> float:
+    """The loot row's chance as a plain percentage.
+
+    A NEGATIVE CHANCE IS A QUEST DROP, the core's own convention, and the size
+    of the number is still the chance. Reading it signed would file every
+    quest-only pattern as a zero-chance row.
+    """
+    return abs(float(row.get("Chance") or 0))
+
+
+def is_rare(quality, chance: float) -> bool:
+    """The operator's rule for a rare recipe, and nothing more.
+
+    Uncommon (quality 2) or better, OR a drop chance on the table's own row
+    under RARE_CHANCE. A chance of zero is NOT under five: it is the row that
+    shares one roll with its group, whose real chance this page cannot count
+    (`_chance_line` says why), so it is left to the quality half alone rather
+    than being called rare on a number nobody read.
+    """
+    if quality is not None and int(quality) >= RARE_QUALITY:
+        return True
+    return 0 < chance < RARE_CHANCE
+
+
+def _rare_line(quality, chance: float) -> str:
+    """Which half of the rule made it rare, or why it is not."""
+    good = quality is not None and int(quality) >= RARE_QUALITY
+    scarce = 0 < chance < RARE_CHANCE
+    if good and scarce:
+        return "rare twice over: uncommon or better, and under %g%% a kill" % (
+            RARE_CHANCE
+        )
+    if good:
+        return "rare: the recipe item is uncommon quality or better"
+    if scarce:
+        return "rare: it drops on under %g%% of kills" % RARE_CHANCE
+    if chance <= 0:
+        return (
+            "not counted rare: a common item, and the loot table gives no "
+            "chance on its row to measure"
+        )
+    return "not counted rare: a common item that drops on %g%% of kills" % chance
+
+
+def _need_line(word: str, rank: int, holders: list[dict], needers: list[str]) -> str:
+    """Who in the guild still wants this one, out of who holds the trade."""
+    if not holders:
+        return "nobody here holds %s, so nobody here can learn it yet" % word
+    if not needers:
+        return "every %s holder here already knows it" % word
+    who = " and ".join(needers)
+    verbs = "holds %s and does not" if len(needers) == 1 else "hold %s and do not"
+    return "still needed by %s, who %s know it yet; it asks for %s %d" % (
+        who,
+        verbs % word,
+        word,
+        rank,
+    )
+
+
+def _creature_line(row: dict) -> str:
+    """One creature inside the dungeon that drops it, with its levels."""
+    low = int(row.get("minlevel") or 0)
+    high = int(row.get("maxlevel") or 0)
+    if low and high and low != high:
+        band = "level %d to %d" % (low, high)
+    elif low:
+        band = "level %d" % low
+    else:
+        band = "a level this page cannot read"
+    return "from %s, %s: %s" % (
+        row.get("name") or "an unnamed creature",
+        band,
+        _chance_line(_chance_of(row)),
+    )
+
+
+def _dungeon_recipe_chips(
+    word: str, rank: int, rare: bool, chance: float, needers: list[str], held: bool
+) -> list[dict]:
+    """The words a collapsed dungeon recipe keeps, cut from its sentences."""
+    chips = [{"text": "%s %d" % (word, rank), "tone": ""}]
+    if rare:
+        chips.append({"text": "rare", "tone": "up"})
+    if chance > 0:
+        chips.append({"text": "%g%%" % chance, "tone": ""})
+    if needers:
+        chips.append(
+            {
+                "text": (
+                    "1 still needs it"
+                    if len(needers) == 1
+                    else "%d still need it" % len(needers)
+                ),
+                "tone": "up",
+            }
+        )
+    elif held:
+        chips.append({"text": "already known", "tone": ""})
+    else:
+        chips.append({"text": "nobody holds the trade", "tone": "no"})
+    return chips
+
+
+def _dungeon_level(map_id: int, rows: list[dict]) -> tuple[tuple, str]:
+    """Where a dungeon sits in the order, and the sentence that says so.
+
+    THE SITE'S OWN PATH FIRST. dungeonpath.PATH is the curated band table the
+    dungeon tab walks, so a dungeon on it lands where that tab puts it and is
+    described by that tab's band. A map off the path (Outland, Northrend, a
+    heroic) falls back to the lowest level of the creatures read here, which
+    is a fact about this page's rows and is said to be one.
+    """
+    for place, step in enumerate(dungeonpath.PATH):
+        if step.map_id == map_id:
+            return (0, place), "the dungeon path runs it at levels %d to %d" % (
+                step.low,
+                step.high,
+            )
+    levels = [int(row.get("minlevel") or 0) for row in rows]
+    levels = [level for level in levels if level]
+    if not levels:
+        return (2, 0), (
+            "off the dungeon path, and no creature read here carries a level"
+        )
+    low = min(levels)
+    return (1, low), (
+        "off the dungeon path; the lowest creature read here that drops a "
+        "recipe is level %d" % low
+    )
+
+
+def _dungeon_line(count: int, rare: int, wanted: int, listed: int) -> str:
+    """The count sentence on one dungeon card."""
+    if count == 1:
+        said = "1 recipe drops here" + (", and it is rare" if rare else "")
+    else:
+        said = "%d recipes drop here, %d of them rare" % (count, rare)
+    if wanted:
+        said += "; %d still wanted by somebody here" % wanted
+    else:
+        said += "; nobody here still needs one of them"
+    if count > listed:
+        said += ". The %d rarest and most wanted are listed" % listed
+    return said
+
+
+def _dungeon_chips(rare: int, wanted: int) -> list[dict]:
+    chips = []
+    if rare:
+        chips.append({"text": "%d rare" % rare, "tone": "up"})
+    if wanted:
+        chips.append({"text": "%d wanted" % wanted, "tone": "up"})
+    else:
+        chips.append({"text": "nothing wanted", "tone": ""})
+    return chips
+
+
+def _dungeons_headline(dungeons: list[dict]) -> str:
+    """The one line over the dungeon list. Counts, never a recommendation."""
+    if not dungeons:
+        return (
+            "no recipe drop this page read stands inside a dungeon, which is "
+            "also what a dungeon recipe behind a reference loot table looks "
+            "like from here"
+        )
+    recipes = sum(d["recipe_count"] for d in dungeons)
+    rare = sum(d["rare_count"] for d in dungeons)
+    wanted = sum(d["wanted_count"] for d in dungeons)
+    where = "1 dungeon" if len(dungeons) == 1 else "%d dungeons" % len(dungeons)
+    what = "1 recipe drops" if recipes == 1 else "%d recipes drop" % recipes
+    return "%s inside %s: %d rare, and %d still wanted by somebody here" % (
+        what,
+        where,
+        rare,
+        wanted,
+    )
+
+
+def _dungeons_order() -> str:
+    """The rule the dungeon list is in, printed above it."""
+    return (
+        "Dungeons in the order the dungeon path walks them, lowest level band "
+        "first; a dungeon off that path comes after it, by the lowest level of "
+        "the creatures read here. Inside a dungeon, rare recipes first, then "
+        "the ones somebody here still needs, then the lowest skill asked for, "
+        "then the name. A recipe is rare when the item is uncommon quality or "
+        "better, or when it drops on under %g%% of kills." % RARE_CHANCE
+    )
+
+
+def _dungeons_basis() -> str:
+    return (
+        "Only creature_loot_template DIRECT rows are read, exactly as the "
+        "trade cards do, so a dungeon recipe behind reference_loot_template "
+        "is missing here rather than absent from the dungeon. A creature is "
+        "placed in a dungeon by ONE of its spawn rows, the lowest by guid. "
+        "Who still needs a recipe is everybody here who holds its trade in "
+        "character_skills and does not have the craft spell it teaches in "
+        "character_spell; the skill the recipe asks for is printed "
+        "beside their names and is not a filter on them."
+    )
+
+
+def build_dungeon_recipes(
+    recipe_rows: list[dict],
+    drop_rows: list[dict],
+    holders_by_skill: dict,
+    known_spells: dict,
+    names: dict,
+    icons: dict,
+    book=None,
+) -> dict:
+    """Recipe drops grouped by the dungeon they drop in, rarest first.
+
+    THE OPERATOR'S QUESTION (2026-10-05): which dungeons hold which rare
+    recipes, so the guild can pick a dungeon for the patterns its crafters
+    need. The trade cards answer "where does this recipe come from"; this
+    answers the same rows the other way round, by the place a group walks into.
+
+    A DROP IS IN A DUNGEON WHEN ITS SPAWN'S MAP IS NOT A CONTINENT, the same
+    test `_place` uses to name it. A drop row for an item that is not a recipe
+    this page read (no trade, no taught spell) is skipped: it could say neither
+    whose trade it is nor who knows it.
+
+    `holders_by_skill` is skill id -> `_holders_of`'s list, and `known_spells`
+    is name -> spell ids, the same two answers the trade cards use, so this
+    list and those cards cannot disagree about who knows what.
+    """
+    recipes = {int(row["entry"]): row for row in recipe_rows}
+    by_map: dict = {}
+    for row in drop_rows:
+        entry = int(row.get("item") or 0)
+        map_id = row.get("map")
+        if entry not in recipes or map_id is None:
+            continue
+        map_id = int(map_id)
+        if map_id in CONTINENT_MAPS:
+            continue
+        by_map.setdefault(map_id, {}).setdefault(entry, []).append(row)
+
+    dungeons = []
+    for map_id, items in by_map.items():
+        cards = []
+        for entry, rows in items.items():
+            recipe = recipes[entry]
+            skill = int(recipe.get("RequiredSkill") or 0)
+            word = _skill_word(skill)
+            rank = int(recipe.get("RequiredSkillRank") or 0)
+            holders = holders_by_skill.get(skill, [])
+            spell = int(recipe.get("spellid_2") or 0)
+            needers = sorted(
+                holder["who"]
+                for holder in holders
+                if not (spell and spell in known_spells.get(holder["who"], ()))
+            )
+            rows = sorted(rows, key=lambda r: (-_chance_of(r), r.get("name") or ""))
+            chance = _chance_of(rows[0])
+            quality = recipe.get("quality", recipe.get("Quality"))
+            rare = is_rare(quality, chance)
+            payload = recap.item_payload(entry, recipe, icons, book)
+            payload.update(
+                trade=word,
+                rank=rank,
+                chance=chance,
+                rare=rare,
+                rare_line=_rare_line(quality, chance),
+                needed_by=needers,
+                need_line=_need_line(word, rank, holders, needers),
+                creatures=[_creature_line(row) for row in rows[:SOURCES_SHOWN]],
+                chips=_dungeon_recipe_chips(
+                    word, rank, rare, chance, needers, bool(holders)
+                ),
+            )
+            cards.append(payload)
+        cards.sort(
+            key=lambda c: (not c["rare"], not c["needed_by"], c["rank"], c["name"])
+        )
+        every_row = [row for rows in items.values() for row in rows]
+        place, level_line = _dungeon_level(map_id, every_row)
+        name = names.get(map_id) or "map %d" % map_id
+        rare_count = len([c for c in cards if c["rare"]])
+        wanted_count = len([c for c in cards if c["needed_by"]])
+        dungeons.append(
+            {
+                "map": map_id,
+                "name": name,
+                "place": place,
+                "level_line": level_line,
+                "line": _dungeon_line(
+                    len(cards), rare_count, wanted_count, LISTED_PER_DUNGEON
+                ),
+                "recipe_count": len(cards),
+                "rare_count": rare_count,
+                "wanted_count": wanted_count,
+                "chips": _dungeon_chips(rare_count, wanted_count),
+                "recipes": cards[:LISTED_PER_DUNGEON],
+            }
+        )
+    dungeons.sort(key=lambda d: (d["place"], d["name"]))
+    for rank, dungeon in enumerate(dungeons, start=1):
+        dungeon["rank"] = rank
+        del dungeon["place"]
+    return {
+        "line": _dungeons_headline(dungeons),
+        "order": _dungeons_order(),
+        "dungeons": dungeons,
+        "basis": _dungeons_basis(),
+    }
+
+
 def build_guildcraft(
     guild_rows: list[dict],
     member_rows: list[dict],
@@ -1182,11 +1506,14 @@ def build_guildcraft(
     drops = _by_item(drop_rows)
     quests = _by_item(quest_rows)
 
+    holders_by_skill = {
+        skill: _holders_of(skill, skills, members) for skill in recipe_skills()
+    }
     trades = [
         _trade_card(
             skill,
             by_skill.get(skill, []),
-            _holders_of(skill, skills, members),
+            holders_by_skill[skill],
             known_spells,
             assigned.get(skill, []),
             trainer_by_skill.get(skill, []),
@@ -1222,6 +1549,11 @@ def build_guildcraft(
         "order": _order(),
         "trades": trades,
         "basis": _basis(trainer_rows, roster_read),
+        # THE SAME ROWS THE OTHER WAY ROUND: by the dungeon a recipe drops in
+        # rather than by the trade it belongs to (operator, 2026-10-05).
+        "dungeons": build_dungeon_recipes(
+            recipe_rows, drop_rows, holders_by_skill, known_spells, names, icons, book
+        ),
         "empty_note": (
             "this database listed no trades this page could read, "
             "so there is nothing to compare"

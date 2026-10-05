@@ -888,11 +888,11 @@ class TheMarkup(unittest.TestCase):
         )
 
     def test_the_rules_are_numbered_without_a_gap_or_a_repeat(self):
-        """Five blocks now stand where two did. A duplicated index reads as two
-        parts of one section and a missing one reads as a section that failed
-        to render."""
+        """Six blocks now stand where two did, the sixth being rare recipes by
+        dungeon. A duplicated index reads as two parts of one section and a
+        missing one reads as a section that failed to render."""
         found = re.findall(r'<span class="ix">(\d+)</span>', SECTION)
-        self.assertEqual(found, ["01", "02", "03", "04", "05"])
+        self.assertEqual(found, ["01", "02", "03", "04", "05", "06"])
 
 
 class TheMobileRules(unittest.TestCase):

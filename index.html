@@ -1309,6 +1309,11 @@
   .gcr-src { margin-top:3px; padding-left:.7rem;
              border-left:2px solid var(--accent-text); font-size:12px;
              line-height:1.5; color:var(--on-card); overflow-wrap:anywhere; }
+  /* RARE RECIPES BY DUNGEON. The same rows as the trade cards turned round to
+     the place a group walks into, so each dungeon is a .gcr-card and each
+     recipe a .gcr-recipe: nothing new to draw, and the same phone rules hold. */
+  #gcdline, #gcdorder, #gcdbasis { max-width:72ch; }
+  #gcdlist { display:grid; gap:10px; }
 
   /* --- where to go next (infra#3500) ---------------------------------------
      EVERY DUNGEON AT ONCE, on a phone. The loot board answers this one map at
@@ -4286,6 +4291,11 @@
   <p id="gcrorder" class="chr-body"></p>
   <div id="gcrlist"></div>
   <details class="basis"><summary>how this is worked out</summary><p id="gcrbasis" class="chr-body"></p></details>
+  <div class="ds-rule"><span class="ix">06</span><span class="ln"></span><span class="lb">rare recipes by dungeon</span></div>
+  <p id="gcdline" class="chr-body"></p>
+  <p id="gcdorder" class="chr-body"></p>
+  <div id="gcdlist"></div>
+  <details class="basis"><summary>how this is worked out</summary><p id="gcdbasis" class="chr-body"></p></details>
 </section>
 <!-- THE COUNCIL. One block per family, both factions: what the family last
      decided and whether it is in effect, the last sitting in the family's own
@@ -9658,7 +9668,58 @@ function gcrRender(p) {
   setBasis(gcrbasis, p.empty_note || p.basis, !!p.empty_note);
   gcrlist.replaceChildren();
   for (const t of p.trades) gcrlist.appendChild(gcrTrade(t));
+  gcdRender(p.dungeons);
   gclRender(p.goal);
+}
+
+// --- rare recipes by dungeon (operator, 2026-10-05) -------------------------
+//
+// THE SAME DROP ROWS AS THE TRADE CARDS, GROUPED BY THE DUNGEON THEY DROP IN,
+// so the guild can pick a dungeon for the patterns its crafters still need.
+// Every sentence is guildcraft.build_dungeon_recipes's: the count on each
+// dungeon, its level band, which half of the rare rule a recipe met, and who
+// still needs it. `d.rank` is the module's place in the order, never this
+// loop's index.
+const gcdline = document.getElementById("gcdline");
+const gcdorder = document.getElementById("gcdorder");
+const gcdlist = document.getElementById("gcdlist");
+const gcdbasis = document.getElementById("gcdbasis");
+
+function gcdRecipe(recipe) {
+  const row = el("div", "gcr-recipe");
+  row.appendChild(chrItem(recipe, ""));
+  gcrChips(row, recipe.chips);
+  row.appendChild(el("div", "gcr-why", recipe.need_line));
+  row.appendChild(el("div", "gcr-why", recipe.rare_line));
+  for (const line of recipe.creatures) row.appendChild(el("div", "gcr-src", line));
+  return row;
+}
+
+function gcdDungeon(d) {
+  const card = el("details", "chr-card gcr-card");
+  const head = document.createElement("summary");
+  head.appendChild(el("span", "gcr-rank", String(d.rank)));
+  head.appendChild(el("span", "gcr-name", d.name));
+  head.appendChild(el("span", "gcr-sum", d.line));
+  gcrChips(head, d.chips);
+  card.appendChild(head);
+  const body = el("div", "gcr-body");
+  gcrNote(body, d.level_line);
+  for (const recipe of d.recipes) body.appendChild(gcdRecipe(recipe));
+  card.appendChild(body);
+  return card;
+}
+
+// A PAYLOAD FROM AN OLDER SERVER HAS NO `dungeons`, for the reason gclRender
+// gives below: drawing nothing is right, and blanking the section would read
+// as a world with no dungeon recipes in it.
+function gcdRender(g) {
+  if (!g) return;
+  gcdline.textContent = g.line;
+  gcdorder.textContent = g.order;
+  setBasis(gcdbasis, g.basis);
+  gcdlist.replaceChildren();
+  for (const d of g.dungeons) gcdlist.appendChild(gcdDungeon(d));
 }
 
 // --- the hundred per cent, and who is first in line (infra#3507 follow-up) --
