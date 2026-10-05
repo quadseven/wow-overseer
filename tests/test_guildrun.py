@@ -859,6 +859,24 @@ class JevChoosesWithAConfidence(unittest.TestCase):
         self.assertEqual(decision.dungeon.confidence, 0.3)
         self.assertEqual(decision.composition.chosen, "a")
 
+    def test_an_agreement_below_the_floor_is_the_heuristics(self):
+        # #584: 30 Wailing Caverns runs at 0.02 to 0.64 were credited to Jev.
+        fake = FakeJev(
+            picks={"dungeon": "ragefire", "composition": "a"}, confidence=0.3
+        )
+        decision = self.decide(fake)
+        self.assertEqual(decision.dungeon.chosen, "ragefire")
+        self.assertEqual(decision.dungeon.acted, jev.HEURISTIC)
+        self.assertEqual(decision.dungeon.chosen_by, jev.HEURISTIC)
+        self.assertTrue(decision.dungeon.agree)
+        self.assertEqual(decision.composition.acted, jev.HEURISTIC)
+
+    def test_an_agreement_at_the_floor_is_both(self):
+        fake = FakeJev(
+            picks={"dungeon": "ragefire", "composition": "a"}, confidence=0.6
+        )
+        self.assertEqual(self.decide(fake).dungeon.acted, jev.BOTH)
+
     def test_no_answer_is_the_prior(self):
         decision = self.decide(FakeJev(), key="")
         self.assertEqual(decision.dungeon.status, jev.NO_KEY)

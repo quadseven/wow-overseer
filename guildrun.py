@@ -1093,13 +1093,19 @@ def heuristic_composition(plan: Plan) -> tuple:
 
 
 def policy(kind: str, environ=None) -> jev.Policy:
-    """Act by default, at a 0.6 floor; an agreement is Jev's (#356)."""
+    """Act by default, at a 0.6 floor.
+
+    AN AGREEMENT BELOW THE FLOOR IS THE HEURISTIC'S (#584). #356 credited Jev
+    with any agreement; #583 then found 30 Wailing Caverns runs recorded
+    dungeon_by=both at confidence 0.02 to 0.64, a coin flip or worse, so a read
+    of overseer_guild_run by chooser credited Jev with picks it was not sure
+    of. The action is the same either way; only the record changes, and the
+    `agree` column still says the two answers matched."""
     return jev.policy(
         kind,
         environ=environ,
         default_mode=jev.ACT,
         default_threshold=DEFAULT_THRESHOLD,
-        on_agreement=True,
     )
 
 
