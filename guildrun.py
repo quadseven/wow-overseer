@@ -1027,37 +1027,46 @@ def failing_doors(plan: Plan) -> set:
     return out
 
 
+# AN UNTRIED DOOR CAN WIN (#583, #584). Every door is scored by its smoothed
+# rate at the band, and a door with fewer than MIN_SAMPLES runs scores the
+# untried prior (Rate.smoothed of no runs, 0.5) instead of being left out. So a
+# door at 0 cleared of 10 loses to a door nobody has run, where before the
+# known failure won every time (Wailing Caverns, 0 of 48). The level fit
+# breaks a tie.
+UNTRIED_PRIOR = NO_RATE.smoothed
+
+
+def _door_score(rate: Rate) -> float:
+    return rate.smoothed if rate.runs >= MIN_SAMPLES else UNTRIED_PRIOR
+
+
 def heuristic_door(plan: Plan, composition: Composition) -> tuple:
-    """(keyword, why). The best smoothed rate among doors with MIN_SAMPLES
-    runs at this band, when it beats the level fit's own; else the level fit.
-    A failing door (failing_doors) is skipped while another door fits."""
+    """(keyword, why). The best score among the doors that fit (_door_score:
+    the smoothed rate at this band, or the untried prior under MIN_SAMPLES
+    runs), the closest level fit on a tie. A failing door (failing_doors) is
+    skipped while another door fits."""
     failing = failing_doors(plan)
     healthy = [d for d in plan.doors if d.keyword not in failing]
     # Only failing doors fit: still go (FAILING_RUNS says why).
     doors = healthy if healthy else list(plan.doors)
-    fit = doors[0]
-    known = []
+    scored = []
     for door in doors:
         rate = door_rate(plan.table, door.keyword, plan.band, composition.key)
-        if rate.runs >= MIN_SAMPLES:
-            known.append((rate.smoothed, door, rate))
-    if known:
-        known.sort(key=lambda t: (-t[0], plan.doors.index(t[1])))
-        smoothed, door, rate = known[0]
-        fit_rate = door_rate(plan.table, fit.keyword, plan.band, composition.key)
-        if (
-            door.keyword == fit.keyword
-            or fit_rate.runs < MIN_SAMPLES
-            or smoothed > fit_rate.smoothed
-        ):
-            return door.keyword, "the best record at band %s: %s" % (
-                plan.band,
-                rate.words(),
-            )
-    return fit.keyword, "the closest level fit (%s wants %d to %d)" % (
-        fit.place,
-        fit.floor,
-        fit.ceiling,
+        scored.append((_door_score(rate), door, rate))
+    # Stable: on a tie the earlier door, the closer level fit, stays first.
+    scored.sort(key=lambda t: -t[0])
+    _score, door, rate = scored[0]
+    if rate.runs >= MIN_SAMPLES:
+        return door.keyword, "the best record at band %s: %s" % (
+            plan.band,
+            rate.words(),
+        )
+    if door.keyword != doors[0].keyword:
+        return door.keyword, "untried at band %s, over records that lose" % plan.band
+    return door.keyword, "the closest level fit (%s wants %d to %d)" % (
+        door.place,
+        door.floor,
+        door.ceiling,
     )
 
 

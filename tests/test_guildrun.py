@@ -761,7 +761,23 @@ class TheHeuristicIsThePrior(unittest.TestCase):
         self.assertIn("best record", why)
 
     def test_too_few_runs_do_not(self):
-        rows = [ended("ragefire", "wiped")] * 4 + [ended("wailing", "cleared")] * 2
+        # Under MIN_SAMPLES runs a door scores the untried prior, as the level
+        # fit does with none: a tie, and the level fit keeps it.
+        rows = [ended("wailing", "cleared")] * 2
+        p = plan(rows)
+        self.assertEqual(guildrun.heuristic_door(p, p.options[0])[0], "ragefire")
+
+    def test_an_untried_door_beats_a_long_losing_record(self):
+        # #583: Wailing Caverns went 0 of 48 and still beat the door nobody
+        # had tried, because a door under MIN_SAMPLES runs was left out.
+        rows = [ended("ragefire", "wiped")] * 4
+        p = plan(rows)
+        keyword, why = guildrun.heuristic_door(p, p.options[0])
+        self.assertNotEqual(keyword, "ragefire")
+        self.assertIn("untried", why)
+
+    def test_a_winning_record_still_beats_an_untried_door(self):
+        rows = [ended("ragefire", "cleared")] * 3
         p = plan(rows)
         self.assertEqual(guildrun.heuristic_door(p, p.options[0])[0], "ragefire")
 
