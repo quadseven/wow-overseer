@@ -293,8 +293,14 @@ def why_not_pug(
 
 def worth(mate, door, entrances: dict) -> float:
     """What the run is worth to a pug: its level's experience, less what it
-    is doing and the walk (guildsocial.worth with XP_BAND)."""
-    return guildsocial.worth(mate, door, guildsocial.XP_BAND, entrances)
+    is doing and the walk. The walk stays for a pug even though the finder
+    carries guildmates (guildsocial.FINDER_TELEPORTS): a pug is a stranger
+    picked from the door's side of the world, the nearest first."""
+    return (
+        guildsocial.XP_BAND
+        - guildsocial.activity_value(mate)
+        - guildsocial.travel_cost(mate, door, entrances)
+    )
 
 
 # How many reasons a Silence names.

@@ -634,9 +634,19 @@ def stance_of(mate: Mate, door, asker_level: int, faction: str, needs: list) -> 
     return NEED, XP_BAND, None
 
 
+# A GUILD RUN GOES IN BY THE DUNGEON FINDER, which teleports the group to the
+# instance and back (mod-overseer#770), so nobody walks to the door. Counting
+# the walk made almost every ask worthless: on wow-dev on 2026-10-05, with 45
+# of Bonkers' 61 members free, a Horde member on Kalimdor valued the Deadmines
+# at 2.0 (the xp) - 1.0 (its questing) - 2.5 (the sea), and asks drew one damage
+# dealer or none for hours. The walk counts again only if runs ever walk in.
+FINDER_TELEPORTS = True
+
+
 def worth(mate: Mate, door, value: float, entrances: dict) -> float:
     """What answering yes is worth over what the member is doing now."""
-    return value - activity_value(mate) - travel_cost(mate, door, entrances)
+    walk = 0.0 if FINDER_TELEPORTS else travel_cost(mate, door, entrances)
+    return value - activity_value(mate) - walk
 
 
 # --- the words ------------------------------------------------------------------------
