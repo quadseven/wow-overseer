@@ -1298,6 +1298,22 @@ def _supply_for(tailor, crew, facts, busy, room, recent, travel) -> list:
     return out
 
 
+def _working_tailor(post, named, busy, notes):
+    """The tailor a post names, or None with the note saying why it sits out."""
+    if post.role != "tailor":
+        return None
+    tailor = named.get(post.name)
+    if tailor is None:
+        notes.append("%s holds a post and is missing from the crew" % post.name)
+    elif tailor.name in busy:
+        notes.append("%s is already on a corps errand" % tailor.name)
+    elif classic.is_expansion_map(tailor.map_id):
+        notes.append(classic.outside_note(tailor.name, tailor.map_id))
+    else:
+        return tailor
+    return None
+
+
 def _guild_steps(
     guild_facts,
     posts,
@@ -1313,17 +1329,8 @@ def _guild_steps(
     named = {m.name: m for m in crew}
     letters = 0
     for post in posts:
-        if post.role != "tailor":
-            continue
-        tailor = named.get(post.name)
+        tailor = _working_tailor(post, named, busy, notes)
         if tailor is None:
-            notes.append("%s holds a post and is missing from the crew" % post.name)
-            continue
-        if tailor.name in busy:
-            notes.append("%s is already on a corps errand" % tailor.name)
-            continue
-        if classic.is_expansion_map(tailor.map_id):
-            notes.append(classic.outside_note(tailor.name, tailor.map_id))
             continue
         trainable = frozenset((trainable_by_map or {}).get(tailor.map_id, ()))
         vendors = frozenset((vendors_by_map or {}).get(tailor.map_id, ()))
