@@ -13217,10 +13217,12 @@ class Bridge(discord.Client):
                 | set(self._guild_mail_runs) | set(self._crafter_walks))
         cap = self._guild_walk_cap()
         near = await self._corps_mailbox_yards(members, names, busy, now)
+        masters = await asyncio.to_thread(_corps_masters_at_mailbox, members)
         if _guild_bag_corps_enabled():
             plan = guildcorps.plan(
                 members, facts["family"], facts["trainable"], facts["vendors"],
-                facts["recent"], busy, walk_yards=cap, mailbox_yards=near)
+                facts["recent"], busy, walk_yards=cap, mailbox_yards=near,
+                at_mailbox=masters)
         else:
             log.info("guild corps: bag crafting is held by configuration%s",
                      _family_label(cohort))
@@ -22524,9 +22526,10 @@ def _fetch_corps_facts(family_names: list) -> dict:
         maintenance = {m.name for m in maint}
         family = set(family_names)
         guid_of = {str(r["name"]): int(r["guid"]) for r in rows}
-        crew = ids(guid_of[n] for n in maintenance if n in guid_of)
+        # The family's trades are read with the crew's: its crafters are the
+        # corps' masters (guildcorps.MASTER_ROLES).
+        crew = ids(guid_of[n] for n in maintenance | family if n in guid_of)
         everyone = ids(guid_of.values())
-        kin = ids(guid_of[n] for n in family if n in guid_of)
         # THE RAID'S ITEMS AND CRAFTS RIDE THE SAME READS (#275), so one pass
         # sees the corps' cloth and the raid's herbs, potions and recipes.
         entries = ids(sorted(guildcorps.PATH_ENTRIES | set(guildcorps.BAG_ITEMS)
@@ -22536,11 +22539,12 @@ def _fetch_corps_facts(family_names: list) -> dict:
         skill_rows = _corps_read(cur, "skills", _CORPS_SKILLS_SQL.format(guids=crew, skills=skills))
         spell_rows = _corps_read(cur, "recipes", _CORPS_SPELLS_SQL.format(guids=crew, spells=spells))
         item_rows = _corps_read(cur, "carried materials", _CORPS_ITEMS_SQL.format(guids=everyone, entries=entries))
-        # The family's letters too: a bag already posted to a family member
-        # counts as worn, so the next bag goes to somebody else.
+        # Every guildmate's letters and worn bags: a bag goes to whoever in the
+        # guild it helps most, and one already posted counts as worn, so the
+        # next bag goes to somebody else.
         mail_rows = _corps_read(cur, "letters", _CORPS_LETTERS_SQL.format(
-            guids=",".join(g for g in (crew, kin) if g != "0") or "0", entries=entries))
-        bag_rows = _corps_read(cur, "worn bags", _CORPS_BAGS_SQL.format(guids=kin))
+            guids=everyone, entries=entries))
+        bag_rows = _corps_read(cur, "worn bags", _CORPS_BAGS_SQL.format(guids=everyone))
         trainable = _corps_read(cur, "trainers", _CORPS_TRAINABLE_SQL.format(spells=spells))
         vendors = _corps_read(cur, "vendors", _CORPS_VENDORS_SQL.format(entries=entries))
         recent = _corps_read(cur, "recent rows", _CORPS_RECENT_SQL, (guildcorps.SOURCE + ":%",))
@@ -22557,6 +22561,21 @@ def _fetch_corps_facts(family_names: list) -> dict:
         "vendors": guildcorps.places_from_rows(vendors, "item"),
         "recent": guildcorps.recent_from_rows(recent),
     }
+
+
+def _corps_masters_at_mailbox(members) -> set:
+    """The family crafters carrying a ladder bag and standing at a mailbox.
+
+    A master is never walked to one (guildcorps.master_step); its bag goes out
+    the pass its family's town stop puts it beside a box. Only a master that
+    carries a bag is looked up, so the reads stay a handful a pass.
+    """
+    holders = [m.name for m in members
+               if m.family and m.online
+               and any(int(h.entry) in guildcorps.BAG_ITEMS for h in m.carried)]
+    if not holders:
+        return set()
+    return _holders_at_mailbox(holders, _fetch_positions(holders))
 
 
 def _insert_corps_row(holder: str, row) -> int:
