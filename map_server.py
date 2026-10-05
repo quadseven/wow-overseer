@@ -71,6 +71,7 @@ import raidready
 import raidsupply
 import recap
 import realm
+import runstory
 import runtimeline
 import standing
 import stream
@@ -2806,6 +2807,47 @@ _GUILD_RUNS_SQL = (
     "FROM overseer_guild_run ORDER BY id DESC LIMIT 500"
 )
 
+# WHY A RUN WENT THE WAY IT DID (runstory). The deaths of the shown runs'
+# members inside those runs' own windows, and which creatures are bosses.
+# Every column here has been on overseer_death since its first migration, so
+# no thinner fallback is needed for 1054; a world without the table reads no
+# deaths, and each story then says only what the run's own counts say. The
+# windows are bound datetimes and the names bound values; `{holes}` and
+# `{spans}` are placeholders sized by runstory.death_scope.
+_RUN_DEATHS_SQL = (
+    "SELECT character_name, level, map, zone, killer_name, killer_type, killer_entry, "
+    "created_at FROM overseer_death WHERE character_name IN ({holes}) AND ({spans}) "
+    "ORDER BY id DESC LIMIT %s"
+)
+_RUN_DEATHS_SPAN = "created_at BETWEEN %s AND %s"
+RUN_DEATHS_LIMIT = 3000
+# The bosses, by creature entry: what tells a boss's kill from a trash pull.
+_RUN_BOSSES_SQL = (
+    "SELECT DISTINCT creditEntry FROM acore_world.instance_encounters "
+    "WHERE creditType = 0"
+)
+
+
+def _run_bosses(cur) -> frozenset:
+    rows = _wide_guarded(cur, _RUN_BOSSES_SQL, (), "", "instance_encounters")
+    return frozenset(int(r["creditEntry"]) for r in rows if r.get("creditEntry"))
+
+
+def _guild_run_stories(cur, runs: list) -> list:
+    """Add runstory's story, cause and causes to each ended guild run, from
+    one read of its members' deaths. Returns `runs`."""
+    names, spans = runstory.death_scope(runs)
+    deaths = []
+    if names and spans:
+        sql = _RUN_DEATHS_SQL.format(  # noqa: S608 - placeholders only
+            holes=", ".join(["%s"] * len(names)),
+            spans=" OR ".join([_RUN_DEATHS_SPAN] * len(spans)))
+        params = tuple(names) + tuple(t for span in spans for t in span)
+        deaths = _wide_guarded(cur, sql, params + (RUN_DEATHS_LIMIT,), "",
+                               "overseer_death")
+    return runstory.tell_guild_runs(runs, deaths, _run_bosses(cur),
+                                    recap.zone_names(GEO.continents))
+
 
 # THE GUILD CHAT FEED (#570). The asks a guild's members made in guild chat,
 # newest first, and the answers to them. The guild name is a bound parameter
@@ -2821,7 +2863,8 @@ _GUILD_ANSWERS_SQL = (
     "FROM overseer_guild_answer WHERE ask_id IN ({holes}) ORDER BY id"
 )
 _GUILD_ASK_RUNS_SQL = (
-    "SELECT id, state, outcome, bosses_done, bosses_total, deaths, ended_at "
+    "SELECT id, state, outcome, bosses_done, bosses_total, deaths, ended_at, "
+    "keyword, members, why, seconds_inside, created_at "
     "FROM overseer_guild_run WHERE id IN ({holes})"
 )
 # The asker's call for a pug in the faction's public channel (guildpug, #591);
@@ -2871,6 +2914,8 @@ def _fetch_guild_chat(guild: str, limit: int) -> dict:
                 runs = _wide_guarded(
                     cur, _GUILD_ASK_RUNS_SQL.format(holes=", ".join(["%s"] * len(run_ids))),
                     tuple(run_ids), "", "overseer_guild_run")
+                # The same story the Guild tab tells about this run.
+                runs = _guild_run_stories(cur, [dict(r) for r in runs])
     finally:
         conn.close()
     by_ask: dict = {}
@@ -4014,6 +4059,14 @@ _RUN_TIMELINE = (
     "FROM overseer_dungeon_run_event "
     "WHERE created_at > NOW() - INTERVAL %s HOUR ORDER BY id DESC LIMIT %s"
 )
+# The family members' deaths over the same hours, aged by the database the same
+# way, which runstory reads each run's story from.
+_RUN_TIMELINE_DEATHS = (
+    "SELECT character_name, level, map, zone, killer_name, killer_type, killer_entry, "
+    "TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_seconds "
+    "FROM overseer_death WHERE character_name IN ({holes}) "
+    "AND created_at > NOW() - INTERVAL %s HOUR ORDER BY id DESC LIMIT %s"
+)
 
 
 def _fetch_run_timeline() -> dict:
@@ -4037,9 +4090,19 @@ def _fetch_run_timeline() -> dict:
                                   (runtimeline.WINDOW_HOURS, runtimeline.ROW_LIMIT),
                                   "", "overseer_dungeon_run_event")
                     if present else [])
+            names = sorted({n for members in families.values() for n in members})
+            deaths = []
+            if rows and names:
+                deaths = _wide_guarded(
+                    cur, _RUN_TIMELINE_DEATHS.format(  # noqa: S608 - placeholders only
+                        holes=", ".join(["%s"] * len(names))),
+                    (*names, runtimeline.WINDOW_HOURS, runtimeline.ROW_LIMIT), "",
+                    "overseer_death")
+            bosses = _run_bosses(cur) if deaths else frozenset()
     finally:
         conn.close()
-    return {"rows": rows, "families": families, "present": present}
+    return {"rows": rows, "families": families, "present": present,
+            "deaths": deaths, "bosses": bosses}
 
 
 # --- the live dungeon recap and the loot board (infra#2597) ------------------
@@ -5771,7 +5834,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             fetched = _fetch_run_timeline()
             payload = runtimeline.build_run_timeline(
-                fetched["rows"], fetched["families"], present=fetched["present"])
+                fetched["rows"], fetched["families"], present=fetched["present"],
+                deaths=fetched["deaths"], bosses=fetched["bosses"],
+                zones=recap.zone_names(GEO.continents))
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # The tab keeps what it has drawn and says it may be stale.
@@ -6687,9 +6752,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 with conn.cursor() as cur:
                     rows = _wide_guarded(cur, _GUILD_RUNS_SQL, (), "", "overseer_guild_run")
+                    payload = guildrun.page(list(rows))
+                    # Why each run that came back went the way it did.
+                    _guild_run_stories(cur, payload["recent"])
             finally:
                 conn.close()
-            payload = guildrun.page(list(rows))
             self._send(200, "application/json", json.dumps(payload, default=str).encode())
         except Exception:
             log.exception("guild runs query failed")

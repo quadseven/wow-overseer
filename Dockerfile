@@ -53,7 +53,7 @@ COPY core.py bridge.py voice.py transform.py \
      campaignqueue.py dungeonpace.py \
      campaignplan.py dungeonladder.py levelroute.py \
      preraid.py gearscore.py gearupgrades.py pvpgear.py \
-     runtimeline.py \
+     runtimeline.py runstory.py \
      vclient.py guildgear.py \
      situation.py vision.py llmmode.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py \
      realmroller.py realmroller_world.py realmroller_plan.py realmroller_act.py \

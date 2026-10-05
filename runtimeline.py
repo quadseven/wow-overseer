@@ -8,7 +8,9 @@ and this module turns those rows into the Dungeons tab's timeline.
 
 WHAT IT DOES NOT DO IS DECIDE. Every sentence here is the module's row, or a
 title built from the row's own numbers. The page prints these strings and
-turns a tone name into a class; it composes nothing.
+turns a tone name into a class; it composes nothing. The one exception is
+each ended run's story and cause, which runstory.py writes from these rows
+and the family's deaths, and which say what is a guess.
 
 HOW ROWS BECOME RUNS. A run row does not exist until somebody is on the
 instance map, so the first phases of a run carry run id 0. The rows are split
@@ -22,6 +24,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import council
+import runstory
 
 try:
     from zoneinfo import ZoneInfo
@@ -244,20 +247,36 @@ def _event(row: dict, now: datetime) -> dict:
     }
 
 
-def _run_card(run: dict, latest: bool, now: datetime) -> dict:
+def _run_card(run: dict, latest: bool, now: datetime, told: dict | None = None) -> dict:
     line, tone = _summary(run, latest=latest)
-    return {
+    card = {
         "title": _title(run),
         "line": line,
         "tone": tone,
         "open": latest,
         "events": [_event(r, now) for r in run["rows"]],
     }
+    # Why the run went the way it did (runstory): the story, the cause line
+    # and the cause tags, empty while the run is under way.
+    told = told or {}
+    card.update(
+        runstory.family_story(
+            run,
+            told.get("deaths") or [],
+            told.get("names") or [],
+            told.get("bosses") or frozenset(),
+            told.get("zones") or {},
+            latest=latest,
+        )
+    )
+    return card
 
 
-def _family_block(family: str, rows: list[dict], now: datetime, limit: int) -> dict:
+def _family_block(
+    family: str, rows: list[dict], now: datetime, limit: int, told: dict | None = None
+) -> dict:
     shown = split_runs(rows)[-limit:][::-1]
-    drawn = [_run_card(run, index == 0, now) for index, run in enumerate(shown)]
+    drawn = [_run_card(run, index == 0, now, told) for index, run in enumerate(shown)]
     if drawn:
         head = "The last %d run%s, newest first." % (
             len(drawn),
@@ -274,13 +293,18 @@ def build_run_timeline(
     now: datetime | None = None,
     present: bool = True,
     runs_per_family: int = RUNS_PER_FAMILY,
+    deaths: list[dict] | None = None,
+    bosses: frozenset = frozenset(),
+    zones: dict | None = None,
 ) -> dict:
     """The timeline payload for every family.
 
     `rows` are overseer_dungeon_run_event rows with an `age_seconds` column,
     in any order. `families` maps a family to its members, from the roster;
     a family with no rows still gets a line saying so. `present` is False when
-    the table does not exist yet.
+    the table does not exist yet. `deaths` (overseer_death rows with an
+    `age_seconds` column), `bosses` (boss creature entries) and `zones` (area
+    id to name) are what runstory tells each ended run's story from.
     """
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -302,6 +326,18 @@ def build_run_timeline(
         "line": "Each run step by step, as the world server recorded it, times "
         "in %s. Kept for 14 days." % _ZONE_LABEL,
         "families": [
-            _family_block(f, by_family.get(f, []), now, runs_per_family) for f in names
+            _family_block(
+                f,
+                by_family.get(f, []),
+                now,
+                runs_per_family,
+                {
+                    "deaths": deaths or [],
+                    "names": families.get(f, []),
+                    "bosses": bosses,
+                    "zones": zones or {},
+                },
+            )
+            for f in names
         ],
     }
