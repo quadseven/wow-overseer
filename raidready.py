@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import bank
 import jobs
+import raidgear
 import raidgoals
 import raidlineup
 import raidroles
@@ -50,16 +51,13 @@ LEVEL_CAP = 60
 # missing attunement is soft. raidrun.py carries the path to earning it.
 ATTUNEMENT_QUESTS = (7487, 7848)
 
-# A CONVENTION AND NOT A GATE. Molten Core's access row states no item level
-# (min_avg_item_level is 0 on this realm). Players went in wearing dungeon
-# blues, which sit at item level 55 to 63, so an average below 55 across the
-# equipped slots is called thin and nothing more. Printed beside the number so
-# it can be disagreed with.
-GEAR_CONVENTION = 55
-
-# The paper-doll slots that carry no stats worth averaging: the shirt and the
-# tabard. Counting a level 1 shirt would drag every average down by a point.
-COSMETIC_SLOTS = frozenset({3, 18})
+# SEATS BY PRE-RAID READINESS (#542, decision #532), NOT ITEM LEVEL. A raider
+# is thin when fewer than raidgear.READY_SHARE of its scored slots sit at or
+# near its spec's pre-raid best in slot by gearscore. Molten Core's access row
+# states no gear floor (min_avg_item_level is 0 on this realm), so this is a
+# convention and not a gate; it is printed beside the number so it can be
+# disagreed with.
+GEAR_CONVENTION = raidgear.READY_SHARE
 
 # The keyword an ordered Molten Core night carries (`raid:moltencore`). Absent
 # from jobs.RAID_KEYWORDS, mod-overseer's DoJob refuses the job, so no raid
@@ -169,28 +167,6 @@ def _names(members: list, limit: int = 3) -> str:
     if len(shown) > 1:
         return "%s and %s" % (", ".join(shown[:-1]), shown[-1])
     return shown[0] if shown else ""
-
-
-def worn_item_levels(worn_rows: list) -> dict:
-    """name -> the average item level of what that character wears.
-
-    Averaged over the slots that hold something, shirt and tabard left out.
-    An empty slot is not counted as zero: an empty slot and a weak item are
-    two different fixes, and averaging a zero in would blur them together.
-    """
-    totals: dict = {}
-    for row in worn_rows:
-        if row.get("slot") is not None and int(row["slot"]) in COSMETIC_SLOTS:
-            continue
-        level = row.get("item_level")
-        if level is None:
-            continue
-        slot = totals.setdefault(row.get("name"), [0, 0])
-        slot[0] += int(level)
-        slot[1] += 1
-    return {
-        name: round(total / count) for name, (total, count) in totals.items() if count
-    }
 
 
 def _placed_raiders(lineup: dict) -> list:
@@ -332,7 +308,8 @@ def _level_blockers(raiders: list, min_level) -> tuple:
 
 
 def _gear_blockers(raiders: list, gear: dict, attuned: set) -> list:
-    """SOFT: thin gear against the convention, and the attunement shortcut."""
+    """SOFT: thin pre-raid gear against the convention, and the attunement
+    shortcut. `gear` is name -> pre-raid readiness share (raidgear), or None."""
     out = []
     thin = sorted(
         (
@@ -343,15 +320,17 @@ def _gear_blockers(raiders: list, gear: dict, attuned: set) -> list:
         key=lambda m: (gear[m["name"]], m["name"]),
     )
     if thin:
-        named = ", ".join("%s %d" % (m["name"], gear[m["name"]]) for m in thin[:3])
+        named = ", ".join(
+            "%s %s" % (m["name"], raidgear.percent(gear[m["name"]])) for m in thin[:3]
+        )
         if len(thin) > 3:
             named += " and %d more" % (len(thin) - 3)
         out.append(
-            "%s gear averaging below item level %d, the dungeon blues players "
-            "usually bring: %s."
+            "%s fewer than %d%% of their slots at or near pre-raid best in "
+            "slot: %s."
             % (
-                _count(len(thin), "raider wears", "raiders wear"),
-                GEAR_CONVENTION,
+                _count(len(thin), "raider has", "raiders have"),
+                round(GEAR_CONVENTION * 100),
                 named,
             )
         )
@@ -530,13 +509,14 @@ def _group_lines(lineup: dict) -> list:
 
 
 def _gear_line(raiders: list, gear: dict) -> str:
-    worn = [gear[m["name"]] for m in raiders if m["name"] in gear]
+    worn = [gear[m["name"]] for m in raiders if gear.get(m["name"]) is not None]
     if not worn:
         return "Nothing the placed raiders wear could be read."
     return (
-        "Placed raiders wear item level %d on average; %d or more is the "
-        "usual convention for a first raid, not a rule the instance keeps."
-        % (round(sum(worn) / len(worn)), GEAR_CONVENTION)
+        "Placed raiders sit at %s of their pre-raid best in slot on average; "
+        "%d%% or more is the usual bar for a first raid, not a rule the "
+        "instance keeps."
+        % (raidgear.percent(sum(worn) / len(worn)), round(GEAR_CONVENTION * 100))
     )
 
 
@@ -585,7 +565,7 @@ RAIDER_COLUMNS = (
     "raider",
     "role",
     "level",
-    "gear (avg ilvl)",
+    "pre-raid ready",
     "fire resistance",
     "attuned",
     "fire protection potions",
@@ -595,8 +575,8 @@ RAIDER_COLUMNS = (
 )
 
 # A RAIDER IS READY FOR THE CORE when three things hold, each a convention
-# named elsewhere and none a gate the instance keeps: the gear average reaches
-# GEAR_CONVENTION, the worn fire resistance reaches raidsupply's target for the
+# named elsewhere and none a gate the instance keeps: the pre-raid readiness
+# share reaches GEAR_CONVENTION (raidgear), the worn fire resistance reaches raidsupply's target for the
 # role (200 for the main tank, 120 for another tank, 60 for a healer, none for
 # a damage dealer), and the bags hold the night's supplies raidsupply lists
 # for the role (four Greater Fire Protection Potions and five Major Healing
@@ -608,10 +588,9 @@ READY = "yes"
 def _short(row: dict) -> list:
     """What keeps one raider from being ready, in the column order."""
     out = []
-    if row["gear"] is None:
-        out.append("gear not read")
-    elif row["gear"] < GEAR_CONVENTION:
-        out.append("gear %d of %d" % (row["gear"], GEAR_CONVENTION))
+    reason = raidgear.short_reason(row["gear"])
+    if reason:
+        out.append(reason)
     if row["fire_target"] and row["fire_res"] < row["fire_target"]:
         out.append("fire resistance %d of %d" % (row["fire_res"], row["fire_target"]))
     if row["supplies_carried"] < row["supplies_wanted"]:
@@ -627,7 +606,7 @@ def _cells(row: dict) -> list:
         row["name"],
         row.get("label") or row["role"],
         "?" if row["level"] is None else str(row["level"]),
-        "not read" if row["gear"] is None else str(row["gear"]),
+        raidgear.percent(row["gear"]),
         (
             "%d of %d" % (row["fire_res"], row["fire_target"])
             if row["fire_target"]
@@ -676,8 +655,8 @@ def raider_rows(
 ) -> list:
     """One row per placed raider: what the operator asked to see, per person.
 
-    Group and role are the lineup's; level from characters; gear the average
-    item level worn; fire resistance summed from worn items, against the
+    Group and role are the lineup's; level from characters; gear the pre-raid
+    readiness share (raidgear); fire resistance summed from worn items, against the
     role's target; attuned from the rewarded quest; the night's supplies
     carried against what the role wants (`supply_raiders` are
     raidsupply.Raider rows, `held` name -> item name -> count); where, from
@@ -734,8 +713,8 @@ def _raiders_line(rows: list) -> str:
     return (
         "%d raiders: %d ready for the core, %d attuned, %d wearing any fire "
         "resistance (%d in all), %d fire protection potions carried, %d not on "
-        "Eastern Kingdoms where the door is. Ready means gear averaging item "
-        "level %d, the role's fire resistance and the night's supplies in the "
+        "Eastern Kingdoms where the door is. Ready means at least %d%% of "
+        "slots at or near pre-raid best in slot, the role's fire resistance and the night's supplies in the "
         "bags."
         % (
             len(rows),
@@ -745,7 +724,7 @@ def _raiders_line(rows: list) -> str:
             fire,
             potions,
             away,
-            GEAR_CONVENTION,
+            round(GEAR_CONVENTION * 100),
         )
     )
 
@@ -762,6 +741,7 @@ def build_guild(
     holding_rows: list = (),
     supply: dict | None = None,
     preraid: dict | None = None,
+    item_rows: dict | None = None,
 ) -> dict:
     """One guild's readiness card.
 
@@ -776,12 +756,18 @@ def build_guild(
     `supply` is this guild's raid supply read (#275): `have` by item entry,
     `knowers` by craft spell and the guild bank's gold as `bank`.
     `preraid` is preraid.family_view's section for the family: each member's
-    next upgrades and where they drop.
+    next upgrades and where they drop. `item_rows` maps item id to the
+    item_template row of every item the gear lists name (raidgear.LIST_SQL);
+    `worn_rows` then carry raidgear.WORN_SQL's columns, and seats are ordered
+    by pre-raid readiness. Without them nobody's gear is read and the lineup
+    orders by level.
     """
-    members = _guild_members(group, char_rows)
+    members = raidgear.attach(
+        _guild_members(group, char_rows), worn_rows, item_rows or {}
+    )
     lineup = raidlineup.build_lineup(members, guaranteed=group["family_names"])
     raiders = _placed_raiders(lineup)
-    gear = worn_item_levels(worn_rows)
+    gear = {m["name"]: m.get("readiness") for m in members}
     attuned = {r["name"] for r in attuned_rows if r.get("name")}
     blockers = _blockers(
         lineup,
@@ -904,13 +890,13 @@ def build_readiness(groups: list) -> dict:
         "basis": (
             "Who fills which place is the Lineup tab's own selection "
             "(raidlineup.py). Levels and classes from characters, guilds from "
-            "guild_member, gear from the item_template item level of every "
-            "worn slot except shirt and tabard, attunement from "
+            "guild_member, gear from the share of each raider's slots at or near "
+            "its spec's pre-raid best in slot by gearscore, attunement from "
             "character_queststatus_rewarded, and the lowest level the "
             "instance admits from its own dungeon_access_template row. "
             "Whether the overseer can run the raid at all is read from the "
-            "portal keywords the site knows mod-overseer carries. The item "
-            "level of %d is a convention and is labelled as one wherever it "
-            "appears." % GEAR_CONVENTION
+            "portal keywords the site knows mod-overseer carries. The "
+            "pre-raid share of %d%% is a convention and is labelled as one "
+            "wherever it appears." % round(GEAR_CONVENTION * 100)
         ),
     }

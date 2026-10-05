@@ -63,6 +63,7 @@ import guildcorps
 import guildjobs
 import guildrun
 import natural
+import raidgear
 import raidlineup
 import raidroles
 import preraid
@@ -2677,14 +2678,24 @@ _RAID_HOLDINGS = (
 # resistance is selected: the page asks about Molten Core, which is a fire
 # raid, and five unread columns would invite the five sentences this view has
 # not earned.
-_RAID_WORN = (
-    "SELECT c.name, ci.slot, it.fire_res, it.ItemLevel AS item_level "
-    "FROM characters c "
-    "JOIN character_inventory ci ON ci.guid = c.guid AND ci.bag = 0 "
-    "AND ci.slot < %s JOIN item_instance ii ON ii.guid = ci.item "
-    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-    "WHERE c.name IN ({holes})"
-)
+# The stat columns and entry ride along (raidgear.WORN_SQL, #542): seats and
+# the readiness gate are pre-raid readiness by gearscore, not item level.
+_RAID_WORN = raidgear.WORN_SQL
+
+
+def _list_items(cur) -> dict:
+    """item_template rows for every item any spec's lists name, by entry.
+
+    The ids come from the committed lists in data/bis, never from a request.
+    A world that cannot answer degrades to {} (nobody's gear is read).
+    """
+    ids = raidgear.every_list_id()
+    rows = _wide_guarded(
+        cur, raidgear.LIST_SQL.format(holes=", ".join(["%s"] * len(ids))),  # noqa: S608
+        tuple(ids), "", "item_template gear lists") if ids else []
+    return {int(r["entry"]): r for r in rows}
+
+
 # The resistance half alone, for a realm whose item_template predates the
 # ItemLevel column: the readiness card then says the gear could not be read
 # rather than the whole worn read dropping to nothing.
@@ -2900,6 +2911,16 @@ def _fetch_lineup() -> dict:
                 "", "overseer_command")
             job_rows = _wide_guarded(
                 cur, _LINEUP_JOBS, (guildjobs.SOURCE + ":%",), "", "overseer_command")
+            # SEATS BY PRE-RAID READINESS (#542): every guild member's worn
+            # gear, so the Lineup tab seats the people the raid card does.
+            members = sorted({r["name"] for r in rows if r.get("name")})
+            worn = _wide_guarded(
+                cur,
+                raidgear.WORN_SQL.format(  # noqa: S608
+                    holes=", ".join(["%s"] * len(members))),
+                (len(armory.EQUIPPED_SLOTS), *members), "",
+                "character_inventory worn") if members else []
+            list_items = _list_items(cur)
             ritual = _wide_guarded(
                 cur, _LINEUP_RITUAL.format(holes=holes),  # noqa: S608
                 (guildjobs.RITUAL_OF_SUMMONING, *names), "", "character_spell")
@@ -2910,6 +2931,8 @@ def _fetch_lineup() -> dict:
         conn.close()
     return {
         "rows": rows,
+        "worn": worn,
+        "list_items": list_items,
         "roster": names,
         "masters": {m.get("guildid"): m.get("master") for m in masters},
         "dues": dues,
@@ -3150,6 +3173,7 @@ def _fetch_raidgoals() -> dict:
             holdings = _wide_guarded(
                 cur, _RAID_HOLDINGS.format(holes=rholes),  # noqa: S608
                 tuple(roster), "", "character_inventory")
+            list_items = _list_items(cur)
             worn = _wide_guarded(cur, _RAID_WORN.format(holes=rholes),  # noqa: S608
                                  (len(armory.EQUIPPED_SLOTS), *roster),
                                  _RAID_WORN_OLD.format(holes=rholes),  # noqa: S608
@@ -3199,6 +3223,7 @@ def _fetch_raidgoals() -> dict:
             "trainer_rows": trainer, "char_rows": chars,
             "skill_rows": skills, "spell_rows": known,
             "holding_rows": holdings, "worn_rows": worn,
+            "list_items": list_items,
             "vendor_rows": vendor, "creature_rows": creature,
             "object_rows": objects, "guild_rows": guild,
             "attuned_rows": attuned, "quest_rows": quest_log,
@@ -5431,6 +5456,9 @@ class Handler(BaseHTTPRequestHandler):
             made = guildcorps.bags_made(fetched.get("corps_crafts"))
             masters = fetched.get("masters") or {}
             for guild in guilds.values():
+                guild["members"] = raidgear.attach(
+                    guild["members"], fetched.get("worn"),
+                    fetched.get("list_items"))
                 lineup = raidlineup.build_lineup(
                     guild["members"],
                     guaranteed=[m["name"] for m in guild["members"]
@@ -5495,6 +5523,7 @@ class Handler(BaseHTTPRequestHandler):
             guild_rows = fetched.pop("guild_rows")
             supply = fetched.pop("supply")
             prep = fetched.pop("preraid")
+            list_items = fetched.pop("list_items")
             # ONE CARD PER GUILD. raidgoals counts one roster at a time, so it
             # is handed one guild's rows and that guild's family as the
             # fallback; handed both guilds at once it would see a family split
@@ -5508,6 +5537,7 @@ class Handler(BaseHTTPRequestHandler):
                     group, fetched["char_rows"], fetched["worn_rows"],
                     attuned, min_level, goals, quest_rows=quest_rows,
                     holding_rows=fetched["holding_rows"],
+                    item_rows=list_items,
                     supply=supply.get(group["guildid"]),
                     preraid=preraid.family_view(
                         list(group["family_names"]), **prep)))

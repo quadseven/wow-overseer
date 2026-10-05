@@ -65,15 +65,24 @@ PURE_HEALERS = frozenset({PRIEST})
 RAIDERS, MAINTENANCE, SUMMONERS, GROUP_SIZE = 40, 10, 21, 5
 
 
-def _sort_key(member: dict, guaranteed: frozenset) -> tuple:
-    """Guaranteed first, then the highest level, then by name.
+def _readiness_percent(member: dict) -> int:
+    return int(round(float(member.get("readiness") or 0) * 100))
 
-    Name last and always, so two runs over the same roster produce the same
+
+def _sort_key(member: dict, guaranteed: frozenset) -> tuple:
+    """Guaranteed first, then the most pre-raid ready, then the highest level,
+    then by name.
+
+    Readiness is the share of the member's slots at or near its spec's
+    pre-raid best in slot (raidgear, #542), a whole percent; a member with no
+    `readiness` counts as zero, so a roster nobody read orders by level as it
+    always did. Name last and always, so two runs over the same roster produce the same
     lineup. A lineup that reshuffled on every poll would make the kick list
     below it meaningless.
     """
     return (
         0 if member["name"] in guaranteed else 1,
+        -_readiness_percent(member),
         -int(member.get("level") or 0),
         member["name"],
     )

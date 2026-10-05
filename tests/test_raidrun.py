@@ -211,6 +211,9 @@ def _load_drive_raid(events, members, missing_table=False, missing_duty=False):
         "jobs": jobs,
         "raidrun": raidrun,
         "raidlineup": raidlineup,
+        # The readiness read is its own test (test_raidgear); here the members
+        # pass through unchanged.
+        "_with_readiness": lambda cur, members: members,
         "campaignqueue": campaignqueue,
         "log": Log(),
         "_insert_job": lambda name, mode, by: events.append(("job", name, mode)),
@@ -371,6 +374,9 @@ def _load_write_specs(events, members, guild="Cave", missing_table=False):
     namespace = {
         "raidrun": raidrun,
         "raidlineup": raidlineup,
+        # The readiness read is its own test (test_raidgear); here the members
+        # pass through unchanged.
+        "_with_readiness": lambda cur, members: members,
         "log": Log(),
         "_RAID_SPEC_MISSING_SAID": False,
         "_connect": lambda: contextlib.nullcontext(Conn()),
