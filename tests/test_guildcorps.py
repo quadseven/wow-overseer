@@ -544,7 +544,7 @@ class TheBridgePass(unittest.TestCase):
         step = self.body("_run_corps_step")
         self.assertIn("self._follow_guild_walk(", step)
         follow = self.body("_follow_guild_walk")
-        self.assertIn("self._await_mail_walk(holder, row_id, cap)", follow)
+        self.assertIn("self._await_mail_walk(holder, row_id, cap, goal)", follow)
         self.assertIn("range(1, guildroute.WALK_COMBAT_RETRIES + 1)", follow)
         self.assertNotIn("while True", follow)
         row = self.body("_corps_row")

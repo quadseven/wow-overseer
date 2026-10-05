@@ -554,11 +554,35 @@ def _result_of(result) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def judge_walk(holder, status, detail, result, far=False) -> WalkAnswer:
+# What a walk row's verb walks to, for the log line when it ends without
+# arriving. A vendor walk logged as "cannot walk to a mailbox" sent the PvP
+# buyers' refusals (#589) to the wrong place on 2026-10-05.
+_WALK_GOALS = (
+    ("walk-to-vendor", "a vendor"),
+    ("walk-to-trainer", "a trainer"),
+    ("walk-to-spawn", "its spot"),
+    (WALK_VERB, "a mailbox"),
+)
+
+
+def walk_goal(command) -> str:
+    """Where a walk row's command walks to, by its verb; "a mailbox" for a
+    command it does not know, as every guild walk was once."""
+    command = str(command or "")
+    for verb, goal in _WALK_GOALS:
+        if command.startswith(verb):
+            return goal
+    return "a mailbox"
+
+
+def judge_walk(
+    holder, status, detail, result, far=False, goal="a mailbox"
+) -> WalkAnswer:
     """What one walk row's status, detail and result say.
 
     `far` is True when the row asked for a cap past the near one, so a
-    malformed answer means a worldserver older than #633.
+    malformed answer means a worldserver older than #633. `goal` is where it
+    walks ("a vendor", "Kelm Hargunth"), for the line when it cannot.
     """
     status = str(status or "").strip().lower()
     detail = str(detail or "").strip()
@@ -570,7 +594,7 @@ def judge_walk(holder, status, detail, result, far=False) -> WalkAnswer:
     if status == "unchanged":
         why = detail or str(body.get("reason") or "did not reach the mailbox")
         return WalkAnswer(ENDED, "%s %s" % (holder, why), retryable=True)
-    return _refusal(holder, status, detail, body, far)
+    return _refusal(holder, status, detail, body, far, goal)
 
 
 def _arrival(holder, body) -> WalkAnswer:
@@ -586,7 +610,7 @@ def _arrival(holder, body) -> WalkAnswer:
     return WalkAnswer(ARRIVED, "%s stands at %s" % (holder, box), mailbox=box)
 
 
-def _refusal(holder, status, detail, body, far) -> WalkAnswer:
+def _refusal(holder, status, detail, body, far, goal="a mailbox") -> WalkAnswer:
     """An 'error' walk row, or one with a status nothing here knows."""
     minutes = int(WALK_UNSUPPORTED_SECONDS // 60)
     if status == "error" and far and detail.startswith(MALFORMED_WALK):
@@ -605,7 +629,7 @@ def _refusal(holder, status, detail, body, far) -> WalkAnswer:
     why = detail or "the world refused the walk and said nothing about why"
     return WalkAnswer(
         ENDED,
-        "%s cannot walk to a mailbox: %s" % (holder, why),
+        "%s cannot walk to %s: %s" % (holder, goal or "a mailbox", why),
         retryable=bool(body.get("retryable")),
         combat=why.startswith(COMBAT_ENDING),
     )
