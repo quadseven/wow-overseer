@@ -42,6 +42,13 @@ guild corps' own `Step` shape, run by the corps' own runner in the bridge.
   raider       post and sell, with a higher bar: its bags are for the raid.
                It levels on its own and raids when the guild does.
 
+  every role   level: before its ordinary job, a member that has outgrown the
+               zone it stands in (its level over the zone's quest band, a
+               capital or a starting zone, or map 530) walks to the flight
+               master of the lowest quest hub of its side whose band fits its
+               level, with `walk-to-spawn creature:` (guildlevel.py). Never a
+               roster family member, whom levelroute.py walks.
+
 The gold each role posts is guildwork.py's, which gives maintenance the
 largest share.
 
@@ -101,6 +108,7 @@ import craft_rhythm
 import dungeonpath
 import gearup
 import guildcorps
+import guildlevel
 import guildroute
 import keep
 import pvpgear
@@ -300,6 +308,8 @@ COOLDOWN_MINUTES = {
     "farm": 45,
     "door": 45,
     "craft": 15,
+    # A walk out of an outgrown zone to a quest hub (guildlevel.py).
+    guildlevel.ACTION: guildlevel.COOLDOWN_MINUTES,
     # PvP for upgrades (#589): a queue row waits this long for its battle.
     "pvp": pvpgear.QUEUE_MINUTES,
 }
@@ -432,6 +442,8 @@ class Member:
     map_id: int | None = None
     x: float | None = None
     y: float | None = None
+    # The snapshot's zone, None when no fresh snapshot was read.
+    zone_id: int | None = None
     money: int = 0
     skills: dict = field(default_factory=dict)  # skill -> (value, max)
     known: frozenset = frozenset()
@@ -1545,6 +1557,7 @@ def plan(
     gear=None,
     mail=None,
     pvp=None,
+    leveling=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -1558,7 +1571,8 @@ def plan(
     name -> (gearup facts, vendor rows in reach) for gear-short members;
     `mail` name -> the mail commands (mailrun) waiting at its mailbox;
     `pvp` name -> (pvpgear.Aim, pvpgear.Move) for members playing PvP for an
-    upgrade (#589).
+    upgrade (#589); `leveling` the guildlevel.World a member who has outgrown
+    its zone is walked to a quest hub from, None to take no level step.
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -1570,7 +1584,7 @@ def plan(
     trades = cloth_trades(split_trades(members, tailors), tailors)
     steps, lines, notes = [], {}, []
     # One counter per allowance, each keyed by guild (_allowance).
-    counters = {"jobs": {}, "gear": {}, "pvp": {}}
+    counters = {"jobs": {}, "gear": {}, "pvp": {}, "level": {}}
     for m in _ordered_members(members):
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
@@ -1589,6 +1603,7 @@ def plan(
             recent,
             cap,
             (pvp or {}).get(m.name),
+            leveling,
         )
         lines[m.name] = doing
         if note:
@@ -1614,10 +1629,13 @@ def plan(
 
 def _allowance(step, counters, per_guild):
     """(the counter, the cap) a step is started against: STEPS_PER_GUILD for
-    every job, GEAR_STEPS_PER_GUILD for gear and hearth steps, and
-    PVP_STEPS_PER_GUILD for PvP queues and honor buys."""
+    every job, GEAR_STEPS_PER_GUILD for gear and hearth steps,
+    PVP_STEPS_PER_GUILD for PvP queues and honor buys, and
+    guildlevel.STEPS_PER_GUILD for walks out of an outgrown zone."""
     if step.action == pvpgear.ACTION:
         return counters["pvp"], PVP_STEPS_PER_GUILD
+    if step.action == guildlevel.ACTION:
+        return counters["level"], guildlevel.STEPS_PER_GUILD
     if step.action in ("gear", "hearth"):
         return counters["gear"], GEAR_STEPS_PER_GUILD
     return counters["jobs"], per_guild
@@ -1675,9 +1693,10 @@ def _member_step(
     recent,
     cap,
     pvp=None,
+    leveling=None,
 ):
-    """Gear, then PvP for an upgrade, then the post, then the member's
-    ordinary job, keeping the notes."""
+    """Gear, then PvP for an upgrade, then the post, then a walk out of an
+    outgrown zone, then the member's ordinary job, keeping the notes."""
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
     if step is not None:
         return step, doing, gear_note
@@ -1687,10 +1706,52 @@ def _member_step(
     step = _collect_first(m, mail, recent, cap)
     if step is not None:
         return step, step.said, gear_note
+    step, doing, level_note = level_step(m, leveling, recent, cap)
+    if step is not None:
+        return step, doing, gear_note
     step, doing, note = _plan_member(
         m, trades, fields, doors, pending, crafters, master, kept, recent, cap
     )
-    return step, doing, "; ".join(n for n in (gear_note, note) if n)
+    return step, doing, "; ".join(n for n in (gear_note, level_note, note) if n)
+
+
+def level_step(m, world, recent, cap):
+    """(step or None, what it does, a note): a natural member that has
+    outgrown where it stands walks to the flight master of a quest hub whose
+    band fits its level (guildlevel.py).
+
+    Never a roster family member (levelroute walks those), never at the level
+    cap, never while offline or fighting, and at most once per
+    COOLDOWN_MINUTES["level"]. The walk is `walk-to-spawn creature:` naming
+    the flight master's spawn, at the pass's cap.
+    """
+    if world is None or not m.eligible or not m.online or m.in_combat:
+        return None, "", ""
+    if m.name in world.roster or m.level >= guildlevel.LEVEL_CAP:
+        return None, "", ""
+    bands = world.bands.get(guildlevel.side_of(m.race), {})
+    why = guildlevel.outgrown(m.level, m.race, m.map_id, m.zone_id, bands)
+    if not why:
+        return None, "", ""
+    choice = guildlevel.choose(m.level, m.race, m.map_id, bands, world.masters)
+    if choice.refused:
+        return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
+    master = choice.master
+    if guildlevel.there(m.map_id, m.x, m.y, master):
+        return None, "", ""
+    if _cooling(m, guildlevel.ACTION, recent):
+        return None, "", ""
+    said = guildlevel.said(m.name, m.level, why, choice)
+    spot = Spot(
+        kind="creature",
+        spawn=master.spawn,
+        map_id=master.map_id,
+        x=master.x,
+        y=master.y,
+        name=master.name or choice.place,
+        why=why,
+    )
+    return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, ""
 
 
 # PVP FOR UPGRADES (#589). A member whose next upgrade is PvP gear
