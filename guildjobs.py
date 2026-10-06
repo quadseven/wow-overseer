@@ -589,6 +589,11 @@ class Recent:
     # the refusal would pass (the realm's far walk walls, a dead character).
     refusal: str = ""
     retryable: bool = False
+    # The module's reason for ANY ending ("stopped getting nearer the spawn",
+    # "died on the way to the spawn"), "" when the row gave none, and the spawn
+    # id a `walk-to-spawn creature:` row named (0 for any other row).
+    reason: str = ""
+    spawn: int = 0
 
 
 @dataclass(frozen=True)
@@ -2110,7 +2115,7 @@ def plan(
             far,
         )
         lines[m.name] = doing
-        helps += class_helps(m, classes, hunts, now)
+        helps += class_helps(m, classes, hunts, now, recent)
         if note:
             notes.append(note)
         if step is None:
@@ -2405,13 +2410,42 @@ def _far_class_walk(m, spot, cap) -> bool:
     return _yards(m.x, m.y, spot.x, spot.y) > guildroute.TRAINER_WALK_YARDS
 
 
-def class_helps(m, book, hunts=None, now=0.0) -> list:
+def refused_spawns(name, recent) -> frozenset:
+    """The spawn ids the module refused this member, or a walk to which ended
+    short of it (classquest.SPAWN_REFUSALS), in the last SPAWN_REFUSED_MINUTES."""
+    return frozenset(
+        r.spawn
+        for r in recent or ()
+        if r.name == name
+        and r.action == classquest.ACTION
+        and r.spawn
+        and r.reason in classquest.SPAWN_REFUSALS
+        and int(r.age_minutes) < classquest.SPAWN_REFUSED_MINUTES
+    )
+
+
+def class_avoid(m, book, recent, hunts=None, now=0.0) -> tuple:
+    """(avoid, held_off) for classquest.moves: the packs the member's hunt
+    tried without progress (the hunt clock) and the packs of the spawns the
+    module refused it (refused_spawns), so a refused hunt goes to the next
+    nearest pack at once, not after two failed walks and a half hour."""
+    avoid, off = hunts.state(m.name, now) if hunts else ({}, frozenset())
+    places = classquest.refused_places(book, refused_spawns(m.name, recent))
+    if not places:
+        return avoid, off
+    merged = dict(avoid)
+    for quest, spots in places.items():
+        merged[quest] = tuple(dict.fromkeys(tuple(merged.get(quest, ())) + spots))
+    return merged, off
+
+
+def class_helps(m, book, hunts=None, now=0.0, recent=()) -> list:
     """The class quests this member cannot do alone and no other class move
     stands ahead of, as classquest.Help rows for classask: a group quest, or a
     hunt given up after it stalled. Nothing for a member with a class move."""
     if not _class_ready(m, book):
         return []
-    avoid, off = hunts.state(m.name, now) if hunts else ({}, frozenset())
+    avoid, off = class_avoid(m, book, recent, hunts, now)
     move, _blocked = classquest.next_move(book, m, avoid, off)
     if move is not None:
         return []
@@ -2424,7 +2458,7 @@ def class_helps(m, book, hunts=None, now=0.0) -> list:
 def _class_move(m, book, recent, hunts, now):
     """(move or None, blocked sentences): classquest.next_move, with a hunt
     that has stalled sent to another pack, or given up (HUNT_STALL_MINUTES)."""
-    avoid, off = hunts.state(m.name, now) if hunts else ({}, frozenset())
+    avoid, off = class_avoid(m, book, recent, hunts, now)
     move, blocked = classquest.next_move(book, m, avoid, off)
     if not hunts or move is None or move.kind not in (classquest.HUNT, classquest.USE):
         return move, blocked
@@ -2437,7 +2471,7 @@ def _class_move(m, book, recent, hunts, now):
         failed_class_walks(m.name, recent),
     )
     if verdict:
-        avoid, off = hunts.state(m.name, now)
+        avoid, off = class_avoid(m, book, recent, hunts, now)
         move, blocked = classquest.next_move(book, m, avoid, off)
     return move, blocked
 
@@ -2469,7 +2503,7 @@ def class_step(m, book, recent, cap, hunts=None, now=0.0, far=None):
     spot = _class_spot(move)
     # A pack tried without progress is left, so a member is "at" the next one
     # only within a pack's width, not the whole field's.
-    tried = hunts.state(m.name, now)[0].get(move.quest) if hunts else ()
+    tried = class_avoid(m, book, recent, hunts, now)[0].get(move.quest)
     reach = classquest.PACK_YARDS if tried else classquest.HUNT_REACH
     if move.kind == classquest.HUNT and _near(m, spot, reach):
         return None, move.said, note
@@ -2535,7 +2569,7 @@ def _join(*parts) -> str:
 def _held_note(m, wait) -> str:
     if not m.alive:
         return "%s is dead and is walked nowhere" % m.name
-    return "%s waits %d more minute(s) after the realm refused its far walk" % (
+    return "%s waits %d more minute(s) after its last walk was refused" % (
         m.name,
         wait,
     )
@@ -3026,6 +3060,8 @@ def recent_from_rows(rows) -> tuple:
                     _trainer_skill_id(row.get("command")) if action == "train" else None
                 ),
                 walk=action.endswith("-walk"),
+                reason=_reason_of(row),
+                spawn=_spawn_of(row.get("command")),
                 **_refusal_of(row),
             )
         )
@@ -3044,6 +3080,18 @@ def _refusal_of(row) -> dict:
         "refusal": found.group(1) if found else "",
         "retryable": '"retryable":true' in result,
     }
+
+
+def _reason_of(row) -> str:
+    """The module's `reason` of a row's result, whatever the outcome."""
+    found = re.search(r'"reason":"((?:[^"\\]|\\.)*)"', str(row.get("result") or ""))
+    return found.group(1) if found else ""
+
+
+def _spawn_of(command) -> int:
+    """The spawn id of a `walk-to-spawn creature:<id>` command, else 0."""
+    found = re.match(r"walk-to-spawn creature:(\d+)\b", str(command or ""))
+    return int(found.group(1)) if found else 0
 
 
 def _trainer_skill_id(command) -> int | None:
