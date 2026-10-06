@@ -816,6 +816,9 @@ def reagents_to_count(
     """
     wanted = set()
     spend = craft.craft_errand(name, skills, primaries)
+    bandage = _bandage_recipe(skills)
+    if bandage is not None:
+        wanted.update(r.entry for r in GATHERED.get(bandage.spell_id, ()))
     fed = BOLT_FED.get(int(spend or 0))
     if fed is not None:
         weave, bolt = fed
@@ -844,6 +847,62 @@ def _guild_bag_entries() -> set:
     return out
 
 
+FIRST_AID = "first aid"
+
+
+def _bandage_recipe(skills: dict):
+    """The First Aid bandage this character holds for its skill value, or None.
+
+    Only a rung it holds without a trainer (craft.SECONDARY_AUTO_LEARNED:
+    Linen Bandage, 1 to 59). The trainer rungs above it are bought, and
+    DriveCraft drops a recipe the character does not know.
+    """
+    value = int((skills or {}).get(FIRST_AID, 0) or 0)
+    if not value:
+        return None
+    recipe = craft.recipe_for(craft.SKILL_IDS[FIRST_AID], value)
+    if recipe is None or recipe.spell_id not in craft.SECONDARY_AUTO_LEARNED:
+        return None
+    return recipe
+
+
+def _bandage_errand(name: str, skills: dict, held: dict, idle: Errand):
+    """Bandage from the cloth in hand while the craft cannot run, or None.
+
+    WHY THE FAMILY'S FIRST AID SAT AT 1 (2026-10-05). `craft.craft_errand`
+    answers a secondary only when no primary recipe exists, and every family
+    member holds a primary with a recipe at every value. So `craft_spell` was
+    always the primary's, and a member out of its own reagent stood on
+    job='craft' casting nothing while carrying the Linen Cloth a Linen
+    Bandage eats: on wow-dev all five of the second family carried 83 to 355
+    Linen Cloth each, every one at First Aid 1/75.
+
+    THE RULE, THE SMELT'S OWN SHAPE: BANDAGE ONLY WHEN THE CRAFT CANNOT RUN.
+    `idle` is the errand the spend-or-smelt choice made; it is replaced only
+    when it casts nothing (judged short, 0 casts in hand), never while it
+    smelts or casts, and never with cloth that errand itself eats: a tailor
+    one Linen Cloth short of a bolt keeps that cloth for the bolt.
+    """
+    if idle.smelting or casts_in_hand(idle.spell, held) != 0:
+        return None
+    recipe = _bandage_recipe(skills)
+    if recipe is None or recipe.spell_id == idle.spell:
+        return None
+    taken = {r.entry for r in feeds(idle.spell)}
+    if any(r.entry in taken for r in GATHERED.get(recipe.spell_id, ())):
+        return None
+    casts = casts_in_hand(recipe.spell_id, held) or 0
+    if casts < 1:
+        return None
+    return Errand(
+        name=name,
+        spell=recipe.spell_id,
+        why="%s makes %s (spell %d) for its First Aid, %d cast(s) of cloth in "
+        "hand, because its craft errand (spell %d) has reagents for 0 cast(s)"
+        % (name, recipe.name, recipe.spell_id, casts, idle.spell),
+    )
+
+
 def errand(
     name: str,
     skills: dict,
@@ -852,7 +911,21 @@ def errand(
     bags_wanted: int = 0,
     floor=None,
 ) -> Errand:
-    """Spend, or smelt? The one `craft_spell` this character should carry.
+    """Spend, smelt or bandage? The one `craft_spell` this character should carry.
+
+    The bag errand first, then the spend-or-smelt choice below
+    (`_spend_or_smelt`), then a bandage when that choice casts nothing
+    (`_bandage_errand`).
+    """
+    bag = bag_errand(name, skills, held, primaries, bags_wanted, floor)
+    if bag is not None:
+        return bag
+    chosen = _spend_or_smelt(name, skills, held, primaries)
+    return _bandage_errand(name, skills, held, chosen) or chosen
+
+
+def _spend_or_smelt(name: str, skills: dict, held: dict, primaries=None) -> Errand:
+    """Spend, or smelt? The choice `errand` makes after the bag errand.
 
     THE ALTERNATION infra#3748 ASKED FOR, AND IT LIVES HERE RATHER THAN IN
     `craft` FOR THE REASON THAT ISSUE GAVE: "a character holds one
@@ -895,12 +968,9 @@ def errand(
     feeds only the powders and the sharpening stones. They arrive on the same
     mining trip and are spent by different recipes.
 
-    `primaries` and `bags_wanted` serve another family (#215): its members'
-    trades are the ones they hold, and a tailor's `bag_errand` comes first.
+    `primaries` serves another family (#215): its members' trades are the
+    ones they hold.
     """
-    bag = bag_errand(name, skills, held, primaries, bags_wanted, floor)
-    if bag is not None:
-        return bag
     spend, weaving = _bolt_first(
         name, craft.craft_errand(name, skills, primaries), held
     )

@@ -106,6 +106,14 @@ TRAINER_ROLE = next(role for role in travel.ROLES if role == "profession trainer
 # would have completed one. When the module learns to sell secondary ranks,
 # this constant is the single place that has to change back, and
 # professions.SECONDARY_RANK_REFUSAL is the thing to re-read first.
+#
+# THE MODULE HAS LEARNED (read at the pinned mod-overseer, 2ed4da9). The
+# trainer index and TrainerSpellForSkill now call SkillStartedBySpell with
+# includeSecondary, and TrainOnArrival skips both the permission check and the
+# free-slot wait for a SKILL_CATEGORY_SECONDARY skill. So a First Aid rank is
+# bought like a primary's. The clear below still stands for a secondary
+# errand nobody decided; a RANK ERRAND (`Row.ranks`, see `rank_errand`) is
+# the one exception, and it is live while its rank is due.
 SECONDARY_IDS = tuple(sorted(trainjob.SECONDARY.values()))
 
 # Why an errand is over. Constants rather than inline strings because they are
@@ -129,6 +137,11 @@ class Row:
     `traded` is every skill this character has a 'learn' row for at ANY status;
     `settled` is the subset that reached 'learned'. Two facts and not one,
     because they answer different questions - see `derived` and `finished`.
+
+    `ranks` is every held trade whose next trainer rank is due now, cheapest
+    first: guildjobs.ranks_due's answer, the guild crew's own rank rule. It is
+    a decision made by the caller from the skill ceilings, not a held-skill
+    set this module reads (mod-overseer#74, `ThereIsNoHoldsRule`).
     """
 
     character: str
@@ -138,6 +151,7 @@ class Row:
     wanted: tuple = ()
     traded: tuple = ()
     settled: tuple = ()
+    ranks: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -164,6 +178,9 @@ class Plan:
     aim: str = ""
     skill: int = 0
     waiting: tuple = ()
+    # (character, skill) of a rank errand to write onto an empty
+    # `learn_skill`, or () for none. See `rank_errand`.
+    learn: tuple = ()
 
 
 def finished(row) -> str:
@@ -178,6 +195,14 @@ def finished(row) -> str:
     """
     skill = int(getattr(row, "learn_skill", 0) or 0)
     if not skill:
+        return ""
+
+    # A RANK THAT IS DUE IS NOT OVER, whatever else is true. Its first learn
+    # may have settled long ago (a tailor's `overseer_trade` row for Tailoring
+    # reads 'learned' once Apprentice was bought), and a First Aid rank is a
+    # secondary; neither says the rank errand standing now was carried out.
+    # TrainOnArrival clears the column once the rank is bought.
+    if skill in tuple(getattr(row, "ranks", ()) or ()):
         return ""
 
     # BEFORE THE SETTLED TEST, because it is unconditional. A secondary errand
@@ -238,7 +263,43 @@ def derived(row) -> bool:
     provably deployed on the realm the row is on.
     """
     skill = int(getattr(row, "learn_skill", 0) or 0)
+    if skill and skill in tuple(getattr(row, "ranks", ()) or ()):
+        # A RANK ERRAND IS DERIVED TOO: `rank_errand` writes it with no trade
+        # row of its own, and a held trade's 'learn' row is the first learn,
+        # not this one.
+        return True
     return bool(skill) and skill not in tuple(getattr(row, "traded", ()) or ())
+
+
+def rank_errand(rows: Sequence) -> tuple:
+    """(character, skill) of the next rank errand to write, or ().
+
+    THE FAMILY BUYS ITS NEXT RANK THE WAY THE GUILD CREW DOES. A crew member
+    walks to a trainer with `walk-to-trainer skill:`, which mod-overseer
+    refuses for a roster character ("aim it through travel_npc"). A family
+    member's rank goes through the roster's own learn errand instead:
+    `learn_skill` names the trade, this module aims the walk, and
+    TrainOnArrival buys the rank through Trainer::TeachSpell. Which rank is
+    due is the crew's rule (guildjobs.ranks_due), carried in on `Row.ranks`.
+
+    ONE ERRAND AT A TIME. Nothing is written while any errand in the family
+    is outstanding, since one character walks at a time. The leader's own
+    rank comes first (it can walk now), then the rest by name.
+    """
+    rows = list(rows or ())
+    if any(outstanding(r) for r in rows):
+        return ()
+    ready = sorted(
+        (
+            r
+            for r in rows
+            if not int(r.learn_skill or 0) and tuple(getattr(r, "ranks", ()) or ())
+        ),
+        key=lambda r: (not r.leads, r.character),
+    )
+    if not ready:
+        return ()
+    return (str(ready[0].character), int(ready[0].ranks[0]))
 
 
 def traveller(rows: Sequence) -> str:
@@ -296,7 +357,7 @@ def plan(rows: Sequence) -> Plan:
         key=lambda r: r.character,
     )
     if not unwalked:
-        return Plan(clear=clear)
+        return Plan(clear=clear, learn=rank_errand(rows))
 
     leading = [r for r in unwalked if r.leads]
     if not leading:
@@ -344,6 +405,17 @@ def statements(learn_plan) -> list:
         )
         for row in getattr(learn_plan, "clear", ()) or ()
     ]
+    learn = tuple(getattr(learn_plan, "learn", ()) or ())
+    if learn:
+        # Only onto an empty column, and never under a pending unlearn: a
+        # learn mod-overseer's AimLearnAt wrote in between keeps its errand.
+        out.append(
+            (
+                "UPDATE overseer_roster SET learn_skill = %s "
+                "WHERE name = %s AND learn_skill = 0 AND unlearn_skill = 0",
+                (int(learn[1]), str(learn[0])),
+            )
+        )
     if getattr(learn_plan, "aim", ""):
         out.append(
             (
@@ -377,6 +449,14 @@ def report(learn_plan) -> str:
             "Arriving is not learning: TrainOnArrival buys the trade through "
             "Trainer::TeachSpell, and only character_skills settles it"
             % (learn_plan.aim, travel.describe(TRAINER_ROLE), learn_plan.skill)
+        )
+    learn = tuple(getattr(learn_plan, "learn", ()) or ())
+    if learn:
+        said.append(
+            "%s's skill %d is at its rank ceiling and the next rank is due, so "
+            "it has a learn errand to buy it at %s; the trainer is paid "
+            "through Trainer::TeachSpell"
+            % (learn[0], learn[1], travel.describe(TRAINER_ROLE))
         )
     waiting = tuple(getattr(learn_plan, "waiting", ()) or ())
     if waiting:

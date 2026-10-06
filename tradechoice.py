@@ -554,8 +554,12 @@ def declarations(members: Sequence, current: Mapping[str, str]) -> list:
     return out
 
 
-def learn_rows(roster, trades, declared: Mapping[str, str]) -> list:
-    """learnaim.Row for each roster row, with `declared` as its permission."""
+def learn_rows(roster, trades, declared: Mapping[str, str], ranks=None) -> list:
+    """learnaim.Row for each roster row, with `declared` as its permission.
+
+    `ranks` is name -> the held trades whose next rank is due
+    (guildjobs.ranks_due), which learnaim turns into a rank errand.
+    """
     traded: dict = {}
     settled: dict = {}
     for row in trades or ():
@@ -577,6 +581,7 @@ def learn_rows(roster, trades, declared: Mapping[str, str]) -> list:
             ),
             traded=tuple(sorted(traded.get(str(row["name"]), ()))),
             settled=tuple(sorted(settled.get(str(row["name"]), ()))),
+            ranks=tuple((ranks or {}).get(str(row["name"]), ())),
         )
         for row in roster or ()
     ]
