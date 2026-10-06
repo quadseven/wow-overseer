@@ -197,6 +197,91 @@ def _helper_choices(asker, free: dict, taken: set, level: int, map_id: int) -> l
     return [name for _d, name in sorted(out)]
 
 
+def _ended(ask, need, free, held, now) -> str:
+    """ "expire", "cancel" or "" for one live ask."""
+    if (ask.state == OPEN and _past(ask.expires_at, now)) or (
+        ask.state == FILLED and not _running(ask, now)
+    ):
+        return "expire"
+    passing = held.get(ask.asker) in guildsocial.PASSING
+    gone = ask.asker not in free and not passing
+    if gone or need is None or need.move.quest != quest_of(ask):
+        return "cancel"
+    return ""
+
+
+def _leaving(yeses, free, held) -> list:
+    """The yes rows of members no longer free, who are not just in combat."""
+    return [
+        y.id
+        for y in yeses
+        if y.member not in free and held.get(y.member) not in guildsocial.PASSING
+    ]
+
+
+def _close(live, by_member, yes_by_ask, free, held, now) -> tuple:
+    """(expire, cancel, withdraw, still): the asks that end now, the yeses
+    taken back, and the asks still running."""
+    expire, cancel, withdraw, still = [], [], [], []
+    for ask in live:
+        yeses = yes_by_ask.get(ask.id, [])
+        how = _ended(ask, by_member.get(ask.asker), free, held, now)
+        if how == "expire":
+            expire.append((ask.id, ask.asker, ""))
+        elif how == "cancel":
+            cancel.append(ask.id)
+        else:
+            still.append(ask)
+            withdraw += _leaving(yeses, free, held)
+            continue
+        withdraw += [y.id for y in yeses]
+    return expire, cancel, withdraw, still
+
+
+def _full_note(ask, need) -> str:
+    return (
+        "%s's %s ask is full; the module has no verb that seats a party and "
+        "walks it to a spawn, so the group is not formed" % (ask.asker, need.move.title)
+    )
+
+
+def _replies(ask, need, free, spoken, wanted) -> list:
+    """The new yes rows for one ask short of `wanted` helpers."""
+    asker = free.get(ask.asker)
+    if asker is None:
+        return []
+    names = _helper_choices(asker, free, spoken, need.level, need.map_id)
+    return [
+        Reply(
+            ask.id,
+            name,
+            DPS,
+            HELPS,
+            answer_line(name, ask.asker, need.move.title, need.move.quest),
+        )
+        for name in names[: min(wanted, ANSWERS_PER_PASS)]
+    ]
+
+
+def _answers(still, by_member, yes_by_ask, withdraw, free, spoken) -> tuple:
+    """(replies, filled, notes) over the asks still running, oldest first."""
+    gone = set(withdraw)
+    replies, filled, notes = [], [], []
+    for ask in sorted(still, key=lambda a: a.id):
+        need = by_member[ask.asker]
+        standing = [y for y in yes_by_ask.get(ask.id, []) if y.id not in gone]
+        wanted = max(1, len(ask.roles_needed)) - len(standing)
+        if wanted > 0:
+            made = _replies(ask, need, free, spoken, wanted)
+            replies += made
+            spoken.update(r.member for r in made)
+            continue
+        if ask.state == OPEN:
+            filled.append(ask.id)
+        notes.append(_full_note(ask, need))
+    return replies, filled, notes
+
+
 def plan_pass(helps, mates, held, asks, answers, now) -> guildsocial.Pass:
     """One pass of the class quest asks.
 
@@ -214,69 +299,16 @@ def plan_pass(helps, mates, held, asks, answers, now) -> guildsocial.Pass:
     for a in answers or ():
         if a.state == YES:
             yes_by_ask.setdefault(a.ask_id, []).append(a)
-    expire, cancel, withdraw, filled, still = [], [], [], [], []
-    for ask in live:
-        yeses = yes_by_ask.get(ask.id, [])
-        need = by_member.get(ask.asker)
-        passing = held.get(ask.asker) in guildsocial.PASSING
-        if (
-            ask.state == OPEN
-            and _past(ask.expires_at, now)
-            or (ask.state == FILLED and not _running(ask, now))
-        ):
-            expire.append((ask.id, ask.asker, ""))
-        elif (
-            (ask.asker not in free and not passing)
-            or need is None
-            or (need.move.quest != quest_of(ask))
-        ):
-            cancel.append(ask.id)
-        else:
-            still.append(ask)
-            withdraw += [
-                y.id
-                for y in yeses
-                if y.member not in free
-                and held.get(y.member) not in guildsocial.PASSING
-            ]
-            continue
-        withdraw += [y.id for y in yeses]
+    expire, cancel, withdraw, still = _close(
+        live, by_member, yes_by_ask, free, held, now
+    )
+    gone = set(withdraw)
     spoken = {a.asker for a in still} | {
-        y.member
-        for a in still
-        for y in yes_by_ask.get(a.id, [])
-        if y.id not in set(withdraw)
+        y.member for a in still for y in yes_by_ask.get(a.id, []) if y.id not in gone
     }
-    replies, notes = [], []
-    for ask in sorted(still, key=lambda a: a.id):
-        need = by_member[ask.asker]
-        standing = [y for y in yes_by_ask.get(ask.id, []) if y.id not in set(withdraw)]
-        wanted = max(1, len(ask.roles_needed)) - len(standing)
-        if wanted <= 0:
-            if ask.state == OPEN:
-                filled.append(ask.id)
-            notes.append(
-                "%s's %s ask is full; the module has no verb that seats a party and "
-                "walks it to a spawn, so the group is not formed"
-                % (ask.asker, need.move.title)
-            )
-            continue
-        asker = free.get(ask.asker)
-        if asker is None:
-            continue
-        for name in _helper_choices(asker, free, spoken, need.level, need.map_id)[
-            : min(wanted, ANSWERS_PER_PASS)
-        ]:
-            replies.append(
-                Reply(
-                    ask.id,
-                    name,
-                    DPS,
-                    HELPS,
-                    answer_line(name, ask.asker, need.move.title, need.move.quest),
-                )
-            )
-            spoken.add(name)
+    replies, filled, notes = _answers(
+        still, by_member, yes_by_ask, withdraw, free, spoken
+    )
     posts = _new_posts(by_member, free, asks, still, spoken, now)
     return guildsocial.Pass(
         expire=tuple(expire),

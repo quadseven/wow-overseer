@@ -154,6 +154,53 @@ class TheHuntClock(unittest.TestCase):
         self.assertEqual(classquest.GIVE_UP_MINUTES, 120)
 
 
+class TheClock(unittest.TestCase):
+    """No clock value is a sentinel: a monotonic clock may start at 0."""
+
+    def spot(self):
+        return classquest.Spawn(1, 3130, 1, 705.0, -4112.0, "Lizard")
+
+    def test_an_unset_hold_off_is_none_not_zero(self):
+        self.assertIsNone(classquest.Hunt(1498, 0, 0.0).until)
+
+    def test_a_give_up_at_clock_zero_still_holds_off(self):
+        hunts = classquest.Hunts()
+        spot = self.spot()
+        hunts.observe("Bigzug", 1498, 0, spot, 0.0)
+        # A hold-off that ends at exactly 0.0 is set until then, not unset.
+        hunts._by["Bigzug"] = classquest.Hunt(1498, 0, -10.0, (), 0.0)
+        avoid, off = hunts.state("Bigzug", -1.0)
+        self.assertEqual(off, frozenset({1498}))
+        avoid, off = hunts.state("Bigzug", 0.0)
+        self.assertEqual(off, frozenset())
+
+    def test_a_hold_off_set_from_a_small_clock_lapses_on_time(self):
+        hunts = classquest.Hunts()
+        spot = self.spot()
+        t = 0.0
+        for _ in range(classquest.MAX_REROLLS + 1):
+            verdict = hunts.observe("Bigzug", 1498, 0, spot, t, failed=True)
+        self.assertEqual(verdict, classquest.GIVE_UP)
+        self.assertEqual(hunts.state("Bigzug", 1.0)[1], frozenset({1498}))
+        later = classquest.GIVE_UP_MINUTES * 60.0 + 1
+        self.assertEqual(hunts.state("Bigzug", later)[1], frozenset())
+
+
+class TheRolesNeeded(unittest.TestCase):
+    """roles_needed is a tuple of seats (guildsocial.roles_of), so a one-seat
+    ask wants one helper and "dps,dps" two."""
+
+    def wanted(self, roles):
+        out = pass_(helps_of("Bigzug"), friends(), asks=[qask(1, roles_needed=roles)])
+        return len(out.replies)
+
+    def test_one_dps_ask_draws_one_answer(self):
+        self.assertEqual(self.wanted("dps"), 1)
+
+    def test_two_dps_ask_draws_two_answers(self):
+        self.assertEqual(self.wanted("dps,dps"), 2)
+
+
 class TheHelps(unittest.TestCase):
     def test_a_group_quest_with_no_other_move_is_a_help_for_two(self):
         result = class_plan([asker()], b=group_book())

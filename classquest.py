@@ -671,14 +671,16 @@ class Hunt:
     progress: int
     since: float
     tried: tuple = ()
-    until: float = 0.0
+    until: float | None = None
 
 
 class Hunts:
     """What each member's hunt has done lately, kept in memory by the bridge.
 
     A restart forgets it, which only gives a stalled hunt a fresh 30 minutes.
-    Times are seconds from any steady clock (the bridge passes time.time())."""
+    Times are seconds from one clock for the life of the object, any epoch
+    (time.time() or time.monotonic(), which may start near 0): no time is a
+    sentinel, an unset hold-off is None."""
 
     def __init__(self):
         self._by: dict = {}
@@ -692,9 +694,9 @@ class Hunts:
         hunt = self._by.get(name)
         if hunt is None:
             return {}, frozenset()
-        if hunt.until and hunt.until <= now:
+        if hunt.until is not None and hunt.until <= now:
             return {}, frozenset()
-        off = frozenset({hunt.quest}) if hunt.until else frozenset()
+        off = frozenset({hunt.quest}) if hunt.until is not None else frozenset()
         return {hunt.quest: hunt.tried}, off
 
     def observe(self, name, quest, progress, spot, now, failed=False) -> str:
@@ -703,7 +705,7 @@ class Hunts:
         retry, else ""."""
         hunt = self._by.get(name)
         fresh = hunt is None or hunt.quest != quest
-        if not fresh and hunt.until:
+        if not fresh and hunt.until is not None:
             if hunt.until > now:
                 return ""
             fresh = True
