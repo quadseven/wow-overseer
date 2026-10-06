@@ -638,6 +638,34 @@ class WhereMaterialsGo(unittest.TestCase):
             ("Og", "its crafter"),
         )
 
+    def test_heavy_leather_goes_to_the_master_tailor_a_bracket_ahead(self):
+        # Small Silk Pack (taught at 150) eats 2 Heavy Leather, and leather
+        # went only to leatherworkers: the master tailor never saw any.
+        leather = stack(23, 4234, 6, subclass=6, name="Heavy Leather")
+        self.assertEqual(
+            guildjobs.recipient_for(leather, {197: [("Og", 130)]}, "Grug"),
+            ("Og", "its crafter"),
+        )
+        # Not before the bag is within a bracket of his skill.
+        self.assertEqual(
+            guildjobs.recipient_for(leather, {197: [("Og", 50)]}, "Grug")[0], "Grug"
+        )
+
+    def test_other_leather_stays_with_the_leatherworker(self):
+        medium = stack(24, 2318, 6, subclass=6, name="Light Leather")
+        crafters = {197: [("Og", 200)], 165: [("Bork", 40)]}
+        self.assertEqual(guildjobs.recipient_for(medium, crafters, "Grug")[0], "Bork")
+
+    def test_the_next_cloth_reaches_the_master_before_he_can_weave_it(self):
+        wool = stack(25, 2592, 20, subclass=5, name="Wool Cloth")
+        # Bolt of Woolen Cloth is taught at 68; Tailoring 50 is a bracket short.
+        self.assertEqual(
+            guildjobs.recipient_for(wool, {197: [("Og", 50)]}, "Grug")[0], "Og"
+        )
+        self.assertEqual(
+            guildjobs.recipient_for(wool, {197: [("Og", 30)]}, "Grug")[0], "Grug"
+        )
+
     def test_a_crafter_with_posts_unopened_is_sent_nothing_new(self):
         m = member(
             "Keeper",

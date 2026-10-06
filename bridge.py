@@ -7124,6 +7124,9 @@ class Bridge(discord.Client):
             name: spell_id
             for name, (spell_id, _) in spells.items()
             if spell_id in craft_supply.REAGENTS
+            # The tailoring rungs' thread and dye are the crew's errand
+            # (guildcorps.shop_steps), so the family stays out farming.
+            and spell_id not in guildcorps.CREW_RUNGS
         }
         if not candidates and not multi_candidates:
             log.info(

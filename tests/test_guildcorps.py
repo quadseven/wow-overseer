@@ -796,6 +796,95 @@ class TheCrewShopsForTheMasters(unittest.TestCase):
         self.assertEqual(gc.shop_steps(og, [member("Arran")], vendors, set()), [])
 
 
+class TheCrewShopsForTheGarmentRungs(unittest.TestCase):
+    """Operator, 2026-10-05: the family are master crafters and the crew shops
+    for them. The thread and dye of the master's next garment rungs
+    (craft_supply.REAGENTS) are bought and posted like a bag's thread."""
+
+    COARSE, FINE, BLUE = 2320, 2321, 6260
+    EVERYWHERE = frozenset({2320, 2321, 6260, 4291, 2604})
+
+    def og(self, value, **over):
+        base = dict(maintenance=False, family=True, skills={gc.TAILORING: (value, 150)})
+        base.update(over)
+        return member("Og", **base)
+
+    def vendors(self):
+        return {EVERLOOK: self.EVERYWHERE}
+
+    def test_the_belt_rung_gets_its_thread_with_the_bags(self):
+        # Tailoring 50: the Linen Bag's 15 Coarse Thread (5 bags), plus the
+        # Linen Belt's 1 a cast, 5 casts deep.
+        steps = gc.shop_steps(self.og(50), [member("Arran")], self.vendors(), set())
+        (step,) = steps
+        self.assertEqual((step.holder, step.key), ("Arran", self.COARSE))
+        self.assertEqual(step.rows[0].command.split(" max:")[0], "entry:2320 count:20")
+        self.assertIn("Linen Belt", step.said)
+        self.assertEqual(step.rows[2].target_arg, "Og")
+
+    def test_a_dye_is_bought_and_posted_by_its_own_shopper(self):
+        # Tailoring 140: Azure Silk Hood (145) is a bracket ahead; it takes 1
+        # Fine Thread and 2 Blue Dye a cast.
+        crew = [member("Arran"), member("Baldam")]
+        steps = gc.shop_steps(self.og(140), crew, self.vendors(), set())
+        by_item = {s.key: s for s in steps}
+        self.assertEqual(set(by_item), {self.FINE, self.BLUE})
+        self.assertNotEqual(by_item[self.FINE].holder, by_item[self.BLUE].holder)
+        dye = by_item[self.BLUE]
+        self.assertEqual(dye.rows[0].command.split(" max:")[0], "entry:6260 count:10")
+        self.assertEqual(
+            dye.rows[2].command, "send entry:6260 subject:Dye for the guild tailor"
+        )
+
+    def test_the_stock_is_topped_up_not_bought_twice(self):
+        og = self.og(140, carried=(held(self.BLUE, 4),))
+        steps = gc.shop_steps(
+            og, [member("Arran"), member("Baldam")], self.vendors(), set()
+        )
+        (dye,) = [s for s in steps if s.key == self.BLUE]
+        self.assertEqual(dye.rows[0].command.split(" max:")[0], "entry:6260 count:6")
+        full = self.og(140, mail=(gc.Letter(1, 2, self.BLUE, 10),))
+        steps = gc.shop_steps(
+            full, [member("Arran"), member("Baldam")], self.vendors(), set()
+        )
+        self.assertNotIn(self.BLUE, {s.key for s in steps})
+
+    def test_a_rung_further_ahead_is_not_stocked_yet(self):
+        # Silken Thread is Crimson Silk Pantaloons' (205): far above Tailoring 90.
+        steps = gc.shop_steps(self.og(90), [member("Arran")], self.vendors(), set())
+        self.assertNotIn(4291, {s.key for s in steps})
+
+    def test_a_bag_and_a_rung_sharing_a_thread_are_bought_together(self):
+        # Woolen Bag (Fine Thread) and Azure Silk Hood (Fine Thread) at 130.
+        crew = [member("Arran"), member("Baldam")]
+        (step,) = [
+            s
+            for s in gc.shop_steps(self.og(130), crew, self.vendors(), set())
+            if s.key == self.FINE
+        ]
+        self.assertEqual(
+            step.rows[0].command.split(" max:")[0], "entry:2321 count:%d" % (5 + 5)
+        )
+
+    def test_every_price_the_crew_pays_is_the_ladders_own(self):
+        import craft_supply
+
+        for spell in gc.CREW_RUNGS:
+            for entry, name, price, _q in craft_supply.REAGENTS[spell]:
+                self.assertEqual(gc.VENDOR_PRICE[entry], price, name)
+        for entry in gc.THREAD_PRICE:
+            self.assertIn(entry, gc.LADDER_ROWS)
+            self.assertEqual(gc.LADDER_ROWS[entry][1], gc.THREAD_PRICE[entry])
+
+    def test_the_corps_reads_the_dyes_so_it_can_count_them_and_find_a_vendor(self):
+        self.assertLessEqual({6260, 2604}, gc.PATH_ENTRIES)
+
+    def test_the_family_stops_walking_to_a_vendor_for_these_rungs(self):
+        self.assertTrue({8776, 8760, 8791, 18417} <= gc.CREW_RUNGS)
+        self.assertNotIn(2167, gc.CREW_RUNGS)  # leatherworking stays the family's
+        self.assertIn("spell_id not in guildcorps.CREW_RUNGS", BRIDGE)
+
+
 class APatternFromAnotherMap(unittest.TestCase):
     """Measured on dev 2026-09-24: both guilds' tailors stood on the Eastern
     Kingdoms, where no vendor sells the Runecloth Bag pattern, and every pass

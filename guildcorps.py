@@ -58,6 +58,8 @@ import json
 from dataclasses import dataclass, field
 
 import classic
+import craft
+import craft_supply
 import guildroute
 
 TAILORING = 197
@@ -194,6 +196,40 @@ RANK_SKILL_SPELL = {3912: 3909, 3913: 3910, 12181: 12180, 26791: 26790, 51308: 5
 THREAD_PRICE = {2320: 10, 2321: 100, 4291: 500, 8343: 2000, 14341: 5000}
 # The patterns a vendor sells, and what each costs (copper).
 PATTERN_PRICE = {14468: 12000}
+
+# THE MASTER'S GARMENT RUNGS (operator, 2026-10-05: the crew shops and farms for
+# the guild's crafters, the family are the master crafters). craft.RECIPES'
+# tailoring ladder casts a rung at a time, and each garment rung eats thread
+# and sometimes a dye that only a vendor sells. craft_supply.REAGENTS already
+# holds, verified against item_template and npc_vendor, which item, what price
+# and how many a cast takes; this reads that table rather than a second copy.
+# A rung is "next" while the master's skill is inside it or within LADDER_AHEAD
+# points below it, so the crew buys a bracket ahead and not the whole ladder.
+LADDER_AHEAD = 25
+
+
+def _ladder_rows() -> dict:
+    """{item entry: (name, copper price)} of every vendor reagent a tailoring
+    rung eats, from craft_supply.REAGENTS."""
+    out = {}
+    for recipe in craft.RECIPES.get(TAILORING, ()):
+        for entry, name, price, _per_cast in craft_supply.REAGENTS.get(
+            recipe.spell_id, ()
+        ):
+            out[int(entry)] = (str(name), int(price))
+    return out
+
+
+LADDER_ROWS = _ladder_rows()
+# Everything the crew buys for a master: the bags' thread, then the rungs'.
+VENDOR_PRICE = {**{e: p for e, (_n, p) in LADDER_ROWS.items()}, **THREAD_PRICE}
+# The rungs whose vendor reagents the crew supplies, so the family does not
+# walk to a vendor for them (bridge._craft_supply_once skips these spells).
+CREW_RUNGS = frozenset(
+    recipe.spell_id
+    for recipe in craft.RECIPES.get(TAILORING, ())
+    if recipe.spell_id in craft_supply.REAGENTS
+)
 # What a buy row may pay above the list price, for the reputation discount's
 # absence and nothing else: a price the planner did not expect is refused.
 BUY_CEILING_NUM, BUY_CEILING_DEN = 5, 4
@@ -653,7 +689,7 @@ def _post_step(tailor, takers, cap=NEAR, walk=True):
 
 
 def _path_entries() -> frozenset:
-    entries = set(PATTERN_PRICE) | set(THREAD_PRICE)
+    entries = set(PATTERN_PRICE) | set(VENDOR_PRICE)
     for recipe in BOLTS + BAGS:
         entries.add(recipe.makes)
         entries.update(int(e) for e, _ in recipe.reagents)
@@ -1025,24 +1061,31 @@ def _shopper(crew, entry, vendors_by_map, busy):
     )
 
 
-def _shop_step(shopper, master, bag, entry, count, cap) -> Step:
+def _shop_kind(entry) -> str:
+    """ "Thread" or "Dye": the word on the letter and in the sentence."""
+    name = LADDER_ROWS.get(int(entry), ("thread",))[0]
+    return name.split()[-1]
+
+
+def _shop_step(shopper, master, why, entry, count, cap) -> Step:
+    kind = _shop_kind(entry)
     return Step(
         shopper.name,
         "shop",
         int(entry),
-        "%s buys %d thread (item %d) for %s's %s and posts it"
-        % (shopper.name, count, int(entry), master.name, bag.name),
+        "%s buys %d %s (item %d) for %s's %s and posts it"
+        % (shopper.name, count, kind.lower(), int(entry), master.name, why),
         rows=(
             Row(
                 "buy",
                 "entry:%d count:%d max:%d"
-                % (int(entry), count, _ceiling(THREAD_PRICE[int(entry)] * count)),
+                % (int(entry), count, _ceiling(VENDOR_PRICE[int(entry)] * count)),
                 "",
                 source_for("shop", entry),
             ),
             _walk_to_mailbox("shop", entry, cap),
             send_by_entry(
-                entry, "Thread for the guild tailor", master.name, "shop", entry
+                entry, "%s for the guild tailor" % kind, master.name, "shop", entry
             ),
         ),
         walk=Row(
@@ -1054,20 +1097,59 @@ def _shop_step(shopper, master, bag, entry, count, cap) -> Step:
     )
 
 
+def ladder_targets(master) -> dict:
+    """{entry: (count, rung name)} the master's next garment rungs eat.
+
+    A rung is next while the master's skill is inside its bracket or within
+    LADDER_AHEAD points below it; each is stocked CASTS_PER_TRIP casts deep.
+    """
+    value, _ = master.skill(TAILORING)
+    out = {}
+    for recipe in craft.RECIPES.get(TAILORING, ()):
+        if recipe.spell_id not in CREW_RUNGS:
+            continue
+        if recipe.max_skill < value or recipe.min_skill > value + LADDER_AHEAD:
+            continue
+        for entry, _name, _price, per_cast in craft_supply.REAGENTS[recipe.spell_id]:
+            more = craft_supply.CASTS_PER_TRIP * int(per_cast)
+            count, rungs = out.get(int(entry), (0, ()))
+            out[int(entry)] = (count + more, rungs + (recipe.name,))
+    return out
+
+
+def _shop_wants(master) -> dict:
+    """{entry: (stocked at, buy, what for)}: the bag's thread, then the rungs'.
+
+    The bag's thread keeps its rule: SHOP_BAGS bags' worth once a bag's worth
+    is gone. A rung's reagent tops the stock up to CASTS_PER_TRIP casts.
+    """
+    wants = {}
+    bag = master_bag(master)
+    if bag is not None:
+        for entry, need in bag.reagents:
+            if _vendor_reagent(entry):
+                wants[int(entry)] = (int(need), int(need) * SHOP_BAGS, bag.name)
+    for entry, (target, rungs) in ladder_targets(master).items():
+        stocked, buy, why = wants.get(entry, (0, 0, ""))
+        topup = 0 if buy else -(master.count(entry) + master.incoming(entry))
+        wants[entry] = (
+            stocked + target,
+            buy + target + topup,
+            " and ".join(filter(None, (why, ", ".join(rungs)))),
+        )
+    return wants
+
+
 def shop_steps(master, crew, vendors_by_map, busy, recent=None, cap=NEAR) -> list:
-    """The crew's shopping for one family master: thread, bought and posted.
+    """The crew's shopping for one family master: thread and dye, bought and
+    posted, for the bag it sews and the garment rungs it climbs.
 
     Nothing is bought twice inside the shop cooldown: `recent` holds
     ("to:<master>", "shop", entry) for every purchase already made for it.
     """
-    bag = master_bag(master)
-    if bag is None:
-        return []
     steps = []
-    for entry, need in bag.reagents:
-        if not _vendor_reagent(entry):
-            continue
-        if master.count(entry) + master.incoming(entry) >= int(need):
+    for entry, (stocked, buy, why) in sorted(_shop_wants(master).items()):
+        if master.count(entry) + master.incoming(entry) >= stocked:
             continue
         asked = (recent or {}).get(("to:" + master.name, "shop", int(entry)))
         if asked is not None and asked < COOLDOWN_MINUTES["shop"]:
@@ -1075,9 +1157,7 @@ def shop_steps(master, crew, vendors_by_map, busy, recent=None, cap=NEAR) -> lis
         shopper = _shopper(crew, entry, vendors_by_map, busy)
         if shopper is None:
             continue
-        steps.append(
-            _shop_step(shopper, master, bag, entry, int(need) * SHOP_BAGS, cap)
-        )
+        steps.append(_shop_step(shopper, master, why, entry, buy, cap))
         busy.add(shopper.name)
     return steps
 

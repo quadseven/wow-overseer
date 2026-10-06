@@ -698,7 +698,8 @@ class SpendOrSmelt(unittest.TestCase):
             # 8776, not 2963: at Tailoring 50 the bolt is grey. Og holds the
             # one Bolt of Linen Cloth a belt eats, so the rung stands; with
             # none he weaves first (BoltFedRungs below).
-            ("Og", {"tailoring": 50, "enchanting": 1}, {2996: 1}, 8776),
+            # The belt's Coarse Thread is the crew's post, in the bags here.
+            ("Og", {"tailoring": 50, "enchanting": 1}, {2996: 1, 2320: 1}, 8776),
             ("Ugga", {"alchemy": 14, "herbalism": 132}, {}, 2330),
             ("Bork", {"leatherworking": 1, "skinning": 12}, {}, 2881),
         ):
@@ -801,7 +802,8 @@ class BoltFedRungs(unittest.TestCase):
         skills = {"tailoring": 50, "enchanting": 1}
         self.assertEqual(craft_rhythm.errand("Og", skills, {}).spell, 2963)
         self.assertEqual(
-            craft_rhythm.errand("Og", skills, {self.LINEN_BOLT: 1}).spell, 8776
+            craft_rhythm.errand("Og", skills, {self.LINEN_BOLT: 1, 2320: 1}).spell,
+            8776,
         )
 
     def test_a_weaver_with_no_cloth_reads_short_so_the_family_gathers(self):
@@ -824,10 +826,26 @@ class BoltFedRungs(unittest.TestCase):
         ):
             skills = {"tailoring": value, "enchanting": 1}
             with self.subTest(value=value):
-                short = craft_rhythm.errand("Og", skills, {bolt: per_cast - 1})
+                post = {e: q for e, _n, _p, q in craft_supply.REAGENTS.get(rung, ())}
+                short = craft_rhythm.errand("Og", skills, {bolt: per_cast - 1, **post})
                 self.assertEqual(short.spell, weave)
-                held = craft_rhythm.errand("Og", skills, {bolt: per_cast})
+                held = craft_rhythm.errand("Og", skills, {bolt: per_cast, **post})
                 self.assertEqual(held.spell, rung)
+
+    def test_a_rung_waits_for_the_crews_thread_by_weaving(self):
+        # Og no longer walks to a vendor for the belt's Coarse Thread
+        # (guildcorps.CREW_RUNGS): with none in the bags and the bolt in hand
+        # he weaves, and casts the belt once the letter is taken out.
+        skills = {"tailoring": 50, "enchanting": 1}
+        waiting = craft_rhythm.errand("Og", skills, {self.LINEN_BOLT: 1})
+        self.assertEqual(waiting.spell, 2963)
+        self.assertIn("crew posts Coarse Thread", waiting.why)
+        posted = craft_rhythm.errand("Og", skills, {self.LINEN_BOLT: 1, 2320: 1})
+        self.assertEqual(posted.spell, 8776)
+
+    def test_the_thread_and_dye_are_counted_before_the_choice(self):
+        wanted = craft_rhythm.reagents_to_count("Og", {"tailoring": 150})
+        self.assertLessEqual({2321, 6260}, wanted)
 
     def test_every_fed_rung_matches_the_recipe_tables(self):
         """Each rung is a tailoring ladder entry whose note names the bolt and
