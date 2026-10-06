@@ -129,12 +129,11 @@ class WhoStandsIn(unittest.TestCase):
                 )
             )
         )
-        self.assertEqual(standin.NONE, step.action)
-        self.assertIn("runs with the family", step.why)
+        self.assertEqual("", step.seat.in_name)
 
     def test_a_family_member_is_never_a_guest(self):
         step = standin.step(facts(candidates=(FAMILY["Bork"],)))
-        self.assertEqual(standin.NONE, step.action)
+        self.assertEqual("", step.seat.in_name)
 
     def test_a_healer_seat_wants_a_member_who_heals(self):
         out = member("Ugga", 20, PRIEST, talent_spells=HOLY)
@@ -153,6 +152,61 @@ class WhoStandsIn(unittest.TestCase):
 
     def test_no_queued_dungeon_seats_nobody(self):
         self.assertEqual(standin.NONE, standin.step(facts(door=None)).action)
+
+
+# --- nobody can stand in: the family runs four-handed ------------------------------
+
+
+class NoGuestRunsFourHanded(unittest.TestCase):
+    """The operator's decision (2026-10-05): when no guildmate can take Og's
+    seat, Og still sits out to tailor and the family runs as the four left."""
+
+    def test_no_guest_still_sits_og_out_with_an_empty_seat(self):
+        step = standin.step(facts(candidates=()))
+        self.assertEqual(standin.SEAT, step.action, step.why)
+        self.assertEqual(
+            ("Grug", "Og", "", "dps"),
+            (step.seat.family, step.seat.out_name, step.seat.in_name, step.seat.seat),
+        )
+        self.assertFalse(step.seat.has_guest)
+        self.assertEqual(
+            "no guest at deadmines; the family runs four-handed", step.seat.reason
+        )
+        self.assertEqual(("Grug", "Og", "", "dps"), step.seat.args()[:4])
+
+    def test_a_guest_found_between_runs_takes_the_empty_seat(self):
+        empty = seated(in_name="")
+        step = standin.step(facts(current=empty))
+        self.assertEqual(standin.SEAT, step.action, step.why)
+        self.assertEqual("Locky", step.seat.in_name)
+
+    def test_still_no_guest_keeps_the_four_handed_row(self):
+        step = standin.step(facts(current=seated(in_name=""), candidates=()))
+        self.assertEqual(standin.KEEP, step.action, step.why)
+        self.assertIn("four-handed", step.why)
+
+    def test_never_filled_mid_run(self):
+        step = standin.step(facts(current=seated(in_name=""), mid_run=True))
+        self.assertEqual(standin.KEEP, step.action)
+
+    def test_kept_with_no_door_queued(self):
+        step = standin.step(facts(current=seated(in_name=""), door=None))
+        self.assertEqual(standin.KEEP, step.action)
+
+    def test_the_order_removed_or_the_goal_met_still_clears_it(self):
+        empty = seated(in_name="")
+        self.assertEqual(
+            standin.CLEAR, standin.step(facts(ordered="", current=empty)).action
+        )
+        self.assertEqual(
+            standin.CLEAR,
+            standin.step(facts(skills={"tailoring": 300}, current=empty)).action,
+        )
+
+    def test_the_head_never_sits_out_even_with_no_guest(self):
+        self.assertEqual(
+            standin.NONE, standin.step(facts(ordered="Grug", candidates=())).action
+        )
 
 
 # --- when the row is cleared -------------------------------------------------------
@@ -479,8 +533,12 @@ class TheBridgePass(unittest.TestCase):
         mid_run=False,
         og_job="dungeon:deadmines",
         leader_job="dungeon:deadmines",
+        guild_rows=None,
     ):
         written, jobs_told, lines = [], [], []
+        gfacts = _guild_facts()
+        if guild_rows is not None:
+            gfacts["rows"] = list(guild_rows)
         this = bridge.Bridge.__new__(bridge.Bridge)
 
         async def fake_mid_run(names):
@@ -503,7 +561,7 @@ class TheBridgePass(unittest.TestCase):
                 bridge,
                 log=log,
                 _fetch_standin_rows=lambda: dict(rows or {}),
-                _fetch_guild_run_facts=lambda bounds: _guild_facts(),
+                _fetch_guild_run_facts=lambda bounds: gfacts,
                 _fetch_trade_skills=lambda names: {"Og": dict(SKILLS)},
                 _fetch_standin_members=lambda names: {
                     n: members[n] for n in names if n in members
@@ -573,6 +631,35 @@ class TheBridgePass(unittest.TestCase):
         self.assertEqual([("Grug", standin.KEEP, None)], written)
         self.assertNotIn("Og", fams["Grug"]["names"])
         self.assertEqual([], jobs_told)
+
+    def test_no_guest_writes_an_empty_seat_and_og_still_sits_out(self):
+        fams, written, jobs_told, lines = self.run_pass(guild_rows=())
+        self.assertEqual(
+            [("Grug", standin.SEAT, ("Grug", "Og", "", "dps"))],
+            [
+                (family, action, (s.family, s.out_name, s.in_name, s.seat))
+                for family, action, s in written
+            ],
+        )
+        self.assertEqual(
+            "no guest at deadmines; the family runs four-handed", written[0][2].reason
+        )
+        self.assertNotIn("Og", fams["Grug"]["names"])
+        self.assertEqual(4, len(fams["Grug"]["names"]))
+        self.assertEqual(frozenset({"Og"}), bridge._STANDIN_OUT)
+        self.assertEqual(frozenset(), bridge._STANDIN_GUESTS)
+        self.assertEqual([("Og", "craft", standin.SOURCE)], jobs_told)
+        self.assertTrue(
+            any("Og sits out, nobody stands in" in line for line in lines), lines
+        )
+
+    def test_a_four_handed_row_is_kept_while_nobody_can_stand_in(self):
+        fams, written, _, _ = self.run_pass(
+            rows={"Grug": seated(in_name="")}, og_job="craft", guild_rows=()
+        )
+        self.assertEqual([("Grug", standin.KEEP, None)], written)
+        self.assertNotIn("Og", fams["Grug"]["names"])
+        self.assertEqual(frozenset(), bridge._STANDIN_GUESTS)
 
     def test_the_queue_pass_runs_it_before_anything_drives_a_family(self):
         import ast

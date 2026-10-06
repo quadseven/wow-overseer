@@ -29,11 +29,18 @@ WHAT THIS DECIDES, one family at a time (`step`):
                  of the family's average level. Best fit first: a member
                  whose talents play the seat, then the level nearest the
                  sitting-out member's, then the name.
+  no guest       the operator's decision, 2026-10-05: when no guildmate can
+                 take the seat, the member still sits out and the family runs
+                 short-handed (four of five) rather than taking the crafter
+                 along. The row is written with `in_name` empty
+                 (`Seat.has_guest`), and a guest found between runs later
+                 takes the empty seat.
   when it ends   the order is removed, the crafting goal is met, or, between
                  runs, the guest is no longer free (offline, in a guild run,
                  dead, inside another instance, gone from the guild or out of
                  the door's band). Grouped or in a fight is not a reason: the
-                 guest is grouped with the family.
+                 guest is grouped with the family. A row with no guest ends
+                 only with the order or the goal.
 
 Never mid-run: while the family is inside a dungeon the row stands as it is.
 
@@ -41,7 +48,9 @@ THE CONTRACT with the worldserver module is the table `overseer_family_standin`
 (`TABLE_SQL`), one row per family. The bridge writes and deletes rows; the
 module reads them and, at the family's next idle point, runs the campaign with
 `in_name` in `out_name`'s seat, leaves `out_name` to its own job, and releases
-the guest when the row is deleted.
+the guest when the row is deleted. An empty `in_name` means "sit out with no
+guest": the module runs the family without `out_name`, and a party under five
+goes in by the walk-in path, as the dungeon finder takes only a full five.
 
 PURE: facts in, a Step out. The bridge reads, writes and logs.
 """
@@ -239,6 +248,16 @@ class Seat:
             self.reason[:REASON_WIDTH],
         )
 
+    @property
+    def has_guest(self) -> bool:
+        """False for a row that sits the member out with nobody in its seat."""
+        return bool(self.in_name)
+
+    @property
+    def guest_word(self) -> str:
+        """The guest's name, or "nobody" for a row with no guest."""
+        return self.in_name or "nobody"
+
 
 def seat_from_row(row: dict) -> Seat:
     return Seat(
@@ -336,17 +355,41 @@ def step(facts: Facts) -> Step:
             return Step(
                 KEEP,
                 "%s could not be read; %s keeps the seat"
-                % (facts.ordered, current.in_name),
+                % (facts.ordered, current.guest_word),
             )
         return Step(NONE, "%s could not be read, so no seat is known" % facts.ordered)
     seat = seat_of(facts.out_member)
     if current is not None:
+        if not current.has_guest:
+            return _fill_or_keep(facts, current, seat)
         return _keep_or_clear(facts, current, seat)
     if facts.door is None:
         return Step(
             NONE,
             "no dungeon is queued for %s's family, so nobody stands in" % facts.family,
         )
+    found = _found(facts, seat, _free_for(facts))
+    if not found:
+        return _no_guest(facts, seat)
+    return _seat_guest(facts, seat, found[0])
+
+
+def _found(facts: Facts, seat: str, free) -> list:
+    """The guests who may take `seat` now, best fit first."""
+    return guests(
+        facts.candidates,
+        seat,
+        facts.out_member.level,
+        facts.family_levels,
+        facts.door,
+        facts.faction,
+        facts.guild,
+        free,
+    )
+
+
+def _free_for(facts: Facts):
+    """guildrun.why_not's answer for a new guest of this family."""
 
     def free(member):
         return guildrun.why_not(
@@ -357,24 +400,38 @@ def step(facts: Facts) -> Step:
             facts.benched,
         )
 
-    found = guests(
-        facts.candidates,
-        seat,
-        facts.out_member.level,
-        facts.family_levels,
-        facts.door,
-        facts.faction,
-        facts.guild,
-        free,
+    return free
+
+
+_HANDS = {1: "one", 2: "two", 3: "three", 4: "four"}
+
+
+def short_handed_reason(facts: Facts) -> str:
+    """The row's reason when nobody stands in: "no guest at scarlet-library;
+    the family runs four-handed" for a family of five."""
+    left = max(len(facts.roster) - 1, 0)
+    return "no guest at %s; the family runs %s-handed" % (
+        facts.door.keyword,
+        _HANDS.get(left, str(left)),
     )
-    if not found:
-        return Step(
-            NONE,
-            "no free %s member can take the %s seat at %s, so %s "
-            "runs with the family"
-            % (facts.guild or "guild", seat, facts.door.keyword, facts.ordered),
-        )
-    guest = found[0]
+
+
+def _no_guest(facts: Facts, seat: str) -> Step:
+    """No guildmate can take the seat: the member still sits out, and the
+    family runs without it (operator decision, 2026-10-05)."""
+    reason = short_handed_reason(facts)
+    why = "no free %s member can take the %s seat at %s, so %s sits out: %s" % (
+        facts.guild or "guild",
+        seat,
+        facts.door.keyword,
+        facts.ordered,
+        reason,
+    )
+    return Step(SEAT, why, Seat(facts.family, facts.ordered, "", seat, reason))
+
+
+def _seat_guest(facts: Facts, seat: str, guest: guildrun.Member) -> Step:
+    """Seat `guest` in the ordered member's place."""
     reason = "%s crafts (%s); %s takes the %s seat at %s" % (
         facts.ordered,
         goal(facts.skills),
@@ -385,6 +442,22 @@ def step(facts: Facts) -> Step:
     return Step(
         SEAT, reason, Seat(facts.family, facts.ordered, guest.name, seat, reason)
     )
+
+
+def _fill_or_keep(facts: Facts, current: Seat, seat: str) -> Step:
+    """A row with no guest stands while the member sits out. Between runs, a
+    guildmate who can now take the seat is written into it; mid-run nothing
+    changes, and with no door there is nothing to fit a guest to."""
+    if facts.mid_run:
+        return Step(
+            KEEP, "the family is inside; %s sits out with no guest" % current.out_name
+        )
+    if facts.door is not None:
+        found = _found(facts, current.seat or seat, _free_for(facts))
+        if found:
+            return _seat_guest(facts, current.seat or seat, found[0])
+        return Step(KEEP, short_handed_reason(facts))
+    return Step(KEEP, "%s sits out with no guest" % current.out_name)
 
 
 def _keep_or_clear(facts: Facts, current: Seat, seat: str) -> Step:
