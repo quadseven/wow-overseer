@@ -283,6 +283,11 @@ def member_from_row(row: dict) -> Member | None:
     )
 
 
+# why_not's word for a member already in a party. A class quest party's own
+# members read it too (classparty.py) and stay free to their ask.
+GROUPED = "already in a group"
+
+
 def why_not(
     member: Member,
     busy: set,
@@ -310,7 +315,7 @@ def why_not(
     if member.in_combat:
         return "in combat"
     if member.grouped:
-        return "already in a group"
+        return GROUPED
     return ""
 
 

@@ -18,6 +18,7 @@ from unittest import mock
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import classask  # noqa: E402
+import classparty  # noqa: E402
 import classquest  # noqa: E402
 import guildjobs  # noqa: E402
 import guildrun  # noqa: E402
@@ -349,12 +350,63 @@ class TheAnswer(unittest.TestCase):
         out = pass_(helps_of("Bigzug"), friends(), asks=[qask(1)], answers=said)
         self.assertEqual([r.member for r in out.replies], ["Dread"])
 
-    def test_a_full_ask_is_marked_filled_and_says_no_group_forms(self):
+    def test_a_full_ask_is_marked_filled_and_its_party_is_formed_next(self):
         answers = [yes(1, 1, "Chill", "dps", "help"), yes(2, 1, "Dread", "dps", "help")]
         out = pass_(helps_of("Bigzug"), friends(), asks=[qask(1)], answers=answers)
         self.assertEqual(out.filled, (1,))
         self.assertEqual(out.replies, ())
-        self.assertTrue(any("no verb" in n for n in out.notes))
+        self.assertTrue(any("party is formed" in n for n in out.notes))
+
+    def test_a_full_ask_on_a_worldserver_with_no_party_verbs_says_so(self):
+        answers = [yes(1, 1, "Chill", "dps", "help"), yes(2, 1, "Dread", "dps", "help")]
+        out = classask.plan_pass(
+            helps_of("Bigzug"), friends(), {}, [qask(1)], answers, NOW, seats=False
+        )
+        self.assertTrue(any("does not seat a party" in n for n in out.notes))
+
+    def test_a_full_ask_with_its_party_up_says_nothing_more(self):
+        answers = [yes(1, 1, "Chill", "dps", "help"), yes(2, 1, "Dread", "dps", "help")]
+        out = classask.plan_pass(
+            helps_of("Bigzug"), friends(), {}, [qask(1)], answers, NOW, partied={1}
+        )
+        self.assertEqual(out.notes, ())
+
+    def test_an_answerer_out_of_seating_range_does_not_answer(self):
+        far = mates(
+            ("Bigzug", 20, CAVE, NEAR, 1),
+            ("Near", 20, CAVE, (-250.0, -4150.0), 1),
+            ("Far", 20, CAVE, (NEAR[0] + classask.SEAT_RANGE_YARDS + 5, NEAR[1]), 1),
+        )
+        out = pass_(helps_of("Bigzug"), far, asks=[qask(1)])
+        self.assertEqual([r.member for r in out.replies], ["Near"])
+
+    def test_a_member_the_module_refused_for_this_ask_does_not_answer_it_again(self):
+        out = classask.plan_pass(
+            helps_of("Bigzug"),
+            friends(),
+            {},
+            [qask(1)],
+            [],
+            NOW,
+            refused={1: frozenset({"Chill"})},
+        )
+        self.assertEqual([r.member for r in out.replies], ["Dread"])
+        other = classask.plan_pass(
+            helps_of("Bigzug"),
+            friends(),
+            {},
+            [qask(1)],
+            [],
+            NOW,
+            refused={2: frozenset({"Chill"})},
+        )
+        self.assertEqual([r.member for r in other.replies], ["Chill", "Dread"])
+
+    def test_an_asker_that_gave_up_lately_does_not_ask_again(self):
+        out = classask.plan_pass(
+            helps_of("Bigzug"), friends(), {}, [], [], NOW, cooling={"Bigzug"}
+        )
+        self.assertEqual(out.posts, ())
 
     def test_a_yes_from_a_member_no_longer_free_is_withdrawn(self):
         answers = [yes(1, 1, "Chill", "dps", "help")]
@@ -386,33 +438,31 @@ class TheEnd(unittest.TestCase):
 
 
 class TheHold(unittest.TestCase):
-    """Dungeon passes leave alone a member on a quest ask that is being
-    answered, and only while that ask runs."""
+    """Dungeon passes leave alone the members of a class quest party that is up,
+    and only while its row is live. The long hold of an answered ask is gone."""
 
-    ANSWERED = [yes(1, 1, "Chill", "dps", "help")]
-
-    def test_the_asker_and_the_answerer_are_held(self):
-        held = classask.held_names([qask(1)], self.ANSWERED, NOW)
-        self.assertEqual(held, {"Bigzug", "Chill"})
-
-    def test_an_ask_nobody_answered_holds_nobody(self):
-        self.assertEqual(classask.held_names([qask(1)], [], NOW), set())
-
-    def test_the_hold_ends_with_the_ask(self):
-        after = NOW + datetime.timedelta(minutes=gs.ASK_MINUTES + 1)
-        late = qask(1, expires_at=NOW)
-        self.assertEqual(classask.held_names([late], self.ANSWERED, after), set())
-        far = NOW + datetime.timedelta(minutes=gs.FILLED_GRACE_MINUTES + 1)
-        filled = qask(1, state="filled", expires_at=NOW)
-        self.assertEqual(classask.held_names([filled], self.ANSWERED, far), set())
-        graced = NOW + datetime.timedelta(minutes=gs.FILLED_GRACE_MINUTES - 1)
-        self.assertEqual(
-            classask.held_names([filled], self.ANSWERED, graced), {"Bigzug", "Chill"}
+    def party(self):
+        return classparty.PartyRun(
+            1, "Bigzug", ("Chill", "Dread"), 2000, "Group Job", None
         )
 
-    def test_a_dungeon_ask_is_not_this_modules_hold(self):
-        dungeon = ask(1, "Bigzug", guild=CAVE)
-        self.assertEqual(classask.held_names([dungeon], self.ANSWERED, NOW), set())
+    def test_the_leader_and_the_helpers_of_a_live_party_are_held(self):
+        self.assertEqual(
+            classask.held_names([self.party()]), {"Bigzug", "Chill", "Dread"}
+        )
+
+    def test_an_answered_ask_with_no_party_holds_nobody(self):
+        self.assertEqual(classask.held_names([]), set())
+        board = classparty.Board()
+        self.assertEqual(board.names(), set())
+
+    def test_the_hold_ends_at_once_with_the_party(self):
+        board = classparty.Board()
+        run = self.party()
+        board.begin(run)
+        self.assertEqual(board.names(), {"Bigzug", "Chill", "Dread"})
+        board.end(run, 0.0, done=False)
+        self.assertEqual(board.names(), set())
 
 
 class TheDungeonPasses(unittest.TestCase):
@@ -421,6 +471,10 @@ class TheDungeonPasses(unittest.TestCase):
     def social(self, helps=(), asks=(), answers=()):
         this = _Self()
         this._class_helps = tuple(helps)
+        this._class_board = classparty.Board()
+        this._class_book = None
+        this.started = []
+        this._begin_class_parties = this.started.extend
         data = facts()
         data["asks"] = list(data["asks"]) + list(asks)
         data["answers"] = list(data["answers"]) + list(answers)
@@ -439,14 +493,49 @@ class TheDungeonPasses(unittest.TestCase):
             _guild_social_names=lambda: set(),
         ):
             asyncio.run(bridge.Bridge._guild_social_once(this))
+        self.last = this
         return written[0]
 
-    def test_a_member_answering_a_quest_ask_is_not_seated_in_a_dungeon(self):
+    def social_with(self, **kw):
+        out = self.social(**kw)
+        return out, self.last
+
+    def group_help(self, member="Auren"):
+        spot = classquest.Spawn(9, 3130, 0, -11100.0, 1600.0, "Lizard")
+        return classquest.Help(
+            member,
+            "Cave",
+            20,
+            0,
+            classquest.Move(
+                classquest.BLOCKED,
+                2000,
+                1,
+                spot,
+                "x",
+                classquest.GROUP,
+                "",
+                1,
+                "Group Job",
+            ),
+        )
+
+    def test_a_member_in_a_party_about_to_form_is_not_seated_in_a_dungeon(self):
         quest_ask = qask(50, "Auren", guild="Cave", roles_needed="dps")
         answered = yes(60, 50, "Zappy", "dps", "help")
-        out = self.social(asks=[quest_ask], answers=[answered])
+        out, this = self.social_with(
+            helps=[self.group_help()], asks=[quest_ask], answers=[answered]
+        )
         self.assertIsNone(out.form)
         self.assertIn(3, out.withdraw)
+        self.assertEqual([r.names() for r in this.started], [("Auren", "Zappy")])
+
+    def test_an_answered_ask_with_no_objective_to_walk_to_holds_nobody(self):
+        quest_ask = qask(50, "Auren", guild="Cave", roles_needed="dps")
+        answered = yes(60, 50, "Zappy", "dps", "help")
+        out, this = self.social_with(asks=[quest_ask], answers=[answered])
+        self.assertEqual(this.started, [])
+        self.assertIsNotNone(out.form)
 
     def test_the_dungeon_ask_still_forms_with_no_quest_ask(self):
         self.assertIsNotNone(self.social().form)
@@ -486,6 +575,10 @@ class TheDungeonPasses(unittest.TestCase):
 
         this = _Self()
         this._classquest_held = {"Zappy"}
+        this._class_board = classparty.Board()
+        this._class_board.begin(
+            classparty.PartyRun(1, "Locky", ("Idle",), 2000, "Group Job", None)
+        )
         data = facts()
         with (
             mock.patch.multiple(
@@ -493,12 +586,11 @@ class TheDungeonPasses(unittest.TestCase):
                 _guild_runs_in_flight=lambda: 0,
                 _guild_run_gate=lambda: {"uptime": 99999, "latest": []},
                 _fetch_guild_run_facts=lambda bounds: data,
-                _quest_ask_holders=lambda: {"Locky"},
             ),
             mock.patch.object(guildrun, "free_members", free_members),
         ):
             asyncio.run(bridge.Bridge._guild_run_once(this))
-        self.assertGreaterEqual(seen["busy"], {"Zappy", "Locky"})
+        self.assertGreaterEqual(seen["busy"], {"Zappy", "Locky", "Idle"})
 
 
 class TheWiring(unittest.TestCase):
