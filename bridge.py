@@ -23330,7 +23330,7 @@ _JOB_HUB_MASTERS_SQL = (
     "ct.name, ft.EnemyGroup AS enemy_group FROM acore_world.creature c "
     "JOIN acore_world.creature_template ct ON ct.entry = c.id "
     "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
-    "WHERE c.map IN (%s, %s) AND (ct.npcflag & %s) <> 0"
+    "WHERE c.map IN (%s, %s, %s) AND (ct.npcflag & %s) <> 0"
 )
 _JOB_HUB_MASTERS: list = []
 # Every roster family member, of every family: the level step leaves them to
@@ -23381,7 +23381,9 @@ def _fetch_job_facts(family_names: list) -> dict:
         if not _JOB_HUB_MASTERS:
             _JOB_HUB_MASTERS.extend(_job_read(
                 cur, "hub flight masters", _JOB_HUB_MASTERS_SQL,
-                (*classic.CLASSIC_CONTINENTS, flightlearn.FLIGHT_MASTER_NPC_FLAG)))
+                # Map 530 for the starting-land hubs (levelroute.STARTING_LAND_HUBS).
+                (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP,
+                 flightlearn.FLIGHT_MASTER_NPC_FLAG)))
         roster_rows = _job_read(cur, "roster names", _JOB_ROSTER_SQL)
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.

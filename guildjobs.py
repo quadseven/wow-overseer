@@ -1983,7 +1983,9 @@ def level_step(m, world, recent, cap):
     why = guildlevel.outgrown(m.level, m.race, m.map_id, m.zone_id, bands)
     if not why:
         return None, "", ""
-    choice = guildlevel.choose(m.level, m.race, m.map_id, bands, world.masters)
+    choice = guildlevel.choose(
+        m.level, m.race, m.map_id, bands, world.masters, zone_id=m.zone_id
+    )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
     master = choice.master

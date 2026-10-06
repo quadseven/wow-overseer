@@ -22,13 +22,15 @@ BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 EASTERN_KINGDOMS, KALIMDOR, OUTLAND = 0, 1, 530
-HUMAN, NIGHT_ELF, DRAENEI, ORC = 1, 4, 11, 2
+HUMAN, NIGHT_ELF, DRAENEI, ORC, BLOOD_ELF = 1, 4, 11, 2, 10
 PRIEST = 5
 
 # Zone ids: the starting zones and capitals the priests stood in, and hubs.
 ELWYNN, DUN_MOROGH, DARNASSUS, AZUREMYST = 12, 1, 1657, 3524
 WESTFALL, LOCH_MODAN, REDRIDGE, DARKSHORE = 40, 38, 44, 148
 BARRENS, SILVERPINE = 17, 130
+# The map-530 starting lands, and Hellfire Peninsula beyond them.
+EVERSONG, GHOSTLANDS, BLOODMYST, THE_EXODAR, HELLFIRE = 3430, 3433, 3525, 3557, 3483
 
 
 def quests_in(zone, low, high, start):
@@ -52,13 +54,17 @@ QUESTS = tuple(
     + quests_in(DARKSHORE, 11, 19, 4000)
     + quests_in(BARRENS, 10, 25, 5000)
     + quests_in(SILVERPINE, 10, 20, 6000)
+    + quests_in(BLOODMYST, 10, 20, 7000)
+    + quests_in(GHOSTLANDS, 10, 20, 8000)
 )
+
+ALL_HUBS = levelroute.HUBS + levelroute.STARTING_LAND_HUBS
 
 
 def master_rows():
     """One flight master beside every hub's taxi node, spawn id by hub order."""
     rows = []
-    for i, hub in enumerate(levelroute.HUBS):
+    for i, hub in enumerate(ALL_HUBS):
         point = hub.point
         rows.append(
             {
@@ -74,7 +80,7 @@ def master_rows():
 
 
 def spawn_of(key):
-    return 90000 + [h.key for h in levelroute.HUBS].index(key)
+    return 90000 + [h.key for h in ALL_HUBS].index(key)
 
 
 def world(roster=()):
@@ -136,8 +142,8 @@ class TheOutgrownRule(unittest.TestCase):
             guildlevel.outgrown(19, HUMAN, EASTERN_KINGDOMS, WESTFALL, bands()), ""
         )
 
-    def test_map_530_is_outside_the_classic_world(self):
-        why = guildlevel.outgrown(14, DRAENEI, OUTLAND, AZUREMYST, bands())
+    def test_outland_proper_is_outside_the_classic_world(self):
+        why = guildlevel.outgrown(14, DRAENEI, OUTLAND, HELLFIRE, bands())
         self.assertIn("outside the classic world", why)
 
     def test_an_unread_zone_or_a_dungeon_is_not_judged(self):
@@ -285,19 +291,116 @@ class TheBounds(unittest.TestCase):
         self.assertEqual(level_steps(result), [])
 
 
+def islander(name="Ekka", **over):
+    """A Draenei priest on Azuremyst Isle, as Cave's stood on 2026-10-05."""
+    base = dict(race=DRAENEI, map_id=OUTLAND, zone_id=AZUREMYST, x=-4000.0, y=-12000.0)
+    base.update(over)
+    return member(name, **base)
+
+
+def blood_elf(name="Glamhands", **over):
+    """A Blood Elf in Eversong Woods, as Bonkers' stood on 2026-10-05."""
+    base = dict(race=BLOOD_ELF, map_id=OUTLAND, zone_id=EVERSONG, x=9400.0, y=-6800.0)
+    base.update(over)
+    return member(name, guild="Bonkers", **base)
+
+
 class MapFiveThirty(unittest.TestCase):
-    def test_a_draenei_on_azuremyst_is_named_and_never_sent_a_row_it_would_refuse(
-        self,
-    ):
-        draenei = member(
-            race=DRAENEI, map_id=OUTLAND, zone_id=AZUREMYST, x=-4000.0, y=-12000.0
+    """The Draenei and Blood Elf starting lands (mod-overseer#765).
+
+    On the dev realm on 2026-10-05 Cave's Draenei priests at 14 and 15 and
+    Bonkers' Blood Elves stayed on map 530 with the note "no walk leaves map
+    530", so none reached 17. A player of those races at that level goes to the
+    second zone of its start, Bloodmyst Isle or the Ghostlands, before the boat
+    or the orb; the module walks a guild member inside the starting lands.
+    """
+
+    def masters(self):
+        return guildlevel.hub_masters(master_rows())
+
+    def test_the_starting_lands_are_judged_like_a_continent(self):
+        alliance = bands()
+        self.assertIn(
+            "no quest band",
+            guildlevel.outgrown(14, DRAENEI, OUTLAND, AZUREMYST, alliance),
         )
-        result = plan([draenei])
+        self.assertIn(
+            "no quest band",
+            guildlevel.outgrown(14, DRAENEI, OUTLAND, THE_EXODAR, alliance),
+        )
+        self.assertEqual(
+            guildlevel.outgrown(15, DRAENEI, OUTLAND, BLOODMYST, alliance), ""
+        )
+        self.assertIn(
+            "top out at 19",
+            guildlevel.outgrown(21, DRAENEI, OUTLAND, BLOODMYST, alliance),
+        )
+
+    def test_outland_beyond_the_starting_lands_stays_outside(self):
+        why = guildlevel.outgrown(14, DRAENEI, OUTLAND, HELLFIRE, bands())
+        self.assertIn("outside the classic world", why)
+        got = guildlevel.choose(
+            14, DRAENEI, OUTLAND, bands(), self.masters(), zone_id=HELLFIRE
+        )
+        self.assertIsNone(got.master)
+
+    def test_a_draenei_on_azuremyst_walks_to_blood_watch(self):
+        result = plan([islander()])
+        steps = level_steps(result)
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(
+            steps[0].rows[0].command,
+            "walk-to-spawn creature:%d max:%d"
+            % (spawn_of("bloodmyst"), int(guildroute.FAR_WALK_YARDS)),
+        )
+        self.assertIn("Blood Watch in Bloodmyst Isle", steps[0].said)
+
+    def test_a_draenei_in_the_exodar_walks_to_blood_watch(self):
+        steps = level_steps(plan([islander(zone_id=THE_EXODAR)]))
+        self.assertEqual(len(steps), 1)
+        self.assertIn("creature:%d " % spawn_of("bloodmyst"), steps[0].rows[0].command)
+
+    def test_a_blood_elf_in_eversong_walks_to_tranquillien(self):
+        steps = level_steps(plan([blood_elf()], masters={"Bonkers": "Grug"}))
+        self.assertEqual(len(steps), 1)
+        self.assertIn("creature:%d " % spawn_of("ghostlands"), steps[0].rows[0].command)
+        self.assertIn("Tranquillien in Ghostlands", steps[0].said)
+
+    def test_a_draenei_on_bloodmyst_whose_band_fits_stays(self):
+        self.assertEqual(level_steps(plan([islander(zone_id=BLOODMYST)])), [])
+
+    def test_past_the_starting_lands_the_note_names_the_boat(self):
+        result = plan([islander(level=21, zone_id=BLOODMYST)])
         self.assertEqual(level_steps(result), [])
         note = "; ".join(result.notes)
-        self.assertIn("outside the classic world", note)
         self.assertIn("no walk leaves map 530", note)
-        self.assertIn("the crossing to Westfall is its own", note)
+        self.assertIn("Valaar's Berth", note)
+        self.assertIn("Auberdine", note)
+
+    def test_past_the_starting_lands_the_note_names_the_orb(self):
+        result = plan(
+            [blood_elf(level=21, zone_id=GHOSTLANDS)], masters={"Bonkers": "Grug"}
+        )
+        self.assertEqual(level_steps(result), [])
+        note = "; ".join(result.notes)
+        self.assertIn("Orb of Translocation in Silvermoon City", note)
+        self.assertIn("the Undercity", note)
+
+    def test_a_member_on_a_continent_is_never_sent_to_the_starting_lands(self):
+        only_bloodmyst = {BLOODMYST: bands()[BLOODMYST]}
+        got = guildlevel.choose(
+            14, HUMAN, EASTERN_KINGDOMS, only_bloodmyst, self.masters(), zone_id=ELWYNN
+        )
+        self.assertIsNone(got.master)
+        self.assertIsNone(got.hub)
+
+    def test_the_starting_land_hubs_are_never_a_familys(self):
+        keys = {h.key for h in levelroute.HUBS}
+        self.assertNotIn("bloodmyst", keys)
+        self.assertNotIn("ghostlands", keys)
+        for hub in levelroute.STARTING_LAND_HUBS:
+            self.assertTrue(hub.friendly, hub.key)
+            self.assertEqual(hub.map_id, OUTLAND, hub.key)
 
 
 class TheWiring(unittest.TestCase):
@@ -308,6 +411,9 @@ class TheWiring(unittest.TestCase):
         self.assertIn("s.zone_id", reads)
         self.assertIn("_JOB_HUB_MASTERS_SQL", reads)
         self.assertIn("EnemyGroup", reads)
+        # Map 530 too, for the starting-land hubs' flight masters.
+        self.assertIn("c.map IN (%s, %s, %s)", reads)
+        self.assertIn("classic.OUTLAND_MAP,", BRIDGE)
         self.assertIn("overseer_roster", reads)
         self.assertIn('zone_id=_row_int(r, "zone_id")', BRIDGE)
 
@@ -316,6 +422,10 @@ class TheWiring(unittest.TestCase):
         body = BRIDGE[BRIDGE.index("def _job_leveling(") :][:600]
         self.assertIn("_level_world()", body)
         self.assertIn("guildlevel.world(", body)
+
+    def test_the_starting_land_quests_are_read_for_their_bands(self):
+        for zone in (BLOODMYST, GHOSTLANDS):
+            self.assertIn(str(zone), levelroute.QUESTS_SQL)
 
     def test_the_module_ships(self):
         self.assertIn("guildlevel.py", DOCKERFILE)
