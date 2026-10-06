@@ -5633,6 +5633,8 @@ class Bridge(discord.Client):
         # The same for the hunt verb (quadseven/mod-overseer#869): the class
         # quest hunt is the walk alone meanwhile (classhunt.py).
         self._class_hunt_unsupported_until: float = 0.0
+        # And for the `item:` key of the hunt row (mod-overseer#871).
+        self._class_hunt_itemless_until: float = 0.0
         # The last comparison written per (kind, subject, item guid), so an
         # unchanged answer is recorded once rather than every economy cycle.
         self._jev_recorded: dict = {}
@@ -13972,6 +13974,7 @@ class Bridge(discord.Client):
             None if now < self._class_hunt_unsupported_until
             else classhunt.Slots(classhunt.free_slots(
                 facts.get("hunt_open"), HUNTS_AT_ONCE)))
+        self._class_hunts.items = now >= self._class_hunt_itemless_until
         plan = await self._plan_guild_jobs(
             members, facts, busy, cap, spawn_walks, cohort)
         self._log_guild_job_plan(members, plan)
@@ -14353,7 +14356,8 @@ class Bridge(discord.Client):
             row_id = await asyncio.to_thread(_insert_corps_row, step.holder, row)
             if not row_id:
                 return False
-            verdict, complete = await self._follow_class_hunt(step, row_id, quest)
+            verdict, complete = await self._follow_class_hunt(
+                step, row_id, quest, row.command)
             log.info("guild jobs: hunt row %d for %s (%s): %s", row_id, step.holder,
                      row.command, verdict.said)
             if complete:
@@ -14364,6 +14368,16 @@ class Bridge(discord.Client):
                 log.warning("guild jobs: this worldserver does not hunt a quest creature; "
                             "class quest hunts are the walk alone for %d minutes",
                             int(guildroute.WALK_UNSUPPORTED_SECONDS // 60))
+                return False
+            if verdict.state == classhunt.ITEMLESS:
+                # An older worldserver: ask again in the plain form, once.
+                self._class_hunt_itemless_until = (
+                    time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS)
+                row = type(row)(row.kind, classhunt.plain_form(row.command),
+                                row.target_arg, row.source)
+                continue
+            if verdict.state == classhunt.RESPAWNING:
+                # The class backoff (NO_RESPAWN_BACKOFF_MINUTES) leaves it alone.
                 return False
             if verdict.state == classhunt.NEVER:
                 self._class_hunts.give_up(step.holder, step.key, time.time())
@@ -14378,7 +14392,7 @@ class Bridge(discord.Client):
             await asyncio.sleep(verdict.wait)
         return False
 
-    async def _follow_class_hunt(self, step, row_id: int, quest):
+    async def _follow_class_hunt(self, step, row_id: int, quest, command=""):
         """(the row's last Answer, whether the quest is complete): read the row
         and the member's counters every POLL_SECONDS until the row leaves
         verifying, the quest is complete (the row is then ended) or the row's
@@ -14391,9 +14405,12 @@ class Bridge(discord.Client):
             if answer is None:
                 return classhunt.Answer(classhunt.UNREADABLE, "hunt row %d is unreadable" % row_id), False
             verdict = classhunt.judge(step.holder, answer.get("status"),
-                                      answer.get("detail"), answer.get("result"))
+                                      answer.get("detail"), answer.get("result"),
+                                      command)
             if quest is not None:
-                state = await asyncio.to_thread(_class_quest_state, step.holder, quest.id)
+                state = await asyncio.to_thread(
+                    _class_hunt_state, step.holder, quest.id,
+                    [i for i, _n in quest.items])
                 if state and classhunt.finished(quest, *state):
                     await asyncio.to_thread(_end_hunt_row, row_id)
                     return classhunt.Answer(
@@ -23845,9 +23862,11 @@ def _corps_masters_at_mailbox(members) -> set:
     return _holders_at_mailbox(holders, _fetch_positions(holders))
 
 
-def _class_quest_state(name: str, quest_id: int):
-    """(status, summed counters) of one character's quest as character_queststatus
-    holds it now, None when the character has no such quest in its log."""
+def _class_hunt_state(name: str, quest_id: int, items=()):
+    """(status, summed counters, {item: held}) of one character's quest as
+    character_queststatus and its bags hold them now, None when the character
+    has no such quest in its log. The bags are read for `items`, the item
+    entries the quest requires."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT q.status AS status, (q.mobcount1 + q.mobcount2 + q.mobcount3 + "
@@ -23857,7 +23876,22 @@ def _class_quest_state(name: str, quest_id: int):
             (name, int(quest_id)),
         )
         row = cur.fetchone()
-        return (row["status"], row["progress"]) if row else None
+        if not row:
+            return None
+        held = {}
+        wanted = [int(i) for i in items]
+        if wanted:
+            cur.execute(
+                "SELECT ii.itemEntry AS entry, SUM(ii.count) AS n "
+                "FROM character_inventory ci "
+                "JOIN item_instance ii ON ii.guid = ci.item "
+                "JOIN characters c ON c.guid = ci.guid WHERE c.name = %s "
+                "AND ii.itemEntry IN (" + ",".join(str(i) for i in wanted) + ") "
+                "GROUP BY ii.itemEntry",
+                (name,),
+            )
+            held = {int(r["entry"]): int(r["n"]) for r in cur.fetchall()}
+        return row["status"], row["progress"], held
 
 
 def _end_hunt_row(row_id: int) -> None:

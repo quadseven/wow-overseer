@@ -265,7 +265,15 @@ REALM_FULL_BACKOFF_MINUTES = 15
 BOT_BUDGET_BACKOFF_MINUTES = 30
 # 690 seconds is 11.5 minutes: asked again at 12, the hold has lapsed.
 HELD_BACKOFF_MINUTES = 12
+# A hunt that killed its target and found no respawn due before its clock ran
+# out (mod-overseer#871): a creature with one spawn comes back in many minutes
+# (rare and single spawns take 10 to 120), so the member is left alone for
+# 15, the same as a full realm, and asks again then; the second such answer in a
+# row sends it to another pack (guildjobs.failed_class_walks).
+NO_RESPAWN_REASON = "nothing respawns before the clock runs out"
+NO_RESPAWN_BACKOFF_MINUTES = 15
 BACKOFF_MINUTES = {
+    NO_RESPAWN_REASON: NO_RESPAWN_BACKOFF_MINUTES,
     REALM_FULL_REASON: REALM_FULL_BACKOFF_MINUTES,
     BOT_BUDGET_REASON: BOT_BUDGET_BACKOFF_MINUTES,
     HELD_REASON: HELD_BACKOFF_MINUTES,
@@ -491,6 +499,8 @@ class Quest:
     provided: tuple = ()
     # Required items a creature with a spawn drops.
     droppable: frozenset = frozenset()
+    # (required item, creature entry that drops it) for every dropper with a spawn.
+    drops: tuple = ()
 
     @property
     def spells(self) -> frozenset:
@@ -533,6 +543,8 @@ class Book:
         items a use quest hands over and the items it requires."""
         out = set()
         for q in self.quests.values():
+            # A dropped item is read too: the hunt asks for what is still missing.
+            out.update(i for i, _n in q.items if i in q.droppable)
             if q.uses:
                 out.update(q.provided)
                 out.update(i for i, _n in q.items)
@@ -703,6 +715,12 @@ def _quest(r, klass, starts, ends, by_entry, droppers, aims) -> Quest:
         provided,
         frozenset(
             i for i, _n in items if any(by_entry.get(e) for e in droppers.get(i, ()))
+        ),
+        tuple(
+            (i, e)
+            for i, _n in items
+            for e in sorted(droppers.get(i, ()))
+            if by_entry.get(e)
         ),
     )
 
@@ -1325,6 +1343,9 @@ class Hunts:
         # planned, set by the bridge before it plans; None keeps the walk-only
         # hunt (a worldserver with no hunt verb, or one not yet read).
         self.slots = None
+        # Whether the hunt row may name the item it wants (`item:`, mod-overseer
+        # #871); False while the worldserver is known to reject the token.
+        self.items = True
 
     def get(self, name):
         return self._by.get(name)

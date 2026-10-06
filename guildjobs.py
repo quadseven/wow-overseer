@@ -2465,7 +2465,7 @@ def class_walk_backoff(name, recent) -> int:
     if not rows:
         return 0
     newest = rows[0]
-    wait = classquest.BACKOFF_MINUTES.get(newest.refusal, 0)
+    wait = classquest.BACKOFF_MINUTES.get(newest.refusal or newest.reason, 0)
     return max(0, wait - int(newest.age_minutes))
 
 
@@ -2609,7 +2609,7 @@ def class_step(m, book, recent, cap, hunts=None, now=0.0, far=None):
     if held is not None:
         return None, move.said, _join(note, held)
     if move.kind == classquest.HUNT:
-        step, wait = _hunt_step(m, move, spot, book, cap, slots, arrived)
+        step, wait = _hunt_step(m, move, spot, book, cap, hunts, arrived)
         if step is None:
             if hunts:
                 hunts.pause(m.name, move.quest, now)
@@ -2680,17 +2680,24 @@ def _held_note(m, wait) -> str:
     )
 
 
-def _hunt_step(m, move, spot, book, cap, slots, arrived):
+def _hunt_step(m, move, spot, book, cap, hunts, arrived):
     """(step, note) for a member's hunt. With a hunt slot free, the step is the
     walk to the pack and then the `hunt-spawn` row for the creature there
     (classhunt.py), no walk for a member already at it; with none left, the walk
     alone (today's hunt) for a member not yet there, and no step with a note for
     one that is. With no hunt verb (`slots` None) the walk alone, as it was."""
+    slots = getattr(hunts, "slots", None)
     walk_only = _spot_step(m, spot, classquest.ACTION, cap, move.said)
     if slots is None:
         return walk_only, ""
     quest = book.quests.get(int(move.quest)) if book is not None else None
-    row = classhunt.command(quest, move.spot.entry) if quest is not None else ""
+    row = (
+        classhunt.command(
+            quest, move.spot.entry, m.count, getattr(hunts, "items", True)
+        )
+        if quest is not None
+        else ""
+    )
     if not row or not slots.take(m.name):
         if arrived:
             return None, "%s waits for a hunt slot on the realm" % m.name

@@ -8,8 +8,10 @@ level-10 warrior line (quest 1498: 5 Singed Scale from Thunder Lizard 3130 and
 Lightning Hide 3131 in the Barrens), read 2026-10-06.
 """
 
+import ast
 import asyncio
 import json
+import pathlib
 import unittest
 from unittest import mock
 
@@ -21,6 +23,11 @@ from test_classquest import KALIMDOR, class_plan, class_steps, qrow, who
 from test_classquest import book as warrior_book
 from test_classquest_far_walk import FAR
 from test_guildsocial_bridge import bridge
+
+
+def bridge_text():
+    return pathlib.Path(bridge.__file__).read_text(encoding="utf-8")
+
 
 HUNTING = dict(quest_log={1498: 3}, quests_done=frozenset({1505}))
 # Beside the Thunder Lizard spawn (705, -4112): inside the module's reach.
@@ -40,13 +47,47 @@ def hunt_rows(step):
 
 
 class TheRow(unittest.TestCase):
-    def test_an_item_objective_asks_for_no_count_and_a_modest_time(self):
+    def test_an_item_objective_names_the_item_and_how_many_are_missing(self):
         quest = warrior_book().quests[1498]
         self.assertEqual(
             classhunt.command(quest, 3130),
-            "hunt-spawn creature:3130 max:%d" % classhunt.MAX_SECONDS,
+            "hunt-spawn creature:3130 item:6486 count:5 max:%d" % classhunt.MAX_SECONDS,
+        )
+        held = {6486: 2}.get
+        self.assertEqual(
+            classhunt.command(quest, 3130, lambda i: held(i, 0)),
+            "hunt-spawn creature:3130 item:6486 count:3 max:%d" % classhunt.MAX_SECONDS,
         )
         self.assertLessEqual(classhunt.MAX_SECONDS, 600)
+
+    def test_a_count_already_held_still_asks_for_one(self):
+        quest = warrior_book().quests[1498]
+        self.assertIn("count:1 ", classhunt.command(quest, 3130, lambda i: 9))
+
+    def test_an_older_worldserver_gets_the_row_with_no_item_key(self):
+        quest = warrior_book().quests[1498]
+        self.assertEqual(
+            classhunt.command(quest, 3130, None, item_form=False),
+            "hunt-spawn creature:3130 max:%d" % classhunt.MAX_SECONDS,
+        )
+        row = classhunt.command(quest, 3130)
+        self.assertEqual(
+            classhunt.plain_form(row),
+            "hunt-spawn creature:3130 max:%d" % classhunt.MAX_SECONDS,
+        )
+
+    def test_a_single_item_quest_from_one_creature(self):
+        rows = [qrow(1678, "Vejrek", sort=-81, classes=1, item1=6799, item_count1=1)]
+        b = classquest.build(
+            rows,
+            [],
+            [{"guid": 5, "entry": 6113, "map_id": 1, "x": 1.0, "y": 2.0}],
+            [{"item": 6799, "entry": 6113}],
+        )
+        self.assertEqual(
+            classhunt.command(b.quests[1678], 6113),
+            "hunt-spawn creature:6113 item:6799 count:1 max:%d" % classhunt.MAX_SECONDS,
+        )
 
     def test_a_kill_objective_asks_for_its_own_kill_count(self):
         quest = warrior_book().quests[1819]
@@ -81,6 +122,11 @@ class TheCounters(unittest.TestCase):
         self.assertEqual(need, 5)
         self.assertFalse(classhunt.finished(quest, classquest.STATUS_INCOMPLETE, 4))
         self.assertTrue(classhunt.finished(quest, classquest.STATUS_INCOMPLETE, 5))
+
+    def test_an_item_objective_is_done_when_the_bags_hold_the_items(self):
+        quest = warrior_book().quests[1498]
+        self.assertFalse(classhunt.finished(quest, 3, 0, {6486: 4}))
+        self.assertTrue(classhunt.finished(quest, 3, 0, {6486: 5}))
 
     def test_an_unreadable_counter_is_not_done(self):
         quest = warrior_book().quests[1498]
@@ -169,6 +215,42 @@ class ThePlan(unittest.TestCase):
         self.assertEqual(step.key, 1498)
         self.assertEqual(step.spot.spawn, 4788)
         self.assertTrue(row.source.endswith("classquest:Bigzug"))
+
+    def test_the_row_names_the_item_and_what_the_bags_still_lack(self):
+        have = (guildjobs.Carried(1, 6486, 2),)
+        m = who(**HUNTING, **BESIDE, carried=have)
+        (step,) = class_steps(class_plan([m], hunts=hunters(classhunt.Slots(2))))
+        self.assertTrue(
+            step.rows[0].command.startswith(
+                "hunt-spawn creature:3130 item:6486 count:3 "
+            )
+        )
+
+    def test_a_world_that_rejects_the_item_key_is_given_the_plain_row(self):
+        hunts = hunters(classhunt.Slots(2))
+        hunts.items = False
+        m = who(**HUNTING, **BESIDE)
+        (step,) = class_steps(class_plan([m], hunts=hunts))
+        self.assertNotIn("item:", step.rows[0].command)
+
+    def test_the_dropped_items_are_read_from_the_bags(self):
+        self.assertIn(6486, warrior_book().watch_items())
+
+    def test_a_target_that_does_not_respawn_leaves_the_member_alone_15_minutes(self):
+        body = {"outcome": "timeout", "reason": classquest.NO_RESPAWN_REASON}
+        row = {
+            "target_name": "Bigzug",
+            "source": "guildjobs:classquest:Bigzug",
+            "status": "unchanged",
+            "age": 2,
+            "result": json.dumps(body, separators=(",", ":")),
+        }
+        recent = guildjobs.recent_from_rows([row])
+        self.assertEqual(
+            guildjobs.class_walk_backoff("Bigzug", recent),
+            classquest.NO_RESPAWN_BACKOFF_MINUTES - 2,
+        )
+        self.assertGreater(classquest.NO_RESPAWN_BACKOFF_MINUTES, 10)
 
     def test_a_member_off_the_pack_walks_to_it_first(self):
         m = who(**HUNTING, **NEARBY)
@@ -272,8 +354,8 @@ ROW = guildjobs.guildcorps.Row(
     "job", "hunt-spawn creature:3130 max:480", "", "guildjobs:classquest:Bigzug"
 )
 RUNNING = ("verifying", "", "{}")
-INCOMPLETE = (classquest.STATUS_INCOMPLETE, 2)
-COMPLETE = (classquest.STATUS_COMPLETE, 5)
+INCOMPLETE = (classquest.STATUS_INCOMPLETE, 2, {})
+COMPLETE = (classquest.STATUS_COMPLETE, 5, {})
 
 
 def run(this):
@@ -291,7 +373,7 @@ def run(this):
             else dict(zip(("status", "detail", "result"), got, strict=True))
         )
 
-    def state(name, quest):
+    def state(name, quest, items=()):
         return this.states.pop(0) if len(this.states) > 1 else this.states[0]
 
     async def nap(seconds):
@@ -300,7 +382,7 @@ def run(this):
     stubs = dict(
         _insert_corps_row=insert,
         _command_answer=read,
-        _class_quest_state=state,
+        _class_hunt_state=state,
         _end_hunt_row=this.ended.append,
     )
     with (
@@ -368,6 +450,44 @@ class TheBridgeFollowsTheHunt(unittest.TestCase):
             )
             self.assertIsNone(this._class_hunts.get("Bigzug"))
 
+    def test_the_item_key_an_older_worldserver_rejects_is_asked_again_plain(self):
+        bad = answer(
+            "error",
+            classhunt.MALFORMED,
+            outcome="refused",
+            reason=classhunt.MALFORMED,
+            retry="never",
+        )
+        this = _Bridge([bad, answer("applied", outcome="done")], states=[INCOMPLETE])
+        item_row = guildjobs.guildcorps.Row(
+            "job", "hunt-spawn creature:3130 item:6486 count:5 max:480", "", "s"
+        )
+        global ROW
+        before, ROW = ROW, item_row
+        try:
+            run(this)
+        finally:
+            ROW = before
+        self.assertEqual(
+            [r[1] for r in this.rows][:2],
+            [item_row.command, "hunt-spawn creature:3130 max:480"],
+        )
+        self.assertGreater(this._class_hunt_itemless_until, 0.0)
+        self.assertIsNone(this._class_hunts.get("Bigzug"))
+
+    def test_nothing_respawning_is_left_alone_not_waited_out_in_the_step(self):
+        gone = answer(
+            "unchanged",
+            "timeout",
+            outcome="timeout",
+            reason=classquest.NO_RESPAWN_REASON,
+            retry="later",
+        )
+        this = _Bridge([gone])
+        self.assertFalse(run(this))
+        self.assertEqual(len(this.rows), 1)
+        self.assertEqual(this.slept, [classhunt.POLL_SECONDS])
+
     def test_a_row_that_cannot_be_read_ends_the_follow(self):
         this = _Bridge([None])
         self.assertFalse(run(this))
@@ -375,12 +495,19 @@ class TheBridgeFollowsTheHunt(unittest.TestCase):
 
 
 class TheBridgeWiring(unittest.TestCase):
+    def test_no_hunt_helper_is_shadowed_by_a_later_def_of_the_same_name(self):
+        tree = ast.parse(pathlib.Path(bridge.__file__).read_text(encoding="utf-8"))
+        names = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
+        for name in ("_class_hunt_state", "_end_hunt_row", "_hunts_open"):
+            self.assertEqual(names.count(name), 1, name)
+        self.assertNotIn("_class_quest_state(step.holder", bridge_text())
+
     def test_the_hunt_row_is_followed_before_any_other_job_row(self):
         src = bridge.Bridge._run_job_step.__code__.co_names
         self.assertIn("_class_hunt_row", src)
 
     def test_the_plan_is_given_the_hunt_slots_the_realm_has_free(self):
-        text = __import__("pathlib").Path(bridge.__file__).read_text(encoding="utf-8")
+        text = bridge_text()
         self.assertIn("classhunt.free_slots(", text)
         self.assertIn("_JOB_HUNTS_OPEN_SQL", text)
         self.assertIn("command LIKE 'hunt-spawn %%'", text)
