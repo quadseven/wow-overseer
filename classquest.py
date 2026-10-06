@@ -34,11 +34,42 @@ quest of the same class and reward.
 WHAT IT REFUSES, WITH A NAMED BLOCKER (a member never waits in silence):
   group    a quest that suggests a group or whose objective is an elite: left
            for the ask path (guildsocial), named so here;
-  object   an objective that needs a gameobject used or a spell cast: the
-           module has no verb for it;
-  source   an item with no creature that drops it, or no spawn row;
+  object   an objective that needs a gameobject used and no spawn of it is on
+           record, or one this worldserver cannot use yet;
+  source   an item with no creature that drops it, no chest that holds it and
+           no quest that hands it over, or no spawn row;
+  item     a quest item the member must use and no longer carries;
   map      every giver or objective spawn is on another map than the member's:
            walk-to-spawn refuses a spawn on another map.
+
+WHAT A PLAYER USES (quadseven/mod-overseer#865). Two verbs on kind='quest'
+rows, written beside `take quest:` and `turnin quest:`:
+
+  use-item-on creature:<entry> item:<entry>   a carried item used on a creature
+  use-gameobject <entry>                      the nearest gameobject clicked
+
+Both fire only when the member already stands beside the target, so a USE move
+is a walk to the target's spawn and then the row, as a take is a walk and then
+a row. They are read from the world, never typed in:
+
+  item on a creature  an item the quest hands over (StartItem, ItemDrop1-4) or
+                      requires, whose on-use spell (item_template.spellid_1,
+                      spelltrigger_1 = 0) is bound by `conditions` (source type
+                      17, condition 31, object type 3) to named creatures: the
+                      hunter's Taming Rod and Taming Totem, a druid's Curative
+                      Animal Salve;
+  gameobject          a required item no creature drops that a chest holds
+                      (gameobject_loot_template through a type 3
+                      gameobject_template), and a negative RequiredNpcOrGo.
+
+An item the quest hands over is carried after the take; any other item the
+member must already hold, and one it does not is a named blocker (the class
+step buys nothing). A worldserver that predates the verbs answers `malformed
+request: want take quest:...` (classuse.py); the bridge then plans from
+Book.plain(), the same book with no uses, and every use quest is named as it
+was before. What the verbs do NOT cover stays blocked and named: an item cast
+at nothing in particular, at a spell focus (the warlock's Summoning Circle, a
+water source) or on a corpse nearby, and a creature a script summons.
 
 PURE MODULE: rows in, a Move out. No MySQL, no clock.
 """
@@ -46,7 +77,7 @@ PURE MODULE: rows in, a Move out. No MySQL, no clock.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 # The class a class QuestSortID names, and the class bit AllowableClasses holds.
 CLASS_OF_SORT = {
@@ -87,14 +118,25 @@ ACTION = "classquest"
 # A member's plan line carries this while it works a class quest.
 MARK = "class quest"
 
-# Move kinds.
-TAKE, HUNT, TURN_IN, BLOCKED = "take", "hunt", "turnin", "blocked"
+# Move kinds. USE writes a use-item-on or use-gameobject row at a target.
+TAKE, HUNT, TURN_IN, USE, BLOCKED = "take", "hunt", "turnin", "use", "blocked"
 # Blockers.
 GROUP, OBJECT, SOURCE, MAP, UNKNOWN = "group", "object", "source", "map", "unknown"
+# A quest item the member must use and does not carry.
+ITEM = "item"
 # A hunt that made no progress through every field it was sent to.
 STALLED = "stalled"
+# A use the world refused for good, or that changed nothing through every
+# target it was sent to.
+USE_STALLED = "usestalled"
 # The blockers a guildmate can help with: the rest are the module's to fix.
-HELPABLE = frozenset({GROUP, STALLED})
+HELPABLE = frozenset({GROUP, STALLED, USE_STALLED})
+
+# The two verbs of kind='quest' (quadseven/mod-overseer#865).
+USE_ITEM, USE_OBJECT = "use-item-on", "use-gameobject"
+# A member this near its target (yards) is already beside it: the use row is
+# written with no walk. The module's creature reach is 8 yards.
+USE_NEAR = 4.0
 
 # A GROUP-BLOCKED QUEST ASKS FOR THIS MANY HELPERS when the world data names no
 # group size (an elite objective): the asker and two make a party of three.
@@ -141,6 +183,10 @@ _ITEMS = "".join(
     % (i, i, i, i)
     for i in range(1, 7)
 )
+# The items a quest hands over when it is taken: StartItem and ItemDrop1-4.
+_PROVIDED = "q.StartItem AS provided0, " + "".join(
+    "q.ItemDrop%d AS provided%d, " % (i, i) for i in range(1, 5)
+)
 
 # Every class quest of the classic range, one row each.
 # Built from this module's own integer constants only (S608 does not apply).
@@ -152,6 +198,7 @@ QUESTS_SQL = (  # noqa: S608
     "q.RewardDisplaySpell AS display, q.SuggestedGroupNum AS grp, "
     + _NPCS
     + _ITEMS
+    + _PROVIDED
     + "0 AS pad FROM acore_world.quest_template q "
     "LEFT JOIN acore_world.quest_template_addon a ON a.ID = q.ID "
     "WHERE (a.AllowableClasses IN ("
@@ -192,6 +239,37 @@ LOOT_SQL = (
     "WHERE l.Item IN ({items})"
 )
 
+# The items whose on-use spell is bound to named creatures: the spell's target
+# condition (source type 17, "object entry", type 3 = a creature, applied to
+# the spell's target). A spell with no such row (a self cast, a spell focus, a
+# corpse nearby) is not a use-item-on.
+USE_ITEMS_SQL = (
+    "SELECT it.entry AS item, c.ConditionValue2 AS target "
+    "FROM acore_world.item_template it "
+    "JOIN acore_world.conditions c ON c.SourceTypeOrReferenceId = 17 "
+    "AND c.SourceEntry = it.spellid_1 AND c.ConditionTypeOrReference = 31 "
+    "AND c.ConditionValue1 = 3 AND c.ConditionTarget = 1 "
+    "AND c.NegativeCondition = 0 "
+    "WHERE it.spelltrigger_1 = 0 AND it.entry IN ({items})"
+)
+
+# The chests (gameobject type 3) whose loot holds a required item.
+CHEST_SQL = (
+    "SELECT l.Item AS item, g.entry AS entry "
+    "FROM acore_world.gameobject_loot_template l "
+    "JOIN acore_world.gameobject_template g ON g.type = 3 AND g.Data1 = l.Entry "
+    "WHERE l.Item IN ({items})"
+)
+
+# Every spawn of the gameobjects a quest uses (a chest, an objective).
+OBJECT_SPAWNS_SQL = (
+    "SELECT o.guid AS guid, o.id AS entry, o.map AS map_id, o.position_x AS x, "
+    "o.position_y AS y, gt.name AS name, 0 AS `rank` "
+    "FROM acore_world.gameobject o "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = o.id "
+    "WHERE o.id IN ({entries})"
+)
+
 # Every spawn of the creatures an objective names.
 SPAWNS_SQL = (
     "SELECT c.guid AS guid, c.id AS entry, c.map AS map_id, c.position_x AS x, "
@@ -230,6 +308,24 @@ class Spawn:
 
 
 @dataclass(frozen=True)
+class Use:
+    """One thing the quest has the member use, and where.
+
+    `verb` is USE_ITEM (item `item` used on a creature of `targets`) or
+    USE_OBJECT (a gameobject of `targets` clicked: a chest that holds `count`
+    of `item`, or an objective gameobject when `item` is 0). `spots` are the
+    spawns of the targets. `provided` is True for an item the quest hands over
+    when it is taken."""
+
+    verb: str
+    item: int = 0
+    count: int = 1
+    targets: tuple = ()
+    spots: tuple = ()
+    provided: bool = False
+
+
+@dataclass(frozen=True)
 class Quest:
     id: int
     title: str
@@ -249,6 +345,12 @@ class Quest:
     enders: tuple = ()
     # Spawns of every creature that satisfies an objective.
     fields: tuple = ()
+    # What the quest has the member use (use-item-on, use-gameobject), and the
+    # item entries it hands over when taken.
+    uses: tuple = ()
+    provided: tuple = ()
+    # Required items a creature with a spawn drops.
+    droppable: frozenset = frozenset()
 
     @property
     def spells(self) -> frozenset:
@@ -278,6 +380,34 @@ class Book:
     def spell_ids(self) -> list:
         return sorted({s for q in self.quests.values() for s in q.spells})
 
+    def plain(self) -> "Book":
+        """The same book with no uses: what the planner works from while the
+        worldserver does not carry the use verbs (classuse.py)."""
+        if not any(q.uses for q in self.quests.values()):
+            return self
+        quests = {i: replace(q, uses=()) for i, q in self.quests.items()}
+        return Book(quests, self.groups, self.trained)
+
+    def watch_items(self) -> list:
+        """The item entries to read from a member's bags: every use item, the
+        items a use quest hands over and the items it requires."""
+        out = set()
+        for q in self.quests.values():
+            if q.uses:
+                out.update(q.provided)
+                out.update(i for i, _n in q.items)
+                out.update(u.item for u in q.uses if u.item)
+        return sorted(out)
+
+    def use_entries(self) -> tuple:
+        """(creature entries, gameobject entries) the uses target, for the
+        spawn reads."""
+        creatures, objects = set(), set()
+        for q in self.quests.values():
+            for u in q.uses:
+                (creatures if u.verb == USE_ITEM else objects).update(u.targets)
+        return sorted(creatures), sorted(objects)
+
 
 @dataclass(frozen=True)
 class Move:
@@ -294,6 +424,8 @@ class Move:
     # title, and the objective's spawn the group would go to.
     want: int = 0
     title: str = ""
+    # For a USE move: what is used at `spot`.
+    use: Use | None = None
 
 
 def _int(value, default=0) -> int:
@@ -355,13 +487,61 @@ def _droppers(loot_rows) -> dict:
     return out
 
 
-def _quest(r, klass, starts, ends, by_entry, droppers) -> Quest:
+def _targets(rows, key="item", value="target") -> dict:
+    """item entry -> the sorted entries a use read names for it."""
+    out: dict = {}
+    for r in rows or ():
+        out.setdefault(_int(r.get(key)), set()).add(_int(r.get(value)))
+    return {k: tuple(sorted(v - {0})) for k, v in out.items()}
+
+
+def _provided(r) -> tuple:
+    """The item entries the quest hands over when it is taken."""
+    seen = []
+    for i in range(5):
+        entry = _int(r.get("provided%d" % i))
+        if entry and entry not in seen:
+            seen.append(entry)
+    return tuple(seen)
+
+
+def _uses(r, items, provided, droppers, aims) -> tuple:
+    """The Uses of one quest: items used on creatures, chests that hold a
+    required item no creature drops, and gameobject objectives.
+
+    `aims` is (item -> creature entries, item -> chest entries, spawns by
+    creature entry, spawns by gameobject entry)."""
+    item_aims, chests, creature_spawns, object_spawns = aims
+    out = []
+    required = [i for i, _n in items]
+    for item in dict.fromkeys([*provided, *required]):
+        targets = item_aims.get(item, ())
+        if targets:
+            spots = tuple(s for t in targets for s in creature_spawns.get(t, ()))
+            out.append(Use(USE_ITEM, item, 1, targets, spots, item in provided))
+    for item, count in items:
+        if item in provided or any(
+            creature_spawns.get(e) for e in droppers.get(item, ())
+        ):
+            continue
+        found = chests.get(item, ())
+        if found:
+            spots = tuple(s for g in found for s in object_spawns.get(g, ()))
+            out.append(Use(USE_OBJECT, item, count, found, spots))
+    for entry, count in _pairs(r, "npc", "npc_count", 4, False):
+        spots = tuple(object_spawns.get(entry, ()))
+        out.append(Use(USE_OBJECT, 0, count, (entry,), spots))
+    return tuple(out)
+
+
+def _quest(r, klass, starts, ends, by_entry, droppers, aims) -> Quest:
     kills = _pairs(r, "npc", "npc_count", 4, True)
     items = _pairs(r, "item", "item_count", 6)
     entries = {e for e, _n in kills}
     for item, _n in items:
         entries |= droppers.get(item, set())
     qid = _int(r.get("id"))
+    provided = _provided(r)
     return Quest(
         qid,
         str(r.get("title") or ""),
@@ -378,25 +558,48 @@ def _quest(r, klass, starts, ends, by_entry, droppers) -> Quest:
         tuple(starts.get(qid, ())),
         tuple(ends.get(qid, ())),
         tuple(s for e in sorted(entries) for s in by_entry.get(e, ())),
+        _uses(r, items, provided, droppers, aims),
+        provided,
+        frozenset(
+            i for i, _n in items if any(by_entry.get(e) for e in droppers.get(i, ()))
+        ),
     )
 
 
-def build(quest_rows, giver_rows, spawn_rows, loot_rows, trained_rows=()) -> Book:
+def build(
+    quest_rows,
+    giver_rows,
+    spawn_rows,
+    loot_rows,
+    trained_rows=(),
+    use_rows=(),
+    chest_rows=(),
+    object_rows=(),
+) -> Book:
     """The Book from the world's rows.
 
     `giver_rows` are GIVERS_SQL's, `spawn_rows` SPAWNS_SQL's for every creature
-    an objective names (a creature to kill, or one that drops a required item)
-    and `loot_rows` LOOT_SQL's.
+    an objective names (a creature to kill, one that drops a required item, or
+    one an item is used on) and `loot_rows` LOOT_SQL's. `use_rows` are
+    USE_ITEMS_SQL's, `chest_rows` CHEST_SQL's and `object_rows`
+    OBJECT_SPAWNS_SQL's: with none of them no quest has a use, as on a world
+    read before the verbs existed.
     """
     starts, ends = _givers(giver_rows)
     by_entry = _spawns_by_entry(spawn_rows)
     droppers = _droppers(loot_rows)
+    aims = (
+        _targets(use_rows),
+        _targets(chest_rows, "item", "entry"),
+        by_entry,
+        _spawns_by_entry(object_rows),
+    )
     quests = {}
     for r in quest_rows or ():
         klass = klass_of(r)
         if klass:
             quests[_int(r.get("id"))] = _quest(
-                r, klass, starts, ends, by_entry, droppers
+                r, klass, starts, ends, by_entry, droppers, aims
             )
     groups = {}
     for q in quests.values():
@@ -465,20 +668,97 @@ def _densest(member, spawns, avoid=()):
     return min(here, key=lambda s: (-pack(s), _yards(member, s), s.guid))
 
 
+def _source_blocker(quest: Quest) -> tuple:
+    return SOURCE, (
+        "%s needs %s no creature spawn or drop supplies (an item used on a "
+        "creature, or a summoned spawn): the module has no verb for it"
+        % (quest.title, "an objective" if quest.kills else "an item")
+    )
+
+
+def _unmet(quest: Quest) -> bool:
+    """True when something the quest requires has no source at all: an item
+    no creature drops, no chest holds and the quest does not hand over, or a
+    kill with no spawn that no item use credits."""
+    spawned = {s.entry for s in quest.fields}
+    chested = {u.item for u in quest.uses if u.verb == USE_OBJECT and u.item}
+    given = set(quest.provided)
+    fed = any(u.verb == USE_ITEM for u in quest.uses)
+    if any(e not in spawned and not fed for e, _n in quest.kills):
+        return True
+    return any(
+        i not in chested and i not in given and i not in quest.droppable
+        for i, _n in quest.items
+    )
+
+
+def _hunting(quest: Quest, member) -> bool:
+    """True while the quest has creatures to hunt: a kill with a spawn, or a
+    dropped item the member does not yet carry in full."""
+    kills = {e for e, _n in quest.kills}
+    if any(s.entry in kills for s in quest.fields):
+        return True
+    return any(member.count(i) < n for i, n in quest.items if i in quest.droppable)
+
+
+def _pending_use(quest: Quest, member):
+    """The Use the member has next, None when it has none or must hunt first."""
+    if not quest.uses or _hunting(quest, member):
+        return None
+    for use in quest.uses:
+        if use.verb == USE_OBJECT and use.item and member.count(use.item) >= use.count:
+            continue
+        return use
+    return None
+
+
+def _use_blocker(quest: Quest, member) -> tuple:
+    """(kind, sentence) when a quest with uses cannot be done now, else
+    ("", "")."""
+    spots = [s for u in quest.uses for s in u.spots] + list(quest.fields)
+    if any(s.rank >= ELITE_RANK for s in spots):
+        return GROUP, "%s's objective is an elite" % quest.title
+    if _unmet(quest):
+        return _source_blocker(quest)
+    use = _pending_use(quest, member)
+    if use is None:
+        if quest.fields and _nearest(member, quest.fields) is None:
+            return MAP, "%s's objective is on another map than the member" % quest.title
+        return "", ""
+    if not use.spots:
+        what = "gameobject" if use.verb == USE_OBJECT else "creature"
+        return (
+            OBJECT,
+            "%s needs a %s used (entry %s has no spawn row in the world data)"
+            % (
+                quest.title,
+                what,
+                "/".join(str(t) for t in use.targets),
+            ),
+        )
+    if _nearest(member, use.spots) is None:
+        return MAP, "%s's use target is on another map than the member" % quest.title
+    if use.verb == USE_ITEM and not member.carries(use.item):
+        return ITEM, (
+            "%s needs item %d used on a creature and the member does not carry "
+            "it (the class step buys nothing and cannot hand a quest item out again)"
+            % (quest.title, use.item)
+        )
+    return "", ""
+
+
 def blocker_of(quest: Quest, member) -> tuple:
     """(kind, sentence) when this quest cannot be hunted solo, else ("", "")."""
     if quest.group >= 2:
         return GROUP, "%s suggests a group of %d" % (quest.title, quest.group)
+    if quest.uses:
+        return _use_blocker(quest, member)
     if quest.objects:
         return OBJECT, "%s needs a gameobject used, which no verb does" % quest.title
     if any(s.rank >= ELITE_RANK for s in quest.fields):
         return GROUP, "%s's objective is an elite" % quest.title
     if (quest.kills or quest.items) and not quest.fields:
-        return SOURCE, (
-            "%s needs %s no creature spawn or drop supplies (an item used on a "
-            "creature, or a summoned spawn): the module has no verb for it"
-            % (quest.title, "an objective" if quest.kills else "an item")
-        )
+        return _source_blocker(quest)
     if quest.fields and _nearest(member, quest.fields) is None:
         return MAP, "%s's objective is on another map than the member" % quest.title
     return "", ""
@@ -588,9 +868,38 @@ def _move_of(member, option, key, avoid=None, held_off=frozenset()) -> Move:
     )
 
 
+def _nearest_untried(member, spawns, avoid=()):
+    """The spawn on the member's map nearest it that is not within PACK_YARDS
+    of a place in `avoid` (a target already used without result)."""
+    here = [
+        s
+        for s in spawns
+        if int(s.map_id) == int(member.map_id) and not _avoids(s, avoid)
+    ]
+    return min(here, key=lambda s: (_yards(member, s), s.guid)) if here else None
+
+
 def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
-    """The member's hunt for an incomplete quest, or why it is blocked."""
+    """The member's work on an incomplete quest (a hunt, or a use), or why it
+    is blocked."""
+    using = _pending_use(quest, member)
     if quest.id in held_off:
+        if using is not None:
+            said = "%s: using it changed nothing through %d target(s)" % (
+                quest.title,
+                len(tried) + 1,
+            )
+            return Move(
+                BLOCKED,
+                quest.id,
+                quest.klass,
+                None,
+                said,
+                USE_STALLED,
+                why,
+                1,
+                quest.title,
+            )
         said = "%s: no progress through %d pack(s) of its objective" % (
             quest.title,
             len(tried) + 1,
@@ -604,6 +913,17 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
         spot = _densest(member, quest.fields) if block == GROUP else None
         return Move(
             BLOCKED, quest.id, quest.klass, spot, said, block, why, want, quest.title
+        )
+    if using is not None:
+        return _use_move(member, quest, using, why, tried)
+    if quest.uses and not quest.fields:
+        # Everything its uses need is carried; the quest log has not caught up.
+        said = (
+            "%s: the member carries what its uses need; the quest log has not caught up"
+            % quest.title
+        )
+        return Move(
+            BLOCKED, quest.id, quest.klass, None, said, UNKNOWN, why, 0, quest.title
         )
     spot = _densest(member, quest.fields, tried)
     if spot is None:
@@ -620,6 +940,26 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
         "",
         why,
     )
+
+
+def _use_move(member, quest: Quest, use: Use, why: str, tried) -> Move:
+    """The member walks to a target of the use and writes its row there."""
+    spot = _nearest_untried(member, use.spots, tried)
+    if spot is None:
+        said = "%s: every target of its use was tried" % quest.title
+        return Move(
+            BLOCKED, quest.id, quest.klass, None, said, USE_STALLED, why, 1, quest.title
+        )
+    what = "uses item %d on" % use.item if use.verb == USE_ITEM else "uses"
+    said = "%s %s %s for %s" % (member.name, what, spot.name or "its target", why)
+    return Move(USE, quest.id, quest.klass, spot, said, "", why, use=use)
+
+
+def use_command(use: Use, spot: Spawn) -> str:
+    """The kind='quest' command row that does this use at `spot`."""
+    if use.verb == USE_ITEM:
+        return "%s creature:%d item:%d" % (USE_ITEM, int(spot.entry), int(use.item))
+    return "%s %d" % (USE_OBJECT, int(spot.entry))
 
 
 def blocked_sentence(member, move: Move) -> str:
@@ -725,6 +1065,13 @@ class Hunts:
             return GIVE_UP
         self._by[name] = Hunt(quest, progress, now, tried)
         return REROLL
+
+    def give_up(self, name, quest, now) -> None:
+        """Give a quest up for GIVE_UP_MINUTES at once: the world refused its
+        use for good (classuse.NEVER), so no other target is worth a try."""
+        hunt = self._by.get(name)
+        tried = hunt.tried if hunt is not None and hunt.quest == quest else ()
+        self._by[name] = Hunt(int(quest), 0, now, tried, now + GIVE_UP_MINUTES * 60)
 
     def forget(self, name) -> None:
         self._by.pop(name, None)

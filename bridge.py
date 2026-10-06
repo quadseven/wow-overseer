@@ -58,6 +58,7 @@ import campaignqueue
 import classic
 import classask
 import classquest
+import classuse
 import guildbank
 import guildshare
 import guildpost
@@ -5611,6 +5612,10 @@ class Bridge(discord.Client):
         # class quests it asks guild chat for help with (classask.py).
         self._class_hunts = classquest.Hunts()
         self._class_helps: tuple = ()
+        # Until when (monotonic) this worldserver is known not to carry the
+        # quest use verbs (quadseven/mod-overseer#865): the class quest plan
+        # works from classquest.Book.plain() meanwhile (classuse.py).
+        self._class_use_unsupported_until: float = 0.0
         # The last comparison written per (kind, subject, item guid), so an
         # unchanged answer is recorded once rather than every economy cycle.
         self._jev_recorded: dict = {}
@@ -13952,6 +13957,8 @@ class Bridge(discord.Client):
         fields = await self._job_fields(members, focus, busy) if spawn_walks else {}
         doors = (guildjobs.assign_doors(members, guildjobs.entrances(), facts["stones"])
                  if spawn_walks else {})
+        # No class quest uses while this worldserver does not carry the verbs.
+        facts = dict(facts, class_book=self._class_book_for_plan(facts))
         plan = guildjobs.plan(
             members, masters=facts["masters"], crafters=facts["crafters"],
             fields=fields, doors=doors, pending=facts["pending"],
@@ -13979,6 +13986,14 @@ class Bridge(discord.Client):
                      "waiting unopened are collected; theirs go to the bank",
                      ", ".join(sorted(facts["unclaimed"])))
         return plan
+
+    def _class_book_for_plan(self, facts):
+        """The class quest book, with no uses while this worldserver is known
+        not to carry the use verbs (classuse.py)."""
+        book = facts.get("class_book")
+        if book is not None and time.monotonic() < self._class_use_unsupported_until:
+            return book.plain()
+        return book
 
     async def _job_pvp_moves(self, members, recent) -> dict:
         """name -> (pvpgear.Aim, pvpgear.Move) for members playing PvP for an
@@ -14206,6 +14221,11 @@ class Bridge(discord.Client):
             else:
                 log.info("guild jobs: %s", step.said)
             for row in step.rows:
+                # A quest use row (classuse.py) is followed by what it answers.
+                if classuse.is_use_row(row.command):
+                    if not await self._class_use_row(step, row, cap):
+                        return
+                    continue
                 # A craft batch is one cast row written `repeat` times, one at
                 # a time, as the corps' runner writes it.
                 casts = max(1, int(step.repeat))
@@ -14219,6 +14239,66 @@ class Bridge(discord.Client):
             log.exception("guild jobs: step for %s failed", step.holder)
         finally:
             self._job_steps.pop(step.holder, None)
+
+    async def _class_use_row(self, step, row, cap: float) -> bool:
+        """Write a class quest use row and follow what the module answered
+        (classuse.py); True when the use moved or spent something.
+
+        A refusal that is worth asking again waits and asks again, at most
+        MAX_ATTEMPTS times; one that says the target is out of reach, or that
+        the character stands in an instance, walks the step's walk again first
+        (REWALKS). `never` gives the quest up at once, so the member asks guild
+        chat for help (classask.py); a worldserver that does not know the verbs
+        is not asked again for WALK_UNSUPPORTED_SECONDS.
+        """
+        rewalks = 0
+        for attempt in range(1, classuse.MAX_ATTEMPTS + 1):
+            row_id = await asyncio.to_thread(_insert_corps_row, step.holder, row)
+            if not row_id:
+                return False
+            answer = await self._await_corps_answer(row_id, CORPS_ROW_FOLLOW_SECONDS) or {}
+            verdict = classuse.judge(
+                step.holder, answer.get("status"), answer.get("detail"),
+                answer.get("result"))
+            log.info("guild jobs: quest use row %d for %s (%s): %s", row_id,
+                     step.holder, row.command, verdict.said)
+            if verdict.state in classuse.DONE:
+                return True
+            if verdict.state == classuse.UNSUPPORTED:
+                self._class_use_unsupported_until = (
+                    time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS)
+                log.warning("guild jobs: this worldserver does not carry the quest use "
+                            "verbs; class quests that need them are named as blocked "
+                            "for %d minutes", int(guildroute.WALK_UNSUPPORTED_SECONDS // 60))
+                return False
+            if verdict.state == classuse.NEVER:
+                self._class_hunts.give_up(step.holder, step.key, time.time())
+                return False
+            if verdict.state not in (classuse.RETRY, classuse.ELSEWHERE):
+                return False
+            if attempt == classuse.MAX_ATTEMPTS:
+                return False
+            if verdict.rewalk:
+                if rewalks >= classuse.REWALKS or not await self._class_rewalk(step, cap):
+                    return False
+                rewalks += 1
+            else:
+                await asyncio.sleep(verdict.wait)
+        return False
+
+    async def _class_rewalk(self, step, cap: float) -> bool:
+        """Walk a class quest step's walk row again; True when it arrived."""
+        if step.walk is None:
+            return False
+        walk_id = await asyncio.to_thread(_insert_corps_row, step.holder, step.walk)
+        if not walk_id:
+            return False
+        goal = step.goal or guildroute.walk_goal(
+            step.walk.command)
+        answer, walk_id = await self._follow_guild_walk(
+            "guild jobs", step.holder, walk_id, cap,
+            lambda: _insert_corps_row(step.holder, step.walk), goal)
+        return answer.state == guildroute.ARRIVED
 
     async def _job_row(self, step, row, cap: float) -> bool:
         """Write one row and wait for its answer; True when it worked."""
@@ -23548,11 +23628,25 @@ def _class_book_reads(cur) -> tuple:
     loot = _class_rows(cur, "class quest loot", classquest.LOOT_SQL, "items", items)
     entries = {int(r[f"npc{i}"]) for r in quests for i in range(1, 5)
                if (r.get(f"npc{i}") or 0) > 0} | {int(r["entry"]) for r in loot}
-    spawns = _class_rows(cur, "class quest spawns", classquest.SPAWNS_SQL, "entries", entries)
     spells = {int(r[k]) for r in quests for k in ("reward", "display") if r.get(k)}
     trained = _class_rows(cur, "class quest spells trained", classquest.TRAINED_SQL,
                           "spells", spells)
-    return quests, givers, spawns, loot, trained
+    # What the quests have a member use (classquest.USE_ITEMS_SQL): items bound
+    # to named creatures, chests that hold a required item, gameobject objectives.
+    provided = {int(r[f"provided{i}"]) for r in quests for i in range(5)
+                if r.get(f"provided{i}")}
+    use_rows = _class_rows(cur, "class quest use items", classquest.USE_ITEMS_SQL,
+                           "items", items | provided)
+    chest_rows = _class_rows(cur, "class quest chests", classquest.CHEST_SQL,
+                             "items", items - provided)
+    objects = ({int(r["entry"]) for r in chest_rows}
+               | {-int(r[f"npc{i}"]) for r in quests for i in range(1, 5)
+                  if (r.get(f"npc{i}") or 0) < 0})
+    object_rows = _class_rows(cur, "class quest object spawns",
+                              classquest.OBJECT_SPAWNS_SQL, "entries", objects)
+    entries |= {int(r["target"]) for r in use_rows}
+    spawns = _class_rows(cur, "class quest spawns", classquest.SPAWNS_SQL, "entries", entries)
+    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows
 
 
 def _class_rows(cur, what: str, sql: str, key: str, values) -> list:
@@ -23623,7 +23717,7 @@ def _fetch_job_facts(family_names: list) -> dict:
         item_rows = _job_read(cur, "carried items", _JOB_ITEMS_SQL.format(
             guids=everyone, goods=guildjobs.TRADE_GOODS,
             subclasses=ids(sorted(guildjobs.MATERIAL_SUBCLASSES)),
-            entries=ids(_JOB_ENTRIES)))
+            entries=ids([*_JOB_ENTRIES, *(book.watch_items() if book else ())])))
         recent_rows = _job_read(cur, "recent rows", _JOB_RECENT_SQL,
                                 (guildjobs.SOURCE + ":%",))
         pending_rows = _job_read(cur, "summons", _JOB_PENDING_SUMMONS_SQL)
