@@ -105,6 +105,8 @@ CLASS_NAMES = {
 # AllowableClasses is a bit mask: bit (class id - 1).
 SINGLE_CLASS_MASKS = tuple(1 << (c - 1) for c in sorted(CLASS_NAMES))
 
+WARRIOR = 1
+
 # The classic range: a class quest is built for a member that can take it by
 # this level. Beyond it (Outland and Northrend class quests) is another job.
 MAX_QUEST_LEVEL = 45
@@ -162,6 +164,57 @@ GIVE_UP_MINUTES = 120
 # Two walk rows in a row that ended in error or unchanged are a stall at once:
 # the spawn cannot be reached.
 FAILED_WALKS = 2
+
+# THE REALM'S FAR WALKS ARE FEW (mod-overseer's FarWalkBudgetGate: a handful
+# under way at once on the whole realm, a couple of starts per bot per hour).
+# A class quest walk the realm refuses for either wall is RETRYABLE: the wall
+# moves, the member is not at fault and the spawn is not out of reach. The
+# worldserver names the two walls in these words (FarWalkRefusal).
+REALM_FULL_REASON = "the realm has as many far walks under way as it allows"
+BOT_BUDGET_REASON = "this character has started as many far walks this hour as one may"
+# HOW LONG A MEMBER IS LEFT ALONE AFTER EITHER REFUSAL. The realm wall: a far
+# walk on the dev realm took 4 to 266 seconds to finish on 2026-10-06, so a slot
+# frees within minutes; 15 minutes is three times the longest of those and more
+# than the 10 minute cooldown any class row gets, so a refusal is asked again no
+# sooner than a success would be. The member wall: a bot's starts leave the budget window one at a time
+# over an hour, so asking sooner than half of it is another refusal; 30 minutes
+# is also still inside the window of the oldest start, so no member waits more
+# than the hour. Neither doubles: both are bounded by the wall's own clock.
+REALM_FULL_BACKOFF_MINUTES = 15
+BOT_BUDGET_BACKOFF_MINUTES = 30
+BACKOFF_MINUTES = {
+    REALM_FULL_REASON: REALM_FULL_BACKOFF_MINUTES,
+    BOT_BUDGET_REASON: BOT_BUDGET_BACKOFF_MINUTES,
+}
+
+
+class FarSlots:
+    """The far walk slots the realm has free this pass, spent as a pass starts
+    class quest walks so the bridge never writes more rows than the realm can
+    take. `free` None means the count is unknown and nothing is held back."""
+
+    def __init__(self, free=None):
+        self.free = None if free is None else max(0, int(free))
+        self.holders: set = set()
+
+    def take(self, name) -> bool:
+        """Spend one slot for `name`; False when none is left."""
+        if name in self.holders:
+            return True
+        if self.free is not None:
+            if self.free <= 0:
+                return False
+            self.free -= 1
+        self.holders.add(name)
+        return True
+
+    def release(self, name) -> None:
+        """Give back the slot `name` took, for a step the plan then refused."""
+        if name in self.holders:
+            self.holders.discard(name)
+            if self.free is not None:
+                self.free += 1
+
 
 # A member this near its hunting ground is hunting; this near a giver is there.
 HUNT_REACH = 400.0
@@ -1088,6 +1141,16 @@ class Hunts:
         hunt = self._by.get(name)
         tried = hunt.tried if hunt is not None and hunt.quest == quest else ()
         self._by[name] = Hunt(int(quest), 0, now, tried, now + GIVE_UP_MINUTES * 60)
+
+    def pause(self, name, quest, now) -> None:
+        """Restart the stall clock of a hunt that is waiting on the realm, not
+        on the member: a far walk refused for a wall that moves (BACKOFF_MINUTES)
+        or held back for want of a slot. The 30 minutes count a member hunting
+        with no progress, and a member standing in a queue has not hunted."""
+        hunt = self._by.get(name)
+        if hunt is None or hunt.quest != quest or hunt.until is not None:
+            return
+        self._by[name] = replace(hunt, since=now)
 
     def forget(self, name) -> None:
         self._by.pop(name, None)

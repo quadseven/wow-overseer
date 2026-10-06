@@ -211,6 +211,20 @@ MALFORMED_WALK = "malformed walk-to-"
 COMBAT_ENDING = "entered combat on the way to the"
 
 
+# THE REALM'S FAR WALK CEILING, as the module's Overseer.FarWalk.AtOnce (its
+# default is this 4). The bridge reads FAR_WALKS_AT_ONCE so the two are set
+# together; a walk past the ceiling is refused and written for nothing.
+FAR_WALKS_AT_ONCE = 4
+
+
+def far_slots_free(open_rows, at_once=FAR_WALKS_AT_ONCE):
+    """The far walks the realm can still take, from the walk rows still open
+    (pending, claimed or verifying); None when the count could not be read."""
+    if open_rows is None:
+        return None
+    return max(0, int(at_once) - int(open_rows))
+
+
 def walk_cap(far_supported) -> float:
     """The cap a guild pass asks for: far while the worldserver carries it."""
     return FAR_WALK_YARDS if far_supported else MAIL_RUN_YARDS

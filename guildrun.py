@@ -250,6 +250,12 @@ def _alive(row: dict) -> bool:
     return health > 1 or (health == 1 and not row.get("has_corpse"))
 
 
+def alive_or_unread(row: dict) -> bool:
+    """_alive, except a row with no health (no fresh snapshot: the member is
+    offline) is taken as alive, so it reads as offline and not as dead."""
+    return row.get("health") is None or _alive(row)
+
+
 def member_from_row(row: dict) -> Member | None:
     """A Member from one bridge read, or None when the row cannot say who."""
     name = str(row.get("name") or "")
