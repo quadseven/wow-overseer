@@ -654,7 +654,7 @@ class TheLearnTripsWait(unittest.TestCase):
             _cohort_town_slot=lambda key=None: slot, _family_lead_since={}
         )
         tradechoice = types.SimpleNamespace(
-            learn_rows=lambda roster, trades, declared: rows,
+            learn_rows=lambda roster, trades, declared, ranks=None: rows,
             next_lead=lambda rows, **kw: "Zug",
             borrow_clock=lambda since, rows, lead, key, now: {},
             expired=lambda since, now, limit: set(),

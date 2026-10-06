@@ -289,10 +289,19 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     # of the exact item Linen Bandage consumes one of. One gathering trip does
     # answer both, but a short trip answers whichever asks first.
     3275: (Reagent(2589, "Linen Cloth", 1),),
-    # 3276 Heavy Linen Bandage is deliberately absent, because craft.RECIPES no
-    # longer carries it: it is a trainer purchase for every class but Death
-    # Knight, and this family has no Death Knight. See craft.RECIPES' First Aid
-    # comment. Do not re-add it here without re-adding it there.
+    # The bandage ladder above 59 (operator, 2026-10-05). Cloth alone, a
+    # humanoid kill drop, per Spell.dbc; see craft.RECIPES' First Aid comment.
+    # Every rung is a trainer purchase, so only a guild crew member that has
+    # bought it is ever aimed at one (guildjobs._open_recipe).
+    3276: (Reagent(2589, "Linen Cloth", 2),),
+    3277: (Reagent(2592, "Wool Cloth", 1),),
+    3278: (Reagent(2592, "Wool Cloth", 2),),
+    7928: (Reagent(4306, "Silk Cloth", 1),),
+    7929: (Reagent(4306, "Silk Cloth", 2),),
+    10840: (Reagent(4338, "Mageweave Cloth", 1),),
+    10841: (Reagent(4338, "Mageweave Cloth", 2),),
+    18629: (Reagent(14047, "Runecloth", 1),),
+    18630: (Reagent(14047, "Runecloth", 2),),
     #
     # COOKING is absent for a different reason and it is not a gap in this
     # table: every Cooking recipe reachable below the family's 75 cap requires
@@ -735,11 +744,32 @@ BAG_FEED: dict[int, tuple[Reagent, ...]] = {
 # craft.py's two anchors asserted first:
 #   8776 Linen Belt   1x Bolt of Linen Cloth (2996), from 2963
 #   3757 Woolen Bag   3x Bolt of Woolen Cloth (2997), from 2964
+# and every rung of craft.RECIPES' TAILORING 145-300 block the same way, each
+# eating Silk (4305, from 3839), Mageweave (4339, from 3865) or Runecloth
+# (14048, from 18401) bolts.
 # A bolt woven past its own grey grants no point; it is cast for the rung it
 # feeds, which does.
+_SILK = (3839, 4305, "Bolt of Silk Cloth")
+_MAGEWEAVE = (3865, 4339, "Bolt of Mageweave")
+_RUNECLOTH = (18401, 14048, "Bolt of Runecloth")
+
+
+def _fed(bolt, per_cast: int) -> tuple[int, Reagent]:
+    weave, entry, label = bolt
+    return weave, Reagent(entry, label, per_cast)
+
+
 BOLT_FED: dict[int, tuple[int, Reagent]] = {
     8776: (2963, Reagent(2996, "Bolt of Linen Cloth", 1)),
     3757: (2964, Reagent(2997, "Bolt of Woolen Cloth", 3)),
+    8760: _fed(_SILK, 2),  # Azure Silk Hood
+    8762: _fed(_SILK, 3),  # Silk Headband
+    8791: _fed(_SILK, 4),  # Crimson Silk Vest
+    8799: _fed(_SILK, 4),  # Crimson Silk Pantaloons
+    12053: _fed(_MAGEWEAVE, 2),  # Black Mageweave Gloves
+    12065: _fed(_MAGEWEAVE, 4),  # Mageweave Bag
+    18402: _fed(_RUNECLOTH, 3),  # Runecloth Belt
+    18417: _fed(_RUNECLOTH, 5),  # Runecloth Gloves
 }
 
 
@@ -786,6 +816,9 @@ def reagents_to_count(
     """
     wanted = set()
     spend = craft.craft_errand(name, skills, primaries)
+    bandage = _bandage_recipe(skills)
+    if bandage is not None:
+        wanted.update(r.entry for r in GATHERED.get(bandage.spell_id, ()))
     fed = BOLT_FED.get(int(spend or 0))
     if fed is not None:
         weave, bolt = fed
@@ -814,6 +847,62 @@ def _guild_bag_entries() -> set:
     return out
 
 
+FIRST_AID = "first aid"
+
+
+def _bandage_recipe(skills: dict):
+    """The First Aid bandage this character holds for its skill value, or None.
+
+    Only a rung it holds without a trainer (craft.SECONDARY_AUTO_LEARNED:
+    Linen Bandage, 1 to 59). The trainer rungs above it are bought, and
+    DriveCraft drops a recipe the character does not know.
+    """
+    value = int((skills or {}).get(FIRST_AID, 0) or 0)
+    if not value:
+        return None
+    recipe = craft.recipe_for(craft.SKILL_IDS[FIRST_AID], value)
+    if recipe is None or recipe.spell_id not in craft.SECONDARY_AUTO_LEARNED:
+        return None
+    return recipe
+
+
+def _bandage_errand(name: str, skills: dict, held: dict, idle: Errand):
+    """Bandage from the cloth in hand while the craft cannot run, or None.
+
+    WHY THE FAMILY'S FIRST AID SAT AT 1 (2026-10-05). `craft.craft_errand`
+    answers a secondary only when no primary recipe exists, and every family
+    member holds a primary with a recipe at every value. So `craft_spell` was
+    always the primary's, and a member out of its own reagent stood on
+    job='craft' casting nothing while carrying the Linen Cloth a Linen
+    Bandage eats: on wow-dev all five of the second family carried 83 to 355
+    Linen Cloth each, every one at First Aid 1/75.
+
+    THE RULE, THE SMELT'S OWN SHAPE: BANDAGE ONLY WHEN THE CRAFT CANNOT RUN.
+    `idle` is the errand the spend-or-smelt choice made; it is replaced only
+    when it casts nothing (judged short, 0 casts in hand), never while it
+    smelts or casts, and never with cloth that errand itself eats: a tailor
+    one Linen Cloth short of a bolt keeps that cloth for the bolt.
+    """
+    if idle.smelting or casts_in_hand(idle.spell, held) != 0:
+        return None
+    recipe = _bandage_recipe(skills)
+    if recipe is None or recipe.spell_id == idle.spell:
+        return None
+    taken = {r.entry for r in feeds(idle.spell)}
+    if any(r.entry in taken for r in GATHERED.get(recipe.spell_id, ())):
+        return None
+    casts = casts_in_hand(recipe.spell_id, held) or 0
+    if casts < 1:
+        return None
+    return Errand(
+        name=name,
+        spell=recipe.spell_id,
+        why="%s makes %s (spell %d) for its First Aid, %d cast(s) of cloth in "
+        "hand, because its craft errand (spell %d) has reagents for 0 cast(s)"
+        % (name, recipe.name, recipe.spell_id, casts, idle.spell),
+    )
+
+
 def errand(
     name: str,
     skills: dict,
@@ -822,7 +911,21 @@ def errand(
     bags_wanted: int = 0,
     floor=None,
 ) -> Errand:
-    """Spend, or smelt? The one `craft_spell` this character should carry.
+    """Spend, smelt or bandage? The one `craft_spell` this character should carry.
+
+    The bag errand first, then the spend-or-smelt choice below
+    (`_spend_or_smelt`), then a bandage when that choice casts nothing
+    (`_bandage_errand`).
+    """
+    bag = bag_errand(name, skills, held, primaries, bags_wanted, floor)
+    if bag is not None:
+        return bag
+    chosen = _spend_or_smelt(name, skills, held, primaries)
+    return _bandage_errand(name, skills, held, chosen) or chosen
+
+
+def _spend_or_smelt(name: str, skills: dict, held: dict, primaries=None) -> Errand:
+    """Spend, or smelt? The choice `errand` makes after the bag errand.
 
     THE ALTERNATION infra#3748 ASKED FOR, AND IT LIVES HERE RATHER THAN IN
     `craft` FOR THE REASON THAT ISSUE GAVE: "a character holds one
@@ -865,12 +968,9 @@ def errand(
     feeds only the powders and the sharpening stones. They arrive on the same
     mining trip and are spent by different recipes.
 
-    `primaries` and `bags_wanted` serve another family (#215): its members'
-    trades are the ones they hold, and a tailor's `bag_errand` comes first.
+    `primaries` serves another family (#215): its members' trades are the
+    ones they hold.
     """
-    bag = bag_errand(name, skills, held, primaries, bags_wanted, floor)
-    if bag is not None:
-        return bag
     spend, weaving = _bolt_first(
         name, craft.craft_errand(name, skills, primaries), held
     )

@@ -224,8 +224,19 @@ HUBS: tuple = (
     Hub("silithus-a", ALLIANCE, 1377, "Silithus", "Cenarion Hold", 73),
 )
 
+# THE SECOND ZONE OF THE TWO MAP-530 STARTS, where a Draenei or a Blood Elf
+# levels from 10 to about 20 before the boat or the orb (classic.py's
+# starting lands). Never a family's hub: HUBS is what a family chooses from,
+# and these stand on map 530. Only guildlevel walks a member here, and only
+# one already standing in the starting lands. Their quests are read with the
+# rest (ZONES), so their bands come from the same quest_template percentiles.
+STARTING_LAND_HUBS: tuple = (
+    Hub("bloodmyst", ALLIANCE, 3525, "Bloodmyst Isle", "Blood Watch", 93),
+    Hub("ghostlands", HORDE, 3433, "Ghostlands", "Tranquillien", 83),
+)
+
 BY_KEY = {hub.key: hub for hub in HUBS}
-ZONES = tuple(sorted({hub.zone_id for hub in HUBS}))
+ZONES = tuple(sorted({hub.zone_id for hub in HUBS + STARTING_LAND_HUBS}))
 
 
 def hubs_for(team: str) -> tuple:
@@ -920,7 +931,7 @@ def route(facts: Facts) -> list:
 def zone_name(zone_id) -> str:
     """A zone's name: a hub's, a dungeon's, the rectangles', or "somewhere"."""
     zone_id = int(zone_id or 0)
-    for hub in HUBS:
+    for hub in HUBS + STARTING_LAND_HUBS:
         if hub.zone_id == zone_id:
             return hub.zone
     for run in campaignplan.RUNS:

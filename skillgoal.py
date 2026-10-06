@@ -420,6 +420,29 @@ def plan(
             )
 
     recipe = craft.recipe_for(skill_id, observed)
+    if (
+        recipe is not None
+        and skill_name in professions.SECONDARY
+        and recipe.spell_id not in craft.SECONDARY_AUTO_LEARNED
+    ):
+        # A trainer-taught bandage rung the guild crew buys and the family
+        # cannot (craft.SECONDARY_AUTO_LEARNED); craft_errand never names it.
+        return Plan(
+            skill_name=skill_name,
+            beneficiary=beneficiary,
+            shape=shape,
+            blocked="%s's rung at %d is %s (spell %d), a trainer purchase %s "
+            "cannot make: %s."
+            % (
+                skill_name,
+                observed,
+                recipe.name,
+                recipe.spell_id,
+                beneficiary,
+                professions.SECONDARY_BLOCKED[skill_name],
+            ),
+            why="the %s rung at %d is trainer-taught." % (skill_name, observed),
+        )
     if recipe is None:
         return Plan(
             skill_name=skill_name,

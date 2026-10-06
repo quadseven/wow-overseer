@@ -5079,6 +5079,49 @@ def _aim_train_traveller(statements) -> None:
                 raise
 
 
+# Level, purse and the ceiling of every trade with a trainer rank table, for
+# guildjobs.ranks_due (the family's next rank). A LEFT JOIN so a character
+# holding none of them still answers with its level and purse.
+_RANK_FACTS_SQL = (
+    "SELECT c.name, c.level, c.money, k.skill, k.value, k.max "
+    "FROM characters c LEFT JOIN character_skills k ON k.guid = c.guid "
+    "AND k.skill IN (" + ",".join(str(int(s)) for s in sorted(guildjobs.RANKS))
+    + ") WHERE c.name IN (%s)"
+)
+
+
+def _ranks_due(cur, roster) -> dict:
+    """name -> the held trades whose next rank is due now (learnaim.Row.ranks).
+
+    `roster` is the overseer_roster rows already read, whose `professions`
+    column is the permission a primary rank needs. On a realm missing a table
+    the answer is {}: no rank is due, so nothing new is written, and every
+    errand already standing is judged exactly as before.
+    """
+    names = [str(row["name"]) for row in roster or ()]
+    if not names:
+        return {}
+    try:
+        cur.execute(_RANK_FACTS_SQL % ",".join(["%s"] * len(names)), names)
+        rows = cur.fetchall()
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return {}
+        raise
+    facts: dict = {}
+    for row in rows:
+        _level, _money, skills = facts.setdefault(
+            row["name"], (int(row["level"] or 0), int(row["money"] or 0), {}))
+        if row["skill"] is not None:
+            skills[int(row["skill"])] = (int(row["value"] or 0), int(row["max"] or 0))
+    wanted = {str(row["name"]): trainjob.parse_wanted(row.get("professions"))
+              for row in roster}
+    return {
+        name: guildjobs.ranks_due(level, money, skills, wanted.get(name, ()))
+        for name, (level, money, skills) in facts.items()
+    }
+
+
 def _learn_aim_rows() -> list:
     """The roster and the trade table, as learnaim reads them (infra#3686).
 
@@ -5162,6 +5205,7 @@ def _learn_aim_rows() -> list:
                 "touched"
             )
             return []
+        ranks = _ranks_due(cur, roster)
 
     return [
         learnaim.Row(
@@ -5172,6 +5216,7 @@ def _learn_aim_rows() -> list:
             wanted=trainjob.parse_wanted(row["professions"]),
             traded=tuple(sorted(set(traded.get(row["name"], ())))),
             settled=tuple(sorted(set(settled.get(row["name"], ())))),
+            ranks=ranks.get(row["name"], ()),
         )
         for row in roster
     ]
@@ -11689,7 +11734,8 @@ class Bridge(discord.Client):
         `_reconcile_learn_aims`, for a family whose head is its roster key.
         The lead is borrowed for at most ERRAND_LEAD_HOURS per errand.
         """
-        rows = tradechoice.learn_rows(state["roster"], state["trades"], declared)
+        rows = tradechoice.learn_rows(state["roster"], state["trades"], declared,
+                                      ranks=state.get("ranks"))
         if not rows:
             return
         slot = self._cohort_town_slot(cohort.key)
@@ -11717,7 +11763,7 @@ class Bridge(discord.Client):
             learn_plan = learnaim.plan(rows)
             if learn_plan.clear:
                 await asyncio.to_thread(_run_learn_aim_plan, learnaim.statements(
-                    dataclasses.replace(learn_plan, aim="", skill=0)))
+                    dataclasses.replace(learn_plan, aim="", skill=0, learn=())))
             log.info("trades: family %s's learn trips wait - the campaign owns "
                      "the traveller (%s)", cohort.key, campaign)
             return
@@ -11737,10 +11783,11 @@ class Bridge(discord.Client):
                      if lead != cohort.key else "no learn errand is left")
             rows = tradechoice.led_by(rows, lead)
         learn_plan = learnaim.plan(rows)
-        if not (learn_plan.clear or learn_plan.aim or learn_plan.waiting):
+        if not (learn_plan.clear or learn_plan.aim or learn_plan.waiting
+                or learn_plan.learn):
             return
         landed = 0
-        if learn_plan.clear or learn_plan.aim:
+        if learn_plan.clear or learn_plan.aim or learn_plan.learn:
             landed = await asyncio.to_thread(
                 _run_learn_aim_plan, learnaim.statements(learn_plan))
         if learn_plan.aim and landed:
@@ -13884,7 +13931,10 @@ class Bridge(discord.Client):
     async def _plan_guild_jobs(self, members, facts, busy, cap, spawn_walks,
                                cohort=None):
         kept = await asyncio.to_thread(_kept_with_bank_policy, cohort)
-        fields = await self._job_fields(members) if spawn_walks else {}
+        # GUILD_FOCUS: a craft-focus guild's members all farm and craft
+        # (guildjobs.THE GUILD FOCUS); unset keeps every guild's jobs.
+        focus = guildjobs.focus_from_env()
+        fields = await self._job_fields(members, focus, busy) if spawn_walks else {}
         doors = (guildjobs.assign_doors(members, guildjobs.entrances(), facts["stones"])
                  if spawn_walks else {})
         plan = guildjobs.plan(
@@ -13898,7 +13948,8 @@ class Bridge(discord.Client):
             pvp=await self._job_pvp_moves(members, facts["recent"]),
             # The level step is a spawn walk too (guildlevel.py).
             leveling=(await asyncio.to_thread(_job_leveling, facts)
-                      if spawn_walks else None))
+                      if spawn_walks else None),
+            focus=focus)
         if facts.get("unclaimed"):
             log.info("guild jobs: no new materials post for %s until the posts "
                      "waiting unopened are collected; theirs go to the bank",
@@ -13992,6 +14043,8 @@ class Bridge(discord.Client):
                                if any(m.name == n for m in crew)) or "none",
                      "; ".join("%s %s" % (n, d.place) for n, d in sorted(plan.doors.items())
                                if any(m.name == n for m in crew)) or "none")
+        for line in guildjobs.focus_lines(plan):
+            log.info("guild jobs: %s", line)
 
     def _start_guild_job_steps(self, plan, now, cap, sale_walks):
         started = 0
@@ -14005,9 +14058,11 @@ class Bridge(discord.Client):
             started += 1
         return started
 
-    async def _job_fields(self, members) -> dict:
+    async def _job_fields(self, members, focus=None, busy=()) -> dict:
         """name -> guildjobs.Spot for every natural maintenance member that
-        holds herbalism or mining and stands somewhere readable.
+        holds herbalism or mining and stands somewhere readable, and every
+        online member of a craft-focus guild (guildjobs.wants_field) that is
+        not on another walk.
 
         gatheraim decides, as it does for the family: fields its own skill
         can open, near where it stands, never a neighbourhood that tops out
@@ -14021,9 +14076,11 @@ class Bridge(discord.Client):
         """
         out = {}
         surveys = {}
+        busy = set(busy or ())
         for m in members:
-            if (m.role != guildjobs.MAINTENANCE or not m.eligible or m.map_id is None
-                    or m.x is None or m.y is None):
+            if not guildjobs.wants_field(m, focus):
+                continue
+            if m.name in busy and not (m.role == guildjobs.MAINTENANCE and m.eligible):
                 continue
             skills = _guild_gathering_skills(m)
             spot = (await self._gathering_field(m, skills, surveys)
@@ -18689,15 +18746,20 @@ class Bridge(discord.Client):
         try:
             rows = await asyncio.to_thread(_learn_aim_rows)
             learn_plan = learnaim.plan(rows)
-            if not (learn_plan.clear or learn_plan.aim or learn_plan.waiting):
+            if not (learn_plan.clear or learn_plan.aim or learn_plan.waiting
+                    or learn_plan.learn):
                 return
-            if learn_plan.aim and self._town_slot.learn_waits:
+            if (learn_plan.aim or learn_plan.learn) and self._town_slot.learn_waits:
                 # A staging campaign keeps its leader (#227), and so does one
-                # held in town for bag room (#297).
+                # held in town for bag room (#297). A rank errand is not
+                # written either: it would fence the character's travel while
+                # the campaign owns it.
                 log.info("learn-aim: %s's trainer walk waits - the campaign "
-                         "owns the traveller (%s)", learn_plan.aim,
+                         "owns the traveller (%s)",
+                         learn_plan.aim or learn_plan.learn[0],
                          self._town_slot.learn_waits)
-                learn_plan = dataclasses.replace(learn_plan, aim="", skill=0)
+                learn_plan = dataclasses.replace(
+                    learn_plan, aim="", skill=0, learn=())
             landed = await asyncio.to_thread(
                 _run_learn_aim_plan, learnaim.statements(learn_plan)
             )
@@ -23322,7 +23384,7 @@ _JOB_HUB_MASTERS_SQL = (
     "ct.name, ft.EnemyGroup AS enemy_group FROM acore_world.creature c "
     "JOIN acore_world.creature_template ct ON ct.entry = c.id "
     "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
-    "WHERE c.map IN (%s, %s) AND (ct.npcflag & %s) <> 0"
+    "WHERE c.map IN (%s, %s, %s) AND (ct.npcflag & %s) <> 0"
 )
 _JOB_HUB_MASTERS: list = []
 # Every roster family member, of every family: the level step leaves them to
@@ -23373,7 +23435,9 @@ def _fetch_job_facts(family_names: list) -> dict:
         if not _JOB_HUB_MASTERS:
             _JOB_HUB_MASTERS.extend(_job_read(
                 cur, "hub flight masters", _JOB_HUB_MASTERS_SQL,
-                (*classic.CLASSIC_CONTINENTS, flightlearn.FLIGHT_MASTER_NPC_FLAG)))
+                # Map 530 for the starting-land hubs (levelroute.STARTING_LAND_HUBS).
+                (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP,
+                 flightlearn.FLIGHT_MASTER_NPC_FLAG)))
         roster_rows = _job_read(cur, "roster names", _JOB_ROSTER_SQL)
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
@@ -24135,6 +24199,7 @@ def _family_trade_state(family: str) -> dict | None:
             ]
             cur.execute(_FAMILY_TRADE_ROWS_SQL % marks, names)
             trades = [dict(row) for row in cur.fetchall()]
+            ranks = _ranks_due(cur, roster)
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("trades: family %s cannot be read on this realm "
@@ -24142,7 +24207,7 @@ def _family_trade_state(family: str) -> dict | None:
                 return None
             raise
     return {"roster": roster, "characters": characters, "trades": trades,
-            "skills": _fetch_trade_skills(names)}
+            "skills": _fetch_trade_skills(names), "ranks": ranks}
 
 
 def _record_family_choice(decision) -> None:

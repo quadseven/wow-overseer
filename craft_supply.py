@@ -320,6 +320,27 @@ def reagent_errand(
 REAGENTS: dict[int, tuple[tuple[int, str, int, int], ...]] = {
     8776: ((2320, "Coarse Thread", 10, 1),),  # Linen Belt (Tailoring)
     3755: ((2320, "Coarse Thread", 10, 3),),  # Linen Bag (craft.BAG_RECIPES)
+    # TAILORING 145-300 (craft.RECIPES' block of that name). Counts are
+    # Spell.dbc's (543b9fe61355b6a77a01714d52fea2e5); prices are
+    # item_template.BuyPrice, and every item has npc_vendor rows (read
+    # 2026-10-05). Mageweave Bag is absent: its Silken Thread is posted by
+    # the maintenance crew (craft.CREW_SUPPLIED).
+    8760: (
+        (2321, "Fine Thread", 100, 1),  # Azure Silk Hood
+        (6260, "Blue Dye", 50, 2),
+    ),
+    8762: ((2321, "Fine Thread", 100, 2),),  # Silk Headband
+    8791: (
+        (2321, "Fine Thread", 100, 2),  # Crimson Silk Vest
+        (2604, "Red Dye", 50, 2),
+    ),
+    8799: (
+        (4291, "Silken Thread", 500, 2),  # Crimson Silk Pantaloons
+        (2604, "Red Dye", 50, 2),
+    ),
+    12053: ((8343, "Heavy Silken Thread", 2000, 2),),  # Black Mageweave Gloves
+    18402: ((14341, "Rune Thread", 5000, 1),),  # Runecloth Belt
+    18417: ((14341, "Rune Thread", 5000, 2),),  # Runecloth Gloves
     # 9058 IS BACK, because the reason it was absent was a misread rather than
     # a missing fact: an AcquireMethod 1 ability has no trainer_spell row by
     # definition, which is what "could not be verified" was actually seeing.

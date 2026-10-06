@@ -363,9 +363,10 @@ FOCUS_AIMS = {
 # guide's own brackets touch or overlap at their edges (the same shape
 # Tailoring's brackets did) - adjacent entries below are shifted by one
 # skill point off the guide's stated numbers so RECIPES brackets never
-# overlap; the real gaps between entries (91-124, 141-199, 211-249) are the
-# Anvil-gated brackets above, left empty on purpose rather than stretched
-# to cover them.
+# overlap; the real gaps between entries (100-124, 150-199, 210-249 and
+# 260-300 since each stone now runs to its own grey; see the BLACKSMITHING
+# ANVIL ROUTE block beside the table) are the Anvil-gated brackets above,
+# left empty on purpose rather than stretched past a grey to cover them.
 #
 #   Rough Sharpening Stone   spell 2660   item 2862   1x Rough Stone (2835)
 #   Rough Grinding Stone     spell 3320   item 3470   2x Rough Stone (2835)
@@ -461,13 +462,10 @@ FOCUS_AIMS = {
 # Brackets below are the wow-professions.com guide's own stated ranges for
 # each bolt (a leveling guide's "worth casting here" bracket, same kind of
 # source the existing Linen entry's 1-60 already leaned on before this pass
-# extended it slightly past the guide's stated 1-45). Gaps between brackets
-# (145-174, 185-249, 260-300; 101-124 is Woolen Bag's now, see its own
-# comment) are exactly where the still-deferred thread/
-# dye recipes belong (infra#3609's own body: "Reinforced Linen Cape, Silk
-# Headband, Crimson Silk Vest, Runecloth Belt/Bag/Gloves, and more") -
-# `recipe_for` correctly returns None there rather than inventing a bolt
-# recipe that would not grant a skill-up.
+# extended it slightly past the guide's stated 1-45). The gaps that used to
+# sit between them (101-124, 145-174, 185-249, 260-300) are filled now by
+# the thread and dye rungs infra#3609 deferred; see Woolen Bag's comment and
+# the TAILORING 145-300 block beside Bolt of Silk Cloth below.
 #
 # LINEN BELT (infra#3609, the minimum bracket its own acceptance criteria
 # asked for once craft_supply's buy plumbing existed - see
@@ -969,6 +967,81 @@ RECIPES: dict = {
             note="4x Silk Cloth -> 1x Bolt of Silk Cloth, no focus needed; "
             "max_skill was 145, its own grey value",
         ),
+        # TAILORING 145-300: THE REST OF THE LADDER (the operator, 2026-10-05:
+        # Og levels tailoring to 300 for the big bags). Before this block
+        # `recipe_for` answered None at 145-174, 185-249 and 260-300, and a
+        # tailor who walked off the top of a bolt rung stopped there.
+        #
+        # THE ROUTE is wow-professions.com's classic Tailoring 1-300 guide:
+        # which recipe at which skill. THE EDGES AND EVERY FACT are the
+        # realm's own, never the guide's:
+        #
+        #   Spell.dbc (md5 543b9fe61355b6a77a01714d52fea2e5, anchors 2963 ->
+        #   Reagent[0]=2589 x2 and 2657 -> focus 3 asserted first): spell id,
+        #   reagents, output item, RequiresSpellFocus 0 and EquippedItemClass
+        #   -1 for every rung below.
+        #   SkillLineAbility.dbc (md5 d8c11abfcfe70596cb9068c0e97a1d9a, the
+        #   MEASURED_BANDS rows for 2963/3757/3839/3865/18401 asserted
+        #   first): yellow and grey, now in MEASURED_BANDS.
+        #   trainer_spell (read 2026-10-05): the rank a trainer teaches each
+        #   one at, which is where each bracket may start.
+        #
+        #   spell  recipe                   taught  yellow  grey  bracket
+        #   8760   Azure Silk Hood           145     155    165   145-159
+        #   8762   Silk Headband             160     170    180   160-174
+        #   8791   Crimson Silk Vest         185     205    225   185-204
+        #   8799   Crimson Silk Pantaloons   195     215    235   205-214
+        #   12053  Black Mageweave Gloves    215     230    260   215-224
+        #   12065  Mageweave Bag             225     240    270   225-249
+        #   18402  Runecloth Belt            255     270    300   260-284
+        #   18417  Runecloth Gloves          275     290    320   285-300
+        #
+        # WHERE THIS LEAVES THE GUIDE, AND WHY:
+        #
+        #   * Mageweave Bag takes 225-249 from the guide's Black Mageweave
+        #     Headband: a 12-slot bag the guild wears, orange to 239 and
+        #     yellow after. Its Silken Thread is the crew's to post
+        #     (CREW_SUPPLIED; guildcorps.master_bag is this bag from 225).
+        #   * Small Silk Pack (taught 150, yellow 170, grey 200) is NOT the
+        #     150-174 rung, though it is a bag. Each cast eats 2x Heavy
+        #     Leather (4234), which a tailor neither weaves nor gathers and
+        #     nothing posts to it, so a tailor without leather would sit
+        #     refused on every poll. It is still sewn ahead of this ladder
+        #     whenever the leather is in hand (craft_rhythm.guild_bag), and
+        #     every such cast below 200 can roll a skill-up too.
+        #   * Formal White Shirt (170-175) and Orange Mageweave Shirt
+        #     (215-220) are left out: Silk Headband runs on to 174 (grey 180)
+        #     and Black Mageweave Gloves start at 215, so two more dyes buy
+        #     nothing.
+        #   * Runecloth Bag (280-290) is taught only by Pattern 14468, and
+        #     nothing on this ladder learns from a pattern. Runecloth Belt
+        #     runs on to 284 instead, the guide's own fallback.
+        #   * Runecloth Gloves is a pattern in the guide, but this realm's
+        #     trainer_spell also teaches it at 275, so it is the 285-300 rung.
+        #
+        # Every rung eats the tailor's own bolts; craft_rhythm.BOLT_FED weaves
+        # them first when short. Thread and dye for the garments are bought by
+        # craft_supply.REAGENTS, as for Linen Belt.
+        Recipe(
+            8760,
+            "Azure Silk Hood",
+            min_skill=145,
+            max_skill=159,
+            note="2x Bolt of Silk Cloth (4305, own Tailoring output), 2x "
+            "Blue Dye (6260, vendor-bought), 1x Fine Thread (2321, "
+            "vendor-bought) -> 1x Azure Silk Hood (item 7048), no focus "
+            "needed. trainer_spell rank 145, yellow 155, grey 165",
+        ),
+        Recipe(
+            8762,
+            "Silk Headband",
+            min_skill=160,
+            max_skill=174,
+            note="3x Bolt of Silk Cloth (4305, own Tailoring output), 2x "
+            "Fine Thread (2321, vendor-bought) -> 1x Silk Headband (item "
+            "7050), no focus needed. trainer_spell rank 160, yellow 170, "
+            "grey 180",
+        ),
         Recipe(
             3865,
             "Bolt of Mageweave",
@@ -980,6 +1053,47 @@ RECIPES: dict = {
             "was 185, its own grey value",
         ),
         Recipe(
+            8791,
+            "Crimson Silk Vest",
+            min_skill=185,
+            max_skill=204,
+            note="4x Bolt of Silk Cloth (4305, own Tailoring output), 2x "
+            "Red Dye (2604, vendor-bought), 2x Fine Thread (2321, "
+            "vendor-bought) -> 1x Crimson Silk Vest (item 7058), no focus "
+            "needed. trainer_spell rank 185, yellow 205, grey 225",
+        ),
+        Recipe(
+            8799,
+            "Crimson Silk Pantaloons",
+            min_skill=205,
+            max_skill=214,
+            note="4x Bolt of Silk Cloth (4305, own Tailoring output), 2x "
+            "Red Dye (2604, vendor-bought), 2x Silken Thread (4291, "
+            "vendor-bought) -> 1x Crimson Silk Pantaloons (item 7062), no "
+            "focus needed. trainer_spell rank 195, yellow 215, grey 235",
+        ),
+        Recipe(
+            12053,
+            "Black Mageweave Gloves",
+            min_skill=215,
+            max_skill=224,
+            note="2x Bolt of Mageweave (4339, own Tailoring output), 2x "
+            "Heavy Silken Thread (8343, vendor-bought) -> 1x Black "
+            "Mageweave Gloves (item 10003), no focus needed. trainer_spell "
+            "rank 215, yellow 230, grey 260",
+        ),
+        Recipe(
+            12065,
+            "Mageweave Bag",
+            min_skill=225,
+            max_skill=249,
+            note="4x Bolt of Mageweave (4339, own Tailoring output), 2x "
+            "Silken Thread (4291, posted by the maintenance crew - "
+            "craft.CREW_SUPPLIED, guildcorps.shop_steps) -> 1x Mageweave "
+            "Bag (item 10050, 12 slots), no focus needed. trainer_spell "
+            "rank 225, yellow 240, grey 270",
+        ),
+        Recipe(
             18401,
             "Bolt of Runecloth",
             min_skill=250,
@@ -988,6 +1102,26 @@ RECIPES: dict = {
             "FOUR, not the five an earlier pass wrote - Spell.dbc, "
             "see this table's header comment; max_skill was 260, its "
             "own grey value",
+        ),
+        Recipe(
+            18402,
+            "Runecloth Belt",
+            min_skill=260,
+            max_skill=284,
+            note="3x Bolt of Runecloth (14048, own Tailoring output), 1x "
+            "Rune Thread (14341, vendor-bought) -> 1x Runecloth Belt (item "
+            "13856), no focus needed. trainer_spell rank 255, yellow 270, "
+            "grey 300",
+        ),
+        Recipe(
+            18417,
+            "Runecloth Gloves",
+            min_skill=285,
+            max_skill=300,
+            note="5x Bolt of Runecloth (14048, own Tailoring output), 2x "
+            "Rune Thread (14341, vendor-bought) -> 1x Runecloth Gloves "
+            "(item 13863), no focus needed. trainer_spell rank 275 (also "
+            "Pattern 14481, not needed), yellow 290, grey 320",
         ),
     ),
     # FIRST AID (infra#2757's Cooking/First Aid slice) - a SECONDARY skill,
@@ -1056,6 +1190,56 @@ RECIPES: dict = {
     #
     # Reagent verified the same way: 1x Linen Cloth (2589) -> 1x Linen Bandage
     # (item 1251), RequiresSpellFocus 0.
+    #
+    # THE BANDAGE LADDER ABOVE 59 (the operator, 2026-10-05: "level up their
+    # professions too ... craft and get all recipes"). The route is
+    # wow-professions.com's classic First Aid guide: Heavy Linen, Wool, Heavy
+    # Wool, Silk, Heavy Silk, Mageweave, Heavy Mageweave, Runecloth, Heavy
+    # Runecloth. Every fact below is the realm's own, read from Spell.dbc
+    # (543b9fe61355b6a77a01714d52fea2e5) and SkillLineAbility.dbc
+    # (d8c11abfcfe70596cb9068c0e97a1d9a), both md5-matched against the running
+    # worldserver on 2026-10-05, with the anchors asserted first (2963 ->
+    # Reagent[0]=2589 x2 and creates 2996; 2657 -> focus 3; 3275 -> bands
+    # 1/30/60). Rows are the family-class ones (ClassMask 0x5DF), never the
+    # Death Knight auto-learn row craftbook.json happens to keep for 3277:
+    #
+    #   spell  name                    reagent              item   yel grey floor
+    #   3276   Heavy Linen Bandage     2x Linen Cloth       2581    50  100  40 t
+    #   3277   Wool Bandage            1x Wool Cloth        3530    80  150  80 y
+    #   3278   Heavy Wool Bandage      2x Wool Cloth        3531   115  185 115 y
+    #   7928   Silk Bandage            1x Silk Cloth        6450   150  210 150 y
+    #   7929   Heavy Silk Bandage      2x Silk Cloth        6451   180  240 180 t
+    #   10840  Mageweave Bandage       1x Mageweave Cloth   8544   210  270 210 t
+    #   10841  Heavy Mageweave Bandage 2x Mageweave Cloth   8545   240  300 240 y
+    #   18629  Runecloth Bandage       1x Runecloth         14529  260  320 260 y
+    #   18630  Heavy Runecloth Bandage 2x Runecloth         14530  290  350 290 t
+    #
+    # Every one is RequiresSpellFocus 0, EquippedItemClass -1, and
+    # AcquireMethod 0 for every class this realm's families play. FLOOR "t" is
+    # `trainer_spell.ReqSkillRank` as this repo already records it (3276 in
+    # professions.py, the rest in test_raidcraft.MEASURED_RANKS); "y" is the
+    # yellow value, the conservative stand-in tradespec.effective_rank uses for
+    # a rank this repo has not recorded, since yellow is never below the learn
+    # rank. Each bracket runs from its floor to the next rung, below its grey.
+    #
+    # HEAVY LINEN STARTS AT 60, NOT THE GUIDE'S 40, so Linen Bandage keeps
+    # 1-59. Linen Bandage is the one rung a family member holds without a
+    # trainer, and the family has no First Aid trainer it can reach (see
+    # professions.SECONDARY_RANK_REFUSAL), so handing it 3276 at 40 would turn
+    # nineteen castable points into a recipe DriveCraft drops.
+    #
+    # WHO CAN CLIMB THIS, AND WHO CANNOT. Every rung above Linen Bandage is a
+    # trainer purchase, so `craft_errand` answers a secondary rung only when it
+    # is auto-learned (SECONDARY_AUTO_LEARNED); the family still stops at 59,
+    # exactly as before. The guild's maintenance crew
+    # does buy First Aid ranks (guildjobs.RANKS: Journeyman 3280 at 50, Expert
+    # 54254 at 125, both `trainer_spell` on this realm, so no Expert book is
+    # needed here), casts only what `character_spell` says it knows, and now
+    # asks the trainer for the bandage its skill has reached
+    # (guildjobs._learn_step). Artisan First Aid is `trainer_spell` 10847
+    # (teaching rank 10846) at 200, so the crew climbs past 225 on the same
+    # ladder (guildjobs.RANKS); the classic Triage quest is not something this
+    # repo drives at all.
     SKILL_IDS["first aid"]: (
         Recipe(
             3275,
@@ -1069,6 +1253,82 @@ RECIPES: dict = {
             "grant a point at. NOT 39 - that was Heavy Linen Bandage's "
             "old hand-off, and 3276 is a trainer purchase for every "
             "class but Death Knight",
+        ),
+        Recipe(
+            3276,
+            "Heavy Linen Bandage",
+            min_skill=60,
+            max_skill=79,
+            note="2x Linen Cloth (2589) -> 1x Heavy Linen Bandage (item "
+            "2581), no focus needed. trainer_spell rank 40; yellow 50, "
+            "grey 100",
+        ),
+        Recipe(
+            3277,
+            "Wool Bandage",
+            min_skill=80,
+            max_skill=114,
+            note="1x Wool Cloth (2592) -> 1x Wool Bandage (item 3530), no "
+            "focus needed. Trainer-taught; yellow 80, grey 150",
+        ),
+        Recipe(
+            3278,
+            "Heavy Wool Bandage",
+            min_skill=115,
+            max_skill=149,
+            note="2x Wool Cloth (2592) -> 1x Heavy Wool Bandage (item 3531), "
+            "no focus needed. Trainer-taught; yellow 115, grey 185",
+        ),
+        Recipe(
+            7928,
+            "Silk Bandage",
+            min_skill=150,
+            max_skill=179,
+            note="1x Silk Cloth (4306) -> 1x Silk Bandage (item 6450), no "
+            "focus needed. Trainer-taught; yellow 150, grey 210",
+        ),
+        Recipe(
+            7929,
+            "Heavy Silk Bandage",
+            min_skill=180,
+            max_skill=209,
+            note="2x Silk Cloth (4306) -> 1x Heavy Silk Bandage (item 6451), "
+            "no focus needed. trainer_spell rank 180; yellow 180, grey 240",
+        ),
+        Recipe(
+            10840,
+            "Mageweave Bandage",
+            min_skill=210,
+            max_skill=239,
+            note="1x Mageweave Cloth (4338) -> 1x Mageweave Bandage (item "
+            "8544), no focus needed. trainer_spell rank 210; yellow 210, "
+            "grey 270",
+        ),
+        Recipe(
+            10841,
+            "Heavy Mageweave Bandage",
+            min_skill=240,
+            max_skill=259,
+            note="2x Mageweave Cloth (4338) -> 1x Heavy Mageweave Bandage "
+            "(item 8545), no focus needed. Trainer-taught; yellow 240, "
+            "grey 300",
+        ),
+        Recipe(
+            18629,
+            "Runecloth Bandage",
+            min_skill=260,
+            max_skill=289,
+            note="1x Runecloth (14047) -> 1x Runecloth Bandage (item 14529), "
+            "no focus needed. Trainer-taught; yellow 260, grey 320",
+        ),
+        Recipe(
+            18630,
+            "Heavy Runecloth Bandage",
+            min_skill=290,
+            max_skill=300,
+            note="2x Runecloth (14047) -> 1x Heavy Runecloth Bandage (item "
+            "14530), no focus needed. trainer_spell rank 290; yellow 290, "
+            "grey 350",
         ),
     ),
     # COOKING (infra#2757's Cooking/First Aid slice) - also SECONDARY, same
@@ -1542,6 +1802,37 @@ RECIPES: dict = {
             "already a raid consumable and was simply starting late",
         ),
     ),
+    # BLACKSMITHING ANVIL ROUTE: MEASURED, AND NOT IN THIS TABLE (operator,
+    # 2026-10-05). The wow-professions.com classic Blacksmithing guide fills
+    # 100-124, 150-199, 210-249 and 260-300 with Anvil recipes. Read from the
+    # same md5-verified Spell.dbc and SkillLineAbility.dbc as the First Aid
+    # ladder, with the same anchors:
+    #
+    #   spell  name                     focus  reagents (bars)          req yel grey
+    #   2666   Runed Copper Belt        1      10x Copper Bar (2840)     80 110 150
+    #   7818   Silver Rod               1      Silver Bar (2842)          1 105 110
+    #   2668   Rough Bronze Leggings    1      6x Bronze Bar (2841)      95 145 175
+    #   2672   Patterned Bronze Bracers 1      5x Bronze Bar            120 150 180
+    #   14379  Golden Rod               1      Gold Bar (3577)            1 155 160
+    #   3506   Green Iron Leggings      1      8x Iron Bar (3575), dye    1 180 205
+    #   3501   Green Iron Bracers       1      6x Iron Bar, Green Dye     1 190 215
+    #   7223   Golden Scale Bracers     1      5x Steel Bar (3859)        1 210 235
+    #   9928   Heavy Mithril Gauntlet   1      6x Mithril Bar (3860)      1 225 245
+    #   9935   Steel Plate Helm         1      14x Steel Bar              1 235 255
+    #   9964   Mithril Spurs            1      4x Mithril Bar             1 255 275
+    #   16643  Thorium Belt             1      8x Thorium Bar (12359)     1 270 290
+    #   16649  Imperial Plate Bracers   1      12x Thorium Bar            1 290 310
+    #   16657  Imperial Plate Boots     1      18x Thorium Bar            1 315 335
+    #
+    # TWO WALLS, AND EVERY ONE OF THEM HITS AT LEAST ONE. Every row needs an
+    # Anvil (focus 1), and `FOCUS_AIMS` has no anvil walk, so each would join
+    # Engineering's stranded eleven (tests/test_craft.py pins that set). And
+    # every row but Runed Copper Belt eats a bar nothing here produces: Smelt
+    # Copper is the only smelt this table may name (see MINING AND SMELTING).
+    # So Runed Copper Belt at 100-124 is the next rung, and it lands with the
+    # anvil walk; the rest also wait on the trainer-taught smelts. The stone
+    # rungs below now reach their own grey instead, which leaves 100-124,
+    # 150-199, 210-249 and 260-300 empty on purpose.
     SKILL_IDS["blacksmithing"]: (
         Recipe(
             2660,
@@ -1565,11 +1856,18 @@ RECIPES: dict = {
             "simply the guide's hand-off to a recipe this realm does "
             "not teach until 75",
         ),
+        # 75-99 and 125-149, not the guide's 75-90 and 125-140 (operator,
+        # 2026-10-05). The guide hands off at 90 to Runed Copper Belt and at
+        # 140 to Patterned Bronze Bracers, and both of those are Anvil-gated
+        # (see the BLACKSMITHING ANVIL ROUTE block below). Each stone still
+        # rolls a skill-up up to its grey (100 and 150), so it carries the
+        # smith the nine points the anvil route cannot yet, the same move
+        # Rough Grinding Stone's 30-74 made.
         Recipe(
             3326,
             "Coarse Grinding Stone",
             min_skill=75,
-            max_skill=90,
+            max_skill=99,
             note="2x Coarse Stone -> 1x Coarse Grinding Stone, no focus "
             "needed; MinSkillLineRank 1, grey 100",
         ),
@@ -1577,8 +1875,9 @@ RECIPES: dict = {
             3337,
             "Heavy Grinding Stone",
             min_skill=125,
-            max_skill=140,
-            note="3x Heavy Stone -> 1x Heavy Grinding Stone, no focus needed",
+            max_skill=149,
+            note="3x Heavy Stone -> 1x Heavy Grinding Stone, no focus "
+            "needed; yellow 125, grey 150",
         ),
         # SOLID SHARPENING STONE REPLACED SOLID GRINDING STONE HERE, and the
         # two are one word apart in every leveling guide. A SHARPENING stone
@@ -2030,6 +2329,13 @@ def smelt_errand(name: str, skills: dict, primaries=None) -> int:
     return 0
 
 
+# The secondary rungs a character holds without visiting anybody:
+# SkillLineAbility AcquireMethod 1, ClassMask 0. Linen Bandage is the only one;
+# every other First Aid rung is a trainer purchase (see RECIPES' First Aid
+# comment), which `craft_errand` therefore never names.
+SECONDARY_AUTO_LEARNED = frozenset({3275})
+
+
 def craft_errand(name: str, skills: dict, primaries=None) -> int:
     """The `craft_spell` this character's roster row should carry, or 0.
 
@@ -2052,6 +2358,13 @@ def craft_errand(name: str, skills: dict, primaries=None) -> int:
 
     `primaries` replaces `professions.assigned(name)` for a character of
     another family (#215); see `held_primaries`.
+
+    A secondary rung is answered only when it is in `SECONDARY_AUTO_LEARNED`.
+    The family has no secondary trainer it can reach
+    (professions.SECONDARY_RANK_REFUSAL) and DriveCraft drops a recipe the
+    character does not hold, so a trainer-taught bandage is no errand here.
+    The guild's crew climbs those rungs through guildjobs instead, which reads
+    what each member knows.
     """
     trades = professions.assigned(name) if primaries is None else primaries
     for skill_name in trades:
@@ -2068,6 +2381,6 @@ def craft_errand(name: str, skills: dict, primaries=None) -> int:
         if not value:
             continue  # not learned yet - same permission discipline as above
         recipe = recipe_for(SKILL_IDS[skill_name], value)
-        if recipe:
+        if recipe and recipe.spell_id in SECONDARY_AUTO_LEARNED:
             return recipe.spell_id
     return 0

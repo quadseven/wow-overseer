@@ -86,9 +86,16 @@ secondary trade that costs no primary slot, and one member in three takes
 Tailoring in place of one gathering trade (`choose_tailors`). A member that
 holds either casts what the cloth in its own bags allows (`_craft_step`):
 Linen Bandage, then Bolt of Linen Cloth, each the recipe craft.py keeps for
-its skill value. It keeps the cloth its next casts eat instead of posting it,
-and posts the rest as before. The trainer rows are `walk-to-trainer skill:`
-and the casts are `cast` rows: what a player does, paid for at a trainer.
+its skill value. Any other crafting trade craft.py covers is cast the same
+way from what the member carries (2026-10-05). It keeps the materials its
+next casts eat instead of posting them, and posts the rest as before. The
+trainer rows are `walk-to-trainer skill:` and the casts are `cast` rows:
+what a player does, paid for at a trainer.
+
+THE GUILD FOCUS (`GUILD_FOCUS`, 2026-10-05). A guild named with focus craft
+gives every free member the maintenance work above, natural or not for its
+own casts and fields; focus dungeon keeps today's jobs. See THE GUILD FOCUS
+below.
 
 PURE MODULE: rows in, steps and sentences out. No MySQL, no clock.
 """
@@ -105,6 +112,7 @@ import campaignplan
 import council
 import craft
 import craft_rhythm
+import craft_supply
 import dungeonpath
 import gearup
 import guildcorps
@@ -126,6 +134,11 @@ SKILL_NAMES = {
     SKINNING: "Skinning",
     FIRST_AID: "First Aid",
     TAILORING: "Tailoring",
+    164: "Blacksmithing",
+    165: "Leatherworking",
+    171: "Alchemy",
+    185: "Cooking",
+    202: "Engineering",
 }
 
 # The primary trades, gathering and crafting, by skill line. Two may be held.
@@ -187,15 +200,26 @@ RANKS = {
 # (acore_world.trainer_spell, 2026-09-29): Apprentice First Aid is the
 # wrapper 3279 (one silver, no level); Journeyman and Expert are 3280 and
 # 54254. Tailoring's ranks are the corps' own 3911, 3912 and 3913.
+#
+# ARTISAN, THE RANK AT 200 (2026-10-05). `acore_world.trainer_spell` sells
+# Artisan First Aid as 10847 (ReqSkillRank 200, ReqLevel 35, 25000c, trainers
+# 81, 82 and 83: every First Aid trainer) and Artisan Tailoring as 12181
+# (ReqSkillRank 200, ReqLevel 35, 50000c, trainers 72, 73 and 74: every
+# Tailoring trainer). The realm's Spell.dbc (md5 543b9fe6...) says each is a
+# wrapper whose SPELL_EFFECT_LEARN_SPELL teaches the rank spell, 10846 and
+# 12180, and whose SPELL_EFFECT_SKILL_STEP is step 4 of skill 129 and 197:
+# the 300 ceiling. Without these rows the crew and the family stopped at 225.
 RANKS[FIRST_AID] = (
     Rank(3279, 75, 0, 0, 100),
     Rank(3280, 150, 0, 50, 500),
     Rank(54254, 225, 0, 125, 1000),
+    Rank(10847, 300, 35, 200, 25000),
 )
 RANKS[TAILORING] = (
     Rank(3911, 75, 5, 0, 10),
     Rank(3912, 150, 10, 50, 500),
     Rank(3913, 225, 20, 125, 5000),
+    Rank(12181, 300, 35, 200, 50000),
 )
 
 # One maintenance member in this many is a tailor: a crew of ten gives three.
@@ -203,10 +227,19 @@ TAILOR_EVERY = 3
 
 # A RECIPE A TRAINER ADDS TO THE BOOK BY ITSELF. Linen Bandage comes with
 # Apprentice First Aid and Bolt of Linen Cloth with Apprentice Tailoring
-# (SkillLineAbility AcquireMethod 1, ClassMask 0; craft.py's notes). Any other
-# recipe is cast only once `character_spell` says the member knows it.
-AUTO_LEARNED = frozenset({3275, 2963})
-CRAFT_SKILLS = (FIRST_AID, TAILORING)
+# (SkillLineAbility AcquireMethod 1, ClassMask 0); the other first rungs are
+# the rest of craft.py's list of nine auto-learned recipes: Rough Blasting
+# Powder, Smelt Copper, Minor Healing Potion, Rough Sharpening Stone, Light
+# Leather, Light Armor Kit and Handstitched Leather Cloak. Any other recipe is
+# cast only once `character_spell` says the member knows it.
+AUTO_LEARNED = frozenset({3275, 2963, 3918, 2657, 2330, 2660, 2881, 2152, 9058})
+# EVERY CRAFTING TRADE craft.RECIPES COVERS (2026-10-05). First Aid first, a
+# secondary trade every member may hold, then Tailoring, then the rest by
+# skill line. A trade with no recipe castable in place (Mining's smelts need a
+# forge; Cooking needs a fire) simply never yields a cast.
+CRAFT_SKILLS = (FIRST_AID, TAILORING) + tuple(
+    sorted(s for s in craft.RECIPES if s not in (FIRST_AID, TAILORING))
+)
 CRAFT_SPELLS = frozenset(
     r.spell_id for skill in CRAFT_SKILLS for r in craft.RECIPES.get(skill, ())
 )
@@ -518,6 +551,8 @@ class JobsPlan:
     trades: dict = field(default_factory=dict)  # name -> (skill, skill)
     doors: dict = field(default_factory=dict)  # name -> Door
     notes: tuple = ()
+    # guild -> {"focus", "members", "craft", "farm", "gathering"} (GUILD_FOCUS)
+    focus: dict = field(default_factory=dict)
 
 
 def _yards(ax, ay, bx, by) -> float:
@@ -755,6 +790,31 @@ def next_rank(skill: int, value: int, cap: int, level: int):
     return None
 
 
+def ranks_due(level: int, money: int, skills, wanted=()) -> tuple:
+    """The held trades whose next rank this character may buy now, cheapest first.
+
+    The crew's own rule (`next_rank`, and the purse check `_train_step`
+    makes), for a character a trainer walk is not written for: a roster
+    family member, whose rank is bought on arrival at a trainer through
+    `overseer_roster.learn_skill` (learnaim.py). `skills` is
+    {skill id: (value, max)}. Only a HELD trade is asked about (max above 0),
+    so this never starts a trade; a primary only when `wanted` (the roster's
+    `professions` column, the permission TrainOnArrival reads) names it, and
+    First Aid always, since it takes no primary slot.
+    """
+    due = []
+    for skill, (value, ceiling) in sorted((skills or {}).items()):
+        skill, value, ceiling = int(skill), int(value or 0), int(ceiling or 0)
+        if ceiling <= 0:
+            continue
+        if skill != FIRST_AID and skill not in tuple(wanted or ()):
+            continue
+        rank = next_rank(skill, value, ceiling, int(level or 0))
+        if rank is not None and int(money or 0) >= rank.cost:
+            due.append((rank.cost, skill))
+    return tuple(skill for _cost, skill in sorted(due))
+
+
 # ---------------------------------------------------------------------------
 # THE STEPS.
 
@@ -812,13 +872,62 @@ def _train_step(member, trades, cap, recent=()):
     return step, ""
 
 
+def bandage_to_learn(member):
+    """The First Aid rung this member's skill has reached and not bought, or None.
+
+    Every bandage above Linen Bandage is a trainer purchase (craft.py's First
+    Aid comment), and `_open_recipe` casts only what `member.known` holds, so
+    without this a crew member walked off Linen Bandage's grey at 60 and
+    stopped. Tailoring is left to guildcorps, which buys its own recipes.
+    """
+    value, ceiling = member.skill(FIRST_AID)
+    if ceiling <= 0:
+        return None
+    recipe = craft.recipe_for(FIRST_AID, value)
+    if recipe is None or recipe.focus:
+        return None
+    if recipe.spell_id in AUTO_LEARNED or recipe.spell_id in member.known:
+        return None
+    return recipe
+
+
+def _learn_step(member, cap, recent=()):
+    """Walk to a First Aid trainer and buy the bandage the skill has reached.
+
+    The same `walk-to-trainer` row guildcorps sends a tailor with, carrying a
+    `learn:` list: mod-overseer buys each listed spell through the core's own
+    Trainer::TeachSpell, which takes the money and refuses a spell the skill
+    is short of. Keyed on the skill so a failed walk cools down like a rank.
+    """
+    recipe = bandage_to_learn(member)
+    if recipe is None or _training_cooling(member.name, FIRST_AID, recent):
+        return None
+    return guildcorps.Step(
+        member.name,
+        "train",
+        FIRST_AID,
+        "%s walks to a trainer to learn %s for its First Aid"
+        % (member.name, recipe.name),
+        rows=(
+            guildcorps.Row(
+                "cast",
+                "walk-to-trainer skill:%d learn:%d%s"
+                % (FIRST_AID, recipe.spell_id, _cap_word(cap)),
+                "",
+                source_for("train", member.name),
+            ),
+        ),
+    )
+
+
 def _open_recipe(member, skill):
-    """The recipe this member would cast toward `skill`, cloth or not in hand.
+    """The recipe this member would cast toward `skill`, materials in hand or not.
 
     It is the one craft.py keeps for the member's skill value (its colour
-    band), made of cloth alone: a recipe with a vendor reagent or a forge or
-    loom is left to the passes that walk there. None at the ceiling, where a
-    rank comes first.
+    band), with a gathered reagent craft_rhythm names: a recipe that needs a
+    forge, an anvil or a loom is left to the passes that walk there, and one
+    made of crafted intermediates only is left alone. None at the ceiling,
+    where a rank comes first.
     """
     value, ceiling = member.skill(skill)
     if ceiling <= 0 or value >= ceiling:
@@ -831,18 +940,38 @@ def _open_recipe(member, skill):
     return recipe if craft_rhythm.GATHERED.get(recipe.spell_id) else None
 
 
+def bought_reagents(spell_id) -> tuple:
+    """(entry, per cast) of the vendor reagents a recipe also eats.
+
+    craft_rhythm.GATHERED is the gathered half of a recipe and craft_supply
+    the bought half (a vial, a thread, a flux). A cast is asked only when the
+    member carries both halves; buying the bought half is craft_supply's walk,
+    not this one.
+    """
+    out = [
+        (int(e), int(n))
+        for e, _name, _price, n in craft_supply.REAGENTS.get(int(spell_id), ())
+    ]
+    single = craft_supply.REAGENT.get(int(spell_id))
+    if single is not None and all(e != int(single[0]) for e, _n in out):
+        out.append((int(single[0]), 1))
+    return tuple(out)
+
+
 def _craft_recipe(member, skill):
     """(recipe, casts) this member can cast now toward `skill`, or (None, 0)."""
     recipe = _open_recipe(member, skill)
     if recipe is None:
         return None, 0
-    reagents = craft_rhythm.GATHERED[recipe.spell_id]
-    casts = min(member.count(r.entry) // max(1, int(r.per_cast)) for r in reagents)
+    needs = [
+        (int(r.entry), int(r.per_cast)) for r in craft_rhythm.GATHERED[recipe.spell_id]
+    ] + list(bought_reagents(recipe.spell_id))
+    casts = min(member.count(entry) // max(1, n) for entry, n in needs)
     return (recipe, min(casts, CRAFT_BATCH)) if casts > 0 else (None, 0)
 
 
 def craft_entries(member) -> frozenset:
-    """The items this member's next cloth casts eat, which it keeps."""
+    """The gathered items this member's next casts eat, which it keeps."""
     out = set()
     for skill in CRAFT_SKILLS:
         recipe = _open_recipe(member, skill)
@@ -852,12 +981,14 @@ def craft_entries(member) -> frozenset:
 
 
 def _craft_step(member):
-    """Cast what its cloth allows, to raise First Aid and Tailoring (#421).
+    """Cast what its bags allow, to raise one of its crafting trades (#421).
 
-    Linen Bandage takes a Linen Cloth and Bolt of Linen Cloth two; both grant
-    skill to the cast and both are the member's own to make, where it stands.
-    The rows are `cast` rows, the verb a player has, and the trade came from a
-    trainer that was paid.
+    Every crafting trade craft.RECIPES covers, First Aid first: Linen Bandage
+    takes a Linen Cloth, Bolt of Linen Cloth two, Light Leather three Ruined
+    Leather Scraps, Rough Sharpening Stone a Rough Stone. Each grants skill to
+    the cast and each is the member's own to make, where it stands. The rows
+    are `cast` rows, the verb a player has, and the trade came from a trainer
+    that was paid.
     """
     for skill in CRAFT_SKILLS:
         recipe, casts = _craft_recipe(member, skill)
@@ -868,7 +999,7 @@ def _craft_step(member):
             "craft",
             recipe.spell_id,
             "%s crafts %d %s to raise its %s"
-            % (member.name, casts, recipe.name, SKILL_NAMES[skill]),
+            % (member.name, casts, recipe.name, SKILL_NAMES.get(skill, skill)),
             rows=(
                 guildcorps.Row(
                     "cast",
@@ -1234,12 +1365,18 @@ def bank_masters(masters: dict, banks, unclaimed) -> dict:
     return out
 
 
-def postable(member: Member, kept) -> list:
-    """The material stacks this member would post, biggest first."""
+def postable(member: Member, kept, crafting=False) -> list:
+    """The material stacks this member would post, biggest first.
+
+    `crafting` is a member of a guild whose focus is craft (GUILD_FOCUS),
+    which keeps what its casts eat the way a maintenance member does.
+    """
     bar = POST_MIN.get(member.role, POST_MIN[RAIDER])
-    # Cloth its own next casts eat stays in the bags: a member that can still
-    # raise First Aid or Tailoring does not post away what it would cast.
-    eaten = craft_entries(member) if member.role == MAINTENANCE else frozenset()
+    # Materials its own next casts eat stay in the bags: a member that can
+    # still raise a crafting trade does not post away what it would cast.
+    eaten = (
+        craft_entries(member) if member.role == MAINTENANCE or crafting else frozenset()
+    )
     out = [
         c
         for c in member.carried
@@ -1262,8 +1399,8 @@ def _kept(name, item, kept) -> bool:
     )
 
 
-def _post_step(member, crafters, master, kept, cap):
-    stacks = postable(member, kept)[:MAX_LETTERS]
+def _post_step(member, crafters, master, kept, cap, crafting=False):
+    stacks = postable(member, kept, crafting)[:MAX_LETTERS]
     if not stacks:
         return None, ""
     if member.money < POSTAGE_COPPER:
@@ -1432,10 +1569,182 @@ def assign_doors(members, entrances, stones) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# THE GUILD FOCUS (the operator, 2026-10-05): two fronts. One guild is the
+# crafting and farming front, the other the dungeon front, and what one front
+# proves is later shared with the other. `GUILD_FOCUS` names them, e.g.
+# "Cave:craft,Bonkers:dungeon". Unset, or a guild it does not name, keeps
+# every member's ordinary job.
+#
+#   craft    every free member of the guild (not in a guild run, not on
+#            another walk, never the family) takes the trade work a
+#            maintenance member has between runs: train, tool, craft, post,
+#            sell, farm. Raiders and summoners are given gathering trades of
+#            their own (`focus_trades`); a summoner with a door keeps it. It
+#            still answers guild asks and still levels: gear, PvP, mail and
+#            the walk out of an outgrown zone come first, as for anybody.
+#            FARMING AND CRAFTING ITS OWN TRADES IS NOT A CONTRIBUTION, so a
+#            member short of its natural restart still casts what it carries
+#            and walks to its field (the same reasoning as #638 for the level
+#            step); training, tools, posts and sales still wait for it.
+#   dungeon  unchanged: the guild social pass asks and runs, and the job
+#            pass keeps every member's ordinary job. Said in the log.
+
+FOCUS_ENV = "GUILD_FOCUS"
+CRAFT_FOCUS, DUNGEON_FOCUS = "craft", "dungeon"
+FOCI = (CRAFT_FOCUS, DUNGEON_FOCUS)
+
+
+def parse_focus(text) -> dict:
+    """guild -> focus word from "Guild:focus,Guild:focus".
+
+    A pair without a colon, with an empty guild or with a focus word not in
+    FOCI is dropped; a guild named twice keeps the last.
+    """
+    out = {}
+    for part in str(text or "").split(","):
+        guild, sep, word = part.partition(":")
+        guild, word = guild.strip(), word.strip().lower()
+        if sep and guild and word in FOCI:
+            out[guild] = word
+    return out
+
+
+def focus_from_env(environ=None) -> dict:
+    """GUILD_FOCUS, parsed; {} when unset."""
+    environ = os.environ if environ is None else environ
+    return parse_focus(environ.get(FOCUS_ENV, ""))
+
+
+def focus_of(guild, focus) -> str:
+    """The focus word for this guild, "" when GUILD_FOCUS does not name it.
+    Guild names are matched without regard to case."""
+    wanted = str(guild or "").lower()
+    for name, word in (focus or {}).items():
+        if str(name).lower() == wanted:
+            return word
+    return ""
+
+
+def crafting(member: Member, focus) -> bool:
+    """Whether this member works its trades for a craft-focus guild."""
+    return member.role in (MAINTENANCE, SUMMONER, RAIDER) and (
+        focus_of(member.guild, focus) == CRAFT_FOCUS
+    )
+
+
+def wants_field(member: Member, focus=None) -> bool:
+    """Whether the bridge should find this member a field to farm.
+
+    A natural maintenance member, as before; and under a craft focus every
+    member of the guild that is online, natural or not, because farming its
+    own trades contributes nothing.
+    """
+    if member.map_id is None or member.x is None or member.y is None:
+        return False
+    if member.role == MAINTENANCE and member.eligible:
+        return True
+    return crafting(member, focus) and member.online
+
+
+def focus_trades(members, focus) -> dict:
+    """name -> trades for the raiders and summoners of a craft-focus guild.
+
+    Each guild's non-maintenance members are split among themselves the way
+    the maintenance crew is (`split_trades`: what it holds first, then the
+    trade fewest of them hold), with First Aid beside, which costs no primary
+    slot. None takes Tailoring here; the crew's tailors are choose_tailors'.
+    """
+    crews = {}
+    for m in members or ():
+        if m.role in (SUMMONER, RAIDER) and crafting(m, focus):
+            crews.setdefault(m.guild, []).append(m)
+    out = {}
+    for _guild, crew in sorted(crews.items()):
+        crew = sorted(crew, key=lambda m: m.name)
+        counts = {s: sum(1 for m in crew if m.holds(s)) for s in GATHERING}
+        for m in crew:
+            out[m.name] = _fill_gathering(m, counts, False) + (FIRST_AID,)
+    return out
+
+
+def _focus_tally(members, focus) -> dict:
+    """guild -> the tally a pass fills, for every guild GUILD_FOCUS names."""
+    out = {}
+    for m in members or ():
+        word = focus_of(m.guild, focus)
+        if not word or m.role not in (MAINTENANCE, SUMMONER, RAIDER):
+            continue
+        tally = out.setdefault(
+            m.guild,
+            {"focus": word, "members": 0, "craft": 0, "farm": 0, "gathering": 0},
+        )
+        tally["members"] += 1
+    return out
+
+
+def _count_focus(tally, m, step, fields):
+    """Count a craft-focus member's craft or farm step, or its stand in its
+    field, into the guild's tally."""
+    t = tally.get(m.guild)
+    if t is None or t["focus"] != CRAFT_FOCUS:
+        return
+    if step is not None and step.action in ("craft", "farm"):
+        t[step.action] += 1
+    elif step is None and fields.get(m.name) and _near(m, fields[m.name], FIELD_REACH):
+        t["gathering"] += 1
+
+
+def focus_lines(plan_result) -> list:
+    """One sentence per named guild: its focus and what its members took."""
+    out = []
+    for guild, t in sorted((plan_result.focus or {}).items()):
+        if t["focus"] == CRAFT_FOCUS:
+            out.append(
+                "%s: focus craft: %d member(s); %d took a craft step, %d a "
+                "farm step, %d gather in their field"
+                % (guild, t["members"], t["craft"], t["farm"], t["gathering"])
+            )
+        else:
+            out.append(
+                "%s: focus dungeon: %d member(s) keep their jobs; the guild "
+                "social pass's dungeon asks and runs are unchanged"
+                % (guild, t["members"])
+            )
+    return out
+
+
+def _own_trade_step(m, spot, recent, cap):
+    """A craft-focus member short of its natural restart: it casts what it
+    carries, else walks to its field. Nothing it does is counted as given."""
+    if not _cooling(m, "craft", recent):
+        step = _craft_step(m)
+        if step:
+            return step, step.said, ""
+    step, doing = _gathering_step(m, spot, recent, cap)
+    if step:
+        return step, step.said, ""
+    return None, doing + " (craft focus; not natural yet, so it gives nothing)", ""
+
+
+def _crafting_job(
+    m, trades, fields, doors, pending, crafters, master, kept, recent, cap
+):
+    """A natural member of a craft-focus guild: a maintenance member's work.
+    A summoner that knows the ritual and has a door keeps its door."""
+    if m.role == SUMMONER and RITUAL_OF_SUMMONING in m.known and m.name in doors:
+        return _summoner_step(m, doors, pending, crafters, master, kept, recent, cap)
+    return _maintenance_step(
+        m, trades, fields, crafters, master, kept, recent, cap, crafting=True
+    )
+
+
+# ---------------------------------------------------------------------------
 # THE PLAN.
 
 
-def _maintenance_step(m, trades, fields, crafters, master, kept, recent, cap):
+def _maintenance_step(
+    m, trades, fields, crafters, master, kept, recent, cap, crafting=False
+):
     """(step or None, what it does now, a note or "")."""
     notes = []
     step, why = _train_step(m, trades, cap, recent)
@@ -1443,6 +1752,9 @@ def _maintenance_step(m, trades, fields, crafters, master, kept, recent, cap):
         return step, step.said, ""
     if why:
         notes.append(why)
+    step = _learn_step(m, cap, recent)
+    if step:
+        return step, step.said, ""
     if not _cooling(m, "tool", recent):
         step, why = _tool_step(m, cap)
         if step:
@@ -1453,7 +1765,7 @@ def _maintenance_step(m, trades, fields, crafters, master, kept, recent, cap):
         step = _craft_step(m)
         if step:
             return step, step.said, ""
-    shared = _shared_step(m, crafters, master, kept, recent, cap)
+    shared = _shared_step(m, crafters, master, kept, recent, cap, crafting)
     if shared[0]:
         return shared
     if shared[2]:
@@ -1487,10 +1799,10 @@ def _gathering_step(m, spot, recent, cap):
     return None, doing
 
 
-def _shared_step(m, crafters, master, kept, recent, cap):
+def _shared_step(m, crafters, master, kept, recent, cap, crafting=False):
     """Post, then sell: what every role does with what it carries."""
     if not _cooling(m, "post", recent):
-        step, why = _post_step(m, crafters, master, kept, cap)
+        step, why = _post_step(m, crafters, master, kept, cap, crafting)
         if step:
             return step, step.said, ""
         if why:
@@ -1558,6 +1870,7 @@ def plan(
     mail=None,
     pvp=None,
     leveling=None,
+    focus=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -1572,7 +1885,9 @@ def plan(
     `mail` name -> the mail commands (mailrun) waiting at its mailbox;
     `pvp` name -> (pvpgear.Aim, pvpgear.Move) for members playing PvP for an
     upgrade (#589); `leveling` the guildlevel.World a member who has outgrown
-    its zone is walked to a quest hub from, None to take no level step.
+    its zone is walked to a quest hub from, None to take no level step;
+    `focus` guild -> focus word (parse_focus), None or {} for every guild's
+    ordinary job.
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -1582,6 +1897,8 @@ def plan(
     pending = {str(n) for n in pending or ()}
     tailors = choose_tailors(members)
     trades = cloth_trades(split_trades(members, tailors), tailors)
+    trades.update(focus_trades(members, focus))
+    tally = _focus_tally(members, focus)
     steps, lines, notes = [], {}, []
     # One counter per allowance, each keyed by guild (_allowance).
     counters = {"jobs": {}, "gear": {}, "pvp": {}, "level": {}}
@@ -1604,11 +1921,13 @@ def plan(
             cap,
             (pvp or {}).get(m.name),
             leveling,
+            crafting(m, focus),
         )
         lines[m.name] = doing
         if note:
             notes.append(note)
         if step is None:
+            _count_focus(tally, m, None, fields)
             continue
         started, allowance = _allowance(step, counters, per_guild)
         why = _step_refusal(m, busy, started, allowance)
@@ -1618,12 +1937,14 @@ def plan(
         started[m.guild] = started.get(m.guild, 0) + 1
         busy.add(m.name)
         steps.append(step)
+        _count_focus(tally, m, step, fields)
     return JobsPlan(
         steps=tuple(steps),
         lines=lines,
         trades=trades,
         doors=doors,
         notes=tuple(notes),
+        focus=tally,
     )
 
 
@@ -1694,9 +2015,11 @@ def _member_step(
     cap,
     pvp=None,
     leveling=None,
+    crafting=False,
 ):
     """Gear, then PvP for an upgrade, then the post, then a walk out of an
-    outgrown zone, then the member's ordinary job, keeping the notes."""
+    outgrown zone, then the member's ordinary job (a craft-focus guild's trade
+    work when `crafting`), keeping the notes."""
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
     if step is not None:
         return step, doing, gear_note
@@ -1710,7 +2033,17 @@ def _member_step(
     if step is not None:
         return step, doing, gear_note
     step, doing, note = _plan_member(
-        m, trades, fields, doors, pending, crafters, master, kept, recent, cap
+        m,
+        trades,
+        fields,
+        doors,
+        pending,
+        crafters,
+        master,
+        kept,
+        recent,
+        cap,
+        crafting,
     )
     return step, doing, "; ".join(n for n in (gear_note, level_note, note) if n)
 
@@ -1737,7 +2070,9 @@ def level_step(m, world, recent, cap):
     why = guildlevel.outgrown(m.level, m.race, m.map_id, m.zone_id, bands)
     if not why:
         return None, "", ""
-    choice = guildlevel.choose(m.level, m.race, m.map_id, bands, world.masters)
+    choice = guildlevel.choose(
+        m.level, m.race, m.map_id, bands, world.masters, zone_id=m.zone_id
+    )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
     master = choice.master
@@ -1913,10 +2248,26 @@ def _gear_first(m, offer, recent, cap, kept=None):
 
 
 def _plan_member(
-    m, trades, fields, doors, pending, crafters, master, kept, recent, cap
+    m,
+    trades,
+    fields,
+    doors,
+    pending,
+    crafters,
+    master,
+    kept,
+    recent,
+    cap,
+    crafting=False,
 ):
     if not m.eligible:
+        if crafting:
+            return _own_trade_step(m, fields.get(m.name), recent, cap)
         return None, "waits for its natural restart; nothing it holds is counted", ""
+    if crafting:
+        return _crafting_job(
+            m, trades, fields, doors, pending, crafters, master, kept, recent, cap
+        )
     return _member_job(
         m, trades, fields, doors, pending, crafters, master, kept, recent, cap
     )

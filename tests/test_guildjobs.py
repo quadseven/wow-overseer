@@ -218,9 +218,11 @@ class TheClothTrades(unittest.TestCase):
         self.assertTrue(step is None or step.action != "craft")
 
     def test_a_tailor_with_linen_casts_bolts_once_first_aid_is_grey(self):
+        # First Aid's own rung (Silk Bandage, bought) has no silk to eat.
         m = member(
             "Sew",
-            skills={FA: (60, 75), TAILOR: (5, 75), H: (40, 75)},
+            skills={FA: (150, 225), TAILOR: (5, 75), H: (40, 75)},
+            known=frozenset({7928}),
             carried=(stack(1, LINEN, 7, subclass=5),),
         )
         step = only_step(plan([m]), "Sew")
@@ -240,7 +242,8 @@ class TheClothTrades(unittest.TestCase):
         # Bolt of Woolen Cloth is a trainer purchase, not part of Apprentice.
         m = member(
             "Sew",
-            skills={FA: (60, 75), TAILOR: (70, 75), H: (40, 75)},
+            skills={FA: (150, 225), TAILOR: (70, 75), H: (40, 75)},
+            known=frozenset({7928}),
             carried=(stack(1, 2592, 9, subclass=5),),
         )
         step = only_step(plan([m]), "Sew")
@@ -248,7 +251,7 @@ class TheClothTrades(unittest.TestCase):
         known = guildjobs.Member(
             **{
                 **{f: getattr(m, f) for f in m.__dataclass_fields__},
-                "known": frozenset({2964}),
+                "known": frozenset({2964, 7928}),
             }
         )
         step = only_step(plan([known]), "Sew")
@@ -284,6 +287,49 @@ class TheRanks(unittest.TestCase):
 
     def test_nothing_past_the_classic_ceiling(self):
         self.assertIsNone(guildjobs.next_rank(M, 300, 300, 60))
+
+
+WOOL = 2592
+
+
+class TheBandageLadder(unittest.TestCase):
+    """Past Linen Bandage's grey every bandage is a trainer purchase, so a crew
+    member buys the rung its First Aid has reached, then casts it (operator,
+    2026-10-05: "craft and get all recipes")."""
+
+    def medic(self, value, cap, known=frozenset(), carried=()):
+        return member(
+            "Medic",
+            skills={FA: (value, cap), H: (40, 75), 171: (10, 75)},
+            known=known,
+            carried=carried,
+        )
+
+    def test_it_walks_to_a_trainer_for_the_rung_it_has_reached(self):
+        step = only_step(plan([self.medic(80, 150)]), "Medic")
+        self.assertEqual(step.action, "train")
+        self.assertEqual(step.rows[0].command, "walk-to-trainer skill:129 learn:3277")
+        self.assertIn("learn Wool Bandage", step.said)
+
+    def test_once_known_it_casts_the_rung_from_its_wool(self):
+        m = self.medic(
+            80,
+            150,
+            known=frozenset({3277}),
+            carried=(stack(1, WOOL, 6, subclass=5),),
+        )
+        step = only_step(plan([m]), "Medic")
+        self.assertEqual(step.action, "craft")
+        self.assertEqual(step.rows[0].command, "3277")
+        self.assertEqual(step.repeat, 6)
+
+    def test_linen_bandage_needs_no_trainer(self):
+        self.assertIsNone(guildjobs.bandage_to_learn(self.medic(40, 75)))
+
+    def test_a_failed_learn_walk_cools_down_on_the_skill(self):
+        failed = (guildjobs.Recent("Medic", "train", 30, "error", FA),)
+        step = only_step(plan([self.medic(80, 150)], recent=failed), "Medic")
+        self.assertTrue(step is None or step.action != "train")
 
 
 class Maintenance(unittest.TestCase):
