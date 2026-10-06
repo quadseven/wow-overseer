@@ -88,6 +88,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import craft_rhythm
+import craft_supply
 
 # Item classes this module will move. Deliberately two, and deliberately not
 # "anything in a bag".
@@ -381,6 +382,32 @@ def reserve_for(entry: int, craft_spells) -> int:
             if int(reagent.entry) != int(entry):
                 continue
             wanted = max(wanted, RESERVE_CASTS * int(reagent.per_cast))
+    return max(wanted, _tailor_reserve(entry))
+
+
+def _tailor_reserve(entry: int) -> int:
+    """The units of this item the family's tailor may sew with next, held back
+    whatever is standing.
+
+    THE BOLTS AND THREAD OF A BAG OR OF A BOLT-EATING RUNG ARE NOT IN GATHERED
+    (a bolt comes off a cast, thread off a vendor), and `craft_spells` names
+    only the recipe a character is aimed at this minute. So a master tailor
+    one bolt short of a Linen Bag was offered to the guild as surplus: on
+    wow-dev (2026-10-06) Og's Bolt of Linen Cloth went to Glob and his Coarse
+    Thread to Pokka while he stood at 52 of 150, sewing nothing for hours. The
+    reserve here is every guild-bag recipe and every bolt-fed rung, aimed at
+    or not, at the usual twelve casts.
+    """
+    wanted = 0
+    feeds = [r for reagents in craft_rhythm.BAG_FEED.values() for r in reagents]
+    feeds += [bolt for _weave, bolt in craft_rhythm.BOLT_FED.values()]
+    for reagent in feeds:
+        if int(reagent.entry) == int(entry):
+            wanted = max(wanted, RESERVE_CASTS * int(reagent.per_cast))
+    for spell in set(craft_rhythm.BAG_FEED) | set(craft_rhythm.BOLT_FED):
+        for row in craft_supply.REAGENTS.get(int(spell), ()):
+            if int(row[0]) == int(entry):
+                wanted = max(wanted, RESERVE_CASTS * int(row[3]))
     return wanted
 
 
