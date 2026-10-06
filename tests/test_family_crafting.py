@@ -107,7 +107,8 @@ class TheTailorMakesTheFamilysBagsFirst(unittest.TestCase):
         self.assertEqual(2963, self.errand(50, {}, 4).spell)
 
     def test_with_no_bag_wanted_it_climbs_its_ladder(self):
-        self.assertEqual(8776, self.errand(50, {BOLT: 3}, 0).spell)
+        # The belt's Coarse Thread (2320) is the crew's post, in the bags here.
+        self.assertEqual(8776, self.errand(50, {BOLT: 3, 2320: 1}, 0).spell)
 
     def test_below_the_bags_skill_it_climbs_its_ladder(self):
         self.assertEqual(2963, self.errand(30, {BOLT: 9}, 4).spell)

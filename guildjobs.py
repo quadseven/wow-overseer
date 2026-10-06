@@ -318,7 +318,7 @@ MATERIAL_SUBCLASSES = {
 # the crafts that use elementals.
 CONSUMERS = {
     5: (197, 129),
-    6: (165,),
+    6: (197, 165),
     7: (164, 202, 755),
     8: (185,),
     9: (171, 773),
@@ -1360,12 +1360,38 @@ POST_SUBJECT = "Guild materials"
 MAILBOX_FULL_LETTERS = 95
 
 
+def _bag_inputs(skill: int, value: int) -> frozenset:
+    """The non-bolt, non-vendor reagents of the trainer bags a master tailor is
+    within reach of: Small Silk Pack's Heavy Leather. A bag is a recipe of
+    craft.BAG_RECIPES, not craft.RECIPES, so `consumes_at` reads it here."""
+    if int(skill) != TAILORING:
+        return frozenset()
+    reach = int(value) + guildcorps.LADDER_AHEAD
+    return frozenset(
+        int(entry)
+        for bag in guildcorps.BAGS
+        if bag.source == "trainer"
+        and guildcorps._classic(bag)
+        and bag.learn_rank <= reach
+        for entry, _need in bag.reagents
+        if not guildcorps._vendor_reagent(entry)
+        and int(entry) not in guildcorps.BOLT_OF
+    )
+
+
 def consumes_at(skill: int, value: int, entry: int) -> bool:
-    """Whether a recipe of `skill` castable at `value` eats item `entry`."""
+    """Whether a recipe of `skill` castable at `value` eats item `entry`.
+
+    A master tailor is read one bracket ahead (guildcorps.LADDER_AHEAD): the
+    cloth and the leather its next rung and bag eat reach it before the cast.
+    """
     if int(value) < CRAFTER_FLOOR:
         return False
+    ahead = guildcorps.LADDER_AHEAD if int(skill) == TAILORING else 0
+    if int(entry) in _bag_inputs(skill, value):
+        return True
     for recipe in craft.RECIPES.get(int(skill), ()):
-        if recipe.min_skill > int(value):
+        if recipe.min_skill > int(value) + ahead:
             continue
         if any(
             r.entry == int(entry)
