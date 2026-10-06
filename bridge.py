@@ -13981,7 +13981,10 @@ class Bridge(discord.Client):
             focus=focus,
             # The class quest is a spawn walk and a quest row (classquest.py).
             classes=facts.get("class_book") if spawn_walks else None,
-            hunts=self._class_hunts, now=time.time())
+            hunts=self._class_hunts, now=time.time(),
+            # The class quest walks the realm has room for (guildroute).
+            far_slots=guildroute.far_slots_free(
+                facts.get("far_open"), FAR_WALKS_AT_ONCE))
         # Members held on a class quest are kept out of every dungeon pass
         # (the guild's asks, its runs): _class_priority_names.
         self._classquest_held = guildjobs.class_held(plan.lines)
@@ -23219,6 +23222,8 @@ _GUILD_HELD_GEAR_SQL = (
 
 
 # How many route holders one pass asks "are you at a mailbox" about.
+# The module's Overseer.FarWalk.AtOnce: set both to the same number.
+FAR_WALKS_AT_ONCE = int(os.environ.get("FAR_WALKS_AT_ONCE", guildroute.FAR_WALKS_AT_ONCE))
 GUILD_ROUTE_MAILBOX_CHECKS = int(os.environ.get("GUILD_ROUTE_MAILBOX_CHECKS", "20"))
 # How many notes one pass logs line by line before it summarises the rest.
 GUILD_ROUTE_NOTE_LINES = 5
@@ -23745,7 +23750,8 @@ def _insert_corps_row(holder: str, row) -> int:
 _JOB_MEMBERS_SQL = (
     "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, "
     "c.level, c.money, c.online, c.map AS map_id, s.pos_x, s.pos_y, s.in_combat, "
-    "s.zone_id, "
+    "s.zone_id, s.health, "
+    "EXISTS (SELECT 1 FROM corpse k WHERE k.guid = c.guid) AS has_corpse, "
     "lc.name AS master, " + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
@@ -23780,9 +23786,21 @@ _JOB_ITEMS_SQL = (
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
 )
 _JOB_RECENT_SQL = (
+    # The head of `result` carries the module's refusal and its reason.
     "SELECT target_name, command, source, status, "
+    "LEFT(result, 400) AS result, "
     "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
     "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY"
+)
+# THE FAR WALKS THE REALM HAS UNDER WAY: every walk row that asked for a far
+# cap and is not finished, of every kind (the module's ceiling is realm-wide,
+# not per kind). A row left open past the walk's own ceiling is no longer under
+# way, so the read stops at FAR_WALK_FOLLOW_SECONDS.
+_JOB_FAR_WALKS_OPEN_SQL = (
+    "SELECT COUNT(*) AS open_walks FROM overseer_command "
+    "WHERE command LIKE 'walk-to-%% max:%%' "
+    "AND status IN ('pending', 'claimed', 'verifying') "
+    "AND created_at > NOW() - INTERVAL %s SECOND"
 )
 # `kind = 'summon'` first, for the (kind, status, updated_at) index.
 _JOB_PENDING_SUMMONS_SQL = (
@@ -23925,6 +23943,14 @@ def _job_read(cur, what: str, sql: str, params=()) -> list:
     return [dict(row) for row in cur.fetchall()]
 
 
+def _far_walks_open(cur):
+    """The far walk rows still open, None when the read found no row (a schema
+    without the table)."""
+    rows = _job_read(cur, "open far walks", _JOB_FAR_WALKS_OPEN_SQL,
+                     (int(guildroute.FAR_WALK_FOLLOW_SECONDS),))
+    return int(rows[0]["open_walks"]) if rows else None
+
+
 def _fetch_job_facts(family_names: list) -> dict:
     """Everything guildjobs.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
@@ -23962,6 +23988,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                 (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP,
                  flightlearn.FLIGHT_MASTER_NPC_FLAG)))
         roster_rows = _job_read(cur, "roster names", _JOB_ROSTER_SQL)
+        far_open = _far_walks_open(cur)
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)
@@ -23969,6 +23996,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  item_rows, recent_rows, pending_rows,
                                  log_rows=log_rows, done_rows=done_rows)
     facts["class_book"] = book
+    facts["far_open"] = far_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}
     # Guilds that own a bank tab (#395). A schema without the table reads as
     # none, so a post never goes to a bank this world cannot show exists.
@@ -24078,7 +24106,10 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             known=frozenset(known.get(guid, ())), carried=carried.get(guid, ()),
             eligible=name in eligible, quest_log=quest_log.get(guid, {}),
             quests_done=frozenset(quests_done.get(guid, ())),
-            quest_progress=quest_progress.get(guid, {})))
+            quest_progress=quest_progress.get(guid, {}),
+            tree=raidroles.tree_of(int(r.get("class_id") or 0),
+                                   r.get(raidroles.KEY)),
+            alive=guildrun.alive_or_unread(r)))
     return members, crafters
 
 

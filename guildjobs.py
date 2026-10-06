@@ -106,6 +106,7 @@ import functools
 import json
 import math
 import os
+import re
 from dataclasses import dataclass, field
 
 import campaignplan
@@ -122,6 +123,7 @@ import guildlevel
 import guildroute
 import keep
 import pvpgear
+import raidroles
 import situation
 
 HERBALISM = guildcorps.HERBALISM
@@ -519,6 +521,10 @@ class Member:
     quests_done: frozenset = frozenset()
     # Kills and items counted toward each logged quest (quest id -> total).
     quest_progress: dict = field(default_factory=dict)
+    # The talent tree played ("Protection", "Holy"), "" when unread or a tie.
+    tree: str = ""
+    # False for a dead member or a ghost; a dead member is walked nowhere.
+    alive: bool = True
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -579,6 +585,10 @@ class Recent:
     skill_id: int | None = None
     # Whether the row is the step's walk (its source ends "-walk").
     walk: bool = False
+    # Why the module refused the row, "" when it did not, and whether it said
+    # the refusal would pass (the realm's far walk walls, a dead character).
+    refusal: str = ""
+    retryable: bool = False
 
 
 @dataclass(frozen=True)
@@ -2036,6 +2046,7 @@ def plan(
     classes=None,
     hunts=None,
     now=0.0,
+    far_slots=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -2054,7 +2065,10 @@ def plan(
     `focus` guild -> focus word (parse_focus), None or {} for every guild's
     ordinary job; `classes` the classquest.Book of every class quest, None to
     take no class quest step; `hunts` the classquest.Hunts clock (None keeps no
-    clock, so no hunt ever stalls) and `now` its time in seconds.
+    clock, so no hunt ever stalls) and `now` its time in seconds; `far_slots`
+    the far walks the realm can still take (None when not counted): class
+    quest walks past it wait, and the members are planned tank-spec warriors
+    and healers first, then by level (class_priority).
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -2069,7 +2083,8 @@ def plan(
     steps, lines, notes, helps = [], {}, [], []
     # One counter per allowance, each keyed by guild (_allowance).
     counters = {"jobs": {}, "gear": {}, "pvp": {}, "level": {}, "classquest": {}}
-    for m in _ordered_members(members):
+    far = classquest.FarSlots(far_slots) if far_slots is not None else None
+    for m in _class_ordered(members, classes):
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
         master = str(masters.get(m.guild) or "")
@@ -2092,6 +2107,7 @@ def plan(
             classes,
             hunts,
             now,
+            far,
         )
         lines[m.name] = doing
         helps += class_helps(m, classes, hunts, now)
@@ -2104,6 +2120,8 @@ def plan(
         why = _step_refusal(m, busy, started, allowance)
         if why:
             notes.append(why)
+            if far is not None:
+                far.release(m.name)
             continue
         started[m.guild] = started.get(m.guild, 0) + 1
         busy.add(m.name)
@@ -2193,6 +2211,7 @@ def _member_step(
     classes=None,
     hunts=None,
     now=0.0,
+    far=None,
 ):
     """A class quest first, then gear, then PvP for an upgrade, then the post, then a walk out of an
     outgrown zone, then the member's ordinary job (a craft-focus guild's trade
@@ -2204,7 +2223,7 @@ def _member_step(
     (CLASSQUEST_STEPS_PER_GUILD), so no other kind of step can use up the
     passes it needs. A member held on a class quest is also kept out of the
     guild's dungeon asks (the bridge's mid_job set)."""
-    step, doing, quest_note = class_step(m, classes, recent, cap, hunts, now)
+    step, doing, quest_note = class_step(m, classes, recent, cap, hunts, now, far)
     if step is not None or doing:
         return step, doing, quest_note
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
@@ -2319,13 +2338,71 @@ def _class_ready(m, book) -> bool:
 def failed_class_walks(name, recent) -> bool:
     """Whether the member's last FAILED_WALKS class quest rows, newest first,
     all ended in error or unchanged (the spawn cannot be reached)."""
+    # A refusal the module calls retryable (a far walk wall, a dead character)
+    # says nothing about the spawn, so it is no failed hunt.
     rows = sorted(
-        (r for r in recent or () if r.name == name and r.action == classquest.ACTION),
+        (
+            r
+            for r in recent or ()
+            if r.name == name and r.action == classquest.ACTION and not r.retryable
+        ),
         key=lambda r: r.age_minutes,
     )[: classquest.FAILED_WALKS]
     return len(rows) == classquest.FAILED_WALKS and all(
         r.status in TRAIN_FAILED for r in rows
     )
+
+
+def class_walk_backoff(name, recent) -> int:
+    """Minutes the member is left alone after the realm refused its newest
+    class quest walk for a far walk wall (classquest.BACKOFF_MINUTES), 0 when
+    the newest class row was anything else, or the wall has had its time."""
+    rows = sorted(
+        (r for r in recent or () if r.name == name and r.action == classquest.ACTION),
+        key=lambda r: int(r.age_minutes),
+    )
+    if not rows:
+        return 0
+    newest = rows[0]
+    wait = classquest.BACKOFF_MINUTES.get(newest.refusal, 0)
+    return max(0, wait - int(newest.age_minutes))
+
+
+def class_priority(m) -> int:
+    """0 for a member whose class quest reward the party most needs and the
+    realm's few far walk slots should go to first: a tank-spec warrior (the
+    reward of the level-10 quest is Defensive Stance, Taunt and Sunder Armor,
+    and a warrior without them cannot hold a dungeon) and a healer of any
+    class (the heal ranks); 1 for everyone else."""
+    cls = int(m.class_id)
+    if cls == classquest.WARRIOR and raidroles.fits_seat(
+        cls, m.tree, raidroles.SEAT_TANK
+    ):
+        return 0
+    return 0 if raidroles.fits_seat(cls, m.tree, raidroles.SEAT_HEALER) else 1
+
+
+def _class_ordered(members, classes):
+    """The members in the order their steps are planned. With a class quest
+    book, the scarce far walk slots go first to class_priority 0, then by level,
+    highest first (the member nearest its next reward spell and the dungeons
+    that want it); the old order (role, guild, name) breaks every tie."""
+    ordered = _ordered_members(members)
+    if classes is None:
+        return ordered
+    return sorted(ordered, key=lambda m: (class_priority(m), -int(m.level or 0)))
+
+
+def _far_class_walk(m, spot, cap) -> bool:
+    """Whether a walk from the member to the spot is a far walk, one the
+    module counts against the realm: past the near cap, or on another map."""
+    if float(cap) <= guildroute.TRAINER_WALK_YARDS:
+        return False
+    if m.map_id is None or m.x is None or m.y is None:
+        return True
+    if int(m.map_id) != int(spot.map_id):
+        return True
+    return _yards(m.x, m.y, spot.x, spot.y) > guildroute.TRAINER_WALK_YARDS
 
 
 def class_helps(m, book, hunts=None, now=0.0) -> list:
@@ -2365,7 +2442,7 @@ def _class_move(m, book, recent, hunts, now):
     return move, blocked
 
 
-def class_step(m, book, recent, cap, hunts=None, now=0.0):
+def class_step(m, book, recent, cap, hunts=None, now=0.0, far=None):
     """(step or None, what it does, a note): the member's next move toward a
     class quest it may do now, from classquest.next_move.
 
@@ -2396,8 +2473,9 @@ def class_step(m, book, recent, cap, hunts=None, now=0.0):
     reach = classquest.PACK_YARDS if tried else classquest.HUNT_REACH
     if move.kind == classquest.HUNT and _near(m, spot, reach):
         return None, move.said, note
-    if _cooling(m, classquest.ACTION, recent):
-        return None, move.said, note
+    held = _class_held(m, move, spot, cap, recent, hunts, now, far)
+    if held is not None:
+        return None, move.said, _join(note, held)
     if move.kind == classquest.HUNT:
         return _spot_step(m, spot, classquest.ACTION, cap, move.said), move.said, note
     if move.kind == classquest.USE:
@@ -2425,6 +2503,42 @@ def class_step(m, book, recent, cap, hunts=None, now=0.0):
         goal=spot.name,
     )
     return step, move.said, note
+
+
+def _class_held(m, move, spot, cap, recent, hunts, now, far):
+    """The note for a member a class quest walk is held back from, or None when
+    the walk may start. Held back: a dead member (the module refuses "character
+    is dead"), a member the realm refused for a far walk wall (its backoff), the
+    class cooldown, and a far walk with no slot left. None of these is the
+    hunt's fault, so the first, second and last restart its stall clock."""
+    wait = class_walk_backoff(m.name, recent)
+    if not m.alive or wait:
+        if hunts:
+            hunts.pause(m.name, move.quest, now)
+        return _held_note(m, wait)
+    if _cooling(m, classquest.ACTION, recent):
+        return ""
+    walks = move.kind != classquest.USE or not _near(m, spot, classquest.USE_NEAR)
+    if far is None or not walks or not _far_class_walk(m, spot, cap):
+        return None
+    if far.take(m.name):
+        return None
+    if hunts:
+        hunts.pause(m.name, move.quest, now)
+    return "%s waits for a far walk slot on the realm" % m.name
+
+
+def _join(*parts) -> str:
+    return "; ".join(p for p in parts if p)
+
+
+def _held_note(m, wait) -> str:
+    if not m.alive:
+        return "%s is dead and is walked nowhere" % m.name
+    return "%s waits %d more minute(s) after the realm refused its far walk" % (
+        m.name,
+        wait,
+    )
 
 
 def _use_step(m, move, spot, cap):
@@ -2912,9 +3026,24 @@ def recent_from_rows(rows) -> tuple:
                     _trainer_skill_id(row.get("command")) if action == "train" else None
                 ),
                 walk=action.endswith("-walk"),
+                **_refusal_of(row),
             )
         )
     return tuple(out)
+
+
+def _refusal_of(row) -> dict:
+    """The module's refusal in a row's `result` ({"outcome":"refused","reason":
+    "...","retryable":true,...}), read from the text so a result cut short in
+    the read still gives its reason, which comes first."""
+    result = str(row.get("result") or "")
+    if '"outcome":"refused"' not in result:
+        return {}
+    found = re.search(r'"reason":"((?:[^"\\]|\\.)*)"', result)
+    return {
+        "refusal": found.group(1) if found else "",
+        "retryable": '"retryable":true' in result,
+    }
 
 
 def _trainer_skill_id(command) -> int | None:
