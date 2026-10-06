@@ -200,15 +200,26 @@ RANKS = {
 # (acore_world.trainer_spell, 2026-09-29): Apprentice First Aid is the
 # wrapper 3279 (one silver, no level); Journeyman and Expert are 3280 and
 # 54254. Tailoring's ranks are the corps' own 3911, 3912 and 3913.
+#
+# ARTISAN, THE RANK AT 200 (2026-10-05). `acore_world.trainer_spell` sells
+# Artisan First Aid as 10847 (ReqSkillRank 200, ReqLevel 35, 25000c, trainers
+# 81, 82 and 83: every First Aid trainer) and Artisan Tailoring as 12181
+# (ReqSkillRank 200, ReqLevel 35, 50000c, trainers 72, 73 and 74: every
+# Tailoring trainer). The realm's Spell.dbc (md5 543b9fe6...) says each is a
+# wrapper whose SPELL_EFFECT_LEARN_SPELL teaches the rank spell, 10846 and
+# 12180, and whose SPELL_EFFECT_SKILL_STEP is step 4 of skill 129 and 197:
+# the 300 ceiling. Without these rows the crew and the family stopped at 225.
 RANKS[FIRST_AID] = (
     Rank(3279, 75, 0, 0, 100),
     Rank(3280, 150, 0, 50, 500),
     Rank(54254, 225, 0, 125, 1000),
+    Rank(10847, 300, 35, 200, 25000),
 )
 RANKS[TAILORING] = (
     Rank(3911, 75, 5, 0, 10),
     Rank(3912, 150, 10, 50, 500),
     Rank(3913, 225, 20, 125, 5000),
+    Rank(12181, 300, 35, 200, 50000),
 )
 
 # One maintenance member in this many is a tailor: a crew of ten gives three.
@@ -777,6 +788,31 @@ def next_rank(skill: int, value: int, cap: int, level: int):
                 return rank
             return None
     return None
+
+
+def ranks_due(level: int, money: int, skills, wanted=()) -> tuple:
+    """The held trades whose next rank this character may buy now, cheapest first.
+
+    The crew's own rule (`next_rank`, and the purse check `_train_step`
+    makes), for a character a trainer walk is not written for: a roster
+    family member, whose rank is bought on arrival at a trainer through
+    `overseer_roster.learn_skill` (learnaim.py). `skills` is
+    {skill id: (value, max)}. Only a HELD trade is asked about (max above 0),
+    so this never starts a trade; a primary only when `wanted` (the roster's
+    `professions` column, the permission TrainOnArrival reads) names it, and
+    First Aid always, since it takes no primary slot.
+    """
+    due = []
+    for skill, (value, ceiling) in sorted((skills or {}).items()):
+        skill, value, ceiling = int(skill), int(value or 0), int(ceiling or 0)
+        if ceiling <= 0:
+            continue
+        if skill != FIRST_AID and skill not in tuple(wanted or ()):
+            continue
+        rank = next_rank(skill, value, ceiling, int(level or 0))
+        if rank is not None and int(money or 0) >= rank.cost:
+            due.append((rank.cost, skill))
+    return tuple(skill for _cost, skill in sorted(due))
 
 
 # ---------------------------------------------------------------------------

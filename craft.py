@@ -1236,10 +1236,10 @@ RECIPES: dict = {
     # 54254 at 125, both `trainer_spell` on this realm, so no Expert book is
     # needed here), casts only what `character_spell` says it knows, and now
     # asks the trainer for the bandage its skill has reached
-    # (guildjobs._learn_step). Artisan First Aid (10846) has no rank row in
-    # this repo, so the crew still caps at 225 and the rungs from 225 up wait
-    # for that rank; the classic Triage quest is not something this repo
-    # drives at all.
+    # (guildjobs._learn_step). Artisan First Aid is `trainer_spell` 10847
+    # (teaching rank 10846) at 200, so the crew climbs past 225 on the same
+    # ladder (guildjobs.RANKS); the classic Triage quest is not something this
+    # repo drives at all.
     SKILL_IDS["first aid"]: (
         Recipe(
             3275,
