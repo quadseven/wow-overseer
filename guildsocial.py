@@ -597,6 +597,14 @@ def can_take(member: guildrun.Member, seat: str) -> bool:
     return True
 
 
+def seatable(member: guildrun.Member) -> bool:
+    """Can this member sit in any seat at all: the tank or healer seat its
+    tree plays (role_of), or a damage seat when its tree is not a tank or
+    healer tree (guildrun.Member.deals_damage). A Protection warrior without a
+    shield plays a tank and takes no damage seat, so it sits out."""
+    return role_of(member) != DPS or member.deals_damage()
+
+
 def activity_value(mate: Mate) -> float:
     """What the member is doing now is worth: nothing in a capital, QUESTING
     anywhere else in the world."""
@@ -938,14 +946,14 @@ def _seats(asker: guildrun.Member, yes: list, free: dict) -> tuple:
     mine = role_of(asker)
     if mine in seats:
         seats[mine] = (asker, None)
-    else:
+    elif asker.deals_damage():
         damage.append((asker, None))
     for answer in yes:
         member = free[answer.member]
         open_seat = answer.role in seats and seats[answer.role] is None
         if open_seat and can_take(member, answer.role):
             seats[answer.role] = (member, answer)
-        elif answer.role == DPS and len(damage) < 3:
+        elif answer.role == DPS and len(damage) < 3 and member.deals_damage():
             damage.append((member, answer))
     return seats, damage
 
@@ -1204,6 +1212,8 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
     because guilds clear dungeons in level order: Jev, offered Ragefire beside
     Wailing Caverns, kept sending Bonkers back to the Ragefire it had cleared.
     """
+    if not seatable(mate.member):
+        return None
     faction = board.factions.get(guild, "")
     band = guildrun.band_of([mate.member.level])
     shape = ask_shape(board, mate, guild)
@@ -1529,15 +1539,16 @@ def plan_pass(
 
 def _seat_for(member: guildrun.Member, open_seats: list) -> str:
     """The seat this member answers for: its own tree's seat when open, a
-    tank or healer seat its class can take untalented, else damage."""
+    tank or healer seat its class can take untalented, else damage when its
+    tree is not a tank or healer tree, else none."""
     mine = role_of(member)
-    if mine in open_seats:
+    if mine in open_seats and (mine != DPS or member.deals_damage()):
         return mine
     if not member.played_tree:
         for seat_name in (TANK, HEALER):
             if seat_name in open_seats and can_take(member, seat_name):
                 return seat_name
-    return DPS if DPS in open_seats else ""
+    return DPS if DPS in open_seats and member.deals_damage() else ""
 
 
 def _said_since(asks: list, head: str, keyword: str, started) -> bool:

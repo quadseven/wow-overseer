@@ -218,6 +218,17 @@ class Member:
         logged "no tank in the party" in 7 of 9 of its runs."""
         return bool(self.tree) and raidroles.fits_seat(self.class_id, self.tree, seat)
 
+    def deals_damage(self) -> bool:
+        """May this member fill a damage seat: its spent talents are not a tree
+        that tanks or heals. A bot plays its tree whatever seat the coordinator
+        gave it (a Protection warrior runs `tank`, `tank assist` and `pull`; a
+        Holy or Discipline priest runs `heal`), so a tank or healer tree in a
+        damage seat is a second tank pulling and taunting against the first, or
+        a damage seat that heals. Guild runs 247, 256 and 265 each took one or
+        two Protection warriors as damage dealers and all three wiped; run 271
+        took a Holy priest and its pulls lasted twice as long as run 272's."""
+        return not (self.plays(TANK) or self.plays(HEALER))
+
     def fit(self, seat: str) -> str:
         """ "spec" when the tree plays the seat, "class" when only the class
         can, "" when it cannot take the seat at all."""
@@ -730,7 +741,11 @@ def compositions(window: list) -> list:
     def build(tank: Member, healer: Member):
         if tank.name == healer.name:
             return None
-        rest = [m for m in window if m.name not in (tank.name, healer.name)]
+        rest = [
+            m
+            for m in window
+            if m.name not in (tank.name, healer.name) and m.deals_damage()
+        ]
         rest.sort(key=lambda m: (_dps_rank(m), -m.level, m.name))
         if len(rest) < 3:
             return None

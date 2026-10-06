@@ -73,6 +73,54 @@ def cave_band():
 DOORS = guildrun.doors({389: 8, 36: 10, 43: 10, 33: 14})
 
 
+class OnlyDamageDealersFillDamageSeats(unittest.TestCase):
+    """A bot plays its spent tree whatever seat it is given, so a Protection
+    warrior or a Holy priest in a damage seat is a second tank or a second
+    healer (runs 247, 256 and 265 took Protection warriors as damage)."""
+
+    def test_a_tank_or_healer_tree_does_not_deal_damage(self):
+        self.assertFalse(
+            member("Tanky", 20, WARRIOR, talent_spells=PROTECTION_TALENT).deals_damage()
+        )
+        self.assertFalse(
+            member("Healy", 20, PRIEST, talent_spells=HOLY_TALENT).deals_damage()
+        )
+
+    def test_a_member_with_no_talents_or_a_damage_tree_does(self):
+        self.assertTrue(member("Stabby", 19, ROGUE).deals_damage())
+        self.assertTrue(
+            member("Furio", 19, WARRIOR, talent_spells="61216").deals_damage()
+        )
+
+    def test_a_window_short_of_damage_dealers_seats_no_group(self):
+        window = [
+            member("Tanky", 20, WARRIOR, talent_spells=PROTECTION_TALENT),
+            member("Shieldy", 20, WARRIOR, talent_spells=PROTECTION_TALENT),
+            member("Healy", 20, PRIEST, talent_spells=HOLY_TALENT),
+            member("Zappy", 19, MAGE),
+            member("Locky", 19, WARLOCK),
+        ]
+        window = [
+            replace(m, worn_slots=6, has_weapon=True, has_shield=True) for m in window
+        ]
+        self.assertEqual(guildrun.compositions(window), [])
+
+    def test_the_damage_seats_go_to_the_damage_dealers(self):
+        window = [
+            member("Tanky", 20, WARRIOR, talent_spells=PROTECTION_TALENT),
+            member("Shieldy", 20, WARRIOR, talent_spells=PROTECTION_TALENT),
+            member("Healy", 20, PRIEST, talent_spells=HOLY_TALENT),
+            member("Zappy", 19, MAGE),
+            member("Locky", 19, WARLOCK),
+            member("Stabby", 19, ROGUE),
+        ]
+        window = [
+            replace(m, worn_slots=6, has_weapon=True, has_shield=True) for m in window
+        ]
+        for comp in guildrun.compositions(window):
+            self.assertTrue(all(m.deals_damage() for m in comp.dps), comp.names)
+
+
 class TheSwitchAndTheLimits(unittest.TestCase):
     def test_off_unless_it_is_turned_on(self):
         self.assertFalse(guildrun.enabled({}))
