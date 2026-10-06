@@ -403,7 +403,9 @@ class WhoAnswers(unittest.TestCase):
             mate("Tanky", 21, WARRIOR, talent_spells=PROTECTION, has_shield=0),
         ]
         out = plan(crowd, asks=[ask(7, "Auren")])
-        self.assertEqual([(r.member, r.role) for r in out.replies], [("Tanky", "dps")])
+        # It plays a tank whatever seat it is given, so it sits out (a second
+        # tank in a damage seat pulls and taunts against the group's tank).
+        self.assertEqual(out.replies, ())
 
     def test_a_member_of_another_guild_never_answers(self):
         crowd = [mate("Auren", 20, ROGUE), mate("Other", 20, MAGE, guild="Bonkers")]
@@ -570,6 +572,73 @@ class FormedOnlyFromAnswers(unittest.TestCase):
         line = gs.formed_line("Tanky", "Tanky", DEADMINES)
         self.assertNotIn("Tanky's", line)
         self.assertIn("The Deadmines", line)
+
+
+def replace_shield(m):
+    return mate("Tanky", 21, WARRIOR, talent_spells=PROTECTION, has_shield=1)
+
+
+class ATankOrHealerTreeNeverFillsADamageSeat(unittest.TestCase):
+    """A bot plays its spent tree whatever seat it is given: a Protection
+    warrior runs tank, tank assist and pull, a Holy priest runs heal. Seated as
+    damage, the first is a second tank against the group's tank and the second
+    is a healer where damage was meant. Runs 247, 256 and 265 had Protection
+    warriors in damage seats and wiped."""
+
+    def test_a_second_protection_warrior_does_not_answer_for_damage(self):
+        crowd = five() + [
+            mate("Shieldy", 21, WARRIOR, talent_spells=PROTECTION, has_shield=1)
+        ]
+        answers = [yes(1, 7, "Tanky", "tank"), yes(2, 7, "Healy", "healer")]
+        out = plan(crowd, asks=[ask(7, "Auren")], answers=answers)
+        self.assertEqual(sorted(r.member for r in out.replies), ["Locky", "Zappy"])
+
+    def test_a_second_healer_does_not_answer_for_damage(self):
+        crowd = five() + [mate("Holy2", 20, PRIEST, talent_spells=HOLY)]
+        answers = [yes(1, 7, "Tanky", "tank"), yes(2, 7, "Healy", "healer")]
+        out = plan(crowd, asks=[ask(7, "Auren")], answers=answers)
+        self.assertEqual(sorted(r.member for r in out.replies), ["Locky", "Zappy"])
+
+    def test_a_damage_yes_from_a_tank_tree_is_not_seated(self):
+        crowd = five() + [
+            mate("Shieldy", 21, WARRIOR, talent_spells=PROTECTION, has_shield=1)
+        ]
+        answers = [
+            yes(1, 7, "Tanky", "tank"),
+            yes(2, 7, "Healy", "healer"),
+            yes(3, 7, "Shieldy", "dps"),
+            yes(4, 7, "Zappy", "dps"),
+        ]
+        out = plan(crowd, asks=[ask(7, "Auren")], answers=answers)
+        self.assertIsNone(out.form)
+
+    def test_the_same_group_forms_with_a_real_damage_dealer(self):
+        crowd = five() + [
+            mate("Shieldy", 21, WARRIOR, talent_spells=PROTECTION, has_shield=1)
+        ]
+        answers = [
+            yes(1, 7, "Tanky", "tank"),
+            yes(2, 7, "Healy", "healer"),
+            yes(3, 7, "Shieldy", "dps"),
+            yes(4, 7, "Zappy", "dps"),
+            yes(5, 7, "Locky", "dps"),
+        ]
+        out = plan(crowd, asks=[ask(7, "Auren")], answers=answers)
+        self.assertEqual(
+            set(out.form.composition.names),
+            {"Auren", "Tanky", "Healy", "Zappy", "Locky"},
+        )
+        self.assertEqual(out.form.declined, (3,))
+
+    def test_an_unshielded_tank_tree_does_not_ask(self):
+        # It would sit in a damage seat as a second tank; it asks once it has
+        # a shield.
+        tank = mate("Tanky", 21, WARRIOR, talent_spells=PROTECTION, has_shield=0)
+        out = plan([tank], needs={"Tanky": [cape_need("Tanky")]})
+        self.assertEqual(out.posts, ())
+        shielded = replace_shield(tank)
+        out = plan([shielded], needs={"Tanky": [cape_need("Tanky")]})
+        self.assertEqual(len(out.posts), 1)
 
 
 class AsksEnd(unittest.TestCase):
