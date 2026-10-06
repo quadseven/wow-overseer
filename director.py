@@ -329,22 +329,57 @@ class WatchDirective:
     source: str
 
 
-_KEYWORDS = {
-    "family",
-    "guild",
-    "run",
-    "dungeon",
-    "bg",
-    "battleground",
-    "raid",
-    "off",
-    "stop",
-    "clear",
-    "character",
-    "char",
-}
 _WORD_RE = re.compile(r"^[a-z][a-z-]{1,31}$")
 _GUILD_RE = re.compile(r"^[A-Za-z][A-Za-z' ]{1,23}$")
+
+
+def _bad(what: str, text: str) -> SpecError:
+    return SpecError(f"'{text}' is not {what}. {USAGE}")
+
+
+def _arg_character(rest: str):
+    return (
+        Spec("character", rest)
+        if _NAME_RE.match(rest)
+        else _bad("a character name", rest)
+    )
+
+
+def _arg_family(rest: str):
+    if rest and not _WORD_RE.match(rest.lower()):
+        return _bad("a family key", rest)
+    return Spec("family", rest.lower())
+
+
+def _arg_guild(rest: str):
+    return Spec("guild", rest) if _GUILD_RE.match(rest) else _bad("a guild name", rest)
+
+
+def _arg_run(rest: str):
+    ok = rest.isdigit() and len(rest) <= 9
+    return Spec("run", rest) if ok else _bad("a run id", rest)
+
+
+def _arg_dungeon(rest: str):
+    ok = _WORD_RE.match(rest.lower())
+    return Spec("dungeon", rest.lower()) if ok else _bad("a dungeon keyword", rest)
+
+
+# The first word of an order -> how the rest of it is read.
+_HEADS = {
+    "off": lambda rest: Spec("off"),
+    "stop": lambda rest: Spec("off"),
+    "clear": lambda rest: Spec("off"),
+    "bg": lambda rest: Spec("bg"),
+    "battleground": lambda rest: Spec("bg"),
+    "raid": lambda rest: Spec("raid"),
+    "character": _arg_character,
+    "char": _arg_character,
+    "family": _arg_family,
+    "guild": _arg_guild,
+    "run": _arg_run,
+    "dungeon": _arg_dungeon,
+}
 
 
 def parse_watch(text: str) -> Spec | SpecError:
@@ -355,41 +390,10 @@ def parse_watch(text: str) -> Spec | SpecError:
     if not words:
         return SpecError(f"watch what? {USAGE}")
     head, rest = words[0].lower(), " ".join(words[1:]).strip()
-    if head in ("off", "stop", "clear"):
-        return Spec("off")
-    if head in ("bg", "battleground"):
-        return Spec("bg")
-    if head == "raid":
-        return Spec("raid")
-    if head in ("character", "char"):
-        return (
-            Spec("character", rest)
-            if _NAME_RE.match(rest)
-            else SpecError(f"'{rest}' is not a character name. {USAGE}")
-        )
-    if head == "family":
-        if rest and not _WORD_RE.match(rest.lower()):
-            return SpecError(f"'{rest}' is not a family key. {USAGE}")
-        return Spec("family", rest.lower())
-    if head == "guild":
-        return (
-            Spec("guild", rest)
-            if _GUILD_RE.match(rest)
-            else SpecError(f"'{rest}' is not a guild name. {USAGE}")
-        )
-    if head == "run":
-        return (
-            Spec("run", rest)
-            if rest.isdigit() and len(rest) <= 9
-            else SpecError(f"'{rest}' is not a run id. {USAGE}")
-        )
-    if head == "dungeon":
-        return (
-            Spec("dungeon", rest.lower())
-            if _WORD_RE.match(rest.lower())
-            else SpecError(f"'{rest}' is not a dungeon keyword. {USAGE}")
-        )
-    if not rest and _NAME_RE.match(words[0]) and head not in _KEYWORDS:
+    reader = _HEADS.get(head)
+    if reader is not None:
+        return reader(rest)
+    if not rest and _NAME_RE.match(words[0]):
         return Spec("character", words[0])
     return SpecError(f"I do not know how to watch '{text.strip()}'. {USAGE}")
 
@@ -417,10 +421,6 @@ class Pick:
 class Refused:
     code: str
     text: str
-
-
-def _present(names: Iterable[str], by_name: Mapping[str, Spot]) -> list[str]:
-    return [n for n in names if n in by_name]
 
 
 def _fight_centre(spots: Sequence[Spot]) -> Spot:
@@ -469,6 +469,83 @@ def _run_pick(
     return Refused(R_NO_TARGET, f"no {label} run has a member inside yet")
 
 
+def _pick_character(spec, by_name, **_):
+    name = {n.lower(): n for n in by_name}.get(spec.arg.lower())
+    if name is None:
+        return Refused(R_TARGET_OFFLINE, f"{spec.arg} is not in the world")
+    return Pick(name, "the named character")
+
+
+def _pick_family(spec, by_name, *, heads, **_):
+    table = dict(heads or {})
+    if not table:
+        return Refused(R_NO_TARGET, "no family has a head on record")
+    key = spec.arg or next(iter(table))
+    head = table.get(key)
+    if head is None:
+        return Refused(R_NO_TARGET, f"no family '{key}' ({', '.join(table)})")
+    if head not in by_name:
+        text = f"{head}, head of the {key} family, is not in the world"
+        return Refused(R_TARGET_OFFLINE, text)
+    return Pick(head, f"head of the {key} family")
+
+
+def _pick_guild(spec, by_name, *, runs, current, **_):
+    mine = [r for r in runs if r.guild.lower() == spec.arg.lower()]
+    return _run_pick(mine, by_name, current, spec.arg)
+
+
+def _pick_dungeon(spec, by_name, *, runs, current, **_):
+    mine = [r for r in runs if spec.arg in r.keyword.lower()]
+    return _run_pick(mine, by_name, current, spec.arg)
+
+
+def _pick_run(spec, by_name, *, runs, current, **_):
+    run = next((r for r in runs if r.id == int(spec.arg)), None)
+    if run is None:
+        return Refused(R_NO_TARGET, f"there is no run {spec.arg}")
+    if run.state != "inside":
+        state = run.state or "not inside"
+        return Refused(R_NO_TARGET, f"run {run.id} is {state}, not in a dungeon")
+    return _run_pick([run], by_name, current, f"run {run.id}")
+
+
+def _crowd_pick(by_name, maps, current, noun, seats=()):
+    """The fullest place on `maps`: keep the current target if it is still
+    there, else a seated tank, else the middle of the fight."""
+    group = _biggest_place([s for s in by_name.values() if s.map_id in maps])
+    if not group:
+        return Refused(R_NO_TARGET, f"no {noun} has anyone in it")
+    names = [s.name for s in group]
+    if current in names:
+        return Pick(current, f"still in the fullest {noun}")
+    tanks = [n for n, role in seats if role == "tank" and n in names]
+    if tanks:
+        return Pick(sorted(tanks)[0], f"a tank of the fullest {noun}")
+    return Pick(
+        _fight_centre(group).name, f"the middle of the fight in the fullest {noun}"
+    )
+
+
+def _pick_bg(spec, by_name, *, current, **_):
+    return _crowd_pick(by_name, BATTLEGROUND_MAPS, current, "battleground")
+
+
+def _pick_raid(spec, by_name, *, current, seats, **_):
+    return _crowd_pick(by_name, RAID_MAPS, current, "raid", seats)
+
+
+_PICKERS = {
+    "character": _pick_character,
+    "family": _pick_family,
+    "guild": _pick_guild,
+    "dungeon": _pick_dungeon,
+    "run": _pick_run,
+    "bg": _pick_bg,
+    "raid": _pick_raid,
+}
+
+
 def pick_target(
     spec: Spec,
     spots: Sequence[Spot],
@@ -479,71 +556,11 @@ def pick_target(
     current: str = "",
 ) -> Pick | Refused:
     """Who the Watcher should be beside, from the order and the world."""
+    picker = _PICKERS.get(spec.kind)
+    if picker is None:
+        return Refused(R_NO_TARGET, USAGE)
     by_name = {s.name: s for s in spots if not is_watcher(s.name)}
-    kind = spec.kind
-    if kind == "character":
-        lowered = {n.lower(): n for n in by_name}
-        name = lowered.get(spec.arg.lower())
-        if name is None:
-            return Refused(R_TARGET_OFFLINE, f"{spec.arg} is not in the world")
-        return Pick(name, "the named character")
-    if kind == "family":
-        table = dict(heads or {})
-        if not table:
-            return Refused(R_NO_TARGET, "no family has a head on record")
-        key = spec.arg or next(iter(table))
-        head = table.get(key)
-        if head is None:
-            return Refused(R_NO_TARGET, f"no family '{key}' ({', '.join(table)})")
-        if head not in by_name:
-            return Refused(
-                R_TARGET_OFFLINE,
-                f"{head}, head of the {key} family, is not in the world",
-            )
-        return Pick(head, f"head of the {key} family")
-    if kind == "guild":
-        mine = [r for r in runs if r.guild.lower() == spec.arg.lower()]
-        return _run_pick(mine, by_name, current, spec.arg)
-    if kind == "dungeon":
-        mine = [r for r in runs if spec.arg in r.keyword.lower()]
-        return _run_pick(mine, by_name, current, spec.arg)
-    if kind == "run":
-        run = next((r for r in runs if r.id == int(spec.arg)), None)
-        if run is None:
-            return Refused(R_NO_TARGET, f"there is no run {spec.arg}")
-        if run.state != "inside":
-            return Refused(
-                R_NO_TARGET,
-                f"run {run.id} is {run.state or 'not inside'}, not in a dungeon",
-            )
-        return _run_pick([run], by_name, current, f"run {run.id}")
-    if kind == "bg":
-        group = _biggest_place(
-            [s for s in by_name.values() if s.map_id in BATTLEGROUND_MAPS]
-        )
-        if not group:
-            return Refused(R_NO_TARGET, "no battleground has anyone in it")
-        names = [s.name for s in group]
-        if current in names:
-            return Pick(current, "still in the biggest battleground")
-        return Pick(
-            _fight_centre(group).name,
-            "the middle of the fight in the fullest battleground",
-        )
-    if kind == "raid":
-        group = _biggest_place([s for s in by_name.values() if s.map_id in RAID_MAPS])
-        if not group:
-            return Refused(R_NO_TARGET, "no raid has anyone in it")
-        names = [s.name for s in group]
-        if current in names:
-            return Pick(current, "still in the fullest raid")
-        tanks = [n for n, role in seats if role == "tank" and n in names]
-        if tanks:
-            return Pick(sorted(tanks)[0], "a tank of the fullest raid")
-        return Pick(
-            _fight_centre(group).name, "the middle of the fight in the fullest raid"
-        )
-    return Refused(R_NO_TARGET, USAGE)
+    return picker(spec, by_name, runs=runs, seats=seats, heads=heads, current=current)
 
 
 # ----------------------------------------------------------------- the decision --
@@ -580,6 +597,58 @@ def _refuse(code: str) -> Decision:
     return Decision(REFUSE, reason=REFUSALS[code], code=code)
 
 
+def _refusal_for(watcher: Spot | None, target: Spot | None) -> Decision | None:
+    """The reasons the Watcher must not move at all, in the order they are named."""
+    if watcher is None:
+        return _refuse(R_WATCHER_OFFLINE)
+    if target is None:
+        return _refuse(R_TARGET_OFFLINE)
+    if is_watcher(target.name):
+        return _refuse(R_SELF)
+    if target.map_id in ARENA_MAPS:
+        return _refuse(R_ARENA)
+    if watcher.group_leader:
+        return _refuse(R_GROUPED)
+    return None
+
+
+def _held(moves, now, new_target) -> Decision | None:
+    """The rate limit: a gap between moves, and a budget over a window."""
+    last = max(moves, default=None)
+    if not new_target and last is not None and now - last < MIN_APPEAR_GAP:
+        return Decision(HOLD, reason=REFUSALS[R_RATE], code=R_RATE)
+    if not _budget_left(moves, now):
+        return Decision(HOLD, reason=REFUSALS[R_RATE] + " (budget spent)", code=R_RATE)
+    return None
+
+
+def _route(watcher: Spot, target: Spot) -> Decision:
+    """The command line that puts the Watcher beside the target."""
+    hint = f"/follow {target.name}"
+    appear = f".appear {target.name}"
+
+    def move(cmds, why):
+        return Decision(APPEAR, cmds, why, client_hint=hint)
+
+    if not _is_instance(target):
+        return move((appear,), f"to {target.name}")
+    if watcher.map_id == target.map_id and watcher.instance_id != target.instance_id:
+        why = (
+            f"leaving this instance of map {watcher.map_id} first, because "
+            "a teleport within a map stays in the instance the GM is in"
+        )
+        return Decision(HOP, (HOP_COMMAND,), why, client_hint=hint)
+    if watcher.place == target.place:
+        return move((appear,), f"{target.name} moved away")
+    if target.map_id in BATTLEGROUND_MAPS:
+        # Battlegrounds take no instance bind, so there is nothing to drop.
+        return move((appear,), f"into {target.name}'s battleground")
+    return move(
+        (UNBIND_COMMAND, appear),
+        f"into {target.name}'s instance (stale binds dropped first)",
+    )
+
+
 def decide(
     watcher: Spot | None,
     target: Spot | None,
@@ -595,16 +664,9 @@ def decide(
     rate limiter's whole memory. `booted_at` is when the observer lines were
     last queued (None means they have not been since the last login).
     """
-    if watcher is None:
-        return _refuse(R_WATCHER_OFFLINE)
-    if target is None:
-        return _refuse(R_TARGET_OFFLINE)
-    if is_watcher(target.name):
-        return _refuse(R_SELF)
-    if target.map_id in ARENA_MAPS:
-        return _refuse(R_ARENA)
-    if watcher.group_leader:
-        return _refuse(R_GROUPED)
+    refusal = _refusal_for(watcher, target)
+    if refusal is not None:
+        return refusal
     if booted_at is None:
         return Decision(
             BOOT, BOOT_COMMANDS, "putting the Watcher into its observer state"
@@ -613,53 +675,13 @@ def decide(
         return Decision(HOLD, reason=REFUSALS[R_SETTLING], code=R_SETTLING)
     if target.map_id in INSTANCE_MAPS and target.instance_id == 0:
         return _refuse(R_UNRESOLVED)
-
-    hint = f"/follow {target.name}"
     if watcher.place == target.place and watcher.distance(target) <= FOLLOW_RANGE:
         return Decision(
             FOLLOW,
             reason=f"within {FOLLOW_RANGE:g} yards of {target.name}",
-            client_hint=hint,
+            client_hint=f"/follow {target.name}",
         )
-
-    last = max(moves, default=None)
-    if not new_target and last is not None and now - last < MIN_APPEAR_GAP:
-        return Decision(HOLD, reason=REFUSALS[R_RATE], code=R_RATE)
-    if not _budget_left(moves, now):
-        return Decision(HOLD, reason=REFUSALS[R_RATE] + " (budget spent)", code=R_RATE)
-
-    appear = f".appear {target.name}"
-    if _is_instance(target):
-        if (
-            watcher.map_id == target.map_id
-            and watcher.instance_id != target.instance_id
-        ):
-            return Decision(
-                HOP,
-                (HOP_COMMAND,),
-                f"leaving this instance of map {watcher.map_id} first, because "
-                "a teleport within a map stays in the instance the GM is in",
-                client_hint=hint,
-            )
-        if watcher.place == target.place:
-            return Decision(
-                APPEAR, (appear,), f"{target.name} moved away", client_hint=hint
-            )
-        if target.map_id in BATTLEGROUND_MAPS:
-            # Battlegrounds take no instance bind, so there is nothing to drop.
-            return Decision(
-                APPEAR,
-                (appear,),
-                f"into {target.name}'s battleground",
-                client_hint=hint,
-            )
-        return Decision(
-            APPEAR,
-            (UNBIND_COMMAND, appear),
-            f"into {target.name}'s instance (stale binds dropped first)",
-            client_hint=hint,
-        )
-    return Decision(APPEAR, (appear,), f"to {target.name}", client_hint=hint)
+    return _held(moves, now, new_target) or _route(watcher, target)
 
 
 def commands_ok(commands: Iterable[str]) -> bool:

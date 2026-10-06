@@ -337,10 +337,6 @@ class Memory(unittest.TestCase):
         self.assertTrue(d.mandate_active({"ttl": 5}))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class Surfaces(unittest.TestCase):
     def test_observer_card_needs_an_explicit_streamed_listing(self):
         import family
@@ -393,16 +389,17 @@ class Surfaces(unittest.TestCase):
             family._STREAMED = saved
 
     def test_http_door_is_closed_without_a_token_and_compares_in_constant_time(self):
-        src = open(
-            os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "map_server.py",
-            )
-        ).read()
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "map_server.py")) as fh:
+            src = fh.read()
         body = src[src.index("def _director_post") : src.index("def _read_json_body")]
         self.assertIn("if not _DIRECTOR_TOKEN", body)
         self.assertIn("hmac.compare_digest", body)
         self.assertLess(
-            body.index("hmac.compare_digest"), body.index("_read_json_body")
+            body.index("hmac.compare_digest"), body.index("self._read_json_body()")
         )
         self.assertIn("director.parse_watch", body)
+
+
+if __name__ == "__main__":
+    unittest.main()
