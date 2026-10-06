@@ -6,7 +6,9 @@ as it is eligible, and a quest that needs help is ASKED for, never waited on in
 silence. classquest.py does the solo steps (take, hunt, hand in). It names a
 quest it cannot do alone, and this module is what the member does about that:
 a paladin's level-12 elites, a druid's suggested group, a hunt that stalled
-through every pack of its objective (classquest.Hunts) say so in guild chat,
+through every pack of its objective (classquest.Hunts), and a use the world
+refused for good or that changed nothing at every target (classuse.py) say so
+in guild chat,
 and free guildmates answer.
 
 THE SAME ROWS AS THE DUNGEON ASKS. An ask is a guildsocial.Post of kind
@@ -141,6 +143,10 @@ _ASK_STUCK = (
     "Stuck on my class quest, {title}. Nothing to show for it after a long hunt, anyone want to come along?",
     "{title} is not going anywhere for me alone. Anyone free to help?",
 )
+_ASK_USE = (
+    "Stuck on my class quest, {title}. Using its item got me nowhere, anyone free to help?",
+    "{title} will not budge for me alone. Anyone free to come and take a look?",
+)
 _ANSWER = (
     "Count me in for {title}, {asker}.",
     "I can help with {title}, {asker}.",
@@ -156,7 +162,9 @@ def ask_line(help_) -> str:
     move = help_.move
     n = _NUMBERS.get(move.want, str(move.want))
     creature = move.spot.name if move.spot and move.spot.name else "its objective"
-    if move.blocker == "stalled":
+    if move.blocker == "usestalled":
+        template = guildsocial._pick(_ASK_USE, help_.member, move.quest)
+    elif move.blocker == "stalled":
         template = guildsocial._pick(_ASK_STUCK, help_.member, move.quest)
     else:
         template = guildsocial._pick(_ASK_GROUP, help_.member, move.quest)

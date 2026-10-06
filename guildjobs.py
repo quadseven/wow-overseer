@@ -2290,8 +2290,9 @@ CLASSQUEST_STEPS_PER_GUILD = 6
 
 def _class_spot(move) -> Spot:
     s = move.spot
+    chest = move.kind == classquest.USE and move.use.verb == classquest.USE_OBJECT
     return Spot(
-        kind="creature",
+        kind="gameobject" if chest else "creature",
         spawn=int(s.guid),
         map_id=int(s.map_id),
         x=float(s.x),
@@ -2348,7 +2349,7 @@ def _class_move(m, book, recent, hunts, now):
     that has stalled sent to another pack, or given up (HUNT_STALL_MINUTES)."""
     avoid, off = hunts.state(m.name, now) if hunts else ({}, frozenset())
     move, blocked = classquest.next_move(book, m, avoid, off)
-    if not hunts or move is None or move.kind != classquest.HUNT:
+    if not hunts or move is None or move.kind not in (classquest.HUNT, classquest.USE):
         return move, blocked
     verdict = hunts.observe(
         m.name,
@@ -2377,7 +2378,10 @@ def class_step(m, book, recent, cap, hunts=None, now=0.0):
     MAX_REROLLS of those is given up for GIVE_UP_MINUTES and asked for in guild
     chat (classask.py), so a hunt never holds a member for ever. A quest that
     cannot be done solo is named in the note, so a member never waits in
-    silence.
+    silence. A quest that has the member use an item on a creature or click a
+    gameobject (classquest.USE) is a walk to the target and one `kind='quest'`
+    row there, which the bridge follows by its answer (classuse.py); the same
+    clock moves it to another target and gives it up.
     """
     if not _class_ready(m, book):
         return None, "", ""
@@ -2396,6 +2400,8 @@ def class_step(m, book, recent, cap, hunts=None, now=0.0):
         return None, move.said, note
     if move.kind == classquest.HUNT:
         return _spot_step(m, spot, classquest.ACTION, cap, move.said), move.said, note
+    if move.kind == classquest.USE:
+        return _use_step(m, move, spot, cap), move.said, note
     verb = "turnin" if move.kind == classquest.TURN_IN else "take"
     step = guildcorps.Step(
         m.name,
@@ -2419,6 +2425,35 @@ def class_step(m, book, recent, cap, hunts=None, now=0.0):
         goal=spot.name,
     )
     return step, move.said, note
+
+
+def _use_step(m, move, spot, cap):
+    """The walk to the target and the quest row that uses the item or object
+    there (classquest.USE_ITEM, USE_OBJECT). A member already beside the target
+    writes the row with no walk."""
+    row = guildcorps.Row(
+        "quest",
+        classquest.use_command(move.use, move.spot),
+        "",
+        source_for(classquest.ACTION, m.name),
+    )
+    walk = None
+    if not _near(m, spot, classquest.USE_NEAR):
+        walk = guildcorps.Row(
+            "job",
+            spot.command + _cap_word(cap),
+            "",
+            source_for(classquest.ACTION + "-walk", m.name),
+        )
+    return guildcorps.Step(
+        m.name,
+        classquest.ACTION,
+        int(move.quest),
+        move.said,
+        rows=(row,),
+        walk=walk,
+        goal=spot.name,
+    )
 
 
 # PVP FOR UPGRADES (#589). A member whose next upgrade is PvP gear
