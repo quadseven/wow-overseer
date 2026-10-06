@@ -91,6 +91,35 @@ MARK = "class quest"
 TAKE, HUNT, TURN_IN, BLOCKED = "take", "hunt", "turnin", "blocked"
 # Blockers.
 GROUP, OBJECT, SOURCE, MAP, UNKNOWN = "group", "object", "source", "map", "unknown"
+# A hunt that made no progress through every field it was sent to.
+STALLED = "stalled"
+# The blockers a guildmate can help with: the rest are the module's to fix.
+HELPABLE = frozenset({GROUP, STALLED})
+
+# A GROUP-BLOCKED QUEST ASKS FOR THIS MANY HELPERS when the world data names no
+# group size (an elite objective): the asker and two make a party of three.
+ELITE_HELPERS = 2
+MAX_HELPERS = 4
+
+# THE HUNT'S CLOCK. A hunt that makes no progress (the quest's kill and item
+# counts do not move) for HUNT_STALL_MINUTES is sent to another pack of the
+# objective's spawns, at most MAX_REROLLS times; the last stall gives the quest
+# up for GIVE_UP_MINUTES and the member asks guild chat for help instead
+# (classask.py). The numbers come from the guild-step conventions in
+# guildjobs.COOLDOWN_MINUTES: a farm or a door is asked of a member every 45
+# minutes and a craft every 15, so a hunt is judged on 30 (a few respawn cycles
+# of an ordinary creature, whose spawn time is 2 to 10 minutes, plus the walk,
+# and under the 45 of a farm that would otherwise replace it). Three packs at
+# 30 minutes is an hour and a half before the member gives the quest up, and
+# 120 minutes is the cool-down the level walk and a sale use for a step that
+# keeps failing, long enough that the member is not walked at the same quest
+# every pass.
+HUNT_STALL_MINUTES = 30
+MAX_REROLLS = 2
+GIVE_UP_MINUTES = 120
+# Two walk rows in a row that ended in error or unchanged are a stall at once:
+# the spawn cannot be reached.
+FAILED_WALKS = 2
 
 # A member this near its hunting ground is hunting; this near a giver is there.
 HUNT_REACH = 400.0
@@ -175,7 +204,10 @@ SPAWNS_SQL = (
 # What one member holds: the quests in its log, the quests it has been
 # rewarded, and the spells it knows (guildjobs reads the last already).
 LOG_SQL = (
-    "SELECT guid, quest, status FROM character_queststatus "
+    "SELECT guid, quest, status, "
+    "(mobcount1 + mobcount2 + mobcount3 + mobcount4 + itemcount1 + itemcount2 + "
+    "itemcount3 + itemcount4 + itemcount5 + itemcount6) AS progress "
+    "FROM character_queststatus "
     "WHERE guid IN ({guids}) AND quest IN ({quests}) AND status IN (1, 3)"
 )
 REWARDED_SQL = (
@@ -258,6 +290,10 @@ class Move:
     said: str = ""
     blocker: str = ""
     why: str = ""
+    # For a blocker a guildmate can help with: how many helpers, the quest's
+    # title, and the objective's spawn the group would go to.
+    want: int = 0
+    title: str = ""
 
 
 def _int(value, default=0) -> int:
@@ -402,10 +438,24 @@ def _nearest(member, spawns):
     return min(here, key=lambda s: (_yards(member, s), s.guid)) if here else None
 
 
-def _densest(member, spawns):
+def _avoids(spawn, avoid) -> bool:
+    return any(
+        int(spawn.map_id) == int(m)
+        and math.hypot(spawn.x - x, spawn.y - y) <= PACK_YARDS
+        for m, x, y in avoid or ()
+    )
+
+
+def _densest(member, spawns, avoid=()):
     """The spawn on the member's map with the most others within PACK_YARDS,
-    the nearest of those; None when none is on the map."""
-    here = [s for s in spawns if int(s.map_id) == int(member.map_id)]
+    the nearest of those; None when none is on the map. A spawn within
+    PACK_YARDS of a place in `avoid` ((map, x, y), a pack already tried) is
+    left out."""
+    here = [
+        s
+        for s in spawns
+        if int(s.map_id) == int(member.map_id) and not _avoids(s, avoid)
+    ]
     if not here:
         return None
 
@@ -463,9 +513,20 @@ def _variant_move(book: Book, member, reward_id: int):
     return TAKE, quest, _nearest(member, quest.starters), reward_id
 
 
-def moves(book: Book, member) -> list:
+def helpers_for(quest: Quest) -> int:
+    """How many guildmates a group-blocked quest asks for: the suggested group
+    less the member itself, or ELITE_HELPERS for an elite objective with no
+    group size, at most MAX_HELPERS."""
+    wanted = quest.group - 1 if quest.group >= 2 else ELITE_HELPERS
+    return max(1, min(MAX_HELPERS, wanted))
+
+
+def moves(book: Book, member, avoid=None, held_off=frozenset()) -> list:
     """Every class reward the member lacks and may work toward now, as Moves,
-    the lowest quest level first; a blocked one is a BLOCKED Move naming why."""
+    the lowest quest level first; a blocked one is a BLOCKED Move naming why.
+
+    `avoid` is quest id -> ((map, x, y), ...), the packs a hunt already tried
+    without progress; `held_off` the quest ids whose hunt was given up for now."""
     out = []
     for key, rewards in sorted(
         book.groups.items(), key=lambda kv: (book.quests[kv[1][0]].min_level, kv[0])
@@ -486,13 +547,13 @@ def moves(book: Book, member) -> list:
                 o[1].id,
             )
         )
-        made = [_move_of(member, o, key) for o in options]
+        made = [_move_of(member, o, key, avoid or {}, held_off) for o in options]
         # The first move that can be made; else the first blocker, named.
         out.append(next((m for m in made if m.kind != BLOCKED), made[0]))
     return out
 
 
-def _move_of(member, option, key) -> Move:
+def _move_of(member, option, key, avoid=None, held_off=frozenset()) -> Move:
     kind, quest, spot, reward_id = option
     reward = key[1]
     why = "%s (%s quest %d) for spell %s" % (
@@ -502,19 +563,7 @@ def _move_of(member, option, key) -> Move:
         "/".join(str(s) for s in reward),
     )
     if kind == HUNT:
-        block, said = blocker_of(quest, member)
-        if block:
-            return Move(BLOCKED, quest.id, quest.klass, None, said, block, why)
-        spot = _densest(member, quest.fields)
-        return Move(
-            HUNT,
-            quest.id,
-            quest.klass,
-            spot,
-            "%s hunts %s for %s" % (member.name, spot.name or "its objective", why),
-            "",
-            why,
-        )
+        return _hunt_move(member, quest, why, (avoid or {}).get(quest.id, ()), held_off)
     if spot is None:
         ends = quest.enders if kind == TURN_IN else quest.starters
         word = "ender" if kind == TURN_IN else "giver"
@@ -539,23 +588,152 @@ def _move_of(member, option, key) -> Move:
     )
 
 
-def next_move(book: Book, member):
+def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
+    """The member's hunt for an incomplete quest, or why it is blocked."""
+    if quest.id in held_off:
+        said = "%s: no progress through %d pack(s) of its objective" % (
+            quest.title,
+            len(tried) + 1,
+        )
+        return Move(
+            BLOCKED, quest.id, quest.klass, None, said, STALLED, why, 1, quest.title
+        )
+    block, said = blocker_of(quest, member)
+    if block:
+        want = helpers_for(quest) if block == GROUP else 0
+        spot = _densest(member, quest.fields) if block == GROUP else None
+        return Move(
+            BLOCKED, quest.id, quest.klass, spot, said, block, why, want, quest.title
+        )
+    spot = _densest(member, quest.fields, tried)
+    if spot is None:
+        said = "%s: every pack of its objective was tried" % quest.title
+        return Move(
+            BLOCKED, quest.id, quest.klass, None, said, STALLED, why, 1, quest.title
+        )
+    return Move(
+        HUNT,
+        quest.id,
+        quest.klass,
+        spot,
+        "%s hunts %s for %s" % (member.name, spot.name or "its objective", why),
+        "",
+        why,
+    )
+
+
+def blocked_sentence(member, move: Move) -> str:
+    return "%s cannot do its %s class quest: %s (%s)" % (
+        member.name,
+        CLASS_NAMES.get(move.klass, "class"),
+        move.blocker,
+        move.said,
+    )
+
+
+def helps(book: Book, member, avoid=None, held_off=frozenset()) -> list:
+    """The BLOCKED Moves a guildmate can help with (a group quest, a hunt that
+    stalled) that the member has no other class move ahead of: the member asks
+    for these in guild chat (classask.py)."""
+    return [
+        m
+        for m in moves(book, member, avoid, held_off)
+        if m.kind == BLOCKED and m.blocker in HELPABLE and m.want
+    ]
+
+
+def next_move(book: Book, member, avoid=None, held_off=frozenset()):
     """(the move to make or None, [blocker sentences]) for one member.
 
     The first move that is not blocked wins; every blocked one is named, so a
     member that does nothing says why."""
     blocked = []
-    for move in moves(book, member):
+    for move in moves(book, member, avoid, held_off):
         if move.kind == BLOCKED:
-            blocked.append(
-                "%s cannot do its %s class quest: %s (%s)"
-                % (
-                    member.name,
-                    CLASS_NAMES.get(move.klass, "class"),
-                    move.blocker,
-                    move.said,
-                )
-            )
+            blocked.append(blocked_sentence(member, move))
             continue
         return move, blocked
     return None, blocked
+
+
+# --- the hunt's clock and the asks ----------------------------------------------
+
+REROLL, GIVE_UP = "reroll", "giveup"
+
+
+@dataclass(frozen=True)
+class Hunt:
+    """One member's current hunt: the quest, its progress when last seen, when
+    that last changed, the packs tried without progress, and (when set) the
+    moment the quest is given up until."""
+
+    quest: int
+    progress: int
+    since: float
+    tried: tuple = ()
+    until: float = 0.0
+
+
+class Hunts:
+    """What each member's hunt has done lately, kept in memory by the bridge.
+
+    A restart forgets it, which only gives a stalled hunt a fresh 30 minutes.
+    Times are seconds from any steady clock (the bridge passes time.time())."""
+
+    def __init__(self):
+        self._by: dict = {}
+
+    def get(self, name):
+        return self._by.get(name)
+
+    def state(self, name, now) -> tuple:
+        """(avoid, held_off) for moves(): the packs tried for the member's
+        hunt, and the quest given up while its hold-off lasts."""
+        hunt = self._by.get(name)
+        if hunt is None:
+            return {}, frozenset()
+        if hunt.until and hunt.until <= now:
+            return {}, frozenset()
+        off = frozenset({hunt.quest}) if hunt.until else frozenset()
+        return {hunt.quest: hunt.tried}, off
+
+    def observe(self, name, quest, progress, spot, now, failed=False) -> str:
+        """Record one pass of a hunt toward `spot`; REROLL when it has stalled
+        and another pack is to be tried, GIVE_UP when it stalled through every
+        retry, else ""."""
+        hunt = self._by.get(name)
+        fresh = hunt is None or hunt.quest != quest
+        if not fresh and hunt.until:
+            if hunt.until > now:
+                return ""
+            fresh = True
+        if fresh:
+            hunt = Hunt(quest, progress, now)
+        elif progress != hunt.progress:
+            hunt = Hunt(quest, progress, now)
+        idle = now - hunt.since >= HUNT_STALL_MINUTES * 60
+        if not (idle or failed):
+            self._by[name] = hunt
+            return ""
+        tried = hunt.tried + ((int(spot.map_id), float(spot.x), float(spot.y)),)
+        if len(tried) > MAX_REROLLS:
+            self._by[name] = Hunt(
+                quest, progress, now, tried, now + GIVE_UP_MINUTES * 60
+            )
+            return GIVE_UP
+        self._by[name] = Hunt(quest, progress, now, tried)
+        return REROLL
+
+    def forget(self, name) -> None:
+        self._by.pop(name, None)
+
+
+@dataclass(frozen=True)
+class Help:
+    """A member's class quest that a guildmate could help with."""
+
+    member: str
+    guild: str
+    level: int
+    map_id: int
+    move: Move

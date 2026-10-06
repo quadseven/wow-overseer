@@ -517,6 +517,8 @@ class Member:
     # ids it was rewarded (classquest.py).
     quest_log: dict = field(default_factory=dict)
     quests_done: frozenset = frozenset()
+    # Kills and items counted toward each logged quest (quest id -> total).
+    quest_progress: dict = field(default_factory=dict)
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -588,6 +590,8 @@ class JobsPlan:
     notes: tuple = ()
     # guild -> {"focus", "members", "craft", "farm", "gathering"} (GUILD_FOCUS)
     focus: dict = field(default_factory=dict)
+    # classquest.Help: class quests a guildmate could help with (classask.py).
+    helps: tuple = ()
 
 
 def _yards(ax, ay, bx, by) -> float:
@@ -2030,6 +2034,8 @@ def plan(
     leveling=None,
     focus=None,
     classes=None,
+    hunts=None,
+    now=0.0,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -2047,7 +2053,8 @@ def plan(
     its zone is walked to a quest hub from, None to take no level step;
     `focus` guild -> focus word (parse_focus), None or {} for every guild's
     ordinary job; `classes` the classquest.Book of every class quest, None to
-    take no class quest step.
+    take no class quest step; `hunts` the classquest.Hunts clock (None keeps no
+    clock, so no hunt ever stalls) and `now` its time in seconds.
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -2059,7 +2066,7 @@ def plan(
     trades = cloth_trades(split_trades(members, tailors), tailors)
     trades.update(focus_trades(members, focus))
     tally = _focus_tally(members, focus)
-    steps, lines, notes = [], {}, []
+    steps, lines, notes, helps = [], {}, [], []
     # One counter per allowance, each keyed by guild (_allowance).
     counters = {"jobs": {}, "gear": {}, "pvp": {}, "level": {}, "classquest": {}}
     for m in _ordered_members(members):
@@ -2083,8 +2090,11 @@ def plan(
             leveling,
             crafting(m, focus),
             classes,
+            hunts,
+            now,
         )
         lines[m.name] = doing
+        helps += class_helps(m, classes, hunts, now)
         if note:
             notes.append(note)
         if step is None:
@@ -2106,6 +2116,7 @@ def plan(
         doors=doors,
         notes=tuple(notes),
         focus=tally,
+        helps=tuple(helps),
     )
 
 
@@ -2180,6 +2191,8 @@ def _member_step(
     leveling=None,
     crafting=False,
     classes=None,
+    hunts=None,
+    now=0.0,
 ):
     """A class quest first, then gear, then PvP for an upgrade, then the post, then a walk out of an
     outgrown zone, then the member's ordinary job (a craft-focus guild's trade
@@ -2191,7 +2204,7 @@ def _member_step(
     (CLASSQUEST_STEPS_PER_GUILD), so no other kind of step can use up the
     passes it needs. A member held on a class quest is also kept out of the
     guild's dungeon asks (the bridge's mid_job set)."""
-    step, doing, quest_note = class_step(m, classes, recent, cap)
+    step, doing, quest_note = class_step(m, classes, recent, cap, hunts, now)
     if step is not None or doing:
         return step, doing, quest_note
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
@@ -2294,7 +2307,64 @@ def class_held(lines) -> set:
     return {n for n, line in (lines or {}).items() if classquest.MARK in str(line)}
 
 
-def class_step(m, book, recent, cap):
+def _class_ready(m, book) -> bool:
+    """Whether the member may be given a class quest move now: a book, online,
+    out of combat and with a position read."""
+    if book is None or not m.online or m.in_combat:
+        return False
+    return not (m.map_id is None or m.x is None or m.y is None)
+
+
+def failed_class_walks(name, recent) -> bool:
+    """Whether the member's last FAILED_WALKS class quest rows, newest first,
+    all ended in error or unchanged (the spawn cannot be reached)."""
+    rows = sorted(
+        (r for r in recent or () if r.name == name and r.action == classquest.ACTION),
+        key=lambda r: r.age_minutes,
+    )[: classquest.FAILED_WALKS]
+    return len(rows) == classquest.FAILED_WALKS and all(
+        r.status in TRAIN_FAILED for r in rows
+    )
+
+
+def class_helps(m, book, hunts=None, now=0.0) -> list:
+    """The class quests this member cannot do alone and no other class move
+    stands ahead of, as classquest.Help rows for classask: a group quest, or a
+    hunt given up after it stalled. Nothing for a member with a class move."""
+    if not _class_ready(m, book):
+        return []
+    avoid, off = hunts.state(m.name, now) if hunts else ({}, frozenset())
+    move, _blocked = classquest.next_move(book, m, avoid, off)
+    if move is not None:
+        return []
+    return [
+        classquest.Help(m.name, m.guild, int(m.level), int(m.map_id), h)
+        for h in classquest.helps(book, m, avoid, off)
+    ]
+
+
+def _class_move(m, book, recent, hunts, now):
+    """(move or None, blocked sentences): classquest.next_move, with a hunt
+    that has stalled sent to another pack, or given up (HUNT_STALL_MINUTES)."""
+    avoid, off = hunts.state(m.name, now) if hunts else ({}, frozenset())
+    move, blocked = classquest.next_move(book, m, avoid, off)
+    if not hunts or move is None or move.kind != classquest.HUNT:
+        return move, blocked
+    verdict = hunts.observe(
+        m.name,
+        move.quest,
+        int(m.quest_progress.get(move.quest, 0)),
+        move.spot,
+        now,
+        failed_class_walks(m.name, recent),
+    )
+    if verdict:
+        avoid, off = hunts.state(m.name, now)
+        move, blocked = classquest.next_move(book, m, avoid, off)
+    return move, blocked
+
+
+def class_step(m, book, recent, cap, hunts=None, now=0.0):
     """(step or None, what it does, a note): the member's next move toward a
     class quest it may do now, from classquest.next_move.
 
@@ -2302,19 +2372,25 @@ def class_step(m, book, recent, cap):
     offline or fighting, and at most once per COOLDOWN_MINUTES. A hunt holds
     the member where it hunts (`doing` is set with no step): the member's own
     grind and loot strategies work the field, and nothing else is asked of it
-    until the quest is complete and handed in. A quest that cannot be done solo
-    is named in the note, so a member never waits in silence.
+    until the quest is complete and handed in. A hunt with no progress for
+    classquest.HUNT_STALL_MINUTES is walked to another pack, and after
+    MAX_REROLLS of those is given up for GIVE_UP_MINUTES and asked for in guild
+    chat (classask.py), so a hunt never holds a member for ever. A quest that
+    cannot be done solo is named in the note, so a member never waits in
+    silence.
     """
-    if book is None or not m.online or m.in_combat:
+    if not _class_ready(m, book):
         return None, "", ""
-    if m.map_id is None or m.x is None or m.y is None:
-        return None, "", ""
-    move, blocked = classquest.next_move(book, m)
+    move, blocked = _class_move(m, book, recent, hunts, now)
     note = "; ".join(blocked)
     if move is None:
         return None, "", note
     spot = _class_spot(move)
-    if move.kind == classquest.HUNT and _near(m, spot, classquest.HUNT_REACH):
+    # A pack tried without progress is left, so a member is "at" the next one
+    # only within a pack's width, not the whole field's.
+    tried = hunts.state(m.name, now)[0].get(move.quest) if hunts else ()
+    reach = classquest.PACK_YARDS if tried else classquest.HUNT_REACH
+    if move.kind == classquest.HUNT and _near(m, spot, reach):
         return None, move.said, note
     if _cooling(m, classquest.ACTION, recent):
         return None, move.said, note
