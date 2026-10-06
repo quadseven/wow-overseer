@@ -267,7 +267,9 @@ class Walker:
     by_row: bool = False
 
 
-def walker_from(name, state, leader_of, roster, spawn, row_walks=True) -> Walker:
+def walker_from(
+    name, state, leader_of, roster, spawn, row_walks=True, row_walkers=frozenset()
+) -> Walker:
     """One Walker out of the facts the bridge read.
 
     `state` is the holder's fresh snapshot row (map_id, in_combat) or None.
@@ -275,12 +277,14 @@ def walker_from(name, state, leader_of, roster, spawn, row_walks=True) -> Walker
     every roster name. `spawn` is the nearest mailbox row, with `d2` measured
     from this holder, or None. `row_walks` is False while the worldserver is
     known not to carry the walk row (see WALK_UNSUPPORTED_SECONDS).
+    `row_walkers` names roster members the caller has cleared to be walked by
+    the row: a member sitting out its family's campaign (guildpost).
     """
     name = str(name)
     by_row = False
     if name in leader_of:
         unwalkable, cohort = "", str(leader_of[name])
-    elif name in roster:
+    elif name in roster and name not in row_walkers:
         unwalkable, cohort = NOT_LEADING, ""
     elif row_walks:
         unwalkable, cohort, by_row = "", "", True
