@@ -289,10 +289,19 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     # of the exact item Linen Bandage consumes one of. One gathering trip does
     # answer both, but a short trip answers whichever asks first.
     3275: (Reagent(2589, "Linen Cloth", 1),),
-    # 3276 Heavy Linen Bandage is deliberately absent, because craft.RECIPES no
-    # longer carries it: it is a trainer purchase for every class but Death
-    # Knight, and this family has no Death Knight. See craft.RECIPES' First Aid
-    # comment. Do not re-add it here without re-adding it there.
+    # The bandage ladder above 59 (operator, 2026-10-05). Cloth alone, a
+    # humanoid kill drop, per Spell.dbc; see craft.RECIPES' First Aid comment.
+    # Every rung is a trainer purchase, so only a guild crew member that has
+    # bought it is ever aimed at one (guildjobs._open_recipe).
+    3276: (Reagent(2589, "Linen Cloth", 2),),
+    3277: (Reagent(2592, "Wool Cloth", 1),),
+    3278: (Reagent(2592, "Wool Cloth", 2),),
+    7928: (Reagent(4306, "Silk Cloth", 1),),
+    7929: (Reagent(4306, "Silk Cloth", 2),),
+    10840: (Reagent(4338, "Mageweave Cloth", 1),),
+    10841: (Reagent(4338, "Mageweave Cloth", 2),),
+    18629: (Reagent(14047, "Runecloth", 1),),
+    18630: (Reagent(14047, "Runecloth", 2),),
     #
     # COOKING is absent for a different reason and it is not a gap in this
     # table: every Cooking recipe reachable below the family's 75 cap requires

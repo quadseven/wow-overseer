@@ -812,6 +812,54 @@ def _train_step(member, trades, cap, recent=()):
     return step, ""
 
 
+def bandage_to_learn(member):
+    """The First Aid rung this member's skill has reached and not bought, or None.
+
+    Every bandage above Linen Bandage is a trainer purchase (craft.py's First
+    Aid comment), and `_open_recipe` casts only what `member.known` holds, so
+    without this a crew member walked off Linen Bandage's grey at 60 and
+    stopped. Tailoring is left to guildcorps, which buys its own recipes.
+    """
+    value, ceiling = member.skill(FIRST_AID)
+    if ceiling <= 0:
+        return None
+    recipe = craft.recipe_for(FIRST_AID, value)
+    if recipe is None or recipe.focus:
+        return None
+    if recipe.spell_id in AUTO_LEARNED or recipe.spell_id in member.known:
+        return None
+    return recipe
+
+
+def _learn_step(member, cap, recent=()):
+    """Walk to a First Aid trainer and buy the bandage the skill has reached.
+
+    The same `walk-to-trainer` row guildcorps sends a tailor with, carrying a
+    `learn:` list: mod-overseer buys each listed spell through the core's own
+    Trainer::TeachSpell, which takes the money and refuses a spell the skill
+    is short of. Keyed on the skill so a failed walk cools down like a rank.
+    """
+    recipe = bandage_to_learn(member)
+    if recipe is None or _training_cooling(member.name, FIRST_AID, recent):
+        return None
+    return guildcorps.Step(
+        member.name,
+        "train",
+        FIRST_AID,
+        "%s walks to a trainer to learn %s for its First Aid"
+        % (member.name, recipe.name),
+        rows=(
+            guildcorps.Row(
+                "cast",
+                "walk-to-trainer skill:%d learn:%d%s"
+                % (FIRST_AID, recipe.spell_id, _cap_word(cap)),
+                "",
+                source_for("train", member.name),
+            ),
+        ),
+    )
+
+
 def _open_recipe(member, skill):
     """The recipe this member would cast toward `skill`, cloth or not in hand.
 
@@ -1443,6 +1491,9 @@ def _maintenance_step(m, trades, fields, crafters, master, kept, recent, cap):
         return step, step.said, ""
     if why:
         notes.append(why)
+    step = _learn_step(m, cap, recent)
+    if step:
+        return step, step.said, ""
     if not _cooling(m, "tool", recent):
         step, why = _tool_step(m, cap)
         if step:

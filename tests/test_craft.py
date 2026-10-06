@@ -12,6 +12,7 @@ import pathlib
 import unittest
 
 import craft
+import craft_rhythm
 import goals
 import professions
 import travel
@@ -63,6 +64,15 @@ MEASURED_FOCUS = {
     18401: 0,
     # FIRST AID
     3275: 0,
+    3276: 0,
+    3277: 0,
+    3278: 0,
+    7928: 0,
+    7929: 0,
+    10840: 0,
+    10841: 0,
+    18629: 0,
+    18630: 0,
     # ENGINEERING - eleven Anvils, and infra#3760 is the issue for them
     3918: 0,
     3922: 1,
@@ -157,6 +167,15 @@ MEASURED_BANDS = {
     18401: (1, 255, 260),
     # FIRST AID
     3275: (1, 30, 60),
+    3276: (1, 50, 100),
+    3277: (1, 80, 150),
+    3278: (1, 115, 185),
+    7928: (1, 150, 210),
+    7929: (1, 180, 240),
+    10840: (1, 210, 270),
+    10841: (1, 240, 300),
+    18629: (1, 260, 320),
+    18630: (1, 290, 350),
     # ENGINEERING
     3918: (1, 20, 40),
     3922: (1, 45, 60),
@@ -349,12 +368,27 @@ class RecipeForTests(unittest.TestCase):
         self.assertEqual(recipe.spell_id, 2660)
 
     def test_blacksmithing_returns_none_in_an_anvil_gated_gap(self):
-        # 91-124 is real skill range with real recipes (Runed Copper Belt,
-        # Silver Rod, Rough Bronze Leggings) - all require an Anvil +
-        # Blacksmith Hammer DriveCraft's v1 cannot satisfy, so this must stay
-        # None rather than falling back to a stone recipe that would not
-        # actually grant a skill-up there.
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 100))
+        # 100-124 is real skill range with real recipes (Runed Copper Belt,
+        # Silver Rod, Rough Bronze Leggings) - all require an Anvil nothing
+        # walks a smith to, so this must stay None rather than falling back to
+        # a stone recipe past its own grey, which would grant no skill-up.
+        for value in (100, 124, 150, 199, 210, 249, 260, 300):
+            with self.subTest(value=value):
+                self.assertIsNone(
+                    craft.recipe_for(goals.SKILL_IDS["blacksmithing"], value)
+                )
+
+    def test_the_grinding_stones_carry_the_smith_to_their_own_grey(self):
+        """Coarse Grinding Stone's grey is 100 and Heavy Grinding Stone's 150,
+        so they cover 91-99 and 141-149, which were empty while the guide's
+        anvil hand-offs at 90 and 140 had nothing behind them."""
+        blacksmithing = goals.SKILL_IDS["blacksmithing"]
+        for value in range(75, 100):
+            with self.subTest(value=value):
+                self.assertEqual(craft.recipe_for(blacksmithing, value).spell_id, 3326)
+        for value in range(125, 150):
+            with self.subTest(value=value):
+                self.assertEqual(craft.recipe_for(blacksmithing, value).spell_id, 3337)
 
     def test_blacksmithing_finds_the_top_bracket(self):
         # Dense Sharpening Stone, 250-259 - the highest verified entry. It
@@ -786,33 +820,52 @@ class FirstAidAndCookingTests(unittest.TestCase):
                 self.assertIsNotNone(recipe)
                 self.assertEqual(recipe.spell_id, 3275)
 
-    def test_nothing_past_linen_bandages_grey(self):
-        # 60 is 3275's grey value: it stops granting skill-ups there, and no
-        # other First Aid recipe is reachable without a Journeyman trainer
-        # (infra#3614, mod-overseer#454). Better no errand than a cast that
-        # consumes cloth for nothing.
-        for value in (60, 74, 75):
-            with self.subTest(value=value):
-                self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["first aid"], value))
-
-    def test_no_heavy_linen_bandage_bracket_at_any_value(self):
-        """3276 is a trainer purchase for every class this family has.
-
-        Its auto-learn SkillLineAbility row is ClassMask 0x20 - Death Knight
-        and nothing else. The all-class row (ClassMask 0x5DF) is
-        AcquireMethod 0, i.e. `trainer_spell` at ReqSkillRank 40 for 100
-        copper, and the nearest Alliance-usable First Aid trainer is 15,513
-        yards across an ocean `ResolveTravelTarget` refuses (infra#3732).
-        Naming it here produces a `craft_spell` DriveCraft drops as a planner
-        bug, which is how First Aid came to stall silently at 39.
-        """
+    def test_first_aid_climbs_without_a_break_from_1_to_300(self):
+        """The bandage ladder (operator, 2026-10-05): one rung for every value,
+        the route wow-professions.com gives, each band the realm's own."""
         first_aid = goals.SKILL_IDS["first aid"]
-        named = {r.spell_id for r in craft.RECIPES[first_aid]}
-        self.assertNotIn(3276, named)
-        for value in range(1, 76):
-            recipe = craft.recipe_for(first_aid, value)
-            if recipe is not None:
-                self.assertNotEqual(recipe.spell_id, 3276)
+        want = (
+            (1, 59, 3275),
+            (60, 79, 3276),
+            (80, 114, 3277),
+            (115, 149, 3278),
+            (150, 179, 7928),
+            (180, 209, 7929),
+            (210, 239, 10840),
+            (240, 259, 10841),
+            (260, 289, 18629),
+            (290, 300, 18630),
+        )
+        for low, high, spell in want:
+            for value in range(low, high + 1):
+                with self.subTest(value=value):
+                    recipe = craft.recipe_for(first_aid, value)
+                    self.assertIsNotNone(recipe)
+                    self.assertEqual(recipe.spell_id, spell)
+
+    def test_every_bandage_rung_is_cloth_alone_and_gathered(self):
+        """A crew member is aimed at a rung only when craft_rhythm.GATHERED can
+        judge it (guildjobs._open_recipe), and cloth is a kill drop."""
+        for recipe in craft.RECIPES[goals.SKILL_IDS["first aid"]]:
+            with self.subTest(recipe=recipe.name):
+                reagents = craft_rhythm.GATHERED[recipe.spell_id]
+                self.assertEqual(len(reagents), 1)
+                self.assertEqual(recipe.focus, 0)
+
+    def test_the_family_is_never_handed_a_trainer_bandage(self):
+        """3276 and up are trainer purchases for every class the family plays,
+        and no First Aid trainer is reachable for it (infra#3732), so
+        craft_errand stays silent past Linen Bandage's grey, exactly as before
+        the ladder was filled."""
+        for value in (60, 74, 75, 150, 300):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    craft.craft_errand("Grug", {"first aid": value}, primaries=()),
+                    0,
+                )
+        self.assertEqual(
+            craft.craft_errand("Grug", {"first aid": 59}, primaries=()), 3275
+        )
 
     def test_cooking_has_no_reachable_bracket_at_all(self):
         """Every Cooking recipe below the 75 cap needs a Cooking Fire.
