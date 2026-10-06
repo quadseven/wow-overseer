@@ -463,6 +463,9 @@ class Step:
     walk: Row | None = None
     repeat: int = 1
     goal: str = ""
+    # The spawn the walk goes to (a guildjobs.Spot), for a step the bridge may
+    # have to leave for another pack (a class quest hunt, classhunt.py).
+    spot: object = None
 
 
 def source_for(action, key) -> str:

@@ -1,0 +1,387 @@
+"""A class quest hunt kills and loots its objective (classhunt.py).
+
+Until quadseven/mod-overseer#869 a class quest hunt ended at `walk-to-spawn
+creature:<spawn id>` and the bot's own grind was supposed to kill and loot: no
+tank warrior ever produced a quest drop. `hunt-spawn creature:<entry>` makes the
+arrived bot do it. The quest, creature and spawn ids below are the dev realm's
+level-10 warrior line (quest 1498: 5 Singed Scale from Thunder Lizard 3130 and
+Lightning Hide 3131 in the Barrens), read 2026-10-06.
+"""
+
+import asyncio
+import json
+import unittest
+from unittest import mock
+
+import classhunt
+import classquest
+import guildjobs
+import guildroute
+from test_classquest import KALIMDOR, class_plan, class_steps, qrow, who
+from test_classquest import book as warrior_book
+from test_classquest_far_walk import FAR
+from test_guildsocial_bridge import bridge
+
+HUNTING = dict(quest_log={1498: 3}, quests_done=frozenset({1505}))
+# Beside the Thunder Lizard spawn (705, -4112): inside the module's reach.
+BESIDE = dict(x=706.0, y=-4111.0)
+# A few hundred yards off the pack: hunting, but not yet in reach.
+NEARBY = dict(x=720.0, y=-4300.0)
+
+
+def hunters(slots, hunts=None):
+    hunts = hunts or classquest.Hunts()
+    hunts.slots = slots
+    return hunts
+
+
+def hunt_rows(step):
+    return [r for r in step.rows if classhunt.is_hunt_row(r.command)]
+
+
+class TheRow(unittest.TestCase):
+    def test_an_item_objective_asks_for_no_count_and_a_modest_time(self):
+        quest = warrior_book().quests[1498]
+        self.assertEqual(
+            classhunt.command(quest, 3130),
+            "hunt-spawn creature:3130 max:%d" % classhunt.MAX_SECONDS,
+        )
+        self.assertLessEqual(classhunt.MAX_SECONDS, 600)
+
+    def test_a_kill_objective_asks_for_its_own_kill_count(self):
+        quest = warrior_book().quests[1819]
+        self.assertEqual(
+            classhunt.command(quest, 6390),
+            "hunt-spawn creature:6390 count:1 max:%d" % classhunt.MAX_SECONDS,
+        )
+
+    def test_the_count_is_held_to_the_modules_ceiling(self):
+        rows = [qrow(7, "Cull", npc1=99, npc_count1=500)]
+        quest = classquest.build(rows, [], [], []).quests[7]
+        self.assertIn("count:%d " % classhunt.MAX_COUNT, classhunt.command(quest, 99))
+
+    def test_no_entry_is_no_row(self):
+        quest = warrior_book().quests[1498]
+        self.assertEqual(classhunt.command(quest, 0), "")
+
+    def test_only_the_hunt_verb_is_a_hunt_row(self):
+        self.assertTrue(classhunt.is_hunt_row("hunt-spawn creature:3130"))
+        self.assertFalse(classhunt.is_hunt_row("walk-to-spawn creature:4788"))
+        self.assertFalse(classhunt.is_hunt_row(None))
+
+
+class TheCounters(unittest.TestCase):
+    def test_the_quest_is_done_when_the_core_says_complete(self):
+        quest = warrior_book().quests[1498]
+        self.assertTrue(classhunt.finished(quest, classquest.STATUS_COMPLETE, 0))
+
+    def test_or_when_the_counters_reach_what_it_requires(self):
+        quest = warrior_book().quests[1498]
+        need = classhunt.wanted(quest)
+        self.assertEqual(need, 5)
+        self.assertFalse(classhunt.finished(quest, classquest.STATUS_INCOMPLETE, 4))
+        self.assertTrue(classhunt.finished(quest, classquest.STATUS_INCOMPLETE, 5))
+
+    def test_an_unreadable_counter_is_not_done(self):
+        quest = warrior_book().quests[1498]
+        self.assertFalse(classhunt.finished(quest, None, None))
+
+
+def answer(status, detail="", **body):
+    return status, detail, json.dumps(body)
+
+
+class TheAnswer(unittest.TestCase):
+    def judge(self, *row):
+        return classhunt.judge("Bigzug", *row)
+
+    def test_a_row_still_open_is_running(self):
+        for status in ("pending", "claimed", "verifying"):
+            self.assertEqual(self.judge(status, "", "{}").state, classhunt.RUNNING)
+
+    def test_done_or_a_timeout_with_kills_is_applied(self):
+        got = self.judge(*answer("applied", outcome="done", kills=5, loot_count=5))
+        self.assertEqual(got.state, classhunt.DONE)
+        self.assertIn("5 kill(s), 5 looted", got.said)
+
+    def test_a_timeout_with_no_kill_changed_nothing(self):
+        self.assertEqual(
+            self.judge(*answer("unchanged", outcome="timeout")).state,
+            classhunt.NOTHING,
+        )
+
+    def test_a_refusal_follows_its_retry_word(self):
+        for word, state in (
+            ("later", classhunt.LATER),
+            ("elsewhere", classhunt.ELSEWHERE),
+            ("never", classhunt.NEVER),
+        ):
+            got = self.judge(
+                *answer("error", "refused", outcome="refused", reason="x", retry=word)
+            )
+            self.assertEqual(got.state, state)
+
+    def test_a_refusal_with_no_word_is_asked_again_later(self):
+        got = self.judge(*answer("error", "refused", outcome="refused"))
+        self.assertEqual(
+            (got.state, got.wait), (classhunt.LATER, classhunt.LATER_WAIT_SECONDS)
+        )
+
+    def test_a_character_that_left_the_world_is_unreadable(self):
+        got = self.judge(*answer("error", "gone", outcome="unreadable"))
+        self.assertEqual(got.state, classhunt.UNREADABLE)
+
+    def test_an_older_worldserver_is_unsupported_not_never(self):
+        for detail in (
+            "unknown job mode 'hunt-spawn'",
+            "malformed request: want take quest:<id> or turnin quest:<id>",
+        ):
+            self.assertEqual(
+                self.judge("error", detail, "{}").state, classhunt.UNSUPPORTED
+            )
+
+    def test_a_hunt_switched_off_is_unsupported_and_never_gives_the_quest_up(self):
+        got = self.judge(
+            *answer(
+                "error",
+                classhunt.DISABLED,
+                outcome="refused",
+                reason=classhunt.DISABLED,
+                retry="never",
+            )
+        )
+        self.assertEqual(got.state, classhunt.UNSUPPORTED)
+
+    def test_the_slots_are_the_ceiling_less_the_rows_open(self):
+        self.assertEqual(classhunt.free_slots(1, 4), 3)
+        self.assertEqual(classhunt.free_slots(9, 4), 0)
+        self.assertIsNone(classhunt.free_slots(None, 4))
+
+
+class ThePlan(unittest.TestCase):
+    def test_an_arrived_member_hunts_the_creature_at_its_pack(self):
+        m = who(**HUNTING, **BESIDE)
+        (step,) = class_steps(class_plan([m], hunts=hunters(classhunt.Slots(2))))
+        (row,) = hunt_rows(step)
+        self.assertEqual(row.kind, "job")
+        self.assertTrue(row.command.startswith("hunt-spawn creature:3130 "))
+        self.assertIsNone(step.walk)
+        self.assertEqual(step.key, 1498)
+        self.assertEqual(step.spot.spawn, 4788)
+        self.assertTrue(row.source.endswith("classquest:Bigzug"))
+
+    def test_a_member_off_the_pack_walks_to_it_first(self):
+        m = who(**HUNTING, **NEARBY)
+        (step,) = class_steps(class_plan([m], hunts=hunters(classhunt.Slots(2))))
+        self.assertTrue(step.walk.command.startswith("walk-to-spawn creature:4788"))
+        self.assertEqual(len(hunt_rows(step)), 1)
+
+    def test_a_far_member_walks_then_hunts_in_one_step(self):
+        m = who("Far", **FAR, **HUNTING)
+        (step,) = class_steps(class_plan([m], hunts=hunters(classhunt.Slots(2))))
+        self.assertTrue(step.walk.command.startswith("walk-to-spawn creature:12197"))
+        (row,) = hunt_rows(step)
+        self.assertTrue(row.command.startswith("hunt-spawn creature:3131 "))
+
+    def test_with_no_slots_set_the_hunt_is_the_walk_alone(self):
+        for hunts in (None, classquest.Hunts()):
+            m = who("Far", **FAR, **HUNTING)
+            (step,) = class_steps(class_plan([m], hunts=hunts))
+            self.assertEqual(hunt_rows(step), [])
+            self.assertTrue(
+                step.rows[0].command.startswith("walk-to-spawn creature:12197")
+            )
+
+    def test_a_member_at_its_pack_with_no_hunt_slot_left_waits(self):
+        m = who(**HUNTING, **BESIDE)
+        result = class_plan([m], hunts=hunters(classhunt.Slots(0)))
+        self.assertEqual(class_steps(result), [])
+        self.assertTrue(any("hunt slot" in n for n in result.notes))
+        self.assertIn(classquest.MARK, result.lines["Bigzug"])
+
+    def test_a_member_off_the_pack_with_no_hunt_slot_still_walks(self):
+        m = who("Far", **FAR, **HUNTING)
+        (step,) = class_steps(class_plan([m], hunts=hunters(classhunt.Slots(0))))
+        self.assertEqual(hunt_rows(step), [])
+
+    def test_the_plan_writes_no_more_hunts_than_the_slots_and_tanks_go_first(self):
+        members = [
+            who("Hitter", level=30, tree="Arms", **HUNTING, **BESIDE),
+            who("Tank", level=12, tree="Protection", **HUNTING, **BESIDE),
+            who("Slasher", level=25, tree="Fury", **HUNTING, **BESIDE),
+        ]
+        result = class_plan(members, hunts=hunters(classhunt.Slots(1)))
+        self.assertEqual(
+            [s.holder for s in class_steps(result) if hunt_rows(s)], ["Tank"]
+        )
+
+    def test_an_unread_count_holds_nothing_back(self):
+        members = [who(n, **HUNTING, **BESIDE) for n in ("Aa", "Bb", "Cc")]
+        result = class_plan(members, hunts=hunters(classhunt.Slots(None)))
+        self.assertEqual(len([s for s in class_steps(result) if hunt_rows(s)]), 3)
+
+    def test_a_step_the_plan_then_refuses_gives_its_hunt_slot_back(self):
+        members = [
+            who("Aa", level=20, **HUNTING, **BESIDE),
+            who("Bb", level=19, **HUNTING, **BESIDE),
+        ]
+        result = class_plan(members, hunts=hunters(classhunt.Slots(1)), busy={"Aa"})
+        self.assertEqual([s.holder for s in class_steps(result)], ["Bb"])
+        self.assertEqual(len(hunt_rows(class_steps(result)[0])), 1)
+
+    def test_a_hunt_just_written_is_not_asked_again_at_once(self):
+        m = who(**HUNTING, **BESIDE)
+        recent = (guildjobs.Recent("Bigzug", classquest.ACTION, 3),)
+        result = class_plan([m], recent=recent, hunts=hunters(classhunt.Slots(2)))
+        self.assertEqual(class_steps(result), [])
+
+    def test_a_finished_objective_is_handed_in_not_hunted(self):
+        m = who(quest_log={1498: 1}, quests_done=frozenset({1505}), **BESIDE)
+        (step,) = class_steps(class_plan([m], hunts=hunters(classhunt.Slots(2))))
+        self.assertEqual(hunt_rows(step), [])
+        self.assertEqual(step.rows[0].command, "turnin quest:1498")
+
+
+# --- the bridge follows the row ----------------------------------------------------
+
+
+class _Bridge:
+    """The Bridge methods that follow a hunt, with the reads and writes stubbed."""
+
+    def __init__(self, answers, states=()):
+        self._class_book = warrior_book()
+        self._class_hunts = classquest.Hunts()
+        self._class_hunt_unsupported_until = 0.0
+        self.rows, self.ended, self.slept = [], [], []
+        self.answers = list(answers)
+        self.states = list(states) or [INCOMPLETE]
+
+
+for _name in ("_class_hunt_row", "_follow_class_hunt"):
+    setattr(_Bridge, _name, getattr(bridge.Bridge, _name))
+
+STEP = guildjobs.guildcorps.Step(
+    "Bigzug",
+    classquest.ACTION,
+    1498,
+    "hunts",
+    rows=(),
+    spot=guildjobs.Spot("creature", 4788, KALIMDOR, 705.0, -4112.0, "Lizard"),
+)
+ROW = guildjobs.guildcorps.Row(
+    "job", "hunt-spawn creature:3130 max:480", "", "guildjobs:classquest:Bigzug"
+)
+RUNNING = ("verifying", "", "{}")
+INCOMPLETE = (classquest.STATUS_INCOMPLETE, 2)
+COMPLETE = (classquest.STATUS_COMPLETE, 5)
+
+
+def run(this):
+    ids = iter(range(100, 200))
+
+    def insert(holder, row):
+        this.rows.append((holder, row.command))
+        return next(ids)
+
+    def read(row_id):
+        got = this.answers.pop(0) if len(this.answers) > 1 else this.answers[0]
+        return None if got is None else dict(zip(("status", "detail", "result"), got))
+
+    def state(name, quest):
+        return this.states.pop(0) if len(this.states) > 1 else this.states[0]
+
+    async def nap(seconds):
+        this.slept.append(seconds)
+
+    stubs = dict(
+        _insert_corps_row=insert,
+        _command_answer=read,
+        _class_quest_state=state,
+        _end_hunt_row=this.ended.append,
+    )
+    with (
+        mock.patch.multiple(bridge, **stubs),
+        mock.patch.object(bridge.asyncio, "sleep", nap),
+    ):
+        return asyncio.run(this._class_hunt_row(STEP, ROW))
+
+
+def refused(word, reason="no living creature of the entry within reach"):
+    return answer("error", "refused", outcome="refused", reason=reason, retry=word)
+
+
+class TheBridgeFollowsTheHunt(unittest.TestCase):
+    def test_the_row_is_ended_the_poll_the_counters_say_the_quest_is_done(self):
+        this = _Bridge([RUNNING], states=[INCOMPLETE, INCOMPLETE, COMPLETE])
+        self.assertTrue(run(this))
+        self.assertEqual(this.rows, [("Bigzug", ROW.command)])
+        self.assertEqual(this.ended, [100])
+        self.assertEqual(this.slept, [classhunt.POLL_SECONDS] * 3)
+
+    def test_a_row_that_ends_itself_is_not_ended_again(self):
+        this = _Bridge(
+            [RUNNING, answer("applied", outcome="done", kills=5)],
+            states=[INCOMPLETE],
+        )
+        self.assertFalse(run(this))
+        self.assertEqual(this.ended, [])
+        self.assertEqual(len(this.rows), 1)
+
+    def test_a_later_refusal_waits_and_asks_again_a_bounded_number_of_times(self):
+        this = _Bridge([refused("later")], states=[INCOMPLETE])
+        self.assertFalse(run(this))
+        self.assertEqual(len(this.rows), classhunt.MAX_ATTEMPTS)
+        self.assertEqual(
+            [s for s in this.slept if s == classhunt.LATER_WAIT_SECONDS],
+            [classhunt.LATER_WAIT_SECONDS] * (classhunt.MAX_ATTEMPTS - 1),
+        )
+
+    def test_an_elsewhere_refusal_leaves_the_pack_for_the_next_one(self):
+        this = _Bridge([refused("elsewhere")], states=[INCOMPLETE])
+        self.assertFalse(run(this))
+        self.assertEqual(len(this.rows), 1)
+        hunt = this._class_hunts.get("Bigzug")
+        self.assertEqual(hunt.tried, ((KALIMDOR, 705.0, -4112.0),))
+        avoid, _off = this._class_hunts.state("Bigzug", 0.0)
+        self.assertEqual(avoid[1498], hunt.tried)
+
+    def test_a_never_refusal_gives_the_quest_up_for_the_cooldown(self):
+        this = _Bridge([refused("never", "the character is not a bot")])
+        self.assertFalse(run(this))
+        self.assertEqual(len(this.rows), 1)
+        _avoid, off = this._class_hunts.state("Bigzug", 1.0)
+        self.assertEqual(off, frozenset({1498}))
+
+    def test_an_older_worldserver_is_not_hammered_and_the_quest_is_not_given_up(self):
+        for detail in ("unknown job mode", classhunt.DISABLED):
+            this = _Bridge([("error", detail, "{}")])
+            before = bridge.time.monotonic()
+            self.assertFalse(run(this))
+            self.assertEqual(len(this.rows), 1)
+            self.assertGreaterEqual(
+                this._class_hunt_unsupported_until,
+                before + guildroute.WALK_UNSUPPORTED_SECONDS,
+            )
+            self.assertIsNone(this._class_hunts.get("Bigzug"))
+
+    def test_a_row_that_cannot_be_read_ends_the_follow(self):
+        this = _Bridge([None])
+        self.assertFalse(run(this))
+        self.assertEqual(len(this.rows), 1)
+
+
+class TheBridgeWiring(unittest.TestCase):
+    def test_the_hunt_row_is_followed_before_any_other_job_row(self):
+        src = bridge.Bridge._run_job_step.__code__.co_names
+        self.assertIn("_class_hunt_row", src)
+
+    def test_the_plan_is_given_the_hunt_slots_the_realm_has_free(self):
+        text = __import__("pathlib").Path(bridge.__file__).read_text(encoding="utf-8")
+        self.assertIn("classhunt.free_slots(", text)
+        self.assertIn("_JOB_HUNTS_OPEN_SQL", text)
+        self.assertIn("command LIKE 'hunt-spawn %%'", text)
+        self.assertIn("_class_hunt_unsupported_until", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
