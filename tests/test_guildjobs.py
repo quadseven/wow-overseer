@@ -392,7 +392,7 @@ class TheLeatherworkingAndAlchemyRanks(unittest.TestCase):
         self.assertIn("sorted(guildjobs.RANKS)", BRIDGE)
 
     def test_a_crew_member_that_holds_the_trade_buys_its_next_rank(self):
-        for skill, spells in self.RANK_SPELLS.items():
+        for skill in self.RANK_SPELLS:
             m = member(
                 "Brewer",
                 level=12,
