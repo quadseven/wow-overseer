@@ -52,6 +52,24 @@ TALENTS_COLUMN = (
     "AS talent_spells"
 )
 
+# THE SPELL A TANK NEEDS TO PLAY ITS SEAT, by class id: a warrior holds threat
+# in Defensive Stance (71, with Taunt and Sunder Armor), a druid in Bear Form
+# (5487). Both come from the level-10 class quest (spell 8121 for the warrior),
+# which the trainers of this realm do not teach, so a warrior or druid that
+# never did its quest has the talents of a tank and none of the means: on
+# 2026-10-06 nine Protection warriors without Defensive Stance were seated as
+# tanks in guild dungeon runs and 0 of 46 clears came of it. A paladin tanks in
+# Righteous Fury, which any paladin casts without a quest, so it has no entry.
+TANK_KIT = {1: 71, 11: 5487}
+# The column a member read adds to its SELECT (`s` is overseer_snapshot, `c`
+# characters): 1 when the member knows the spell its class tanks with. Written
+# out, one clause per TANK_KIT entry (a test holds the two together).
+TANK_KIT_COLUMN = (
+    "EXISTS (SELECT 1 FROM character_spell cs WHERE cs.guid = s.guid AND "
+    "((s.class = 1 AND cs.spell = 71) OR (s.class = 11 AND cs.spell = 5487))) "
+    "AS has_tank_kit"
+)
+
 _BOOK: dict | None = None
 _TABS: dict | None = None
 
@@ -186,6 +204,14 @@ def tree_tab(class_id, tree) -> int | None:
     except (TypeError, ValueError):
         return None
     return _tabs().get((cid, str(tree or "")))
+
+
+def tank_kit(class_id) -> int:
+    """The spell id the class needs to tank, 0 for a class that needs none."""
+    try:
+        return TANK_KIT.get(int(class_id), 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def can_seat(class_id, seat: str) -> bool:

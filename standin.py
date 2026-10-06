@@ -306,6 +306,10 @@ class Facts:
     busy: frozenset = frozenset()
     resting: frozenset = frozenset()
     benched: frozenset = frozenset()
+    # The members that owe a class quest (classquest.owed): a class quest comes
+    # before any dungeon, so none is seated as a guest, and a seated one that
+    # comes to owe one is released between runs.
+    owed: frozenset = frozenset()
     # Every roster name of every family: guildrun.why_not's `family`.
     every_family: frozenset = frozenset()
     # Whether the family is inside a dungeon now.
@@ -398,6 +402,7 @@ def _free_for(facts: Facts):
             set(facts.resting),
             set(facts.every_family),
             facts.benched,
+            facts.owed,
         )
 
     return free
@@ -477,6 +482,7 @@ def _keep_or_clear(facts: Facts, current: Seat, seat: str) -> Step:
         set(facts.resting),
         set(facts.every_family),
         facts.benched,
+        facts.owed,
     )
     if why not in KEEPS_SEAT:
         return Step(CLEAR, "%s is no longer free: %s" % (current.in_name, why))

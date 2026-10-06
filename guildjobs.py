@@ -107,7 +107,7 @@ import json
 import math
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import campaignplan
 import classic
@@ -607,6 +607,11 @@ class JobsPlan:
     focus: dict = field(default_factory=dict)
     # classquest.Help: class quests a guildmate could help with (classask.py).
     helps: tuple = ()
+    # name -> classquest.Owed for every member held out of the dungeon
+    # formations for a class quest it owes, and the members released from that
+    # hold after classquest.OWED_HOURS with no progress.
+    owed: dict = field(default_factory=dict)
+    released: dict = field(default_factory=dict)
 
 
 def _yards(ax, ay, bx, by) -> float:
@@ -2052,6 +2057,7 @@ def plan(
     hunts=None,
     now=0.0,
     far_slots=None,
+    owing=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -2073,7 +2079,9 @@ def plan(
     clock, so no hunt ever stalls) and `now` its time in seconds; `far_slots`
     the far walks the realm can still take (None when not counted): class
     quest walks past it wait, and the members are planned tank-spec warriors
-    and healers first, then by level (class_priority).
+    and healers first, then by level (class_priority); `owing` the
+    classquest.Owing clock (None keeps none, so a hold never lapses within one
+    call).
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -2132,6 +2140,10 @@ def plan(
         busy.add(m.name)
         steps.append(step)
         _count_focus(tally, m, step, fields)
+    owed, released = owed_members(
+        members, classes, recent, hunts, now, owing or classquest.Owing()
+    )
+    notes += owed_notes(owed, released)
     return JobsPlan(
         steps=tuple(steps),
         lines=lines,
@@ -2140,6 +2152,8 @@ def plan(
         notes=tuple(notes),
         focus=tally,
         helps=tuple(helps),
+        owed=owed,
+        released=released,
     )
 
 
@@ -2324,6 +2338,80 @@ def _class_spot(move) -> Spot:
         name=s.name,
         why=move.why,
     )
+
+
+def progress_mark(m) -> tuple:
+    """What a member's class quest progress looks like: the quests rewarded,
+    the log with each status, the kills and items counted and the spells
+    known. It changes when the member takes, works, hands in or learns."""
+    return (
+        len(m.quests_done),
+        tuple(sorted((m.quest_log or {}).items())),
+        tuple(sorted((m.quest_progress or {}).items())),
+        len(m.known),
+    )
+
+
+def class_owed(m, book, recent=(), hunts=None, now=0.0):
+    """The classquest.Owed row of the class quest this member owes, or None.
+
+    Read from the book, not from the plan line: a member in backoff after a far
+    walk wall, in combat, dead, offline or waiting for a far walk slot owes its
+    quest as much as one on its hunt. A member whose position is unread is read
+    from an unknown map, which only makes its quest a map blocker (not
+    permanent), never a permanent one."""
+    if book is None:
+        return None
+    probe = m
+    if m.map_id is None or m.x is None or m.y is None:
+        probe = replace(
+            m,
+            map_id=-1 if m.map_id is None else m.map_id,
+            x=0.0 if m.x is None else m.x,
+            y=0.0 if m.y is None else m.y,
+        )
+    avoid, off = class_avoid(m, book, recent, hunts, now)
+    return classquest.owed(book, probe, avoid, off)
+
+
+def owed_members(members, book, recent, hunts, now, owing, hours=None) -> tuple:
+    """(held, released): name -> classquest.Owed for every member with a class
+    quest owed, split by the Owing clock. A member that has made no progress in
+    `hours` (classquest.OWED_HOURS) is released: out of `held`, so the dungeon
+    formations may pick it, while its ask and its named blocker stand."""
+    hours = classquest.OWED_HOURS if hours is None else hours
+    held, released = {}, {}
+    for m in members:
+        row = class_owed(m, book, recent, hunts, now)
+        if row is None:
+            continue
+        if owing.expired(m.name, progress_mark(m), now, hours):
+            released[m.name] = row
+        else:
+            held[m.name] = row
+    owing.forget_unowed([m.name for m in members], set(held) | set(released))
+    return held, released
+
+
+def owed_notes(held, released) -> list:
+    """The plan's notes on the hold: each release with the blocker it keeps,
+    each held member whose quest is blocked, so none waits in silence."""
+    notes = [
+        "%s has owed %s for %d hours with no progress and is released from the "
+        "dungeon hold; the ask and the blocker stand%s"
+        % (n, o.title, classquest.OWED_HOURS, _because(o))
+        for n, o in sorted(released.items())
+    ]
+    notes += [
+        "%s owes %s and is held out of the dungeons%s" % (n, o.title, _because(o))
+        for n, o in sorted(held.items())
+        if o.blocker
+    ]
+    return notes
+
+
+def _because(owed) -> str:
+    return ": %s (%s)" % (owed.said, owed.blocker) if owed.blocker else ""
 
 
 def class_held(lines) -> set:

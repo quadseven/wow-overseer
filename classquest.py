@@ -77,6 +77,15 @@ was before. What the verbs do NOT cover stays blocked and named: an item cast
 at nothing in particular, at a spell focus (the warlock's Summoning Circle, a
 water source) or on a corpse nearby, and a creature a script summons.
 
+WHAT A MEMBER OWES (OWED_*). The operator's rule of 2026-10-06 is that every
+class quest is mandatory and comes before anything else, so a member with an
+eligible unfinished class quest is held out of every dungeon formation (the
+guild's asks, its runs, the pick-up groups, a family's stand-in guests), not
+only while a hunt is under way: `owed` reads the book, not the plan line, so a
+member waiting out a far walk wall, in combat, dead or in line for a far walk
+slot is held too. The blockers no work of the module can lift today (PERMANENT)
+do not hold anybody. The hold is bounded by an Owing clock (OWED_HOURS).
+
 PURE MODULE: rows in, a Move out. No MySQL, no clock.
 """
 
@@ -141,6 +150,14 @@ LEVEL = "level"
 USE_STALLED = "usestalled"
 # The blockers a guildmate can help with: the rest are the module's to fix.
 HELPABLE = frozenset({GROUP, STALLED, USE_STALLED})
+# THE BLOCKERS NO WORK OF THE MODULE CAN LIFT TODAY: a creature no spawn row
+# names (a script summons it), a gameobject no verb uses, a quest item the
+# member no longer carries. A member whose every way to a reward ends in one of
+# these is not held from the dungeons: nothing it could do would clear them. The
+# rest are not permanent: a group or a stalled hunt is asked for in guild chat, a
+# far map needs the member to travel (CROSSING_VERB), a level gap closes as it
+# levels, and a quest log that has not caught up catches up.
+PERMANENT = frozenset({SOURCE, OBJECT, ITEM})
 
 # The two verbs of kind='quest' (quadseven/mod-overseer#865).
 USE_ITEM, USE_OBJECT = "use-item-on", "use-gameobject"
@@ -152,6 +169,24 @@ USE_NEAR = 4.0
 # group size (an elite objective): the asker and two make a party of three.
 ELITE_HELPERS = 2
 MAX_HELPERS = 4
+
+# HOW LONG A MEMBER IS HELD FOR A CLASS QUEST IT MAKES NO PROGRESS ON. Six
+# hours: a hunt takes three packs of HUNT_STALL_MINUTES (an hour and a half)
+# and GIVE_UP_MINUTES (two hours) before it is asked for in guild chat, and the
+# realm's far walk slots are few (nine tank warriors wait their turn at four a
+# time, a walk taking up to half an hour), so a member that is making its way
+# through the line has made progress inside six hours. One that has not
+# (no quest taken, no kill or item counted, nothing handed in) is released
+# from the hold, with its ask and its named blocker kept, so a quest nobody can
+# finish never keeps a member out of the dungeons for ever.
+OWED_HOURS = 6
+
+# THE ONE VERB A CROSS-CONTINENT CLASS QUEST WANTS AND THE MODULE DOES NOT HAVE
+# for a guild member. walk-to-spawn refuses a spawn on another map; the module's
+# boat and zeppelin crossing (build fact `crossing = boards`) serves only a
+# roster family member sailing to its leader. A kind='job' row that takes a
+# map id and walks, boards, rides and walks off for any bot would do it.
+CROSSING_VERB = "cross-to-map map:<id>"
 
 # THE HUNT'S CLOCK. A hunt that makes no progress (the quest's kill and item
 # counts do not move) for HUNT_STALL_MINUTES is sent to another pack of the
@@ -774,6 +809,36 @@ def _densest(member, spawns, avoid=()):
     return min(here, key=lambda s: (-pack(s), _yards(member, s), s.guid))
 
 
+# The two classic continents, by map id, for the crossing sentence.
+CONTINENTS = {0: "Eastern Kingdoms", 1: "Kalimdor"}
+
+
+def far_map(member, spawns) -> int:
+    """The classic continent a class quest's spawns are on when none is on the
+    member's map and the member stands on the other one, else -1: the member
+    must cross to get there (a boat, a zeppelin), as a player does."""
+    here = member.map_id
+    if here is None or int(here) not in CONTINENTS:
+        return -1
+    other = {int(s.map_id) for s in spawns if int(s.map_id) in CONTINENTS}
+    other.discard(int(here))
+    if not other or any(int(s.map_id) == int(here) for s in spawns):
+        return -1
+    return min(other)
+
+
+def _across(member, spawns) -> str:
+    """The sentence ending a MAP blocker: where the quest is and what the
+    crossing lacks, or "" when the spawns are not on the other continent."""
+    there = far_map(member, spawns)
+    if there < 0:
+        return ""
+    return (
+        "; it is on %s, a boat or zeppelin away, and no verb carries a guild "
+        "member across (missing: %s)" % (CONTINENTS[there], CROSSING_VERB)
+    )
+
+
 def _source_blocker(quest: Quest) -> tuple:
     return SOURCE, (
         "%s needs %s no creature spawn or drop supplies (an item used on a "
@@ -829,7 +894,10 @@ def _use_blocker(quest: Quest, member) -> tuple:
     use = _pending_use(quest, member)
     if use is None:
         if quest.fields and _nearest(member, quest.fields) is None:
-            return MAP, "%s's objective is on another map than the member" % quest.title
+            return MAP, "%s's objective is on another map than the member%s" % (
+                quest.title,
+                _across(member, quest.fields),
+            )
         return "", ""
     if not use.spots:
         what = "gameobject" if use.verb == USE_OBJECT else "creature"
@@ -843,7 +911,10 @@ def _use_blocker(quest: Quest, member) -> tuple:
             ),
         )
     if _nearest(member, use.spots) is None:
-        return MAP, "%s's use target is on another map than the member" % quest.title
+        return MAP, "%s's use target is on another map than the member%s" % (
+            quest.title,
+            _across(member, use.spots),
+        )
     if use.verb == USE_ITEM and not member.carries(use.item):
         return ITEM, (
             "%s needs item %d used on a creature and the member does not carry "
@@ -866,7 +937,10 @@ def blocker_of(quest: Quest, member) -> tuple:
     if (quest.kills or quest.items) and not quest.fields:
         return _source_blocker(quest)
     if quest.fields and _nearest(member, quest.fields) is None:
-        return MAP, "%s's objective is on another map than the member" % quest.title
+        return MAP, "%s's objective is on another map than the member%s" % (
+            quest.title,
+            _across(member, quest.fields),
+        )
     return "", ""
 
 
@@ -907,12 +981,9 @@ def helpers_for(quest: Quest) -> int:
     return max(1, min(MAX_HELPERS, wanted))
 
 
-def moves(book: Book, member, avoid=None, held_off=frozenset()) -> list:
-    """Every class reward the member lacks and may work toward now, as Moves,
-    the lowest quest level first; a blocked one is a BLOCKED Move naming why.
-
-    `avoid` is quest id -> ((map, x, y), ...), the packs a hunt already tried
-    without progress; `held_off` the quest ids whose hunt was given up for now."""
+def _groups(book: Book, member, avoid=None, held_off=frozenset()) -> list:
+    """(reward key, [Move of each variant open to the member]) for every class
+    reward the member lacks, the lowest quest level first."""
     out = []
     for key, rewards in sorted(
         book.groups.items(), key=lambda kv: (book.quests[kv[1][0]].min_level, kv[0])
@@ -933,10 +1004,63 @@ def moves(book: Book, member, avoid=None, held_off=frozenset()) -> list:
                 o[1].id,
             )
         )
-        made = [_move_of(member, o, key, avoid or {}, held_off) for o in options]
-        # The first move that can be made; else the first blocker, named.
-        out.append(next((m for m in made if m.kind != BLOCKED), made[0]))
+        out.append(
+            (key, [_move_of(member, o, key, avoid or {}, held_off) for o in options])
+        )
     return out
+
+
+def moves(book: Book, member, avoid=None, held_off=frozenset()) -> list:
+    """Every class reward the member lacks and may work toward now, as Moves,
+    the lowest quest level first; a blocked one is a BLOCKED Move naming why.
+
+    `avoid` is quest id -> ((map, x, y), ...), the packs a hunt already tried
+    without progress; `held_off` the quest ids whose hunt was given up for now."""
+    # The first move that can be made; else the first blocker, named.
+    return [
+        next((m for m in made if m.kind != BLOCKED), made[0])
+        for _key, made in _groups(book, member, avoid, held_off)
+    ]
+
+
+@dataclass(frozen=True)
+class Owed:
+    """A class quest a member owes: eligible, unfinished, and not proven
+    impossible. `blocker` is "" when a move can be made now, else the kind of
+    the blocker that stands in the way (never one of PERMANENT), `said` names
+    it, and `to_map` is the continent a crossing would reach (-1 when none)."""
+
+    quest: int
+    title: str
+    klass: int
+    blocker: str = ""
+    said: str = ""
+    to_map: int = -1
+
+
+def owed(book: Book, member, avoid=None, held_off=frozenset()):
+    """The Owed row of the first class reward the member owes, or None.
+
+    A reward group is owed when any of its variants can be worked now or is
+    blocked for a reason that is not PERMANENT (a variant whose creature no spawn
+    names does not clear a group whose other variant is across the sea). A
+    member of a level or race no quest of its class admits owes nothing, and
+    nor does one whose every open variant is permanently blocked."""
+    for _key, made in _groups(book, member, avoid, held_off):
+        live = next((m for m in made if m.kind != BLOCKED), None)
+        if live is None:
+            live = next((m for m in made if m.blocker not in PERMANENT), None)
+        if live is None:
+            continue
+        quest = book.quests.get(int(live.quest))
+        title = live.title or (quest.title if quest else "")
+        there = -1
+        if live.blocker == MAP and quest is not None:
+            there = far_map(
+                member, list(quest.starters) + list(quest.enders) + list(quest.fields)
+            )
+        return Owed(live.quest, title, live.klass, live.blocker, live.said, there)
+    return None
 
 
 def _move_of(member, option, key, avoid=None, held_off=frozenset()) -> Move:
@@ -954,7 +1078,11 @@ def _move_of(member, option, key, avoid=None, held_off=frozenset()) -> Move:
         ends = quest.enders if kind == TURN_IN else quest.starters
         word = "ender" if kind == TURN_IN else "giver"
         block, said = (
-            (MAP, "%s has no %s on the member's map" % (quest.title, word))
+            (
+                MAP,
+                "%s has no %s on the member's map%s"
+                % (quest.title, word, _across(member, ends)),
+            )
             if ends
             else (
                 SOURCE,
@@ -1254,6 +1382,40 @@ class Hunts:
 
     def forget(self, name) -> None:
         self._by.pop(name, None)
+
+
+class Owing:
+    """How long each member has owed a class quest with no progress, kept in
+    memory by the bridge (a restart gives every member a fresh OWED_HOURS).
+
+    A member's progress is a mark (guildjobs.progress_mark): when it changes the
+    clock starts over. Times are seconds from one clock for the life of the
+    object, any epoch."""
+
+    def __init__(self):
+        self._by: dict = {}
+
+    def idle(self, name, mark, now) -> float:
+        """Seconds since the member's mark last changed (0.0 the first time it
+        is seen)."""
+        seen = self._by.get(name)
+        if seen is None or seen[0] != mark:
+            self._by[name] = (mark, now)
+            return 0.0
+        return max(0.0, now - seen[1])
+
+    def expired(self, name, mark, now, hours=OWED_HOURS) -> bool:
+        """Whether the member has made no progress for `hours`."""
+        return self.idle(name, mark, now) >= hours * 3600
+
+    def forget_unowed(self, seen, owing) -> None:
+        """Forget every member of `seen` (the members one pass read) that is not
+        in `owing`: one that owes nothing starts a fresh clock the day it owes
+        again. A member the pass did not read is left alone, so two guilds'
+        passes keep each other's clocks."""
+        owing = set(owing)
+        for name in [n for n in seen if n not in owing]:
+            self._by.pop(name, None)
 
 
 @dataclass(frozen=True)

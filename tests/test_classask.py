@@ -569,7 +569,9 @@ class TheDungeonPasses(unittest.TestCase):
     def test_the_old_coordinator_does_not_pick_a_member_on_a_class_quest(self):
         seen = {}
 
-        def free_members(rows, busy, resting, family, benched=frozenset()):
+        def free_members(
+            rows, busy, resting, family, benched=frozenset(), owed=frozenset()
+        ):
             seen["busy"] = set(busy)
             return [], {}
 
