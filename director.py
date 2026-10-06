@@ -81,9 +81,7 @@ HOP_COMMAND = ".tele stormwind"
 UNBIND_COMMAND = ".instance unbind all"
 
 _FIXED = frozenset(
-    c.lstrip(".")
-    for c in BOOT_COMMANDS
-    if not c.startswith(".modify")
+    c.lstrip(".") for c in BOOT_COMMANDS if not c.startswith(".modify")
 ) | {HOP_COMMAND.lstrip("."), UNBIND_COMMAND.lstrip(".")}
 _APPEAR_RE = re.compile(r"^appear [a-z]{2,12}$")
 _SPEED_RE = re.compile(r"^modify speed all ([0-9]{1,2}(?:\.[0-9])?)$")
@@ -111,18 +109,94 @@ def is_watcher(name: str) -> bool:
 
 BATTLEGROUND_MAPS = frozenset({30, 489, 529, 566, 607, 628})
 ARENA_MAPS = frozenset({559, 562, 572, 617, 618})
-RAID_MAPS = frozenset({
-    249, 309, 409, 469, 509, 531, 532, 533, 534, 544, 548, 550, 564, 565, 568,
-    580, 603, 615, 616, 624, 631, 649, 724,
-})
+RAID_MAPS = frozenset(
+    {
+        249,
+        309,
+        409,
+        469,
+        509,
+        531,
+        532,
+        533,
+        534,
+        544,
+        548,
+        550,
+        564,
+        565,
+        568,
+        580,
+        603,
+        615,
+        616,
+        624,
+        631,
+        649,
+        724,
+    }
+)
 # Instance maps by id, for the one case instance_id cannot answer: a target on
 # an instance map whose instance has not been assigned a row yet.
-INSTANCE_MAPS = BATTLEGROUND_MAPS | ARENA_MAPS | RAID_MAPS | frozenset({
-    33, 34, 36, 43, 47, 48, 70, 90, 109, 129, 189, 209, 229, 230, 289, 329,
-    349, 389, 429, 540, 542, 543, 545, 546, 547, 552, 553, 554, 555, 556, 557,
-    558, 560, 574, 575, 576, 578, 585, 595, 599, 600, 601, 602, 604, 608, 619,
-    632, 650, 658, 668,
-})
+INSTANCE_MAPS = (
+    BATTLEGROUND_MAPS
+    | ARENA_MAPS
+    | RAID_MAPS
+    | frozenset(
+        {
+            33,
+            34,
+            36,
+            43,
+            47,
+            48,
+            70,
+            90,
+            109,
+            129,
+            189,
+            209,
+            229,
+            230,
+            289,
+            329,
+            349,
+            389,
+            429,
+            540,
+            542,
+            543,
+            545,
+            546,
+            547,
+            552,
+            553,
+            554,
+            555,
+            556,
+            557,
+            558,
+            560,
+            574,
+            575,
+            576,
+            578,
+            585,
+            595,
+            599,
+            600,
+            601,
+            602,
+            604,
+            608,
+            619,
+            632,
+            650,
+            658,
+            668,
+        }
+    )
+)
 
 # /follow gives up past about forty yards; inside this the camera is held.
 FOLLOW_RANGE = 35.0
@@ -148,10 +222,10 @@ REFUSALS = {
     R_SELF: "the target is the Watcher itself",
     R_ARENA: "the target is in an arena; the Watcher does not enter a match as a participant",
     R_GROUPED: "the Watcher is in a group, and the core refuses `.appear` into a dungeon "
-               "unless the GM is in the target's own group; the Watcher never joins one, "
-               "so a group means something invited it and it must leave first",
+    "unless the GM is in the target's own group; the Watcher never joins one, "
+    "so a group means something invited it and it must leave first",
     R_UNRESOLVED: "the target stands on an instance map whose instance is not resolved yet; "
-                  "trying again when it is",
+    "trying again when it is",
     R_NO_TARGET: "nothing to watch matches that",
     R_RATE: "moves are rate limited",
     R_SETTLING: "the Watcher is still taking up its observer state",
@@ -207,7 +281,9 @@ class Run:
 
 def run_from_row(row: Mapping) -> Run:
     members = tuple(
-        part.split(":", 1)[0] for part in str(row.get("members") or "").split(",") if part
+        part.split(":", 1)[0]
+        for part in str(row.get("members") or "").split(",")
+        if part
     )
     created = row.get("created")
     return Run(
@@ -253,8 +329,20 @@ class WatchDirective:
     source: str
 
 
-_KEYWORDS = {"family", "guild", "run", "dungeon", "bg", "battleground", "raid",
-             "off", "stop", "clear", "character", "char"}
+_KEYWORDS = {
+    "family",
+    "guild",
+    "run",
+    "dungeon",
+    "bg",
+    "battleground",
+    "raid",
+    "off",
+    "stop",
+    "clear",
+    "character",
+    "char",
+}
 _WORD_RE = re.compile(r"^[a-z][a-z-]{1,31}$")
 _GUILD_RE = re.compile(r"^[A-Za-z][A-Za-z' ]{1,23}$")
 
@@ -274,21 +362,33 @@ def parse_watch(text: str) -> Spec | SpecError:
     if head == "raid":
         return Spec("raid")
     if head in ("character", "char"):
-        return Spec("character", rest) if _NAME_RE.match(rest) else SpecError(
-            f"'{rest}' is not a character name. {USAGE}")
+        return (
+            Spec("character", rest)
+            if _NAME_RE.match(rest)
+            else SpecError(f"'{rest}' is not a character name. {USAGE}")
+        )
     if head == "family":
         if rest and not _WORD_RE.match(rest.lower()):
             return SpecError(f"'{rest}' is not a family key. {USAGE}")
         return Spec("family", rest.lower())
     if head == "guild":
-        return Spec("guild", rest) if _GUILD_RE.match(rest) else SpecError(
-            f"'{rest}' is not a guild name. {USAGE}")
+        return (
+            Spec("guild", rest)
+            if _GUILD_RE.match(rest)
+            else SpecError(f"'{rest}' is not a guild name. {USAGE}")
+        )
     if head == "run":
-        return Spec("run", rest) if rest.isdigit() and len(rest) <= 9 else SpecError(
-            f"'{rest}' is not a run id. {USAGE}")
+        return (
+            Spec("run", rest)
+            if rest.isdigit() and len(rest) <= 9
+            else SpecError(f"'{rest}' is not a run id. {USAGE}")
+        )
     if head == "dungeon":
-        return Spec("dungeon", rest.lower()) if _WORD_RE.match(rest.lower()) else SpecError(
-            f"'{rest}' is not a dungeon keyword. {USAGE}")
+        return (
+            Spec("dungeon", rest.lower())
+            if _WORD_RE.match(rest.lower())
+            else SpecError(f"'{rest}' is not a dungeon keyword. {USAGE}")
+        )
     if not rest and _NAME_RE.match(words[0]) and head not in _KEYWORDS:
         return Spec("character", words[0])
     return SpecError(f"I do not know how to watch '{text.strip()}'. {USAGE}")
@@ -329,6 +429,7 @@ def _fight_centre(spots: Sequence[Spot]) -> Spot:
     A flag carrier is not in the snapshot, and nothing here pretends it is: the
     fight is the next best thing to point a camera at.
     """
+
     def crowd(s: Spot) -> int:
         return sum(1 for o in spots if o.in_combat and s.distance(o) <= 40.0)
 
@@ -344,14 +445,17 @@ def _biggest_place(spots: Sequence[Spot]) -> list[Spot]:
     return sorted(places.values(), key=lambda g: (-len(g), g[0].place))[0]
 
 
-def _run_pick(runs: Sequence[Run], by_name: Mapping[str, Spot], current: str, label: str):
+def _run_pick(
+    runs: Sequence[Run], by_name: Mapping[str, Spot], current: str, label: str
+):
     inside = [r for r in runs if r.state == "inside"]
     if not inside:
         return Refused(R_NO_TARGET, f"no {label} run is inside a dungeon right now")
 
     def here(r: Run) -> list[str]:
         return [
-            n for n in dict.fromkeys((r.tank, *r.members))
+            n
+            for n in dict.fromkeys((r.tank, *r.members))
             if n in by_name and by_name[n].instance_id > 0
         ]
 
@@ -392,7 +496,10 @@ def pick_target(
         if head is None:
             return Refused(R_NO_TARGET, f"no family '{key}' ({', '.join(table)})")
         if head not in by_name:
-            return Refused(R_TARGET_OFFLINE, f"{head}, head of the {key} family, is not in the world")
+            return Refused(
+                R_TARGET_OFFLINE,
+                f"{head}, head of the {key} family, is not in the world",
+            )
         return Pick(head, f"head of the {key} family")
     if kind == "guild":
         mine = [r for r in runs if r.guild.lower() == spec.arg.lower()]
@@ -405,16 +512,24 @@ def pick_target(
         if run is None:
             return Refused(R_NO_TARGET, f"there is no run {spec.arg}")
         if run.state != "inside":
-            return Refused(R_NO_TARGET, f"run {run.id} is {run.state or 'not inside'}, not in a dungeon")
+            return Refused(
+                R_NO_TARGET,
+                f"run {run.id} is {run.state or 'not inside'}, not in a dungeon",
+            )
         return _run_pick([run], by_name, current, f"run {run.id}")
     if kind == "bg":
-        group = _biggest_place([s for s in by_name.values() if s.map_id in BATTLEGROUND_MAPS])
+        group = _biggest_place(
+            [s for s in by_name.values() if s.map_id in BATTLEGROUND_MAPS]
+        )
         if not group:
             return Refused(R_NO_TARGET, "no battleground has anyone in it")
         names = [s.name for s in group]
         if current in names:
             return Pick(current, "still in the biggest battleground")
-        return Pick(_fight_centre(group).name, "the middle of the fight in the fullest battleground")
+        return Pick(
+            _fight_centre(group).name,
+            "the middle of the fight in the fullest battleground",
+        )
     if kind == "raid":
         group = _biggest_place([s for s in by_name.values() if s.map_id in RAID_MAPS])
         if not group:
@@ -425,13 +540,22 @@ def pick_target(
         tanks = [n for n, role in seats if role == "tank" and n in names]
         if tanks:
             return Pick(sorted(tanks)[0], "a tank of the fullest raid")
-        return Pick(_fight_centre(group).name, "the middle of the fight in the fullest raid")
+        return Pick(
+            _fight_centre(group).name, "the middle of the fight in the fullest raid"
+        )
     return Refused(R_NO_TARGET, USAGE)
 
 
 # ----------------------------------------------------------------- the decision --
 
-BOOT, HOLD, FOLLOW, HOP, APPEAR, REFUSE = "boot", "hold", "follow", "hop", "appear", "refuse"
+BOOT, HOLD, FOLLOW, HOP, APPEAR, REFUSE = (
+    "boot",
+    "hold",
+    "follow",
+    "hop",
+    "appear",
+    "refuse",
+)
 
 
 @dataclass(frozen=True)
@@ -482,7 +606,9 @@ def decide(
     if watcher.group_leader:
         return _refuse(R_GROUPED)
     if booted_at is None:
-        return Decision(BOOT, BOOT_COMMANDS, "putting the Watcher into its observer state")
+        return Decision(
+            BOOT, BOOT_COMMANDS, "putting the Watcher into its observer state"
+        )
     if now - booted_at < BOOT_SETTLE:
         return Decision(HOLD, reason=REFUSALS[R_SETTLING], code=R_SETTLING)
     if target.map_id in INSTANCE_MAPS and target.instance_id == 0:
@@ -490,8 +616,11 @@ def decide(
 
     hint = f"/follow {target.name}"
     if watcher.place == target.place and watcher.distance(target) <= FOLLOW_RANGE:
-        return Decision(FOLLOW, reason=f"within {FOLLOW_RANGE:g} yards of {target.name}",
-                        client_hint=hint)
+        return Decision(
+            FOLLOW,
+            reason=f"within {FOLLOW_RANGE:g} yards of {target.name}",
+            client_hint=hint,
+        )
 
     last = max(moves, default=None)
     if not new_target and last is not None and now - last < MIN_APPEAR_GAP:
@@ -501,20 +630,35 @@ def decide(
 
     appear = f".appear {target.name}"
     if _is_instance(target):
-        if watcher.map_id == target.map_id and watcher.instance_id != target.instance_id:
-            return Decision(HOP, (HOP_COMMAND,),
-                            f"leaving this instance of map {watcher.map_id} first, because "
-                            "a teleport within a map stays in the instance the GM is in",
-                            client_hint=hint)
+        if (
+            watcher.map_id == target.map_id
+            and watcher.instance_id != target.instance_id
+        ):
+            return Decision(
+                HOP,
+                (HOP_COMMAND,),
+                f"leaving this instance of map {watcher.map_id} first, because "
+                "a teleport within a map stays in the instance the GM is in",
+                client_hint=hint,
+            )
         if watcher.place == target.place:
-            return Decision(APPEAR, (appear,), f"{target.name} moved away", client_hint=hint)
+            return Decision(
+                APPEAR, (appear,), f"{target.name} moved away", client_hint=hint
+            )
         if target.map_id in BATTLEGROUND_MAPS:
             # Battlegrounds take no instance bind, so there is nothing to drop.
-            return Decision(APPEAR, (appear,), f"into {target.name}'s battleground",
-                            client_hint=hint)
-        return Decision(APPEAR, (UNBIND_COMMAND, appear),
-                        f"into {target.name}'s instance (stale binds dropped first)",
-                        client_hint=hint)
+            return Decision(
+                APPEAR,
+                (appear,),
+                f"into {target.name}'s battleground",
+                client_hint=hint,
+            )
+        return Decision(
+            APPEAR,
+            (UNBIND_COMMAND, appear),
+            f"into {target.name}'s instance (stale binds dropped first)",
+            client_hint=hint,
+        )
     return Decision(APPEAR, (appear,), f"to {target.name}", client_hint=hint)
 
 

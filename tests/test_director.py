@@ -18,26 +18,67 @@ def spot(name, map_id=0, inst=0, x=0.0, y=0.0, z=0.0, combat=False, grp=0):
     return d.Spot(name, map_id, inst, x, y, z, combat, grp)
 
 
-def run(rid, guild="Bonkers", kw="ragefire", tank="Tanky", members=("Tanky", "Heal"),
-        state="inside", created=1.0):
+def run(
+    rid,
+    guild="Bonkers",
+    kw="ragefire",
+    tank="Tanky",
+    members=("Tanky", "Heal"),
+    state="inside",
+    created=1.0,
+):
     return d.Run(rid, guild, kw, tank, tuple(members), state, created)
 
 
 class AllowList(unittest.TestCase):
     def test_boot_and_move_lines_pass(self):
-        for c in (*d.BOOT_COMMANDS, ".appear Grug", "appear grug", ".instance unbind all",
-                  d.HOP_COMMAND, ".modify speed all 4"):
+        for c in (
+            *d.BOOT_COMMANDS,
+            ".appear Grug",
+            "appear grug",
+            ".instance unbind all",
+            d.HOP_COMMAND,
+            ".modify speed all 4",
+        ):
             self.assertTrue(d.observer_allows(c), c)
 
     def test_nothing_else_passes(self):
         bad = [
-            ".group invite Grug", ".summon Grug", ".gm visible on", ".gm off", ".gm fly off",
-            ".cheat god off", ".appear", ".appear Grug now", ".appear Gr ug", ".appear Grug1",
-            ".instance unbind", ".instance unbind 389", ".modify speed all 7",
-            ".modify speed all 0", ".modify speed 2", ".modify hp 1", ".die", ".additem 25",
-            ".tele orgrimmar", ".tele del x", ".go xyz 1 2 3", ".revive", ".account set gmlevel x 3",
-            ".server shutdown", ".gm on; .die", ".gm on\n.die", "say hi", "", ".", ".cast 1",
-            ".appear Grug\n.die", ".npc add 1", ".learn all", ".aura 1", ".damage 99",
+            ".group invite Grug",
+            ".summon Grug",
+            ".gm visible on",
+            ".gm off",
+            ".gm fly off",
+            ".cheat god off",
+            ".appear",
+            ".appear Grug now",
+            ".appear Gr ug",
+            ".appear Grug1",
+            ".instance unbind",
+            ".instance unbind 389",
+            ".modify speed all 7",
+            ".modify speed all 0",
+            ".modify speed 2",
+            ".modify hp 1",
+            ".die",
+            ".additem 25",
+            ".tele orgrimmar",
+            ".tele del x",
+            ".go xyz 1 2 3",
+            ".revive",
+            ".account set gmlevel x 3",
+            ".server shutdown",
+            ".gm on; .die",
+            ".gm on\n.die",
+            "say hi",
+            "",
+            ".",
+            ".cast 1",
+            ".appear Grug\n.die",
+            ".npc add 1",
+            ".learn all",
+            ".aura 1",
+            ".damage 99",
         ]
         for c in bad:
             self.assertFalse(d.observer_allows(c), repr(c))
@@ -58,8 +99,12 @@ class AllowList(unittest.TestCase):
         allowed = frozenset({"1"})
         ok = core.parse_directive(f"@{W} .appear Grug", "1", allowed)
         self.assertIsInstance(ok[0], relay.GmCommand)
-        for line in (f"@{W} .group invite Grug", f"@{W} /say hi", f"@{W} follow me",
-                     f"@{W} .gm visible on"):
+        for line in (
+            f"@{W} .group invite Grug",
+            f"@{W} /say hi",
+            f"@{W} follow me",
+            f"@{W} .gm visible on",
+        ):
             got = core.parse_directive(line, "1", allowed)
             self.assertEqual(len(got), 1, line)
             self.assertIsInstance(got[0], core.Reply, line)
@@ -84,8 +129,16 @@ class Grammar(unittest.TestCase):
             self.assertEqual(d.parse_watch(text), want, text)
 
     def test_bad_orders(self):
-        for text in ("watch", "watch run abc", "watch dungeon", "watch guild", "watch x",
-                     "watch family a;b", "watch Grug Zug", "watch run 99999999999"):
+        for text in (
+            "watch",
+            "watch run abc",
+            "watch dungeon",
+            "watch guild",
+            "watch x",
+            "watch family a;b",
+            "watch Grug Zug",
+            "watch run 99999999999",
+        ):
             self.assertIsInstance(d.parse_watch(text), d.SpecError, text)
 
     def test_message_prefix(self):
@@ -99,55 +152,93 @@ class Targets(unittest.TestCase):
         spots = [spot("Grug"), spot(W)]
         self.assertEqual(d.pick_target(d.Spec("character", "grug"), spots).name, "Grug")
         self.assertIsInstance(d.pick_target(d.Spec("character", W), spots), d.Refused)
-        self.assertEqual(d.pick_target(d.Spec("character", "Nobody"), spots).code,
-                         d.R_TARGET_OFFLINE)
+        self.assertEqual(
+            d.pick_target(d.Spec("character", "Nobody"), spots).code, d.R_TARGET_OFFLINE
+        )
 
     def test_family_head(self):
         heads = {"cave": "Grug", "alt": "Thak"}
         spots = [spot("Grug"), spot("Thak")]
-        self.assertEqual(d.pick_target(d.Spec("family"), spots, heads=heads).name, "Grug")
-        self.assertEqual(d.pick_target(d.Spec("family", "alt"), spots, heads=heads).name, "Thak")
-        self.assertEqual(d.pick_target(d.Spec("family", "zz"), spots, heads=heads).code, d.R_NO_TARGET)
-        self.assertEqual(d.pick_target(d.Spec("family"), [spot("Thak")], heads=heads).code,
-                         d.R_TARGET_OFFLINE)
+        self.assertEqual(
+            d.pick_target(d.Spec("family"), spots, heads=heads).name, "Grug"
+        )
+        self.assertEqual(
+            d.pick_target(d.Spec("family", "alt"), spots, heads=heads).name, "Thak"
+        )
+        self.assertEqual(
+            d.pick_target(d.Spec("family", "zz"), spots, heads=heads).code,
+            d.R_NO_TARGET,
+        )
+        self.assertEqual(
+            d.pick_target(d.Spec("family"), [spot("Thak")], heads=heads).code,
+            d.R_TARGET_OFFLINE,
+        )
 
     def test_dungeon_and_run_pick_the_tank(self):
         spots = [spot("Tanky", 389, 3), spot("Heal", 389, 3)]
         r = [run(1)]
-        for spec in (d.Spec("dungeon", "rage"), d.Spec("run", "1"), d.Spec("guild", "bonkers")):
+        for spec in (
+            d.Spec("dungeon", "rage"),
+            d.Spec("run", "1"),
+            d.Spec("guild", "bonkers"),
+        ):
             self.assertEqual(d.pick_target(spec, spots, runs=r).name, "Tanky", spec)
 
     def test_dead_tank_falls_to_a_member_and_sticks(self):
         spots = [spot("Heal", 389, 3), spot("Zed", 389, 3)]
         r = [run(1, members=("Tanky", "Heal", "Zed"))]
         self.assertEqual(d.pick_target(d.Spec("run", "1"), spots, runs=r).name, "Heal")
-        self.assertEqual(d.pick_target(d.Spec("run", "1"), spots, runs=r, current="Zed").name, "Zed")
+        self.assertEqual(
+            d.pick_target(d.Spec("run", "1"), spots, runs=r, current="Zed").name, "Zed"
+        )
 
     def test_guild_chooses_its_busiest_run_then_newest(self):
         spots = [spot("A", 389, 3), spot("B", 389, 3), spot("C", 43, 7)]
-        r = [run(1, tank="A", members=("A", "B"), created=1), run(2, tank="C", members=("C",), created=9)]
-        self.assertEqual(d.pick_target(d.Spec("guild", "Bonkers"), spots, runs=r).name, "A")
+        r = [
+            run(1, tank="A", members=("A", "B"), created=1),
+            run(2, tank="C", members=("C",), created=9),
+        ]
+        self.assertEqual(
+            d.pick_target(d.Spec("guild", "Bonkers"), spots, runs=r).name, "A"
+        )
 
     def test_runs_not_inside_are_refused(self):
         spots = [spot("Tanky", 389, 3)]
         r = [run(1, state="ended")]
-        self.assertEqual(d.pick_target(d.Spec("run", "1"), spots, runs=r).code, d.R_NO_TARGET)
-        self.assertEqual(d.pick_target(d.Spec("dungeon", "rage"), spots, runs=r).code, d.R_NO_TARGET)
-        self.assertEqual(d.pick_target(d.Spec("run", "9"), spots, runs=r).code, d.R_NO_TARGET)
+        self.assertEqual(
+            d.pick_target(d.Spec("run", "1"), spots, runs=r).code, d.R_NO_TARGET
+        )
+        self.assertEqual(
+            d.pick_target(d.Spec("dungeon", "rage"), spots, runs=r).code, d.R_NO_TARGET
+        )
+        self.assertEqual(
+            d.pick_target(d.Spec("run", "9"), spots, runs=r).code, d.R_NO_TARGET
+        )
 
     def test_bg_picks_the_fullest_battleground_and_its_fight(self):
-        spots = [spot("A", 489, 1, 0, 0), spot("B", 489, 1, 5, 0, combat=True),
-                 spot("C", 489, 1, 6, 0, combat=True), spot("D", 489, 2), spot("Far", 0)]
+        spots = [
+            spot("A", 489, 1, 0, 0),
+            spot("B", 489, 1, 5, 0, combat=True),
+            spot("C", 489, 1, 6, 0, combat=True),
+            spot("D", 489, 2),
+            spot("Far", 0),
+        ]
         got = d.pick_target(d.Spec("bg"), spots)
         self.assertIn(got.name, ("B", "C"))
         self.assertEqual(d.pick_target(d.Spec("bg"), spots, current="A").name, "A")
-        self.assertEqual(d.pick_target(d.Spec("bg"), [spot("Far", 0)]).code, d.R_NO_TARGET)
+        self.assertEqual(
+            d.pick_target(d.Spec("bg"), [spot("Far", 0)]).code, d.R_NO_TARGET
+        )
 
     def test_raid_prefers_a_seated_tank(self):
         spots = [spot("T", 409, 4), spot("H", 409, 4), spot("X", 409, 4, combat=True)]
-        got = d.pick_target(d.Spec("raid"), spots, seats=[("T", "tank"), ("H", "healer")])
+        got = d.pick_target(
+            d.Spec("raid"), spots, seats=[("T", "tank"), ("H", "healer")]
+        )
         self.assertEqual(got.name, "T")
-        self.assertEqual(d.pick_target(d.Spec("raid"), [spot("Z", 0)]).code, d.R_NO_TARGET)
+        self.assertEqual(
+            d.pick_target(d.Spec("raid"), [spot("Z", 0)]).code, d.R_NO_TARGET
+        )
 
 
 class Decisions(unittest.TestCase):
@@ -173,7 +264,9 @@ class Decisions(unittest.TestCase):
         first = d.decide(w, t, now=100.0, booted_at=None)
         self.assertEqual((first.action, first.commands), (d.BOOT, d.BOOT_COMMANDS))
         self.assertEqual(d.decide(w, t, now=104.0, booted_at=100.0).action, d.HOLD)
-        self.assertEqual(d.decide(w, t, now=110.0, booted_at=100.0, new_target=True).action, d.APPEAR)
+        self.assertEqual(
+            d.decide(w, t, now=110.0, booted_at=100.0, new_target=True).action, d.APPEAR
+        )
 
     def test_in_range_follows_and_does_not_teleport(self):
         got = self.go(spot(W, 1, 0, 0, 0), spot("Grug", 1, 0, 20, 0))
@@ -253,9 +346,22 @@ class Surfaces(unittest.TestCase):
         import family
         import watchwall
 
-        row = {"name": W, "level": 80, "race": 1, "class": 1, "health": 10, "max_health": 10,
-               "in_combat": 0, "is_bot": 0, "group_leader": 0, "map_id": 0, "zone_id": 1,
-               "pos_x": 0, "pos_y": 0, "age_seconds": 1}
+        row = {
+            "name": W,
+            "level": 80,
+            "race": 1,
+            "class": 1,
+            "health": 10,
+            "max_health": 10,
+            "in_combat": 0,
+            "is_bot": 0,
+            "group_leader": 0,
+            "map_id": 0,
+            "zone_id": 1,
+            "pos_x": 0,
+            "pos_y": 0,
+            "age_seconds": 1,
+        }
 
         class Geo:
             def place(self, *a):
@@ -287,10 +393,16 @@ class Surfaces(unittest.TestCase):
             family._STREAMED = saved
 
     def test_http_door_is_closed_without_a_token_and_compares_in_constant_time(self):
-        src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                "map_server.py")).read()
-        body = src[src.index("def _director_post"):src.index("def _read_json_body")]
+        src = open(
+            os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "map_server.py",
+            )
+        ).read()
+        body = src[src.index("def _director_post") : src.index("def _read_json_body")]
         self.assertIn("if not _DIRECTOR_TOKEN", body)
         self.assertIn("hmac.compare_digest", body)
-        self.assertLess(body.index("hmac.compare_digest"), body.index("_read_json_body"))
+        self.assertLess(
+            body.index("hmac.compare_digest"), body.index("_read_json_body")
+        )
         self.assertIn("director.parse_watch", body)

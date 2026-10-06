@@ -259,7 +259,9 @@ def parse_directive(
         # character: no chat, no bot orders, no natural language, and none of
         # the wider GM surface below (which admits `group`). See director.
         if director.is_watcher(target):
-            directives.append(_watcher_directive(target, command, f"discord:{author_id}"))
+            directives.append(
+                _watcher_directive(target, command, f"discord:{author_id}")
+            )
             continue
         # WoW's own chat syntax ("/say hi", "/w Thrall hi") and dot-commands
         # (".appear Thrall") are taken literally. Everything else falls
