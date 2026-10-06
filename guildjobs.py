@@ -1716,8 +1716,8 @@ def _member_step(
 
 
 def level_step(m, world, recent, cap):
-    """(step or None, what it does, a note): a natural member that has
-    outgrown where it stands walks to the flight master of a quest hub whose
+    """(step or None, what it does, a note): a member that has outgrown
+    where it stands walks to the flight master of a quest hub whose
     band fits its level (guildlevel.py).
 
     Never a roster family member (levelroute walks those), never at the level
@@ -1725,7 +1725,11 @@ def level_step(m, world, recent, cap):
     COOLDOWN_MINUTES["level"]. The walk is `walk-to-spawn creature:` naming
     the flight master's spawn, at the pass's cap.
     """
-    if world is None or not m.eligible or not m.online or m.in_combat:
+    # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
+    # a member contributes, not where it walks: on the dev realm 1 of Cave's
+    # 60 and none of Bonkers' 56 held a reset, so a step gated on it walked
+    # nobody, and Cave's level 14-15 priests stayed in their starting zones.
+    if world is None or not m.online or m.in_combat:
         return None, "", ""
     if m.name in world.roster or m.level >= guildlevel.LEVEL_CAP:
         return None, "", ""

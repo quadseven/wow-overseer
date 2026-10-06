@@ -246,14 +246,18 @@ class TheStep(unittest.TestCase):
         self.assertEqual(level_steps(plan([member()], leveling=None)), [])
         self.assertIsNone(guildlevel.world(None, master_rows()))
 
-    def test_no_step_at_the_level_cap_unnatural_offline_or_fighting(self):
+    def test_no_step_at_the_level_cap_offline_or_fighting(self):
         for m in (
             member(level=guildlevel.LEVEL_CAP),
-            member(eligible=False),
             member(online=False),
             member(in_combat=True),
         ):
             self.assertEqual(level_steps(plan([m])), [], m)
+
+    def test_a_member_not_yet_naturalized_still_walks_to_level(self):
+        """2026-10-05: 1 of Cave's 60 and none of Bonkers' 56 held the natural
+        reset; the reset gates contributions, not where a member levels."""
+        self.assertEqual(len(level_steps(plan([member(eligible=False)]))), 1)
 
 
 class TheBounds(unittest.TestCase):
