@@ -461,13 +461,10 @@ FOCUS_AIMS = {
 # Brackets below are the wow-professions.com guide's own stated ranges for
 # each bolt (a leveling guide's "worth casting here" bracket, same kind of
 # source the existing Linen entry's 1-60 already leaned on before this pass
-# extended it slightly past the guide's stated 1-45). Gaps between brackets
-# (145-174, 185-249, 260-300; 101-124 is Woolen Bag's now, see its own
-# comment) are exactly where the still-deferred thread/
-# dye recipes belong (infra#3609's own body: "Reinforced Linen Cape, Silk
-# Headband, Crimson Silk Vest, Runecloth Belt/Bag/Gloves, and more") -
-# `recipe_for` correctly returns None there rather than inventing a bolt
-# recipe that would not grant a skill-up.
+# extended it slightly past the guide's stated 1-45). The gaps that used to
+# sit between them (101-124, 145-174, 185-249, 260-300) are filled now by
+# the thread and dye rungs infra#3609 deferred; see Woolen Bag's comment and
+# the TAILORING 145-300 block beside Bolt of Silk Cloth below.
 #
 # LINEN BELT (infra#3609, the minimum bracket its own acceptance criteria
 # asked for once craft_supply's buy plumbing existed - see
@@ -969,6 +966,81 @@ RECIPES: dict = {
             note="4x Silk Cloth -> 1x Bolt of Silk Cloth, no focus needed; "
             "max_skill was 145, its own grey value",
         ),
+        # TAILORING 145-300: THE REST OF THE LADDER (the operator, 2026-10-05:
+        # Og levels tailoring to 300 for the big bags). Before this block
+        # `recipe_for` answered None at 145-174, 185-249 and 260-300, and a
+        # tailor who walked off the top of a bolt rung stopped there.
+        #
+        # THE ROUTE is wow-professions.com's classic Tailoring 1-300 guide:
+        # which recipe at which skill. THE EDGES AND EVERY FACT are the
+        # realm's own, never the guide's:
+        #
+        #   Spell.dbc (md5 543b9fe61355b6a77a01714d52fea2e5, anchors 2963 ->
+        #   Reagent[0]=2589 x2 and 2657 -> focus 3 asserted first): spell id,
+        #   reagents, output item, RequiresSpellFocus 0 and EquippedItemClass
+        #   -1 for every rung below.
+        #   SkillLineAbility.dbc (md5 d8c11abfcfe70596cb9068c0e97a1d9a, the
+        #   MEASURED_BANDS rows for 2963/3757/3839/3865/18401 asserted
+        #   first): yellow and grey, now in MEASURED_BANDS.
+        #   trainer_spell (read 2026-10-05): the rank a trainer teaches each
+        #   one at, which is where each bracket may start.
+        #
+        #   spell  recipe                   taught  yellow  grey  bracket
+        #   8760   Azure Silk Hood           145     155    165   145-159
+        #   8762   Silk Headband             160     170    180   160-174
+        #   8791   Crimson Silk Vest         185     205    225   185-204
+        #   8799   Crimson Silk Pantaloons   195     215    235   205-214
+        #   12053  Black Mageweave Gloves    215     230    260   215-224
+        #   12065  Mageweave Bag             225     240    270   225-249
+        #   18402  Runecloth Belt            255     270    300   260-284
+        #   18417  Runecloth Gloves          275     290    320   285-300
+        #
+        # WHERE THIS LEAVES THE GUIDE, AND WHY:
+        #
+        #   * Mageweave Bag takes 225-249 from the guide's Black Mageweave
+        #     Headband: a 12-slot bag the guild wears, orange to 239 and
+        #     yellow after. Its Silken Thread is the crew's to post
+        #     (CREW_SUPPLIED; guildcorps.master_bag is this bag from 225).
+        #   * Small Silk Pack (taught 150, yellow 170, grey 200) is NOT the
+        #     150-174 rung, though it is a bag. Each cast eats 2x Heavy
+        #     Leather (4234), which a tailor neither weaves nor gathers and
+        #     nothing posts to it, so a tailor without leather would sit
+        #     refused on every poll. It is still sewn ahead of this ladder
+        #     whenever the leather is in hand (craft_rhythm.guild_bag), and
+        #     every such cast below 200 can roll a skill-up too.
+        #   * Formal White Shirt (170-175) and Orange Mageweave Shirt
+        #     (215-220) are left out: Silk Headband runs on to 174 (grey 180)
+        #     and Black Mageweave Gloves start at 215, so two more dyes buy
+        #     nothing.
+        #   * Runecloth Bag (280-290) is taught only by Pattern 14468, and
+        #     nothing on this ladder learns from a pattern. Runecloth Belt
+        #     runs on to 284 instead, the guide's own fallback.
+        #   * Runecloth Gloves is a pattern in the guide, but this realm's
+        #     trainer_spell also teaches it at 275, so it is the 285-300 rung.
+        #
+        # Every rung eats the tailor's own bolts; craft_rhythm.BOLT_FED weaves
+        # them first when short. Thread and dye for the garments are bought by
+        # craft_supply.REAGENTS, as for Linen Belt.
+        Recipe(
+            8760,
+            "Azure Silk Hood",
+            min_skill=145,
+            max_skill=159,
+            note="2x Bolt of Silk Cloth (4305, own Tailoring output), 2x "
+            "Blue Dye (6260, vendor-bought), 1x Fine Thread (2321, "
+            "vendor-bought) -> 1x Azure Silk Hood (item 7048), no focus "
+            "needed. trainer_spell rank 145, yellow 155, grey 165",
+        ),
+        Recipe(
+            8762,
+            "Silk Headband",
+            min_skill=160,
+            max_skill=174,
+            note="3x Bolt of Silk Cloth (4305, own Tailoring output), 2x "
+            "Fine Thread (2321, vendor-bought) -> 1x Silk Headband (item "
+            "7050), no focus needed. trainer_spell rank 160, yellow 170, "
+            "grey 180",
+        ),
         Recipe(
             3865,
             "Bolt of Mageweave",
@@ -980,6 +1052,47 @@ RECIPES: dict = {
             "was 185, its own grey value",
         ),
         Recipe(
+            8791,
+            "Crimson Silk Vest",
+            min_skill=185,
+            max_skill=204,
+            note="4x Bolt of Silk Cloth (4305, own Tailoring output), 2x "
+            "Red Dye (2604, vendor-bought), 2x Fine Thread (2321, "
+            "vendor-bought) -> 1x Crimson Silk Vest (item 7058), no focus "
+            "needed. trainer_spell rank 185, yellow 205, grey 225",
+        ),
+        Recipe(
+            8799,
+            "Crimson Silk Pantaloons",
+            min_skill=205,
+            max_skill=214,
+            note="4x Bolt of Silk Cloth (4305, own Tailoring output), 2x "
+            "Red Dye (2604, vendor-bought), 2x Silken Thread (4291, "
+            "vendor-bought) -> 1x Crimson Silk Pantaloons (item 7062), no "
+            "focus needed. trainer_spell rank 195, yellow 215, grey 235",
+        ),
+        Recipe(
+            12053,
+            "Black Mageweave Gloves",
+            min_skill=215,
+            max_skill=224,
+            note="2x Bolt of Mageweave (4339, own Tailoring output), 2x "
+            "Heavy Silken Thread (8343, vendor-bought) -> 1x Black "
+            "Mageweave Gloves (item 10003), no focus needed. trainer_spell "
+            "rank 215, yellow 230, grey 260",
+        ),
+        Recipe(
+            12065,
+            "Mageweave Bag",
+            min_skill=225,
+            max_skill=249,
+            note="4x Bolt of Mageweave (4339, own Tailoring output), 2x "
+            "Silken Thread (4291, posted by the maintenance crew - "
+            "craft.CREW_SUPPLIED, guildcorps.shop_steps) -> 1x Mageweave "
+            "Bag (item 10050, 12 slots), no focus needed. trainer_spell "
+            "rank 225, yellow 240, grey 270",
+        ),
+        Recipe(
             18401,
             "Bolt of Runecloth",
             min_skill=250,
@@ -988,6 +1101,26 @@ RECIPES: dict = {
             "FOUR, not the five an earlier pass wrote - Spell.dbc, "
             "see this table's header comment; max_skill was 260, its "
             "own grey value",
+        ),
+        Recipe(
+            18402,
+            "Runecloth Belt",
+            min_skill=260,
+            max_skill=284,
+            note="3x Bolt of Runecloth (14048, own Tailoring output), 1x "
+            "Rune Thread (14341, vendor-bought) -> 1x Runecloth Belt (item "
+            "13856), no focus needed. trainer_spell rank 255, yellow 270, "
+            "grey 300",
+        ),
+        Recipe(
+            18417,
+            "Runecloth Gloves",
+            min_skill=285,
+            max_skill=300,
+            note="5x Bolt of Runecloth (14048, own Tailoring output), 2x "
+            "Rune Thread (14341, vendor-bought) -> 1x Runecloth Gloves "
+            "(item 13863), no focus needed. trainer_spell rank 275 (also "
+            "Pattern 14481, not needed), yellow 290, grey 320",
         ),
     ),
     # FIRST AID (infra#2757's Cooking/First Aid slice) - a SECONDARY skill,
