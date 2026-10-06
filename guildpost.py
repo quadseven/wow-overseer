@@ -170,7 +170,14 @@ def visits(
     by_receiver = _waiting_by_receiver(
         letters, set(roster or ()) - set(sitting_out or ())
     )
-    order = sorted(by_receiver, key=lambda n: (-len(by_receiver[n]), n))
+    # A MEMBER SITTING OUT TO CRAFT GOES FIRST. WALKS_PER_PASS is 3 and the
+    # order was most letters first, so the master tailor with one letter of
+    # cloth from the crew stood behind 23 guildmates (93 letters on wow-dev,
+    # 2026-10-06) and his 20 Linen Cloth sat unclaimed for hours.
+    crafters = set(sitting_out or ())
+    order = sorted(
+        by_receiver, key=lambda n: (n not in crafters, -len(by_receiver[n]), n)
+    )
     out, notes = [], []
     for receiver in order:
         if len(out) >= WALKS_PER_PASS:
