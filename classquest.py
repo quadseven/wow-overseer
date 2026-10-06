@@ -114,7 +114,8 @@ _ITEMS = "".join(
 )
 
 # Every class quest of the classic range, one row each.
-QUESTS_SQL = (
+# Built from this module's own integer constants only (S608 does not apply).
+QUESTS_SQL = (  # noqa: S608
     "SELECT q.ID AS id, q.LogTitle AS title, q.QuestSortID AS sort, "
     "q.MinLevel AS min_level, q.AllowableRaces AS races, "
     "COALESCE(a.AllowableClasses, 0) AS classes, "
@@ -283,6 +284,67 @@ def _pairs(row, key, count, span, positive=True) -> tuple:
     return tuple(out)
 
 
+def _spawn(r) -> Spawn:
+    return Spawn(
+        _int(r.get("guid")),
+        _int(r.get("entry")),
+        _int(r.get("map_id")),
+        float(r.get("x") or 0.0),
+        float(r.get("y") or 0.0),
+        str(r.get("name") or ""),
+        _int(r.get("rank")),
+    )
+
+
+def _givers(giver_rows) -> tuple:
+    """(quest -> start spawns, quest -> end spawns) from GIVERS_SQL's rows."""
+    starts, ends = {}, {}
+    for r in giver_rows or ():
+        side = starts if r.get("role") == "start" else ends
+        side.setdefault(_int(r.get("quest")), []).append(_spawn(r))
+    return starts, ends
+
+
+def _spawns_by_entry(spawn_rows) -> dict:
+    out = {}
+    for r in spawn_rows or ():
+        out.setdefault(_int(r.get("entry")), []).append(_spawn(r))
+    return out
+
+
+def _droppers(loot_rows) -> dict:
+    out = {}
+    for r in loot_rows or ():
+        out.setdefault(_int(r.get("item")), set()).add(_int(r.get("entry")))
+    return out
+
+
+def _quest(r, klass, starts, ends, by_entry, droppers) -> Quest:
+    kills = _pairs(r, "npc", "npc_count", 4, True)
+    items = _pairs(r, "item", "item_count", 6)
+    entries = {e for e, _n in kills}
+    for item, _n in items:
+        entries |= droppers.get(item, set())
+    qid = _int(r.get("id"))
+    return Quest(
+        qid,
+        str(r.get("title") or ""),
+        klass,
+        _int(r.get("min_level")),
+        _int(r.get("races")),
+        abs(_int(r.get("prev"))),
+        _int(r.get("reward")),
+        _int(r.get("display")),
+        _int(r.get("grp")),
+        kills,
+        items,
+        _pairs(r, "npc", "npc_count", 4, False),
+        tuple(starts.get(qid, ())),
+        tuple(ends.get(qid, ())),
+        tuple(s for e in sorted(entries) for s in by_entry.get(e, ())),
+    )
+
+
 def build(quest_rows, giver_rows, spawn_rows, loot_rows, trained_rows=()) -> Book:
     """The Book from the world's rows.
 
@@ -290,65 +352,16 @@ def build(quest_rows, giver_rows, spawn_rows, loot_rows, trained_rows=()) -> Boo
     an objective names (a creature to kill, or one that drops a required item)
     and `loot_rows` LOOT_SQL's.
     """
-    starts, ends = {}, {}
-    for r in giver_rows or ():
-        spawn = Spawn(
-            _int(r.get("guid")),
-            _int(r.get("entry")),
-            _int(r.get("map_id")),
-            float(r.get("x") or 0.0),
-            float(r.get("y") or 0.0),
-            str(r.get("name") or ""),
-        )
-        (starts if r.get("role") == "start" else ends).setdefault(
-            _int(r.get("quest")), []
-        ).append(spawn)
-    by_entry = {}
-    for r in spawn_rows or ():
-        by_entry.setdefault(_int(r.get("entry")), []).append(
-            Spawn(
-                _int(r.get("guid")),
-                _int(r.get("entry")),
-                _int(r.get("map_id")),
-                float(r.get("x") or 0.0),
-                float(r.get("y") or 0.0),
-                str(r.get("name") or ""),
-                _int(r.get("rank")),
-            )
-        )
-    droppers = {}
-    for r in loot_rows or ():
-        droppers.setdefault(_int(r.get("item")), set()).add(_int(r.get("entry")))
+    starts, ends = _givers(giver_rows)
+    by_entry = _spawns_by_entry(spawn_rows)
+    droppers = _droppers(loot_rows)
     quests = {}
     for r in quest_rows or ():
         klass = klass_of(r)
-        if not klass:
-            continue
-        kills = _pairs(r, "npc", "npc_count", 4, True)
-        objects = _pairs(r, "npc", "npc_count", 4, False)
-        items = _pairs(r, "item", "item_count", 6)
-        entries = {e for e, _n in kills}
-        for item, _n in items:
-            entries |= droppers.get(item, set())
-        fields = tuple(s for e in sorted(entries) for s in by_entry.get(e, ()))
-        qid = _int(r.get("id"))
-        quests[qid] = Quest(
-            qid,
-            str(r.get("title") or ""),
-            klass,
-            _int(r.get("min_level")),
-            _int(r.get("races")),
-            abs(_int(r.get("prev"))),
-            _int(r.get("reward")),
-            _int(r.get("display")),
-            _int(r.get("grp")),
-            kills,
-            items,
-            objects,
-            tuple(starts.get(qid, ())),
-            tuple(ends.get(qid, ())),
-            fields,
-        )
+        if klass:
+            quests[_int(r.get("id"))] = _quest(
+                r, klass, starts, ends, by_entry, droppers
+            )
     groups = {}
     for q in quests.values():
         if q.rewards:

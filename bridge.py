@@ -23456,33 +23456,58 @@ _JOB_ROSTER_SQL = "SELECT name FROM overseer_roster WHERE enabled = 1"
 _CLASS_BOOK: "classquest.Book | None" = None
 
 
+def _class_book_reads(cur) -> tuple:
+    """The rows classquest.build takes, or None when the realm has no quests."""
+    ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
+    quests = _job_read(cur, "class quests", classquest.QUESTS_SQL)
+    if not quests:
+        return None
+    givers = _job_read(cur, "class quest givers", classquest.GIVERS_SQL.format(
+        quests=ids(r["id"] for r in quests)))
+    items = {int(r[f"item{i}"]) for r in quests for i in range(1, 7) if r.get(f"item{i}")}
+    loot = _class_rows(cur, "class quest loot", classquest.LOOT_SQL, "items", items)
+    entries = {int(r[f"npc{i}"]) for r in quests for i in range(1, 5)
+               if (r.get(f"npc{i}") or 0) > 0} | {int(r["entry"]) for r in loot}
+    spawns = _class_rows(cur, "class quest spawns", classquest.SPAWNS_SQL, "entries", entries)
+    spells = {int(r[k]) for r in quests for k in ("reward", "display") if r.get(k)}
+    trained = _class_rows(cur, "class quest spells trained", classquest.TRAINED_SQL,
+                          "spells", spells)
+    return quests, givers, spawns, loot, trained
+
+
+def _class_rows(cur, what: str, sql: str, key: str, values) -> list:
+    """One class quest read over an id list; nothing to ask is no rows."""
+    if not values:
+        return []
+    ids = ",".join(str(int(v)) for v in sorted(values))
+    return _job_read(cur, what, sql.format(**{key: ids}))
+
+
 def _class_book():
     global _CLASS_BOOK
     if _CLASS_BOOK is not None:
         return _CLASS_BOOK
-    ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
     with _connect() as conn, conn.cursor() as cur:
-        quests = _job_read(cur, "class quests", classquest.QUESTS_SQL)
-        if not quests:
-            return None
-        qids = [r["id"] for r in quests]
-        givers = _job_read(cur, "class quest givers",
-                           classquest.GIVERS_SQL.format(quests=ids(qids)))
-        items = {int(r[f"item{i}"]) for r in quests for i in range(1, 7)
-                 if r.get(f"item{i}")}
-        loot = _job_read(cur, "class quest loot", classquest.LOOT_SQL.format(
-            items=ids(items))) if items else []
-        entries = {int(r[f"npc{i}"]) for r in quests for i in range(1, 5)
-                   if (r.get(f"npc{i}") or 0) > 0} | {int(r["entry"]) for r in loot}
-        spawns = _job_read(cur, "class quest spawns", classquest.SPAWNS_SQL.format(
-            entries=ids(entries))) if entries else []
-        spells = {int(r[k]) for r in quests for k in ("reward", "display") if r.get(k)}
-        trained = _job_read(cur, "class quest spells trained", classquest.TRAINED_SQL.format(
-            spells=ids(spells))) if spells else []
-    _CLASS_BOOK = classquest.build(quests, givers, spawns, loot, trained)
+        reads = _class_book_reads(cur)
+    if reads is None:
+        return None
+    _CLASS_BOOK = classquest.build(*reads)
     log.info("class quests: read %d quest(s) in %d reward group(s) from the world database",
              len(_CLASS_BOOK.quests), len(_CLASS_BOOK.groups))
     return _CLASS_BOOK
+
+
+def _class_member_reads(cur, book, everyone: str) -> tuple:
+    """(class quest log rows, rewarded rows) of these guids; none without a book."""
+    if not book:
+        return [], []
+    ids = ",".join(str(q) for q in book.quest_ids())
+    return (
+        _job_read(cur, "class quest log", classquest.LOG_SQL.format(
+            guids=everyone, quests=ids)),
+        _job_read(cur, "class quests rewarded", classquest.REWARDED_SQL.format(
+            guids=everyone, quests=ids)),
+    )
 
 
 def _job_read(cur, what: str, sql: str, params=()) -> list:
@@ -23514,10 +23539,7 @@ def _fetch_job_facts(family_names: list) -> dict:
             guids=everyone,
             spells=ids([guildjobs.RITUAL_OF_SUMMONING, *sorted(guildjobs.CRAFT_SPELLS),
                         *(book.spell_ids() if book else ())])))
-        log_rows = _job_read(cur, "class quest log", classquest.LOG_SQL.format(
-            guids=everyone, quests=ids(book.quest_ids()))) if book else []
-        done_rows = _job_read(cur, "class quests rewarded", classquest.REWARDED_SQL.format(
-            guids=everyone, quests=ids(book.quest_ids()))) if book else []
+        log_rows, done_rows = _class_member_reads(cur, book, everyone)
         item_rows = _job_read(cur, "carried items", _JOB_ITEMS_SQL.format(
             guids=everyone, goods=guildjobs.TRADE_GOODS,
             subclasses=ids(sorted(guildjobs.MATERIAL_SUBCLASSES)),
