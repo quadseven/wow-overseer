@@ -78,7 +78,7 @@ UNSUPPORTED = "unsupported"
 RESPAWNING = "respawning"
 # The module's answer to a key it does not know, from a worldserver before
 # mod-overseer#871: the item token is rejected as a malformed row.
-ITEM_TOKEN = " item:"
+ITEM_KEY = " item:"
 ITEMLESS = "itemless"
 UNREADABLE = "unreadable"
 
@@ -235,46 +235,41 @@ def _heard(body) -> str:
     )
 
 
-def judge(holder, status, detail, result, command="") -> Answer:
-    """What one hunt row's status, detail and result say."""
-    status = str(status or "").strip().lower()
-    detail = str(detail or "").strip()
-    body = _body(result)
-    if status in ("pending", "claimed", "verifying", ""):
-        return Answer(RUNNING, "%s's hunt row is running" % holder)
+def _unsupported_answer(status, detail, body, command):
+    """The Answer for a worldserver that does not hunt, or rejects the item
+    key of the row, else None."""
     if unsupported(status, detail):
         return Answer(
             UNSUPPORTED,
             "this worldserver answered the hunt as %r, so it cannot hunt a quest "
             "creature (yet); the walk-only hunt is used until it can" % detail,
         )
-    if (
-        status == "error"
-        and ITEM_TOKEN in str(command)
-        and MALFORMED
-        in (
-            detail,
-            str(body.get("reason") or ""),
-        )
-    ):
+    said = (detail, str(body.get("reason") or ""))
+    if status == "error" and ITEM_KEY in str(command) and MALFORMED in said:
         return Answer(
             ITEMLESS,
             "this worldserver rejects the item key of a hunt row; the plain row is "
             "used until it knows it",
         )
+    return None
+
+
+def _ended(holder, status, detail, body):
+    """The Answer for a hunt that ran and ended (applied or unchanged), else None."""
     if status == "applied":
         return Answer(DONE, "%s's hunt ended%s" % (holder, _heard(body)))
-    if (
-        status == "unchanged"
-        and str(body.get("reason") or "") == classquest.NO_RESPAWN_REASON
-    ):
+    if status != "unchanged":
+        return None
+    if str(body.get("reason") or "") == classquest.NO_RESPAWN_REASON:
         return Answer(RESPAWNING, "%s's target does not respawn in time" % holder)
-    if status == "unchanged":
-        return Answer(
-            NOTHING,
-            "%s's hunt ended with no kill%s"
-            % (holder, " (%s)" % detail if detail else ""),
-        )
+    return Answer(
+        NOTHING,
+        "%s's hunt ended with no kill%s" % (holder, " (%s)" % detail if detail else ""),
+    )
+
+
+def _refusal(holder, detail, body) -> Answer:
+    """The Answer for a refused row, by its retry word."""
     if str(body.get("outcome") or "").lower() == UNREADABLE:
         return Answer(UNREADABLE, "%s left the world during its hunt" % holder)
     reason = str(body.get("reason") or detail or "").strip()
@@ -286,4 +281,18 @@ def judge(holder, status, detail, result, command="") -> Answer:
         return Answer(ELSEWHERE, "%s cannot hunt here: %s" % (holder, why))
     return Answer(
         LATER, "%s's hunt is refused for now: %s" % (holder, why), LATER_WAIT_SECONDS
+    )
+
+
+def judge(holder, status, detail, result, command="") -> Answer:
+    """What one hunt row's status, detail and result say."""
+    status = str(status or "").strip().lower()
+    detail = str(detail or "").strip()
+    body = _body(result)
+    if status in ("pending", "claimed", "verifying", ""):
+        return Answer(RUNNING, "%s's hunt row is running" % holder)
+    return (
+        _unsupported_answer(status, detail, body, command)
+        or _ended(holder, status, detail, body)
+        or _refusal(holder, detail, body)
     )
