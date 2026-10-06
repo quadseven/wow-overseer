@@ -126,6 +126,44 @@ def _retry_word(detail, body) -> str:
     return "later"
 
 
+def _applied(holder, body) -> UseAnswer:
+    """An 'applied' row: the module says progressed or spent, nothing else."""
+    word = str(body.get("outcome") or "").lower()
+    if word == PROGRESSED:
+        return UseAnswer(PROGRESSED, "%s's use moved its quest" % holder)
+    if word == SPENT:
+        return UseAnswer(
+            SPENT, "%s's use was spent; the quest log is read again" % holder
+        )
+    return UseAnswer(
+        UNREADABLE,
+        "%s's use row read 'applied' without a reading in its result" % holder,
+    )
+
+
+def _refused(holder, detail, body) -> UseAnswer:
+    """An 'error' row: unreadable, or a refusal with its retry word."""
+    if str(body.get("outcome") or "").lower() == UNREADABLE:
+        return UseAnswer(
+            UNREADABLE, "%s left the world before its use could be read" % holder
+        )
+    retry = _retry_word(detail, body)
+    why = detail or "the world refused the use and said nothing about why"
+    if retry == NEVER:
+        return UseAnswer(NEVER, "%s cannot do this use: %s" % (holder, why))
+    if retry == ELSEWHERE:
+        return UseAnswer(
+            ELSEWHERE, "%s cannot use it here: %s" % (holder, why), rewalk=True
+        )
+    wait = DEAD_WAIT_SECONDS if detail == TARGET_DEAD else LATER_WAIT_SECONDS
+    return UseAnswer(
+        RETRY,
+        "%s's use is refused for now: %s" % (holder, why),
+        detail in OUT_OF_REACH,
+        wait,
+    )
+
+
 def judge(holder, status, detail, result) -> UseAnswer:
     """What one use row's status, detail and result say."""
     status = str(status or "").strip().lower()
@@ -140,36 +178,9 @@ def judge(holder, status, detail, result) -> UseAnswer:
             "item or object yet; use quests are named as blocked until it can" % detail,
         )
     if status == "applied":
-        word = str(body.get("outcome") or "").lower()
-        if word == PROGRESSED:
-            return UseAnswer(PROGRESSED, "%s's use moved its quest" % holder)
-        if word == SPENT:
-            return UseAnswer(
-                SPENT, "%s's use was spent; the quest log is read again" % holder
-            )
-        return UseAnswer(
-            UNREADABLE,
-            "%s's use row read 'applied' without a reading in its result" % holder,
-        )
+        return _applied(holder, body)
     if status == "unchanged":
         return UseAnswer(
             NOTHING, "%s's use changed nothing: %s" % (holder, detail or "no reading")
         )
-    word = str(body.get("outcome") or "").lower()
-    if word == UNREADABLE:
-        return UseAnswer(
-            UNREADABLE, "%s left the world before its use could be read" % holder
-        )
-    retry = _retry_word(detail, body)
-    why = detail or "the world refused the use and said nothing about why"
-    if retry == NEVER:
-        return UseAnswer(NEVER, "%s cannot do this use: %s" % (holder, why))
-    if retry == ELSEWHERE:
-        return UseAnswer(
-            ELSEWHERE, "%s cannot use it here: %s" % (holder, why), rewalk=True
-        )
-    out_of_reach = detail in OUT_OF_REACH
-    wait = DEAD_WAIT_SECONDS if detail == TARGET_DEAD else LATER_WAIT_SECONDS
-    return UseAnswer(
-        RETRY, "%s's use is refused for now: %s" % (holder, why), out_of_reach, wait
-    )
+    return _refused(holder, detail, body)

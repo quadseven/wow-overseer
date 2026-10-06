@@ -23631,8 +23631,16 @@ def _class_book_reads(cur) -> tuple:
     spells = {int(r[k]) for r in quests for k in ("reward", "display") if r.get(k)}
     trained = _class_rows(cur, "class quest spells trained", classquest.TRAINED_SQL,
                           "spells", spells)
-    # What the quests have a member use (classquest.USE_ITEMS_SQL): items bound
-    # to named creatures, chests that hold a required item, gameobject objectives.
+    use_rows, chest_rows, object_rows = _class_use_reads(cur, quests, items)
+    entries |= {int(r["target"]) for r in use_rows}
+    spawns = _class_rows(cur, "class quest spawns", classquest.SPAWNS_SQL, "entries", entries)
+    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows
+
+
+def _class_use_reads(cur, quests, items) -> tuple:
+    """(use item rows, chest rows, object spawn rows) for what the quests have a
+    member use (classquest.USE_ITEMS_SQL): items bound to named creatures, chests
+    that hold a required item, gameobject objectives."""
     provided = {int(r[f"provided{i}"]) for r in quests for i in range(5)
                 if r.get(f"provided{i}")}
     use_rows = _class_rows(cur, "class quest use items", classquest.USE_ITEMS_SQL,
@@ -23644,9 +23652,7 @@ def _class_book_reads(cur) -> tuple:
                   if (r.get(f"npc{i}") or 0) < 0})
     object_rows = _class_rows(cur, "class quest object spawns",
                               classquest.OBJECT_SPAWNS_SQL, "entries", objects)
-    entries |= {int(r["target"]) for r in use_rows}
-    spawns = _class_rows(cur, "class quest spawns", classquest.SPAWNS_SQL, "entries", entries)
-    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows
+    return use_rows, chest_rows, object_rows
 
 
 def _class_rows(cur, what: str, sql: str, key: str, values) -> list:
