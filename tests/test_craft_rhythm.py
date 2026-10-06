@@ -195,14 +195,22 @@ class TheGatheredTableIsAProjectionOfTheRecipeNotes(unittest.TestCase):
             with self.subTest(spell=spell):
                 self.assertNotIn(spell, craft_rhythm.GATHERED)
 
-    def test_the_own_crafted_intermediates_are_deliberately_absent(self):
-        """2337 needs a Minor Healing Potion, 8776 a Bolt of Linen Cloth, and
-        7151/7156 a Cured Heavy Hide - which has zero rows in every loot table
-        and every vendor on this world, because it exists only if somebody
-        casts 3818. No gathering trip returns with any of them."""
-        for spell in (2337, 8776, 7151, 7156):
+    def test_the_own_crafted_intermediates_are_never_a_gathered_reagent(self):
+        """A Minor Healing Potion (2337), a Bolt of Linen Cloth (8776) and a
+        Cured Heavy Hide (7151/7156) have zero rows in every loot table and
+        every vendor on this world, because they exist only if somebody casts
+        the earlier rung. No gathering trip returns with any of them, so none
+        may be a GATHERED reagent; 2337, 7151 and 7156 list only the half a
+        trip does return (Briarthorn, Heavy Leather) and BOLT_FED casts the
+        earlier rung for the rest."""
+        intermediates = {118, 2996, 4236}
+        for spell, reagents in sorted(craft_rhythm.GATHERED.items()):
             with self.subTest(spell=spell):
-                self.assertNotIn(spell, craft_rhythm.GATHERED)
+                self.assertFalse(intermediates & {r.entry for r in reagents})
+        self.assertNotIn(8776, craft_rhythm.GATHERED)
+        for spell in (2337, 7151, 7156):
+            with self.subTest(spell=spell):
+                self.assertIn(spell, craft_rhythm.BOLT_FED)
 
 
 class TheGatheringModeIsQuestAndNotFarm(unittest.TestCase):
@@ -838,6 +846,8 @@ class BoltFedRungs(unittest.TestCase):
         tailoring = craft.RECIPES[craft.SKILL_IDS["tailoring"]]
         by_spell = {r.spell_id: r for r in tailoring}
         for rung, (weave, bolt) in sorted(craft_rhythm.BOLT_FED.items()):
+            if rung in self.OTHER_TRADES:
+                continue
             with self.subTest(rung=rung):
                 self.assertIn(rung, by_spell)
                 self.assertIn(weave, by_spell)
@@ -847,6 +857,43 @@ class BoltFedRungs(unittest.TestCase):
                 )
                 self.assertEqual(guildcorps.BOLT_OF[bolt.entry].spell, weave)
                 self.assertIn(weave, craft_rhythm.GATHERED)
+
+    OTHER_TRADES = {2337: "alchemy", 7151: "leatherworking", 7156: "leatherworking"}
+
+    def test_the_alchemy_and_leatherworking_feeds_match_the_recipe_tables(self):
+        """Each fed rung is a ladder entry of its own trade, its weave is an
+        earlier entry of the same trade that the realm's Spell.dbc says makes
+        the fed item (118 from 2330, 4236 from 3818), and the weave judges its
+        own gathered half."""
+        made = {2330: 118, 3818: 4236}
+        for rung, trade in sorted(self.OTHER_TRADES.items()):
+            weave, fed = craft_rhythm.BOLT_FED[rung]
+            ladder = {r.spell_id: r for r in craft.RECIPES[craft.SKILL_IDS[trade]]}
+            with self.subTest(rung=rung):
+                self.assertIn(rung, ladder)
+                self.assertIn(weave, ladder)
+                self.assertLess(ladder[weave].max_skill, ladder[rung].min_skill)
+                self.assertEqual(made[weave], fed.entry)
+                self.assertIn(weave, craft_rhythm.GATHERED)
+
+    def test_a_short_alchemist_casts_the_minor_potion_first(self):
+        skills = {"alchemy": 90, "herbalism": 90}
+        short = craft_rhythm.errand(
+            "Ugga", skills, {118: 0, 2450: 5}, primaries=("alchemy",)
+        )
+        self.assertEqual(short.spell, 2330)
+        held = craft_rhythm.errand(
+            "Ugga", skills, {118: 1, 2450: 5}, primaries=("alchemy",)
+        )
+        self.assertEqual(held.spell, 2337)
+
+    def test_a_short_leatherworker_casts_the_hide_first(self):
+        skills = {"leatherworking": 185, "skinning": 185}
+        primaries = ("leatherworking",)
+        short = craft_rhythm.errand("Bork", skills, {4236: 0}, primaries=primaries)
+        self.assertEqual(short.spell, 3818)
+        held = craft_rhythm.errand("Bork", skills, {4236: 1}, primaries=primaries)
+        self.assertEqual(held.spell, 7151)
 
 
 if __name__ == "__main__":

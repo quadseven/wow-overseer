@@ -365,8 +365,8 @@ REAGENTS: dict[int, tuple[tuple[int, str, int, int], ...]] = {
     10507: ((4291, "Silken Thread", 500, 2),),  # Nightscape Headband
     10548: ((4291, "Silken Thread", 500, 4),),  # Nightscape Pants
     10558: ((8343, "Heavy Silken Thread", 2000, 2),),  # Nightscape Boots
-    19049: (
-        (2325, "Black Dye", 1000, 1),  # Wicked Leather Gauntlets
+    19052: (
+        (2325, "Black Dye", 1000, 1),  # Wicked Leather Bracers
         (14341, "Rune Thread", 5000, 1),
     ),
     19082: ((14341, "Rune Thread", 5000, 1),),  # Runic Leather Headband

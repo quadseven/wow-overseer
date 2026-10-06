@@ -147,7 +147,7 @@ MEASURED_FOCUS = {
     10507: 0,
     10548: 0,
     10558: 0,
-    19049: 0,
+    19052: 0,
     19082: 0,
 }
 
@@ -251,7 +251,7 @@ MEASURED_BANDS = {
     10507: (1, 225, 245),
     10548: (1, 250, 270),
     10558: (1, 255, 275),
-    19049: (1, 280, 300),
+    19052: (1, 285, 305),
     19082: (1, 310, 330),
 }
 
@@ -584,15 +584,186 @@ class RecipeForTests(unittest.TestCase):
         self.assertIsNotNone(recipe)
         self.assertEqual(recipe.spell_id, 10558)
 
-    def test_leatherworking_picks_wicked_leather_gauntlets(self):
+    def test_leatherworking_picks_wicked_leather_bracers(self):
         recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 290)
         self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, 19049)
+        self.assertEqual(recipe.spell_id, 19052)
 
     def test_leatherworking_picks_runic_leather_headband_at_the_top(self):
         recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 300)
         self.assertIsNotNone(recipe)
         self.assertEqual(recipe.spell_id, 19082)
+
+
+class LeatherworkingAndAlchemyLadderTests(unittest.TestCase):
+    """The route is wow-professions.com's classic guides; the edges are the
+    realm's (Spell.dbc, SkillLineAbility.dbc and trainer_spell, 2026-10-05)."""
+
+    LEATHER = (
+        (1, 19, 2881),
+        (20, 45, 2152),
+        (46, 55, 9058),
+        (56, 100, 3756),
+        (101, 125, 3763),
+        (126, 137, 2167),
+        (138, 149, 7135),
+        (150, 155, 20649),
+        (156, 165, 3818),
+        (166, 180, 3780),
+        (181, 190, 7151),
+        (191, 200, 7156),
+        (201, 205, 10487),
+        (206, 235, 10507),
+        (236, 250, 10548),
+        (251, 264, 10558),
+        (265, 290, 19052),
+        (291, 300, 19082),
+    )
+    ALCHEMY = (
+        (1, 79, 2330),
+        (80, 109, 2337),
+        (110, 139, 3447),
+        (140, 154, 3173),
+        (155, 174, 7181),
+        (175, 184, 3450),
+        (185, 209, 11449),
+        (210, 214, 11450),
+        (215, 229, 11457),
+        (230, 239, 11460),
+        (240, 264, 11467),
+        (265, 274, 17553),
+        (275, 300, 17556),
+    )
+    # trainer_spell.ReqSkillRank, read 2026-10-05. A recipe with no row is
+    # auto-learned (guildjobs.AUTO_LEARNED) or taught by a pattern only.
+    TAUGHT = {
+        3756: 55,
+        3763: 80,
+        2167: 100,
+        7135: 115,
+        20649: 150,
+        3818: 150,
+        3780: 150,
+        7151: 175,
+        7156: 190,
+        10487: 200,
+        10507: 205,
+        10548: 230,
+        10558: 235,
+        19052: 265,
+        19082: 290,
+        2337: 55,
+        3447: 110,
+        3173: 120,
+        7181: 155,
+        3450: 175,
+        11449: 185,
+        11450: 195,
+        11457: 215,
+        11460: 230,
+        11467: 240,
+        17553: 260,
+        17556: 275,
+    }
+
+    def test_leatherworking_climbs_without_a_break_from_1_to_300(self):
+        skill = goals.SKILL_IDS["leatherworking"]
+        missing = [v for v in range(1, 301) if craft.recipe_for(skill, v) is None]
+        self.assertEqual(missing, [])
+
+    def test_alchemy_climbs_without_a_break_from_1_to_300(self):
+        skill = goals.SKILL_IDS["alchemy"]
+        missing = [v for v in range(1, 301) if craft.recipe_for(skill, v) is None]
+        self.assertEqual(missing, [])
+
+    def test_each_band_hands_to_the_rung_the_route_names(self):
+        for trade, route in (
+            ("leatherworking", self.LEATHER),
+            ("alchemy", self.ALCHEMY),
+        ):
+            skill = goals.SKILL_IDS[trade]
+            for low, high, spell in route:
+                for value in range(low, high + 1):
+                    with self.subTest(trade=trade, value=value):
+                        self.assertEqual(craft.recipe_for(skill, value).spell_id, spell)
+
+    def test_no_rung_starts_below_the_rank_a_trainer_teaches_it(self):
+        """MEASURED_BANDS' MinSkillLineRank reads 1 for nearly every rung, so
+        only trainer_spell.ReqSkillRank catches a bracket aimed too low."""
+        for trade in ("leatherworking", "alchemy"):
+            for recipe in craft.RECIPES[goals.SKILL_IDS[trade]]:
+                if recipe.spell_id in self.TAUGHT:
+                    with self.subTest(recipe=recipe.name):
+                        self.assertGreaterEqual(
+                            recipe.min_skill, self.TAUGHT[recipe.spell_id]
+                        )
+
+    def test_every_rung_is_auto_learned_or_trainer_taught(self):
+        import guildjobs
+
+        for trade in ("leatherworking", "alchemy"):
+            for recipe in craft.RECIPES[goals.SKILL_IDS[trade]]:
+                with self.subTest(recipe=recipe.name):
+                    self.assertTrue(
+                        recipe.spell_id in guildjobs.AUTO_LEARNED
+                        or recipe.spell_id in self.TAUGHT
+                    )
+
+    def test_the_pattern_taught_wicked_leather_gauntlets_is_not_a_rung(self):
+        """19049 has no trainer_spell row; only Pattern 15725 teaches it, and
+        nothing on the ladder learns from a pattern. Wicked Leather Bracers
+        (19052, rank 265) is the guide's own sibling with the same reagents."""
+        spells = {r.spell_id for r in craft.RECIPES[goals.SKILL_IDS["leatherworking"]]}
+        self.assertNotIn(19049, spells)
+        self.assertIn(19052, spells)
+
+    def test_the_fallback_keeps_the_gauntlets_reagents(self):
+        import craft_supply
+
+        self.assertEqual(
+            craft_supply.REAGENTS[19052],
+            (
+                (2325, "Black Dye", 1000, 1),
+                (14341, "Rune Thread", 5000, 1),
+            ),
+        )
+        self.assertEqual(
+            [(r.entry, r.per_cast) for r in craft_rhythm.GATHERED[19052]],
+            [(8170, 8)],
+        )
+        self.assertNotIn(19049, craft_supply.REAGENTS)
+        self.assertNotIn(19049, craft_rhythm.GATHERED)
+
+    def test_no_rung_needs_a_focus_and_none_is_crew_supplied(self):
+        for trade in ("leatherworking", "alchemy"):
+            for recipe in craft.RECIPES[goals.SKILL_IDS[trade]]:
+                with self.subTest(recipe=recipe.name):
+                    self.assertEqual(recipe.focus, 0)
+                    self.assertNotIn(recipe.spell_id, craft.CREW_SUPPLIED)
+
+    def test_every_vendor_reagent_of_a_rung_is_bought(self):
+        """Thread, dye, salt and vials are vendor-bought by craft_supply; a
+        rung whose bought half were missing would be refused every poll."""
+        import craft_supply
+
+        bought = {
+            3756: 2320,
+            2167: 2321,
+            3818: 4289,
+            7151: 2321,
+            7156: 4291,
+            10558: 8343,
+            19082: 14341,
+            3447: 3372,
+            3173: 3371,
+            11457: 8925,
+        }
+        for spell, entry in bought.items():
+            have = {e for e, _n, _p, _q in craft_supply.REAGENTS.get(spell, ())}
+            if spell in craft_supply.REAGENT:
+                have.add(craft_supply.REAGENT[spell][0])
+            with self.subTest(spell=spell):
+                self.assertIn(entry, have)
 
 
 class EngineeringRecipeForTests(unittest.TestCase):

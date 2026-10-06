@@ -222,6 +222,33 @@ RANKS[TAILORING] = (
     Rank(12181, 300, 35, 200, 50000),
 )
 
+# LEATHERWORKING AND ALCHEMY, THE SAME FOUR RANKS (2026-10-05). Read from
+# `trainer_spell` on the dev world (least MoneyCost across the trainers that
+# teach each: 4 for Leatherworking, 3 for Alchemy) and from Spell.dbc (md5
+# 543b9fe6...): each is a wrapper whose SPELL_EFFECT_LEARN_SPELL teaches the
+# rank spell (Leatherworking 2108, 3104, 3811, 10662; Alchemy 2259, 3101,
+# 3464, 11611) and whose SPELL_EFFECT_SKILL_STEP is step 1 to 4 of skill 165
+# or 171: ceilings 75, 150, 225, 300. Expert asks level 20 and Artisan 35,
+# like Tailoring's. `next_rank` and `ranks_due` need nothing else: the
+# family's rank errand reads this table (bridge._RANK_FACTS_SQL), and the
+# crew's `_train_step` reads it for a held crafting trade.
+LEATHERWORKING, ALCHEMY = 165, 171
+RANKS[LEATHERWORKING] = (
+    Rank(2155, 75, 5, 0, 10),
+    Rank(2154, 150, 10, 50, 500),
+    Rank(3812, 225, 20, 125, 5000),
+    Rank(10663, 300, 35, 200, 50000),
+)
+RANKS[ALCHEMY] = (
+    Rank(2275, 75, 5, 0, 10),
+    Rank(2280, 150, 10, 50, 500),
+    Rank(3465, 225, 20, 125, 5000),
+    Rank(11612, 300, 35, 200, 50000),
+)
+# The crafting trades whose rank a member buys once it holds them, beside the
+# gathering trades `split_trades` hands out. A trade is never started here.
+RANKED_CRAFTS = (LEATHERWORKING, ALCHEMY)
+
 # One maintenance member in this many is a tailor: a crew of ten gives three.
 TAILOR_EVERY = 3
 
@@ -824,7 +851,9 @@ def _train_step(member, trades, cap, recent=()):
     if member.level < TRAIN_MIN_LEVEL and trades.get(member.name):
         return None, "%s learns a trade from level %d" % (member.name, TRAIN_MIN_LEVEL)
     wants, cooling = [], []
-    for skill in trades.get(member.name, ()):
+    held = tuple(trades.get(member.name, ()))
+    held += tuple(s for s in RANKED_CRAFTS if member.holds(s) and s not in held)
+    for skill in held:
         value, ceiling = member.skill(skill)
         rank = next_rank(skill, value, ceiling, member.level)
         if rank is not None:
@@ -872,18 +901,27 @@ def _train_step(member, trades, cap, recent=()):
     return step, ""
 
 
-def bandage_to_learn(member):
-    """The First Aid rung this member's skill has reached and not bought, or None.
+# The crafting trades whose rungs above the auto-learned first are trainer
+# purchases a crew member walks to buy: First Aid's bandages, and (2026-10-05)
+# the Leatherworking and Alchemy ladders, every rung of which the realm's
+# trainers teach (craft.py's two ladder blocks). Tailoring is left to
+# guildcorps, which buys its own recipes.
+LEARNED_SKILLS = (FIRST_AID, LEATHERWORKING, ALCHEMY)
 
-    Every bandage above Linen Bandage is a trainer purchase (craft.py's First
-    Aid comment), and `_open_recipe` casts only what `member.known` holds, so
-    without this a crew member walked off Linen Bandage's grey at 60 and
-    stopped. Tailoring is left to guildcorps, which buys its own recipes.
+
+def recipe_to_learn(member, skill):
+    """The rung of `skill` this member's value has reached and not bought, or None.
+
+    Every rung above the first is a trainer purchase (craft.py's ladder
+    comments), and `_open_recipe` casts only what `member.known` holds, so
+    without this a crew member walked off its auto-learned rung and stopped.
     """
-    value, ceiling = member.skill(FIRST_AID)
+    if skill not in LEARNED_SKILLS:
+        return None
+    value, ceiling = member.skill(skill)
     if ceiling <= 0:
         return None
-    recipe = craft.recipe_for(FIRST_AID, value)
+    recipe = craft.recipe_for(skill, value)
     if recipe is None or recipe.focus:
         return None
     if recipe.spell_id in AUTO_LEARNED or recipe.spell_id in member.known:
@@ -891,33 +929,40 @@ def bandage_to_learn(member):
     return recipe
 
 
+def bandage_to_learn(member):
+    """The First Aid rung this member's skill has reached and not bought, or None."""
+    return recipe_to_learn(member, FIRST_AID)
+
+
 def _learn_step(member, cap, recent=()):
-    """Walk to a First Aid trainer and buy the bandage the skill has reached.
+    """Walk to a trainer and buy the rung a held crafting trade has reached.
 
     The same `walk-to-trainer` row guildcorps sends a tailor with, carrying a
     `learn:` list: mod-overseer buys each listed spell through the core's own
     Trainer::TeachSpell, which takes the money and refuses a spell the skill
     is short of. Keyed on the skill so a failed walk cools down like a rank.
     """
-    recipe = bandage_to_learn(member)
-    if recipe is None or _training_cooling(member.name, FIRST_AID, recent):
-        return None
-    return guildcorps.Step(
-        member.name,
-        "train",
-        FIRST_AID,
-        "%s walks to a trainer to learn %s for its First Aid"
-        % (member.name, recipe.name),
-        rows=(
-            guildcorps.Row(
-                "cast",
-                "walk-to-trainer skill:%d learn:%d%s"
-                % (FIRST_AID, recipe.spell_id, _cap_word(cap)),
-                "",
-                source_for("train", member.name),
+    for skill in LEARNED_SKILLS:
+        recipe = recipe_to_learn(member, skill)
+        if recipe is None or _training_cooling(member.name, skill, recent):
+            continue
+        return guildcorps.Step(
+            member.name,
+            "train",
+            skill,
+            "%s walks to a trainer to learn %s for its %s"
+            % (member.name, recipe.name, SKILL_NAMES[skill]),
+            rows=(
+                guildcorps.Row(
+                    "cast",
+                    "walk-to-trainer skill:%d learn:%d%s"
+                    % (skill, recipe.spell_id, _cap_word(cap)),
+                    "",
+                    source_for("train", member.name),
+                ),
             ),
-        ),
-    )
+        )
+    return None
 
 
 def _open_recipe(member, skill):
@@ -958,11 +1003,35 @@ def bought_reagents(spell_id) -> tuple:
     return tuple(out)
 
 
+def _weave_recipe(member, skill, spell):
+    """(recipe, casts) of the earlier rung `spell` of `skill` when this member
+    holds it and its materials, else (None, 0)."""
+    recipe = next(
+        (r for r in craft.RECIPES.get(skill, ()) if r.spell_id == spell), None
+    )
+    if recipe is None or recipe.focus:
+        return None, 0
+    if recipe.spell_id not in AUTO_LEARNED and recipe.spell_id not in member.known:
+        return None, 0
+    needs = [
+        (int(r.entry), int(r.per_cast)) for r in craft_rhythm.GATHERED.get(spell, ())
+    ] + list(bought_reagents(spell))
+    if not needs:
+        return None, 0
+    casts = min(member.count(entry) // max(1, n) for entry, n in needs)
+    return (recipe, min(casts, CRAFT_BATCH)) if casts > 0 else (None, 0)
+
+
 def _craft_recipe(member, skill):
     """(recipe, casts) this member can cast now toward `skill`, or (None, 0)."""
     recipe = _open_recipe(member, skill)
     if recipe is None:
         return None, 0
+    fed = craft_rhythm.BOLT_FED.get(recipe.spell_id)
+    if fed is not None and member.count(fed[1].entry) < fed[1].per_cast:
+        # The rung eats its own earlier output (a Cured Heavy Hide, a Minor
+        # Healing Potion): cast that first, as craft_rhythm.errand does.
+        return _weave_recipe(member, skill, fed[0])
     needs = [
         (int(r.entry), int(r.per_cast)) for r in craft_rhythm.GATHERED[recipe.spell_id]
     ] + list(bought_reagents(recipe.spell_id))
@@ -977,6 +1046,12 @@ def craft_entries(member) -> frozenset:
         recipe = _open_recipe(member, skill)
         if recipe is not None:
             out.update(int(r.entry) for r in craft_rhythm.GATHERED[recipe.spell_id])
+            fed = craft_rhythm.BOLT_FED.get(recipe.spell_id)
+            if fed is not None:
+                # What the rung eats of its own earlier output, and what that
+                # earlier cast eats, stay in the bags too.
+                out.add(int(fed[1].entry))
+                out.update(int(r.entry) for r in craft_rhythm.GATHERED.get(fed[0], ()))
     return frozenset(out)
 
 
