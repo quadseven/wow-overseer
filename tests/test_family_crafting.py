@@ -234,6 +234,9 @@ def _rhythm_self(world, log):
             "_protected_guids": lambda: {1: "Grug"},
             "_queue_owns_job": world.queue_owns_job,
             "_standing_jobs": world.standing_jobs,
+            # Nobody sits out to craft (standin.py).
+            "_standin_out": frozenset,
+            "_standin_running": list,
             "_fetch_trade_skills": world.skills,
             "_bags_wanted_for": lambda cohort=None: 0,
             "_guild_bag_floor_for": lambda cohort=None: None,
