@@ -46,6 +46,7 @@ PURE MODULE: a row's answer in, a verdict out. No MySQL, no clock, no sleeping.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 import classquest
@@ -72,6 +73,13 @@ LATER = "later"
 ELSEWHERE = "elsewhere"
 NEVER = "never"
 UNSUPPORTED = "unsupported"
+# A hunt that killed its target and found no respawn due before its clock ran
+# out: the member is left alone (classquest.NO_RESPAWN_BACKOFF_MINUTES).
+RESPAWNING = "respawning"
+# The module's answer to a key it does not know, from a worldserver before
+# mod-overseer#871: the item token is rejected as a malformed row.
+ITEM_TOKEN = " item:"
+ITEMLESS = "itemless"
 UNREADABLE = "unreadable"
 
 # The module's answers that mean "this worldserver does not hunt".
@@ -114,24 +122,40 @@ def is_hunt_row(command) -> bool:
     return str(command or "").split(" ", 1)[0] == VERB
 
 
-def command(quest: classquest.Quest, entry) -> str:
+def command(quest: classquest.Quest, entry, held=None, item_form=True) -> str:
     """The `hunt-spawn` row for `entry`, a creature of the quest's objective,
     or "" when the quest has no creature to hunt there.
 
-    A kill objective asks for its own kill count, so the row finishes by itself;
-    a dropped item asks for no count (the drop rate is not read), and the
-    bridge ends the row when the member's counters say the quest is complete.
+    A kill objective asks for its own kill count, so the row finishes by itself.
+    An item the creature drops (mod-overseer#871) names the item and how many
+    are still missing, `item:<entry> count:<needed>`: the module loots the
+    corpse itself and ends the row `done` when the bot holds that many. `held`
+    is the member's count of an item (guildjobs.Member.count). With
+    `item_form` False (a worldserver that rejects `item:`) or no known item,
+    the row asks for neither, and the bridge ends it when the member's counters
+    say the quest is complete.
     """
     entry = int(entry or 0)
     if entry <= 0:
         return ""
     kills = dict(quest.kills)
-    word = (
-        " count:%d" % min(MAX_COUNT, max(1, int(kills[entry])))
-        if entry in kills
-        else ""
-    )
+    if entry in kills:
+        word = " count:%d" % min(MAX_COUNT, max(1, int(kills[entry])))
+        return "%s creature:%d%s max:%d" % (VERB, entry, word, MAX_SECONDS)
+    word = ""
+    wants = dict(quest.items)
+    item = next((i for i, e in quest.drops if e == entry and i in wants), 0)
+    if item and item_form:
+        have = int(held(item)) if callable(held) else 0
+        need = min(MAX_COUNT, max(1, int(wants[item]) - have))
+        word = " item:%d count:%d" % (item, need)
     return "%s creature:%d%s max:%d" % (VERB, entry, word, MAX_SECONDS)
+
+
+def plain_form(row) -> str:
+    """The same row without the `item:` and `count:` keys, for a worldserver
+    that rejects the item token."""
+    return re.sub(r" (?:item|count):\d+", "", str(row or ""))
 
 
 def wanted(quest: classquest.Quest) -> int:
@@ -140,13 +164,17 @@ def wanted(quest: classquest.Quest) -> int:
     return sum(n for _e, n in quest.kills) + sum(n for _i, n in quest.items)
 
 
-def finished(quest: classquest.Quest, status, progress) -> bool:
+def finished(quest: classquest.Quest, status, progress, held=None) -> bool:
     """True when character_queststatus says the objective is complete: the
-    core's own complete status, or counters (their sum, as LOG_SQL reads them)
-    that reach what the quest requires."""
+    core's own complete status, counters (their sum, as LOG_SQL reads them)
+    that reach what the quest requires, or, for an item objective with no kill
+    in it, the bags (`held`, item entry -> count) holding every item required."""
     try:
         if int(status) == classquest.STATUS_COMPLETE:
             return True
+        if held and quest.items and not quest.kills:
+            if all(int(held.get(i, 0)) >= n for i, n in quest.items):
+                return True
         return 0 < wanted(quest) <= int(progress)
     except (TypeError, ValueError):
         return False
@@ -207,7 +235,7 @@ def _heard(body) -> str:
     )
 
 
-def judge(holder, status, detail, result) -> Answer:
+def judge(holder, status, detail, result, command="") -> Answer:
     """What one hunt row's status, detail and result say."""
     status = str(status or "").strip().lower()
     detail = str(detail or "").strip()
@@ -220,8 +248,27 @@ def judge(holder, status, detail, result) -> Answer:
             "this worldserver answered the hunt as %r, so it cannot hunt a quest "
             "creature (yet); the walk-only hunt is used until it can" % detail,
         )
+    if (
+        status == "error"
+        and ITEM_TOKEN in str(command)
+        and MALFORMED
+        in (
+            detail,
+            str(body.get("reason") or ""),
+        )
+    ):
+        return Answer(
+            ITEMLESS,
+            "this worldserver rejects the item key of a hunt row; the plain row is "
+            "used until it knows it",
+        )
     if status == "applied":
         return Answer(DONE, "%s's hunt ended%s" % (holder, _heard(body)))
+    if (
+        status == "unchanged"
+        and str(body.get("reason") or "") == classquest.NO_RESPAWN_REASON
+    ):
+        return Answer(RESPAWNING, "%s's target does not respawn in time" % holder)
     if status == "unchanged":
         return Answer(
             NOTHING,
