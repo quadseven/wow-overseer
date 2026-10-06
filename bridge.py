@@ -58,6 +58,7 @@ import campaignqueue
 import classic
 import classask
 import classparty
+import classhunt
 import classquest
 import classuse
 import guildbank
@@ -5629,6 +5630,9 @@ class Bridge(discord.Client):
         # quest use verbs (quadseven/mod-overseer#865): the class quest plan
         # works from classquest.Book.plain() meanwhile (classuse.py).
         self._class_use_unsupported_until: float = 0.0
+        # The same for the hunt verb (quadseven/mod-overseer#869): the class
+        # quest hunt is the walk alone meanwhile (classhunt.py).
+        self._class_hunt_unsupported_until: float = 0.0
         # The last comparison written per (kind, subject, item guid), so an
         # unchanged answer is recorded once rather than every economy cycle.
         self._jev_recorded: dict = {}
@@ -13962,6 +13966,12 @@ class Bridge(discord.Client):
                 | set(self._guild_mail_runs) | set(self._crafter_walks))
         cap = self._guild_walk_cap()
         spawn_walks = now >= self._job_walks_unsupported.get("spawn", 0.0)
+        # The hunt slots the realm has free (classhunt.py); none while this
+        # worldserver is known not to hunt, which keeps the walk-only hunt.
+        self._class_hunts.slots = (
+            None if now < self._class_hunt_unsupported_until
+            else classhunt.Slots(classhunt.free_slots(
+                facts.get("hunt_open"), HUNTS_AT_ONCE)))
         plan = await self._plan_guild_jobs(
             members, facts, busy, cap, spawn_walks, cohort)
         self._log_guild_job_plan(members, plan)
@@ -14257,6 +14267,10 @@ class Bridge(discord.Client):
                     if not await self._class_use_row(step, row, cap):
                         return
                     continue
+                # A class quest hunt row (classhunt.py) is followed to its end.
+                if classhunt.is_hunt_row(row.command):
+                    await self._class_hunt_row(step, row)
+                    continue
                 # A craft batch is one cast row written `repeat` times, one at
                 # a time, as the corps' runner writes it.
                 casts = max(1, int(step.repeat))
@@ -14316,6 +14330,77 @@ class Bridge(discord.Client):
             else:
                 await asyncio.sleep(verdict.wait)
         return False
+
+    async def _class_hunt_row(self, step, row) -> bool:
+        """Write a class quest hunt row and follow it (classhunt.py); True when
+        the quest's objective is complete.
+
+        The row is read every POLL_SECONDS and so are the member's quest
+        counters: the moment they say the objective is done the row is ended
+        (it leaves verifying; the module notices within 10 seconds) and the
+        step is over, so the next pass hands the quest in. A refusal that is
+        worth asking again waits and asks again, at most MAX_ATTEMPTS times;
+        `elsewhere` leaves this pack for the next one; `never` gives the
+        quest up so the member asks guild chat (classask.py); a worldserver
+        that does not hunt is not asked again for WALK_UNSUPPORTED_SECONDS.
+        """
+        quest = (self._class_book.quests.get(int(step.key))
+                 if self._class_book is not None else None)
+        began = time.monotonic()
+        for attempt in range(1, classhunt.MAX_ATTEMPTS + 1):
+            if time.monotonic() - began >= classhunt.FOLLOW_SECONDS:
+                return False
+            row_id = await asyncio.to_thread(_insert_corps_row, step.holder, row)
+            if not row_id:
+                return False
+            verdict, complete = await self._follow_class_hunt(step, row_id, quest)
+            log.info("guild jobs: hunt row %d for %s (%s): %s", row_id, step.holder,
+                     row.command, verdict.said)
+            if complete:
+                return True
+            if verdict.state == classhunt.UNSUPPORTED:
+                self._class_hunt_unsupported_until = (
+                    time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS)
+                log.warning("guild jobs: this worldserver does not hunt a quest creature; "
+                            "class quest hunts are the walk alone for %d minutes",
+                            int(guildroute.WALK_UNSUPPORTED_SECONDS // 60))
+                return False
+            if verdict.state == classhunt.NEVER:
+                self._class_hunts.give_up(step.holder, step.key, time.time())
+                return False
+            if verdict.state == classhunt.ELSEWHERE:
+                if step.spot is not None:
+                    self._class_hunts.observe(
+                        step.holder, step.key, 0, step.spot, time.time(), True)
+                return False
+            if verdict.state != classhunt.LATER or attempt == classhunt.MAX_ATTEMPTS:
+                return False
+            await asyncio.sleep(verdict.wait)
+        return False
+
+    async def _follow_class_hunt(self, step, row_id: int, quest):
+        """(the row's last Answer, whether the quest is complete): read the row
+        and the member's counters every POLL_SECONDS until the row leaves
+        verifying, the quest is complete (the row is then ended) or the row's
+        own time and a little more has passed."""
+        deadline = time.monotonic() + classhunt.MAX_SECONDS + classhunt.GRACE_SECONDS
+        verdict = classhunt.Answer(classhunt.RUNNING)
+        while True:
+            await asyncio.sleep(classhunt.POLL_SECONDS)
+            answer = await asyncio.to_thread(_command_answer, row_id)
+            if answer is None:
+                return classhunt.Answer(classhunt.UNREADABLE, "hunt row %d is unreadable" % row_id), False
+            verdict = classhunt.judge(step.holder, answer.get("status"),
+                                      answer.get("detail"), answer.get("result"))
+            if quest is not None:
+                state = await asyncio.to_thread(_class_quest_state, step.holder, quest.id)
+                if state and classhunt.finished(quest, *state):
+                    await asyncio.to_thread(_end_hunt_row, row_id)
+                    return classhunt.Answer(
+                        classhunt.DONE, "%s's quest objective is complete; the hunt row "
+                        "was ended" % step.holder), True
+            if verdict.state != classhunt.RUNNING or time.monotonic() >= deadline:
+                return verdict, False
 
     async def _class_rewalk(self, step, cap: float) -> bool:
         """Walk a class quest step's walk row again; True when it arrived."""
@@ -23268,6 +23353,8 @@ _GUILD_HELD_GEAR_SQL = (
 # How many route holders one pass asks "are you at a mailbox" about.
 # The module's Overseer.FarWalk.AtOnce: set both to the same number.
 FAR_WALKS_AT_ONCE = int(os.environ.get("FAR_WALKS_AT_ONCE", guildroute.FAR_WALKS_AT_ONCE))
+# The realm's hunt ceiling (the module's Overseer.Hunt.AtOnce).
+HUNTS_AT_ONCE = int(os.environ.get("HUNTS_AT_ONCE", classhunt.HUNTS_AT_ONCE))
 GUILD_ROUTE_MAILBOX_CHECKS = int(os.environ.get("GUILD_ROUTE_MAILBOX_CHECKS", "20"))
 # How many notes one pass logs line by line before it summarises the rest.
 GUILD_ROUTE_NOTE_LINES = 5
@@ -23758,6 +23845,33 @@ def _corps_masters_at_mailbox(members) -> set:
     return _holders_at_mailbox(holders, _fetch_positions(holders))
 
 
+def _class_quest_state(name: str, quest_id: int):
+    """(status, summed counters) of one character's quest as character_queststatus
+    holds it now, None when the character has no such quest in its log."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT q.status AS status, (q.mobcount1 + q.mobcount2 + q.mobcount3 + "
+            "q.mobcount4 + q.itemcount1 + q.itemcount2 + q.itemcount3 + q.itemcount4 + "
+            "q.itemcount5 + q.itemcount6) AS progress FROM character_queststatus q "
+            "JOIN characters c ON c.guid = q.guid WHERE c.name = %s AND q.quest = %s",
+            (name, int(quest_id)),
+        )
+        row = cur.fetchone()
+        return (row["status"], row["progress"]) if row else None
+
+
+def _end_hunt_row(row_id: int) -> None:
+    """End a running hunt row: it leaves verifying, which the module reads as
+    the bridge's word to stop (there is no cancel verb)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_command SET status = 'applied', "
+            "detail = 'the quest objective is complete; the bridge ended the hunt' "
+            "WHERE id = %s AND status = 'verifying'",
+            (int(row_id),),
+        )
+
+
 def _insert_corps_row(holder: str, row) -> int:
     """One overseer_command row for the corps, as the step named it.
 
@@ -23845,6 +23959,14 @@ _JOB_FAR_WALKS_OPEN_SQL = (
     "WHERE command LIKE 'walk-to-%% max:%%' "
     "AND status IN ('pending', 'claimed', 'verifying') "
     "AND created_at > NOW() - INTERVAL %s SECOND"
+)
+# THE HUNTS THE REALM HAS UNDER WAY (classhunt.py): every hunt-spawn row not yet
+# finished. A hunt row never runs past the module's own 1800 second ceiling.
+_JOB_HUNTS_OPEN_SQL = (
+    "SELECT COUNT(*) AS open_hunts FROM overseer_command "
+    "WHERE command LIKE 'hunt-spawn %%' "
+    "AND status IN ('pending', 'claimed', 'verifying') "
+    "AND created_at > NOW() - INTERVAL 1800 SECOND"
 )
 # `kind = 'summon'` first, for the (kind, status, updated_at) index.
 _JOB_PENDING_SUMMONS_SQL = (
@@ -23995,6 +24117,12 @@ def _far_walks_open(cur):
     return int(rows[0]["open_walks"]) if rows else None
 
 
+def _hunts_open(cur):
+    """The hunt rows still open, None when the read found no row."""
+    rows = _job_read(cur, "open hunts", _JOB_HUNTS_OPEN_SQL)
+    return int(rows[0]["open_hunts"]) if rows else None
+
+
 def _fetch_job_facts(family_names: list) -> dict:
     """Everything guildjobs.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
@@ -24033,6 +24161,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                  flightlearn.FLIGHT_MASTER_NPC_FLAG)))
         roster_rows = _job_read(cur, "roster names", _JOB_ROSTER_SQL)
         far_open = _far_walks_open(cur)
+        hunt_open = _hunts_open(cur)
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)
@@ -24041,6 +24170,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  log_rows=log_rows, done_rows=done_rows)
     facts["class_book"] = book
     facts["far_open"] = far_open
+    facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}
     # Guilds that own a bank tab (#395). A schema without the table reads as
     # none, so a post never goes to a bank this world cannot show exists.

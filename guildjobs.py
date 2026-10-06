@@ -111,6 +111,7 @@ from dataclasses import dataclass, field, replace
 
 import campaignplan
 import classic
+import classhunt
 import classquest
 import council
 import craft
@@ -2133,8 +2134,7 @@ def plan(
         why = _step_refusal(m, busy, started, allowance)
         if why:
             notes.append(why)
-            if far is not None:
-                far.release(m.name)
+            _release_slots(m.name, far, hunts)
             continue
         started[m.guild] = started.get(m.guild, 0) + 1
         busy.add(m.name)
@@ -2155,6 +2155,14 @@ def plan(
         owed=owed,
         released=released,
     )
+
+
+def _release_slots(name, far, hunts) -> None:
+    """Give back the far walk and hunt slots a step took that the plan then
+    refused."""
+    for slots in (far, getattr(hunts, "slots", None)):
+        if slots is not None:
+            slots.release(name)
 
 
 def _allowance(step, counters, per_guild):
@@ -2593,13 +2601,20 @@ def class_step(m, book, recent, cap, hunts=None, now=0.0, far=None):
     # only within a pack's width, not the whole field's.
     tried = class_avoid(m, book, recent, hunts, now)[0].get(move.quest)
     reach = classquest.PACK_YARDS if tried else classquest.HUNT_REACH
-    if move.kind == classquest.HUNT and _near(m, spot, reach):
+    slots = getattr(hunts, "slots", None)
+    arrived = move.kind == classquest.HUNT and _near(m, spot, reach)
+    if arrived and slots is None:
         return None, move.said, note
     held = _class_held(m, move, spot, cap, recent, hunts, now, far)
     if held is not None:
         return None, move.said, _join(note, held)
     if move.kind == classquest.HUNT:
-        return _spot_step(m, spot, classquest.ACTION, cap, move.said), move.said, note
+        step, wait = _hunt_step(m, move, spot, book, cap, slots, arrived)
+        if step is None:
+            if hunts:
+                hunts.pause(m.name, move.quest, now)
+            return None, move.said, _join(note, wait)
+        return step, move.said, note
     if move.kind == classquest.USE:
         return _use_step(m, move, spot, cap), move.said, note
     verb = "turnin" if move.kind == classquest.TURN_IN else "take"
@@ -2641,6 +2656,8 @@ def _class_held(m, move, spot, cap, recent, hunts, now, far):
     if _cooling(m, classquest.ACTION, recent):
         return ""
     walks = move.kind != classquest.USE or not _near(m, spot, classquest.USE_NEAR)
+    if move.kind == classquest.HUNT and _near(m, spot, classhunt.HUNT_NEAR):
+        walks = False
     if far is None or not walks or not _far_class_walk(m, spot, cap):
         return None
     if far.take(m.name):
@@ -2661,6 +2678,42 @@ def _held_note(m, wait) -> str:
         m.name,
         wait,
     )
+
+
+def _hunt_step(m, move, spot, book, cap, slots, arrived):
+    """(step, note) for a member's hunt. With a hunt slot free, the step is the
+    walk to the pack and then the `hunt-spawn` row for the creature there
+    (classhunt.py), no walk for a member already at it; with none left, the walk
+    alone (today's hunt) for a member not yet there, and no step with a note for
+    one that is. With no hunt verb (`slots` None) the walk alone, as it was."""
+    walk_only = _spot_step(m, spot, classquest.ACTION, cap, move.said)
+    if slots is None:
+        return walk_only, ""
+    quest = book.quests.get(int(move.quest)) if book is not None else None
+    row = classhunt.command(quest, move.spot.entry) if quest is not None else ""
+    if not row or not slots.take(m.name):
+        if arrived:
+            return None, "%s waits for a hunt slot on the realm" % m.name
+        return walk_only, ""
+    walk = None
+    if not _near(m, spot, classhunt.HUNT_NEAR):
+        walk = guildcorps.Row(
+            "job",
+            spot.command + _cap_word(cap),
+            "",
+            source_for(classquest.ACTION + "-walk", m.name),
+        )
+    step = guildcorps.Step(
+        m.name,
+        classquest.ACTION,
+        int(move.quest),
+        move.said,
+        rows=(guildcorps.Row("job", row, "", source_for(classquest.ACTION, m.name)),),
+        walk=walk,
+        goal=spot.name,
+        spot=spot,
+    )
+    return step, ""
 
 
 def _use_step(m, move, spot, cap):

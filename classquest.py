@@ -1321,6 +1321,10 @@ class Hunts:
 
     def __init__(self):
         self._by: dict = {}
+        # The realm's free hunt slots (classhunt.Slots) for the pass being
+        # planned, set by the bridge before it plans; None keeps the walk-only
+        # hunt (a worldserver with no hunt verb, or one not yet read).
+        self.slots = None
 
     def get(self, name):
         return self._by.get(name)
