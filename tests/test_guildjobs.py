@@ -332,6 +332,183 @@ class TheBandageLadder(unittest.TestCase):
         self.assertTrue(step is None or step.action != "train")
 
 
+LEATHER, ALCHEMY = guildjobs.LEATHERWORKING, guildjobs.ALCHEMY
+
+
+class TheLeatherworkingAndAlchemyRanks(unittest.TestCase):
+    """The four trainer ranks of both trades, through the one rank rule the
+    crew and the family already share (next_rank, ranks_due)."""
+
+    RANK_SPELLS = {
+        LEATHER: (2155, 2154, 3812, 10663),
+        ALCHEMY: (2275, 2280, 3465, 11612),
+    }
+
+    def test_the_ranks_are_apprentice_journeyman_expert_artisan(self):
+        for skill, spells in self.RANK_SPELLS.items():
+            ranks = guildjobs.RANKS[skill]
+            with self.subTest(skill=skill):
+                self.assertEqual(tuple(r.spell for r in ranks), spells)
+                self.assertEqual(tuple(r.cap for r in ranks), (75, 150, 225, 300))
+                self.assertEqual(tuple(r.needs for r in ranks), (0, 50, 125, 200))
+                self.assertEqual(tuple(r.level for r in ranks), (5, 10, 20, 35))
+
+    def test_next_rank_climbs_the_four_steps(self):
+        for skill, spells in self.RANK_SPELLS.items():
+            with self.subTest(skill=skill):
+                self.assertEqual(guildjobs.next_rank(skill, 0, 0, 5).spell, spells[0])
+                self.assertEqual(
+                    guildjobs.next_rank(skill, 72, 75, 10).spell, spells[1]
+                )
+                self.assertEqual(
+                    guildjobs.next_rank(skill, 147, 150, 20).spell, spells[2]
+                )
+                self.assertEqual(
+                    guildjobs.next_rank(skill, 222, 225, 35).spell, spells[3]
+                )
+                self.assertIsNone(guildjobs.next_rank(skill, 222, 225, 34))
+                self.assertIsNone(guildjobs.next_rank(skill, 297, 300, 60))
+
+    def test_the_family_is_due_a_rank_only_for_a_trade_the_roster_names(self):
+        skills = {LEATHER: (147, 150), ALCHEMY: (72, 75)}
+        self.assertEqual((), guildjobs.ranks_due(38, 60000, skills, ()))
+        self.assertEqual((ALCHEMY,), guildjobs.ranks_due(38, 60000, skills, (ALCHEMY,)))
+        self.assertEqual(
+            (ALCHEMY, LEATHER),
+            guildjobs.ranks_due(38, 60000, skills, (ALCHEMY, LEATHER)),
+        )
+
+    def test_a_short_purse_waits_and_an_unheld_trade_is_never_started(self):
+        self.assertEqual(
+            (), guildjobs.ranks_due(38, 4999, {LEATHER: (147, 150)}, (LEATHER,))
+        )
+        self.assertEqual(
+            (), guildjobs.ranks_due(38, 60000, {ALCHEMY: (0, 0)}, (ALCHEMY,))
+        )
+
+    def test_the_bridge_reads_both_trades_for_the_family(self):
+        self.assertIn(LEATHER, guildjobs.RANKS)
+        self.assertIn(ALCHEMY, guildjobs.RANKS)
+        self.assertIn("sorted(guildjobs.RANKS)", BRIDGE)
+
+    def test_a_crew_member_that_holds_the_trade_buys_its_next_rank(self):
+        for skill in self.RANK_SPELLS:
+            m = member(
+                "Brewer",
+                level=12,
+                money=900,
+                skills={skill: (72, 75), H: (40, 75)},
+            )
+            with self.subTest(skill=skill):
+                step = only_step(plan([m]), "Brewer")
+                self.assertEqual(step.action, "train")
+                self.assertEqual(
+                    step.rows[0].command, "walk-to-trainer skill:%d" % skill
+                )
+
+    def test_a_trade_the_crew_member_does_not_hold_is_never_started(self):
+        m = member("Keeper", level=40, money=90000)
+        self.assertNotIn(
+            "skill:%d" % LEATHER, only_step(plan([m]), "Keeper").rows[0].command
+        )
+
+
+class TheLeatherAndAlchemyLadders(unittest.TestCase):
+    """Past each trade's auto-learned rungs every rung is a trainer purchase,
+    so a crew member buys the rung its skill has reached, then casts it."""
+
+    def maker(self, skill, value, cap, known=frozenset(), carried=()):
+        return member(
+            "Maker",
+            level=40,
+            skills={skill: (value, cap), H: (40, 75)},
+            known=known,
+            carried=carried,
+        )
+
+    def test_it_walks_to_a_trainer_for_the_leather_rung_it_has_reached(self):
+        step = only_step(plan([self.maker(LEATHER, 60, 75)]), "Maker")
+        self.assertEqual(step.action, "train")
+        self.assertEqual(step.rows[0].command, "walk-to-trainer skill:165 learn:3756")
+        self.assertIn("learn Embossed Leather Gloves", step.said)
+
+    def test_it_walks_to_a_trainer_for_the_alchemy_rung_it_has_reached(self):
+        step = only_step(plan([self.maker(ALCHEMY, 120, 150)]), "Maker")
+        self.assertEqual(step.rows[0].command, "walk-to-trainer skill:171 learn:3447")
+
+    def test_an_auto_learned_rung_needs_no_trainer(self):
+        self.assertIsNone(
+            guildjobs.recipe_to_learn(self.maker(LEATHER, 30, 75), LEATHER)
+        )
+        self.assertIsNone(
+            guildjobs.recipe_to_learn(self.maker(ALCHEMY, 30, 75), ALCHEMY)
+        )
+
+    def test_a_known_rung_is_not_bought_twice(self):
+        m = self.maker(LEATHER, 60, 75, known=frozenset({3756}))
+        self.assertIsNone(guildjobs.recipe_to_learn(m, LEATHER))
+
+    def test_a_trade_with_no_learn_path_is_left_alone(self):
+        self.assertIsNone(guildjobs.recipe_to_learn(self.maker(164, 100, 150), 164))
+
+    def test_once_known_it_casts_the_rung_from_its_leather(self):
+        m = self.maker(
+            LEATHER,
+            60,
+            75,
+            known=frozenset({3756}),
+            carried=(stack(1, 2318, 9, subclass=6), stack(2, 2320, 4, subclass=0)),
+        )
+        step = only_step(plan([m]), "Maker")
+        self.assertEqual(step.action, "craft")
+        self.assertEqual(step.rows[0].command, "3756")
+        self.assertEqual(step.repeat, 2)
+
+    def test_a_failed_learn_walk_cools_down_on_the_skill(self):
+        failed = (guildjobs.Recent("Maker", "train", 30, "error", LEATHER),)
+        step = only_step(plan([self.maker(LEATHER, 60, 75)], recent=failed), "Maker")
+        self.assertTrue(step is None or step.action != "train")
+
+    def test_short_of_a_cured_hide_it_casts_the_hide_first(self):
+        m = self.maker(
+            LEATHER,
+            185,
+            225,
+            known=frozenset({7151, 3818}),
+            carried=(
+                stack(1, 4234, 20, subclass=6),
+                stack(2, 2321, 4, subclass=0),
+                stack(3, 4235, 2, subclass=6),
+                stack(4, 4289, 6, subclass=0),
+            ),
+        )
+        step = only_step(plan([m]), "Maker")
+        self.assertEqual(step.action, "craft")
+        self.assertEqual(step.rows[0].command, "3818")
+        self.assertEqual(step.repeat, 2)
+
+    def test_holding_the_hide_it_casts_the_rung(self):
+        m = self.maker(
+            LEATHER,
+            185,
+            225,
+            known=frozenset({7151, 3818}),
+            carried=(
+                stack(1, 4234, 20, subclass=6),
+                stack(2, 2321, 4, subclass=0),
+                stack(3, 4236, 2, subclass=6),
+            ),
+        )
+        step = only_step(plan([m]), "Maker")
+        self.assertEqual(step.rows[0].command, "7151")
+
+    def test_the_hide_and_the_potion_are_kept_for_the_next_cast(self):
+        leather = self.maker(LEATHER, 185, 225, known=frozenset({7151}))
+        alchemist = self.maker(ALCHEMY, 90, 150, known=frozenset({2337}))
+        self.assertLessEqual({4234, 4236, 4235}, guildjobs.craft_entries(leather))
+        self.assertLessEqual({2450, 118}, guildjobs.craft_entries(alchemist))
+
+
 class Maintenance(unittest.TestCase):
     def test_a_new_member_learns_its_first_trade_at_a_trainer_and_pays(self):
         m = member("Keeper", level=5, money=40)

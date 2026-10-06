@@ -1652,6 +1652,43 @@ RECIPES: dict = {
             "no trainer_spell row exists for it",
         ),
     ),
+    # ALCHEMY 1-300 AGAINST THE REALM ITSELF (the operator, 2026-10-05). The
+    # route is wow-professions.com's classic Alchemy guide; every fact is the
+    # realm's own, read the way the Tailoring and Leatherworking ladders were
+    # (Spell.dbc md5 543b9fe61355b6a77a01714d52fea2e5 and SkillLineAbility.dbc
+    # md5 d8c11abfcfe70596cb9068c0e97a1d9a, anchors asserted first, and
+    # trainer_spell read 2026-10-05). EVERY RUNG IS TRAINER-TAUGHT OR
+    # AUTO-LEARNED, which the guide does not say: it calls Superior Mana
+    # Potion and Major Healing Potion "vendor recipes", and this realm's
+    # trainers teach both (260 and 275). So no rung is left out for a pattern.
+    #
+    #   spell  recipe                      taught  yellow  grey  bracket
+    #   2330   Minor Healing Potion        auto        55    95    1-79
+    #   2337   Lesser Healing Potion         55        85   125   80-109
+    #   3447   Healing Potion               110       135   175  110-139
+    #   3173   Lesser Mana Potion           120       145   185  140-154
+    #   7181   Greater Healing Potion       155       175   215  155-174
+    #   3450   Elixir of Fortitude          175       195   235  175-184
+    #   11449  Elixir of Agility            185       205   245  185-209
+    #   11450  Elixir of Greater Defense    195       215   255  210-214
+    #   11457  Superior Healing Potion      215       230   270  215-229
+    #   11460  Elixir of Detect Undead      230       245   285  230-239
+    #   11467  Elixir of Greater Agility    240       255   295  240-264
+    #   17553  Superior Mana Potion         260       275   315  265-274
+    #   17556  Major Healing Potion         275       290   330  275-300
+    #
+    # Where this ladder departs from the guide, each time for a better cast
+    # and never for a gap: Lesser Healing Potion starts at 80, the realm's
+    # MinSkillLineRank, not the guide's 60; Elixir of Fortitude and Elixir of
+    # Greater Agility take points from the guide's neighbours for the raid (see
+    # RAID CONSUMABLES above); Major Healing Potion starts at 275, where it is
+    # taught, not 285. Lesser Healing Potion eats a Minor Healing Potion
+    # (item 118, 2330's own output), and craft_rhythm.BOLT_FED casts 2330
+    # first when it is short. Rank purchases are guildjobs.RANKS[171]:
+    # Apprentice 2275, Journeyman 2280 at 50, Expert 3465 at 125, Artisan 11612
+    # at 200, each a wrapper whose SPELL_EFFECT_SKILL_STEP is step 1 to 4 of
+    # skill 171. The vials are vendor-bought by craft_supply.REAGENT (every
+    # one has npc_vendor rows); the crew posts none, so none is CREW_SUPPLIED.
     SKILL_IDS["alchemy"]: (
         Recipe(
             2330,
@@ -1937,16 +1974,65 @@ RECIPES: dict = {
     # Blacksmithing/Tailoring tables above already use, chosen so this
     # closes the ENTIRE 1-300 gap this issue complained about ("most of the
     # profession's leveling range undriven") rather than leaving new gaps
-    # between the old zero-reagent brackets and these new ones. Two of the
-    # fifteen (Nightscape Boots, Runic Leather Headband) have a real,
-    # unresolved skill-range disagreement between sources: two independent
-    # WotLK trainer-data lookups put their real learn-floor at 235 and 270,
-    # while the wow-professions.com guide (and infra#3611's own body) states
-    # 250 and 290. The LATER, more conservative number from the guide is
-    # used below - a character able to learn Nightscape Boots at the
-    # trainer-verified 235 is trivially also able to at 251, so this never
-    # aims a cast the trainer would refuse, it only starts the bracket a
-    # little later than the true floor might allow.
+    # between the old zero-reagent brackets and these new ones.
+    #
+    # LEATHERWORKING 1-300 AGAINST THE REALM ITSELF (the operator, 2026-10-05:
+    # "level up their professions too ... craft and get all recipes"). The
+    # route is wow-professions.com's classic Leatherworking guide: which
+    # recipe at which skill. EVERY FACT BELOW IS THE REALM'S OWN, never the
+    # guide's or a public database's, read like the Tailoring ladder's:
+    #
+    #   Spell.dbc (md5 543b9fe61355b6a77a01714d52fea2e5, anchors 2963 ->
+    #   Reagent[0]=2589 x2 and 2657 -> focus 3 asserted first): spell id,
+    #   reagents and counts, output item, RequiresSpellFocus 0 and
+    #   EquippedItemClass -1 for every rung.
+    #   SkillLineAbility.dbc (md5 d8c11abfcfe70596cb9068c0e97a1d9a): yellow
+    #   and grey, in test_craft.MEASURED_BANDS.
+    #   trainer_spell (read 2026-10-05): the rank a trainer teaches each one
+    #   at, which is where each bracket may start. A recipe with no row there
+    #   is auto-learned (AcquireMethod 1) or taught by a pattern item only.
+    #
+    #   spell  recipe                    taught  yellow  grey  bracket
+    #   2881   Light Leather             auto        20    40    1-19
+    #   2152   Light Armor Kit           auto        30    60   20-45
+    #   9058   Handstitched Leather Cloak auto       40    70   46-55
+    #   3756   Embossed Leather Gloves     55        85   115   56-100
+    #   3763   Fine Leather Belt            80       110   140  101-125
+    #   2167   Dark Leather Boots          100       125   150  126-137
+    #   7135   Dark Leather Pants          115       140   165  138-149
+    #   20649  Heavy Leather               150       150   160  150-155
+    #   3818   Cured Heavy Hide            150       160   170  156-165
+    #   3780   Heavy Armor Kit             150       170   190  166-180
+    #   7151   Barbaric Shoulders          175       195   215  181-190
+    #   7156   Guardian Gloves             190       210   230  191-200
+    #   10487  Thick Armor Kit             200       220   240  201-205
+    #   10507  Nightscape Headband         205       225   245  206-235
+    #   10548  Nightscape Pants            230       250   270  236-250
+    #   10558  Nightscape Boots            235       255   275  251-264
+    #   19052  Wicked Leather Bracers       265       285   305  265-290
+    #   19082  Runic Leather Headband      290       310   330  291-300
+    #
+    # WHERE THIS LEAVES THE GUIDE, AND WHY:
+    #
+    #   * Wicked Leather Gauntlets (19049, the guide's 260-290 rung) is taught
+    #     only by Pattern 15725: it has no trainer_spell row, and nothing on
+    #     this ladder learns from a pattern. Wicked Leather Bracers (19052)
+    #     is the trainer-taught sibling at rank 265 with the same Rugged
+    #     Leather x8, Black Dye and Rune Thread, so nothing new is stocked,
+    #     and Nightscape Boots (grey 275) carries 261-264 until it is taught.
+    #   * Barbaric Shoulders is a vendor pattern in the guide, but this
+    #     realm's trainer_spell teaches it at 175, so it stays a rung.
+    #   * The old note's 270 for Runic Leather Headband's learn floor was wrong;
+    #     the trainer teaches it at 290, which is where its bracket is.
+    #   * Rank purchases are guildjobs.RANKS[165]: Apprentice 2155, Journeyman
+    #     2154 at 50, Expert 3812 at 125, Artisan 10663 at 200; each is a
+    #     wrapper whose SPELL_EFFECT_SKILL_STEP is step 1 to 4 of skill 165.
+    #   * Every thread, dye and salt is vendor-bought by craft_supply.REAGENTS
+    #     (each item has npc_vendor rows); the maintenance crew posts none of
+    #     it, so no rung is in CREW_SUPPLIED.
+    #   * Barbaric Shoulders and Guardian Gloves also eat a Cured Heavy Hide
+    #     (item 4236, 3818's own output), and craft_rhythm.BOLT_FED casts 3818
+    #     first when it is short.
     SKILL_IDS["leatherworking"]: (
         # spell 2881, creates item 2318 from 3x Ruined Leather Scraps (2934).
         # Cross-checked: wowhead tooltip API (wotlk) + classicdb.ch spell
@@ -2124,21 +2210,24 @@ RECIPES: dict = {
             10558,
             "Nightscape Boots",
             min_skill=251,
-            max_skill=260,
+            max_skill=264,
             note="16x Thick Leather, 2x Heavy Silken Thread (8343, "
             "vendor-bought) -> item 8197, no focus needed; "
-            "trainer-verified learn floor is 235, see this table's "
-            "header comment for why 251 is used instead",
+            "trainer_spell rank 235, yellow 255, grey 275. Runs to 264 "
+            "because Wicked Leather Bracers is not taught before 265",
         ),
         Recipe(
-            19049,
-            "Wicked Leather Gauntlets",
-            min_skill=261,
+            19052,
+            "Wicked Leather Bracers",
+            min_skill=265,
             max_skill=290,
-            note="8x Rugged Leather, 1x Black Dye (2325, vendor-bought), "
-            "1x Rune Thread (14341, vendor-bought - NOT item 24288, "
-            "a same-named item with zero npc_vendor rows) -> item "
-            "15083, no focus needed",
+            note="8x Rugged Leather (8170), 1x Black Dye (2325, "
+            "vendor-bought), 1x Rune Thread (14341, vendor-bought - NOT "
+            "item 24288, a same-named item with zero npc_vendor rows) -> "
+            "item 15084, no focus needed. trainer_spell rank 265 (also "
+            "Pattern 15728, not needed), yellow 285, grey 305. Stands in "
+            "for the guide's Wicked Leather Gauntlets (19049), which only "
+            "Pattern 15725 teaches; same three reagents, same counts",
         ),
         Recipe(
             19082,
@@ -2147,9 +2236,8 @@ RECIPES: dict = {
             max_skill=300,
             note="14x Rugged Leather, 10x Runecloth (own Tailoring "
             "output), 1x Rune Thread (14341, vendor-bought) -> item "
-            "15094, no focus needed; trainer-verified learn floor "
-            "is 270, see this table's header comment for why 291 "
-            "is used instead",
+            "15094, no focus needed. trainer_spell rank 290, yellow "
+            "310, grey 330",
         ),
     ),
 }

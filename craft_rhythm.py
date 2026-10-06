@@ -327,8 +327,9 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     2657: (Reagent(2770, "Copper Ore", 1),),
     # ALCHEMY - herbs, every one of them a herb-node gather plus a long tail of
     # creature drops. The vial each of these also needs is craft_supply's.
-    # Lesser Healing Potion (2337) is absent: its second reagent is the
-    # previous bracket's own output.
+    # Lesser Healing Potion (2337) lists only its Briarthorn: its Minor
+    # Healing Potion is the previous bracket's own output, fed by BOLT_FED.
+    2337: (Reagent(2450, "Briarthorn", 1),),
     2330: (Reagent(2447, "Peacebloom", 1), Reagent(765, "Silverleaf", 1)),
     3447: (Reagent(2453, "Bruiseweed", 1), Reagent(2450, "Briarthorn", 1)),
     3173: (Reagent(785, "Mageroyal", 1), Reagent(3820, "Stranglekelp", 1)),
@@ -385,11 +386,17 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     20649: (Reagent(2319, "Medium Leather", 5),),
     3818: (Reagent(4235, "Heavy Hide", 1),),
     3780: (Reagent(4234, "Heavy Leather", 5),),
+    # Heavy Leather is skinned, so it is judged; the Cured Heavy Hide each of
+    # these also eats is 3818's own output and is fed by BOLT_FED.
+    7151: (Reagent(4234, "Heavy Leather", 8),),
+    7156: (Reagent(4234, "Heavy Leather", 4),),
     10487: (Reagent(4304, "Thick Leather", 5),),
     10507: (Reagent(4304, "Thick Leather", 5),),
     10548: (Reagent(4304, "Thick Leather", 14),),
     10558: (Reagent(4304, "Thick Leather", 16),),
-    19049: (Reagent(8170, "Rugged Leather", 8),),
+    # 19049 Wicked Leather Gauntlets is a pattern recipe and is not a rung;
+    # 19052 Wicked Leather Bracers is the trainer-taught rung beside it.
+    19052: (Reagent(8170, "Rugged Leather", 8),),
     19082: (Reagent(8170, "Rugged Leather", 14), Reagent(14047, "Runecloth", 10)),
 }
 
@@ -770,6 +777,14 @@ BOLT_FED: dict[int, tuple[int, Reagent]] = {
     12065: _fed(_MAGEWEAVE, 4),  # Mageweave Bag
     18402: _fed(_RUNECLOTH, 3),  # Runecloth Belt
     18417: _fed(_RUNECLOTH, 5),  # Runecloth Gloves
+    # THE SAME SHAPE OFF THE TAILOR'S BENCH: a rung that eats its own earlier
+    # output. Spell.dbc counts, same md5 and anchors as above:
+    #   2337 Lesser Healing Potion   1x Minor Healing Potion (118), from 2330
+    #   7151 Barbaric Shoulders      1x Cured Heavy Hide (4236), from 3818
+    #   7156 Guardian Gloves         1x Cured Heavy Hide (4236), from 3818
+    2337: (2330, Reagent(118, "Minor Healing Potion", 1)),
+    7151: (3818, Reagent(4236, "Cured Heavy Hide", 1)),
+    7156: (3818, Reagent(4236, "Cured Heavy Hide", 1)),
 }
 
 
