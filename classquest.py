@@ -41,6 +41,12 @@ WHAT IT REFUSES, WITH A NAMED BLOCKER (a member never waits in silence):
   item     a quest item the member must use and no longer carries;
   map      every giver or objective spawn is on another map than the member's:
            walk-to-spawn refuses a spawn on another map.
+  level    every spawn of the objective is more than OVERLEVEL_MAX levels over
+           the member: no pack is chosen that would kill it.
+
+A HUNT LEAVES WHAT THE MODULE REFUSED. A spawn the module refused, or a walk to
+which did not reach it (SPAWN_REFUSALS), is left for SPAWN_REFUSED_MINUTES and
+the member goes to the next pack of the objective (guildjobs.class_avoid).
 
 WHAT A PLAYER USES (quadseven/mod-overseer#865). Two verbs on kind='quest'
 rows, written beside `take quest:` and `turnin quest:`:
@@ -128,6 +134,8 @@ GROUP, OBJECT, SOURCE, MAP, UNKNOWN = "group", "object", "source", "map", "unkno
 ITEM = "item"
 # A hunt that made no progress through every field it was sent to.
 STALLED = "stalled"
+# Every spawn of the objective is too many levels over the member to hunt.
+LEVEL = "level"
 # A use the world refused for good, or that changed nothing through every
 # target it was sent to.
 USE_STALLED = "usestalled"
@@ -165,6 +173,40 @@ GIVE_UP_MINUTES = 120
 # the spawn cannot be reached.
 FAILED_WALKS = 2
 
+# NEVER A SPAWN WHOSE CREATURE IS MORE THAN THIS MANY LEVELS OVER THE MEMBER. On
+# the dev realm on 2026-10-06 members walked to spawns and were killed on the
+# way or at them (8 of 163 class quest walks ended "died on the way to the
+# spawn"). Three is the module's own lethal gap: it holds a revived character
+# out of combat on ground reaching three levels over it.
+OVERLEVEL_MAX = 3
+
+# A SPAWN THE MODULE REFUSED, OR THAT A WALK DID NOT REACH, IS NOT ASKED OF THE
+# SAME MEMBER AGAIN FOR THIS LONG: the member is sent to the next pack of the
+# objective instead (guildjobs.class_avoid). These are the module's refusals
+# that say the spawn or the way to it is the trouble, in its own words
+# (SpawnWalkRefusal): the first step goes over a drop, the way crosses the
+# other side's ground, the ground does not hold, the walk stopped getting
+# nearer, ran out of time or ended in the member's death, and the spawn is not
+# in the world, on this map or in season. The words that name the member's
+# state (dead, in combat, held, in flight, a far walk wall) are not here: they
+# say nothing about the spawn. The time is GIVE_UP_MINUTES, the hold a hunt
+# gets when it stalled through every pack, so a refused spawn and a stalled
+# pack are left alone for as long.
+SPAWN_REFUSED_MINUTES = 120
+SPAWN_REFUSALS = frozenset(
+    {
+        "the first step toward the creature goes over a drop",
+        "the way to the spawn crosses the other side's ground",
+        "the ground toward the spawn does not hold",
+        "stopped getting nearer the spawn",
+        "did not reach the spawn in time",
+        "died on the way to the spawn",
+        "no such spawn in the world",
+        "the spawn is on another map than the character",
+        "the spawn belongs to a world event that is not running",
+    }
+)
+
 # THE REALM'S FAR WALKS ARE FEW (mod-overseer's FarWalkBudgetGate: a handful
 # under way at once on the whole realm, a couple of starts per bot per hour).
 # A class quest walk the realm refuses for either wall is RETRYABLE: the wall
@@ -172,6 +214,10 @@ FAILED_WALKS = 2
 # worldserver names the two walls in these words (FarWalkRefusal).
 REALM_FULL_REASON = "the realm has as many far walks under way as it allows"
 BOT_BUDGET_REASON = "this character has started as many far walks this hour as one may"
+# A walk refused because another verb holds the character. The longest hold
+# the module places is the one after a revival, 690 seconds; 32 of 163 class
+# quest walks on 2026-10-06 were refused this way.
+HELD_REASON = "character is held by another verb"
 # HOW LONG A MEMBER IS LEFT ALONE AFTER EITHER REFUSAL. The realm wall: a far
 # walk on the dev realm took 4 to 266 seconds to finish on 2026-10-06, so a slot
 # frees within minutes; 15 minutes is three times the longest of those and more
@@ -182,9 +228,12 @@ BOT_BUDGET_REASON = "this character has started as many far walks this hour as o
 # than the hour. Neither doubles: both are bounded by the wall's own clock.
 REALM_FULL_BACKOFF_MINUTES = 15
 BOT_BUDGET_BACKOFF_MINUTES = 30
+# 690 seconds is 11.5 minutes: asked again at 12, the hold has lapsed.
+HELD_BACKOFF_MINUTES = 12
 BACKOFF_MINUTES = {
     REALM_FULL_REASON: REALM_FULL_BACKOFF_MINUTES,
     BOT_BUDGET_REASON: BOT_BUDGET_BACKOFF_MINUTES,
+    HELD_REASON: HELD_BACKOFF_MINUTES,
 }
 
 
@@ -317,7 +366,7 @@ CHEST_SQL = (
 # Every spawn of the gameobjects a quest uses (a chest, an objective).
 OBJECT_SPAWNS_SQL = (
     "SELECT o.guid AS guid, o.id AS entry, o.map AS map_id, o.position_x AS x, "
-    "o.position_y AS y, gt.name AS name, 0 AS `rank` "
+    "o.position_y AS y, gt.name AS name, 0 AS `rank`, 0 AS level "
     "FROM acore_world.gameobject o "
     "JOIN acore_world.gameobject_template gt ON gt.entry = o.id "
     "WHERE o.id IN ({entries})"
@@ -326,7 +375,8 @@ OBJECT_SPAWNS_SQL = (
 # Every spawn of the creatures an objective names.
 SPAWNS_SQL = (
     "SELECT c.guid AS guid, c.id AS entry, c.map AS map_id, c.position_x AS x, "
-    "c.position_y AS y, ct.name AS name, ct.`rank` AS `rank` "
+    "c.position_y AS y, ct.name AS name, ct.`rank` AS `rank`, "
+    "ct.maxlevel AS level "
     "FROM acore_world.creature c "
     "JOIN acore_world.creature_template ct ON ct.entry = c.id "
     "WHERE c.id IN ({entries})"
@@ -358,6 +408,8 @@ class Spawn:
     y: float
     name: str = ""
     rank: int = 0
+    # The creature's top level; 0 when the row does not say.
+    level: int = 0
 
 
 @dataclass(frozen=True)
@@ -514,6 +566,7 @@ def _spawn(r) -> Spawn:
         float(r.get("y") or 0.0),
         str(r.get("name") or ""),
         _int(r.get("rank")),
+        _int(r.get("level")),
     )
 
 
@@ -932,6 +985,40 @@ def _nearest_untried(member, spawns, avoid=()):
     return min(here, key=lambda s: (_yards(member, s), s.guid)) if here else None
 
 
+def within_level(member, spawns) -> tuple:
+    """The spawns whose creature is at most OVERLEVEL_MAX levels over the
+    member; a spawn whose level the world data does not give (0) is kept."""
+    top = int(member.level) + OVERLEVEL_MAX
+    return tuple(s for s in spawns if int(s.level) <= top)
+
+
+def _level_said(member, quest: Quest) -> str:
+    lowest = min(int(s.level) for s in quest.fields)
+    return (
+        "%s: every spawn of its objective is more than %d levels over the "
+        "member (the lowest is level %d, the member %d)"
+        % (quest.title, OVERLEVEL_MAX, lowest, int(member.level))
+    )
+
+
+def refused_places(book: Book, refused) -> dict:
+    """quest id -> ((map, x, y), ...) of every objective spawn whose guid is in
+    `refused` (the spawns the module refused this member lately): the places a
+    hunt leaves, as it leaves a pack that made no progress."""
+    if not refused:
+        return {}
+    out = {}
+    for quest in book.quests.values():
+        places = tuple(
+            (int(s.map_id), float(s.x), float(s.y))
+            for s in quest.fields
+            if s.guid in refused
+        )
+        if places:
+            out[quest.id] = places
+    return out
+
+
 def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
     """The member's work on an incomplete quest (a hunt, or a use), or why it
     is blocked."""
@@ -978,7 +1065,20 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
         return Move(
             BLOCKED, quest.id, quest.klass, None, said, UNKNOWN, why, 0, quest.title
         )
-    spot = _densest(member, quest.fields, tried)
+    fields = within_level(member, quest.fields)
+    if quest.fields and not fields:
+        return Move(
+            BLOCKED,
+            quest.id,
+            quest.klass,
+            None,
+            _level_said(member, quest),
+            LEVEL,
+            why,
+            0,
+            quest.title,
+        )
+    spot = _densest(member, fields, tried)
     if spot is None:
         said = "%s: every pack of its objective was tried" % quest.title
         return Move(
