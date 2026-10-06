@@ -1101,22 +1101,26 @@ class SecondaryRankRefusalTest(unittest.TestCase):
         is the exact shape of the failure this whole area keeps repeating:
         a number that reads as progress with nothing behind it. So the claim
         is checked against the table rather than restated.
+
+        Read through `craft_errand`, the family's own path, rather than
+        `recipe_for`: the table now carries the trainer-taught bandage rungs
+        the guild crew buys (operator, 2026-10-05), and `craft_errand` never
+        hands the family one of those.
         """
         import craft
-        import goals
 
         for skill in ("first aid", "cooking"):
             with self.subTest(skill=skill):
                 top = 0
                 for value in range(1, 76):
-                    if craft.recipe_for(goals.SKILL_IDS[skill], value) is not None:
+                    if craft.craft_errand("Grug", {skill: value}, primaries=()):
                         top = value
                 self.assertEqual(
                     professions.SECONDARY_HEADROOM[skill],
                     max(top - 1, 0),
                     f"SECONDARY_HEADROOM says {skill} can earn "
                     f"{professions.SECONDARY_HEADROOM[skill]} points, but "
-                    f"craft.RECIPES stops aiming at it above {top}",
+                    f"craft.craft_errand stops aiming at it above {top}",
                 )
 
     def test_it_says_which_wall_each_secondary_is_behind(self):

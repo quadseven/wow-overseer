@@ -673,11 +673,17 @@ class TheFirstAidLadderIsRecordedAndBlocked(unittest.TestCase):
             with self.subTest(spell=c.spell_id):
                 self.assertEqual(c.taught, raidcraft.TRAINER)
 
-    def test_craft_py_still_carries_only_the_auto_learned_one(self):
-        """Linen Bandage (3275) is the sole ClassMask 0 / AcquireMethod 1 rung,
-        and craft.RECIPES carrying only it is the correct state, not a gap."""
+    def test_the_family_is_still_aimed_only_at_the_auto_learned_one(self):
+        """Linen Bandage (3275) is the sole ClassMask 0 / AcquireMethod 1 rung.
+        craft.RECIPES now carries the trainer-taught rungs too, for the guild
+        crew that buys them (operator, 2026-10-05), and the family's
+        `craft_errand` still names none of them."""
+        self.assertEqual(craft.SECONDARY_AUTO_LEARNED, {3275})
         spells = {r.spell_id for r in craft.RECIPES[goals.SKILL_IDS["first aid"]]}
-        self.assertEqual(spells, {3275})
+        for c in raidcraft.for_skill("first aid"):
+            with self.subTest(spell=c.spell_id):
+                self.assertIn(c.spell_id, spells)
+                self.assertNotIn(c.spell_id, craft.SECONDARY_AUTO_LEARNED)
 
     def test_the_blocker_is_the_one_professions_py_already_names(self):
         """Not a second opinion about the same wall. If that sentence ever
