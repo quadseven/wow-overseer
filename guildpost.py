@@ -112,7 +112,11 @@ class Visit:
 
 
 def _waiting_by_receiver(letters, roster) -> dict:
-    """receiver -> its ready letters, a roster member's left to its family."""
+    """receiver -> its ready letters, a roster member's left to its family.
+
+    `roster` is the family names whose own mail pass collects; a member sitting
+    out to craft is taken out of it by `visits` (see there).
+    """
     out: dict = {}
     for letter in letters or ():
         if letter.receiver not in roster and letter.ready:
@@ -140,17 +144,32 @@ def _visit_for(receiver, waiting, online, busy, free_slots):
     return Visit(receiver, takes, len(waiting)), ""
 
 
-def visits(letters, online, busy=frozenset(), free_slots=None, roster=frozenset()):
+def visits(
+    letters,
+    online,
+    busy=frozenset(),
+    free_slots=None,
+    roster=frozenset(),
+    sitting_out=frozenset(),
+):
     """(visits, notes): which guild members walk to take out their post.
 
     `online` holds the names standing in the world now; `busy` the names
     another guild pass has on a walk; `roster` the family members, whose own
     mail pass collects. `free_slots` maps a name to its free bag slots, -1 or
     absent when unread (then TAKES_PER_VISIT stands).
+
+    `sitting_out` holds the family members the caller found free to walk: out
+    of their family's campaign to craft (standin.py), so the family's own mail
+    pass, which collects only when the family stands at a mailbox, never
+    reaches them. They are walked like any guildmate. A name here that is not
+    on the roster changes nothing.
     """
     free_slots = free_slots or {}
     online, busy = set(online or ()), set(busy or ())
-    by_receiver = _waiting_by_receiver(letters, set(roster or ()))
+    by_receiver = _waiting_by_receiver(
+        letters, set(roster or ()) - set(sitting_out or ())
+    )
     order = sorted(by_receiver, key=lambda n: (-len(by_receiver[n]), n))
     out, notes = [], []
     for receiver in order:

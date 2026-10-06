@@ -13441,22 +13441,26 @@ class Bridge(discord.Client):
         busy = (set(getattr(self, "_guild_run_names", ())) | set(self._post_walks)
                 | set(self._crafter_walks) | set(self._guild_mail_runs)
                 | set(self._dues_walks) | set(self._corps_steps))
-        plan, notes = guildpost.visits(letters, online, busy, free_slots, roster)
+        sitting = await asyncio.to_thread(_sitting_out_to_walk, names)
+        plan, notes = guildpost.visits(letters, online, busy, free_slots, roster,
+                                       sitting)
         log.info("%s %d letter(s) with items wait for %d guild member(s) of %s's "
                  "guild; %d walk(s) this pass", guildpost.LOG_PREFIX, len(letters),
                  len({x.receiver for x in letters}), names[0] if names else "?",
                  len(plan))
-        notes += await self._start_post_walks(plan, names, now)
+        notes += await self._start_post_walks(plan, names, now, sitting)
         _log_capped(guildpost.LOG_PREFIX.rstrip(":"), notes)
 
-    async def _start_post_walks(self, plan, names: list, now: float) -> list:
+    async def _start_post_walks(self, plan, names: list, now: float,
+                                sitting=frozenset()) -> list:
         """Write a walk row per visit a walker allows; the refusals as notes."""
         if not plan:
             return []
         cap = self._guild_walk_cap()
         row_walks = now >= self._mail_walk_unsupported_until
         walkers = await asyncio.to_thread(
-            _route_walkers, [v.receiver for v in plan], names, row_walks)
+            _route_walkers, [v.receiver for v in plan], names, row_walks,
+            None, sitting)
         notes = []
         for visit in plan:
             refused = guildpost.walk_refusal(
@@ -22068,6 +22072,35 @@ def _fetch_guild_post(names: list) -> list:
         return [dict(row) for row in cur.fetchall()]
 
 
+def _sitting_out_to_walk(names: list) -> frozenset:
+    """The family members sitting out to craft who may walk to a mailbox now.
+
+    A member sitting out (standin.py) is off the campaign, so the family's
+    mail pass, which collects when the family stands at a mailbox, never
+    brings it the post. It is cleared to walk only when it holds no travel
+    errand of its own and no member still running the campaign is off the
+    continents (inside a dungeon): the family inside is never disturbed.
+    """
+    out = [n for n in names if n in _standin_out()]
+    if not out:
+        return frozenset()
+    running = [n for n in names if n not in out]
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, travel_npc FROM overseer_roster WHERE enabled = 1 "
+            "AND name IN (%s)" % ",".join(["%s"] * len(out)), out)  # noqa: S608 - placeholders from a COUNT
+        free = {r["name"] for r in cur.fetchall() if not (r["travel_npc"] or "").strip()}
+        inside = False
+        if running:
+            cur.execute(
+                "SELECT map_id FROM overseer_snapshot WHERE name IN (%s) "
+                "AND updated_at > NOW() - INTERVAL 60 SECOND"
+                % ",".join(["%s"] * len(running)), running)  # noqa: S608 - placeholders from a COUNT
+            inside = any(int(r["map_id"]) not in _OUTDOOR_CONTINENT_MAPS
+                         for r in cur.fetchall() if r["map_id"] is not None)
+    return frozenset() if inside else frozenset(free)
+
+
 def _on_roster(name: str) -> bool:
     """Whether this character is an enabled roster family member."""
     with _connect() as conn, conn.cursor() as cur:
@@ -22841,7 +22874,7 @@ _ROUTE_WALKER_SQL = (
 
 
 def _route_walkers(holders: list, family_names: list, row_walks: bool = True,
-                   escort=None) -> dict:
+                   escort=None, row_walkers=frozenset()) -> dict:
     """holder -> guildroute.Walker; guildroute decides everything.
 
     Which roster family each holder leads comes from the same roster read the
@@ -22880,11 +22913,12 @@ def _route_walkers(holders: list, family_names: list, row_walks: bool = True,
         walker_name = escort_leader or holder
         state = states.get(walker_name)
         walkable = walker_name in leader_of or (
-            row_walks and walker_name not in roster
+            row_walks and (walker_name not in roster or walker_name in row_walkers)
         )
         spawn = _nearest_mailbox(walker_name) if state and walkable else None
         out[holder] = guildroute.walker_from(
-            walker_name, state, leader_of, roster, spawn, row_walks=row_walks
+            walker_name, state, leader_of, roster, spawn, row_walks=row_walks,
+            row_walkers=row_walkers,
         )
     return out
 
