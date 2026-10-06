@@ -2501,6 +2501,15 @@ _STANDIN_OUT: frozenset = frozenset()
 _STANDIN_GUESTS: frozenset = frozenset()
 
 
+def _standin_door(rows: list, doors: dict):
+    """The campaign's current dungeon door for the stand-in, or None (a raid
+    never seats one)."""
+    keyword = str(rows[0].get("keyword") or "") if rows else ""
+    if keyword and not raidrun.is_raid(keyword):
+        return doors.get(keyword)
+    return None
+
+
 def _standin_out() -> frozenset:
     """The members sitting out their family's campaign to craft."""
     return _STANDIN_OUT
@@ -16554,6 +16563,20 @@ class Bridge(discord.Client):
                 await asyncio.to_thread(_standin_crafts, seated[key].out_name, key)
         return seated
 
+    async def _standin_out_facts(self, key: str, leader: str, ordered: str,
+                                 roster: tuple) -> tuple:
+        """(skills, out member, the others' levels, guild, faction) for the
+        member ordered to sit out. Reads only."""
+        skills = (await asyncio.to_thread(_fetch_trade_skills, [ordered])).get(ordered, {})
+        read = await asyncio.to_thread(_fetch_standin_members, list(roster))
+        members = {n: guildrun.member_from_row(r) for n, r in read.items()}
+        levels = tuple(m.level for n, m in sorted(members.items())
+                       if m is not None and n != ordered)
+        head = members.get(key) or members.get(leader)
+        guild = head.guild if head is not None else ""
+        faction = guildrun.faction_of([m for m in members.values() if m is not None])
+        return skills, members.get(ordered), levels, guild, faction
+
     async def _standin_facts(self, key: str, ordered: str, current, rows: list,
                              fam, gfacts: dict, doors: dict, candidates: tuple):
         """standin.Facts for one family. Reads only."""
@@ -16561,19 +16584,9 @@ class Bridge(discord.Client):
         leader = str(fam["leader"].get("name") or "") if fam else ""
         skills, out_member, levels, guild, faction = {}, None, (), "", ""
         if ordered and ordered in roster:
-            skills = (await asyncio.to_thread(_fetch_trade_skills, [ordered])).get(ordered, {})
-            read = await asyncio.to_thread(_fetch_standin_members, list(roster))
-            members = {n: guildrun.member_from_row(r) for n, r in read.items()}
-            out_member = members.get(ordered)
-            levels = tuple(m.level for n, m in sorted(members.items())
-                           if m is not None and n != ordered)
-            head = members.get(key) or members.get(leader)
-            guild = head.guild if head is not None else ""
-            faction = guildrun.faction_of([m for m in members.values() if m is not None])
-        door = None
-        keyword = str(rows[0].get("keyword") or "") if rows else ""
-        if keyword and not raidrun.is_raid(keyword):
-            door = doors.get(keyword)
+            skills, out_member, levels, guild, faction = await self._standin_out_facts(
+                key, leader, ordered, roster)
+        door = _standin_door(rows, doors)
         mid_run = bool(roster and (current is not None or ordered in roster)
                        and await self._mid_run(list(roster)))
         return standin.Facts(
