@@ -16579,7 +16579,8 @@ class Bridge(discord.Client):
             else:
                 seated = {}
             _STANDIN_OUT = frozenset(s.out_name for s in seated.values())
-            _STANDIN_GUESTS = frozenset(s.in_name for s in seated.values())
+            # A row with no guest (the family runs short-handed) seats nobody.
+            _STANDIN_GUESTS = frozenset(s.in_name for s in seated.values() if s.in_name)
         except Exception:
             log.exception("standin: the pass failed; the rows read last stand")
         return {key: dict(fam, names=_standin_running(fam["names"]))
@@ -16595,7 +16596,8 @@ class Bridge(discord.Client):
         for key in sorted(set(asked) | set(rows)):
             # In a guild run, or the guest of another family (this pass's
             # seats included); never busy by its own family's row.
-            busy = set(gfacts["in_runs"]) | {s.in_name for f, s in seated.items() if f != key}
+            busy = set(gfacts["in_runs"]) | {s.in_name for f, s in seated.items()
+                                             if f != key and s.in_name}
             try:
                 facts = await self._standin_facts(
                     key, asked.get(key, ""), rows.get(key), pending.get(key) or [],
@@ -16610,11 +16612,11 @@ class Bridge(discord.Client):
                 seated[key] = step.seat
                 log.info("standin: %s: %s sits out, %s stands in - %s",
                          campaignqueue._family(key), step.seat.out_name,
-                         step.seat.in_name, step.why)
+                         step.seat.guest_word, step.why)
             elif step.action == standin.CLEAR:
                 gone = seated.pop(key)
                 log.info("standin: %s: %s is released and %s rejoins - %s",
-                         campaignqueue._family(key), gone.in_name, gone.out_name,
+                         campaignqueue._family(key), gone.guest_word, gone.out_name,
                          step.why)
                 await asyncio.to_thread(_standin_rejoin, key, gone.out_name,
                                         fams.get(key))
