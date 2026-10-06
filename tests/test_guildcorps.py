@@ -1023,5 +1023,56 @@ class EveryFamilysGuild(unittest.TestCase):
         self.assertIn("at_mailbox=masters", once)
 
 
+class TheGuildPostsClothToItsOwnMaster(unittest.TestCase):
+    """2026-10-06: the guild's bag maker stood at no cloth for hours."""
+
+    def og(self, **over):
+        base = dict(
+            maintenance=False,
+            family=True,
+            level=30,
+            skills={gc.TAILORING: (52, 150)},
+            known=frozenset({2963, 3755}),
+        )
+        base.update(over)
+        return member("Og", **base)
+
+    def run_plan(self, crew):
+        og = next(m for m in crew if m.name == "Og")
+        return gc.plan(crew, {"Cave": [og]}, TRAINABLE, {}, {}, set())
+
+    def test_a_master_away_from_a_thread_vendor_is_still_posted_cloth(self):
+        crew = [self.og(), member("Gugga", carried=(held(2589, 20),))]
+        plan = self.run_plan(crew)
+        (step,) = [s for s in plan.steps if s.action == "supply"]
+        self.assertEqual((step.holder, step.key), ("Gugga", 2589))
+        self.assertEqual(step.rows[0].target_arg, "Og")
+
+    def test_a_crew_tailor_still_needs_a_vendor_for_its_own_thread(self):
+        pokka = member(
+            "Pokka", known=frozenset({2963, 3755}), skills={gc.TAILORING: (52, 150)}
+        )
+        bag, why = gc.target_bag(pokka, [pokka], TRAINABLE[EVERLOOK], frozenset())
+        self.assertIsNone(bag)
+        self.assertIn("no bag", why)
+
+    def test_the_ask_is_a_stack_so_two_guildmates_can_answer(self):
+        og = self.og()
+        crew = [og, member("Gugga", carried=(held(2589, 20),))]
+        bag, _ = gc.target_bag(og, crew, TRAINABLE[EVERLOOK], frozenset())
+        self.assertEqual(gc._shortfall(og, bag, None), [(2589, gc.STACK)])
+
+    def test_cloth_never_crosses_to_the_other_guilds_master(self):
+        horde = member("Glob", guild="Bonkers", carried=(held(2589, 20),))
+        plan = self.run_plan([self.og(), horde])
+        self.assertEqual([s for s in plan.steps if s.action == "supply"], [])
+
+    def test_a_master_with_cloth_on_its_way_is_not_asked_again(self):
+        og = self.og(mail=(gc.Letter(1, 2, 2589, 20),))
+        crew = [og, member("Gugga", carried=(held(2589, 20),))]
+        plan = self.run_plan(crew)
+        self.assertEqual([s for s in plan.steps if s.action == "supply"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -109,6 +109,7 @@ import os
 from dataclasses import dataclass, field
 
 import campaignplan
+import classic
 import council
 import craft
 import craft_rhythm
@@ -679,21 +680,20 @@ def skin_band(level, value) -> tuple:
     return max(1, level - SKIN_BELOW), min(level + SKIN_ABOVE, skinnable_level(value))
 
 
-def skinning_field(beasts, origin, level, value) -> Spot | None:
-    """The beast spawn a skinner is sent to, or None.
+def _densest_field(mobs, origin, low, high, name, noun) -> Spot | None:
+    """The spawn a farmer is sent to among `mobs`, or None.
 
-    `beasts` are (Spot, level) for skinnable creature spawns on its map;
-    `origin` its (x, y). The spawns in its band are grouped into SKIN_CELL
+    `mobs` are (Spot, level) for creature spawns on its map; `origin` its
+    (x, y). The spawns in levels `low` to `high` are grouped into SKIN_CELL
     cells; of the cells with SKIN_MIN_SPAWNS or more within SKIN_YARDS, the
     nearest (in thousand-yard steps) and then the densest wins, and the spawn
     sent to is the real one nearest that cell's middle.
     """
-    low, high = skin_band(level, value)
     if high < low or origin is None:
         return None
     cells = {}
-    for spot, beast_level in beasts or ():
-        if not low <= _int(beast_level) <= high:
+    for spot, mob_level in mobs or ():
+        if not low <= _int(mob_level) <= high:
             continue
         if _yards(spot.x, spot.y, origin[0], origin[1]) > SKIN_YARDS:
             continue
@@ -718,8 +718,58 @@ def skinning_field(beasts, origin, level, value) -> Spot | None:
         map_id=spot.map_id,
         x=spot.x,
         y=spot.y,
-        name=spot.name or "a pack of beasts",
-        why="%d skinnable beasts of levels %d to %d" % (count, low, high),
+        name=spot.name or name,
+        why="%d %s of levels %d to %d" % (count, noun, low, high),
+    )
+
+
+def skinning_field(beasts, origin, level, value) -> Spot | None:
+    """The beast spawn a skinner is sent to, or None (see `_densest_field`)."""
+    low, high = skin_band(level, value)
+    return _densest_field(
+        beasts, origin, low, high, "a pack of beasts", "skinnable beasts"
+    )
+
+
+# THE CLOTH FIELD (2026-10-06). The guild's master tailor is the bag maker, and
+# Linen Cloth is its bottleneck: the crew's farm jobs were mining, herbalism and
+# skinning, and the humanoid mobs that drop cloth were nobody's. A crew tailor
+# (or a member with no field of its own) is sent to the densest pack of
+# humanoids that carry cloth in their loot table and that it can fight, with the
+# same `walk-to-spawn creature:` the skinner's beast field uses; the module's
+# own grind strategy kills and loots there. What it loots reaches the master by
+# the corps' supply letters and by `post`, as before. The cloth entries are the
+# bolts' reagents (guildcorps.BOLTS, read off the realm's Spell.dbc), never a
+# second list. The band is a skinner's: SKIN_BELOW levels under the member to
+# one over.
+CLOTH_ENTRIES = tuple(
+    int(bolt.reagents[0][0])
+    for bolt in guildcorps.BOLTS
+    if all(classic.item_ok(int(e)) for e, _n in bolt.reagents)
+)
+
+
+def cloth_band(level) -> tuple:
+    """(lowest, highest) creature level a cloth farmer of this level hunts."""
+    level = _int(level)
+    return max(1, level - SKIN_BELOW), level + SKIN_ABOVE
+
+
+def farms_cloth(member, has_field) -> bool:
+    """Whether this member's field is the cloth field: a crew tailor, whose
+    trade eats cloth and whose master wants it, or anyone with no other field."""
+    return member.holds(TAILORING) or not has_field
+
+
+def cloth_field(mobs, origin, level) -> Spot | None:
+    """The humanoid spawn a cloth farmer is sent to, or None.
+
+    `mobs` are (Spot, level) for the world's creature spawns whose loot holds
+    cloth (`CLOTH_ENTRIES`), already limited to the farmer's map.
+    """
+    low, high = cloth_band(level)
+    return _densest_field(
+        mobs, origin, low, high, "a pack of humanoids", "cloth-dropping humanoids"
     )
 
 

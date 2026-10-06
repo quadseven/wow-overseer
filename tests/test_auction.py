@@ -862,5 +862,59 @@ class ExecutorContractTest(unittest.TestCase):
         self.assertLess(picks_house, wrong_house)
 
 
+class MasterTailorShopsAtTheCounterTest(unittest.TestCase):
+    """A master tailor on a bag or a bolt-fed rung is a cloth shopper
+    (2026-10-06: the master sat at 0 cloth for hours because only a standing
+    bolt weave was read as a craft this pass can supply)."""
+
+    LINEN_BAG, WOOLEN_BAG, LINEN_BELT = 3755, 3757, 8776
+    WEAVE_LINEN, WEAVE_WOOL = 2963, 2964
+
+    def test_a_weave_answers_itself(self):
+        self.assertEqual(auction.supply_spell(self.WEAVE_LINEN), self.WEAVE_LINEN)
+
+    def test_a_bag_answers_the_weave_of_its_bolt(self):
+        self.assertEqual(auction.supply_spell(self.LINEN_BAG), self.WEAVE_LINEN)
+        self.assertEqual(auction.supply_spell(self.WOOLEN_BAG), self.WEAVE_WOOL)
+
+    def test_a_bolt_fed_rung_answers_the_weave_of_its_bolt(self):
+        self.assertEqual(auction.supply_spell(self.LINEN_BELT), self.WEAVE_LINEN)
+
+    def test_every_guild_bag_is_judged_on_its_own_cloth(self):
+        import guildcorps
+
+        for spell, (reagent,) in craft_rhythm.BAG_FEED.items():
+            weave = auction.supply_spell(spell)
+            self.assertTrue(weave, spell)
+            bolt = guildcorps.BOLT_OF[int(reagent.entry)]
+            self.assertEqual(weave, bolt.spell)
+            cloth = [r.entry for r in craft_rhythm.GATHERED[weave]]
+            self.assertEqual(cloth, [int(bolt.reagents[0][0])])
+
+    def test_what_is_not_cloth_or_not_a_craft_is_not_supplied(self):
+        self.assertEqual(auction.supply_spell(0), 0)
+        self.assertEqual(auction.supply_spell(None), 0)
+        self.assertEqual(auction.supply_spell(999999), 0)
+        # A potion fed by an earlier potion is not the tailor's cloth.
+        self.assertNotIn(2337, auction.CLOTH_WEAVES)
+
+    def test_a_master_with_no_cloth_is_short_of_cloth_for_the_bag(self):
+        spell = auction.supply_spell(self.LINEN_BAG)
+        (need,) = auction.wanted(spell, {}, {})
+        self.assertEqual((need.entry, need.label), (2589, "Linen Cloth"))
+        self.assertEqual(need.short, 2 * auction.CASTS_PER_TRIP)
+
+    def test_the_cloth_already_in_the_mail_is_not_bought_twice(self):
+        spell = auction.supply_spell(self.LINEN_BAG)
+        self.assertEqual(auction.wanted(spell, {}, {2589: 40}), [])
+
+    def test_the_pass_reads_a_masters_errand_through_the_bag_rule(self):
+        source = BRIDGE.read_text(encoding="utf-8")
+        body = source[source.index("async def _auction_once") :]
+        body = body[: body.index("async def _auction_shortfall")]
+        self.assertIn("auction.supply_spell(spell_id)", body)
+        self.assertNotIn("if spell_id in auction.GATHERED", body)
+
+
 if __name__ == "__main__":
     unittest.main()

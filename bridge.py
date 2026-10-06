@@ -8033,10 +8033,12 @@ class Bridge(discord.Client):
         # so gating on the crafting job would make this dark on every cycle
         # that mattered and green on every cycle with nothing to do.
         spells = await asyncio.to_thread(_fetch_standing_crafts, names)
+        # A master tailor on a bag or a bolt-fed rung shops for the cloth of
+        # the weave that feeds it (auction.supply_spell).
         shoppers = {
-            name: spell_id
+            name: auction.supply_spell(spell_id)
             for name, (spell_id, _money) in spells.items()
-            if spell_id in auction.GATHERED
+            if auction.supply_spell(spell_id)
         }
         if not shoppers:
             log.info("auction: nobody is on a craft errand this pass can supply")
@@ -14092,6 +14094,10 @@ class Bridge(discord.Client):
             skills = _guild_gathering_skills(m)
             spot = (await self._gathering_field(m, skills, surveys)
                     if skills else await self._skinning_field(m))
+            # The master tailor's cloth: a crew tailor, or a member with no
+            # field of its own, farms the humanoids that drop it.
+            if guildjobs.farms_cloth(m, spot is not None):
+                spot = await self._cloth_field(m) or spot
             if spot is not None:
                 out[m.name] = spot
         return out
@@ -14147,6 +14153,15 @@ class Bridge(discord.Client):
             float(member.y), low, high)
         return guildjobs.skinning_field(
             beasts, (float(member.x), float(member.y)), member.level, skin)
+
+    async def _cloth_field(self, member):
+        """The pack of cloth-dropping humanoids a member is sent to, or None."""
+        low, high = guildjobs.cloth_band(member.level)
+        mobs = await asyncio.to_thread(
+            _survey_job_cloth, int(member.map_id), float(member.x),
+            float(member.y), low, high)
+        return guildjobs.cloth_field(
+            mobs, (float(member.x), float(member.y)), member.level)
 
     async def _run_job_step(self, step, cap: float) -> None:
         """Write one job step's rows in order, each after the last has answered.
@@ -23606,6 +23621,41 @@ def _survey_job_beasts(map_id: int, x: float, y: float, low: int, high: int) -> 
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(_JOB_BEAST_SQL, (int(map_id), int(low), int(high), x - reach,
+                                         x + reach, y - reach, y + reach))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [(spot, int(row["level"] or 0))
+                for row in cur.fetchall()
+                for spot in guildjobs.spots_from_rows([row], kind="creature")]
+
+
+# THE CLOTH FIELD'S SPAWNS: humanoid creatures (type 7), no elites or bosses
+# (`rank` 0), that carry a cloth entry in their own loot table
+# (`creature_loot_template`, the table craft_rhythm counted 788 Linen Cloth rows
+# in), inside a level band and a square box the pure selection trims to a
+# circle. A cloth reached only through a reference loot group is not listed.
+_JOB_CLOTH_SQL = (
+    "SELECT c.guid, c.map AS map_id, c.position_x AS x, c.position_y AS y, "
+    "ct.maxlevel AS level, ct.name FROM acore_world.creature c "
+    "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "WHERE c.map = %s AND ct.type = 7 AND ct.`rank` = 0 AND ct.lootid > 0 "
+    "AND ct.maxlevel BETWEEN %s AND %s "
+    "AND c.position_x BETWEEN %s AND %s AND c.position_y BETWEEN %s AND %s "
+    "AND EXISTS (SELECT 1 FROM acore_world.creature_loot_template l "
+    "WHERE l.Entry = ct.lootid AND l.Item IN (" +
+    ",".join(str(int(e)) for e in guildjobs.CLOTH_ENTRIES) + "))"
+)
+
+
+def _survey_job_cloth(map_id: int, x: float, y: float, low: int, high: int) -> list:
+    """[(Spot, level)] of cloth-dropping humanoids within guildjobs.SKIN_YARDS
+    of a point, from the world's own creature spawns, with their spawn ids."""
+    reach = guildjobs.SKIN_YARDS
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_JOB_CLOTH_SQL, (int(map_id), int(low), int(high), x - reach,
                                          x + reach, y - reach, y + reach))
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
