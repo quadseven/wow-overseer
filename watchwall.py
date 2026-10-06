@@ -211,7 +211,7 @@ def headline(members) -> str:
     return "%d of %d in the world" % (here, len(members))
 
 
-def build_heads(families) -> dict:
+def build_heads(families, observers=()) -> dict:
     """The Watch wall across every family: only the characters with a picture.
 
     `families` is [(family key, family.build_family payload)], in the order
@@ -222,6 +222,9 @@ def build_heads(families) -> dict:
 
     Each kept member carries the key of the family it came from, so a tile
     can say whose head it is without the page knowing any roster.
+
+    `observers` are cards for streamed characters that belong to no family
+    (the Watcher). They follow every family's heads, keyed `family=""`.
     """
     members = []
     keys = []
@@ -230,6 +233,7 @@ def build_heads(families) -> dict:
         for m in payload.get("members", []):
             if playable(m):
                 members.append(dict(m, family=key))
+    members.extend(dict(m, family="") for m in observers if playable(m))
     return {
         "members": members,
         "families": keys,

@@ -44,6 +44,7 @@ import craftpleas
 import crossing
 import digest
 import disposition
+import director
 import dungeonpath
 import events
 import fanout
@@ -2926,6 +2927,91 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
 # the way the Jev store is (#179), because the worldserver never reads it.
 
 
+# --- the Watcher (director.py) -------------------------------------------
+
+
+def _ensure_watch_store() -> None:
+    """The one-row order table. Logged and swallowed, like the queue store: a
+    start-up that raised here would stop every other loop."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(director.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("watcher: the order store is unavailable, so the Watcher "
+                      "cannot be pointed at anyone")
+
+
+def _read_watch() -> dict | None:
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(director.READ_SQL)
+            row = cur.fetchone()
+            return dict(row) if row else None
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return None
+        raise
+
+
+def _write_watch(spec: str, source: str) -> None:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(director.CREATE_SQL)
+        if spec == "off":
+            cur.execute(director.CLEAR_SQL)
+        else:
+            cur.execute(director.SET_SQL, (spec, source[:48], director.MANDATE_TTL))
+
+
+def _fetch_watch_world() -> dict:
+    """Everything one director tick reads, in one connection."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, map_id, instance_id, pos_x, pos_y, pos_z, in_combat, group_leader "
+            "FROM overseer_snapshot WHERE updated_at > NOW() - INTERVAL 60 SECOND"
+        )
+        spots = [director.spot_from_row(r) for r in cur.fetchall()]
+        runs = []
+        try:
+            cur.execute(
+                "SELECT id, guild, keyword, tank, members, state, "
+                "UNIX_TIMESTAMP(created_at) AS created FROM overseer_guild_run "
+                "WHERE state = 'inside'"
+            )
+            runs = [director.run_from_row(r) for r in cur.fetchall()]
+            cur.execute("SELECT name, role FROM overseer_raid_seat")
+            seats = [(r["name"], r["role"]) for r in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            seats = []
+        heads: dict = {}
+        cur.execute("SELECT name, family FROM overseer_roster WHERE enabled = 1 AND `lead` = 1 "
+                    "ORDER BY created_at, name")
+        for r in cur.fetchall():
+            heads.setdefault(str(r.get("family") or "family").lower(), r["name"])
+    return {"spots": spots, "runs": runs, "seats": seats, "heads": heads}
+
+
+def _note_watch(spec: str, target: str, note: str) -> None:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(director.NOTE_SQL, (target[:12], note[:255], spec))
+
+
+def _insert_watcher_lines(commands, source: str) -> list:
+    """Queue observer lines for the Watcher, and ONLY observer lines.
+
+    The allow-list is checked here, at the write, as well as where the lines
+    are made: a line that reached this function by a path nobody planned must
+    still not be queued.
+    """
+    queued = []
+    for command in commands:
+        if not director.observer_allows(command):
+            raise ValueError(f"not an observer command: {command!r}")
+        queued.append(_insert_gm(relay.GmCommand(director.WATCHER_NAME, command, source)))
+    return queued
+
+
 def _ensure_queue_store() -> None:
     """The campaign queue table, created the way the Jev store is (#179).
 
@@ -5776,6 +5862,7 @@ class Bridge(discord.Client):
                 self._level_route_loop,
                 self._movement_loop,
                 self._family_intent_loop,
+                self._watch_loop,
             )
         }
 
@@ -5795,6 +5882,7 @@ class Bridge(discord.Client):
         await asyncio.to_thread(_ensure_guild_run_store)
         await asyncio.to_thread(_ensure_standin_store)
         await asyncio.to_thread(_ensure_queue_store)
+        await asyncio.to_thread(_ensure_watch_store)
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
@@ -5827,6 +5915,7 @@ class Bridge(discord.Client):
         (core.JobDirective, "_set_job"),
         (core.QueueDirective, "_set_queue"),
         (core.DigestQuery, "_report_digest"),
+        (director.WatchDirective, "_set_watch"),
     )
 
     async def _act_on(self, decision, channel) -> None:
@@ -18922,6 +19011,78 @@ class Bridge(discord.Client):
             )[:1990]
         )
 
+    # --- the Watcher (director.py) ---------------------------------------
+
+    async def _set_watch(self, d, channel) -> None:
+        """Take the operator's order for the Watcher. The loop does the moving."""
+        spec = director.parse_watch(d.spec)
+        if isinstance(spec, director.SpecError):
+            await channel.send(spec.why[:1990])
+            return
+        await asyncio.to_thread(_write_watch, spec.text(), d.source)
+        if spec.kind == "off":
+            await channel.send("The Watcher is stood down.")
+        else:
+            await channel.send(
+                f"The Watcher will follow: {spec.text()}. The order lapses after "
+                f"{director.MANDATE_TTL // 60} minutes unless renewed."
+            )
+
+    async def _watch_loop(self) -> None:
+        """Keep the Watcher beside whoever the operator's order names."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("WATCH_CYCLE_SECONDS", "3"))
+        memory = director.Memory()
+        await asyncio.sleep(10.0)
+        while not self.is_closed():
+            try:
+                await self._watch_once(memory)
+            except Exception:
+                log.exception("watcher: pass failed; the Watcher stays where it is")
+            await asyncio.sleep(cycle)
+
+    async def _watch_once(self, memory) -> None:
+        row = await asyncio.to_thread(_read_watch)
+        if not director.mandate_active(row):
+            memory.spec, memory.target = "", ""
+            return
+        spec_text = str(row["spec"])
+        spec = director.parse_watch(spec_text)
+        if isinstance(spec, director.SpecError) or spec.kind == "off":
+            return
+        world = await asyncio.to_thread(_fetch_watch_world)
+        now = time.time()
+        watcher = next((s for s in world["spots"] if director.is_watcher(s.name)), None)
+        memory.on_presence(watcher is not None)
+        new_target = memory.on_order(spec_text)
+        picked = director.pick_target(
+            spec, world["spots"], runs=world["runs"], seats=world["seats"],
+            heads=world["heads"], current=memory.target,
+        )
+        if isinstance(picked, director.Refused):
+            await asyncio.to_thread(_note_watch, spec_text, "", picked.text)
+            return
+        if picked.name != memory.target:
+            new_target = True
+        memory.target = picked.name
+        target = next((s for s in world["spots"] if s.name == picked.name), None)
+        decision = director.decide(
+            watcher, target, now=now, moves=memory.moves,
+            booted_at=memory.booted_at, new_target=new_target,
+        )
+        source = f"watcher:{row.get('set_by', '')}"[:48]
+        if decision.commands:
+            await asyncio.to_thread(_insert_watcher_lines, decision.commands, source)
+            if decision.action == director.BOOT:
+                memory.booted_at = now
+            else:
+                memory.record_move(now)
+            log.info("watcher: %s -> %s (%s)", decision.action, picked.name, decision.reason)
+        note = f"{picked.name}: {decision.action}, {decision.reason}"
+        if decision.client_hint and decision.action == director.FOLLOW:
+            note += f" (client: {decision.client_hint})"
+        await asyncio.to_thread(_note_watch, spec_text, picked.name, note)
+
     # --- job schedule (infra#2834) ------------------------------------------
 
     async def _set_job(self, d: core.JobDirective, channel) -> None:
@@ -29620,6 +29781,7 @@ class HeadlessBridge(Bridge):
         await asyncio.to_thread(_ensure_guild_run_store)
         await asyncio.to_thread(_ensure_standin_store)
         await asyncio.to_thread(_ensure_queue_store)
+        await asyncio.to_thread(_ensure_watch_store)
 
         loops = [
             coro for coro in (
@@ -29669,6 +29831,7 @@ class HeadlessBridge(Bridge):
                 self._level_route_loop,
                 self._movement_loop,
                 self._family_intent_loop,
+                self._watch_loop,
             ) if coro.__name__ not in self.HEADLESS_SKIP
         ]
         log.info("headless: no Discord gateway; driving %d loop(s): %s",

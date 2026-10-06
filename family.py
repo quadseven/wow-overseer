@@ -340,6 +340,28 @@ def _race_name_of(bond, profile: dict) -> str:
     return _RACE_NAMES.get(race_id, "") if race_id is not None else ""
 
 
+def build_observers(rows, geo, names=()) -> list[dict]:
+    """Cards for the observer characters (the Watcher), which are streamed but
+    belong to no family.
+
+    ONLY a name the deployment lists in WOW_STREAMED_CHARACTERS gets a card: an
+    unset list means "everyone is streamed" for the family, and applying that
+    here would draw a tile for an observer that has no client. The card carries
+    `broadcast_url` and `present` like a member's, which is the whole contract
+    the host's watchdog reads (it takes any named entry with both), so listing
+    the observer here is what stops the capacity guard disabling its session.
+    """
+    by_name = {r["name"]: r for r in rows}
+    cards = []
+    for name in names:
+        if name not in _STREAMED:
+            continue
+        card = _member(name, by_name.get(name), geo, None, {})
+        card["role"] = "observer"
+        cards.append(card)
+    return cards
+
+
 def _member(
     name: str,
     row: dict | None,

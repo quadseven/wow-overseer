@@ -5,6 +5,7 @@ out, bytes over HTTP. No logic here that tests would want to reach.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -32,6 +33,7 @@ import chat
 import council
 import crossing
 import decree
+import director
 import dungeonladder
 import dungeonpath
 import dungeonplan
@@ -195,6 +197,10 @@ LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT_SECONDS", "120"))
 # A chat POST is a name plus a sentence; anything larger is not a request
 # this page makes, and an unbounded read would be a memory hole.
 MAX_BODY = 4096
+
+# The operator's key for POST /api/director. Unset, the Watcher cannot be
+# ordered over HTTP at all (the Discord door has its own allow-list of users).
+_DIRECTOR_TOKEN = os.environ.get("OVERSEER_DIRECTOR_TOKEN", "").strip()
 
 # What the inner voice is told the character IS. panel.py has its own copy
 # for the panel's own labels; importing it here would couple the prompt's
@@ -5378,6 +5384,8 @@ class Handler(BaseHTTPRequestHandler):
             # be told in advance how many there are.
             payload["family"] = chosen
             payload["families"] = known
+            payload["observers"] = family.build_observers(
+                _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,))
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as /api/map: the tab shows its stale banner on a
@@ -5409,7 +5417,8 @@ class Handler(BaseHTTPRequestHandler):
                 mine = [r for r in rows if r["name"] in names]
                 built.append((key, family.build_family(
                     mine, GEO, names, {n: profiles[n] for n in names if n in profiles})))
-            payload = watchwall.build_heads(built)
+            payload = watchwall.build_heads(built, family.build_observers(
+                _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,)))
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # The same contract as /api/family: the wall keeps the tiles it
@@ -6791,6 +6800,72 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("guild chat query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _director_state(self, _query: dict) -> None:
+        """GET /api/director - what the Watcher has been told, and what it is doing.
+
+        Read-only and open like every other GET here. Only the order (POST) is
+        gated: see _director_post.
+        """
+        try:
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(director.CREATE_SQL)
+                cur.execute(director.READ_SQL)
+                row = cur.fetchone()
+            active = director.mandate_active(row)
+            payload = {
+                "watcher": director.WATCHER_NAME,
+                "enabled": bool(_DIRECTOR_TOKEN),
+                "active": active,
+                "spec": row["spec"] if active else "",
+                "target": row["target"] if active else "",
+                "note": row["note"] if row else "",
+                "expires_in": int(row["ttl"]) if active else 0,
+                "usage": director.USAGE,
+            }
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            log.exception("director state query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
+    def _director_post(self) -> None:
+        """POST /api/director {"watch": "<order>"} - point the Watcher.
+
+        OPERATOR ONLY, and closed by default: the order is taken only when the
+        deployment set OVERSEER_DIRECTOR_TOKEN and the request carries the same
+        value in X-Director-Token (compared in constant time). With no token
+        configured the door answers 503, never an open endpoint. The body is
+        parsed by director.parse_watch, so no name or text from the request
+        reaches SQL except as a bound, grammar-checked value.
+        """
+        if not _DIRECTOR_TOKEN:
+            self._send(503, "application/json", b'{"error": "the director is not enabled here"}')
+            return
+        sent = self.headers.get("X-Director-Token") or ""
+        if not hmac.compare_digest(sent.encode(), _DIRECTOR_TOKEN.encode()):
+            self._send(403, "application/json", b'{"error": "operator only"}')
+            return
+        request = self._read_json_body()
+        if request is None:
+            return
+        text = request.get("watch") if isinstance(request.get("watch"), str) else ""
+        spec = director.parse_watch(text)
+        if isinstance(spec, director.SpecError):
+            self._send(400, "application/json", json.dumps({"error": spec.why}).encode())
+            return
+        try:
+            with _connect() as conn, conn.cursor() as cur:
+                cur.execute(director.CREATE_SQL)
+                if spec.kind == "off":
+                    cur.execute(director.CLEAR_SQL)
+                else:
+                    cur.execute(director.SET_SQL,
+                                (spec.text(), "web:director", director.MANDATE_TTL))
+            self._send(200, "application/json", json.dumps(
+                {"ok": True, "spec": spec.text(), "expires_in": director.MANDATE_TTL}).encode())
+        except Exception:
+            log.exception("director order failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _read_json_body(self) -> dict | None:
         """The POST body as a dict, or None after sending the error itself."""
         try:
@@ -6919,6 +6994,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/decree": _decree,
         "/api/thoughts": _thoughts,
         "/api/watch": _watch_state,
+        "/api/director": _director_state,
         "/": _index,
         "/index.html": _index,
         "/zones.json": _zones_file,
@@ -6935,6 +7011,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/chat": _chat_post,
         "/api/decree": _decree_post,
         "/api/watch": _watch_post,
+        "/api/director": _director_post,
         "/api/frame": _frame_post,
     }
 

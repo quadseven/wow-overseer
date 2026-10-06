@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+import director
 from relay import GmCommand, GmRefused, SpeakCommand, parse_speak
 
 # WoW enforces 2-12 letters for character names; anything else is not a
@@ -254,6 +255,12 @@ def parse_directive(
                 )
             )
             continue
+        # THE WATCHER TAKES OBSERVER LINES AND NOTHING ELSE. It is a camera
+        # character: no chat, no bot orders, no natural language, and none of
+        # the wider GM surface below (which admits `group`). See director.
+        if director.is_watcher(target):
+            directives.append(_watcher_directive(target, command, f"discord:{author_id}"))
+            continue
         # WoW's own chat syntax ("/say hi", "/w Thrall hi") and dot-commands
         # (".appear Thrall") are taken literally. Everything else falls
         # through to the playerbot-command and inner-voice paths untouched.
@@ -293,6 +300,16 @@ def parse_directive(
             )
         ]
     return directives
+
+
+def _watcher_directive(target: str, command: str, source: str):
+    """A line addressed to the Watcher: an observer dot-command or a refusal."""
+    if command.startswith(".") and director.observer_allows(command):
+        return GmCommand(target, command, source)
+    return Reply(
+        f"{target} takes observer commands only (appear, observer state, speed). "
+        f"To point it somewhere say: {director.USAGE}"
+    )
 
 
 def _job_mode(text: str):
@@ -341,6 +358,9 @@ def _unaddressed(text: str, dedicated: bool, author_id: str = "") -> list:
     """
     if not dedicated:
         return []
+    watch = director.parse_watch_message(text)
+    if watch is not None:
+        return [director.WatchDirective(spec=watch, source=f"discord:{author_id}")]
     queue = _queue_order(text)
     if queue is not None:
         return [
