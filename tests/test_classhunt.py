@@ -285,7 +285,11 @@ def run(this):
 
     def read(row_id):
         got = this.answers.pop(0) if len(this.answers) > 1 else this.answers[0]
-        return None if got is None else dict(zip(("status", "detail", "result"), got))
+        return (
+            None
+            if got is None
+            else dict(zip(("status", "detail", "result"), got, strict=True))
+        )
 
     def state(name, quest):
         return this.states.pop(0) if len(this.states) > 1 else this.states[0]

@@ -24117,6 +24117,12 @@ def _far_walks_open(cur):
     return int(rows[0]["open_walks"]) if rows else None
 
 
+def _hunts_open(cur):
+    """The hunt rows still open, None when the read found no row."""
+    rows = _job_read(cur, "open hunts", _JOB_HUNTS_OPEN_SQL)
+    return int(rows[0]["open_hunts"]) if rows else None
+
+
 def _fetch_job_facts(family_names: list) -> dict:
     """Everything guildjobs.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
@@ -24155,7 +24161,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                  flightlearn.FLIGHT_MASTER_NPC_FLAG)))
         roster_rows = _job_read(cur, "roster names", _JOB_ROSTER_SQL)
         far_open = _far_walks_open(cur)
-        hunt_rows = _job_read(cur, "open hunts", _JOB_HUNTS_OPEN_SQL)
+        hunt_open = _hunts_open(cur)
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)
@@ -24164,7 +24170,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  log_rows=log_rows, done_rows=done_rows)
     facts["class_book"] = book
     facts["far_open"] = far_open
-    facts["hunt_open"] = int(hunt_rows[0]["open_hunts"]) if hunt_rows else None
+    facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}
     # Guilds that own a bank tab (#395). A schema without the table reads as
     # none, so a post never goes to a bank this world cannot show exists.

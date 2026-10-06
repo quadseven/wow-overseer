@@ -2134,10 +2134,7 @@ def plan(
         why = _step_refusal(m, busy, started, allowance)
         if why:
             notes.append(why)
-            if far is not None:
-                far.release(m.name)
-            if getattr(hunts, "slots", None) is not None:
-                hunts.slots.release(m.name)
+            _release_slots(m.name, far, hunts)
             continue
         started[m.guild] = started.get(m.guild, 0) + 1
         busy.add(m.name)
@@ -2158,6 +2155,14 @@ def plan(
         owed=owed,
         released=released,
     )
+
+
+def _release_slots(name, far, hunts) -> None:
+    """Give back the far walk and hunt slots a step took that the plan then
+    refused."""
+    for slots in (far, getattr(hunts, "slots", None)):
+        if slots is not None:
+            slots.release(name)
 
 
 def _allowance(step, counters, per_guild):
