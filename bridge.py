@@ -56,6 +56,7 @@ import bonds
 import campaignplan
 import campaignqueue
 import classic
+import classquest
 import guildbank
 import guildshare
 import guildpost
@@ -13958,7 +13959,11 @@ class Bridge(discord.Client):
             # The level step is a spawn walk too (guildlevel.py).
             leveling=(await asyncio.to_thread(_job_leveling, facts)
                       if spawn_walks else None),
-            focus=focus)
+            focus=focus,
+            # The class quest is a spawn walk and a quest row (classquest.py).
+            classes=facts.get("class_book") if spawn_walks else None)
+        # Members held on a class quest are kept out of the guild's dungeon asks.
+        self._classquest_held = guildjobs.class_held(plan.lines)
         if facts.get("unclaimed"):
             log.info("guild jobs: no new materials post for %s until the posts "
                      "waiting unopened are collected; theirs go to the bank",
@@ -16432,7 +16437,8 @@ class Bridge(discord.Client):
         mid_job = (set(getattr(self, "_job_steps", ())) | set(getattr(self, "_corps_steps", ()))
                    | set(getattr(self, "_dues_walks", ())) | set(getattr(self, "_guild_mail_runs", ()))
                    | set(getattr(self, "_crafter_walks", ()))
-                   | {n for n, held in getattr(self, "_pvp_held", {}).items() if held})
+                   | {n for n, held in getattr(self, "_pvp_held", {}).items() if held}
+                   | set(getattr(self, "_classquest_held", ())))
         doors = guildrun.doors(facts["finder_floors"])
         mates, held, needs = _guild_social_mates(facts, mid_job, doors)
         log.info("guild social: %s", guildsocial.census(mates, held))
@@ -23444,6 +23450,41 @@ _JOB_HUB_MASTERS: list = []
 _JOB_ROSTER_SQL = "SELECT name FROM overseer_roster WHERE enabled = 1"
 
 
+# THE CLASS QUEST BOOK (classquest.py): every class quest of the classic range,
+# its givers and its objective's spawns, read from acore_world once per process.
+# A read the realm cannot answer is None and asked again next pass.
+_CLASS_BOOK: "classquest.Book | None" = None
+
+
+def _class_book():
+    global _CLASS_BOOK
+    if _CLASS_BOOK is not None:
+        return _CLASS_BOOK
+    ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
+    with _connect() as conn, conn.cursor() as cur:
+        quests = _job_read(cur, "class quests", classquest.QUESTS_SQL)
+        if not quests:
+            return None
+        qids = [r["id"] for r in quests]
+        givers = _job_read(cur, "class quest givers",
+                           classquest.GIVERS_SQL.format(quests=ids(qids)))
+        items = {int(r[f"item{i}"]) for r in quests for i in range(1, 7)
+                 if r.get(f"item{i}")}
+        loot = _job_read(cur, "class quest loot", classquest.LOOT_SQL.format(
+            items=ids(items))) if items else []
+        entries = {int(r[f"npc{i}"]) for r in quests for i in range(1, 5)
+                   if (r.get(f"npc{i}") or 0) > 0} | {int(r["entry"]) for r in loot}
+        spawns = _job_read(cur, "class quest spawns", classquest.SPAWNS_SQL.format(
+            entries=ids(entries))) if entries else []
+        spells = {int(r[k]) for r in quests for k in ("reward", "display") if r.get(k)}
+        trained = _job_read(cur, "class quest spells trained", classquest.TRAINED_SQL.format(
+            spells=ids(spells))) if spells else []
+    _CLASS_BOOK = classquest.build(quests, givers, spawns, loot, trained)
+    log.info("class quests: read %d quest(s) in %d reward group(s) from the world database",
+             len(_CLASS_BOOK.quests), len(_CLASS_BOOK.groups))
+    return _CLASS_BOOK
+
+
 def _job_read(cur, what: str, sql: str, params=()) -> list:
     """One job read; a schema without the table or column reads as empty."""
     try:
@@ -23468,9 +23509,15 @@ def _fetch_job_facts(family_names: list) -> dict:
         everyone = ids(guid_of.values())
         skill_rows = _job_read(cur, "skills", _JOB_SKILLS_SQL.format(
             guids=everyone, skills=ids(_JOB_SKILL_IDS)))
+        book = _class_book()
         spell_rows = _job_read(cur, "spells", _JOB_SPELLS_SQL.format(
             guids=everyone,
-            spells=ids([guildjobs.RITUAL_OF_SUMMONING, *sorted(guildjobs.CRAFT_SPELLS)])))
+            spells=ids([guildjobs.RITUAL_OF_SUMMONING, *sorted(guildjobs.CRAFT_SPELLS),
+                        *(book.spell_ids() if book else ())])))
+        log_rows = _job_read(cur, "class quest log", classquest.LOG_SQL.format(
+            guids=everyone, quests=ids(book.quest_ids()))) if book else []
+        done_rows = _job_read(cur, "class quests rewarded", classquest.REWARDED_SQL.format(
+            guids=everyone, quests=ids(book.quest_ids()))) if book else []
         item_rows = _job_read(cur, "carried items", _JOB_ITEMS_SQL.format(
             guids=everyone, goods=guildjobs.TRADE_GOODS,
             subclasses=ids(sorted(guildjobs.MATERIAL_SUBCLASSES)),
@@ -23495,7 +23542,9 @@ def _fetch_job_facts(family_names: list) -> dict:
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)
     facts = _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows,
-                                 item_rows, recent_rows, pending_rows)
+                                 item_rows, recent_rows, pending_rows,
+                                 log_rows=log_rows, done_rows=done_rows)
+    facts["class_book"] = book
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}
     # Guilds that own a bank tab (#395). A schema without the table reads as
     # none, so a post never goes to a bank this world cannot show exists.
@@ -23526,7 +23575,7 @@ def _guild_gathering_skills(member):
 
 
 def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, item_rows,
-                         recent_rows, pending_rows) -> dict:
+                         recent_rows, pending_rows, log_rows=(), done_rows=()) -> dict:
     """The rows the job reads, turned into guildjobs' facts."""
     family = set(family_names)
     guild_members, masters = guildwork.members_from_rows(rows, family_names)
@@ -23534,7 +23583,8 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     skills, known = _guild_skills_and_spells(skill_rows, spell_rows)
     carried = guildjobs.carried_from_rows(item_rows)
     members, crafters = _guild_members_and_crafters(
-        rows, family, role_of, skills, known, carried, eligible)
+        rows, family, role_of, skills, known, carried, eligible,
+        _class_quest_state(log_rows, done_rows))
     pending = {str(r.get(k) or "") for r in pending_rows
                for k in ("target_name", "target_arg")} - {""}
     return {
@@ -23564,8 +23614,20 @@ def _row_float(row, key):
     return None if row.get(key) is None else float(row[key])
 
 
-def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible):
+def _class_quest_state(log_rows, done_rows) -> tuple:
+    """(guid -> {quest: status}, guid -> {quest}) from the class quest reads."""
+    log_of, done_of = {}, {}
+    for r in log_rows or ():
+        log_of.setdefault(int(r["guid"]), {})[int(r["quest"])] = int(r["status"])
+    for r in done_rows or ():
+        done_of.setdefault(int(r["guid"]), set()).add(int(r["quest"]))
+    return log_of, done_of
+
+
+def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible,
+                                quest_state=({}, {})):
     members, crafters = [], {}
+    quest_log, quests_done = quest_state
     for r in rows:
         name, guid, guild = str(r["name"]), int(r["guid"]), str(r.get("guild_name") or "")
         if name in family:
@@ -23587,7 +23649,8 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             zone_id=_row_int(r, "zone_id"),
             money=int(r.get("money") or 0), skills=skills.get(guid, {}),
             known=frozenset(known.get(guid, ())), carried=carried.get(guid, ()),
-            eligible=name in eligible))
+            eligible=name in eligible, quest_log=quest_log.get(guid, {}),
+            quests_done=frozenset(quests_done.get(guid, ()))))
     return members, crafters
 
 
