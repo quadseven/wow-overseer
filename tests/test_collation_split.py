@@ -65,6 +65,7 @@ COLLATIONS = {
     "overseer_chat": "utf8mb4_0900_ai_ci",
     "overseer_chat_watch": "utf8mb4_0900_ai_ci",
     "overseer_stream": "utf8mb4_0900_ai_ci",
+    "overseer_watch": "utf8mb4_0900_ai_ci",
     "overseer_dungeon_run": "utf8mb4_0900_ai_ci",
     "overseer_sample": "utf8mb4_0900_ai_ci",
     # NOT READ FROM A LIVE SCHEMA, AND NOT A GUESS EITHER: this table does not
@@ -217,6 +218,7 @@ STRING_COLUMNS = {
     "overseer_build": frozenset({"name", "source", "value"}),
     "overseer_snapshot": frozenset({"name"}),
     "overseer_stream": frozenset({"character", "delivery", "detail", "mode", "state"}),
+    "overseer_watch": frozenset({"note", "set_by", "spec", "target"}),
     "overseer_thought": frozenset({"character_name", "source", "text"}),
     "overseer_trade": frozenset(
         {"character_name", "reason", "skill_name", "status", "verb"}

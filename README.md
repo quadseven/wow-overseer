@@ -63,6 +63,33 @@ extraction `mod-overseer` went through on 2026-08-27, one repo later.
 - `Dockerfile` - builds the bridge image, `docker build .`, no submodule or
   test content required.
 
+## The Watcher (observer camera)
+
+`director.py` points one invisible, flying GM character at whoever the
+operator names, so its stream shows them. It reads the world snapshot and the
+guild-run table, decides with pure functions, and queues the moves as
+`overseer_command` rows of kind `gm` for that character, the same channel every
+other GM line uses. Its command allow-list holds only observer commands
+(`director.observer_allows`); nothing else can be queued for it.
+
+Orders (Discord, in the overseer channel, from an allowed user; or
+`POST /api/director {"watch": "<order>"}` with the `X-Director-Token` header):
+
+    watch <character> | family [key] | guild <name> | run <id> | dungeon <keyword> | bg | raid | off
+
+An order lapses after 30 minutes unless renewed. `GET /api/director` shows
+the order and what the Watcher is doing.
+
+| Variable | Meaning |
+|---|---|
+| `OVERSEER_WATCHER_NAME` | The observer character's name (default `Watcher`). |
+| `OVERSEER_DIRECTOR_TOKEN` | Operator key for the HTTP order. Unset means the HTTP door is closed. |
+| `WATCH_CYCLE_SECONDS` | How often the director decides (default 3). |
+| `WOW_STREAMED_CHARACTERS` | Must list the observer for the site to publish its card. |
+
+The character, its game account and the client that logs it in are the
+deployment's to provide.
+
 ## CI
 
 - `check.yml` - `python3 .github/scripts/compile_check.py --min-python 3.12`
