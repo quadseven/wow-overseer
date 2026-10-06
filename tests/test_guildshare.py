@@ -122,9 +122,25 @@ class ReserveIsCraftRhythmsNumberTest(unittest.TestCase):
         self.assertEqual(guildshare.reserve_for(2589, (3275,)), 12)
 
     def test_an_item_no_family_recipe_consumes_reserves_nothing(self):
-        # A Bolt of Linen Cloth is the OUTPUT of 2963, never an input, so
-        # nothing in the family's rhythm is waiting on one.
-        self.assertEqual(guildshare.reserve_for(2996, (2963, 3275)), 0)
+        # Linen Bandage (1065) is the OUTPUT of 3275 and is no tailor's input.
+        self.assertEqual(guildshare.reserve_for(1251, (2963, 3275)), 0)
+
+    def test_the_tailors_bolts_are_reserved_with_no_bag_standing(self):
+        # Bolt of Linen Cloth (2996) is a Linen Bag's input (3 a cast) and a
+        # Linen Belt's. craft_spells names neither, yet Og's bolts went to a
+        # guildmate on wow-dev (2026-10-06) while he stood at Tailoring 52.
+        self.assertEqual(guildshare.reserve_for(2996, ()), 36)
+        self.assertEqual(guildshare.reserve_for(2996, (2963, 3275)), 36)
+
+    def test_the_bags_vendor_thread_is_reserved_too(self):
+        # Coarse Thread (2320): 3 a Linen Bag, 1 a Linen Belt.
+        self.assertEqual(guildshare.reserve_for(2320, ()), 36)
+
+    def test_a_tailors_few_bolts_are_never_offered_to_the_guild(self):
+        og = [_stack("Og", "Bolt of Linen Cloth", 2996, 1, 9001)]
+        self.assertEqual(guildshare.surplus(og, ()), ())
+        thread = [_stack("Og", "Coarse Thread", 2320, 9, 9002)]
+        self.assertEqual(guildshare.surplus(thread, ()), ())
 
 
 class GearRecipientPriorityTest(unittest.TestCase):
@@ -235,10 +251,15 @@ class SurplusNeverBreaksTheReserveTest(unittest.TestCase):
         spare = guildshare.surplus(holdings, (2963,))
         self.assertEqual(sum(s.count for s in spare), 36)
 
-    def test_the_measured_151_bolts_are_spare_because_nothing_eats_a_bolt(self):
+    def test_the_measured_151_bolts_keep_a_bag_ladders_reserve_and_the_rest_is_spare(
+        self,
+    ):
+        # A bag eats 3 bolts a cast, so the tailor keeps 36 (twelve casts) and
+        # only whole stacks above that move.
         spare = guildshare.surplus(_measured_bolts(), (2963, 3275))
-        self.assertEqual(len(spare), 8)
-        self.assertEqual(sum(s.count for s in spare), 151)
+        moved = sum(s.count for s in spare)
+        self.assertGreaterEqual(151 - moved, 36)
+        self.assertGreater(moved, 0)
 
     def test_surplus_is_deterministic_across_runs(self):
         first = guildshare.surplus(_measured_bolts(), (2963,))
