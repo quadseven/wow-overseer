@@ -1212,8 +1212,6 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
     because guilds clear dungeons in level order: Jev, offered Ragefire beside
     Wailing Caverns, kept sending Bonkers back to the Ragefire it had cleared.
     """
-    if not seatable(mate.member):
-        return None
     faction = board.factions.get(guild, "")
     band = guildrun.band_of([mate.member.level])
     shape = ask_shape(board, mate, guild)
@@ -1410,6 +1408,8 @@ def _best_askers(board: _Board, guild: str, barred: set, asked: set) -> list:
     choices = []
     for name, mate in board.free_mates.items():
         if mate.member.guild != guild or name in barred:
+            continue
+        if not seatable(mate.member):
             continue
         choice = _asker_choice(board, name, mate, guild, asked)
         if choice:
