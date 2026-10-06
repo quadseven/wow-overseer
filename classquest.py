@@ -982,6 +982,22 @@ def helps(book: Book, member, avoid=None, held_off=frozenset()) -> list:
     ]
 
 
+def objective_spot(book, move: Move, member):
+    """The creature spawn a party walks to for a helpable move, None when it
+    has none: the group quest's own densest pack (Move.spot), or, for a hunt
+    given up after it stalled, the densest pack of the quest's objective with
+    no pack left out (a party can face the pack a lone member could not).
+
+    A use that changed nothing (USE_STALLED) has no spot: a party walk only
+    gets the party there, and the use is the leader's own row."""
+    if move.spot is not None:
+        return move.spot
+    quest = book.quests.get(int(move.quest)) if book is not None else None
+    if quest is None or move.blocker != STALLED:
+        return None
+    return _densest(member, quest.fields)
+
+
 def next_move(book: Book, member, avoid=None, held_off=frozenset()):
     """(the move to make or None, [blocker sentences]) for one member.
 

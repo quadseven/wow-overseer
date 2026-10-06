@@ -57,6 +57,7 @@ import campaignplan
 import campaignqueue
 import classic
 import classask
+import classparty
 import classquest
 import classuse
 import guildbank
@@ -5612,6 +5613,12 @@ class Bridge(discord.Client):
         # class quests it asks guild chat for help with (classask.py).
         self._class_hunts = classquest.Hunts()
         self._class_helps: tuple = ()
+        # The class quest book as the last job pass read it, and the class
+        # quest parties up (classparty.py): their members are held out of the
+        # dungeon passes and the guild jobs while they stand.
+        self._class_book = None
+        self._class_board = classparty.Board()
+        self._class_party_tasks: set = set()
         # Until when (monotonic) this worldserver is known not to carry the
         # quest use verbs (quadseven/mod-overseer#865): the class quest plan
         # works from classquest.Book.plain() meanwhile (classuse.py).
@@ -13981,6 +13988,7 @@ class Bridge(discord.Client):
         # The class quests a guildmate could help with, asked in guild chat
         # by the social pass (classask.py).
         self._class_helps = plan.helps
+        self._class_book = facts.get("class_book")
         if facts.get("unclaimed"):
             log.info("guild jobs: no new materials post for %s until the posts "
                      "waiting unopened are collected; theirs go to the bank",
@@ -14299,6 +14307,162 @@ class Bridge(discord.Client):
             "guild jobs", step.holder, walk_id, cap,
             lambda: _insert_corps_row(step.holder, step.walk), goal)
         return answer.state == guildroute.ARRIVED
+
+    # --- the class quest party (classparty.py) ---------------------------------
+
+    def _begin_class_parties(self, runs) -> None:
+        """Put each party on the board, which holds its members at once, and
+        start its task."""
+        for run in runs:
+            self._class_board.begin(run)
+            task = asyncio.ensure_future(self._run_class_party(run))
+            self._class_party_tasks.add(task)
+            task.add_done_callback(self._class_party_tasks.discard)
+
+    async def _run_class_party(self, run) -> None:
+        """One class quest party from its party-up row to its party-disband: form
+        it, walk it to the objective, watch the quest, end it. The members are
+        free again when this returns, whatever happened."""
+        formed = done = False
+        try:
+            formed = await self._class_party_form(run)
+            if formed:
+                done = await self._class_party_work(run)
+        except Exception:
+            log.exception("class party: %s's party for %s failed", run.leader, run.title)
+        finally:
+            await self._class_party_close(run, formed, done)
+
+    async def _class_party_form(self, run) -> bool:
+        """Write party-up and follow its answer. True when the party formed.
+
+        A refusal naming a helper takes that helper's yes back and bars it from
+        this ask, and the ask's next pass picks another; one naming the leader
+        waits and asks again; a worldserver before the verbs is not asked again
+        for guildroute.WALK_UNSUPPORTED_SECONDS (today's behaviour: the ask runs
+        out unformed). MAX_FAILURES failures give the ask up."""
+        board = self._class_board
+        row = guildcorps.Row("guild", classparty.up_command(run.helpers), "",
+                             classparty.SOURCE)
+        while True:
+            row_id = await asyncio.to_thread(_insert_corps_row, run.leader, row)
+            if not row_id:
+                board.fail(run.ask_id)
+                return False
+            answer = await self._await_corps_answer(
+                row_id, classparty.UP_FOLLOW_SECONDS) or {}
+            verdict = classparty.judge_up(
+                run.leader, answer.get("status"), answer.get("detail"),
+                answer.get("result"))
+            log.info("class party: party-up row %d for %s (%s): %s", row_id,
+                     run.leader, row.command, verdict.said)
+            if verdict.state == classparty.FORMED:
+                run.form(time.monotonic())
+                return True
+            if verdict.state == classparty.UNSUPPORTED:
+                board.mark_unsupported(time.monotonic())
+                log.warning("class party: this worldserver does not seat a quest party; "
+                            "filled class quest asks run out unformed for %d minutes",
+                            int(guildroute.WALK_UNSUPPORTED_SECONDS // 60))
+                return False
+            board.fail(run.ask_id)
+            if verdict.state == classparty.WAITING:
+                # A row that answers late must not leave a party nobody follows.
+                await self._class_party_disband_row(run)
+                return False
+            if verdict.state == classparty.HELPER:
+                helper = run.helper_named(verdict.name) or verdict.name
+                board.refuse(run.ask_id, helper)
+                await asyncio.to_thread(_class_party_withdraw, run.answers.get(helper))
+                return False
+            if verdict.state == classparty.LEADER and not board.exhausted(run.ask_id):
+                await asyncio.sleep(classparty.LEADER_WAIT_SECONDS)
+                continue
+            return False
+
+    async def _class_party_work(self, run) -> bool:
+        """Walk the formed party to the objective and watch the quest; True when
+        the quest's objective is done."""
+        cap = self._guild_walk_cap()
+        row = guildcorps.Row("job", classparty.walk_command(run.spot, cap), "",
+                             classparty.SOURCE)
+
+        def insert():
+            return _insert_corps_row(run.leader, row)
+
+        walk_id = await asyncio.to_thread(insert)
+        if not walk_id:
+            return False
+        try:
+            answer, walk_id = await asyncio.wait_for(
+                self._follow_guild_walk(
+                    "class party", run.leader, walk_id, cap, insert,
+                    run.spot.name or "its objective"),
+                timeout=max(1.0, run.left(time.monotonic())))
+        except asyncio.TimeoutError:
+            log.info("class party: %s's party did not reach %s in its time",
+                     run.leader, run.spot.name or "the objective")
+            return False
+        if answer.state != guildroute.ARRIVED:
+            if classparty.walk_unsupported(answer.said):
+                self._class_board.mark_unsupported(time.monotonic())
+            self._class_board.fail(run.ask_id)
+            log.info("class party: walk row %d for %s's party ended without arriving: "
+                     "%s", walk_id, run.leader, answer.said)
+            return False
+        log.info("class party: %s's party stands at %s for %s", run.leader,
+                 run.spot.name or "the objective", run.title)
+        return await self._class_party_watch(run)
+
+    async def _class_party_watch(self, run) -> bool:
+        """Read the asker's quest log until the objective is done, its ask is no
+        longer live or the party's time is up."""
+        while True:
+            state = await asyncio.to_thread(
+                _class_party_quest_state, run.leader, run.quest)
+            if classparty.objective_done(state):
+                log.info("class party: %s's %s is %s; the party is done", run.leader,
+                         run.title, state)
+                return True
+            if not await asyncio.to_thread(_class_party_ask_live, run.ask_id):
+                log.info("class party: %s's ask for %s is over; the party ends",
+                         run.leader, run.title)
+                return False
+            left = run.left(time.monotonic())
+            if left <= 0:
+                log.info("class party: %s's party for %s ran out of time", run.leader,
+                         run.title)
+                return False
+            await asyncio.sleep(min(classparty.WATCH_SECONDS, max(1.0, left)))
+
+    async def _class_party_disband_row(self, run) -> None:
+        row = guildcorps.Row("guild", classparty.DISBAND, "", classparty.SOURCE)
+        row_id = await asyncio.to_thread(_insert_corps_row, run.leader, row)
+        if not row_id:
+            return
+        answer = await self._await_corps_answer(row_id, CORPS_ROW_FOLLOW_SECONDS) or {}
+        log.info("class party: party-disband row %d for %s came back %s", row_id,
+                 run.leader, answer.get("status") or "unanswered")
+
+    async def _class_party_close(self, run, formed: bool, done: bool) -> None:
+        """End the party: disband it, settle the ask and the answers, and give
+        the members back (the board forgets the run, which frees them at once,
+        and even when a write fails)."""
+        board = self._class_board
+        gave_up = not formed and board.exhausted(run.ask_id)
+        try:
+            if formed:
+                await self._class_party_disband_row(run)
+            await asyncio.to_thread(_class_party_settle, run, formed, gave_up)
+        except Exception:
+            log.exception("class party: closing %s's party failed", run.leader)
+        finally:
+            now = time.monotonic()
+            if gave_up:
+                board.cool(run.leader, now, classparty.GIVE_UP_COOLDOWN_MINUTES)
+                log.info("class party: %s's ask for %s is given up after %d failures",
+                         run.leader, run.title, board.failures(run.ask_id))
+            board.end(run, now, done)
 
     async def _job_row(self, step, row, cap: float) -> bool:
         """Write one row and wait for its answer; True when it worked."""
@@ -16432,8 +16596,9 @@ class Bridge(discord.Client):
             try:
                 await asyncio.to_thread(_follow_guild_runs)
                 active = await asyncio.to_thread(_active_guild_run_names)
-                self._guild_run_names = set(active) | set(
-                    getattr(self, "_guild_social_names", ()))
+                self._guild_run_names = (
+                    set(active) | set(getattr(self, "_guild_social_names", ()))
+                    | _class_party_names(self))
                 await asyncio.to_thread(_hearth_stranded_guild_members)
                 if guildrun.enabled():
                     said_off = False
@@ -16472,10 +16637,10 @@ class Bridge(discord.Client):
             return
         facts = await asyncio.to_thread(_fetch_guild_run_facts, bounds)
         # THE CLASS QUEST COMES BEFORE THE DUNGEON (the same exclusion as the
-        # social pass): a member on a class quest, or on a quest ask with an
-        # answer, is not picked, so it counts as busy.
+        # social pass): a member on a class quest, or in a class quest party
+        # that is up, is not picked, so it counts as busy.
         facts["busy"] = (set(facts["busy"]) | set(getattr(self, "_classquest_held", ()))
-                         | await asyncio.to_thread(_quest_ask_holders))
+                         | _class_party_names(self))
         if swap:
             log.info("guild runs: the last run was refused over %s; forming again "
                      "without %s", guildrun.refused_member(gate["latest"][0].get("why")),
@@ -16536,11 +16701,14 @@ class Bridge(discord.Client):
                    | set(getattr(self, "_classquest_held", ())))
         doors = guildrun.doors(facts["finder_floors"])
         mates, held, needs = _guild_social_mates(facts, mid_job, doors)
-        # THE CLASS QUEST COMES BEFORE THE DUNGEON: a member on a quest ask
-        # that has an answer, or whose answer stands on one, is not asked to a
-        # dungeon either (classask.held_names, bounded by the ask's expiry).
-        quest_pass, held, needs = _class_ask_pass(
-            facts, mates, held, needs, getattr(self, "_class_helps", ()))
+        # THE CLASS QUEST COMES BEFORE THE DUNGEON: a member in a class quest
+        # party that is up, or about to be formed from a filled ask, is not
+        # asked to a dungeon either (classask.held_names, only while the party
+        # row is live).
+        quest_pass, held, needs, parties = _class_ask_pass(
+            facts, mates, held, needs, getattr(self, "_class_helps", ()),
+            getattr(self, "_class_board", None), getattr(self, "_class_book", None),
+            time.monotonic())
         log.info("guild social: %s", guildsocial.census(mates, held))
         # PICK-UP GROUPS (guildpug, #591): a pug who said yes counts as free.
         pugs_on = guildpug.enabled()
@@ -16564,6 +16732,8 @@ class Bridge(discord.Client):
                     if pugs_on else None)
         social = _with_class_asks(social, quest_pass)
         run_id = await asyncio.to_thread(_write_guild_social, social)
+        if parties:
+            self._begin_class_parties(parties)
         await _say_guild_pugs(pug_pass)
         if run_id:
             self._guild_run_formed_at = now
@@ -21212,44 +21382,44 @@ def _fetch_guild_social_facts(bounds) -> dict:
 
 
 def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
-                    helps) -> tuple:
-    """(the class quest ask pass, held, needs) for one social pass.
+                    helps, board=None, book=None, clock: float = 0.0) -> tuple:
+    """(the class quest ask pass, held, needs, the parties to form) for one
+    social pass.
 
     The class quest asks (classask.py) see the members free of every job but
-    the quest asks themselves, so an asker and its answerers are free to it;
-    the dungeon asks then see them held. `held` is the dungeon's: the members
-    on a running quest ask that has an answer are added, and cost no need."""
+    the quest asks themselves, so an asker and its answerers are free to it, and
+    so are the members of a class quest party that is up though the core now
+    reads them as grouped (classparty.ask_held). `held` is the dungeon's: the
+    members of a party that is up, or about to be formed from a filled ask, are
+    added, and cost no need. Only a live party row holds anybody."""
     if not classask.enabled():
-        return guildsocial.Pass(), held, needs
+        return guildsocial.Pass(), held, needs, ()
+    board = board if board is not None else classparty.Board()
     asks, answers, now = facts["asks"], facts["answers"], facts["now"]
-    quest_pass = classask.plan_pass(helps, mates, held, asks, answers, now)
-    quest_held = classask.held_names(asks, answers, now)
+    board.prune([a.id for a in classask.quest_asks(asks)
+                 if a.state in guildsocial.LIVE_ASKS])
+    own = classparty.ask_held(held, board)
+    quest_pass = classask.plan_pass(
+        helps, mates, own, asks, answers, now, partied=board.partied_asks(),
+        refused=board.refused(), cooling=board.cooling(clock),
+        seats=board.seats(clock))
+    free = {m.name: m for m in mates if m.name not in own}
+    parties = classparty.plan_starts(
+        asks, answers, quest_pass, helps, free, board, now, clock, book)
+    quest_held = classask.held_names(board.runs() + list(parties))
     held = {**{n: _QUEST_ASK_WHY for n in quest_held}, **held}
-    return quest_pass, held, {n: v for n, v in needs.items() if n not in quest_held}
+    return (quest_pass, held, {n: v for n, v in needs.items() if n not in quest_held},
+            parties)
 
 
-_QUEST_ASK_WHY = "on a class quest ask"
+_QUEST_ASK_WHY = "in a class quest party"
 
 
-def _quest_ask_holders() -> set:
-    """classask.held_names from the tables, for a pass that does not read the
-    social facts. A world without the tables holds nobody."""
-    try:
-        with _connect() as conn, conn.cursor() as cur:
-            cur.execute(guildsocial.ASKS_SQL, (guildsocial.ASK_COOLDOWN_MINUTES,))
-            asks = classask.quest_asks(
-                [guildsocial.ask_from_row(r) for r in cur.fetchall()])
-            if not asks:
-                return set()
-            cur.execute(guildsocial.ANSWERS_SQL.format(  # noqa: S608 - placeholders only
-                holes=",".join(["%s"] * len(asks))), [a.id for a in asks])
-            answers = [guildsocial.answer_from_row(r) for r in cur.fetchall()]
-            cur.execute("SELECT NOW() AS now")
-            now = (cur.fetchone() or {}).get("now")
-    except pymysql.err.MySQLError:
-        log.exception("class quest asks: the table could not be read")
-        return set()
-    return classask.held_names(asks, answers, now)
+def _class_party_names(owner) -> set:
+    """The members of the class quest parties that are up, for the passes that
+    leave them alone (a bridge with no board holds nobody)."""
+    board = getattr(owner, "_class_board", None)
+    return board.names() if board is not None else set()
 
 
 def _with_class_asks(social, quest_pass):
@@ -21322,7 +21492,8 @@ async def _guild_social_doors(client, social):
 def _guild_social_names() -> set:
     """Askers of live dungeon asks and their yeses: members spoken for, whom no
     guild job or walk should take meanwhile. A class quest ask holds nobody
-    from a job (nothing forms a group from it yet, classask.py)."""
+    from a job; the members of its party do, while the party is up
+    (_class_party_names)."""
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -21338,6 +21509,57 @@ def _guild_social_names() -> set:
                 return set()
             raise
         return {str(r["name"]) for r in cur.fetchall()}
+
+
+_CLASS_PARTY_QUEST_SQL = (
+    "SELECT s.status FROM character_queststatus s "
+    "JOIN characters c ON c.guid = s.guid "
+    "WHERE c.name = %s AND s.quest = %s AND s.status IN (1, 3)"
+)
+
+
+def _class_party_quest_state(name: str, quest: int) -> str:
+    """classparty.COMPLETE, INCOMPLETE or GONE for one member's quest, from the
+    same table the class quest planner reads (classquest.LOG_SQL)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_CLASS_PARTY_QUEST_SQL, (name, int(quest)))
+        row = cur.fetchone()
+    return classparty.quest_state(None if row is None else row["status"])
+
+
+def _class_party_ask_live(ask_id: int) -> bool:
+    """Whether the ask is still open or filled (the pass ends one that ran out,
+    was cancelled or lost its asker)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT state FROM overseer_guild_ask WHERE id = %s", (int(ask_id),))
+        row = cur.fetchone()
+    return bool(row) and str(row["state"]) in guildsocial.LIVE_ASKS
+
+
+def _class_party_withdraw(answer_id) -> None:
+    """Take one yes back: its helper was refused for the ask."""
+    if not answer_id:
+        return
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(guildsocial.ANSWER_STATE_SQL, (guildsocial.WITHDRAWN, int(answer_id)))
+
+
+def _class_party_settle(run, formed: bool, gave_up: bool) -> None:
+    """The rows when a party is over. One that formed marks its answerers seated
+    and its ask ran (a quest still not done is asked for again after the
+    cooldown); an ask given up after its failures is cancelled and its yeses
+    taken back. Anything else is left for the next pass to answer again."""
+    if not (formed or gave_up):
+        return
+    with _connect() as conn, conn.cursor() as cur:
+        state = guildsocial.SEATED if formed else guildsocial.WITHDRAWN
+        for answer_id in run.answers.values():
+            cur.execute(guildsocial.ANSWER_STATE_SQL, (state, int(answer_id)))
+        if formed:
+            cur.execute(guildsocial.ASK_RAN_SQL, (None, int(run.ask_id)))
+        else:
+            cur.execute(guildsocial.ASK_STATE_SQL,
+                        (guildsocial.CANCELLED, int(run.ask_id)))
 
 
 def _write_guild_social(social) -> int:

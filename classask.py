@@ -23,20 +23,19 @@ is free. One open ask per member, MAX_OPEN_PER_GUILD in a guild, NEW_PER_PASS a
 pass, ASK_COOLDOWN_MINUTES before the same member asks again.
 
 WHO ANSWERS. A free member of the same guild, not already on an ask, within
-LEVEL_BAND levels of the asker and on its map (the open world's maps are
-continents): the nearest first, ANSWERS_PER_PASS a pass, as many as the quest
-wants.
+LEVEL_BAND levels of the asker, on its map (the open world's maps are
+continents) and within SEAT_RANGE_YARDS of it (the module seats nobody farther
+than 100 yards from the leader): the nearest first, ANSWERS_PER_PASS a pass, as
+many as the quest wants, and never one the module refused for this ask.
 
 BOUNDED. An ask lives guildsocial.ASK_MINUTES and, filled, FILLED_GRACE_MINUTES
-more; a member is held out of the dungeon passes (held_names) only while its
-ask has a yes and has not run out, then not again for the cooldown. A quest
-nobody answers never holds a member at all.
+more, unless a party is up for it: then the party's own clock (classparty.py)
+bounds it. A quest nobody answers holds nobody.
 
-WHAT IS NOT HERE: the group. Forming it needs a module verb that does not
-exist: one that seats the named members in one party and walks the party to a
-creature spawn (finder-run is the dungeon door's, and walk-to-spawn walks one
-bot). Until it does, a filled ask runs out unformed, and the pass says so in its
-notes.
+THE GROUP is classparty.py's: a filled ask has the module seat its answerers in
+one party (`party-up`), walk it to the objective (`party-walk`) and end it
+(`party-disband`). A member is held out of the dungeon passes (held_names) only
+while a party is up, and no longer from the moment it is refused or ended.
 
 PURE: rows in, a guildsocial.Pass out.
 """
@@ -67,6 +66,9 @@ ANSWERS_PER_PASS = guildsocial.ANSWERS_PER_PASS
 MAX_OPEN_PER_GUILD = 3
 NEW_PER_PASS = 2
 LEVEL_BAND = 5
+# The module forms a party only of members within 100 yards of the leader
+# (mod-overseer#866); an answerer beyond this could not be seated.
+SEAT_RANGE_YARDS = 90.0
 
 _NUMBERS = {1: "one", 2: "two", 3: "three", 4: "four"}
 
@@ -113,22 +115,14 @@ def _running(ask, now) -> bool:
     )
 
 
-def held_names(asks, answers, now) -> set:
-    """The members the dungeon passes leave alone: the asker of a running quest
-    ask that has a yes, and each member whose yes stands on one. An ask nobody
-    has answered holds nobody, and one that ran out holds nobody."""
-    yes_by_ask: dict = {}
-    for a in answers or ():
-        if a.state == YES:
-            yes_by_ask.setdefault(a.ask_id, []).append(a.member)
+def held_names(parties) -> set:
+    """The members the dungeon passes leave alone: the leader and the helpers of
+    each class quest party that is up (classparty.PartyRun). An ask nobody has
+    answered, one still being answered and one whose party was refused or ended
+    hold nobody."""
     held = set()
-    for ask in quest_asks(asks):
-        if ask.state not in LIVE_ASKS or not _running(ask, now):
-            continue
-        yes = yes_by_ask.get(ask.id, [])
-        if yes:
-            held.add(ask.asker)
-            held.update(yes)
+    for party in parties or ():
+        held.update(party.names())
     return held
 
 
@@ -187,13 +181,17 @@ def _distance(a, b) -> float:
     return ((a.x - b.x) ** 2 + (a.y - b.y) ** 2) ** 0.5
 
 
-def _helper_choices(asker, free: dict, taken: set, level: int, map_id: int) -> list:
-    """Free mates of the asker's guild that may answer, nearest first."""
+def _helper_choices(
+    asker, free: dict, taken: set, level: int, map_id: int, refused=frozenset()
+) -> list:
+    """Free mates of the asker's guild that may answer, nearest first, within
+    seating range, and not one the module refused for this ask."""
     out = []
     for name, mate in free.items():
         if (
             name == asker.name
             or name in taken
+            or name in refused
             or mate.member.guild != asker.member.guild
         ):
             continue
@@ -201,14 +199,19 @@ def _helper_choices(asker, free: dict, taken: set, level: int, map_id: int) -> l
             continue
         if abs(int(mate.member.level) - int(level)) > LEVEL_BAND:
             continue
-        out.append((_distance(asker, mate), name))
+        away = _distance(asker, mate)
+        if away > SEAT_RANGE_YARDS:
+            continue
+        out.append((away, name))
     return [name for _d, name in sorted(out)]
 
 
-def _ended(ask, need, free, held, now) -> str:
-    """ "expire", "cancel" or "" for one live ask."""
-    if (ask.state == OPEN and _past(ask.expires_at, now)) or (
-        ask.state == FILLED and not _running(ask, now)
+def _ended(ask, need, free, held, now, partied=frozenset()) -> str:
+    """ "expire", "cancel" or "" for one live ask. An ask with a party up does
+    not run out by its own clock: the party's clock ends it."""
+    if ask.id not in partied and (
+        (ask.state == OPEN and _past(ask.expires_at, now))
+        or (ask.state == FILLED and not _running(ask, now))
     ):
         return "expire"
     passing = held.get(ask.asker) in guildsocial.PASSING
@@ -227,13 +230,13 @@ def _leaving(yeses, free, held) -> list:
     ]
 
 
-def _close(live, by_member, yes_by_ask, free, held, now) -> tuple:
+def _close(live, by_member, yes_by_ask, free, held, now, partied=frozenset()) -> tuple:
     """(expire, cancel, withdraw, still): the asks that end now, the yeses
     taken back, and the asks still running."""
     expire, cancel, withdraw, still = [], [], [], []
     for ask in live:
         yeses = yes_by_ask.get(ask.id, [])
-        how = _ended(ask, by_member.get(ask.asker), free, held, now)
+        how = _ended(ask, by_member.get(ask.asker), free, held, now, partied)
         if how == "expire":
             expire.append((ask.id, ask.asker, ""))
         elif how == "cancel":
@@ -246,19 +249,24 @@ def _close(live, by_member, yes_by_ask, free, held, now) -> tuple:
     return expire, cancel, withdraw, still
 
 
-def _full_note(ask, need) -> str:
+def _full_note(ask, need, seats) -> str:
+    if seats:
+        return "%s's %s ask is full; its party is formed next" % (
+            ask.asker,
+            need.move.title,
+        )
     return (
-        "%s's %s ask is full; the module has no verb that seats a party and "
-        "walks it to a spawn, so the group is not formed" % (ask.asker, need.move.title)
+        "%s's %s ask is full; this worldserver does not seat a party yet, so "
+        "the group is not formed" % (ask.asker, need.move.title)
     )
 
 
-def _replies(ask, need, free, spoken, wanted) -> list:
+def _replies(ask, need, free, spoken, wanted, refused=frozenset()) -> list:
     """The new yes rows for one ask short of `wanted` helpers."""
     asker = free.get(ask.asker)
     if asker is None:
         return []
-    names = _helper_choices(asker, free, spoken, need.level, need.map_id)
+    names = _helper_choices(asker, free, spoken, need.level, need.map_id, refused)
     return [
         Reply(
             ask.id,
@@ -271,7 +279,9 @@ def _replies(ask, need, free, spoken, wanted) -> list:
     ]
 
 
-def _answers(still, by_member, yes_by_ask, withdraw, free, spoken) -> tuple:
+def _answers(
+    still, by_member, yes_by_ask, withdraw, free, spoken, partied, refused, seats
+) -> tuple:
     """(replies, filled, notes) over the asks still running, oldest first."""
     gone = set(withdraw)
     replies, filled, notes = [], [], []
@@ -280,23 +290,41 @@ def _answers(still, by_member, yes_by_ask, withdraw, free, spoken) -> tuple:
         standing = [y for y in yes_by_ask.get(ask.id, []) if y.id not in gone]
         wanted = max(1, len(ask.roles_needed)) - len(standing)
         if wanted > 0:
-            made = _replies(ask, need, free, spoken, wanted)
+            made = _replies(
+                ask, need, free, spoken, wanted, (refused or {}).get(ask.id, ())
+            )
             replies += made
             spoken.update(r.member for r in made)
             continue
         if ask.state == OPEN:
             filled.append(ask.id)
-        notes.append(_full_note(ask, need))
+        if ask.id not in partied:
+            notes.append(_full_note(ask, need, seats))
     return replies, filled, notes
 
 
-def plan_pass(helps, mates, held, asks, answers, now) -> guildsocial.Pass:
+def plan_pass(
+    helps,
+    mates,
+    held,
+    asks,
+    answers,
+    now,
+    partied=frozenset(),
+    refused=None,
+    cooling=frozenset(),
+    seats=True,
+) -> guildsocial.Pass:
     """One pass of the class quest asks.
 
     helps    classquest.Help rows: the class quests members need help with now
     mates    guildsocial.Mate for every member read; `held` name -> why not free
     asks     every overseer_guild_ask row; only the quest kind is read
     answers  the answer rows
+    partied  ids of the asks a party is up for: their own clock does not end them
+    refused  ask id -> the members the module refused for it, who do not answer it
+    cooling  the members who gave an ask up lately and do not ask again yet
+    seats    False while this worldserver is known not to seat a party
     """
     free = {m.name: m for m in mates if m.name not in held}
     by_member = {}
@@ -308,16 +336,16 @@ def plan_pass(helps, mates, held, asks, answers, now) -> guildsocial.Pass:
         if a.state == YES:
             yes_by_ask.setdefault(a.ask_id, []).append(a)
     expire, cancel, withdraw, still = _close(
-        live, by_member, yes_by_ask, free, held, now
+        live, by_member, yes_by_ask, free, held, now, partied
     )
     gone = set(withdraw)
     spoken = {a.asker for a in still} | {
         y.member for a in still for y in yes_by_ask.get(a.id, []) if y.id not in gone
     }
     replies, filled, notes = _answers(
-        still, by_member, yes_by_ask, withdraw, free, spoken
+        still, by_member, yes_by_ask, withdraw, free, spoken, partied, refused, seats
     )
-    posts = _new_posts(by_member, free, asks, still, spoken, now)
+    posts = _new_posts(by_member, free, asks, still, spoken | set(cooling), now)
     return guildsocial.Pass(
         expire=tuple(expire),
         cancel=tuple(cancel),
