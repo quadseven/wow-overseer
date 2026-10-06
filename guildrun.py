@@ -204,6 +204,9 @@ class Member:
     has_weapon: bool | None = None
     # A shield worn in the off hand; None when unread.
     has_shield: bool | None = None
+    # Whether it knows the spell its class tanks with (raidroles.TANK_KIT:
+    # Defensive Stance, Bear Form); None when unread.
+    has_tank_kit: bool | None = None
 
     @property
     def played_tree(self) -> str:
@@ -286,12 +289,17 @@ def member_from_row(row: dict) -> Member | None:
         worn_slots=None if row.get("worn_slots") is None else int(row["worn_slots"]),
         has_weapon=None if row.get("has_weapon") is None else bool(row["has_weapon"]),
         has_shield=None if row.get("has_shield") is None else bool(row["has_shield"]),
+        has_tank_kit=(
+            None if row.get("has_tank_kit") is None else bool(row["has_tank_kit"])
+        ),
     )
 
 
 # why_not's word for a member already in a party. A class quest party's own
 # members read it too (classparty.py) and stay free to their ask.
 GROUPED = "already in a group"
+# why_not's word for a member that owes a class quest (classquest.owed).
+OWES_CLASS_QUEST = "owes a class quest"
 
 
 def why_not(
@@ -300,8 +308,12 @@ def why_not(
     resting: set,
     family: set,
     benched=frozenset(),
+    owed=frozenset(),
 ) -> str:
-    """Why this member cannot be picked now, or ""."""
+    """Why this member cannot be picked now, or "".
+
+    `owed` is the names of the members that owe a class quest: the operator's
+    rule is that a class quest comes before any dungeon, so none is picked."""
     if member.name in family:
         return "a family member"
     if not member.online:
@@ -312,6 +324,8 @@ def why_not(
         return "resting after a run"
     if member.name in benched:
         return "refused a run just now"
+    if member.name in owed:
+        return OWES_CLASS_QUEST
     # Where a member stands is read before its gear: a member left inside a
     # dungeon read as "gear too weak", which hid 50 of them (2026-10-04).
     if member.map_id not in OPEN_WORLD_MAPS:
@@ -331,6 +345,7 @@ def free_members(
     resting: set[str],
     family: set[str],
     benched: frozenset[str] = frozenset(),
+    owed: frozenset[str] = frozenset(),
 ) -> tuple[list[Member], dict[str, int]]:
     """The free guild roster and the reasons each other member was held."""
     free = []
@@ -339,7 +354,7 @@ def free_members(
         member = member_from_row(row)
         if member is None:
             continue
-        why = why_not(member, busy, resting, family, benched)
+        why = why_not(member, busy, resting, family, benched, owed)
         if why:
             held[why] = held.get(why, 0) + 1
             continue
@@ -592,10 +607,24 @@ COVERED_SLOTS = 4
 SHIELD_TANK_CLASSES = frozenset({1, 2})
 
 
+def has_kit(member: Member) -> bool:
+    """Whether the member knows the spell its class tanks with (Defensive
+    Stance for a warrior, Bear Form for a druid), or needs none. An unread spell
+    list is not held, as unread gear is not."""
+    if not raidroles.tank_kit(member.class_id) or member.has_tank_kit is None:
+        return True
+    return bool(member.has_tank_kit)
+
+
 def tank_ready(member: Member) -> bool:
-    """May this member take the tank seat: covered, and a warrior or paladin
-    wears a shield. Unread gear is not held."""
-    if not covered(member):
+    """May this member take the tank seat: covered, knows the spell its class
+    tanks with, and a warrior or paladin wears a shield. Unread gear and an
+    unread spell list are not held.
+
+    No tank in a free window means no group forms: guildrun.compositions gives
+    nothing and the social layer seats nobody, so the class quest that gives
+    the spell (a mandatory one, classquest.py) is what unblocks the dungeon."""
+    if not has_kit(member) or not covered(member):
         return False
     if int(member.class_id) not in SHIELD_TANK_CLASSES or member.has_shield is None:
         return True

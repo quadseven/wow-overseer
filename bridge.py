@@ -5613,6 +5613,12 @@ class Bridge(discord.Client):
         # class quests it asks guild chat for help with (classask.py).
         self._class_hunts = classquest.Hunts()
         self._class_helps: tuple = ()
+        # THE CLASS QUEST IS OWED BEFORE ANY DUNGEON (the operator, 2026-10-06):
+        # cohort key -> {name: classquest.Owed} for the members held out of
+        # every dungeon formation, and the clock that releases one that makes
+        # no progress for classquest.OWED_HOURS (_class_owed_names).
+        self._class_owed_by: dict = {}
+        self._class_owing = classquest.Owing()
         # The class quest book as the last job pass read it, and the class
         # quest parties up (classparty.py): their members are held out of the
         # dungeon passes and the guild jobs while they stand.
@@ -13992,12 +13998,16 @@ class Bridge(discord.Client):
             # The class quest is a spawn walk and a quest row (classquest.py).
             classes=facts.get("class_book") if spawn_walks else None,
             hunts=self._class_hunts, now=time.time(),
+            owing=self._class_owing,
             # The class quest walks the realm has room for (guildroute).
             far_slots=guildroute.far_slots_free(
                 facts.get("far_open"), FAR_WALKS_AT_ONCE))
         # Members held on a class quest are kept out of every dungeon pass
         # (the guild's asks, its runs): _class_priority_names.
         self._classquest_held = guildjobs.class_held(plan.lines)
+        # A member that OWES a class quest is held out of every dungeon
+        # formation, hunting or not (guildjobs.owed_members).
+        self._class_owed_by[_cohort_key(cohort)] = dict(plan.owed)
         # The class quests a guildmate could help with, asked in guild chat
         # by the social pass (classask.py).
         self._class_helps = plan.helps
@@ -16662,7 +16672,7 @@ class Bridge(discord.Client):
 
         members, skipped = guildrun.free_members(
             facts["rows"], facts["busy"], facts["resting"],
-            facts["family"], facts["benched"])
+            facts["family"], facts["benched"], owed=frozenset(_class_owed_names(self)))
         pools = guildrun.pools(members, doors)
         if not pools:
             log.info("guild runs: %d free member(s) in %s, and no five of one guild and one "
@@ -16722,6 +16732,11 @@ class Bridge(discord.Client):
             facts, mates, held, needs, getattr(self, "_class_helps", ()),
             getattr(self, "_class_board", None), getattr(self, "_class_book", None),
             time.monotonic())
+        # THE CLASS QUEST IS OWED BEFORE ANY DUNGEON: a member that owes one is
+        # not free to any dungeon ask, run or pick-up group, hunting or not.
+        owed = _class_owed_names(self)
+        held, needs = _hold_owed(held, needs, owed)
+        facts = dict(facts, busy=set(facts["busy"]) | owed)
         log.info("guild social: %s", guildsocial.census(mates, held))
         # PICK-UP GROUPS (guildpug, #591): a pug who said yes counts as free.
         pugs_on = guildpug.enabled()
@@ -16970,6 +16985,7 @@ class Bridge(discord.Client):
             out_member=out_member, family_levels=levels, guild=guild, faction=faction,
             door=door, candidates=candidates, busy=frozenset(gfacts["busy"]),
             resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
+            owed=frozenset(_class_owed_names(self)),
             every_family=frozenset(gfacts["family"]), mid_run=mid_run, current=current)
 
     async def _campaign_queue_once(self) -> None:
@@ -20970,6 +20986,8 @@ _GUILD_RUN_MEMBERS_SQL = (
     "EXISTS (SELECT 1 FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry WHERE ci.guid = s.guid "
     "AND ci.bag = 0 AND ci.slot = 16 AND it.class = 4 AND it.subclass = 6) AS has_shield, "
+    # The spell its class tanks with (raidroles.TANK_KIT), for guildrun.tank_ready.
+    + raidroles.TANK_KIT_COLUMN + ", "
     # IN THE WORLD IS A FRESH SNAPSHOT, NOT characters.online. The flag reads
     # 0 for random bots that are in the world (8 guild members flipped to 0 at
     # once on the dev realm while their snapshots kept updating), and the
@@ -21426,6 +21444,22 @@ def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
 
 
 _QUEST_ASK_WHY = "in a class quest party"
+
+
+def _class_owed_names(owner) -> set:
+    """The members that owe a class quest, from every cohort's last job pass
+    (a bridge that has run none holds nobody)."""
+    by = getattr(owner, "_class_owed_by", None) or {}
+    return {name for owed in by.values() for name in owed}
+
+
+def _hold_owed(held: dict, needs: dict, owed) -> tuple:
+    """(held, needs) with every member that owes a class quest held for it and
+    costing no need. A member already held keeps its own reason, and the class
+    quest asks have been planned before this (a member that owes a quest is
+    still free to ask for help with it and to answer a class quest ask)."""
+    held = {**{n: guildrun.OWES_CLASS_QUEST for n in owed}, **held}
+    return held, {n: v for n, v in needs.items() if n not in owed}
 
 
 def _class_party_names(owner) -> set:
