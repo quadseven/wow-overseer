@@ -235,6 +235,7 @@ class EveryCraftingTrade(unittest.TestCase):
         m = member(
             "Hide",
             role=guildjobs.MAINTENANCE,
+            known=frozenset({3276}),
             skills={FA: (60, 75), LEATHERWORKING: (1, 75), H: (40, 75)},
             carried=(stack(1, SCRAPS, 9, subclass=6),),
         )
@@ -252,6 +253,7 @@ class EveryCraftingTrade(unittest.TestCase):
         m = member(
             "Brew",
             role=guildjobs.MAINTENANCE,
+            known=frozenset({3276}),
             skills={FA: (60, 75), ALCHEMY: (1, 75), H: (40, 75)},
             carried=herbs,
         )
@@ -271,6 +273,7 @@ class EveryCraftingTrade(unittest.TestCase):
         m = member(
             "Ore",
             role=guildjobs.MAINTENANCE,
+            known=frozenset({3276}),
             skills={FA: (60, 75), M: (1, 75), H: (40, 75)},
             carried=(
                 stack(1, 2770, 20, subclass=7),
