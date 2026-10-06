@@ -99,6 +99,24 @@ class TheSittingOutMemberIsWalked(unittest.TestCase):
         self.assertEqual([v.receiver for v in plan], ["Og"])
         self.assertEqual(plan[0].takes[0].command, "take-item mail:33549 item:70")
 
+    def test_a_sitting_out_crafter_with_one_letter_is_walked_before_a_busier_guildmate(
+        self,
+    ):
+        # WALKS_PER_PASS is 3, and most letters used to go first: the master
+        # tailor's one letter of cloth stood behind everyone with a pile.
+        letters = [letter("Og", 900, 90)]
+        for n, name in enumerate(("Aa", "Bb", "Cc"), start=1):
+            for k in range(3):
+                letters.append(letter(name, n * 10 + k, n * 100 + k))
+        plan, _ = guildpost.visits(
+            letters,
+            {"Og", "Aa", "Bb", "Cc"},
+            roster={"Grug", "Og"},
+            sitting_out={"Og"},
+        )
+        self.assertEqual(len(plan), guildpost.WALKS_PER_PASS)
+        self.assertEqual(plan[0].receiver, "Og")
+
     def test_a_roster_member_still_in_the_campaign_is_left_to_its_family(self):
         plan, _ = guildpost.visits(
             [letter("Grug", 1, 10)], {"Grug"}, roster={"Grug", "Og"}, sitting_out={"Og"}
