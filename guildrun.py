@@ -81,10 +81,18 @@ HARD_MAX_GROUPS = 30
 FORM_EVERY_SECONDS = 300
 COOLDOWN_MINUTES = 40
 BAND_SPREAD = 4
-# The guide minimum: a group goes in when its average reaches the door's floor,
-# the lowest level public guides recommend. Attempts are how the guild learns,
-# and the decision tools learn from every one; holding groups home for more
-# levels starves that loop (operator, 2026-09-28).
+# A group goes in when its average reaches the door's floor plus ENTRY_MARGIN.
+# The operator's 2026-09-28 rule was the bare guide minimum (margin 0), so
+# attempts would teach the guild. The record says the attempts teach nothing at
+# that margin: of 265 runs on wow-dev (2026-09-27 to 2026-10-06), Ragefire
+# Chasm (floor 15) cleared 0 of 11 at an average of 12-13, 3 of 25 at 14-15,
+# 8 of 25 at 16-17 and 4 of 5 at 18-19 (deaths a run 3.7, 2.4, 2.3, 1.0), while
+# Wailing Caverns and the Deadmines (floor 17) cleared 0 of 46 at 14-21. A group
+# waits and levels naturally until it is 3 over the floor.
+ENTRY_MARGIN = 3
+# The margin is capped here so the doors that want 58 or more stay reachable.
+LEVEL_CAP = 60
+# The margin the family stand-in check (standin.py) holds a guest to.
 LEVEL_MARGIN = 0
 ROLLING = 20
 MIN_SAMPLES = 3
@@ -597,7 +605,8 @@ def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
     use are offered.
 
     Fits: every member at or over the finder's minimum, the average at least
-    the door's floor (plus LEVEL_MARGIN), and nobody past its ceiling.
+    the door's floor plus ENTRY_MARGIN (never more than LEVEL_CAP), and nobody
+    past its ceiling.
     Best fit is the door whose band's middle is nearest the average.
     """
     levels = [int(x) for x in levels]
@@ -614,7 +623,7 @@ def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
             continue
         if low < door.finder_floor:
             continue
-        if mean < door.floor + LEVEL_MARGIN:
+        if mean < min(door.floor + ENTRY_MARGIN, LEVEL_CAP):
             continue
         if high > door.ceiling:
             continue

@@ -1200,10 +1200,10 @@ GEAR_SUCCESS_COOLDOWN_MINUTES = 15
 GUILD_GEAR_VENDOR_YARDS = 1500.0
 
 
-# The lowest level a guild group may enter any door at (Ragefire Chasm and
-# the Deadmines' floors, guildrun.LEVEL_MARGIN 0). A member below it fits no
-# door yet, so gear that lifts it over guildrun's gate seats nobody today.
-GUILD_DOOR_FLOOR = 15
+# The lowest level a guild group may enter any door at (Ragefire Chasm's
+# floor of 15 plus guildrun.ENTRY_MARGIN 3). A member below it fits no door
+# yet, so gear that lifts it over guildrun's gate seats nobody today.
+GUILD_DOOR_FLOOR = 18
 
 
 def shield_aware(member, character):

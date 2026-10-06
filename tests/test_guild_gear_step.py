@@ -331,8 +331,8 @@ class GearReadsPickTheNeedy(unittest.TestCase):
         import gearup
 
         low = _member(name="Low", level=11)
-        high = _member(name="High", level=17)
-        geared = _member(name="Fine", level=17)
+        high = _member(name="High", level=18)
+        geared = _member(name="Fine", level=18)
         full = {
             s: {"item_level": 17, "item_class": 4, "item_subclass": 1}
             for s in (
@@ -357,7 +357,7 @@ class GearReadsPickTheNeedy(unittest.TestCase):
         facts = {
             "Low": _character(),
             "High": _character(),
-            "Fine": dict(_character(full), level=17),
+            "Fine": dict(_character(full), level=18),
         }
         self.assertFalse(gearup.stale_gear(facts["Fine"]))
         chosen, _ = guildjobs.gear_reads([low, high, geared], facts, (0, 0), 1)

@@ -54,19 +54,19 @@ def member(name, level, class_id, **kw):
 
 
 def cave_band():
-    """Seven free Cave members at 14 to 17: a Protection warrior, a Fury
+    """Seven free Cave members at 18 to 21: a Protection warrior, a Fury
     warrior, a Holy priest, a paladin with no talents and the raid plan's
     Holy, and three damage dealers."""
     return [
-        member("Tanky", 20, WARRIOR, talent_spells=PROTECTION_TALENT),
-        member("Furio", 19, WARRIOR, talent_spells="61216"),
-        member("Healy", 19, PRIEST, talent_spells=HOLY_TALENT),
+        member("Tanky", 21, WARRIOR, talent_spells=PROTECTION_TALENT),
+        member("Furio", 20, WARRIOR, talent_spells="61216"),
+        member("Healy", 20, PRIEST, talent_spells=HOLY_TALENT),
         # Holy Shock (20473) spent: a paladin that heals. #575 seats only a
         # member whose spent talents play the seat.
-        member("Pally", 19, PALADIN, talent_spells="20473"),
-        member("Stabby", 19, ROGUE),
-        member("Zappy", 18, MAGE),
-        member("Locky", 17, WARLOCK),
+        member("Pally", 20, PALADIN, talent_spells="20473"),
+        member("Stabby", 20, ROGUE),
+        member("Zappy", 19, MAGE),
+        member("Locky", 18, WARLOCK),
     ]
 
 
@@ -239,7 +239,7 @@ class EachGuildStaysOnItsOwnSide(unittest.TestCase):
     HUMAN, ORC = 1, 2
 
     def test_an_alliance_guild_is_not_sent_into_orgrimmar(self):
-        levels = [17, 17, 18, 18, 18]
+        levels = [20, 20, 21, 21, 21]
         alliance = [
             d.keyword for d in guildrun.fitting_doors(levels, DOORS, "Alliance")
         ]
@@ -310,9 +310,9 @@ class EachGuildRunsItsOwnDoorsInGear(unittest.TestCase):
 
     def test_each_side_is_offered_only_its_own_doors(self):
         alliance = {
-            d.keyword for d in guildrun.fitting_doors([19] * 5, DOORS, "Alliance")
+            d.keyword for d in guildrun.fitting_doors([22] * 5, DOORS, "Alliance")
         }
-        horde = {d.keyword for d in guildrun.fitting_doors([17] * 5, DOORS, "Horde")}
+        horde = {d.keyword for d in guildrun.fitting_doors([18] * 5, DOORS, "Horde")}
         self.assertLessEqual(alliance, guildrun.GUILD_DOORS["Alliance"])
         self.assertIn("deadmines", alliance)
         self.assertLessEqual(horde, guildrun.GUILD_DOORS["Horde"])
@@ -453,7 +453,7 @@ class TheHostileCapitalDoorIsNeverOffered(unittest.TestCase):
             offered = self.offered(level, "")
             self.assertNotIn("ragefire", offered, level)
             self.assertNotIn("stockades", offered, level)
-        self.assertEqual(self.offered(19, ""), ["wailing", "deadmines"])
+        self.assertEqual(self.offered(21, ""), ["deadmines", "wailing"])
 
     def test_the_hostile_capital_map_ids_are_the_capital_dungeons(self):
         self.assertEqual(guildrun.HOSTILE_CAPITAL_DUNGEONS["Alliance"], {389})
@@ -532,7 +532,7 @@ class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):
         "lower-blackrock-spire", "dire-maul-east-east", "dire-maul-west-north",
         "dire-maul-north",
     }  # fmt: skip
-    FIRST_LEVEL = {"Alliance": 17, "Horde": 15}
+    FIRST_LEVEL = {"Alliance": 20, "Horde": 18}
 
     def offered(self, level, faction):
         return [
@@ -557,41 +557,49 @@ class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):
                 self.assertTrue(self.offered(level, faction), (faction, level))
 
     def test_the_ladder_climbs_through_the_high_dungeons(self):
-        self.assertIn("razorfen-kraul", self.offered(32, "Horde"))
+        self.assertIn("razorfen-kraul", self.offered(34, "Horde"))
         self.assertIn("zulfarrak", self.offered(40, "Alliance"))
-        self.assertIn("sunken-temple", self.offered(52, "Horde"))
+        self.assertIn("sunken-temple", self.offered(54, "Horde"))
         self.assertIn("blackrock-depths", self.offered(56, "Alliance"))
         self.assertIn("scholomance", self.offered(60, "Horde"))
 
 
 class TheDoorsThatFit(unittest.TestCase):
-    def test_a_band_of_seventeen_to_nineteen_gets_ragefire_first(self):
+    def test_a_band_of_eighteen_to_nineteen_gets_ragefire_first(self):
         keywords = [
             d.keyword
-            for d in guildrun.fitting_doors([17, 17, 18, 18, 19], DOORS, "Horde")
+            for d in guildrun.fitting_doors([18, 18, 18, 19, 19], DOORS, "Horde")
         ]
-        self.assertEqual(keywords[0], "ragefire")
-        self.assertNotIn("shadowfang", keywords)
+        self.assertEqual(keywords, ["ragefire"])
 
-    def test_the_guide_minimum_goes_in(self):
-        """Wailing Caverns has floor 17: a mean of 17.0 is offered, 16.8 is not."""
+    def test_a_group_goes_in_three_levels_over_the_floor(self):
+        """Wailing Caverns has floor 17: a mean of 20.0 is offered, 19.8 is not.
+        On wow-dev Ragefire Chasm (floor 15) cleared 0 of 11 runs at an average
+        of 12-13, 3 of 25 at 14-15, 8 of 25 at 16-17 and 4 of 5 at 18-19, and
+        Wailing Caverns and the Deadmines 0 of 46 at 14-21."""
         at = [
             d.keyword
-            for d in guildrun.fitting_doors([17, 17, 17, 17, 17], DOORS, "Alliance")
+            for d in guildrun.fitting_doors([20, 20, 20, 20, 20], DOORS, "Alliance")
         ]
         under = [
             d.keyword
-            for d in guildrun.fitting_doors([16, 17, 17, 17, 17], DOORS, "Horde")
+            for d in guildrun.fitting_doors([19, 20, 20, 20, 20], DOORS, "Horde")
         ]
         self.assertIn("wailing", at)
         self.assertIn("deadmines", at)
         self.assertNotIn("wailing", under)
         self.assertIn("ragefire", under)
 
-    def test_a_group_at_the_ragefire_floor_is_sent(self):
+    def test_a_group_at_the_bare_guide_minimum_stays_home(self):
+        for levels in ([15] * 5, [17] * 5, [15, 15, 15, 15, 16]):
+            self.assertEqual(guildrun.fitting_doors(levels, DOORS, "Horde"), [])
+            self.assertEqual(guildrun.fitting_doors(levels, DOORS, "Alliance"), [])
+        self.assertEqual(guildrun.ENTRY_MARGIN, 3)
+
+    def test_a_group_at_the_ragefire_entry_level_is_sent(self):
         keywords = [
             d.keyword
-            for d in guildrun.fitting_doors([15, 15, 15, 15, 16], DOORS, "Horde")
+            for d in guildrun.fitting_doors([18, 18, 18, 18, 18], DOORS, "Horde")
         ]
         self.assertEqual(keywords, ["ragefire"])
 
@@ -654,11 +662,11 @@ class TheCompositions(unittest.TestCase):
                 )
             )
             for n, lvl, c in (
-                ("W", 19, WARRIOR),
-                ("P", 18, PRIEST),
-                ("R", 18, ROGUE),
-                ("M", 17, MAGE),
-                ("L", 17, WARLOCK),
+                ("W", 21, WARRIOR),
+                ("P", 20, PRIEST),
+                ("R", 20, ROGUE),
+                ("M", 19, MAGE),
+                ("L", 19, WARLOCK),
             )
         ]
         pools = guildrun.pools(cave_band() + horde, DOORS)
@@ -750,44 +758,46 @@ class TheRecordByShape(unittest.TestCase):
 
 
 def plan(table_rows=()):
+    """The Cave pool (an average of 20: band 20-24), the rows played at that band."""
     pool = guildrun.Pool("Cave", tuple(cave_band()))
-    return guildrun.plan_for(pool, DOORS, guildrun.rates(list(table_rows)))
+    rows = [dict(r, band="20-24") for r in table_rows]
+    return guildrun.plan_for(pool, DOORS, guildrun.rates(rows))
 
 
 class TheHeuristicIsThePrior(unittest.TestCase):
     def test_with_no_record_the_closest_level_fit(self):
         p = plan()
         keyword, why = guildrun.heuristic_door(p, p.options[0])
-        self.assertEqual(keyword, "ragefire")
+        self.assertEqual(keyword, "wailing")
         self.assertIn("closest level fit", why)
 
     def test_a_record_with_enough_runs_moves_it(self):
-        rows = [ended("ragefire", "wiped")] * 4 + [ended("wailing", "cleared")] * 4
+        rows = [ended("wailing", "wiped")] * 4 + [ended("deadmines", "cleared")] * 4
         p = plan(rows)
         keyword, why = guildrun.heuristic_door(p, p.options[0])
-        self.assertEqual(keyword, "wailing")
+        self.assertEqual(keyword, "deadmines")
         self.assertIn("best record", why)
 
     def test_too_few_runs_do_not(self):
         # Under MIN_SAMPLES runs a door scores the untried prior, as the level
         # fit does with none: a tie, and the level fit keeps it.
-        rows = [ended("wailing", "cleared")] * 2
+        rows = [ended("deadmines", "cleared")] * 2
         p = plan(rows)
-        self.assertEqual(guildrun.heuristic_door(p, p.options[0])[0], "ragefire")
+        self.assertEqual(guildrun.heuristic_door(p, p.options[0])[0], "wailing")
 
     def test_an_untried_door_beats_a_long_losing_record(self):
         # #583: Wailing Caverns went 0 of 48 and still beat the door nobody
         # had tried, because a door under MIN_SAMPLES runs was left out.
-        rows = [ended("ragefire", "wiped")] * 4
+        rows = [ended("wailing", "wiped")] * 4
         p = plan(rows)
         keyword, why = guildrun.heuristic_door(p, p.options[0])
-        self.assertNotEqual(keyword, "ragefire")
+        self.assertNotEqual(keyword, "wailing")
         self.assertIn("untried", why)
 
     def test_a_winning_record_still_beats_an_untried_door(self):
-        rows = [ended("ragefire", "cleared")] * 3
+        rows = [ended("wailing", "cleared")] * 3
         p = plan(rows)
-        self.assertEqual(guildrun.heuristic_door(p, p.options[0])[0], "ragefire")
+        self.assertEqual(guildrun.heuristic_door(p, p.options[0])[0], "wailing")
 
 
 class OnlyRealTanksAndHealersAreSeated(unittest.TestCase):
@@ -815,21 +825,21 @@ class OnlyRealTanksAndHealersAreSeated(unittest.TestCase):
 
 class AFailingDoorIsRetired(unittest.TestCase):
     def test_six_wipes_and_no_clear_retire_a_door_at_the_band(self):
-        rows = [ended("ragefire", "wiped")] * 6
+        rows = [ended("wailing", "wiped")] * 6
         p = plan(rows)
-        self.assertEqual(guildrun.failing_doors(p), {"ragefire"})
+        self.assertEqual(guildrun.failing_doors(p), {"wailing"})
         keyword, _why = guildrun.heuristic_door(p, p.options[0])
-        self.assertNotEqual(keyword, "ragefire")
+        self.assertNotEqual(keyword, "wailing")
 
     def test_the_only_fitting_door_is_still_chosen(self):
         # A preference, not a ban: the record only moves when the door is run.
-        rows = [ended("ragefire", "wiped")] * 6
+        rows = [ended("wailing", "wiped")] * 6
         p = plan(rows)
-        only = replace(p, doors=tuple(d for d in p.doors if d.keyword == "ragefire"))
-        self.assertEqual(guildrun.heuristic_door(only, only.options[0])[0], "ragefire")
+        only = replace(p, doors=tuple(d for d in p.doors if d.keyword == "wailing"))
+        self.assertEqual(guildrun.heuristic_door(only, only.options[0])[0], "wailing")
 
     def test_one_clear_keeps_it(self):
-        rows = [ended("ragefire", "wiped")] * 6 + [ended("ragefire", "cleared")]
+        rows = [ended("wailing", "wiped")] * 6 + [ended("wailing", "cleared")]
         self.assertEqual(guildrun.failing_doors(plan(rows)), set())
 
 
@@ -839,56 +849,58 @@ class JevChoosesWithAConfidence(unittest.TestCase):
         return asyncio.run(guildrun.decide(client, plan(), environ={}))
 
     def test_both_questions_go_in_one_request_with_the_records(self):
-        fake = FakeJev(picks={"dungeon": "wailing", "composition": "b"}, confidence=0.9)
+        fake = FakeJev(
+            picks={"dungeon": "deadmines", "composition": "b"}, confidence=0.9
+        )
         self.decide(fake)
         self.assertEqual(len(fake.requests), 1)
         questions = fake.requests[0]["questions"]
         self.assertEqual(set(questions), {"composition", "dungeon"})
         self.assertIn(
-            "record for this band", questions["dungeon"]["criteria"]["ragefire"]
+            "record for this band", questions["dungeon"]["criteria"]["wailing"]
         )
         self.assertIn("record at band", questions["composition"]["criteria"]["a"])
 
     def test_a_confident_answer_acts(self):
-        fake = FakeJev(picks={"dungeon": "wailing", "composition": "b"}, confidence=0.9)
+        fake = FakeJev(
+            picks={"dungeon": "deadmines", "composition": "b"}, confidence=0.9
+        )
         decision = self.decide(fake)
-        self.assertEqual(decision.dungeon.chosen, "wailing")
+        self.assertEqual(decision.dungeon.chosen, "deadmines")
         self.assertEqual(decision.dungeon.acted, jev.JEV)
         self.assertEqual(decision.dungeon.confidence, 0.9)
         self.assertEqual(decision.composition.chosen, "b")
         self.assertEqual(decision.chosen, decision.plan.options[1])
 
     def test_below_the_floor_the_prior_acts_and_jevs_answer_is_kept(self):
-        fake = FakeJev(picks={"dungeon": "wailing", "composition": "b"}, confidence=0.3)
+        fake = FakeJev(
+            picks={"dungeon": "deadmines", "composition": "b"}, confidence=0.3
+        )
         decision = self.decide(fake)
-        self.assertEqual(decision.dungeon.chosen, "ragefire")
+        self.assertEqual(decision.dungeon.chosen, "wailing")
         self.assertEqual(decision.dungeon.acted, jev.HEURISTIC)
-        self.assertEqual(decision.dungeon.jev, "wailing")
+        self.assertEqual(decision.dungeon.jev, "deadmines")
         self.assertEqual(decision.dungeon.confidence, 0.3)
         self.assertEqual(decision.composition.chosen, "a")
 
     def test_an_agreement_below_the_floor_is_the_heuristics(self):
         # #584: 30 Wailing Caverns runs at 0.02 to 0.64 were credited to Jev.
-        fake = FakeJev(
-            picks={"dungeon": "ragefire", "composition": "a"}, confidence=0.3
-        )
+        fake = FakeJev(picks={"dungeon": "wailing", "composition": "a"}, confidence=0.3)
         decision = self.decide(fake)
-        self.assertEqual(decision.dungeon.chosen, "ragefire")
+        self.assertEqual(decision.dungeon.chosen, "wailing")
         self.assertEqual(decision.dungeon.acted, jev.HEURISTIC)
         self.assertEqual(decision.dungeon.chosen_by, jev.HEURISTIC)
         self.assertTrue(decision.dungeon.agree)
         self.assertEqual(decision.composition.acted, jev.HEURISTIC)
 
     def test_an_agreement_at_the_floor_is_both(self):
-        fake = FakeJev(
-            picks={"dungeon": "ragefire", "composition": "a"}, confidence=0.6
-        )
+        fake = FakeJev(picks={"dungeon": "wailing", "composition": "a"}, confidence=0.6)
         self.assertEqual(self.decide(fake).dungeon.acted, jev.BOTH)
 
     def test_no_answer_is_the_prior(self):
         decision = self.decide(FakeJev(), key="")
         self.assertEqual(decision.dungeon.status, jev.NO_KEY)
-        self.assertEqual(decision.dungeon.chosen, "ragefire")
+        self.assertEqual(decision.dungeon.chosen, "wailing")
         self.assertEqual(decision.dungeon.chosen_by, jev.HEURISTIC)
 
     def test_each_judgment_is_shaped_for_the_judgment_table(self):

@@ -130,7 +130,7 @@ def five():
         mate("Auren", 20, ROGUE),
         mate("Tanky", 21, WARRIOR, talent_spells=PROTECTION, has_shield=1),
         mate("Healy", 20, PRIEST, talent_spells=HOLY),
-        mate("Zappy", 19, MAGE),
+        mate("Zappy", 20, MAGE),
         mate("Locky", 20, WARLOCK),
     ]
 
@@ -813,7 +813,7 @@ class TheDoorsRecordGatesTheAsk(unittest.TestCase):
             "Auren", "shadowfang", "Sword", entry=3, gain=9.0, slot="mainhand"
         )
         out = plan(
-            [mate("Auren", 24, ROGUE)],
+            [mate("Auren", 25, ROGUE)],
             needs={"Auren": [sfk, cape_need("Auren")]},
             records=guildrun.shape_records([], NOW),
             cleared={("Cave", "deadmines")},
