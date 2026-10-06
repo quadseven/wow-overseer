@@ -110,6 +110,7 @@ from dataclasses import dataclass, field
 
 import campaignplan
 import classic
+import classquest
 import council
 import craft
 import craft_rhythm
@@ -369,6 +370,8 @@ COOLDOWN_MINUTES = {
     "farm": 45,
     "door": 45,
     "craft": 15,
+    # A walk, a take or a hand-in toward a class quest (classquest.py).
+    classquest.ACTION: 10,
     # A walk out of an outgrown zone to a quest hub (guildlevel.py).
     guildlevel.ACTION: guildlevel.COOLDOWN_MINUTES,
     # PvP for upgrades (#589): a queue row waits this long for its battle.
@@ -510,6 +513,10 @@ class Member:
     known: frozenset = frozenset()
     carried: tuple = ()  # Carried
     eligible: bool = False
+    # The class quests in the log (quest id -> status 1 or 3) and the quest
+    # ids it was rewarded (classquest.py).
+    quest_log: dict = field(default_factory=dict)
+    quests_done: frozenset = frozenset()
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -2022,6 +2029,7 @@ def plan(
     pvp=None,
     leveling=None,
     focus=None,
+    classes=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -2038,7 +2046,8 @@ def plan(
     upgrade (#589); `leveling` the guildlevel.World a member who has outgrown
     its zone is walked to a quest hub from, None to take no level step;
     `focus` guild -> focus word (parse_focus), None or {} for every guild's
-    ordinary job.
+    ordinary job; `classes` the classquest.Book of every class quest, None to
+    take no class quest step.
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -2052,7 +2061,7 @@ def plan(
     tally = _focus_tally(members, focus)
     steps, lines, notes = [], {}, []
     # One counter per allowance, each keyed by guild (_allowance).
-    counters = {"jobs": {}, "gear": {}, "pvp": {}, "level": {}}
+    counters = {"jobs": {}, "gear": {}, "pvp": {}, "level": {}, "classquest": {}}
     for m in _ordered_members(members):
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
@@ -2073,6 +2082,7 @@ def plan(
             (pvp or {}).get(m.name),
             leveling,
             crafting(m, focus),
+            classes,
         )
         lines[m.name] = doing
         if note:
@@ -2104,6 +2114,8 @@ def _allowance(step, counters, per_guild):
     every job, GEAR_STEPS_PER_GUILD for gear and hearth steps,
     PVP_STEPS_PER_GUILD for PvP queues and honor buys, and
     guildlevel.STEPS_PER_GUILD for walks out of an outgrown zone."""
+    if step.action == classquest.ACTION:
+        return counters["classquest"], CLASSQUEST_STEPS_PER_GUILD
     if step.action == pvpgear.ACTION:
         return counters["pvp"], PVP_STEPS_PER_GUILD
     if step.action == guildlevel.ACTION:
@@ -2167,10 +2179,21 @@ def _member_step(
     pvp=None,
     leveling=None,
     crafting=False,
+    classes=None,
 ):
-    """Gear, then PvP for an upgrade, then the post, then a walk out of an
+    """A class quest first, then gear, then PvP for an upgrade, then the post, then a walk out of an
     outgrown zone, then the member's ordinary job (a craft-focus guild's trade
-    work when `crafting`), keeping the notes."""
+    work when `crafting`), keeping the notes.
+
+    THE CLASS QUEST COMES FIRST (the operator, 2026-10-06: the highest-priority
+    job in the guild). It is the first rung here, ahead of gear, PvP, post, the
+    level walk and every ordinary job, and it has its own allowance per guild
+    (CLASSQUEST_STEPS_PER_GUILD), so no other kind of step can use up the
+    passes it needs. A member held on a class quest is also kept out of the
+    guild's dungeon asks (the bridge's mid_job set)."""
+    step, doing, quest_note = class_step(m, classes, recent, cap)
+    if step is not None or doing:
+        return step, doing, quest_note
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
     if step is not None:
         return step, doing, gear_note
@@ -2196,7 +2219,11 @@ def _member_step(
         cap,
         crafting,
     )
-    return step, doing, "; ".join(n for n in (gear_note, level_note, note) if n)
+    return (
+        step,
+        doing,
+        "; ".join(n for n in (quest_note, gear_note, level_note, note) if n),
+    )
 
 
 def level_step(m, world, recent, cap):
@@ -2242,6 +2269,80 @@ def level_step(m, world, recent, cap):
         why=why,
     )
     return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, ""
+
+
+# THE CLASS QUEST (classquest.py).
+CLASSQUEST_STEPS_PER_GUILD = 6
+
+
+def _class_spot(move) -> Spot:
+    s = move.spot
+    return Spot(
+        kind="creature",
+        spawn=int(s.guid),
+        map_id=int(s.map_id),
+        x=float(s.x),
+        y=float(s.y),
+        name=s.name,
+        why=move.why,
+    )
+
+
+def class_held(lines) -> set:
+    """The names whose line says they are on a class quest, for the guild
+    social pass, which does not ask them to a dungeon."""
+    return {n for n, line in (lines or {}).items() if classquest.MARK in str(line)}
+
+
+def class_step(m, book, recent, cap):
+    """(step or None, what it does, a note): the member's next move toward a
+    class quest it may do now, from classquest.next_move.
+
+    Never at a roster family member (levelroute walks those), never while
+    offline or fighting, and at most once per COOLDOWN_MINUTES. A hunt holds
+    the member where it hunts (`doing` is set with no step): the member's own
+    grind and loot strategies work the field, and nothing else is asked of it
+    until the quest is complete and handed in. A quest that cannot be done solo
+    is named in the note, so a member never waits in silence.
+    """
+    if book is None or not m.online or m.in_combat:
+        return None, "", ""
+    if m.map_id is None or m.x is None or m.y is None:
+        return None, "", ""
+    move, blocked = classquest.next_move(book, m)
+    note = "; ".join(blocked)
+    if move is None:
+        return None, "", note
+    spot = _class_spot(move)
+    if move.kind == classquest.HUNT and _near(m, spot, classquest.HUNT_REACH):
+        return None, move.said, note
+    if _cooling(m, classquest.ACTION, recent):
+        return None, move.said, note
+    if move.kind == classquest.HUNT:
+        return _spot_step(m, spot, classquest.ACTION, cap, move.said), move.said, note
+    verb = "turnin" if move.kind == classquest.TURN_IN else "take"
+    step = guildcorps.Step(
+        m.name,
+        classquest.ACTION,
+        int(move.quest),
+        move.said,
+        rows=(
+            guildcorps.Row(
+                "quest",
+                "%s quest:%d" % (verb, int(move.quest)),
+                "",
+                source_for(classquest.ACTION, m.name),
+            ),
+        ),
+        walk=guildcorps.Row(
+            "job",
+            spot.command + _cap_word(cap),
+            "",
+            source_for(classquest.ACTION + "-walk", m.name),
+        ),
+        goal=spot.name,
+    )
+    return step, move.said, note
 
 
 # PVP FOR UPGRADES (#589). A member whose next upgrade is PvP gear
