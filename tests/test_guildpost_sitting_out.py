@@ -39,6 +39,8 @@ class _Cursor:
         self.roster, self.snapshots, self.rows = roster, snapshots, []
 
     def execute(self, sql, args=()):
+        # PyMySQL needs one bound value per placeholder.
+        assert sql.count("%s") == len(args), (sql, args)
         if "overseer_roster" in sql:
             self.rows = [
                 {"name": n, "travel_npc": t}
@@ -137,7 +139,8 @@ class TheBridgeClearsOnlyAFreeMember(unittest.TestCase):
         self.assertEqual(sitting({"Og": ""}, {}, out=()), frozenset())
 
     def test_the_pass_passes_the_cleared_names_to_the_walker_read(self):
-        text = (bridge.__file__ and open(bridge.__file__).read()) or ""
+        with open(bridge.__file__) as source:
+            text = source.read()
         self.assertIn(
             "guildpost.visits(letters, online, busy, free_slots, roster,", text
         )
