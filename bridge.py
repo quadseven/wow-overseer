@@ -13884,7 +13884,10 @@ class Bridge(discord.Client):
     async def _plan_guild_jobs(self, members, facts, busy, cap, spawn_walks,
                                cohort=None):
         kept = await asyncio.to_thread(_kept_with_bank_policy, cohort)
-        fields = await self._job_fields(members) if spawn_walks else {}
+        # GUILD_FOCUS: a craft-focus guild's members all farm and craft
+        # (guildjobs.THE GUILD FOCUS); unset keeps every guild's jobs.
+        focus = guildjobs.focus_from_env()
+        fields = await self._job_fields(members, focus, busy) if spawn_walks else {}
         doors = (guildjobs.assign_doors(members, guildjobs.entrances(), facts["stones"])
                  if spawn_walks else {})
         plan = guildjobs.plan(
@@ -13898,7 +13901,8 @@ class Bridge(discord.Client):
             pvp=await self._job_pvp_moves(members, facts["recent"]),
             # The level step is a spawn walk too (guildlevel.py).
             leveling=(await asyncio.to_thread(_job_leveling, facts)
-                      if spawn_walks else None))
+                      if spawn_walks else None),
+            focus=focus)
         if facts.get("unclaimed"):
             log.info("guild jobs: no new materials post for %s until the posts "
                      "waiting unopened are collected; theirs go to the bank",
@@ -13992,6 +13996,8 @@ class Bridge(discord.Client):
                                if any(m.name == n for m in crew)) or "none",
                      "; ".join("%s %s" % (n, d.place) for n, d in sorted(plan.doors.items())
                                if any(m.name == n for m in crew)) or "none")
+        for line in guildjobs.focus_lines(plan):
+            log.info("guild jobs: %s", line)
 
     def _start_guild_job_steps(self, plan, now, cap, sale_walks):
         started = 0
@@ -14005,9 +14011,11 @@ class Bridge(discord.Client):
             started += 1
         return started
 
-    async def _job_fields(self, members) -> dict:
+    async def _job_fields(self, members, focus=None, busy=()) -> dict:
         """name -> guildjobs.Spot for every natural maintenance member that
-        holds herbalism or mining and stands somewhere readable.
+        holds herbalism or mining and stands somewhere readable, and every
+        online member of a craft-focus guild (guildjobs.wants_field) that is
+        not on another walk.
 
         gatheraim decides, as it does for the family: fields its own skill
         can open, near where it stands, never a neighbourhood that tops out
@@ -14021,9 +14029,11 @@ class Bridge(discord.Client):
         """
         out = {}
         surveys = {}
+        busy = set(busy or ())
         for m in members:
-            if (m.role != guildjobs.MAINTENANCE or not m.eligible or m.map_id is None
-                    or m.x is None or m.y is None):
+            if not guildjobs.wants_field(m, focus):
+                continue
+            if m.name in busy and not (m.role == guildjobs.MAINTENANCE and m.eligible):
                 continue
             skills = _guild_gathering_skills(m)
             spot = (await self._gathering_field(m, skills, surveys)
