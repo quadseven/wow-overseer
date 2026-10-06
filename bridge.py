@@ -23943,6 +23943,14 @@ def _job_read(cur, what: str, sql: str, params=()) -> list:
     return [dict(row) for row in cur.fetchall()]
 
 
+def _far_walks_open(cur):
+    """The far walk rows still open, None when the read found no row (a schema
+    without the table)."""
+    rows = _job_read(cur, "open far walks", _JOB_FAR_WALKS_OPEN_SQL,
+                     (int(guildroute.FAR_WALK_FOLLOW_SECONDS),))
+    return int(rows[0]["open_walks"]) if rows else None
+
+
 def _fetch_job_facts(family_names: list) -> dict:
     """Everything guildjobs.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
@@ -23980,8 +23988,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                 (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP,
                  flightlearn.FLIGHT_MASTER_NPC_FLAG)))
         roster_rows = _job_read(cur, "roster names", _JOB_ROSTER_SQL)
-        far_open = _job_read(cur, "open far walks", _JOB_FAR_WALKS_OPEN_SQL,
-                             (int(guildroute.FAR_WALK_FOLLOW_SECONDS),))
+        far_open = _far_walks_open(cur)
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)
@@ -23989,8 +23996,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  item_rows, recent_rows, pending_rows,
                                  log_rows=log_rows, done_rows=done_rows)
     facts["class_book"] = book
-    # None when the read found no row (a schema without the table).
-    facts["far_open"] = int(far_open[0]["open_walks"]) if far_open else None
+    facts["far_open"] = far_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}
     # Guilds that own a bank tab (#395). A schema without the table reads as
     # none, so a post never goes to a bank this world cannot show exists.

@@ -2374,13 +2374,12 @@ def class_priority(m) -> int:
     reward of the level-10 quest is Defensive Stance, Taunt and Sunder Armor,
     and a warrior without them cannot hold a dungeon) and a healer of any
     class (the heal ranks); 1 for everyone else."""
-    tree = str(m.tree or "")
     cls = int(m.class_id)
-    if cls == classquest.WARRIOR and tree == raidroles.TANK_TREE.get(cls):
+    if cls == classquest.WARRIOR and raidroles.fits_seat(
+        cls, m.tree, raidroles.SEAT_TANK
+    ):
         return 0
-    if tree and tree == raidroles.HEALER_TREE.get(cls):
-        return 0
-    return 1
+    return 0 if raidroles.fits_seat(cls, m.tree, raidroles.SEAT_HEALER) else 1
 
 
 def _class_ordered(members, classes):
@@ -2474,26 +2473,9 @@ def class_step(m, book, recent, cap, hunts=None, now=0.0, far=None):
     reach = classquest.PACK_YARDS if tried else classquest.HUNT_REACH
     if move.kind == classquest.HUNT and _near(m, spot, reach):
         return None, move.said, note
-    # A DEAD MEMBER IS WALKED NOWHERE (the module refuses "character is dead"),
-    # and a member the realm refused for a far walk wall is left alone for
-    # that wall's backoff. Neither is the hunt's fault, so its clock waits.
-    wait = class_walk_backoff(m.name, recent)
-    if not m.alive or wait:
-        if hunts:
-            hunts.pause(m.name, move.quest, now)
-        return None, move.said, _join(note, _held_note(m, wait))
-    if _cooling(m, classquest.ACTION, recent):
-        return None, move.said, note
-    walks = move.kind != classquest.USE or not _near(m, spot, classquest.USE_NEAR)
-    if far is not None and walks and _far_class_walk(m, spot, cap):
-        if not far.take(m.name):
-            if hunts:
-                hunts.pause(m.name, move.quest, now)
-            return (
-                None,
-                move.said,
-                _join(note, "%s waits for a far walk slot on the realm" % m.name),
-            )
+    held = _class_held(m, move, spot, cap, recent, hunts, now, far)
+    if held is not None:
+        return None, move.said, _join(note, held)
     if move.kind == classquest.HUNT:
         return _spot_step(m, spot, classquest.ACTION, cap, move.said), move.said, note
     if move.kind == classquest.USE:
@@ -2521,6 +2503,29 @@ def class_step(m, book, recent, cap, hunts=None, now=0.0, far=None):
         goal=spot.name,
     )
     return step, move.said, note
+
+
+def _class_held(m, move, spot, cap, recent, hunts, now, far):
+    """The note for a member a class quest walk is held back from, or None when
+    the walk may start. Held back: a dead member (the module refuses "character
+    is dead"), a member the realm refused for a far walk wall (its backoff), the
+    class cooldown, and a far walk with no slot left. None of these is the
+    hunt's fault, so the first, second and last restart its stall clock."""
+    wait = class_walk_backoff(m.name, recent)
+    if not m.alive or wait:
+        if hunts:
+            hunts.pause(m.name, move.quest, now)
+        return _held_note(m, wait)
+    if _cooling(m, classquest.ACTION, recent):
+        return ""
+    walks = move.kind != classquest.USE or not _near(m, spot, classquest.USE_NEAR)
+    if far is None or not walks or not _far_class_walk(m, spot, cap):
+        return None
+    if far.take(m.name):
+        return None
+    if hunts:
+        hunts.pause(m.name, move.quest, now)
+    return "%s waits for a far walk slot on the realm" % m.name
 
 
 def _join(*parts) -> str:
