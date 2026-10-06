@@ -818,6 +818,14 @@ def _crew_reagents_first(name: str, spend: int, held: dict):
     )
 
 
+def _crew_entries(spend) -> set:
+    """The thread and dye entries of a crew-supplied rung, else none."""
+    spell = int(spend or 0)
+    if spell not in guildcorps.CREW_RUNGS:
+        return set()
+    return {entry for entry, _label, _price, _q in craft_supply.REAGENTS[spell]}
+
+
 def feeds(craft_spell: int) -> tuple:
     """The reagents a stand on this recipe counts: GATHERED, then BAG_FEED."""
     spell = int(craft_spell or 0)
@@ -850,8 +858,7 @@ def reagents_to_count(
         weave, bolt = fed
         wanted.add(bolt.entry)
         wanted.update(r.entry for r in GATHERED.get(weave, ()))
-    if int(spend or 0) in guildcorps.CREW_RUNGS:
-        wanted.update(e for e, _l, _p, _q in craft_supply.REAGENTS[int(spend)])
+    wanted.update(_crew_entries(spend))
     for spell in (spend, craft.smelt_errand(name, skills, primaries)):
         for reagent in GATHERED.get(int(spell or 0), ()):
             wanted.add(reagent.entry)
