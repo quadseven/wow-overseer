@@ -10176,12 +10176,22 @@ class Bridge(discord.Client):
             await asyncio.to_thread(_campaign_waiting, names), free_slots)
         mode = bag_pressure.vendor_pass_mode(trip_worth, withheld, in_run)
         if mode == bag_pressure.VENDOR_MODE_COUNTER:
+            # SAY "WITHHELD" ONLY WHEN IT IS. The counter mode is also the quiet
+            # cycle (no trip worth taking, nothing withheld): on wow-dev
+            # 2026-10-06 this line said "withheld for bag space" over a family
+            # with 7 or more free slots each, and sent a whole investigation
+            # after a bag deadlock that did not exist.
+            if withheld:
+                why = ("the family's campaign is withheld for bag space - the "
+                       "bag trip owns the travel aim and sales are written for "
+                       "whoever stands at a vendor")
+            else:
+                why = ("no trip is worth taking and no campaign is withheld - "
+                       "sales are written for whoever stands at a vendor")
             log.info("economy: selling alone lifts nobody past the trigger of "
-                     "%d (free slots %s, sellable %s), but the family's campaign "
-                     "is withheld for bag space - the bag trip owns the travel "
-                     "aim and sales are written for whoever stands at a vendor",
+                     "%d (free slots %s, sellable %s); %s",
                      bag_pressure.TOWN_RUN_FREE_SLOTS, free_slots,
-                     sellable_counts)
+                     sellable_counts, why)
         return mode
 
     async def _vendor_once(self, cohort=None) -> None:
