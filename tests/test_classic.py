@@ -51,6 +51,17 @@ class TheMaps(unittest.TestCase):
             self.assertTrue(classic.outside_classic(map_id), map_id)
             self.assertFalse(classic.is_classic_map(map_id), map_id)
 
+    def test_the_starting_lands_are_six_zones_on_map_530(self):
+        for zone in (3430, 3433, 3487, 3524, 3525, 3557):
+            self.assertTrue(classic.is_starting_land(530, zone), zone)
+        # Hellfire Peninsula and the Isle of Quel'Danas are Outland proper.
+        self.assertFalse(classic.is_starting_land(530, 3483))
+        self.assertFalse(classic.is_starting_land(530, 4080))
+        # The zone id alone is not enough, and an unread one is never in.
+        self.assertFalse(classic.is_starting_land(0, 3524))
+        self.assertFalse(classic.is_starting_land(530, None))
+        self.assertFalse(classic.is_starting_land(None, 3524))
+
     def test_an_unknown_map_is_not_judged(self):
         self.assertFalse(classic.outside_classic(None))
         self.assertFalse(classic.outside_classic(999))
@@ -134,6 +145,13 @@ class TheModuleAgrees(unittest.TestCase):
     def test_the_two_maps(self):
         self.assertEqual(self.constant("OUTLAND_MAP_ID"), classic.OUTLAND_MAP)
         self.assertEqual(self.constant("NORTHREND_MAP_ID"), classic.NORTHREND_MAP)
+
+    def test_the_starting_lands(self):
+        """mod-overseer#765 names the six zones; a pin from before it has none."""
+        found = re.findall(r"constexpr uint32_t \w+_ZONE_ID = (\d+);", self.block)
+        if not found:
+            self.skipTest("the pinned module predates the starting lands (#765)")
+        self.assertEqual(frozenset(int(z) for z in found), classic.STARTING_LAND_ZONES)
 
 
 if __name__ == "__main__":

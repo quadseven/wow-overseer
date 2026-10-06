@@ -16,7 +16,11 @@ THE RULES.
   and no recipe that needs more than 300.
 - Maps: Eastern Kingdoms (0), Kalimdor (1) and the classic instances. Never
   Outland (530) or Northrend (571). The Blood Elf and Draenei starting lands
-  are physically on map 530 and are outside too: the rule names the map.
+  are physically on map 530 and are outside too: the rule names the map. The
+  one exception is where a member of those races levels from 1 to about 20
+  (STARTING_LAND_ZONES, `is_starting_land`): the module walks a character
+  inside them (mod-overseer#765), and a planner that walks somebody there asks
+  that question rather than the map's.
 - Items: item level at most 92 and required level at most 60, and not one of
   the items below whose only source is Outland or Northrend. Wrath data gives
   an item no expansion column, and several Outland and Northrend items (the
@@ -42,6 +46,27 @@ NORTHREND_MAP = 571
 EXPANSION_MAPS = frozenset({OUTLAND_MAP, NORTHREND_MAP})
 
 CLASSIC_CONTINENTS = (0, 1)
+
+# THE BLOOD ELF AND DRAENEI STARTING LANDS, on map 530: the four zones those
+# races level in and their two capitals. The module's Classic::IsStartingLand
+# names the same six (tests/test_classic.py compares them). The Isle of
+# Quel'Danas is not one: it is level-70 content.
+EVERSONG_WOODS = 3430
+GHOSTLANDS = 3433
+SILVERMOON_CITY = 3487
+AZUREMYST_ISLE = 3524
+BLOODMYST_ISLE = 3525
+THE_EXODAR = 3557
+STARTING_LAND_ZONES = frozenset(
+    {
+        EVERSONG_WOODS,
+        GHOSTLANDS,
+        SILVERMOON_CITY,
+        AZUREMYST_ISLE,
+        BLOODMYST_ISLE,
+        THE_EXODAR,
+    }
+)
 
 # The classic instances: the dungeons and raids of dungeonpath.PATH, the
 # Deeprun Tram, and the classic battlegrounds. Onyxia's Lair (249) and
@@ -216,6 +241,17 @@ EXPANSION_ONLY_ITEMS = frozenset(
 def is_expansion_map(map_id) -> bool:
     """Outland or Northrend. An unknown map (None) is not judged here."""
     return map_id is not None and int(map_id) in EXPANSION_MAPS
+
+
+def is_starting_land(map_id, zone_id) -> bool:
+    """One of the six starting-land zones, on map 530. An unread map or zone
+    is not one."""
+    return (
+        map_id is not None
+        and zone_id is not None
+        and int(map_id) == OUTLAND_MAP
+        and int(zone_id) in STARTING_LAND_ZONES
+    )
 
 
 def is_classic_map(map_id) -> bool:

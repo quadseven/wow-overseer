@@ -18,24 +18,38 @@ the far cap, mounted and by the flight paths the member knows.
 
 OUTGROWN (`outgrown`). A member has outgrown where it stands when:
 
-  * it stands on Outland ground (map 530: the Draenei and Blood Elf starting
-    lands), outside the classic world (classic.py);
+  * it stands on Outland ground (map 530) outside the Draenei and Blood Elf
+    starting lands, outside the classic world (classic.py);
   * it stands in a zone where its side has no quest band: a capital, a starting
-    zone, or any zone that is not one of levelroute's hubs;
+    zone, or any zone that is not one of levelroute's hubs or starting-land
+    hubs;
   * its level is above the zone's band ceiling.
 
 An unread zone (no fresh snapshot) is not judged, and neither is any map other
-than the two continents and 530 (a dungeon, a battleground).
+than the two continents and 530 (a dungeon, a battleground). In the starting
+lands (classic.is_starting_land) a member is judged as on a continent: Azuremyst
+Isle, Eversong Woods and the two capitals have no band, and Bloodmyst Isle and
+the Ghostlands have their own (levelroute.STARTING_LAND_HUBS).
 
 WHICH HUB (`choose`). levelroute's HUBS and levelroute's bands, never a second
 table. A hub fits a level when its band's ceiling is at or above the level (so
 the member is not outgrown the moment it arrives) and its floor is at most
 council.NEAR_ENOUGH above it. Of the hubs that fit, the lowest band first, then
 levelroute's own order. Only a hub on the member's own map: the module refuses a
-spawn on another map than the walker's, and a far walk starts on the two classic
-continents only. So a member on map 530, or one whose continent has no hub
-that fits, is named in the pass's notes with the hub it would go to, and left
-where it stands: the boat or the portal is its own to take.
+spawn on another map than the walker's. A far walk starts on the two classic
+continents and in the starting lands (mod-overseer#765), so a member standing
+in the starting lands is offered their second zone's hub as well: Blood Watch
+on Bloodmyst Isle for the Alliance, Tranquillien in the Ghostlands for the
+Horde, which is where a Draenei or a Blood Elf player goes from 10 to 20.
+
+LEAVING MAP 530 (`EXITS`). A Draenei leaves by the boat from Valaar's Berth on
+Azuremyst Isle to Auberdine in Darkshore; a Blood Elf by the Orb of
+Translocation in Silvermoon City to the Undercity. No row the bridge can write
+takes either today: walk-to-spawn refuses a spawn on another map, the module's
+boat crossing serves only a family member whose leader is on the far map, and
+nothing uses an orb. So a member past its starting lands, or one whose
+continent has no hub that fits, is named in the pass's notes with the hub it
+would go to and the way there, and left where it stands.
 
 WHERE THE WALK ENDS (`hub_masters`). The hub's flight master: the flight-master
 spawn of the world's creature table nearest the hub's taxi node, within
@@ -78,6 +92,14 @@ LEVEL_CAP = levelroute.LEVEL_CAP
 
 # A flight master belongs to a hub's node within this many yards of it.
 MASTER_YARDS = float(travel.FLIGHT_NODE_MATCH_YARDS)
+
+# The way off map 530 a player of each side takes, for the note. Named, never
+# walked: no row the bridge writes boards a boat or uses an orb.
+EXITS = {
+    levelroute.ALLIANCE: "the boat from Valaar's Berth on Azuremyst Isle to "
+    "Auberdine in Darkshore",
+    levelroute.HORDE: "the Orb of Translocation in Silvermoon City to the Undercity",
+}
 
 
 @dataclass(frozen=True)
@@ -142,7 +164,7 @@ def hub_masters(rows) -> dict:
         except (KeyError, TypeError, ValueError):
             continue
     out = {}
-    for hub in levelroute.HUBS:
+    for hub in levelroute.HUBS + levelroute.STARTING_LAND_HUBS:
         point = hub.point
         if point is None:
             continue
@@ -176,9 +198,10 @@ def outgrown(level, race, map_id, zone_id, bands) -> str:
     """
     if map_id is None:
         return ""
-    if classic.is_expansion_map(map_id):
+    starting = classic.is_starting_land(map_id, zone_id)
+    if classic.is_expansion_map(map_id) and not starting:
         return classic.outside_note("it", map_id)
-    if int(map_id) not in classic.CLASSIC_CONTINENTS:
+    if int(map_id) not in classic.CLASSIC_CONTINENTS and not starting:
         return ""
     if not zone_id:
         return ""
@@ -203,19 +226,29 @@ def fits(band, level) -> bool:
     )
 
 
-def choose(level, race, map_id, bands, masters) -> Choice:
+def hubs_from(team, map_id, zone_id) -> tuple:
+    """The hubs a member of `team` standing at (map, zone) may be sent to:
+    levelroute's, and its side's starting-land hub while it stands in the
+    starting lands."""
+    hubs = levelroute.hubs_for(team)
+    if classic.is_starting_land(map_id, zone_id):
+        hubs += tuple(h for h in levelroute.STARTING_LAND_HUBS if h.team == team)
+    return hubs
+
+
+def choose(level, race, map_id, bands, masters, zone_id=None) -> Choice:
     """The hub a member of this level and race is walked to from `map_id`.
 
     The lowest band of its side that fits, then levelroute's order, among the
-    hubs with a known flight master. Only on its own map; see the module
-    docstring.
+    hubs with a known flight master (`hubs_from`). Only on its own map; see
+    the module docstring.
     """
     team = side_of(race)
     if not team:
         return Choice(refused="its side cannot be read off its race")
     level = int(level)
     fitting = []
-    for order, hub in enumerate(levelroute.hubs_for(team)):
+    for order, hub in enumerate(hubs_from(team, map_id, zone_id)):
         band = (bands or {}).get(hub.zone_id)
         if not hub.friendly or not fits(band, level):
             continue
@@ -232,9 +265,10 @@ def choose(level, race, map_id, bands, masters) -> Choice:
         return Choice(hub=hub, band=band, master=master)
     _floor, _order, hub, band, _master = fitting[0]
     if classic.is_expansion_map(map_id):
-        why = "no walk leaves map %d; the crossing to %s is its own" % (
+        why = "no walk leaves map %d; its way to %s is %s, and no row takes it" % (
             int(map_id),
             hub.zone,
+            EXITS[team],
         )
     else:
         why = "no hub on its continent fits level %d; %s is across the sea" % (
