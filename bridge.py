@@ -56,6 +56,7 @@ import bonds
 import campaignplan
 import campaignqueue
 import classic
+import classask
 import classquest
 import guildbank
 import guildshare
@@ -5606,6 +5607,10 @@ class Bridge(discord.Client):
         # Askers and yeses of the guild's live asks (guildsocial); folded into
         # _guild_run_names so no guild job or walk takes them meanwhile.
         self._guild_social_names: set = set()
+        # Each member's class quest hunt clock (classquest.Hunts) and the
+        # class quests it asks guild chat for help with (classask.py).
+        self._class_hunts = classquest.Hunts()
+        self._class_helps: tuple = ()
         # The last comparison written per (kind, subject, item guid), so an
         # unchanged answer is recorded once rather than every economy cycle.
         self._jev_recorded: dict = {}
@@ -13961,9 +13966,14 @@ class Bridge(discord.Client):
                       if spawn_walks else None),
             focus=focus,
             # The class quest is a spawn walk and a quest row (classquest.py).
-            classes=facts.get("class_book") if spawn_walks else None)
-        # Members held on a class quest are kept out of the guild's dungeon asks.
+            classes=facts.get("class_book") if spawn_walks else None,
+            hunts=self._class_hunts, now=time.time())
+        # Members held on a class quest are kept out of every dungeon pass
+        # (the guild's asks, its runs): _class_priority_names.
         self._classquest_held = guildjobs.class_held(plan.lines)
+        # The class quests a guildmate could help with, asked in guild chat
+        # by the social pass (classask.py).
+        self._class_helps = plan.helps
         if facts.get("unclaimed"):
             log.info("guild jobs: no new materials post for %s until the posts "
                      "waiting unopened are collected; theirs go to the bank",
@@ -16381,6 +16391,11 @@ class Bridge(discord.Client):
                 and now - self._guild_run_formed_at < bounds.form_every_seconds):
             return
         facts = await asyncio.to_thread(_fetch_guild_run_facts, bounds)
+        # THE CLASS QUEST COMES BEFORE THE DUNGEON (the same exclusion as the
+        # social pass): a member on a class quest, or on a quest ask with an
+        # answer, is not picked, so it counts as busy.
+        facts["busy"] = (set(facts["busy"]) | set(getattr(self, "_classquest_held", ()))
+                         | await asyncio.to_thread(_quest_ask_holders))
         if swap:
             log.info("guild runs: the last run was refused over %s; forming again "
                      "without %s", guildrun.refused_member(gate["latest"][0].get("why")),
@@ -16441,6 +16456,11 @@ class Bridge(discord.Client):
                    | set(getattr(self, "_classquest_held", ())))
         doors = guildrun.doors(facts["finder_floors"])
         mates, held, needs = _guild_social_mates(facts, mid_job, doors)
+        # THE CLASS QUEST COMES BEFORE THE DUNGEON: a member on a quest ask
+        # that has an answer, or whose answer stands on one, is not asked to a
+        # dungeon either (classask.held_names, bounded by the ask's expiry).
+        quest_pass, held, needs = _class_ask_pass(
+            facts, mates, held, needs, getattr(self, "_class_helps", ()))
         log.info("guild social: %s", guildsocial.census(mates, held))
         # PICK-UP GROUPS (guildpug, #591): a pug who said yes counts as free.
         pugs_on = guildpug.enabled()
@@ -16453,7 +16473,8 @@ class Bridge(discord.Client):
         # LEVEL ORDER: a door a guild has cleared ranks below one it has not.
         cleared = guildrun.cleared_doors(facts.get("history", []))
         social = guildsocial.plan_pass(
-            mates, held, facts["asks"], facts["answers"], needs, doors,
+            mates, held, [a for a in facts["asks"] if a.kind == guildsocial.KIND_DUNGEON],
+            facts["answers"], needs, doors,
             guildjobs.entrances(), facts["now"],
             room=max(0, bounds.max_groups - in_flight),
             can_form=spaced and in_flight < bounds.max_groups,
@@ -16461,6 +16482,7 @@ class Bridge(discord.Client):
         social = await _guild_social_doors(getattr(self, "_jev", None), social)
         pug_pass = (_guild_pug_plan(social, facts, mates, held, doors, pug_all, bounds)
                     if pugs_on else None)
+        social = _with_class_asks(social, quest_pass)
         run_id = await asyncio.to_thread(_write_guild_social, social)
         await _say_guild_pugs(pug_pass)
         if run_id:
@@ -21109,6 +21131,62 @@ def _fetch_guild_social_facts(bounds) -> dict:
     return facts
 
 
+def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
+                    helps) -> tuple:
+    """(the class quest ask pass, held, needs) for one social pass.
+
+    The class quest asks (classask.py) see the members free of every job but
+    the quest asks themselves, so an asker and its answerers are free to it;
+    the dungeon asks then see them held. `held` is the dungeon's: the members
+    on a running quest ask that has an answer are added, and cost no need."""
+    if not classask.enabled():
+        return guildsocial.Pass(), held, needs
+    asks, answers, now = facts["asks"], facts["answers"], facts["now"]
+    quest_pass = classask.plan_pass(helps, mates, held, asks, answers, now)
+    quest_held = classask.held_names(asks, answers, now)
+    held = {**{n: _QUEST_ASK_WHY for n in quest_held}, **held}
+    return quest_pass, held, {n: v for n, v in needs.items() if n not in quest_held}
+
+
+_QUEST_ASK_WHY = "on a class quest ask"
+
+
+def _quest_ask_holders() -> set:
+    """classask.held_names from the tables, for a pass that does not read the
+    social facts. A world without the tables holds nobody."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(guildsocial.ASKS_SQL, (guildsocial.ASK_COOLDOWN_MINUTES,))
+            asks = classask.quest_asks(
+                [guildsocial.ask_from_row(r) for r in cur.fetchall()])
+            if not asks:
+                return set()
+            cur.execute(guildsocial.ANSWERS_SQL.format(  # noqa: S608 - placeholders only
+                holes=",".join(["%s"] * len(asks))), [a.id for a in asks])
+            answers = [guildsocial.answer_from_row(r) for r in cur.fetchall()]
+            cur.execute("SELECT NOW() AS now")
+            now = (cur.fetchone() or {}).get("now")
+    except pymysql.err.MySQLError:
+        log.exception("class quest asks: the table could not be read")
+        return set()
+    return classask.held_names(asks, answers, now)
+
+
+def _with_class_asks(social, quest_pass):
+    """The dungeon pass with the class quest pass's rows added, to be written
+    by the one writer (_write_guild_social)."""
+    return dataclasses.replace(
+        social,
+        expire=social.expire + quest_pass.expire,
+        cancel=social.cancel + quest_pass.cancel,
+        withdraw=social.withdraw + quest_pass.withdraw,
+        filled=social.filled + quest_pass.filled,
+        posts=social.posts + quest_pass.posts,
+        replies=social.replies + quest_pass.replies,
+        notes=social.notes + quest_pass.notes,
+    )
+
+
 def _guild_social_mates(facts: dict, mid_job: set, doors: list) -> tuple:
     """(mates, held, needs) for one social pass: every member read, why each
     held one is held (guildrun.why_not, or a guild job in hand), and what each
@@ -21162,16 +21240,18 @@ async def _guild_social_doors(client, social):
 
 
 def _guild_social_names() -> set:
-    """Askers of live asks and their yeses: members spoken for, whom no guild
-    job or walk should take meanwhile."""
+    """Askers of live dungeon asks and their yeses: members spoken for, whom no
+    guild job or walk should take meanwhile. A class quest ask holds nobody
+    from a job (nothing forms a group from it yet, classask.py)."""
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 "SELECT asker AS name FROM overseer_guild_ask "
-                "WHERE state IN ('open', 'filled') UNION "
+                "WHERE state IN ('open', 'filled') AND kind = 'dungeon' UNION "
                 "SELECT w.member AS name FROM overseer_guild_answer w "
                 "JOIN overseer_guild_ask a ON a.id = w.ask_id "
-                "WHERE a.state IN ('open', 'filled') AND w.state = 'yes'"
+                "WHERE a.state IN ('open', 'filled') AND a.kind = 'dungeon' "
+                "AND w.state = 'yes'"
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1146:
@@ -23637,19 +23717,22 @@ def _row_float(row, key):
 
 
 def _class_quest_state(log_rows, done_rows) -> tuple:
-    """(guid -> {quest: status}, guid -> {quest}) from the class quest reads."""
-    log_of, done_of = {}, {}
+    """(guid -> {quest: status}, guid -> {quest}, guid -> {quest: progress})
+    from the class quest reads."""
+    log_of, done_of, progress_of = {}, {}, {}
     for r in log_rows or ():
-        log_of.setdefault(int(r["guid"]), {})[int(r["quest"])] = int(r["status"])
+        guid, quest = int(r["guid"]), int(r["quest"])
+        log_of.setdefault(guid, {})[quest] = int(r["status"])
+        progress_of.setdefault(guid, {})[quest] = int(r.get("progress") or 0)
     for r in done_rows or ():
         done_of.setdefault(int(r["guid"]), set()).add(int(r["quest"]))
-    return log_of, done_of
+    return log_of, done_of, progress_of
 
 
 def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible,
-                                quest_state=({}, {})):
+                                quest_state=({}, {}, {})):
     members, crafters = [], {}
-    quest_log, quests_done = quest_state
+    quest_log, quests_done, quest_progress = quest_state
     for r in rows:
         name, guid, guild = str(r["name"]), int(r["guid"]), str(r.get("guild_name") or "")
         if name in family:
@@ -23672,7 +23755,8 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             money=int(r.get("money") or 0), skills=skills.get(guid, {}),
             known=frozenset(known.get(guid, ())), carried=carried.get(guid, ()),
             eligible=name in eligible, quest_log=quest_log.get(guid, {}),
-            quests_done=frozenset(quests_done.get(guid, ()))))
+            quests_done=frozenset(quests_done.get(guid, ())),
+            quest_progress=quest_progress.get(guid, {})))
     return members, crafters
 
 
