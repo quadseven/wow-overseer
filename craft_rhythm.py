@@ -735,11 +735,32 @@ BAG_FEED: dict[int, tuple[Reagent, ...]] = {
 # craft.py's two anchors asserted first:
 #   8776 Linen Belt   1x Bolt of Linen Cloth (2996), from 2963
 #   3757 Woolen Bag   3x Bolt of Woolen Cloth (2997), from 2964
+# and every rung of craft.RECIPES' TAILORING 145-300 block the same way, each
+# eating Silk (4305, from 3839), Mageweave (4339, from 3865) or Runecloth
+# (14048, from 18401) bolts.
 # A bolt woven past its own grey grants no point; it is cast for the rung it
 # feeds, which does.
+_SILK = (3839, 4305, "Bolt of Silk Cloth")
+_MAGEWEAVE = (3865, 4339, "Bolt of Mageweave")
+_RUNECLOTH = (18401, 14048, "Bolt of Runecloth")
+
+
+def _fed(bolt, per_cast: int) -> tuple[int, Reagent]:
+    weave, entry, label = bolt
+    return weave, Reagent(entry, label, per_cast)
+
+
 BOLT_FED: dict[int, tuple[int, Reagent]] = {
     8776: (2963, Reagent(2996, "Bolt of Linen Cloth", 1)),
     3757: (2964, Reagent(2997, "Bolt of Woolen Cloth", 3)),
+    8760: _fed(_SILK, 2),  # Azure Silk Hood
+    8762: _fed(_SILK, 3),  # Silk Headband
+    8791: _fed(_SILK, 4),  # Crimson Silk Vest
+    8799: _fed(_SILK, 4),  # Crimson Silk Pantaloons
+    12053: _fed(_MAGEWEAVE, 2),  # Black Mageweave Gloves
+    12065: _fed(_MAGEWEAVE, 4),  # Mageweave Bag
+    18402: _fed(_RUNECLOTH, 3),  # Runecloth Belt
+    18417: _fed(_RUNECLOTH, 5),  # Runecloth Gloves
 }
 
 

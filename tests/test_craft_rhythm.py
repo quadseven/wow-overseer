@@ -814,6 +814,21 @@ class BoltFedRungs(unittest.TestCase):
         wanted = craft_rhythm.reagents_to_count("Og", self.OG)
         self.assertLessEqual({self.WOOL_BOLT, self.WOOL}, wanted)
 
+    def test_the_upper_ladder_weaves_its_own_bolts_first(self):
+        """145-300: each rung, short of its bolts, weaves them; with a cast's
+        worth in hand it casts the rung."""
+        for value, rung, weave, bolt, per_cast in (
+            (150, 8760, 3839, 4305, 2),
+            (230, 12065, 3865, 4339, 4),
+            (290, 18417, 18401, 14048, 5),
+        ):
+            skills = {"tailoring": value, "enchanting": 1}
+            with self.subTest(value=value):
+                short = craft_rhythm.errand("Og", skills, {bolt: per_cast - 1})
+                self.assertEqual(short.spell, weave)
+                held = craft_rhythm.errand("Og", skills, {bolt: per_cast})
+                self.assertEqual(held.spell, rung)
+
     def test_every_fed_rung_matches_the_recipe_tables(self):
         """Each rung is a tailoring ladder entry whose note names the bolt and
         count, and each weave spell is the bolt recipe the guild corps

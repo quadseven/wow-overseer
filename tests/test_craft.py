@@ -59,8 +59,16 @@ MEASURED_FOCUS = {
     2964: 0,
     3757: 0,
     3839: 0,
+    8760: 0,
+    8762: 0,
     3865: 0,
+    8791: 0,
+    8799: 0,
+    12053: 0,
+    12065: 0,
     18401: 0,
+    18402: 0,
+    18417: 0,
     # FIRST AID
     3275: 0,
     # ENGINEERING - eleven Anvils, and infra#3760 is the issue for them
@@ -153,8 +161,16 @@ MEASURED_BANDS = {
     2964: (1, 90, 105),
     3757: (1, 105, 140),
     3839: (1, 135, 145),
+    8760: (1, 155, 165),
+    8762: (1, 170, 180),
     3865: (1, 180, 185),
+    8791: (1, 205, 225),
+    8799: (1, 215, 235),
+    12053: (1, 230, 260),
+    12065: (1, 240, 270),
     18401: (1, 255, 260),
+    18402: (1, 270, 300),
+    18417: (1, 290, 320),
     # FIRST AID
     3275: (1, 30, 60),
     # ENGINEERING
@@ -241,15 +257,6 @@ FOCUS_WITHOUT_A_WALK = {
 
 
 class RecipeForTests(unittest.TestCase):
-    def test_returns_none_in_the_gap_between_two_bolt_brackets(self):
-        # 145-174 is a still-deliberate gap: Silk Headband and the rest of
-        # the guide's later thread/dye Tailoring recipes are deferred.
-        # recipe_for must not fall back to the Mageweave bolt just because it
-        # is close by. (101-124 was the gap this test named until Woolen Bag
-        # filled it, below.)
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 145))
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 174))
-
     def test_woolen_bag_carries_tailoring_from_101_to_124(self):
         """The operator's 2026-10-05 ask: Og levels tailoring, and the family
         gets bigger bags. Woolen Bag is both, and its edges are the realm's:
@@ -261,12 +268,59 @@ class RecipeForTests(unittest.TestCase):
         self.assertEqual(craft.recipe_for(tailoring, 100).spell_id, 2964)
         self.assertEqual(craft.recipe_for(tailoring, 125).spell_id, 3839)
 
-    def test_tailoring_climbs_without_a_break_from_1_to_144(self):
-        """Every value from 1 to Bolt of Silk Cloth's last point has a recipe,
-        so a tailor is never left at a value with nothing to cast below 145."""
+    def test_tailoring_climbs_without_a_break_from_1_to_300(self):
+        """Every value from 1 to 300 has a recipe, so a tailor is never left at
+        a value with nothing to cast. 145-174, 185-249 and 260-300 were the
+        gaps where `recipe_for` answered None and Og stopped leveling."""
         tailoring = goals.SKILL_IDS["tailoring"]
-        missing = [v for v in range(1, 145) if craft.recipe_for(tailoring, v) is None]
+        missing = [v for v in range(1, 301) if craft.recipe_for(tailoring, v) is None]
         self.assertEqual(missing, [])
+
+    def test_the_filled_bands_follow_the_route(self):
+        """Each filled band hands to the rung the route names, at the edges the
+        realm's trainer ranks and grey values allow."""
+        tailoring = goals.SKILL_IDS["tailoring"]
+        route = (
+            (145, 159, 8760),  # Azure Silk Hood
+            (160, 174, 8762),  # Silk Headband
+            (175, 184, 3865),  # Bolt of Mageweave
+            (185, 204, 8791),  # Crimson Silk Vest
+            (205, 214, 8799),  # Crimson Silk Pantaloons
+            (215, 224, 12053),  # Black Mageweave Gloves
+            (225, 249, 12065),  # Mageweave Bag
+            (250, 259, 18401),  # Bolt of Runecloth
+            (260, 284, 18402),  # Runecloth Belt
+            (285, 300, 18417),  # Runecloth Gloves
+        )
+        for low, high, spell in route:
+            for value in (low, high):
+                with self.subTest(value=value):
+                    self.assertEqual(craft.recipe_for(tailoring, value).spell_id, spell)
+
+    def test_no_rung_starts_below_the_rank_a_trainer_teaches_it(self):
+        """`trainer_spell.ReqSkillRank` (read 2026-10-05) is the real learn
+        gate; MEASURED_BANDS' MinSkillLineRank is 1 for every tailoring craft,
+        so it cannot catch a rung aimed below the trainer's rank."""
+        taught = {
+            8760: 145,
+            8762: 160,
+            8791: 185,
+            8799: 195,
+            12053: 215,
+            12065: 225,
+            18402: 255,
+            18417: 275,
+        }
+        for recipe in craft.RECIPES[goals.SKILL_IDS["tailoring"]]:
+            if recipe.spell_id in taught:
+                with self.subTest(recipe=recipe.name):
+                    self.assertGreaterEqual(recipe.min_skill, taught[recipe.spell_id])
+
+    def test_the_pattern_taught_runecloth_bag_is_not_a_rung(self):
+        """Runecloth Bag (18405) is taught only by Pattern 14468, which no
+        trainer replaces; nothing on the ladder learns from a pattern."""
+        spells = {r.spell_id for r in craft.RECIPES[goals.SKILL_IDS["tailoring"]]}
+        self.assertNotIn(18405, spells)
 
     def test_finds_linen_belt_bracket(self):
         # infra#3609's own acceptance criteria: the first Tailoring bracket
