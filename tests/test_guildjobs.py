@@ -1285,5 +1285,67 @@ class ThePage(unittest.TestCase):
         self.assertEqual(guildroute.errand_cap_word(20000), " max:20000")
 
 
+class TheClothField(unittest.TestCase):
+    """2026-10-06: the master tailor's bottleneck is cloth, and the humanoids
+    that drop it were nobody's field."""
+
+    def mob(self, spawn, x, y, level=10, name="Defias Thug"):
+        return (guildjobs.Spot("creature", spawn, 0, x, y, name), level)
+
+    def test_the_cloth_is_the_bolts_own_reagents(self):
+        self.assertEqual(guildjobs.CLOTH_ENTRIES, (2589, 2592, 4306, 4338, 14047))
+
+    def test_the_band_is_a_skinners(self):
+        self.assertEqual(guildjobs.cloth_band(12), (6, 13))
+        self.assertEqual(guildjobs.cloth_band(1), (1, 2))
+
+    def test_the_nearest_dense_pack_in_band_wins(self):
+        near = [self.mob(i, 100 + i, 100 + i) for i in range(4)]
+        far = [self.mob(10 + i, 2100 + i, 100) for i in range(9)]
+        high = [self.mob(40 + i, 50 + i, 50, level=30) for i in range(8)]
+        spot = guildjobs.cloth_field(near + far + high, (0.0, 0.0), 12)
+        self.assertEqual(spot.kind, "creature")
+        self.assertIn(spot.spawn, {0, 1, 2, 3})
+        self.assertIn("4 cloth-dropping humanoids of levels 6 to 13", spot.why)
+        self.assertEqual(spot.command, "walk-to-spawn creature:%d" % spot.spawn)
+
+    def test_a_thin_pack_or_none_is_no_field(self):
+        thin = [self.mob(i, 10 + i, 10) for i in range(3)]
+        self.assertIsNone(guildjobs.cloth_field(thin, (0.0, 0.0), 12))
+        self.assertIsNone(guildjobs.cloth_field([], (0.0, 0.0), 12))
+        self.assertIsNone(guildjobs.cloth_field(thin * 3, None, 12))
+
+    def test_a_crew_tailor_farms_cloth_and_a_miner_keeps_its_ore(self):
+        tailor = member("Pokka", skills={197: (40, 75), M: (30, 75)})
+        miner = member("Chopp", skills={M: (30, 75)})
+        idle = member("Diggo")
+        self.assertTrue(guildjobs.farms_cloth(tailor, True))
+        self.assertFalse(guildjobs.farms_cloth(miner, True))
+        self.assertTrue(guildjobs.farms_cloth(miner, False))
+        self.assertTrue(guildjobs.farms_cloth(idle, False))
+
+    def test_a_tailor_is_walked_to_the_humanoids(self):
+        field = guildjobs.Spot("creature", 88, 0, -8100.0, 400.0, "Defias Thug")
+        m = member(
+            "Pokka",
+            skills={197: (40, 75), M: (30, 75)},
+            carried=(stack(1, 2901, 1, item_class=2),),
+        )
+        step = only_step(plan([m], fields={"Pokka": field}), "Pokka")
+        self.assertEqual(step.rows[0].command, "walk-to-spawn creature:88")
+
+    def test_the_bridge_surveys_humanoids_that_carry_cloth(self):
+        bridge = TheBridgePass()
+        body = bridge.body("_job_fields")
+        self.assertIn("guildjobs.farms_cloth(", body)
+        self.assertIn("self._cloth_field(", body)
+        self.assertIn("_survey_job_cloth", bridge.body("_cloth_field"))
+        sql = BRIDGE[BRIDGE.index("_JOB_CLOTH_SQL = (") :]
+        sql = sql[: sql.index("def _survey_job_cloth")]
+        for word in ("ct.type = 7", "creature_loot_template", "ct.lootid", "c.guid"):
+            self.assertIn(word, sql)
+        self.assertIn("guildjobs.CLOTH_ENTRIES", sql)
+
+
 if __name__ == "__main__":
     unittest.main()

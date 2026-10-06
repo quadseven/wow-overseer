@@ -282,6 +282,7 @@ from dataclasses import dataclass
 
 import classic
 import craft_rhythm
+import guildcorps
 import travel
 
 # The auctioneer role keyword, READ FROM travel.ROLES rather than spelled here
@@ -433,6 +434,37 @@ def auctioneer_map_available(
 # why Minor Healing Potion's Empty Vial does not appear and must not. Two
 # passes buying the same reagent would be two passes spending twice.
 GATHERED = craft_rhythm.GATHERED
+
+
+# THE CLOTH A MASTER TAILOR'S BAG OR RUNG EATS (2026-10-06). The family's
+# master tailor stands on the bag or the garment rung it is sewing, and that
+# recipe's own reagent is a bolt, so its stand is not in GATHERED and this pass
+# read it as "nobody is on a craft errand this pass can supply" while the
+# master sat at 0 cloth for hours. A bolt is two to five cloth woven at the
+# bench, so the shortfall to buy is the cloth of the weave that feeds the
+# recipe, and that weave IS in GATHERED. Only the tailor's own bolts are read:
+# BOLT_FED also names a potion and a hide, which are not cloth and not bought.
+CLOTH_WEAVES = frozenset(bolt.spell for bolt in guildcorps.BOLTS)
+
+
+def supply_spell(craft_spell: int) -> int:
+    """The GATHERED recipe whose reagents to buy for a standing errand, or 0.
+
+    A recipe with gathered reagents answers itself. A bag answers the weave of
+    the bolt it sews from (craft_rhythm.BAG_FEED), and a rung that eats its own
+    bolts answers the weave that makes them (craft_rhythm.BOLT_FED). Anything
+    else is not this pass's to supply.
+    """
+    spell = int(craft_spell or 0)
+    if spell in GATHERED:
+        return spell
+    weave = 0
+    if spell in craft_rhythm.BOLT_FED:
+        weave = int(craft_rhythm.BOLT_FED[spell][0])
+    elif spell in craft_rhythm.BAG_FEED:
+        bolt = guildcorps.BOLT_OF.get(int(craft_rhythm.BAG_FEED[spell][0].entry))
+        weave = int(bolt.spell) if bolt is not None else 0
+    return weave if weave in CLOTH_WEAVES and weave in GATHERED else 0
 
 
 # ---------------------------------------------------------------------------

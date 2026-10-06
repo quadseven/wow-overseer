@@ -540,7 +540,12 @@ def _materials_exist(bag, tailor, members, trainable, vendors) -> bool:
     """Can the guild, between its members, make this bag at all?"""
     for entry, need in bag.reagents:
         if _vendor_reagent(entry):
-            if entry not in vendors and tailor.count(entry) < need:
+            # A family master's thread is the crew's to buy and post
+            # (`shop_steps`), so no vendor on the master's own map is asked of
+            # it; without this a master standing away from a thread vendor read
+            # "no bag can be supplied" and the guild never posted it cloth.
+            held = tailor.count(entry) + tailor.incoming(entry)
+            if not tailor.family and entry not in vendors and held < need:
                 return False
             continue
         bolt = BOLT_OF.get(int(entry))
@@ -937,7 +942,9 @@ def _shortfall(tailor, bag, bolt) -> list:
                 cloth, per = _cloth_for(recipe)
                 have += (tailor.count(cloth) + tailor.incoming(cloth)) // per
                 if have < count:
-                    need.append((cloth, (count - have) * per))
+                    # At least a stack, so two guildmates may each post one
+                    # and the master is not back at no cloth after one bag.
+                    need.append((cloth, max((count - have) * per, STACK)))
             elif have < count:
                 need.append((int(entry), count - have))
     if bolt is not None:
