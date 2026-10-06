@@ -62,14 +62,12 @@ TALENTS_COLUMN = (
 # Righteous Fury, which any paladin casts without a quest, so it has no entry.
 TANK_KIT = {1: 71, 11: 5487}
 # The column a member read adds to its SELECT (`s` is overseer_snapshot, `c`
-# characters): 1 when the member knows the spell its class tanks with.
+# characters): 1 when the member knows the spell its class tanks with. Written
+# out, one clause per TANK_KIT entry (a test holds the two together).
 TANK_KIT_COLUMN = (
     "EXISTS (SELECT 1 FROM character_spell cs WHERE cs.guid = s.guid AND "
-    + " OR ".join(
-        "(s.class = %d AND cs.spell = %d)" % (c, sp)
-        for c, sp in sorted(TANK_KIT.items())
-    ).join(("(", ")"))
-    + ") AS has_tank_kit"
+    "((s.class = 1 AND cs.spell = 71) OR (s.class = 11 AND cs.spell = 5487))) "
+    "AS has_tank_kit"
 )
 
 _BOOK: dict | None = None

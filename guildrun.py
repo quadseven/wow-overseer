@@ -259,6 +259,12 @@ def alive_or_unread(row: dict) -> bool:
     return row.get("health") is None or _alive(row)
 
 
+def _optional(row: dict, key: str, cast):
+    """`cast(row[key])`, or None when the read had no value for it."""
+    value = row.get(key)
+    return None if value is None else cast(value)
+
+
 def member_from_row(row: dict) -> Member | None:
     """A Member from one bridge read, or None when the row cannot say who."""
     name = str(row.get("name") or "")
@@ -285,13 +291,11 @@ def member_from_row(row: dict) -> Member | None:
         online=bool(row.get("online", 1)),
         race=int(row.get("race") or 0),
         zone_id=int(row.get("zone_id") or 0),
-        gear_ilvl=None if row.get("gear_ilvl") is None else float(row["gear_ilvl"]),
-        worn_slots=None if row.get("worn_slots") is None else int(row["worn_slots"]),
-        has_weapon=None if row.get("has_weapon") is None else bool(row["has_weapon"]),
-        has_shield=None if row.get("has_shield") is None else bool(row["has_shield"]),
-        has_tank_kit=(
-            None if row.get("has_tank_kit") is None else bool(row["has_tank_kit"])
-        ),
+        gear_ilvl=_optional(row, "gear_ilvl", float),
+        worn_slots=_optional(row, "worn_slots", int),
+        has_weapon=_optional(row, "has_weapon", bool),
+        has_shield=_optional(row, "has_shield", bool),
+        has_tank_kit=_optional(row, "has_tank_kit", bool),
     )
 
 

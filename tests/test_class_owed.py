@@ -494,6 +494,16 @@ class TheTankKit(unittest.TestCase):
         self.assertIsNotNone(run(1).form)
         self.assertIsNone(run(0).form)
 
+    def test_the_column_holds_every_kit_entry(self):
+        for klass, spell in raidroles.TANK_KIT.items():
+            self.assertIn(
+                "(s.class = %d AND cs.spell = %d)" % (klass, spell),
+                raidroles.TANK_KIT_COLUMN,
+            )
+        self.assertEqual(
+            raidroles.TANK_KIT_COLUMN.count("(s.class"), len(raidroles.TANK_KIT)
+        )
+
     def test_the_member_read_asks_the_world_for_the_spell(self):
         self.assertIn("has_tank_kit", bridge._GUILD_RUN_MEMBERS_SQL)
         self.assertIn("character_spell", bridge._GUILD_RUN_MEMBERS_SQL)
