@@ -14472,18 +14472,37 @@ class Bridge(discord.Client):
             if verdict.state == classhunt.RESPAWNING:
                 # The class backoff (NO_RESPAWN_BACKOFF_MINUTES) leaves it alone.
                 return False
-            if verdict.state == classhunt.NEVER:
-                self._class_hunts.give_up(step.holder, step.key, time.time())
+            if self._hunt_left(step, row, verdict):
                 return False
-            if verdict.state == classhunt.ELSEWHERE:
-                if step.spot is not None:
-                    self._class_hunts.observe(
-                        step.holder, step.key, 0, step.spot, time.time(), True)
-                return False
-            if verdict.state != classhunt.LATER or attempt == classhunt.MAX_ATTEMPTS:
+            if (verdict.state not in (classhunt.LATER, classhunt.RESTING)
+                    or attempt == classhunt.MAX_ATTEMPTS):
                 return False
             await asyncio.sleep(verdict.wait)
         return False
+
+    def _hunt_left(self, step, row, verdict) -> bool:
+        """Act on a refusal that ends the step: a creature of few spawns that is
+        respawning (the plan leaves the member be for the wait), `never` (the
+        quest is given up) or `elsewhere` (the pack is left)."""
+        if verdict.state == classhunt.RESTING:
+            return bool(self._slow_respawn(row.command))
+        if verdict.state == classhunt.NEVER:
+            self._class_hunts.give_up(step.holder, step.key, time.time())
+            return True
+        if verdict.state == classhunt.ELSEWHERE:
+            if step.spot is not None:
+                self._class_hunts.observe(
+                    step.holder, step.key, 0, step.spot, time.time(), True)
+            return True
+        return False
+
+    def _slow_respawn(self, command) -> int:
+        """Minutes the hunted creature takes to respawn when it has few spawns
+        in the world (classquest.slow_respawns), 0 for any other."""
+        if self._class_book is None:
+            return 0
+        return classquest.slow_respawns(self._class_book).get(
+            classhunt.entry_of(command), 0)
 
     async def _follow_class_hunt(self, step, row_id: int, quest, command=""):
         """(the row's last Answer, whether the quest is complete): read the row
