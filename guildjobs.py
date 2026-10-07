@@ -2491,6 +2491,31 @@ def failed_class_walks(name, recent) -> bool:
     )
 
 
+def resting_entries(name, recent, book) -> dict:
+    """creature entry -> minutes left to wait for it to respawn, for each
+    creature of few spawns (classquest.slow_respawns) whose newest hunt row of
+    this member was refused for want of a living creature in reach
+    (classquest.NO_LIVING_REASON). A later hunt row of the entry that did
+    anything else ends the wait."""
+    if book is None:
+        return {}
+    waits = classquest.slow_respawns(book)
+    newest: dict = {}
+    for r in recent or ():
+        if r.name != name or r.action != classquest.ACTION or r.entry not in waits:
+            continue
+        if r.entry not in newest or int(r.age_minutes) < int(
+            newest[r.entry].age_minutes
+        ):
+            newest[r.entry] = r
+    return {
+        e: waits[e] - int(r.age_minutes)
+        for e, r in newest.items()
+        if (r.refusal or r.reason) == classquest.NO_LIVING_REASON
+        and int(r.age_minutes) < waits[e]
+    }
+
+
 def class_walk_backoff(name, recent) -> int:
     """Minutes the member is left alone after the realm refused its newest
     class quest walk for a far walk wall (classquest.BACKOFF_MINUTES), 0 when
@@ -2607,9 +2632,10 @@ def class_avoid(m, book, recent, hunts=None, now=0.0) -> tuple:
             if not (entries.get(g) in killed and killed[entries[g]] <= age)
         }
     marked = classquest.marked_places(book, marks) if marks and book else {}
-    if not marked:
-        return avoid, off
     merged = dict(avoid)
+    _leave_resting(m, book, resting_entries(m.name, recent, book), merged)
+    if not marked:
+        return merged, off
     for quest, spots in marked.items():
         places = tuple(p[:3] for p in spots)
         left = tuple(dict.fromkeys(tuple(merged.get(quest, ())) + places))
@@ -2617,6 +2643,23 @@ def class_avoid(m, book, recent, hunts=None, now=0.0) -> tuple:
             left = classquest.roll_oldest(m, book.quests[quest], left, spots)
         merged[quest] = left
     return merged, off
+
+
+def _leave_resting(m, book, resting, merged) -> None:
+    """Add to `merged` (quest -> places) the spawns of a creature still
+    respawning, for a quest with another dropper to go to at once; a quest
+    whose only droppers are resting keeps them, and the member waits."""
+    for quest in book.quests.values() if book is not None else ():
+        places = tuple(
+            (int(s.map_id), float(s.x), float(s.y))
+            for s in quest.fields
+            if s.entry in resting
+        )
+        if not places:
+            continue
+        left = tuple(dict.fromkeys(tuple(merged.get(quest.id, ())) + places))
+        if not classquest.all_tried(m, quest, left):
+            merged[quest.id] = left
 
 
 def class_helps(m, book, hunts=None, now=0.0, recent=()) -> list:
@@ -2894,7 +2937,7 @@ def class_step(
     arrived = move.kind == classquest.HUNT and _near(m, spot, reach)
     if arrived and slots is None:
         return None, move.said, note
-    held = _class_held(m, move, spot, cap, recent, hunts, now, far)
+    held = _class_held(m, move, spot, cap, recent, hunts, now, far, book)
     if held is not None:
         return None, move.said, _join(note, held)
     if move.kind == classquest.HUNT:
@@ -2931,7 +2974,7 @@ def class_step(
     return step, move.said, note
 
 
-def _class_held(m, move, spot, cap, recent, hunts, now, far):
+def _class_held(m, move, spot, cap, recent, hunts, now, far, book=None):
     """The note for a member a class quest walk is held back from, or None when
     the walk may start. Held back: a dead member (the module refuses "character
     is dead"), a member the realm refused for a far walk wall (its backoff), the
@@ -2942,7 +2985,26 @@ def _class_held(m, move, spot, cap, recent, hunts, now, far):
         if hunts:
             hunts.pause(m.name, move.quest, now)
         return _held_note(m, wait)
-    if _cooling(m, classquest.ACTION, recent):
+    rest = resting_entries(m.name, recent, book)
+    slow = (
+        rest.get(int(move.spot.entry))
+        if (move.kind == classquest.HUNT and move.spot is not None)
+        else 0
+    )
+    if slow:
+        # No living creature stands there yet: wait out its respawn in place,
+        # no hunt row and no walk, and do not count it against the hunt clock.
+        if hunts:
+            hunts.pause(m.name, move.quest, now)
+        return "%s waits %d more minute(s) for %s to respawn" % (
+            m.name,
+            slow,
+            spot.name or "its target",
+        )
+    # A refusal of a creature that is resting is no action taken: it does not
+    # hold the member back from another dropper.
+    acted = [r for r in recent or () if not (r.entry in rest and r.name == m.name)]
+    if _cooling(m, classquest.ACTION, acted):
         return ""
     walks = move.kind != classquest.USE or not _near(m, spot, classquest.USE_NEAR)
     if move.kind == classquest.HUNT and _near(m, spot, classhunt.HUNT_NEAR):

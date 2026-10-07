@@ -19,7 +19,7 @@ import classhunt
 import classquest
 import guildjobs
 import guildroute
-from test_classquest import KALIMDOR, class_plan, class_steps, qrow, who
+from test_classquest import HIDE, KALIMDOR, LIZARD, class_plan, class_steps, qrow, who
 from test_classquest import book as warrior_book
 from test_classquest_far_walk import FAR
 from test_guildsocial_bridge import bridge
@@ -339,7 +339,7 @@ class _Bridge:
         self.states = list(states) or [INCOMPLETE]
 
 
-for _name in ("_class_hunt_row", "_follow_class_hunt"):
+for _name in ("_class_hunt_row", "_follow_class_hunt", "_slow_respawn"):
     setattr(_Bridge, _name, getattr(bridge.Bridge, _name))
 
 STEP = guildjobs.guildcorps.Step(
@@ -415,6 +415,10 @@ class TheBridgeFollowsTheHunt(unittest.TestCase):
 
     def test_a_later_refusal_waits_and_asks_again_a_bounded_number_of_times(self):
         this = _Bridge([refused("later")], states=[INCOMPLETE])
+        # Three spawns: not a creature to wait out the respawn of.
+        this._class_book = warrior_book(
+            spawn_rows=[LIZARD, dict(LIZARD, guid=1), dict(LIZARD, guid=2), HIDE]
+        )
         self.assertFalse(run(this))
         self.assertEqual(len(this.rows), classhunt.MAX_ATTEMPTS)
         self.assertEqual(
@@ -492,6 +496,107 @@ class TheBridgeFollowsTheHunt(unittest.TestCase):
         this = _Bridge([None])
         self.assertFalse(run(this))
         self.assertEqual(len(this.rows), 1)
+
+
+SLOW = dict(LIZARD, respawn=498)
+NO_LIVING = classquest.NO_LIVING_REASON
+
+
+def resting(age, entry=3130, **over):
+    return guildjobs.Recent(
+        "Bigzug",
+        classquest.ACTION,
+        age,
+        status="error",
+        refusal=NO_LIVING,
+        retryable=True,
+        row_id=700000,
+        entry=entry,
+        **over,
+    )
+
+
+class TheSlowRespawn(unittest.TestCase):
+    """Vejrek (quest 1678, creature 6113): one spawn, respawn 498 seconds. Durg
+    killed him; Gronk and Hurk were refused `no living creature` every 75 s."""
+
+    def test_the_wait_is_the_respawn_time_within_five_and_thirty_minutes(self):
+        def wait(seconds, spawns=1):
+            rows = [dict(LIZARD, guid=g, respawn=seconds) for g in range(spawns)]
+            return classquest.slow_respawns(warrior_book(spawn_rows=rows)).get(3130)
+
+        self.assertEqual(wait(498), 9)
+        self.assertEqual(wait(60), classquest.RESPAWN_MIN_MINUTES)
+        self.assertEqual(wait(0), classquest.RESPAWN_MIN_MINUTES)
+        self.assertEqual(wait(7200), classquest.RESPAWN_CAP_MINUTES)
+        self.assertEqual(wait(498, spawns=2), 9)
+        self.assertIsNone(wait(498, spawns=3))
+
+    def test_the_spawn_query_reads_the_respawn_time(self):
+        self.assertIn("spawntimesecs AS respawn", classquest.SPAWNS_SQL)
+
+    def test_the_refusal_is_a_resting_answer_with_no_failure_in_it(self):
+        verdict = classhunt.judge("Bigzug", "error", "refused", refused("later")[2])
+        self.assertEqual(verdict.state, classhunt.RESTING)
+        self.assertEqual(classhunt.entry_of(ROW.command), 3130)
+
+    def test_a_bot_at_a_dead_single_spawn_asks_once_and_waits_in_the_plan(self):
+        this = _Bridge([refused("later")], states=[INCOMPLETE])
+        this._class_book = warrior_book(spawn_rows=[SLOW, HIDE])
+        self.assertFalse(run(this))
+        self.assertEqual(len(this.rows), 1)
+        self.assertEqual(this.slept, [classhunt.POLL_SECONDS])
+
+    def test_the_member_writes_no_row_and_no_walk_during_the_wait(self):
+        hunts = hunters(classhunt.Slots(2))
+        b = warrior_book(spawn_rows=[SLOW], loot_rows=[{"item": 6486, "entry": 3130}])
+        for pos in (BESIDE, NEARBY):
+            m = who(**HUNTING, **pos)
+            result = class_plan([m], b, recent=(resting(2),), hunts=hunts)
+            self.assertEqual(class_steps(result), [])
+            self.assertTrue(any("to respawn" in n for n in result.notes), result.notes)
+
+    def test_the_wait_ends_with_the_respawn_time(self):
+        hunts = hunters(classhunt.Slots(2))
+        b = warrior_book(spawn_rows=[SLOW], loot_rows=[{"item": 6486, "entry": 3130}])
+        m = who(**HUNTING, **BESIDE)
+        result = class_plan([m], b, recent=(resting(11),), hunts=hunts)
+        (step,) = class_steps(result)
+        self.assertEqual(len(hunt_rows(step)), 1)
+
+    def test_a_creature_with_many_spawns_is_not_waited_on(self):
+        rows = [dict(LIZARD, guid=g, respawn=498) for g in (1, 2, 3)]
+        b = warrior_book(spawn_rows=rows, loot_rows=[{"item": 6486, "entry": 3130}])
+        m = who(**HUNTING, **BESIDE)
+        result = class_plan(
+            [m], b, recent=(resting(0),), hunts=hunters(classhunt.Slots(2))
+        )
+        self.assertEqual(guildjobs.resting_entries("Bigzug", (resting(0),), b), {})
+        self.assertFalse(any("to respawn" in n for n in result.notes))
+
+    def test_the_wait_does_not_run_the_hunt_clock(self):
+        hunts = hunters(classhunt.Slots(2))
+        b = warrior_book(spawn_rows=[SLOW], loot_rows=[{"item": 6486, "entry": 3130}])
+        m = who(**HUNTING, **BESIDE)
+        hunts.observe(
+            "Bigzug", 1498, 3, guildjobs.Spot("creature", 4788, 1, 705.0, -4112.0), 0.0
+        )
+        late = classquest.HUNT_STALL_MINUTES * 60 + 5.0
+        class_plan([m], b, recent=(resting(2),), hunts=hunts, now=late)
+        self.assertEqual(hunts.get("Bigzug").since, late)
+        self.assertEqual(hunts.get("Bigzug").tried, ())
+        self.assertFalse(guildjobs.failed_class_walks("Bigzug", (resting(2),) * 3))
+
+    def test_another_dropper_is_walked_to_at_once(self):
+        hunts = hunters(classhunt.Slots(2))
+        b = warrior_book(spawn_rows=[SLOW, HIDE])
+        m = who(**HUNTING, **BESIDE)
+        result = class_plan([m], b, recent=(resting(2),), hunts=hunts)
+        (step,) = class_steps(result)
+        self.assertTrue(step.walk.command.startswith("walk-to-spawn creature:12197"))
+        self.assertTrue(
+            hunt_rows(step)[0].command.startswith("hunt-spawn creature:3131 ")
+        )
 
 
 class TheBridgeWiring(unittest.TestCase):

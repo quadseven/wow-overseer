@@ -293,6 +293,16 @@ HELD_BACKOFF_MINUTES = 12
 # row sends it to another pack (guildjobs.failed_class_walks).
 NO_RESPAWN_REASON = "nothing respawns before the clock runs out"
 NO_RESPAWN_BACKOFF_MINUTES = 15
+# A hunt refused because no living creature of the entry stands in reach
+# (mod-overseer answers it `later`). For a creature with SLOW_SPAWNS or fewer
+# spawns in the world the one that was there is dead, and the next comes back
+# after its `spawntimesecs`: the member waits that long (at least
+# RESPAWN_MIN_MINUTES, at most RESPAWN_CAP_MINUTES) instead of asking every
+# minute. The refusal is no failure: it never counts toward the hunt clock.
+NO_LIVING_REASON = "no living creature of the entry within reach"
+SLOW_SPAWNS = 2
+RESPAWN_MIN_MINUTES = 5
+RESPAWN_CAP_MINUTES = 30
 BACKOFF_MINUTES = {
     NO_RESPAWN_REASON: NO_RESPAWN_BACKOFF_MINUTES,
     REALM_FULL_REASON: REALM_FULL_BACKOFF_MINUTES,
@@ -440,7 +450,7 @@ OBJECT_SPAWNS_SQL = (
 SPAWNS_SQL = (
     "SELECT c.guid AS guid, c.id AS entry, c.map AS map_id, c.position_x AS x, "
     "c.position_y AS y, ct.name AS name, ct.`rank` AS `rank`, "
-    "ct.maxlevel AS level "
+    "ct.maxlevel AS level, c.spawntimesecs AS respawn "
     "FROM acore_world.creature c "
     "JOIN acore_world.creature_template ct ON ct.entry = c.id "
     "WHERE c.id IN ({entries})"
@@ -474,6 +484,8 @@ class Spawn:
     rank: int = 0
     # The creature's top level; 0 when the row does not say.
     level: int = 0
+    # The spawn's respawn time in seconds (`spawntimesecs`); 0 when not read.
+    respawn: int = 0
 
 
 @dataclass(frozen=True)
@@ -635,6 +647,7 @@ def _spawn(r) -> Spawn:
         str(r.get("name") or ""),
         _int(r.get("rank")),
         _int(r.get("level")),
+        _int(r.get("respawn")),
     )
 
 
@@ -1184,6 +1197,25 @@ def refused_places(book: Book, refused) -> dict:
         if places:
             out[quest.id] = places
     return out
+
+
+def slow_respawns(book: Book) -> dict:
+    """creature entry -> minutes to wait for it to respawn, for every objective
+    creature with SLOW_SPAWNS or fewer spawns in the world: the soonest of its
+    spawns' respawn times, rounded up, within RESPAWN_MIN_MINUTES and
+    RESPAWN_CAP_MINUTES."""
+    seen: dict = {}
+    for quest in book.quests.values():
+        for s in quest.fields:
+            seen.setdefault(s.entry, {})[s.guid] = int(s.respawn)
+    return {
+        entry: min(
+            RESPAWN_CAP_MINUTES,
+            max(RESPAWN_MIN_MINUTES, -(-min(times.values()) // 60)),
+        )
+        for entry, times in seen.items()
+        if len(times) <= SLOW_SPAWNS
+    }
 
 
 def spawn_entries(book: Book) -> dict:

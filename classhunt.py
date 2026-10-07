@@ -76,6 +76,10 @@ UNSUPPORTED = "unsupported"
 # A hunt that killed its target and found no respawn due before its clock ran
 # out: the member is left alone (classquest.NO_RESPAWN_BACKOFF_MINUTES).
 RESPAWNING = "respawning"
+# A refusal that no living creature of the entry stands in reach. For a creature
+# with few spawns it is a wait for the respawn (classquest.slow_respawns); the
+# bridge reads it as `later` for any other.
+RESTING = "resting"
 # The module's answer to a key it does not know, from a worldserver before
 # mod-overseer#871: the item token is rejected as a malformed row.
 ITEM_KEY = " item:"
@@ -150,6 +154,12 @@ def command(quest: classquest.Quest, entry, held=None, item_form=True) -> str:
         need = min(MAX_COUNT, max(1, int(wants[item]) - have))
         word = " item:%d count:%d" % (item, need)
     return "%s creature:%d%s max:%d" % (VERB, entry, word, MAX_SECONDS)
+
+
+def entry_of(command) -> int:
+    """The creature entry of a `hunt-spawn creature:<entry>` row, else 0."""
+    found = re.match(r"%s creature:(\d+)\b" % VERB, str(command or ""))
+    return int(found.group(1)) if found else 0
 
 
 def plain_form(row) -> str:
@@ -279,6 +289,12 @@ def _refusal(holder, detail, body) -> Answer:
         return Answer(NEVER, "%s cannot hunt: %s" % (holder, why))
     if word == ELSEWHERE:
         return Answer(ELSEWHERE, "%s cannot hunt here: %s" % (holder, why))
+    if reason == classquest.NO_LIVING_REASON:
+        return Answer(
+            RESTING,
+            "%s's hunt found nothing alive: %s" % (holder, why),
+            LATER_WAIT_SECONDS,
+        )
     return Answer(
         LATER, "%s's hunt is refused for now: %s" % (holder, why), LATER_WAIT_SECONDS
     )
