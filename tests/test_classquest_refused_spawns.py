@@ -141,7 +141,7 @@ class TheRefusedSpawn(unittest.TestCase):
         self.assertEqual(hunt_target(result), 12197)
 
     def test_with_every_pack_refused_the_member_waits_and_says_why(self):
-        recent = [walked("Aa", 4788, DROP, 20), walked("Aa", 12197, DROP, 30)]
+        recent = [walked("Aa", 4788, DROP, 20), walked("Aa", 12197, DROP, 25)]
         result = self.plan(recent)
         self.assertEqual(class_steps(result), [])
         self.assertTrue(any("every pack" in n for n in result.notes), result.notes)

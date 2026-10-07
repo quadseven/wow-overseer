@@ -602,6 +602,12 @@ class Recent:
     # id a `walk-to-spawn creature:` row named (0 for any other row).
     reason: str = ""
     spawn: int = 0
+    # The overseer_command id (0 when not read), and for a `hunt-spawn` row the
+    # creature entry it hunted, the kills it made and the items it looted.
+    row_id: int = 0
+    entry: int = 0
+    kills: int = 0
+    loot: int = 0
 
 
 @dataclass(frozen=True)
@@ -2455,16 +2461,28 @@ def _class_ready(m, book) -> bool:
     return not (m.map_id is None or m.x is None or m.y is None)
 
 
+def _before_epoch(row) -> bool:
+    """Whether the row was written at or before classquest.TRIED_EPOCH (an id of
+    0, a row whose id was not read, is never before it)."""
+    return 0 < int(row.row_id) <= classquest.TRIED_EPOCH
+
+
 def failed_class_walks(name, recent) -> bool:
     """Whether the member's last FAILED_WALKS class quest rows, newest first,
-    all ended in error or unchanged (the spawn cannot be reached)."""
+    all ended in error or unchanged (the spawn cannot be reached). A hunt row is
+    no walk: a hunt that found no creature yet, or killed and could not carry
+    the loot, says nothing about the way to the spawn."""
     # A refusal the module calls retryable (a far walk wall, a dead character)
     # says nothing about the spawn, so it is no failed hunt.
     rows = sorted(
         (
             r
             for r in recent or ()
-            if r.name == name and r.action == classquest.ACTION and not r.retryable
+            if r.name == name
+            and r.action == classquest.ACTION
+            and not r.retryable
+            and not r.entry
+            and not _before_epoch(r)
         ),
         key=lambda r: r.age_minutes,
     )[: classquest.FAILED_WALKS]
@@ -2525,32 +2543,79 @@ def _far_class_walk(m, spot, cap) -> bool:
     return _yards(m.x, m.y, spot.x, spot.y) > guildroute.TRAINER_WALK_YARDS
 
 
+def refused_marks(name, recent) -> dict:
+    """spawn id -> minutes since the newest evidence that the spawn is out of
+    reach of this member: a walk to it that the module refused or that ended
+    short (classquest.SPAWN_REFUSALS), still inside its hold (a stall or a death
+    SPAWN_SHORT_MINUTES, the rest SPAWN_REFUSED_MINUTES) and written after
+    classquest.TRIED_EPOCH."""
+    marks = {}
+    for r in recent or ():
+        if (
+            r.name != name
+            or r.action != classquest.ACTION
+            or not r.spawn
+            or r.reason not in classquest.SPAWN_REFUSALS
+            or _before_epoch(r)
+        ):
+            continue
+        short = r.reason in classquest.SPAWN_SHORT_REFUSALS
+        hold = (
+            classquest.SPAWN_SHORT_MINUTES
+            if short
+            else classquest.SPAWN_REFUSED_MINUTES
+        )
+        age = int(r.age_minutes)
+        if age < hold:
+            marks[r.spawn] = min(age, marks.get(r.spawn, age))
+    return marks
+
+
 def refused_spawns(name, recent) -> frozenset:
     """The spawn ids the module refused this member, or a walk to which ended
-    short of it (classquest.SPAWN_REFUSALS), in the last SPAWN_REFUSED_MINUTES."""
-    return frozenset(
-        r.spawn
-        for r in recent or ()
-        if r.name == name
-        and r.action == classquest.ACTION
-        and r.spawn
-        and r.reason in classquest.SPAWN_REFUSALS
-        and int(r.age_minutes) < classquest.SPAWN_REFUSED_MINUTES
-    )
+    short of it (refused_marks)."""
+    return frozenset(refused_marks(name, recent))
+
+
+def productive_entries(name, recent, minutes) -> dict:
+    """creature entry -> minutes since the member's newest hunt of it that made
+    a kill, within `minutes`: a pack that gave kills is reachable."""
+    out = {}
+    for r in recent or ():
+        if r.name == name and r.entry and r.kills > 0 and int(r.age_minutes) < minutes:
+            out[r.entry] = min(int(r.age_minutes), out.get(r.entry, 10**6))
+    return out
 
 
 def class_avoid(m, book, recent, hunts=None, now=0.0) -> tuple:
     """(avoid, held_off) for classquest.moves: the packs the member's hunt
     tried without progress (the hunt clock) and the packs of the spawns the
-    module refused it (refused_spawns), so a refused hunt goes to the next
-    nearest pack at once, not after two failed walks and a half hour."""
+    module refused it (refused_marks), so a refused hunt goes to the next
+    nearest pack at once, not after two failed walks and a half hour.
+
+    A spawn of a creature the member hunted and killed since the mark is not
+    left. When every pack is left, the one left longest is asked again once its
+    mark is classquest.SPAWN_RETRY_MINUTES old."""
     avoid, off = hunts.state(m.name, now) if hunts else ({}, frozenset())
-    places = classquest.refused_places(book, refused_spawns(m.name, recent))
-    if not places:
+    marks = refused_marks(m.name, recent)
+    if marks and book is not None:
+        killed = productive_entries(m.name, recent, classquest.SPAWN_REFUSED_MINUTES)
+        entries = classquest.spawn_entries(book)
+        marks = {
+            g: age
+            for g, age in marks.items()
+            if not (entries.get(g) in killed and killed[entries[g]] <= age)
+        }
+    marked = classquest.marked_places(book, marks) if marks and book else {}
+    if not marked:
         return avoid, off
     merged = dict(avoid)
-    for quest, spots in places.items():
-        merged[quest] = tuple(dict.fromkeys(tuple(merged.get(quest, ())) + spots))
+    for quest, spots in marked.items():
+        places = tuple(p[:3] for p in spots)
+        left = tuple(dict.fromkeys(tuple(merged.get(quest, ())) + places))
+        if quest in book.quests:
+            left = classquest.roll_oldest(m, book.quests[quest], left, spots)
+        merged[quest] = left
     return merged, off
 
 
@@ -2573,6 +2638,8 @@ def class_helps(m, book, hunts=None, now=0.0, recent=()) -> list:
 def _class_move(m, book, recent, hunts, now):
     """(move or None, blocked sentences): classquest.next_move, with a hunt
     that has stalled sent to another pack, or given up (HUNT_STALL_MINUTES)."""
+    if hunts and productive_entries(m.name, recent, classquest.HUNT_STALL_MINUTES):
+        hunts.productive(m.name, now)
     avoid, off = class_avoid(m, book, recent, hunts, now)
     move, blocked = classquest.next_move(book, m, avoid, off)
     if not hunts or move is None or move.kind not in (classquest.HUNT, classquest.USE):
@@ -3432,6 +3499,8 @@ def recent_from_rows(rows) -> tuple:
                 walk=action.endswith("-walk"),
                 reason=_reason_of(row),
                 spawn=_spawn_of(row.get("command")),
+                row_id=_int(row.get("id"), 0),
+                **_hunt_of(row),
                 **_refusal_of(row),
             )
         )
@@ -3449,6 +3518,21 @@ def _refusal_of(row) -> dict:
     return {
         "refusal": found.group(1) if found else "",
         "retryable": '"retryable":true' in result,
+    }
+
+
+def _hunt_of(row) -> dict:
+    """The entry, kills and loot of a `hunt-spawn creature:<entry>` row."""
+    found = re.match(r"hunt-spawn creature:(\d+)\b", str(row.get("command") or ""))
+    if not found:
+        return {}
+    result = str(row.get("result") or "")
+    kills = re.search(r'"kills":(\d+)', result)
+    loot = re.search(r'"loot_count":(\d+)', result)
+    return {
+        "entry": int(found.group(1)),
+        "kills": int(kills.group(1)) if kills else 0,
+        "loot": int(loot.group(1)) if loot else 0,
     }
 
 

@@ -228,19 +228,40 @@ OVERLEVEL_MAX = 3
 # gets when it stalled through every pack, so a refused spawn and a stalled
 # pack are left alone for as long.
 SPAWN_REFUSED_MINUTES = 120
+# ONLY WORDS THAT SAY THE SPAWN OR THE WAY TO IT IS THE TROUBLE ARE HERE. A walk
+# that ran out of time is not (it says the walk was slow, not that the spawn is
+# out of reach), nor is anything that names the member's state.
 SPAWN_REFUSALS = frozenset(
     {
         "the first step toward the creature goes over a drop",
         "the way to the spawn crosses the other side's ground",
         "the ground toward the spawn does not hold",
         "stopped getting nearer the spawn",
-        "did not reach the spawn in time",
         "died on the way to the spawn",
         "no such spawn in the world",
         "the spawn is on another map than the character",
         "the spawn belongs to a world event that is not running",
     }
 )
+# A stall or a death on the way is a pack to leave for a short while, not two
+# hours: the ground was passable on another try and a member that died comes
+# back revived. The other words (a drop, ground that does not hold, the other
+# side's ground, no such spawn) are lasting and keep SPAWN_REFUSED_MINUTES.
+SPAWN_SHORT_REFUSALS = frozenset(
+    {"stopped getting nearer the spawn", "died on the way to the spawn"}
+)
+SPAWN_SHORT_MINUTES = 30
+# WHEN EVERY PACK IS LEFT, THE ONE LEFT LONGEST IS ASKED AGAIN once its mark is
+# this old: a member is never reported stalled while a pack's mark is older.
+SPAWN_RETRY_MINUTES = 30
+# THE TRIED-STATE EPOCH. Rows of overseer_command with an id at or below this
+# are not read as evidence that a pack is out of reach (refused_spawns,
+# guildjobs.failed_class_walks): on 2026-10-06 they were filled by refusals the
+# module has since fixed (a drop guard, held characters) and by hunts that ended
+# because the bags were full. Row ids only grow, so the rows that were there at
+# the deploy are ignored once, and the first row after it counts. Bump it past
+# the newest row id when a fix makes the older rows untrustworthy again.
+TRIED_EPOCH = 632500
 
 # THE REALM'S FAR WALKS ARE FEW (mod-overseer's FarWalkBudgetGate: a handful
 # under way at once on the whole realm, a couple of starts per bot per hour).
@@ -1165,6 +1186,52 @@ def refused_places(book: Book, refused) -> dict:
     return out
 
 
+def spawn_entries(book: Book) -> dict:
+    """spawn guid -> creature entry, for every objective spawn of the book."""
+    return {s.guid: s.entry for q in book.quests.values() for s in q.fields}
+
+
+def marked_places(book: Book, marks) -> dict:
+    """quest id -> ((map, x, y, age), ...): like refused_places, for `marks`
+    (spawn guid -> minutes since the evidence), keeping each place's age."""
+    out = {}
+    for quest in book.quests.values():
+        places = tuple(
+            (int(s.map_id), float(s.x), float(s.y), int(marks[s.guid]))
+            for s in quest.fields
+            if s.guid in marks
+        )
+        if places:
+            out[quest.id] = places
+    return out
+
+
+def all_tried(member, quest: Quest, avoid) -> bool:
+    """Whether every pack of the quest the member could hunt is in `avoid`."""
+    fields = within_level(member, quest.fields)
+    return bool(fields) and _densest(member, fields, avoid) is None
+
+
+def roll_oldest(member, quest: Quest, avoid, marked) -> tuple:
+    """`avoid` with the oldest marked pack taken out, when every pack is in it
+    and that pack's mark is SPAWN_RETRY_MINUTES old: the rolling, oldest first
+    retry. `marked` is ((map, x, y, age), ...). Otherwise `avoid` as it was."""
+    avoid = tuple(avoid)
+    if not marked or not all_tried(member, quest, avoid):
+        return avoid
+    old = max(marked, key=lambda p: p[3])
+    if old[3] < SPAWN_RETRY_MINUTES:
+        return avoid
+    return tuple(
+        p
+        for p in avoid
+        if not (
+            int(p[0]) == old[0]
+            and math.hypot(p[1] - old[1], p[2] - old[2]) <= PACK_YARDS
+        )
+    )
+
+
 def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
     """The member's work on an incomplete quest (a hunt, or a use), or why it
     is blocked."""
@@ -1387,6 +1454,15 @@ class Hunts:
             return GIVE_UP
         self._by[name] = Hunt(quest, progress, now, tried)
         return REROLL
+
+    def productive(self, name, now) -> None:
+        """A hunt that killed is reachable ground: forget the packs it tried
+        and any hold-off, and restart its stall clock."""
+        hunt = self._by.get(name)
+        if hunt is not None and (hunt.tried or hunt.until is not None):
+            self._by[name] = Hunt(hunt.quest, hunt.progress, now)
+        elif hunt is not None:
+            self._by[name] = replace(hunt, since=now)
 
     def give_up(self, name, quest, now) -> None:
         """Give a quest up for GIVE_UP_MINUTES at once: the world refused its
