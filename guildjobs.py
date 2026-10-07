@@ -2697,37 +2697,60 @@ def class_room_step(m, move, book, recent, cap, kept=None, crafters=None, master
     doing = "%s: %s" % (classquest.MARK, said)
     if _cooling(m, ROOM_ACTION, recent):
         return None, doing, ""
+    step = (
+        _room_sale(m, said, kept, book, cap)
+        or _room_mail(m, said, kept, crafters, master, cap)
+        or _room_destroy(m, said, kept, book)
+    )
+    if step is None:
+        return (
+            None,
+            "",
+            "%s has no room for its class quest and nothing it may sell, mail or "
+            "destroy" % m.name,
+        )
+    return step, doing, ""
+
+
+def _room_sale(m, said, kept, book, cap):
+    """The sale step: grey and outgrown stacks, best price first."""
     junk = sorted(
         _room_rows(m, [c for c in m.carried if c.sellable(m.level)], kept, book),
         key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
     )[:MAX_SALES]
-    if junk:
-        step = guildcorps.Step(
-            m.name,
-            ROOM_ACTION,
-            len(junk),
-            "%s walks to a vendor to sell %d stack(s)" % (said, len(junk)),
-            rows=tuple(
-                guildcorps.Row(
-                    "sell",
-                    "guid:%d" % int(c.guid),
-                    "",
-                    source_for(ROOM_ACTION, m.name),
-                )
-                for c in junk
-            ),
-            walk=guildcorps.Row(
-                "buy",
-                "walk-to-vendor any%s" % _cap_word(cap),
-                "",
-                source_for(ROOM_ACTION + "-walk", m.name),
-            ),
-        )
-        return step, doing, ""
+    if not junk:
+        return None
+    return guildcorps.Step(
+        m.name,
+        ROOM_ACTION,
+        len(junk),
+        "%s walks to a vendor to sell %d stack(s)" % (said, len(junk)),
+        rows=tuple(
+            guildcorps.Row(
+                "sell", "guid:%d" % int(c.guid), "", source_for(ROOM_ACTION, m.name)
+            )
+            for c in junk
+        ),
+        walk=guildcorps.Row(
+            "buy",
+            "walk-to-vendor any%s" % _cap_word(cap),
+            "",
+            source_for(ROOM_ACTION + "-walk", m.name),
+        ),
+    )
+
+
+def _room_mail(m, said, kept, crafters, master, cap):
+    """The post step with no bar of stack size, counted as a make-room step."""
     mail, _why = _post_step(m, crafters or {}, master, kept, cap, bar=1)
-    if mail is not None:
-        mail = _as_room(mail, m.name)
-        return replace(mail, said="%s: %s" % (said, mail.said)), doing, ""
+    if mail is None:
+        return None
+    mail = _as_room(mail, m.name)
+    return replace(mail, said="%s: %s" % (said, mail.said))
+
+
+def _room_destroy(m, said, kept, book):
+    """The destroy step: the member's lowest value material, one stack."""
     eaten = craft_entries(m) if m.role == MAINTENANCE else frozenset()
     stacks = sorted(
         (
@@ -2738,13 +2761,8 @@ def class_room_step(m, move, book, recent, cap, kept=None, crafters=None, master
         key=lambda c: (int(c.sell_price) * int(c.count), int(c.guid)),
     )[:1]
     if not stacks:
-        return (
-            None,
-            "",
-            "%s has no room for its class quest and nothing it may sell, mail or "
-            "destroy" % m.name,
-        )
-    step = guildcorps.Step(
+        return None
+    return guildcorps.Step(
         m.name,
         ROOM_ACTION,
         len(stacks),
@@ -2759,7 +2777,6 @@ def class_room_step(m, move, book, recent, cap, kept=None, crafters=None, master
             for c in stacks
         ),
     )
-    return step, doing, ""
 
 
 def class_step(
