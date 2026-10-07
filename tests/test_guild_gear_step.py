@@ -8,6 +8,7 @@ member to a vendor.
 
 import unittest
 
+import gearup
 import guildjobs
 
 
@@ -256,10 +257,11 @@ class AStrandedMemberHearthsHome(unittest.TestCase):
         ]
         self.assertFalse(guildjobs.last_gear_failed("Aurevil", recent))
 
-    def test_an_unnatural_member_never_hearths(self):
+    def test_an_unnatural_member_hearths_too(self):
+        # The reset gates what a member contributes, not where it walks (#638).
         recent = [guildjobs.Recent("Aurevil", "gear", 5, status="error")]
         plan = guildjobs.plan([_member(eligible=False)], recent=recent)
-        self.assertEqual((), plan.steps)
+        self.assertEqual(["hearth"], [s.action for s in plan.steps])
 
 
 class GearHasItsOwnAllowance(unittest.TestCase):
@@ -380,16 +382,133 @@ class ThePlanPutsGearFirst(unittest.TestCase):
         )
         self.assertNotIn("gear", [s.action for s in plan.steps])
 
-    def test_an_unnatural_member_never_shops(self):
+    def test_an_unnatural_member_shops_too(self):
         plan = guildjobs.plan(
             [_member(eligible=False)], gear={"Aurevil": (_character(), ROWS)}
         )
-        self.assertEqual((), plan.steps)
+        self.assertEqual(["gear"], [s.action for s in plan.steps])
 
     def test_no_gear_argument_changes_nothing(self):
         self.assertEqual(
             guildjobs.plan([_member()]), guildjobs.plan([_member()], gear=None)
         )
+
+
+# The live facts of two guild warriors, at level 16 and 17, with no reset row
+# (overseer_naturalized), wearing 10 and 11 of the 17 stat slots. Item levels
+# and slots are the realm's own rows.
+GRONK_EQUIPPED = {
+    "shirt": {"item_level": 1, "item_class": 4, "item_subclass": 0},
+    "chest": {"item_level": 10, "item_class": 4, "item_subclass": 3},
+    "waist": {"item_level": 5, "item_class": 4, "item_subclass": 3},
+    "legs": {"item_level": 5, "item_class": 4, "item_subclass": 2},
+    "feet": {"item_level": 5, "item_class": 4, "item_subclass": 1},
+    "wrist": {"item_level": 8, "item_class": 4, "item_subclass": 3},
+    "hands": {"item_level": 5, "item_class": 4, "item_subclass": 3},
+    "back": {"item_level": 10, "item_class": 4, "item_subclass": 1},
+    "mainhand": {"item_level": 6, "item_class": 2, "item_subclass": 15},
+    "ranged": {"item_level": 8, "item_class": 2, "item_subclass": 16},
+}
+HURK_EQUIPPED = {
+    "shirt": {"item_level": 1, "item_class": 4, "item_subclass": 0},
+    "chest": {"item_level": 13, "item_class": 4, "item_subclass": 1},
+    "waist": {"item_level": 5, "item_class": 4, "item_subclass": 3},
+    "legs": {"item_level": 12, "item_class": 4, "item_subclass": 1},
+    "feet": {"item_level": 5, "item_class": 4, "item_subclass": 3},
+    "wrist": {"item_level": 5, "item_class": 4, "item_subclass": 3},
+    "hands": {"item_level": 5, "item_class": 4, "item_subclass": 3},
+    "back": {"item_level": 10, "item_class": 4, "item_subclass": 1},
+    "mainhand": {"item_level": 13, "item_class": 2, "item_subclass": 4},
+    "offhand": {"item_level": 5, "item_class": 4, "item_subclass": 6},
+    "ranged": {"item_level": 8, "item_class": 2, "item_subclass": 16},
+}
+# Each piece is 80c: under a fifth of Gronk's 427c purse (85c), the cap a
+# non-weapon buy must fit (gearup._fits_budget), so the case buys.
+# Pieces for the slots both are missing: head (1), shoulders (3), neck (2),
+# rings (11) and trinkets (12).
+CHEAP_ROWS = [
+    _row(201, 1, sub=2, price=80),
+    _row(202, 3, sub=2, price=80),
+    _row(203, 2, sub=0, price=80),
+    _row(204, 11, sub=0, price=80),
+    _row(205, 12, sub=0, price=80),
+]
+
+
+def _live(name, level, purse, equipped, **kw):
+    return _member(
+        name=name,
+        guild="Cave",
+        level=level,
+        class_id=1,
+        money=purse,
+        eligible=False,
+        map_id=0,
+        x=-9975.42,
+        y=1757.63,
+        **kw,
+    ), _character_of(level, purse, equipped)
+
+
+def _character_of(level, purse, equipped):
+    return {
+        "class": "warrior",
+        "level": level,
+        "purse": purse,
+        "equipped": equipped,
+        "skills": {"weapons": {7}},
+    }
+
+
+class AnUnresetGuildMemberShortOfGear(unittest.TestCase):
+    """Two members short of gear with no reset row: the gear step never came
+    and nothing said why."""
+
+    def test_their_live_facts_are_gear_short(self):
+        self.assertTrue(gearup.gear_short(_character_of(16, 427, GRONK_EQUIPPED)))
+        self.assertTrue(gearup.gear_short(_character_of(17, 784, HURK_EQUIPPED)))
+
+    def test_gronk_walks_to_a_vendor_for_gear(self):
+        gronk, facts = _live("Gronk", 16, 427, GRONK_EQUIPPED)
+        plan = guildjobs.plan([gronk], gear={"Gronk": (facts, CHEAP_ROWS)})
+        self.assertEqual(["gear"], [s.action for s in plan.steps])
+        self.assertEqual(plan.gear_holds, ())
+
+    def test_hurk_walks_to_a_vendor_for_gear(self):
+        hurk, facts = _live("Hurk", 17, 784, HURK_EQUIPPED)
+        plan = guildjobs.plan([hurk], gear={"Hurk": (facts, CHEAP_ROWS)})
+        self.assertEqual(["gear"], [s.action for s in plan.steps])
+
+    def test_both_are_read_for_gear_without_a_reset(self):
+        gronk, _ = _live("Gronk", 16, 427, GRONK_EQUIPPED)
+        hurk, _ = _live("Hurk", 17, 784, HURK_EQUIPPED)
+        offline = _member(name="Asleep", online=False, eligible=False)
+        names = [m.name for m in guildjobs.gear_candidates([gronk, hurk, offline], ())]
+        self.assertEqual(["Gronk", "Hurk"], names)
+
+
+class EveryGearHoldSaysWhy(unittest.TestCase):
+    def test_each_member_that_does_not_shop_gets_one_reason_line(self):
+        members = [
+            _member(name="Asleep", online=False),
+            _member(name="Brawler", in_combat=True),
+            _member(name="Cooled"),
+            _member(name="Unread"),
+        ]
+        recent = [guildjobs.Recent("Cooled", "gear", 5)]
+        plan = guildjobs.plan(members, recent=recent)
+        self.assertEqual((), plan.steps)
+        holds = {line.split(" waits")[0]: line for line in plan.gear_holds}
+        self.assertEqual(["Asleep", "Brawler", "Cooled", "Unread"], sorted(holds))
+        self.assertIn("offline", holds["Asleep"])
+        self.assertIn("in combat", holds["Brawler"])
+        self.assertIn("cooling down", holds["Cooled"])
+        self.assertIn("not read this pass", holds["Unread"])
+        self.assertTrue(all("\n" not in line for line in plan.gear_holds))
+
+    def test_a_member_that_shops_has_no_hold(self):
+        plan = guildjobs.plan([_member()], gear={"Aurevil": (_character(), ROWS)})
+        self.assertEqual((), plan.gear_holds)
 
 
 if __name__ == "__main__":
