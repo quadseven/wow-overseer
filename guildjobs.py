@@ -370,6 +370,10 @@ COOLDOWN_MINUTES = {
     "tool": 60,
     "post": 60,
     "sell": 120,
+    # Making room for a class quest (class_room_step): the sale cooldown above
+    # is overridden for it, and this is its own, long enough for the walk to a
+    # vendor and the sales to be written.
+    "room": 20,
     "farm": 45,
     "door": 45,
     "craft": 15,
@@ -526,6 +530,9 @@ class Member:
     tree: str = ""
     # False for a dead member or a ghost; a dead member is walked nowhere.
     alive: bool = True
+    # Bag slots free in the backpack and the worn bags; None when unread, which
+    # keeps no quest waiting on room (class_room_needed).
+    free_slots: int | None = None
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -1548,13 +1555,14 @@ def bank_masters(masters: dict, banks, unclaimed) -> dict:
     return out
 
 
-def postable(member: Member, kept, crafting=False) -> list:
+def postable(member: Member, kept, crafting=False, bar=None) -> list:
     """The material stacks this member would post, biggest first.
 
     `crafting` is a member of a guild whose focus is craft (GUILD_FOCUS),
     which keeps what its casts eat the way a maintenance member does.
     """
-    bar = POST_MIN.get(member.role, POST_MIN[RAIDER])
+    if bar is None:
+        bar = POST_MIN.get(member.role, POST_MIN[RAIDER])
     # Materials its own next casts eat stay in the bags: a member that can
     # still raise a crafting trade does not post away what it would cast.
     eaten = (
@@ -1582,8 +1590,8 @@ def _kept(name, item, kept) -> bool:
     )
 
 
-def _post_step(member, crafters, master, kept, cap, crafting=False):
-    stacks = postable(member, kept, crafting)[:MAX_LETTERS]
+def _post_step(member, crafters, master, kept, cap, crafting=False, bar=None):
+    stacks = postable(member, kept, crafting, bar)[:MAX_LETTERS]
     if not stacks:
         return None, ""
     if member.money < POSTAGE_COPPER:
@@ -2096,7 +2104,14 @@ def plan(
     tally = _focus_tally(members, focus)
     steps, lines, notes, helps = [], {}, [], []
     # One counter per allowance, each keyed by guild (_allowance).
-    counters = {"jobs": {}, "gear": {}, "pvp": {}, "level": {}, "classquest": {}}
+    counters = {
+        "jobs": {},
+        "gear": {},
+        "pvp": {},
+        "level": {},
+        "classquest": {},
+        "room": {},
+    }
     far = classquest.FarSlots(far_slots) if far_slots is not None else None
     for m in _class_ordered(members, classes):
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
@@ -2170,6 +2185,8 @@ def _allowance(step, counters, per_guild):
     every job, GEAR_STEPS_PER_GUILD for gear and hearth steps,
     PVP_STEPS_PER_GUILD for PvP queues and honor buys, and
     guildlevel.STEPS_PER_GUILD for walks out of an outgrown zone."""
+    if step.action == ROOM_ACTION:
+        return counters["room"], ROOM_STEPS_PER_GUILD
     if step.action == classquest.ACTION:
         return counters["classquest"], CLASSQUEST_STEPS_PER_GUILD
     if step.action == pvpgear.ACTION:
@@ -2250,7 +2267,9 @@ def _member_step(
     (CLASSQUEST_STEPS_PER_GUILD), so no other kind of step can use up the
     passes it needs. A member held on a class quest is also kept out of the
     guild's dungeon asks (the bridge's mid_job set)."""
-    step, doing, quest_note = class_step(m, classes, recent, cap, hunts, now, far)
+    step, doing, quest_note = class_step(
+        m, classes, recent, cap, hunts, now, far, kept, crafters, master
+    )
     if step is not None or doing:
         return step, doing, quest_note
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
@@ -2572,7 +2591,206 @@ def _class_move(m, book, recent, hunts, now):
     return move, blocked
 
 
-def class_step(m, book, recent, cap, hunts=None, now=0.0, far=None):
+# MAKING ROOM FOR A CLASS QUEST. Measured on the dev realm 2026-10-06: Bigzug,
+# a level 20 warrior hunting Thunder Lizards for quest 1498 (5 Singed Scale, an
+# 80% drop), opened 12 corpses with the quest item on them and kept none,
+# because backpack 16 of 16 and four bags 6/6, 8/8, 6/6 and 6/6 were full and
+# the core refuses every store without a word. The class quest is the first
+# rung of _member_step, so the sale and the post below it never ran: a full
+# member was held on a hunt that could not succeed. 47 of the 142 members of
+# the two guilds had no free slot. A class move that needs a bag slot the
+# member has not got is now a make-room step instead (class_room_step).
+ROOM_ACTION = "room"
+ROOM_STEPS_PER_GUILD = 6
+# The most slots a quest's items ask for before the hunt starts: the rest
+# stack as they drop, or are made room for as the bags empty.
+ROOM_CAP = 3
+BACKPACK_SLOTS = 16
+
+
+def free_slots_of(backpack_used, bag_sizes, bag_used) -> int:
+    """Free bag slots: the backpack's 16 and the worn bags' sizes, less the
+    slots used in the backpack and in the bags (character_inventory rows)."""
+    total = BACKPACK_SLOTS + sum(int(n or 0) for n in bag_sizes)
+    return max(0, total - int(backpack_used) - int(bag_used))
+
+
+def class_room_needed(m, move, book) -> int:
+    """The free bag slots a class move needs before it is worth starting: 0 when
+    none. A hunt or a use with item objectives asks for the items still missing,
+    at most ROOM_CAP; a kill hunt and a hand-in ask for one, for a drop and a
+    reward; a take asks for the items the quest hands over."""
+    quest = book.quests.get(int(move.quest)) if book is not None else None
+    if quest is None or move.kind not in (
+        classquest.HUNT,
+        classquest.USE,
+        classquest.TURN_IN,
+        classquest.TAKE,
+    ):
+        return 0
+    if move.kind == classquest.TAKE:
+        return min(ROOM_CAP, len(quest.provided))
+    if move.kind == classquest.TURN_IN:
+        return 1
+    missing = sum(max(0, int(n) - m.count(i)) for i, n in quest.items)
+    return min(ROOM_CAP, max(1, missing))
+
+
+def _protected_entries(book) -> frozenset:
+    """The item entries a make-room step never sells, posts or destroys: every
+    item a class quest needs, hands over or uses, and the trades' tools."""
+    out = {e for tools in TOOL_ENTRIES.values() for e in tools} | {SOUL_SHARD}
+    if book is not None:
+        out.update(book.watch_items())
+        for q in book.quests.values():
+            out.update(i for i, _n in q.items)
+            out.update(q.provided)
+    return frozenset(out)
+
+
+def _room_rows(m, stacks, kept, book):
+    """The stacks a make-room step may let go of: never reserved, never a class
+    quest's, never a tool. `stacks` is already narrowed to what the verb takes."""
+    guard = _protected_entries(book)
+    return [
+        c for c in stacks if int(c.entry) not in guard and not _kept(m.name, c, kept)
+    ]
+
+
+def _as_room(step, name):
+    """The same step, counted and logged as the member's make-room step."""
+    source = source_for(ROOM_ACTION, name)
+    return replace(
+        step,
+        action=ROOM_ACTION,
+        rows=tuple(replace(r, source=source) for r in step.rows),
+        walk=replace(step.walk, source=source) if step.walk is not None else None,
+    )
+
+
+def class_room_step(m, move, book, recent, cap, kept=None, crafters=None, master=""):
+    """None when the class move has the room it needs, else (step or None, what
+    the member does, a note): the member makes room first.
+
+    The order: sell the grey and outgrown stacks (the sale's own 120 minute
+    cooldown and its bar of stacks do not apply: the member cannot work its
+    quest), mail its materials to the guild, destroy its lowest value material, one
+    stack a step (the destroy verb, Uncommon or below). Never an item a class quest needs, a
+    stack reserved in overseer_keep, a trade's tool, or a weapon or piece of
+    armor that is not outgrown, which the member may still wear. The step is
+    its own kind (ROOM_ACTION) with its own cooldown and allowance, so the
+    class allowance and the dungeon hold never stand between a full member and
+    the vendor. With nothing to part with, no step and no hold: the lower rungs
+    (gear, post, sale) run as they would, and the note says why.
+    """
+    need = class_room_needed(m, move, book)
+    if not need or m.free_slots is None or int(m.free_slots) >= need:
+        return None
+    if not m.alive:
+        return None
+    said = "%s makes room in its bags (%d free, %d needed) for %s" % (
+        m.name,
+        int(m.free_slots),
+        need,
+        move.said or "its " + classquest.MARK,
+    )
+    doing = "%s: %s" % (classquest.MARK, said)
+    if _cooling(m, ROOM_ACTION, recent):
+        return None, doing, ""
+    step = (
+        _room_sale(m, said, kept, book, cap)
+        or _room_mail(m, said, kept, crafters, master, cap)
+        or _room_destroy(m, said, kept, book)
+    )
+    if step is None:
+        return (
+            None,
+            "",
+            "%s has no room for its class quest and nothing it may sell, mail or "
+            "destroy" % m.name,
+        )
+    return step, doing, ""
+
+
+def _room_sale(m, said, kept, book, cap):
+    """The sale step: grey and outgrown stacks, best price first."""
+    junk = sorted(
+        _room_rows(m, [c for c in m.carried if c.sellable(m.level)], kept, book),
+        key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
+    )[:MAX_SALES]
+    if not junk:
+        return None
+    return guildcorps.Step(
+        m.name,
+        ROOM_ACTION,
+        len(junk),
+        "%s walks to a vendor to sell %d stack(s)" % (said, len(junk)),
+        rows=tuple(
+            guildcorps.Row(
+                "sell", "guid:%d" % int(c.guid), "", source_for(ROOM_ACTION, m.name)
+            )
+            for c in junk
+        ),
+        walk=guildcorps.Row(
+            "buy",
+            "walk-to-vendor any%s" % _cap_word(cap),
+            "",
+            source_for(ROOM_ACTION + "-walk", m.name),
+        ),
+    )
+
+
+def _room_mail(m, said, kept, crafters, master, cap):
+    """The post step with no bar of stack size, counted as a make-room step."""
+    mail, _why = _post_step(m, crafters or {}, master, kept, cap, bar=1)
+    if mail is None:
+        return None
+    mail = _as_room(mail, m.name)
+    return replace(mail, said="%s: %s" % (said, mail.said))
+
+
+def _room_destroy(m, said, kept, book):
+    """The destroy step: the member's lowest value material, one stack."""
+    eaten = craft_entries(m) if m.role == MAINTENANCE else frozenset()
+    stacks = sorted(
+        (
+            c
+            for c in _room_rows(m, [c for c in m.carried if c.material], kept, book)
+            if int(c.entry) not in eaten
+        ),
+        key=lambda c: (int(c.sell_price) * int(c.count), int(c.guid)),
+    )[:1]
+    if not stacks:
+        return None
+    return guildcorps.Step(
+        m.name,
+        ROOM_ACTION,
+        len(stacks),
+        "%s: destroys its lowest value stack" % said,
+        rows=tuple(
+            guildcorps.Row(
+                "sell",
+                "destroy guid:%d count:%d" % (int(c.guid), int(c.count)),
+                "",
+                source_for(ROOM_ACTION, m.name),
+            )
+            for c in stacks
+        ),
+    )
+
+
+def class_step(
+    m,
+    book,
+    recent,
+    cap,
+    hunts=None,
+    now=0.0,
+    far=None,
+    kept=None,
+    crafters=None,
+    master="",
+):
     """(step or None, what it does, a note): the member's next move toward a
     class quest it may do now, from classquest.next_move.
 
@@ -2596,6 +2814,10 @@ def class_step(m, book, recent, cap, hunts=None, now=0.0, far=None):
     note = "; ".join(blocked)
     if move is None:
         return None, "", note
+    room = class_room_step(m, move, book, recent, cap, kept, crafters, master)
+    if room is not None:
+        step, doing, why = room
+        return step, doing, _join(note, why)
     spot = _class_spot(move)
     # A pack tried without progress is left, so a member is "at" the next one
     # only within a pack's width, not the whole field's.
