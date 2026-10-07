@@ -2613,7 +2613,9 @@ def class_avoid(m, book, recent, hunts=None, now=0.0) -> tuple:
     for quest, spots in marked.items():
         places = tuple(p[:3] for p in spots)
         left = tuple(dict.fromkeys(tuple(merged.get(quest, ())) + places))
-        merged[quest] = classquest.roll_oldest(m, book.quests[quest], left, spots)
+        if quest in book.quests:
+            left = classquest.roll_oldest(m, book.quests[quest], left, spots)
+        merged[quest] = left
     return merged, off
 
 

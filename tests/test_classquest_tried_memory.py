@@ -292,5 +292,17 @@ class TheRoom(unittest.TestCase):
         )
 
 
+@mock.patch.object(classquest, "TRIED_EPOCH", 0)
+class TheUnknownQuest(unittest.TestCase):
+    def test_a_marked_quest_the_book_lacks_is_left_as_it_was(self):
+        rows = recent(walk(1, "Aa", 12214, "unchanged", 5, "stalled", STALL))
+        m = who("Aa", **HUNTER)
+        with mock.patch.object(
+            classquest, "marked_places", return_value={9999: ((1, 705.0, -4112.0, 5),)}
+        ):
+            avoid, _off = guildjobs.class_avoid(m, two_packs(), rows)
+        self.assertEqual(avoid, {9999: ((1, 705.0, -4112.0),)})
+
+
 if __name__ == "__main__":
     unittest.main()
