@@ -14221,7 +14221,11 @@ class Bridge(discord.Client):
     def _start_guild_job_steps(self, plan, now, cap, sale_walks):
         started = 0
         for step in plan.steps:
-            if step.action == "sell" and not sale_walks:
+            # A sale walk, whichever step asks it (a sale or a class quest's
+            # make-room step), waits while the world refuses the walk.
+            vendor_walk = step.walk is not None and step.walk.command.startswith(
+                "walk-to-vendor any")
+            if (step.action == "sell" or vendor_walk) and not sale_walks:
                 continue
             self._job_steps[step.holder] = now
             task = asyncio.create_task(self._run_job_step(step, cap))
@@ -24362,7 +24366,8 @@ def _fetch_job_facts(family_names: list) -> dict:
     eligible = _natural_contributors(list(guid_of), family_names)
     facts = _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows,
                                  item_rows, recent_rows, pending_rows,
-                                 log_rows=log_rows, done_rows=done_rows)
+                                 log_rows=log_rows, done_rows=done_rows,
+                                 free_slots=_job_free_slots(list(guid_of)))
     facts["class_book"] = book
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
@@ -24395,8 +24400,20 @@ def _guild_gathering_skills(member):
     }
 
 
+def _job_free_slots(names) -> dict:
+    """name -> free bag slots, for the make-room step of a class quest
+    (guildjobs.class_room_step). An unread count is {}: no quest then waits on
+    room it cannot see."""
+    try:
+        return _fetch_free_slots(names)
+    except pymysql.err.MySQLError:
+        log.exception("guild jobs: free bag slots unread; no class quest waits on room")
+        return {}
+
+
 def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, item_rows,
-                         recent_rows, pending_rows, log_rows=(), done_rows=()) -> dict:
+                         recent_rows, pending_rows, log_rows=(), done_rows=(),
+                         free_slots=None) -> dict:
     """The rows the job reads, turned into guildjobs' facts."""
     family = set(family_names)
     guild_members, masters = guildwork.members_from_rows(rows, family_names)
@@ -24405,7 +24422,7 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     carried = guildjobs.carried_from_rows(item_rows)
     members, crafters = _guild_members_and_crafters(
         rows, family, role_of, skills, known, carried, eligible,
-        _class_quest_state(log_rows, done_rows))
+        _class_quest_state(log_rows, done_rows), free_slots or {})
     pending = {str(r.get(k) or "") for r in pending_rows
                for k in ("target_name", "target_arg")} - {""}
     return {
@@ -24449,7 +24466,7 @@ def _class_quest_state(log_rows, done_rows) -> tuple:
 
 
 def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible,
-                                quest_state=({}, {}, {})):
+                                quest_state=({}, {}, {}), free_slots=None):
     members, crafters = [], {}
     quest_log, quests_done, quest_progress = quest_state
     for r in rows:
@@ -24478,7 +24495,8 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             quest_progress=quest_progress.get(guid, {}),
             tree=raidroles.tree_of(int(r.get("class_id") or 0),
                                    r.get(raidroles.KEY)),
-            alive=guildrun.alive_or_unread(r)))
+            alive=guildrun.alive_or_unread(r),
+            free_slots=(free_slots or {}).get(name)))
     return members, crafters
 
 
