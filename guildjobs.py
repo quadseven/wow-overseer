@@ -2986,26 +2986,37 @@ def _class_held(m, move, spot, cap, recent, hunts, now, far, book=None):
             hunts.pause(m.name, move.quest, now)
         return _held_note(m, wait)
     rest = resting_entries(m.name, recent, book)
-    slow = (
-        rest.get(int(move.spot.entry))
-        if (move.kind == classquest.HUNT and move.spot is not None)
-        else 0
-    )
-    if slow:
-        # No living creature stands there yet: wait out its respawn in place,
-        # no hunt row and no walk, and do not count it against the hunt clock.
-        if hunts:
-            hunts.pause(m.name, move.quest, now)
-        return "%s waits %d more minute(s) for %s to respawn" % (
-            m.name,
-            slow,
-            spot.name or "its target",
-        )
+    note = _respawn_note(m, move, spot, rest, hunts, now)
+    if note:
+        return note
     # A refusal of a creature that is resting is no action taken: it does not
     # hold the member back from another dropper.
     acted = [r for r in recent or () if not (r.entry in rest and r.name == m.name)]
     if _cooling(m, classquest.ACTION, acted):
         return ""
+    return _slot_note(m, move, spot, cap, hunts, now, far)
+
+
+def _respawn_note(m, move, spot, rest, hunts, now) -> str:
+    """The note for a member that waits in place for a creature to respawn
+    (resting_entries), "" when it does not: no hunt row and no walk, and the
+    wait is not counted against the hunt clock."""
+    if move.kind != classquest.HUNT or move.spot is None:
+        return ""
+    slow = rest.get(int(move.spot.entry), 0)
+    if not slow:
+        return ""
+    if hunts:
+        hunts.pause(m.name, move.quest, now)
+    return "%s waits %d more minute(s) for %s to respawn" % (
+        m.name,
+        slow,
+        spot.name or "its target",
+    )
+
+
+def _slot_note(m, move, spot, cap, hunts, now, far):
+    """The note for a far walk with no slot left, None when the walk may start."""
     walks = move.kind != classquest.USE or not _near(m, spot, classquest.USE_NEAR)
     if move.kind == classquest.HUNT and _near(m, spot, classhunt.HUNT_NEAR):
         walks = False

@@ -339,7 +339,7 @@ class _Bridge:
         self.states = list(states) or [INCOMPLETE]
 
 
-for _name in ("_class_hunt_row", "_follow_class_hunt", "_slow_respawn"):
+for _name in ("_class_hunt_row", "_follow_class_hunt", "_slow_respawn", "_hunt_left"):
     setattr(_Bridge, _name, getattr(bridge.Bridge, _name))
 
 STEP = guildjobs.guildcorps.Step(
