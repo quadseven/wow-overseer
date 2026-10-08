@@ -1419,7 +1419,7 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
     if (
         block == ITEM
         and using is not None
-        and using.verb == USE_HERE
+        and using.verb in (USE_HERE, USE_ITEM)
         and using.provided
         and _status(member, quest.id) == STATUS_INCOMPLETE
     ):

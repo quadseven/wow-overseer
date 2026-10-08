@@ -327,12 +327,13 @@ class TheUseMove(unittest.TestCase):
         move, _ = self.move(who())
         self.assertEqual((move.kind, move.quest), (classquest.TAKE, 6062))
 
-    def test_a_member_that_lost_its_rod_is_named_not_waited_on(self):
+    def test_a_member_that_lost_its_rod_drops_the_quest_to_be_handed_it_again(self):
+        # The quest hands the rod over when it is taken (2026-10-08), so a member
+        # that lost it is not left waiting: it drops the quest and takes it anew.
         m = who(quest_log={6062: 3}, carried=())
         move, blocked = self.move(m)
-        self.assertIsNone(move)
-        self.assertIn("item 15917", blocked[0])
-        self.assertIn("does not carry", blocked[0])
+        self.assertEqual((move.kind, move.quest), (classquest.ABANDON, 6062))
+        self.assertEqual(blocked, [])
 
     def test_the_rod_is_used_again_for_the_next_quest_of_the_chain(self):
         m = who(
