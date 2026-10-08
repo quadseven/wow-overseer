@@ -171,3 +171,76 @@ def plan(
     if renames_on:
         actions += _renames(guild, names, seated, pending)
     return actions
+
+
+def _waiting_line(seated: dict, pending: set, refusals: dict | None) -> str:
+    waiting = ", ".join(
+        "%s as %s" % (m["name"], seat) for seat, m in sorted(seated.items())
+    )
+    line = (
+        "%d seats are filled by recruits already in the guild, waiting for "
+        "the approved name (%s)" % (len(seated), waiting)
+    )
+    if pending & {m["name"] for m in seated.values()}:
+        line += "; their rows are in flight or were asked in the last ten minutes"
+    if refusals:
+        line += "; recent refusals: " + ", ".join(
+            "%s x%d" % (detail, n) for detail, n in sorted(refusals.items())
+        )
+    return line
+
+
+def _unfilled_lines(
+    unfilled: list, members: list, candidates: list, pending: set, actor_online: bool
+) -> list:
+    taken, missing = set(pending), []
+    for seat in unfilled:
+        pick = _best_candidate(seat, candidates, taken)
+        if pick is None:
+            missing.append(seat.name)
+        else:
+            taken.add(pick["name"])
+    out = []
+    if missing:
+        out.append(
+            "no candidate at level %d or under fits %s"
+            % (RECRUIT_MAX_LEVEL, ", ".join(missing))
+        )
+    if len(missing) == len(unfilled):
+        return out
+    if len(members) >= GUILD_SIZE:
+        out.append(
+            "the guild is full (%d) and the approved teams name no leaver"
+            % len(members)
+        )
+    elif not actor_online:
+        out.append("the family head is not in the world")
+    else:
+        out.append("invites wait on rows in flight")
+    return out
+
+
+def stall_reason(
+    guild: str,
+    members: list,
+    candidates: list,
+    pending: set,
+    actor_online: bool = True,
+    refusals: dict | None = None,
+) -> str:
+    """Why a pass with open seats moved nothing, or "" when no seat is open.
+
+    A seat counts as open by name, so a recruit already in the guild that fits
+    it (not yet renamed) still leaves the seat open. That case is the usual
+    stall: the invites are done and the rename is what waits. `refusals` is
+    detail -> count for the recently refused rows.
+    """
+    opens = open_seats(guild, {m["name"] for m in members})
+    if not opens:
+        return ""
+    seated = recruits_in_guild(guild, members)
+    parts = [_waiting_line(seated, pending, refusals)] if seated else []
+    unfilled = [s for s in opens if s.name not in seated]
+    if unfilled:
+        parts += _unfilled_lines(unfilled, members, candidates, pending, actor_online)
+    return "%s has %d open seats: %s" % (guild, len(opens), "; ".join(parts))

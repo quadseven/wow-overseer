@@ -13169,7 +13169,12 @@ class Bridge(discord.Client):
             # guild in the same pass never asks for the same character.
             pending |= {action.target for action in actions}
             if not actions:
-                log.info("team sync: %s matches its approved teams as far as this pass can move it", guild)
+                refusals = await asyncio.to_thread(_team_refusals)
+                why = teamsync.stall_reason(guild, members, candidates, pending, bool(actor), refusals)
+                if why:
+                    log.info("team sync: %s", why)
+                else:
+                    log.info("team sync: %s matches its approved teams as far as this pass can move it", guild)
                 continue
             for action in actions:
                 if action.kind == "rename":
@@ -27206,6 +27211,18 @@ def _team_candidates(guild: str) -> list:
         )
         return [dict(r) for r in cur.fetchall()
                 if (int(r["class_id"]), int(r["race"])) in wanted]
+
+
+def _team_refusals() -> dict:
+    """detail -> count of the team-sync rows refused in the last thirty
+    minutes, so a stalled pass can say what the world answered."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail, COUNT(*) AS n FROM overseer_command WHERE source = %s "
+            "AND status = 'error' AND created_at > NOW() - INTERVAL 30 MINUTE GROUP BY detail",
+            (TEAM_SYNC_SOURCE,),
+        )
+        return {str(r["detail"] or "no detail"): int(r["n"]) for r in cur.fetchall()}
 
 
 def _team_pending() -> set:
