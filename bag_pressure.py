@@ -1333,7 +1333,12 @@ def item_binding(row) -> str:
 
 
 def gear_candidates(
-    rows: Iterable[dict], family, available=None, fits=None, keep_names=()
+    rows: Iterable[dict],
+    family,
+    available=None,
+    fits=None,
+    keep_names=(),
+    spare=frozenset(),
 ) -> tuple[SellCandidate, ...]:
     """Carried equipment whose only honest route is a vendor (infra#3330).
 
@@ -1357,7 +1362,8 @@ def gear_candidates(
     that sells the soulbound upgrades their holders should be wearing.
 
     `keep_names` is the owner's never-dispose mark, checked before anything
-    else and before any row is even parsed.
+    else and before any row is even parsed. `spare` is the guids
+    `bankpolicy.redundant` named as copies past what the family can wear.
     """
     if available is None:
         available = disposition.EXECUTABLE_TODAY
@@ -1404,6 +1410,9 @@ def gear_candidates(
             # An item the gate never reached is UNASKED, not "nobody wants
             # it": the two answers differ by exactly one irreversible sale.
             family_fit=fits.get(guid, disposition.FIT_UNASKED),
+            # `bankpolicy.redundant`: copies past one per member who can wear
+            # the piece. The caller counted them; this only passes the word.
+            spare=guid in spare,
         )
         if verdict.route != disposition.VENDOR:
             continue

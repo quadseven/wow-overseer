@@ -559,6 +559,7 @@ def decide(
     available=ALL_ROUTES,
     family_fit=FIT_UNASKED,
     learner=LEARNER_UNASKED,
+    spare=False,
 ):
     """One item, one route, with the reason attached.
 
@@ -677,6 +678,25 @@ def decide(
             GIVE,
             "%s teaches %s's own trade, and it is sitting in "
             "somebody else's bag" % (item.name, learner),
+        )
+    if (
+        spare
+        and item.equipment
+        and family_fit != FIT_SIBLING
+        and VENDOR in available
+        and family.vendor_reachable
+        and item.sell_price > 0
+    ):
+        # A COPY THE FAMILY HAS NO USE FOR (bankpolicy.redundant): the caller
+        # counted the copies against the members who can wear the piece and
+        # named this one as past that count. It sits above the fit and level
+        # gates below because those keep a piece for "somebody who will wear
+        # it", and the copies that remain are exactly those somebodies. A
+        # sibling who would wear it today still gets the hand-off first.
+        return Verdict(
+            VENDOR,
+            "%s is a spare copy: the family keeps one for each member who "
+            "can wear it" % item.name,
         )
     if family_fit == FIT_HOLDER:
         # Soulbound or not, the character carrying it would wear it. This sits

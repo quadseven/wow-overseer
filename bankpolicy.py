@@ -471,8 +471,16 @@ def _personal(pieces, family, reach, claimed) -> dict:
         if found is None:
             continue
         kind, score, why = found
-        # Every piece the holder grows into is kept; a set keeps its best.
-        key = (piece.holder, kind, fit.bucket, piece.guid if kind == GROWS_INTO else 0)
+        # Every piece the holder grows into is kept, once per item: a second
+        # copy of the same entry is the same step on the same ladder (four
+        # Jinxed Hoodoo Kilts, seven Twilight Cultist Cowls, measured on the
+        # dev realm 2026-10-08). A set keeps its best.
+        key = (
+            piece.holder,
+            kind,
+            fit.bucket,
+            (piece.entry or piece.guid) if kind == GROWS_INTO else 0,
+        )
         held = best.get(key)
         if held is None or score > held[0]:
             best[key] = (score, piece, kind, why)
@@ -482,6 +490,49 @@ def _personal(pieces, family, reach, claimed) -> dict:
         )
         for _score, piece, kind, why in best.values()
     }
+
+
+def redundant(facts: Facts) -> frozenset:
+    """Guids of gear copies the family holds past what it can use.
+
+    The same entry held several times is worth one copy per family member who
+    can wear it (the holder, and each member who will wear it at its level);
+    the rest are spares. The copies kept are the ones the policy places, then
+    those already in a bank, then the lowest guid, so a sale and a placement
+    never name the same stack. Soulbound or tradable alike. Epics, quest gear
+    and stacks the operator's keep reservations cover are never named, and a
+    piece the policy could not judge (no reach) names nothing.
+    """
+    placed = place(facts)
+    held = frozenset(
+        p.guid for p in facts.pieces if any(r.covers(p) for r in facts.reserved)
+    )
+    by_entry: dict = {}
+    for piece in facts.pieces:
+        if (
+            not piece.is_gear
+            or piece.entry <= 0
+            or piece.quality > RARE
+            or piece.quest_needed
+            or piece.guid in held
+        ):
+            continue
+        by_entry.setdefault(piece.entry, []).append(piece)
+    spare = set()
+    for copies in by_entry.values():
+        if len(copies) < 2:
+            continue
+        fits = [facts.reach.get(piece.guid) for piece in copies]
+        if any(fit is None for fit in fits):
+            continue
+        wearers = {p.holder for p, fit in zip(copies, fits) if fit.holder_wears}
+        for piece, fit in zip(copies, fits):
+            # A soulbound copy goes to nobody else, so only its holder counts.
+            if not piece.bound:
+                wearers.update(fit.later_wearers)
+        copies.sort(key=lambda p: (p.guid not in placed, p.place != "bank", p.guid))
+        spare.update(p.guid for p in copies[max(1, len(wearers)) :])
+    return frozenset(spare)
 
 
 def _own_night(piece: Piece, keeper: Keeper) -> int:
