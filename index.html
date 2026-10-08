@@ -12650,6 +12650,7 @@ function itemTipLines(node, t, note) {
   add("nm" + (t.quality === null ? "" : " q" + t.quality), t.name);
   if (t.item_level !== null) add("il", "Item Level " + t.item_level);
   if (t.binding) add("", t.binding);
+  if (t.container) add("", t.container);
   if (t.slot || t.kind) {
     const r = el("div", "t");
     r.append(el("span", "", t.slot || ""), el("span", "", t.kind || ""));
