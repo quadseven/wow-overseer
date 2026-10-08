@@ -2575,6 +2575,7 @@ def refused_marks(name, recent) -> dict:
     SPAWN_SHORT_MINUTES, the rest SPAWN_REFUSED_MINUTES) and written after
     classquest.TRIED_EPOCH."""
     marks = {}
+    deaths = {}
     for r in recent or ():
         if (
             r.name != name
@@ -2584,15 +2585,28 @@ def refused_marks(name, recent) -> dict:
             or _before_epoch(r)
         ):
             continue
+        age = int(r.age_minutes)
+        if (
+            r.reason == classquest.DEATH_REASON
+            and age < classquest.DEATH_WINDOW_MINUTES
+        ):
+            deaths.setdefault(r.spawn, []).append(age)
         short = r.reason in classquest.SPAWN_SHORT_REFUSALS
         hold = (
             classquest.SPAWN_SHORT_MINUTES
             if short
             else classquest.SPAWN_REFUSED_MINUTES
         )
-        age = int(r.age_minutes)
         if age < hold:
             marks[r.spawn] = min(age, marks.get(r.spawn, age))
+    # A spawn the member has died on the way to more than once is left long.
+    for spawn, ages in deaths.items():
+        newest = min(ages)
+        if (
+            len(ages) >= classquest.DEATHS_BEFORE_LONG_HOLD
+            and newest < classquest.DEATH_BACKOFF_MINUTES
+        ):
+            marks[spawn] = min(newest, marks.get(spawn, newest))
     return marks
 
 
