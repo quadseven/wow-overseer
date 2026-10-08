@@ -119,7 +119,7 @@ def main(argv=None) -> int:
         ref=args.ref,
         out_since=_out_since(args.status),
     )
-    for line in report(channel, releases, w, realmroller.tick(channel, releases, w)):
+    for line in report(channel, releases, w, world.dry_action(channel, releases, w)):
         print(line)
     return 0
 

@@ -106,6 +106,16 @@ class ChannelFile(unittest.TestCase):
             rr.parse_channel(_channel_data(paused="false"))
         self.assertIn("paused must be true or false", str(e.exception))
 
+    def test_the_roll_marker_value_is_optional_and_needs_one_group(self):
+        d = _channel_data()
+        self.assertEqual(rr.parse_channel(d).policy.roll_marker_value, "")
+        d["policy"]["roll_marker"]["value"] = r"worldserver\n\s+digest: (sha256:\w+)"
+        self.assertIn("(sha256", rr.parse_channel(d).policy.roll_marker_value)
+        for bad in ("no group", "(a)(b)", "(", 5):
+            d["policy"]["roll_marker"]["value"] = bad
+            with self.assertRaises(rr.Invalid, msg=repr(bad)):
+                rr.parse_channel(d)
+
     def test_every_problem_is_reported_at_once(self):
         d = _channel_data(current="latest", queue=["r2026.10.04-2", "r2026.10.04-2"])
         d["policy"]["settle"] = "five minutes"

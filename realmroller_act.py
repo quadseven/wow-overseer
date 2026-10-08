@@ -418,9 +418,16 @@ def read_roller(gh: GitHub, sha: str, roller_path: str) -> tuple[dict, dict[str,
     return json.loads(channel_text), raws
 
 
-def marker_time(gh: GitHub, branch: str, path: str, pattern: str) -> datetime | None:
+def marker_time(
+    gh: GitHub, branch: str, path: str, pattern: str, value: str = ""
+) -> datetime | None:
     """`git log -1 -G pattern -- path`, through the API: the last commit whose diff
-    adds or removes a line of `path` matching `pattern`."""
+    adds or removes a line of `path` matching `pattern`.
+
+    With `value` the commit must also have moved what the regex's one group
+    captures in the file (world.value_moved), so an ungated image's digest
+    moving in the same file is not a roll start.
+    """
     rx = re.compile(pattern)
     for c in gh.path_commits(path, branch):
         detail = gh.commit_detail(c["sha"])
@@ -429,11 +436,19 @@ def marker_time(gh: GitHub, branch: str, path: str, pattern: str) -> datetime | 
                 continue
             for line in (f.get("patch") or "").splitlines():
                 if line[:1] in "+-" and not line.startswith(("+++", "---")):
-                    if rx.search(line[1:]):
+                    if rx.search(line[1:]) and (
+                        not value or _moved(gh, c["sha"], detail, path, value)
+                    ):
                         return rr.instant(
                             detail["commit"]["committer"]["date"].replace("Z", "+00:00")
                         )
     return None
+
+
+def _moved(gh: GitHub, sha: str, detail: dict, path: str, value: str) -> bool:
+    parents = detail.get("parents") or []
+    old = text_at(gh, parents[0]["sha"], path) if parents else None
+    return world.value_moved(value, text_at(gh, sha, path), old)
 
 
 # --- Kubernetes --------------------------------------------------------------------
@@ -669,19 +684,51 @@ class Roller:
         )
         ctx.status["out_since"] = _iso(out_since) if out_since else None
         marker = marker_time(
-            self.gh, ctx.act.base, p.roll_marker_path, p.roll_marker_pattern
+            self.gh,
+            ctx.act.base,
+            p.roll_marker_path,
+            p.roll_marker_pattern,
+            p.roll_marker_value,
         )
+        cur = ctx.releases[ctx.channel.current]
         w = rr.World(
             now=now,
             family_in_instance=family,
             guild_groups_inside=guild,
             out_since=out_since,
             last_roll_started=rr.last_roll_start(ctx.releases, marker),
+            bots_low_since=self._bots_low_since(ctx, cur, now),
         )
-        cur = ctx.releases[ctx.channel.current]
         if cur.state in rr.ON_REALM:
             w = self._observe_realm(ctx, cur, w)
         return w
+
+    def _bots_low_since(
+        self, ctx: Context, cur: rr.Release, now: datetime
+    ) -> datetime | None:
+        """When the online count was first seen under the rollback line, or None.
+
+        The baseline is the last count read while nothing was on the realm,
+        kept in the status; it is not overwritten while a release is rolling
+        or live, so the count is judged against the realm before the roll.
+        """
+        status = ctx.status
+        online = world.characters_online(self.site_url, self.fetch)
+        if cur.state not in rr.ON_REALM:
+            if online is not None:
+                status["online_before"] = online
+            status["bots_low_since"] = None
+            return None
+        prev = status.get("bots_low_since")
+        low = world.carry_low_since(
+            rr.instant(prev) if prev else None,
+            status.get("online_before"),
+            online,
+            ctx.channel.policy.rollback.bots_below_pct,
+            now,
+        )
+        status["bots_low_since"] = _iso(low) if low else None
+        return low
 
     def _parts(self, ctx: Context, rel: rr.Release) -> tuple[rr.Component, ...]:
         """The components a release on the realm restarted, against the rollback target."""
@@ -703,6 +750,7 @@ class Roller:
             guild_groups_inside=w.guild_groups_inside,
             out_since=w.out_since,
             last_roll_started=w.last_roll_started,
+            bots_low_since=w.bots_low_since,
             ready=ready,
             restarts=restarts,
             bad_signature=bad,
@@ -800,10 +848,20 @@ class Roller:
                 if since:
                     q["sinceTime"] = since
                 started = self.clock()
-                text = self.kube.log(
-                    "/api/v1/namespaces/%s/pods/%s/log?%s"
-                    % (src.namespace, pname, urllib.parse.urlencode(q))
-                )
+                try:
+                    text = self.kube.log(
+                        "/api/v1/namespaces/%s/pods/%s/log?%s"
+                        % (src.namespace, pname, urllib.parse.urlencode(q))
+                    )
+                except ApiError as exc:
+                    # A container that has not started (its pod is still in
+                    # init) answers 400 until it does. That is a pod not yet
+                    # readable, not a failed tick: raising here would stop
+                    # every tick before the not-Ready rollback could fire.
+                    if exc.status not in (400, 404):
+                        raise
+                    log.warning("log of %s not readable yet: %s", key, exc)
+                    continue
                 found, sig = plan.scan(
                     text.splitlines(), mine, ctx.channel.policy.rollback.log_signatures
                 )
