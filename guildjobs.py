@@ -593,6 +593,8 @@ class Recent:
     skill_id: int | None = None
     # Whether the row is the step's walk (its source ends "-walk").
     walk: bool = False
+    # The quest id an `abandon quest:` row dropped, 0 for any other row.
+    abandoned: int = 0
     # Why the module refused the row, "" when it did not, and whether it said
     # the refusal would pass (the realm's far walk walls, a dead character).
     refusal: str = ""
@@ -2361,7 +2363,10 @@ CLASSQUEST_STEPS_PER_GUILD = 6
 
 def _class_spot(move) -> Spot:
     s = move.spot
-    chest = move.kind == classquest.USE and move.use.verb == classquest.USE_OBJECT
+    chest = move.kind == classquest.USE and move.use.verb in (
+        classquest.USE_OBJECT,
+        classquest.USE_HERE,
+    )
     return Spot(
         kind="gameobject" if chest else "creature",
         spawn=int(s.guid),
@@ -2942,6 +2947,8 @@ def class_step(
     if room is not None:
         step, doing, why = room
         return step, doing, _join(note, why)
+    if move.kind == classquest.ABANDON:
+        return _abandon_step(m, move, recent, note)
     spot = _class_spot(move)
     # A pack tried without progress is left, so a member is "at" the next one
     # only within a pack's width, not the whole field's.
@@ -3097,6 +3104,34 @@ def _hunt_step(m, move, spot, book, cap, hunts, arrived):
         spot=spot,
     )
     return step, ""
+
+
+def _abandon_step(m, move, recent, note):
+    """The one quest row that drops a quest to take it again, unless this
+    member dropped that quest lately (classquest.ABANDON_HOLD_MINUTES)."""
+    for r in recent or ():
+        if (
+            r.name == m.name
+            and r.abandoned == int(move.quest)
+            and int(r.age_minutes) < classquest.ABANDON_HOLD_MINUTES
+        ):
+            return None, move.said, _join(note, "%s was dropped lately" % move.quest)
+    step = guildcorps.Step(
+        m.name,
+        classquest.ACTION,
+        int(move.quest),
+        move.said,
+        rows=(
+            guildcorps.Row(
+                "quest",
+                "abandon quest:%d" % int(move.quest),
+                "",
+                source_for(classquest.ACTION, m.name),
+            ),
+        ),
+        goal=m.name,
+    )
+    return step, move.said, note
 
 
 def _use_step(m, move, spot, cap):
@@ -3586,12 +3621,19 @@ def recent_from_rows(rows) -> tuple:
                 walk=action.endswith("-walk"),
                 reason=_reason_of(row),
                 spawn=_spawn_of(row.get("command")),
+                abandoned=_abandoned_of(row.get("command")),
                 row_id=_int(row.get("id"), 0),
                 **_hunt_of(row),
                 **_refusal_of(row),
             )
         )
     return tuple(out)
+
+
+def _abandoned_of(command) -> int:
+    """The quest id of an `abandon quest:<id>` row, 0 for any other row."""
+    found = re.match(r"abandon quest:(\d+)\b", str(command or ""))
+    return int(found.group(1)) if found else 0
 
 
 def _refusal_of(row) -> dict:
