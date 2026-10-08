@@ -2943,11 +2943,9 @@ def class_step(
     row there, which the bridge follows by its answer (classuse.py); the same
     clock moves it to another target and gives it up.
     """
-    if not _class_ready(m, book):
-        return None, "", ""
-    recall = stranded_recall_step(m, recent)
-    if recall is not None:
-        return recall, recall.said, ""
+    early = _class_early(m, book, recent)
+    if early is not None:
+        return early
     move, blocked = _class_move(m, book, recent, hunts, now)
     note = "; ".join(blocked)
     if move is None:
@@ -3295,6 +3293,18 @@ def last_gear_failed(name, recent) -> bool:
 # hearth recall: the stone's own spell, for a knight that has lost the stone.
 STRANDED_STALLED_WALKS = 2
 STRANDED_WALK_WINDOW_MINUTES = 240
+
+
+def _class_early(m, book, recent):
+    """The result of class_step when it is settled before any move is read: a
+    member that cannot be given a move now (nothing, no note), or a stranded
+    death knight's hearth recall. None when the move is to be read."""
+    if not _class_ready(m, book):
+        return None, "", ""
+    recall = stranded_recall_step(m, recent)
+    if recall is not None:
+        return recall, recall.said, ""
+    return None
 
 
 def stranded_recall_step(m, recent):
