@@ -1223,19 +1223,91 @@
      desk. The grid's first column is sized by its content and the second is
      minmax(0, 1fr), which is what stops a long profession name taking the page
      sideways. */
-  #gclbars { display:grid; gap:9px; margin-bottom:.9rem; }
-  .gcl-row { display:grid; grid-template-columns:auto minmax(0, 1fr);
-             gap:.1rem .7rem; align-items:baseline; }
-  .gcl-pc { font-family:var(--mono); font-size:12px; font-weight:700;
-            letter-spacing:.06em; color:var(--on-card-dim); }
-  .gcl-name { font-family:var(--display); font-weight:800; font-size:1rem;
-              line-height:1.25; color:var(--on-card); text-transform:capitalize;
-              overflow-wrap:anywhere; }
-  .gcl-track { grid-column:2; height:5px; border-radius:999px;
-               background:var(--card-line); overflow:hidden; margin-top:5px; }
-  .gcl-fill { display:block; height:100%; background:var(--accent-text); }
-  .gcl-why { grid-column:2; margin-top:5px; color:var(--on-card-dim);
-             font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+  #gclbars { display:grid; gap:8px; margin-bottom:.9rem; }
+  /* THE PHONE ROW. Everything in this block is sized for a thumb and read at
+     arm's length: sixteen pixel text, 44 pixel minimum targets (the text and
+     the row are the same button), and no pixel widths. Colours are the card
+     roles only, so both themes follow without a rule of their own. */
+  .tp-pick { display:flex; gap:8px; overflow-x:auto; padding:2px 2px 10px;
+             margin-bottom:4px; scrollbar-width:none;
+             -webkit-overflow-scrolling:touch; }
+  .tp-pick::-webkit-scrollbar { display:none; }
+  .tp-pick[hidden] { display:none; }
+  .tp-chip { flex:0 0 auto; min-height:44px; padding:0 1.1rem;
+             border:1px solid var(--card-line); border-radius:999px;
+             background:var(--card); color:var(--on-card); font:inherit;
+             font-size:16px; font-weight:600; cursor:pointer; }
+  .tp-chip.on { background:var(--accent-text); color:var(--card);
+                border-color:var(--accent-text); }
+  .tp-prof { border:1px solid var(--card-line); border-radius:12px;
+             background:var(--card); overflow:hidden; }
+  .tp-prof.open { border-color:var(--accent-text); }
+  .tp-head { display:grid; grid-template-columns:minmax(0, 1fr) auto;
+             gap:.2rem .8rem; align-items:baseline; width:100%; min-height:44px;
+             padding:.75rem .9rem; border:0; background:transparent;
+             color:var(--on-card); font:inherit; text-align:left;
+             cursor:pointer; }
+  .tp-head:focus-visible, .tp-ghead:focus-visible, .tp-chead:focus-visible,
+  .tp-chip:focus-visible, .tp-more:focus-visible {
+    outline:2px solid var(--accent); outline-offset:-2px; }
+  .tp-name { font-family:var(--display); font-weight:800; font-size:1.15rem;
+             line-height:1.25; text-transform:capitalize;
+             overflow-wrap:anywhere; }
+  .tp-pc { font-family:var(--mono); font-weight:700; font-size:1.15rem;
+           color:var(--accent-text); }
+  .tp-brief { grid-column:1 / -1; font-size:16px; line-height:1.4;
+              color:var(--on-card-dim); overflow-wrap:anywhere; }
+  .tp-track { grid-column:1 / -1; display:block; height:6px;
+              border-radius:999px; background:var(--card-line);
+              overflow:hidden; margin-top:4px; }
+  .tp-fill { display:block; height:100%; background:var(--accent-text); }
+  .tp-body { padding:0 .9rem .9rem; border-top:1px solid var(--card-line); }
+  .tp-viewline { margin:.8rem 0 .4rem; font-size:16px; line-height:1.45;
+                 color:var(--on-card); overflow-wrap:anywhere; }
+  .tp-note, .tp-fine { margin-top:.8rem; font-size:16px; line-height:1.45;
+                       color:var(--on-card-dim); overflow-wrap:anywhere; }
+  .tp-group { margin-top:.5rem; }
+  .tp-ghead { display:grid; grid-template-columns:minmax(0, 1fr) auto auto;
+              gap:.6rem; align-items:center; width:100%; min-height:48px;
+              padding:0 .75rem; border:1px solid var(--card-line);
+              border-radius:10px; background:var(--sunken);
+              color:var(--on-card); font:inherit; font-size:16px;
+              font-weight:700; text-align:left; cursor:pointer; }
+  .tp-ghead::after { content:"+"; font-weight:700; color:var(--on-card-dim); }
+  .tp-ghead.open::after { content:"-"; }
+  .tp-ghead.empty { display:flex; align-items:center; cursor:default;
+                    color:var(--on-card-dim); font-weight:500; }
+  .tp-ghead.empty::after { content:none; }
+  .tp-glabel { overflow-wrap:anywhere; }
+  .tp-gcount { font-family:var(--mono); color:var(--accent-text); }
+  .tp-craft { margin-top:6px; border-bottom:1px solid var(--card-line);
+              padding-bottom:6px; }
+  .tp-chead { display:grid; grid-template-columns:minmax(0, 1fr) auto;
+              gap:.6rem; align-items:center; width:100%; min-height:48px;
+              padding:0 .25rem; border:0; background:transparent;
+              color:var(--on-card); font:inherit; font-size:16px;
+              text-align:left; cursor:pointer; }
+  .tp-cname { font-weight:600; line-height:1.3; overflow-wrap:anywhere; }
+  .tp-crank { font-family:var(--mono); font-size:16px;
+              color:var(--on-card-dim); }
+  .tp-who { display:flex; flex-wrap:wrap; gap:6px; align-items:center;
+            padding:0 .25rem 4px; }
+  .tp-lab { font-size:16px; color:var(--on-card-dim); }
+  .tp-name-chip { min-height:32px; display:inline-flex; align-items:center;
+                  padding:0 .8rem; border-radius:999px; font-size:16px;
+                  font-weight:600; border:1px solid var(--accent-text);
+                  color:var(--accent-text); }
+  .tp-name-chip.could { border-style:dashed; color:var(--on-card); }
+  .tp-detail { margin:.4rem .25rem 0; padding:.2rem 0 .2rem .75rem;
+               border-left:2px solid var(--accent-text); }
+  .tp-dline { margin-top:.4rem; font-size:16px; line-height:1.45;
+              color:var(--on-card); overflow-wrap:anywhere; }
+  .tp-src { margin-top:.4rem; font-size:16px; line-height:1.45;
+            color:var(--on-card-dim); overflow-wrap:anywhere; }
+  .tp-more { width:100%; min-height:44px; margin-top:8px; border:1px solid
+             var(--card-line); border-radius:10px; background:transparent;
+             color:var(--on-card); font:inherit; font-size:16px;
+             font-weight:600; cursor:pointer; }
   /* A BRANCH, AND A RUNG OF THE LADDER. Both are cards rather than bare rows,
      because both carry a paragraph of reasoning underneath a one-line summary
      and that is exactly what a <details> is for. They take .chr-card wholesale
@@ -4275,6 +4347,7 @@
   <p id="gcrcoverage" class="chr-body"></p>
   <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">the hundred per cent</span></div>
   <p id="gclgoal" class="chr-body"></p>
+  <div id="gclpick" class="tp-pick" role="group" aria-label="Character"></div>
   <div id="gclbars"></div>
   <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">who takes which branch</span></div>
   <div id="gclspecs"></div>
@@ -9743,6 +9816,7 @@ function gcdRender(g) {
 // reader who stops early would take it for work in progress.
 const gclgoal = document.getElementById("gclgoal");
 const gclbars = document.getElementById("gclbars");
+const gclpick = document.getElementById("gclpick");
 const gclspecs = document.getElementById("gclspecs");
 const gclorder = document.getElementById("gclorder");
 const gcllimit = document.getElementById("gcllimit");
@@ -9750,21 +9824,196 @@ const gclladder = document.getElementById("gclladder");
 const gclgrant = document.getElementById("gclgrant");
 const gclbasis = document.getElementById("gclbasis");
 
-// ONE PROFESSION'S STANDING. The percent, the name, a bar and the module's
-// sentence. The bar's fill is `row.percent` and nothing else: a width worked
-// out here from counts would be a second opinion about a number the module
-// already rounded down on purpose.
+// ONE PROFESSION IS ONE TAPPABLE ROW, and opening it draws its crafts in
+// place. The row carries the name, the module's percent and the module's
+// one-line brief; the bar's fill is `row.percent` and nothing else, a width
+// worked out here from counts would be a second opinion about a number the
+// module already rounded down on purpose.
+//
+// WHAT IS KEPT ACROSS THE TWO-MINUTE REFRESH, because the whole list is
+// redrawn from the poll: which profession is open (one at a time), which
+// character the crafts are shown for, which groups the reader opened or shut,
+// which craft is open, and the craft lists already fetched. A redraw that
+// forgot any of them would fold the thing somebody was reading.
+let gclOpen = 0;
+let gclView = "";
+let gclSpell = 0;
+let gclGoal = null;
+const gclLists = new Map();
+const gclGroups = new Map();
+const gclShown = new Map();
+const gclErrors = new Set();
+const gclPending = new Set();
+// A group draws this many rows and then offers the rest, so a profession of
+// five hundred crafts is not five hundred nodes the moment it opens.
+const GCL_PAGE = 60;
+
+function gclKey(skill) { return gcrChosen + "|" + skill; }
+
 function gclBar(row) {
-  const box = el("div", "gcl-row");
-  box.appendChild(el("span", "gcl-pc", row.percent + "%"));
-  box.appendChild(el("span", "gcl-name", row.name));
-  const track = el("div", "gcl-track");
-  const fill = el("i", "gcl-fill");
+  const open = gclOpen === row.skill;
+  const box = el("div", "tp-prof" + (open ? " open" : ""));
+  const head = el("button", "tp-head");
+  head.type = "button";
+  head.dataset.k = "p" + row.skill;
+  head.setAttribute("aria-expanded", open ? "true" : "false");
+  head.appendChild(el("span", "tp-name", row.name));
+  head.appendChild(el("span", "tp-pc", row.percent + "%"));
+  head.appendChild(el("span", "tp-brief", row.brief));
+  const track = el("span", "tp-track");
+  const fill = el("i", "tp-fill");
   fill.style.width = row.percent + "%";
   track.appendChild(fill);
-  box.appendChild(track);
-  box.appendChild(el("div", "gcl-why", row.line));
-  gcrChips(box, row.chips);
+  head.appendChild(track);
+  head.onclick = () => gclToggle(row.skill);
+  box.appendChild(head);
+  if (open) box.appendChild(gclBody(row));
+  return box;
+}
+
+function gclToggle(skill) {
+  gclOpen = gclOpen === skill ? 0 : skill;
+  gclSpell = 0;
+  gclRedraw();
+  if (gclOpen) gclFetch(skill);
+}
+
+// THE CRAFT LIST FOR ONE PROFESSION, asked for when its row is opened and
+// again on each refresh while it stays open. A failed ask keeps whatever list
+// is already drawn, for the reason pollTrades gives.
+async function gclFetch(skill) {
+  const key = gclKey(skill);
+  gclPending.add(key);
+  const q = "?skill=" + encodeURIComponent(skill) +
+            "&family=" + encodeURIComponent(gcrChosen);
+  try {
+    const r = await fetch(u("/api/trades" + q),
+                          {signal: AbortSignal.timeout(20000)});
+    if (!r.ok) throw new Error(r.status);
+    gclLists.set(key, await r.json());
+    gclErrors.delete(key);
+  } catch (e) {
+    gclErrors.add(key);
+  }
+  gclPending.delete(key);
+  if (gclOpen === skill) gclRedraw();
+}
+
+function gclRedraw() {
+  if (gclGoal) gclRender(gclGoal);
+}
+
+// The character filter: a row of big chips that scrolls sideways inside its
+// own box. The labels come from the module.
+function gclFilter(people) {
+  gclpick.replaceChildren();
+  if (!people.some((p) => p.key === gclView)) gclView = "";
+  for (const p of people) {
+    const b = el("button", "tp-chip" + (p.key === gclView ? " on" : ""), p.label);
+    b.type = "button";
+    b.dataset.k = "f" + p.key;
+    b.setAttribute("aria-pressed", p.key === gclView ? "true" : "false");
+    b.onclick = () => { gclView = p.key; gclSpell = 0; gclRedraw(); };
+    gclpick.appendChild(b);
+  }
+  gclpick.hidden = people.length < 2;
+}
+
+// What opening a profession draws: the view's own line, then the groups the
+// module named, each collapsible. `view.groups` decides which groups exist
+// and what they are called; a group is open by default only when it is the
+// one a reader acts on (`l`, ready to learn now).
+function gclBody(row) {
+  const body = el("div", "tp-body");
+  const key = gclKey(row.skill);
+  const list = gclLists.get(key);
+  if (!list) {
+    if (!gclErrors.has(key) && !gclPending.has(key)) gclFetch(row.skill);
+    body.appendChild(el("div", "tp-note", gclErrors.has(key)
+      ? "Could not load these crafts. Tap the row twice to try again."
+      : "Loading..."));
+    return body;
+  }
+  const at = list.views.findIndex((v) => v.key === gclView);
+  const idx = at < 0 ? 0 : at;
+  const view = list.views[idx];
+  if (view.brief && idx > 0) {
+    body.appendChild(el("div", "tp-viewline", view.brief));
+  }
+  for (const group of view.groups) {
+    body.appendChild(gclGroup(row.skill, list, idx, group));
+  }
+  body.appendChild(el("div", "tp-fine", list.reagents_line));
+  return body;
+}
+
+function gclGroup(skill, list, idx, group) {
+  const gk = skill + "|" + group.state;
+  const mine = list.crafts.filter((c) => c.states[idx] === group.state);
+  const wrap = el("div", "tp-group");
+  if (!group.count) {
+    wrap.appendChild(el("div", "tp-ghead empty", group.label + "  0"));
+    return wrap;
+  }
+  const open = gclGroups.has(gk) ? gclGroups.get(gk) : group.state === "l";
+  const head = el("button", "tp-ghead" + (open ? " open" : ""));
+  head.type = "button";
+  head.dataset.k = "g" + gk;
+  head.setAttribute("aria-expanded", open ? "true" : "false");
+  head.appendChild(el("span", "tp-glabel", group.label));
+  head.appendChild(el("span", "tp-gcount", String(group.count)));
+  head.onclick = () => { gclGroups.set(gk, !open); gclRedraw(); };
+  wrap.appendChild(head);
+  if (!open) return wrap;
+  const limit = gclShown.get(gk) || GCL_PAGE;
+  for (const craft of mine.slice(0, limit)) {
+    wrap.appendChild(gclCraft(craft, list));
+  }
+  if (mine.length > limit) {
+    const more = el("button", "tp-more", "Show more");
+    more.type = "button";
+    more.onclick = () => { gclShown.set(gk, limit + GCL_PAGE); gclRedraw(); };
+    wrap.appendChild(more);
+  }
+  return wrap;
+}
+
+// A character name chip. Big enough to read, and the two kinds differ in
+// shape as well as in hue: solid for one who has it, dashed for one who could
+// learn it, so the difference survives a colour-blind reader.
+function gclWho(parent, label, names, more, cls) {
+  if (!names.length) return;
+  const line = el("div", "tp-who");
+  line.appendChild(el("span", "tp-lab", label));
+  for (const n of names) line.appendChild(el("span", "tp-name-chip " + cls, n));
+  if (more) line.appendChild(el("span", "tp-lab", "+" + more));
+  parent.appendChild(line);
+}
+
+function gclCraft(craft, list) {
+  const open = gclSpell === craft.spell;
+  const box = el("div", "tp-craft" + (open ? " open" : ""));
+  const head = el("button", "tp-chead");
+  head.type = "button";
+  head.dataset.k = "c" + craft.spell;
+  head.setAttribute("aria-expanded", open ? "true" : "false");
+  head.appendChild(el("span", "tp-cname", craft.name));
+  head.appendChild(el("span", "tp-crank", String(craft.rank)));
+  head.onclick = () => { gclSpell = open ? 0 : craft.spell; gclRedraw(); };
+  box.appendChild(head);
+  gclWho(box, "Knows", craft.known_by || [], craft.known_more, "has");
+  gclWho(box, "Can learn", craft.can_learn || [], craft.can_learn_more,
+         "could");
+  if (!open) return box;
+  const more = el("div", "tp-detail");
+  more.appendChild(el("div", "tp-dline", list.ask_label + " " + craft.rank));
+  for (const line of [craft.gate_line,
+                      craft.how_line || list.how_words[craft.how],
+                      craft.dungeon_line, craft.where_line]) {
+    if (line) more.appendChild(el("div", "tp-dline", line));
+  }
+  for (const line of craft.where || []) more.appendChild(el("div", "tp-src", line));
+  box.appendChild(more);
   return box;
 }
 
@@ -9812,8 +10061,19 @@ function gclRender(g) {
   gcllimit.textContent = g.limit_line;
   gclgrant.textContent = g.grant_line;
   setBasis(gclbasis, g.basis);
+  gclGoal = g;
+  // The row the reader had a finger on survives the redraw, so a refresh does
+  // not drop the focus ring or the screen reader's place.
+  const had = document.activeElement && document.activeElement.dataset
+    ? document.activeElement.dataset.k : "";
+  gclFilter(g.people || []);
   gclbars.replaceChildren();
   for (const row of g.professions) gclbars.appendChild(gclBar(row));
+  if (had) {
+    for (const node of document.querySelectorAll("#trades [data-k]")) {
+      if (node.dataset.k === had) { node.focus({preventScroll: true}); break; }
+    }
+  }
   gclspecs.replaceChildren();
   for (const row of g.specs) gclspecs.appendChild(gclSpec(row));
   gclladder.replaceChildren();
@@ -9835,6 +10095,7 @@ async function pollTrades() {
                           {signal: AbortSignal.timeout(20000)});
     if (!r.ok) throw new Error(r.status);
     gcrPick(await r.json());
+    if (gclOpen) gclFetch(gclOpen);
   } catch (e) {
     // Whatever is drawn stays drawn, like every other poll on this page. A
     // blanked list reads as "the guild can make nothing and needs nothing",

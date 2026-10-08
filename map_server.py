@@ -3319,7 +3319,8 @@ def _fetch_raidgoals() -> dict:
 # The trade skill ids, inlined as text rather than bound, exactly as
 # bridge.py's `_TRADE_SKILL_IDS` is and for the same reason: every element is
 # an int from goals.SKILL_IDS, a table in this repository, and NOTHING a caller
-# can reach ever touches it. /api/trades takes no parameters at all.
+# can reach ever touches it. /api/trades takes no parameters at all, except
+# the opt-in `skill`, which is only ever compared with craftbook keys.
 #
 # THAT IS ALSO WHAT EVERY `noqa: S608` BELOW IS SAYING. ruff sees a query
 # built by concatenation and cannot tell a constant from a request; the
@@ -5748,15 +5749,71 @@ class Handler(BaseHTTPRequestHandler):
         payload = chat.build_timeline(name, rows, db_now, limit)
         self._send(200, "application/json", json.dumps(payload).encode())
 
-    def _trades(self, _query: dict) -> None:
+    def _trade_crafts(self, query: dict) -> None:
+        """GET /api/trades?skill=<id>[&family=<key>] - one profession's crafts.
+
+        THE ONE OPT-IN PARAMETER THIS ENDPOINT HAS, and it keeps the property
+        the plain form has: nothing a caller sends reaches SQL. The id is
+        compared with the keys of craftbook.json, which this process loaded at
+        start, and `family` with the keys the roster produced; anything else
+        is a 400 (tradespec.parse_skill, parse_family); a bad skill never
+        reaches the database at all.
+        The same whole-world reads run as for the plain form, filtered in
+        Python, so the cost of a profession is the cost of the page.
+        """
+        try:
+            skill, error = tradespec.parse_skill(query, CRAFTBOOK)
+            if error:
+                self._send(400, "application/json",
+                           json.dumps({"error": error}).encode())
+                return
+            sides = _faction_sides()
+            wanted, error = tradespec.parse_family(
+                query, [side["family"] for side in sides])
+            if error:
+                body = json.dumps({"error": error}).encode()
+                self._send(400, "application/json", body)
+                return
+            fetched = _fetch_guildcraft(
+                [(side["family"], side["names"]) for side in sides])
+            crafts = fetched.pop("craft_rows")
+            per_family = fetched.pop("families")
+            built = []
+            for side in sides:
+                if wanted and side["family"] != wanted:
+                    continue
+                mine = per_family[side["family"]]
+                payload = tradespec.build_craft_list(
+                    skill, CRAFTBOOK, crafts, mine["skill_rows"],
+                    mine["spell_rows"], mine["member_rows"], side["names"],
+                    fetched["recipe_rows"], fetched["trainer_rows"],
+                    fetched["vendor_rows"], fetched["drop_rows"],
+                    fetched["quest_rows"], achievements.MAP_NAMES, GEO)
+                payload["family"] = side["family"]
+                built.append(payload)
+            # ONE FAMILY'S LIST, flat: the page always names the family it
+            # is drawing, and with none named the first (Alliance) answers.
+            self._send(200, "application/json",
+                       json.dumps(built[0], separators=(",", ":")).encode())
+        except Exception:
+            log.exception("guild trade crafts query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
+    def _trades(self, query: dict) -> None:
         """GET /api/trades - who can make what, and where the rest comes from.
 
         NO PARAMETERS AT ALL, and that is the shape of the view rather than an
         omission: it asks about every trade and every recipe in the world at
         once, so there is nothing for a caller to steer and no id to validate.
         WHO the guild is belongs to bonds and to the world's own guild table,
-        exactly as /api/armory and /api/family refuse a name.
+        exactly as /api/armory and /api/family refuse a name. The single
+        exception is `skill`, which asks for one profession's crafts and is
+        answered by `_trade_crafts`, where it is validated against the
+        craftbook before anything else happens.
         """
+        if "skill" in query:
+            self._trade_crafts(query)
+            return
         try:
             # ONE GUILD PER FAMILY, Alliance first: Cave's trades on the left
             # and Bonkers' on the right. Before this the tab was bonds' one

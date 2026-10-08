@@ -85,6 +85,7 @@ from typing import Mapping, Sequence
 
 import cast
 import goals
+import guildcraft
 import professions
 
 CRAFTBOOK_FILE = "craftbook.json"
@@ -1058,6 +1059,7 @@ def profession_completion(
         "known": counts[KNOWN],
         "percent": _percent(counts[KNOWN], total),
         "line": _completion_line(_skill_word(skill), best, counts, total),
+        "brief": brief_line(_skill_word(skill), best, counts, total),
         "chips": _count_chips(counts),
     }
 
@@ -1078,6 +1080,37 @@ def _count_chips(counts: Mapping) -> list:
         word, tone = STATE_WORDS[state]
         out.append({"text": "%d %s" % (counts[state], word), "tone": tone})
     return out
+
+
+def brief_line(word: str, holder: str, counts: Mapping, total: int) -> str:
+    """The one line a phone row carries: who can make how many, and what is next.
+
+    PLAIN WORDS AND ONE LINE, because the paragraph `_completion_line` writes
+    is for a desk and a row on a phone shows exactly one line. Only the states
+    that are not zero are named, in STATE_ORDER, so the sentence never says
+    "0 of anything". `holder` is whoever the counts were made for: a character,
+    or "The guild" for the all-crafters view.
+    """
+    if not holder:
+        return "Nobody has %s yet; %d crafts to find" % (word, total)
+    known = counts[KNOWN]
+    if known >= total:
+        return "%s can make all %d" % (holder, total)
+    said = []
+    if counts[LEARNABLE]:
+        said.append("%d ready to learn" % counts[LEARNABLE])
+    if counts[BLOCKED_SKILL]:
+        said.append("%d need more skill" % counts[BLOCKED_SKILL])
+    if counts[BLOCKED_SPEC]:
+        said.append("%d need a specialization" % counts[BLOCKED_SPEC])
+    if counts[UNREACHABLE]:
+        said.append("%d have no route here" % counts[UNREACHABLE])
+    return "%s can make %d of %d%s" % (
+        holder,
+        known,
+        total,
+        "; " + ", ".join(said) if said else "",
+    )
 
 
 def _completion_line(word: str, holder: str, counts: Mapping, total: int) -> str:
@@ -1444,6 +1477,7 @@ def build_tradespec(
             sum(row["known"] for row in done), sum(row["total"] for row in done)
         ),
         "professions": done,
+        "people": people_filter(roster, member_rows),
         "specs": specs,
         "hierarchy": ladder,
         "order": _order_line(),
@@ -1550,3 +1584,404 @@ def _basis(gated: bool) -> str:
         "toward the family's crafter knowing it. Percentages are rounded DOWN, "
         "so 100% means 100%."
     )
+
+
+# --- one profession's crafts, on demand (the phone view) ----------------------
+#
+# THE LIST IS ASKED FOR ONE PROFESSION AT A TIME. Every craft in the game is a
+# few thousand rows, so /api/trades keeps its fixed shape (one line per
+# profession) and the crafts of one profession arrive from
+# /api/trades?skill=<id>&family=<key> when a row is opened. Nothing a caller
+# sends reaches SQL: the two values are only ever compared with keys this
+# process already holds (`parse_craft_request`).
+
+# The words a group is headed with. Written here and not in JavaScript for the
+# reason STATE_WORDS gives. The two states a reader acts on differently from
+# the rest (a branch nobody took, a craft nobody can reach) are headed in
+# their own words and only drawn when a count is not zero.
+GROUP_WORDS = {
+    KNOWN: "Known",
+    LEARNABLE: "Ready to learn now",
+    BLOCKED_SKILL: "Needs more skill",
+    BLOCKED_SPEC: "Needs a specialization nobody took",
+    UNREACHABLE: "No route on this realm",
+}
+
+# One character per state, so a craft carries its state for every view as a
+# short string rather than as a list of words.
+STATE_CODE = {
+    KNOWN: "k",
+    LEARNABLE: "l",
+    BLOCKED_SKILL: "s",
+    BLOCKED_SPEC: "b",
+    UNREACHABLE: "u",
+}
+CODE_STATE = {code: state for state, code in STATE_CODE.items()}
+
+# The key of the all-guild-crafters view. A character name is letters only, so
+# this can never be one.
+GUILD_KEY = "*guild"
+ALL_KEY = ""
+
+# How many names a craft row lists before it says how many more. A phone row
+# with twenty name chips is not a row.
+NAMES_SHOWN = 6
+# Guild crafters named per profession. The list is the people who HOLD the
+# profession, highest ground skill first.
+GUILD_SHOWN = 20
+
+SOURCE_AUTOMATIC = "auto"
+SOURCE_TRAINER = "trainer"
+SOURCE_RECIPE = "recipe"
+SOURCE_UNREAD = "unread"
+
+
+def people_filter(roster: Sequence, member_rows: Sequence) -> list:
+    """The character filter: everyone, each family member, the guild's crafters.
+
+    "Guild crafters" is only offered when the reads saw somebody outside the
+    family, because a chip that selects nobody is a control that does nothing.
+    """
+    out = [{"key": ALL_KEY, "label": "All"}]
+    out.extend({"key": name, "label": name} for name in roster)
+    seen = {row["name"] for row in member_rows}
+    if seen - set(roster):
+        out.append({"key": GUILD_KEY, "label": "Guild crafters"})
+    return out
+
+
+def parse_skill(query: Mapping, craftbook: Mapping) -> tuple:
+    """(skill, error) out of a query string, with nothing trusted.
+
+    THE SAFETY PROPERTY /api/trades ALWAYS HAD, kept: no caller-supplied value
+    is ever interpolated or bound into a query. `skill` must be the decimal
+    spelling of a key this process loaded from craftbook.json, so it is a
+    lookup into a table that already exists, and anything else is refused
+    before the database is touched. A query with no `skill` at all is the
+    ordinary whole-view request and is not an error here: the caller decides
+    which of the two it is by asking whether the key is present.
+    """
+    raw = (query.get("skill") or [""])[0]
+    if not (raw.isascii() and raw.isdigit() and len(raw) <= 4) or raw not in craftbook:
+        return 0, "unknown skill"
+    return int(raw), ""
+
+
+def parse_family(query: Mapping, families: Sequence) -> tuple:
+    """(family, error): "" for both families, else one of the roster's keys."""
+    wanted = (query.get("family") or [""])[0]
+    if wanted and wanted not in families:
+        return "", "unknown family"
+    return wanted, ""
+
+
+def _best_state(states: Sequence) -> str:
+    """The state nearest to known among several characters' states."""
+    return min(states, key=STATE_ORDER.index)
+
+
+def _how(spell: int, acquire: int, trainer: set, items: Sequence) -> str:
+    """Which road a craft comes by, as the data has it."""
+    if is_automatic(acquire):
+        return SOURCE_AUTOMATIC
+    if spell in trainer:
+        return SOURCE_TRAINER
+    if items:
+        return SOURCE_RECIPE
+    return SOURCE_UNREAD
+
+
+# What each road is called when no recipe item is involved. Sent once per list
+# and not once per craft: five hundred copies of one sentence is most of a
+# profession's payload.
+HOW_WORDS = {
+    SOURCE_AUTOMATIC: "Learned on its own as the skill rises; nobody has to buy it",
+    SOURCE_TRAINER: "A trainer teaches it",
+    SOURCE_RECIPE: "A recipe item teaches it",
+    SOURCE_UNREAD: (
+        "No trainer or recipe item in this database teaches it, which is "
+        "also what a craft learned another way looks like from here"
+    ),
+}
+
+
+def _how_line(how: str, trainer: bool, items: Sequence) -> str:
+    """The craft's own sentence about where it is learned, or "" for HOW_WORDS.
+
+    Only a craft with a recipe item has anything to add, which is the item's
+    name; everything else is the shared sentence for its road.
+    """
+    if how == SOURCE_AUTOMATIC or not items:
+        return ""
+    names = sorted({row.get("item_name") or "an unnamed recipe" for row in items})
+    item = "the recipe item %s teaches it" % " or ".join(names[:2])
+    if trainer:
+        return "A trainer teaches it, and " + item
+    return item[0].upper() + item[1:]
+
+
+def _where_lines(
+    items: Sequence,
+    vendors: Mapping,
+    drops: Mapping,
+    quests: Mapping,
+    geo,
+    names: Mapping,
+) -> tuple:
+    """(lines, dungeons): where the recipe item can be got, dungeon drops first.
+
+    A drop whose spawn is on a map that is not a continent is inside a
+    dungeon, and it is listed before vendors and quests because that is the
+    answer the operator asked for. The creature named is the one whose loot
+    table holds the row: this database does not say whether it is a boss.
+    """
+    inside: list = []
+    other: list = []
+    dungeons: set = set()
+    for item in items:
+        entry = int(item.get("entry") or 0)
+        for row in drops.get(entry, ()):
+            map_id = row.get("map")
+            line = guildcraft._drop_line(row, geo, names)
+            if map_id is not None and int(map_id) not in guildcraft.CONTINENT_MAPS:
+                dungeons.add(names.get(int(map_id)) or "map %d" % int(map_id))
+                inside.append(line)
+            else:
+                other.append(line)
+        sold = guildcraft._sources_for(entry, vendors, {}, quests, geo, names)
+        other[:0] = [source["line"] for source in sold]
+    return (inside + other)[: guildcraft.SOURCES_SHOWN], sorted(dungeons)
+
+
+def _view_counts(states: Sequence) -> dict:
+    counts = {state: 0 for state in STATE_ORDER}
+    for state in states:
+        counts[state] += 1
+    return counts
+
+
+def _groups(counts: Mapping) -> list:
+    """The groups a view is drawn in: the first three always, the rest on a count."""
+    out = []
+    for state in STATE_ORDER:
+        if state in (BLOCKED_SPEC, UNREACHABLE) and not counts[state]:
+            continue
+        out.append(
+            {
+                "state": STATE_CODE[state],
+                "label": GROUP_WORDS[state],
+                "count": counts[state],
+            }
+        )
+    return out
+
+
+# The keys a craft always carries, whatever else it has.
+_ALWAYS = frozenset({"spell", "name", "rank", "states", "how"})
+
+
+def build_craft_list(
+    skill: int,
+    craftbook: Mapping,
+    craft_rows: Sequence,
+    skill_rows: Sequence,
+    spell_rows: Sequence,
+    member_rows: Sequence,
+    roster: Sequence,
+    recipe_rows: Sequence,
+    trainer_rows: Sequence,
+    vendor_rows: Sequence,
+    drop_rows: Sequence,
+    quest_rows: Sequence,
+    names: Mapping,
+    geo,
+) -> dict:
+    """Every craft of one profession, who has it, and where it is learned.
+
+    The same observations build_tradespec takes, plus the recipe and source
+    reads guildcraft already holds, handed in for the same reason: this module
+    has no path to the world. `views` are the ways the list can be read (all,
+    each family member, the guild's crafters) and each craft carries one state
+    character per view in `states`, so the list is sent once and regrouped by
+    the page without a second request. The ALL view is the headline's: the best
+    ground skill in the family, so its counts equal the profession's row.
+    """
+    crafts = craftbook.get(str(int(skill))) or {}
+    word = _skill_word(skill)
+    ctx = _ListContext(skill, roster, craft_rows, skill_rows, spell_rows, member_rows)
+    ctx.trainer = {int(row.get("SpellId") or 0) for row in trainer_rows}
+    ctx.items_by_spell = {}
+    for row in recipe_rows:
+        spell = int(row.get("spellid_2") or 0)
+        ctx.items_by_spell.setdefault(spell, []).append(row)
+    ctx.sources = (
+        guildcraft._by_item(vendor_rows),
+        guildcraft._by_item(drop_rows),
+        guildcraft._by_item(quest_rows),
+        geo,
+        names,
+    )
+    out = []
+    per_view: list = [[] for _ in ctx.view_keys]
+    for spell_key, entry in crafts.items():
+        craft, states = _craft_entry(int(spell_key), entry, ctx)
+        out.append(craft)
+        for index, state in enumerate(states):
+            per_view[index].append(state)
+    out.sort(key=lambda c: (c["rank"], c["name"], c["spell"]))
+    return {
+        "skill": int(skill),
+        "name": word,
+        "total": len(out),
+        "views": _view_cards(word, ctx, per_view),
+        "crafts": out,
+        "ask_label": "Asks for %s" % word,
+        "how_words": HOW_WORDS,
+        "reagents_line": "Reagents: this data does not have them",
+        "basis": CRAFT_LIST_BASIS,
+    }
+
+
+class _ListContext:
+    """What one craft list is read against: who, their skill, their spellbooks.
+
+    Built once per request so each craft is a lookup rather than a scan.
+    `view_keys` is the order the per-craft state strings are written in.
+    """
+
+    def __init__(
+        self, skill, roster, craft_rows, skill_rows, spell_rows, member_rows
+    ) -> None:
+        levels = {row["name"]: int(row.get("level") or 0) for row in member_rows}
+        self.known_by: dict = {}
+        for row in spell_rows:
+            self.known_by.setdefault(row["name"], set()).add(int(row["spell"]))
+        self.value_of: dict = {
+            row["name"]: int(row.get("value") or 0)
+            for row in skill_rows
+            if int(row["skill"]) == int(skill)
+        }
+        family = list(roster)
+        self.outsiders = sorted(
+            (n for n in self.value_of if n not in family and n in levels),
+            key=lambda n: (-self.value_of[n], n),
+        )[:GUILD_SHOWN]
+        self.people = family + self.outsiders
+        self.ranks, self.gates = craft_facts(craft_rows)
+        self.held = {n: held_specs(self.known_by.get(n, ())) for n in self.people}
+        self.best = max(
+            (n for n in family if n in self.value_of),
+            key=lambda n: (self.value_of[n], -family.index(n)),
+            default="",
+        )
+        guild = [GUILD_KEY] if self.outsiders else []
+        self.view_keys = [ALL_KEY] + family + guild
+        self.trainer: set = set()
+        self.items_by_spell: dict = {}
+        self.sources: tuple = ()
+
+
+def _view_state(key: str, by_person: Mapping, ctx: _ListContext) -> str:
+    """One craft's state in one view: the best holder, the guild, or a person."""
+    if key == ALL_KEY:
+        return by_person[ctx.best] if ctx.best else BLOCKED_SKILL
+    if key == GUILD_KEY:
+        return _best_state(list(by_person.values()))
+    return by_person[key]
+
+
+def _craft_entry(spell: int, entry: Sequence, ctx: _ListContext) -> tuple:
+    """(the craft's payload row, its state in every view)."""
+    rank = effective_rank(entry, ctx.ranks.get(spell))
+    acquire = int(entry[3])
+    gate = int(ctx.gates.get(spell, 0))
+    by_person = {
+        name: _craft_state(
+            rank,
+            acquire,
+            gate,
+            ctx.value_of.get(name, 0),
+            frozenset(ctx.known_by.get(name, ())),
+            spell,
+            ctx.held[name],
+        )
+        for name in ctx.people
+    }
+    states = [_view_state(key, by_person, ctx) for key in ctx.view_keys]
+    items = ctx.items_by_spell.get(spell, [])
+    how = _how(spell, acquire, ctx.trainer, items)
+    lines, dungeons = _where_lines(items, *ctx.sources)
+    knowers = [n for n in ctx.people if by_person[n] == KNOWN]
+    learners = [n for n in ctx.people if by_person[n] == LEARNABLE]
+    spec = BY_SPELL.get(gate)
+    craft = {
+        "spell": spell,
+        "name": entry[0],
+        "rank": rank,
+        "states": "".join(STATE_CODE[s] for s in states),
+        "how": how,
+        "known_by": knowers[:NAMES_SHOWN],
+        "known_more": max(0, len(knowers) - NAMES_SHOWN),
+        "can_learn": learners[:NAMES_SHOWN],
+        "can_learn_more": max(0, len(learners) - NAMES_SHOWN),
+        "how_line": _how_line(how, spell in ctx.trainer, items),
+        "where": lines,
+        "where_line": _where_line(how, lines),
+        "dungeon_line": (
+            "Found in the dungeon %s" % " and ".join(dungeons) if dungeons else ""
+        ),
+        "gate_line": "Needs the %s specialization" % spec.label if spec else "",
+    }
+    # AN EMPTY FIELD IS LEFT OFF. Five hundred crafts each carrying seven
+    # empty keys was a third of the payload, and the page treats an absent
+    # key as "nothing to say", which is what an empty one meant.
+    return {k: v for k, v in craft.items() if v or k in _ALWAYS}, states
+
+
+def _view_card(word: str, key: str, states: Sequence, ctx: _ListContext) -> dict:
+    """One view's counts, groups and one-line brief."""
+    counts = _view_counts(states)
+    total = sum(counts.values())
+    if key == ALL_KEY:
+        label, holder = "All", ctx.best
+    elif key == GUILD_KEY:
+        label, holder = "Guild crafters", "The guild"
+    else:
+        label, holder = key, (key if key in ctx.value_of else "")
+    return {
+        "key": key,
+        "label": label,
+        "percent": _percent(counts[KNOWN], total),
+        "counts": {STATE_CODE[s]: n for s, n in counts.items()},
+        "groups": _groups(counts),
+        "brief": brief_line(word, holder, counts, total),
+    }
+
+
+def _view_cards(word: str, ctx: _ListContext, per_view: Sequence) -> list:
+    return [
+        _view_card(word, key, per_view[index], ctx)
+        for index, key in enumerate(ctx.view_keys)
+    ]
+
+
+def _where_line(how: str, lines: Sequence) -> str:
+    """The sentence for a recipe item whose source this database cannot name."""
+    if how == SOURCE_RECIPE and not lines:
+        return (
+            "No vendor, quest or direct drop row names where the recipe item comes from"
+        )
+    return ""
+
+
+CRAFT_LIST_BASIS = (
+    "THIS LIST HAS NO REAGENTS. Neither craftbook.json nor the world "
+    "database this view reads carries what a craft consumes, so none is shown "
+    "rather than a guess. Where a recipe item is found comes from direct "
+    "vendor, quest and creature-drop rows only; a recipe behind a reference "
+    "loot table shows no source, which is not the same as having none. A "
+    "dungeon drop names the creature whose loot table holds the row, and this "
+    "database does not say whether that creature is a boss. A craft the core "
+    "grants automatically is counted known at or under the holder's skill, "
+    "exactly as the profession figure counts it."
+)

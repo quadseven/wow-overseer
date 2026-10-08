@@ -297,7 +297,8 @@ class ThePoll(unittest.TestCase):
     def test_a_failed_poll_keeps_what_is_drawn(self):
         """A blanked list reads as "the guild can make nothing and needs
         nothing", which is the one claim this view must never make."""
-        catch = CODE[CODE.index("} catch (e) {") :]
+        poll = CODE[CODE.index("async function pollTrades") :]
+        catch = poll[poll.index("} catch (e) {") :]
         self.assertIn("may be stale", catch)
         self.assertNotIn("replaceChildren", catch)
 
