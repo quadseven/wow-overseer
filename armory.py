@@ -1086,6 +1086,38 @@ def _item_kind(row: dict) -> str | None:
     return None
 
 
+# THE CLIENT'S "16 Slot Bag" LINE. A container's size is the one fact a bag
+# tooltip exists to tell you, and the line was missing: Grug's Journeyman's
+# Backpack read "Item Level 45 / Bag" with no number (operator, 2026-10-08).
+# Item class 1 is a container and class 11 a quiver or ammo pouch; the subclass
+# names are the client's own.
+CONTAINER_SUBCLASSES = {
+    0: "Bag",
+    1: "Soul Bag",
+    2: "Herb Bag",
+    3: "Enchanting Bag",
+    4: "Engineering Bag",
+    5: "Gem Bag",
+    6: "Mining Bag",
+    7: "Leatherworking Bag",
+    8: "Inscription Bag",
+}
+QUIVER_SUBCLASSES = {2: "Quiver", 3: "Ammo Pouch"}
+
+
+def _container_line(row: dict) -> str | None:
+    """'16 Slot Bag', '6 Slot Quiver', or None for anything that holds nothing."""
+    slots = row.get("container_slots") or 0
+    if not slots:
+        return None
+    item_class, subclass = row.get("class"), row.get("subclass")
+    if item_class == 11:
+        kind = QUIVER_SUBCLASSES.get(subclass, "Quiver")
+    else:
+        kind = CONTAINER_SUBCLASSES.get(subclass, "Bag")
+    return f"{int(slots)} Slot {kind}"
+
+
 def _item_set(
     row: dict, book: ItemBook, worn_entries: set[int], set_names: dict[int, str]
 ) -> dict | None:
@@ -1135,6 +1167,7 @@ def _tooltip(
         "quality": row["quality"],
         "item_level": row["item_level"],
         "binding": BINDING.get(row.get("bonding") or 0),
+        "container": _container_line(row),
         "slot": INVENTORY_TYPES.get(row.get("inventory_type") or 0),
         "kind": _item_kind(row),
         "damage": _damage(row),
