@@ -95,7 +95,7 @@ class UseAnswer:
 def is_use_row(command) -> bool:
     """True for a quest row that uses an item or a gameobject."""
     head = str(command or "").split(" ", 1)[0]
-    return head in (classquest.USE_ITEM, classquest.USE_OBJECT)
+    return head in (classquest.USE_ITEM, classquest.USE_OBJECT, classquest.USE_HERE)
 
 
 def _body(result) -> dict:

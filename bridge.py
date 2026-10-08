@@ -24329,14 +24329,14 @@ def _class_book_reads(cur) -> tuple:
     spells = {int(r[k]) for r in quests for k in ("reward", "display") if r.get(k)}
     trained = _class_rows(cur, "class quest spells trained", classquest.TRAINED_SQL,
                           "spells", spells)
-    use_rows, chest_rows, object_rows = _class_use_reads(cur, quests, items)
+    use_rows, chest_rows, object_rows, focus_rows = _class_use_reads(cur, quests, items)
     entries |= {int(r["target"]) for r in use_rows}
     spawns = _class_rows(cur, "class quest spawns", classquest.SPAWNS_SQL, "entries", entries)
-    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows
+    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows, focus_rows
 
 
 def _class_use_reads(cur, quests, items) -> tuple:
-    """(use item rows, chest rows, object spawn rows) for what the quests have a
+    """(use item rows, chest rows, object spawn rows, focus rows) for what the quests have a
     member use (classquest.USE_ITEMS_SQL): items bound to named creatures, chests
     that hold a required item, gameobject objectives."""
     provided = {int(r[f"provided{i}"]) for r in quests for i in range(5)
@@ -24345,12 +24345,17 @@ def _class_use_reads(cur, quests, items) -> tuple:
                            "items", items | provided)
     chest_rows = _class_rows(cur, "class quest chests", classquest.CHEST_SQL,
                              "items", items - provided)
+    foci = {focus for item, focus in classquest.FOCUS_ITEMS.items()
+            if item in items | provided}
+    focus_rows = _class_rows(cur, "class quest focus objects",
+                             classquest.FOCUS_OBJECTS_SQL, "focus", foci)
     objects = ({int(r["entry"]) for r in chest_rows}
+               | {int(r["entry"]) for r in focus_rows}
                | {-int(r[f"npc{i}"]) for r in quests for i in range(1, 5)
                   if (r.get(f"npc{i}") or 0) < 0})
     object_rows = _class_rows(cur, "class quest object spawns",
                               classquest.OBJECT_SPAWNS_SQL, "entries", objects)
-    return use_rows, chest_rows, object_rows
+    return use_rows, chest_rows, object_rows, focus_rows
 
 
 def _class_rows(cur, what: str, sql: str, key: str, values) -> list:

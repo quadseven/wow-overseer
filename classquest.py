@@ -170,6 +170,15 @@ PERMANENT = frozenset({SOURCE, OBJECT, ITEM})
 
 # The two verbs of kind='quest' (quadseven/mod-overseer#865).
 USE_ITEM, USE_OBJECT = "use-item-on", "use-gameobject"
+# A carried item used where the member stands, beside a spell-focus gameobject
+# (mod-overseer `use-item-here`, 2026-10-08).
+USE_HERE = "use-item-here"
+# The items whose on-use spell works only near a spell-focus gameobject, and
+# the focus. The world data does not say it (the spell is in the client DBC, not
+# the database), so each is written down: 38607 Battle-worn Sword (spell 51769,
+# the death knight's The Emblazoned Runeblade) works beside a Runeforge, spell
+# focus 1552; the gameobjects are read from gameobject_template (type 8).
+FOCUS_ITEMS = {38607: 1552}
 # A member this near its target (yards) is already beside it: the use row is
 # written with no walk. The module's creature reach is 8 yards.
 USE_NEAR = 4.0
@@ -454,6 +463,12 @@ USE_ITEMS_SQL = (
     "WHERE it.spelltrigger_1 = 0 AND it.entry IN ({items})"
 )
 
+# The spell-focus gameobjects (type 8) of the foci FOCUS_ITEMS names.
+FOCUS_OBJECTS_SQL = (
+    "SELECT g.Data0 AS focus, g.entry AS entry FROM acore_world.gameobject_template g "
+    "WHERE g.type = 8 AND g.Data0 IN ({focus})"
+)
+
 # The chests (gameobject type 3) whose loot holds a required item.
 CHEST_SQL = (
     "SELECT l.Item AS item, g.entry AS entry "
@@ -517,7 +532,8 @@ class Spawn:
 class Use:
     """One thing the quest has the member use, and where.
 
-    `verb` is USE_ITEM (item `item` used on a creature of `targets`) or
+    `verb` is USE_HERE (item `item` used where the member stands, beside a
+    gameobject of `targets`), USE_ITEM (item `item` used on a creature of `targets`) or
     USE_OBJECT (a gameobject of `targets` clicked: a chest that holds `count`
     of `item`, or an objective gameobject when `item` is 0). `spots` are the
     spawns of the targets. `provided` is True for an item the quest hands over
@@ -707,6 +723,19 @@ def _targets(rows, key="item", value="target") -> dict:
     return {k: tuple(sorted(v - {0})) for k, v in out.items()}
 
 
+def _focus_targets(rows) -> dict:
+    """item entry -> the spell-focus gameobject entries (FOCUS_OBJECTS_SQL rows
+    carry the focus; FOCUS_ITEMS says which item works at which)."""
+    by_focus: dict = {}
+    for r in rows or ():
+        by_focus.setdefault(_int(r.get("focus")), set()).add(_int(r.get("entry")))
+    return {
+        item: tuple(sorted(by_focus.get(focus, set()) - {0}))
+        for item, focus in FOCUS_ITEMS.items()
+        if by_focus.get(focus)
+    }
+
+
 def _provided(r) -> tuple:
     """The item entries the quest hands over when it is taken."""
     seen = []
@@ -723,10 +752,16 @@ def _uses(r, items, provided, droppers, aims) -> tuple:
 
     `aims` is (item -> creature entries, item -> chest entries, spawns by
     creature entry, spawns by gameobject entry)."""
-    item_aims, chests, creature_spawns, object_spawns = aims
+    item_aims, chests, creature_spawns, object_spawns = aims[:4]
+    focus = aims[4] if len(aims) > 4 else {}
     out = []
     required = [i for i, _n in items]
     for item in dict.fromkeys([*provided, *required]):
+        foci = focus.get(item, ())
+        if foci:
+            spots = tuple(s for g in foci for s in object_spawns.get(g, ()))
+            out.append(Use(USE_HERE, item, 1, foci, spots, item in provided))
+            continue
         targets = item_aims.get(item, ())
         if targets:
             spots = tuple(s for t in targets for s in creature_spawns.get(t, ()))
@@ -793,6 +828,7 @@ def build(
     use_rows=(),
     chest_rows=(),
     object_rows=(),
+    focus_rows=(),
 ) -> Book:
     """The Book from the world's rows.
 
@@ -811,6 +847,7 @@ def build(
         _targets(chest_rows, "item", "entry"),
         by_entry,
         _spawns_by_entry(object_rows),
+        _focus_targets(focus_rows),
     )
     quests = {}
     for r in quest_rows or ():
@@ -932,10 +969,12 @@ def _unmet(quest: Quest) -> bool:
     chested = {u.item for u in quest.uses if u.verb == USE_OBJECT and u.item}
     given = set(quest.provided)
     fed = any(u.verb == USE_ITEM for u in quest.uses)
+    # An item made by using another beside a forge is no unmet source.
+    made = any(u.verb == USE_HERE for u in quest.uses)
     if any(e not in spawned and not fed for e, _n in quest.kills):
         return True
     return any(
-        i not in chested and i not in given and i not in quest.droppable
+        i not in chested and i not in given and i not in quest.droppable and not made
         for i, _n in quest.items
     )
 
@@ -955,6 +994,8 @@ def _pending_use(quest: Quest, member):
         return None
     for use in quest.uses:
         if use.verb == USE_OBJECT and use.item and member.count(use.item) >= use.count:
+            continue
+        if use.verb == USE_HERE and all(member.count(i) >= n for i, n in quest.items):
             continue
         return use
     return None
@@ -977,7 +1018,7 @@ def _use_blocker(quest: Quest, member) -> tuple:
             )
         return "", ""
     if not use.spots:
-        what = "gameobject" if use.verb == USE_OBJECT else "creature"
+        what = "gameobject" if use.verb in (USE_OBJECT, USE_HERE) else "creature"
         return (
             OBJECT,
             "%s needs a %s used (entry %s has no spawn row in the world data)"
@@ -992,7 +1033,7 @@ def _use_blocker(quest: Quest, member) -> tuple:
             quest.title,
             _across(member, use.spots),
         )
-    if use.verb == USE_ITEM and not member.carries(use.item):
+    if use.verb in (USE_ITEM, USE_HERE) and not member.carries(use.item):
         return ITEM, (
             "%s needs item %d used on a creature and the member does not carry "
             "it (the class step buys nothing and cannot hand a quest item out again)"
@@ -1373,13 +1414,18 @@ def _use_move(member, quest: Quest, use: Use, why: str, tried) -> Move:
         return Move(
             BLOCKED, quest.id, quest.klass, None, said, USE_STALLED, why, 1, quest.title
         )
-    what = "uses item %d on" % use.item if use.verb == USE_ITEM else "uses"
+    if use.verb == USE_HERE:
+        what = "uses item %d beside" % use.item
+    else:
+        what = "uses item %d on" % use.item if use.verb == USE_ITEM else "uses"
     said = "%s %s %s for %s" % (member.name, what, spot.name or "its target", why)
     return Move(USE, quest.id, quest.klass, spot, said, "", why, use=use)
 
 
 def use_command(use: Use, spot: Spawn) -> str:
     """The kind='quest' command row that does this use at `spot`."""
+    if use.verb == USE_HERE:
+        return "%s item:%d" % (USE_HERE, int(use.item))
     if use.verb == USE_ITEM:
         return "%s creature:%d item:%d" % (USE_ITEM, int(spot.entry), int(use.item))
     return "%s %d" % (USE_OBJECT, int(spot.entry))

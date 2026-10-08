@@ -2361,7 +2361,10 @@ CLASSQUEST_STEPS_PER_GUILD = 6
 
 def _class_spot(move) -> Spot:
     s = move.spot
-    chest = move.kind == classquest.USE and move.use.verb == classquest.USE_OBJECT
+    chest = move.kind == classquest.USE and move.use.verb in (
+        classquest.USE_OBJECT,
+        classquest.USE_HERE,
+    )
     return Spot(
         kind="gameobject" if chest else "creature",
         spawn=int(s.guid),
