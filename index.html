@@ -3661,6 +3661,29 @@
   .povhit { position:absolute; inset:0; border:0; background:transparent;
             cursor:pointer; padding:0; }
   .povhit:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
+  /* WHAT THEY ARE DOING AND WAITING FOR (nowstatus.py). One sentence in plain
+     words under the caption, 16px so it reads at arm's length, and a whole-row
+     button (44px or taller) because a tap opens the last five steps behind it.
+     It wraps rather than truncates: a clipped reason is the thing this row
+     exists to prevent. Colours are the card tokens, so both themes follow. */
+  .pownow { display:block; width:100%; min-height:44px; margin:0; text-align:left;
+            padding:8px var(--s3); border:0; border-top:1px solid var(--card-line);
+            background:var(--card); color:var(--on-card); font:inherit;
+            font-size:16px; line-height:1.35; cursor:pointer;
+            overflow-wrap:anywhere; white-space:normal; }
+  .pownow:empty { display:none; }
+  .pownow[data-known="false"] { color:var(--warn-text); }
+  .pownow:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
+  .pownow::after { content:" \25BE"; color:var(--on-card-dim); }
+  .pownow[aria-expanded="true"]::after { content:" \25B4"; }
+  .pownow-sheet { padding:4px var(--s3) 10px; background:var(--card);
+                  color:var(--on-card); font-size:16px; line-height:1.35; }
+  .pownow-sheet[hidden] { display:none; }
+  .pownow-sheet ol { margin:0; padding:0; list-style:none; }
+  .pownow-sheet li { padding:8px 0; border-top:1px solid var(--card-line);
+                     overflow-wrap:anywhere; }
+  .pownow-sheet .when { display:block; font-family:var(--mono); font-size:13px;
+                        color:var(--on-card-dim); }
   /* THE CONTROL ROW (#363): HEAR, BIG and the client's action bar, under the
      caption and never over the picture. Wraps rather than scrolls, so on a
      phone the action bar takes a full row of its own under the two chips. */
@@ -6594,6 +6617,18 @@ function wallSlot(name) {
     wallApplyAudio();
   };
   shot.append(hit);
+  // WHAT IT IS DOING AND WAITING FOR (nowstatus.py): the module's sentence,
+  // printed, on a button that opens the last few steps behind it.
+  const now = el("button", "pownow");
+  now.type = "button";
+  now.setAttribute("aria-expanded", "false");
+  const sheet = el("div", "pownow-sheet");
+  sheet.hidden = true;
+  now.onclick = () => {
+    const open = sheet.hidden;
+    sheet.hidden = !open;
+    now.setAttribute("aria-expanded", String(open));
+  };
   // THE CONTROLS SIT UNDER THE PICTURE, NOT ON IT (#363). HEAR, BIG and the
   // virtual client's action bar (vclient.py: bags, bank, guild bank,
   // character, social and quest log) used to ride the video's corners, where
@@ -6603,10 +6638,44 @@ function wallSlot(name) {
   const ctl = el("div", "povctl");
   ctl.append(ear, big, vclientBar(name));
   slot.append(shot, strip, ctl);
+  strip.after(now, sheet);
   wall.slots.set(name, { slot: slot, shot: shot, standing: standing,
                          line: line, status: status, big: big, hit: hit,
-                         ear: ear });
+                         ear: ear, now: now, sheet: sheet });
   return wall.slots.get(name);
+}
+
+// The status sentence and its steps. Nothing is rebuilt when nothing changed,
+// so a poll never closes a sheet the reader is in the middle of.
+function wallNow(s, now) {
+  const text = now ? now.line : "";
+  if (s.now.textContent !== text) s.now.textContent = text;
+  s.now.dataset.known = now && now.known === false ? "false" : "true";
+  const steps = (now && now.steps) || [];
+  const key = JSON.stringify(steps);
+  if (s.sheet.dataset.key === key) return;
+  s.sheet.dataset.key = key;
+  const list = el("ol");
+  if (!steps.length) {
+    list.appendChild(el("li", null, "No steps recorded yet."));
+  }
+  for (const st of steps) {
+    const li = el("li");
+    const clock = st.at ? new Date(st.at * 1000).toLocaleTimeString(
+      [], { hour: "numeric", minute: "2-digit" }) : "";
+    const ago = st.ago_s == null ? "" : " (" + wallAgo(st.ago_s) + " ago)";
+    li.appendChild(el("span", "when", clock + ago + (st.times > 1 ? " x" + st.times : "")));
+    li.appendChild(document.createTextNode(st.text));
+    list.appendChild(li);
+  }
+  s.sheet.textContent = "";
+  s.sheet.appendChild(list);
+}
+
+function wallAgo(sec) {
+  if (sec < 90) return sec + " s";
+  if (sec < 3600) return Math.round(sec / 60) + " min";
+  return Math.floor(sec / 3600) + " h " + Math.round((sec % 3600) / 60) + " min";
 }
 
 function applyWallLayout() {
@@ -6683,6 +6752,7 @@ function renderWall(p) {
     s.standing.textContent = t.standing || "";
     s.line.textContent = t.line;
     s.status.textContent = WALL_STATUS[t.tone] || "";
+    wallNow(s, t.now);
     if (s.slot.parentElement !== wallEl) wallEl.appendChild(s.slot);
   }
   // A TITLE AND A BODY, because it is five sentences of genuinely important

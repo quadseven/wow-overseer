@@ -70,6 +70,7 @@ import guildwork
 import gearup
 import weaponskill
 import natural
+import nowstatus
 import guildcorps
 import guildjobs
 import guildlevel
@@ -3983,6 +3984,52 @@ def _fetch_family_intents() -> dict:
     return {str(r["leader_name"]): r for r in rows or ()}
 
 
+# --- what each character is doing, and waiting for (nowstatus.py) ------------
+# The bridge's own INFO lines carry the reasons nothing else records ("waits
+# for bag room", "withheld: bags are near full"). NOW_TAP collects them from
+# the logger without I/O; _now_once stores them, with the module's intent-book
+# changes, as steps the dev site composes into one sentence per character.
+NOW_TAP = nowstatus.NowTap()
+_NOW_SEEN: dict = {}
+_NOW_PREV_INTENT: dict = {}
+
+
+def _ensure_now_store() -> None:
+    """Logged and swallowed, like the watch store: a start-up that raised here
+    would stop every other loop, and the cost of no steps is a tile that says
+    its reason is unknown."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(nowstatus.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("now: the step store is unavailable, so the Watch tiles "
+                      "cannot name what a character waits for")
+
+
+def _store_now_steps(steps, seen=None, mono=None) -> int:
+    """Insert each step, or bump the identical one seen a moment ago."""
+    seen = _NOW_SEEN if seen is None else seen
+    now = time.monotonic() if mono is None else mono
+    wrote = 0
+    with _connect() as conn, conn.cursor() as cur:
+        for step in steps:
+            key = (step.subject, step.scope, step.kind, step.doing, step.waiting)
+            hit = seen.get(key)
+            if hit and now - hit[1] <= nowstatus.SAME_STEP_SECONDS:
+                cur.execute(nowstatus.BUMP_SQL, (hit[0],))
+                seen[key] = (hit[0], now)
+            else:
+                cur.execute(nowstatus.INSERT_SQL, (
+                    step.subject[:24], step.scope, step.kind[:24],
+                    step.doing[:200], step.waiting[:200]))
+                seen[key] = (int(cur.lastrowid), now)
+            wrote += 1
+        cur.execute(nowstatus.PRUNE_SQL, (nowstatus.KEEP_HOURS,))
+    for key in [k for k, v in seen.items() if now - v[1] > nowstatus.SAME_STEP_SECONDS]:
+        del seen[key]
+    return wrote
+
+
 def _write_family_pick(leader: str, kind: str, target: str, confidence) -> int:
     """Jev's pick for a leader, honoured by the module for PICK_SECONDS."""
     with _connect() as conn, conn.cursor() as cur:
@@ -5862,6 +5909,7 @@ class Bridge(discord.Client):
                 self._level_route_loop,
                 self._movement_loop,
                 self._family_intent_loop,
+                self._now_loop,
                 self._watch_loop,
             )
         }
@@ -18010,6 +18058,26 @@ class Bridge(discord.Client):
                      "(%s, conf %.2f)", leader, facts.errand, facts.claimant,
                      released, actor, judgment.confidence or 0.0)
 
+    async def _now_loop(self) -> None:
+        """Store what the characters are doing and waiting for (nowstatus)."""
+        await self.wait_until_ready()
+        _ensure_now_store()
+        cycle = float(os.environ.get("NOW_CYCLE_SECONDS", "10"))
+        log.addHandler(NOW_TAP)
+        while not self.is_closed():
+            try:
+                steps = NOW_TAP.drain()
+                rows = await asyncio.to_thread(_fetch_family_intents)
+                for leader, row in rows.items():
+                    steps.extend(nowstatus.intent_steps(
+                        _NOW_PREV_INTENT.get(leader), row))
+                    _NOW_PREV_INTENT[leader] = row
+                if steps:
+                    await asyncio.to_thread(_store_now_steps, steps)
+            except Exception:
+                log.exception("now: pass failed; the tiles keep the steps they have")
+            await asyncio.sleep(cycle)
+
     async def _family_intent_loop(self) -> None:
         """Let Jev choose what each family is doing, from what the module's
         intent book can carry out (jev_family_intent)."""
@@ -29868,6 +29936,7 @@ class HeadlessBridge(Bridge):
                 self._level_route_loop,
                 self._movement_loop,
                 self._family_intent_loop,
+                self._now_loop,
                 self._watch_loop,
             ) if coro.__name__ not in self.HEADLESS_SKIP
         ]

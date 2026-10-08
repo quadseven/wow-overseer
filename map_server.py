@@ -65,6 +65,7 @@ import guildcorps
 import guildjobs
 import guildrun
 import natural
+import nowstatus
 import raidgear
 import raidlineup
 import raidroles
@@ -853,6 +854,54 @@ def _faction_sides() -> list[dict]:
     rank = {"alliance": 0, "horde": 1}
     sides.sort(key=lambda side: rank.get(side["faction"], 2))
     return sides
+
+
+def _fetch_now_facts(names):
+    """name -> the facts nowstatus composes a tile's sentence from.
+
+    Three small reads: the roster rows (job, aim), the module's intent book
+    (who holds each leader's walk, and each member's state) and the steps the
+    bridge stored from its own log. The step table is created by the bridge, so
+    a realm that has not made it yet answers with no steps rather than failing
+    the wall. Returns False when the roster or the intent book cannot be read.
+    """
+    names = list(names)
+    if not names:
+        return {}
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, family, enabled, job, travel_npc, learn_skill, "  # noqa: S608
+                "dungeon_runs_wanted, dungeon_runs_done FROM overseer_roster "
+                f"WHERE name IN ({holes})",
+                tuple(names),
+            )
+            roster = list(cur.fetchall())
+            try:
+                cur.execute(
+                    "SELECT leader_name, family, current_kind, current_owner, "
+                    "current_target, TIMESTAMPDIFF(SECOND, current_since, NOW()) "
+                    "AS current_for, members_state FROM overseer_family_intent"
+                )
+                intents = list(cur.fetchall())
+            except pymysql.err.MySQLError as exc:
+                if not (exc.args and exc.args[0] in (1054, 1146)):
+                    raise
+                intents = []
+            try:
+                cur.execute(nowstatus.READ_SQL, (nowstatus.KEEP_HOURS,))
+                steps = list(cur.fetchall())
+            except pymysql.err.MySQLError as exc:
+                if not (exc.args and exc.args[0] in (1054, 1146)):
+                    raise
+                steps = []
+            cur.execute("SELECT UNIX_TIMESTAMP() AS now_at")
+            now_at = int(cur.fetchone()["now_at"])
+        return nowstatus.build_facts(names, roster, intents, steps, now_at)
+    finally:
+        conn.close()
 
 
 def _fetch_family(names=None) -> list[dict]:
@@ -5418,8 +5467,15 @@ class Handler(BaseHTTPRequestHandler):
                 mine = [r for r in rows if r["name"] in names]
                 built.append((key, family.build_family(
                     mine, GEO, names, {n: profiles[n] for n in names if n in profiles})))
+            try:
+                facts = _fetch_now_facts(everyone + [director.WATCHER_NAME])
+            except (pymysql.err.MySQLError, OSError):
+                # The tiles still draw; each says its sentence is unavailable.
+                log.exception("wall status feed failed")
+                facts = False
             payload = watchwall.build_heads(built, family.build_observers(
-                _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,)))
+                _fetch_family([director.WATCHER_NAME]), GEO, (director.WATCHER_NAME,)),
+                facts=facts)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # The same contract as /api/family: the wall keeps the tiles it
