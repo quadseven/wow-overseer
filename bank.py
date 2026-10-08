@@ -118,6 +118,14 @@ BANK_SIZE = len(BANK_ITEM_SLOTS)
 # a person clears out in one stop, and the next cycle takes the rest.
 VISIT_LIMIT = 8
 
+# Free slots a personal bank keeps once it has been used (2026-10-08). Measured
+# on the dev realm: seven of ten banks sat at 0 or 1 free, so the next thing a
+# member had to put down (the operator's reserved sword included) had nowhere
+# to go. A deposit that would take the bank under this many free slots is
+# refused and said so; only a stack the operator told a character to keep may
+# use the last of them.
+BANK_FREE_RESERVE = 2
+
 # item_template.class values this module has an opinion about. Containers are
 # excluded from deposits: an empty one is worth more in somebody's empty bag
 # position (bag_upgrade), and a full one is refused by the executor with
@@ -579,6 +587,9 @@ class Storage:
     # tab id -> free slots, for every purchased tab (#320). `guild_free` is
     # tab 0's, kept for the callers that only ever knew one tab.
     guild_tab_free: dict = field(default_factory=dict)
+    # guids of gear copies past what the family can wear (bankpolicy.redundant):
+    # banked ones come out to be sold from the bags, never put back.
+    spare: frozenset = frozenset()
 
 
 def _trades_and_skills(held, worked_by):
@@ -645,6 +656,7 @@ def storage_from(
     routed=None,
     guild_later=None,
     policy=None,
+    spare=frozenset(),
 ):
     """The Storage this family is today, from what the bridge already reads.
 
@@ -673,6 +685,7 @@ def storage_from(
         guild_later=dict(guild_later or {}),
         policy=dict(policy or {}),
         guild_tab_free=tabs,
+        spare=frozenset(spare or ()),
     )
 
 
@@ -949,6 +962,18 @@ def _guild_tab_for(holding, storage, guild_room):
     return None
 
 
+def _no_room_note(name, item, room):
+    """The sentence for a deposit the bank's room (or its reserve) refuses."""
+    if room <= 0:
+        return "%s's bank is full, so %s stays in the bags" % (name, item)
+    return "%s's bank has %d free slot(s) and keeps %d, so %s stays in the bags" % (
+        name,
+        room,
+        BANK_FREE_RESERVE,
+        item,
+    )
+
+
 def _plan_deposits(member, candidates, storage, guild_room, visit_limit, notes):
     """(personal deposits, guild deposits, guild room left) for one member.
 
@@ -964,6 +989,7 @@ def _plan_deposits(member, candidates, storage, guild_room, visit_limit, notes):
     for holding, why, keeper in candidates:
         placed = storage.policy.get(holding.guid) if storage else None
         personal = placed is not None and placed.to == bankpolicy.PERSONAL
+        reserved = personal and placed.kind == bankpolicy.RESERVED
         to_guild = (
             keeper
             and not personal
@@ -986,11 +1012,8 @@ def _plan_deposits(member, candidates, storage, guild_room, visit_limit, notes):
                 "rest waits for the next trip" % member.name
             )
             continue
-        if room <= 0:
-            notes.append(
-                "%s's bank is full, so %s stays in the bags"
-                % (member.name, holding.item.name)
-            )
+        if room <= (0 if reserved else BANK_FREE_RESERVE):
+            notes.append(_no_room_note(member.name, holding.item.name, room))
             continue
         room -= 1
         deposits.append(_deposit(member, holding, why))
@@ -1008,6 +1031,8 @@ def _wanted_back(holding, member, family, totals, storage):
         return verdict.why if verdict.route in WITHDRAW_ROUTES else ""
     if holding.guid in storage.routed and not disposition.recipe(holding.item):
         return "%s is for %s" % (holding.item.name, storage.routed[holding.guid])
+    if holding.guid in storage.spare:
+        return "%s is a spare copy, sold from the bags" % holding.item.name
     if storage_reason(holding, storage):
         return ""
     if disposition.recipe(holding.item) and _learnable(holding, storage):
@@ -1048,6 +1073,63 @@ def _plan_withdrawals(member, family, totals, storage, space, budget, notes):
             )
         )
     return withdrawals
+
+
+def _plan_relocations(member, storage, guild_room, space, budget, notes):
+    """Withdrawals that bring banked shared stock out for the guild bank.
+
+    A stack the keeper rule stores for the guild (a material the family works
+    and this holder does not, a gem, a lockbox) was put in the holder's own
+    bank when the guild's tab had no room, and nothing ever moved it on once
+    the tab had some. The guild bank takes a deposit only from the bags, so
+    the stack comes out here and the guild pass deposits it. It is planned
+    only while the tab has a free slot for it, which that slot is then spoken
+    for, so the stack is not carried out to be put straight back. A stack the
+    holder's own trade uses, a policy placement, and anything bound never
+    come out. Only materials and gems move: a recipe waiting for a family
+    member to learn it, gear and a lockbox stay where the keeper rule put them.
+    """
+    out = []
+    if storage is None or member.name not in storage.guild_depositors:
+        return out
+    for holding in member.banked:
+        if len(out) >= budget:
+            break
+        if (
+            holding.container_slots > 0
+            or holding.bound
+            or holding.guid in storage.policy
+            or holding.guid in storage.routed
+            or holding.guid in storage.spare
+            or holding.item.item_class not in (ITEM_CLASS_TRADE_GOODS, ITEM_CLASS_GEM)
+        ):
+            continue
+        why = storage_reason(holding, storage)
+        if not why:
+            continue
+        tab = _guild_tab_for(holding, storage, guild_room)
+        if tab is None:
+            continue
+        if space <= 0:
+            notes.append(
+                "%s has no room to take %s out for the guild bank"
+                % (member.name, holding.item.name)
+            )
+            continue
+        space -= 1
+        guild_room[tab] -= 1
+        out.append(
+            Move(
+                character=member.name,
+                verb=WITHDRAW,
+                guid=holding.guid,
+                item=holding.item.name,
+                count=holding.count,
+                why="%s goes to the guild bank, which has room again - %s"
+                % (holding.item.name, why),
+            )
+        )
+    return out
 
 
 def _room_by_tab(storage):
@@ -1112,6 +1194,14 @@ def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None, room_floor=0
             storage,
             member.bag_free + len(deposits) - max(0, room_floor),
             visit_limit - len(deposits),
+            notes,
+        )
+        withdrawals += _plan_relocations(
+            member,
+            storage,
+            guild_room,
+            member.bag_free + len(deposits) - len(withdrawals) - max(0, room_floor),
+            visit_limit - len(deposits) - len(withdrawals),
             notes,
         )
         moves.extend(deposits)

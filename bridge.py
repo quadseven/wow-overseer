@@ -10633,6 +10633,7 @@ class Bridge(discord.Client):
             bag_pressure.gear_candidates(
                 gear_rows, disposition.Family(vendor_reachable=True),
                 available=SELL_ROUTES, fits=fits, keep_names=OWNER_KEEPS,
+                spare=await asyncio.to_thread(_bank_spare, names, True),
             )
         ) + (
             # Redundant spare bags nobody has equipped (infra#4163): dead
@@ -25775,6 +25776,7 @@ def _plan_bank(names: list) -> "bank.Plan":
         routed=_crafter_plan(names).routed | _tidy_routes(names),
         guild_later=dict(_GUILD_BANK_KEEPS),
         policy=_bank_policy(names),
+        spare=_bank_spare(names),
     )
     # WHILE A CAMPAIGN WAITS, BAGS ARE KEPT AT RUN ROOM: a member short of
     # the resume floor puts its trade goods down, and nothing is fetched back
@@ -25806,29 +25808,47 @@ def _bank_policy(names: list, fresh: bool = False) -> dict:
     any other failure is raised, so a pass that would sell cannot go ahead on
     a policy it could not read.
     """
+    return _bank_policy_read(names, fresh)[0]
+
+
+def _bank_spare(names: list, fresh: bool = False) -> frozenset:
+    """Guids of gear copies past what the family can wear (bankpolicy.redundant);
+    blocking, from the same cached read as `_bank_policy`. A read that fails
+    names no copy: nothing is sold or fetched on a policy that was not read."""
+    try:
+        return _bank_policy_read(names, fresh)[1]
+    except Exception:
+        log.exception("bank policy: spare copies unreadable; none are named")
+        return frozenset()
+
+
+def _bank_policy_read(names: list, fresh: bool = False) -> tuple:
+    """(guid -> Placement, spare guids) for this family, cached; blocking."""
     key = tuple(sorted(str(n) for n in names or ()))
     if not key:
-        return {}
+        return {}, frozenset()
     now = time.monotonic()
     hit = _BANK_POLICY_CACHE.get(key)
     if not fresh and hit is not None and now - hit[0] < BANK_POLICY_SECONDS:
-        return hit[1]
+        return hit[1], hit[2]
     with _connect() as conn, conn.cursor() as cur:
         try:
-            placed = bankpolicy.place(
-                bankpolicy.read(cur, list(key), reservations=_keep_reservations(cur, key))
-            )
+            facts = bankpolicy.read(
+                cur, list(key), reservations=_keep_reservations(cur, key))
+            placed = bankpolicy.place(facts)
+            spare = bankpolicy.redundant(facts)
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("bank policy: the facts it reads are missing on "
                             "this world image; it keeps nothing")
-                placed = {}
+                placed, spare = {}, frozenset()
             else:
                 raise
-    _BANK_POLICY_CACHE[key] = (now, placed)
+    _BANK_POLICY_CACHE[key] = (now, placed, spare)
     _log_capped("bank policy", ["%s's %s -> %s: %s" % (p.holder, p.item, p.where, p.why)
                                 for p in placed.values()])
-    return placed
+    _log_capped("bank policy: spare copy", [str(g) for g in sorted(spare)])
+    return placed, spare
 
 
 def _kept_with_bank_policy(cohort=None):
