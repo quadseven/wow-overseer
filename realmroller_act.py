@@ -848,19 +848,8 @@ class Roller:
                 if since:
                     q["sinceTime"] = since
                 started = self.clock()
-                try:
-                    text = self.kube.log(
-                        "/api/v1/namespaces/%s/pods/%s/log?%s"
-                        % (src.namespace, pname, urllib.parse.urlencode(q))
-                    )
-                except ApiError as exc:
-                    # A container that has not started (its pod is still in
-                    # init) answers 400 until it does. That is a pod not yet
-                    # readable, not a failed tick: raising here would stop
-                    # every tick before the not-Ready rollback could fire.
-                    if exc.status not in (400, 404):
-                        raise
-                    log.warning("log of %s not readable yet: %s", key, exc)
+                text = self._pod_log(src, pname, q, key)
+                if text is None:
                     continue
                 found, sig = plan.scan(
                     text.splitlines(), mine, ctx.channel.policy.rollback.log_signatures
@@ -872,6 +861,26 @@ class Roller:
                 )
         scan["seen"], scan["bad"] = sorted(seen), bad
         return seen, bad
+
+    def _pod_log(
+        self, src: plan.LogSource, pname: str, q: dict, key: str
+    ) -> str | None:
+        """A pod's log text, or None when its container has not started.
+
+        A container still in init answers 400 until it starts. That is a pod
+        not yet readable, not a failed tick: raising would stop every tick
+        before the not-Ready rollback could fire. Any other error stops it.
+        """
+        try:
+            return self.kube.log(
+                "/api/v1/namespaces/%s/pods/%s/log?%s"
+                % (src.namespace, pname, urllib.parse.urlencode(q))
+            )
+        except ApiError as exc:
+            if exc.status not in (400, 404):
+                raise
+            log.warning("log of %s not readable yet: %s", key, exc)
+            return None
 
     # -- the actions -----------------------------------------------------------------
 
