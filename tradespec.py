@@ -1808,135 +1808,161 @@ def build_craft_list(
     """
     crafts = craftbook.get(str(int(skill))) or {}
     word = _skill_word(skill)
-    wanted = set(roster)
-    levels = {row["name"]: int(row.get("level") or 0) for row in member_rows}
-    known_by: dict = {}
-    for row in spell_rows:
-        known_by.setdefault(row["name"], set()).add(int(row["spell"]))
-    value_of: dict = {}
-    for row in skill_rows:
-        if int(row["skill"]) == int(skill):
-            value_of[row["name"]] = int(row.get("value") or 0)
-    outsiders = sorted(
-        (name for name in value_of if name not in wanted and name in levels),
-        key=lambda name: (-value_of[name], name),
-    )[:GUILD_SHOWN]
-    people = list(roster) + outsiders
-    ranks, gates = craft_facts(craft_rows)
-
-    held = {name: held_specs(known_by.get(name, ())) for name in people}
-    best = max(
-        (name for name in roster if name in value_of),
-        key=lambda name: (value_of[name], -list(roster).index(name)),
-        default="",
-    )
-    view_keys = [ALL_KEY] + list(roster) + ([GUILD_KEY] if outsiders else [])
-
-    trainer = {int(row.get("SpellId") or 0) for row in trainer_rows}
-    items_by_spell: dict = {}
+    ctx = _ListContext(skill, roster, craft_rows, skill_rows, spell_rows, member_rows)
+    ctx.trainer = {int(row.get("SpellId") or 0) for row in trainer_rows}
+    ctx.items_by_spell = {}
     for row in recipe_rows:
-        items_by_spell.setdefault(int(row.get("spellid_2") or 0), []).append(row)
-    vendors = guildcraft._by_item(vendor_rows)
-    drops = guildcraft._by_item(drop_rows)
-    quests = guildcraft._by_item(quest_rows)
-
+        spell = int(row.get("spellid_2") or 0)
+        ctx.items_by_spell.setdefault(spell, []).append(row)
+    ctx.sources = (
+        guildcraft._by_item(vendor_rows),
+        guildcraft._by_item(drop_rows),
+        guildcraft._by_item(quest_rows),
+        geo,
+        names,
+    )
     out = []
-    per_view: list = [[] for _ in view_keys]
+    per_view: list = [[] for _ in ctx.view_keys]
     for spell_key, entry in crafts.items():
-        spell = int(spell_key)
-        rank = effective_rank(entry, ranks.get(spell))
-        acquire = int(entry[3])
-        gate = int(gates.get(spell, 0))
-        by_person = {
-            name: _craft_state(
-                rank,
-                acquire,
-                gate,
-                value_of.get(name, 0),
-                frozenset(known_by.get(name, ())),
-                spell,
-                held[name],
-            )
-            for name in people
-        }
-        states = []
-        for key in view_keys:
-            if key == ALL_KEY:
-                state = by_person[best] if best else BLOCKED_SKILL
-            elif key == GUILD_KEY:
-                state = _best_state([by_person[n] for n in people])
-            else:
-                state = by_person[key]
-            states.append(state)
+        craft, states = _craft_entry(int(spell_key), entry, ctx)
+        out.append(craft)
         for index, state in enumerate(states):
             per_view[index].append(state)
-        items = items_by_spell.get(spell, [])
-        how = _how(spell, acquire, trainer, items)
-        lines, dungeons = _where_lines(items, vendors, drops, quests, geo, names)
-        knowers = [n for n in people if by_person[n] == KNOWN]
-        learners = [n for n in people if by_person[n] == LEARNABLE]
-        spec = BY_SPELL.get(gate)
-        craft = {
-            "spell": spell,
-            "name": entry[0],
-            "rank": rank,
-            "states": "".join(STATE_CODE[s] for s in states),
-            "how": how,
-            "known_by": knowers[:NAMES_SHOWN],
-            "known_more": max(0, len(knowers) - NAMES_SHOWN),
-            "can_learn": learners[:NAMES_SHOWN],
-            "can_learn_more": max(0, len(learners) - NAMES_SHOWN),
-            "how_line": _how_line(how, spell in trainer, items),
-            "where": lines,
-            "where_line": _where_line(how, lines),
-            "dungeon_line": (
-                "Found in the dungeon %s" % " and ".join(dungeons) if dungeons else ""
-            ),
-            "gate_line": "Needs the %s specialization" % spec.label if spec else "",
-        }
-        # AN EMPTY FIELD IS LEFT OFF. Five hundred crafts each carrying seven
-        # empty keys was a third of the payload, and the page treats an absent
-        # key as "nothing to say", which is what an empty one meant.
-        out.append({k: v for k, v in craft.items() if v or k in _ALWAYS})
     out.sort(key=lambda c: (c["rank"], c["name"], c["spell"]))
-
-    views = []
-    for index, key in enumerate(view_keys):
-        counts = _view_counts(per_view[index])
-        total = sum(counts.values())
-        if key == ALL_KEY:
-            label, holder = "All", best
-        elif key == GUILD_KEY:
-            label, holder = "Guild crafters", "The guild"
-        else:
-            label, holder = key, key
-            if key not in value_of:
-                holder = ""
-        views.append(
-            {
-                "key": key,
-                "label": label,
-                "percent": _percent(counts[KNOWN], total),
-                "counts": {STATE_CODE[s]: n for s, n in counts.items()},
-                "groups": _groups(counts),
-                "brief": (
-                    brief_line(word, holder, counts, total)
-                    if key != GUILD_KEY or outsiders
-                    else ""
-                ),
-            }
-        )
     return {
         "skill": int(skill),
         "name": word,
         "total": len(out),
-        "views": views,
+        "views": _view_cards(word, ctx, per_view),
         "crafts": out,
         "ask_label": "Asks for %s" % word,
         "how_words": HOW_WORDS,
         "reagents_line": "Reagents: this data does not have them",
         "basis": CRAFT_LIST_BASIS,
     }
+
+
+class _ListContext:
+    """What one craft list is read against: who, their skill, their spellbooks.
+
+    Built once per request so each craft is a lookup rather than a scan.
+    `view_keys` is the order the per-craft state strings are written in.
+    """
+
+    def __init__(
+        self, skill, roster, craft_rows, skill_rows, spell_rows, member_rows
+    ) -> None:
+        levels = {row["name"]: int(row.get("level") or 0) for row in member_rows}
+        self.known_by: dict = {}
+        for row in spell_rows:
+            self.known_by.setdefault(row["name"], set()).add(int(row["spell"]))
+        self.value_of: dict = {
+            row["name"]: int(row.get("value") or 0)
+            for row in skill_rows
+            if int(row["skill"]) == int(skill)
+        }
+        family = list(roster)
+        self.outsiders = sorted(
+            (n for n in self.value_of if n not in family and n in levels),
+            key=lambda n: (-self.value_of[n], n),
+        )[:GUILD_SHOWN]
+        self.people = family + self.outsiders
+        self.ranks, self.gates = craft_facts(craft_rows)
+        self.held = {n: held_specs(self.known_by.get(n, ())) for n in self.people}
+        self.best = max(
+            (n for n in family if n in self.value_of),
+            key=lambda n: (self.value_of[n], -family.index(n)),
+            default="",
+        )
+        guild = [GUILD_KEY] if self.outsiders else []
+        self.view_keys = [ALL_KEY] + family + guild
+        self.trainer: set = set()
+        self.items_by_spell: dict = {}
+        self.sources: tuple = ()
+
+
+def _view_state(key: str, by_person: Mapping, ctx: _ListContext) -> str:
+    """One craft's state in one view: the best holder, the guild, or a person."""
+    if key == ALL_KEY:
+        return by_person[ctx.best] if ctx.best else BLOCKED_SKILL
+    if key == GUILD_KEY:
+        return _best_state(list(by_person.values()))
+    return by_person[key]
+
+
+def _craft_entry(spell: int, entry: Sequence, ctx: _ListContext) -> tuple:
+    """(the craft's payload row, its state in every view)."""
+    rank = effective_rank(entry, ctx.ranks.get(spell))
+    acquire = int(entry[3])
+    gate = int(ctx.gates.get(spell, 0))
+    by_person = {
+        name: _craft_state(
+            rank,
+            acquire,
+            gate,
+            ctx.value_of.get(name, 0),
+            frozenset(ctx.known_by.get(name, ())),
+            spell,
+            ctx.held[name],
+        )
+        for name in ctx.people
+    }
+    states = [_view_state(key, by_person, ctx) for key in ctx.view_keys]
+    items = ctx.items_by_spell.get(spell, [])
+    how = _how(spell, acquire, ctx.trainer, items)
+    lines, dungeons = _where_lines(items, *ctx.sources)
+    knowers = [n for n in ctx.people if by_person[n] == KNOWN]
+    learners = [n for n in ctx.people if by_person[n] == LEARNABLE]
+    spec = BY_SPELL.get(gate)
+    craft = {
+        "spell": spell,
+        "name": entry[0],
+        "rank": rank,
+        "states": "".join(STATE_CODE[s] for s in states),
+        "how": how,
+        "known_by": knowers[:NAMES_SHOWN],
+        "known_more": max(0, len(knowers) - NAMES_SHOWN),
+        "can_learn": learners[:NAMES_SHOWN],
+        "can_learn_more": max(0, len(learners) - NAMES_SHOWN),
+        "how_line": _how_line(how, spell in ctx.trainer, items),
+        "where": lines,
+        "where_line": _where_line(how, lines),
+        "dungeon_line": (
+            "Found in the dungeon %s" % " and ".join(dungeons) if dungeons else ""
+        ),
+        "gate_line": "Needs the %s specialization" % spec.label if spec else "",
+    }
+    # AN EMPTY FIELD IS LEFT OFF. Five hundred crafts each carrying seven
+    # empty keys was a third of the payload, and the page treats an absent
+    # key as "nothing to say", which is what an empty one meant.
+    return {k: v for k, v in craft.items() if v or k in _ALWAYS}, states
+
+
+def _view_card(word: str, key: str, states: Sequence, ctx: _ListContext) -> dict:
+    """One view's counts, groups and one-line brief."""
+    counts = _view_counts(states)
+    total = sum(counts.values())
+    if key == ALL_KEY:
+        label, holder = "All", ctx.best
+    elif key == GUILD_KEY:
+        label, holder = "Guild crafters", "The guild"
+    else:
+        label, holder = key, (key if key in ctx.value_of else "")
+    return {
+        "key": key,
+        "label": label,
+        "percent": _percent(counts[KNOWN], total),
+        "counts": {STATE_CODE[s]: n for s, n in counts.items()},
+        "groups": _groups(counts),
+        "brief": brief_line(word, holder, counts, total),
+    }
+
+
+def _view_cards(word: str, ctx: _ListContext, per_view: Sequence) -> list:
+    return [
+        _view_card(word, key, per_view[index], ctx)
+        for index, key in enumerate(ctx.view_keys)
+    ]
 
 
 def _where_line(how: str, lines: Sequence) -> str:
