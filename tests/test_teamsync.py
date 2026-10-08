@@ -133,5 +133,85 @@ class Renames(unittest.TestCase):
         )
 
 
+OPEN_CAVE = ("Ezzo", "Fizzog", "Fuggo", "Gorrk", "Haggo", "Hrunt")
+
+
+def _cave_live():
+    """Cave as it stood on 2026-10-08: 71 members, the 6 recruits invited on
+    2026-10-05 still at level 1 under their own names, empty LEAVING."""
+    out = []
+    for s in raidteams.seats("Cave"):
+        if s.name not in OPEN_CAVE:
+            out.append(
+                {
+                    "name": s.was or s.name,
+                    "class_id": s.class_id,
+                    "race": teamsync.RACE_IDS[s.race],
+                    "level": 20,
+                }
+            )
+    for old, _new in raidteams.SUMMONERS["Cave"] + raidteams.MAINTENANCE["Cave"]:
+        out.append({"name": old, "class_id": 9, "race": 5, "level": 20})
+    recruits = [
+        ("Ahesun", 7, 11),
+        ("Anduum", 7, 11),
+        ("Anklitlu", 9, 7),
+        ("Awudis", 9, 7),
+        ("Aramas", 9, 1),
+        ("Caedarin", 9, 1),
+    ]
+    out += [{"name": n, "class_id": c, "race": r, "level": 1} for n, c, r in recruits]
+    return out
+
+
+class StalledOnRenames(unittest.TestCase):
+    def test_the_live_cave_numbers(self):
+        members = _cave_live()
+        self.assertEqual(len(members), teamsync.GUILD_SIZE)
+        self.assertEqual(
+            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 6
+        )
+        self.assertEqual(len(teamsync.recruits_in_guild("Cave", members)), 6)
+
+    def test_an_empty_plan_with_open_seats_says_why(self):
+        members = _cave_live()
+        pending = {m["name"] for m in members if m["level"] == 1}
+        acts = teamsync.plan("Cave", members, [], pending, False)
+        self.assertEqual(acts, [])
+        why = teamsync.stall_reason(
+            "Cave", members, [], pending, True, {"target not online": 6}
+        )
+        self.assertIn("6 seats are filled by recruits already in the guild", why)
+        self.assertIn("Ahesun as Ezzo", why)
+        self.assertIn("target not online x6", why)
+
+    def test_a_full_guild_with_a_candidate_and_no_leaver_says_so(self):
+        members = [m for m in _cave_live() if m["level"] != 1]
+        members += [
+            {"name": "Filler%d" % i, "class_id": 1, "race": 1, "level": 5}
+            for i in range(teamsync.GUILD_SIZE - len(members))
+        ]
+        cand = [{"name": "Newbie", "class_id": 7, "race": 11, "level": 1}]
+        why = teamsync.stall_reason("Cave", members, cand, set(), True)
+        self.assertIn(
+            "the guild is full (71) and the approved teams name no leaver", why
+        )
+        self.assertIn("no candidate at level 10 or under fits Fuggo", why)
+
+    def test_the_head_not_in_the_world_is_named(self):
+        members = [m for m in _cave_live() if m["level"] != 1]
+        cand = [{"name": "Newbie", "class_id": 7, "race": 11, "level": 1}]
+        why = teamsync.stall_reason("Cave", members, cand, set(), False)
+        self.assertIn("the family head is not in the world", why)
+
+    def test_nothing_open_nothing_said(self):
+        members = _cave_live()
+        members = [
+            dict(m, name=seat)
+            for seat, m in teamsync.recruits_in_guild("Cave", members).items()
+        ] + [m for m in members if m["level"] != 1]
+        self.assertEqual(teamsync.stall_reason("Cave", members, [], set()), "")
+
+
 if __name__ == "__main__":
     unittest.main()
