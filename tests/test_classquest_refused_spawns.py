@@ -225,3 +225,27 @@ class TheHold(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheRepeatedDeath(unittest.TestCase):
+    """A way that kills the member twice is left for hours (2026-10-08)."""
+
+    DIED = "died on the way to the spawn"
+
+    def marks(self, *ages):
+        rows = [walked("Aa", 4788, self.DIED, age, "died", True) for age in ages]
+        return guildjobs.refused_marks("Aa", rows)
+
+    def test_one_death_is_the_short_mark_only(self):
+        self.assertEqual(self.marks(40), {})  # past SPAWN_SHORT_MINUTES
+        self.assertEqual(self.marks(10), {4788: 10})
+
+    def test_two_deaths_hold_the_spawn_for_hours(self):
+        self.assertEqual(self.marks(100, 200), {4788: 100})
+        self.assertEqual(self.marks(300, 340), {4788: 300})
+
+    def test_the_long_hold_ends(self):
+        self.assertEqual(self.marks(361, 400), {})
+
+    def test_deaths_outside_the_window_do_not_add_up(self):
+        self.assertEqual(self.marks(100, 800), {})

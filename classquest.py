@@ -251,6 +251,16 @@ SPAWN_SHORT_REFUSALS = frozenset(
     {"stopped getting nearer the spawn", "died on the way to the spawn"}
 )
 SPAWN_SHORT_MINUTES = 30
+# A WAY THAT KILLS THE MEMBER TWICE IS NOT A WAY (2026-10-08). The dwarf and the
+# gnome warrior whose trainer stands in Stormwind died on the 15,000 yard land
+# road three times in a morning, one thirty minute mark after another, because a
+# death alone is a short mark and the trainer has one spawn. Two deaths on the
+# way to the same spawn within DEATH_WINDOW_MINUTES hold the spawn for
+# DEATH_BACKOFF_MINUTES, so the member levels where it is safe meanwhile.
+DEATH_REASON = "died on the way to the spawn"
+DEATHS_BEFORE_LONG_HOLD = 2
+DEATH_WINDOW_MINUTES = 720
+DEATH_BACKOFF_MINUTES = 360
 # WHEN EVERY PACK IS LEFT, THE ONE LEFT LONGEST IS ASKED AGAIN once its mark is
 # this old: a member is never reported stalled while a pack's mark is older.
 SPAWN_RETRY_MINUTES = 30
