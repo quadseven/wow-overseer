@@ -156,9 +156,13 @@ class TheAbandon(unittest.TestCase):
         self.assertIsNone(step)
         self.assertIn("dropped lately", note)
 
-    def test_an_old_drop_does_not_hold_it(self):
-        step, _said, _note = self.step(self.recent(classquest.ABANDON_HOLD_MINUTES + 1))
-        self.assertIsNotNone(step)
+    def test_the_hold_ends_at_its_edge(self):
+        # Held while the drop is younger than the hold; free from the minute it
+        # reaches it, and long after.
+        edge = classquest.ABANDON_HOLD_MINUTES
+        self.assertIsNone(self.step(self.recent(edge - 1))[0])
+        self.assertIsNotNone(self.step(self.recent(edge))[0])
+        self.assertIsNotNone(self.step(self.recent(edge * 2))[0])
 
     def test_another_members_drop_does_not_hold_it(self):
         step, _said, _note = self.step(self.recent(5, name="Other"))

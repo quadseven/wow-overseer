@@ -765,26 +765,37 @@ def _provided(r) -> tuple:
     return tuple(seen)
 
 
+def _item_use(item, provided, aims):
+    """The Use of one carried or handed-over item: used beside a spell-focus
+    gameobject (USE_HERE), or on a creature (USE_ITEM); None when it has no
+    target."""
+    item_aims, _chests, creature_spawns, object_spawns = aims[:4]
+    focus = aims[4] if len(aims) > 4 else {}
+    foci = focus.get(item, ())
+    if foci:
+        spots = tuple(s for g in foci for s in object_spawns.get(g, ()))
+        return Use(USE_HERE, item, 1, foci, spots, item in provided)
+    targets = item_aims.get(item, ())
+    if targets:
+        spots = tuple(s for t in targets for s in creature_spawns.get(t, ()))
+        return Use(USE_ITEM, item, 1, targets, spots, item in provided)
+    return None
+
+
 def _uses(r, items, provided, droppers, aims) -> tuple:
-    """The Uses of one quest: items used on creatures, chests that hold a
-    required item no creature drops, and gameobject objectives.
+    """The Uses of one quest: items used beside a forge or on creatures, chests
+    that hold a required item no creature drops, and gameobject objectives.
 
     `aims` is (item -> creature entries, item -> chest entries, spawns by
-    creature entry, spawns by gameobject entry)."""
-    item_aims, chests, creature_spawns, object_spawns = aims[:4]
-    focus = aims[4] if len(aims) > 4 else {}
+    creature entry, spawns by gameobject entry, item -> spell-focus
+    gameobject entries)."""
+    _item_aims, chests, creature_spawns, object_spawns = aims[:4]
     out = []
     required = [i for i, _n in items]
     for item in dict.fromkeys([*provided, *required]):
-        foci = focus.get(item, ())
-        if foci:
-            spots = tuple(s for g in foci for s in object_spawns.get(g, ()))
-            out.append(Use(USE_HERE, item, 1, foci, spots, item in provided))
-            continue
-        targets = item_aims.get(item, ())
-        if targets:
-            spots = tuple(s for t in targets for s in creature_spawns.get(t, ()))
-            out.append(Use(USE_ITEM, item, 1, targets, spots, item in provided))
+        use = _item_use(item, provided, aims)
+        if use is not None:
+            out.append(use)
     for item, count in items:
         if item in provided or any(
             creature_spawns.get(e) for e in droppers.get(item, ())
@@ -1387,6 +1398,25 @@ def roll_oldest(member, quest: Quest, avoid, marked) -> tuple:
     )
 
 
+def _lost_item_move(member, quest: Quest, using, block: str, why: str):
+    """The ABANDON move for a quest whose handed-over use item the member no
+    longer carries (the quest gives it out again when it is taken anew), else
+    None."""
+    if (
+        block == ITEM
+        and using is not None
+        and using.verb in (USE_HERE, USE_ITEM)
+        and using.provided
+        and _status(member, quest.id) == STATUS_INCOMPLETE
+    ):
+        said = "%s drops %s to take it again and be handed what it lost" % (
+            member.name,
+            quest.title,
+        )
+        return Move(ABANDON, quest.id, quest.klass, None, said, "", why)
+    return None
+
+
 def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
     """The member's work on an incomplete quest (a hunt, or a use), or why it
     is blocked."""
@@ -1416,24 +1446,9 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
             BLOCKED, quest.id, quest.klass, None, said, STALLED, why, 1, quest.title
         )
     block, said = blocker_of(quest, member)
-    if (
-        block == ITEM
-        and using is not None
-        and using.verb in (USE_HERE, USE_ITEM)
-        and using.provided
-        and _status(member, quest.id) == STATUS_INCOMPLETE
-    ):
-        # The quest hands the item over when it is taken; taking it anew returns it.
-        return Move(
-            ABANDON,
-            quest.id,
-            quest.klass,
-            None,
-            "%s drops %s to take it again and be handed what it lost"
-            % (member.name, quest.title),
-            "",
-            why,
-        )
+    lost = _lost_item_move(member, quest, using, block, why)
+    if lost is not None:
+        return lost
     if block:
         want = helpers_for(quest) if block == GROUP else 0
         spot = _densest(member, quest.fields) if block == GROUP else None
