@@ -107,10 +107,11 @@ class TheMove(unittest.TestCase):
         )
         self.assertEqual(move.spot.guid, 129401)
 
-    def test_a_knight_without_the_sword_is_blocked_on_the_item(self):
+    def test_a_knight_who_lost_the_sword_drops_the_quest_to_take_it_again(self):
         move, blocked = self.move(knight())
-        self.assertIsNone(move)
-        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked, [])
+        self.assertEqual((move.kind, move.quest), (classquest.ABANDON, 12619))
+        self.assertIsNone(move.spot)
 
     def test_a_knight_with_the_runeblade_turns_the_quest_in(self):
         move, _ = self.move(
@@ -121,6 +122,50 @@ class TheMove(unittest.TestCase):
     def test_the_quest_is_not_unmet_for_want_of_a_source(self):
         quest = runeblade().quests[12619]
         self.assertFalse(classquest._unmet(quest))
+
+
+class TheAbandon(unittest.TestCase):
+    def recent(self, age, quest=12619, name="Brug"):
+        return guildjobs.recent_from_rows(
+            [
+                {
+                    "target_name": name,
+                    "command": "abandon quest:%d" % quest,
+                    "source": guildjobs.source_for(classquest.ACTION, name),
+                    "status": "delivered",
+                    "age": age,
+                    "result": "",
+                }
+            ]
+        )
+
+    def step(self, recent=()):
+        m = knight()
+        move, _ = classquest.next_move(runeblade(), m)
+        return guildjobs._abandon_step(m, move, recent, "")
+
+    def test_the_step_is_one_abandon_row_and_no_walk(self):
+        step, said, _note = self.step()
+        self.assertEqual(step.rows[0].kind, "quest")
+        self.assertEqual(step.rows[0].command, "abandon quest:12619")
+        self.assertIsNone(step.walk)
+        self.assertIn("drops", said)
+
+    def test_a_quest_dropped_lately_is_not_dropped_again(self):
+        step, _said, note = self.step(self.recent(30))
+        self.assertIsNone(step)
+        self.assertIn("dropped lately", note)
+
+    def test_an_old_drop_does_not_hold_it(self):
+        step, _said, _note = self.step(self.recent(classquest.ABANDON_HOLD_MINUTES + 1))
+        self.assertIsNotNone(step)
+
+    def test_another_members_drop_does_not_hold_it(self):
+        step, _said, _note = self.step(self.recent(5, name="Other"))
+        self.assertIsNotNone(step)
+
+    def test_the_row_reads_back_as_an_abandon(self):
+        self.assertEqual(self.recent(5)[0].abandoned, 12619)
 
 
 class TheStep(unittest.TestCase):

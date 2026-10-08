@@ -24332,7 +24332,9 @@ def _class_book_reads(cur) -> tuple:
     use_rows, chest_rows, object_rows, focus_rows = _class_use_reads(cur, quests, items)
     entries |= {int(r["target"]) for r in use_rows}
     spawns = _class_rows(cur, "class quest spawns", classquest.SPAWNS_SQL, "entries", entries)
-    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows, focus_rows
+    started = _job_read(cur, "class quest other starters", classquest.STARTERS_SQL.format(
+        quests=ids(r["id"] for r in quests)))
+    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows, focus_rows, started
 
 
 def _class_use_reads(cur, quests, items) -> tuple:

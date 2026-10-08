@@ -146,6 +146,13 @@ MARK = "class quest"
 
 # Move kinds. USE writes a use-item-on or use-gameobject row at a target.
 TAKE, HUNT, TURN_IN, USE, BLOCKED = "take", "hunt", "turnin", "use", "blocked"
+# A quest dropped to be taken again, so the core hands the member the item the
+# quest gives out (2026-10-08: Brug held The Emblazoned Runeblade without the
+# Battle-worn Sword it hands over, and a quest item cannot be bought or looted).
+ABANDON = "abandon"
+# Not asked of the same quest again for this long: if the item is lost again the
+# fault is not the quest, and a loop of dropping and taking helps no one.
+ABANDON_HOLD_MINUTES = 240
 # Blockers.
 GROUP, OBJECT, SOURCE, MAP, UNKNOWN = "group", "object", "source", "map", "unknown"
 # A quest item the member must use and does not carry.
@@ -436,6 +443,16 @@ GIVERS_SQL = (
     "WHERE e.quest IN ({quests})"
 )
 
+# The other ways a quest starts: a gameobject offers it, or an item starts it
+# when used. Neither has a verb, but the blocker names which one it is.
+STARTERS_SQL = (
+    "SELECT s.quest AS quest, 'gameobject' AS kind, s.id AS entry "
+    "FROM acore_world.gameobject_queststarter s WHERE s.quest IN ({quests}) "
+    "UNION ALL "
+    "SELECT it.startquest, 'item', it.entry FROM acore_world.item_template it "
+    "WHERE it.startquest IN ({quests})"
+)
+
 # The reward spells a trainer teaches for coin: not a class quest's to give.
 TRAINED_SQL = (
     "SELECT DISTINCT SpellId AS spell FROM acore_world.trainer_spell "
@@ -575,6 +592,8 @@ class Quest:
     droppable: frozenset = frozenset()
     # (required item, creature entry that drops it) for every dropper with a spawn.
     drops: tuple = ()
+    # (kind, entry) of each non-creature start: a gameobject or an item.
+    other_starts: tuple = ()
 
     @property
     def spells(self) -> frozenset:
@@ -781,7 +800,7 @@ def _uses(r, items, provided, droppers, aims) -> tuple:
     return tuple(out)
 
 
-def _quest(r, klass, starts, ends, by_entry, droppers, aims) -> Quest:
+def _quest(r, klass, starts, ends, by_entry, droppers, aims, others=None) -> Quest:
     kills = _pairs(r, "npc", "npc_count", 4, True)
     items = _pairs(r, "item", "item_count", 6)
     entries = {e for e, _n in kills}
@@ -816,7 +835,28 @@ def _quest(r, klass, starts, ends, by_entry, droppers, aims) -> Quest:
             for e in sorted(droppers.get(i, ()))
             if by_entry.get(e)
         ),
+        tuple((others or {}).get(qid, ())),
     )
+
+
+def _orphan(quest: Quest) -> bool:
+    """A quest nothing starts: no creature, gameobject or item, and no earlier
+    quest in a chain to offer it. On the dev realm (2026-10-08) the level 10
+    racial priest spell quests (Desperate Prayer, Hex of Weakness, Stars of
+    Elune and the rest) are all of this kind: retired in 3.3.5, their spells
+    taught by the class trainer, and each one blocked a priest of both guilds
+    for good with 'has no giver creature in the world data'."""
+    return not quest.starters and not quest.other_starts and not quest.prev
+
+
+def _other_starts(rows) -> dict:
+    """quest -> sorted (kind, entry) of the gameobjects and items that start it."""
+    out: dict = {}
+    for r in rows or ():
+        out.setdefault(_int(r.get("quest")), set()).add(
+            (str(r.get("kind") or ""), _int(r.get("entry")))
+        )
+    return {k: tuple(sorted(v)) for k, v in out.items()}
 
 
 def build(
@@ -829,6 +869,7 @@ def build(
     chest_rows=(),
     object_rows=(),
     focus_rows=(),
+    start_rows=None,
 ) -> Book:
     """The Book from the world's rows.
 
@@ -837,9 +878,11 @@ def build(
     one an item is used on) and `loot_rows` LOOT_SQL's. `use_rows` are
     USE_ITEMS_SQL's, `chest_rows` CHEST_SQL's and `object_rows`
     OBJECT_SPAWNS_SQL's: with none of them no quest has a use, as on a world
-    read before the verbs existed.
+    read before the verbs existed. `start_rows` are STARTERS_SQL's: the quests a
+    gameobject or an item starts.
     """
     starts, ends = _givers(giver_rows)
+    others = _other_starts(start_rows)
     by_entry = _spawns_by_entry(spawn_rows)
     droppers = _droppers(loot_rows)
     aims = (
@@ -853,9 +896,12 @@ def build(
     for r in quest_rows or ():
         klass = klass_of(r)
         if klass:
-            quests[_int(r.get("id"))] = _quest(
-                r, klass, starts, ends, by_entry, droppers, aims
-            )
+            quest = _quest(r, klass, starts, ends, by_entry, droppers, aims, others)
+            # With the other starters read (start_rows given), a quest nothing
+            # starts is not a class quest anyone can have.
+            if start_rows is not None and _orphan(quest):
+                continue
+            quests[_int(r.get("id"))] = quest
     groups = {}
     for q in quests.values():
         if q.rewards:
@@ -1181,6 +1227,20 @@ def owed(book: Book, member, avoid=None, held_off=frozenset()):
     return None
 
 
+def _no_creature(quest: Quest, word: str) -> str:
+    """The sentence for a quest no creature starts or ends. A take names what
+    starts it instead, or says nothing in the world data does (a retired quest
+    whose spell the class trainer now teaches)."""
+    said = "%s has no %s creature in the world data" % (quest.title, word)
+    if word != "giver":
+        return said
+    if quest.other_starts:
+        return said + "; it is started by %s, which no verb does" % ", ".join(
+            "%s %d" % (k, e) for k, e in quest.other_starts
+        )
+    return said + ", and no gameobject or item starts it either: it cannot be taken"
+
+
 def _move_of(member, option, key, avoid=None, held_off=frozenset()) -> Move:
     kind, quest, spot, reward_id = option
     reward = key[1]
@@ -1202,10 +1262,7 @@ def _move_of(member, option, key, avoid=None, held_off=frozenset()) -> Move:
                 % (quest.title, word, _across(member, ends)),
             )
             if ends
-            else (
-                SOURCE,
-                "%s has no %s creature in the world data" % (quest.title, word),
-            )
+            else (SOURCE, _no_creature(quest, word))
         )
         return Move(BLOCKED, quest.id, quest.klass, None, said, block, why)
     verb = "hands in" if kind == TURN_IN else "takes"
@@ -1359,6 +1416,24 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
             BLOCKED, quest.id, quest.klass, None, said, STALLED, why, 1, quest.title
         )
     block, said = blocker_of(quest, member)
+    if (
+        block == ITEM
+        and using is not None
+        and using.verb == USE_HERE
+        and using.provided
+        and _status(member, quest.id) == STATUS_INCOMPLETE
+    ):
+        # The quest hands the item over when it is taken; taking it anew returns it.
+        return Move(
+            ABANDON,
+            quest.id,
+            quest.klass,
+            None,
+            "%s drops %s to take it again and be handed what it lost"
+            % (member.name, quest.title),
+            "",
+            why,
+        )
     if block:
         want = helpers_for(quest) if block == GROUP else 0
         spot = _densest(member, quest.fields) if block == GROUP else None
