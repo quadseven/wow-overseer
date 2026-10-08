@@ -2543,6 +2543,10 @@ def class_priority(m) -> int:
     and a warrior without them cannot hold a dungeon) and a healer of any
     class (the heal ranks); 1 for everyone else."""
     cls = int(m.class_id)
+    # A death knight still in its starting zone is stranded there, with its
+    # guild's hand-me-down gear on it, until its chain is done (2026-10-08).
+    if cls == classquest.DEATH_KNIGHT and m.map_id == classquest.DEATH_KNIGHT_START_MAP:
+        return 0
     if cls == classquest.WARRIOR and raidroles.fits_seat(
         cls, m.tree, raidroles.SEAT_TANK
     ):

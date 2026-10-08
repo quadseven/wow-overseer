@@ -133,6 +133,9 @@ MAX_QUEST_LEVEL = 45
 # module reads, and a death knight is stranded in its starting zone until it is
 # done. The class is read to its own level, not the classic cap.
 DEATH_KNIGHT = 6
+# The death knight's starting zone (map 609): a death knight that stands in it is
+# stranded until its chain is done (2026-10-08).
+DEATH_KNIGHT_START_MAP = 609
 MAX_DEATH_KNIGHT_QUEST_LEVEL = 60
 
 # The core's QuestStatus values a character_queststatus row carries.
