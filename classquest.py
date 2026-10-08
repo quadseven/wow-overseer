@@ -99,6 +99,7 @@ CLASS_OF_SORT = {
     -81: 1,  # warrior
     -141: 2,  # paladin
     -261: 3,  # hunter
+    -372: 6,  # death knight
     -162: 4,  # rogue
     -262: 5,  # priest
     -82: 7,  # shaman
@@ -110,6 +111,7 @@ CLASS_NAMES = {
     1: "warrior",
     2: "paladin",
     3: "hunter",
+    6: "death knight",
     4: "rogue",
     5: "priest",
     7: "shaman",
@@ -125,6 +127,13 @@ WARRIOR = 1
 # The classic range: a class quest is built for a member that can take it by
 # this level. Beyond it (Outland and Northrend class quests) is another job.
 MAX_QUEST_LEVEL = 45
+
+# THE DEATH KNIGHT STARTS AT 55 (2026-10-08). Its starting chain (QuestSortID
+# -372, 71 quests, all level 55) is the class's only class quest range this
+# module reads, and a death knight is stranded in its starting zone until it is
+# done. The class is read to its own level, not the classic cap.
+DEATH_KNIGHT = 6
+MAX_DEATH_KNIGHT_QUEST_LEVEL = 60
 
 # The core's QuestStatus values a character_queststatus row carries.
 STATUS_COMPLETE, STATUS_INCOMPLETE = 1, 3
@@ -382,7 +391,13 @@ QUESTS_SQL = (  # noqa: S608
     + ") OR q.QuestSortID IN ("
     + _SORTS
     + ")) "
-    "AND q.MinLevel <= " + str(MAX_QUEST_LEVEL) + " AND q.LogTitle NOT LIKE '<%%' "
+    "AND q.MinLevel <= CASE WHEN COALESCE(a.AllowableClasses, 0) = "
+    + str(1 << (DEATH_KNIGHT - 1))
+    + " OR q.QuestSortID = -372 THEN "
+    + str(MAX_DEATH_KNIGHT_QUEST_LEVEL)
+    + " ELSE "
+    + str(MAX_QUEST_LEVEL)
+    + " END AND q.LogTitle NOT LIKE '<%%' "
     "AND q.LogTitle NOT LIKE 'NOT A QUEST%%'"
 )
 
