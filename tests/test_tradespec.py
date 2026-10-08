@@ -913,13 +913,22 @@ class TheMobileRules(unittest.TestCase):
         would widen the row and take the page sideways with it. Named rule by
         rule rather than counted: this window also holds the trade card's own
         grid, so a count would pass on the strength of somebody else's rule."""
-        for rule in (".gcl-row", ".gcl-card > summary"):
+        for rule in (".tp-head", ".tp-ghead", ".tp-chead", ".gcl-card > summary"):
             block = self.CSS[self.CSS.index(rule + " {") :]
             block = block[: block.index("}")]
             self.assertIn("minmax(0, 1fr)", block, rule)
 
     def test_long_names_break_rather_than_scroll(self):
-        for rule in (".gcl-name", ".gcl-why", ".gcl-label", ".gcl-sum", ".gcl-reason"):
+        for rule in (
+            ".tp-name",
+            ".tp-brief",
+            ".tp-cname",
+            ".tp-dline",
+            ".tp-src",
+            ".gcl-label",
+            ".gcl-sum",
+            ".gcl-reason",
+        ):
             block = self.CSS[self.CSS.index(rule + " {") :]
             block = block[: block.index("}")]
             self.assertIn("overflow-wrap:anywhere", block, rule)
