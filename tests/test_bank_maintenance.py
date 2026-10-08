@@ -196,7 +196,7 @@ class ABankKeepsRoomForTheNextThing(unittest.TestCase):
     def rows(self, filled):
         out = [
             row(item_guid=1000 + n, name="Rough Stone", slot=slot)
-            for n, slot in zip(range(filled), bank.BANK_ITEM_SLOTS)
+            for n, slot in enumerate(bank.BANK_ITEM_SLOTS[:filled])
         ]
         out += [
             row(item_guid=11, name="Malachite", count=9, slot=23),

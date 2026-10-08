@@ -962,6 +962,18 @@ def _guild_tab_for(holding, storage, guild_room):
     return None
 
 
+def _no_room_note(name, item, room):
+    """The sentence for a deposit the bank's room (or its reserve) refuses."""
+    if room <= 0:
+        return "%s's bank is full, so %s stays in the bags" % (name, item)
+    return "%s's bank has %d free slot(s) and keeps %d, so %s stays in the bags" % (
+        name,
+        room,
+        BANK_FREE_RESERVE,
+        item,
+    )
+
+
 def _plan_deposits(member, candidates, storage, guild_room, visit_limit, notes):
     """(personal deposits, guild deposits, guild room left) for one member.
 
@@ -1001,17 +1013,7 @@ def _plan_deposits(member, candidates, storage, guild_room, visit_limit, notes):
             )
             continue
         if room <= (0 if reserved else BANK_FREE_RESERVE):
-            if room <= 0:
-                notes.append(
-                    "%s's bank is full, so %s stays in the bags"
-                    % (member.name, holding.item.name)
-                )
-            else:
-                notes.append(
-                    "%s's bank has %d free slot(s) and keeps %d, so %s stays in "
-                    "the bags"
-                    % (member.name, room, BANK_FREE_RESERVE, holding.item.name)
-                )
+            notes.append(_no_room_note(member.name, holding.item.name, room))
             continue
         room -= 1
         deposits.append(_deposit(member, holding, why))

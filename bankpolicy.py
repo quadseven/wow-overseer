@@ -492,21 +492,26 @@ def _personal(pieces, family, reach, claimed) -> dict:
     }
 
 
-def redundant(facts: Facts) -> frozenset:
-    """Guids of gear copies the family holds past what it can use.
+def _wearer_count(copies, reach) -> int:
+    """How many family members the copies of one item can serve, or 0 when a
+    copy has no reach (the piece could not be judged). Each copy is read with
+    its own reach, in one pass, so the two never fall out of step."""
+    wearers = set()
+    for piece in copies:
+        fit = reach.get(piece.guid)
+        if fit is None:
+            return 0
+        if fit.holder_wears:
+            wearers.add(piece.holder)
+        # A soulbound copy goes to nobody else, so only its holder counts.
+        if not piece.bound:
+            wearers.update(fit.later_wearers)
+    return max(1, len(wearers))
 
-    The same entry held several times is worth one copy per family member who
-    can wear it (the holder, and each member who will wear it at its level);
-    the rest are spares. The copies kept are the ones the policy places, then
-    those already in a bank, then the lowest guid, so a sale and a placement
-    never name the same stack. Soulbound or tradable alike. Epics, quest gear
-    and stacks the operator's keep reservations cover are never named, and a
-    piece the policy could not judge (no reach) names nothing.
-    """
-    placed = place(facts)
-    held = frozenset(
-        p.guid for p in facts.pieces if any(r.covers(p) for r in facts.reserved)
-    )
+
+def _spare_candidates(facts: Facts) -> dict:
+    """entry -> the copies of it that could be spare (gear up to rare, not
+    quest gear, not under an operator keep reservation)."""
     by_entry: dict = {}
     for piece in facts.pieces:
         if (
@@ -514,24 +519,33 @@ def redundant(facts: Facts) -> frozenset:
             or piece.entry <= 0
             or piece.quality > RARE
             or piece.quest_needed
-            or piece.guid in held
+            or any(r.covers(piece) for r in facts.reserved)
         ):
             continue
         by_entry.setdefault(piece.entry, []).append(piece)
+    return by_entry
+
+
+def redundant(facts: Facts) -> frozenset:
+    """Guids of gear copies the family holds past what it can use.
+
+    The same entry held several times is worth one copy per family member who
+    can wear it (the holder, and each member who will wear it at its level
+    when the copy is still tradable); the rest are spares. The copies kept are
+    the ones the policy places, then those already in a bank, then the lowest
+    guid, so a sale and a placement never name the same stack. Soulbound or
+    tradable alike. Epics, quest gear and stacks the operator's keep
+    reservations cover are never named, and a piece the policy could not judge
+    (no reach) names nothing.
+    """
+    placed = place(facts)
     spare = set()
-    for copies in by_entry.values():
-        if len(copies) < 2:
+    for copies in _spare_candidates(facts).values():
+        keep = _wearer_count(copies, facts.reach)
+        if len(copies) < 2 or not keep:
             continue
-        fits = [facts.reach.get(piece.guid) for piece in copies]
-        if any(fit is None for fit in fits):
-            continue
-        wearers = {p.holder for p, fit in zip(copies, fits) if fit.holder_wears}
-        for piece, fit in zip(copies, fits):
-            # A soulbound copy goes to nobody else, so only its holder counts.
-            if not piece.bound:
-                wearers.update(fit.later_wearers)
         copies.sort(key=lambda p: (p.guid not in placed, p.place != "bank", p.guid))
-        spare.update(p.guid for p in copies[max(1, len(wearers)) :])
+        spare.update(p.guid for p in copies[keep:])
     return frozenset(spare)
 
 
