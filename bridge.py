@@ -14109,6 +14109,7 @@ class Bridge(discord.Client):
             self._job_steps, now, guildroute.GUILD_STEP_SECONDS)
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._job_steps) | set(self._corps_steps) | set(self._dues_walks)
                 | set(self._guild_mail_runs) | set(self._crafter_walks))
+        busy -= self._stranded_knights_freed(members)
         cap = self._guild_walk_cap()
         spawn_walks = now >= self._job_walks_unsupported.get("spawn", 0.0)
         # The hunt slots the realm has free (classhunt.py); none while this
@@ -14126,6 +14127,38 @@ class Bridge(discord.Client):
         started = self._start_guild_job_steps(plan, now, cap, sale_walks)
         await self._say_pvp_lines(plan, facts["recent"])
         log.info("guild jobs: started %d step(s)%s", started, _family_label(cohort))
+
+    def _stranded_knights_freed(self, members) -> set:
+        """The death knights standing in their starting zone that every other
+        pass holds busy, so the class quest that frees them can run (2026-10-08).
+
+        A death knight there can reach nobody: a gear hand-over run, a crafter
+        walk, a guild ask or a dungeon run that names it walks nowhere and holds
+        it for good. Only the step it is itself running (`_job_steps`) holds it.
+        The sets that held it are logged, so the next pass shows which."""
+        sets = (
+            ("guild run", getattr(self, "_guild_run_names", ())),
+            ("corps step", self._corps_steps),
+            ("dues walk", self._dues_walks),
+            ("hand-over run", self._guild_mail_runs),
+            ("crafter walk", self._crafter_walks),
+        )
+        freed = set()
+        for m in members:
+            if not (
+                m.online
+                and int(m.class_id) == classquest.DEATH_KNIGHT
+                and m.map_id == classquest.DEATH_KNIGHT_START_MAP
+                and m.name not in self._job_steps
+            ):
+                continue
+            held = [label for label, names in sets if m.name in names]
+            if held:
+                log.info("guild jobs: %s stands in the death knight start zone and "
+                         "was held by %s; freed for its class quest", m.name,
+                         ", ".join(held))
+                freed.add(m.name)
+        return freed
 
     async def _plan_guild_jobs(self, members, facts, busy, cap, spawn_walks,
                                cohort=None):
