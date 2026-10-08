@@ -14484,6 +14484,12 @@ class Bridge(discord.Client):
         # A quest use row (classuse.py) is followed by what it answers.
         if classuse.is_use_row(row.command):
             return await self._class_use_row(step, row, cap)
+        # A class quest crossing row is written once and left to the module:
+        # it takes up to half an hour, and the next pass reads its answer from
+        # the log (guildjobs.crossing_cooling). Nothing follows it in the step.
+        if classquest.is_cross_row(row.command):
+            await self._class_cross_row(step, row)
+            return False
         # A class quest hunt row (classhunt.py) is followed to its end.
         if classhunt.is_hunt_row(row.command):
             await self._class_hunt_row(step, row)
@@ -14520,6 +14526,20 @@ class Bridge(discord.Client):
                 return False
             await asyncio.sleep(guildjobs.RECALL_ASK_SECONDS)
         return False
+
+    async def _class_cross_row(self, step, row) -> None:
+        """Write a class quest `cross-to-map` row ONCE and log what it answers
+        within CORPS_ROW_FOLLOW_SECONDS. The row is never written again here: a
+        crossing still under way past the follow is the module's, and its
+        result (arrived, or a refusal with its reason) is read from the log by
+        the next pass (guildjobs.class_walls, crossing_cooling)."""
+        row_id = await asyncio.to_thread(_insert_corps_row, step.holder, row)
+        if not row_id:
+            return
+        answer = await self._await_corps_answer(row_id, CORPS_ROW_FOLLOW_SECONDS) or {}
+        log.info("guild jobs: %s (crossing row %d for %s): %s", step.said, row_id,
+                 step.holder, str(answer.get("detail") or answer.get("status")
+                                  or "under way"))
 
     async def _class_use_row(self, step, row, cap: float) -> bool:
         """Write a class quest use row and follow what the module answered

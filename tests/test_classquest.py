@@ -10,6 +10,7 @@ Uzzek (creature 5810); Ulag the Cleaver (1819), whose creature 6390 has no spawn
 row because a script summons it.
 """
 
+import dataclasses
 import pathlib
 import unittest
 
@@ -235,6 +236,10 @@ class TheNextMove(unittest.TestCase):
             quests_done=frozenset({1818}),
         )
         move, blocked = self.move(m)
+        # Ulag has no spawn row (permanent); the other chain is across the sea.
+        self.assertEqual((move.kind, move.to_map), (classquest.CROSS, KALIMDOR))
+        m = dataclasses.replace(m, no_crossing={KALIMDOR: "no transport"})
+        move, blocked = self.move(m)
         self.assertIsNone(move)
         self.assertIn("Ulag the Cleaver", blocked[0])
 
@@ -439,7 +444,8 @@ class ThePriority(unittest.TestCase):
             quest_log={1819: 3},
             quests_done=frozenset({1818}),
         )
-        result = class_plan([m])
+        walled = dataclasses.replace(m, no_crossing={KALIMDOR: "no transport"})
+        result = class_plan([walled])
         self.assertTrue(any("Ulag the Cleaver" in n for n in result.notes))
 
     def test_the_family_social_pass_does_not_ask_a_member_on_a_class_quest(self):

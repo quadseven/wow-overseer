@@ -40,7 +40,12 @@ WHAT IT REFUSES, WITH A NAMED BLOCKER (a member never waits in silence):
            no quest that hands it over, or no spawn row;
   item     a quest item the member must use and no longer carries;
   map      every giver or objective spawn is on another map than the member's:
-           walk-to-spawn refuses a spawn on another map.
+           walk-to-spawn refuses a spawn on another map. When the spawns are
+           on the other classic continent the move is a CROSS (a
+           `cross-to-map map:<id>` row) instead; the blocker stands only when
+           the module has refused the crossing for good (Member.no_crossing:
+           the verb is off, or no transport serves the faction), or when the
+           spawns are on a map no boat or zeppelin reaches.
   level    every spawn of the objective is more than OVERLEVEL_MAX levels over
            the member: no pack is chosen that would kill it.
 
@@ -159,6 +164,9 @@ ABANDON_HOLD_MINUTES = 240
 # A quest taken this recently is not judged by the saved bags: the database trails
 # the live game, and the item the take handed over may not be in it yet.
 TAKE_SETTLE_MINUTES = 45
+# CROSS carries the member to the continent its quest is on (a `cross-to-map`
+# row); it is the move in place of a MAP blocker while a crossing may be asked.
+CROSS = "cross"
 # Blockers.
 GROUP, OBJECT, SOURCE, MAP, UNKNOWN = "group", "object", "source", "map", "unknown"
 # A quest item the member must use and does not carry.
@@ -212,12 +220,37 @@ MAX_HELPERS = 4
 # finish never keeps a member out of the dungeons for ever.
 OWED_HOURS = 6
 
-# THE ONE VERB A CROSS-CONTINENT CLASS QUEST WANTS AND THE MODULE DOES NOT HAVE
-# for a guild member. walk-to-spawn refuses a spawn on another map; the module's
-# boat and zeppelin crossing (build fact `crossing = boards`) serves only a
-# roster family member sailing to its leader. A kind='job' row that takes a
-# map id and walks, boards, rides and walks off for any bot would do it.
-CROSSING_VERB = "cross-to-map map:<id>"
+# THE VERB A CROSS-CONTINENT CLASS QUEST USES. walk-to-spawn refuses a spawn on
+# another map; the module's `cross-to-map map:<id>` row (kind='job', any bot,
+# guild or roster) walks to the berth of the member's own faction's boat or
+# zeppelin, waits for it to dock, boards, rides and walks off on the far
+# continent. The module prices the route from its own transport catalogue and
+# answers a refusal in the row's result: the bridge keeps no catalogue of its
+# own. Overseer.Cross.Enable (default 0) and Overseer.Cross.AtOnce bound it.
+CROSSING_VERB = "cross-to-map"
+# The source action of a crossing row (guildjobs.source_for), apart from the
+# class quest's walks so that none of their clocks read it.
+CROSS_ACTION = ACTION + "-cross"
+# A member is not asked to cross again for this long after its last crossing
+# row: longer than the module's own 30 minute crossing backstop, so one
+# crossing is in flight per member and a crossing back and forth never
+# runs faster than one an hour.
+CROSS_COOLDOWN_MINUTES = 35
+# A refusal the module calls retryable (the realm's crossing cap, a fight, a
+# dead character) is asked again sooner.
+CROSS_RETRY_MINUTES = 10
+# The module's refusals that say no crossing will come of asking, in its own
+# words (overseer_decisions.h, CrossRefusal): the verb is switched off, or no
+# transport serves the member's faction between the two maps. The destination
+# stays a named MAP blocker for this long.
+CROSS_WALLS = frozenset(
+    {
+        "crossing is off (Overseer.Cross.Enable)",
+        "no transport the module knows sails from this map to that map for this faction",
+        "the character is not a bot",
+    }
+)
+CROSS_WALL_MINUTES = 6 * 60
 
 # THE HUNT'S CLOCK. A hunt that makes no progress (the quest's kill and item
 # counts do not move) for HUNT_STALL_MINUTES is sent to another pack of the
@@ -681,6 +714,8 @@ class Move:
     title: str = ""
     # For a USE move: what is used at `spot`.
     use: Use | None = None
+    # For a CROSS move: the map id of the continent to cross to.
+    to_map: int = -1
 
 
 def _int(value, default=0) -> int:
@@ -1009,15 +1044,60 @@ def far_map(member, spawns) -> int:
     return min(other)
 
 
+def _walled(member, there) -> str:
+    """The module's reason it will not cross the member to map `there`, "" when
+    no refusal stands (Member.no_crossing, map id -> reason)."""
+    return str((getattr(member, "no_crossing", None) or {}).get(int(there), ""))
+
+
 def _across(member, spawns) -> str:
-    """The sentence ending a MAP blocker: where the quest is and what the
-    crossing lacks, or "" when the spawns are not on the other continent."""
+    """The sentence ending a MAP blocker: where the quest is and why the member
+    does not cross, or "" when the spawns are not on the other continent."""
     there = far_map(member, spawns)
     if there < 0:
         return ""
+    wall = _walled(member, there)
     return (
-        "; it is on %s, a boat or zeppelin away, and no verb carries a guild "
-        "member across (missing: %s)" % (CONTINENTS[there], CROSSING_VERB)
+        "; it is on %s, a boat or zeppelin away, and the module will not cross "
+        "the member (%s)"
+        % (
+            CONTINENTS[there],
+            wall or "no crossing asked yet",
+        )
+    )
+
+
+def is_cross_row(command) -> bool:
+    return str(command or "").split(" ", 1)[0] == CROSSING_VERB
+
+
+def cross_command(map_id) -> str:
+    return "%s map:%d" % (CROSSING_VERB, int(map_id))
+
+
+def _block_spawns(quest: Quest, member) -> list:
+    """The spawns whose map made blocker_of say MAP."""
+    if quest.uses:
+        use = _pending_use(quest, member)
+        if use is not None and use.spots:
+            return list(use.spots)
+    return list(quest.fields)
+
+
+def _crossing(member, quest: Quest, spawns, why: str, blocked: Move) -> Move:
+    """A CROSS move in place of a MAP-blocked `blocked` move, when its spawns
+    are all on the other continent and the module has not refused the crossing;
+    else `blocked`."""
+    there = far_map(member, spawns)
+    if there < 0 or _walled(member, there):
+        return blocked
+    said = "%s crosses to %s by its faction's boat or zeppelin for %s" % (
+        member.name,
+        CONTINENTS[there],
+        why,
+    )
+    return Move(
+        CROSS, quest.id, quest.klass, None, said, "", why, 0, quest.title, None, there
     )
 
 
@@ -1221,6 +1301,28 @@ def _groups(book: Book, member, avoid=None, held_off=frozenset()) -> list:
     return out
 
 
+# A variant in the log that is held for a reason of its own (a group, a stalled
+# hunt or use, ground over the member's level) is not left for a crossing to
+# the other variant's chain: it is asked for in guild chat or waited on.
+HOLDING = frozenset({GROUP, STALLED, USE_STALLED, LEVEL})
+
+
+def _live(made, member):
+    """The first Move of a reward group's variants that can be made now, None
+    when there is none. A CROSS does not pass over a variant in the member's
+    log that is HOLDING."""
+    for i, move in enumerate(made):
+        if move.kind == BLOCKED:
+            continue
+        if move.kind == CROSS and any(
+            b.kind == BLOCKED and b.blocker in HOLDING and _status(member, b.quest)
+            for b in made[:i]
+        ):
+            return None
+        return move
+    return None
+
+
 def moves(book: Book, member, avoid=None, held_off=frozenset()) -> list:
     """Every class reward the member lacks and may work toward now, as Moves,
     the lowest quest level first; a blocked one is a BLOCKED Move naming why.
@@ -1229,7 +1331,7 @@ def moves(book: Book, member, avoid=None, held_off=frozenset()) -> list:
     without progress; `held_off` the quest ids whose hunt was given up for now."""
     # The first move that can be made; else the first blocker, named.
     return [
-        next((m for m in made if m.kind != BLOCKED), made[0])
+        _live(made, member) or made[0]
         for _key, made in _groups(book, member, avoid, held_off)
     ]
 
@@ -1258,14 +1360,14 @@ def owed(book: Book, member, avoid=None, held_off=frozenset()):
     member of a level or race no quest of its class admits owes nothing, and
     nor does one whose every open variant is permanently blocked."""
     for _key, made in _groups(book, member, avoid, held_off):
-        live = next((m for m in made if m.kind != BLOCKED), None)
+        live = _live(made, member)
         if live is None:
             live = next((m for m in made if m.blocker not in PERMANENT), None)
         if live is None:
             continue
         quest = book.quests.get(int(live.quest))
         title = live.title or (quest.title if quest else "")
-        there = -1
+        there = live.to_map if live.kind == CROSS else -1
         if live.blocker == MAP and quest is not None:
             there = far_map(
                 member, list(quest.starters) + list(quest.enders) + list(quest.fields)
@@ -1311,7 +1413,10 @@ def _move_of(member, option, key, avoid=None, held_off=frozenset()) -> Move:
             if ends
             else (SOURCE, _no_creature(quest, word))
         )
-        return Move(BLOCKED, quest.id, quest.klass, None, said, block, why)
+        blocked = Move(BLOCKED, quest.id, quest.klass, None, said, block, why)
+        if block == MAP:
+            return _crossing(member, quest, ends, why, blocked)
+        return blocked
     verb = "hands in" if kind == TURN_IN else "takes"
     return Move(
         kind,
@@ -1488,9 +1593,12 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
     if block:
         want = helpers_for(quest) if block == GROUP else 0
         spot = _densest(member, quest.fields) if block == GROUP else None
-        return Move(
+        blocked = Move(
             BLOCKED, quest.id, quest.klass, spot, said, block, why, want, quest.title
         )
+        if block == MAP:
+            return _crossing(member, quest, _block_spawns(quest, member), why, blocked)
+        return blocked
     if using is not None:
         return _use_move(member, quest, using, why, tried)
     if quest.uses and not quest.fields:

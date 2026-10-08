@@ -538,6 +538,9 @@ class Member:
     # Bag slots free in the backpack and the worn bags; None when unread, which
     # keeps no quest waiting on room (class_room_needed).
     free_slots: int | None = None
+    # Maps the module has refused to cross this member to for good, with its
+    # reason (class_walls): classquest then names a MAP blocker, not a CROSS.
+    no_crossing: dict = field(default_factory=dict)
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -617,6 +620,8 @@ class Recent:
     entry: int = 0
     kills: int = 0
     loot: int = 0
+    # For a `cross-to-map map:<id>` row, the map id it asked for (0 otherwise).
+    dest: int = 0
 
 
 @dataclass(frozen=True)
@@ -2417,6 +2422,7 @@ def class_owed(m, book, recent=(), hunts=None, now=0.0):
             x=0.0 if m.x is None else m.x,
             y=0.0 if m.y is None else m.y,
         )
+    probe = with_walls(probe, recent)
     avoid, off = class_avoid(m, book, recent, hunts, now)
     return classquest.owed(book, probe, avoid, off)
 
@@ -2701,6 +2707,7 @@ def class_helps(m, book, hunts=None, now=0.0, recent=()) -> list:
     if not _class_ready(m, book):
         return []
     avoid, off = class_avoid(m, book, recent, hunts, now)
+    m = with_walls(m, recent)
     move, _blocked = classquest.next_move(book, m, avoid, off)
     if move is not None:
         return []
@@ -2710,11 +2717,86 @@ def class_helps(m, book, hunts=None, now=0.0, recent=()) -> list:
     ]
 
 
+def class_walls(name, recent) -> dict:
+    """map id -> the module's reason, for each map the module refused to cross
+    this member to for good (classquest.CROSS_WALLS) in its newest crossing row
+    to that map, inside classquest.CROSS_WALL_MINUTES. A later row to the map
+    that was not refused that way lifts the wall."""
+    newest: dict = {}
+    for r in recent or ():
+        if r.name != name or r.action != classquest.CROSS_ACTION or not r.dest:
+            continue
+        if r.dest not in newest or int(r.age_minutes) < int(newest[r.dest].age_minutes):
+            newest[r.dest] = r
+    return {
+        d: r.refusal
+        for d, r in newest.items()
+        if r.refusal in classquest.CROSS_WALLS
+        and int(r.age_minutes) < classquest.CROSS_WALL_MINUTES
+    }
+
+
+def with_walls(m, recent):
+    """The member with the crossings the module refused for good (class_walls)."""
+    walls = class_walls(m.name, recent)
+    return replace(m, no_crossing=walls) if walls else m
+
+
+def crossing_cooling(name, recent) -> bool:
+    """Whether the member's newest crossing row is too young to cross again: one
+    crossing is in flight per member. A refusal the module calls retryable is
+    asked again after classquest.CROSS_RETRY_MINUTES, any other row after
+    classquest.CROSS_COOLDOWN_MINUTES (over the module's own 30 minute backstop,
+    so a row still crossing is always inside it)."""
+    rows = [
+        r
+        for r in recent or ()
+        if r.name == name and r.action == classquest.CROSS_ACTION
+    ]
+    if not rows:
+        return False
+    newest = min(rows, key=lambda r: int(r.age_minutes))
+    minutes = (
+        classquest.CROSS_RETRY_MINUTES
+        if newest.refusal and newest.retryable
+        else classquest.CROSS_COOLDOWN_MINUTES
+    )
+    return int(newest.age_minutes) < minutes
+
+
+def _cross_step(m, move, recent):
+    """(step or None, what it does, note) for a CROSS move: one
+    `cross-to-map map:<id>` row, no walk (the module walks to the berth). The
+    member is held where it is, with no row, while its last crossing is young
+    or while it is dead."""
+    if not m.alive:
+        return None, move.said, _held_note(m, 0)
+    if crossing_cooling(m.name, recent):
+        return None, move.said, ""
+    step = guildcorps.Step(
+        m.name,
+        classquest.ACTION,
+        int(move.quest),
+        move.said,
+        rows=(
+            guildcorps.Row(
+                "job",
+                classquest.cross_command(move.to_map),
+                "",
+                source_for(classquest.CROSS_ACTION, m.name),
+            ),
+        ),
+        goal=classquest.CONTINENTS.get(int(move.to_map), ""),
+    )
+    return step, move.said, ""
+
+
 def _class_move(m, book, recent, hunts, now):
     """(move or None, blocked sentences): classquest.next_move, with a hunt
     that has stalled sent to another pack, or given up (HUNT_STALL_MINUTES)."""
     if hunts and productive_entries(m.name, recent, classquest.HUNT_STALL_MINUTES):
         hunts.productive(m.name, now)
+    m = with_walls(m, recent)
     avoid, off = class_avoid(m, book, recent, hunts, now)
     move, blocked = classquest.next_move(book, m, avoid, off)
     if not hunts or move is None or move.kind not in (classquest.HUNT, classquest.USE):
@@ -2958,6 +3040,9 @@ def class_step(
     note = "; ".join(blocked)
     if move is None:
         return None, "", note
+    if move.kind == classquest.CROSS:
+        step, doing, why = _cross_step(m, move, recent)
+        return step, doing, _join(note, why)
     room = class_room_step(m, move, book, recent, cap, kept, crafters, master)
     if room is not None:
         step, doing, why = room
@@ -3791,6 +3876,7 @@ def recent_from_rows(rows) -> tuple:
                 spawn=_spawn_of(row.get("command")),
                 abandoned=_abandoned_of(row.get("command")),
                 taken=_taken_of(row.get("command"), row.get("status")),
+                dest=_cross_dest_of(row.get("command")),
                 row_id=_int(row.get("id"), 0),
                 **_hunt_of(row),
                 **_refusal_of(row),
@@ -3864,6 +3950,12 @@ def _reason_of(row) -> str:
 def _spawn_of(command) -> int:
     """The spawn id of a `walk-to-spawn creature:<id>` command, else 0."""
     found = re.match(r"walk-to-spawn creature:(\d+)\b", str(command or ""))
+    return int(found.group(1)) if found else 0
+
+
+def _cross_dest_of(command) -> int:
+    """The map id of a `cross-to-map map:<id>` command, else 0."""
+    found = re.match(r"cross-to-map map:(\d+)\s*$", str(command or ""))
     return int(found.group(1)) if found else 0
 
 
