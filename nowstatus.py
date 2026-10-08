@@ -444,6 +444,37 @@ def _fresh(steps, now_at):
     return [s for s in steps if now_at - int(s.get("last_at") or 0) <= FRESH_SECONDS]
 
 
+def _clock(f: dict, steps: list, now_at):
+    """The database clock: the argument, else the facts', else a step's."""
+    if now_at is None:
+        now_at = int(f.get("now_at") or 0)
+    if not now_at and steps and steps[0].get("now_at"):
+        now_at = int(steps[0]["now_at"])
+    return now_at
+
+
+def _out_of_play(member: dict, f: dict):
+    """Doing and waiting for a character who is gone, dead or fighting, else None."""
+    if not member.get("present"):
+        on = (f.get("roster") or {}).get("enabled", 1)
+        return "Logged out", "a login" if on else "being switched on in the roster"
+    if member.get("condition") == "dead":
+        return "Dead", "a release or a resurrection"
+    if member.get("combat"):
+        return "Fighting", "the fight to end"
+    return None
+
+
+def _stored_reason(fresh: list, doing: str, waiting: str, since):
+    """A reason from a stored step beats a guess from the intent book, when it
+    is still being repeated: the bridge writes the step again on every pass."""
+    held = [s for s in fresh if s.get("waiting")]
+    if not held:
+        return doing, waiting, since
+    top = held[0]
+    return (doing or top["doing"]), top["waiting"], int(top["first_at"])
+
+
 def compose(member: dict, facts: dict | None, now_at: int | None = None) -> dict:
     """The sentence and the sheet for one character.
 
@@ -455,99 +486,81 @@ def compose(member: dict, facts: dict | None, now_at: int | None = None) -> dict
     """
     f = facts or {}
     steps = list(f.get("steps") or ())
-    if now_at is None:
-        now_at = int(f.get("now_at") or 0)
-    if not now_at and steps and steps[0].get("now_at"):
-        now_at = int(steps[0]["now_at"])
+    now_at = _clock(f, steps, now_at)
     fresh = _fresh(steps, now_at) if now_at else []
-    doing, waiting, since = "", "", None
-
-    if not member.get("present"):
-        roster = f.get("roster") or {}
-        doing = "Logged out"
-        waiting = (
-            "a login" if roster.get("enabled", 1) else "being switched on in the roster"
-        )
-    elif member.get("condition") == "dead":
-        doing, waiting = "Dead", "a release or a resurrection"
-    elif member.get("combat"):
-        doing, waiting = "Fighting", "the fight to end"
+    since = None
+    stopped = _out_of_play(member, f)
+    if stopped:
+        doing, waiting = stopped
     else:
         doing, waiting, since = _live(member, f, fresh, now_at)
-
-    # A reason from a stored step beats a guess from the intent book, when it is
-    # still being repeated: the bridge writes the step again on every pass.
-    if member.get("present") and not (
-        member.get("combat") or member.get("condition") == "dead"
-    ):
-        held = [s for s in fresh if s.get("waiting")]
-        if held:
-            top = held[0]
-            waiting, since = top["waiting"], int(top["first_at"])
-            if not doing or doing in ("Idle",):
-                doing = top["doing"]
-
+        doing, waiting, since = _stored_reason(fresh, doing, waiting, since)
     if not doing:
         doing, waiting, since = "Idle", "no errand and no hold found", None
-
     elapsed = max(0, now_at - since) if (since is not None and now_at) else None
-    line = _sentence(doing, waiting, elapsed)
     return {
         "doing": doing,
         "waiting": waiting,
         "for_s": elapsed,
-        "line": line,
+        "line": _sentence(doing, waiting, elapsed),
         "known": doing != "Idle",
         "steps": sheet(steps, now_at),
     }
 
 
-def _live(member, f, fresh, now_at):
-    """Doing, waiting, since for a character in the world and not fighting."""
-    mine = [s for s in fresh if s.get("scope") == "character"]
-    intent = f.get("intent")
-    state = f.get("member")
-    roster = f.get("roster") or {}
-    if intent and str(intent.get("current_kind") or "") not in ("", "none"):
-        doing = _walk_words(intent)
-        doing = doing[:1].upper() + doing[1:]
-        restarts = _restarts(f.get("steps") or (), now_at)
-        age = intent.get("current_for")
-        since = (now_at - int(age)) if (age is not None and now_at) else None
-        if restarts >= 3:
-            return (
-                doing,
-                "a way there; the walk has ended and restarted %d times" % restarts,
-                _first_restart(f.get("steps") or (), now_at) or since,
-            )
-        return doing, "to get there", since
-    if mine:
-        top = mine[0]
-        return top["doing"], top.get("waiting") or "", int(top["first_at"])
-    if state:
-        leader, st, detail = state
-        said = _MEMBER_STATES.get(st)
-        if said:
-            doing = said[0].format(leader=leader)
-            if detail:
-                doing += " (" + _detail_words(detail) + ")"
-            return doing, said[1].format(leader=leader), None
+def _from_intent(intent: dict, steps, now_at):
+    doing = _walk_words(intent)
+    doing = doing[:1].upper() + doing[1:]
+    age = intent.get("current_for")
+    since = (now_at - int(age)) if (age is not None and now_at) else None
+    restarts = _restarts(steps, now_at)
+    if restarts >= 3:
+        why = "a way there; the walk has ended and restarted %d times" % restarts
+        return doing, why, _first_restart(steps, now_at) or since
+    return doing, "to get there", since
+
+
+def _from_step(step: dict):
+    return step["doing"], step.get("waiting") or "", int(step["first_at"])
+
+
+def _from_member_state(state):
+    leader, st, detail = state
+    said = _MEMBER_STATES.get(st)
+    if not said:
         return "In state '%s' with %s" % (st, leader), "", None
-    own = [s for s in fresh if s.get("scope") == "family"]
-    if own:
-        top = own[0]
-        return top["doing"], top.get("waiting") or "", int(top["first_at"])
+    doing = said[0].format(leader=leader)
+    if detail:
+        doing += " (" + _detail_words(detail) + ")"
+    return doing, said[1].format(leader=leader), None
+
+
+def _from_job(roster: dict):
     job = str(roster.get("job") or "")
     if job.startswith("dungeon:"):
-        done, wanted = (
-            roster.get("dungeon_runs_done"),
-            roster.get("dungeon_runs_wanted"),
-        )
+        done = roster.get("dungeon_runs_done")
+        wanted = roster.get("dungeon_runs_wanted")
         run = " (run %d of %d)" % (int(done) + 1, int(wanted)) if wanted else ""
         return "On the " + job.split(":", 1)[1] + " dungeon job" + run, "", None
     if job and job != "quest":
         return "On the '" + job + "' job", "", None
     return "", "", None
+
+
+def _live(member, f, fresh, now_at):
+    """Doing, waiting, since for a character in the world and not fighting."""
+    intent = f.get("intent")
+    if intent and str(intent.get("current_kind") or "") not in ("", "none"):
+        return _from_intent(intent, f.get("steps") or (), now_at)
+    for scope in ("character", None, "family"):
+        if scope is None:
+            if f.get("member"):
+                return _from_member_state(f["member"])
+            continue
+        mine = [s for s in fresh if s.get("scope") == scope]
+        if mine:
+            return _from_step(mine[0])
+    return _from_job(f.get("roster") or {})
 
 
 def _detail_words(detail: str) -> str:
