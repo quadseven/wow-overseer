@@ -34,6 +34,8 @@ apparent confidence is worse than one that promotes the first. The hero is
 whoever the viewer picked. Nothing here ranks anybody.
 """
 
+import nowstatus
+
 # THE THREE SHAPES, and they exist because five streams have three honestly
 # different jobs. FIVE UP is the family: nobody is the subject, and the point
 # is who is where. STACKED is reading: one column, in roster order, for a
@@ -211,7 +213,7 @@ def headline(members) -> str:
     return "%d of %d in the world" % (here, len(members))
 
 
-def build_heads(families, observers=()) -> dict:
+def build_heads(families, observers=(), facts=None) -> dict:
     """The Watch wall across every family: only the characters with a picture.
 
     `families` is [(family key, family.build_family payload)], in the order
@@ -225,6 +227,10 @@ def build_heads(families, observers=()) -> dict:
 
     `observers` are cards for streamed characters that belong to no family
     (the Watcher). They follow every family's heads, keyed `family=""`.
+
+    `facts` is what nowstatus composes each tile's "Doing / Waiting for"
+    sentence from: a name -> facts dict, or False when the feed could not be
+    read (every tile then says so). None leaves the tiles without a `now` key.
     """
     members = []
     keys = []
@@ -237,13 +243,13 @@ def build_heads(families, observers=()) -> dict:
     return {
         "members": members,
         "families": keys,
-        "wall": build_wall(members),
+        "wall": build_wall(members, facts=facts),
         "here": sum(1 for m in members if m.get("present")),
         "expected": len(members),
     }
 
 
-def build_wall(members, chosen=None) -> dict:
+def build_wall(members, chosen=None, facts=None) -> dict:
     """The whole wall, composed, in roster order.
 
     ROSTER ORDER IS NEVER TOUCHED. `family.roster` is seniority, which is the
@@ -254,20 +260,23 @@ def build_wall(members, chosen=None) -> dict:
     """
     tiles = []
     for m in members:
-        tiles.append(
-            {
-                "name": m.get("name"),
-                "role": m.get("role"),
-                "class": m.get("class"),
-                "class_colour": m.get("class_colour"),
-                "leader": bool(m.get("leader")),
-                "playable": playable(m),
-                "url": (m.get("broadcast_url") or "") or None,
-                "standing": standing(m),
-                "line": status_line(m),
-                "tone": tone_of(m),
-            }
-        )
+        tile = {
+            "name": m.get("name"),
+            "role": m.get("role"),
+            "class": m.get("class"),
+            "class_colour": m.get("class_colour"),
+            "leader": bool(m.get("leader")),
+            "playable": playable(m),
+            "url": (m.get("broadcast_url") or "") or None,
+            "standing": standing(m),
+            "line": status_line(m),
+            "tone": tone_of(m),
+        }
+        if facts is False:
+            tile["now"] = nowstatus.unavailable()
+        elif facts is not None:
+            tile["now"] = nowstatus.compose(m, facts.get(m.get("name")))
+        tiles.append(tile)
     return {
         "modes": list(MODES),
         "mode_labels": dict(MODE_LABELS),
