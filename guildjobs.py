@@ -2359,6 +2359,8 @@ def level_step(m, world, recent, cap):
 
 # THE CLASS QUEST (classquest.py).
 CLASSQUEST_STEPS_PER_GUILD = 6
+# What the module says when a walk stops getting nearer its target.
+STALLED_WALK_REASON = "stopped getting nearer the spawn"
 
 
 def _class_spot(move) -> Spot:
@@ -2941,8 +2943,9 @@ def class_step(
     row there, which the bridge follows by its answer (classuse.py); the same
     clock moves it to another target and gives it up.
     """
-    if not _class_ready(m, book):
-        return None, "", ""
+    early = _class_early(m, book, recent)
+    if early is not None:
+        return early
     move, blocked = _class_move(m, book, recent, hunts, now)
     note = "; ".join(blocked)
     if move is None:
@@ -3281,6 +3284,58 @@ def last_gear_failed(name, recent) -> bool:
         return False
     newest = min(rows, key=lambda r: int(r.age_minutes))
     return newest.status in TRAIN_FAILED
+
+
+# A death knight standing on the ground below Acherus cannot walk up to its giver
+# (266 yards of height), and a hearthstone is a player's way home to the inn it
+# is bound at, in Acherus (2026-10-08). After this many walks to a giver that
+# stopped getting nearer within STRANDED_WALK_WINDOW_MINUTES, it asks for the
+# hearth recall: the stone's own spell, for a knight that has lost the stone.
+STRANDED_STALLED_WALKS = 2
+STRANDED_WALK_WINDOW_MINUTES = 240
+
+
+def _class_early(m, book, recent):
+    """The result of class_step when it is settled before any move is read: a
+    member that cannot be given a move now (nothing, no note), or a stranded
+    death knight's hearth recall. None when the move is to be read."""
+    if not _class_ready(m, book):
+        return None, "", ""
+    recall = stranded_recall_step(m, recent)
+    if recall is not None:
+        return recall, recall.said, ""
+    return None
+
+
+def stranded_recall_step(m, recent):
+    """The hearth recall step for a death knight stranded in its starting zone
+    after repeated stalled walks, or None. Held by the hearth cooldown."""
+    if not (
+        int(m.class_id) == classquest.DEATH_KNIGHT
+        and m.map_id == classquest.DEATH_KNIGHT_START_MAP
+        and m.alive
+        and not m.in_combat
+    ):
+        return None
+    stalled = [
+        r
+        for r in recent or ()
+        if r.name == m.name
+        and r.action == classquest.ACTION
+        and r.walk
+        and r.reason == STALLED_WALK_REASON
+        and int(r.age_minutes) < STRANDED_WALK_WINDOW_MINUTES
+    ]
+    if len(stalled) < STRANDED_STALLED_WALKS or _cooling(m, "hearth", recent):
+        return None
+    return guildcorps.Step(
+        m.name,
+        "hearth",
+        0,
+        "%s hearths home to Acherus: its walks to a giver there stopped getting nearer"
+        % m.name,
+        rows=(guildcorps.Row("hearth", "recall", "", source_for("hearth", m.name)),),
+    )
 
 
 def hearth_step(m):
