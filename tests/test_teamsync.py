@@ -196,7 +196,10 @@ class StalledOnRenames(unittest.TestCase):
         self.assertIn(
             "the guild is full (71) and the approved teams name no leaver", why
         )
-        self.assertIn("no candidate at level 10 or under fits Fuggo", why)
+        self.assertIn(
+            "no candidate at level 10 or under fits Fizzog, Fuggo, Gorrk, Haggo, Hrunt",
+            why,
+        )
 
     def test_the_head_not_in_the_world_is_named(self):
         members = [m for m in _cave_live() if m["level"] != 1]
