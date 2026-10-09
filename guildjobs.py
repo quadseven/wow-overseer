@@ -4145,15 +4145,42 @@ def recent_from_rows(rows) -> tuple:
 
 
 def with_recent_takes(m, recent):
-    """The member with the quests it took inside TAKE_SETTLE_MINUTES."""
+    """The member with the quests it took inside TAKE_SETTLE_MINUTES, each one
+    also in its quest log until the saved log has it.
+
+    THE SAVED QUEST LOG TRAILS THE TAKE (2026-10-09). The realm saves a
+    character every 15 minutes or so; Brug took The Emblazoned Runeblade at
+    12:57 and the pass at 13:01 read a log without it and sent him to take it
+    again, so the sword's use waited for a save while he wandered off. A quest
+    dropped after its take is not put back."""
+    mine = [r for r in recent or () if r.name == m.name]
     taken = frozenset(
         r.taken
-        for r in recent or ()
-        if r.name == m.name
-        and r.taken
-        and int(r.age_minutes) < classquest.TAKE_SETTLE_MINUTES
+        for r in mine
+        if r.taken and int(r.age_minutes) < classquest.TAKE_SETTLE_MINUTES
     )
-    return replace(m, recently_taken=taken) if taken else m
+    if not taken:
+        return m
+    log = dict(m.quest_log or {})
+    for quest in taken:
+        if quest in log or quest in m.quests_done or _dropped_since_take(mine, quest):
+            continue
+        log[quest] = classquest.STATUS_INCOMPLETE
+    return replace(m, recently_taken=taken, quest_log=log)
+
+
+def _dropped_since_take(rows, quest) -> bool:
+    """Whether the newest row that dropped `quest` is newer than its newest take."""
+    took = min((int(r.age_minutes) for r in rows if r.taken == quest), default=None)
+    dropped = min(
+        (
+            int(r.age_minutes)
+            for r in rows
+            if r.abandoned == quest and r.status not in TRAIN_FAILED
+        ),
+        default=None,
+    )
+    return took is not None and dropped is not None and dropped <= took
 
 
 def _taken_of(command, status) -> int:
