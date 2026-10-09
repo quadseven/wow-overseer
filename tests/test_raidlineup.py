@@ -322,11 +322,21 @@ class TheNaturalGuildsFillEveryGroup(unittest.TestCase):
         cover = lineup["buff_cover"]
         self.assertEqual(cover[raidlineup.BLESSINGS]["bearers"], 3)
         self.assertEqual(cover[raidlineup.BLESSINGS]["groups"], 3)
-        self.assertEqual(
-            lineup["recruit_classes"],
-            [PALADIN, raidlineup.SHAMAN, PRIEST, raidlineup.DRUID],
-        )
+        # A raid buff is anyone's to cast (MIN_BUFF_BEARERS): only the buff with
+        # fewer than two bearers asks for a recruit, here the druid's Mark.
+        self.assertEqual(lineup["recruit_classes"], [raidlineup.DRUID])
         self.assertIn("No seat gap", lineup["gap_line"])
+        self.assertIn("mark has 1", lineup["gap_line"])
+        self.assertNotIn("reaches", lineup["gap_line"])
+
+    def test_one_bearer_per_group_is_not_asked_for(self):
+        # Eight groups, two druids: the old rule wanted a Mark bearer in every
+        # group; a bot casts it on anyone, so two (one to cover) are enough.
+        roster = _roster(WARRIOR=8, PRIEST=11, PALADIN=4, DRUID=2, MAGE=15)
+        lineup = raidlineup.build_lineup(roster)
+        self.assertEqual(lineup["buff_cover"][raidlineup.MARK]["bearers"], 2)
+        self.assertNotIn("mark has", lineup["gap_line"])
+        self.assertNotIn(raidlineup.DRUID, lineup["recruit_classes"])
 
     def test_a_death_knight_is_never_a_recruit(self):
         lineup = raidlineup.build_lineup(_roster(MAGE=40))

@@ -134,6 +134,13 @@ DAMAGE_WORD = "damage"
 BLESSINGS, FORTITUDE, MARK = "blessings or totems", "fortitude", "mark"
 BUFF_OF = {PALADIN: BLESSINGS, SHAMAN: BLESSINGS, PRIEST: FORTITUDE, DRUID: MARK}
 BUFFS = (BLESSINGS, FORTITUDE, MARK)
+# A RAID BUFF IS ANYONE'S TO CAST (the operator, 2026-10-08). Mark of the Wild,
+# Fortitude and the blessings go on one raider at a time, and a bot casts the
+# moment a buff is missing or a raider has died and returned, so a raid does not
+# need a bearer in every group of five. It needs one to cast and one to cover
+# for another that died. (Totems, shouts and other group-scoped buffs are a
+# different matter, and are placed by group.)
+MIN_BUFF_BEARERS = 2
 
 # Who to recruit for a missing seat, most useful first. A class that fills
 # only the missing seat comes before a hybrid, which could be taken for the
@@ -354,7 +361,7 @@ def _recruit_classes(gaps: dict, cover: dict | None = None, groups: int = 0) -> 
     else:
         out = []
     for buff in BUFFS:
-        if cover and groups and cover.get(buff, {}).get("bearers", 0) < groups:
+        if cover and cover.get(buff, {}).get("bearers", 0) < MIN_BUFF_BEARERS:
             out += list(RECRUIT_FOR_BUFF[buff])
     return list(dict.fromkeys(out))
 
@@ -711,12 +718,15 @@ def gap_line(
         % groups
     )
     thin = [
-        "%s reaches %d of %d" % (buff, cover[buff]["groups"], groups)
+        "%s has %d" % (buff, cover.get(buff, {}).get("bearers", 0))
         for buff in BUFFS
-        if cover and groups and cover.get(buff, {}).get("bearers", 0) < groups
+        if cover and cover.get(buff, {}).get("bearers", 0) < MIN_BUFF_BEARERS
     ]
     if thin:
-        line += " Too few raiders bring a buff to every group: %s." % "; ".join(thin)
+        line += (
+            " Too few raiders can cast a raid buff (%d are wanted so one can cover "
+            "for another that died): %s." % (MIN_BUFF_BEARERS, "; ".join(thin))
+        )
     if recruit:
         line += " Recruiting prefers %s." % ", ".join(CLASS_NAMES[c] for c in recruit)
     return line
