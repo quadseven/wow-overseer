@@ -2137,6 +2137,7 @@ def plan(
         if m.role not in (MAINTENANCE, SUMMONER, RAIDER):
             continue
         master = str(masters.get(m.guild) or "")
+        level_room = counters["level"].get(m.guild, 0) < guildlevel.STEPS_PER_GUILD
         step, doing, note = _member_step(
             m,
             (gear or {}).get(m.name),
@@ -2157,6 +2158,7 @@ def plan(
             hunts,
             now,
             far,
+            level_room,
         )
         lines[m.name] = doing
         helps += class_helps(m, classes, hunts, now, recent)
@@ -2276,6 +2278,7 @@ def _member_step(
     hunts=None,
     now=0.0,
     far=None,
+    level_room=True,
 ):
     """A class quest first, then gear, then PvP for an upgrade, then the post, then a walk out of an
     outgrown zone, then the member's ordinary job (a craft-focus guild's trade
@@ -2286,7 +2289,16 @@ def _member_step(
     level walk and every ordinary job, and it has its own allowance per guild
     (CLASSQUEST_STEPS_PER_GUILD), so no other kind of step can use up the
     passes it needs. A member held on a class quest is also kept out of the
-    guild's dungeon asks (the bridge's mid_job set)."""
+    guild's dungeon asks (the bridge's mid_job set).
+
+    The one exception is a class step that keeps failing (class_stall_hold):
+    while its hold lasts, the member's level walk out of an outgrown zone goes
+    ahead of it, when the guild has a level walk left this pass (`level_room`)
+    and the member has a walk to make. Otherwise the class step is first, as
+    above."""
+    first = stalled_level_first(m, leveling, recent, cap, level_room)
+    if first is not None:
+        return first
     step, doing, quest_note = class_step(
         m, classes, recent, cap, hunts, now, far, kept, crafters, master
     )
@@ -2330,9 +2342,10 @@ def level_step(m, world, recent, cap):
     band fits its level (guildlevel.py).
 
     Never a roster family member (levelroute walks those), never at the level
-    cap, never while offline or fighting, and at most once per
-    COOLDOWN_MINUTES["level"]. The walk is `walk-to-spawn creature:` naming
-    the flight master's spawn, at the pass's cap.
+    cap, never while offline, fighting or dead, never on a way that has killed
+    it (deadly_hub_note), and at most once per COOLDOWN_MINUTES["level"]. The
+    walk is `walk-to-spawn creature:` naming the flight master's spawn, at the
+    pass's cap.
     """
     # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
     # a member contributes, not where it walks: on the dev realm 1 of Cave's
@@ -2346,6 +2359,12 @@ def level_step(m, world, recent, cap):
     why = guildlevel.outgrown(m.level, m.race, m.map_id, m.zone_id, bands)
     if not why:
         return None, "", ""
+    # A GHOST IS WALKED NOWHERE (2026-10-09). On the dev realm 45 of 207 level
+    # walks in a day went to a dead member: each was refused "character is
+    # dead" and started the walk's two hour cooldown, so the member stood in
+    # its outgrown zone up to two hours longer once it was alive again.
+    if not m.alive:
+        return None, "", _held_note(m, 0)
     choice = guildlevel.choose(
         m.level, m.race, m.map_id, bands, world.masters, zone_id=m.zone_id
     )
@@ -2354,6 +2373,9 @@ def level_step(m, world, recent, cap):
     master = choice.master
     if guildlevel.there(m.map_id, m.x, m.y, master):
         return None, "", ""
+    deadly = deadly_hub_note(m, master, choice, recent)
+    if deadly:
+        return None, "", deadly
     if _cooling(m, guildlevel.ACTION, recent):
         return None, "", ""
     said = guildlevel.said(m.name, m.level, why, choice)
@@ -2367,6 +2389,36 @@ def level_step(m, world, recent, cap):
         why=why,
     )
     return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, ""
+
+
+# A WAY TO A HUB THAT KILLS IS NOT WALKED AGAIN FOR HOURS (2026-10-09). On the
+# dev realm 54 of 207 level walks in a day ended "died on the way to the spawn",
+# at least 30 of them nine Alliance members' walks to the flight master at
+# Sentinel Hill in Westfall, one member dying on that way 6 times. The walk was
+# asked again at every cooldown. It now keeps the class quest's death hold
+# (deadly_ways): two deaths on the way to the same flight master inside
+# classquest.DEATH_WINDOW_MINUTES hold that walk for
+# classquest.DEATH_BACKOFF_MINUTES, named in the notes. The stalled class step's
+# level walk (stalled_level_first) goes through level_step and keeps it too.
+def deadly_hub_note(m, master, choice, recent) -> str:
+    """The note for a member whose level walk to `master` has killed it
+    (deadly_ways over guildlevel.ACTION rows), "" when it has not."""
+    found = deadly_ways(m.name, recent, guildlevel.ACTION).get(int(master.spawn))
+    if found is None:
+        return ""
+    deaths, newest = found
+    return (
+        "%s died %d times on the way to the flight master at %s: its way crosses "
+        "ground above level %d that the walk cannot avoid, so no level walk there "
+        "for %d more minute(s)"
+        % (
+            m.name,
+            deaths,
+            choice.place or master.name,
+            int(m.level),
+            classquest.DEATH_BACKOFF_MINUTES - newest,
+        )
+    )
 
 
 # THE CLASS QUEST (classquest.py).
@@ -2599,7 +2651,6 @@ def refused_marks(name, recent) -> dict:
     SPAWN_SHORT_MINUTES, the rest SPAWN_REFUSED_MINUTES) and written after
     classquest.TRIED_EPOCH."""
     marks = {}
-    deaths = {}
     for r in recent or ():
         if (
             r.name != name
@@ -2610,11 +2661,6 @@ def refused_marks(name, recent) -> dict:
         ):
             continue
         age = int(r.age_minutes)
-        if (
-            r.reason == classquest.DEATH_REASON
-            and age < classquest.DEATH_WINDOW_MINUTES
-        ):
-            deaths.setdefault(r.spawn, []).append(age)
         short = r.reason in classquest.SPAWN_SHORT_REFUSALS
         hold = (
             classquest.SPAWN_SHORT_MINUTES
@@ -2624,14 +2670,36 @@ def refused_marks(name, recent) -> dict:
         if age < hold:
             marks[r.spawn] = min(age, marks.get(r.spawn, age))
     # A spawn the member has died on the way to more than once is left long.
-    for spawn, ages in deaths.items():
-        newest = min(ages)
-        if (
-            len(ages) >= classquest.DEATHS_BEFORE_LONG_HOLD
-            and newest < classquest.DEATH_BACKOFF_MINUTES
-        ):
-            marks[spawn] = min(newest, marks.get(spawn, newest))
+    for spawn, (_deaths, newest) in deadly_ways(name, recent).items():
+        marks[spawn] = min(newest, marks.get(spawn, newest))
     return marks
+
+
+def deadly_ways(name, recent, action=classquest.ACTION) -> dict:
+    """spawn id -> (deaths, minutes since the newest) for each spawn this
+    member died on the way to (classquest.DEATH_REASON) at least
+    classquest.DEATHS_BEFORE_LONG_HOLD times inside DEATH_WINDOW_MINUTES, the
+    newest inside DEATH_BACKOFF_MINUTES: a way that kills, held for hours. Only
+    the walk rows of `action` (a class quest's, or guildlevel.ACTION for the
+    level walk) written after classquest.TRIED_EPOCH count."""
+    deaths: dict = {}
+    for r in recent or ():
+        if (
+            r.name != name
+            or r.action != action
+            or not r.spawn
+            or r.reason != classquest.DEATH_REASON
+            or _before_epoch(r)
+            or int(r.age_minutes) >= classquest.DEATH_WINDOW_MINUTES
+        ):
+            continue
+        deaths.setdefault(r.spawn, []).append(int(r.age_minutes))
+    return {
+        spawn: (len(ages), min(ages))
+        for spawn, ages in deaths.items()
+        if len(ages) >= classquest.DEATHS_BEFORE_LONG_HOLD
+        and min(ages) < classquest.DEATH_BACKOFF_MINUTES
+    }
 
 
 def refused_spawns(name, recent) -> frozenset:
@@ -2791,12 +2859,16 @@ def _cross_step(m, move, recent):
     return step, move.said, ""
 
 
-def _cross_or_room_step(m, move, book, recent, cap, kept, crafters, master):
+def _no_walk_step(m, move, book, recent, cap, kept, crafters, master):
     """(step or None, what it does, note) for a class move that is no walk to
-    its spot: a crossing (_cross_step), or room made in the bags first
+    its spot: a crossing (_cross_step), a way that kills the member, named and
+    not walked (deadly_way_note), or room made in the bags first
     (class_room_step); None when the move walks to its spot."""
     if move.kind == classquest.CROSS:
         return _cross_step(m, move, recent)
+    deadly = deadly_way_note(m, move, recent)
+    if deadly:
+        return None, "", deadly
     return class_room_step(m, move, book, recent, cap, kept, crafters, master)
 
 
@@ -3039,7 +3111,9 @@ def class_step(
     silence. A quest that has the member use an item on a creature or click a
     gameobject (classquest.USE) is a walk to the target and one `kind='quest'`
     row there, which the bridge follows by its answer (classuse.py); the same
-    clock moves it to another target and gives it up.
+    clock moves it to another target and gives it up. A walk whose way has
+    killed the member (deadly_way_note) is not written: the blocker is named
+    and the member goes about the rest of its work.
     """
     early = _class_early(m, book, recent)
     if early is not None:
@@ -3049,7 +3123,7 @@ def class_step(
     note = "; ".join(blocked)
     if move is None:
         return None, "", note
-    first = _cross_or_room_step(m, move, book, recent, cap, kept, crafters, master)
+    first = _no_walk_step(m, move, book, recent, cap, kept, crafters, master)
     if first is not None:
         step, doing, why = first
         return step, doing, _join(note, why)
@@ -3122,6 +3196,55 @@ def _class_held(m, move, spot, cap, recent, hunts, now, far, book=None):
     if _cooling(m, classquest.ACTION, acted) and not follows_a_take(m, acted):
         return ""
     return _slot_note(m, move, spot, cap, hunts, now, far)
+
+
+# A WAY THAT KILLS IS A BLOCKER, NOT A WALK (2026-10-09). The death hold of
+# refused_marks reached the hunt's packs only (classquest.marked_places names
+# objective spawns), and with every pack held the oldest is asked again after
+# classquest.SPAWN_RETRY_MINUTES (classquest.roll_oldest), so a giver, an ender,
+# a use target or a hunt's only spawn was walked to again however often the way
+# killed the member. In a day on the dev realm 83 of the 97 class quest walks
+# that ended "died on the way to the spawn" were walks to a giver or an ender, a
+# level 13 druid dying 14 times between Teldrassil and Moonglade, and Cave's
+# warlocks died on the way to Surena Caledon in Elwynn Forest, the one spawn of
+# their hunt (a level 22 from Dun Morogh by Searing Gorge and Burning Steppes).
+# The far walk follows the module's own path over the ground, which the bridge
+# does not choose, so a way through ground far above the member cannot be
+# steered around from here: it is held for as long as deadly_ways says and named
+# in the plan's notes, and the member goes about the rest of its work.
+DEADLY_WAY_MOVES = frozenset(
+    {classquest.TAKE, classquest.TURN_IN, classquest.USE, classquest.HUNT}
+)
+
+
+def deadly_way_note(m, move, recent) -> str:
+    """The blocker sentence for a class move whose walk to a giver, an ender, a
+    creature it uses an item on or a pack it hunts has killed the member
+    (deadly_ways), "" when it has not, when the spot is a gameobject (whose walk
+    names no creature spawn) or when the member stands within
+    classquest.HUNT_REACH of it, where no far walk is left to make."""
+    if move.kind not in DEADLY_WAY_MOVES or move.spot is None:
+        return ""
+    spot = _class_spot(move)
+    if spot.kind != "creature" or _near(m, spot, classquest.HUNT_REACH):
+        return ""
+    found = deadly_ways(m.name, recent).get(int(spot.spawn))
+    if found is None:
+        return ""
+    deaths, newest = found
+    return (
+        "%s died %d times on the way to %s for %s: its way crosses ground above "
+        "level %d that the walk cannot avoid, so no walk there for %d more "
+        "minute(s)"
+        % (
+            m.name,
+            deaths,
+            spot.name or "its target",
+            move.why or "its " + classquest.MARK,
+            int(m.level),
+            classquest.DEATH_BACKOFF_MINUTES - newest,
+        )
+    )
 
 
 # A class step that follows a take is not held by the class cooldown, for this
@@ -3516,6 +3639,96 @@ def stranded_recall_step(m, recent):
         % m.name,
         rows=(guildcorps.Row("hearth", "recall", "", source_for("hearth", m.name)),),
     )
+
+
+# A CLASS STEP THAT KEEPS FAILING LETS THE LEVEL WALK GO FIRST (2026-10-09). On
+# the dev realm 19 guild members stood for 36 minutes and more in starting
+# zones below their level, 13 of them held on a class quest step that kept
+# failing: in a day 451 class quest walks ended in error against 145 that
+# arrived, and a level 23 member in Tirisfal Glades clicked the same gameobject
+# 8 times in 6 hours to no effect. The class step is the first rung of
+# _member_step, so the walk out of the outgrown zone (level_step) never ran for
+# them. The operator's rule stands (every member does its class quests first),
+# with this bound: after CLASS_STALL_ROWS class quest rows in a row that failed,
+# inside CLASS_STALL_WINDOW_MINUTES (the stranded knight's window), the class
+# step is held for CLASS_STALL_HOLD_MINUTES after the newest of them, and the
+# member's level walk may go ahead of it meanwhile. The hold is as long as the
+# level walk's own cooldown: while the class step keeps failing the member
+# takes one level walk per cooldown and its class step is asked in between,
+# and once a class row goes through or the hold runs out, the class step is
+# first again.
+#
+# WHAT COUNTS. A row that failed (TRAIN_FAILED) counts, a walk that ended in a
+# death among them. A refusal the module calls retryable (a far walk wall, a
+# fight, another verb's hold, a dead character) says nothing about the quest
+# and is passed over, and so is a walk that arrived: reaching a giver is no
+# progress until the take goes through. A row that went through (a take, a
+# hand-in, a use the module spent), took a quest or made a kill ends the run.
+CLASS_STALL_ROWS = 3
+CLASS_STALL_WINDOW_MINUTES = STRANDED_WALK_WINDOW_MINUTES
+CLASS_STALL_HOLD_MINUTES = guildlevel.COOLDOWN_MINUTES
+
+
+def class_stall_hold(name, recent) -> tuple:
+    """(minutes left of the hold, failed rows in the run) for a member whose
+    newest class quest rows failed CLASS_STALL_ROWS times or more in a row
+    inside CLASS_STALL_WINDOW_MINUTES; (0, failed) when they did not or the
+    hold has run out."""
+    failed = _failed_run(_telling_class_rows(name, recent))
+    if len(failed) < CLASS_STALL_ROWS:
+        return 0, len(failed)
+    return max(0, CLASS_STALL_HOLD_MINUTES - int(failed[0].age_minutes)), len(failed)
+
+
+def _telling_class_rows(name, recent) -> list:
+    """The member's class quest rows inside CLASS_STALL_WINDOW_MINUTES that say
+    something about the quest, newest first: no retryable refusal, nothing
+    written before classquest.TRIED_EPOCH."""
+    return sorted(
+        (
+            r
+            for r in recent or ()
+            if r.name == name
+            and r.action == classquest.ACTION
+            and int(r.age_minutes) < CLASS_STALL_WINDOW_MINUTES
+            and not (r.refusal and r.retryable)
+            and not _before_epoch(r)
+        ),
+        key=lambda r: int(r.age_minutes),
+    )
+
+
+def _failed_run(rows) -> list:
+    """The failed rows at the head of `rows` (newest first), up to the first
+    that made progress. A walk that arrived is passed over."""
+    failed = []
+    for r in rows:
+        moved = bool(r.kills or r.taken)
+        if r.status in TRAIN_FAILED and not moved:
+            failed.append(r)
+        elif moved or not r.walk:
+            break
+    return failed
+
+
+def stalled_level_first(m, leveling, recent, cap, room=True):
+    """(step, what it does, note) of the level walk for a member whose class
+    step is held for failing (class_stall_hold), or None: no hold, no level
+    walk left to the guild this pass (`room`), or no walk to make
+    (level_step)."""
+    if not room or leveling is None:
+        return None
+    left, failed = class_stall_hold(m.name, recent)
+    if not left:
+        return None
+    step, doing, _note = level_step(m, leveling, recent, cap)
+    if step is None:
+        return None
+    note = (
+        "%s's class quest step failed %d times in a row without progress; its "
+        "level walk goes first for %d more minute(s)" % (m.name, failed, left)
+    )
+    return step, doing, note
 
 
 def hearth_step(m):
