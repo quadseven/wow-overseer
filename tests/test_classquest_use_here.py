@@ -217,5 +217,43 @@ class TheStep(unittest.TestCase):
         self.assertTrue(classuse.is_use_row("use-item-here item:38607"))
 
 
+class TheLatelyTakenQuest(unittest.TestCase):
+    """The saved bags trail the live game: a take handed its item over (2026-10-08)."""
+
+    def move(self, **over):
+        return classquest.next_move(runeblade(), knight(**over))
+
+    def test_without_a_lately_taken_mark_a_missing_sword_is_a_loss(self):
+        move, _ = self.move()
+        self.assertEqual(move.kind, classquest.ABANDON)
+
+    def test_a_lately_taken_quest_is_trusted_to_have_handed_the_sword_over(self):
+        move, blocked = self.move(recently_taken=frozenset({12619}))
+        self.assertEqual(blocked, [])
+        self.assertEqual(
+            (move.kind, move.use.verb), (classquest.USE, classquest.USE_HERE)
+        )
+
+    def test_class_step_marks_a_member_from_its_recent_take(self):
+        rows = guildjobs.recent_from_rows(
+            [
+                {
+                    "target_name": "Brug",
+                    "command": "take quest:12619",
+                    "source": guildjobs.source_for(classquest.ACTION, "Brug"),
+                    "status": "delivered",
+                    "age": 10,
+                    "result": "",
+                }
+            ]
+        )
+        self.assertEqual(
+            guildjobs.with_recent_takes(knight(), rows).recently_taken, {12619}
+        )
+        self.assertEqual(
+            guildjobs.with_recent_takes(knight(), ()).recently_taken, frozenset()
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
