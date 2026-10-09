@@ -37,7 +37,7 @@ import unittest
 import guildcraft
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 MODULE = (HERE / "guildcraft.py").read_text(encoding="utf-8")
 
@@ -529,7 +529,7 @@ class TheMobileRules(unittest.TestCase):
 class TheHouseRules(unittest.TestCase):
     def test_no_em_dashes(self):
         for name in (
-            "index.html",
+            "classic.html",
             "map_server.py",
             "guildcraft.py",
             "tests/test_trades_tab.py",

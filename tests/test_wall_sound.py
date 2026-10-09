@@ -22,7 +22,7 @@ import re
 import unittest
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-with open(os.path.join(HERE, "index.html"), encoding="utf-8") as _fh:
+with open(os.path.join(HERE, "classic.html"), encoding="utf-8") as _fh:
     PAGE = _fh.read()
 SCRIPTS = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script[^>]*>", PAGE, re.S | re.I)
 APP = max(SCRIPTS, key=len)
@@ -55,7 +55,7 @@ class ThePageMakesNoSoundOfItsOwn(unittest.TestCase):
             "<audio",
         ):
             absent(self, needle, code(APP), "the page script")
-        absent(self, "<audio", PAGE, "index.html")
+        absent(self, "<audio", PAGE, "classic.html")
 
     def test_the_toggle_no_longer_promises_a_tone(self):
         button = PAGE[PAGE.index('<button id="wallsound"') :]

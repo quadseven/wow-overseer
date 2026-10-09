@@ -670,7 +670,7 @@ class ThePageSaysWhy(unittest.TestCase):
             "bankpolicy.annotate_tips(payload, _fetch_bank_policy(group))", source
         )
         self.assertIn('item["why"] = bankpolicy.why_stored(item)', source)
-        page = (ROOT / "index.html").read_text(encoding="utf-8")
+        page = (ROOT / "classic.html").read_text(encoding="utf-8")
         self.assertIn(
             'if (item.why) t.appendChild(el("div", "vcsub vcwhy", item.why));', page
         )

@@ -404,7 +404,7 @@ class MapServerWiring(unittest.TestCase):
 
         here = pathlib.Path(__file__).resolve().parent.parent
         cls.server = (here / "map_server.py").read_text()
-        cls.page = (here / "index.html").read_text()
+        cls.page = (here / "classic.html").read_text()
 
     def test_the_watch_endpoints_exist_on_both_verbs(self):
         """Asserted against the routing tables rather than an if-chain: the
@@ -699,7 +699,7 @@ class ThePlayer(unittest.TestCase):
         import pathlib
 
         here = pathlib.Path(__file__).resolve().parent.parent
-        cls.page = (here / "index.html").read_text()
+        cls.page = (here / "classic.html").read_text()
         cls.server = (here / "map_server.py").read_text()
 
     def test_there_is_a_video_element_for_the_stream(self):

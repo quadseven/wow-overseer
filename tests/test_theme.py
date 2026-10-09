@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 STYLE = PAGE[PAGE.index("<style>") : PAGE.index("</style>")]
 HEAD = PAGE[: PAGE.index("</head>")]
 
@@ -265,7 +265,7 @@ class TheRealmBandsUseTheDesignTokens(unittest.TestCase):
 
 class TheHouseRules(unittest.TestCase):
     def test_no_em_dashes(self):
-        for name in ("index.html", "tests/test_theme.py"):
+        for name in ("classic.html", "tests/test_theme.py"):
             self.assertNotIn(
                 chr(0x2014), (HERE / name).read_text(encoding="utf-8"), name
             )

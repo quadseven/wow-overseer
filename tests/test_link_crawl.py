@@ -33,7 +33,7 @@ sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 import map_server  # noqa: E402  (must follow the pymysql stub)
 import realmnav  # noqa: E402
 
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 
 # Every href the page assigns or writes, by its exact right-hand side, and
 # what kind of link it is. For routes and anchors, the sample is a real value

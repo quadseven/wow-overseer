@@ -31,7 +31,7 @@ import basepath  # noqa: E402  (must follow the pymysql stub)
 import map_server  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
-PAGE = (HERE.parent / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE.parent / "classic.html").read_text(encoding="utf-8")
 
 # Served by the ingress from a machine outside the cluster rather than by this
 # process, so it is in neither routing table, and the page links to it all the
@@ -124,6 +124,8 @@ class PageTest(unittest.TestCase):
         routes |= set(map_server.Handler.POST_ROUTES)
         routes.discard("/")  # the root is not a literal the page writes
         routes.discard("/index.html")  # nor is the page's own name
+        routes.discard("/classic")  # the classic page is not linked from itself
+        routes.discard("/classic.html")
         routes.add(map_server.MODEL_PREFIX)
         routes.update(EXTRA_SAME_ORIGIN)
         lines = page_code_lines()
@@ -171,15 +173,25 @@ class ServedPageTest(unittest.TestCase):
         def _send(self, code, ctype, body, cache_control="no-store"):
             self.sent.append((code, ctype, body))
 
-    def serve(self, prefix):
+    def serve(self, prefix, page="_classic"):
         handler = self.FakeHandler()
         original = map_server.BASE_PATH
         map_server.BASE_PATH = prefix
         try:
-            handler._index({})
+            getattr(handler, page)({})
         finally:
             map_server.BASE_PATH = original
         return handler.sent[-1]
+
+    def test_the_app_is_told_its_mount_too(self):
+        # The operations app (index.html) reads its mount from a meta tag
+        # rather than from the classic page's script token.
+        for prefix in ("", "/dev"):
+            code, _ctype, body = self.serve(prefix, "_index")
+            self.assertEqual(code, 200)
+            text = body.decode("utf-8")
+            self.assertNotIn(basepath.PLACEHOLDER, text)
+            self.assertIn('<meta name="overseer-base" content="%s">' % prefix, text)
 
     def test_the_root_serves_the_page_it_always_served(self):
         code, ctype, body = self.serve("")

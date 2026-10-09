@@ -21,7 +21,7 @@ class TheFamilyTab(unittest.TestCase):
         import pathlib
 
         here = pathlib.Path(__file__).resolve().parent.parent
-        cls.page = (here / "index.html").read_text()
+        cls.page = (here / "classic.html").read_text()
         cls.server = (here / "map_server.py").read_text()
         start = cls.page.index("// --- the Family tab (infra#2892)")
         cls.tab = cls.page[start : cls.page.index("loadZones().then(")]
@@ -211,7 +211,7 @@ class TheBroadcastGrid(unittest.TestCase):
         import pathlib
 
         here = pathlib.Path(__file__).resolve().parent.parent
-        cls.page = (here / "index.html").read_text()
+        cls.page = (here / "classic.html").read_text()
         start = cls.page.index("// --- the Family tab (infra#2892)")
         cls.tab = cls.page[start : cls.page.index("loadZones().then(")]
 
@@ -398,7 +398,7 @@ class ThumbSizedBroadcastGrid(unittest.TestCase):
         import pathlib
 
         here = pathlib.Path(__file__).resolve().parent.parent
-        cls.page = (here / "index.html").read_text()
+        cls.page = (here / "classic.html").read_text()
         cls.css = cls.page[
             cls.page.index("the broadcast tile, inside its own") : cls.page.index(
                 "</style>"
@@ -448,7 +448,7 @@ class ThumbSized(unittest.TestCase):
         import pathlib
 
         here = pathlib.Path(__file__).resolve().parent.parent
-        page = (here / "index.html").read_text()
+        page = (here / "classic.html").read_text()
         cls.css = page[
             page.index("--- the Family tab (infra#2892)") : page.index("</style>")
         ]
@@ -495,7 +495,7 @@ class SwitchingFamilyDropsTheOtherFamilysTiles(unittest.TestCase):
         import pathlib
 
         here = pathlib.Path(__file__).resolve().parent.parent
-        cls.page = (here / "index.html").read_text(encoding="utf-8")
+        cls.page = (here / "classic.html").read_text(encoding="utf-8")
         start = cls.page.index("function retainOnlyThese(")
         cls.prune = cls.page[start : cls.page.index("function renderFamily(")]
         cls.render = cls.page[cls.page.index("function renderFamily(") :][:600]
@@ -541,7 +541,7 @@ class OnlyStreamedCharactersHaveAVideo(unittest.TestCase):
         import pathlib
 
         here = pathlib.Path(__file__).resolve().parent.parent
-        cls.page = (here / "index.html").read_text(encoding="utf-8")
+        cls.page = (here / "classic.html").read_text(encoding="utf-8")
         start = cls.page.index("function renderBroadcasts(")
         cls.broadcasts = cls.page[
             start : cls.page.index("function retainOnlyThese(")
@@ -604,7 +604,7 @@ class TheBrokenButtonMustNotBeSpendable(unittest.TestCase):
         import pathlib
 
         cls.page = (
-            pathlib.Path(__file__).resolve().parent.parent / "index.html"
+            pathlib.Path(__file__).resolve().parent.parent / "classic.html"
         ).read_text()
 
     def test_the_working_mode_comes_first(self):
@@ -648,7 +648,7 @@ class TheQuestBoard(unittest.TestCase):
         import pathlib
 
         here = pathlib.Path(__file__).resolve().parent.parent
-        cls.page = (here / "index.html").read_text()
+        cls.page = (here / "classic.html").read_text()
         cls.server = (here / "map_server.py").read_text()
         start = cls.page.index("// --- the Family tab (infra#2892)")
         cls.tab = cls.page[start : cls.page.index("loadZones().then(")]
@@ -856,7 +856,7 @@ class TheFamilyIsTheFrontDoor(unittest.TestCase):
         import pathlib
 
         here = pathlib.Path(__file__).resolve().parent.parent
-        cls.page = (here / "index.html").read_text()
+        cls.page = (here / "classic.html").read_text()
         cls.route = cls.page[cls.page.index("// --- the front door (infra#3110)") :]
 
     def test_the_view_is_chosen_on_load(self):
@@ -943,7 +943,7 @@ class TheNeedsTheHandoversAndTheBonds(unittest.TestCase):
         import pathlib
 
         here = pathlib.Path(__file__).resolve().parent.parent
-        cls.page = (here / "index.html").read_text(encoding="utf-8")
+        cls.page = (here / "classic.html").read_text(encoding="utf-8")
         cls.server = (here / "map_server.py").read_text(encoding="utf-8")
         cls.dockerfile = (here / "Dockerfile").read_text(encoding="utf-8")
         start = cls.page.index("// --- the Family tab (infra#2892)")

@@ -48,7 +48,7 @@ map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 SCRIPT = PAGE[PAGE.index("<script>") :]
 
 ALLIANCE = ["Grug", "Bork", "Grog", "Og", "Ugga"]
@@ -370,7 +370,7 @@ class TheLineupPutsTheAllianceFirst(unittest.TestCase):
 
 class AnOpenTabLearnsItIsStale(unittest.TestCase):
     def test_the_page_is_stamped_with_the_version_it_was_served_as(self):
-        raw = (HERE / "index.html").read_bytes()
+        raw = (HERE / "classic.html").read_bytes()
         served = basepath.apply(raw, "/dev")
         self.assertIn(basepath.page_version(raw).encode(), served)
         self.assertNotIn(basepath.PAGE_PLACEHOLDER.encode(), served)
@@ -383,7 +383,7 @@ class AnOpenTabLearnsItIsStale(unittest.TestCase):
         ):
             h._realm({})
         _code, p = body(h)
-        raw = (HERE / "index.html").read_bytes()
+        raw = (HERE / "classic.html").read_bytes()
         self.assertEqual(basepath.page_version(raw), p["page"])
 
     def test_the_page_compares_and_offers_a_reload(self):

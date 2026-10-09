@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 import runtimeline
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 NOW = datetime(2026, 9, 23, 20, 0, 0, tzinfo=timezone.utc)
 

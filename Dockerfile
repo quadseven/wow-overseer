@@ -60,7 +60,13 @@ COPY core.py bridge.py voice.py transform.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json bagicons.json spells.json bagspells.json viewerdisplays.json \
      standing.json craftbook.json taxinodes.json itemextendedcost.json \
-     index.html /app/
+     index.html classic.html /app/
+
+# The operations app (index.html above loads it): its modules and styles, and
+# the /api/v2 endpoints. Whole directories, so a new view or endpoint is a new
+# file and not a new line here.
+COPY app /app/app
+COPY apiv2 /app/apiv2
 
 # It stays VENDORED. map_server._jquery_file says why - the page reaches no
 # third host for it - and moving it to a CDN to save the same bytes would have

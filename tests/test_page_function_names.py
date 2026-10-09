@@ -27,7 +27,7 @@ import pathlib
 import re
 import unittest
 
-PAGE = pathlib.Path(__file__).resolve().parent.parent / "index.html"
+PAGE = pathlib.Path(__file__).resolve().parent.parent / "classic.html"
 
 # Top level only: a function declaration that starts at the beginning of a
 # line. Anything indented is nested inside another function or a block, where

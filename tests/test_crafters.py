@@ -24,7 +24,7 @@ from test_bag_keep import _bank_rows
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 FIRST_AID, BLACKSMITHING, LEATHERWORKING, ALCHEMY = 129, 164, 165, 171

@@ -23,7 +23,7 @@ from test_jev_items import FakeJev
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 
 WARRIOR, PALADIN, ROGUE, PRIEST, MAGE, WARLOCK, DRUID = 1, 2, 4, 5, 8, 9, 11
 PROTECTION_TALENT = "12301"

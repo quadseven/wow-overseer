@@ -110,7 +110,7 @@ class TheEndpointIsWired(unittest.TestCase):
     def setUpClass(cls):
         here = pathlib.Path(__file__).resolve().parent.parent
         cls.server = (here / "map_server.py").read_text()
-        cls.page = (here / "index.html").read_text()
+        cls.page = (here / "classic.html").read_text()
 
     def test_both_verbs_reach_the_right_half(self):
         get = self.server[self.server.index("GET_ROUTES = {") :]

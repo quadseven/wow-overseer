@@ -20,7 +20,7 @@ sys.path.insert(0, str(HERE))
 import runstory  # noqa: E402
 import runtimeline  # noqa: E402
 
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 
 ANACONDRA = 3671

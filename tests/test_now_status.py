@@ -423,7 +423,7 @@ def _import_bridge():
 
 
 class ThePageShowsItOnAPhone(unittest.TestCase):
-    PAGE = read("index.html")
+    PAGE = read("classic.html")
 
     def test_the_line_is_16px_and_a_44px_button_that_wraps(self):
         css = self.PAGE[self.PAGE.index(".pownow {") :]

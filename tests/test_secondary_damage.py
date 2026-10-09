@@ -27,7 +27,7 @@ class SecondaryDamageTest(unittest.TestCase):
     def test_query_and_renderer_request_and_draw_secondary_damage(self):
         here = Path(__file__).parents[1]
         query = (here / "map_server.py").read_text(encoding="utf-8")
-        page = (here / "index.html").read_text(encoding="utf-8")
+        page = (here / "classic.html").read_text(encoding="utf-8")
         self.assertIn("it.dmg_min2, it.dmg_max2, it.dmg_type2", query)
         self.assertIn("t.secondary_damage", page)
         self.assertIn('damage.school + " Damage"', page)

@@ -176,7 +176,7 @@ class TheSourceLabelIsTrue(unittest.TestCase):
             self.assertNotIn("Discord", line)
 
     def test_the_page_prints_the_payloads_label_and_no_discord_badge(self):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         self.assertNotIn("from a Discord order", page)
         start = page.index("function renderAgenda(p)")
         body = page[start : page.index("\n}\n", start)]
@@ -302,7 +302,7 @@ class TheLightThemeKeepsClassNamesReadable(unittest.TestCase):
     class colour toward black by --class-mix: 50% on light (Priest white
     then reads at about 6:1), whole on dark."""
 
-    PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+    PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 
     def test_the_lineup_names_go_through_class_ink(self):
         for fn in ("function lnCard(", "function lgRender("):

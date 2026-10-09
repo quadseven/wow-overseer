@@ -24,7 +24,7 @@ map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 
 T0 = datetime(2026, 9, 12, 18, 0)
 ZONES = {40: "Westfall"}

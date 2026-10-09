@@ -808,7 +808,7 @@ class ThePagePanel(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text()
+        cls.page = (HERE / "classic.html").read_text()
         cls.server = (HERE / "map_server.py").read_text()
         start = cls.page.index("// --- the standing panel (mod-overseer#88")
         cls.js = cls.page[start : cls.page.index("// --- the front door", start)]

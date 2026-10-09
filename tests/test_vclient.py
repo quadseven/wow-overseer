@@ -30,7 +30,7 @@ map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text()
+PAGE = (HERE / "classic.html").read_text()
 SERVER = (HERE / "map_server.py").read_text()
 
 ICONS = {6418: "inv_misc_rune_01", 7383: "inv_fabric_linen_01", 8271: "inv_misc_bag_09"}

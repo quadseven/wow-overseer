@@ -22,7 +22,7 @@ import subprocess
 import unittest
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 
 BANNER = "// --- the item tooltip, on every gear name (infra#3501)"
 BLOCK = PAGE[

@@ -5,11 +5,13 @@ out, bytes over HTTP. No logic here that tests would want to reach.
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 import urllib.error
@@ -21,6 +23,8 @@ from urllib.parse import parse_qs, urlsplit
 import pymysql
 
 import achievements
+import apiv2
+from apiv2._context import Context as _V2Context
 import agenda
 import armory
 import gearupgrades
@@ -821,15 +825,19 @@ def _fetch_profiles(names) -> dict:
         conn.close()
 
 
-def _page_version() -> str:
-    """basepath.page_version of index.html as it is on disk now.
+def _page_version(name: str = "classic.html") -> str:
+    """basepath.page_version of a page as it is on disk now.
 
     Read per call rather than once at import: it is one small file, /api/realm
     is polled once a minute, and a value frozen at import would go on
     reporting the old page if the file were ever replaced under a running
     process.
+
+    `page` in /api/realm is the classic page's version, because the classic
+    page is the one that compares it with its own and offers a reload; the
+    app's page is reported beside it as `app_page`.
     """
-    with open(os.path.join(HERE, "index.html"), "rb") as f:
+    with open(os.path.join(HERE, name), "rb") as f:
         return basepath.page_version(f.read())
 
 
@@ -4806,6 +4814,20 @@ _FRAMES_LOCK = threading.Lock()
 # page's window.CONTENT_PATH, which the viewer appends its file paths to.
 MODEL_PREFIX = "/modelviewer/"
 
+# The operations app's files (index.html loads them) and how they are typed.
+APP_PREFIX = "/app/"
+_APP_DIR = os.path.realpath(os.path.join(HERE, "app"))
+_APP_FILE = re.compile(r"[a-z0-9_-]+(?:/[a-z0-9_-]+)*\.(js|css)")
+_APP_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8"}
+
+# What a /api/v2 handler is given: this server's own connection and module.
+_V2_CONTEXT = _V2Context(connect=lambda: _connect(), server=sys.modules[__name__])
+
+
+def _etag(body: bytes) -> str:
+    """A strong validator for a response body: same bytes, same tag."""
+    return '"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+
 
 def _fetch_decree() -> dict:
     """Everything the decree console reads, in one connection.
@@ -5287,6 +5309,14 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith(MODEL_PREFIX):
                 self._modelviewer(path[len(MODEL_PREFIX):])
                 return
+            # The app's own modules and styles, and the v2 reads: one file
+            # or one endpoint per name, so neither fits a fixed table.
+            if path.startswith(APP_PREFIX):
+                self._app_file(path[len(APP_PREFIX):])
+                return
+            if path.startswith(apiv2.PREFIX):
+                self._v2(path, parse_qs(urlsplit(self.path).query))
+                return
             self._send(404, "text/plain", b"not found")
             return
         handler(self, parse_qs(urlsplit(self.path).query))
@@ -5324,6 +5354,37 @@ class Handler(BaseHTTPRequestHandler):
         # does not, and it is not a broken link.
         self._send_file("index.html", "text/html; charset=utf-8",
                         transform=lambda body: basepath.apply(body, BASE_PATH))
+
+    def _classic(self, _query: dict) -> None:
+        # The page this app replaces, unchanged, while its views move over
+        # (one PR per section). Same substitution as the app: it is mounted
+        # under the same prefix and must address the same realm.
+        self._send_file("classic.html", "text/html; charset=utf-8",
+                        transform=lambda body: basepath.apply(body, BASE_PATH))
+
+    def _app_file(self, rel: str) -> None:
+        """GET /app/<path>.js|.css - one file of the operations app.
+
+        Only plain lower-case paths ending in .js or .css, inside app/, are
+        served: no dot segments, no other kinds of file, nothing outside the
+        directory. Anything else is a 404, never a read.
+        """
+        m = _APP_FILE.fullmatch(rel)
+        full = os.path.realpath(os.path.join(HERE, "app", rel)) if m else ""
+        if not m or not full.startswith(_APP_DIR + os.sep) or not os.path.isfile(full):
+            self._send(404, "text/plain", b"not found")
+            return
+        self._send_file(os.path.join("app", rel), _APP_TYPES[m.group(1)])
+
+    def _v2(self, path: str, query: dict) -> None:
+        """GET /api/v2/... - the reads the operations app adds (apiv2/)."""
+        try:
+            code, payload = apiv2.handle(path, query, _V2_CONTEXT)
+        except Exception:
+            log.exception("v2 read failed: %s", path)
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            return
+        self._send(code, "application/json", json.dumps(payload).encode())
 
     def _zones_file(self, _query: dict) -> None:
         self._send_file("zones.json", "application/json")
@@ -5381,6 +5442,7 @@ class Handler(BaseHTTPRequestHandler):
             # The page this server would serve now; an open tab compares it
             # with the one it was served as (basepath.PAGE_PLACEHOLDER).
             payload["page"] = _page_version()
+            payload["app_page"] = _page_version("index.html")
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             log.exception("realm query failed")
@@ -7026,12 +7088,28 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send(self, code: int, ctype: str, body: bytes,
               cache_control: str = "no-store") -> None:
+        # A successful GET is revalidated rather than refetched: it carries
+        # an ETag of its bytes and `no-cache`, so the app's poll of an
+        # unchanged answer costs a 304 and no body. The model-viewer files
+        # are the one immutable thing here and say so themselves; POSTs and
+        # errors keep no-store.
+        tag = ""
+        if code == 200 and cache_control == "no-store" and getattr(self, "command", "") == "GET":
+            cache_control = "no-cache"
+            tag = _etag(body)
+            asked = self.headers.get("If-None-Match", "") if getattr(self, "headers", None) else ""
+            if tag in [t.strip() for t in asked.split(",")]:
+                self.send_response(304)
+                self.send_header("ETag", tag)
+                self.send_header("Cache-Control", cache_control)
+                self.end_headers()
+                return
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        # no-store for everything the page polls; the model-viewer files
-        # are the one immutable thing here and say so themselves.
         self.send_header("Cache-Control", cache_control)
+        if tag:
+            self.send_header("ETag", tag)
         self.end_headers()
         self.wfile.write(body)
 
@@ -7110,6 +7188,8 @@ class Handler(BaseHTTPRequestHandler):
         "/api/director": _director_state,
         "/": _index,
         "/index.html": _index,
+        "/classic": _classic,
+        "/classic.html": _classic,
         "/zones.json": _zones_file,
         "/shapes.json": _shapes_file,
         "/jquery.min.js": _jquery_file,

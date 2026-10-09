@@ -518,7 +518,7 @@ class TheRowsAndThePage(unittest.TestCase):
         self.assertIn("AS has_effect", sql)
 
     def test_the_bags_page_draws_the_routes(self):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         self.assertIn('<div id="wroute"></div>', page)
         self.assertIn("renderRoutes(p.guild_routes);", page)
         server = (HERE / "map_server.py").read_text(encoding="utf-8")

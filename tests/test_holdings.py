@@ -475,7 +475,7 @@ class TheViewReadsTheWeek(unittest.TestCase):
                 "# Everything a tooltip draws"
             )
         ]
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
 
     def test_the_vault_gold_is_read(self):
         self.assertIn("g.BankMoney AS bank_money", self.fetch)

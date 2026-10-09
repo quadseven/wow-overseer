@@ -37,7 +37,7 @@ import armory
 import recap
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 
 BANNER = "// --- the item tooltip, on every gear name (infra#3501)"
@@ -680,7 +680,7 @@ class TheWayOutIsStillThere(unittest.TestCase):
 class TheHouseRules(unittest.TestCase):
     def test_no_em_dashes(self):
         for name in (
-            "index.html",
+            "classic.html",
             "armory.py",
             "recap.py",
             "achievements.py",

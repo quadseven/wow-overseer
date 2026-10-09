@@ -16,7 +16,7 @@ import tradespec
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 BOOK = json.loads((HERE / "craftbook.json").read_text(encoding="utf-8"))
 
 ARMOR = tradespec.BY_KEY["armorsmith"].spell

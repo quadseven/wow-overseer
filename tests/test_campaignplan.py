@@ -27,7 +27,7 @@ import jobs  # noqa: E402
 HERE = pathlib.Path(__file__).resolve().parent.parent
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 
 EASTERN_KINGDOMS, KALIMDOR, RAGEFIRE = 0, 1, 389
 

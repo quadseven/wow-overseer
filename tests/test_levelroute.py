@@ -22,7 +22,7 @@ import questshare
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
 SERVER = (ROOT / "map_server.py").read_text(encoding="utf-8")
-PAGE = (ROOT / "index.html").read_text(encoding="utf-8")
+PAGE = (ROOT / "classic.html").read_text(encoding="utf-8")
 
 KALIMDOR = 1
 ORGRIMMAR = (KALIMDOR, 1637, 1677.6, -4315.7)

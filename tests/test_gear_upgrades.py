@@ -248,7 +248,7 @@ class TheUpgradesEndpoint(unittest.TestCase):
         self.assertEqual(body["error"], "world unreachable")
 
 
-PAGE = (pathlib.Path(__file__).resolve().parent.parent / "index.html").read_text(
+PAGE = (pathlib.Path(__file__).resolve().parent.parent / "classic.html").read_text(
     encoding="utf-8"
 )
 

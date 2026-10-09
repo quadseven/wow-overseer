@@ -227,7 +227,7 @@ class ADegradedSchemaThinsTheViewRatherThanBreakingIt(unittest.TestCase):
 class ThePageOnlyDraws(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
         start = cls.page.index(BANNER)
         cls.tab = cls.page[start : cls.page.index(NEXT, start)]

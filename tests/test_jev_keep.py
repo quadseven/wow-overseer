@@ -23,7 +23,7 @@ from test_jev_items import FakeJev
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 
 PRIEST, ROGUE, WARRIOR, PALADIN, MAGE = 5, 4, 1, 2, 8
 HERBALISM, ALCHEMY, TAILORING, ENCHANTING = 182, 171, 197, 333

@@ -48,7 +48,7 @@ def code(block: str) -> str:
 class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
 
     def test_the_styles_sit_above_the_family_banner(self):
         self.assertLess(
@@ -77,7 +77,7 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
 class TheChronicle(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
         start = cls.page.index(BANNER)
         cls.tab = cls.page[start : cls.page.index(NEXT, start)]
@@ -235,7 +235,7 @@ class TheChronicle(unittest.TestCase):
 
     def test_no_em_dashes(self):
         for name in (
-            "index.html",
+            "classic.html",
             "achievements.py",
             "council.py",
             "eye.py",
@@ -262,7 +262,7 @@ class TheCardSaysNothingThePageWrote(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
         cls.tab = page[start : page.index(NEXT, start)]
         cls.code = code(cls.tab)
@@ -336,7 +336,7 @@ class TheModuleOwnsTheWordsAndTheHues(unittest.TestCase):
         """A hue with no rule is text in the ground colour, which on a card is
         invisible. This is the guard that makes the token vocabulary a
         contract rather than a convention."""
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         hues = set(achievements.KIND_HUES.values())
         hues.add(achievements.ATTEMPT_HUE)
         for hue in sorted(hues):
@@ -346,7 +346,7 @@ class TheModuleOwnsTheWordsAndTheHues(unittest.TestCase):
         """A pigment is mixed for ONE ground and this page has two. --cyan is
         3.2:1 on white, under the 4.5:1 a label needs, and the wrong colour
         entirely on the dark theme. The roles carry a value per theme."""
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         for hue in ("ink", "muted", "green", "cyan", "amber", "vermilion"):
             rule = page[page.index(".h-%s {" % hue) :]
             rule = rule[: rule.index("}")]
@@ -369,7 +369,7 @@ class TheModuleOwnsTheWordsAndTheHues(unittest.TestCase):
         """A role defined only inside a media query is invisible to a reader
         whose system preference does not match, and the symptom is one
         theme's text on the other theme's ground."""
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         style = page[page.index("<style>") : page.index("</style>")]
         for role in ("--accent-text", "--caution-text", "--info-text", "--warn-text"):
             self.assertGreaterEqual(
@@ -385,7 +385,7 @@ class BothFamiliesAndNoGearInTheWay(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
         start = cls.page.index(BANNER)
         cls.code = code(cls.page[start : cls.page.index(NEXT, start)])
@@ -463,7 +463,7 @@ class NotableLootIsTheModulesSentence(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
         start = cls.page.index(BANNER)
         cls.code = code(cls.page[start : cls.page.index(NEXT, start)])

@@ -54,7 +54,7 @@ class TheBagSizeIsOnTheTooltip(unittest.TestCase):
         self.assertIsNone(tip["container"])
 
     def test_the_page_draws_the_line(self):
-        page = (HERE / "index.html").read_text()
+        page = (HERE / "classic.html").read_text()
         self.assertIn('if (t.container) add("", t.container);', page)
 
 

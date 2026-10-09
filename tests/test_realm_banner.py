@@ -42,7 +42,7 @@ MODULE_SRC = (
 class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
 
     def test_the_styles_sit_above_every_other_css_slice(self):
@@ -101,7 +101,7 @@ class TheBannerIsAlwaysVisible(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
 
     def test_it_is_not_inside_any_section(self):
         realm_at = self.page.index('<div id="realm"')
@@ -154,7 +154,7 @@ class TheMarkupShipsTheAlarmState(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = cls.page.index('<div id="realm"')
         cls.markup = cls.page[
             start : cls.page.index("</div>", cls.page.index('id="rkbuild"'))
@@ -192,7 +192,7 @@ class TheBannerDrawsWhatItIsGiven(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = page.index(JS_BANNER)
         cls.tab = page[start : page.index(AGENDA_JS, start)]
 
@@ -234,7 +234,7 @@ class TheEndpointIsWiredUp(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
 
     def test_the_route_exists(self):
         self.assertIn('"/api/realm": _realm,', self.server)

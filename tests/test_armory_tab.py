@@ -30,7 +30,7 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text()
+        cls.page = (HERE / "classic.html").read_text()
 
     def test_the_styles_sit_above_the_family_banner(self):
         """ThumbSized and the broadcast-grid CSS tests both slice from a
@@ -53,7 +53,7 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
 class TheArmoryTab(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text()
+        cls.page = (HERE / "classic.html").read_text()
         cls.server = (HERE / "map_server.py").read_text()
         start = cls.page.index("// --- the Armory tab (infra#3096, infra#3139)")
         cls.tab = cls.page[start : cls.page.index("</script>", start)]
@@ -1013,7 +1013,7 @@ class TheTwoFamiliesAndTheGuilds(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        page = (HERE / "index.html").read_text()
+        page = (HERE / "classic.html").read_text()
         start = page.index("// --- the Armory tab (infra#3096, infra#3139)")
         tab = page[start : page.index("</script>", start)]
         cls.ajs = tab[

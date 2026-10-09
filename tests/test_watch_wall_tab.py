@@ -22,7 +22,7 @@ import unittest
 
 LF = chr(10)
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-with open(os.path.join(HERE, "index.html"), encoding="utf-8") as _fh:
+with open(os.path.join(HERE, "classic.html"), encoding="utf-8") as _fh:
     PAGE = _fh.read()
 SCRIPTS = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", PAGE, re.S)
 
@@ -390,7 +390,7 @@ class TheSoundIsOffUntilAskedFor(unittest.TestCase):
             self,
             'wall.sound = wallStored(WALL_SOUND_KEY) === "on";',
             PAGE,
-            "index.html",
+            "classic.html",
         )
         self.assertIn('aria-pressed="false"', PAGE)
 
@@ -537,13 +537,13 @@ class ThePageFitsThePhoneItIsReadOn(unittest.TestCase):
 
 class TheHouseRules(unittest.TestCase):
     def test_no_em_dashes(self):
-        for name in ("index.html", "tests/test_watch_wall_tab.py"):
+        for name in ("classic.html", "tests/test_watch_wall_tab.py"):
             with open(os.path.join(HERE, name), encoding="utf-8") as fh:
                 absent(self, chr(0x2014), fh.read(), name)
 
     def test_the_page_still_carries_no_framework(self):
         """The wall added a view, not a dependency."""
-        absent(self, "<script src=", PAGE, "index.html")
+        absent(self, "<script src=", PAGE, "classic.html")
 
 
 if __name__ == "__main__":

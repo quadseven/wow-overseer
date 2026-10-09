@@ -29,7 +29,7 @@ import realmnav
 
 LF = chr(10)
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-with open(os.path.join(HERE, "index.html"), encoding="utf-8") as _fh:
+with open(os.path.join(HERE, "classic.html"), encoding="utf-8") as _fh:
     PAGE = _fh.read()
 STYLE = PAGE[PAGE.index("<style>") : PAGE.index("</style>")]
 
@@ -331,7 +331,7 @@ class TheSwitcherReachesThePageWithTheMountPoint(unittest.TestCase):
 class TheHouseRules(unittest.TestCase):
     def test_no_em_dashes(self):
         for name in (
-            "index.html",
+            "classic.html",
             "realmnav.py",
             "basepath.py",
             "tests/test_realm_nav.py",

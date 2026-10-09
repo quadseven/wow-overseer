@@ -50,7 +50,7 @@ def payload():
 class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
 
     def test_the_styles_sit_inside_the_armorys_window_and_above_the_familys(self):
@@ -93,7 +93,7 @@ class ItIsATabOfItsOwn(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
 
     def test_the_section_exists_and_the_armory_no_longer_contains_it(self):
         self.assertIn('<section id="bags">', self.page)
@@ -173,7 +173,7 @@ class NothingOnThisTabDecidesAnything(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
         cls.tab = page[start : page.index(FRONT_DOOR, start)]
         cls.built = payload()
@@ -269,7 +269,7 @@ class NothingOnThisTabDecidesAnything(unittest.TestCase):
 class TheFindingOpensTheTab(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
         cls.tab = page[start : page.index(FRONT_DOOR, start)]
         css = page.index(CSS_BANNER)
@@ -312,7 +312,7 @@ class TheFindingOpensTheTab(unittest.TestCase):
 class TheBagGrid(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
         cls.tab = page[start : page.index(FRONT_DOOR, start)]
         css = page.index(CSS_BANNER)
@@ -378,7 +378,7 @@ class TheBagGrid(unittest.TestCase):
 class ThePurseCard(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
         cls.tab = page[start : page.index(FRONT_DOOR, start)]
         css = page.index(CSS_BANNER)
@@ -443,7 +443,7 @@ class ThePurseCard(unittest.TestCase):
 class TheEmptyPanelsSayWhyTheyAreEmpty(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
         cls.tab = page[start : page.index(FRONT_DOOR, start)]
         cls.built = payload()
@@ -495,7 +495,7 @@ class TheContractWithTheBuilder(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
         cls.tab = page[start : page.index(FRONT_DOOR, start)]
         cls.built = payload()
@@ -573,7 +573,7 @@ class TheContractWithTheBuilder(unittest.TestCase):
 class ItReadsOnAPhone(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         css = cls.page.index(CSS_BANNER)
         cls.css = cls.page[css : cls.page.index("/* --- the Family tab (infra#2892)")]
 
@@ -636,7 +636,7 @@ class ItReadsOnAPhone(unittest.TestCase):
 
     def test_no_em_dashes(self):
         for name in (
-            "index.html",
+            "classic.html",
             "wealth.py",
             "map_server.py",
             "tests/test_wealth.py",
@@ -761,7 +761,7 @@ class BothFamiliesAndWhereItIsGoing(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
+        page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = page.index(
             "// --- the Bags tab (quadseven/mod-overseer#88, infra#2597)"
         )

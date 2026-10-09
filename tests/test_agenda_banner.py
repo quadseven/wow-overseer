@@ -30,7 +30,7 @@ FAMILY_CSS = "--- the Family tab (infra#2892)"
 class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
 
     def test_the_styles_sit_above_every_tabs_css_slice(self):
         """The earliest CSS window on the page starts at the redesign
@@ -56,7 +56,7 @@ class TheBannerIsAlwaysVisible(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
 
     def test_it_is_not_inside_any_section(self):
         agenda_at = self.page.index('<div id="agenda">')
@@ -98,7 +98,7 @@ class TheBannerIsAlwaysVisible(unittest.TestCase):
 class TheBannerDrawsWhatItIsGiven(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = cls.page.index(BANNER)
         cls.tab = cls.page[start : cls.page.index(CHRONICLE, start)]
         css = cls.page.index(CSS_BANNER)
@@ -301,7 +301,7 @@ class EveryFamilyIsOnTheBanner(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = cls.page.index(BANNER)
         cls.tab = cls.page[start : cls.page.index(CHRONICLE, start)]
 
@@ -341,7 +341,7 @@ class EachFamilyIsItsOwnCard(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         start = cls.page.index(BANNER)
         cls.tab = cls.page[start : cls.page.index(CHRONICLE, start)]
 

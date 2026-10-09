@@ -243,7 +243,7 @@ class TheMapIsWiredToTheGeometry(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = (HERE / "map_server.py").read_text()
-        cls.page = (HERE / "index.html").read_text()
+        cls.page = (HERE / "classic.html").read_text()
 
     def test_the_server_serves_the_geometry(self):
         table = self.server[self.server.index("GET_ROUTES = {") :]

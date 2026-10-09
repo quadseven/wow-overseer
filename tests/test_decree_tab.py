@@ -38,7 +38,7 @@ import jobs
 import travel
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 
 JS_BANNER = "// --- the Decree console (infra#2597)"
@@ -646,7 +646,7 @@ class TheDesignTokens(unittest.TestCase):
 
 class TheHouseRules(unittest.TestCase):
     def test_no_em_dashes(self):
-        for name in ("index.html", "tests/test_decree_tab.py"):
+        for name in ("classic.html", "tests/test_decree_tab.py"):
             self.assertNotIn(
                 chr(0x2014), (HERE / name).read_text(encoding="utf-8"), name
             )

@@ -45,7 +45,7 @@ import professions
 import tradespec
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
+PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 MODULE = (HERE / "tradespec.py").read_text(encoding="utf-8")
 CRAFTBOOK = json.loads((HERE / "craftbook.json").read_text(encoding="utf-8"))
@@ -1000,7 +1000,7 @@ class TheHouseRules(unittest.TestCase):
     def test_no_em_dashes(self):
         for name in (
             "tradespec.py",
-            "index.html",
+            "classic.html",
             "map_server.py",
             "tools/craftbook_from_dbc.py",
             "tests/test_tradespec.py",
