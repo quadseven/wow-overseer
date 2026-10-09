@@ -234,6 +234,25 @@ class TheLatelyTakenQuest(unittest.TestCase):
             (move.kind, move.use.verb), (classquest.USE, classquest.USE_HERE)
         )
 
+    def test_class_step_goes_from_a_take_row_to_the_forge_and_the_use(self):
+        # The wire end to end: a take row inside the settle window, no sword in the
+        # (stale) saved bags, and class_step walks to the forge and uses the sword.
+        rows = guildjobs.recent_from_rows(
+            [
+                {
+                    "target_name": "Brug",
+                    "command": "take quest:12619",
+                    "source": guildjobs.source_for(classquest.ACTION, "Brug"),
+                    "status": "delivered",
+                    "age": 10,
+                    "result": "",
+                }
+            ]
+        )
+        step, _doing, _note = guildjobs.class_step(knight(), runeblade(), rows, 5000)
+        self.assertEqual(step.rows[0].command, "use-item-here item:%d" % SWORD)
+        self.assertIn("gameobject:129401", step.walk.command)
+
     def test_class_step_marks_a_member_from_its_recent_take(self):
         rows = guildjobs.recent_from_rows(
             [

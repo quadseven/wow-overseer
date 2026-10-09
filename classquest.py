@@ -1069,6 +1069,19 @@ def _pending_use(quest: Quest, member):
     return None
 
 
+def _missing_item_blocker(quest: Quest, member, use: Use) -> tuple:
+    """(ITEM, sentence) when the item a use needs is not carried, else ("", "").
+    A quest TAKEN lately handed its item over, whatever the saved bags say yet."""
+    handed = use.provided and quest.id in getattr(member, "recently_taken", ())
+    if use.verb in (USE_ITEM, USE_HERE) and not member.carries(use.item) and not handed:
+        return ITEM, (
+            "%s needs item %d used on a creature and the member does not carry "
+            "it (the class step buys nothing and cannot hand a quest item out again)"
+            % (quest.title, use.item)
+        )
+    return "", ""
+
+
 def _use_blocker(quest: Quest, member) -> tuple:
     """(kind, sentence) when a quest with uses cannot be done now, else
     ("", "")."""
@@ -1101,15 +1114,7 @@ def _use_blocker(quest: Quest, member) -> tuple:
             quest.title,
             _across(member, use.spots),
         )
-    # A quest TAKEN lately handed its item over, whatever the saved bags say yet.
-    handed = use.provided and quest.id in getattr(member, "recently_taken", ())
-    if use.verb in (USE_ITEM, USE_HERE) and not member.carries(use.item) and not handed:
-        return ITEM, (
-            "%s needs item %d used on a creature and the member does not carry "
-            "it (the class step buys nothing and cannot hand a quest item out again)"
-            % (quest.title, use.item)
-        )
-    return "", ""
+    return _missing_item_blocker(quest, member, use)
 
 
 def blocker_of(quest: Quest, member) -> tuple:
