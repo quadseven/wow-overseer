@@ -27354,14 +27354,18 @@ def _team_members(guild: str) -> list:
 
 def _team_candidates(guild: str) -> list:
     """Characters in no guild, at or under the recruit level, of a class and
-    race one of `guild`'s open seats wants."""
+    race one of `guild`'s open seats wants, each with its account's
+    playerbot account type (None for an account that is not a bot's), so
+    teamsync recruits only a character the realm logs in by itself."""
     wanted = {(s.class_id, teamsync.RACE_IDS[s.race]) for s in raidteams.seats(guild) if not s.was}
     if not wanted:
         return []
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT c.name AS name, c.class AS class_id, c.race AS race, c.level AS level "
+            "SELECT c.name AS name, c.class AS class_id, c.race AS race, c.level AS level, "
+            "t.account_type AS account_type "
             "FROM characters c LEFT JOIN guild_member gm ON gm.guid = c.guid "
+            "LEFT JOIN acore_playerbots.playerbots_account_type t ON t.account_id = c.account "
             "WHERE gm.guid IS NULL AND c.level <= %s AND c.deleteInfos_Account IS NULL",
             (teamsync.RECRUIT_MAX_LEVEL,),
         )

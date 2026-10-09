@@ -30,9 +30,48 @@ def _bonkers_now():
     return out
 
 
-ORC_SHAMAN = {"name": "Randomorc", "class_id": 7, "race": 2, "level": 3}
-TROLL_SHAMAN = {"name": "Randomtroll", "class_id": 7, "race": 8, "level": 2}
-HIGH_ORC_SHAMAN = {"name": "Oldorc", "class_id": 7, "race": 2, "level": 55}
+# playerbots_account_type.account_type: 1 RNDbot (rotated by the manager),
+# 2 AddClass (kept for the `addclass` chat command).
+RNDBOT = 1
+ADDCLASS = 2
+
+ORC_SHAMAN = {
+    "name": "Randomorc",
+    "class_id": 7,
+    "race": 2,
+    "level": 3,
+    "account_type": RNDBOT,
+}
+TROLL_SHAMAN = {
+    "name": "Randomtroll",
+    "class_id": 7,
+    "race": 8,
+    "level": 2,
+    "account_type": RNDBOT,
+}
+HIGH_ORC_SHAMAN = {
+    "name": "Oldorc",
+    "class_id": 7,
+    "race": 2,
+    "level": 55,
+    "account_type": RNDBOT,
+}
+# The AddClass pool's never-played level-1 characters, and one on a player's
+# own account: the lowest levels on the realm, and never logged in by it.
+POOL_ORC_SHAMAN = {
+    "name": "Poolorc",
+    "class_id": 7,
+    "race": 2,
+    "level": 1,
+    "account_type": ADDCLASS,
+}
+ALT_ORC_SHAMAN = {
+    "name": "Altorc",
+    "class_id": 7,
+    "race": 2,
+    "level": 1,
+    "account_type": None,
+}
 
 
 class Order(unittest.TestCase):
@@ -88,6 +127,48 @@ class NoInviteBesideARemoval(unittest.TestCase):
         ]
         acts = teamsync.plan("Bonkers", members, [ORC_SHAMAN], set(), False)
         self.assertEqual([a.target for a in acts if a.kind == "invite"], ["Randomorc"])
+
+
+def _bonkers_with_room():
+    return [m for m in _bonkers_now() if m["name"] not in raidteams.LEAVING["Bonkers"]]
+
+
+class RecruitsOnlyWhoTheRealmLogsIn(unittest.TestCase):
+    """A seat goes to a character on a rotating random-bot account, however
+    low the others' levels: an AddClass or player-account character is never
+    logged in by the realm, so it would hold the seat out of the world."""
+
+    def test_the_pool_and_an_alt_lose_to_a_rotating_bot_of_a_higher_level(self):
+        acts = teamsync.plan(
+            "Bonkers",
+            _bonkers_with_room(),
+            [POOL_ORC_SHAMAN, ALT_ORC_SHAMAN, ORC_SHAMAN],
+            set(),
+            False,
+        )
+        invites = [a.target for a in acts if a.kind == "invite"]
+        self.assertIn("Randomorc", invites)
+        self.assertNotIn("Poolorc", invites)
+        self.assertNotIn("Altorc", invites)
+
+    def test_with_only_the_pool_and_an_alt_nobody_is_invited(self):
+        acts = teamsync.plan(
+            "Bonkers",
+            _bonkers_with_room(),
+            [POOL_ORC_SHAMAN, ALT_ORC_SHAMAN],
+            set(),
+            False,
+        )
+        self.assertEqual([a for a in acts if a.kind == "invite"], [])
+
+    def test_an_unknown_account_type_is_not_a_rotating_bot(self):
+        self.assertEqual(teamsync.ROTATING_ACCOUNT_TYPE, RNDBOT)
+        self.assertTrue(teamsync.logs_in_by_itself(ORC_SHAMAN))
+        self.assertFalse(teamsync.logs_in_by_itself(POOL_ORC_SHAMAN))
+        self.assertFalse(teamsync.logs_in_by_itself(ALT_ORC_SHAMAN))
+        self.assertFalse(
+            teamsync.logs_in_by_itself({"name": "Old", "class_id": 7, "race": 2})
+        )
 
 
 class Renames(unittest.TestCase):
@@ -191,19 +272,36 @@ class StalledOnRenames(unittest.TestCase):
             {"name": "Filler%d" % i, "class_id": 1, "race": 1, "level": 5}
             for i in range(teamsync.GUILD_SIZE - len(members))
         ]
-        cand = [{"name": "Newbie", "class_id": 7, "race": 11, "level": 1}]
+        cand = [
+            {
+                "name": "Newbie",
+                "class_id": 7,
+                "race": 11,
+                "level": 1,
+                "account_type": RNDBOT,
+            }
+        ]
         why = teamsync.stall_reason("Cave", members, cand, set(), True)
         self.assertIn(
             "the guild is full (71) and the approved teams name no leaver", why
         )
         self.assertIn(
-            "no candidate at level 10 or under fits Fizzog, Fuggo, Gorrk, Haggo, Hrunt",
+            "no candidate at level 10 or under on a rotating random-bot account "
+            "fits Fizzog, Fuggo, Gorrk, Haggo, Hrunt",
             why,
         )
 
     def test_the_head_not_in_the_world_is_named(self):
         members = [m for m in _cave_live() if m["level"] != 1]
-        cand = [{"name": "Newbie", "class_id": 7, "race": 11, "level": 1}]
+        cand = [
+            {
+                "name": "Newbie",
+                "class_id": 7,
+                "race": 11,
+                "level": 1,
+                "account_type": RNDBOT,
+            }
+        ]
         why = teamsync.stall_reason("Cave", members, cand, set(), False)
         self.assertIn("the family head is not in the world", why)
 

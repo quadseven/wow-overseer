@@ -16,6 +16,11 @@ PACE. A few rows per pass, and never a second row for something already in
 flight (`pending`), so a slow worldserver is not flooded and a refused row is
 simply asked again on a later pass.
 
+WHO MAY BE RECRUITED. Only a character the realm logs in by itself: one on a
+random-bot account the playerbot manager rotates (see ROTATING_ACCOUNT_TYPE).
+A seat is for a member who plays, and the guild's always-online setting keeps
+only those accounts' members in the world.
+
 PURE: plain values in, actions out.
 """
 
@@ -30,6 +35,17 @@ REMOVES_PER_PASS = 2
 INVITES_PER_PASS = 2
 RENAMES_PER_PASS = 6
 RECRUIT_MAX_LEVEL = 10
+
+# playerbots_account_type.account_type of the accounts the playerbot manager
+# logs in and out on its own (RNDbot). The other bot type, 2, is the AddClass
+# pool kept for the `addclass` chat command, and a player's account has no
+# row at all. The manager never logs a character of either in, and the
+# always-online guild pass admits RNDbot accounts only, so a recruit from them
+# holds a seat and never enters the world. Lowest level first made that the
+# rule rather than the exception: the AddClass pool is hundreds of never-played
+# level-1 characters, the RNDbot ones at this level have all been played to
+# level 2 or more, and all sixteen seats filled on 2026-10-05 went to the pool.
+ROTATING_ACCOUNT_TYPE = 1
 
 # race word (raidteams) -> characters.race id (3.3.5a).
 RACE_IDS = {
@@ -97,6 +113,13 @@ def _removals(guild: str, names: set, pending: set) -> list:
     ]
 
 
+def logs_in_by_itself(candidate: dict) -> bool:
+    """Whether the realm puts this character in the world without anyone
+    asking: it sits on an account the playerbot manager rotates. A missing or
+    unknown account type is a no."""
+    return int(candidate.get("account_type") or 0) == ROTATING_ACCOUNT_TYPE
+
+
 def _best_candidate(seat, candidates: list, taken: set):
     fit = sorted(
         (
@@ -104,6 +127,7 @@ def _best_candidate(seat, candidates: list, taken: set):
             for c in candidates
             if _fits(c, seat)
             and int(c.get("level") or 0) <= RECRUIT_MAX_LEVEL
+            and logs_in_by_itself(c)
             and c["name"] not in taken
         ),
         key=lambda c: (int(c.get("level") or 0), c["name"]),
@@ -154,7 +178,8 @@ def plan(
     invites, then (when the module's rename verb is live) renames.
 
     members     the guild's members: name, class_id, race, level
-    candidates  characters in no guild: name, class_id, race, level
+    candidates  characters in no guild: name, class_id, race, level,
+                account_type (its account's playerbots_account_type, or None)
     pending     names a row is already in flight for (any of these actions)
     renames_on  whether the module's rename verb is live
     """
@@ -203,8 +228,8 @@ def _unfilled_lines(
     out = []
     if missing:
         out.append(
-            "no candidate at level %d or under fits %s"
-            % (RECRUIT_MAX_LEVEL, ", ".join(missing))
+            "no candidate at level %d or under on a rotating random-bot "
+            "account fits %s" % (RECRUIT_MAX_LEVEL, ", ".join(missing))
         )
     if len(missing) == len(unfilled):
         return out
