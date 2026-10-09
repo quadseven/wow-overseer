@@ -156,6 +156,9 @@ ABANDON = "abandon"
 # Not asked of the same quest again for this long: if the item is lost again the
 # fault is not the quest, and a loop of dropping and taking helps no one.
 ABANDON_HOLD_MINUTES = 240
+# A quest taken this recently is not judged by the saved bags: the database trails
+# the live game, and the item the take handed over may not be in it yet.
+TAKE_SETTLE_MINUTES = 45
 # Blockers.
 GROUP, OBJECT, SOURCE, MAP, UNKNOWN = "group", "object", "source", "map", "unknown"
 # A quest item the member must use and does not carry.

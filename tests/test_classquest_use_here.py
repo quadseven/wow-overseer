@@ -164,6 +164,37 @@ class TheAbandon(unittest.TestCase):
         self.assertIsNotNone(self.step(self.recent(edge))[0])
         self.assertIsNotNone(self.step(self.recent(edge * 2))[0])
 
+    def taken(self, age, status="delivered"):
+        return guildjobs.recent_from_rows(
+            [
+                {
+                    "target_name": "Brug",
+                    "command": "take quest:12619",
+                    "source": guildjobs.source_for(classquest.ACTION, "Brug"),
+                    "status": status,
+                    "age": age,
+                    "result": "",
+                }
+            ]
+        )
+
+    def test_a_quest_taken_lately_is_not_dropped_for_a_missing_item(self):
+        # The saved bags trail the live game (2026-10-08).
+        step, _said, note = self.step(self.taken(15))
+        self.assertIsNone(step)
+        self.assertIn("taken lately", note)
+
+    def test_a_take_long_ago_no_longer_holds_it(self):
+        step, _said, _note = self.step(self.taken(classquest.TAKE_SETTLE_MINUTES))
+        self.assertIsNotNone(step)
+
+    def test_a_take_that_failed_does_not_hold_it(self):
+        step, _said, _note = self.step(self.taken(5, status="error"))
+        self.assertIsNotNone(step)
+
+    def test_the_take_row_reads_back_as_a_take(self):
+        self.assertEqual(self.taken(5)[0].taken, 12619)
+
     def test_another_members_drop_does_not_hold_it(self):
         step, _said, _note = self.step(self.recent(5, name="Other"))
         self.assertIsNotNone(step)
