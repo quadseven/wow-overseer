@@ -50,6 +50,24 @@ def row(name, command, action, status, age, body=None, rid=0):
     )[0]
 
 
+def written(step_row, status, age, body=None):
+    """The recent row the bridge reads back for a row the plan wrote: its own
+    source and command, as _JOB_RECENT_SQL returns them."""
+    return guildjobs.recent_from_rows(
+        [
+            {
+                "id": 0,
+                "target_name": step_row.source.rsplit(":", 1)[1],
+                "command": step_row.command,
+                "source": step_row.source,
+                "status": status,
+                "age": age,
+                "result": json.dumps(body or {}, separators=(",", ":")),
+            }
+        ]
+    )[0]
+
+
 def take_failed(age, name="Bigzug"):
     body = {
         "outcome": "refused",
@@ -228,9 +246,9 @@ class TheLevelWalkFirst(unittest.TestCase):
         self.assertEqual(step_of(result).action, classquest.ACTION)
 
     def test_with_the_level_walk_cooling_the_class_step_is_first(self):
-        cooling = row(
-            "Bigzug", "walk-to-spawn creature:1 max:20000", "level", "applied", 30
-        )
+        walked = step_of(plan([stuck()], failing(10, 40, 70))).rows[0]
+        self.assertEqual(walked.source, "guildjobs:level:Bigzug")
+        cooling = written(walked, "applied", 30)
         result = plan([stuck()], failing(10, 40, 70) + (cooling,))
         self.assertEqual(step_of(result).action, classquest.ACTION)
 
@@ -401,18 +419,10 @@ class TheDeadlyHub(unittest.TestCase):
         self.assertEqual(len(steps), 1)
 
     def test_a_stalled_class_steps_level_walk_keeps_the_hold(self):
-        hub = spawn_of("barrens")
-        deaths = tuple(
-            row(
-                "Bigzug",
-                "walk-to-spawn creature:%d max:20000" % hub,
-                guildlevel.ACTION,
-                "error",
-                age,
-                {"outcome": "died", "reason": classquest.DEATH_REASON},
-            )
-            for age in (150, 400)
-        )
+        walked = step_of(plan([stuck()], failing(10, 40, 70))).rows[0]
+        self.assertIn("creature:%d " % spawn_of("barrens"), walked.command)
+        body = {"outcome": "died", "reason": classquest.DEATH_REASON}
+        deaths = tuple(written(walked, "error", age, body) for age in (150, 400))
         result = plan([stuck()], failing(10, 40, 70) + deaths)
         self.assertEqual(step_of(result).action, classquest.ACTION)
 
