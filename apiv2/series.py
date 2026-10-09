@@ -57,12 +57,14 @@ _XP_TABLE_SQL = (
 )
 # Only a member of a managed guild (_allow): a name outside them reads as
 # unknown, in the same query that reads it.
-_MEMBER_SQL = (
+# S608: the only text joined in is a run of %s placeholders sized by the
+# allowlist; every value is bound by the driver.
+_MEMBER_SQL = (  # noqa: S608
     "SELECT c.guid, c.name, c.level, c.xp FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
     "JOIN guild g ON g.guildid = gm.guildid "
-    "WHERE c.name = %s AND g.name IN (" + _allow.guild_holes() + ") LIMIT 1"
-)
+    "WHERE c.name = %s AND g.name IN ({holes}) LIMIT 1"
+).format(holes=_allow.guild_holes())
 _GUILD_SQL = "SELECT guildid, name FROM guild WHERE name = %s LIMIT 1"
 # A guild holds at most a thousand members; the bound is the game's.
 MAX_MEMBERS = 1000
@@ -122,7 +124,8 @@ def total_at(points: list, ts: float) -> float | None:
     """Total experience at `ts`, interpolated; None before the first instant."""
     if not points or ts < points[0][0]:
         return None
-    for (t0, v0), (t1, v1) in zip(points, points[1:]):
+    # Consecutive pairs: the second list is one shorter by design.
+    for (t0, v0), (t1, v1) in zip(points, points[1:], strict=False):
         if t0 <= ts <= t1:
             if t1 == t0:
                 return float(v1)
@@ -190,10 +193,12 @@ def member_series(char: dict, events: list, table: dict, now: float) -> dict:
 def _sum_hours(per_member: list) -> list:
     if not per_member:
         return []
+    # Every member's series is the same 24 hours (hourly() builds them all
+    # off one `now`), so the rows line up; strict says so out loud.
     out = []
-    for i, (ts, _) in enumerate(per_member[0]):
-        vals = [s[i][1] for s in per_member if s[i][1] is not None]
-        out.append([ts, sum(vals) if vals else None])
+    for hour in zip(*per_member, strict=True):
+        vals = [v for _, v in hour if v is not None]
+        out.append([hour[0][0], sum(vals) if vals else None])
     return out
 
 

@@ -220,10 +220,11 @@ def chronicle(query: dict, ctx) -> tuple[int, dict]:
     if asked and _allow.guild(asked) is None:
         return 404, {"error": "no such guild", "guilds": sorted(_allow.GUILDS)}
     guilds = [_allow.guild(asked)] if asked else list(_allow.GUILDS.values())
+    maps = ctx.server.achievements.MAP_NAMES
     conn = ctx.connect()
     try:
         with conn.cursor() as cur:
-            payload = build(cur, guilds, ctx.server.achievements.MAP_NAMES)
+            payload = build(cur, guilds, maps)
     finally:
         conn.close()
     if asked and not payload["guilds"]:
