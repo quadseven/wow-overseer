@@ -1215,6 +1215,38 @@ def _fetch_upgrade_items(ids: list[int]) -> dict[int, dict]:
         conn.close()
 
 
+_NOT_A_GUILD_MEMBER = {"error": "not a guild member"}
+
+
+def _upgrades_payload(wanted: str) -> tuple[int, dict]:
+    """(status, payload) for /api/upgrades?name=`wanted`.
+
+    The gate and the build of the upgrade tracker (#541), apart from the
+    handler so /api/v2/upgrades can extend the same payload rather than copy
+    it. A name that fails the world's rule, is not on a family guild's roster
+    or is not present is a 404.
+    """
+    if not _NAME_RE.fullmatch(wanted):
+        return 404, dict(_NOT_A_GUILD_MEMBER)
+    groups = _fetch_family_groups()
+    names = [n for _key, group in groups for n in group]
+    if not _is_family_guildmate(wanted, names):
+        return 404, dict(_NOT_A_GUILD_MEMBER)
+    fetched = _fetch_armory([wanted])
+    fetched.pop("equip_event_rows")
+    payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
+                                  families=[("", [wanted])])
+    member = (payload.get("members") or [None])[0]
+    if not member or not member.get("present"):
+        return 404, dict(_NOT_A_GUILD_MEMBER)
+    spec, _note = gearupgrades.choose_spec(
+        member.get("class"), (member.get("spec") or {}).get("primary"))
+    ids = gearupgrades.all_list_ids(spec) if spec else []
+    return 200, gearupgrades.build(
+        member, fetched["equipment_rows"], _fetch_upgrade_items(ids),
+        list(armory.EQUIPPED_SLOTS), book=ITEMS)
+
+
 # --- /api/item: where one item comes from ---------------------------------
 #
 # Item data is static, so the answer is kept in-process, bounded. A restart
@@ -1482,7 +1514,7 @@ _GUILD_GEAR = (
     "AND s.health = 0 AND s.updated_at > NOW() - INTERVAL 60 SECOND) AS dead, "
     + raidroles.TALENTS_COLUMN + ", "
     "ci.slot, it.ItemLevel AS item_level, it.name AS item_name, "
-    "it.entry AS item_entry "
+    "it.entry AS item_entry, it.Quality AS item_quality "
     "FROM guild g JOIN guild_member gm ON gm.guildid = g.guildid "
     "JOIN characters c ON c.guid = gm.guid "
     "LEFT JOIN character_inventory ci ON ci.guid = c.guid "
@@ -6780,33 +6812,12 @@ class Handler(BaseHTTPRequestHandler):
         as the database reports it; anything else is a 404. Like /api/armory it
         reads saved gear, not overseer_snapshot, so it is not subject to the
         60s freshness rule and answers for someone offline. Every score is
-        gearscore's; gearupgrades only lays the slots out.
+        gearscore's; gearupgrades only lays the slots out. The payload is
+        _upgrades_payload's, which /api/v2/upgrades extends.
         """
         try:
-            wanted = query.get("name", [""])[0]
-            if not _NAME_RE.fullmatch(wanted):
-                self._send(404, "application/json", b'{"error": "not a guild member"}')
-                return
-            groups = _fetch_family_groups()
-            names = [n for _key, group in groups for n in group]
-            if not _is_family_guildmate(wanted, names):
-                self._send(404, "application/json", b'{"error": "not a guild member"}')
-                return
-            fetched = _fetch_armory([wanted])
-            fetched.pop("equip_event_rows")
-            payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
-                                          families=[("", [wanted])])
-            member = (payload.get("members") or [None])[0]
-            if not member or not member.get("present"):
-                self._send(404, "application/json", b'{"error": "not a guild member"}')
-                return
-            spec, _note = gearupgrades.choose_spec(
-                member.get("class"), (member.get("spec") or {}).get("primary"))
-            ids = gearupgrades.all_list_ids(spec) if spec else []
-            result = gearupgrades.build(
-                member, fetched["equipment_rows"], _fetch_upgrade_items(ids),
-                list(armory.EQUIPPED_SLOTS), book=ITEMS)
-            self._send(200, "application/json", json.dumps(result).encode())
+            code, payload = _upgrades_payload(query.get("name", [""])[0])
+            self._send(code, "application/json", json.dumps(payload).encode())
         except Exception:
             log.exception("upgrades query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')

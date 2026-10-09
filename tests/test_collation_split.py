@@ -57,6 +57,9 @@ COLLATIONS = {
     "overseer_naturalized": "utf8mb4_unicode_ci",
     "overseer_event": "utf8mb4_unicode_ci",
     "overseer_death": "utf8mb4_unicode_ci",
+    # Read on the dev realm's information_schema (2026-10-09), for the
+    # profile's level line (apiv2/activity.py).
+    "overseer_level": "utf8mb4_unicode_ci",
     "overseer_snapshot": "utf8mb4_0900_ai_ci",
     "overseer_trade": "utf8mb4_0900_ai_ci",
     "overseer_command": "utf8mb4_0900_ai_ci",
@@ -167,6 +170,7 @@ STRING_COLUMNS = {
             "target_name",
         }
     ),
+    "overseer_level": frozenset({"character_name"}),
     "overseer_death": frozenset(
         {
             "character_name",
