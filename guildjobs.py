@@ -595,6 +595,8 @@ class Recent:
     walk: bool = False
     # The quest id an `abandon quest:` row dropped, 0 for any other row.
     abandoned: int = 0
+    # The quest id a `take quest:` row took, 0 for any other row.
+    taken: int = 0
     # Why the module refused the row, "" when it did not, and whether it said
     # the refusal would pass (the realm's far walk walls, a dead character).
     refusal: str = ""
@@ -3123,6 +3125,24 @@ def _abandon_step(m, move, recent, note):
             and int(r.age_minutes) < classquest.ABANDON_HOLD_MINUTES
         ):
             return None, move.said, _join(note, "%s was dropped lately" % move.quest)
+        # THE ITEM A TAKE HANDS OVER IS NOT IN THE SAVED BAGS FOR A WHILE
+        # (2026-10-08). The bridge reads bags from the database, which trails the
+        # live game; Brug took The Emblazoned Runeblade at 06:14 and was told at
+        # 06:29 that he carried no sword, so he dropped the quest and the sword
+        # with it. A quest taken lately is not judged by the saved bags.
+        if (
+            r.name == m.name
+            and r.taken == int(move.quest)
+            and int(r.age_minutes) < classquest.TAKE_SETTLE_MINUTES
+        ):
+            return (
+                None,
+                move.said,
+                _join(
+                    note,
+                    "%s was taken lately; its item may not be saved yet" % move.quest,
+                ),
+            )
     step = guildcorps.Step(
         m.name,
         classquest.ACTION,
@@ -3699,12 +3719,22 @@ def recent_from_rows(rows) -> tuple:
                 reason=_reason_of(row),
                 spawn=_spawn_of(row.get("command")),
                 abandoned=_abandoned_of(row.get("command")),
+                taken=_taken_of(row.get("command"), row.get("status")),
                 row_id=_int(row.get("id"), 0),
                 **_hunt_of(row),
                 **_refusal_of(row),
             )
         )
     return tuple(out)
+
+
+def _taken_of(command, status) -> int:
+    """The quest id of a `take quest:<id>` row that went through, 0 for any
+    other row."""
+    found = re.match(r"take quest:(\d+)\b", str(command or ""))
+    if not found or str(status or "") in TRAIN_FAILED:
+        return 0
+    return int(found.group(1))
 
 
 def _abandoned_of(command) -> int:
