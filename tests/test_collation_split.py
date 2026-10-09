@@ -57,6 +57,9 @@ COLLATIONS = {
     "overseer_naturalized": "utf8mb4_unicode_ci",
     "overseer_event": "utf8mb4_unicode_ci",
     "overseer_death": "utf8mb4_unicode_ci",
+    # Read on the dev realm's information_schema (2026-10-09), for the
+    # profile's level line (apiv2/activity.py).
+    "overseer_level": "utf8mb4_unicode_ci",
     "overseer_snapshot": "utf8mb4_0900_ai_ci",
     "overseer_trade": "utf8mb4_0900_ai_ci",
     "overseer_command": "utf8mb4_0900_ai_ci",
@@ -108,9 +111,6 @@ COLLATIONS = {
     # Module-owned (mod-overseer#634, 2026_09_23_01_overseer_raid_seat.sql),
     # named in its own CREATE TABLE the same way. The bridge only writes it.
     "overseer_raid_seat": "utf8mb4_unicode_ci",
-    # Module-owned (wow-overseer#533), one row per level change. Read from
-    # SHOW CREATE TABLE on wow-dev on 2026-10-09: COLLATE=utf8mb4_unicode_ci.
-    "overseer_level": "utf8mb4_unicode_ci",
     # Module-owned (2026_09_25_10_overseer_raid_spec.sql), named in its own
     # CREATE TABLE the same way. The bridge only writes it.
     "overseer_raid_spec": "utf8mb4_unicode_ci",

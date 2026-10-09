@@ -52,7 +52,7 @@ def members_from_rows(rows: list[dict]) -> list[dict]:
     """One row per member, from one row per (member, worn slot).
 
     Each row carries guild_name, name, level, class_id, money, online, dead,
-    talent_spells, and slot/item_level/item_name/item_entry for one worn item
+    talent_spells, and slot/item_level/item_name/item_entry/item_quality for one worn item
     (all None for a member wearing nothing). Sorted worst first (`worst_first`).
     """
     by_name: dict = {}
@@ -72,6 +72,7 @@ def members_from_rows(rows: list[dict]) -> list[dict]:
             else None,
             "name": r.get("item_name") or "",
             "entry": r.get("item_entry"),
+            "quality": r.get("item_quality"),
         }
     out = [_member(m["row"], m["worn"]) for m in by_name.values()]
     out.sort(key=worst_first)
@@ -93,6 +94,19 @@ def _weakest(worn: dict):
                 "entry": w["entry"],
             }
     return weakest
+
+
+def _strip(worn: dict) -> list:
+    """One cell per stat slot, in paper-doll order: the worn item's quality,
+    or None for an empty slot. The quality strip the gear hub draws."""
+    return [
+        {
+            "slot": slot,
+            "quality": worn[slot].get("quality") if slot in worn else None,
+            "name": worn[slot]["name"] if slot in worn else "",
+        }
+        for slot in STAT_SLOTS
+    ]
 
 
 def _presence(row: dict) -> str:
@@ -133,6 +147,7 @@ def _member(row: dict, worn: dict) -> dict:
         "gold": wealth.coins(row.get("money")),
         "presence": _presence(row),
         "flags": _flags(weapon, len(empty_slots), int(row.get("level") or 0)),
+        "strip": _strip(worn),
     }
 
 

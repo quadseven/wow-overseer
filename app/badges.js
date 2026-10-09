@@ -34,4 +34,17 @@ const guilds = {
   },
 };
 
-export default [guilds];
+
+// Members: a warn badge with the stuck count (/api/v2/stuck), and the tab
+// opens the roster filtered to them while anyone is stuck.
+const members = {
+  section: "members",
+  reads: ["/api/v2/stuck"],
+  compute(get) {
+    const s = get("/api/v2/stuck");
+    const n = s.data && Array.isArray(s.data.members) ? s.data.members.length : 0;
+    return n ? { n, tone: "warn", label: n + " stuck", href: "#/members?stuck=1" } : null;
+  },
+};
+
+export default [guilds, members];

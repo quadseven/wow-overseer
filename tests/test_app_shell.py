@@ -150,8 +150,14 @@ class ThePage(unittest.TestCase):
             self.assertIn(tag, PAGE)
 
     def test_jquery_is_gone_from_the_app(self):
+        # One exception, and only one: the paperdoll's model stage reuses the
+        # classic Armory's 3D viewer, a third-party script that needs jQuery.
+        # It loads both lazily, when a model comes near the screen; the page
+        # and every other module stay free of it.
         self.assertNotIn("jquery", PAGE.lower())
         for path in APP_FILES:
+            if path.relative_to(APP).as_posix() == "views/_model.js":
+                continue
             self.assertNotIn(
                 "jquery", path.read_text(encoding="utf-8").lower(), path.name
             )
