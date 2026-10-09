@@ -1,0 +1,160 @@
+/* Raid (#/raid/mc/cave|bonkers). Tokens from tokens.css; components from app.css. */
+
+.small { font-size: var(--fs-1); }
+.raid-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.raid-title .muted { flex: 1 1 160px; min-width: 0; }
+.raid-pick { margin-left: auto; }
+.raid-pick > a { min-height: 36px; }
+@media (max-width: 759.98px) { .raid-pick { display: none; } }
+
+.raid-h2 {
+  margin: 4px 0 0; font-size: var(--fs-1); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--color-neutral-500); font-weight: 500;
+}
+.raid-sub { padding-top: 6px; font-size: var(--fs-2); }
+
+/* The readiness card. */
+.raid-head-card { padding: 14px 16px; gap: 10px; }
+.raid-headline { font-size: var(--fs-3); font-weight: 500; text-wrap: pretty; }
+.raid-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.raid-tile {
+  display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--color-neutral-800);
+}
+.raid-tile .v { font-size: var(--fs-4); font-weight: 500; font-variant-numeric: tabular-nums; }
+.raid-tile .k { font-size: var(--fs-1); color: var(--color-neutral-400); }
+.raid-tile[data-tone="bad"] { box-shadow: inset 0 0 0 1px var(--bad-line); }
+.raid-tile[data-tone="bad"] .v { color: var(--bad); }
+.raid-tile[data-tone="warn"] { box-shadow: inset 0 0 0 1px var(--warn-line); }
+.raid-tile[data-tone="warn"] .v { color: var(--warn); }
+.raid-tile[data-tone="ok"] .v { color: var(--ok); }
+
+/* Readiness gates. */
+.raid-gates { gap: 8px; }
+.gate-list { display: flex; flex-direction: column; }
+.gate {
+  display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(88px, auto) minmax(60px, 1fr);
+  gap: 4px 12px; align-items: center; padding: 6px 8px; min-height: 44px; box-sizing: border-box;
+  text-decoration: none; color: var(--color-text); border-radius: var(--radius-sm);
+  box-shadow: 0 -1px 0 var(--color-neutral-900);
+}
+.gate:hover { background: var(--color-neutral-900); color: var(--color-text); }
+.gate[aria-current="true"] { background: var(--color-accent-900); }
+.gate-label { display: flex; flex-direction: column; min-width: 0; }
+.gate-rule { font-size: var(--fs-1); color: var(--color-neutral-400); }
+.gate-count { font-variant-numeric: tabular-nums; font-size: var(--fs-2); }
+.gate-bar { height: 6px; border-radius: 3px; background: var(--color-neutral-800); overflow: hidden; }
+.gate-bar > span { display: block; height: 100%; background: var(--color-accent-600); }
+.gate-bar > span[data-tone="ok"] { background: var(--ok); }
+@media (max-width: 559.98px) {
+  .gate { grid-template-columns: minmax(0, 1fr) auto; }
+  .gate-bar { grid-column: 1 / -1; }
+}
+
+.raid-viewhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.raid-viewhead .seg { margin-left: auto; align-self: center; }
+.raid-viewhead .seg > a { min-height: 36px; }
+
+/* The eight groups. */
+.raid-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr)); gap: 8px; }
+.raid-group { padding: 10px 12px; gap: 0; }
+.group-label { font-size: var(--fs-1); color: var(--color-neutral-500); padding-bottom: 4px; }
+.seat {
+  display: flex; justify-content: space-between; align-items: center; gap: 6px; min-height: 44px;
+  font-size: var(--fs-2); text-decoration: none; color: var(--color-text);
+  box-shadow: 0 -1px 0 var(--color-neutral-900);
+}
+a.seat:hover .seat-name { text-decoration: underline; text-underline-offset: 3px; }
+.seat-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-weight: 500; }
+.seat-name i { font-size: 12px; color: var(--color-neutral-400); flex-shrink: 0; }
+.seat-name i.aura { color: var(--warn); font-size: 11px; }
+.seat-sub { font-size: var(--fs-1); color: var(--color-neutral-400); text-align: right; white-space: nowrap; }
+.seat.open .seat-name { color: var(--color-neutral-500); font-weight: 400; }
+.seat.open .seat-sub { white-space: normal; }
+.seat-sub.bad { color: var(--bad); }
+.seat-sub.warn { color: var(--warn); }
+.seat-sub.ok { color: var(--ok); }
+
+/* Who falls short of one gate. */
+.raid-gap { gap: 0; }
+.gap-row {
+  display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 4px 10px;
+  align-items: center; min-height: 44px; padding: 4px 0; font-size: var(--fs-2);
+  box-shadow: 0 -1px 0 var(--color-neutral-900);
+}
+@media (max-width: 559.98px) { .gap-row { grid-template-columns: minmax(0, 1fr) auto; } .gap-row > :last-child { grid-column: 1 / -1; } }
+
+/* Two cards side by side on desktop. */
+.raid-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 12px; align-items: start; }
+.raid-block { gap: 8px; }
+.blocker { display: flex; gap: 8px; align-items: flex-start; font-size: var(--fs-2); }
+.blocker i { margin-top: 3px; flex-shrink: 0; }
+.raid-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; color: var(--color-neutral-300); }
+.raid-block .tag { white-space: normal; font-size: var(--fs-1); }
+
+/* Folds: every raider, each member's upgrades. */
+.raid-fold > summary {
+  cursor: pointer; list-style: none; min-height: 44px; display: flex; align-items: center; gap: 8px;
+}
+.raid-fold > summary::-webkit-details-marker { display: none; }
+.raid-fold > summary::before { content: "\25B8"; color: var(--color-neutral-500); align-self: flex-start; padding-top: 2px; }
+.raid-fold[open] > summary::before { content: "\25BE"; }
+.fold-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.raid-fold[open] > summary { padding-bottom: 6px; }
+.raid-stack { display: flex; flex-direction: column; gap: 8px; }
+.raid-more { font-size: var(--fs-2); padding-top: 6px; min-height: 44px; display: inline-flex; align-items: center; }
+
+.up-rows { display: flex; flex-direction: column; }
+.up-row {
+  display: grid; grid-template-columns: 80px minmax(0, 1.4fr) minmax(0, 1fr) 60px; gap: 10px;
+  align-items: center; min-height: 44px; padding: 4px 0; font-size: var(--fs-2);
+  box-shadow: 0 -1px 0 var(--color-neutral-900);
+}
+.up-row > :last-child { text-align: right; }
+@media (max-width: 559.98px) {
+  .up-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .up-row > :first-child { grid-column: 1 / -1; }
+  .up-row > :nth-child(3) { grid-column: 1 / -1; order: 4; }
+}
+
+/* Tables: a table on desktop, one card per row on phone. */
+.raid-table td { font-size: var(--fs-2); }
+@media (max-width: 759.98px) {
+  .raid-table thead { display: none; }
+  .raid-table, .raid-table tbody, .raid-table tr, .raid-table td { display: block; width: 100%; box-sizing: border-box; }
+  .raid-table tr { padding: 8px 0; }
+  .raid-table td { padding: 2px 0; display: grid; grid-template-columns: minmax(96px, 38%) minmax(0, 1fr); gap: 8px; }
+  .raid-table td::before {
+    content: attr(data-label); font-size: var(--fs-0); letter-spacing: .08em; text-transform: uppercase;
+    color: var(--color-neutral-500); padding-top: 2px;
+  }
+  .raid-table tbody tr:hover { background-color: transparent; }
+}
+
+.il { display: inline-flex; align-items: center; flex-wrap: wrap; column-gap: 0; }
+.il .il { display: contents; }
+.supply-name { display: flex; flex-direction: column; gap: 2px; }
+
+/* Consumable goals. */
+.raid-goal > summary { cursor: pointer; list-style: none; display: flex; flex-direction: column; gap: 6px; min-height: 44px; }
+.raid-goal > summary::-webkit-details-marker { display: none; }
+.goal-top { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.goal-name { font-weight: 500; }
+.raid-chip { font-size: var(--fs-1); box-shadow: inset 0 0 0 1px var(--color-neutral-700); color: var(--color-neutral-200); }
+.raid-chip[data-tone="bad"] { box-shadow: inset 0 0 0 1px var(--bad-line); color: var(--bad); }
+.raid-chip[data-tone="warn"] { box-shadow: inset 0 0 0 1px var(--warn-line); color: var(--warn); }
+.raid-chip[data-tone="ok"] { box-shadow: inset 0 0 0 1px var(--ok); color: var(--ok); }
+.goal-body {
+  display: flex; flex-direction: column; gap: 6px; padding-top: 8px; margin-top: 4px; font-size: var(--fs-2);
+  box-shadow: 0 -1px 0 var(--color-neutral-900);
+}
+.recipe {
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--color-neutral-800);
+}
+.recipe-head { font-weight: 500; }
+.reagent { display: flex; flex-direction: column; gap: 2px; padding-left: 12px; box-shadow: inset 2px 0 0 var(--color-neutral-800); }
+.raid-lines { display: flex; flex-direction: column; gap: 2px; padding-bottom: 6px; }
+
+.raid-tier { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 10px; }
+.raid-basis { font-size: var(--fs-1); }
