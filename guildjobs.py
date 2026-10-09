@@ -3028,9 +3028,40 @@ def _class_held(m, move, spot, cap, recent, hunts, now, far, book=None):
     # A refusal of a creature that is resting is no action taken: it does not
     # hold the member back from another dropper.
     acted = [r for r in recent or () if not (r.entry in rest and r.name == m.name)]
-    if _cooling(m, classquest.ACTION, acted):
+    if _cooling(m, classquest.ACTION, acted) and not follows_a_take(m, acted):
         return ""
     return _slot_note(m, move, spot, cap, hunts, now, far)
+
+
+# A class step that follows a take is not held by the class cooldown, for this
+# many minutes after the take (2026-10-09). The item a take hands over is used
+# at once or the knight wanders off: Brug took The Emblazoned Runeblade at 10:06
+# and stood at the forge, then waited out the ten-minute cooldown and the
+# fifteen-minute cycle and was fighting on the ground when the sword step came.
+FOLLOW_UP_MINUTES = 30
+
+
+# The pass after a take comes this soon, not a cycle (900 s) later.
+FOLLOW_UP_SECONDS = 90.0
+
+
+def is_take_row(command) -> bool:
+    """Whether a corps row is a `take quest:<id>`."""
+    return re.match(r"take quest:\d+\b", str(command or "")) is not None
+
+
+def follows_a_take(m, recent) -> bool:
+    """Whether the member's newest class row is a take that went through, so the
+    step after it (the use, the next walk) is not held by the class cooldown."""
+    mine = [
+        r
+        for r in recent or ()
+        if r.name == m.name and r.action == classquest.ACTION and not r.walk
+    ]
+    if not mine:
+        return False
+    newest = min(mine, key=lambda r: r.age_minutes)
+    return newest.taken > 0 and int(newest.age_minutes) < FOLLOW_UP_MINUTES
 
 
 def _respawn_note(m, move, spot, rest, hunts, now) -> str:
