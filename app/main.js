@@ -2,7 +2,8 @@
 //
 // A view is a module in app/views/ whose default export is
 //   { reads(ctx) -> [paths], every?: ms, title?(ctx), render(ctx) -> markup,
-//     after?(main, ctx), thumb?(ctx) -> {label, items} }
+//     after?(main, ctx), thumb?(ctx) -> {label, items}, css?: ["views/x.css"] }
+// (app/README.md has the whole contract).
 // render() draws from ctx.get(path) (what is cached, never a fetch), and is
 // called again whenever one of its reads answers with new data.
 
@@ -14,6 +15,7 @@ import * as gestures from "./gestures.js";
 import { legacy, parse, resolve } from "./router.js";
 import { savedTheme, saveTheme, lastPage, saveLastPage, stampVisit, previousVisit } from "./store.js";
 import { html, ago, plural } from "./ui.js";
+import badgeProviders from "./badges.js";
 
 const root = document.getElementById("app");
 shell.mount(root);
@@ -69,6 +71,15 @@ function loadView(name) {
 
 const isPhone = () => window.matchMedia("(max-width: 759.98px)").matches;
 
+// A view's own stylesheet (paths under app/), linked once.
+function useCss(path) {
+  const href = api.u("/app/" + path);
+  if (document.querySelector('link[data-view-css="' + CSS.escape(path) + '"]')) return;
+  const link = document.createElement("link");
+  link.rel = "stylesheet"; link.href = href; link.setAttribute("data-view-css", path);
+  document.head.appendChild(link);
+}
+
 function banner(h) {
   if (h.state !== "stale") return "";
   const secs = h.at ? (Date.now() - h.at) / 1000 : null;
@@ -114,6 +125,7 @@ async function route() {
   if (r.redirect) { history.replaceState(null, "", r.redirect); return route(); }
   saveLastPage(hash);
   const module = await loadView(r.view);
+  (module.css || []).forEach(useCss);
   const ctx = {
     view: r.view, section: r.section, params: r.params, query: parsed.query, hash,
     get: api.peek, isPhone: isPhone(), previousVisit: previousVisit(),
@@ -176,5 +188,18 @@ api.load("/api/v2/operator").then((e) => {
   shell.setOperator(!!(e.data && e.data.enabled));
   drawShell();
 });
+
+// ---- nav badges (badges.js): refreshed every minute, whatever is on screen --
+function refreshBadges() {
+  if (document.hidden) return;
+  badgeProviders.forEach((b) => {
+    api.loadAll(b.reads).then(() => {
+      shell.setBadge(b.section, b.compute(api.peek, { previousVisit: previousVisit() }));
+      drawShell();
+    });
+  });
+}
+refreshBadges();
+window.setInterval(refreshBadges, 60000);
 
 route();
