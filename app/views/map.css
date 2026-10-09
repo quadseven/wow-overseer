@@ -1,0 +1,7 @@
+/* The world map page (#/now/map). The map itself is styled in now.css. */
+
+.where { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 8px; }
+.where-card { padding: 10px 12px; gap: 4px; }
+.where-who { display: flex; gap: 2px 10px; flex-wrap: wrap; font-size: var(--fs-2); }
+.where-who a { text-decoration: none; min-height: 44px; display: inline-flex; align-items: center; }
+.where-who a:hover { text-decoration: underline; }
