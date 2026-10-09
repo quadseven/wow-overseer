@@ -209,7 +209,12 @@ class TheBridgeAsksAgain(unittest.TestCase):
 
     def test_an_answer_that_will_not_change_is_asked_once(self):
         went, asked, slept = self.drive(
-            [{"status": "error", "detail": "home is where the character already stands"}]
+            [
+                {
+                    "status": "error",
+                    "detail": "home is where the character already stands",
+                }
+            ]
         )
         self.assertFalse(went)
         self.assertEqual(len(asked), 1)
