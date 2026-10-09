@@ -58,8 +58,11 @@ def qrow(qid, title, **over):
     for i in range(1, 7):
         row["item%d" % i] = 0
         row["item_count%d" % i] = 0
-    for i in range(5):
-        row["provided%d" % i] = 0
+    # StartItem (the one item the take hands over) and ItemDrop1-4 (the source
+    # items, which it does not), as QUESTS_SQL names them.
+    row["provided0"] = 0
+    for i in range(1, 5):
+        row["source%d" % i] = 0
     row.update(over)
     return row
 
@@ -289,6 +292,33 @@ class TheUsesAreReadFromTheWorld(unittest.TestCase):
         self.assertEqual(classquest.QUESTS_SQL.count("StartItem"), 1)
         self.assertIn("ItemDrop4", classquest.QUESTS_SQL)
 
+    def test_only_the_start_item_is_handed_over_never_an_item_drop(self):
+        # The core gives StartItem on accept and nothing else (2026-10-09):
+        # ItemDrop1-4 are source items, read under their own name.
+        self.assertIn("q.StartItem AS provided0", classquest.QUESTS_SQL)
+        for i in range(1, 5):
+            self.assertIn("q.ItemDrop%d AS source%d" % (i, i), classquest.QUESTS_SQL)
+            self.assertNotIn("AS provided%d" % i, classquest.QUESTS_SQL)
+        b = classquest.build(
+            quest_rows=[qrow(6062, "Taming the Beast", provided0=ROD, source2=4242)],
+            giver_rows=[],
+            spawn_rows=[],
+            loot_rows=[],
+        )
+        self.assertEqual(b.quests[6062].provided, (ROD,))
+        self.assertEqual(b.quests[6062].sources, (4242,))
+
+    def test_a_source_item_with_no_use_is_still_never_sold(self):
+        # Trial of the Lake (28): its Shrine Bauble (15877) is an ItemDrop with
+        # no use here; it stays a protected quest item.
+        b = classquest.build(
+            quest_rows=[qrow(28, "Trial of the Lake", sort=-263, source1=15877)],
+            giver_rows=[],
+            spawn_rows=[],
+            loot_rows=[],
+        )
+        self.assertIn(15877, guildjobs._protected_entries(b))
+
     def test_the_new_reads_name_the_world_database_and_the_spell_condition(self):
         for sql in (
             classquest.USE_ITEMS_SQL,
@@ -401,6 +431,85 @@ class TheUseMove(unittest.TestCase):
         self.assertIn("log has not caught up", blocked[0])
         # Not a help the member asks guild chat for.
         self.assertEqual(classquest.helps(tome_book(), m), [])
+
+
+class TheLostStartItem(unittest.TestCase):
+    """A Taming Rod is 6062's StartItem, the one item its take hands over: a
+    member that lost it drops the quest and takes it again to be handed it anew,
+    held by the abandon and take clocks (2026-10-08)."""
+
+    def member(self, **over):
+        over.setdefault("quest_log", {6062: 3})
+        return who(**over)
+
+    def row(self, command, age, name="Pokka", status="delivered"):
+        return guildjobs.recent_from_rows(
+            [
+                {
+                    "target_name": name,
+                    "command": command,
+                    "source": guildjobs.source_for(classquest.ACTION, name),
+                    "status": status,
+                    "age": age,
+                    "result": "",
+                }
+            ]
+        )
+
+    def step(self, recent=()):
+        m = self.member()
+        move, _ = classquest.next_move(taming(), m)
+        return guildjobs._abandon_step(m, move, recent, "")
+
+    def test_the_step_is_one_abandon_row_and_no_walk(self):
+        step, said, _note = self.step()
+        self.assertEqual(step.rows[0].kind, "quest")
+        self.assertEqual(step.rows[0].command, "abandon quest:6062")
+        self.assertIsNone(step.walk)
+        self.assertIn("drops", said)
+
+    def test_a_quest_dropped_lately_is_not_dropped_again(self):
+        step, _said, note = self.step(self.row("abandon quest:6062", 30))
+        self.assertIsNone(step)
+        self.assertIn("dropped lately", note)
+
+    def test_the_hold_ends_at_its_edge(self):
+        # Held while the drop is younger than the hold; free from the minute it
+        # reaches it, and long after.
+        edge = classquest.ABANDON_HOLD_MINUTES
+        self.assertIsNone(self.step(self.row("abandon quest:6062", edge - 1))[0])
+        self.assertIsNotNone(self.step(self.row("abandon quest:6062", edge))[0])
+        self.assertIsNotNone(self.step(self.row("abandon quest:6062", edge * 2))[0])
+
+    def test_a_quest_taken_lately_is_not_dropped_for_a_missing_item(self):
+        # The saved bags trail the live game (2026-10-08).
+        step, _said, note = self.step(self.row("take quest:6062", 15))
+        self.assertIsNone(step)
+        self.assertIn("taken lately", note)
+
+    def test_a_take_long_ago_no_longer_holds_it(self):
+        settled = classquest.TAKE_SETTLE_MINUTES
+        self.assertIsNotNone(self.step(self.row("take quest:6062", settled))[0])
+
+    def test_a_take_that_failed_does_not_hold_it(self):
+        failed = self.row("take quest:6062", 5, status="error")
+        self.assertIsNotNone(self.step(failed)[0])
+
+    def test_another_members_drop_does_not_hold_it(self):
+        other = self.row("abandon quest:6062", 5, name="Other")
+        self.assertIsNotNone(self.step(other)[0])
+
+    def test_the_rows_read_back_as_a_take_and_an_abandon(self):
+        self.assertEqual(self.row("take quest:6062", 5)[0].taken, 6062)
+        self.assertEqual(self.row("abandon quest:6062", 5)[0].abandoned, 6062)
+
+    def test_a_lately_taken_quest_is_trusted_to_have_handed_its_rod_over(self):
+        m = self.member(recently_taken=frozenset({6062}))
+        move, blocked = classquest.next_move(taming(), m)
+        self.assertEqual(blocked, [])
+        self.assertEqual(
+            (move.kind, move.use.verb), (classquest.USE, classquest.USE_ITEM)
+        )
 
 
 class TheBlockersThatStay(unittest.TestCase):
@@ -772,6 +881,14 @@ class TheBridgeFollowsTheAnswer(unittest.TestCase):
         ):
             self.assertIn(needle, BRIDGE)
         self.assertIn("return quests, givers, spawns, loot, trained, use_rows,", BRIDGE)
+
+    def test_the_chest_read_covers_the_items_the_take_does_not_hand_over(self):
+        body = BRIDGE[BRIDGE.index("def _class_use_reads") :]
+        body = body[: body.index("def _class_rows")]
+        self.assertIn('provided = {int(r["provided0"]) for r in quests', body)
+        self.assertNotIn('r[f"provided{i}"]', body)
+        self.assertIn('r.get(f"source{i}")', body)
+        self.assertIn('"items", items | sources | set(classquest.FOCUS_ITEMS))', body)
 
     def test_the_use_row_is_written_as_a_quest_row_of_the_class_step(self):
         body = BRIDGE[BRIDGE.index("def _insert_corps_row") :]
