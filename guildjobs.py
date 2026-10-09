@@ -3307,6 +3307,21 @@ def _class_early(m, book, recent):
     return None
 
 
+def _recalled_lately(m, recent) -> bool:
+    """Whether a hearth of this member went through inside the hearth cooldown.
+    A refused or failed one does not count: the stone's hour of cooldown is
+    spent only by a cast, and a recall refused for a fight (2026-10-08) must be
+    asked again at once."""
+    minutes = COOLDOWN_MINUTES.get("hearth", 60)
+    return any(
+        r.name == m.name
+        and r.action == "hearth"
+        and r.status not in TRAIN_FAILED
+        and int(r.age_minutes) < minutes
+        for r in recent or ()
+    )
+
+
 def stranded_recall_step(m, recent):
     """The hearth recall step for a death knight stranded in its starting zone
     after repeated stalled walks, or None. Held by the hearth cooldown."""
@@ -3326,7 +3341,7 @@ def stranded_recall_step(m, recent):
         and r.reason == STALLED_WALK_REASON
         and int(r.age_minutes) < STRANDED_WALK_WINDOW_MINUTES
     ]
-    if len(stalled) < STRANDED_STALLED_WALKS or _cooling(m, "hearth", recent):
+    if len(stalled) < STRANDED_STALLED_WALKS or _recalled_lately(m, recent):
         return None
     return guildcorps.Step(
         m.name,

@@ -30,14 +30,14 @@ def knight(**over):
 
 def rows(*specs):
     out = []
-    for source, command, age, reason in specs:
+    for source, command, age, reason, *status in specs:
         body = {"outcome": "stalled", "reason": reason, "retryable": True}
         out.append(
             {
                 "target_name": "Brug",
                 "command": command,
                 "source": guildjobs.source_for(*source),
-                "status": "unchanged",
+                "status": status[0] if status else "unchanged",
                 "age": age,
                 "result": json.dumps(body, separators=(",", ":")) + "x" * 20,
             }
@@ -75,8 +75,18 @@ class TheRecall(unittest.TestCase):
         self.assertIsNone(guildjobs.stranded_recall_step(knight(class_id=1), STALLS))
 
     def test_a_recall_within_the_hearth_cooldown_is_not_repeated(self):
-        done = STALLS + rows((("hearth", "Brug"), "recall", 20, ""))
+        done = STALLS + rows((("hearth", "Brug"), "recall", 20, "", "applied"))
         self.assertIsNone(guildjobs.stranded_recall_step(knight(), done))
+
+    def test_a_refused_recall_does_not_spend_the_cooldown(self):
+        # A recall refused for a fight (status error), or one that changed
+        # nothing (status unchanged), is asked again at once.
+        for status in ("error", "unchanged"):
+            with self.subTest(status):
+                failed = STALLS + rows(
+                    (("hearth", "Brug"), "recall", 5, "character is in combat", status)
+                )
+                self.assertIsNotNone(guildjobs.stranded_recall_step(knight(), failed))
 
     def test_a_fighting_or_dead_knight_waits(self):
         self.assertIsNone(
