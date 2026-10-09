@@ -14465,10 +14465,10 @@ class Bridge(discord.Client):
                 if not await self._run_step_row(step, row, cap):
                     return
             if step.action == classquest.ACTION and any(
-                guildjobs.is_take_row(r.command) for r in step.rows
+                guildjobs.is_chain_row(r.command) for r in step.rows
             ):
                 # The next class step is asked for soon, not a cycle from now.
-                self._class_follow_up = True
+                self._note_follow_up()
         except pymysql.err.MySQLError:
             log.exception("guild jobs: step for %s failed", step.holder)
         finally:
@@ -14480,7 +14480,10 @@ class Bridge(discord.Client):
         # step carries exactly one row (guildjobs.stranded_recall_step), so the
         # asks cannot stack across rows.
         if row.kind == "hearth" and guildjobs.is_recall_row(row.command):
-            return await self._recall_row(step, row)
+            went = await self._recall_row(step, row)
+            if went:
+                self._note_follow_up()
+            return went
         # A quest use row (classuse.py) is followed by what it answers.
         if classuse.is_use_row(row.command):
             return await self._class_use_row(step, row, cap)
@@ -14908,18 +14911,52 @@ class Bridge(discord.Client):
         cycle = float(os.environ.get("GUILD_JOBS_CYCLE_SECONDS", "900"))
         await asyncio.sleep(min(cycle, 420.0))
         while not self.is_closed():
-            self._class_follow_up = False
             try:
                 await self._guild_jobs_once()
             except Exception:
                 log.exception("guild jobs pass failed; retrying next cycle")
             await self._for_other_families("guild jobs", self._guild_jobs_once)
-            # A class quest taken in this pass hands over an item to use now.
-            await asyncio.sleep(
-                min(cycle, guildjobs.FOLLOW_UP_SECONDS)
-                if getattr(self, "_class_follow_up", False)
-                else cycle
-            )
+            await self._sleep_until_next_pass(cycle)
+
+    def _follow_up_event(self) -> asyncio.Event:
+        """Set by a step whose class chain row went through (a take, an abandon,
+        a recall home); the jobs loop wakes early for it."""
+        event = getattr(self, "_follow_up", None)
+        if event is None:
+            event = self._follow_up = asyncio.Event()
+        return event
+
+    def _note_follow_up(self) -> None:
+        self._follow_up_event().set()
+
+    async def _sleep_until_next_pass(self, cycle: float) -> None:
+        """Sleep a cycle, or FOLLOW_UP_SECONDS after a class chain row went
+        through, so the step after it is asked while the member still stands
+        where the row left it (2026-10-09).
+
+        THE STEPS RUN AS TASKS. A pass schedules its steps and returns before
+        any of them has answered, so a flag a step sets is read by nobody: the
+        first follow-up (#696) chose its sleep before the take it waited for.
+        The step sets an event instead and the sleep waits on it. At most
+        guildjobs.FOLLOW_UPS_PER_CYCLE early passes run before a full cycle.
+        """
+        event = self._follow_up_event()
+        early = getattr(self, "_follow_ups", 0)
+        if early >= guildjobs.FOLLOW_UPS_PER_CYCLE:
+            self._follow_ups = 0
+            event.clear()
+            await asyncio.sleep(cycle)
+            return
+        try:
+            await asyncio.wait_for(event.wait(), timeout=cycle)
+        except asyncio.TimeoutError:
+            self._follow_ups = 0
+            return
+        event.clear()
+        self._follow_ups = early + 1
+        log.info("guild jobs: a class chain row went through; the next pass "
+                 "comes in %d seconds", int(guildjobs.FOLLOW_UP_SECONDS))
+        await asyncio.sleep(min(cycle, guildjobs.FOLLOW_UP_SECONDS))
 
     async def _mail_once(self, cohort=None) -> None:
         """One pass of the mail: collect what is already addressed to the family.

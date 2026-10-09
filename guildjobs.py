@@ -3136,14 +3136,25 @@ FOLLOW_UP_MINUTES = 30
 FOLLOW_UP_SECONDS = 90.0
 
 
+# Early passes between two full cycles, however many chain rows go through.
+FOLLOW_UPS_PER_CYCLE = 3
+
+
 def is_take_row(command) -> bool:
     """Whether a corps row is a `take quest:<id>`."""
     return re.match(r"take quest:\d+\b", str(command or "")) is not None
 
 
+def is_chain_row(command) -> bool:
+    """Whether a class quest row moves a chain on at once: a take (its item is
+    used next) or an abandon (the quest is taken again next)."""
+    return re.match(r"(take|abandon) quest:\d+\b", str(command or "")) is not None
+
+
 def follows_a_take(m, recent) -> bool:
-    """Whether the member's newest class row is a take that went through, so the
-    step after it (the use, the next walk) is not held by the class cooldown."""
+    """Whether the member's newest class row is a take or an abandon that went
+    through, so the step after it (the use, the retake, the next walk) is not
+    held by the class cooldown."""
     mine = [
         r
         for r in recent or ()
@@ -3152,7 +3163,10 @@ def follows_a_take(m, recent) -> bool:
     if not mine:
         return False
     newest = min(mine, key=lambda r: r.age_minutes)
-    return newest.taken > 0 and int(newest.age_minutes) < FOLLOW_UP_MINUTES
+    moved = newest.taken > 0 or (
+        newest.abandoned > 0 and newest.status not in TRAIN_FAILED
+    )
+    return moved and int(newest.age_minutes) < FOLLOW_UP_MINUTES
 
 
 def _respawn_note(m, move, spot, rest, hunts, now) -> str:
