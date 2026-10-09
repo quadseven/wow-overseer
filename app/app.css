@@ -358,3 +358,8 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
 
 /* ---- Pending section (until its PR lands) --------------------------------- */
 .pending { max-width: 640px; }
+
+/* The thumb's slot is what sticks: the slot holds only the switch, so a
+   sticky .thumb inside it had no room to move and scrolled away (Raid PR). */
+[data-slot="thumb"] { position: sticky; bottom: calc(var(--tabbar-h) + 4px); z-index: 5; }
+[data-slot="thumb"] > .thumb { position: static; }

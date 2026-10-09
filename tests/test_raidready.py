@@ -261,6 +261,23 @@ class HardBlockers(unittest.TestCase):
         )
 
 
+class TheCardStatesItsBars(unittest.TestCase):
+    """The two bars the raider rows are held to, as numbers, so the app can
+    count who clears each one (the Raid view's readiness gates)."""
+
+    def test_the_access_level_and_the_gear_share_ride_on_the_card(self):
+        rows = _guild("Bonkers", 24, FULL, level=10, race=2)
+        card = _card(rows, [rows[0]["name"]], min_level=50)
+        self.assertEqual(
+            card["gates"], {"min_level": 50, "gear_share": raidready.GEAR_CONVENTION}
+        )
+
+    def test_no_access_row_is_a_null_bar_not_a_zero(self):
+        rows = _guild("Bonkers", 24, FULL, level=10, race=2)
+        card = _card(rows, [rows[0]["name"]], min_level=None)
+        self.assertIsNone(card["gates"]["min_level"])
+
+
 class SoftBlockersStopNothing(unittest.TestCase):
     def setUp(self):
         self.rows = _guild(
