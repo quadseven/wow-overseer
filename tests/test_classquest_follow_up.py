@@ -95,9 +95,11 @@ class TheTakeIsInTheLog(unittest.TestCase):
         member = knight(quest_log={}, quests_done=frozenset({12593}))
         return guildjobs.class_step(member, runeblade(), rows, 5000)[0]
 
-    def test_a_take_minutes_ago_goes_on_to_the_use(self):
+    def test_a_take_minutes_ago_goes_on_to_the_next_link(self):
+        # Not a second take: the take hands nothing over (#702), so the next
+        # link is the Battle-worn Sword chest, then the Runeforge.
         step = self.step(recent(row("take quest:12619", 2)))
-        self.assertTrue(step.rows[0].command.startswith("use-item-here"))
+        self.assertEqual(step.rows[0].command, "use-gameobject 190584")
 
     def test_without_the_take_it_is_taken(self):
         step = self.step(())

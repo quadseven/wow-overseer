@@ -70,7 +70,8 @@ class TheOrphanedQuest(unittest.TestCase):
                 **{"npc_count%d" % i: 0 for i in range(1, 5)},
                 **{"item%d" % i: 0 for i in range(1, 7)},
                 **{"item_count%d" % i: 0 for i in range(1, 7)},
-                **{"provided%d" % i: 0 for i in range(5)},
+                provided0=0,
+                **{"source%d" % i: 0 for i in range(1, 5)},
             )
         ]
 

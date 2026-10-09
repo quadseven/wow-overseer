@@ -63,19 +63,27 @@ Both fire only when the member already stands beside the target, so a USE move
 is a walk to the target's spawn and then the row, as a take is a walk and then
 a row. They are read from the world, never typed in:
 
-  item on a creature  an item the quest hands over (StartItem, ItemDrop1-4) or
-                      requires, whose on-use spell (item_template.spellid_1,
-                      spelltrigger_1 = 0) is bound by `conditions` (source type
-                      17, condition 31, object type 3) to named creatures: the
-                      hunter's Taming Rod and Taming Totem, a druid's Curative
-                      Animal Salve;
+  item on a creature  an item the quest hands over (StartItem), uses (its
+                      source items, ItemDrop1-4) or requires, whose on-use
+                      spell (item_template.spellid_1, spelltrigger_1 = 0) is
+                      bound by `conditions` (source type 17, condition 31,
+                      object type 3) to named creatures: the hunter's Taming
+                      Rod and Taming Totem, a druid's Curative Animal Salve;
   gameobject          a required item no creature drops that a chest holds
                       (gameobject_loot_template through a type 3
-                      gameobject_template), and a negative RequiredNpcOrGo.
+                      gameobject_template), a use's item that a chest holds
+                      and the take does not hand over (Use.fetch), and a
+                      negative RequiredNpcOrGo.
 
-An item the quest hands over is carried after the take; any other item the
-member must already hold, and one it does not is a named blocker (the class
-step buys nothing). A worldserver that predates the verbs answers `malformed
+THE TAKE HANDS OVER StartItem AND NOTHING ELSE (2026-10-09). The core gives a
+quest's StartItem on accept (Player::AddQuest -> GiveQuestSourceItem).
+ItemDrop1-4 are source items the quest uses and takes back when it is
+abandoned; they are never given. Brug was sent to use a Battle-worn Sword the
+take of The Emblazoned Runeblade never gave him, and dropped and took the quest
+again and again for it. An item a use needs that the take does not hand over is
+fetched first from a chest that holds it; any other item the member must
+already hold, and one it does not is a named blocker (the class step buys
+nothing). A worldserver that predates the verbs answers `malformed
 request: want take quest:...` (classuse.py); the bridge then plans from
 Book.plain(), the same book with no uses, and every use quest is named as it
 was before. What the verbs do NOT cover stays blocked and named: an item cast
@@ -154,15 +162,17 @@ MARK = "class quest"
 
 # Move kinds. USE writes a use-item-on or use-gameobject row at a target.
 TAKE, HUNT, TURN_IN, USE, BLOCKED = "take", "hunt", "turnin", "use", "blocked"
-# A quest dropped to be taken again, so the core hands the member the item the
-# quest gives out (2026-10-08: Brug held The Emblazoned Runeblade without the
-# Battle-worn Sword it hands over, and a quest item cannot be bought or looted).
+# A quest dropped to be taken again, so the core hands the member the StartItem
+# it lost (a quest item cannot be bought). Only a StartItem comes back so: the
+# take gives nothing else, so an item the take never handed over is no reason to
+# drop a quest (2026-10-09: the Battle-worn Sword of The Emblazoned Runeblade is
+# an ItemDrop, looted from a chest, and dropping the quest never brought it).
 ABANDON = "abandon"
 # Not asked of the same quest again for this long: if the item is lost again the
 # fault is not the quest, and a loop of dropping and taking helps no one.
 ABANDON_HOLD_MINUTES = 240
 # A quest taken this recently is not judged by the saved bags: the database trails
-# the live game, and the item the take handed over may not be in it yet.
+# the live game, and the StartItem the take handed over may not be in it yet.
 TAKE_SETTLE_MINUTES = 45
 # CROSS carries the member to the continent its quest is on (a `cross-to-map`
 # row); it is the move in place of a MAP blocker while a crossing may be asked.
@@ -198,7 +208,10 @@ USE_HERE = "use-item-here"
 # the focus. The world data does not say it (the spell is in the client DBC, not
 # the database), so each is written down: 38607 Battle-worn Sword (spell 51769,
 # the death knight's The Emblazoned Runeblade) works beside a Runeforge, spell
-# focus 1552; the gameobjects are read from gameobject_template (type 8).
+# focus 1552; the gameobjects are read from gameobject_template (type 8). The
+# take does not hand the sword over (it is the quest's ItemDrop4, not its
+# StartItem): it is looted from a Battle-worn Sword chest (gameobject 190584)
+# on Acherus, so these items are read in the chest read (CHEST_SQL) too.
 FOCUS_ITEMS = {38607: 1552}
 # A member this near its target (yards) is already beside it: the use row is
 # written with no walk. The module's creature reach is 8 yards.
@@ -433,9 +446,11 @@ _ITEMS = "".join(
     % (i, i, i, i)
     for i in range(1, 7)
 )
-# The items a quest hands over when it is taken: StartItem and ItemDrop1-4.
+# The item a quest hands over when it is taken: StartItem, and nothing else
+# (Player::AddQuest -> GiveQuestSourceItem). ItemDrop1-4 are its source items:
+# the quest uses them and takes them back when it is abandoned, never gives them.
 _PROVIDED = "q.StartItem AS provided0, " + "".join(
-    "q.ItemDrop%d AS provided%d, " % (i, i) for i in range(1, 5)
+    "q.ItemDrop%d AS source%d, " % (i, i) for i in range(1, 5)
 )
 
 # Every class quest of the classic range, one row each.
@@ -528,7 +543,8 @@ FOCUS_OBJECTS_SQL = (
     "WHERE g.type = 8 AND g.Data0 IN ({focus})"
 )
 
-# The chests (gameobject type 3) whose loot holds a required item.
+# The chests (gameobject type 3) whose loot holds a required item, or an item a
+# use needs that the take does not hand over (a source item, a FOCUS_ITEMS item).
 CHEST_SQL = (
     "SELECT l.Item AS item, g.entry AS entry "
     "FROM acore_world.gameobject_loot_template l "
@@ -536,10 +552,14 @@ CHEST_SQL = (
     "WHERE l.Item IN ({items})"
 )
 
-# Every spawn of the gameobjects a quest uses (a chest, an objective).
+# Every spawn of the gameobjects a quest uses (a chest, an objective, a spell
+# focus), with its height: a death knight on the ground below Acherus is told
+# from one beside the sword chest or the Runeforge by height alone
+# (guildjobs.below_its_giver).
 OBJECT_SPAWNS_SQL = (
     "SELECT o.guid AS guid, o.id AS entry, o.map AS map_id, o.position_x AS x, "
-    "o.position_y AS y, gt.name AS name, 0 AS `rank`, 0 AS level "
+    "o.position_y AS y, gt.name AS name, 0 AS `rank`, 0 AS level, "
+    "o.position_z AS z "
     "FROM acore_world.gameobject o "
     "JOIN acore_world.gameobject_template gt ON gt.entry = o.id "
     "WHERE o.id IN ({entries})"
@@ -599,7 +619,9 @@ class Use:
     USE_OBJECT (a gameobject of `targets` clicked: a chest that holds `count`
     of `item`, or an objective gameobject when `item` is 0). `spots` are the
     spawns of the targets. `provided` is True for an item the quest hands over
-    when it is taken."""
+    when it is taken (its StartItem, nothing else). `fetch` is the USE_OBJECT
+    that gets `item` first, from the chests that hold it, for an item the take
+    does not hand over; None when no chest holds it or the take hands it over."""
 
     verb: str
     item: int = 0
@@ -607,6 +629,7 @@ class Use:
     targets: tuple = ()
     spots: tuple = ()
     provided: bool = False
+    fetch: Use | None = None
 
 
 @dataclass(frozen=True)
@@ -630,7 +653,7 @@ class Quest:
     # Spawns of every creature that satisfies an objective.
     fields: tuple = ()
     # What the quest has the member use (use-item-on, use-gameobject), and the
-    # item entries it hands over when taken.
+    # item it hands over when taken (its StartItem).
     uses: tuple = ()
     provided: tuple = ()
     # Required items a creature with a spawn drops.
@@ -642,6 +665,9 @@ class Quest:
     # quest_template_addon.ExclusiveGroup: a positive group lets a player take
     # only one of its quests (taking or finishing one closes the rest).
     exclusive: int = 0
+    # The quest's source items (ItemDrop1-4): what it uses and takes back when it
+    # is abandoned. The take does NOT hand them over.
+    sources: tuple = ()
 
     @property
     def spells(self) -> frozenset:
@@ -699,6 +725,8 @@ class Book:
         for q in self.quests.values():
             for u in q.uses:
                 (creatures if u.verb == USE_ITEM else objects).update(u.targets)
+                if u.fetch is not None:
+                    objects.update(u.fetch.targets)
         return sorted(creatures), sorted(objects)
 
 
@@ -807,34 +835,55 @@ def _focus_targets(rows) -> dict:
 
 
 def _provided(r) -> tuple:
-    """The item entries the quest hands over when it is taken."""
+    """The item the quest hands over when it is taken: its StartItem, or ()."""
+    entry = _int(r.get("provided0"))
+    return (entry,) if entry else ()
+
+
+def _sources(r) -> tuple:
+    """The quest's source items (ItemDrop1-4), which the take does not hand
+    over: the quest uses them and takes them back when it is abandoned."""
     seen = []
-    for i in range(5):
-        entry = _int(r.get("provided%d" % i))
+    for i in range(1, 5):
+        entry = _int(r.get("source%d" % i))
         if entry and entry not in seen:
             seen.append(entry)
     return tuple(seen)
 
 
+def _chest_fetch(item, aims):
+    """The USE_OBJECT that gets `item` from the chests that hold it, None when
+    no chest does."""
+    _item_aims, chests, _creature_spawns, object_spawns = aims[:4]
+    found = chests.get(item, ())
+    if not found:
+        return None
+    spots = tuple(s for g in found for s in object_spawns.get(g, ()))
+    return Use(USE_OBJECT, item, 1, found, spots)
+
+
 def _item_use(item, provided, aims):
-    """The Use of one carried or handed-over item: used beside a spell-focus
-    gameobject (USE_HERE), or on a creature (USE_ITEM); None when it has no
-    target."""
+    """The Use of one item the member uses: beside a spell-focus gameobject
+    (USE_HERE), or on a creature (USE_ITEM); None when it has no target. An
+    item the take does not hand over carries the chest it is fetched from."""
     item_aims, _chests, creature_spawns, object_spawns = aims[:4]
     focus = aims[4] if len(aims) > 4 else {}
+    handed = item in provided
+    fetch = None if handed else _chest_fetch(item, aims)
     foci = focus.get(item, ())
     if foci:
         spots = tuple(s for g in foci for s in object_spawns.get(g, ()))
-        return Use(USE_HERE, item, 1, foci, spots, item in provided)
+        return Use(USE_HERE, item, 1, foci, spots, handed, fetch)
     targets = item_aims.get(item, ())
     if targets:
         spots = tuple(s for t in targets for s in creature_spawns.get(t, ()))
-        return Use(USE_ITEM, item, 1, targets, spots, item in provided)
+        return Use(USE_ITEM, item, 1, targets, spots, handed, fetch)
     return None
 
 
 def _uses(r, items, provided, droppers, aims) -> tuple:
-    """The Uses of one quest: items used beside a forge or on creatures, chests
+    """The Uses of one quest: items used beside a forge or on creatures (each
+    fetched first from a chest when the take does not hand it over), chests
     that hold a required item no creature drops, and gameobject objectives.
 
     `aims` is (item -> creature entries, item -> chest entries, spawns by
@@ -843,7 +892,7 @@ def _uses(r, items, provided, droppers, aims) -> tuple:
     _item_aims, chests, creature_spawns, object_spawns = aims[:4]
     out = []
     required = [i for i, _n in items]
-    for item in dict.fromkeys([*provided, *required]):
+    for item in dict.fromkeys([*provided, *_sources(r), *required]):
         use = _item_use(item, provided, aims)
         if use is not None:
             out.append(use)
@@ -899,6 +948,7 @@ def _quest(r, klass, starts, ends, by_entry, droppers, aims, others=None) -> Que
         ),
         tuple((others or {}).get(qid, ())),
         max(0, _int(r.get("exclusive"))),
+        _sources(r),
     )
 
 
@@ -1147,7 +1197,9 @@ def _hunting(quest: Quest, member) -> bool:
 
 
 def _pending_use(quest: Quest, member):
-    """The Use the member has next, None when it has none or must hunt first."""
+    """The Use the member has next, None when it has none or must hunt first.
+    A use whose item the member lacks and the take did not hand over is its
+    chest first (Use.fetch)."""
     if not quest.uses or _hunting(quest, member):
         return None
     for use in quest.uses:
@@ -1155,21 +1207,28 @@ def _pending_use(quest: Quest, member):
             continue
         if use.verb == USE_HERE and all(member.count(i) >= n for i, n in quest.items):
             continue
+        if use.fetch is not None and not member.carries(use.item):
+            return use.fetch
         return use
     return None
 
 
 def _missing_item_blocker(quest: Quest, member, use: Use) -> tuple:
     """(ITEM, sentence) when the item a use needs is not carried, else ("", "").
-    A quest TAKEN lately handed its item over, whatever the saved bags say yet."""
+    A quest TAKEN lately handed its StartItem over, whatever the saved bags say
+    yet; an item the take does not hand over is never assumed carried so."""
     handed = use.provided and quest.id in getattr(member, "recently_taken", ())
-    if use.verb in (USE_ITEM, USE_HERE) and not member.carries(use.item) and not handed:
-        return ITEM, (
-            "%s needs item %d used on a creature and the member does not carry "
-            "it (the class step buys nothing and cannot hand a quest item out again)"
-            % (quest.title, use.item)
-        )
-    return "", ""
+    if use.verb not in (USE_ITEM, USE_HERE) or member.carries(use.item) or handed:
+        return "", ""
+    how = (
+        "the take handed it over and it is lost"
+        if use.provided
+        else "the take does not hand it over and no chest holds it"
+    )
+    return ITEM, (
+        "%s needs item %d used and the member does not carry it (%s; the class "
+        "step buys nothing)" % (quest.title, use.item, how)
+    )
 
 
 def _use_blocker(quest: Quest, member) -> tuple:
@@ -1548,9 +1607,10 @@ def roll_oldest(member, quest: Quest, avoid, marked) -> tuple:
 
 
 def _lost_item_move(member, quest: Quest, using, block: str, why: str):
-    """The ABANDON move for a quest whose handed-over use item the member no
+    """The ABANDON move for a quest whose StartItem, a use item, the member no
     longer carries (the quest gives it out again when it is taken anew), else
-    None."""
+    None. An item the take never handed over (a source item, ItemDrop1-4) is
+    no reason to drop the quest: taking it again does not bring it."""
     if (
         block == ITEM
         and using is not None

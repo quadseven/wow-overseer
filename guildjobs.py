@@ -534,8 +534,9 @@ class Member:
     alive: bool = True
     # The quest ids this member took lately (a `take quest:` row inside
     # classquest.TAKE_SETTLE_MINUTES). The bags are read from the database, which
-    # trails the live game, so the item such a take handed over may not be in them
-    # yet; the planner trusts the take (classquest._use_blocker).
+    # trails the live game, so the StartItem such a take handed over may not be in
+    # them yet; the planner trusts the take for it, and for nothing else
+    # (classquest._missing_item_blocker).
     recently_taken: frozenset = frozenset()
     # Bag slots free in the backpack and the worn bags; None when unread, which
     # keeps no quest waiting on room (class_room_needed).
@@ -2945,13 +2946,15 @@ def class_room_needed(m, move, book) -> int:
 
 def _protected_entries(book) -> frozenset:
     """The item entries a make-room step never sells, posts or destroys: every
-    item a class quest needs, hands over or uses, and the trades' tools."""
+    item a class quest needs, hands over or uses (its source items too), and
+    the trades' tools."""
     out = {e for tools in TOOL_ENTRIES.values() for e in tools} | {SOUL_SHARD}
     if book is not None:
         out.update(book.watch_items())
         for q in book.quests.values():
             out.update(i for i, _n in q.items)
             out.update(q.provided)
+            out.update(q.sources)
     return frozenset(out)
 
 
@@ -3250,10 +3253,11 @@ def deadly_way_note(m, move, recent) -> str:
 
 
 # A class step that follows a take is not held by the class cooldown, for this
-# many minutes after the take (2026-10-09). The item a take hands over is used
-# at once or the knight wanders off: Brug took The Emblazoned Runeblade at 10:06
-# and stood at the forge, then waited out the ten-minute cooldown and the
-# fifteen-minute cycle and was fighting on the ground when the sword step came.
+# many minutes after the take (2026-10-09). The step after a take (a StartItem
+# used, or the chest a use's item comes from) is made at once or the knight
+# wanders off: Brug took The Emblazoned Runeblade at 10:06 and stood near the
+# forge, then waited out the ten-minute cooldown and the fifteen-minute cycle
+# and was fighting on the ground when the sword step came.
 FOLLOW_UP_MINUTES = 30
 
 
@@ -3392,11 +3396,12 @@ def _abandon_step(m, move, recent, note):
             and int(r.age_minutes) < classquest.ABANDON_HOLD_MINUTES
         ):
             return None, move.said, _join(note, "%s was dropped lately" % move.quest)
-        # THE ITEM A TAKE HANDS OVER IS NOT IN THE SAVED BAGS FOR A WHILE
+        # THE StartItem A TAKE HANDS OVER IS NOT IN THE SAVED BAGS FOR A WHILE
         # (2026-10-08). The bridge reads bags from the database, which trails the
-        # live game; Brug took The Emblazoned Runeblade at 06:14 and was told at
-        # 06:29 that he carried no sword, so he dropped the quest and the sword
-        # with it. A quest taken lately is not judged by the saved bags.
+        # live game, so a quest taken lately is not judged by the saved bags.
+        # (The case that raised it, Brug's Battle-worn Sword for The Emblazoned
+        # Runeblade, was no StartItem: the take never gave it, 2026-10-09, and
+        # the planner now sends him to the chest that holds it instead.)
         if (
             r.name == m.name
             and r.taken == int(move.quest)

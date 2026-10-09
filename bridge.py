@@ -24490,15 +24490,19 @@ def _class_book_reads(cur) -> tuple:
 def _class_use_reads(cur, quests, items) -> tuple:
     """(use item rows, chest rows, object spawn rows, focus rows) for what the quests have a
     member use (classquest.USE_ITEMS_SQL): items bound to named creatures, chests
-    that hold a required item, gameobject objectives."""
-    provided = {int(r[f"provided{i}"]) for r in quests for i in range(5)
-                if r.get(f"provided{i}")}
+    that hold a required item or an item a use needs that the take does not hand
+    over, gameobject objectives."""
+    # The take hands over the StartItem only; ItemDrop1-4 (source1-4) are the
+    # quest's source items, never given, so a chest is read for them (2026-10-09).
+    provided = {int(r["provided0"]) for r in quests if r.get("provided0")}
+    sources = {int(r[f"source{i}"]) for r in quests for i in range(1, 5)
+               if r.get(f"source{i}")}
+    used = items | provided | sources
     use_rows = _class_rows(cur, "class quest use items", classquest.USE_ITEMS_SQL,
-                           "items", items | provided)
+                           "items", used)
     chest_rows = _class_rows(cur, "class quest chests", classquest.CHEST_SQL,
-                             "items", items - provided)
-    foci = {focus for item, focus in classquest.FOCUS_ITEMS.items()
-            if item in items | provided}
+                             "items", items | sources | set(classquest.FOCUS_ITEMS))
+    foci = {focus for item, focus in classquest.FOCUS_ITEMS.items() if item in used}
     focus_rows = _class_rows(cur, "class quest focus objects",
                              classquest.FOCUS_OBJECTS_SQL, "focus", foci)
     objects = ({int(r["entry"]) for r in chest_rows}

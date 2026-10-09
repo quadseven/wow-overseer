@@ -7,11 +7,14 @@ walks, once an hour (the hearth cooldown).
 """
 
 import json
+import re
 import unittest
 
 import classquest
 import guildjobs
-from test_classquest_use import who
+from test_classquest_use import carried, spawn, who
+from test_classquest_use_here import CHEST, FORGE, SWORD, runeblade
+from test_classquest_use_here import knight as here_knight
 
 DK = 6
 STALL = guildjobs.STALLED_WALK_REASON
@@ -281,6 +284,74 @@ class BelowAcherus(unittest.TestCase):
             self.ground(in_combat=True), self.book(), (), 5000
         )
         self.assertEqual(step.action, "hearth")
+
+
+# The height of the sword chests and the Runeforges on Acherus, and of Brug on
+# the ground below it (the dev realm's rows, 2026-10-09).
+ACHERUS_Z, GROUND_Z = 420.643, 101.347
+
+
+def as_read(row, sql=classquest.OBJECT_SPAWNS_SQL):
+    """`row` with only the columns `sql` selects: a column the read leaves out
+    is not in the row the book is built from."""
+    names = set(re.findall(r"\bAS `?(\w+)`?", sql))
+    return {k: v for k, v in row.items() if k in names}
+
+
+class BelowTheSwordChest(unittest.TestCase):
+    """A knight on the ground with 12619 in its log is recalled when its next
+    move is the Battle-worn Sword chest or a Runeforge on Acherus: the
+    gameobject read carries each spawn's height (2026-10-09)."""
+
+    def book(self):
+        def up(guid, entry, x, y, name):
+            row = spawn(guid, entry, x, y, name, classquest.DEATH_KNIGHT_START_MAP)
+            return as_read(dict(row, z=ACHERUS_Z))
+
+        return runeblade(
+            object_rows=[
+                up(65945, CHEST, 2439.37, -5672.16, "Battle-worn Sword"),
+                up(65918, FORGE, 2493.57, -5642.81, "Runeforge"),
+            ]
+        )
+
+    def knight(self, **over):
+        base = dict(
+            x=2351.76,
+            y=-5680.54,
+            z=GROUND_Z,
+            quest_log={12619: 3},
+            quests_done=frozenset({12593}),
+        )
+        base.update(over)
+        return here_knight(**base)
+
+    def test_the_gameobject_read_selects_the_height(self):
+        self.assertIn("o.position_z AS z", classquest.OBJECT_SPAWNS_SQL)
+
+    def test_a_knight_below_the_sword_chest_is_recalled(self):
+        m = self.knight()
+        move, _ = classquest.next_move(self.book(), m)
+        self.assertEqual(
+            (move.use.verb, move.spot.guid), (classquest.USE_OBJECT, 65945)
+        )
+        self.assertEqual(move.spot.z, ACHERUS_Z)
+        step = guildjobs.stranded_recall_step(m, (), self.book())
+        self.assertIsNotNone(step)
+        self.assertEqual(
+            (step.rows[0].kind, step.rows[0].command), ("hearth", "recall")
+        )
+
+    def test_a_knight_below_the_runeforge_is_recalled(self):
+        m = self.knight(carried=carried((SWORD, 1)))
+        move, _ = classquest.next_move(self.book(), m)
+        self.assertEqual((move.use.verb, move.spot.guid), (classquest.USE_HERE, 65918))
+        step = guildjobs.stranded_recall_step(m, (), self.book())
+        self.assertEqual(step.rows[0].command, "recall")
+
+    def test_a_knight_on_acherus_beside_the_chest_is_not(self):
+        m = self.knight(x=2430.0, y=-5670.0, z=ACHERUS_Z)
+        self.assertIsNone(guildjobs.stranded_recall_step(m, (), self.book()))
 
 
 if __name__ == "__main__":
