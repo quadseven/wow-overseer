@@ -608,7 +608,7 @@ class TheBridgeWiring(unittest.TestCase):
         self.assertNotIn("_class_quest_state(step.holder", bridge_text())
 
     def test_the_hunt_row_is_followed_before_any_other_job_row(self):
-        src = bridge.Bridge._run_job_step.__code__.co_names
+        src = bridge.Bridge._run_step_row.__code__.co_names
         self.assertIn("_class_hunt_row", src)
 
     def test_the_plan_is_given_the_hunt_slots_the_realm_has_free(self):
