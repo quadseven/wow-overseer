@@ -149,7 +149,7 @@ class TheBridgeIsWired(unittest.TestCase):
         )
 
     def test_the_ledger_read_fails_closed(self):
-        self.assertIn('"SELECT name, part FROM overseer_naturalized"', BRIDGE)
+        self.assertIn("cur.execute(_NATURALIZED_SQL)", BRIDGE)
         self.assertIn("takers = {str(n) for n in family_names or ()}", BRIDGE)
 
     def test_the_image_ships_the_module(self):

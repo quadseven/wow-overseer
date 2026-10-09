@@ -24027,6 +24027,28 @@ def _tabless_guilds(guild_names: list) -> frozenset:
         return frozenset(str(row["name"]) for row in cur.fetchall())
 
 
+# THE LEDGER IS READ BY GUID, UNDER THE NAME THE CHARACTER HAS NOW (2026-10-09).
+# The module writes the name a character had when it was reset; the approved
+# lineup renamed 114 of the guild members afterwards (Aalall became Brug), and a
+# read by the written name found 28 of 142 members natural, so the rest never
+# sold their own loot, bought gear with their own gold or opened their post.
+# A character since deleted keeps the name the ledger wrote. The two names are
+# read apart and chosen in Python: the tables differ in collation, and MySQL
+# refuses COALESCE across them (test_collation_split).
+_NATURALIZED_SQL = (
+    "SELECT c.name AS current_name, n.name AS name, n.part AS part "
+    "FROM overseer_naturalized n LEFT JOIN characters c ON c.guid = n.guid"
+)
+
+
+def _naturalized_rows(rows) -> list:
+    """The ledger's rows under each character's name now (_NATURALIZED_SQL)."""
+    return [
+        {"name": row.get("current_name") or row.get("name"), "part": row.get("part")}
+        for row in (dict(r) for r in rows or ())
+    ]
+
+
 def _natural_contributors(candidates: list, family_names: list) -> frozenset:
     """natural.contributors over the module's ledger; no judgement here.
 
@@ -24037,8 +24059,8 @@ def _natural_contributors(candidates: list, family_names: list) -> frozenset:
     rows, readable, takers = [], True, set()
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute("SELECT name, part FROM overseer_naturalized")
-            rows = [dict(row) for row in cur.fetchall()]
+            cur.execute(_NATURALIZED_SQL)
+            rows = _naturalized_rows(cur.fetchall())
         except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
