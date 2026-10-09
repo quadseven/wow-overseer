@@ -14464,6 +14464,11 @@ class Bridge(discord.Client):
             for row in step.rows:
                 if not await self._run_step_row(step, row, cap):
                     return
+            if step.action == classquest.ACTION and any(
+                guildjobs.is_take_row(r.command) for r in step.rows
+            ):
+                # The next class step is asked for soon, not a cycle from now.
+                self._class_follow_up = True
         except pymysql.err.MySQLError:
             log.exception("guild jobs: step for %s failed", step.holder)
         finally:
@@ -14883,12 +14888,18 @@ class Bridge(discord.Client):
         cycle = float(os.environ.get("GUILD_JOBS_CYCLE_SECONDS", "900"))
         await asyncio.sleep(min(cycle, 420.0))
         while not self.is_closed():
+            self._class_follow_up = False
             try:
                 await self._guild_jobs_once()
             except Exception:
                 log.exception("guild jobs pass failed; retrying next cycle")
             await self._for_other_families("guild jobs", self._guild_jobs_once)
-            await asyncio.sleep(cycle)
+            # A class quest taken in this pass hands over an item to use now.
+            await asyncio.sleep(
+                min(cycle, guildjobs.FOLLOW_UP_SECONDS)
+                if getattr(self, "_class_follow_up", False)
+                else cycle
+            )
 
     async def _mail_once(self, cohort=None) -> None:
         """One pass of the mail: collect what is already addressed to the family.
