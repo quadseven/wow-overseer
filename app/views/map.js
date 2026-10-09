@@ -34,6 +34,8 @@ function model(ctx) {
   if (!D.ok(shapes) || !D.ok(map)) return null;
   const cont = wm.CONTINENT[pickOf(ctx)];
   const shape = shapes.data[cont];
+  // A shapes file without this continent cannot be drawn on; say so.
+  if (!shape) return { missing: true };
   const who = people(ctx);
   const dots = wm.dotsFor(shape, cont, map.data.dots, who);
   const placed = new Set((map.data.dots || []).map((d) => d.name));
@@ -85,6 +87,7 @@ export default {
       const failed = ctx.get("/api/map").error || ctx.get("/shapes.json").error;
       return html`${head}${failed ? state("error", "The world did not answer", "Positions come from /api/map, which did not answer, so no dot is drawn.") : html`<div class="wm"><div class="wm-wait">Unrolling the map...</div></div>`}`;
     }
+    if (m.missing) return html`${head}${state("unmeasured", "This continent is not drawn", "shapes.json has no shape for it, so no position can be placed on it.")}`;
     const gear = ctx.get("/api/guildgear");
     return html`${head}<p class="lead">${familyLine(m)}</p>
 <div class="wm" data-map-box="full"></div>
@@ -95,7 +98,7 @@ ${whereList(m)}`;
   after(main, ctx) {
     const box = main.querySelector('[data-map-box="full"]');
     const m = model(ctx);
-    if (!box || !m) return;
+    if (!box || !m || m.missing) return;
     const counts = new Map();
     m.dots.forEach((d) => counts.set(d.zone, (counts.get(d.zone) || []).concat(d.name)));
     const summary = plural(m.dots.length, "of ours", "of ours") + " on this continent";
