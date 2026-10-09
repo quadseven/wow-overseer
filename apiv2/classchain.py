@@ -182,36 +182,46 @@ def _variant(book, rewards: list, race: int, status: dict, done: set):
     return min(options, key=lambda q: (q.min_level, q.id))
 
 
+def _chain(book, key, last, learned: bool, look: tuple) -> dict:
+    """One reward chain as the page draws it, oldest step first."""
+    status, done, blocked, level = look
+    steps = [book.quests[i] for i in classquest.chain(book, last.id)]
+    return {
+        "title": last.title,
+        "done": learned,
+        "opens": steps[0].min_level if steps else last.min_level,
+        "steps": [
+            {
+                "id": q.id,
+                "title": q.title,
+                "level": q.min_level,
+                "state": "done"
+                if learned and q.id not in status
+                else step_state(q, status, done, blocked, level),
+            }
+            for q in steps
+        ],
+    }
+
+
+def _learned(key, rewards, known: set, done: set) -> bool:
+    """classquest.has_reward's rule: the spell is known, or any quest that
+    grants it was rewarded."""
+    return any(s in known for s in key[1]) or any(q in done for q in rewards)
+
+
 def chains(book, char: dict, status: dict, done: set, known: set, blocked: int) -> list:
     klass, race = int(char.get("class_id") or 0), int(char.get("race") or 0)
-    level = int(char.get("level") or 0)
+    look = (status, done, blocked, int(char.get("level") or 0))
     out = []
     for key, rewards in book.groups.items():
         if key[0] != klass or book.trained.intersection(key[1]):
             continue
         last = _variant(book, rewards, race, status, done)
-        if last is None:
-            continue
-        learned = any(s in known for s in key[1]) or any(q in done for q in rewards)
-        steps = [book.quests[i] for i in classquest.chain(book, last.id)]
-        out.append(
-            {
-                "title": last.title,
-                "done": learned,
-                "opens": steps[0].min_level if steps else last.min_level,
-                "steps": [
-                    {
-                        "id": q.id,
-                        "title": q.title,
-                        "level": q.min_level,
-                        "state": "done"
-                        if learned and q.id not in status
-                        else step_state(q, status, done, blocked, level),
-                    }
-                    for q in steps
-                ],
-            }
-        )
+        if last is not None:
+            out.append(
+                _chain(book, key, last, _learned(key, rewards, known, done), look)
+            )
     out.sort(key=lambda c: (c["opens"], c["title"]))
     return without_prefixes(out)
 

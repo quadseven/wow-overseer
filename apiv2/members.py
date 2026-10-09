@@ -303,28 +303,27 @@ def _family_of(families: dict) -> dict:
     return out
 
 
-def _member(name, row, ctx_rows) -> dict:
-    char = ctx_rows["chars"].get(name) or {}
-    snap = ctx_rows["snaps"].get(name)
-    life = life_of(snap, char)
-    family, lead = ctx_rows["family"].get(name, ("", False))
-    now = nowstatus.compose(
-        _presence(snap, life), ctx_rows["facts"].get(name), ctx_rows["now_at"] or None
-    )
-    job = ctx_rows["jobs"].get(name)
-    class_id = int(char.get("class_id") or row.get("class_id") or 0)
+def _either(char: dict, row: dict, key: str) -> int:
+    """A number from the character's own row, else from the guild row."""
+    return int(char.get(key) or row.get(key) or 0)
+
+
+def _identity(name: str, row: dict, char: dict, family_of: dict) -> dict:
+    family, lead = family_of.get(name, ("", False))
     return {
         "name": name,
         "guild": row.get("guild_name") or "",
         "family": family,
         "lead": lead,
-        "level": int(char.get("level") or row.get("level") or 0),
-        "class": _CLASS_NAMES.get(class_id, ""),
-        "race": _RACE_NAMES.get(int(char.get("race") or row.get("race") or 0), ""),
+        "level": _either(char, row, "level"),
+        "class": _CLASS_NAMES.get(_either(char, row, "class_id"), ""),
+        "race": _RACE_NAMES.get(_either(char, row, "race"), ""),
         "gender": "female" if char.get("gender") else "male",
-        "zone": zone_of(snap, char),
-        "online": snap is not None,
-        "life": life,
+    }
+
+
+def _doing(now: dict, job: dict | None) -> dict:
+    return {
         "doing": now.get("doing") or "",
         "waiting": now.get("waiting") or "",
         "for_s": now.get("for_s"),
@@ -333,6 +332,19 @@ def _member(name, row, ctx_rows) -> dict:
         "job_answer": job_answer(job),
         "job_at": int(job["at"]) if job and job.get("at") else None,
     }
+
+
+def _member(name, row, ctx_rows) -> dict:
+    char = ctx_rows["chars"].get(name) or {}
+    snap = ctx_rows["snaps"].get(name)
+    life = life_of(snap, char)
+    now = nowstatus.compose(
+        _presence(snap, life), ctx_rows["facts"].get(name), ctx_rows["now_at"] or None
+    )
+    out = _identity(name, row, char, ctx_rows["family"])
+    out.update(zone=zone_of(snap, char), online=snap is not None, life=life)
+    out.update(_doing(now, ctx_rows["jobs"].get(name)))
+    return out
 
 
 def _stuck_entry(member: dict, run: list, now_at: int) -> dict | None:
@@ -357,9 +369,24 @@ def _step_of(m: dict, found: dict | None) -> str:
     return m["doing"]
 
 
-def build(families, guild, chars, snaps, asks, facts, now_at, jobs=()) -> dict:
-    """The roster: one row per member, family first, with its stuck reading."""
-    rows = {
+def _with_stuck(m: dict, found: dict | None) -> dict:
+    """The member with its stuck reading: the blocker, or none."""
+    m["stuck"] = found is not None
+    m["step"] = _step_of(m, found)
+    found = found or {"blocker": "", "since": None, "kind": ""}
+    m.update(blocker=found["blocker"], since=found["since"], stuck_kind=found["kind"])
+    return m
+
+
+def _order(families: dict, guild_of: dict) -> list:
+    """The families first, lead first, then the guilds by name."""
+    names = [n for group in families.values() for n in group]
+    return names + sorted(n for n in guild_of if n not in names)
+
+
+def _lookups(families, chars, snaps, facts, now_at, jobs) -> dict:
+    """The rows build() reads, keyed by name."""
+    return {
         "jobs": _newest(jobs),
         "chars": {r["name"]: r for r in chars or ()},
         "snaps": {r["name"]: r for r in snaps or ()},
@@ -367,25 +394,24 @@ def build(families, guild, chars, snaps, asks, facts, now_at, jobs=()) -> dict:
         "facts": facts or {},
         "now_at": int(now_at or 0),
     }
+
+
+def build(families, guild, chars, snaps, asks, facts, now_at, jobs=()) -> dict:
+    """The roster: one row per member, family first, with its stuck reading."""
+    families = families or {}
+    rows = _lookups(families, chars, snaps, facts, now_at, jobs)
     guild_of = {r["name"]: r for r in guild or ()}
-    names = [n for group in (families or {}).values() for n in group]
-    names += sorted(n for n in guild_of if n not in names)
     streaks = ask_streaks(asks)
     members = []
-    for name in names:
+    for name in _order(families, guild_of):
         if name not in rows["chars"] and name not in guild_of:
             continue
         m = _member(name, guild_of.get(name, {}), rows)
         found = _stuck_entry(m, streaks.get(name, []), rows["now_at"])
-        m["stuck"] = found is not None
-        m["step"] = _step_of(m, found)
-        m["blocker"] = found["blocker"] if found else ""
-        m["since"] = found["since"] if found else None
-        m["stuck_kind"] = found["kind"] if found else ""
-        members.append(m)
+        members.append(_with_stuck(m, found))
     return {
         "members": members,
-        "families": {k: list(v) for k, v in (families or {}).items()},
+        "families": {k: list(v) for k, v in families.items()},
         "checked_at": rows["now_at"] or None,
         "basis": BASIS,
     }

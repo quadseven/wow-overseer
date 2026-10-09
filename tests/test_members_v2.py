@@ -401,7 +401,7 @@ class NowIsTheBestDropOpenAtThisLevel(unittest.TestCase):
         for key, value in payload.items():
             if key != "slots":
                 self.assertEqual(out[key], value)
-        for old, new in zip(payload["slots"], out["slots"]):
+        for old, new in zip(payload["slots"], out["slots"], strict=True):
             self.assertLessEqual(old.items(), new.items())
         self.assertEqual(out["slots"][0]["now"]["gain"], 19)
         self.assertIsNone(out["slots"][1]["now"])
