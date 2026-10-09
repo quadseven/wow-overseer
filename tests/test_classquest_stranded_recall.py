@@ -88,6 +88,29 @@ class TheRecall(unittest.TestCase):
                 )
                 self.assertIsNotNone(guildjobs.stranded_recall_step(knight(), failed))
 
+    def test_the_plan_lets_a_recall_through_a_fight_and_nothing_else(self):
+        # The step was chosen in a fight (#689) and then dropped by the plan's
+        # own combat refusal: the live log said 'Brug is in combat' (2026-10-08).
+        recall = guildjobs.stranded_recall_step(knight(in_combat=True), STALLS)
+        other = guildjobs.hearth_step(knight(in_combat=True))
+        self.assertEqual(
+            guildjobs._step_refusal(knight(in_combat=True), set(), {}, 6, recall), ""
+        )
+        self.assertIn(
+            "in combat",
+            guildjobs._step_refusal(knight(in_combat=True), set(), {}, 6, other),
+        )
+        self.assertIn(
+            "in combat", guildjobs._step_refusal(knight(in_combat=True), set(), {}, 6)
+        )
+
+    def test_a_recall_still_waits_for_the_other_refusals(self):
+        recall = guildjobs.stranded_recall_step(knight(), STALLS)
+        self.assertIn(
+            "already on another",
+            guildjobs._step_refusal(knight(), {"Brug"}, {}, 6, recall),
+        )
+
     def test_a_dead_or_offline_knight_waits(self):
         self.assertIsNone(guildjobs.stranded_recall_step(knight(alive=False), STALLS))
         self.assertIsNone(guildjobs.stranded_recall_step(knight(online=False), STALLS))

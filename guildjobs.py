@@ -2161,7 +2161,7 @@ def plan(
             _count_focus(tally, m, None, fields)
             continue
         started, allowance = _allowance(step, counters, per_guild)
-        why = _step_refusal(m, busy, started, allowance)
+        why = _step_refusal(m, busy, started, allowance, step)
         if why:
             notes.append(why)
             _release_slots(m.name, far, hunts)
@@ -3460,10 +3460,19 @@ def _member_job(m, trades, fields, doors, pending, crafters, master, kept, recen
     return step, doing or "levels toward the raid and raids when the guild does", note
 
 
-def _step_refusal(m, busy, started, per_guild):
+def _is_recall(step) -> bool:
+    """Whether the step is a stranded knight's hearth recall."""
+    rows = getattr(step, "rows", None) or ()
+    return bool(rows) and rows[0].kind == "hearth" and rows[0].command == "recall"
+
+
+def _step_refusal(m, busy, started, per_guild, step=None):
     if not m.online:
         return "%s is offline" % m.name
-    if m.in_combat:
+    # A recall is asked in a fight too (2026-10-08): the module refuses the cast
+    # for the fight at no cost, and the ask that lands is the one in a gap. A
+    # stranded knight fights almost without a pause.
+    if m.in_combat and not _is_recall(step):
         return "%s is in combat" % m.name
     if m.name in busy:
         return "%s is already on another guild walk" % m.name
