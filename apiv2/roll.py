@@ -59,7 +59,7 @@ def _uptime(uptime_rows: list) -> int | None:
     if not uptime_rows:
         return None
     row = uptime_rows[0]
-    up = row.get("up") if isinstance(row, dict) else row[0]
+    up = row.get("up") if isinstance(row, dict) else (row[0] if row else None)
     if up is None:
         return None
     return max(0, int(up))

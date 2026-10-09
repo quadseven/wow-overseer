@@ -121,6 +121,12 @@ class TheRoll(unittest.TestCase):
         self.assertIsNone(out["when"])
         self.assertIsNone(out["uptime_seconds"])
 
+    def test_a_tuple_uptime_row_is_read_and_an_empty_one_is_not_measured(self):
+        self.assertEqual(
+            v2roll.build_roll([], [], [(90,)], now=NOW)["uptime_seconds"], 90
+        )
+        self.assertIsNone(v2roll.build_roll([], [], [()], now=NOW)["uptime_seconds"])
+
     def test_the_spec_shape_is_present(self):
         out = v2roll.build_roll(build_rows(), [], [], now=NOW)
         for key in ("build", "when", "channel", "shipped"):
