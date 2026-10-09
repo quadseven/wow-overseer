@@ -140,6 +140,7 @@ export default {
     const sel = main.querySelector("#ro-sort");
     if (sel) sel.addEventListener("change", () => redraw(setQuery({ sort: sel.value === "stuck" ? "" : sel.value })));
     const wrap = main.querySelector(".ro-wrap");
+    if (!wrap) return;
     wrap.addEventListener("click", (e) => {
       const c = e.target.closest("[data-chip], [data-sort], [data-clear], [data-clear-lvl]");
       if (!c) return;

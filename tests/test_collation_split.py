@@ -111,9 +111,6 @@ COLLATIONS = {
     # Module-owned (mod-overseer#634, 2026_09_23_01_overseer_raid_seat.sql),
     # named in its own CREATE TABLE the same way. The bridge only writes it.
     "overseer_raid_seat": "utf8mb4_unicode_ci",
-    # Module-owned (wow-overseer#533), one row per level change. Read from
-    # SHOW CREATE TABLE on wow-dev on 2026-10-09: COLLATE=utf8mb4_unicode_ci.
-    "overseer_level": "utf8mb4_unicode_ci",
     # Module-owned (2026_09_25_10_overseer_raid_spec.sql), named in its own
     # CREATE TABLE the same way. The bridge only writes it.
     "overseer_raid_spec": "utf8mb4_unicode_ci",
@@ -175,7 +172,6 @@ STRING_COLUMNS = {
             "target_name",
         }
     ),
-    "overseer_level": frozenset({"character_name"}),
     "overseer_death": frozenset(
         {
             "character_name",
