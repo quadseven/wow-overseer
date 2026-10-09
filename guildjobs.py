@@ -513,6 +513,8 @@ class Member:
     map_id: int | None = None
     x: float | None = None
     y: float | None = None
+    # The snapshot's height, None when no fresh snapshot was read.
+    z: float | None = None
     # The snapshot's zone, None when no fresh snapshot was read.
     zone_id: int | None = None
     money: int = 0
@@ -3464,7 +3466,7 @@ def _class_early(m, book, recent):
     # The recall is asked even in a fight (2026-10-08): a knight stranded on the
     # ground fights almost without a pause, the module refuses the cast for the
     # fight at no cost, and the ask that lands is the one in a gap.
-    recall = stranded_recall_step(m, recent) if book is not None else None
+    recall = stranded_recall_step(m, recent, book) if book is not None else None
     if recall is not None:
         return recall, recall.said, ""
     if not _class_ready(m, book):
@@ -3487,9 +3489,31 @@ def _recalled_lately(m, recent) -> bool:
     )
 
 
-def stranded_recall_step(m, recent):
-    """The hearth recall step for a death knight stranded in its starting zone
-    after repeated stalled walks, or None. Held by the hearth cooldown."""
+# How far below the spawn of its next class move a death knight stands before
+# it is stranded. Acherus floats about 250 yards over the ground; its decks lie
+# within 50 yards of each other.
+ACHERUS_HEIGHT_GAP = 150.0
+
+
+def below_its_giver(m, book) -> bool:
+    """Whether a death knight stands far below the spawn of its next class move
+    on the same map (2026-10-09). Brug fell off Acherus within 20 minutes of each
+    recall and then fought on the ground without a pause, so no class walk was
+    asked and no stalled walk was counted: the stall rule never fired again."""
+    if book is None or m.z is None:
+        return False
+    move, _blocked = classquest.next_move(book, m)
+    spot = getattr(move, "spot", None)
+    z = getattr(spot, "z", None)
+    if z is None or getattr(spot, "map_id", None) != m.map_id:
+        return False
+    return float(z) - float(m.z) > ACHERUS_HEIGHT_GAP
+
+
+def stranded_recall_step(m, recent, book=None):
+    """The hearth recall step for a death knight stranded in its starting zone,
+    after repeated stalled walks or when it stands far below its next giver, or
+    None. Held by the hearth cooldown."""
     if not (
         int(m.class_id) == classquest.DEATH_KNIGHT
         and m.map_id == classquest.DEATH_KNIGHT_START_MAP
@@ -3506,7 +3530,9 @@ def stranded_recall_step(m, recent):
         and r.reason == STALLED_WALK_REASON
         and int(r.age_minutes) < STRANDED_WALK_WINDOW_MINUTES
     ]
-    if len(stalled) < STRANDED_STALLED_WALKS or _recalled_lately(m, recent):
+    if _recalled_lately(m, recent):
+        return None
+    if len(stalled) < STRANDED_STALLED_WALKS and not below_its_giver(m, book):
         return None
     return guildcorps.Step(
         m.name,

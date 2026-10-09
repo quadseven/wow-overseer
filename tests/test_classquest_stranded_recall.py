@@ -227,5 +227,61 @@ class TheBridgeAsksAgain(unittest.TestCase):
         self.assertEqual(len(asked), guildjobs.RECALL_ATTEMPTS)
 
 
+class BelowAcherus(unittest.TestCase):
+    """A knight far below its next giver is recalled without a stalled walk
+    (2026-10-09): Brug fought on the ground without a pause after each fall, so
+    no class walk was asked and the stall rule never fired again."""
+
+    def book(self, z=420.48):
+        from test_classquest_use_here import RAZUVIOUS, runeblade
+        from test_classquest_use import giver
+
+        top = dict(RAZUVIOUS, z=z)
+        return runeblade(
+            giver_rows=[giver(12619, "start", top), giver(12619, "end", top)]
+        )
+
+    def ground(self, **over):
+        from test_classquest_use_here import knight as here_knight
+
+        base = dict(quest_log={}, quests_done=frozenset({12593}), z=101.2)
+        base.update(over)
+        return here_knight(**base)
+
+    def test_a_knight_on_the_ground_below_its_giver_is_recalled(self):
+        step = guildjobs.stranded_recall_step(self.ground(), (), self.book())
+        self.assertIsNotNone(step)
+        self.assertEqual(step.rows[0].command, "recall")
+
+    def test_a_knight_on_the_platform_is_not(self):
+        self.assertIsNone(
+            guildjobs.stranded_recall_step(self.ground(z=403.0), (), self.book())
+        )
+
+    def test_without_a_height_nothing_is_judged(self):
+        self.assertIsNone(
+            guildjobs.stranded_recall_step(self.ground(z=None), (), self.book())
+        )
+        self.assertIsNone(
+            guildjobs.stranded_recall_step(self.ground(), (), self.book(z=None))
+        )
+
+    def test_the_hearth_cooldown_still_holds(self):
+        done = rows((("hearth", "Brug"), "recall", 20, "", "applied"))
+        self.assertIsNone(
+            guildjobs.stranded_recall_step(self.ground(), done, self.book())
+        )
+
+    def test_the_book_reads_the_givers_height(self):
+        quest = self.book().quests[12619]
+        self.assertEqual(quest.starters[0].z, 420.48)
+
+    def test_class_step_asks_the_recall_in_a_fight(self):
+        step, _doing, _note = guildjobs.class_step(
+            self.ground(in_combat=True), self.book(), (), 5000
+        )
+        self.assertEqual(step.action, "hearth")
+
+
 if __name__ == "__main__":
     unittest.main()

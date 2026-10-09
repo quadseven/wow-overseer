@@ -24348,7 +24348,8 @@ def _insert_corps_row(holder: str, row) -> int:
 # reservations keep.py's (`_KEEP`).
 _JOB_MEMBERS_SQL = (
     "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, "
-    "c.level, c.money, c.online, c.map AS map_id, s.pos_x, s.pos_y, s.in_combat, "
+    "c.level, c.money, c.online, c.map AS map_id, s.pos_x, s.pos_y, s.pos_z, "
+    "s.in_combat, "
     "s.zone_id, s.health, "
     "EXISTS (SELECT 1 FROM corpse k WHERE k.guid = c.guid) AS has_corpse, "
     "lc.name AS master, " + raidroles.TALENTS_COLUMN + " "
@@ -24736,6 +24737,7 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             map_id=_row_int(r, "map_id"),
             x=_row_float(r, "pos_x"),
             y=_row_float(r, "pos_y"),
+            z=_row_float(r, "pos_z"),
             zone_id=_row_int(r, "zone_id"),
             money=int(r.get("money") or 0), skills=skills.get(guid, {}),
             known=frozenset(known.get(guid, ())), carried=carried.get(guid, ()),
