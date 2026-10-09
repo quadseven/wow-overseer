@@ -162,15 +162,64 @@ class TheAskingAgain(unittest.TestCase):
         )
         self.assertFalse(guildjobs.recall_again("", ""))
 
-    def test_the_bridge_asks_through_the_helper(self):
-        import pathlib
 
-        bridge = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
-            encoding="utf-8"
+class TheBridgeAsksAgain(unittest.TestCase):
+    """`Bridge._recall_row` driven with the row writes and answers stubbed."""
+
+    ROW = guildjobs.guildcorps.Row("hearth", "recall", "", "guildjobs:stranded:Brug")
+    STEP = guildjobs.guildcorps.Step("Brug", "recall", 0, "goes home", rows=(ROW,))
+
+    def drive(self, answers):
+        import asyncio
+        from unittest import mock
+
+        from test_guildsocial_bridge import bridge
+
+        asked, slept = [], []
+        queue = list(answers)
+
+        def insert(holder, row):
+            asked.append(row.command)
+            return len(asked)
+
+        async def answer(row_id, seconds):
+            return queue.pop(0) if queue else {}
+
+        async def nap(seconds):
+            slept.append(seconds)
+
+        this = type("B", (), {"_await_corps_answer": staticmethod(answer)})()
+        with (
+            mock.patch.object(bridge, "_insert_corps_row", insert),
+            mock.patch.object(bridge.asyncio, "sleep", nap),
+        ):
+            went = asyncio.run(bridge.Bridge._recall_row(this, self.STEP, self.ROW))
+        return went, asked, slept
+
+    def test_a_fight_then_a_gap_asks_twice_and_goes_home(self):
+        went, asked, slept = self.drive(
+            [
+                {"status": "error", "detail": "the character is in combat"},
+                {"status": "applied", "detail": "went home"},
+            ]
         )
-        self.assertIn("guildjobs.is_recall_row(row.command)", bridge)
-        self.assertIn("async def _recall_row", bridge)
-        self.assertIn("guildjobs.recall_again(status, detail)", bridge)
+        self.assertTrue(went)
+        self.assertEqual(asked, ["recall", "recall"])
+        self.assertEqual(slept, [guildjobs.RECALL_ASK_SECONDS])
+
+    def test_an_answer_that_will_not_change_is_asked_once(self):
+        went, asked, slept = self.drive(
+            [{"status": "error", "detail": "home is where the character already stands"}]
+        )
+        self.assertFalse(went)
+        self.assertEqual(len(asked), 1)
+        self.assertEqual(slept, [])
+
+    def test_a_stubborn_fight_stops_at_the_attempt_cap(self):
+        fight = {"status": "error", "detail": "the character is in combat"}
+        went, asked, _ = self.drive([fight] * 50)
+        self.assertFalse(went)
+        self.assertEqual(len(asked), guildjobs.RECALL_ATTEMPTS)
 
 
 if __name__ == "__main__":

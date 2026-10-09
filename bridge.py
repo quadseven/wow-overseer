@@ -14462,33 +14462,37 @@ class Bridge(discord.Client):
             else:
                 log.info("guild jobs: %s", step.said)
             for row in step.rows:
-                # A stranded knight's recall is asked again within the step.
-                if row.kind == "hearth" and guildjobs.is_recall_row(row.command):
-                    if not await self._recall_row(step, row):
-                        return
-                    continue
-                # A quest use row (classuse.py) is followed by what it answers.
-                if classuse.is_use_row(row.command):
-                    if not await self._class_use_row(step, row, cap):
-                        return
-                    continue
-                # A class quest hunt row (classhunt.py) is followed to its end.
-                if classhunt.is_hunt_row(row.command):
-                    await self._class_hunt_row(step, row)
-                    continue
-                # A craft batch is one cast row written `repeat` times, one at
-                # a time, as the corps' runner writes it.
-                casts = max(1, int(step.repeat))
-                for done in range(casts):
-                    if not await self._job_row(step, row, cap):
-                        if casts > 1:
-                            log.info("guild jobs: %s stopped after %d of %d casts",
-                                     step.holder, done, casts)
-                        return
+                if not await self._run_step_row(step, row, cap):
+                    return
         except pymysql.err.MySQLError:
             log.exception("guild jobs: step for %s failed", step.holder)
         finally:
             self._job_steps.pop(step.holder, None)
+
+    async def _run_step_row(self, step, row, cap: float) -> bool:
+        """Run one row of a guild job step by its kind; False ends the step."""
+        # A stranded knight's recall is asked again within the step. A recall
+        # step carries exactly one row (guildjobs.stranded_recall_step), so the
+        # asks cannot stack across rows.
+        if row.kind == "hearth" and guildjobs.is_recall_row(row.command):
+            return await self._recall_row(step, row)
+        # A quest use row (classuse.py) is followed by what it answers.
+        if classuse.is_use_row(row.command):
+            return await self._class_use_row(step, row, cap)
+        # A class quest hunt row (classhunt.py) is followed to its end.
+        if classhunt.is_hunt_row(row.command):
+            await self._class_hunt_row(step, row)
+            return True
+        # A craft batch is one cast row written `repeat` times, one at a time,
+        # as the corps' runner writes it.
+        casts = max(1, int(step.repeat))
+        for done in range(casts):
+            if not await self._job_row(step, row, cap):
+                if casts > 1:
+                    log.info("guild jobs: %s stopped after %d of %d casts",
+                             step.holder, done, casts)
+                return False
+        return True
 
     async def _recall_row(self, step, row) -> bool:
         """Write a stranded knight's `hearth recall` and ask again every
