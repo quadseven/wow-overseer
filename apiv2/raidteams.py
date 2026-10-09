@@ -204,9 +204,9 @@ def _member(row: dict, attuned, fire, carried) -> dict:
     }
 
 
-def build(guild: str, fetched: dict) -> dict:
-    """The payload for `guild` from fetch()'s rows. Pure."""
-    rows = {r["name"]: r for r in in_guild(fetched.get("members") or [])}
+def seat_grid(guild: str, rows: dict) -> tuple:
+    """(groups, seats, gaps): each approved seat filled by the member found
+    under its approved or current name, or left open and counted as a gap."""
     groups, seats = [], []
     gaps = {"tanks": 0, "healers": 0, "damage": 0}
     for approved in raidteams.GROUPS[guild]:
@@ -218,12 +218,25 @@ def build(guild: str, fetched: dict) -> dict:
                 gaps[_GAP_KEY[seat.seat]] += 1
         seats.append(placed)
         groups.append([s["name"] for s in placed])
-    seated = [s["name"] for group in seats for s in group if s["name"]]
+    return groups, seats, gaps
+
+
+def raid_fields(fetched: dict) -> tuple:
+    """(attuned names, fire by name, consumables by name), each None when its
+    read could not be answered."""
     attuned_rows = fetched.get("attuned")
     attuned = None if attuned_rows is None else {r.get("name") for r in attuned_rows}
     worn = fetched.get("worn")
     fire = None if worn is None else raidready.fire_resistance(worn)
-    carried = _per_name(fetched.get("consumables"), _consumables)
+    return attuned, fire, _per_name(fetched.get("consumables"), _consumables)
+
+
+def build(guild: str, fetched: dict) -> dict:
+    """The payload for `guild` from fetch()'s rows. Pure."""
+    rows = {r["name"]: r for r in in_guild(fetched.get("members") or [])}
+    groups, seats, gaps = seat_grid(guild, rows)
+    seated = [s["name"] for group in seats for s in group if s["name"]]
+    attuned, fire, carried = raid_fields(fetched)
     return {
         "guild": guild,
         "groups": groups,
