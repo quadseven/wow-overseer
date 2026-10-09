@@ -3460,6 +3460,31 @@ def _member_job(m, trades, fields, doors, pending, crafters, master, kept, recen
     return step, doing or "levels toward the raid and raids when the guild does", note
 
 
+# A RECALL IS ASKED AGAIN WITHIN ITS STEP (2026-10-08). A stranded knight fights
+# almost without a pause and the Hearthstone cannot be cast in a fight: one ask
+# per pass (a quarter hour apart) rarely met a gap. The step keeps asking every
+# RECALL_ASK_SECONDS for up to RECALL_ATTEMPTS asks while the module's answer is
+# one that the next moment may change.
+RECALL_ATTEMPTS = 10
+RECALL_ASK_SECONDS = 12.0
+RECALL_AGAIN_WORDS = ("in combat", "never started", "is moving", "already casting")
+
+
+def is_recall_row(command) -> bool:
+    """Whether a corps row is the stranded knight's `hearth recall`."""
+    return str(command or "").strip() == "recall"
+
+
+def recall_again(status, detail) -> bool:
+    """Whether the module's answer to a recall says to ask again at once: the
+    knight was fighting or moving, or the cast never started. A cast that went
+    through ("applied"/"delivered") and every other refusal end the asking."""
+    if str(status or "") in ("applied", "delivered"):
+        return False
+    text = str(detail or "")
+    return any(word in text for word in RECALL_AGAIN_WORDS)
+
+
 def _is_recall(step) -> bool:
     """Whether the step is a stranded knight's hearth recall."""
     rows = getattr(step, "rows", None) or ()

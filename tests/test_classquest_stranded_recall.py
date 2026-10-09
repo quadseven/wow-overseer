@@ -131,5 +131,47 @@ class TheRecall(unittest.TestCase):
         )
 
 
+class TheAskingAgain(unittest.TestCase):
+    """A stranded knight fights almost without a pause (2026-10-08)."""
+
+    def test_the_row_is_recognised(self):
+        self.assertTrue(guildjobs.is_recall_row("recall"))
+        self.assertTrue(guildjobs.is_recall_row(" recall "))
+        self.assertFalse(guildjobs.is_recall_row("use"))
+
+    def test_a_fight_a_move_or_a_cast_that_never_started_is_asked_again(self):
+        for status, detail in (
+            ("error", "character is in combat"),
+            ("error", "character is moving"),
+            ("unchanged", "the cast never started and the character never left"),
+            ("error", "character is already casting"),
+        ):
+            with self.subTest(detail):
+                self.assertTrue(guildjobs.recall_again(status, detail))
+
+    def test_a_cast_that_went_through_or_any_other_refusal_ends_the_asking(self):
+        self.assertFalse(guildjobs.recall_again("applied", ""))
+        self.assertFalse(guildjobs.recall_again("delivered", ""))
+        self.assertFalse(
+            guildjobs.recall_again("error", "character carries a hearthstone; use it")
+        )
+        self.assertFalse(
+            guildjobs.recall_again(
+                "error", "home is where the character already stands"
+            )
+        )
+        self.assertFalse(guildjobs.recall_again("", ""))
+
+    def test_the_bridge_asks_through_the_helper(self):
+        import pathlib
+
+        bridge = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("guildjobs.is_recall_row(row.command)", bridge)
+        self.assertIn("async def _recall_row", bridge)
+        self.assertIn("guildjobs.recall_again(status, detail)", bridge)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14462,6 +14462,11 @@ class Bridge(discord.Client):
             else:
                 log.info("guild jobs: %s", step.said)
             for row in step.rows:
+                # A stranded knight's recall is asked again within the step.
+                if row.kind == "hearth" and guildjobs.is_recall_row(row.command):
+                    if not await self._recall_row(step, row):
+                        return
+                    continue
                 # A quest use row (classuse.py) is followed by what it answers.
                 if classuse.is_use_row(row.command):
                     if not await self._class_use_row(step, row, cap):
@@ -14484,6 +14489,28 @@ class Bridge(discord.Client):
             log.exception("guild jobs: step for %s failed", step.holder)
         finally:
             self._job_steps.pop(step.holder, None)
+
+    async def _recall_row(self, step, row) -> bool:
+        """Write a stranded knight's `hearth recall` and ask again every
+        guildjobs.RECALL_ASK_SECONDS while the answer says the next moment may
+        change it (a fight, a move, a cast that never started); True when it
+        went home."""
+        for attempt in range(1, guildjobs.RECALL_ATTEMPTS + 1):
+            row_id = await asyncio.to_thread(_insert_corps_row, step.holder, row)
+            if not row_id:
+                return False
+            answer = await self._await_corps_answer(row_id, CORPS_ROW_FOLLOW_SECONDS) or {}
+            status = str(answer.get("status") or "")
+            detail = str(answer.get("detail") or "")
+            log.info("guild jobs: recall row %d for %s (ask %d of %d): %s %s", row_id,
+                     step.holder, attempt, guildjobs.RECALL_ATTEMPTS, status or "unanswered",
+                     detail)
+            if status in ("applied", "delivered"):
+                return True
+            if not guildjobs.recall_again(status, detail):
+                return False
+            await asyncio.sleep(guildjobs.RECALL_ASK_SECONDS)
+        return False
 
     async def _class_use_row(self, step, row, cap: float) -> bool:
         """Write a class quest use row and follow what the module answered
