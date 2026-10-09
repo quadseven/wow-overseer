@@ -2791,6 +2791,15 @@ def _cross_step(m, move, recent):
     return step, move.said, ""
 
 
+def _cross_or_room_step(m, move, book, recent, cap, kept, crafters, master):
+    """(step or None, what it does, note) for a class move that is no walk to
+    its spot: a crossing (_cross_step), or room made in the bags first
+    (class_room_step); None when the move walks to its spot."""
+    if move.kind == classquest.CROSS:
+        return _cross_step(m, move, recent)
+    return class_room_step(m, move, book, recent, cap, kept, crafters, master)
+
+
 def _class_move(m, book, recent, hunts, now):
     """(move or None, blocked sentences): classquest.next_move, with a hunt
     that has stalled sent to another pack, or given up (HUNT_STALL_MINUTES)."""
@@ -3040,12 +3049,9 @@ def class_step(
     note = "; ".join(blocked)
     if move is None:
         return None, "", note
-    if move.kind == classquest.CROSS:
-        step, doing, why = _cross_step(m, move, recent)
-        return step, doing, _join(note, why)
-    room = class_room_step(m, move, book, recent, cap, kept, crafters, master)
-    if room is not None:
-        step, doing, why = room
+    first = _cross_or_room_step(m, move, book, recent, cap, kept, crafters, master)
+    if first is not None:
+        step, doing, why = first
         return step, doing, _join(note, why)
     if move.kind == classquest.ABANDON:
         return _abandon_step(m, move, recent, note)

@@ -1084,10 +1084,14 @@ def _block_spawns(quest: Quest, member) -> list:
     return list(quest.fields)
 
 
-def _crossing(member, quest: Quest, spawns, why: str, blocked: Move) -> Move:
-    """A CROSS move in place of a MAP-blocked `blocked` move, when its spawns
-    are all on the other continent and the module has not refused the crossing;
-    else `blocked`."""
+def _crossing(member, quest: Quest, why: str, blocked: Move, spawns=None) -> Move:
+    """A CROSS move in place of `blocked` when it is a MAP blocker whose spawns
+    (`spawns`, else the hunt's own: _block_spawns) are all on the other
+    continent and the module has not refused the crossing; else `blocked`."""
+    if blocked.blocker != MAP:
+        return blocked
+    if spawns is None:
+        spawns = _block_spawns(quest, member)
     there = far_map(member, spawns)
     if there < 0 or _walled(member, there):
         return blocked
@@ -1414,9 +1418,7 @@ def _move_of(member, option, key, avoid=None, held_off=frozenset()) -> Move:
             else (SOURCE, _no_creature(quest, word))
         )
         blocked = Move(BLOCKED, quest.id, quest.klass, None, said, block, why)
-        if block == MAP:
-            return _crossing(member, quest, ends, why, blocked)
-        return blocked
+        return _crossing(member, quest, why, blocked, ends)
     verb = "hands in" if kind == TURN_IN else "takes"
     return Move(
         kind,
@@ -1596,9 +1598,7 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
         blocked = Move(
             BLOCKED, quest.id, quest.klass, spot, said, block, why, want, quest.title
         )
-        if block == MAP:
-            return _crossing(member, quest, _block_spawns(quest, member), why, blocked)
-        return blocked
+        return _crossing(member, quest, why, blocked)
     if using is not None:
         return _use_move(member, quest, using, why, tried)
     if quest.uses and not quest.fields:
