@@ -88,11 +88,24 @@ class TheRecall(unittest.TestCase):
                 )
                 self.assertIsNotNone(guildjobs.stranded_recall_step(knight(), failed))
 
-    def test_a_fighting_or_dead_knight_waits(self):
-        self.assertIsNone(
+    def test_a_dead_or_offline_knight_waits(self):
+        self.assertIsNone(guildjobs.stranded_recall_step(knight(alive=False), STALLS))
+        self.assertIsNone(guildjobs.stranded_recall_step(knight(online=False), STALLS))
+
+    def test_a_fighting_knight_still_asks(self):
+        # The module refuses the cast for the fight at no cost; the ask that lands
+        # is the one in a gap. A stranded knight is almost always in a fight.
+        self.assertIsNotNone(
             guildjobs.stranded_recall_step(knight(in_combat=True), STALLS)
         )
-        self.assertIsNone(guildjobs.stranded_recall_step(knight(alive=False), STALLS))
+
+    def test_class_step_asks_for_the_recall_even_in_a_fight(self):
+        step, _doing, _note = guildjobs.class_step(
+            knight(in_combat=True), object(), STALLS, 5000
+        )
+        self.assertEqual(
+            (step.rows[0].kind, step.rows[0].command), ("hearth", "recall")
+        )
 
 
 if __name__ == "__main__":
