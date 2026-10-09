@@ -470,13 +470,15 @@ QUESTS_SQL = (  # noqa: S608
 # The creatures that start and end each quest, with every spawn of them.
 GIVERS_SQL = (
     "SELECT s.quest AS quest, 'start' AS role, c.guid AS guid, c.id AS entry, "
-    "c.map AS map_id, c.position_x AS x, c.position_y AS y, ct.name AS name "
+    "c.map AS map_id, c.position_x AS x, c.position_y AS y, ct.name AS name, "
+    "c.position_z AS z "
     "FROM acore_world.creature_queststarter s "
     "JOIN acore_world.creature c ON c.id = s.id "
     "JOIN acore_world.creature_template ct ON ct.entry = c.id "
     "WHERE s.quest IN ({quests}) "
     "UNION ALL "
-    "SELECT e.quest, 'end', c.guid, c.id, c.map, c.position_x, c.position_y, ct.name "
+    "SELECT e.quest, 'end', c.guid, c.id, c.map, c.position_x, c.position_y, ct.name, "
+    "c.position_z "
     "FROM acore_world.creature_questender e "
     "JOIN acore_world.creature c ON c.id = e.id "
     "JOIN acore_world.creature_template ct ON ct.entry = c.id "
@@ -583,6 +585,9 @@ class Spawn:
     level: int = 0
     # The spawn's respawn time in seconds (`spawntimesecs`); 0 when not read.
     respawn: int = 0
+    # The spawn's height; None when the row does not say (2026-10-09: a death
+    # knight below Acherus is told from one standing on it by height alone).
+    z: float | None = None
 
 
 @dataclass(frozen=True)
@@ -753,6 +758,7 @@ def _spawn(r) -> Spawn:
         _int(r.get("rank")),
         _int(r.get("level")),
         _int(r.get("respawn")),
+        None if r.get("z") is None else float(r.get("z")),
     )
 
 
