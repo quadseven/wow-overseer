@@ -263,7 +263,7 @@ class TheClothTrades(unittest.TestCase):
         run = next(
             n
             for n in ast.walk(tree)
-            if isinstance(n, ast.AsyncFunctionDef) and n.name == "_run_job_step"
+            if isinstance(n, ast.AsyncFunctionDef) and n.name == "_run_step_row"
         )
         self.assertIn("step.repeat", ast.unparse(run))
         # A batch that stops early says how many casts landed.
