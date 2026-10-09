@@ -36,7 +36,7 @@ export function groups(p) {
       name: it.name, item: it.entry, href: location.hash || "#/now", color: QUALITY[it.quality] || "",
       sub: it.item_level ? "Item level " + it.item_level : "",
     })) },
-    { label: "Quests", rows: (p.quests || []).map((q) => ({
+    { label: "Quests", rows: (p.quests || []).filter((q) => (q.holders || []).length).map((q) => ({
       name: q.title, href: memberHref(q.holders[0], "quests"),
       sub: "In the log of " + q.holders.join(", "),
     })) },

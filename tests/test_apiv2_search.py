@@ -23,6 +23,10 @@ from apiv2 import search  # noqa: E402
 ROSTER = ["Grug", "Bork", "Zug"]
 
 
+class Lost(Exception):
+    """A database error that is not a missing table."""
+
+
 class Cursor:
     def __init__(self, conn):
         self.conn = conn
@@ -219,8 +223,8 @@ class TheSearch(unittest.TestCase):
         self.assertEqual(p["dungeons"][0]["guild"], "Cave")
 
     def test_any_other_failure_is_the_namespaces_503(self):
-        conn = Conn(dict(answers(), item_template=Exception(2013, "lost connection")))
-        with self.assertRaises(Exception):
+        conn = Conn(dict(answers(), item_template=Lost(2013, "lost connection")))
+        with self.assertRaises(Lost):
             self.run_q("linen", conn)
         self.assertTrue(conn.closed)
 
