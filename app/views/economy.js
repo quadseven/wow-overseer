@@ -192,7 +192,7 @@ function profCard(fam, prof, ctx, get) {
   const q = ctx.query;
   const isOpen = !!q.family && String(q.open || "") === String(prof.skill);
   const read = isOpen ? get(skillPath(prof.skill, fam.family)) : null;
-  const list = read && read.data;
+  const list = read && read.data && (read.data.views || []).length ? read.data : null;
   const at = list ? list.views.findIndex((v) => v.key === (q.who || "")) : -1;
   const idx = at < 0 ? 0 : at;
   const view = list ? list.views[idx] : null;
@@ -204,8 +204,8 @@ function profCard(fam, prof, ctx, get) {
   const hrefShut = ecoHref("trades", base);
   let body;
   if (!isOpen) body = html`<div class="eco-groups">${groupLinks(prof, hrefOpen)}</div>`;
-  else if (!list) body = html`<div class="eco-groups">${pendingRead(read, 1) || ""}</div>`;
-  else body = html`<div class="eco-groups">${view.groups.map((g) => craftGroup(fam.family + "|" + prof.skill + "|" + g.state, list, idx, g))}</div><span class="eco-meta">${list.reagents_line}</span>`;
+  else if (!list) body = html`<div class="eco-groups">${pendingRead(read, 1) || state("unmeasured", "The crafts for this trade are not measured.")}</div>`;
+  else body = html`<div class="eco-groups">${(view.groups || []).map((g) => craftGroup(fam.family + "|" + prof.skill + "|" + g.state, list, idx, g))}</div><span class="eco-meta">${list.reagents_line}</span>`;
   return html`<div class="card eco-prof${ready ? " ready" : ""}" id="trade-${prof.skill}">
 <div class="eco-line"><span class="eco-trade">${cap(prof.name)}</span><span class="num${percent >= 75 ? " ok" : ""}">${percent}%</span></div>
 <span class="eco-sub">${sentence(brief)}</span>${bar(percent, "accent")}${body}
@@ -317,7 +317,7 @@ function bankTab(ctx, get) {
   const g = bank.guild.toLowerCase();
   const pick = html`<div class="eco-chips" role="group" aria-label="Guild">${ready.map((r) => chipLink(r.data.guild, ecoHref("bank", { guild: r.data.guild.toLowerCase() }), r.data === bank))}</div>`;
   const head = html`<div class="eco-line eco-vault"><span>${bank.guild} vault holds ${money(bank.money ? { total: Number(bank.money.gold || 0) * 10000 + Number(bank.money.silver || 0) * 100 + Number(bank.money.copper || 0) } : null)}</span></div>`;
-  const tabs = bank.tabs || [];
+  const tabs = (bank.tabs || []).filter(Boolean);
   if (!tabs.length) return html`${pick}${head}${state("empty", bank.note || "The guild has not bought a bank tab yet.")}`;
   const at = tabs.find((t) => String(t.tab) === String(ctx.query.tab)) || tabs[0];
   const tabCards = tabs.map((t) => html`<a class="card eco-btab" href="${ecoHref("bank", { guild: g, tab: t.tab })}"${t === at ? raw(' aria-current="true"') : ""}><div class="eco-line"><span class="eco-trade">${t.name}</span><span class="eco-meta">${t.used} of ${t.total}</span></div>${bar((100 * t.used) / (t.total || 1), "accent")}${t.holds ? html`<span class="eco-meta">${sentence(t.holds)}</span>` : ""}</a>`);

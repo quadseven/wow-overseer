@@ -169,6 +169,11 @@ class TheEconomyView(unittest.TestCase):
         self.assertIn("has not bought a bank tab", got[1])
         self.assertNotIn("data-item", got[1])
 
+    def test_the_app_loads_the_realm_search(self):
+        main = (APP / "main.js").read_text(encoding="utf-8")
+        self.assertIn('import "./searchv2.js";', main)
+        self.assertIn("addProvider(", (APP / "searchv2.js").read_text(encoding="utf-8"))
+
     def test_search_hits_link_where_the_brief_says(self):
         payload = {
             "members": [
