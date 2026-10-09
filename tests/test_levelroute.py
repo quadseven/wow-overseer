@@ -22,7 +22,6 @@ import questshare
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
 SERVER = (ROOT / "map_server.py").read_text(encoding="utf-8")
-PAGE = (ROOT / "classic.html").read_text(encoding="utf-8")
 
 KALIMDOR = 1
 ORGRIMMAR = (KALIMDOR, 1637, 1677.6, -4315.7)
@@ -433,15 +432,6 @@ class TheWiring(unittest.TestCase):
     def test_the_shares_are_held_to_the_zone(self):
         self.assertIn("members = levelroute.share_members(members, zone)", BRIDGE)
         self.assertIn("_share_family_quests, names, hub.zone_id", self.pass_body())
-
-    def test_the_page_reads_it_and_draws_it(self):
-        self.assertIn('"/api/levelroute": _levelroute,', SERVER)
-        handler = SERVER[SERVER.index("def _levelroute(") :]
-        handler = handler[: handler.index("def _armory_guild")]
-        self.assertIn("self._family_scope(query)", handler)
-        self.assertNotIn("query.get", handler)
-        self.assertIn('u("/api/levelroute" + familyQuery(asked))', PAGE)
-        self.assertIn('<span class="fsecl">leveling route</span>', PAGE)
 
     def test_the_module_ships_in_the_image(self):
         self.assertIn(

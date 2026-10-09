@@ -423,36 +423,6 @@ def _import_bridge():
 
 
 class ThePageShowsItOnAPhone(unittest.TestCase):
-    PAGE = read("classic.html")
-
-    def test_the_line_is_16px_and_a_44px_button_that_wraps(self):
-        css = self.PAGE[self.PAGE.index(".pownow {") :]
-        rule = css[: css.index("}")]
-        self.assertIn("font-size:16px", rule)
-        self.assertIn("min-height:44px", rule)
-        self.assertIn("white-space:normal", rule)
-        self.assertNotIn("nowrap", rule)
-
-    def test_it_uses_theme_tokens_only(self):
-        css = self.PAGE[
-            self.PAGE.index(".pownow {") : self.PAGE.index("/* THE CONTROL ROW (#363)")
-        ]
-        self.assertIsNone(re.search(r"#[0-9a-fA-F]{3,8}\b", css))
-
-    def test_the_wall_prints_the_modules_sentence_as_text(self):
-        js = self.PAGE[
-            self.PAGE.index("function wallNow(") : self.PAGE.index(
-                "function applyWallLayout"
-            )
-        ]
-        self.assertIn("s.now.textContent = text", js)
-        self.assertNotIn("innerHTML", js)
-        self.assertIn("wallNow(s, t.now);", self.PAGE)
-
-    def test_the_tap_opens_a_sheet(self):
-        self.assertIn('now.setAttribute("aria-expanded", String(open));', self.PAGE)
-        self.assertIn("strip.after(now, sheet);", self.PAGE)
-
     def test_the_new_files_are_ascii(self):
         for name in ("nowstatus.py", "tests/test_now_status.py"):
             read(name).encode("ascii")

@@ -96,7 +96,6 @@ class ShipManifestTest(unittest.TestCase):
             "entrances.json",
             "shapes.json",
             "index.html",
-            "classic.html",
         ):
             self.assertIn(needed, _copied_files(), needed)
 

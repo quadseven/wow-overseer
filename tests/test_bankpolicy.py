@@ -656,26 +656,6 @@ class ThePageSaysWhy(unittest.TestCase):
             "Shield\nBank: Grog's bank - kept", payload["members"][0]["items"][0]["tip"]
         )
 
-    def test_the_server_reads_the_policy_for_every_bank_view(self):
-        source = (ROOT / "map_server.py").read_text(encoding="utf-8")
-        bags = source[
-            source.index("    def _client_bags(") : source.index(
-                "    def _client_guild_bank("
-            )
-        ]
-        self.assertEqual(
-            2, bags.count('_with_bank_reasons(f["rows"], _fetch_bank_policy(names))')
-        )
-        self.assertIn(
-            "bankpolicy.annotate_tips(payload, _fetch_bank_policy(group))", source
-        )
-        self.assertIn('item["why"] = bankpolicy.why_stored(item)', source)
-        page = (ROOT / "classic.html").read_text(encoding="utf-8")
-        self.assertIn(
-            'if (item.why) t.appendChild(el("div", "vcsub vcwhy", item.why));', page
-        )
-        self.assertIn("if (tab.holds)", page)
-
 
 class TheSellPassesSkipWhatThePolicyKeeps(unittest.TestCase):
     SOURCE = (ROOT / "bridge.py").read_text(encoding="utf-8")

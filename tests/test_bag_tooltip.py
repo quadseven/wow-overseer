@@ -53,10 +53,6 @@ class TheBagSizeIsOnTheTooltip(unittest.TestCase):
         )
         self.assertIsNone(tip["container"])
 
-    def test_the_page_draws_the_line(self):
-        page = (HERE / "classic.html").read_text()
-        self.assertIn('if (t.container) add("", t.container);', page)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,7 +23,6 @@ from test_jev_items import FakeJev
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
-PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 
 PRIEST, ROGUE, WARRIOR, PALADIN, MAGE = 5, 4, 1, 2, 8
 HERBALISM, ALCHEMY, TAILORING, ENCHANTING = 182, 171, 197, 333
@@ -611,13 +610,6 @@ class ViewTest(unittest.TestCase):
         out = jevview.view([])
         self.assertEqual(out["keep_differ"], [])
         self.assertTrue(out["keep_empty"])
-
-    def test_the_page_draws_the_list_as_text(self):
-        fn = PAGE[PAGE.index("function dcrRenderJev(j) {") :]
-        fn = fn[: fn.index("\n}\n")]
-        for key in ("j.keep_title", "j.keep_differ", "j.keep_empty"):
-            self.assertIn(key, fn)
-        self.assertIn('id="dcrjevkeep"', PAGE)
 
 
 class BridgeTest(unittest.TestCase):

@@ -227,106 +227,7 @@ class ADegradedSchemaThinsTheViewRatherThanBreakingIt(unittest.TestCase):
 class ThePageOnlyDraws(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
-        start = cls.page.index(BANNER)
-        cls.tab = cls.page[start : cls.page.index(NEXT, start)]
-        cls.code = code(cls.tab)
-        css = cls.page.index(CSS_BANNER)
-        cls.css = cls.page[css : cls.page.index(NEXT_CSS, css)]
-
-    def test_the_view_exists_and_is_an_address(self):
-        self.assertIn('<section id="eye">', self.page)
-        self.assertIn('eb.textContent = "The Eye";', self.page)
-        self.assertIn("eb.dataset.view = EYE_VIEW;", self.page)
-        listed = self.page[self.page.index("const HASH_VIEWS = [") :]
-        listed = listed[: listed.index("]")]
-        self.assertIn("EYE_VIEW", listed)
-
-    def test_show_view_hides_it_with_the_others(self):
-        show = self.page[self.page.index("function showView") :]
-        show = show[: show.index("setInterval(pollFamily")]
-        self.assertIn('eyesection.style.display = isEye ? "block" : "none";', show)
-        branch = show[show.index("if (isEye) {") :]
-        branch = branch[: branch.index("return;")]
-        for line in ("closePanel();", "stopBroadcasts();", "pollEye();"):
-            self.assertIn(line, branch)
-
-    def test_the_switch_sentence_is_drawn_and_never_written_here(self):
-        """What turns a tier on is the most useful sentence on an off rung and
-        the most judgement-shaped one on the view."""
-        self.assertIn("t.switch", self.code)
-        for invented in ("charter", "signatures", "logged in and saved"):
-            self.assertNotIn(invented, self.code, invented)
-
-    def test_the_state_word_and_the_headline_come_from_the_payload(self):
-        self.assertIn("t.state", self.code)
-        self.assertIn("t.headline", self.code)
-        self.assertIn("p.honest", self.code)
-
-    def test_the_page_invents_no_tier_of_its_own(self):
-        """Five rungs, named by the module. A sixth added here would be a
-        claim about the realm made by a stylesheet's neighbour."""
-        for name in ("CHARACTER", "FAMILY", "GUILD", "REALM", "PARTY"):
-            self.assertNotIn('"%s"' % name, self.code, name)
-
-    def test_it_draws_no_chart_of_anything(self):
-        """The refusal, stated as a test. A canvas, an svg or a bar sized from
-        a number is the exact shape this view exists not to be."""
-        for chart in (
-            "<canvas",
-            'createElement("canvas")',
-            "<svg",
-            "createElementNS",
-            'width: " +',
-            "chart",
-        ):
-            self.assertNotIn(chart, self.code, chart)
-
-    def test_the_hue_is_the_modules_choice_and_the_page_only_names_a_class(self):
-        """ "Off is the alarming one" is a judgement about the state, not about
-        the stylesheet. The page knows what vermilion looks like on the ground
-        it is painting, and it has two grounds to know that on."""
-        self.assertIn('"ey-state h-" + t.hue', self.code)
-        self.assertNotIn("h-vermilion", self.code)
-
-    def test_every_state_the_module_can_emit_has_a_hue_with_a_rule(self):
-        """A state with no rule is text in the ground colour, which on a card
-        is invisible."""
-        for state in (eye.ON, eye.OFF, eye.PARTIAL):
-            self.assertIn(state, eye.STATE_HUES, state)
-        for hue in set(eye.STATE_HUES.values()):
-            self.assertIn(".h-%s {" % hue, self.page, hue)
-
-    def test_the_tier_name_leads_and_the_count_follows_it(self):
-        """Read aloud that is "GUILD 0 OFF", which is a sentence. The other way
-        round it is a number looking for a noun, which is what a screen reader
-        gets handed."""
-        top = self.code[self.code.index('el("div", "ey-top")') :]
-        self.assertLess(top.index('"ey-name"'), top.index('"ey-count"'))
-
-    def test_an_off_rung_is_told_apart_without_colour_too(self):
-        """A state said only in colour is lost to a screenshot and to a reader
-        who cannot tell the two apart. The word is there, and so is a border
-        that is not a colour."""
-        self.assertIn('"ey-row s-" + t.state.toLowerCase()', self.code)
-        self.assertIn("border-style:dashed", self.css)
-
-    def test_nothing_from_the_payload_is_rendered_as_markup(self):
-        self.assertNotIn("innerHTML", self.code)
-        self.assertNotIn("insertAdjacentHTML", self.code)
-
-    def test_a_failed_poll_keeps_the_ladder(self):
-        """A view whose whole job is to say what is NOT real, rendered empty,
-        reads as a realm where nothing is real at all."""
-        poll = self.code[self.code.index("async function pollEye") :]
-        self.assertIn("may be stale", poll)
-        self.assertNotIn("replaceChildren", poll)
-
-    def test_the_endpoint_is_wired_and_the_builder_is_pure(self):
-        self.assertIn('"/api/eye": _eye,', self.server)
-        self.assertIn("eye.build_eye(**_fetch_eye())", self.server)
-        self.assertIn('fetch(u("/api/eye"))', self.code)
 
     def test_the_endpoint_takes_no_roster_from_the_caller(self):
         handler = self.server[self.server.index("def _eye") :]
@@ -343,19 +244,9 @@ class ThePageOnlyDraws(unittest.TestCase):
         self.assertIn("SELECT COUNT(*) AS guilds FROM guild", fetch)
         self.assertIn('"guild")', fetch)
 
-    def test_the_view_polls_only_while_it_is_open(self):
-        self.assertIn("if (view === EYE_VIEW) pollEye();", self.code)
-
     def test_the_module_ships_in_the_image(self):
         dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("eye.py", dockerfile)
-
-    def test_the_one_breakpoint_is_the_one_the_handoff_names(self):
-        """Mobile-first, a single breakpoint at 640px, and everything else
-        auto-fit. Two queries in one view is where a layout starts having
-        opinions nobody wrote down."""
-        self.assertEqual(1, self.css.count("@media"))
-        self.assertIn("@media (min-width:640px)", self.css)
 
     def test_no_em_dashes(self):
         for name in ("eye.py", "tests/test_eye.py"):

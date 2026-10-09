@@ -18,13 +18,11 @@ import campaignplan
 import jev
 import jev_choices
 import preraid
-import raidready
 from test_jev_items import FakeJev
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 
 KALIMDOR = 1
 TEXTS = {
@@ -522,22 +520,6 @@ class TheRaidTab(unittest.TestCase):
         )
         self.assertEqual(view["members"], [])
         self.assertIn("weakest is 25", view["line"])
-
-    def test_the_card_carries_the_plan_and_the_page_draws_it(self):
-        group = {
-            "guildid": None,
-            "guild": "",
-            "family": "Grug",
-            "family_names": ["Grug"],
-            "rows": [],
-        }
-        card = raidready.build_guild(
-            group, [], [], [], 50, {"goals": []}, preraid={"line": "x"}
-        )
-        self.assertEqual(card["preraid"], {"line": "x"})
-        self.assertIn('"next upgrades and where they drop"', PAGE)
-        self.assertIn("for (const m of pre.members)", PAGE)
-        self.assertIn("preraid=preraid.family_view(", SERVER)
 
     def test_the_bridge_planner_reads_the_upgrades_at_the_cap(self):
         self.assertIn("upgrades=upgrades, progress=progress", BRIDGE)

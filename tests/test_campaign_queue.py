@@ -25,7 +25,6 @@ import raidrun  # noqa: E402
 HERE = pathlib.Path(__file__).resolve().parent.parent
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 
 ORDER = "Ragefire Chasm 50 times, then Wailing Caverns 50 times"
 
@@ -779,17 +778,6 @@ class TheSiteShowsTheQueue(unittest.TestCase):
         views = campaignqueue.views([_q(1, "ragefire", 50, "active", 0)], rows)
         self.assertEqual("Queue: Ragefire Chasm 7 of 50.", views["Zug"]["line"])
         self.assertEqual("", views["Grug"]["line"])
-
-    def test_the_dungeons_page_and_the_banner_carry_it(self):
-        self.assertIn('path["queue"] = fetched.get("queue_views", {})', SERVER)
-        self.assertIn('payload["queue"] = queue or campaignqueue.view', SERVER)
-        self.assertIn("f.queue && f.queue.line", PAGE)
-        self.assertIn("p.queue && p.queue.line", PAGE)
-
-    def test_the_decree_card_is_on_the_page(self):
-        for node in ("dcrqueuetext", "dcrqueuesend", "dcrqueueclear", "dcrqueuefam"):
-            self.assertIn('id="%s"' % node, PAGE)
-        self.assertIn("section: p.queue.section, entries: dcrQueueText.value", PAGE)
 
 
 if __name__ == "__main__":

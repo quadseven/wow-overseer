@@ -19,7 +19,6 @@ when it is an older copy than the server now serves.
 import json
 import logging
 import pathlib
-import re
 import sys
 import types
 import unittest
@@ -37,7 +36,6 @@ if not hasattr(sys.modules["pymysql"], "err"):
     sys.modules["pymysql"].err = _err
 
 import armory  # noqa: E402
-import basepath  # noqa: E402
 import bonds  # noqa: E402
 import eye  # noqa: E402
 import map_server  # noqa: E402  (must follow the pymysql stub)
@@ -48,8 +46,6 @@ map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
-SCRIPT = PAGE[PAGE.index("<script>") :]
 
 ALLIANCE = ["Grug", "Bork", "Grog", "Og", "Ugga"]
 HORDE = ["Zug", "Oz", "Uzza", "Zork", "Zrog"]
@@ -366,64 +362,6 @@ class TheLineupPutsTheAllianceFirst(unittest.TestCase):
         code, p = body(h)
         self.assertEqual(200, code)
         self.assertEqual(["Cave", "Bonkers"], [g["guild"] for g in p["guilds"]])
-
-
-class AnOpenTabLearnsItIsStale(unittest.TestCase):
-    def test_the_page_is_stamped_with_the_version_it_was_served_as(self):
-        raw = (HERE / "classic.html").read_bytes()
-        served = basepath.apply(raw, "/dev")
-        self.assertIn(basepath.page_version(raw).encode(), served)
-        self.assertNotIn(basepath.PAGE_PLACEHOLDER.encode(), served)
-
-    def test_realm_reports_the_version_the_server_would_serve_now(self):
-        h = handler()
-        with (
-            mock.patch.object(map_server, "_fetch_realm", return_value={}),
-            mock.patch.object(map_server.realm, "build_realm", return_value={}),
-        ):
-            h._realm({})
-        _code, p = body(h)
-        raw = (HERE / "classic.html").read_bytes()
-        self.assertEqual(basepath.page_version(raw), p["page"])
-
-    def test_the_page_compares_and_offers_a_reload(self):
-        self.assertIn('const PAGE_BUILT = "__OVERSEER_PAGE__";', SCRIPT)
-        self.assertIn("checkPage(d.page);", SCRIPT)
-        self.assertIn('id="pagestale"', PAGE)
-
-
-class NoTabHardCodesOneFamily(unittest.TestCase):
-    """The page draws whatever families the server sends. A family or guild
-    name typed into the script is a view that works for one of them."""
-
-    def test_no_family_member_or_guild_is_named_in_the_script(self):
-        names = [n for house in bonds.HOUSES.values() for n in house.members]
-        for name in names + ["Cave", "Bonkers", "Alliance", "Horde"]:
-            self.assertIsNone(
-                re.search(r"[\"']%s[\"']" % re.escape(name), SCRIPT), name
-            )
-
-    def test_a_first_guild_is_only_ever_a_switch_default(self):
-        """guilds[0] alone is a view of one guild; `|| guilds[0]` is a switch
-        that opens on the first and offers the rest."""
-        for m in re.finditer(r"guilds\[0\]", SCRIPT):
-            before = SCRIPT[max(0, m.start() - 4) : m.start()]
-            self.assertEqual("|| ", before[-3:], SCRIPT[m.start() - 80 : m.end()])
-
-    def test_the_two_family_views_draw_every_family_they_are_sent(self):
-        for fragment in (
-            "for (const side of p.sides) {",  # standing
-            "const fams = p.families || [p];",  # recap, loot board, trades
-            "for (const f of p.families) dgnfamilies",  # dungeons
-            "for (const f of p.families || []) cnfamilies",  # council
-            "for (const g of guilds) {",  # lineup
-            "for (const g of p.guilds) rrlist",  # raid
-        ):
-            self.assertIn(fragment, SCRIPT, fragment)
-
-    def test_the_per_family_reads_carry_the_family(self):
-        for path in ("/api/needs", "/api/questlog", "/api/agenda"):
-            self.assertIn('fetch(u("%s" + familyQuery(' % path, SCRIPT, path)
 
 
 if __name__ == "__main__":

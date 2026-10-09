@@ -243,30 +243,11 @@ class TheMapIsWiredToTheGeometry(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = (HERE / "map_server.py").read_text()
-        cls.page = (HERE / "classic.html").read_text()
 
     def test_the_server_serves_the_geometry(self):
         table = self.server[self.server.index("GET_ROUTES = {") :]
         table = table[: table.index("}")]
         self.assertIn('"/shapes.json": _shapes_file', table)
-
-    def test_the_page_asks_for_it(self):
-        self.assertIn('fetch(u("/shapes.json"))', self.page)
-
-    def test_the_page_no_longer_squashes_a_continent_to_fit(self):
-        """The old height clamp (360..760px) flattened a 2:1 continent into a
-        1.4:1 blob. Its return would look like a styling nit and read as the
-        map being wrong again."""
-        self.assertNotIn("Math.min(760", self.page)
-        self.assertIn("fitContinent", self.page)
-
-    def test_hit_testing_scales_to_the_device_pixel_ratio(self):
-        """isPointInPath takes the point UNAFFECTED by the current transform
-        while transforming the path by it, so passing CSS pixels never hits on
-        a retina screen - and never throws, either."""
-        fn = self.page[self.page.index("function zoneAt") :]
-        fn = fn[: fn.index("\n}")]
-        self.assertIn("devicePixelRatio", fn)
 
 
 class EveryContinentHasACoast(unittest.TestCase):

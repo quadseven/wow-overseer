@@ -24,7 +24,6 @@ map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 
 T0 = datetime(2026, 9, 12, 18, 0)
 ZONES = {40: "Westfall"}
@@ -231,20 +230,6 @@ class TheMemberEndpoint(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(body["origin"], {})
         self.assertEqual(body["member"]["name"], "Aldren")
-
-
-class ThePageShowsIt(unittest.TestCase):
-    def test_the_character_sheet_hands_the_line_to_the_tooltip(self):
-        sheet = PAGE[PAGE.index("async function vcCharacter") :]
-        sheet = sheet[: sheet.index("\n}\n")]
-        self.assertIn("const origin = p.origin || {};", sheet)
-        self.assertIn("const from = origin[String(s.entry)];", sheet)
-        self.assertIn('why: from ? from.line : ""', sheet)
-        tip = PAGE[PAGE.index("async function vcShowTip") :]
-        tip = tip[: tip.index("\n}\n")]
-        self.assertIn(
-            'if (item.why) t.appendChild(el("div", "vcsub vcwhy", item.why));', tip
-        )
 
 
 if __name__ == "__main__":

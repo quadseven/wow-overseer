@@ -16,7 +16,6 @@ map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 
 
 class MySQLError(Exception):
@@ -183,11 +182,6 @@ class APugInTheFeed(unittest.TestCase):
         self.assertEqual(h.code, 200)
         self.assertIsNone(h.payload["asks"][0]["pug_call"])
 
-    def test_the_view_says_a_pug_joined_as_its_seat(self):
-        self.assertIn('a.stance === "pug"', PAGE)
-        self.assertIn('" (pug) joined as " + a.role', PAGE)
-        self.assertIn('" in LookingForGroup: "', PAGE)
-
 
 class TheEndpoint(unittest.TestCase):
     def test_asks_come_back_with_answers_and_the_run(self):
@@ -252,37 +246,6 @@ class TheEndpoint(unittest.TestCase):
         with mock.patch.object(map_server, "_connect", side_effect=OSError("down")):
             h = get("/api/guildchat?guild=Cave")
         self.assertEqual(h.code, 503)
-
-
-class TheView(unittest.TestCase):
-    def test_it_is_a_view_in_the_guild_hub_and_an_address(self):
-        self.assertIn('const GUILDCHAT_VIEW = "guildchat";', PAGE)
-        hub = PAGE[PAGE.index('["guild", "Guild", [') :]
-        self.assertIn("GUILDCHAT_VIEW", hub[: hub.index("]")])
-        listed = PAGE[PAGE.index("const HASH_VIEWS = [") :]
-        self.assertIn("GUILDCHAT_VIEW", listed[: listed.index("]")])
-        self.assertIn("gcb.dataset.view = GUILDCHAT_VIEW;", PAGE)
-
-    def test_showview_toggles_it_and_fetches_on_the_way_in(self):
-        show = PAGE[PAGE.index("function showView") :]
-        show = show[: show.index("setInterval(pollFamily")]
-        self.assertIn('gcsection.style.display = isGc ? "block" : "none";', show)
-        self.assertIn("pollGuildChat();", show[show.index("if (isGc) {") :])
-
-    def test_it_reads_the_endpoint_per_guild_and_refreshes(self):
-        poll = PAGE[PAGE.index("async function pollGuildChat") :]
-        poll = poll[: poll.index("\n}\n")]
-        self.assertIn('"?guild=" + encodeURIComponent(guild)', poll)
-        self.assertIn("if (view !== GUILDCHAT_VIEW", poll)
-        self.assertIn("gcGuilds = data.guilds;", PAGE)
-        self.assertIn(
-            "setInterval(() => { if (view === GUILDCHAT_VIEW) pollGuildChat(); }", PAGE
-        )
-
-    def test_items_in_a_line_use_the_site_tooltip_and_outcomes_link_the_dungeon(self):
-        self.assertIn("itemTipName({entry: Number(m[1])}", PAGE)
-        self.assertIn('"cleared " + done + " of " + of', PAGE)
-        self.assertIn('"#dungeons/" + ask.target', PAGE)
 
 
 if __name__ == "__main__":

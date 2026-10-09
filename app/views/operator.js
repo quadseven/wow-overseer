@@ -35,7 +35,7 @@ export default {
     const dec = ctx.get("/api/decree");
     const enabled = !!(op.data && op.data.enabled);
     const lock = enabled
-      ? html`<div class="card" style="max-width:640px"><span class="card-title" style="display:flex;gap:8px;align-items:center"><i class="ph ph-lock-simple-open" aria-hidden="true"></i>On for this deployment</span><span class="muted">The operator setting is on. The controls still live on the classic page until this view takes them over.</span></div>`
+      ? html`<div class="card" style="max-width:640px"><span class="card-title" style="display:flex;gap:8px;align-items:center"><i class="ph ph-lock-simple-open" aria-hidden="true"></i>On for this deployment</span><span class="muted">The operator setting is on. The controls are not drawn in this view yet; the server's endpoints for them are unchanged.</span></div>`
       : html`<div class="card" style="max-width:640px"><span class="card-title" style="display:flex;gap:8px;align-items:center"><i class="ph ph-lock-simple" aria-hidden="true"></i>Off on this deployment</span><span class="muted" style="text-wrap:pretty">Talking to a character, decrees, starting and stopping streams, and pointing the Watcher all queue commands the realm acts on. The rest of this app is read-only. These live on this separate route, which only works when the operator setting is turned on on the server.</span></div>`;
     const wait = pendingRead(dec, 3);
     const d = dec.data || {};

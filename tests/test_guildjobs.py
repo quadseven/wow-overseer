@@ -20,7 +20,6 @@ import keep
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 H, M, S = guildjobs.HERBALISM, guildjobs.MINING, guildjobs.SKINNING
@@ -1272,10 +1271,6 @@ class ThePage(unittest.TestCase):
         self.assertIn("guildjobs.attach_jobs(", lineup)
         self.assertIn("guildjobs.contributions(", lineup)
         self.assertIn("guildjobs.page_doing(", SERVER)
-
-    def test_the_page_draws_the_guilds_totals(self):
-        self.assertIn("g.given.said", PAGE)
-        self.assertIn("farm there between summons", PAGE)
 
     def test_the_module_ships_in_the_image(self):
         self.assertIn("guildjobs.py", DOCKERFILE)

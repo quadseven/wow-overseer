@@ -24,7 +24,6 @@ from test_bag_keep import _bank_rows
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 FIRST_AID, BLACKSMITHING, LEATHERWORKING, ALCHEMY = 129, 164, 165, 171
@@ -559,11 +558,6 @@ class TheBridgeWiring(unittest.TestCase):
             body = self.body(name)
             self.assertNotIn("_insert_gm", body)
             self.assertNotIn("'give'", body)
-
-    def test_the_page_and_the_image(self):
-        self.assertIn('lineup["crafters"] = _crafter_register(', SERVER)
-        self.assertIn("lnCrafters(g.crafters)", PAGE)
-        self.assertIn(" crafters.py ", DOCKERFILE)
 
 
 if __name__ == "__main__":
