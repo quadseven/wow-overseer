@@ -242,6 +242,12 @@ class TheHouseRules(unittest.TestCase):
 
 
 class TheServer(unittest.TestCase):
+    def test_nothing_still_points_at_the_classic_page(self):
+        # Every section has its own view now: no stub, no link to /classic.
+        self.assertFalse((APP / "views" / "_pending.js").exists())
+        self.assertNotIn("classicFor", (APP / "router.js").read_text(encoding="utf-8"))
+        self.assertNotIn("/classic", PAGE)
+
     def test_the_root_serves_the_app_and_the_classic_page_is_gone(self):
         app = get("/")
         self.assertEqual(app.status(), 200)
