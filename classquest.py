@@ -552,10 +552,14 @@ CHEST_SQL = (
     "WHERE l.Item IN ({items})"
 )
 
-# Every spawn of the gameobjects a quest uses (a chest, an objective).
+# Every spawn of the gameobjects a quest uses (a chest, an objective, a spell
+# focus), with its height: a death knight on the ground below Acherus is told
+# from one beside the sword chest or the Runeforge by height alone
+# (guildjobs.below_its_giver).
 OBJECT_SPAWNS_SQL = (
     "SELECT o.guid AS guid, o.id AS entry, o.map AS map_id, o.position_x AS x, "
-    "o.position_y AS y, gt.name AS name, 0 AS `rank`, 0 AS level "
+    "o.position_y AS y, gt.name AS name, 0 AS `rank`, 0 AS level, "
+    "o.position_z AS z "
     "FROM acore_world.gameobject o "
     "JOIN acore_world.gameobject_template gt ON gt.entry = o.id "
     "WHERE o.id IN ({entries})"
