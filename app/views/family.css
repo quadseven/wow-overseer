@@ -1,0 +1,49 @@
+/* The family board (#/now/family/:f). Shared pieces come from now.css. */
+
+.accent { color: var(--color-accent-300); }
+.spread { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.fam-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; align-items: start; }
+.fam-card { gap: 8px; }
+.fam-members { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr)); gap: 8px; }
+.fam-member {
+  display: flex; flex-direction: column; gap: 1px; padding: 8px 12px; min-height: 44px; border-radius: 8px;
+  background: var(--color-surface); text-decoration: none; color: var(--color-text);
+}
+.fam-member:hover { background: var(--color-neutral-900); color: var(--color-text); }
+.buff { display: flex; gap: 10px; align-items: center; }
+.buff i { color: var(--color-accent-300); }
+.meter-tabs { align-self: flex-start; }
+.meter-tabs > a { font-size: var(--fs-1); }
+.mrow { display: grid; grid-template-columns: 72px minmax(0, 1fr) 64px; gap: 8px; align-items: center; min-height: 32px; }
+.mbar { height: 8px; border-radius: 4px; background: var(--color-neutral-800); overflow: hidden; }
+.mfill { display: block; height: 100%; background: var(--color-accent); }
+.mfill.m-healing { background: var(--ok); }
+.mfill.m-threat { background: var(--warn); }
+.mval { text-align: right; }
+.qrow { display: flex; gap: 12px; padding: 10px 14px; align-items: center; flex-wrap: wrap; box-shadow: 0 1px 0 var(--color-neutral-900); }
+.qmain { display: flex; flex-direction: column; gap: 1px; flex: 1 1 240px; min-width: 0; }
+.qwhos { display: flex; gap: 3px; }
+.qwho {
+  width: 44px; height: 44px; border-radius: 6px; display: flex; align-items: center; justify-content: center;
+  font-size: var(--fs-1); font-weight: 500; text-decoration: none; color: var(--color-neutral-600);
+  box-shadow: inset 0 0 0 1px var(--color-neutral-800);
+}
+.qwho.q-has, .qwho.q-done { background: var(--color-neutral-900); box-shadow: inset 0 0 0 1px var(--color-neutral-700); }
+.qwho.q-done { box-shadow: inset 0 0 0 1px var(--ok); }
+.qwho.q-helping { color: var(--color-neutral-400); box-shadow: inset 0 0 0 1px var(--color-neutral-700); border-style: dashed; }
+@media (max-width: 759.98px) { .qwho { width: 40px; } .qwhos { width: 100%; justify-content: flex-start; } }
+.tag.bond-warn { box-shadow: inset 0 0 0 1px var(--warn-line); color: var(--warn); }
+.tag.bond-accent { box-shadow: inset 0 0 0 1px var(--color-accent-700); color: var(--color-accent-300); }
+.tag.bond-ok { box-shadow: inset 0 0 0 1px var(--ok); color: var(--ok); }
+.tag.bond-bad { box-shadow: inset 0 0 0 1px var(--bad-line); color: var(--bad); }
+.tag.bond-neutral { box-shadow: inset 0 0 0 1px var(--color-neutral-700); color: var(--color-neutral-300); }
+.bbar { height: 4px; border-radius: 2px; background: var(--color-neutral-800); overflow: hidden; }
+.bfill { display: block; height: 100%; }
+.bfill.bond-warn { background: var(--warn); }
+.bfill.bond-accent { background: var(--color-accent); }
+.bfill.bond-ok { background: var(--ok); }
+.bfill.bond-bad { background: var(--bad); }
+.route { gap: 3px; }
+.bands { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 10px; }
+.band { gap: 4px; }
+.band.is-now { box-shadow: inset 0 0 0 1px var(--color-accent); }
