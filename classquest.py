@@ -408,7 +408,8 @@ QUESTS_SQL = (  # noqa: S608
     "SELECT q.ID AS id, q.LogTitle AS title, q.QuestSortID AS sort, "
     "q.MinLevel AS min_level, q.AllowableRaces AS races, "
     "COALESCE(a.AllowableClasses, 0) AS classes, "
-    "COALESCE(a.PrevQuestID, 0) AS prev, q.RewardSpell AS reward, "
+    "COALESCE(a.PrevQuestID, 0) AS prev, "
+    "COALESCE(a.ExclusiveGroup, 0) AS exclusive, q.RewardSpell AS reward, "
     "q.RewardDisplaySpell AS display, q.SuggestedGroupNum AS grp, "
     + _NPCS
     + _ITEMS
@@ -597,6 +598,9 @@ class Quest:
     drops: tuple = ()
     # (kind, entry) of each non-creature start: a gameobject or an item.
     other_starts: tuple = ()
+    # quest_template_addon.ExclusiveGroup: a positive group lets a player take
+    # only one of its quests (taking or finishing one closes the rest).
+    exclusive: int = 0
 
     @property
     def spells(self) -> frozenset:
@@ -850,6 +854,7 @@ def _quest(r, klass, starts, ends, by_entry, droppers, aims, others=None) -> Que
             if by_entry.get(e)
         ),
         tuple((others or {}).get(qid, ())),
+        max(0, _int(r.get("exclusive"))),
     )
 
 
@@ -1126,6 +1131,22 @@ def _status(member, quest_id) -> int:
     return int(member.quest_log.get(int(quest_id), 0))
 
 
+def _closed_by_sibling(book: Book, member, path) -> bool:
+    """True when a quest of the path shares a positive ExclusiveGroup with a
+    quest the member has rewarded or holds: the game offers only one of them.
+    A dwarf who finished Muren Stormpike (1679) can no longer take A Warrior's
+    Training (1638), though both lead to the same spell."""
+    for qid in path:
+        group = book.quests[qid].exclusive
+        if not group:
+            continue
+        for other in book.quests.values():
+            if other.exclusive == group and other.id != qid and other.id not in path:
+                if other.id in member.quests_done or _status(member, other.id):
+                    return True
+    return False
+
+
 def _variant_move(book: Book, member, reward_id: int):
     """The next move along one reward quest's chain, or None when it is not
     open to this member (race, level)."""
@@ -1142,6 +1163,8 @@ def _variant_move(book: Book, member, reward_id: int):
     ):
         return None
     if int(member.level) < quest.min_level:
+        return None
+    if _closed_by_sibling(book, member, path):
         return None
     status = _status(member, quest.id)
     if status == STATUS_COMPLETE:
