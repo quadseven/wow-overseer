@@ -27,30 +27,34 @@ from __future__ import annotations
 
 import guildrun
 import council
+from apiv2 import _allow
 
 DAYS = 7
 HOUR = 3600
 LIMIT = 200
+# Every read is bounded, newest first: far more rows than LIMIT items need.
+MAX_ROWS = 20000
 CONTINENTS = (0, 1, 530, 571)
 
 _GUILDS_SQL = "SELECT guildid, name FROM guild WHERE name IN ({holes})"
 _LEVELS_SQL = (
     "SELECT character_name AS name, new_level AS level, guild_id, "
     "UNIX_TIMESTAMP(created_at) AS at FROM overseer_level "
-    "WHERE guild_id IN ({holes}) AND created_at >= NOW() - INTERVAL %s DAY"
+    "WHERE guild_id IN ({holes}) AND created_at >= NOW() - INTERVAL %s DAY "
+    "ORDER BY created_at DESC LIMIT %s"
 )
 _RUNS_SQL = (
     "SELECT id, guild, keyword, outcome, members, deaths, bosses_done, "
     "bosses_total, UNIX_TIMESTAMP(ended_at) AS at FROM overseer_guild_run "
     "WHERE guild IN ({holes}) AND ended_at >= NOW() - INTERVAL %s DAY "
-    "AND outcome IN ({went})"
+    "AND outcome IN ({went}) ORDER BY id DESC LIMIT %s"
 )
 _DEATHS_SQL = (
     "SELECT d.character_name AS name, d.map, d.killer_name AS killer, "
     "gm.guildid AS guild_id, UNIX_TIMESTAMP(d.created_at) AS at "
     "FROM overseer_death d JOIN guild_member gm ON gm.guid = d.character_guid "
     "WHERE gm.guildid IN ({holes}) AND d.created_at >= NOW() - INTERVAL %s DAY "
-    "AND d.map NOT IN ({continents})"
+    "AND d.map NOT IN ({continents}) ORDER BY d.id DESC LIMIT %s"
 )
 
 
@@ -188,17 +192,21 @@ def build(cur, guilds: list, maps: dict) -> dict:
         went = _holes(len(guildrun.WENT_IN))
         conts = ", ".join(str(c) for c in CONTINENTS)
         items += level_items(
-            _all(cur, _LEVELS_SQL.format(holes=ih), (*ids, DAYS)), guild_of
+            _all(cur, _LEVELS_SQL.format(holes=ih), (*ids, DAYS, MAX_ROWS)), guild_of
         )
         items += run_items(
             _all(
                 cur,
                 _RUNS_SQL.format(holes=nh, went=went),
-                (*names, DAYS, *guildrun.WENT_IN),
+                (*names, DAYS, *guildrun.WENT_IN, MAX_ROWS),
             )
         )
         items += death_items(
-            _all(cur, _DEATHS_SQL.format(holes=ih, continents=conts), (*ids, DAYS)),
+            _all(
+                cur,
+                _DEATHS_SQL.format(holes=ih, continents=conts),
+                (*ids, DAYS, MAX_ROWS),
+            ),
             guild_of,
             maps,
         )
@@ -208,7 +216,10 @@ def build(cur, guilds: list, maps: dict) -> dict:
 
 def chronicle(query: dict, ctx) -> tuple[int, dict]:
     asked = (query.get("guild") or [""])[0].strip()
-    guilds = [asked] if asked else list(guildrun.DEFAULT_GUILDS)
+    # Only a managed guild, refused before any query (_allow).
+    if asked and _allow.guild(asked) is None:
+        return 404, {"error": "no such guild", "guilds": sorted(_allow.GUILDS)}
+    guilds = [_allow.guild(asked)] if asked else list(_allow.GUILDS.values())
     conn = ctx.connect()
     try:
         with conn.cursor() as cur:

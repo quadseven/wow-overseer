@@ -37,21 +37,27 @@ import statistics
 import classquest
 import council
 import guildrun
+from apiv2 import _allow
 
 GHOST_FLAG = 0x10
 BLOCKED_HOURS = 2
 TOP_KILLERS = 5
 CONTINENTS = (0, 1, 530, 571)
+# Every read is bounded. A guild holds at most a thousand members (the game's
+# own limit); the rest are generous ceilings over a day or two of rows.
+MAX_MEMBERS = 1000
+MAX_ROWS = 5000
 
 _GUILD_SQL = "SELECT guildid, name FROM guild WHERE name = %s LIMIT 1"
 _NOW_SQL = "SELECT UNIX_TIMESTAMP() AS now"
 _MEMBERS_SQL = (
     "SELECT c.guid, c.name, c.level, c.class, c.race, c.online, "
     "c.playerFlags AS flags, c.zone FROM characters c "
-    "JOIN guild_member gm ON gm.guid = c.guid WHERE gm.guildid = %s"
+    "JOIN guild_member gm ON gm.guid = c.guid WHERE gm.guildid = %s LIMIT %s"
 )
 _ROSTER_SQL = (
-    "SELECT name, family FROM overseer_roster WHERE family IS NOT NULL AND family <> ''"
+    "SELECT name, family FROM overseer_roster "
+    "WHERE family IS NOT NULL AND family <> '' LIMIT %s"
 )
 _DINGS_SQL = (
     "SELECT character_name AS name, MAX(new_level) AS level, "
@@ -86,7 +92,7 @@ _CQ_OPEN_SQL = (
     "JOIN guild_member gm ON gm.guid = c.guid "
     "JOIN acore_world.quest_template q ON q.ID = s.quest "
     "LEFT JOIN acore_world.quest_template_addon a ON a.ID = q.ID "
-    "WHERE gm.guildid = %s AND s.status IN (1, 3) AND " + _CLASS_QUEST
+    "WHERE gm.guildid = %s AND s.status IN (1, 3) AND " + _CLASS_QUEST + " LIMIT %s"
 )
 _CQ_DONE_SQL = (
     "SELECT COUNT(*) AS n, COUNT(DISTINCT r.guid) AS who "
@@ -101,7 +107,7 @@ _CQ_STEPS_SQL = (
     "LEFT(result, 600) AS result, UNIX_TIMESTAMP(created_at) AS at "
     "FROM overseer_command WHERE source LIKE 'guildjobs:classquest%%' "
     "AND created_at >= NOW() - INTERVAL %s HOUR AND target_name IN ({holes}) "
-    "ORDER BY id"
+    "ORDER BY id DESC LIMIT %s"
 )
 _QUEST_TITLES_SQL = (
     "SELECT ID AS id, LogTitle AS title FROM acore_world.quest_template "
@@ -110,7 +116,7 @@ _QUEST_TITLES_SQL = (
 _RUNS_SQL = (
     "SELECT keyword, state, outcome, why, deaths, seconds_inside, "
     "UNIX_TIMESTAMP(created_at) AS created, UNIX_TIMESTAMP(ended_at) AS ended "
-    "FROM overseer_guild_run WHERE guild = %s ORDER BY id"
+    "FROM overseer_guild_run WHERE guild = %s ORDER BY id DESC LIMIT %s"
 )
 
 _QUEST_IN_COMMAND = re.compile(r"\bquest:(\d+)")
@@ -334,12 +340,14 @@ def _ghost(name: str, death, zones: dict, maps: dict) -> dict:
 
 def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
     done = _all(cur, _CQ_DONE_SQL, (guild_id,))[0]
-    open_rows = _all(cur, _CQ_OPEN_SQL, (guild_id,))
+    open_rows = _all(cur, _CQ_OPEN_SQL, (guild_id, MAX_ROWS))
     steps = []
     if names:
         steps = _all(
-            cur, _CQ_STEPS_SQL.format(holes=_holes(len(names))), (BLOCKED_HOURS, *names)
-        )
+            cur,
+            _CQ_STEPS_SQL.format(holes=_holes(len(names))),
+            (BLOCKED_HOURS, *names, MAX_ROWS),
+        )[::-1]  # newest first under the bound, then back to oldest first
     blocked = blocked_steps(steps)
     wanted = sorted(
         {
@@ -368,7 +376,7 @@ def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
 def build(cur, row: dict, zones: dict, maps: dict) -> dict:
     gid = int(row["guildid"])
     now = int(_all(cur, _NOW_SQL)[0]["now"])
-    raw = _all(cur, _MEMBERS_SQL, (gid,))
+    raw = _all(cur, _MEMBERS_SQL, (gid, MAX_MEMBERS))
     members = member_rows(raw)
     names = [m["name"] for m in members]
     classes = {m["name"]: m["class"] for m in members}
@@ -377,7 +385,7 @@ def build(cur, row: dict, zones: dict, maps: dict) -> dict:
     return {
         "guild": row["name"],
         "faction": faction,
-        "family": family_of(set(names), _all(cur, _ROSTER_SQL)),
+        "family": family_of(set(names), _all(cur, _ROSTER_SQL, (MAX_ROWS,))),
         "count": len(members),
         "online": sum(1 for m in members if m["online"]),
         "members": members,
@@ -388,16 +396,22 @@ def build(cur, row: dict, zones: dict, maps: dict) -> dict:
         "deaths": _deaths(cur, names, ghosts, zones, maps),
         "class_quests": _class_quests(cur, gid, names, classes),
         "dungeons": dungeon_rows(
-            guildrun.doors(), faction, _all(cur, _RUNS_SQL, (row["name"],))
+            guildrun.doors(),
+            faction,
+            _all(cur, _RUNS_SQL, (row["name"], MAX_ROWS))[::-1],
         ),
         "now": now,
     }
 
 
 def guild(query: dict, ctx) -> tuple[int, dict]:
-    name = (query.get("guild") or [""])[0].strip()
-    if not name:
+    asked = (query.get("guild") or [""])[0].strip()
+    if not asked:
         return 400, {"error": "say guild="}
+    # Only a managed guild, refused before any query (_allow).
+    name = _allow.guild(asked)
+    if name is None:
+        return 404, {"error": "no such guild", "guilds": sorted(_allow.GUILDS)}
     server = ctx.server
     zones = server.recap.zone_names(server.GEO.continents)
     maps = server.achievements.MAP_NAMES

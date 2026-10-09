@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import statistics
 
+from apiv2 import _allow
+
 DAY = 86400
 HOUR = 3600
 LEVEL_DAYS = 7
@@ -53,17 +55,27 @@ _NOW_SQL = "SELECT UNIX_TIMESTAMP() AS now"
 _XP_TABLE_SQL = (
     "SELECT Level AS level, Experience AS xp FROM acore_world.player_xp_for_level"
 )
-_MEMBER_SQL = "SELECT guid, name, level, xp FROM characters WHERE name = %s LIMIT 1"
+# Only a member of a managed guild (_allow): a name outside them reads as
+# unknown, in the same query that reads it.
+_MEMBER_SQL = (
+    "SELECT c.guid, c.name, c.level, c.xp FROM characters c "
+    "JOIN guild_member gm ON gm.guid = c.guid "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "WHERE c.name = %s AND g.name IN (" + _allow.guild_holes() + ") LIMIT 1"
+)
 _GUILD_SQL = "SELECT guildid, name FROM guild WHERE name = %s LIMIT 1"
+# A guild holds at most a thousand members; the bound is the game's.
+MAX_MEMBERS = 1000
+MAX_EVENTS = 50000
 _GUILD_MEMBERS_SQL = (
     "SELECT c.guid, c.name, c.level, c.xp FROM characters c "
-    "JOIN guild_member gm ON gm.guid = c.guid WHERE gm.guildid = %s"
+    "JOIN guild_member gm ON gm.guid = c.guid WHERE gm.guildid = %s LIMIT %s"
 )
 _EVENTS_SQL = (
     "SELECT character_guid AS guid, old_level, new_level, "
     "UNIX_TIMESTAMP(created_at) AS at FROM overseer_level "
     "WHERE character_guid IN ({holes}) AND created_at >= FROM_UNIXTIME(%s) "
-    "ORDER BY created_at, id"
+    "ORDER BY created_at, id LIMIT %s"
 )
 
 
@@ -230,7 +242,9 @@ def _events(cur, guids: list, now: float) -> list:
     if not guids:
         return []
     holes = ", ".join(["%s"] * len(guids))
-    return _all(cur, _EVENTS_SQL.format(holes=holes), (*guids, int(now - LOOKBACK)))  # noqa: S608
+    return _all(
+        cur, _EVENTS_SQL.format(holes=holes), (*guids, int(now - LOOKBACK), MAX_EVENTS)
+    )  # noqa: S608
 
 
 def _arg(query: dict, key: str) -> str:
@@ -241,21 +255,26 @@ def series(query: dict, ctx) -> tuple[int, dict]:
     name, guild = _arg(query, "name"), _arg(query, "guild")
     if not name and not guild:
         return 400, {"error": "say name= or guild="}
+    # Refused before any query: only a managed guild, only a name's shape.
+    if name and not _allow.name(name):
+        return 400, {"error": "name= is a character name"}
+    if not name and not _allow.guild(guild):
+        return 404, {"error": "no such guild", "guilds": sorted(_allow.GUILDS)}
     conn = ctx.connect()
     try:
         with conn.cursor() as cur:
             now = float(_one(cur, _NOW_SQL)["now"])
             table = {int(r["level"]): int(r["xp"]) for r in _all(cur, _XP_TABLE_SQL)}
             if name:
-                char = _one(cur, _MEMBER_SQL, (name,))
+                char = _one(cur, _MEMBER_SQL, (name, *_allow.guild_args()))
                 if not char:
                     return 404, {"error": "no such character", "name": name}
                 events = _events(cur, [int(char["guid"])], now)
                 return 200, member_series(char, events, table, now)
-            row = _one(cur, _GUILD_SQL, (guild,))
+            row = _one(cur, _GUILD_SQL, (_allow.guild(guild),))
             if not row:
                 return 404, {"error": "no such guild", "guild": guild}
-            chars = _all(cur, _GUILD_MEMBERS_SQL, (row["guildid"],))
+            chars = _all(cur, _GUILD_MEMBERS_SQL, (row["guildid"], MAX_MEMBERS))
             events = _events(cur, [int(c["guid"]) for c in chars], now)
             return 200, guild_series(row["name"], chars, events, table, now)
     finally:

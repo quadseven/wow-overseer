@@ -66,8 +66,10 @@ class Ctx:
     def __init__(self, answers=(), server=None):
         self.conn = FakeConn(list(answers))
         self.server = server
+        self.connects = 0
 
     def connect(self):
+        self.connects += 1
         return self.conn
 
 
@@ -144,16 +146,17 @@ class TheSeries(unittest.TestCase):
             ("UNIX_TIMESTAMP() AS now", [{"now": NOW}]),
             ("player_xp_for_level", XP),
             (
-                "FROM characters WHERE name",
+                # Only a member of a managed guild: the query carries the list.
+                "WHERE c.name = %s AND g.name IN",
                 lambda a: (
                     [{"guid": 7, "name": "Grug", "level": 11, "xp": 500}]
-                    if a == ("Grug",)
+                    if a == ("Grug", "Cave", "Bonkers")
                     else []
                 ),
             ),
             (
                 "FROM guild WHERE name",
-                lambda a: [{"guildid": 23, "name": "Cave"}] if a == ("cave",) else [],
+                lambda a: [{"guildid": 23, "name": "Cave"}] if a == ("Cave",) else [],
             ),
             (
                 "JOIN guild_member",
@@ -390,7 +393,7 @@ class TheGuild(unittest.TestCase):
         answers = [
             (
                 "FROM guild WHERE name",
-                lambda a: [{"guildid": 23, "name": "Cave"}] if a == ("cave",) else [],
+                lambda a: [{"guildid": 23, "name": "Cave"}] if a == ("Cave",) else [],
             ),
             ("UNIX_TIMESTAMP() AS now", [{"now": NOW}]),
             (
@@ -591,6 +594,46 @@ class TheChronicle(unittest.TestCase):
         self.assertEqual(
             chronicle.chronicle({"guild": ["nowhere"]}, Ctx(answers, Server))[0], 404
         )
+
+
+class TheAllowlist(unittest.TestCase):
+    """A guild outside the managed ones, or a value that is not a name, is
+    refused before a connection is opened, so it never reaches the realm."""
+
+    OUTSIDERS = ["Adventurer Union", "x' OR '1'='1", "cave; DROP TABLE guild", ""]
+
+    def _refused(self, handler, query, code):
+        ctx = Ctx([("", lambda a: self.fail("a query ran: %r" % (a,)))])
+        got, body = handler(query, ctx)
+        self.assertEqual(got, code, query)
+        self.assertEqual(ctx.connects, 0, query)
+        self.assertIn("error", body)
+
+    def test_only_managed_guilds_are_read(self):
+        for g in self.OUTSIDERS[:-1]:
+            self._refused(guild.guild, {"guild": [g]}, 404)
+            self._refused(chronicle.chronicle, {"guild": [g]}, 404)
+            self._refused(series.series, {"guild": [g]}, 404)
+
+    def test_a_value_that_is_not_a_name_is_refused(self):
+        for n in ["x' OR '1'='1", "Grug1", "A" * 13, "Grug Zug"]:
+            self._refused(series.series, {"name": [n]}, 400)
+
+        class Server:
+            @staticmethod
+            def _fetch_dungeonplan():
+                raise AssertionError("the world was read")
+
+        for q in ({"family": ["gr'ug"]}, {"family": ["grug"], "dungeon": ["123456"]}):
+            ctx = Ctx(server=Server)
+            self.assertEqual(dungeonups.dungeonups(q, ctx)[0], 400)
+
+    def test_a_managed_guild_is_matched_in_any_case(self):
+        from apiv2 import _allow
+
+        self.assertEqual(_allow.guild("CAVE"), "Cave")
+        self.assertEqual(_allow.guild(" bonkers "), "Bonkers")
+        self.assertIsNone(_allow.guild("Adventurer Union"))
 
 
 if __name__ == "__main__":
