@@ -87,6 +87,37 @@ class TheStepAfterATake(unittest.TestCase):
         self.assertFalse(guildjobs.is_chain_row("turnin quest:12619"))
 
 
+class TheTakeIsInTheLog(unittest.TestCase):
+    """The saved quest log trails a take (2026-10-09): the pass after Brug's take
+    read a log without the quest and sent him to take it again."""
+
+    def step(self, rows):
+        member = knight(quest_log={}, quests_done=frozenset({12593}))
+        return guildjobs.class_step(member, runeblade(), rows, 5000)[0]
+
+    def test_a_take_minutes_ago_goes_on_to_the_use(self):
+        step = self.step(recent(row("take quest:12619", 2)))
+        self.assertTrue(step.rows[0].command.startswith("use-item-here"))
+
+    def test_without_the_take_it_is_taken(self):
+        step = self.step(())
+        self.assertEqual(step.rows[0].command, "take quest:12619")
+
+    def test_a_drop_after_the_take_is_not_undone(self):
+        rows = recent(row("take quest:12619", 8), row("abandon quest:12619", 2))
+        member = guildjobs.with_recent_takes(
+            knight(quest_log={}, quests_done=frozenset({12593})), rows
+        )
+        self.assertNotIn(12619, member.quest_log)
+
+    def test_a_take_after_a_drop_is_in(self):
+        rows = recent(row("abandon quest:12619", 8), row("take quest:12619", 2))
+        member = guildjobs.with_recent_takes(
+            knight(quest_log={}, quests_done=frozenset({12593})), rows
+        )
+        self.assertEqual(member.quest_log[12619], classquest.STATUS_INCOMPLETE)
+
+
 class _Loop:
     """The Bridge methods that pace the jobs loop and run a step, nothing else."""
 
