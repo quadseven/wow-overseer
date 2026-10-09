@@ -243,7 +243,13 @@ function body(ctx, m, roster) {
 
 export default {
   css: ["views/members.css"],
-  reads: (ctx) => ["/api/v2/roster"].concat(readsFor(ctx.params.name, ctx.params.tab)),
+  // A name the roster (already read) does not hold is not a guild member: its
+  // per-member reads would only be refused, so only the roster is read.
+  reads: (ctx) => {
+    const roster = ctx.get("/api/v2/roster").data;
+    if (roster && !byName(roster.members).has(ctx.params.name)) return ["/api/v2/roster"];
+    return ["/api/v2/roster"].concat(readsFor(ctx.params.name, ctx.params.tab));
+  },
   every: 30000,
   title: (ctx) => ctx.params.name,
   render(ctx) {

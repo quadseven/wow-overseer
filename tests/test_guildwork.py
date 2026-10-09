@@ -18,7 +18,6 @@ import raidlineup
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 GOLD = guildwork.COPPER_PER_GOLD
@@ -518,12 +517,6 @@ class ThePage(unittest.TestCase):
 
     def test_the_dues_read_rides_the_kind_index(self):
         self.assertIn("WHERE kind = 'mail' AND source LIKE %s", SERVER)
-
-    def test_the_page_draws_the_work_line_and_the_total(self):
-        self.assertIn("if (m.work) {", PAGE)
-        self.assertIn('w.className = "ln-work";', PAGE)
-        self.assertIn("g.dues ? g.dues.said", PAGE)
-        self.assertIn(".ln-work {", PAGE)
 
     def test_the_module_ships_in_the_image(self):
         self.assertIn("guildwork.py", DOCKERFILE)

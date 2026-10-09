@@ -60,7 +60,7 @@ COPY core.py bridge.py voice.py transform.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json bagicons.json spells.json bagspells.json viewerdisplays.json \
      standing.json craftbook.json taxinodes.json itemextendedcost.json \
-     index.html classic.html /app/
+     index.html /app/
 
 # The operations app (index.html above loads it): its modules and styles, and
 # the /api/v2 endpoints. Whole directories, so a new view or endpoint is a new

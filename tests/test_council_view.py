@@ -627,110 +627,7 @@ class TheWholePayloadSurvivesAnEmptyWorld(unittest.TestCase):
 class ThePageOnlyDraws(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
-        start = cls.page.index(BANNER)
-        cls.tab = cls.page[start : cls.page.index(NEXT, start)]
-        css = cls.page.index(CSS_BANNER)
-        cls.css = cls.page[css : cls.page.index(NEXT_CSS, css)]
-        cls.code = code(cls.tab)
-
-    def test_the_view_exists_and_is_an_address(self):
-        self.assertIn('<section id="council">', self.page)
-        self.assertIn('cb.textContent = "Council";', self.page)
-        self.assertIn("cb.dataset.view = COUNCIL_VIEW;", self.page)
-        listed = self.page[self.page.index("const HASH_VIEWS = [") :]
-        listed = listed[: listed.index("]")]
-        self.assertIn("COUNCIL_VIEW", listed)
-
-    def test_show_view_hides_it_with_the_others(self):
-        show = self.page[self.page.index("function showView") :]
-        show = show[: show.index("setInterval(pollFamily")]
-        self.assertIn('cnsection.style.display = isCouncil ? "block" : "none";', show)
-        branch = show[show.index("if (isCouncil) {") :]
-        branch = branch[: branch.index("return;")]
-        for line in ("closePanel();", "stopBroadcasts();", "pollCouncil();"):
-            self.assertIn(line, branch)
-
-    def test_the_page_never_sorts_the_transcript(self):
-        """THE GUARD THIS FILE IS FOR. One .sort() here and the order becomes
-        the page's opinion, free to drift from the family's own - and the
-        wrong answer is the one a reasonable person reaches first, because
-        alphabetical looks tidy."""
-        for reorder in (".sort(", ".reverse(", "localeCompare"):
-            self.assertNotIn(reorder, self.code, reorder)
-
-    def test_the_hue_is_applied_as_a_class_and_not_as_a_colour(self):
-        self.assertIn('"cn-who h-" + line.hue', self.code)
-        self.assertNotIn(".style.color", self.code)
-
-    def test_every_hue_the_module_can_emit_has_a_rule_in_the_page(self):
-        """A hue with no rule is text in the ground colour, which on a card is
-        invisible."""
-        for hue in list(council.SPEAKER_HUES) + [
-            council.OUTSIDER_HUE,
-            council.READY_HUE,
-            council.SHORT_HUE,
-        ]:
-            self.assertIn(".h-%s {" % hue, self.page, hue)
-
-    def test_the_page_does_not_pick_the_gates_colour_either(self):
-        self.assertIn('"cn-gate h-" + p.hue', self.code)
-        self.assertNotIn("h-green", self.code)
-
-    def test_the_decision_is_drawn_as_sentences_and_not_composed(self):
-        """The card was a status word over "1 OF 5 SPOKE", and the operator
-        could not read it. Every line on it is now a sentence from council.py,
-        drawn as it arrives."""
-        for key in (
-            "agreed.label",
-            "agreed.decision",
-            "agreed.who_line",
-            "agreed.when_line",
-            "agreed.next_line",
-            "agreed.sitting",
-        ):
-            self.assertIn(key, self.code, key)
-        self.assertNotIn("agreed.vote", self.code)
-        self.assertNotIn("CARRIED", self.code)
-        self.assertNotIn("SPOKE", self.code)
-
-    def test_every_family_is_drawn(self):
-        self.assertIn("p.families", self.code)
-        self.assertIn("f.title", self.code)
-        self.assertIn("f.note", self.code)
-
-    def test_the_gate_and_the_verdict_come_from_the_payload(self):
-        self.assertIn("p.gate", self.code)
-        self.assertIn("p.verdict", self.code)
-        for invented in ('"READY"', "LEVELS SHORT", "p.short +"):
-            self.assertNotIn(invented, self.code, invented)
-
-    def test_the_gate_is_a_word_before_it_is_a_colour(self):
-        """A gate said only in colour is lost to a screenshot, to a
-        colourblind reader and to anybody reading it out loud."""
-        self.assertIn('el("span", "cn-gate ', self.code)
-        self.assertIn("p.gate", self.code[self.code.index('"cn-gate ') :])
-
-    def test_nothing_from_the_payload_is_rendered_as_markup(self):
-        """A council line is written by a language model into a table the
-        bridge fills, which is as untrusted as text on this page gets."""
-        self.assertNotIn("innerHTML", self.code)
-        self.assertNotIn("insertAdjacentHTML", self.code)
-
-    def test_a_failed_poll_keeps_the_transcript(self):
-        """Blanking it reads as "the family has stopped talking", which is a
-        far stronger claim than "one read failed"."""
-        poll = self.code[self.code.index("async function pollCouncil") :]
-        self.assertIn("may be stale", poll)
-        self.assertNotIn("replaceChildren", poll)
-
-    def test_the_endpoint_is_wired_and_the_builder_is_pure(self):
-        self.assertIn('"/api/council": _council,', self.server)
-        self.assertIn(
-            "council.build_council(**_fetch_council(), cards=cards)", self.server
-        )
-        self.assertIn('fetch(u("/api/council"))', self.tab)
 
     def test_the_endpoint_takes_no_roster_from_the_caller(self):
         """WHO the family is belongs to bonds, and a roster parameter would
@@ -752,18 +649,6 @@ class ThePageOnlyDraws(unittest.TestCase):
             "overseer_roster",
         ):
             self.assertIn('"%s")' % table, fetch, table)
-
-    def test_the_view_polls_only_while_it_is_open(self):
-        self.assertIn("if (view === COUNCIL_VIEW) pollCouncil();", self.tab)
-
-    def test_it_lays_out_without_a_breakpoint_of_its_own(self):
-        """Mobile-first: auto-fit turns two columns into one without anybody
-        choosing where that happens, and "left" becomes "first"."""
-        self.assertIn(
-            "grid-template-columns:repeat(auto-fit, minmax(min(100%, 320px), 1fr))",
-            self.css,
-        )
-        self.assertNotIn("@media", self.css)
 
     def test_the_module_ships_in_the_image(self):
         dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")

@@ -909,7 +909,6 @@ class TheHouseRules(unittest.TestCase):
             "recap.py",
             "achievements.py",
             "map_server.py",
-            "classic.html",
             "tests/test_recap.py",
             "tests/test_recap_tab.py",
         ):

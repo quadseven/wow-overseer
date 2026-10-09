@@ -2,8 +2,7 @@
 fetch layer's server half and the /api/v2 namespace.
 
 The page is index.html; its modules live in app/ and are served one file at a
-time from /app/. The classic page it replaces is classic.html at /classic
-until every section has moved (test_classic_shell.py holds its contract).
+time from /app/. The classic page it replaced is gone, and /classic with it.
 The router and the markup helpers are pure modules, run under node.
 """
 
@@ -243,14 +242,34 @@ class TheHouseRules(unittest.TestCase):
 
 
 class TheServer(unittest.TestCase):
-    def test_the_root_serves_the_app_and_classic_serves_the_old_page(self):
+    def test_a_worn_bonus_is_read_as_its_score(self):
+        # /api/upgrades sends a worn item's extras as {enchants, stats, score};
+        # the panel once printed the object as a number: "+NaN".
+        src = (APP / "views" / "_members.js").read_text(encoding="utf-8")
+        self.assertIn("function bonusScore(b)", src)
+        self.assertNotIn("score(s.worn.bonus)", src)
+
+    def test_a_name_outside_the_roster_reads_only_the_roster(self):
+        src = (APP / "views" / "member.js").read_text(encoding="utf-8")
+        self.assertIn(
+            'if (roster && !byName(roster.members).has(ctx.params.name)) return ["/api/v2/roster"];',
+            src,
+        )
+
+    def test_nothing_still_points_at_the_classic_page(self):
+        # Every section has its own view now: no stub, no link to /classic.
+        self.assertFalse((APP / "views" / "_pending.js").exists())
+        self.assertNotIn("classicFor", (APP / "router.js").read_text(encoding="utf-8"))
+        self.assertNotIn("/classic", PAGE)
+
+    def test_the_root_serves_the_app_and_the_classic_page_is_gone(self):
         app = get("/")
         self.assertEqual(app.status(), 200)
         self.assertIn(b'<script type="module" src="/app/main.js">', app.body())
-        old = get("/classic")
-        self.assertEqual(old.status(), 200)
-        self.assertNotIn(basepath.PLACEHOLDER.encode(), old.body())
-        self.assertIn(b"Overseer", old.body())
+        for old in ("/classic", "/classic.html"):
+            self.assertNotIn(old, map_server.Handler.GET_ROUTES)
+            self.assertEqual(get(old).status(), 404, old)
+        self.assertFalse((HERE / "classic.html").exists())
 
     def test_a_prefixed_realm_gets_its_prefix_in_the_app(self):
         original = map_server.BASE_PATH
@@ -304,9 +323,9 @@ class TheServer(unittest.TestCase):
         missing = get("/nope")
         self.assertEqual(missing.header("Cache-Control"), "no-store")
 
-    def test_the_realm_reports_both_pages_versions(self):
-        # The classic page compares `page` with its own build and offers a
-        # reload; pointing it at the app's version would offer one forever.
+    def test_the_realm_reports_the_pages_version(self):
+        # `page` and `app_page` stay in the payload (the contract is kept);
+        # with the classic page gone both are the app's page.
         h = FakeHandler("/api/realm")
         with (
             mock.patch.object(map_server, "_fetch_realm", return_value={}),
@@ -315,7 +334,7 @@ class TheServer(unittest.TestCase):
             h._realm({})
         payload = json.loads(h.body())
         self.assertEqual(
-            payload["page"], basepath.page_version((HERE / "classic.html").read_bytes())
+            payload["page"], basepath.page_version((HERE / "index.html").read_bytes())
         )
         self.assertEqual(
             payload["app_page"],
@@ -530,11 +549,11 @@ console.log(JSON.stringify([String(M.sparkline([5])), String(M.sparkline([1, nul
 
 
 class TheImage(unittest.TestCase):
-    def test_the_image_carries_the_app_the_old_page_and_v2(self):
+    def test_the_image_carries_the_app_and_v2_and_not_the_old_page(self):
         docker = (HERE / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("COPY app /app/app", docker)
         self.assertIn("COPY apiv2 /app/apiv2", docker)
-        self.assertIn("classic.html", docker)
+        self.assertNotIn("classic.html", docker)
 
 
 if __name__ == "__main__":

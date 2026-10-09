@@ -16,7 +16,6 @@ import guildroute
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 # The recipes every 300 tailor on dev knew (character_spell, 2026-09-23).
@@ -512,16 +511,6 @@ class ThePage(unittest.TestCase):
             lineup, "Cave", [{"name": "Derred", "skill": 197, "value": 300, "max": 300}]
         )
         self.assertEqual([(p.name, p.role) for p in posts], [("Derred", "tailor")])
-
-    def test_the_endpoint_and_page_carry_the_corps(self):
-        lineup = SERVER[SERVER.index("    def _lineup(") :]
-        lineup = lineup[: lineup.index("    def _raidgoals(")]
-        self.assertIn("guildcorps.attach_corps(", lineup)
-        self.assertIn("guildcorps.bags_made(", lineup)
-        self.assertIn("WHERE kind = 'cast' AND source LIKE %s", SERVER)
-        self.assertIn("if (m.corps) {", PAGE)
-        self.assertIn("g.corps ? g.corps.said", PAGE)
-        self.assertIn("guildcorps.py", DOCKERFILE)
 
 
 class TheBridgePass(unittest.TestCase):

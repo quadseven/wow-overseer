@@ -190,6 +190,13 @@ function upItem(entry, name, items) {
 
 function score(v) { return v === null || v === undefined ? "" : String(Math.round(v * 10) / 10); }
 
+// /api/upgrades reports a worn item's extras as {enchants, stats, score}; an
+// older shape was the bare number. Either way the score is what is shown.
+function bonusScore(b) {
+  const v = b && typeof b === "object" ? b.score : b;
+  return typeof v === "number" && isFinite(v) && v > 0 ? v : 0;
+}
+
 export const UP_FILTERS = [["all", "All 17"], ["now", "Upgrade now"], ["up", "Below pre-raid"], ["best", "At or near best"]];
 export const UP_SORTS = [["slot", "Slot order"], ["now", "Biggest gain now"], ["gain", "Biggest pre-raid gain"]];
 
@@ -207,7 +214,7 @@ function stateCell(s) {
 
 function wornBlock(s, items) {
   if (!s.worn) return html`<span class="warn">nothing worn</span>`;
-  return html`<span>${upItem(s.worn.entry, s.worn.name, items)} <span class="dim num">(${score(s.worn.score)})</span></span>${s.worn.bonus ? html`<span class="dim mb-s">enchants, gems and suffix +${score(s.worn.bonus)}</span>` : ""}`;
+  return html`<span>${upItem(s.worn.entry, s.worn.name, items)} <span class="dim num">(${score(s.worn.score)})</span></span>${bonusScore(s.worn.bonus) ? html`<span class="dim mb-s">enchants, gems and suffix +${score(bonusScore(s.worn.bonus))}</span>` : ""}`;
 }
 
 function nowBlock(s) {

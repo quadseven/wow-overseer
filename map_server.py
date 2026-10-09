@@ -825,7 +825,7 @@ def _fetch_profiles(names) -> dict:
         conn.close()
 
 
-def _page_version(name: str = "classic.html") -> str:
+def _page_version(name: str = "index.html") -> str:
     """basepath.page_version of a page as it is on disk now.
 
     Read per call rather than once at import: it is one small file, /api/realm
@@ -833,9 +833,9 @@ def _page_version(name: str = "classic.html") -> str:
     reporting the old page if the file were ever replaced under a running
     process.
 
-    `page` in /api/realm is the classic page's version, because the classic
-    page is the one that compares it with its own and offers a reload; the
-    app's page is reported beside it as `app_page`.
+    `page` in /api/realm is the app page's version, and `app_page` beside it
+    is the same: it named the classic page's version while that page was
+    served, and both fields stay so no reader of the payload loses one.
     """
     with open(os.path.join(HERE, name), "rb") as f:
         return basepath.page_version(f.read())
@@ -5405,13 +5405,6 @@ class Handler(BaseHTTPRequestHandler):
         self._send_file("index.html", "text/html; charset=utf-8",
                         transform=lambda body: basepath.apply(body, BASE_PATH))
 
-    def _classic(self, _query: dict) -> None:
-        # The page this app replaces, unchanged, while its views move over
-        # (one PR per section). Same substitution as the app: it is mounted
-        # under the same prefix and must address the same realm.
-        self._send_file("classic.html", "text/html; charset=utf-8",
-                        transform=lambda body: basepath.apply(body, BASE_PATH))
-
     def _app_file(self, rel: str) -> None:
         """GET /app/<path>.js|.css - one file of the operations app.
 
@@ -7217,8 +7210,6 @@ class Handler(BaseHTTPRequestHandler):
         "/api/director": _director_state,
         "/": _index,
         "/index.html": _index,
-        "/classic": _classic,
-        "/classic.html": _classic,
         "/zones.json": _zones_file,
         "/shapes.json": _shapes_file,
         "/jquery.min.js": _jquery_file,

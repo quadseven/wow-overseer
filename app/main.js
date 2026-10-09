@@ -10,6 +10,7 @@
 import * as api from "./api.js";
 import * as shell from "./shell.js";
 import * as search from "./search.js";
+import "./searchv2.js";
 import * as tooltip from "./tooltip.js";
 import * as gestures from "./gestures.js";
 import { legacy, parse, resolve } from "./router.js";

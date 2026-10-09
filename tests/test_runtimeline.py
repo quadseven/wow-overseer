@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 import runtimeline
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "classic.html").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 NOW = datetime(2026, 9, 23, 20, 0, 0, tzinfo=timezone.utc)
 
@@ -192,35 +191,6 @@ class ThePageAndTheEndpoint(unittest.TestCase):
         self.assertIn("runtimeline.ROW_LIMIT", fetch)
         sql = SERVER[SERVER.index("_RUN_TIMELINE = (") :]
         self.assertIn("LIMIT %s", sql[: sql.index(")\n")])
-
-    def test_the_page_prints_the_modules_strings(self):
-        block = PAGE[
-            PAGE.index("function rtlRender") : PAGE.index(
-                "setInterval(() => { if (view === DUNGEONS_VIEW) pollRunTimeline(); }"
-            )
-        ]
-        for key in (
-            "p.line",
-            "f.title",
-            "f.line",
-            "run.title",
-            "run.line",
-            "ev.at",
-            "ev.line",
-        ):
-            self.assertIn(key, block, key)
-        self.assertIn('fetch(u("/api/runtimeline"),', block)
-        self.assertIn("rtlPulling = false;", block[block.index("} finally {") :])
-
-    def test_opening_the_tab_pulls_it(self):
-        show = PAGE[PAGE.index("if (isDgn) {") :]
-        self.assertIn("pollRunTimeline();", show[: show.index("return;")])
-
-    def test_the_markup_is_on_the_dungeons_tab(self):
-        section = PAGE[PAGE.index('<section id="dungeons">') :]
-        section = section[: section.index("</section>")]
-        self.assertIn('id="rtlfamilies"', section)
-        self.assertIn('id="rtlline"', section)
 
     def test_the_module_is_copied_into_the_container(self):
         dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")

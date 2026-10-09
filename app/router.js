@@ -129,25 +129,6 @@ export function resolve(route) {
   return { view: "notfound", section: "", params: {} };
 }
 
-// The classic page's view for a route that has not been rebuilt yet.
-export function classicFor(view, params) {
-  switch (view) {
-    case "now": return "watch";
-    case "family": return "family/" + (params.family || "grug");
-    case "map": return "map" + (params.continent ? "/" + params.continent : "");
-    case "server": return "eye";
-    case "guild": return params.tab === "chronicle" ? "chronicle" : "dungeons";
-    case "run": return "dungeons";
-    case "members": return "lineup";
-    case "gear": return params.tab === "upgrades" ? "upgrades" : params.tab === "table" ? "lineup" : "armory";
-    case "member": return "armory";
-    case "raid": return "raid";
-    case "economy": return params.tab === "trades" ? "trades" : "bags";
-    case "operator": return "decree";
-    default: return "family";
-  }
-}
-
 // The tab row a phone swipe walks, for a resolved route.
 export function swipeSiblings(hrefs, current) {
   const i = hrefs.indexOf(current);

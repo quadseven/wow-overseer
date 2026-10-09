@@ -169,6 +169,18 @@ function place(stage, name) {
 
 // After every draw: put each kept viewer back into its new stage, and watch
 // the stages so only those near the screen hold one.
+// A view that draws no stage (Now, Raid, Economy) never calls mountModels, so
+// the viewers of the last gear view would keep their WebGL contexts and keep
+// rendering off screen. After every route change, a viewer whose pane is no
+// longer on the page is dropped.
+window.addEventListener("hashchange", () => {
+  window.setTimeout(() => {
+    Array.from(live.entries()).forEach(([name, e]) => {
+      if (!e.pane || !document.contains(e.pane)) drop(name);
+    });
+  }, 1500);
+});
+
 export function mountModels(root) {
   if (!seen) return;
   seen.disconnect();

@@ -30,7 +30,6 @@ map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "classic.html").read_text()
 SERVER = (HERE / "map_server.py").read_text()
 
 ICONS = {6418: "inv_misc_rune_01", 7383: "inv_fabric_linen_01", 8271: "inv_misc_bag_09"}
@@ -447,54 +446,6 @@ class TheEndpointsAreReadOnly(unittest.TestCase):
         block = block[: block.index("class Handler(")]
         for verb in ("INSERT", "UPDATE ", "DELETE", "REPLACE", "commit("):
             self.assertNotIn(verb, block, verb)
-
-
-def overlay():
-    js = PAGE[PAGE.index("// --- the virtual game client (vclient.py)") :]
-    return js[: js.index("</script>")]
-
-
-class TheOverlayHandlesBothFamilies(unittest.TestCase):
-    def test_every_wall_tile_gets_the_bar(self):
-        slot = PAGE[PAGE.index("function wallSlot(name) {") :]
-        slot = slot[: slot.index("\n}")]
-        self.assertIn("ctl.append(ear, big, vclientBar(name));", slot)
-        self.assertIn("slot.append(shot, strip, ctl);", slot)
-
-    def test_no_family_or_character_is_named_in_the_overlay(self):
-        code = overlay()
-        for _key, names in FAMILIES:
-            for name in names:
-                self.assertNotRegex(code, r'["\']%s["\']' % name, name)
-        for guild in ("Cave", "Bonkers"):
-            self.assertNotIn(guild, code)
-
-    def test_the_quest_log_is_scoped_by_the_server(self):
-        code = overlay()
-        self.assertIn('u("/api/client/quests?name=") + encodeURIComponent(name)', code)
-        self.assertIn("s.family.members.map(", code)
-
-    def test_six_frames_draggable_closable_and_escape(self):
-        code = overlay()
-        for kind in ("bags", "bank", "guildbank", "character", "social", "quests"):
-            self.assertIn('kind: "%s"' % kind, code)
-        self.assertIn('if (e.key !== "Escape") return;', code)
-        self.assertIn("setPointerCapture", code)
-        self.assertIn('x.addEventListener("click", () => vcClose(kind));', code)
-
-    def test_read_only_lazy_and_no_markup(self):
-        code = overlay()
-        self.assertNotIn("POST", code)
-        self.assertNotIn("innerHTML", code)
-        self.assertNotIn("setInterval", code)
-        self.assertNotIn("https://", code)
-        # Every same-origin URL through the mount helper.
-        self.assertIn('u("/api/client/bags?name=")', code)
-
-    def test_an_icon_falls_back_to_the_items_initials(self):
-        code = overlay()
-        self.assertIn('iconImg(item.icon, "", letters)', code)
-        self.assertIn("item.letters", code)
 
 
 if __name__ == "__main__":

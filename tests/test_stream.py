@@ -404,7 +404,6 @@ class MapServerWiring(unittest.TestCase):
 
         here = pathlib.Path(__file__).resolve().parent.parent
         cls.server = (here / "map_server.py").read_text()
-        cls.page = (here / "classic.html").read_text()
 
     def test_the_watch_endpoints_exist_on_both_verbs(self):
         """Asserted against the routing tables rather than an if-chain: the
@@ -446,36 +445,6 @@ class MapServerWiring(unittest.TestCase):
         self.assertIn("outcome_of", state)
         self.assertIn('"outcome"', state)
 
-    def test_the_page_offers_a_shot_and_does_not_beat_for_it(self):
-        """A shot has no viewer to fall silent. Beating for it would keep
-        alive a row whose entire point is to finish."""
-        self.assertIn('id="pwshot"', self.page)
-        self.assertIn('mode !== "shot"', self.page)
-
-    def test_the_page_renders_it(self):
-        self.assertIn("s.outcome", self.page)
-
-    def test_a_live_detail_is_printed_verbatim(self):
-        """The agent writes detail as prose meant to be read as-is. Labelling
-        it produced "live on Moonlight - Open Moonlight on the Switch and
-        launch..." - the sentence already says that, better.
-
-        Asserted inside watchView since infra#2892: the decision moved there
-        when the Family tab became a second surface rendering the same row,
-        and two surfaces disagreeing about what a row MEANS is worse than
-        either being wrong, because only one is on screen to be corrected.
-        """
-        view = self.page[self.page.index("function watchView") :]
-        view = view[: view.index("async function refreshWatch")]
-        self.assertNotIn('"live on Moonlight" + (w.detail', view)
-        self.assertIn('w.detail || "live on Moonlight"', view)
-
-    def test_the_note_keeps_the_line_breaks_it_was_given(self):
-        """detail is several sentences now; textContent collapses newlines
-        without pre-wrap, running the instruction into one wall."""
-        css = self.page[self.page.index("#pwnote {") :]
-        self.assertIn("pre-wrap", css[: css.index("}")])
-
     def test_the_sweep_stamps_when_it_gave_up(self):
         """Without a clock on the teardown, outcome_of cannot tell a refusal
         that just happened from one that happened yesterday, and refuses to
@@ -494,36 +463,6 @@ class MapServerWiring(unittest.TestCase):
             "the ensure must run AFTER basicConfig or its failure "
             "is emitted through an unconfigured logger",
         )
-
-    def test_the_page_heartbeats_and_does_not_rely_on_unload(self):
-        """Silence is the signal. An unload handler misses a crashed tab, a
-        slept laptop and a dropped tailnet; a heartbeat misses none of them."""
-        self.assertIn("setInterval", self.page)
-        self.assertIn('"beat"', self.page)
-        self.assertNotIn("onbeforeunload", self.page)
-
-    def test_the_page_never_embeds_a_moonlight_stream(self):
-        """Sunshine has no browser player - 47990 is its config UI. An iframe
-        at any Sunshine port shows settings or nothing."""
-        view = self.page[self.page.index("function watchView") :]
-        view = view[: view.index("async function refreshWatch")]
-        self.assertIn('w.delivery === "embed"', view)
-        self.assertIn("Moonlight", view)
-        self.assertNotIn("<iframe", view)
-
-    def test_closing_the_panel_does_not_stop_the_stream(self):
-        """A viewer may close the map and keep watching on the Switch. Only
-        the staleness sweep decides, because only it cannot be fooled by how
-        the page was left."""
-        close = self.page[self.page.index("function closePanel") :]
-        close = close[: close.index("async function fetchPanel")]
-        self.assertIn("clearInterval", close)
-        self.assertNotIn('"stop"', close)
-
-    def test_both_modes_are_offered_and_described(self):
-        self.assertIn('id="pwcam"', self.page)
-        self.assertIn('id="pwpov"', self.page)
-        self.assertIn("observer", self.page)
 
 
 class AShotIsNotAWatch(unittest.TestCase):
@@ -699,123 +638,13 @@ class ThePlayer(unittest.TestCase):
         import pathlib
 
         here = pathlib.Path(__file__).resolve().parent.parent
-        cls.page = (here / "classic.html").read_text()
         cls.server = (here / "map_server.py").read_text()
-
-    def test_there_is_a_video_element_for_the_stream(self):
-        self.assertIn('id="pwvid"', self.page)
-
-    def test_the_player_autoplays_muted_and_inline(self):
-        """A browser refuses to autoplay audible video, and refuses to play
-        inline on iOS without playsinline. Both failures look like a black
-        box, which is the one outcome this feature cannot survive."""
-        tag = self.page[self.page.index('id="pwvid"') :]
-        tag = tag[: tag.index(">")]
-        for attr in ("muted", "autoplay", "playsinline", "controls"):
-            self.assertIn(attr, tag)
-
-    def test_the_attribute_alone_is_not_trusted_to_start_it(self):
-        """MEASURED, not reasoned about: in a real browser at the real
-        hostname the element reported connected, 1280x720, readyState 4 - and
-        paused, with currentTime stuck at 0. A stream handed to an element
-        after load does not reliably trip the attribute, and the tab is
-        commonly unfocused because the wait is a minute long. The symptom is
-        the worst one available: a frozen frame that looks like a live game.
-        """
-        player = self.page[self.page.index("function makePlayer") :]
-        player = player[: player.index("const panelPlayer")]
-        self.assertIn(".play()", player)
-        self.assertIn(
-            "if (!video.paused) return;",
-            player,
-            "a rejected play() is not always a refusal - an "
-            "interrupted promise rejects while the video plays on, "
-            "and the first live run printed 'would not start it' "
-            "underneath Ugga running through a forest at 30fps",
-        )
-        self.assertIn(
-            "press play",
-            player,
-            "a refused play() must tell the person what to do, not "
-            "leave them looking at a still picture",
-        )
-        self.assertEqual(
-            self.page.count("new RTCPeerConnection"),
-            1,
-            "ONE WHEP path for both surfaces (infra#2892): a "
-            "second PeerConnection is a second set of autoplay "
-            "lies to fall for, and a second chance to disagree "
-            "about whether a stream is up",
-        )
-
-    def test_a_live_embed_starts_the_player_rather_than_printing_a_url(self):
-        watch = self.page[self.page.index("async function refreshWatch") :]
-        watch = watch[: watch.index("// --- their own screen")]
-        self.assertIn("startPlayer(", watch)
-        self.assertNotIn(
-            '"live - open "',
-            watch,
-            "printing the URL for a person to copy is exactly what this piece replaces",
-        )
-
-    def test_the_whep_endpoint_is_derived_from_the_detail_url(self):
-        """`detail` is the URL the agent wrote. WHEP hangs off it; inventing a
-        hostname here would break the day the vhost is renamed."""
-        self.assertIn('"/whep"', self.page)
-
-    def test_mixed_content_is_named_rather_than_suffered(self):
-        """The map is HTTPS. An http:// stream URL is blocked by every modern
-        browser and the player then shows NOTHING, with the reason only in a
-        console nobody has open. Say it on the page instead."""
-        self.assertIn("mixed content", self.page)
-
-    def test_the_player_says_why_when_the_handshake_fails(self):
-        """404 from WHEP means nothing is publishing on that path yet.
-        Silence here is a black rectangle and a bug report."""
-        player = self.page[self.page.index("function whepFailure") :]
-        player = player[: player.index("function stopPlayer")]
-        self.assertIn("404", player)
-        self.assertNotIn(
-            "bad status code",
-            player,
-            "a status code on its own names nothing to go and "
-            "look at, which is what an iframe would have given",
-        )
-
-    def test_closing_the_panel_tears_the_player_down(self):
-        """A PeerConnection left open holds a MediaMTX session and keeps
-        pulling video across the tailnet for a panel nobody can see."""
-        close = self.page[self.page.index("function closePanel") :]
-        close = close[: close.index("async function fetchPanel")]
-        self.assertIn("stopPlayer(", close)
-
-    def test_the_panel_polls_the_watch_state(self):
-        """requested -> starting -> live takes a minute on the agent's clock.
-        Without a poll the panel says 'waiting for a client' until somebody
-        clicks the dot again, and the stream that DID come up never renders."""
-        self.assertIn("setInterval(refreshWatch", self.page)
 
     def test_the_wait_reaches_the_page_with_its_clock(self):
         state = self.server[self.server.index("def _watch_state") :]
         state = state[: state.index("def _watch_post")]
         self.assertIn("waited_seconds", state)
         self.assertIn("looks_unclaimed", state)
-
-    def test_the_page_shows_the_wait_and_the_budget(self):
-        self.assertIn("waited_seconds", self.page)
-        self.assertIn("startup_seconds", self.page)
-
-    def test_an_unclaimed_request_reads_as_a_stopped_agent(self):
-        """Asserted inside watchView, not anywhere on the page: the word
-        already appears in a comment about map regions, and a whole-file
-        assertIn passed against a page that had no such state at all.
-
-        watchView rather than refreshWatch since infra#2892 - see
-        MapServerWiring.test_a_live_detail_is_printed_verbatim.
-        """
-        view = self.page[self.page.index("function watchView") :]
-        view = view[: view.index("async function refreshWatch")]
-        self.assertIn("w.unclaimed", view)
 
 
 class NoOnDemandClientForTheFamily(unittest.TestCase):

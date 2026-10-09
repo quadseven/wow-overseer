@@ -475,7 +475,6 @@ class TheViewReadsTheWeek(unittest.TestCase):
                 "# Everything a tooltip draws"
             )
         ]
-        cls.page = (HERE / "classic.html").read_text(encoding="utf-8")
 
     def test_the_vault_gold_is_read(self):
         self.assertIn("g.BankMoney AS bank_money", self.fetch)
@@ -499,24 +498,6 @@ class TheViewReadsTheWeek(unittest.TestCase):
             "and guild_bank_right in _fetch_wealth, mail and "
             "overseer_economy_sample in _fetch_wealth_holdings",
         )
-
-    def test_the_page_draws_what_it_is_handed(self):
-        econ = self.page[self.page.index("function wspark(points)") :]
-        econ = econ[: econ.index("// WHERE IT IS ALL GOING")]
-        for field in (
-            "m.mail",
-            "m.bank.label",
-            "m.history",
-            "line.caption",
-            "line.label",
-            "line.points",
-            "h.note",
-        ):
-            self.assertIn(field, econ)
-        self.assertNotIn("innerHTML", econ)
-        self.assertIn("renderEcon(c.econ, m);", self.page)
-        self.assertIn("c.econ.replaceChildren();", self.page)
-        self.assertIn("whistory(b.history)", self.page)
 
     def test_the_module_ships_in_the_image(self):
         self.assertIn("holdings.py", (HERE / "Dockerfile").read_text(encoding="utf-8"))
