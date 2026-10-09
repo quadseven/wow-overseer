@@ -17,6 +17,7 @@ from acore_world on the dev realm on 2026-10-06:
           condition (it is cast at a Summoning Circle), so it stays blocked.
 """
 
+import dataclasses
 import json
 import pathlib
 import unittest
@@ -457,6 +458,9 @@ class TheBlockersThatStay(unittest.TestCase):
     def test_a_target_on_another_map_is_named(self):
         m = who(quest_log={6062: 3}, carried=carried((ROD, 1)), map_id=EASTERN)
         move, blocked = classquest.next_move(taming(), m)
+        self.assertEqual((move.kind, move.to_map), (classquest.CROSS, 1))
+        walled = dataclasses.replace(m, no_crossing={1: "no transport"})
+        move, blocked = classquest.next_move(taming(), walled)
         self.assertIsNone(move)
         self.assertIn("another map", blocked[0])
 

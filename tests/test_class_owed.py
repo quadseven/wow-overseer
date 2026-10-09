@@ -107,9 +107,13 @@ class WhoOwes(unittest.TestCase):
         self.assertEqual(owed.blocker, classquest.GROUP)
 
     def test_a_permanent_variant_does_not_clear_a_group_whose_other_is_open(self):
-        # Fleshless: Ulag (permanent) in the log, the other chain across the sea.
+        # Fleshless: Ulag (permanent) in the log, the other chain across the sea
+        # (a crossing); with the crossing refused, a named MAP blocker.
         owed = classquest.owed(book(), fleshless())
         self.assertIsNotNone(owed)
+        self.assertEqual(owed.blocker, "")
+        wall = {KALIMDOR: "no transport"}
+        owed = classquest.owed(book(), fleshless(no_crossing=wall))
         self.assertEqual(owed.blocker, classquest.MAP)
 
 
@@ -515,20 +519,25 @@ class TheTankKit(unittest.TestCase):
 
 
 class TheCrossing(unittest.TestCase):
-    def test_a_quest_on_the_other_continent_names_it_and_the_missing_verb(self):
-        move, blocked = classquest.next_move(book(), fleshless(quest_log={}))
-        # Take Veteran Uzzek's chain at Kalimdor, or Dillinger's here.
-        self.assertTrue(move is not None or blocked)
+    def test_a_quest_on_the_other_continent_is_a_crossing_not_a_blocker(self):
         far = fleshless(quest_log={}, quests_done=frozenset({1818}), race=2)
         move, blocked = classquest.next_move(book(), far)
-        text = " ".join(blocked)
-        self.assertIn("Kalimdor", text)
-        self.assertIn(classquest.CROSSING_VERB, text)
+        self.assertEqual(move.kind, classquest.CROSS)
+        self.assertEqual(move.to_map, KALIMDOR)
+        self.assertEqual(blocked, [])
 
     def test_the_owed_row_carries_the_continent_to_reach(self):
         owed = classquest.owed(book(), fleshless())
         self.assertEqual(owed.to_map, KALIMDOR)
-        self.assertIn(classquest.CROSSING_VERB, owed.said)
+        self.assertEqual(owed.blocker, "")
+
+    def test_a_refused_crossing_leaves_the_named_blocker(self):
+        wall = {KALIMDOR: "crossing is off (Overseer.Cross.Enable)"}
+        owed = classquest.owed(book(), fleshless(no_crossing=wall))
+        self.assertEqual(owed.blocker, classquest.MAP)
+        self.assertEqual(owed.to_map, KALIMDOR)
+        self.assertIn("Kalimdor", owed.said)
+        self.assertIn("Overseer.Cross.Enable", owed.said)
 
     def test_far_map_is_only_for_the_two_continents(self):
         m = fleshless()
@@ -539,11 +548,10 @@ class TheCrossing(unittest.TestCase):
         self.assertEqual(classquest.far_map(m, [outland]), -1)
         self.assertEqual(classquest.far_map(fleshless(map_id=None), [spot]), -1)
 
-    def test_the_member_stays_held_while_it_waits_for_the_verb(self):
+    def test_the_member_is_held_by_its_crossing_row(self):
         result = class_plan([fleshless()])
-        self.assertEqual(class_steps(result), [])
+        self.assertEqual(len(class_steps(result)), 1)
         self.assertIn("Fleshless", result.owed)
-        self.assertTrue(any(classquest.CROSSING_VERB in n for n in result.notes))
 
 
 class TheWiring(unittest.TestCase):
