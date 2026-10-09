@@ -242,6 +242,20 @@ class TheHouseRules(unittest.TestCase):
 
 
 class TheServer(unittest.TestCase):
+    def test_a_worn_bonus_is_read_as_its_score(self):
+        # /api/upgrades sends a worn item's extras as {enchants, stats, score};
+        # the panel once printed the object as a number: "+NaN".
+        src = (APP / "views" / "_members.js").read_text(encoding="utf-8")
+        self.assertIn("function bonusScore(b)", src)
+        self.assertNotIn("score(s.worn.bonus)", src)
+
+    def test_a_name_outside_the_roster_reads_only_the_roster(self):
+        src = (APP / "views" / "member.js").read_text(encoding="utf-8")
+        self.assertIn(
+            'if (roster && !byName(roster.members).has(ctx.params.name)) return ["/api/v2/roster"];',
+            src,
+        )
+
     def test_nothing_still_points_at_the_classic_page(self):
         # Every section has its own view now: no stub, no link to /classic.
         self.assertFalse((APP / "views" / "_pending.js").exists())
