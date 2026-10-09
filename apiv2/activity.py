@@ -85,7 +85,8 @@ def build(name: str, commands, levels, level, now_at=None) -> dict:
         }
         for r in commands or ()
     ]
-    points = [[int(r["at"]), int(r["new_level"])] for r in levels or () if r.get("at")]
+    levels = [r for r in levels or () if r.get("at")]
+    points = [[int(r["at"]), int(r["new_level"])] for r in levels]
     return {
         "name": name,
         "commands": rows,

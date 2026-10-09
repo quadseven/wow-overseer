@@ -126,7 +126,8 @@ def fetch(ctx, name: str) -> dict | None:
                 ctx, cur, ASK_SQL, (name, roster.ASK_DAYS), "overseer_guild_ask"
             )
             cur.execute("SELECT UNIX_TIMESTAMP() AS now_at")
-            now_at = int(cur.fetchone()["now_at"])
+            row = cur.fetchone()
+            now_at = int(row["now_at"]) if row else 0
     finally:
         conn.close()
     return dict(

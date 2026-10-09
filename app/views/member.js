@@ -151,7 +151,8 @@ function gearTab(ctx, m) {
   const arm = read(ctx, "/api/armory/member" + n);
   const tr = read(ctx, "/api/v2/training" + n);
   const wait = pendingRead(arm, 3);
-  const card = wait || paperdoll(arm.data.member, arm.data.doll, { bare: true });
+  const data = arm.data || {};
+  const card = wait || paperdoll(data.member, data.doll, { bare: true });
   return html`${seg("Gear views", [{ label: "Paperdoll", href: href(m.name, "gear"), current: true }, { label: "Upgrades", href: href(m.name, "upgrades") }])}<div class="pf-gear">${card}</div><div class="pf-gear">${tr.data ? standing(tr.data, m.name) : pendingRead(tr, 1)}</div>`;
 }
 

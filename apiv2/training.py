@@ -50,13 +50,18 @@ _LOCK = threading.Lock()
 
 
 def _trainer_rows(ctx, cur, class_id: int) -> list:
+    """A class's trainer rows, read once. The lock guards the dict only: the
+    read itself runs outside it, so one class's first read never holds up a
+    request for another (two first reads of one class both read, and agree)."""
     with _LOCK:
-        if class_id in _TRAINERS:
-            return _TRAINERS[class_id]
-        rows = guarded(ctx, cur, TRAINER_SQL, (class_id,), "trainer_spell")
-        if rows:
-            _TRAINERS[class_id] = rows
-        return rows
+        kept = _TRAINERS.get(class_id)
+    if kept is not None:
+        return kept
+    rows = guarded(ctx, cur, TRAINER_SQL, (class_id,), "trainer_spell")
+    if rows:
+        with _LOCK:
+            _TRAINERS.setdefault(class_id, rows)
+    return rows
 
 
 def fetch(ctx, name: str) -> dict | None:

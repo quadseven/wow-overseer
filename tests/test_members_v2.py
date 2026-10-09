@@ -325,6 +325,23 @@ class TheRosterAndStuckReads(unittest.TestCase):
             "error: refused",
         )
 
+    def test_roster_and_stuck_take_no_name_and_answer_the_same_to_one(self):
+        # Neither read has a parameter to gate: who they answer about is the
+        # roster's families and their guilds, never the request.
+        for handler in (members.roster, members.stuck):
+            ctx, log = ctx_for(roster_rules(), server())
+            plain = handler({}, ctx)
+            asked = handler({"name": ["Stranger"], "guild": ["Other"]}, ctx)
+            self.assertEqual(plain, asked)
+            self.assertFalse(any("Stranger" in str(p) for _sql, p in log))
+
+    def test_a_null_snapshot_zone_falls_back_to_the_save(self):
+        snap = {"zone_id": None, "map_id": None}
+        self.assertEqual(members._first(snap, "zone_id", "zone"), None)
+        self.assertEqual(
+            members._first({"zone_id": None, "zone": 1519}, "zone_id", "zone"), 1519
+        )
+
     def test_no_roster_reads_nothing(self):
         ctx, log = ctx_for([], server(families={}))
         code, payload = members.roster({}, ctx)

@@ -155,7 +155,8 @@ def _read(ctx, names: list) -> dict:
                 "overseer_command",
             )
             cur.execute("SELECT UNIX_TIMESTAMP() AS now_at")
-            now_at = int(cur.fetchone()["now_at"])
+            row = cur.fetchone()
+            now_at = int(row["now_at"]) if row else 0
     finally:
         conn.close()
     return {
@@ -179,11 +180,16 @@ def place_words(name: str) -> str:
     return " ".join(out).strip()
 
 
+def _first(row: dict, *keys):
+    """The first of `keys` with a value: a present None does not count."""
+    return next((row[k] for k in keys if row.get(k) is not None), None)
+
+
 def zone_of(snap: dict | None, char: dict | None) -> str:
     """Where a member stands: the fresh snapshot's zone, else the last save's."""
     row = snap or char or {}
-    zone = row.get("zone_id", row.get("zone"))
-    map_id = row.get("map_id", row.get("map"))
+    zone = _first(row, "zone_id", "zone")
+    map_id = _first(row, "map_id", "map")
     if zone is None and map_id is None:
         return ""
     name = situation.zone_name(int(zone or 0), None if map_id is None else int(map_id))

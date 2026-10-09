@@ -27,6 +27,9 @@ const live = new Map();    // name -> {key, pane, viewer, held, loaded}
 let viewerReady = null;
 let resizeBound = false;
 
+// One listener for every stage: a released pointer lets each model turn again.
+window.addEventListener("pointerup", () => live.forEach((e) => { e.held = false; }));
+
 export function modelStage(m) {
   if (m.model) models.set(m.name, m.model);
   const p = m.portrait || {};
@@ -118,7 +121,6 @@ async function build(name, stage, model, key) {
   const entry = { key, pane: document.createElement("div"), viewer: null, held: false, loaded: false };
   entry.pane.className = "pd-model";
   entry.pane.addEventListener("pointerdown", () => { entry.held = true; });
-  window.addEventListener("pointerup", () => { entry.held = false; });
   live.set(name, entry);
   if (!(await ensureViewer()) || live.get(name) !== entry) return;
   try {
