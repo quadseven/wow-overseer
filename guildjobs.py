@@ -530,6 +530,11 @@ class Member:
     tree: str = ""
     # False for a dead member or a ghost; a dead member is walked nowhere.
     alive: bool = True
+    # The quest ids this member took lately (a `take quest:` row inside
+    # classquest.TAKE_SETTLE_MINUTES). The bags are read from the database, which
+    # trails the live game, so the item such a take handed over may not be in them
+    # yet; the planner trusts the take (classquest._use_blocker).
+    recently_taken: frozenset = frozenset()
     # Bag slots free in the backpack and the worn bags; None when unread, which
     # keeps no quest waiting on room (class_room_needed).
     free_slots: int | None = None
@@ -2948,6 +2953,7 @@ def class_step(
     early = _class_early(m, book, recent)
     if early is not None:
         return early
+    m = with_recent_takes(m, recent)
     move, blocked = _class_move(m, book, recent, hunts, now)
     note = "; ".join(blocked)
     if move is None:
@@ -3726,6 +3732,18 @@ def recent_from_rows(rows) -> tuple:
             )
         )
     return tuple(out)
+
+
+def with_recent_takes(m, recent):
+    """The member with the quests it took inside TAKE_SETTLE_MINUTES."""
+    taken = frozenset(
+        r.taken
+        for r in recent or ()
+        if r.name == m.name
+        and r.taken
+        and int(r.age_minutes) < classquest.TAKE_SETTLE_MINUTES
+    )
+    return replace(m, recently_taken=taken) if taken else m
 
 
 def _taken_of(command, status) -> int:
