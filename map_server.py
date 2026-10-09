@@ -4849,7 +4849,25 @@ MODEL_PREFIX = "/modelviewer/"
 # The operations app's files (index.html loads them) and how they are typed.
 APP_PREFIX = "/app/"
 _APP_DIR = os.path.realpath(os.path.join(HERE, "app"))
-_APP_FILE = re.compile(r"[a-z0-9_-]+(?:/[a-z0-9_-]+)*\.(js|css)")
+_APP_SEGMENT = re.compile(r"[a-z0-9_-]{1,64}")
+
+
+def _app_file_kind(rel: str) -> str:
+    """'js' or 'css' for a plain app path such as "views/now.js", else "".
+
+    Checked segment by segment (lower-case letters, digits, '-' and '_', no
+    dots but the one before the extension), so no dot segment, hidden file or
+    other kind of file can be named.
+    """
+    if len(rel) > 256:
+        return ""
+    stem, dot, ext = rel.rpartition(".")
+    if not dot or ext not in _APP_TYPES:
+        return ""
+    if not all(_APP_SEGMENT.fullmatch(seg) for seg in stem.split("/")):
+        return ""
+    return ext
+
 _APP_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8"}
 
 # What a /api/v2 handler is given: this server's own connection and module.
@@ -4858,7 +4876,7 @@ _V2_CONTEXT = _V2Context(connect=lambda: _connect(), server=sys.modules[__name__
 
 def _etag(body: bytes) -> str:
     """A strong validator for a response body: same bytes, same tag."""
-    return '"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+    return '"' + hashlib.sha256(body).hexdigest()[:24] + '"'
 
 
 def _fetch_decree() -> dict:
@@ -5401,12 +5419,12 @@ class Handler(BaseHTTPRequestHandler):
         served: no dot segments, no other kinds of file, nothing outside the
         directory. Anything else is a 404, never a read.
         """
-        m = _APP_FILE.fullmatch(rel)
-        full = os.path.realpath(os.path.join(HERE, "app", rel)) if m else ""
-        if not m or not full.startswith(_APP_DIR + os.sep) or not os.path.isfile(full):
+        kind = _app_file_kind(rel)
+        full = os.path.realpath(os.path.join(HERE, "app", rel)) if kind else ""
+        if not kind or not full.startswith(_APP_DIR + os.sep) or not os.path.isfile(full):
             self._send(404, "text/plain", b"not found")
             return
-        self._send_file(os.path.join("app", rel), _APP_TYPES[m.group(1)])
+        self._send_file(os.path.join("app", rel), _APP_TYPES[kind])
 
     def _v2(self, path: str, query: dict) -> None:
         """GET /api/v2/... - the reads the operations app adds (apiv2/)."""

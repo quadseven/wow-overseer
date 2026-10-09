@@ -841,6 +841,17 @@ def build_guild(
         ),
         "supply": _supply_card(lineup, members, worn_rows, group, supply),
         "preraid": preraid,
+        "gates": _gates(min_level),
+    }
+
+
+def _gates(min_level) -> dict:
+    """The two bars the raider rows are held to, as numbers, so a page can
+    count who clears each one: the instance's own lowest level (None when the
+    realm did not say) and the pre-raid gear share."""
+    return {
+        "min_level": int(min_level) if min_level else None,
+        "gear_share": GEAR_CONVENTION,
     }
 
 
