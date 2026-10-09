@@ -3299,11 +3299,14 @@ def _class_early(m, book, recent):
     """The result of class_step when it is settled before any move is read: a
     member that cannot be given a move now (nothing, no note), or a stranded
     death knight's hearth recall. None when the move is to be read."""
-    if not _class_ready(m, book):
-        return None, "", ""
-    recall = stranded_recall_step(m, recent)
+    # The recall is asked even in a fight (2026-10-08): a knight stranded on the
+    # ground fights almost without a pause, the module refuses the cast for the
+    # fight at no cost, and the ask that lands is the one in a gap.
+    recall = stranded_recall_step(m, recent) if book is not None else None
     if recall is not None:
         return recall, recall.said, ""
+    if not _class_ready(m, book):
+        return None, "", ""
     return None
 
 
@@ -3328,8 +3331,8 @@ def stranded_recall_step(m, recent):
     if not (
         int(m.class_id) == classquest.DEATH_KNIGHT
         and m.map_id == classquest.DEATH_KNIGHT_START_MAP
+        and m.online
         and m.alive
-        and not m.in_combat
     ):
         return None
     stalled = [
