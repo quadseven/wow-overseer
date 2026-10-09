@@ -14,7 +14,11 @@ BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 
 class TheStrandedLine(unittest.TestCase):
     def body(self):
-        return BRIDGE.split("def _log_guild_job_plan", 1)[1].split("\n    def ", 1)[0]
+        return BRIDGE.split("def _log_stranded_knights", 1)[1].split("\n    def ", 1)[0]
+
+    def test_the_plan_log_calls_it(self):
+        called = BRIDGE.split("def _log_guild_job_plan", 1)[1].split("\n    def ", 1)[0]
+        self.assertIn("self._log_stranded_knights(members, plan)", called)
 
     def test_the_plan_log_names_a_stranded_knight(self):
         body = self.body()

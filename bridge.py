@@ -14292,6 +14292,22 @@ class Bridge(discord.Client):
                 _fetch_gear_vendors, by_name[name], guildjobs.GUILD_GEAR_VENDOR_YARDS))
         return offers
 
+    def _log_stranded_knights(self, members, plan):
+        """A death knight in its starting zone is a stranded one (2026-10-08): say
+        what the planner decided for it and what it noted, every pass, so a pass
+        that gives it no step is explained."""
+        for m in members:
+            if not (m.online and int(m.class_id) == classquest.DEATH_KNIGHT
+                    and m.map_id == classquest.DEATH_KNIGHT_START_MAP):
+                continue
+            steps = [s.action for s in plan.steps if s.holder == m.name]
+            notes = [n for n in plan.notes if m.name in n]
+            log.info("guild jobs: stranded %s: level %d, combat %s, free slots %s, "
+                     "quests taken lately %s; plan line %r; steps %s; notes %s",
+                     m.name, m.level, m.in_combat, m.free_slots,
+                     sorted(getattr(m, "recently_taken", ())),
+                     plan.lines.get(m.name, ""), steps or "none", notes or "none")
+
     def _log_guild_job_plan(self, members, plan):
         for guild in sorted({m.guild for m in members}):
             crew = [m for m in members if m.guild == guild]
@@ -14304,19 +14320,7 @@ class Bridge(discord.Client):
                                if any(m.name == n for m in crew)) or "none")
         for line in guildjobs.focus_lines(plan):
             log.info("guild jobs: %s", line)
-        # A death knight in its starting zone is a stranded one (2026-10-08): say
-        # what the planner decided for it and what it noted, every pass, so a
-        # pass that gives it no step is explained.
-        for m in members:
-            if (m.online and int(m.class_id) == classquest.DEATH_KNIGHT
-                    and m.map_id == classquest.DEATH_KNIGHT_START_MAP):
-                steps = [s.action for s in plan.steps if s.holder == m.name]
-                notes = [n for n in plan.notes if m.name in n]
-                log.info("guild jobs: stranded %s: level %d, combat %s, free slots %s, "
-                         "quests taken lately %s; plan line %r; steps %s; notes %s",
-                         m.name, m.level, m.in_combat, m.free_slots,
-                         sorted(getattr(m, "recently_taken", ())),
-                         plan.lines.get(m.name, ""), steps or "none", notes or "none")
+        self._log_stranded_knights(members, plan)
 
     def _start_guild_job_steps(self, plan, now, cap, sale_walks):
         started = 0
