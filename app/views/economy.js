@@ -240,7 +240,7 @@ ${g ? fold("ladder|how", "How this is ordered, and what cannot be asked", html`<
 
 function nobody(fam) {
   const gaps = fam.gaps || [];
-  const lines = Array.from(new Set(gaps.map((x) => x.line.replace(/^[^:]+:\s*/, ""))));
+  const lines = Array.from(new Set(gaps.map((x) => String(x.line || "").replace(/^[^:]+:\s*/, "")).filter(Boolean)));
   const body = gaps.length
     ? html`<div class="eco-chips">${gaps.map((x) => html`<span class="tag tag-warn eco-gap">${cap(x.name)}</span>`)}<span class="eco-sub muted">Nobody in the guild holds these, so nothing they make can come from inside it.</span></div>${lines.map((l) => html`<p class="eco-why">${sentence(l)}</p>`)}`
     : html`<p class="eco-sub">Every trade has somebody in the guild who holds it.</p>`;
