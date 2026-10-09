@@ -1,0 +1,136 @@
+/* Economy: bags and gold, auction house, trades, skill levels, guild bank. */
+
+:root { --eco-gold: #f2c94c; --eco-gold-bar: #c9a13a; }
+:root[data-theme="light"] { --eco-gold: #7a5c00; --eco-gold-bar: #b08a1e; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { --eco-gold: #7a5c00; --eco-gold-bar: #b08a1e; }
+}
+
+.eco { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.eco .accent { color: var(--color-accent-300); }
+.eco-gold { color: var(--eco-gold); font-variant-numeric: tabular-nums; }
+.eco-name { font-weight: 500; }
+.eco-line { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.eco-meta { font-size: var(--fs-1); color: var(--color-neutral-400); text-wrap: pretty; }
+.eco-sub { font-size: var(--fs-2); color: var(--color-neutral-300); text-wrap: pretty; }
+.eco-note { font-size: var(--fs-1); color: var(--color-neutral-500); max-width: 72ch; text-wrap: pretty; }
+.eco-why { font-size: var(--fs-2); color: var(--color-neutral-300); max-width: 72ch; margin: 6px 0; text-wrap: pretty; }
+.eco-trade { font-size: var(--fs-3); font-weight: 500; }
+.eco-trade-s { display: flex; flex-direction: column; font-weight: 500; }
+.eco-trade-s .muted { font-weight: 400; font-size: var(--fs-1); }
+
+/* A thin usage bar: the fill width is the server's percent. */
+.eco-bar { flex: 1; display: block; height: 6px; border-radius: 3px; background: var(--color-neutral-800); overflow: hidden; min-width: 40px; }
+.eco-bar > span { display: block; height: 100%; background: var(--color-accent); }
+.eco-bar.warn > span { background: var(--warn); }
+.eco-bar.gold > span { background: var(--eco-gold-bar); }
+.eco-bar.accent > span { background: var(--color-accent-600); }
+
+/* ---- bags and gold ---- */
+.eco-bags { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
+.eco-bag { padding: 10px 12px; gap: 5px; }
+.eco-fill { display: flex; gap: 8px; align-items: center; font-size: var(--fs-1); color: var(--color-accent-300); }
+.eco-fill > span:last-child { white-space: nowrap; flex-shrink: 0; }
+.eco-list { padding: 4px 0; gap: 0; max-width: 900px; }
+.eco-list-title { padding: 10px 14px; font-size: var(--fs-2); font-weight: 500; }
+.eco-list .eco-note { padding: 8px 14px; }
+.eco-route { display: grid; grid-template-columns: 110px minmax(0, 0.8fr) minmax(0, 1.6fr); gap: 10px; padding: 9px 14px; font-size: var(--fs-2); box-shadow: 0 -1px 0 var(--color-neutral-900); }
+.eco-route-empty { padding: 9px 14px; font-size: var(--fs-2); }
+.eco-totals { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
+.eco-totals .card { gap: 2px; }
+.eco-k { font-size: var(--fs-1); color: var(--color-neutral-400); }
+.eco-v { font-size: var(--fs-4); font-weight: 500; }
+.eco-rich {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(60px, 1.4fr) 96px; gap: 12px; align-items: center;
+  padding: 9px 14px; min-height: 44px; text-decoration: none; color: var(--color-text); font-size: var(--fs-2);
+  box-shadow: 0 -1px 0 var(--color-neutral-900);
+}
+.eco-rich:hover { background: var(--color-neutral-900); color: var(--color-text); }
+.eco-rich .num { text-align: right; }
+
+/* ---- auction house: a table on desktop, cards on phone ---- */
+.eco-auc-table { padding: 4px 6px; max-width: 980px; }
+.eco-auc-cards { display: none; flex-direction: column; gap: 8px; }
+.eco-auc-cards .card { padding: 10px 12px; gap: 3px; }
+@media (max-width: 759.98px) {
+  .eco-auc-table { display: none; }
+  .eco-auc-cards { display: flex; }
+  .eco-route { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
+
+/* ---- trades ---- */
+.eco-head { display: flex; flex-direction: column; gap: 8px; }
+.eco-headline { font-size: var(--fs-3); font-weight: 500; text-wrap: pretty; }
+.eco-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.eco-pick { min-height: 44px; padding: 0 12px; color: var(--color-neutral-300); }
+.eco-pick[aria-current="true"] { color: var(--color-accent-200); }
+.eco-profs { display: grid; gap: 10px; align-items: start; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); }
+.eco-prof { gap: 8px; }
+.eco-prof.ready { box-shadow: inset 0 0 0 1px var(--color-accent-800); }
+.eco-prof .eco-bar { flex: none; height: 5px; }
+.eco-groups { display: flex; flex-direction: column; gap: 6px; }
+.eco-group-link, .eco-group-empty, .eco-fold > summary {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 44px;
+  padding: 9px 12px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--color-neutral-800);
+  font-size: var(--fs-2); font-weight: 500; color: var(--color-text); text-decoration: none;
+}
+.eco-group-link:hover { background: var(--color-neutral-900); color: var(--color-text); }
+.eco-group-empty { color: var(--color-neutral-400); }
+.eco-fold > summary { cursor: pointer; list-style: none; }
+.eco-fold > summary::-webkit-details-marker { display: none; }
+.eco-fold > summary::after { content: "\25B8"; color: var(--color-neutral-500); margin-left: 4px; }
+.eco-fold[open] > summary::after { content: "\25BE"; }
+.eco-fold > summary > span:first-child { margin-right: auto; }
+.eco-crafts { display: flex; flex-direction: column; padding: 0 12px 8px; }
+.eco-crafts .eco-fold { margin-top: 6px; }
+.eco-craft { display: flex; flex-direction: column; gap: 0; padding: 7px 0; box-shadow: 0 -1px 0 var(--color-neutral-900); font-size: var(--fs-2); }
+.eco-who { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; font-size: var(--fs-1); color: var(--color-neutral-400); }
+/* The tap target is 44px tall; the pill inside it is what shows. */
+.eco-namechip { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; color: var(--color-neutral-200); }
+.eco-namechip > span { padding: 2px 8px; border-radius: 14px; box-shadow: inset 0 0 0 1px var(--color-neutral-700); }
+.eco-namechip:hover { color: var(--color-text); }
+.eco-namechip:hover > span { box-shadow: inset 0 0 0 1px var(--color-accent); }
+.eco-shut { align-self: flex-start; min-height: 44px; display: inline-flex; align-items: center; font-size: var(--fs-2); }
+.eco-pair { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 12px; padding: 9px 14px; font-size: var(--fs-2); box-shadow: 0 -1px 0 var(--color-neutral-900); }
+.eco-pair-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--color-neutral-300); }
+.eco-pair .eco-fold > summary { font-weight: 400; color: var(--color-neutral-300); }
+.eco-rung { display: grid; grid-template-columns: 28px minmax(0, 1.1fr) minmax(0, 1fr) 80px; gap: 10px; align-items: center; padding: 9px 14px; min-height: 44px; font-size: var(--fs-2); box-shadow: 0 -1px 0 var(--color-neutral-900); }
+.eco-rung .num:last-child { text-align: right; }
+.eco-gap { font-size: var(--fs-2); padding: 5px 12px; }
+.eco-recipe { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; min-width: 0; }
+.eco-recipe .item { max-width: 100%; }
+.eco-dungeons { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
+.eco-dungeon { gap: 4px; }
+.eco .section > .eco-fold, .eco .section > .eco-list { max-width: 900px; }
+@media (max-width: 759.98px) {
+  .eco-pair { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .eco-rung { grid-template-columns: 24px minmax(0, 1fr) 72px; }
+  .eco-rung > span:nth-child(3) { grid-column: 2 / 4; }
+}
+
+/* ---- skill levels ---- */
+.eco-skills { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
+.eco-skill { display: grid; grid-template-columns: minmax(72px, 1fr) minmax(40px, 1.2fr) 60px; gap: 8px; align-items: center; min-height: 44px; font-size: var(--fs-2); }
+.eco-skill .num { text-align: right; color: var(--color-neutral-300); }
+.eco-skills .eco-fold > summary { font-weight: 400; color: var(--color-neutral-300); margin-top: 4px; }
+
+/* ---- guild bank ---- */
+.eco-vault { font-size: var(--fs-3); }
+.eco-btabs { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); }
+.eco-btab { gap: 6px; min-height: 44px; }
+.eco-btab[aria-current="true"] { box-shadow: inset 0 0 0 1px var(--color-accent); }
+.eco-grid { display: grid; grid-template-columns: repeat(auto-fill, 44px); gap: 5px; max-width: 720px; }
+.eco-cell { position: relative; width: 44px; height: 44px; }
+.eco-cell .item {
+  width: 44px; height: 44px; border-radius: 6px; overflow: hidden; background: var(--color-neutral-900);
+  box-shadow: inset 0 0 0 1px var(--ring, var(--color-neutral-700)); text-decoration: none; justify-content: center;
+}
+.eco-cell .item img, .eco-cell .item .noicon { width: 40px; height: 40px; border-radius: 4px; box-shadow: none; }
+.eco-cell .item .noicon { font-size: var(--fs-1); }
+.eco-cell .item .nm {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+.eco-cell .ct {
+  position: absolute; right: 3px; bottom: 1px; font-size: var(--fs-0); font-weight: 500; color: #e9e9ed;
+  text-shadow: 0 0 3px #000, 0 0 2px #000; pointer-events: none;
+}
