@@ -24917,6 +24917,14 @@ def _class_quest_state(log_rows, done_rows) -> tuple:
     return log_of, done_of, progress_of
 
 
+def _member_supplies(supplies, guid) -> tuple:
+    """(food units, drink units) one member carries; (None, None) while the
+    bags are unread, which buys no food or drink (restsupply.py)."""
+    if supplies is None:
+        return None, None
+    return supplies.get(guid, (0, 0))
+
+
 def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible,
                                 quest_state=({}, {}, {}), free_slots=None, supplies=None):
     members, crafters = [], {}
@@ -24950,9 +24958,8 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
                                    r.get(raidroles.KEY)),
             alive=guildrun.alive_or_unread(r),
             free_slots=(free_slots or {}).get(name),
-            # Unread bags (None) buy no food or drink (restsupply.py).
-            food=None if supplies is None else supplies.get(guid, (0, 0))[0],
-            drink=None if supplies is None else supplies.get(guid, (0, 0))[1],
+            food=_member_supplies(supplies, guid)[0],
+            drink=_member_supplies(supplies, guid)[1],
             home_map=_row_int(r, "home_map"),
             home_zone=_row_int(r, "home_zone")))
     return members, crafters

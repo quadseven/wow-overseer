@@ -2230,7 +2230,7 @@ def plan(
     trades = cloth_trades(split_trades(members, tailors), tailors)
     trades.update(focus_trades(members, focus))
     tally = _focus_tally(members, focus)
-    steps, lines, notes, helps, yields = [], {}, [], [], []
+    steps, lines, notes, helps = [], {}, [], []
     # One counter per allowance, each keyed by guild (_allowance).
     counters = {
         "jobs": {},
@@ -2270,13 +2270,10 @@ def plan(
             far,
             level_room,
             int((still or {}).get(m.name, 0)),
-            (supply or {}).get(m.name),
+            _offer_for(supply, m.name),
         )
         lines[m.name] = doing
         helps += class_helps(m, classes, hunts, now, recent)
-        yielded = class_yield(m, recent) if _class_ready(m, classes) else ""
-        if yielded:
-            yields.append(yielded)
         if note:
             notes.append(note)
         if step is None:
@@ -2306,7 +2303,24 @@ def plan(
         helps=tuple(helps),
         owed=owed,
         released=released,
-        yields=tuple(yields),
+        yields=class_yields(members, classes, recent),
+    )
+
+
+def _offer_for(offers, name):
+    """One member's entry of a pass's `name -> offer` map, None when unread."""
+    return (offers or {}).get(name)
+
+
+def class_yields(members, classes, recent) -> tuple:
+    """One line per member whose class step yields to levelling this pass
+    (class_yield): the members a class step would be read for."""
+    return tuple(
+        line
+        for line in (
+            class_yield(m, recent) for m in members if _class_ready(m, classes)
+        )
+        if line
     )
 
 
@@ -3404,9 +3418,6 @@ def class_step(
     early = _class_early(m, book, recent)
     if early is not None:
         return early
-    yielded = class_yield(m, recent)
-    if yielded:
-        return None, "", yielded
     m = with_recent_takes(m, recent)
     move, blocked = _class_move(m, book, recent, hunts, now)
     note = "; ".join(blocked)
@@ -3883,6 +3894,10 @@ def _class_early(m, book, recent):
         return recall, recall.said, ""
     if not _class_ready(m, book):
         return None, "", ""
+    # A class quest that keeps failing yields to levelling (class_yield).
+    yielded = class_yield(m, recent)
+    if yielded:
+        return None, "", yielded
     return None
 
 

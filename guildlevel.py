@@ -447,30 +447,43 @@ def bind_inn(level, race, map_id, zone_id, x, y, home_map, home_zone, bands, inn
     (`fits`), where that hub has an inn on the member's map (`hub_inns`). Of
     several such hubs in the zone, the nearest inn."""
     team = side_of(race)
-    if not team or map_id is None or not zone_id or home_map is None or not home_zone:
+    if not _bind_due(team, level, race, map_id, zone_id, home_map, home_zone, bands):
         return None, None
+    return _zone_inn(team, map_id, zone_id, x, y, inns)
+
+
+def _bind_due(team, level, race, map_id, zone_id, home_map, home_zone, bands) -> bool:
+    """Whether a member of `team` is bound where it has outgrown and stands in
+    a zone whose band fits its level; False when anything is unread."""
+    if not team or map_id is None or not zone_id or home_map is None:
+        return False
     side_bands = (bands or {}).get(team, {})
-    if not outgrown(level, race, home_map, home_zone, side_bands):
-        return None, None
-    if not fits(side_bands.get(int(zone_id)), level):
-        return None, None
+    if not home_zone or not outgrown(level, race, home_map, home_zone, side_bands):
+        return False
+    return fits(side_bands.get(int(zone_id)), level)
+
+
+def _zone_inn(team, map_id, zone_id, x, y, inns):
+    """(inn, hub) of the nearest inn of `team`'s friendly hubs in the zone, on
+    the member's map, or (None, None)."""
     best = None
     for hub in hubs_from(team, map_id, zone_id):
-        if hub.zone_id != int(zone_id) or not hub.friendly:
-            continue
         inn = (inns or {}).get(hub.key)
-        if inn is None or inn.map_id != int(map_id):
+        if hub.zone_id != int(zone_id) or not hub.friendly or inn is None:
             continue
-        yards = (
-            math.hypot(float(x) - inn.x, float(y) - inn.y)
-            if x is not None and y is not None
-            else 0.0
-        )
-        if best is None or (yards, inn.spawn) < best[0]:
-            best = ((yards, inn.spawn), inn, hub)
-    if best is None:
-        return None, None
-    return best[1], best[2]
+        if inn.map_id != int(map_id):
+            continue
+        key = (_yards_to(x, y, inn), inn.spawn)
+        if best is None or key < best[0]:
+            best = (key, inn, hub)
+    return (best[1], best[2]) if best else (None, None)
+
+
+def _yards_to(x, y, spawn) -> float:
+    """Yards from (x, y) to a spawn, 0 when the position is unread."""
+    if x is None or y is None:
+        return 0.0
+    return math.hypot(float(x) - spawn.x, float(y) - spawn.y)
 
 
 def bind_said(name, level, inn, hub, home_zone) -> str:
