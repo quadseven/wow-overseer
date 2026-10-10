@@ -7,12 +7,12 @@ Everything here is read from the realm's own tables, at the moment of the
 read, and nothing is written:
 
   members       characters joined to guild_member: level, class, online, and
-                ghost. Both are read as the roster (members.py) reads them: a
-                snapshot written in the last minute means online, and its
-                health says dead or ghost; offline, the ghost flag in
-                characters.playerFlags. The saved flag alone lags a member in
-                the world, so the guild page once showed no ghosts while the
-                roster showed several.
+                ghost. Online and ghost are presence.of's reading, the one the
+                roster and the gear table serve too: online is a snapshot
+                written in the last minute, and ghost is a corpse or a
+                released spirit. The saved online column is not read: it
+                lagged the world, and this page once counted members online
+                that the roster did not.
   gaining       members with a level change in the last 24 hours
                 (overseer_level). Experience itself is not recorded, so
                 "gaining" means a level, not a kill.
@@ -42,8 +42,7 @@ import statistics
 import classquest
 import council
 import guildrun
-from apiv2 import _allow
-from apiv2.members import SNAP_SQL, life_of
+from apiv2 import _allow, presence
 
 BLOCKED_HOURS = 2
 TOP_KILLERS = 5
@@ -56,8 +55,7 @@ MAX_ROWS = 5000
 _GUILD_SQL = "SELECT guildid, name FROM guild WHERE name = %s LIMIT 1"
 _NOW_SQL = "SELECT UNIX_TIMESTAMP() AS now"
 _MEMBERS_SQL = (
-    "SELECT c.guid, c.name, c.level, c.class, c.race, c.online, "
-    "c.playerFlags AS flags, c.zone FROM characters c "
+    "SELECT c.guid, c.name, c.level, c.class, c.race, c.zone FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid WHERE gm.guildid = %s LIMIT %s"
 )
 _ROSTER_SQL = (
@@ -151,30 +149,22 @@ def family_of(names: set, roster_rows: list) -> str:
     return counts.most_common(1)[0][0] if counts else ""
 
 
-def member_rows(rows: list, snaps: dict | None = None) -> list:
-    """Each member, online and ghost as the roster reads them (life_of)."""
-    snaps = snaps or {}
+def member_rows(rows: list, readings: dict) -> list:
+    """Each member, online and ghost as presence.of read them. Ghost is a
+    corpse or a released spirit: either is out of play."""
     out = []
     for r in sorted(rows, key=lambda r: r["name"]):
-        snap = snaps.get(r["name"])
+        reading = readings.get(r["name"]) or {}
         out.append(
             {
                 "name": r["name"],
                 "level": int(r["level"] or 0),
                 "class": class_name(r["class"]),
-                "online": snap is not None or bool(r["online"]),
-                "ghost": life_of(snap, r) in ("dead", "ghost"),
+                "online": bool(reading.get("online")),
+                "ghost": reading.get("life") in ("dead", "ghost"),
             }
         )
     return out
-
-
-def _snaps(cur, names: list) -> dict:
-    """The last minute's snapshot of each member in the world, by name."""
-    if not names:
-        return {}
-    found = _all(cur, SNAP_SQL.format(holes=_holes(len(names))), tuple(names))
-    return {r["name"]: r for r in found}
 
 
 def place(map_id, zone, zones: dict, maps: dict) -> str:
@@ -391,11 +381,11 @@ def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
     }
 
 
-def build(cur, row: dict, zones: dict, maps: dict) -> dict:
+def build(ctx, cur, row: dict, zones: dict, maps: dict) -> dict:
     gid = int(row["guildid"])
     now = int(_all(cur, _NOW_SQL)[0]["now"])
     raw = _all(cur, _MEMBERS_SQL, (gid, MAX_MEMBERS))
-    members = member_rows(raw, _snaps(cur, [r["name"] for r in raw]))
+    members = member_rows(raw, presence.of(ctx, cur, [r["name"] for r in raw]))
     names = [m["name"] for m in members]
     classes = {m["name"]: m["class"] for m in members}
     faction = faction_of(r["race"] for r in raw)
@@ -439,7 +429,7 @@ def guild(query: dict, ctx) -> tuple[int, dict]:
             found = _all(cur, _GUILD_SQL, (name,))
             if not found:
                 return 404, {"error": "no such guild", "guild": name}
-            return 200, build(cur, found[0], zones, maps)
+            return 200, build(ctx, cur, found[0], zones, maps)
     finally:
         conn.close()
 

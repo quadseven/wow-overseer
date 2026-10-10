@@ -24,6 +24,7 @@ import pymysql
 
 import achievements
 import apiv2
+from apiv2 import presence as v2_presence
 from apiv2._context import Context as _V2Context
 import agenda
 import armory
@@ -1378,15 +1379,12 @@ def _is_family_guildmate(name: str, family_names: list[str]) -> bool:
 # gear table). The guilds are the ones the roster's names are in, as the
 # database reports them, exactly as _LINEUP_GUILD binds them; nothing from the
 # request reaches it. A member wearing nothing still comes back once, with a
-# NULL slot. `dead` is the world's own fresh reading (a snapshot row written
-# in the last minute with no health left); the `corpse` table is not used,
-# because a corpse row outlives the death until the next save.
+# NULL slot. Online and life are not read here: _fetch_guild_gear adds
+# apiv2.presence's reading, the one the roster and the Guild page serve.
 # S608 below: the one concatenation is the talents column, a module constant.
 _GUILD_GEAR = (
     "SELECT g.name AS guild_name, c.name, c.level, c.class AS class_id, "  # noqa: S608
-    "c.money, c.online, "
-    "EXISTS(SELECT 1 FROM overseer_snapshot s WHERE s.guid = c.guid "
-    "AND s.health = 0 AND s.updated_at > NOW() - INTERVAL 60 SECOND) AS dead, "
+    "c.money, "
     + raidroles.TALENTS_COLUMN + ", "
     "ci.slot, it.ItemLevel AS item_level, it.name AS item_name, "
     "it.entry AS item_entry, it.Quality AS item_quality "
@@ -1402,7 +1400,8 @@ _GUILD_GEAR = (
 
 
 def _fetch_guild_gear() -> list[dict]:
-    """The rows guildgear.build reads, for every family guild at once."""
+    """The rows guildgear.build reads, for every family guild at once, each
+    with its member's `online` and `life` from apiv2.presence."""
     names = _all_roster_names()
     if not names:
         return []
@@ -1414,9 +1413,14 @@ def _fetch_guild_gear() -> list[dict]:
             # the length of a constant list.
             cur.execute(_GUILD_GEAR.format(  # noqa: S608
                 holes=holes, slots=len(armory.EQUIPPED_SLOTS)), tuple(names))
-            return list(cur.fetchall())
+            rows = list(cur.fetchall())
+            readings = v2_presence.of(_V2_CONTEXT, cur, [r["name"] for r in rows])
     finally:
         conn.close()
+    for r in rows:
+        reading = readings[r["name"]]
+        r["online"], r["life"] = reading["online"], reading["life"]
+    return rows
 
 
 def _fetch_armory(names: list[str] | None = None) -> dict:

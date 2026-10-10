@@ -51,9 +51,10 @@ def _slot_name(slot):
 def members_from_rows(rows: list[dict]) -> list[dict]:
     """One row per member, from one row per (member, worn slot).
 
-    Each row carries guild_name, name, level, class_id, money, online, dead,
-    talent_spells, and slot/item_level/item_name/item_entry/item_quality for one worn item
-    (all None for a member wearing nothing). Sorted worst first (`worst_first`).
+    Each row carries guild_name, name, level, class_id, money, talent_spells,
+    online and life (apiv2.presence's reading, added by the read), and
+    slot/item_level/item_name/item_entry/item_quality for one worn item (all
+    None for a member wearing nothing). Sorted worst first (`worst_first`).
     """
     by_name: dict = {}
     for r in rows or ():
@@ -110,7 +111,8 @@ def _strip(worn: dict) -> list:
 
 
 def _presence(row: dict) -> str:
-    if row.get("dead"):
+    """The word the table has always served, from the presence reading."""
+    if row.get("life") == "dead":
         return "dead"
     return "online" if row.get("online") else "offline"
 
@@ -146,6 +148,8 @@ def _member(row: dict, worn: dict) -> dict:
         "weakest": _weakest(worn),
         "gold": wealth.coins(row.get("money")),
         "presence": _presence(row),
+        "online": bool(row.get("online")),
+        "life": row.get("life"),
         "flags": _flags(weapon, len(empty_slots), int(row.get("level") or 0)),
         "strip": _strip(worn),
     }

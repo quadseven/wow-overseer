@@ -29,11 +29,12 @@ never written here:
 `since` is None when the blocker is known but nothing recorded when it began;
 the page says "since not measured" and never guesses.
 
-GHOSTS. A fresh snapshot (written in the last minute) with no health is a
-corpse ("dead"); with exactly one point of health it is a released spirit
-("ghost"): the core sets a ghost's health to 1 on release. Offline, the
-world's last save says it through the ghost player flag. A member offline
-with no flag has no reading ("life": None).
+ONLINE AND GHOSTS are presence.of's reading, the same one the Guild page and
+the gear table serve: online is a snapshot written in the last minute, and
+`life` is "alive", "dead" (a corpse), "ghost" (a released spirit) or None (an
+offline member the save says nothing about). Where a member stands and whether
+it is fighting come from that snapshot, read only for the members it reads as
+online.
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ import nowstatus
 import situation
 from panel import _CLASS_NAMES, _RACE_NAMES
 
+from . import presence
 from ._scope import guarded, holes
 
 # A class quest ask newer than this means the blocker still stands: the bridge
@@ -62,17 +64,15 @@ HOLD_STUCK_SECONDS = 30 * 60
 # Doings that are not a hold: out of play, or a walk that is still walking.
 NOT_HOLDS = frozenset({"Logged out", "Dead", "Fighting", "Idle"})
 WALKING = "to get there"
-# The player flag a released spirit carries (PLAYER_FLAGS_GHOST).
-GHOST_FLAG = 0x10
-
 CHARS_SQL = (
-    "SELECT name, race, gender, class AS class_id, level, online, zone, map, "
-    "playerFlags AS flags FROM characters WHERE name IN ({holes})"
+    "SELECT name, race, gender, class AS class_id, level, zone, map "
+    "FROM characters WHERE name IN ({holes})"
 )
-SNAP_SQL = (
-    "SELECT name, zone_id, map_id, health, max_health, in_combat "
-    "FROM overseer_snapshot WHERE name IN ({holes}) "
-    "AND updated_at > NOW() - INTERVAL 60 SECOND"
+# Where the members presence.of reads as online stand. Freshness is that
+# reading's rule, so this read does not restate it.
+WHERE_SQL = (
+    "SELECT name, zone_id, map_id, in_combat FROM overseer_snapshot "
+    "WHERE name IN ({holes})"
 )
 # The newest guild job each member was given, for a member whose step the
 # now-step feed cannot name: guildjobs writes its rows with the source
@@ -110,7 +110,15 @@ def fetch(ctx) -> dict:
     if not names:
         names = list(server.family.roster())
         families = {names[0]: names} if names else {}
-    rows = {"guild": [], "chars": [], "snaps": [], "asks": [], "jobs": [], "now_at": 0}
+    rows = {
+        "guild": [],
+        "chars": [],
+        "readings": {},
+        "snaps": [],
+        "asks": [],
+        "jobs": [],
+        "now_at": 0,
+    }
     if names:
         rows = _read(ctx, names)
     everyone = sorted(set(names) | {r["name"] for r in rows["guild"]})
@@ -137,9 +145,17 @@ def _read(ctx, names: list) -> dict:
             chars = guarded(
                 ctx, cur, CHARS_SQL.format(holes=h), tuple(everyone), "characters"
             )
-            snaps = guarded(
-                ctx, cur, SNAP_SQL.format(holes=h), tuple(everyone), "overseer_snapshot"
-            )
+            readings = presence.of(ctx, cur, everyone)
+            online = [n for n in everyone if readings[n]["online"]]
+            snaps = []
+            if online:
+                snaps = guarded(
+                    ctx,
+                    cur,
+                    WHERE_SQL.format(holes=holes(len(online))),
+                    tuple(online),
+                    "overseer_snapshot",
+                )
             asks = guarded(
                 ctx,
                 cur,
@@ -162,6 +178,7 @@ def _read(ctx, names: list) -> dict:
     return {
         "guild": guild,
         "chars": chars,
+        "readings": readings,
         "snaps": snaps,
         "asks": asks,
         "jobs": jobs,
@@ -194,20 +211,6 @@ def zone_of(snap: dict | None, char: dict | None) -> str:
         return ""
     name = situation.zone_name(int(zone or 0), None if map_id is None else int(map_id))
     return place_words(name)
-
-
-def life_of(snap: dict | None, char: dict | None) -> str | None:
-    """'alive', 'dead' (a corpse), 'ghost' (a released spirit), or None."""
-    if snap is not None:
-        health = int(snap.get("health") or 0)
-        if health <= 0:
-            return "dead"
-        if health == 1 and int(snap.get("max_health") or 0) > 1:
-            return "ghost"
-        return "alive"
-    if char and int(char.get("flags") or 0) & GHOST_FLAG:
-        return "ghost"
-    return None
 
 
 def job_step(row: dict | None) -> str:
@@ -292,11 +295,11 @@ def hold_blocker(now: dict, now_at: int) -> dict | None:
 # -------------------------------------------------------------------- build --
 
 
-def _presence(snap: dict | None, life: str | None) -> dict:
+def _presence(reading: dict, snap: dict | None) -> dict:
     """What nowstatus.compose reads about a character's presence."""
     return {
-        "present": snap is not None,
-        "condition": "dead" if life == "dead" else "ok",
+        "present": reading["online"],
+        "condition": "dead" if reading["life"] == "dead" else "ok",
         "combat": bool(snap and snap.get("in_combat")),
     }
 
@@ -340,15 +343,21 @@ def _doing(now: dict, job: dict | None) -> dict:
     }
 
 
+# A member presence.of was not asked about: nothing is known.
+UNREAD = {"online": False, "life": None, "fresh_at": None}
+
+
 def _member(name, row, ctx_rows) -> dict:
     char = ctx_rows["chars"].get(name) or {}
-    snap = ctx_rows["snaps"].get(name)
-    life = life_of(snap, char)
+    reading = ctx_rows["readings"].get(name) or UNREAD
+    snap = ctx_rows["snaps"].get(name) if reading["online"] else None
     now = nowstatus.compose(
-        _presence(snap, life), ctx_rows["facts"].get(name), ctx_rows["now_at"] or None
+        _presence(reading, snap),
+        ctx_rows["facts"].get(name),
+        ctx_rows["now_at"] or None,
     )
     out = _identity(name, row, char, ctx_rows["family"])
-    out.update(zone=zone_of(snap, char), online=snap is not None, life=life)
+    out.update(zone=zone_of(snap, char), online=reading["online"], life=reading["life"])
     out.update(_doing(now, ctx_rows["jobs"].get(name)))
     return out
 
@@ -390,11 +399,12 @@ def _order(families: dict, guild_of: dict) -> list:
     return names + sorted(n for n in guild_of if n not in names)
 
 
-def _lookups(families, chars, snaps, facts, now_at, jobs) -> dict:
+def _lookups(families, chars, snaps, facts, now_at, jobs, readings) -> dict:
     """The rows build() reads, keyed by name."""
     return {
         "jobs": _newest(jobs),
         "chars": {r["name"]: r for r in chars or ()},
+        "readings": readings or {},
         "snaps": {r["name"]: r for r in snaps or ()},
         "family": _family_of(families),
         "facts": facts or {},
@@ -402,10 +412,15 @@ def _lookups(families, chars, snaps, facts, now_at, jobs) -> dict:
     }
 
 
-def build(families, guild, chars, snaps, asks, facts, now_at, jobs=()) -> dict:
-    """The roster: one row per member, family first, with its stuck reading."""
+def build(
+    families, guild, chars, snaps, asks, facts, now_at, jobs=(), readings=None
+) -> dict:
+    """The roster: one row per member, family first, with its stuck reading.
+
+    `readings` is presence.of's answer for every member; `snaps` is where the
+    online ones stand."""
     families = families or {}
-    rows = _lookups(families, chars, snaps, facts, now_at, jobs)
+    rows = _lookups(families, chars, snaps, facts, now_at, jobs, readings)
     guild_of = {r["name"]: r for r in guild or ()}
     streaks = ask_streaks(asks)
     members = []
@@ -457,6 +472,7 @@ def _roster_payload(ctx) -> dict:
         f["facts"],
         f["now_at"],
         f["jobs"],
+        f["readings"],
     )
 
 
