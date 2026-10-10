@@ -163,6 +163,18 @@ class GitMarker(unittest.TestCase):
     def test_not_a_repo_is_none(self):
         self.assertIsNone(world.git_marker_time(self.tmp, "HEAD", "x", "y"))
 
+    def test_an_unreadable_commit_time_is_none_not_a_crash(self):
+        class Out:
+            returncode = 0
+            stderr = ""
+            stdout = "abc not-a-time\n"
+
+        self.assertIsNone(
+            world.git_marker_time(
+                self.tmp, "HEAD", "x", "y", run=lambda *a, **k: Out()
+            )
+        )
+
 
 def _two_image_repo(tmp):
     """One overlay file pinning a gated and an ungated image by digest.

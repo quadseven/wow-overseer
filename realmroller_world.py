@@ -201,7 +201,10 @@ def git_marker_time(
                 _git_text(repo, "%s:%s" % (sha, path), run),
                 _git_text(repo, "%s^:%s" % (sha, path), run),
             ):
-                return datetime.fromisoformat(when)
+                try:
+                    return datetime.fromisoformat(when)
+                except ValueError:
+                    log.warning("git log gave a commit time it cannot read: %r", when)
     except (OSError, subprocess.SubprocessError) as exc:
         log.warning("git log failed: %s", exc)
     return None
