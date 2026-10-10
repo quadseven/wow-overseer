@@ -960,21 +960,43 @@ def errand(
     primaries=None,
     bags_wanted: int = 0,
     floor=None,
+    known=None,
 ) -> Errand:
     """Spend, smelt or bandage? The one `craft_spell` this character should carry.
 
     The bag errand first, then the spend-or-smelt choice below
     (`_spend_or_smelt`), then a bandage when that choice casts nothing
     (`_bandage_errand`).
+
+    ONLY A RECIPE THE CHARACTER HOLDS (#769). `known` is its spellbook
+    (character_spell), or None when it was not read. A trainer rung absent
+    from it (`craft.holds`) is never named: DriveCraft drops such an errand
+    every cycle ("does not know the recipe"), 14 times a day for Og's Bolt of
+    Woolen Cloth. The learn errand guildjobs.recipes_due writes buys it.
     """
     bag = bag_errand(name, skills, held, primaries, bags_wanted, floor)
-    if bag is not None:
+    if bag is not None and craft.holds(bag.spell, known):
         return bag
-    chosen = _spend_or_smelt(name, skills, held, primaries)
+    chosen = _spend_or_smelt(name, skills, held, primaries, known)
     return _bandage_errand(name, skills, held, chosen) or chosen
 
 
-def _spend_or_smelt(name: str, skills: dict, held: dict, primaries=None) -> Errand:
+def _unheld_why(name: str, spell: int) -> str:
+    """The sentence for a rung left uncast because it is not held yet."""
+    label = next(
+        (r.name for r in craft.known_recipes() if r.spell_id == int(spell)),
+        "spell %d" % int(spell),
+    )
+    return (
+        "%s's ladder names %s (%d), a trainer recipe it does not hold, so no "
+        "craft errand is written for it; its learn errand walks it to its "
+        "trainer to buy it" % (name, label, int(spell))
+    )
+
+
+def _spend_or_smelt(
+    name: str, skills: dict, held: dict, primaries=None, known=None
+) -> Errand:
     """Spend, or smelt? The choice `errand` makes after the bag errand.
 
     THE ALTERNATION infra#3748 ASKED FOR, AND IT LIVES HERE RATHER THAN IN
@@ -1021,11 +1043,14 @@ def _spend_or_smelt(name: str, skills: dict, held: dict, primaries=None) -> Erra
     `primaries` serves another family (#215): its members' trades are the
     ones they hold.
     """
-    spend, weaving = _bolt_first(
-        name, craft.craft_errand(name, skills, primaries), held
-    )
+    rung = craft.craft_errand(name, skills, primaries)
+    spend, weaving = _bolt_first(name, rung, held)
     if not weaving:
         spend, weaving = _crew_reagents_first(name, spend, held)
+    for spell in (rung, spend):
+        if not craft.holds(spell, known):
+            spend, weaving = 0, _unheld_why(name, spell)
+            break
     smelt = craft.smelt_errand(name, skills, primaries)
 
     if not smelt:

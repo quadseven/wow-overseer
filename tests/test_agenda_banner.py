@@ -83,19 +83,15 @@ class EveryOverseerTableReadIsGuarded(unittest.TestCase):
         ):
             self.assertIn('"%s")' % table, self.fetch, table)
 
-    def test_the_guard_swallows_a_missing_column_as_well_as_a_missing_table(self):
-        guard = self.server[
-            self.server.index("def _guarded") : self.server.index("def _fetch_agenda")
-        ]
-        self.assertIn("(1054, 1146)", guard)
-
-    def test_the_guard_swallows_nothing_else(self):
-        """Anything but those two is a real fault and must still reach the
-        handler's 503, rather than being rendered as an empty banner."""
-        guard = self.server[
-            self.server.index("def _guarded") : self.server.index("def _fetch_agenda")
-        ]
-        self.assertIn("raise", guard)
+    def test_every_read_goes_through_the_realm_readers_guard(self):
+        """The guard is the realm reader's rows() (realmread.py): it swallows a
+        missing column (1054) as well as a missing table (1146) and nothing
+        else, which tests/test_realmread.py holds. Here: no read bypasses it."""
+        self.assertIn("with realmread.Session(_connect) as rd:", self.fetch)
+        self.assertNotIn("cur.execute", self.fetch)
+        self.assertNotIn("except", self.fetch)
+        reader = (HERE / "realmread.py").read_text(encoding="utf-8")
+        self.assertIn("_SCHEMA_GAPS = (MISSING_TABLE, MISSING_COLUMN)", reader)
 
     def test_the_newest_columns_have_an_older_fallback(self):
         """dungeon_runs_*, campaign_id, run_number, outcome and members all

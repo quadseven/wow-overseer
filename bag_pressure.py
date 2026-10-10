@@ -1876,9 +1876,37 @@ def jev_equips(wanted, gear_rows, equipped_rows, names, plan, keep_names=()) -> 
 
 # Re-exported so the bridge never imports gear itself (this module is its one
 # adapter); see gear.equips_to_queue and gear.equip_entry.
+Equip = gear.Equip
+ROLE_TANK, ROLE_DAMAGE, ROLE_UNKNOWN = (
+    gear.ROLE_TANK,
+    gear.ROLE_DAMAGE,
+    gear.ROLE_UNKNOWN,
+)
 equips_to_queue = gear.equips_to_queue
 equip_entry = gear.equip_entry
 since_level_change = gear.since_level_change
+
+
+def off_hand_refusal(
+    row, class_id: int, level: int, role: str = gear.ROLE_UNKNOWN
+) -> str:
+    """gear.py's off-hand guards for one carried row (equipscore.py): why this
+    piece is not for this character's off hand, or "". A caster's held piece
+    is never a warrior's, a rogue's or a Retribution paladin's, and a shield
+    tank holds a shield. The row becomes a Holding here, the one place that
+    happens."""
+    # The row carries every column holdings_from_rows reads (_SCORED_GEAR_SQL);
+    # one it cannot read is no Holding, and no guard is asked.
+    holdings = gear.holdings_from_rows([row])
+    if not holdings:
+        return ""
+    character = gear.CharacterState(
+        name=holdings[0].holder,
+        class_id=int(class_id),
+        level=int(level),
+        role=str(role),
+    )
+    return gear._off_hand_refusal(holdings[0], character)
 
 
 def guild_gear_gifts(

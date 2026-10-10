@@ -93,6 +93,7 @@ import gatherband
 import craft_supply
 import dungeonpace
 import dungeonprogression
+import equipscore
 import item_plan
 import jev
 import jev_items
@@ -734,6 +735,15 @@ def _expire_stale_claims(seconds: int) -> int:
     the paragraph above exists to avoid. The module keeps its outstanding
     read-backs in memory (mod_overseer.cpp, _pendingChecks), so a worldserver
     restart is precisely when this fires.
+
+    A guild run's `finder-run` row is the one 'verifying' row it must not
+    touch. It stays 'verifying' for the whole run, and after a restart the
+    module re-adopts it from this table (mod-overseer #896) and may not touch
+    it again while the members log back in, which can take fifteen minutes.
+    Erroring it then ends a run the module is still driving: the module's
+    write-back is guarded on 'verifying' and writes nothing, so the run reads
+    as lost while its members stay in the dungeon's group. The module ends
+    those rows itself, on a clear, a wipe or a run nobody came back to.
     """
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -748,7 +758,8 @@ def _expire_stale_claims(seconds: int) -> int:
             "UPDATE overseer_command SET status = 'error', "
             "detail = 'handed to the bot, but the worldserver never reported "
             "whether anything changed' "
-            "WHERE status = 'verifying' AND updated_at < NOW() - INTERVAL %s SECOND",
+            "WHERE status = 'verifying' AND updated_at < NOW() - INTERVAL %s SECOND "
+            "AND NOT (kind = 'guild' AND command LIKE 'finder-run %%')",
             (seconds,),
         )
         return swept + cur.rowcount
@@ -5223,19 +5234,46 @@ def _aim_train_traveller(statements) -> None:
                 raise
 
 
-# Level, purse and the ceiling of every trade with a trainer rank table, for
-# guildjobs.ranks_due (the family's next rank). A LEFT JOIN so a character
+# Level, purse and the ceiling of every trade with a trainer rank table or a
+# craft ladder, for guildjobs.ranks_due and guildjobs.recipes_due (the
+# family's next rank and next trainer recipe). A LEFT JOIN so a character
 # holding none of them still answers with its level and purse.
 _RANK_FACTS_SQL = (
     "SELECT c.name, c.level, c.money, k.skill, k.value, k.max "
     "FROM characters c LEFT JOIN character_skills k ON k.guid = c.guid "
-    "AND k.skill IN (" + ",".join(str(int(s)) for s in sorted(guildjobs.RANKS))
+    "AND k.skill IN ("
+    + ",".join(
+        str(int(s))
+        for s in sorted(guildjobs.RANKS) + sorted(set(craft.RECIPES) - set(guildjobs.RANKS))
+    )
+    + ") WHERE c.name IN (%s)"
+)
+
+# The trainer recipes each member already holds, for guildjobs.recipes_due. A
+# bought recipe persists to character_spell (craft.AUTO_LEARNED rungs do not,
+# and are never asked about).
+_RECIPES_KNOWN_SQL = (
+    "SELECT c.name, sp.spell FROM characters c "
+    "JOIN character_spell sp ON sp.guid = c.guid AND sp.spell IN ("
+    + ",".join(str(int(s)) for s in sorted(craft.TRAINER_RECIPES))
     + ") WHERE c.name IN (%s)"
 )
 
 
+def _rank_facts(rows) -> dict:
+    """name -> (level, money, {skill: (value, max)}) from _RANK_FACTS_SQL rows."""
+    facts: dict = {}
+    for row in rows:
+        _level, _money, skills = facts.setdefault(
+            row["name"], (int(row["level"] or 0), int(row["money"] or 0), {}))
+        if row["skill"] is not None:
+            skills[int(row["skill"])] = (int(row["value"] or 0), int(row["max"] or 0))
+    return facts
+
+
 def _ranks_due(cur, roster) -> dict:
-    """name -> the held trades whose next rank is due now (learnaim.Row.ranks).
+    """name -> the held trades whose next rank or trainer recipe is due now
+    (learnaim.Row.ranks): the ranks first, then the recipes (#769).
 
     `roster` is the overseer_roster rows already read, whose `professions`
     column is the permission a primary rank needs. On a realm missing a table
@@ -5245,25 +5283,29 @@ def _ranks_due(cur, roster) -> dict:
     names = [str(row["name"]) for row in roster or ()]
     if not names:
         return {}
+    marks = ",".join(["%s"] * len(names))
     try:
-        cur.execute(_RANK_FACTS_SQL % ",".join(["%s"] * len(names)), names)
+        cur.execute(_RANK_FACTS_SQL % marks, names)
         rows = cur.fetchall()
+        cur.execute(_RECIPES_KNOWN_SQL % marks, names)
+        spells = cur.fetchall()
     except pymysql.err.MySQLError as exc:
         if exc.args and exc.args[0] in (1054, 1146):
             return {}
         raise
-    facts: dict = {}
-    for row in rows:
-        _level, _money, skills = facts.setdefault(
-            row["name"], (int(row["level"] or 0), int(row["money"] or 0), {}))
-        if row["skill"] is not None:
-            skills[int(row["skill"])] = (int(row["value"] or 0), int(row["max"] or 0))
+    facts = _rank_facts(rows)
+    known: dict = {}
+    for row in spells:
+        known.setdefault(row["name"], set()).add(int(row["spell"]))
     wanted = {str(row["name"]): trainjob.parse_wanted(row.get("professions"))
               for row in roster}
-    return {
-        name: guildjobs.ranks_due(level, money, skills, wanted.get(name, ()))
-        for name, (level, money, skills) in facts.items()
-    }
+    due: dict = {}
+    for name, (level, money, skills) in facts.items():
+        ranks = guildjobs.ranks_due(level, money, skills, wanted.get(name, ()))
+        recipes = guildjobs.recipes_due(
+            level, money, skills, known.get(name, ()), wanted.get(name, ()))
+        due[name] = ranks + tuple(s for s in recipes if s not in ranks)
+    return due
 
 
 def _learn_aim_rows() -> list:
@@ -7193,11 +7235,17 @@ class Bridge(discord.Client):
                 floor)
         }
         counts = await asyncio.to_thread(_fetch_item_counts, sorted(wanted))
+        # THE SPELLBOOK, SO NO ERRAND NAMES A RECIPE NOT YET BOUGHT (#769).
+        # DriveCraft drops one every cycle ("does not know the recipe"); the
+        # learn errand (guildjobs.recipes_due) buys it. An unread book is None
+        # for everyone, which craft.holds does not judge.
+        known = await asyncio.to_thread(_fetch_crafters_known, names)
         for name in names:
             held = {entry: count for (who, entry), count in counts.items()
                     if who == name}
             chosen = craft_rhythm.errand(name, skills.get(name, {}), held,
-                                         primaries.get(name), bags_wanted, floor)
+                                         primaries.get(name), bags_wanted, floor,
+                                         known=known.get(name))
             await asyncio.to_thread(_write_craft_errand, name, chosen.spell)
             if chosen.spell:
                 log.info("craft: %s aimed at %s spell %s - %s",
@@ -7379,11 +7427,15 @@ class Bridge(discord.Client):
                 (name, craft_supply.REAGENT[craft_spell][0])
                 for name, craft_spell in candidates.items()
             ]
+            # AND THE HERBS THE VIALS WILL MEET (#769): at the counter a member
+            # buys the vials its herbs in hand will use, up to a stack.
+            pairs += _herb_pairs(candidates)
             held_by = await asyncio.to_thread(_fetch_item_counts, pairs)
             for name, craft_spell in sorted(candidates.items()):
                 entry, _label, _price = craft_supply.REAGENT[craft_spell]
                 town = await asyncio.to_thread(_fetch_town, name)
                 held = held_by.get((name, entry), 0)
+                target = _vial_target(name, craft_spell, held_by)
                 # A NEED, NOT AN AIM (infra#3692). What used to stand here
                 # was one `travel_npc = 'vendor'` write per candidate, and
                 # both halves of it were wrong - the keyword cannot see the
@@ -7398,6 +7450,7 @@ class Bridge(discord.Client):
                 _spell_id, money = spells[name]
                 errand, note = craft_supply.reagent_errand(
                     name, craft_spell, held, money, free_slots.get(name, 0), town,
+                    target=target,
                 )
                 if note:
                     log.info("craft_supply: %s", note)
@@ -7937,10 +7990,14 @@ class Bridge(discord.Client):
                    if who == name}
             for name in names
         }
+        # The same spellbook `_craft_once` reads, so the two passes agree on
+        # the recipe (#769).
+        known = await asyncio.to_thread(_fetch_crafters_known, names)
         spells = {
             name: craft_rhythm.errand(
                 name, skills.get(name, {}), carried[name],
-                primaries.get(name), bags_wanted, floor).spell
+                primaries.get(name), bags_wanted, floor,
+                known=known.get(name)).spell
             for name in names
         }
 
@@ -11126,12 +11183,47 @@ class Bridge(discord.Client):
             )
         wanted = bag_pressure.holder_equips(
             gear_rows, worn, names, keep_names=OWNER_KEEPS)
+        # BY THE SPEC'S GEAR SCORE, NOT ITEM LEVEL (equipscore.py): every member
+        # the scorer can judge gets its picks, necks, rings, trinkets and the
+        # weapon hands as a set included; item level stays the judge only for
+        # a member it cannot.
+        wanted = await self._scored_equips(wanted, names, "")
         # JEV'S ANSWER, THROUGH THE SAME ROW (#95): a piece it chose is put on
         # with the same `e Hitem:` command, and one it judged worse than what
         # is worn is left in the bags. No plan leaves `wanted` as it is.
         wanted = bag_pressure.jev_equips(
             wanted, gear_rows, worn, names, jev_plan, keep_names=OWNER_KEEPS)
         await self._write_equips(wanted, current)
+
+    async def _scored_equips(self, legacy, names, label: str, tanks=()) -> tuple:
+        """`legacy` with every member equipscore can judge judged by its spec's
+        gear score instead (equipscore.plan), and the pass said in one line.
+
+        A member it cannot judge (no class row, or a world without the
+        columns) keeps the item-level pick. A weapon held back only by a
+        weapon skill is named, so the weapon-skill pass has its evidence.
+        """
+        wearers = await asyncio.to_thread(_fetch_wearers, list(names))
+        gear_rows = await asyncio.to_thread(_fetch_scored_gear, list(names))
+        if not wearers or not gear_rows:
+            return tuple(legacy)
+        plan = equipscore.plan(
+            legacy, wearers, gear_rows, names, keep_names=OWNER_KEEPS,
+            tanks=tanks, book=_jev_item_book())
+        if plan.waiting:
+            log.info("equip: %d %scarried weapon upgrade(s) wait on a weapon skill a "
+                     "weapon master teaches: %s", len(plan.waiting), label,
+                     "; ".join("%s %s (skill %d)" % w for w in plan.waiting[:8])
+                     + ("; ..." if len(plan.waiting) > 8 else ""))
+        log.info(
+            "equip: judged %d %smember(s) by gear score (spec weights): %d "
+            "carried upgrade(s) to put on, %d weapon(s) wait on a weapon skill; "
+            "%d member(s) left to item level",
+            len(plan.scored), label,
+            sum(1 for e in plan.equips if e.holder in plan.scored),
+            len(plan.waiting), len({str(n) for n in names} - set(plan.scored)),
+        )
+        return plan.equips
 
     async def _write_equips(self, wanted, current: list, label: str = "") -> None:
         """Queue and log the `e` rows for `wanted`, inside the retry window.
@@ -11185,12 +11277,14 @@ class Bridge(discord.Client):
         if not members:
             return
         gear_rows = await asyncio.to_thread(_fetch_surplus_gear, members)
-        if not gear_rows:
-            return
         worn = await asyncio.to_thread(_fetch_family_equipped, members)
         tanks = await asyncio.to_thread(_fetch_shield_tanks, members)
         wanted = bag_pressure.guild_equips(
             gear_rows, worn, members, names, keep_names=OWNER_KEEPS, tanks=tanks)
+        # The scorer reads every quality: the surplus read above keeps its
+        # uncommon floor for the hand-off and the vendor, and a level 20
+        # member's best chest is often white.
+        wanted = await self._scored_equips(wanted, members, "guild ", tanks=tanks)
         if not wanted:
             return
         history = await asyncio.to_thread(_equip_history, EQUIP_MEMORY_HOURS,
@@ -12941,11 +13035,14 @@ class Bridge(discord.Client):
         # spent on `plan_setup` alone. Wiring it here is the step
         # `plan_deposits`' own docstring anticipated: "wiring that read in later
         # can only ever release gold, never strand it".
-        deposits = guildbank.plan_deposits(
-            members, guild_has_tab=purchased_tabs > 0,
-            buyer=_setup_buyer(setup, names, leader),
-            reserve_for_buyer=guildbank.buyer_reserve(purchased_tabs)
-        ) if guildbank.MEMBER_GOLD_DEPOSITS else []
+        #
+        # THE GUILD MASTER BANKS THE GUILD'S GOLD (#775): with member deposits
+        # off, the dues stopped in the master's purse and Cave's vault sat at
+        # 155.0g for twelve days. guildbank.gold_deposits has the rule.
+        master = _guild_master(setup)
+        deposits = guildbank.gold_deposits(
+            members, master=master, purchased_tabs=purchased_tabs,
+            buyer=_setup_buyer(setup, names, leader))
         items = (await asyncio.to_thread(_plan_bank, names)).guild
         # AND WHAT JEV CHOSE TO BANK (#267), under the same gates.
         items = tuple(items) + tuple(self._jev_keep_deposits(names, setup, items))
@@ -12961,6 +13058,8 @@ class Bridge(discord.Client):
                 return
             log.info("guild bank: the guild fund needs the vault: %s to withdraw "
                      "for the members", guildfund.gold(fund))
+        if not fund and _gold_waits_for_a_vault(actions, items, deposits, cohort):
+            return
         # ONE POSITION READ, FOR TWO QUESTIONS (infra#3804): which map the
         # LEADER aims from, and whether each DEPOSITOR is at the vault now.
         # `_fetch_positions` batches, so this is the one query it always was.
@@ -13089,6 +13188,7 @@ class Bridge(discord.Client):
                 continue
             await asyncio.to_thread(_insert_guild, deposit.name, command, "guildbank")
             fresh.append(deposit)
+            _say_master_deposit(deposit, master, members, purchased_tabs, cohort)
         if walking:
             # LOGGED: a pass that writes nothing and a broken one look
             # identical otherwise (infra#3660, restated for the rows).
@@ -13142,13 +13242,14 @@ class Bridge(discord.Client):
         setup = await asyncio.to_thread(_fetch_guild_bank_setup, names)
         purchased_tabs = int(setup["purchased_tabs"]) if setup else 0
         eligible = await asyncio.to_thread(_natural_contributors, names, names)
-        deposits = guildbank.plan_deposits(
+        # The guild master's deposit of the guild's gold (#775), under the
+        # same rule as the full pass; it needs no ten gold here, no walk.
+        deposits = guildbank.gold_deposits(
             natural.only_contributors(
                 await asyncio.to_thread(_fetch_guild_money, names), eligible),
-            guild_has_tab=purchased_tabs > 0,
-            buyer=_setup_buyer(setup, names, leader),
-            reserve_for_buyer=guildbank.buyer_reserve(purchased_tabs)
-        ) if guildbank.MEMBER_GOLD_DEPOSITS else []
+            master=_guild_master(setup),
+            purchased_tabs=purchased_tabs,
+            buyer=_setup_buyer(setup, names, leader))
         if not deposits:
             return
         positions = await asyncio.to_thread(
@@ -17716,9 +17817,10 @@ class Bridge(discord.Client):
 
     async def _standin_out_facts(self, key: str, leader: str, ordered: str,
                                  roster: tuple) -> tuple:
-        """(skills, out member, the others' levels, guild, faction) for the
-        member ordered to sit out. Reads only."""
+        """(skills, known spells, out member, the others' levels, guild,
+        faction) for the member ordered to sit out. Reads only."""
         skills = (await asyncio.to_thread(_fetch_trade_skills, [ordered])).get(ordered, {})
+        known = await asyncio.to_thread(_fetch_standin_known, ordered)
         read = await asyncio.to_thread(_fetch_standin_members, list(roster))
         members = {n: guildrun.member_from_row(r) for n, r in read.items()}
         levels = tuple(m.level for n, m in sorted(members.items())
@@ -17726,23 +17828,24 @@ class Bridge(discord.Client):
         head = members.get(key) or members.get(leader)
         guild = head.guild if head is not None else ""
         faction = guildrun.faction_of([m for m in members.values() if m is not None])
-        return skills, members.get(ordered), levels, guild, faction
+        return skills, known, members.get(ordered), levels, guild, faction
 
     async def _standin_facts(self, key: str, ordered: str, current, rows: list,
                              fam, gfacts: dict, doors: dict, candidates: tuple):
         """standin.Facts for one family. Reads only."""
         roster = tuple(fam["names"]) if fam else ()
         leader = str(fam["leader"].get("name") or "") if fam else ""
-        skills, out_member, levels, guild, faction = {}, None, (), "", ""
+        skills, known, out_member, levels, guild, faction = {}, None, None, (), "", ""
         if ordered and ordered in roster:
-            skills, out_member, levels, guild, faction = await self._standin_out_facts(
-                key, leader, ordered, roster)
+            (skills, known, out_member, levels, guild,
+             faction) = await self._standin_out_facts(key, leader, ordered, roster)
         door = _standin_door(rows, doors)
         mid_run = bool(roster and (current is not None or ordered in roster)
                        and await self._mid_run(list(roster)))
         return standin.Facts(
             family=key, leader=leader, ordered=ordered, roster=roster, skills=skills,
-            out_member=out_member, family_levels=levels, guild=guild, faction=faction,
+            known=known, out_member=out_member, family_levels=levels, guild=guild,
+            faction=faction,
             door=door, candidates=candidates, busy=frozenset(gfacts["busy"]),
             resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
             owed=frozenset(_class_owed_names(self)),
@@ -20826,7 +20929,7 @@ def _fetch_guild_roster(names: list) -> list:
     the recap and the dungeon plan already hold themselves to.
 
     Degrades to "no guild" rather than raising when `guild_member` is missing,
-    the direction `_wide_guarded` takes on the map-server side: a realm image
+    the direction the map server's realm reader (realmread) takes: a realm image
     without the table is a family that shares with nobody, which is exactly
     what this service did before this pass existed.
     """
@@ -21190,6 +21293,95 @@ def _fetch_equip_candidate_gear(names: list) -> list:
                 return []
             raise
         return [dict(row) for row in cur.fetchall()]
+
+
+# WHAT THE EQUIP PASS SCORES (equipscore.py): every weapon and armour piece a
+# member wears or carries in its bags, of any quality, with the template stats
+# gearscore.stats_from_row reads, the instance's random suffix and enchants,
+# and the columns that say whether the member can put it on now. Necks, rings,
+# trinkets and relics are in, which the item-level judge never read. Worn rows
+# carry `equipment_slot` (bag 0, slot 0..18); carried rows carry NULL there.
+# The bank is not read: `e Hitem:` equips from the bags only.
+_SCORED_GEAR_SQL = (
+    "SELECT c.name AS holder, "
+    "IF(ci.bag = 0 AND ci.slot < 19, ci.slot, NULL) AS equipment_slot, "
+    "ii.guid AS item_guid, ii.itemEntry AS entry, "
+    "ii.randomPropertyId AS random_property_id, ii.enchantments AS enchantments, "
+    "it.name AS name, it.Quality AS quality, it.ItemLevel AS item_level, "
+    "it.RequiredLevel AS required_level, it.class AS item_class, "
+    "it.subclass AS item_subclass, it.InventoryType AS inventory_type, "
+    "it.AllowableClass AS allowable_class, it.AllowableRace AS allowable_race, "
+    "it.RequiredSkill AS required_skill, it.RequiredSkillRank AS required_skill_rank, "
+    "it.requiredspell AS required_spell, "
+    "it.RequiredReputationFaction AS required_reputation, "
+    "it.MaxCount AS max_count, it.Flags AS item_flags, "
+    "it.armor, it.block, it.fire_res, it.frost_res, it.nature_res, "
+    "it.shadow_res, it.arcane_res, it.dmg_min1, it.dmg_max1, it.delay, "
+    + ", ".join("it.stat_type%d, it.stat_value%d" % (n, n) for n in range(1, 11))
+    + " FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ((ci.bag = 0 AND ci.slot < 19) "
+    "OR (ci.bag = 0 AND ci.slot BETWEEN 19 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "AND it.class IN (2, 4) "
+    "AND it.InventoryType IN (1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, "
+    "16, 17, 20, 21, 22, 23, 25, 26, 28)"
+)
+
+# Who each member is to the scorer: class, level and race, the talents it has
+# spent and the raid plan's tree (its spec, gearupgrades.choose_spec), and the
+# skill lines it holds (its proficiencies, the core's own CanUseItem test).
+_WEARERS_SQL = (
+    "SELECT c.name AS name, c.class AS class_id, c.level AS level, c.race AS race, "
+    + raidroles.TALENTS_COLUMN + ", "
+    "{target} AS target_tree, "
+    "(SELECT GROUP_CONCAT(k.skill) FROM character_skills k "
+    "WHERE k.guid = c.guid AND k.value > 0) AS skills "
+    "FROM characters c WHERE c.name IN (%s)"
+)
+_RAID_TREE = "(SELECT s.tree FROM overseer_raid_spec s WHERE s.name = c.name LIMIT 1)"
+
+
+def _fetch_scored_gear(names: list) -> list:
+    """Worn and carried gear with its stats; equipscore decides what it means."""
+    if not names:
+        return []
+    sql = _SCORED_GEAR_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("equip: scored gear facts unavailable on this world image; "
+                            "the item-level judge decides")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _fetch_wearers(names: list) -> list:
+    """One row per member for equipscore.wearer_from_row. A world without
+    overseer_raid_spec reads the spent talents alone."""
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        for target in (_RAID_TREE, "''"):
+            try:
+                cur.execute(_WEARERS_SQL.format(target=target) % marks, names)
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    if target == _RAID_TREE:
+                        continue
+                    log.warning("equip: member facts unavailable on this world image; "
+                                "the item-level judge decides")
+                    return []
+                raise
+            return [dict(row) for row in cur.fetchall()]
+    return []
 
 
 # What each of the five is WEARING, which is the half of the family-fit gate
@@ -21709,6 +21901,56 @@ def _standin_tell(name: str, mode: str, now: float) -> bool:
     _insert_job(name, mode, standin.SOURCE)
     _STANDIN_TOLD[name] = (mode, now)
     return True
+
+
+def _herb_pairs(candidates: dict) -> list:
+    """(name, entry) of the gathered reagents each vial buyer's recipe eats."""
+    return [
+        (name, reagent.entry)
+        for name, craft_spell in candidates.items()
+        for reagent in craft_rhythm.GATHERED.get(craft_spell, ())
+    ]
+
+
+def _vial_target(name: str, craft_spell: int, held_by: dict) -> int:
+    """craft_supply.vial_target for `name`, from its counted herbs (#769)."""
+    held = {entry: count for (who, entry), count in held_by.items() if who == name}
+    return craft_supply.vial_target(
+        craft_spell, craft_rhythm.casts_in_hand(craft_spell, held))
+
+
+def _fetch_crafters_known(names: list) -> dict:
+    """name -> the spells it holds (character_spell), for craft_rhythm.errand.
+
+    {} when the read fails, so every crafter's book reads None (not judged)
+    and the errands stand as they would have before #769.
+    """
+    try:
+        rows = _fetch_town_spells(list(names))
+    except pymysql.err.MySQLError:
+        log.warning("craft: the crafters' spellbooks could not be read; no "
+                    "errand is judged on them this pass")
+        return {}
+    known: dict = {str(name): set() for name in names}
+    for row in rows:
+        known.setdefault(str(row.get("holder")), set()).add(int(row["spell"]))
+    return {name: frozenset(spells) for name, spells in known.items()}
+
+
+def _fetch_standin_known(name: str):
+    """The spells the member ordered to sit out holds, or None unread.
+
+    For standin.walled: a trainer recipe persists to character_spell, so its
+    absence there is real. A failed read answers None, which standin does not
+    judge, so the row stands as it did.
+    """
+    try:
+        rows = _fetch_town_spells([name])
+    except pymysql.err.MySQLError:
+        log.warning("standin: %s's spellbook could not be read; its craft is "
+                    "not judged this pass", name)
+        return None
+    return frozenset(int(r["spell"]) for r in rows if r.get("holder") == name)
 
 
 def _standin_crafts(name: str, family: str) -> None:
@@ -24974,6 +25216,8 @@ _JOB_MEMBERS_SQL = (
     "s.zone_id, s.health, "
     "EXISTS (SELECT 1 FROM corpse k WHERE k.guid = c.guid) AS has_corpse, "
     "lc.name AS master, hb.mapId AS home_map, hb.zoneId AS home_zone, "
+    # The taxi nodes it knows, for the level step's flight (guildlevel.choose).
+    "c.taximask, "
     + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
@@ -24992,6 +25236,11 @@ _JOB_SKILLS_SQL = (
 )
 _JOB_SPELLS_SQL = (
     "SELECT guid, spell FROM character_spell WHERE guid IN ({guids}) AND spell IN ({spells})"
+)
+# Every quest a member was rewarded, for its open quests in each hub zone
+# (guildlevel.open_quests): a chain's earlier quest may lie in any zone.
+_JOB_REWARDED_SQL = (
+    "SELECT guid, quest FROM character_queststatus_rewarded WHERE guid IN ({guids})"
 )
 # Carried: the backpack and the bags worn, never the bank, like the corps' read.
 _JOB_ITEMS_SQL = (
@@ -25139,6 +25388,9 @@ _JOB_INNS: list = []
 # Every roster family member, of every family: the level step leaves them to
 # levelroute.py, which walks a family as one.
 _JOB_ROSTER_SQL = "SELECT name FROM overseer_roster WHERE enabled = 1"
+# The hub quests' chains, kinds and spawned givers (guildlevel.QUEST_FACTS_SQL),
+# for a member's open quests. Read once per process: the world does not change.
+_JOB_QUEST_FACTS: list = []
 
 
 # THE CLASS QUEST BOOK (classquest.py): every class quest of the classic range,
@@ -25279,6 +25531,9 @@ def _read_job_spawns_once(cur) -> None:
         _JOB_INNS.extend(_job_read(
             cur, "innkeepers", _JOB_INNS_SQL,
             (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP, INNKEEPER_NPC_FLAG)))
+    if not _JOB_QUEST_FACTS:
+        _JOB_QUEST_FACTS.extend(_job_read(cur, "hub quest givers",
+                                          guildlevel.QUEST_FACTS_SQL))
 
 
 def _fetch_job_facts(family_names: list) -> dict:
@@ -25299,6 +25554,8 @@ def _fetch_job_facts(family_names: list) -> dict:
                         *(book.spell_ids() if book else ())])))
         log_rows, done_rows = _class_member_reads(cur, book, everyone)
         worn_rows = _job_read(cur, "worn gear", _JOB_WORN_SQL.format(guids=everyone))
+        rewarded_rows = _job_read(cur, "rewarded quests",
+                                  _JOB_REWARDED_SQL.format(guids=everyone))
         item_rows = _job_read(cur, "carried items", _JOB_ITEMS_SQL.format(
             guids=everyone, goods=guildjobs.TRADE_GOODS,
             subclasses=ids(sorted(guildjobs.MATERIAL_SUBCLASSES)),
@@ -25322,7 +25579,8 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  item_rows, recent_rows, pending_rows,
                                  log_rows=log_rows, done_rows=done_rows,
                                  free_slots=_job_free_slots(room),
-                                 supplies=supplies, bag_slots=_job_bag_slots(room),
+                                 supplies=supplies, rewarded_rows=rewarded_rows,
+                                 bag_slots=_job_bag_slots(room),
                                  worn=_job_worn(worn_rows))
     facts["class_book"] = book
     facts["far_open"] = far_open
@@ -25334,6 +25592,7 @@ def _fetch_job_facts(family_names: list) -> dict:
     facts["hub_masters"] = list(_JOB_HUB_MASTERS)
     facts["orbs"] = list(_JOB_ORBS)
     facts["inns"] = list(_JOB_INNS)
+    facts["quest_facts"] = list(_JOB_QUEST_FACTS)
     # Plus this pass's own family names, so an unread roster still leaves
     # the family to levelroute.
     facts["roster"] = ({str(r.get("name") or "") for r in roster_rows}
@@ -25343,12 +25602,14 @@ def _fetch_job_facts(family_names: list) -> dict:
 
 def _job_leveling(facts):
     """guildlevel.World for the level step: levelroute's hub quests (read once
-    per process by `_level_world`), the hub flight masters, the roster and the
-    Silvermoon orb. None while the quests are unread, which takes no level step."""
+    per process by `_level_world`), the hub flight masters, the roster, the
+    Silvermoon orb, the innkeepers and the hub quests' givers and chains. None
+    while the quests are unread, which takes no level step."""
     quests, _spawns = _level_world()
     return guildlevel.world(quests, facts.get("hub_masters"), facts.get("roster", ()),
                             orb_rows=facts.get("orbs", ()),
-                            inn_rows=facts.get("inns", ()))
+                            inn_rows=facts.get("inns", ()),
+                            fact_rows=facts.get("quest_facts"))
 
 
 def _guild_gathering_skills(member):
@@ -25402,8 +25663,8 @@ def _job_worn(rows) -> dict:
 
 def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, item_rows,
                          recent_rows, pending_rows, log_rows=(), done_rows=(),
-                         free_slots=None, supplies=None, bag_slots=None,
-                         worn=None) -> dict:
+                         free_slots=None, supplies=None, rewarded_rows=None,
+                         bag_slots=None, worn=None) -> dict:
     """The rows the job reads, turned into guildjobs' facts."""
     family = set(family_names)
     guild_members, masters = guildwork.members_from_rows(rows, family_names)
@@ -25413,7 +25674,7 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     members, crafters = _guild_members_and_crafters(
         rows, family, role_of, skills, known, carried, eligible,
         _class_quest_state(log_rows, done_rows), free_slots or {}, supplies,
-        bag_slots or {}, worn or {})
+        _rewarded_of(rewarded_rows), bag_slots or {}, worn or {})
     pending = {str(r.get(k) or "") for r in pending_rows
                for k in ("target_name", "target_arg")} - {""}
     return {
@@ -25464,9 +25725,22 @@ def _member_supplies(supplies, guid) -> tuple:
     return supplies.get(guid, (0, 0))
 
 
+def _rewarded_of(rows):
+    """guid -> frozenset of the quests it was rewarded, None when the read gave
+    no row: every member of a guild that levels has been rewarded for some
+    quest, so no row is an unread table, and the level step then judges a zone
+    by its band alone."""
+    if not rows:
+        return None
+    out: dict = {}
+    for r in rows:
+        out.setdefault(int(r["guid"]), set()).add(int(r["quest"]))
+    return {guid: frozenset(quests) for guid, quests in out.items()}
+
+
 def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible,
                                 quest_state=({}, {}, {}), free_slots=None, supplies=None,
-                                bag_slots=None, worn=None):
+                                rewarded=None, bag_slots=None, worn=None):
     members, crafters = [], {}
     quest_log, quests_done, quest_progress = quest_state
     for r in rows:
@@ -25502,6 +25776,8 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             drink=_member_supplies(supplies, guid)[1],
             home_map=_row_int(r, "home_map"),
             home_zone=_row_int(r, "home_zone"),
+            rewarded=None if rewarded is None else rewarded.get(guid, frozenset()),
+            taxi_nodes=flightlearn.known_nodes(r.get("taximask")),
             bag_slots=(bag_slots or {}).get(name),
             worn=(worn or {}).get(name)))
     return members, crafters
@@ -27094,6 +27370,37 @@ def _setup_buyer(setup: dict | None, names: list, leader: str) -> str:
     """
     master = str((setup or {}).get("master") or "")
     return master if master and master in names else leader
+
+
+def _guild_master(setup: dict | None) -> str:
+    """The guild master's name off `_fetch_guild_bank_setup`, or ''."""
+    return str((setup or {}).get("master") or "")
+
+
+def _gold_waits_for_a_vault(actions, items, deposits, cohort=None) -> bool:
+    """True, and said, when gold alone is all the guild bank pass would walk
+    for and it is under the walk's worth (#775). A few gold is not a trip to a
+    capital: the passing pass banks it the next time the master stands at a
+    vault."""
+    if actions or items or not deposits or guildbank.worth_a_walk(deposits):
+        return False
+    log.info(
+        "guild bank: %s carries %s above what it keeps, under the %dg "
+        "a trip is made for - it banks it at the next vault it passes%s",
+        ", ".join(d.name for d in deposits),
+        guildbank.gold(sum(d.copper for d in deposits)),
+        guildbank.MASTER_DEPOSIT_WALK_COPPER // 10_000,
+        _family_label(cohort))
+    return True
+
+
+def _say_master_deposit(deposit, master, members, purchased_tabs, cohort=None) -> None:
+    """Log the guild master's deposit of the guild's gold (#775)."""
+    if deposit.name != master or guildbank.MEMBER_GOLD_DEPOSITS:
+        return
+    purse = {str(m.get("name")): m.get("money") for m in members}.get(master)
+    log.info("%s%s", guildbank.master_deposit_line(deposit, purse, purchased_tabs),
+             _family_label(cohort))
 
 
 def _plan_guild_setup(setup: dict | None, purchased_tabs: int, names: list,
@@ -30026,7 +30333,7 @@ def _fetch_town_carried(names: list) -> list:
 
 
 def _fetch_town_spells(names: list) -> list:
-    """Known spell ids, for the conjure check and nothing else."""
+    """Known spell ids, for the conjure check and the stand-in's craft wall."""
     if not names:
         return []
     sql = _TOWN_SPELLS_SQL % ",".join(["%s"] * len(names))

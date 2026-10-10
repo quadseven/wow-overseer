@@ -19,6 +19,7 @@ sys.path.insert(0, str(HERE))
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import apiv2  # noqa: E402
+import realmread  # noqa: E402
 from apiv2 import roll as v2roll  # noqa: E402
 from apiv2._context import Context  # noqa: E402
 
@@ -44,7 +45,7 @@ def build_rows(reported_at=NOW - timedelta(hours=6)):
 
 
 class FakeCursor:
-    """Answers each of the roll's three reads with rows set per SQL."""
+    """The database end, for the one test that goes through the map server."""
 
     def __init__(self, answers):
         self.answers = answers
@@ -77,16 +78,9 @@ class FakeConnection:
         self.closed = True
 
 
-def guarded(cur, sql, _what):
-    cur.execute(sql)
-    return list(cur.fetchall())
-
-
 def context(answers):
-    cur = FakeCursor(answers)
-    conn = FakeConnection(cur)
-    server = types.SimpleNamespace(_realm_guarded=guarded)
-    return Context(connect=lambda: conn, server=server), conn, cur
+    rd = realmread.Memory(answers)
+    return Context(read=rd, server=types.SimpleNamespace()), rd
 
 
 class TheRoll(unittest.TestCase):
@@ -138,8 +132,8 @@ class TheHandler(unittest.TestCase):
     def test_it_is_registered_under_v2(self):
         self.assertIs(apiv2.ROUTES["/api/v2/roll"], v2roll.roll)
 
-    def test_it_reads_the_three_tables_and_closes_the_connection(self):
-        ctx, conn, cur = context(
+    def test_it_reads_the_three_tables(self):
+        ctx, rd = context(
             {
                 v2roll.BUILD_SQL: build_rows(),
                 v2roll.VERSION_SQL: [{"core_version": CORE}],
@@ -151,9 +145,27 @@ class TheHandler(unittest.TestCase):
         self.assertEqual(payload["build"], "core 7f12e89ee5f4, module 0.1.0")
         self.assertEqual(payload["uptime_seconds"], 3600)
         self.assertEqual(
-            cur.executed, [v2roll.BUILD_SQL, v2roll.VERSION_SQL, v2roll.UPTIME_SQL]
+            rd.asked,
+            [
+                (v2roll.BUILD_SQL, None),
+                (v2roll.VERSION_SQL, None),
+                (v2roll.UPTIME_SQL, None),
+            ],
         )
-        self.assertTrue(conn.closed)
+
+    def test_a_realm_without_the_tables_reads_as_not_measured(self):
+        missing = realmread.MISSING_TABLE
+        ctx, _rd = context(
+            {
+                v2roll.BUILD_SQL: missing,
+                v2roll.VERSION_SQL: missing,
+                v2roll.UPTIME_SQL: missing,
+            }
+        )
+        code, payload = apiv2.handle("/api/v2/roll", {}, ctx)
+        self.assertEqual(code, 200)
+        self.assertIsNone(payload["build"])
+        self.assertIsNone(payload["uptime_seconds"])
 
     def test_every_statement_only_reads(self):
         for sql in (v2roll.BUILD_SQL, v2roll.VERSION_SQL, v2roll.UPTIME_SQL):

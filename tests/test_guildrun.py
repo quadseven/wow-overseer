@@ -566,19 +566,19 @@ class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):
     up. Every dungeon mod-overseer's finder can queue is on each side's ladder,
     the hostile capital's own dungeon excepted."""
 
-    # Doors the module can queue through the dungeon finder: one finder row on
-    # the map, or a wing the door's own landing picks out (Maraudon).
+    # Doors the module can queue through the dungeon finder: one normal finder
+    # row on the map (the Lower Spire), or a wing the door's own landing picks
+    # out (Maraudon, the Scarlet Library).
     QUEUEABLE = {
         "wailing", "deadmines", "shadowfang", "blackfathom", "scarlet",
         "gnomeregan", "razorfen-kraul", "razorfen-downs", "uldaman",
         "zulfarrak", "ragefire", "stockades", "maraudon-orange", "maraudon-purple", "sunken-temple",
-        "blackrock-depths", "scholomance",
+        "blackrock-depths", "scholomance", "scarlet-library", "lower-blackrock-spire",
     }  # fmt: skip
-    # Doors the finder cannot resolve today (see guildrun.BLOCKED_DOORS).
+    # Doors a run could not finish through (see guildrun.BLOCKED_DOORS).
     BLOCKED = {
-        "scarlet-library", "scarlet-armory", "scarlet-cathedral",
-        "lower-blackrock-spire", "dire-maul-east-east", "dire-maul-west-north",
-        "dire-maul-north",
+        "scarlet-armory", "scarlet-cathedral", "dire-maul-east-east",
+        "dire-maul-west-north", "dire-maul-north",
     }  # fmt: skip
     FIRST_LEVEL = {"Alliance": 17, "Horde": 15}
 
@@ -603,6 +603,24 @@ class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):
         for faction, first in self.FIRST_LEVEL.items():
             for level in range(first, 61):
                 self.assertTrue(self.offered(level, faction), (faction, level))
+
+    def test_the_library_and_the_lower_spire_are_on_both_ladders(self):
+        """The finder resolves both doors on the realm's own data (wow-dev,
+        2026-10-10): the Library's landing is lfg_dungeon_template row 165's
+        start, and the Spire has one normal finder row, 32. Held out, a side's
+        level-35 groups had no Library and its level-58 groups no Spire."""
+        for faction in ("Alliance", "Horde"):
+            self.assertIn("scarlet-library", self.offered(35, faction), faction)
+            self.assertIn("lower-blackrock-spire", self.offered(58, faction), faction)
+
+    def test_a_door_whose_boss_is_behind_a_keyed_door_stays_off(self):
+        """The Armory (Herod's Door), the Cathedral (the Chapel Door) and Dire
+        Maul North (the Gordok doors) are keyed, no seat brings the key, and
+        Dire Maul's other two doors do not land on their wing's finder start."""
+        for faction in ("Alliance", "Horde"):
+            for level in range(36, 61):
+                offered = set(self.offered(level, faction))
+                self.assertFalse(offered & self.BLOCKED, (faction, level))
 
     def test_the_ladder_climbs_through_the_high_dungeons(self):
         self.assertIn("razorfen-kraul", self.offered(32, "Horde"))

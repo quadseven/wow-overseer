@@ -242,6 +242,8 @@ def _rhythm_self(world, log):
             "_bags_wanted_for": lambda cohort=None: 0,
             "_guild_bag_floor_for": lambda cohort=None: None,
             "_fetch_item_counts": world.counts,
+            # An unread spellbook: no errand is judged on it (#769).
+            "_fetch_crafters_known": lambda names: {},
             "_insert_job": world.insert_job,
         },
     )
@@ -321,6 +323,7 @@ class TheCraftErrandIsWrittenForAnotherFamily(unittest.TestCase):
                 "_bags_wanted_for": lambda cohort=None: 5 if cohort is HORDE else 0,
                 "_guild_bag_floor_for": lambda cohort=None: None,
                 "_fetch_item_counts": lambda pairs: {("Oz", BOLT): 3},
+                "_fetch_crafters_known": lambda names: {},
                 "_write_craft_errand": lambda name, spell: written.append(
                     (name, spell)
                 ),

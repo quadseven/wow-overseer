@@ -44,7 +44,7 @@ COPY core.py bridge.py voice.py transform.py \
      lootcouncil.py statweights.py \
      bank.py bankpolicy.py bankforecast.py \
      mailrun.py holdings.py \
-     realm.py basepath.py appbuild.py watchwall.py nowstatus.py realmnav.py classic.py \
+     realm.py realmread.py basepath.py appbuild.py watchwall.py nowstatus.py realmnav.py classic.py \
      needs.py partystatus.py lootcard.py lootstory.py towntrip.py \
      townerrand.py townslot.py tradechoice.py \
      enroll.py \
@@ -52,7 +52,7 @@ COPY core.py bridge.py voice.py transform.py \
      vendor_stall.py \
      campaignqueue.py dungeonpace.py standin.py \
      campaignplan.py dungeonladder.py director.py levelroute.py \
-     preraid.py gearscore.py gearupgrades.py pvpgear.py \
+     preraid.py gearscore.py gearupgrades.py pvpgear.py equipscore.py \
      runtimeline.py runstory.py places.py commandwords.py \
      vclient.py guildgear.py \
      situation.py standstill.py restsupply.py vision.py llmmode.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py \
