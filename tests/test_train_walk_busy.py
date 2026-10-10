@@ -30,8 +30,14 @@ class TheTrainerWalkIsBusy(unittest.TestCase):
         self.assertIn("guildroute.GUILD_STEP_SECONDS", body)
 
     def test_every_other_walking_pass_reads_it(self):
-        for name in ("_guild_dues_once", "_crafter_mail_for", "_guild_post_for",
-                     "_guild_corps_once", "_start_guild_job_pass", "_guild_social_once"):
+        for name in (
+            "_guild_dues_once",
+            "_crafter_mail_for",
+            "_guild_post_for",
+            "_guild_corps_once",
+            "_start_guild_job_pass",
+            "_guild_social_once",
+        ):
             with self.subTest(name):
                 self.assertIn(WALKS, method(name))
 
