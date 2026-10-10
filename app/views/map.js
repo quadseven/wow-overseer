@@ -6,7 +6,7 @@ import { html, raw, plural, state, classVar } from "../ui.js";
 import * as D from "./now/data.js";
 import * as wm from "./now/worldmap.js";
 
-const READS = ["/shapes.json", "/api/map", "/api/wall", "/api/guildgear"];
+const READS = ["/shapes.json", "/api/map", "/api/wall", "/api/guildgear", "/api/v2/roster"];
 const PICK = [["kal", "Kalimdor"], ["ek", "Eastern Kingdoms"]];
 
 const pickOf = (ctx) => (ctx.params.continent === "ek" ? "ek" : "kal");
@@ -14,16 +14,18 @@ const pickOf = (ctx) => (ctx.params.continent === "ek" ? "ek" : "kal");
 // name -> {family, color, ghost, head} for both families and every guildmate.
 function people(ctx) {
   const out = new Map();
+  // Ghost state is the roster's: neither the wall nor guildgear carries it.
+  const ghosts = D.ghostNames(ctx.get("/api/v2/roster"));
   const gear = ctx.get("/api/guildgear");
   if (D.ok(gear)) {
     (gear.data.guilds || []).forEach((g) => (g.members || []).forEach((m) => {
-      out.set(m.name, { family: false, color: wm.MATE, ghost: m.ghost === true, head: false, guild: g.name, cls: classVar(m["class"]) });
+      out.set(m.name, { family: false, color: wm.MATE, ghost: ghosts.has(m.name), head: false, guild: g.name, cls: classVar(m["class"]) });
     }));
   }
   const wall = ctx.get("/api/wall");
   if (D.ok(wall)) {
     (wall.data.members || []).forEach((m) => {
-      out.set(m.name, { family: true, color: m.class_colour || wm.MATE, ghost: m.ghost === true, head: m.role === "father" || m.role === "chief" || m.leader === true, cls: classVar(m["class"]) });
+      out.set(m.name, { family: true, color: m.class_colour || wm.MATE, ghost: ghosts.has(m.name), head: m.role === "father" || m.role === "chief" || m.leader === true, cls: classVar(m["class"]) });
     });
   }
   return out;

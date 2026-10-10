@@ -7,7 +7,12 @@ Everything here is read from the realm's own tables, at the moment of the
 read, and nothing is written:
 
   members       characters joined to guild_member: level, class, online, and
-                ghost (PLAYER_FLAGS_GHOST in characters.playerFlags).
+                ghost. Both are read as the roster (members.py) reads them: a
+                snapshot written in the last minute means online, and its
+                health says dead or ghost; offline, the ghost flag in
+                characters.playerFlags. The saved flag alone lags a member in
+                the world, so the guild page once showed no ghosts while the
+                roster showed several.
   gaining       members with a level change in the last 24 hours
                 (overseer_level). Experience itself is not recorded, so
                 "gaining" means a level, not a kill.
@@ -38,8 +43,8 @@ import classquest
 import council
 import guildrun
 from apiv2 import _allow
+from apiv2.members import SNAP_SQL, life_of
 
-GHOST_FLAG = 0x10
 BLOCKED_HOURS = 2
 TOP_KILLERS = 5
 CONTINENTS = (0, 1, 530, 571)
@@ -146,17 +151,30 @@ def family_of(names: set, roster_rows: list) -> str:
     return counts.most_common(1)[0][0] if counts else ""
 
 
-def member_rows(rows: list) -> list:
-    return [
-        {
-            "name": r["name"],
-            "level": int(r["level"] or 0),
-            "class": class_name(r["class"]),
-            "online": bool(r["online"]),
-            "ghost": bool(int(r["flags"] or 0) & GHOST_FLAG),
-        }
-        for r in sorted(rows, key=lambda r: r["name"])
-    ]
+def member_rows(rows: list, snaps: dict | None = None) -> list:
+    """Each member, online and ghost as the roster reads them (life_of)."""
+    snaps = snaps or {}
+    out = []
+    for r in sorted(rows, key=lambda r: r["name"]):
+        snap = snaps.get(r["name"])
+        out.append(
+            {
+                "name": r["name"],
+                "level": int(r["level"] or 0),
+                "class": class_name(r["class"]),
+                "online": snap is not None or bool(r["online"]),
+                "ghost": life_of(snap, r) in ("dead", "ghost"),
+            }
+        )
+    return out
+
+
+def _snaps(cur, names: list) -> dict:
+    """The last minute's snapshot of each member in the world, by name."""
+    if not names:
+        return {}
+    found = _all(cur, SNAP_SQL.format(holes=_holes(len(names))), tuple(names))
+    return {r["name"]: r for r in found}
 
 
 def place(map_id, zone, zones: dict, maps: dict) -> str:
@@ -377,7 +395,7 @@ def build(cur, row: dict, zones: dict, maps: dict) -> dict:
     gid = int(row["guildid"])
     now = int(_all(cur, _NOW_SQL)[0]["now"])
     raw = _all(cur, _MEMBERS_SQL, (gid, MAX_MEMBERS))
-    members = member_rows(raw)
+    members = member_rows(raw, _snaps(cur, [r["name"] for r in raw]))
     names = [m["name"] for m in members]
     classes = {m["name"]: m["class"] for m in members}
     faction = faction_of(r["race"] for r in raw)

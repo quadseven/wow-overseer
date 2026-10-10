@@ -43,11 +43,20 @@ export function tileOf(wall, name) {
   return tiles.find((t) => t.name === name) || null;
 }
 
-// Ghost state is per member on the family reads once the server sends it
-// (`ghost`). Until a member carries the field, ghosts are not measured.
-export function ghosts(members) {
-  if (!members.length || !members.some((m) => typeof m.ghost === "boolean")) return null;
-  return members.filter((m) => m.ghost === true);
+// Ghosts from /api/v2/roster, the read the Members page counts: each member's
+// `life` is "dead" (a corpse), "ghost" (a released spirit), "alive", or null
+// when nothing was read. The wall's members carry no ghost state at all, so
+// the chip once said "not measured" while the roster listed ghosts.
+export function ghosts(roster) {
+  if (!ok(roster)) return null;
+  const members = roster.data.members || [];
+  if (!members.some((m) => typeof m.life === "string")) return null;
+  return members.filter((m) => m.life === "ghost" || m.life === "dead");
+}
+
+// The names ghosts() finds, for the map dots; empty when not measured.
+export function ghostNames(roster) {
+  return new Set((ghosts(roster) || []).map((m) => m.name));
 }
 
 // /api/v2/stuck: {members: [{name, step, blocker, since}]}; `since` is a
