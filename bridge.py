@@ -125,6 +125,7 @@ import raidgear
 import raidlineup
 import raidprep
 import raidroles
+import restsupply
 import raidrun
 import raidsupply
 import recipebook
@@ -14218,6 +14219,8 @@ class Bridge(discord.Client):
             recent=facts["recent"], busy=busy, cap=cap,
             unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"),
             gear=await self._job_gear_offers(members, facts["recent"]),
+            # Food and drink for a member with none (restsupply.py).
+            supply=await self._job_supply_offers(members, facts["recent"]),
             mail=await asyncio.to_thread(_job_mail_commands, members),
             pvp=await self._job_pvp_moves(members, facts["recent"]),
             # The level step is a spawn walk too (guildlevel.py).
@@ -14332,6 +14335,25 @@ class Bridge(discord.Client):
         for name in chosen:
             offers[name] = (facts[name], await asyncio.to_thread(
                 _fetch_gear_vendors, by_name[name], guildjobs.GUILD_GEAR_VENDOR_YARDS))
+        return offers
+
+    async def _job_supply_offers(self, members, recent) -> dict:
+        """name -> the food and drink sold in reach, for members short of them
+        (restsupply.wanted): online, alive, out of combat, placed and off the
+        supply cooldown, at most GUILD_SUPPLY_READS_PER_PASS of them in turn."""
+        wanted = [m.name for m in members
+                  if m.online and m.alive and not m.in_combat
+                  and m.map_id is not None and m.x is not None and m.y is not None
+                  and restsupply.wanted(m)
+                  and not guildjobs._cooling(m, restsupply.ACTION, recent)]
+        chosen, self._supply_read_offset = guildjobs.rotate_reads(
+            wanted, getattr(self, "_supply_read_offset", 0),
+            GUILD_SUPPLY_READS_PER_PASS)
+        by_name = {m.name: m for m in members}
+        offers = {}
+        for name in chosen:
+            offers[name] = await asyncio.to_thread(
+                _fetch_supply_vendors, by_name[name], guildjobs.GUILD_GEAR_VENDOR_YARDS)
         return offers
 
     def _log_stranded_knights(self, members, plan):
@@ -24479,6 +24501,49 @@ _JOB_ITEMS_SQL = (
     "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
 )
+# THE FOOD AND DRINK EACH MEMBER CARRIES (restsupply.py): units by the game's
+# own category (item_template.spellcategory_1, 11 eaten and 59 drunk, what
+# mod-playerbots' EatAction and DrinkAction look for), in the backpack and the
+# bags worn.
+_JOB_SUPPLIES_SQL = (
+    "SELECT ci.guid AS owner, it.spellcategory_1 AS category, "
+    "SUM(ii.count) AS units "
+    "FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE ci.guid IN ({guids}) AND it.class = 0 AND it.subclass = 5 "
+    "AND it.spellcategory_1 IN ({food}, {drink}) "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "GROUP BY ci.guid, it.spellcategory_1"
+)
+
+
+def _job_supplies(cur, guids: str):
+    """guid -> (food units, drink units) for every member read, or None when
+    the read failed on this schema, which buys nothing (restsupply.py)."""
+    try:
+        cur.execute(_JOB_SUPPLIES_SQL.format(
+            guids=guids, food=restsupply.FOOD_CATEGORY,
+            drink=restsupply.DRINK_CATEGORY))
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            log.warning("guild jobs: the food and drink read failed on this schema "
+                        "(%s); no member buys any", exc.args[0])
+            return None
+        raise
+    out = {}
+    for row in cur.fetchall():
+        food, drink = out.get(int(row["owner"]), (0, 0))
+        units = int(row.get("units") or 0)
+        if int(row["category"]) == restsupply.FOOD_CATEGORY:
+            food += units
+        else:
+            drink += units
+        out[int(row["owner"])] = (food, drink)
+    return out
+
+
 _JOB_RECENT_SQL = (
     # The head of `result` carries the module's refusal and its reason.
     "SELECT id, target_name, command, source, status, "
@@ -24715,6 +24780,7 @@ def _fetch_job_facts(family_names: list) -> dict:
             guids=everyone, goods=guildjobs.TRADE_GOODS,
             subclasses=ids(sorted(guildjobs.MATERIAL_SUBCLASSES)),
             entries=ids([*_JOB_ENTRIES, *(book.watch_items() if book else ())])))
+        supplies = _job_supplies(cur, everyone)
         recent_rows = _job_read(cur, "recent rows", _JOB_RECENT_SQL,
                                 (guildjobs.SOURCE + ":%",))
         pending_rows = _job_read(cur, "summons", _JOB_PENDING_SUMMONS_SQL)
@@ -24731,7 +24797,8 @@ def _fetch_job_facts(family_names: list) -> dict:
     facts = _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows,
                                  item_rows, recent_rows, pending_rows,
                                  log_rows=log_rows, done_rows=done_rows,
-                                 free_slots=_job_free_slots(list(guid_of)))
+                                 free_slots=_job_free_slots(list(guid_of)),
+                                 supplies=supplies)
     facts["class_book"] = book
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
@@ -24779,7 +24846,7 @@ def _job_free_slots(names) -> dict:
 
 def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, item_rows,
                          recent_rows, pending_rows, log_rows=(), done_rows=(),
-                         free_slots=None) -> dict:
+                         free_slots=None, supplies=None) -> dict:
     """The rows the job reads, turned into guildjobs' facts."""
     family = set(family_names)
     guild_members, masters = guildwork.members_from_rows(rows, family_names)
@@ -24788,7 +24855,7 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     carried = guildjobs.carried_from_rows(item_rows)
     members, crafters = _guild_members_and_crafters(
         rows, family, role_of, skills, known, carried, eligible,
-        _class_quest_state(log_rows, done_rows), free_slots or {})
+        _class_quest_state(log_rows, done_rows), free_slots or {}, supplies)
     pending = {str(r.get(k) or "") for r in pending_rows
                for k in ("target_name", "target_arg")} - {""}
     return {
@@ -24832,7 +24899,7 @@ def _class_quest_state(log_rows, done_rows) -> tuple:
 
 
 def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible,
-                                quest_state=({}, {}, {}), free_slots=None):
+                                quest_state=({}, {}, {}), free_slots=None, supplies=None):
     members, crafters = [], {}
     quest_log, quests_done, quest_progress = quest_state
     for r in rows:
@@ -24863,7 +24930,10 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             tree=raidroles.tree_of(int(r.get("class_id") or 0),
                                    r.get(raidroles.KEY)),
             alive=guildrun.alive_or_unread(r),
-            free_slots=(free_slots or {}).get(name)))
+            free_slots=(free_slots or {}).get(name),
+            # Unread bags (None) buy no food or drink (restsupply.py).
+            food=None if supplies is None else supplies.get(guid, (0, 0))[0],
+            drink=None if supplies is None else supplies.get(guid, (0, 0))[1]))
     return members, crafters
 
 
@@ -25690,6 +25760,53 @@ _GEAR_VENDOR_SQL = (
 # one stock query around one member, so the pass stays bounded however many
 # members are short.
 GUILD_GEAR_READS_PER_PASS = 24
+
+
+# THE FOOD AND DRINK SOLD NEAR A MEMBER (restsupply.py), one row per (vendor,
+# item): the gear query's shape with the consumable filter, never a conjured
+# item, only an unlimited line, and only what the member's level may use.
+_SUPPLY_VENDOR_SQL = (
+    "SELECT cr.id AS vendor, ct.name AS vendor_name, cr.map AS map_id, "
+    "MIN(SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2))) AS yards, "
+    "it.entry AS entry, it.name AS item_name, it.BuyPrice AS price, "
+    "it.BuyCount AS buy_count, it.RequiredLevel AS required_level, "
+    "it.spellcategory_1 AS category, ft.EnemyGroup AS enemy_group "
+    "FROM acore_world.npc_vendor nv "
+    "JOIN acore_world.creature cr ON cr.id = nv.entry "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "JOIN acore_world.item_template it ON it.entry = nv.item "
+    "LEFT JOIN acore_world.factiontemplate_dbc ft ON ft.ID = ct.faction "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 AND nv.maxcount = 0 "
+    "AND it.class = 0 AND it.subclass = 5 AND it.spellcategory_1 IN (%s, %s) "
+    "AND (it.Flags & 2) = 0 AND it.BuyPrice > 0 AND it.RequiredLevel <= %s "
+    "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
+    "GROUP BY cr.id, ct.name, cr.map, it.entry, it.name, it.BuyPrice, it.BuyCount, "
+    "it.RequiredLevel, it.spellcategory_1, ft.EnemyGroup "
+    "HAVING yards <= %s ORDER BY yards, vendor"
+)
+
+# The supply step's vendor reads per pass, as the gear step's: one stock query
+# around one member each.
+GUILD_SUPPLY_READS_PER_PASS = 12
+
+
+def _fetch_supply_vendors(here, cap_yards) -> list:
+    """Rows for restsupply.plan, measured from where the member stands."""
+    cap = float(cap_yards)
+    x, y = float(here.x), float(here.y)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                _SUPPLY_VENDOR_SQL,
+                (x, y, int(here.map_id), towntrip.NPC_FLAG_VENDOR,
+                 restsupply.FOOD_CATEGORY, restsupply.DRINK_CATEGORY,
+                 int(here.level), x, cap, y, cap, cap),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
 
 
 def _fetch_gear_vendors(here, cap_yards=None) -> list:

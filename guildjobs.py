@@ -125,6 +125,7 @@ import guildroute
 import keep
 import pvpgear
 import raidroles
+import restsupply
 import situation
 import standstill
 
@@ -386,6 +387,9 @@ COOLDOWN_MINUTES = {
     guildlevel.ORB_ACTION: guildlevel.ORB_COOLDOWN_MINUTES,
     # PvP for upgrades (#589): a queue row waits this long for its battle.
     "pvp": pvpgear.QUEUE_MINUTES,
+    # Food and drink bought with its own gold (restsupply.py): bought, the bags
+    # show it; refused, the trip waits an hour.
+    restsupply.ACTION: 60,
 }
 
 # A TRAINER WALK THAT KEEPS FAILING IS ASKED LESS OFTEN (#766). Measured on the
@@ -547,6 +551,10 @@ class Member:
     # Maps the module has refused to cross this member to for good, with its
     # reason (class_walls): classquest then names a MAP blocker, not a CROSS.
     no_crossing: dict = field(default_factory=dict)
+    # Units of food and of drink in its bags (restsupply.py), None when unread,
+    # which buys nothing.
+    food: int | None = None
+    drink: int | None = None
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -1362,15 +1370,9 @@ def friendly_vendor_rows(member, vendor_rows) -> list:
     ]
 
 
-def junk_sales(member, kept) -> tuple:
-    """The sell rows a gear step opens with: room first.
-
-    The junk the member carries is sold at the same counter before the buys.
-    On wow-dev on 2026-10-04 three of four guild members who reached their
-    vendor were refused every piece with "bags cannot take the item". Never a
-    stack reserved in overseer_keep, and at most MAX_SALES.
-    """
-    junk = sorted(
+def _junk(member, kept) -> list:
+    """The stacks junk_sales sells, priciest first."""
+    return sorted(
         (
             c
             for c in (member.carried or ())
@@ -1378,11 +1380,26 @@ def junk_sales(member, kept) -> tuple:
         ),
         key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
     )[:MAX_SALES]
+
+
+def junk_value(member, kept) -> int:
+    """Copper the junk junk_sales sells brings at the counter."""
+    return sum(int(c.sell_price) * int(c.count) for c in _junk(member, kept))
+
+
+def junk_sales(member, kept, action="gear") -> tuple:
+    """The sell rows a gear step opens with: room first.
+
+    The junk the member carries is sold at the same counter before the buys.
+    On wow-dev on 2026-10-04 three of four guild members who reached their
+    vendor were refused every piece with "bags cannot take the item". Never a
+    stack reserved in overseer_keep, and at most MAX_SALES.
+    """
     return tuple(
         guildcorps.Row(
-            "sell", "guid:%d" % int(c.guid), "", source_for("gear", member.name)
+            "sell", "guid:%d" % int(c.guid), "", source_for(action, member.name)
         )
-        for c in junk
+        for c in _junk(member, kept)
     )
 
 
@@ -1397,6 +1414,16 @@ def gear_step(member, character, vendor_rows, cap, kept=None):
     character = shield_aware(member, character)
     if not character or not _gear_wanted(character):
         return None, ""
+    # THE JUNK PAYS FOR THE GEAR (2026-10-10). The sales are this step's first
+    # rows, at the same counter, so what they bring is the member's to spend.
+    # On the dev realm the guilds' median purse was 10 silver, every piece at a
+    # fifth of it was out of reach ("sells it nothing it can wear and afford"),
+    # and so no gear step was written and the junk that would have paid for it
+    # was never sold either.
+    character = dict(
+        character,
+        purse=int(character.get("purse") or 0) + junk_value(member, kept),
+    )
     if member.map_id is None:
         return None, "%s is short of gear; where it stands is not read" % member.name
     vendor_rows = friendly_vendor_rows(member, vendor_rows)
@@ -1453,6 +1480,68 @@ def gear_step(member, character, vendor_rows, cap, kept=None):
         ),
     )
     return step, ""
+
+
+def supply_step(member, vendor_rows, cap, kept=None):
+    """(step or None, why not): a member short of food or drink walks to a
+    friendly vendor in reach, sells its junk there and buys some with its own
+    gold (restsupply.py). `vendor_rows` are the food and drink sold in reach of
+    where it stands (bridge._SUPPLY_VENDOR_SQL)."""
+    if member.map_id is None:
+        return None, ""
+    rows = friendly_vendor_rows(member, vendor_rows)
+    if vendor_rows and not rows:
+        return None, "no vendor in reach will sell %s food or drink" % member.name
+    buys, why = restsupply.plan(member, rows, junk_value(member, kept))
+    if not buys:
+        return None, why
+    # The walk names the item the chosen vendor is the nearest seller of, so
+    # the module's nearest-stockist walk ends at that counter.
+    nearest = {}
+    for r in rows:
+        entry = int(r.get("entry") or 0)
+        yards = float(r.get("yards") or 0.0)
+        if entry not in nearest or yards < nearest[entry][0]:
+            nearest[entry] = (yards, int(r.get("vendor") or 0))
+    lead = next(
+        (b for b in buys if nearest.get(b.entry, (0, 0))[1] == b.vendor), buys[0]
+    )
+    return (
+        guildcorps.Step(
+            member.name,
+            restsupply.ACTION,
+            lead.entry,
+            restsupply.said(member, buys),
+            rows=junk_sales(member, kept, restsupply.ACTION)
+            + tuple(
+                guildcorps.Row(
+                    "buy", b.command, "", source_for(restsupply.ACTION, member.name)
+                )
+                for b in buys
+            ),
+            walk=guildcorps.Row(
+                "buy",
+                "walk-to-vendor item:%d%s" % (lead.entry, _cap_word(cap)),
+                "",
+                source_for(restsupply.ACTION, member.name),
+            ),
+        ),
+        "",
+    )
+
+
+def _supply_first(m, offer, recent, cap, kept=None):
+    """A member with no food or drink buys some before any other job but the
+    class quest and the stood-still hearth: a member that cannot rest between
+    fights dies in them (restsupply.py)."""
+    if not offer or not m.online or not m.alive or m.in_combat:
+        return None, "", ""
+    if not restsupply.wanted(m) or _cooling(m, restsupply.ACTION, recent):
+        return None, "", ""
+    step, why = supply_step(m, offer, cap, kept)
+    if step is None:
+        return None, "", why
+    return step, step.said, ""
 
 
 # A CRAFTER IS POSTED ONLY WHAT IT CAN WORK NOW (#373). Holding a trade is not
@@ -2094,6 +2183,7 @@ def plan(
     far_slots=None,
     owing=None,
     still=None,
+    supply=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -2118,7 +2208,9 @@ def plan(
     and healers first, then by level (class_priority); `owing` the
     classquest.Owing clock (None keeps none, so a hold never lapses within one
     call); `still` name -> minutes the member has stood on one spot
-    (standstill.py), None to read no stand (stood_still_step).
+    (standstill.py), None to read no stand (stood_still_step); `supply` name
+    -> the food and drink sold in reach of a member short of them
+    (restsupply.py, supply_step).
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -2139,6 +2231,7 @@ def plan(
         "level": {},
         "classquest": {},
         "room": {},
+        "supply": {},
     }
     far = classquest.FarSlots(far_slots) if far_slots is not None else None
     for m in _class_ordered(members, classes):
@@ -2168,6 +2261,7 @@ def plan(
             far,
             level_room,
             int((still or {}).get(m.name, 0)),
+            (supply or {}).get(m.name),
         )
         lines[m.name] = doing
         helps += class_helps(m, classes, hunts, now, recent)
@@ -2218,6 +2312,8 @@ def _allowance(step, counters, per_guild):
     guildlevel.STEPS_PER_GUILD for walks out of an outgrown zone."""
     if step.action == ROOM_ACTION:
         return counters["room"], ROOM_STEPS_PER_GUILD
+    if step.action == restsupply.ACTION:
+        return counters["supply"], restsupply.STEPS_PER_GUILD
     if step.action == classquest.ACTION:
         return counters["classquest"], CLASSQUEST_STEPS_PER_GUILD
     if step.action == pvpgear.ACTION:
@@ -2289,6 +2385,7 @@ def _member_step(
     far=None,
     level_room=True,
     still_for=0,
+    supply=None,
 ):
     """A class quest first, then a hearth out of a spot it cannot leave, then gear, then PvP for an upgrade, then the post, then a walk out of an
     outgrown zone, then the member's ordinary job (a craft-focus guild's trade
@@ -2321,7 +2418,11 @@ def _member_step(
     step = stood_still_step(m, still_for, recent, leveling)
     if step is not None:
         return step, step.said, quest_note
+    step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
+    if step is not None:
+        return step, doing, quest_note
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
+    gear_note = "; ".join(n for n in (supply_note, gear_note) if n)
     if step is not None:
         return step, doing, gear_note
     step, doing, held = _pvp_first(m, pvp, recent, cap, kept)
