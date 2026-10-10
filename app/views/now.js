@@ -14,8 +14,9 @@ import { openPanel, pressed } from "./now/panel.js";
 import * as wm from "./now/worldmap.js";
 import { seatChips } from "./_runs.js";
 import { firstFamily, firstGuild } from "../families.js";
+import { announce, CSS as ACH_CSS } from "./_achievements.js";
 
-const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/v2/roster", "/api/map", "/shapes.json"];
+const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/v2/roster", "/api/map", "/shapes.json", "/api/v2/achievements"];
 // The realm strip's two reads are the cheap ones, so they are asked for every
 // 5s while the rest keep 15s. Measured on the dev realm: /api/eye runs 9 SQL
 // statements in about 1KB, /api/v2/roll 5 in under 0.5KB, against 16 to 18
@@ -241,7 +242,7 @@ function fold(ctx, agendas) {
 
 export default {
   // The tile panels draw the profile's and the guild bank's frames, in their styles.
-  css: ["views/now.css", "views/members.css", "views/economy.css"],
+  css: ["views/now.css", "views/members.css", "views/economy.css", ACH_CSS],
   reads: () => READS.concat(D.familyKeys().map(D.agendaPath)),
   every: 15000,
   quick: QUICK,
@@ -266,6 +267,8 @@ ${fold(ctx, agendas)}`;
     streams.bind(main, openPanel);
     pressed();
     drawMiniMaps(main, ctx);
+    // A new achievement since the last visit: a brief toast, once per device.
+    announce(ctx.get("/api/v2/achievements"), ctx.previousVisit);
     main.querySelectorAll("button[data-layout]").forEach((b) => b.addEventListener("click", () => {
       saveLayout(b.getAttribute("data-layout"));
       const tilesEl = main.querySelector(".live-tiles");

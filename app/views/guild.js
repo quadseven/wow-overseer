@@ -7,7 +7,7 @@
 // Reads: /api/v2/guild (header, tiles, class quests, deaths, the path),
 // /api/v2/series (guild XP per hour), /api/guildruns, /api/v2/dungeonups, /api/runtimeline, and for the
 // chronicle /api/v2/chronicle, /api/loot, /api/recap, /api/council and
-// /api/guildchat. Nothing here writes.
+// /api/guildchat, and the announcer's /api/v2/achievements. Nothing here writes.
 
 import {
   html, raw, pageHead, sectionHead, tabs, kpi, sparkline, histogram, notMeasured,
@@ -19,6 +19,8 @@ import { guilds, guildName, guildFamily } from "../families.js";
 import { since, toSeconds, fromClock } from "../models/time.js";
 import { guild as guildModel } from "../models/guild.js";
 import { roster as rosterModel } from "../models/roster.js";
+import { items as achItems, notable } from "../models/achievements.js";
+import { feedRow as achRow, CSS as ACH_CSS } from "./_achievements.js";
 
 const TABS = [["progress", "Progress"], ["runs", "Runs"], ["chronicle", "Chronicle"]];
 const FEED_KINDS = [
@@ -26,6 +28,7 @@ const FEED_KINDS = [
   ["levels", "Levels and runs", ["level", "clear", "run"]],
   ["loot", "Loot", ["loot"]],
   ["death", "Deaths", ["death"]],
+  ["achievements", "Achievements", ["achievement"]],
 ];
 const FEED_PAGE = 40;
 const CQ_SHOWN = 8;
@@ -51,12 +54,13 @@ const P = {
   recap: () => "/api/recap",
   council: () => "/api/council",
   chat: (ctx) => "/api/guildchat?guild=" + gname(ctx),
+  achievements: (ctx) => "/api/v2/achievements?guild=" + key(ctx),
 };
 
 const TAB_READS = {
   progress: ["guild", "series", "roster"],
   runs: ["guild", "runs", "ups", "timeline"],
-  chronicle: ["guild", "runs", "chronicle", "loot", "recap", "council", "chat"],
+  chronicle: ["guild", "runs", "chronicle", "loot", "recap", "council", "chat", "achievements"],
 };
 
 // Per-device view state that is not worth a URL: the feed's page length and
@@ -278,9 +282,16 @@ function feedItems(ctx) {
       items.push({ kind: "loot", at: toSeconds(s.at), text: s.line, item: s.item });
     });
   }
+  achItems(peek(P.achievements(ctx))).forEach((a) => {
+    items.push({ kind: "achievement", at: a.earned_at, text: a.title, ach: a, notable: notable(a) });
+  });
   items.sort((a, b) => (b.at || 0) - (a.at || 0));
   return items;
 }
+
+// All shows every kind, but of the announcer's achievements only the notable
+// ones (gold, and a guild's firsts): the rest are under Achievements.
+function inAll(x) { return x.kind !== "achievement" || x.notable; }
 
 const FEED_ICON = {
   level: ["ph-fill ph-arrow-fat-up", "gold"], clear: ["ph-fill ph-trophy", "gold"],
@@ -290,11 +301,24 @@ const FEED_ICON = {
 function feedRow(ctx, x) {
   const seen = fromClock(ctx.previousVisit);
   const fresh = seen && x.at && x.at > seen;
+  if (x.kind === "achievement") return achRow(x.ach, { fresh, cls: (n) => model(ctx).classOf(n) });
   const [icon, tone] = FEED_ICON[x.kind] || ["ph ph-circle", ""];
   const body = x.kind === "loot" && x.item
     ? html`${item({ entry: x.item.entry, name: x.item.name, quality: x.item.quality, icon: x.item.icon })} <span>${x.text}</span>`
     : x.run ? html`<a href="${runHref({ id: x.run })}" class="g-feed-link">${x.text}</a>` : x.text;
   return html`<div class="g-row g-feed"><i class="${icon}" data-gt="${tone}" aria-hidden="true"></i><span class="g-grow">${body}</span>${fresh ? html`<span class="tag tag-accent">New</span>` : ""}<span class="muted g-when">${since(x.at)}</span></div>`;
+}
+
+// An empty filter: the achievements read may still be on its way, or have
+// failed, which is not the same as nothing earned.
+function emptyFeed(ctx, days) {
+  const a = peek(P.achievements(ctx));
+  if (view.kind === "achievements") {
+    const wait = pendingRead(a, 1);
+    if (wait) return wait;
+    return html`<div class="g-row muted">Nothing earned in the windows the announcer reads. ${a.data.basis}</div>`;
+  }
+  return html`<div class="g-row muted">Nothing of this kind in the last ${days} days.</div>`;
 }
 
 function feed(ctx) {
@@ -303,12 +327,13 @@ function feed(ctx) {
   if (wait) return wait;
   const all = feedItems(ctx);
   const kinds = FEED_KINDS.find((k) => k[0] === view.kind) || FEED_KINDS[0];
-  const list = kinds[2] ? all.filter((x) => kinds[2].includes(x.kind)) : all;
-  const chips = FEED_KINDS.map(([k, label, ks]) => html`<button type="button" class="chip g-filter" data-kind="${k}" aria-pressed="${k === view.kind ? "true" : "false"}">${label} <span class="muted">${ks ? all.filter((x) => ks.includes(x.kind)).length : all.length}</span></button>`);
+  const pick = (ks) => (ks ? all.filter((x) => ks.includes(x.kind)) : all.filter(inAll));
+  const list = pick(kinds[2]);
+  const chips = FEED_KINDS.map(([k, label, ks]) => html`<button type="button" class="chip g-filter" data-kind="${k}" aria-pressed="${k === view.kind ? "true" : "false"}">${label} <span class="muted">${pick(ks).length}</span></button>`);
   const shown = list.slice(0, view.shown);
   return html`<div class="row g-filters" role="group" aria-label="Show">${chips}</div>
 <div class="card g-list" id="g-feed">${shown.map((x) => feedRow(ctx, x))}
-${list.length ? "" : html`<div class="g-row muted">Nothing of this kind in the last ${c.data.days} days.</div>`}
+${list.length ? "" : emptyFeed(ctx, c.data.days)}
 ${list.length > shown.length ? html`<div class="g-row"><button type="button" class="btn btn-ghost" data-more="feed">Show ${Math.min(FEED_PAGE, list.length - shown.length)} more of ${list.length - shown.length}</button></div>` : ""}
 </div>`;
 }
@@ -425,7 +450,7 @@ function chronicleTab(ctx) {
 // ---- the view -------------------------------------------------------------------
 
 export default {
-  css: ["views/guild.css"],
+  css: ["views/guild.css", ACH_CSS],
   every: 30000,
   reads: (ctx) => (TAB_READS[ctx.params.tab] || TAB_READS.progress).map((k) => P[k](ctx)),
   title: (ctx) => gname(ctx) + (ctx.params.tab === "progress" ? "" : " " + ctx.params.tab),

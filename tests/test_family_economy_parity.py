@@ -445,7 +445,7 @@ class TheOtherGuildPaysItsDues(unittest.TestCase):
                 )[1],
                 "_dues_recent_holders": lambda: set(),
                 # No trainer reserve in these fixtures (guildfund.reserve).
-                "_with_reserves": lambda rows: rows,
+                "_with_reserves": lambda rows: [dict(r, reserve=0) for r in rows],
                 "_tabless_guilds": lambda guilds: frozenset(),
                 "_route_walkers": walkers,
                 "_log_capped": lambda what, lines: None,
