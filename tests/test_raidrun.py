@@ -16,6 +16,7 @@ import contextlib
 import pathlib
 import types
 import unittest
+import unittest.mock
 
 from test_decree_order import FakeConn, FakeCursor  # noqa: F401  (pymysql stub)
 
@@ -87,6 +88,17 @@ class TheRunLineSaysWhatShipped(unittest.TestCase):
         line = raidrun.run_line()
         self.assertIn("Only the head is walked to the door", line)
         self.assertIn("not brought there", line)
+
+    def test_a_module_without_the_clear_is_still_said_plainly(self):
+        """The flags are switches pinned to the module, like FORMS and ENTERS.
+        A pin back to a module without CLEAR flips CLEARS, and the run line
+        must then say the raid holds at the entrance, not that it clears."""
+        with unittest.mock.patch.object(raidrun, "CLEARS", False):
+            line = raidrun.run_line()
+        self.assertIn(
+            "It does not clear: inside, the raid holds at the entrance.", line
+        )
+        self.assertNotIn("clears it with the dungeon brain", line)
 
     def test_the_reader_sentence_says_it_clears(self):
         said = jobs.say("raid:moltencore", "Molten Core")
