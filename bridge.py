@@ -12930,11 +12930,14 @@ class Bridge(discord.Client):
         # spent on `plan_setup` alone. Wiring it here is the step
         # `plan_deposits`' own docstring anticipated: "wiring that read in later
         # can only ever release gold, never strand it".
-        deposits = guildbank.plan_deposits(
-            members, guild_has_tab=purchased_tabs > 0,
-            buyer=_setup_buyer(setup, names, leader),
-            reserve_for_buyer=guildbank.buyer_reserve(purchased_tabs)
-        ) if guildbank.MEMBER_GOLD_DEPOSITS else []
+        #
+        # THE GUILD MASTER BANKS THE GUILD'S GOLD (#775): with member deposits
+        # off, the dues stopped in the master's purse and Cave's vault sat at
+        # 155.0g for twelve days. guildbank.gold_deposits has the rule.
+        master = str((setup or {}).get("master") or "")
+        deposits = guildbank.gold_deposits(
+            members, master=master, purchased_tabs=purchased_tabs,
+            buyer=_setup_buyer(setup, names, leader))
         items = (await asyncio.to_thread(_plan_bank, names)).guild
         # AND WHAT JEV CHOSE TO BANK (#267), under the same gates.
         items = tuple(items) + tuple(self._jev_keep_deposits(names, setup, items))
@@ -12943,6 +12946,17 @@ class Bridge(discord.Client):
         items = await asyncio.to_thread(_not_kept_at_home, items, names)
         if not actions and not deposits and not items:
             log.info("guild bank: nobody is carrying more than the float")
+            return
+        if not actions and not items and not guildbank.worth_a_walk(deposits):
+            # A FEW GOLD IS NOT A TRIP TO A CAPITAL. The passing pass banks it
+            # the next time the master stands at a vault.
+            log.info(
+                "guild bank: %s carries %s above what it keeps, under the %dg "
+                "a trip is made for - it banks it at the next vault it passes%s",
+                ", ".join(d.name for d in deposits),
+                guildbank.gold(sum(d.copper for d in deposits)),
+                guildbank.MASTER_DEPOSIT_WALK_COPPER // 10_000,
+                _family_label(cohort))
             return
         # ONE POSITION READ, FOR TWO QUESTIONS (infra#3804): which map the
         # LEADER aims from, and whether each DEPOSITOR is at the vault now.
@@ -13072,6 +13086,10 @@ class Bridge(discord.Client):
                 continue
             await asyncio.to_thread(_insert_guild, deposit.name, command, "guildbank")
             fresh.append(deposit)
+            if deposit.name == master and not guildbank.MEMBER_GOLD_DEPOSITS:
+                purse = {str(m.get("name")): m.get("money") for m in members}.get(master)
+                log.info("%s%s", guildbank.master_deposit_line(
+                    deposit, purse, purchased_tabs), _family_label(cohort))
         if walking:
             # LOGGED: a pass that writes nothing and a broken one look
             # identical otherwise (infra#3660, restated for the rows).
@@ -13125,13 +13143,14 @@ class Bridge(discord.Client):
         setup = await asyncio.to_thread(_fetch_guild_bank_setup, names)
         purchased_tabs = int(setup["purchased_tabs"]) if setup else 0
         eligible = await asyncio.to_thread(_natural_contributors, names, names)
-        deposits = guildbank.plan_deposits(
+        # The guild master's deposit of the guild's gold (#775), under the
+        # same rule as the full pass; it needs no ten gold here, no walk.
+        deposits = guildbank.gold_deposits(
             natural.only_contributors(
                 await asyncio.to_thread(_fetch_guild_money, names), eligible),
-            guild_has_tab=purchased_tabs > 0,
-            buyer=_setup_buyer(setup, names, leader),
-            reserve_for_buyer=guildbank.buyer_reserve(purchased_tabs)
-        ) if guildbank.MEMBER_GOLD_DEPOSITS else []
+            master=str((setup or {}).get("master") or ""),
+            purchased_tabs=purchased_tabs,
+            buyer=_setup_buyer(setup, names, leader))
         if not deposits:
             return
         positions = await asyncio.to_thread(

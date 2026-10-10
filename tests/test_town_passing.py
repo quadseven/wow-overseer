@@ -215,14 +215,12 @@ class TheVaultLookDepositsOnlyForWhoeverIsAtAVault(unittest.TestCase):
                     {"name": n, "money": 50_000_000, "in_guild": 1} for n in names
                 ],
                 "guildbank": types.SimpleNamespace(
-                    plan_deposits=lambda members, guild_has_tab, **kw: [
+                    # The mechanism under test; the live policy (only the
+                    # guild master banks) is pinned in test_guildbank.
+                    gold_deposits=lambda members, **kw: [
                         types.SimpleNamespace(name=m["name"], copper=1000)
                         for m in members
                     ],
-                    buyer_reserve=lambda tabs: 0,
-                    # The mechanism under test; the live policy is off (the
-                    # members keep their gold) and test_guildbank pins that.
-                    MEMBER_GOLD_DEPOSITS=True,
                 ),
                 "_fetch_positions": lambda names: {
                     n: {"map_id": 1, "at": n == "Zug"} for n in names
@@ -244,6 +242,51 @@ class TheVaultLookDepositsOnlyForWhoeverIsAtAVault(unittest.TestCase):
             ),
             log.lines,
         )
+
+
+class TheMasterBanksAtAVaultItPasses(unittest.TestCase):
+    """#775: the guild master banks a few gold without a trip when it is
+    already standing at a vault; nobody else's gold moves."""
+
+    def test_zug_at_a_vault_banks_what_sits_above_its_float(self):
+        world, log = {"written": []}, _Log()
+        ns = _base(world)
+        ns.update(
+            {
+                "log": log,
+                "GIVE_RETRY_MINUTES": 60,
+                "TOWN_COUNTER_YARDS": 8,
+                "_fetch_guild_bank_setup": lambda names: {
+                    "purchased_tabs": 1,
+                    "master": "Zug",
+                },
+                "natural": __import__("natural"),
+                "_natural_contributors": lambda candidates, family: frozenset(
+                    candidates
+                ),
+                "_fetch_guild_money": lambda names: [
+                    {
+                        "name": n,
+                        "money": 130_000 if n == "Zug" else 900_000,
+                        "in_guild": 1,
+                    }
+                    for n in names
+                ],
+                "guildbank": __import__("guildbank"),
+                "_fetch_positions": lambda names: {
+                    n: {"map_id": 1, "at": True} for n in names
+                },
+                "_nearest_vault": lambda name: {"d2": 1.0},
+                "_recent_guild_bank_keys": lambda minutes: set(),
+                "_insert_guild": lambda who, command, source: world["written"].append(
+                    (who, command, source)
+                ),
+                "travel": types.SimpleNamespace(spawn_in_reach=_at(world)),
+            }
+        )
+        ns = _load(["_guild_bank_passing_once", "_setup_buyer", *HELPERS], ns)
+        asyncio.run(ns["_guild_bank_passing_once"](object(), HORDE))
+        self.assertEqual([("Zug", "bank deposit 30000", "guildbank")], world["written"])
 
 
 class TheLookRunsForEveryFamilyAndNeverWalks(unittest.TestCase):
