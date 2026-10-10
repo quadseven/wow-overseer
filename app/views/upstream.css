@@ -1,0 +1,17 @@
+/* ---- Upstream section of the Server view ---- */
+.ud-note { max-width: 760px; margin: 0; }
+.ud-rows { display: grid; gap: 10px; max-width: 760px; }
+.ud-row { gap: 6px; }
+.ud-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.ud-top h3 { font-size: var(--fs-2); margin: 0; }
+.ud-pin { overflow-wrap: anywhere; color: var(--color-neutral-300); }
+.ud-pin code { font-size: var(--fs-1); }
+.ud-fold > summary { min-height: 44px; }
+.ud-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ud-list li { display: grid; gap: 4px; }
+.ud-list a { overflow-wrap: anywhere; }
+.ud-kinds { display: flex; gap: 6px; flex-wrap: wrap; }
+.ud-foot { font-size: var(--fs-1); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.ud-foot a, .ud-list a { display: inline-flex; align-items: center; min-height: 44px; }
+.ud-list a { min-height: 0; }
+@media (max-width: 759.98px) { .ud-list a { min-height: 44px; } }
