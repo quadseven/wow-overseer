@@ -286,11 +286,12 @@ class TheServer(unittest.TestCase):
         # while Members listed ghosts; the guild's Stuck tile never counted.
         views = APP / "views"
         now = (views / "now.js").read_text(encoding="utf-8")
-        data = (views / "now" / "data.js").read_text(encoding="utf-8")
         guild = (views / "guild.js").read_text(encoding="utf-8")
         self.assertIn('"/api/v2/stuck", "/api/v2/roster"', now)
-        self.assertEqual(now.count('D.ghosts(ctx.get("/api/v2/roster"))'), 2)
-        self.assertIn('m.life === "ghost" || m.life === "dead"', data)
+        # Who is a ghost is the roster model's answer (test_app_models.py).
+        self.assertEqual(
+            now.count('rosterModel(ctx.get("/api/v2/roster")).ghosts()'), 2
+        )
         self.assertNotIn("m.ghost === true", now)
         self.assertNotIn(
             "m.ghost === true", (views / "map.js").read_text(encoding="utf-8")

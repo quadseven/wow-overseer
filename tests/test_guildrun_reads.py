@@ -382,13 +382,13 @@ console.log(JSON.stringify([
 
     def test_the_now_page_counts_runs_inside_by_run_state(self):
         got = render(
-            "views/now/data.js",
+            "models/guildruns.js",
             """
 const read = {data: {active: [
   {id: 1, run_state: "inside", state: "queued", status: "queued"},
   {id: 2, run_state: "queued", state: "inside", status: "inside"},
 ]}, at: 1, error: null};
-console.log(JSON.stringify(M.runsInside(read).map((r) => r.id)));""",
+console.log(JSON.stringify(M.guildRuns(read).insideNow().map((r) => r.id)));""",
         )
         self.assertEqual(got, [1])
 

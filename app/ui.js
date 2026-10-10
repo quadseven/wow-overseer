@@ -158,10 +158,11 @@ export function skeletons(n) {
 
 // What a view draws for one read before it has data: the skeleton while the
 // first answer is on its way, "The world did not answer" with Retry when it
-// failed and nothing earlier exists.
+// failed and nothing earlier exists. The read's state is readState's, below.
 export function pendingRead(read, rows) {
-  if (read.data !== undefined) return null;
-  if (read.error) {
+  const st = readState(read);
+  if (st === "ready" || st === "refused") return null;
+  if (st === "failed") {
     return html`<div class="state" data-kind="error" role="alert"><i class="${STATE_ICON.error}" aria-hidden="true"></i><div><div class="t">The world did not answer</div><div class="b">Nothing has been read yet. <button type="button" class="btn btn-ghost" data-action="retry">Retry</button></div></div></div>`;
   }
   return skeletons(rows || 3);
@@ -224,3 +225,20 @@ export function histogram(bins, opts) {
   const role = bins.some((b) => b.href) ? "group" : "img";
   return html`<div class="histo" role="${role}" aria-label="${o.label || "Distribution"}">${bars}</div><div class="histo-axis"><span>${first}</span><span>${last}</span></div>`;
 }
+
+// ---- the state of a read ---------------------------------------------------
+// The one decision every view and read model takes about a read from api.js
+// ({data, error, ...}), so pendingRead and the models never disagree.
+//
+//   loading   nothing has answered yet
+//   failed    nothing has answered and the last ask failed
+//   refused   the server answered, but with no payload or an error body
+//   ready     a payload to draw (kept even while a later poll fails)
+
+export function readState(read) {
+  if (!read || read.data === undefined) return read && read.error ? "failed" : "loading";
+  if (read.data === null || read.data.error) return "refused";
+  return "ready";
+}
+
+export function ready(read) { return readState(read) === "ready"; }

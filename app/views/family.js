@@ -3,8 +3,9 @@
 // is one existing read; a block whose read fails says so on its own and the
 // rest still draw.
 
-import { html, raw, ago, plural, notMeasured, state, skeletons, memberHref, classVar } from "../ui.js";
+import { html, raw, plural, notMeasured, state, skeletons, memberHref, classVar } from "../ui.js";
 import * as D from "./now/data.js";
+import { since } from "../models/time.js";
 
 // The buffs the classic page counts as the family's own (the rest are listed
 // as "other positive auras").
@@ -78,7 +79,7 @@ function buffs(ctx, p, fam) {
   else {
     const members = (read.data.members || []).filter((m) => m.family === fam);
     const { online, held, other } = buffRows(members);
-    const sampled = read.data.sampled_at ? ago(Date.now() / 1000 - read.data.sampled_at) : "not measured";
+    const sampled = read.data.sampled_at ? since(read.data.sampled_at) : "not measured";
     if (!online.length) body = state("unmeasured", "Buffs not measured", "No member of the family answered the aura probe" + (members[0] && members[0].error ? ": " + members[0].error : "") + ".");
     else if (!held.size) body = html`<span class="muted">No family buffs seen on the ${plural(online.length, "member")} who answered.</span>`;
     else body = [...held.entries()].sort((a, b) => b[1] - a[1]).map(([name, n]) => html`<div class="buff"><i class="ph ph-sparkle" aria-hidden="true"></i><span class="grow">${name}</span><span class="num ${n === online.length ? "ok" : "warn"}">${n} of ${online.length}</span></div>`);

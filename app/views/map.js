@@ -5,6 +5,8 @@
 import { html, raw, plural, state, classVar } from "../ui.js";
 import * as D from "./now/data.js";
 import * as wm from "./now/worldmap.js";
+import { roster as rosterModel } from "../models/roster.js";
+import { wall as wallModel } from "../models/wall.js";
 
 const READS = ["/shapes.json", "/api/map", "/api/wall", "/api/guildgear", "/api/v2/roster"];
 const PICK = [["kal", "Kalimdor"], ["ek", "Eastern Kingdoms"]];
@@ -15,24 +17,21 @@ const pickOf = (ctx) => (ctx.params.continent === "ek" ? "ek" : "kal");
 function people(ctx) {
   const out = new Map();
   // Ghost state is the roster's: neither the wall nor guildgear carries it.
-  const ghosts = D.ghostNames(ctx.get("/api/v2/roster"));
+  const ghosts = rosterModel(ctx.get("/api/v2/roster")).ghostNames();
   const gear = ctx.get("/api/guildgear");
   if (D.ok(gear)) {
     (gear.data.guilds || []).forEach((g) => (g.members || []).forEach((m) => {
       out.set(m.name, { family: false, color: wm.MATE, ghost: ghosts.has(m.name), head: false, guild: g.name, cls: classVar(m["class"]) });
     }));
   }
-  const wall = ctx.get("/api/wall");
-  if (D.ok(wall)) {
-    (wall.data.members || []).forEach((m) => {
-      out.set(m.name, { family: true, color: m.class_colour || wm.MATE, ghost: ghosts.has(m.name), head: m.role === "father" || m.role === "chief" || m.leader === true, cls: classVar(m["class"]) });
-    });
-  }
+  wallModel(ctx.get("/api/wall")).members.forEach((m) => {
+    out.set(m.name, { family: true, color: m.class_colour || wm.MATE, ghost: ghosts.has(m.name), head: m.role === "father" || m.role === "chief" || m.leader === true, cls: classVar(m["class"]) });
+  });
   return out;
 }
 
 function model(ctx) {
-  const shapes = ctx.get("/shapes.json"), map = ctx.get("/api/map"), wall = ctx.get("/api/wall");
+  const shapes = ctx.get("/shapes.json"), map = ctx.get("/api/map"), wall = wallModel(ctx.get("/api/wall"));
   if (!D.ok(shapes) || !D.ok(map)) return null;
   const cont = wm.CONTINENT[pickOf(ctx)];
   const shape = shapes.data[cont];
@@ -41,15 +40,13 @@ function model(ctx) {
   const who = people(ctx);
   const dots = wm.dotsFor(shape, cont, map.data.dots, who);
   const placed = new Set((map.data.dots || []).map((d) => d.name));
-  const members = D.ok(wall) ? wall.data.members || [] : [];
-  const fallback = wm.fallbackDots(shape, placed, members);
-  return { shape, shapes: shapes.data, cont, who, dots: dots.concat(fallback), map: map.data, members };
+  const fallback = wm.fallbackDots(shape, placed, wall.members);
+  return { shape, shapes: shapes.data, cont, who, dots: dots.concat(fallback), map: map.data, wall };
 }
 
 function familyLine(m) {
-  const fams = D.families({ members: m.members });
   const parts = D.familyKeys().map((f) => {
-    const head = D.headOf(fams.get(f) || [], f);
+    const head = m.wall.head(f);
     const dot = head && (m.map.dots || []).find((d) => d.name === head.name);
     if (!dot) return f + "'s family is not placed";
     if (dot.instance) return f + "'s family is inside " + dot.zone;
