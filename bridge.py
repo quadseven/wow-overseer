@@ -12914,7 +12914,7 @@ class Bridge(discord.Client):
         # every new keeper went to a personal bank instead. They ride the same
         # walk and the same per-member range gate as the deposits.
         withdrawals = await asyncio.to_thread(_plan_guild_withdrawals, names)
-        if not actions and not deposits and not items and not withdrawals:
+        if not any((actions, deposits, items, withdrawals)):
             log.info("guild bank: nobody is carrying more than the float")
             return
         # ONE POSITION READ, FOR TWO QUESTIONS (infra#3804): which map the
@@ -13025,9 +13025,9 @@ class Bridge(discord.Client):
         if withdrawals:
             await self._queue_guild_withdrawals(withdrawals, spawn, positions)
         if not deposits:
-            # REACHED WHEN SETUP OR ITEMS ARE THE WHOLE REASON THIS PASS
-            # WALKED. `not actions and not deposits and not items` already
-            # returned far above, so this arm means nobody is over their
+            # REACHED WHEN SETUP, ITEMS OR WITHDRAWALS ARE THE WHOLE REASON
+            # THIS PASS WALKED. The gate far above already returned when there
+            # was none of the four, so this arm means nobody is over their
             # float - which is a complete, uninteresting pass and not a
             # failure.
             log.info("guild bank: nobody is carrying more than the float")

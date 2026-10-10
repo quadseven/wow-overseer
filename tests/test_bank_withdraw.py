@@ -227,7 +227,7 @@ class TheBridgeTakesAndThenLists(unittest.TestCase):
         body = self.block("    async def _guild_bank_once(")
         self.assertIn("_plan_guild_withdrawals", body)
         self.assertIn("_queue_guild_withdrawals(", body)
-        self.assertIn("not withdrawals", body)
+        self.assertIn("if not any((actions, deposits, items, withdrawals)):", body)
 
     def test_a_withdrawal_is_queued_only_at_the_vault(self):
         body = self.block("    async def _queue_guild_withdrawals(")
