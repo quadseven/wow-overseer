@@ -1210,6 +1210,15 @@ def ask_shape(board: _Board, mate: Mate, guild: str) -> str:
     )
 
 
+def _may_ask_for(member: guildrun.Member, door, faction: str) -> bool:
+    """Whether this member may ask for `door`: the door fits its level, and a
+    tank or healer can take its own seat there (can_take, the bosses' level)."""
+    if not guildrun.fitting_doors([member.level], [door], faction):
+        return False
+    mine = role_of(member)
+    return mine == DPS or can_take(member, mine, door)
+
+
 def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
     """(rank, name, mate, options, band, shape) for this member's ask, or None.
 
@@ -1233,11 +1242,7 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
         door = board.doors.get(need.keyword)
         if door is None or door.keyword in seen or (guild, door.keyword) in asked:
             continue
-        if not guildrun.fitting_doors([mate.member.level], [door], faction):
-            continue
-        # A tank or healer asks only where it can take its own seat.
-        mine = role_of(mate.member)
-        if mine != DPS and not can_take(mate.member, mine, door):
+        if not _may_ask_for(mate.member, door, faction):
             continue
         record = board.records.get(
             (door.keyword, band, shape), guildrun.NO_SHAPE_RECORD
