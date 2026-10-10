@@ -294,27 +294,37 @@ def skill_needed(row: dict) -> int:
     )
 
 
-def refusal(row: dict, wearer: Wearer, off_hand: bool = False) -> str:
-    """Why this member cannot put the piece on now, or "" when it can."""
+def _template_refusal(row: dict) -> str:
+    """Is the piece gear this pass judges at all."""
     item_class = _int(row.get("item_class"))
     inv = _int(row.get("inventory_type"))
     if item_class not in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR):
         return "not gear"
     if inv not in SINGLE and inv not in PAIRS and inv not in HAND_TYPES:
         return "inventory type %d is not judged" % inv
-    if item_class == ITEM_CLASS_WEAPON and _int(row.get("item_subclass")) in (
-        WEAPON_MISC,
-        WEAPON_FISHING_POLE,
-    ):
+    tools = (WEAPON_MISC, WEAPON_FISHING_POLE)
+    if item_class == ITEM_CLASS_WEAPON and _int(row.get("item_subclass")) in tools:
         return "a tool, not a weapon"
+    return ""
+
+
+def _mask_refuses(mask: int, bit_of: int) -> bool:
+    return bit_of > 0 and mask not in (0, -1) and not mask & (1 << (bit_of - 1))
+
+
+def _wearer_refusal(row: dict, wearer: Wearer) -> str:
+    """Level, class and race: the template's own limits on who wears it."""
     if _int(row.get("required_level")) > wearer.level:
         return "requires level %d" % _int(row.get("required_level"))
-    classes = _int(row.get("allowable_class"), -1)
-    if classes not in (0, -1) and not classes & (1 << (wearer.class_id - 1)):
+    if _mask_refuses(_int(row.get("allowable_class"), -1), wearer.class_id):
         return "not for this class"
-    races = _int(row.get("allowable_race"), -1)
-    if wearer.race and races not in (0, -1) and not races & (1 << (wearer.race - 1)):
+    if _mask_refuses(_int(row.get("allowable_race"), -1), wearer.race):
         return "not for this race"
+    return ""
+
+
+def _skill_refusal(row: dict, wearer: Wearer) -> str:
+    """The proficiency the core checks, and the asks this pass cannot read."""
     need = skill_needed(row)
     if need and need not in wearer.skills:
         return "lacks the %s skill" % recap.SKILL_NAMES.get(need, str(need))
@@ -324,18 +334,35 @@ def refusal(row: dict, wearer: Wearer, off_hand: bool = False) -> str:
         return "asks a profession skill rank"
     if _int(row.get("required_spell")) or _int(row.get("required_reputation")):
         return "asks a spell or a reputation this pass cannot read"
+    return ""
+
+
+def _off_hand_role(wearer: Wearer) -> str:
+    if wearer.role == statweights.MELEE and wearer.class_id == 2:
+        return bag_pressure.ROLE_DAMAGE
+    return bag_pressure.ROLE_TANK if wearer.shield_tank else bag_pressure.ROLE_UNKNOWN
+
+
+def _hand_refusal(row: dict, wearer: Wearer, off_hand: bool) -> str:
+    """Dual wield for an off-hand weapon, and gear.py's off-hand guards."""
+    inv = _int(row.get("inventory_type"))
     if off_hand and inv in (ONE_HAND, OFF_HAND_WEAPON) and not wearer.dual_wields:
         return "cannot dual wield"
-    if inv in (SHIELD, OFF_HAND_WEAPON, HELD) or off_hand:
-        role = (
-            bag_pressure.ROLE_TANK if wearer.shield_tank else bag_pressure.ROLE_UNKNOWN
-        )
-        if wearer.role == statweights.MELEE and wearer.class_id == 2:
-            role = bag_pressure.ROLE_DAMAGE
-        said = bag_pressure.off_hand_refusal(row, wearer.class_id, wearer.level, role)
-        if said:
-            return said
-    return ""
+    if not off_hand and inv not in (SHIELD, OFF_HAND_WEAPON, HELD):
+        return ""
+    return bag_pressure.off_hand_refusal(
+        row, wearer.class_id, wearer.level, _off_hand_role(wearer)
+    )
+
+
+def refusal(row: dict, wearer: Wearer, off_hand: bool = False) -> str:
+    """Why this member cannot put the piece on now, or "" when it can."""
+    return (
+        _template_refusal(row)
+        or _wearer_refusal(row, wearer)
+        or _skill_refusal(row, wearer)
+        or _hand_refusal(row, wearer, off_hand)
+    )
 
 
 def waits_on_skill(row: dict, wearer: Wearer) -> bool:
@@ -416,145 +443,175 @@ def _singles(wearer, worn, carried, book) -> list:
     return out
 
 
+def _total(values) -> tuple:
+    out = (0.0, 0.0)
+    for v in values:
+        out = _add(out, v)
+    return out
+
+
+def _pair_pool(group, wearer, on, carried, book) -> list:
+    """(value, row, worn) for the pieces worn in `group` and those that could
+    be, best first."""
+    pool = [(value(r, wearer, "", book), r, True) for r in on]
+    pool += [
+        (value(row, wearer, "", book), row, False)
+        for row in carried
+        if PAIRS.get(_int(row.get("inventory_type"))) == group
+        and not refusal(row, wearer)
+    ]
+    pool.sort(key=lambda t: _rank(t[0], t[1]), reverse=True)
+    return pool
+
+
+def _best_two(pool) -> list:
+    """The two best of `pool`. A unique piece is worn once, and `e Hitem:<entry>`
+    cannot name a second copy of what is already worn."""
+    chosen, entries = [], set()
+    for v, row, is_worn in pool:
+        entry = _int(row.get("entry"))
+        if entry in entries and (_unique(row) or not is_worn):
+            continue
+        entries.add(entry)
+        chosen.append((v, row, is_worn))
+        if len(chosen) == 2:
+            break
+    return chosen
+
+
 def _pairs(wearer, worn, carried, book) -> list:
     out = []
     for group in sorted(set(PAIRS.values())):
         on = [r for r in worn if WORN_GROUP.get(_int(r.get("equipment_slot"))) == group]
-        pool = [(value(r, wearer, "", book), r, True) for r in on]
-        for row in carried:
-            if PAIRS.get(_int(row.get("inventory_type"))) != group or refusal(
-                row, wearer
-            ):
-                continue
-            pool.append((value(row, wearer, "", book), row, False))
-        pool.sort(key=lambda t: _rank(t[0], t[1]), reverse=True)
-        chosen, entries = [], set()
-        for v, row, is_worn in pool:
-            entry = _int(row.get("entry"))
-            if entry in entries and (_unique(row) or not is_worn):
-                # A unique piece is worn once; and `e Hitem:<entry>` cannot
-                # name a second copy of what is already worn.
-                continue
-            entries.add(entry)
-            chosen.append((v, row, is_worn))
-            if len(chosen) == 2:
-                break
-        old = (0.0, 0.0)
-        for r in on:
-            old = _add(old, value(r, wearer, "", book))
-        new = (0.0, 0.0)
-        for v, _row, _w in chosen:
-            new = _add(new, v)
+        chosen = _best_two(_pair_pool(group, wearer, on, carried, book))
+        old = _total(value(r, wearer, "", book) for r in on)
+        new = _total(v for v, _row, _worn in chosen)
         if not beats(new, old):
             continue
-        floor = (
-            min((_int(r.get("item_level")) for r in on), default=0)
-            if len(on) == 2
-            else 0
-        )
-        for v, row, is_worn in chosen:
-            if not is_worn:
-                out.append(_equip(row, wearer, group, floor, _said(new, old, wearer)))
+        floor = min(_int(r.get("item_level")) for r in on) if len(on) == 2 else 0
+        said = _said(new, old, wearer)
+        out += [
+            _equip(row, wearer, group, floor, said)
+            for _v, row, is_worn in chosen
+            if not is_worn
+        ]
     return out
 
 
-def _hands(wearer, worn, carried, book) -> list:
-    main = next(
-        (r for r in worn if _int(r.get("equipment_slot")) == MAIN_HAND_SLOT), None
-    )
-    off = next(
-        (r for r in worn if _int(r.get("equipment_slot")) == OFF_HAND_SLOT), None
-    )
-    two_worn = main is not None and _int(main.get("inventory_type")) == TWO_HAND
+def _worn_in(worn, slot: int):
+    return next((r for r in worn if _int(r.get("equipment_slot")) == slot), None)
 
-    def main_value(row):
-        key = "two_hand" if _int(row.get("inventory_type")) == TWO_HAND else "main_hand"
-        return value(row, wearer, key, book)
 
-    def off_value(row):
-        key = "off_hand" if _int(row.get("item_class")) == ITEM_CLASS_WEAPON else ""
-        return value(row, wearer, key, book)
+def _inv(row) -> int:
+    return _int((row or {}).get("inventory_type"))
 
-    old = (0.0, 0.0)
-    if main is not None:
-        old = _add(old, main_value(main))
-    if off is not None:
-        old = _add(old, off_value(off))
 
-    usable = [r for r in carried if _int(r.get("inventory_type")) in HAND_TYPES]
-    twos = [
-        r
-        for r in usable
-        if _int(r.get("inventory_type")) == TWO_HAND and not refusal(r, wearer)
-    ]
+def _main_value(row, wearer, book) -> tuple:
+    key = "two_hand" if _inv(row) == TWO_HAND else "main_hand"
+    return value(row, wearer, key, book)
+
+
+def _off_value(row, wearer, book) -> tuple:
+    key = "off_hand" if _int(row.get("item_class")) == ITEM_CLASS_WEAPON else ""
+    return value(row, wearer, key, book)
+
+
+def _set_value(m, o, wearer, book) -> tuple:
+    """A main-hand piece and an off-hand piece, either of them None."""
+    parts = []
+    if m is not None:
+        parts.append(_main_value(m, wearer, book))
+    if o is not None:
+        parts.append(_off_value(o, wearer, book))
+    return _total(parts)
+
+
+@dataclass
+class _HandPool:
+    """The pieces each hand could hold: the carried ones the member may put
+    there now, and what it wears."""
+
+    twos: list
+    mains: list
+    offs: list
+    two_worn: bool
+
+
+def _hand_pool(wearer, main, off, carried) -> _HandPool:
+    two_worn = _inv(main) == TWO_HAND and main is not None
+    twos = [r for r in carried if _inv(r) == TWO_HAND and not refusal(r, wearer)]
     mains = [
         r
-        for r in usable
-        if _int(r.get("inventory_type")) in (ONE_HAND, MAIN_HAND_ONLY)
-        and not refusal(r, wearer)
+        for r in carried
+        if _inv(r) in (ONE_HAND, MAIN_HAND_ONLY) and not refusal(r, wearer)
     ]
     offs = [
         r
-        for r in usable
-        if _int(r.get("inventory_type")) in (SHIELD, OFF_HAND_WEAPON, HELD, ONE_HAND)
+        for r in carried
+        if _inv(r) in (SHIELD, OFF_HAND_WEAPON, HELD, ONE_HAND)
         and not refusal(r, wearer, off_hand=True)
     ]
-    if main is not None and not two_worn:
-        mains.append(main)
+    if main is not None:
+        (twos if two_worn else mains).append(main)
     if off is not None:
         offs.append(off)
-    if two_worn:
-        twos.append(main)
+    return _HandPool(twos=twos, mains=mains, offs=offs, two_worn=two_worn)
 
-    shields = [r for r in offs if _int(r.get("inventory_type")) == SHIELD]
-    need_shield = wearer.shield_tank and bool(shields)
 
-    configs = []
+def _same_piece(m, o) -> bool:
+    if m is None or o is None:
+        return False
+    return m is o or _int(m.get("item_guid")) == _int(o.get("item_guid"))
+
+
+def _set_allowed(m, o, pool: _HandPool, need_shield: bool) -> bool:
+    """May (m, o) be one set: not empty, not one piece in both hands, never an
+    off-hand piece alone beside a worn two-hander (the core refuses it, and
+    nothing here takes the two-hander off on its own), and a shield tank's
+    off hand holds a shield."""
+    if m is None and (o is None or pool.two_worn):
+        return False
+    if _same_piece(m, o):
+        return False
+    return not need_shield or _inv(o) == SHIELD
+
+
+def _hand_sets(wearer, pool: _HandPool, book) -> list:
+    """((main, off), value) for every set the member could hold."""
+    need_shield = wearer.shield_tank and any(_inv(r) == SHIELD for r in pool.offs)
+    sets = []
     if not need_shield:
-        for row in twos:
-            configs.append(((row, None), main_value(row)))
-    for m in mains + [None]:
-        if m is None and two_worn:
-            # The core will not put an off-hand piece beside a two-hander, and
-            # nothing here takes the two-hander off on its own.
-            continue
-        for o in offs + [None]:
-            if m is not None and o is not None and m is o:
-                continue
-            if (
-                m is not None
-                and o is not None
-                and _int(m.get("item_guid")) == _int(o.get("item_guid"))
-            ):
-                continue
-            if m is None and o is None:
-                continue
-            if need_shield and (o is None or _int(o.get("inventory_type")) != SHIELD):
-                continue
-            v = (0.0, 0.0)
-            if m is not None:
-                v = _add(v, main_value(m))
-            if o is not None:
-                v = _add(v, off_value(o))
-            configs.append(((m, o), v))
-    if not configs:
+        sets += [((row, None), _main_value(row, wearer, book)) for row in pool.twos]
+    for m in pool.mains + [None]:
+        for o in pool.offs + [None]:
+            if _set_allowed(m, o, pool, need_shield):
+                sets.append(((m, o), _set_value(m, o, wearer, book)))
+    return sets
+
+
+def _set_rank(entry) -> tuple:
+    (m, o), v = entry
+    level = _int((m or {}).get("item_level")) + _int((o or {}).get("item_level"))
+    return (round(v[0], 6), round(v[1], 6), level)
+
+
+def _hands(wearer, worn, carried, book) -> list:
+    main = _worn_in(worn, MAIN_HAND_SLOT)
+    off = _worn_in(worn, OFF_HAND_SLOT)
+    old = _set_value(main, off, wearer, book)
+    pool = _hand_pool(wearer, main, off, [r for r in carried if _inv(r) in HAND_TYPES])
+    sets = _hand_sets(wearer, pool, book)
+    if not sets:
         return []
-
-    def rank(config):
-        (m, o), v = config
-        level = _int((m or {}).get("item_level")) + _int((o or {}).get("item_level"))
-        return (round(v[0], 6), round(v[1], 6), level)
-
-    (m, o), new = max(configs, key=rank)
+    (m, o), new = max(sets, key=_set_rank)
     if not beats(new, old):
         return []
-    worn_rows = [r for r in (main, off) if r is not None]
-    out = []
     said = _said(new, old, wearer)
-    if m is not None and all(m is not r for r in worn_rows):
-        slot = "two_hand" if _int(m.get("inventory_type")) == TWO_HAND else "main_hand"
+    out = []
+    if m is not None and m is not main and m is not off:
+        slot = "two_hand" if _inv(m) == TWO_HAND else "main_hand"
         out.append(_equip(m, wearer, slot, _int((main or {}).get("item_level")), said))
-    if o is not None and all(o is not r for r in worn_rows):
+    if o is not None and o is not main and o is not off:
         out.append(
             _equip(o, wearer, "off_hand", _int((off or {}).get("item_level")), said)
         )
@@ -628,6 +685,35 @@ def _is_worn(row: dict) -> bool:
     return slot is not None and 0 <= _int(slot, -1) < 19
 
 
+def _wearers(wearer_rows, names, tanks) -> dict:
+    """name -> Wearer for each named member whose class has gear lists."""
+    wanted = {str(n) for n in names or ()}
+    out = {}
+    for row in wearer_rows or ():
+        if str(row.get("name") or "") not in wanted:
+            continue
+        wearer = wearer_from_row(row, tanks)
+        if wearer is not None and wearer.spec:
+            out[wearer.name] = wearer
+    return out
+
+
+def _split_gear(gear_rows, wearers, keep_names) -> tuple:
+    """(worn, carried), each holder -> rows. A carried piece the owner marked
+    never-dispose stays out of `carried`."""
+    worn: dict = {}
+    carried: dict = {}
+    for row in gear_rows or ():
+        holder = str(row.get("holder") or "")
+        if holder not in wearers:
+            continue
+        if _is_worn(row):
+            worn.setdefault(holder, []).append(row)
+        elif not bag_pressure.owner_keeps(str(row.get("name") or ""), keep_names):
+            carried.setdefault(holder, []).append(row)
+    return worn, carried
+
+
 def plan(
     legacy, wearer_rows, gear_rows, names, keep_names=(), tanks=(), book=None
 ) -> Plan:
@@ -640,33 +726,17 @@ def plan(
     lists (`gearupgrades.choose_spec`); a carried piece the owner marked
     never-dispose (`bag_pressure.owner_keeps`) is left in the bags.
     """
-    wanted = {str(n) for n in names or ()}
-    wearers = {}
-    for row in wearer_rows or ():
-        if str(row.get("name") or "") not in wanted:
-            continue
-        wearer = wearer_from_row(row, tanks)
-        if wearer is not None and wearer.spec:
-            wearers[wearer.name] = wearer
-    worn: dict = {}
-    carried: dict = {}
-    for row in gear_rows or ():
-        holder = str(row.get("holder") or "")
-        if holder not in wearers:
-            continue
-        if _is_worn(row):
-            worn.setdefault(holder, []).append(row)
-        elif not bag_pressure.owner_keeps(str(row.get("name") or ""), keep_names):
-            carried.setdefault(holder, []).append(row)
+    wearers = _wearers(wearer_rows, names, tanks)
+    worn, carried = _split_gear(gear_rows, wearers, keep_names)
     out = [e for e in legacy or () if e.holder not in wearers]
     waiting = []
     for name in sorted(wearers):
-        wearer = wearers[name]
-        out.extend(choose(wearer, worn.get(name, ()), carried.get(name, ()), book))
-        for row, skill in waiting_on_skill(
-            wearer, worn.get(name, ()), carried.get(name, ()), book
-        ):
-            waiting.append((name, str(row.get("name") or ""), skill))
+        on, bags = worn.get(name, ()), carried.get(name, ())
+        out.extend(choose(wearers[name], on, bags, book))
+        waiting += [
+            (name, str(row.get("name") or ""), skill)
+            for row, skill in waiting_on_skill(wearers[name], on, bags, book)
+        ]
     # Members in name order; the sort is stable, so each member keeps the
     # order `choose` gave its rows (weapons first, main hand before off hand).
     out.sort(key=lambda e: e.holder)
