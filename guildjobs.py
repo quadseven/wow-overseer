@@ -3285,8 +3285,15 @@ def class_room_step(m, move, book, recent, cap, kept=None, crafters=None, master
 
     The order: sell the grey and outgrown stacks (the sale's own 120 minute
     cooldown and its bar of stacks do not apply: the member cannot work its
-    quest), mail its materials to the guild, destroy its lowest value material, one
-    stack a step (the destroy verb, Uncommon or below). Never an item a class quest needs, a
+    quest), mail its materials to the guild, sell its lowest value priced
+    materials at a vendor, as many stacks as the move needs, and destroy only a
+    material no vendor buys, one stack a step (the destroy verb, Uncommon or
+    below). The module refuses to destroy anything with a sell price ("item has
+    a sell price", retry never): read live 2026-10-10, every one of the 347
+    make-room destroys since 2026-10-07 was refused so. Four Bonkers members
+    (three with no bag beyond the backpack, and a guild with no bank tab to
+    post to) drew 295 of them and stood still on their class quests, asking
+    again every 20 minutes. Never an item a class quest needs, a
     stack reserved in overseer_keep, a trade's tool, or a weapon or piece of
     armor that is not outgrown, which the member may still wear. The step is
     its own kind (ROOM_ACTION) with its own cooldown and allowance, so the
@@ -3311,6 +3318,7 @@ def class_room_step(m, move, book, recent, cap, kept=None, crafters=None, master
     step = (
         _room_sale(m, said, kept, book, cap)
         or _room_mail(m, said, kept, crafters, master, cap)
+        or _room_material_sale(m, said, kept, book, cap, need)
         or _room_destroy(m, said, kept, book)
     )
     if step is None:
@@ -3329,18 +3337,44 @@ def _room_sale(m, said, kept, book, cap):
         _room_rows(m, [c for c in m.carried if c.sellable(m.level)], kept, book),
         key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
     )[:MAX_SALES]
-    if not junk:
+    return _room_vendor_step(m, said, junk, cap)
+
+
+def _room_materials(m, kept, book):
+    """The material stacks a make-room step may let go of: not reserved, not a
+    class quest's, not what the member's own trade casts eat."""
+    eaten = craft_entries(m) if m.role == MAINTENANCE else frozenset()
+    return [
+        c
+        for c in _room_rows(m, [c for c in m.carried if c.material], kept, book)
+        if int(c.entry) not in eaten
+    ]
+
+
+def _room_material_sale(m, said, kept, book, cap, need):
+    """The vendor step for materials nobody in the guild took: the lowest
+    value stacks a vendor buys, as many as the move needs. A player out of
+    room sells its meat at the next vendor; it does not throw it away."""
+    priced = sorted(
+        (c for c in _room_materials(m, kept, book) if int(c.sell_price) > 0),
+        key=lambda c: (int(c.sell_price) * int(c.count), int(c.guid)),
+    )[: max(1, int(need))]
+    return _room_vendor_step(m, said, priced, cap)
+
+
+def _room_vendor_step(m, said, stacks, cap):
+    if not stacks:
         return None
     return guildcorps.Step(
         m.name,
         ROOM_ACTION,
-        len(junk),
-        "%s walks to a vendor to sell %d stack(s)" % (said, len(junk)),
+        len(stacks),
+        "%s walks to a vendor to sell %d stack(s)" % (said, len(stacks)),
         rows=tuple(
             guildcorps.Row(
                 "sell", "guid:%d" % int(c.guid), "", source_for(ROOM_ACTION, m.name)
             )
-            for c in junk
+            for c in stacks
         ),
         walk=guildcorps.Row(
             "buy",
@@ -3361,15 +3395,11 @@ def _room_mail(m, said, kept, crafters, master, cap):
 
 
 def _room_destroy(m, said, kept, book):
-    """The destroy step: the member's lowest value material, one stack."""
-    eaten = craft_entries(m) if m.role == MAINTENANCE else frozenset()
+    """The destroy step: one material stack no vendor buys. A priced stack
+    goes to `_room_material_sale`; the module refuses to destroy it."""
     stacks = sorted(
-        (
-            c
-            for c in _room_rows(m, [c for c in m.carried if c.material], kept, book)
-            if int(c.entry) not in eaten
-        ),
-        key=lambda c: (int(c.sell_price) * int(c.count), int(c.guid)),
+        (c for c in _room_materials(m, kept, book) if int(c.sell_price) <= 0),
+        key=lambda c: (int(c.count), int(c.guid)),
     )[:1]
     if not stacks:
         return None
