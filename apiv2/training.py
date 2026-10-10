@@ -29,7 +29,7 @@ import campaignplan
 import guildjobs
 from panel import _CLASS_NAMES
 
-from ._scope import NOT_A_MEMBER, guarded, guild_member, wanted_name
+from ._scope import NOT_A_MEMBER, guarded, may_answer, wanted_name
 
 CHAR_SQL = (
     "SELECT guid, level, class AS class_id, money FROM characters WHERE name = %s"
@@ -194,7 +194,7 @@ def build(name: str, f: dict, cap: int = campaignplan.LEVEL_CAP) -> dict:
 
 def training(query: dict, ctx) -> tuple[int, dict]:
     name = wanted_name(query)
-    if not guild_member(ctx, name):
+    if not may_answer(ctx, name):
         return 404, dict(NOT_A_MEMBER)
     f = fetch(ctx, name)
     if f is None:

@@ -106,11 +106,8 @@ BASIS = (
 def fetch(ctx) -> dict:
     """Every row build() reads, on one connection plus the now-step reads."""
     server = ctx.server
-    families = server._fetch_families()
-    names = [n for group in families.values() for n in group]
-    if not names:
-        names = list(server.family.roster())
-        families = {names[0]: names} if names else {}
+    families = server.FAMILIES.families()
+    names = server.FAMILIES.names()
     rows = {
         "guild": [],
         "chars": [],

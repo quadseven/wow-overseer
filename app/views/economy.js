@@ -5,7 +5,8 @@
 // guild is shown lives in the URL query, so every state can be linked.
 
 import { html, raw, pageHead, sectionHead, tabs, item, notMeasured, gold, plural, duration, pendingRead, state, classVar, memberHref, member } from "../ui.js";
-import { build, FAMILIES } from "../router.js";
+import { build } from "../router.js";
+import { familyKeys } from "../families.js";
 
 const TABS = [
   ["gold", "Bags and gold"],
@@ -33,7 +34,6 @@ const pct = (n) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
 const ecoHref = (tab, query) => build(tab === "gold" ? ["economy"] : ["economy", tab], query || {});
 const skillPath = (skill, family) => TRADES + "?skill=" + encodeURIComponent(skill) + "&family=" + encodeURIComponent(family);
 const bankPath = (name) => "/api/client/guildbank?name=" + encodeURIComponent(name);
-const BANK_NAMES = FAMILIES.map(cap);
 
 function money(m) {
   return m && m.total !== undefined && m.total !== null ? html`<span class="eco-gold">${gold(m.total)}</span>` : notMeasured();
@@ -330,7 +330,8 @@ function bankGrid(cells) {
 
 // Also the Now tiles' Guild bank panel (now/panel.js).
 export function bankTab(ctx, get) {
-  const reads = BANK_NAMES.map((n) => get(bankPath(n)));
+  const reads = familyKeys().map((n) => get(bankPath(n)));
+  if (!reads.length) return state("unmeasured", "Which families the realm has is not measured yet.");
   const ready = reads.filter((r) => r.data && r.data.guild);
   if (!ready.length) return pendingRead(reads[0], 3) || state("empty", "Neither family is in a guild.");
   const wanted = (ctx.query.guild || "").toLowerCase();
@@ -352,7 +353,7 @@ export function bankTab(ctx, get) {
 export function readsFor(ctx) {
   const t = ctx.params.tab;
   if (t === "gold" || t === "auction") return [WEALTH];
-  if (t === "bank") return BANK_NAMES.map(bankPath);
+  if (t === "bank") return familyKeys().map(bankPath);
   const q = ctx.query;
   if (t === "trades" && q.open && q.family) return [TRADES, skillPath(q.open, cap(q.family))];
   return [TRADES];

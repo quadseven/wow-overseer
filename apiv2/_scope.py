@@ -1,14 +1,18 @@
 """Who a /api/v2 read may answer about, and the small helpers they share.
 
-THE SAME CLOSED SET AS /api/armory/member. A read that takes a name answers
-only for a member of a family guild, as the database reports the guilds:
-anything else is a 404, never a query about an arbitrary character. The name
-must also pass the world's own name rule before it reaches SQL at all.
+ONE CLOSED SET, families.Families.may_answer (the map server's FAMILIES): a
+read that takes a name answers only for a family member or a member of a
+family guild, as the database reports the guilds; anything else is a 404,
+never a query about an arbitrary character. The name must also pass the
+world's own name rule before it reaches SQL at all. A read that takes a guild
+answers only for a family guild (`guild`), matched without case, and refuses
+anything else before it opens a connection of its own.
 """
 
 from __future__ import annotations
 
 NOT_A_MEMBER = {"error": "not a guild member"}
+NAME_MAX = 12
 
 
 def wanted_name(query: dict) -> str:
@@ -16,14 +20,31 @@ def wanted_name(query: dict) -> str:
     return (query.get("name") or [""])[0]
 
 
-def guild_member(ctx, name: str) -> bool:
+def name_shaped(value: str) -> bool:
+    """Letters only, at most twelve: the shape of a character name, checked
+    before a value is looked up at all."""
+    value = (value or "").strip()
+    return bool(value) and len(value) <= NAME_MAX and value.isalpha()
+
+
+def may_answer(ctx, name: str) -> bool:
     """True when `name` is a family member or a member of a family guild."""
-    server = ctx.server
-    if not server._NAME_RE.fullmatch(name or ""):
-        return False
-    groups = server._fetch_family_groups()
-    names = [n for _key, group in groups for n in group]
-    return name in names or server._is_family_guildmate(name, names)
+    return ctx.server.FAMILIES.may_answer(name)
+
+
+def guilds(ctx) -> dict:
+    """{lower-case name: name} for every family guild."""
+    return {g["name"].lower(): g["name"] for g in ctx.server.FAMILIES.guilds()}
+
+
+def guild(ctx, value: str) -> str | None:
+    """The family guild's own name for `value`, any case, or None."""
+    return guilds(ctx).get((value or "").strip().lower())
+
+
+def no_such_guild(ctx) -> dict:
+    """The refusal for a guild outside the set, naming the ones inside it."""
+    return {"error": "no such guild", "guilds": sorted(guilds(ctx))}
 
 
 def holes(n: int) -> str:

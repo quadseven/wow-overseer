@@ -2,9 +2,8 @@
 // members, the stuck list and the times the server sends. Pure functions of
 // payloads, so the views stay markup.
 
-import { FAMILIES } from "../../router.js";
-
-export const FAMILY_KEYS = FAMILIES.map((f) => f.charAt(0).toUpperCase() + f.slice(1));
+// familyKeys(): "Grug", "Zug", every family the realm reports, default first.
+export { familyKeys } from "../../families.js";
 
 export function agendaPath(fam) { return "/api/agenda?family=" + encodeURIComponent(fam); }
 

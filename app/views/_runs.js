@@ -5,11 +5,6 @@
 import { html, ago, duration, plural, classVar, memberHref } from "../ui.js";
 import { peek } from "../api.js";
 
-export const GUILD_NAME = { cave: "Cave", bonkers: "Bonkers" };
-// Each guild's family (Grug's family plays in Cave, Zug's in Bonkers). The
-// guild read says the family it found too; the view checks the two agree.
-export const GUILD_FAMILY = { cave: "Grug", bonkers: "Zug" };
-
 // The realm's database clock is UTC and its timestamps arrive without a zone
 // ("2026-10-09 20:12:04"), so they are read as UTC. Unix seconds pass through.
 export function utc(v) {

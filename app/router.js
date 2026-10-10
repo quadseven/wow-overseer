@@ -2,17 +2,22 @@
 //
 // Routes are "#/section/part/part?key=value". Every hash the old page used
 // (#armory, #family/zug, #dungeons/33, #aprof-Grog, ...) is redirected to its
-// new home, so links already sent or bookmarked keep working.
+// new home, so links already sent or bookmarked keep working. The families
+// and guilds a route may name are the realm's own (families.js).
+
+import { isFamily, isGuild, firstFamily, firstGuild } from "./families.js";
 
 export const SECTIONS = ["now", "guilds", "members", "raid", "economy"];
 
-export const GUILDS = ["cave", "bonkers"];
-export const FAMILIES = ["grug", "zug"];
+// The default family's or guild's page under `prefix`, or the Now page while
+// the realm has not said which families and guilds there are.
+const familyHome = () => (firstFamily() ? "#/now/family/" + firstFamily() : "#/now");
+const guildHome = (prefix, tail) => (firstGuild() ? prefix + firstGuild() + (tail || "") : "#/now");
 
 // Old view -> new hash. A function takes the part after the first "/".
 const LEGACY = {
   "": () => "",
-  family: (rest) => "#/now/family/" + (FAMILIES.includes((rest || "").toLowerCase()) ? rest.toLowerCase() : "grug"),
+  family: (rest) => (isFamily((rest || "").toLowerCase()) ? "#/now/family/" + rest.toLowerCase() : familyHome()),
   watch: () => "#/now",
   map: (rest) => "#/now/map" + (/^(kal|kalimdor|1)$/i.test(rest || "") ? "?c=kal" : /^(ek|eastern|0)/i.test(rest || "") ? "?c=ek" : ""),
   eye: () => "#/now/server",
@@ -22,12 +27,12 @@ const LEGACY = {
   upgrades: () => "#/members/gear/upgrades",
   lineup: () => "#/members/gear/table",
   trades: () => "#/economy/trades",
-  dungeons: () => "#/guilds/cave/runs",
-  guild: () => "#/guilds/cave/runs",
-  guildchat: () => "#/guilds/cave/chronicle",
-  chronicle: () => "#/guilds/cave/chronicle",
-  achievements: () => "#/guilds/cave/chronicle",
-  council: () => "#/guilds/cave/chronicle",
+  dungeons: () => guildHome("#/guilds/", "/runs"),
+  guild: () => guildHome("#/guilds/", "/runs"),
+  guildchat: () => guildHome("#/guilds/", "/chronicle"),
+  chronicle: () => guildHome("#/guilds/", "/chronicle"),
+  achievements: () => guildHome("#/guilds/", "/chronicle"),
+  council: () => guildHome("#/guilds/", "/chronicle"),
   raid: () => "#/raid/mc",
 };
 
@@ -84,7 +89,7 @@ export function resolve(route) {
   if (top === "now") {
     if (p[1] === "family") {
       const f = (p[2] || "").toLowerCase();
-      if (!FAMILIES.includes(f)) return { redirect: "#/now/family/grug" };
+      if (!isFamily(f)) return { redirect: familyHome() };
       return { view: "family", section: "now", params: { family: f } };
     }
     if (p[1] === "map") return { view: "map", section: "now", params: { continent: q.c === "ek" ? "ek" : q.c === "kal" ? "kal" : "" } };
@@ -94,13 +99,13 @@ export function resolve(route) {
   }
   if (top === "guilds") {
     const g = (p[1] || "").toLowerCase();
-    if (!GUILDS.includes(g)) return { redirect: "#/guilds/cave" };
+    if (!isGuild(g)) return { redirect: guildHome("#/guilds/") };
     const tab = p[2] === "runs" || p[2] === "chronicle" ? p[2] : "progress";
     if (p[2] && tab === "progress" && p[2] !== "progress") return { redirect: "#/guilds/" + g };
     return { view: "guild", section: "guilds", params: { guild: g, tab } };
   }
   if (top === "runs") {
-    if (!p[1]) return { redirect: "#/guilds/cave/runs" };
+    if (!p[1]) return { redirect: guildHome("#/guilds/", "/runs") };
     return { view: "run", section: "guilds", params: { id: p[1] } };
   }
   if (top === "members") {
@@ -118,7 +123,7 @@ export function resolve(route) {
   }
   if (top === "raid") {
     const g = (p[2] || "").toLowerCase();
-    if (p[1] !== "mc" || !GUILDS.includes(g)) return { redirect: "#/raid/mc/cave" };
+    if (p[1] !== "mc" || !isGuild(g)) return { redirect: guildHome("#/raid/mc/") };
     return { view: "raid", section: "raid", params: { guild: g } };
   }
   if (top === "economy") {
