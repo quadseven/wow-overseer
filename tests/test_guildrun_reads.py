@@ -5,9 +5,9 @@ one 28-column list, and the app worked out a run's state from `state`,
 `status` or `outcome`. Now guildrun owns the column list, every read, the run
 view and its stories, and the view pins one state field, `run_state`.
 
-The reader here is a fake cursor that answers only the reads it was given:
-any other statement fails the test, so a renamed or extra read cannot pass
-by reading nothing.
+The reader here is a realm reader (realmread, #731) whose adapter answers only
+the reads it was given: any other statement fails the test, so a renamed or
+extra read cannot pass by reading nothing.
 """
 
 import datetime
@@ -23,6 +23,7 @@ sys.path.insert(0, str(HERE))
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import guildrun  # noqa: E402
+import realmread  # noqa: E402
 from test_measured_views import render  # noqa: E402
 
 FORMED = datetime.datetime(2026, 10, 8, 10, 0, 0)
@@ -86,31 +87,29 @@ class NoColumn(Exception):
         super().__init__(1054, "Unknown column 'proposer' in 'field list'")
 
 
-class Reader:
-    """A cursor that answers only the reads it was given.
+class Reader(realmread.Reader):
+    """A realm reader that answers only the reads it was given.
 
     `answers` maps a fragment of a statement to the rows it returns (or an
-    exception it raises). A statement no fragment matches fails the test."""
+    exception it raises: Missing and NoColumn as the driver's schema errors
+    reach the reader). A statement no fragment matches fails the test."""
 
     def __init__(self, answers):
         self.answers = answers
         self.reads = []
-        self._rows = []
 
-    def execute(self, sql, params=()):
+    def _run(self, sql, params):
         for fragment, rows in self.answers.items():
             if fragment in sql:
-                self.reads.append((fragment, sql, tuple(params)))
+                self.reads.append((fragment, sql, tuple(params or ())))
                 if callable(rows):
                     rows = rows(sql)
+                if isinstance(rows, (Missing, NoColumn)):
+                    raise realmread.Gap(rows.args[0], sql) from rows
                 if isinstance(rows, Exception):
                     raise rows
-                self._rows = [dict(r) for r in rows]
-                return
+                return [dict(r) for r in rows]
         raise AssertionError("a read nobody expected: " + sql)
-
-    def fetchall(self):
-        return self._rows
 
     def read(self, fragment):
         return [r for r in self.reads if r[0] == fragment]

@@ -100,7 +100,7 @@ class BothFamiliesAndNoGearInTheWay(unittest.TestCase):
         runs = self.server[self.server.index("def _fetch_family_runs") :]
         runs = runs[: runs.index("def _fetch_achievements")]
         self.assertIn("WHERE leader_name IN ({holes})", runs)
-        self.assertIn("run_rows = _fetch_family_runs(cur, names, holes)", self.server)
+        self.assertIn("run_rows = _fetch_family_runs(rd, names, holes)", self.server)
 
 
 class NotableLootIsTheModulesSentence(unittest.TestCase):
@@ -115,7 +115,7 @@ class NotableLootIsTheModulesSentence(unittest.TestCase):
     def test_a_missing_story_column_degrades_rather_than_failing(self):
         fetch = self.server[self.server.index("def _fetch_loot") :]
         fetch = fetch[: fetch.index("\ndef ")]
-        self.assertIn("_guarded(", fetch)
+        self.assertIn("rows = rd.rows(", fetch)
         self.assertIn('fallback=base.format(story="")', fetch)
 
 

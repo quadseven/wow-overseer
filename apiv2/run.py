@@ -35,12 +35,7 @@ def run(query: dict, ctx) -> tuple[int, dict]:
     wanted = run_id((query.get("id") or [""])[0])
     if wanted is None:
         return 400, {"error": "id must be a positive whole number"}
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            view = guildrun.by_id(cur, wanted)
-    finally:
-        conn.close()
+    view = guildrun.by_id(ctx.read, wanted)
     if view is None:
         return 404, {"error": "no such run", "id": wanted}
     return 200, {"run": view}
