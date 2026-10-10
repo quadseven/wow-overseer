@@ -891,7 +891,10 @@ def choose_tailors(members) -> frozenset:
 def choose_alchemists(members, tailors=frozenset()) -> frozenset:
     """The maintenance members that take Alchemy, per guild.
 
-    One in ALCHEMIST_EVERY of a crew, never a tailor. A member that already
+    One in ALCHEMIST_EVERY of a crew, rounded down as choose_tailors rounds
+    (a crew under five has none, a crew of ten has two), never a tailor. The
+    crew counted is the whole maintenance crew, tailors included; only the
+    choice skips them. A member that already
     holds Alchemy comes first, then a herbalist with a primary slot to spare
     (the herbs it gathers are what it brews), then the members with the
     fewest primaries, by name. A member with both primary slots taken by
