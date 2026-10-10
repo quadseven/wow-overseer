@@ -77,6 +77,54 @@ travel.FLIGHT_NODE_MATCH_YARDS, whose faction does not attack the hub's side.
 The row names that spawn by its id, so the place walked to is a spawn row of the
 world and never a coordinate computed here.
 
+OPEN QUESTS (`quest_book`, `open_quests`, 2026-10-10). A player leaves a zone
+when its quests run out, not when its band's ceiling is passed, and goes where
+it has the most quests left. The band alone kept a member in one zone until
+the zone's 90th-percentile level and never read what it had done. Run against
+the live bands of 2026-10-10, Horde members on the Eastern Kingdoms stayed in
+Hillsbrad from 21 to 40, Alliance members on Kalimdor in Ashenvale from 22 to
+32, and Duskwood, Dustwallow Marsh, Un'Goro, Felwood, both Plaguelands and
+Silithus were never chosen. Rokk (22) and Whakk (20) stood in Searing Gorge
+with no quest open, and Tugga (26) in Hillsbrad with one. So once the member's
+rewarded quests are read (`Member.rewarded`), a quest is open for it when:
+
+  * it is of a hub zone, its side may take it (levelroute.side_quests), its
+    race mask holds the member's race and its minimum level is met;
+  * a lone member works it: not a group, dungeon, raid or PvP quest, not
+    suggested for a group, not repeatable (`PARTY_QUEST_INFO`);
+  * a creature or object of the world that gives it is spawned outside a
+    seasonal event (`QUEST_FACTS_SQL`);
+  * the member has not been rewarded for it, and the quest before it, if any,
+    is rewarded or itself open by these rules (a chain counts from its head);
+  * its level lies in levelroute's window around the member's level
+    (GREEN_BELOW under, ABOVE over).
+
+A member has then outgrown a hub zone once fewer than MIN_OPEN quests are open
+for it there, whatever its band says, and `choose` takes the fitting hub with
+the most open quests, a hub whose flight point it knows before one it does not,
+then the lower band. Unread rewarded quests or unread quest facts fall back to
+the band rule above.
+
+THE GROUND A SIDE WALKS (`POCKETS`, `ground_of`). A walk crosses a continent by
+road. Some hubs lie past the other side's ground: from the Horde's north of the
+Eastern Kingdoms, Stranglethorn Vale is reached through Duskwood, the Badlands
+through the Wetlands and Loch Modan, the Swamp of Sorrows through Redridge or
+Duskwood. A Horde player takes the zeppelin to Grom'gol and the flight paths to
+Kargath and Stonard instead. So a hub is walked to only on the member's own
+ground. The module's far walk still refuses a road far above the walker's
+level (quadseven/mod-overseer#897), and flies whenever a known flight beats it.
+
+THE ZEPPELINS AND BOATS (`TRANSPORTS`). Each side's rides between the two
+continents, and the one from the Undercity to Grom'gol. A member none of whose
+own ground's hubs fit rides its side's way to the other continent with the
+module's `cross-to-map map:<id>` row (`Choice.cross_to`, `Choice.transport`),
+when a hub fits on the ground that ride lands on. The module picks the ride by
+its own price, so the member may land elsewhere on that map; the next pass
+reads where it stands. The Undercity to Grom'gol zeppelin never leaves map 0,
+and `cross-to-map` names only a map, so no row rides it yet (`Transport.rides`):
+a Horde member in the north is offered Kalimdor's hubs before Stranglethorn's,
+and is told so when only Stranglethorn fits.
+
 PURE MODULE: rows in, choices and sentences out. No MySQL, no clock.
 """
 
@@ -168,6 +216,115 @@ INN_COOLDOWN_MINUTES = 6 * 60
 # New bind walks one guild starts in one pass (each may be a far walk).
 INN_STEPS_PER_GUILD = 2
 
+# OPEN QUESTS (see the module docstring). levelroute's window and floor, so a
+# guild member and a family read a zone the same way.
+MIN_OPEN = levelroute.MIN_OPEN
+GREEN_BELOW = levelroute.GREEN_BELOW
+ABOVE = levelroute.ABOVE
+# quest_template.QuestInfoID of quests a lone member does not work: group (1),
+# PvP (41), raid (62), dungeon (81), heroic (85), 10- and 25-man raid (88, 89).
+# Read against the dev world on 2026-10-10, 127 of the 2,178 hub zone quests.
+PARTY_QUEST_INFO = frozenset({1, 41, 62, 81, 85, 88, 89})
+# quest_template_addon.SpecialFlags: QUEST_SPECIAL_FLAGS_REPEATABLE.
+REPEATABLE_FLAG = 1
+# How many quests back a chain is followed to its head.
+CHAIN_DEPTH = 30
+# The maps a quest's giver is read on: the two continents and map 530.
+GIVER_MAPS = (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP)
+
+# One row per quest of a hub zone: the quest before it, its kind, and whether a
+# creature or object that gives it is spawned outside a seasonal event (a
+# positive game_event entry spawns it only while that event runs). The only
+# interpolated parts are this module's integer constants.
+QUEST_FACTS_SQL = (
+    "SELECT t.ID AS quest, COALESCE(a.PrevQuestID, 0) AS prev, "  # noqa: S608
+    "t.QuestInfoID AS info, t.SuggestedGroupNum AS group_size, "
+    "COALESCE(a.SpecialFlags, 0) AS special, ("
+    "EXISTS (SELECT 1 FROM acore_world.creature_queststarter s "
+    "JOIN acore_world.creature c ON c.id = s.id WHERE s.quest = t.ID "
+    "AND c.map IN (" + ", ".join(str(int(m)) for m in GIVER_MAPS) + ") "
+    "AND NOT EXISTS (SELECT 1 FROM acore_world.game_event_creature e "
+    "WHERE e.guid = c.guid AND e.eventEntry > 0)) "
+    "OR EXISTS (SELECT 1 FROM acore_world.gameobject_queststarter s "
+    "JOIN acore_world.gameobject g ON g.id = s.id WHERE s.quest = t.ID "
+    "AND g.map IN (" + ", ".join(str(int(m)) for m in GIVER_MAPS) + ") "
+    "AND NOT EXISTS (SELECT 1 FROM acore_world.game_event_gameobject e "
+    "WHERE e.guid = g.guid AND e.eventEntry > 0))"
+    ") AS given FROM acore_world.quest_template t "
+    "LEFT JOIN acore_world.quest_template_addon a ON a.ID = t.ID "
+    "WHERE t.QuestSortID IN (" + ", ".join(str(int(z)) for z in levelroute.ZONES) + ")"
+)
+
+# THE GROUND A SIDE WALKS (see the module docstring): side -> map -> the zones
+# of each pocket that side reaches only past the other side's ground. Every
+# other zone of the map is the side's own ground there (MAIN_GROUND).
+MAIN_GROUND = ""
+POCKETS = {
+    levelroute.HORDE: {
+        0: {
+            # Past Duskwood. Grom'gol's zeppelins and Booty Bay's boat call.
+            "Stranglethorn Vale": frozenset({33}),
+            # Past the Wetlands and Loch Modan: Badlands, Searing Gorge and
+            # Burning Steppes, one ground by Blackrock Mountain.
+            "the Badlands": frozenset({3, 46, 51}),
+            # Past Redridge or Duskwood: the Swamp of Sorrows and the Blasted
+            # Lands.
+            "the Swamp of Sorrows": frozenset({4, 8}),
+        },
+    },
+}
+
+# Zone ids of the berths below.
+TIRISFAL, DUROTAR, STRANGLETHORN, BARRENS = 85, 14, 33, 17
+WETLANDS, DARKSHORE, DUSTWALLOW = 11, 148, 15
+
+
+@dataclass(frozen=True)
+class Transport:
+    """A zeppelin or boat: its name, the sides whose crew welcome them, its two
+    ends as (map, zone), and whether a row can ride it (`cross-to-map` takes a
+    member only to another map)."""
+
+    name: str
+    sides: tuple
+    ends: tuple
+    rides: bool = True
+
+
+TRANSPORTS = (
+    Transport(
+        "the zeppelin from the Undercity to Orgrimmar",
+        (levelroute.HORDE,),
+        ((0, TIRISFAL), (1, DUROTAR)),
+    ),
+    Transport(
+        "the zeppelin from Grom'gol to Orgrimmar",
+        (levelroute.HORDE,),
+        ((0, STRANGLETHORN), (1, DUROTAR)),
+    ),
+    Transport(
+        "the zeppelin from the Undercity to Grom'gol",
+        (levelroute.HORDE,),
+        ((0, TIRISFAL), (0, STRANGLETHORN)),
+        rides=False,
+    ),
+    Transport(
+        "the boat from Booty Bay to Ratchet",
+        (levelroute.HORDE, levelroute.ALLIANCE),
+        ((0, STRANGLETHORN), (1, BARRENS)),
+    ),
+    Transport(
+        "the boat from Menethil Harbor to Auberdine",
+        (levelroute.ALLIANCE,),
+        ((0, WETLANDS), (1, DARKSHORE)),
+    ),
+    Transport(
+        "the boat from Menethil Harbor to Theramore",
+        (levelroute.ALLIANCE,),
+        ((0, WETLANDS), (1, DUSTWALLOW)),
+    ),
+)
+
 
 @dataclass(frozen=True)
 class HubMaster:
@@ -225,8 +382,9 @@ class Choice:
     A non-empty `refused` means `master` is None. `hub` and `band` may still
     name the hub it would go to, for the note. `cross_to` set means the member
     first crosses to that map by its side's boat (BOAT_EXITS), or by its orb
-    when `orb` is set, with `master` None: `hub` is where it levels once it
-    has landed.
+    when `orb` is set, or between the two continents by `transport`, with
+    `master` None: `hub` is where it levels once it has landed. `open` is the
+    member's open quests at `hub`, None while they are unread.
     """
 
     hub: levelroute.Hub | None = None
@@ -235,6 +393,8 @@ class Choice:
     refused: str = ""
     cross_to: int | None = None
     orb: Orb | None = None
+    open: int | None = None
+    transport: str = ""
 
     @property
     def place(self) -> str:
@@ -246,6 +406,171 @@ class Choice:
 def side_of(race) -> str:
     """levelroute's side for one race, or "" when unknown."""
     return levelroute.team_of([{"race": race}])
+
+
+@dataclass(frozen=True)
+class Quest:
+    """One quest a lone member may take: its zone, level, minimum level, race
+    mask and the quest before it (PrevQuestID; 0 or below for none)."""
+
+    id: int
+    zone: int
+    level: int
+    min_level: int
+    races: int
+    prev: int
+
+
+def quest_book(quest_rows, fact_rows) -> dict | None:
+    """side -> {quest id: Quest} off levelroute.QUESTS_SQL's rows and
+    QUEST_FACTS_SQL's, keeping the quests a lone member of that side works and
+    whose giver is spawned (`_solo`); None while either read is missing or
+    empty, so a zone is then judged by its band alone."""
+    if not quest_rows or not fact_rows:
+        return None
+    facts = {}
+    for row in fact_rows:
+        try:
+            facts[int(row["quest"])] = row
+        except (KeyError, TypeError, ValueError):
+            continue
+    out = {}
+    for team in (levelroute.HORDE, levelroute.ALLIANCE):
+        book = {}
+        for row in levelroute.side_quests(quest_rows, team):
+            try:
+                qid = int(row["quest"])
+                fact = facts.get(qid)
+                if fact is None or not _solo(fact):
+                    continue
+                book[qid] = Quest(
+                    id=qid,
+                    zone=int(row["zone"]),
+                    level=int(row["level"]),
+                    min_level=int(row.get("min_level") or 0),
+                    races=int(row.get("races") or 0),
+                    prev=int(fact.get("prev") or 0),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        out[team] = book
+    return out
+
+
+def _solo(fact) -> bool:
+    """A quest a lone member works, given by a spawn of the world."""
+    return (
+        bool(int(fact.get("given") or 0))
+        and int(fact.get("info") or 0) not in PARTY_QUEST_INFO
+        and int(fact.get("group_size") or 0) <= 1
+        and not int(fact.get("special") or 0) & REPEATABLE_FLAG
+    )
+
+
+def open_quests(book, level, race, done) -> dict | None:
+    """zone id -> the quests open for a member of this level and race that has
+    been rewarded for `done` (see the module docstring), out of one side's
+    `quest_book`. None when the book or `done` is unread."""
+    if book is None or done is None:
+        return None
+    chain = _Chain(book, int(level), race, done)
+    out: dict = {}
+    for qid, quest in book.items():
+        if not chain.level - GREEN_BELOW <= quest.level <= chain.level + ABOVE:
+            continue
+        if chain.can_take(qid):
+            out[quest.zone] = out.get(quest.zone, 0) + 1
+    return out
+
+
+class _Chain:
+    """Which quests of a book one member can take now or after quests it can
+    take: each answer remembered, a chain followed at most CHAIN_DEPTH back."""
+
+    def __init__(self, book, level, race, done):
+        self.book = book
+        self.level = level
+        self.bit = 1 << (int(race) - 1) if race and int(race) > 0 else 0
+        self.done = frozenset(int(q) for q in done)
+        self.known: dict = {}
+
+    def can_take(self, qid, depth=0) -> bool:
+        if qid in self.known:
+            return self.known[qid]
+        self.known[qid] = False  # a chain that loops back is not takeable
+        quest = self.book.get(qid)
+        if not self._allowed(quest) or qid in self.done or depth > CHAIN_DEPTH:
+            return False
+        prev = quest.prev
+        ok = prev <= 0 or prev in self.done or self.can_take(prev, depth + 1)
+        self.known[qid] = ok
+        return ok
+
+    def _allowed(self, quest) -> bool:
+        """Its minimum level met and its race mask open to the member."""
+        if quest is None or quest.min_level > self.level:
+            return False
+        return not quest.races or bool(quest.races & self.bit)
+
+
+def member_opens(world, race, level, done) -> dict | None:
+    """`open_quests` for one member off the pass's World, None when unread."""
+    books = getattr(world, "quests", None)
+    if books is None:
+        return None
+    return open_quests(books.get(side_of(race)), level, race, done)
+
+
+def ground_of(team, map_id, zone_id) -> str:
+    """The pocket of `team`'s POCKETS the zone lies in, MAIN_GROUND otherwise."""
+    if map_id is None:
+        return MAIN_GROUND
+    for name, zones in POCKETS.get(team, {}).get(int(map_id), {}).items():
+        if zone_id is not None and int(zone_id) in zones:
+            return name
+    return MAIN_GROUND
+
+
+def ground_name(team, ground) -> str:
+    """The words for a ground in a note."""
+    return ground or "the %s's own ground" % (
+        "Horde" if team == levelroute.HORDE else "Alliance"
+    )
+
+
+def rides_from(team, map_id, ground, zone_id=None, to_zone=None) -> list:
+    """[(Transport, far map, far ground)] of `team`'s rides from `ground` on
+    `map_id` to another map that a row can take: one calling in the member's
+    zone (`zone_id`) first, then one landing in the hub's zone (`to_zone`),
+    then TRANSPORTS' order."""
+    out = []
+    for order, ride in enumerate(TRANSPORTS):
+        if team not in ride.sides or not ride.rides:
+            continue
+        for (here_map, here_zone), (far_map, far_zone) in (
+            ride.ends,
+            ride.ends[::-1],
+        ):
+            if here_map != int(map_id) or far_map == here_map:
+                continue
+            if ground_of(team, here_map, here_zone) != ground:
+                continue
+            rank = (here_zone != zone_id, far_zone != to_zone, order)
+            out.append((rank, ride, far_map, ground_of(team, far_map, far_zone)))
+    out.sort(key=lambda r: r[0])
+    return [r[1:] for r in out]
+
+
+def unridden_to(team, map_id, ground, far_ground) -> str:
+    """The name of `team`'s transport from `ground` to `far_ground` on the same
+    map that no row rides yet, "" for none."""
+    for ride in TRANSPORTS:
+        if team not in ride.sides or ride.rides:
+            continue
+        grounds = {ground_of(team, m, z) for m, z in ride.ends if m == int(map_id)}
+        if {ground, far_ground} <= grounds:
+            return ride.name
+    return ""
 
 
 def hub_masters(rows) -> dict:
@@ -312,12 +637,14 @@ def _hub_spawns(rows, reach) -> dict:
     return out
 
 
-def outgrown(level, race, map_id, zone_id, bands) -> str:
+def outgrown(level, race, map_id, zone_id, bands, opens=None) -> str:
     """Why a member has outgrown where it stands, or "" when it has not or
     where it stands cannot be judged.
 
     `bands` is levelroute.bands for the member's side: zone id -> (floor,
-    ceiling, quest count).
+    ceiling, quest count). `opens` is the member's `open_quests`; once read, a
+    hub zone is outgrown when fewer than MIN_OPEN quests are open there,
+    whatever its ceiling.
     """
     if map_id is None:
         return ""
@@ -335,18 +662,36 @@ def outgrown(level, race, map_id, zone_id, bands) -> str:
             "its side has no quest band in %s (a capital, a starting zone or no hub)"
             % (zone)
         )
+    if opens is not None:
+        left = int(opens.get(int(zone_id), 0))
+        if left < MIN_OPEN:
+            return "it has %s left in %s at level %d" % (
+                quests_word(left),
+                zone,
+                int(level),
+            )
+        return ""
     if int(level) > int(band[1]):
         return "it has outgrown %s, whose quests top out at %d" % (zone, band[1])
     return ""
 
 
-def fits(band, level) -> bool:
-    """A band a member of `level` may be sent to: not outgrown, not too high."""
+def quests_word(n) -> str:
+    """ "1 open quest", "4 open quests"."""
+    return "%d open quest%s" % (int(n), "" if int(n) == 1 else "s")
+
+
+def fits(band, level, left=None) -> bool:
+    """A band a member of `level` may be sent to: not outgrown, not too high.
+    With `left`, its open quests there, MIN_OPEN of them stand for the
+    ceiling."""
     if band is None:
         return False
-    return int(band[1]) >= int(level) and int(band[0]) <= int(level) + int(
-        council.NEAR_ENOUGH
-    )
+    if int(band[0]) > int(level) + int(council.NEAR_ENOUGH):
+        return False
+    if left is not None:
+        return int(left) >= MIN_OPEN
+    return int(band[1]) >= int(level)
 
 
 def hubs_from(team, map_id, zone_id) -> tuple:
@@ -359,26 +704,62 @@ def hubs_from(team, map_id, zone_id) -> tuple:
     return hubs
 
 
-def choose(level, race, map_id, bands, masters, zone_id=None, orbs=None) -> Choice:
+def choose(
+    level, race, map_id, bands, masters, zone_id=None, orbs=None, opens=None, nodes=None
+) -> Choice:
     """The hub a member of this level and race is walked to from `map_id`.
 
-    The lowest band of its side that fits, then levelroute's order, among the
-    hubs with a known flight master (`hubs_from`). Only on its own map, or,
-    from map 530, on the map its side's boat or orb (`orbs`, orbs_from) lands
-    on (`Choice.cross_to`); see the module docstring.
+    Among the hubs with a known flight master (`hubs_from`) whose band fits:
+    with `opens` read (`open_quests`), those with MIN_OPEN quests open for the
+    member, the most open first, then one whose flight point is in `nodes` (the
+    member's known taxi nodes), then the lowest band; unread, the lowest band
+    first. Then levelroute's order. Only on its own map and its own ground
+    (`ground_of`); from map 530, on the map its side's boat or orb (`orbs`,
+    orbs_from) lands on, and from a continent, on the ground its side's
+    zeppelin or boat lands on (`Choice.cross_to`); see the module docstring.
     """
     team = side_of(race)
     if not team:
         return Choice(refused="its side cannot be read off its race")
     level = int(level)
-    fitting = _fitting(team, level, map_id, zone_id, bands, masters)
+    fitting = _fitting(team, level, map_id, zone_id, bands, masters, opens, nodes)
     if not fitting:
         return Choice(refused="no %s hub fits level %d" % (team, level))
-    home = [f for f in fitting if map_id is not None and f[4].map_id == int(map_id)]
+    ground = ground_of(team, map_id, zone_id)
+    home = [
+        f
+        for f in fitting
+        if map_id is not None
+        and f.master.map_id == int(map_id)
+        and _ground(team, f.hub) == ground
+    ]
     if home:
-        _floor, _order, hub, band, master = home[0]
-        return Choice(hub=hub, band=band, master=master)
-    return _away(team, level, map_id, fitting, _orb_for(team, map_id, zone_id, orbs))
+        return home[0].choice()
+    if classic.is_expansion_map(map_id):
+        return _away(
+            team, level, map_id, fitting, _orb_for(team, map_id, zone_id, orbs)
+        )
+    return _across(team, level, map_id, zone_id, fitting)
+
+
+@dataclass(frozen=True)
+class _Fit:
+    """A hub that fits, with what it is ranked by."""
+
+    rank: tuple
+    hub: levelroute.Hub
+    band: tuple
+    master: HubMaster
+    open: int | None
+
+    def choice(self, **over) -> Choice:
+        fields = dict(hub=self.hub, band=self.band, master=self.master, open=self.open)
+        fields.update(over)
+        return Choice(**fields)
+
+
+def _ground(team, hub) -> str:
+    return ground_of(team, hub.map_id, hub.zone_id)
 
 
 def _orb_for(team, map_id, zone_id, orbs):
@@ -389,45 +770,80 @@ def _orb_for(team, map_id, zone_id, orbs):
     return (orbs or {}).get(team)
 
 
-def _fitting(team, level, map_id, zone_id, bands, masters) -> list:
-    """(floor, order, hub, band, master) of every friendly hub of `team` whose
-    band fits `level` and whose flight master is known, lowest floor first,
-    then levelroute's order."""
+def _fitting(team, level, map_id, zone_id, bands, masters, opens=None, nodes=None):
+    """_Fit of every friendly hub of `team` whose band fits `level` (with its
+    open quests, when `opens` is read) and whose flight master is known, best
+    first (see `choose`)."""
     fitting = []
     for order, hub in enumerate(hubs_from(team, map_id, zone_id)):
         band = (bands or {}).get(hub.zone_id)
         master = (masters or {}).get(hub.key)
-        if hub.friendly and fits(band, level) and master is not None:
-            fitting.append((int(band[0]), order, hub, band, master))
-    fitting.sort(key=lambda f: f[:2])
+        left = None if opens is None else int(opens.get(hub.zone_id, 0))
+        if not hub.friendly or master is None or not fits(band, level, left):
+            continue
+        if left is None:
+            rank = (int(band[0]), order)
+        else:
+            flies = nodes is not None and hub.node in nodes
+            rank = (-left, not flies, int(band[0]), order)
+        fitting.append(_Fit(rank, hub, band, master, left))
+    fitting.sort(key=lambda f: f.rank)
     return fitting
 
 
 def _away(team, level, map_id, fitting, orb=None) -> Choice:
-    """The choice when no fitting hub stands on the member's own map: its
-    side's boat (BOAT_EXITS) or orb (`orb`) off map 530 to the lowest hub that
-    fits where it lands, or the lowest hub of all, named and refused."""
-    boat = BOAT_EXITS.get(team) if classic.is_expansion_map(map_id) else None
-    if boat is not None or not classic.is_expansion_map(map_id):
+    """The choice from map 530 when no fitting hub stands there: its side's
+    boat (BOAT_EXITS) or orb (`orb`) to the best hub that fits where it lands,
+    or the best hub of all, named and refused."""
+    boat = BOAT_EXITS.get(team)
+    if boat is not None:
         orb = None
     landing = boat if boat is not None else (orb.lands_on if orb else None)
-    landed = [f for f in fitting if landing is not None and f[4].map_id == landing]
+    landed = [f for f in fitting if landing is not None and f.master.map_id == landing]
     if landed:
-        _floor, _order, hub, band, _master = landed[0]
-        return Choice(hub=hub, band=band, cross_to=landing, orb=orb)
-    _floor, _order, hub, band, _master = fitting[0]
-    if classic.is_expansion_map(map_id):
-        why = "no walk leaves map %d; its way to %s is %s, and no row takes it" % (
-            int(map_id),
-            hub.zone,
-            EXITS[team],
+        return landed[0].choice(master=None, cross_to=landing, orb=orb)
+    best = fitting[0]
+    why = "no walk leaves map %d; its way to %s is %s, and no row takes it" % (
+        int(map_id),
+        best.hub.zone,
+        EXITS[team],
+    )
+    return best.choice(master=None, refused=why)
+
+
+def _across(team, level, map_id, zone_id, fitting) -> Choice:
+    """The choice on a continent when no fitting hub stands on the member's own
+    ground: its side's zeppelin or boat from that ground to the best hub that
+    fits on the ground it lands on (`rides_from`), or the best hub of all,
+    named and refused."""
+    ground = ground_of(team, map_id, zone_id)
+    for f in fitting:
+        if map_id is None or f.master.map_id == int(map_id):
+            continue
+        rides = rides_from(team, map_id, ground, zone_id, f.hub.zone_id)
+        for ride, far_map, far_ground in rides:
+            if f.master.map_id == far_map and _ground(team, f.hub) == far_ground:
+                return f.choice(master=None, cross_to=far_map, transport=ride.name)
+    best = fitting[0]
+    here = ground_name(team, ground)
+    if map_id is not None and best.master.map_id == int(map_id):
+        link = unridden_to(team, map_id, ground, _ground(team, best.hub))
+        why = "%s lies past the other side's ground from %s%s" % (
+            best.hub.zone,
+            here,
+            (", and no row rides %s yet" % link) if link else "",
         )
     else:
-        why = "no hub on its continent fits level %d; %s is across the sea" % (
+        why = "no hub on %s fits level %d; %s is across the sea, and no %s ride %s" % (
+            here,
             level,
-            hub.zone,
+            best.hub.zone,
+            team,
+            "from here lands where it fits"
+            if map_id is not None and rides_from(team, map_id, ground)
+            else "leaves %s" % here,
         )
-    return Choice(hub=hub, band=band, refused=why)
+    return best.choice(master=None, refused=why)
 
 
 def there(map_id, x, y, master: HubMaster) -> bool:
@@ -505,23 +921,47 @@ def said(name, level, why, choice: Choice) -> str:
     """The sentence the pass logs for a level walk."""
     return (
         "%s walks to the flight master at %s to level (quests %d to %d fit its "
-        "level %d): %s"
+        "level %d%s): %s"
         % (
             name,
             choice.place,
             int(choice.band[0]),
             int(choice.band[1]),
             int(level),
+            _open_words(choice),
             why,
         )
     )
 
 
+def _open_words(choice: Choice) -> str:
+    """ "; 12 open quests there" when the member's open quests are read."""
+    if choice.open is None:
+        return ""
+    return "; %s there" % quests_word(choice.open)
+
+
 def crossing_said(name, level, why, choice: Choice) -> str:
-    """The sentence the pass logs for a member sent to its side's boat."""
+    """The sentence the pass logs for a member sent to its side's boat off map
+    530, or to its zeppelin or boat between the continents."""
+    if choice.transport:
+        return (
+            "%s takes %s to level, then walks on to %s (quests %d to %d fit its "
+            "level %d%s): %s"
+            % (
+                name,
+                choice.transport,
+                choice.place,
+                int(choice.band[0]),
+                int(choice.band[1]),
+                int(level),
+                _open_words(choice),
+                why,
+            )
+        )
     return (
         "%s takes the boat off map 530 to level: %s, then on to %s (quests %d "
-        "to %d fit its level %d): %s"
+        "to %d fit its level %d%s): %s"
         % (
             name,
             EXITS[choice.hub.team],
@@ -529,6 +969,7 @@ def crossing_said(name, level, why, choice: Choice) -> str:
             int(choice.band[0]),
             int(choice.band[1]),
             int(level),
+            _open_words(choice),
             why,
         )
     )
@@ -538,7 +979,7 @@ def orb_said(name, level, why, choice: Choice) -> str:
     """The sentence the pass logs for a member sent to its side's orb."""
     return (
         "%s takes %s to level, then walks on to %s (quests %d to %d fit its "
-        "level %d): %s"
+        "level %d%s): %s"
         % (
             name,
             EXITS[choice.hub.team],
@@ -546,6 +987,7 @@ def orb_said(name, level, why, choice: Choice) -> str:
             int(choice.band[0]),
             int(choice.band[1]),
             int(level),
+            _open_words(choice),
             why,
         )
     )
@@ -584,6 +1026,8 @@ class World:
     roster   every roster family member's name: levelroute serves those
     orbs     side -> Orb (`orbs_from`), its way off map 530 by an orb
     inns     hub key -> HubMaster of its innkeeper (`hub_inns`)
+    quests   side -> {quest id: Quest} (`quest_book`), None while unread, which
+             judges every zone by its band alone
     """
 
     bands: dict
@@ -591,12 +1035,15 @@ class World:
     roster: frozenset = frozenset()
     orbs: dict = field(default_factory=dict)
     inns: dict = field(default_factory=dict)
+    quests: dict | None = None
 
 
-def world(quest_rows, master_rows, roster=(), orb_rows=(), inn_rows=()) -> World | None:
-    """The World off levelroute.QUESTS_SQL's rows, the flight-master rows and
-    the orb's gameobject rows, or None while the quests are unread (no step is
-    taken from no bands)."""
+def world(
+    quest_rows, master_rows, roster=(), orb_rows=(), inn_rows=(), fact_rows=None
+) -> World | None:
+    """The World off levelroute.QUESTS_SQL's rows, the flight-master rows, the
+    orb's gameobject rows, the innkeeper rows and QUEST_FACTS_SQL's rows, or
+    None while the quests are unread (no step is taken from no bands)."""
     if quest_rows is None:
         return None
     return World(
@@ -608,4 +1055,5 @@ def world(quest_rows, master_rows, roster=(), orb_rows=(), inn_rows=()) -> World
         roster=frozenset(str(n) for n in roster or ()),
         orbs=orbs_from(orb_rows),
         inns=hub_inns(inn_rows),
+        quests=quest_book(quest_rows, fact_rows),
     )

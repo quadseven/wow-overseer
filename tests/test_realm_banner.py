@@ -71,7 +71,6 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
             "def _fetch_armory",
             "def _fetch_achievements",
             "def _fetch_agenda",
-            "def _guarded",
         ):
             self.assertLess(fetch_at, self.server.index(later), later)
 
@@ -127,20 +126,27 @@ class EveryReadIsGuardedWithTheClassThatActuallyFires(unittest.TestCase):
     the obvious thing to copy from the helper three functions down - would
     compile, read correctly, pass review, and never once fire on half of what it
     names.
+
+    The guard is the realm reader's rows() (realmread.py, #731), which every
+    read on the site now goes through; tests/test_realmread.py runs it.
     """
 
     @classmethod
     def setUpClass(cls):
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
-        start = cls.server.index("def _realm_guarded")
-        cls.guard = cls.server[start : cls.server.index("def _fetch_rows", start)]
+        reader = (HERE / "realmread.py").read_text(encoding="utf-8")
+        start = reader.index("def _schema_gap")
+        cls.guard = reader[start : reader.index("class Session", start)]
 
     def test_the_guard_catches_the_base_class_and_not_programmingerror(self):
-        self.assertIn("except pymysql.err.MySQLError", self.guard)
-        self.assertNotIn("except pymysql.err.ProgrammingError", self.guard)
+        self.assertIn('"MySQLError"', self.guard)
+        self.assertNotIn("ProgrammingError", self.guard)
 
     def test_it_swallows_both_a_missing_table_and_a_missing_column(self):
-        self.assertIn("(1054, 1146)", self.guard)
+        reader = (HERE / "realmread.py").read_text(encoding="utf-8")
+        self.assertIn("_SCHEMA_GAPS = (MISSING_TABLE, MISSING_COLUMN)", reader)
+        self.assertIn("MISSING_TABLE = 1146", reader)
+        self.assertIn("MISSING_COLUMN = 1054", reader)
 
     def test_it_swallows_nothing_else(self):
         """Anything but those two is a real fault and must still reach the
@@ -155,7 +161,7 @@ class EveryReadIsGuardedWithTheClassThatActuallyFires(unittest.TestCase):
         already wrong."""
         fetch = self.server[self.server.index("def _fetch_realm") :]
         fetch = fetch[: fetch.index("def _fetch_rows")]
-        self.assertEqual(fetch.count("_realm_guarded("), 3)
+        self.assertEqual(fetch.count("rd.rows("), 3)
         for table in ("overseer_build", "acore_world.version", "acore_auth.realmlist"):
             self.assertIn(table, self.server, table)
 

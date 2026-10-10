@@ -2423,6 +2423,124 @@ def smelt_errand(name: str, skills: dict, primaries=None) -> int:
 # comment), which `craft_errand` therefore never names.
 SECONDARY_AUTO_LEARNED = frozenset({3275})
 
+# A RECIPE A TRAINER ADDS TO THE BOOK BY ITSELF (SkillLineAbility
+# AcquireMethod 1, ClassMask 0): Linen Bandage with Apprentice First Aid, Bolt
+# of Linen Cloth with Apprentice Tailoring, and the other first rungs (Rough
+# Blasting Powder, Smelt Copper, Minor Healing Potion, Rough Sharpening Stone,
+# Light Leather, Light Armor Kit, Handstitched Leather Cloak). It is never
+# written to `character_spell`, so its absence there proves nothing. Every
+# other rung is bought, and a bought recipe persists there. guildjobs, standin
+# and craft_rhythm all read this one set.
+AUTO_LEARNED = frozenset({3275, 2963, 3918, 2657, 2330, 2660, 2881, 2152, 9058})
+
+# THE TRAINER'S PRICE FOR EVERY BOUGHT RUNG, spell -> (ReqSkillRank, copper).
+# acore_world.trainer_spell on the dev world, 2026-10-10: the least
+# ReqSkillRank and MoneyCost across the trainers that teach it, for every
+# rung of RECIPES that is not AUTO_LEARNED and every trainer bag the tailor
+# sews (BAG_RECIPES, guildcorps.BAGS). Every one of them is sold by the
+# ordinary trainer of its trade in each capital (trainer ids 58-60, 61-63,
+# 65-67, 72-74, 81-83 and 84-92), so the nearest trainer of the trade sells
+# it. mod-overseer's TrainOnArrival buys a trade's recipes at this price once
+# a learn errand brings the member to that trainer (mod-overseer#862);
+# guildjobs.recipes_due reads this table to write that errand only when the
+# skill and the purse allow the purchase.
+TRAINER_RECIPES: dict[int, tuple[int, int]] = {
+    # FIRST AID
+    3276: (40, 100),  # Heavy Linen Bandage
+    3277: (80, 250),  # Wool Bandage
+    3278: (115, 1000),  # Heavy Wool Bandage
+    7928: (150, 5000),  # Silk Bandage
+    7929: (180, 5000),  # Heavy Silk Bandage
+    10840: (210, 10000),  # Mageweave Bandage
+    10841: (240, 10000),  # Heavy Mageweave Bandage
+    18629: (260, 20000),  # Runecloth Bandage
+    18630: (290, 20000),  # Heavy Runecloth Bandage
+    # BLACKSMITHING
+    3320: (25, 100),  # Rough Grinding Stone
+    3326: (75, 250),  # Coarse Grinding Stone
+    3337: (125, 1000),  # Heavy Grinding Stone
+    9918: (200, 2500),  # Solid Sharpening Stone
+    16641: (250, 10000),  # Dense Sharpening Stone
+    # LEATHERWORKING
+    3756: (55, 150),  # Embossed Leather Gloves
+    3763: (80, 300),  # Fine Leather Belt
+    2167: (100, 350),  # Dark Leather Boots
+    7135: (115, 400),  # Dark Leather Pants
+    3780: (150, 750),  # Heavy Armor Kit
+    3818: (150, 500),  # Cured Heavy Hide
+    20649: (150, 1000),  # Heavy Leather
+    7151: (175, 1200),  # Barbaric Shoulders
+    7156: (190, 2400),  # Guardian Gloves
+    10487: (200, 2000),  # Thick Armor Kit
+    10507: (205, 3000),  # Nightscape Headband
+    10548: (230, 4000),  # Nightscape Pants
+    10558: (235, 4500),  # Nightscape Boots
+    19052: (265, 10000),  # Wicked Leather Bracers
+    19082: (290, 15000),  # Runic Leather Headband
+    # ALCHEMY
+    2337: (55, 1000),  # Lesser Healing Potion
+    3447: (110, 4000),  # Healing Potion
+    3173: (120, 1500),  # Lesser Mana Potion
+    7181: (155, 5000),  # Greater Healing Potion
+    3450: (175, 6000),  # Elixir of Fortitude
+    11449: (185, 6500),  # Elixir of Agility
+    11450: (195, 7500),  # Elixir of Greater Defense
+    11457: (215, 10000),  # Superior Healing Potion
+    11460: (230, 5000),  # Elixir of Detect Undead
+    11467: (240, 12000),  # Elixir of Greater Agility
+    17553: (260, 15000),  # Superior Mana Potion
+    17556: (275, 20000),  # Major Healing Potion
+    # TAILORING
+    8776: (15, 50),  # Linen Belt
+    3755: (45, 100),  # Linen Bag
+    2964: (75, 100),  # Bolt of Woolen Cloth
+    3757: (80, 200),  # Woolen Bag
+    3839: (125, 500),  # Bolt of Silk Cloth
+    8760: (145, 600),  # Azure Silk Hood
+    3813: (150, 800),  # Small Silk Pack
+    8762: (160, 750),  # Silk Headband
+    3865: (175, 1000),  # Bolt of Mageweave
+    8791: (185, 2500),  # Crimson Silk Vest
+    8799: (195, 3000),  # Crimson Silk Pantaloons
+    12053: (215, 5000),  # Black Mageweave Gloves
+    12065: (225, 5000),  # Mageweave Bag
+    18401: (250, 10000),  # Bolt of Runecloth
+    18402: (255, 10000),  # Runecloth Belt
+    18417: (275, 12500),  # Runecloth Gloves
+    # ENGINEERING
+    3922: (30, 115),  # Handful of Copper Bolts
+    3923: (30, 130),  # Rough Copper Bomb
+    7430: (50, 150),  # Arclight Spanner
+    3929: (75, 250),  # Coarse Blasting Powder
+    3931: (75, 250),  # Coarse Dynamite
+    3973: (90, 300),  # Silver Contact
+    3938: (105, 450),  # Bronze Tube
+    3945: (125, 500),  # Heavy Blasting Powder
+    12585: (175, 1000),  # Solid Blasting Powder
+    12590: (175, 1000),  # Gyromatic Micro-Adjustor
+    12589: (195, 1300),  # Mithril Tube
+    12591: (200, 1500),  # Unstable Trigger
+    12599: (215, 1800),  # Mithril Casing
+    12619: (235, 2400),  # Hi-Explosive Bomb
+    19788: (250, 4000),  # Dense Blasting Powder
+    19791: (260, 5000),  # Thorium Widget
+    19795: (275, 10000),  # Thorium Tube
+}
+
+
+def holds(spell_id: int, known) -> bool:
+    """Does a character with spellbook `known` hold this recipe?
+
+    `known` None is an unread spellbook: held, so nothing is judged on it. An
+    auto-learned rung is held whatever `character_spell` says, and so is any
+    spell this module cannot place as a trainer purchase. Only a rung in
+    TRAINER_RECIPES that is absent from `known` is not held.
+    """
+    spell = int(spell_id or 0)
+    if known is None or not spell or spell in AUTO_LEARNED:
+        return True
+    return spell not in TRAINER_RECIPES or spell in known
+
 
 def craft_errand(name: str, skills: dict, primaries=None) -> int:
     """The `craft_spell` this character's roster row should carry, or 0.

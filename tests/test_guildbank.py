@@ -1259,10 +1259,135 @@ class MembersKeepTheirGold(unittest.TestCase):
 
     def test_no_member_gold_is_deposited(self):
         self.assertFalse(guildbank.MEMBER_GOLD_DEPOSITS)
+        members = [
+            {"name": "Grug", "money": 457_496, "in_guild": True},
+            {"name": "Ugga", "money": 1_222_780, "in_guild": True},
+            {"name": "Og", "money": 3_583_000, "in_guild": True},
+        ]
+        got = guildbank.gold_deposits(members, master="Grug", purchased_tabs=1)
+        self.assertEqual(["Grug"], [d.name for d in got])
+
+    def test_both_passes_plan_through_the_one_rule(self):
         src = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
             encoding="utf-8"
         )
-        self.assertEqual(2, src.count("if guildbank.MEMBER_GOLD_DEPOSITS else []"))
+        self.assertEqual(0, src.count("if guildbank.MEMBER_GOLD_DEPOSITS else []"))
+        self.assertEqual(2, src.count("guildbank.gold_deposits("))
+
+
+G = 10_000
+
+
+class TheMasterBanksTheGuildsGold(unittest.TestCase):
+    """#775, read on the dev realm 2026-10-10 about 14:00 ET: Cave's vault held
+    exactly 155.0g every day from 2026-09-28, with no deposit, while the guild
+    master Grug carried 45.7g; Bonkers' vault held 0 and its master Zug
+    carried 96.3g against its first tab's 100g. MEMBER_GOLD_DEPOSITS is off,
+    and it took the master's deposit with it."""
+
+    def plan(self, money, tabs, master="Grug", in_guild=True):
+        members = [{"name": master, "money": money, "in_guild": in_guild}]
+        return guildbank.plan_master_deposit(
+            members, master=master, purchased_tabs=tabs
+        )
+
+    def test_grug_banks_what_sits_above_its_float(self):
+        self.assertEqual(
+            [guildbank.Deposit("Grug", 457_496 - guildbank.FLOAT_COPPER)],
+            self.plan(457_496, tabs=1),
+        )
+
+    def test_zug_keeps_the_first_tabs_price(self):
+        self.assertEqual([], self.plan(963_168, tabs=0, master="Zug"))
+
+    def test_zug_banks_only_above_the_tab_and_its_float(self):
+        self.assertEqual(
+            [guildbank.Deposit("Zug", 10 * G)], self.plan(120 * G, tabs=0, master="Zug")
+        )
+
+    def test_a_later_tab_the_purse_pays_for_is_kept(self):
+        # Tab 1 costs 250g and asks the buyer's float on top (can_buy_tab).
+        self.assertEqual(
+            [guildbank.Deposit("Grug", 40 * G)], self.plan(300 * G, tabs=1)
+        )
+
+    def test_a_later_tab_the_purse_cannot_pay_for_holds_nothing_back(self):
+        # 45g never reaches tab 1's 250g by itself (it read 41g to 48g from
+        # 2026-10-05 to 2026-10-10), so the guild's gold goes to the vault.
+        self.assertEqual([guildbank.Deposit("Grug", 35 * G)], self.plan(45 * G, tabs=1))
+
+    def test_under_a_gold_above_the_float_is_not_worth_a_row(self):
+        self.assertEqual([], self.plan(guildbank.FLOAT_COPPER + G - 1, tabs=1))
+        self.assertEqual(
+            [guildbank.Deposit("Grug", G)],
+            self.plan(guildbank.FLOAT_COPPER + G, tabs=1),
+        )
+
+    def test_no_master_no_guild_or_an_unreadable_purse_banks_nothing(self):
+        self.assertEqual([], self.plan(457_496, tabs=1, in_guild=False))
+        self.assertEqual([], self.plan("lots", tabs=1))
+        self.assertEqual(
+            [],
+            guildbank.plan_master_deposit(
+                [{"name": "Grug", "money": 457_496, "in_guild": True}],
+                master="",
+                purchased_tabs=1,
+            ),
+        )
+        self.assertEqual(
+            [],
+            guildbank.plan_master_deposit(
+                [{"name": "Ugga", "money": 457_496, "in_guild": True}],
+                master="Grug",
+                purchased_tabs=1,
+            ),
+        )
+
+    def test_member_deposits_switched_back_on_keep_the_old_plan(self):
+        members = [
+            {"name": "Grug", "money": 5_000_000, "in_guild": True},
+            {"name": "Ugga", "money": 1_222_780, "in_guild": True},
+        ]
+        saved = guildbank.MEMBER_GOLD_DEPOSITS
+        guildbank.MEMBER_GOLD_DEPOSITS = True
+        try:
+            got = guildbank.gold_deposits(
+                members, master="Grug", purchased_tabs=1, buyer="Grug"
+            )
+        finally:
+            guildbank.MEMBER_GOLD_DEPOSITS = saved
+        self.assertEqual(
+            guildbank.plan_deposits(
+                members,
+                guild_has_tab=True,
+                buyer="Grug",
+                reserve_for_buyer=guildbank.buyer_reserve(1),
+            ),
+            got,
+        )
+
+    def test_a_trip_is_made_for_ten_gold_and_not_for_less(self):
+        self.assertFalse(
+            guildbank.worth_a_walk([guildbank.Deposit("Grug", 10 * G - 1)])
+        )
+        self.assertTrue(guildbank.worth_a_walk([guildbank.Deposit("Grug", 10 * G)]))
+        self.assertFalse(guildbank.worth_a_walk([]))
+
+    def test_the_line_names_the_master_the_gold_and_what_it_keeps(self):
+        line = guildbank.master_deposit_line(
+            guildbank.Deposit("Grug", 357_496), 457_496, 1
+        )
+        self.assertEqual(
+            "guild bank: Grug banks 35g 74s of the guild's gold and keeps 10g", line
+        )
+        line = guildbank.master_deposit_line(
+            guildbank.Deposit("Zug", 10 * G), 120 * G, 0
+        )
+        self.assertEqual(
+            "guild bank: Zug banks 10g of the guild's gold and keeps 110g, "
+            "its float and tab 0's price",
+            line,
+        )
 
 
 class TheFirstTabIsFundedByTheFamily(unittest.TestCase):

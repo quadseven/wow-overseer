@@ -1,4 +1,4 @@
-"""A guild bot's own post: the letters with items, taken out at a mailbox (#625).
+"""A guild bot's own post: the letters with items or gold, taken out at a mailbox (#625).
 
 WHY THIS EXISTS. Measured on wow-dev 2026-10-05: 293 letters carrying items,
 sent from one guildmate to another, sat unopened (Bonkers 210 of them since
@@ -55,6 +55,8 @@ class Letter:
     item_guid: int
     name: str
     ready: bool = True
+    # Copper on a letter of gold (item_guid 0), taken with `take-money`.
+    money: int = 0
 
 
 def letter_from_row(row) -> Letter | None:
@@ -69,9 +71,15 @@ def letter_from_row(row) -> Letter | None:
         item_guid = int(row["item_guid"])
     except (KeyError, TypeError, ValueError):
         return None
-    if not receiver or mail_id <= 0 or item_guid <= 0:
+    money = _int(row.get("money"))
+    # A LETTER OF GOLD (2026-10-10): a row with no attachment and money on it
+    # is the gold itself, taken out with `take-money` (the guild fund's
+    # training letters and dues refunds, guildfund.py).
+    if not receiver or mail_id <= 0 or item_guid < 0 or (item_guid == 0 and money <= 0):
         return None
     ready = bool(_int(row.get("delivered"), 1)) and _int(row.get("cod")) == 0
+    if item_guid == 0:
+        return Letter(receiver, mail_id, 0, "%d copper" % money, ready, money)
     name = str(row.get("name") or "item %d" % item_guid)
     return Letter(receiver, mail_id, item_guid, name, ready)
 
@@ -87,6 +95,8 @@ class Take:
 
     @property
     def command(self) -> str:
+        if not self.item_guid:
+            return "%s mail:%d" % (mailrun.TAKE_MONEY, self.mail_id)
         return "%s mail:%d item:%d" % (mailrun.TAKE_ITEM, self.mail_id, self.item_guid)
 
 
@@ -132,15 +142,22 @@ def _visit_for(receiver, waiting, online, busy, free_slots):
         return None, "%s is already on a walk" % receiver
     room = _int(free_slots.get(receiver), -1)
     limit = TAKES_PER_VISIT if room < 0 else min(TAKES_PER_VISIT, room)
-    if limit <= 0:
+    # GOLD FIRST, AND IT NEEDS NO BAG SLOT (mailrun's own order): a member
+    # with full bags still takes the gold the guild posted it.
+    gold = sorted((x for x in waiting if not x.item_guid), key=lambda x: x.mail_id)
+    items = sorted(
+        (x for x in waiting if x.item_guid), key=lambda x: (x.mail_id, x.item_guid)
+    )
+    chosen = (
+        gold[:TAKES_PER_VISIT]
+        + items[: max(0, min(limit, TAKES_PER_VISIT - len(gold)))]
+    )
+    if not chosen:
         return None, "%s has %d letter(s) and no free bag slot" % (
             receiver,
             len(waiting),
         )
-    takes = tuple(
-        Take(x.receiver, x.mail_id, x.item_guid, x.name)
-        for x in sorted(waiting, key=lambda x: (x.mail_id, x.item_guid))[:limit]
-    )
+    takes = tuple(Take(x.receiver, x.mail_id, x.item_guid, x.name) for x in chosen)
     return Visit(receiver, takes, len(waiting)), ""
 
 

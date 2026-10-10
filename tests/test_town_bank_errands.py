@@ -1207,8 +1207,10 @@ class TheSetupBranchClosedTheDepositBranch(unittest.TestCase):
         setup queue rather than below it.
         """
         body = self._pass()
+        # Planned through guildbank.gold_deposits since #775, which is
+        # plan_deposits while member deposits are on.
         self.assertLess(
-            body.index("plan_deposits"), body.index("_recent_guild_setup_keys")
+            body.index("gold_deposits"), body.index("_recent_guild_setup_keys")
         )
 
     def test_the_setup_queue_does_not_return(self):
@@ -1264,7 +1266,8 @@ class ThePurchasedTabCountReachesTheReserve(unittest.TestCase):
 
     def test_the_pass_passes_the_count_it_already_read(self):
         body = _statements("    async def _guild_bank_once(")
-        self.assertIn("guild_has_tab=purchased_tabs > 0", body)
+        # guildbank.gold_deposits turns the count into guild_has_tab (#775).
+        self.assertIn("purchased_tabs=purchased_tabs", body)
         self.assertIn(
             'purchased_tabs = int(setup["purchased_tabs"]) if setup else 0', body
         )
@@ -1298,7 +1301,7 @@ class TheItemDepositHasOneCaller(unittest.TestCase):
         body = _statements("    async def _guild_bank_once(")
         self.assertIn("_plan_bank, names)).guild", body)
         self.assertIn("self._queue_guild_items(items, spawn, positions)", body)
-        self.assertIn("if not actions and not deposits and not items:", body)
+        self.assertIn("if not any((actions, deposits, items, withdrawals)):", body)
         queue = _statements("    async def _queue_guild_items(")
         self.assertIn("bank.command(move)", queue)
         self.assertIn("_recent_guild_bank_keys", queue)

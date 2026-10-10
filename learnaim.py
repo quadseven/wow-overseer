@@ -141,7 +141,10 @@ class Row:
     `ranks` is every held trade whose next trainer rank is due now, cheapest
     first: guildjobs.ranks_due's answer, the guild crew's own rank rule. It is
     a decision made by the caller from the skill ceilings, not a held-skill
-    set this module reads (mod-overseer#74, `ThereIsNoHoldsRule`).
+    set this module reads (mod-overseer#74, `ThereIsNoHoldsRule`). After the
+    ranks come the trades whose next trainer RECIPE is due
+    (guildjobs.recipes_due, #769): the same errand, since TrainOnArrival buys
+    a trade's recipes when the trainer has no rank to sell (mod-overseer#862).
     """
 
     character: str
@@ -453,8 +456,8 @@ def report(learn_plan) -> str:
     learn = tuple(getattr(learn_plan, "learn", ()) or ())
     if learn:
         said.append(
-            "%s's skill %d is at its rank ceiling and the next rank is due, so "
-            "it has a learn errand to buy it at %s; the trainer is paid "
+            "%s's skill %d has its next rank or trainer recipe due, so it "
+            "has a learn errand to buy it at %s; the trainer is paid "
             "through Trainer::TeachSpell"
             % (learn[0], learn[1], travel.describe(TRAINER_ROLE))
         )

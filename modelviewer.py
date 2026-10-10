@@ -95,6 +95,9 @@ CONTENT_TYPES = {
 # from race ids, display ids and file names is exactly this shape.
 _SEGMENT = re.compile(r"^[A-Za-z0-9_\-]+(\.[A-Za-z0-9]+)*$")
 
+# A cache file extension: one dot and alphanumerics, as CONTENT_TYPES has.
+_EXT = re.compile(r"\.[a-z0-9]{1,8}")
+
 # Model data is immutable for a frozen expansion: a display id's m2 file
 # is the same file tomorrow. A day is long enough that a browser reloads
 # nothing across a session and short enough that a corrected upstream
@@ -150,14 +153,28 @@ class DiskCache:
     cap_bytes: int = DEFAULT_CAP_BYTES
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def _name(self, path: str) -> str:
+    def _name(self, path: str) -> str | None:
+        """The one on-disk file for `path`, or None if it would leave the cache.
+
+        The name is a hash plus an allowlisted extension, then resolved with
+        realpath and required to sit directly inside the resolved cache
+        directory. Callers open exactly the string returned here.
+        """
         ext = os.path.splitext(path)[1].lower()
-        return os.path.join(
-            self.directory, hashlib.sha256(path.encode()).hexdigest() + ext
+        if ext and not _EXT.fullmatch(ext):
+            return None
+        root = os.path.realpath(self.directory)
+        full = os.path.realpath(
+            os.path.join(root, hashlib.sha256(path.encode()).hexdigest() + ext)
         )
+        if os.path.dirname(full) != root or not full.startswith(root + os.sep):
+            return None
+        return full
 
     def get(self, path: str) -> bytes | None:
         name = self._name(path)
+        if name is None:
+            return None
         try:
             with open(name, "rb") as f:
                 data = f.read()
@@ -172,8 +189,10 @@ class DiskCache:
         return data
 
     def put(self, path: str, data: bytes) -> None:
-        os.makedirs(self.directory, exist_ok=True)
         name = self._name(path)
+        if name is None:
+            raise OSError("path is outside the model cache")
+        os.makedirs(self.directory, exist_ok=True)
         # Written beside and renamed over, so a reader never sees half a
         # file and two threads fetching the same path do not interleave.
         fd, tmp = tempfile.mkstemp(dir=self.directory, prefix=".part-")

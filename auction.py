@@ -652,6 +652,25 @@ def plan_sales(rows, *, max_items: int = 10, hours: int = 12) -> tuple:
     )
 
 
+def price_candidates(candidates, market) -> list:
+    """Each sale candidate with `market_price` set for one house.
+
+    The house's lowest live buyout per unit for the entry when it has one,
+    else the price the candidate's route was judged at (`fair_price`, set by
+    clearance for a stack it routed to the house), else 0, which
+    `plan_sales` refuses. Without the second, a stack clearance listed at the
+    fair price from the house's own history was dropped on any house with no
+    live listing of it, and stayed in the bags.
+    """
+    out = []
+    for candidate in candidates or ():
+        entry = int(candidate.get("entry", 0) or 0)
+        live = int((market or {}).get(entry, 0) or 0)
+        fair = int(candidate.get("fair_price", 0) or 0)
+        out.append(dict(candidate, market_price=live or fair))
+    return out
+
+
 def sales_by_house(candidates, holder_houses) -> dict:
     """Group sale candidates by the auction house each holder can reach.
 

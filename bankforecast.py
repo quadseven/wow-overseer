@@ -50,9 +50,12 @@ price history and no vendor price is kept, because a guess is not a price.
 WHAT IT CHANGES TODAY. The keeper rule sends the vault nothing the guild
 already holds past its target (the holder's own bank takes it, as before),
 and clearance lists or sells a carried material past the target at the fair
-price. The vault's own stacks cannot leave it yet: mod-overseer has no verb
-that takes an item out of a guild bank tab, so their decisions are the plan
-the bridge logs, and they wait for that verb.
+price. The vault's stacks to list leave it by a member's own hand
+(`plan_withdrawals`): a member whose rank may withdraw from the tab stands at
+the vault and takes the stack into an empty bag slot through mod-overseer's
+`bank withdraw-item`, the core's own withdraw with its rank rights and daily
+allowance, and clearance lists it from the bags at the fair price. The gives
+and vendor sales of vault stacks are still only the plan the bridge logs.
 
 NATURAL ONLY. Nothing here creates or grants anything. A member lists its own
 stack, posts it to a guildmate, or sells it to a vendor: what a player does.
@@ -70,6 +73,7 @@ import bankpolicy
 import craft
 import craft_rhythm
 import disposition
+import guildbank
 import guildjobs
 import guildshare
 
@@ -1059,3 +1063,201 @@ def read(cur, names) -> Facts:
         casts,
         history,
     )
+
+
+# ---------------------------------------------------------------------------
+# THE STACKS TO LIST LEAVE THE VAULT BY A MEMBER'S OWN HAND
+#
+# A member whose rank may withdraw from a tab walks to a guild vault, opens it
+# and drags the stack into its bags: mod-overseer's `bank withdraw-item`, the
+# core's own Guild::SwapItemsWithInventory, which enforces the rank's right on
+# the tab and its daily allowance. Clearance then lists the stack from the
+# bags at the fair price. Only SELL decisions are taken: a give to a short
+# member and a vendor sale of a vault stack stay the plan the bridge logs.
+
+# Stacks one member takes in one visit to the vault, the keeper rule's visit.
+WITHDRAW_VISIT_STACKS = 8
+# Free bag slots a member keeps after a visit: the campaign's own resume floor
+# (bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS), so a withdrawal never holds a
+# member's dungeon door shut.
+WITHDRAW_KEEP_FREE = 8
+# How long a withdrawn stack stays the house's: clearance lists it, and the
+# keeper rule never puts it back down, while it is still carried.
+WITHDRAWN_FOR_SALE_HOURS = 48
+# The core's rank 0 and the tab right a withdrawal needs (Guild.h).
+GUILD_MASTER_RANK = 0
+GUILD_BANK_RIGHT_VIEW_TAB = 0x01
+
+_WITHDRAW_COMMAND = "bank withdraw-item "
+# The LIKE pattern for those rows in `overseer_command`.
+WITHDRAW_LIKE = _WITHDRAW_COMMAND + "%"
+
+
+@dataclass(frozen=True)
+class Withdrawer:
+    """A guild member, its bag room, and what each tab still lets it take."""
+
+    name: str
+    rank: int
+    free_slots: int
+    # tab -> withdrawals left today, read from the member's rank.
+    allowance: dict = field(default_factory=dict)
+
+    def left(self, tab):
+        """Withdrawals left today from `tab`; None means no limit."""
+        if self.rank == GUILD_MASTER_RANK:
+            return None
+        return max(0, _int(self.allowance.get(int(tab))))
+
+
+@dataclass(frozen=True)
+class Withdrawal:
+    """One vault stack a member takes out for the house."""
+
+    character: str
+    stack: Stack
+    item: str
+    price: int
+
+    @property
+    def command(self) -> str:
+        return guildbank.format_item_withdraw(
+            item_guid=int(self.stack.guid), tab=int(self.stack.tab)
+        )
+
+    @property
+    def line(self) -> str:
+        return "%s takes %s x%d (guid %d) from tab %d to list at %s each" % (
+            self.character,
+            self.item,
+            self.stack.count,
+            self.stack.guid,
+            self.stack.tab,
+            money(self.price),
+        )
+
+
+def withdrawers(rows, free_slots) -> tuple:
+    """Withdrawer per member from `read_withdrawers` rows, the core's rule.
+
+    Guild::_GetMemberRemainingSlots: the guild master has no limit; any other
+    rank has `SlotPerDay` less what the member took today, and only on a tab
+    its rank may view.
+    """
+    ranks: dict = {}
+    allowance: dict = {}
+    for row in rows or ():
+        name = str(row.get("name") or "")
+        if not name:
+            continue
+        ranks[name] = _int(row.get("rank_id"), -1)
+        allowance.setdefault(name, {})
+        if row.get("tab") is None:
+            continue
+        rights = _int(row.get("rights"))
+        left = _int(row.get("per_day")) - _int(row.get("used"))
+        if rights & GUILD_BANK_RIGHT_VIEW_TAB and left > 0:
+            allowance[name][_int(row.get("tab"))] = left
+    return tuple(
+        Withdrawer(
+            name,
+            ranks[name],
+            max(0, _int((free_slots or {}).get(name))),
+            allowance[name],
+        )
+        for name in sorted(ranks)
+    )
+
+
+def plan_withdrawals(
+    forecast: Forecast,
+    takers,
+    *,
+    pending=frozenset(),
+    visit: int = WITHDRAW_VISIT_STACKS,
+    keep_free: int = WITHDRAW_KEEP_FREE,
+) -> tuple:
+    """The vault stacks the house should have, and who takes each.
+
+    Every SELL decision, the dearest stack first, except an entry in
+    `pending` (a stack of it already withdrawn and not yet listed: taking more
+    before it sells would read as the members holding more, and the vault
+    would empty itself). The guild master takes first, then the rank below it;
+    a member takes no more than one visit's worth, no more than its rank's
+    allowance on the tab today, and never past `keep_free` free bag slots.
+    """
+    sells = sorted(
+        (
+            d
+            for d in forecast.decisions()
+            if d.action == SELL and int(d.stack.entry) not in pending
+        ),
+        key=lambda d: (-d.price * d.stack.count, d.stack.guid),
+    )
+    order = sorted(takers or (), key=lambda w: (w.rank, w.name))
+    room = {w.name: max(0, min(visit, w.free_slots - keep_free)) for w in order}
+    used: dict = {}
+    out = []
+    for decision in sells:
+        tab = int(decision.stack.tab)
+        for taker in order:
+            left = taker.left(tab)
+            spent = used.get((taker.name, tab), 0)
+            if room[taker.name] <= 0 or (left is not None and spent >= left):
+                continue
+            room[taker.name] -= 1
+            used[(taker.name, tab)] = spent + 1
+            out.append(
+                Withdrawal(taker.name, decision.stack, decision.item, decision.price)
+            )
+            break
+    return tuple(out)
+
+
+def withdrawn_guids(commands) -> frozenset:
+    """The stack guids named by `bank withdraw-item guid:<n> ...` texts."""
+    out = set()
+    for command in commands or ():
+        if not isinstance(command, str) or not command.startswith(_WITHDRAW_COMMAND):
+            continue
+        for word in command[len(_WITHDRAW_COMMAND) :].split():
+            if word.startswith("guid:") and word[5:].isdigit() and int(word[5:]) > 0:
+                out.add(int(word[5:]))
+    return frozenset(out)
+
+
+WITHDRAWERS_SQL = (
+    "SELECT c.name AS name, gm.rank AS rank_id, gbr.TabId AS tab, "
+    "gbr.gbright AS rights, gbr.SlotPerDay AS per_day, "
+    "COALESCE(CASE gbr.TabId WHEN 0 THEN w.tab0 WHEN 1 THEN w.tab1 "
+    "WHEN 2 THEN w.tab2 WHEN 3 THEN w.tab3 WHEN 4 THEN w.tab4 "
+    "WHEN 5 THEN w.tab5 END, 0) AS used "
+    "FROM guild_member gm JOIN characters c ON c.guid = gm.guid "
+    "LEFT JOIN guild_bank_right gbr ON gbr.guildid = gm.guildid AND gbr.rid = gm.rank "
+    "LEFT JOIN guild_member_withdraw w ON w.guid = gm.guid "
+    "WHERE c.name IN (%s)"
+)
+
+WITHDRAWN_SQL = (
+    "SELECT command FROM overseer_command "  # noqa: S608
+    "WHERE kind = 'guild' AND status = 'applied' AND command LIKE %%s "
+    "AND target_name IN (%s) AND created_at > NOW() - INTERVAL %%s HOUR"
+)
+
+
+def read_withdrawers(cur, names, free_slots) -> tuple:
+    """Withdrawer for each of `names` in a guild, over `cur`."""
+    names = [str(n) for n in names or () if n]
+    if not names:
+        return ()
+    cur.execute(WITHDRAWERS_SQL % _marks(names), names)
+    return withdrawers([dict(r) for r in cur.fetchall()], free_slots)
+
+
+def read_withdrawn(cur, names, hours: int = WITHDRAWN_FOR_SALE_HOURS) -> frozenset:
+    """Guids `names` took out of a vault for the house in the last `hours`."""
+    names = [str(n) for n in names or () if n]
+    if not names:
+        return frozenset()
+    cur.execute(WITHDRAWN_SQL % _marks(names), [WITHDRAW_LIKE, *names, int(hours)])
+    return withdrawn_guids(r["command"] for r in cur.fetchall())

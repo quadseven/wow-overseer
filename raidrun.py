@@ -49,10 +49,19 @@ NAMES = {
 
 # WHAT THE OVERSEER CAN DO WITH AN ORDERED RAID, stated rather than inferred,
 # because the module that does it is another repository. Pinned to
-# quadseven/mod-overseer#634; change these with the module, never ahead of it.
+# quadseven/mod-overseer#634 and #640; change these with the module, never
+# ahead of it.
 FORMS = True  # converts the head's group and seats the lineup
 ENTERS = True  # assembles at the door and walks the raid in, head last
-CLEARS = False  # the dungeon brain is held off raid maps until this is built
+# HOLD, CLEAR and RECOVER (mod-overseer#640, merged 2026-09-24 and in the
+# deployed module): inside, the raid rests, then the dungeon brain is armed on
+# the head, and a wipe is released and run back.
+CLEARS = True
+# ASSEMBLE walks the head alone (StepRaidRun's aimStaging). A seated raider
+# who is not already near the door when the raid forms is not walked there,
+# not ferried across a sea and not summoned, and after the assemble wait the
+# raid goes in with whoever has arrived.
+GATHERS = False
 
 # --- the seats -----------------------------------------------------------------
 
@@ -325,7 +334,7 @@ DUNGEON_CLEAR_LINE = (
     "boss fight to the playerbots raid strategies, and Molten Core's finale "
     "authored (Majordomo's adds, then Ragnaros summoned by gossip). Its own "
     "notes say none of it has been validated live, and the overseer keeps it "
-    "switched off on a raid map until clearing is ordered."
+    "switched off on a raid map until the raid run reaches CLEAR."
 )
 
 
@@ -343,10 +352,17 @@ def run_line() -> str:
         if did
         else "Nothing can take a raid in yet."
     )
-    if not CLEARS:
+    if CLEARS:
         head += (
-            " It does not clear: inside, the raid holds at the entrance. "
-            "Raiders on another continent are not brought to the door; "
-            "summoning them is a later slice."
+            " Inside, it rests at the entrance, then clears it with the dungeon "
+            "brain armed on the head, and runs back after a wipe."
+        )
+    else:
+        head += " It does not clear: inside, the raid holds at the entrance."
+    if not GATHERS:
+        head += (
+            " Only the head is walked to the door: a raider who is not near it "
+            "when the raid forms is not brought there, and after the wait the "
+            "raid goes in with whoever has arrived."
         )
     return head
