@@ -13674,7 +13674,8 @@ class Bridge(discord.Client):
         self._dues_walks = guildroute.live_runs(
             self._dues_walks, now, guildroute.GUILD_STEP_SECONDS)
         posted = await asyncio.to_thread(_dues_recent_holders)
-        busy = set(getattr(self, "_guild_run_names", ())) | set(self._dues_walks) | set(self._guild_mail_runs)
+        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._dues_walks)
+                | set(self._guild_mail_runs) | set(getattr(self, "_train_walks", ())))
         # NATURALLY EARNED ONLY (the operator, 2026-09-24): a member posts dues
         # only once it has been reset to level 1; natural.py has the rule.
         eligible = await asyncio.to_thread(
@@ -13813,7 +13814,7 @@ class Bridge(discord.Client):
         receivers = sorted({x.receiver for x in letters})
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._crafter_walks) | set(self._guild_mail_runs)
-                | set(self._dues_walks))
+                | set(self._dues_walks) | set(getattr(self, "_train_walks", ())))
         plan, notes = crafters.visits(letters, designated, known,
                                       frozenset(busy), free_slots)
         notes += await self._start_crafter_walks(plan, names, now)
@@ -13957,7 +13958,8 @@ class Bridge(discord.Client):
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
         busy = (set(getattr(self, "_guild_run_names", ())) | set(self._post_walks)
                 | set(self._crafter_walks) | set(self._guild_mail_runs)
-                | set(self._dues_walks) | set(self._corps_steps))
+                | set(self._dues_walks) | set(self._corps_steps)
+                | set(getattr(self, "_train_walks", ())))
         sitting = await asyncio.to_thread(_sitting_out_to_walk, names)
         plan, notes = guildpost.visits(letters, online, busy, free_slots, roster,
                                        sitting)
@@ -14113,7 +14115,9 @@ class Bridge(discord.Client):
 
     def _guild_walkers_busy(self, now: float) -> set:
         """Every member another guild pass has on a walk, after the class
-        trainer walks past their step window are let go."""
+        trainer walks past their step window are let go. The other walking
+        passes read `_train_walks` the same way: the module refuses a second
+        walk, and the refusal spends the step's cooldown."""
         self._train_walks = guildroute.live_runs(
             self._train_walks, now, guildroute.GUILD_STEP_SECONDS)
         return (set(getattr(self, "_guild_run_names", ())) | set(self._train_walks)
@@ -14236,7 +14240,8 @@ class Bridge(discord.Client):
         # would refuse a second walk anyway, and the refusal would spend the
         # step's cooldown.
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._corps_steps) | set(self._dues_walks)
-                | set(self._guild_mail_runs) | set(self._crafter_walks))
+                | set(self._guild_mail_runs) | set(self._crafter_walks)
+                | set(getattr(self, "_train_walks", ())))
         cap = self._guild_walk_cap()
         near = await self._corps_mailbox_yards(members, names, busy, now)
         masters = await asyncio.to_thread(_corps_masters_at_mailbox, members)
@@ -14581,7 +14586,8 @@ class Bridge(discord.Client):
         self._job_steps = guildroute.live_runs(
             self._job_steps, now, guildroute.GUILD_STEP_SECONDS)
         busy = set(getattr(self, "_guild_run_names", ())) | (set(self._job_steps) | set(self._corps_steps) | set(self._dues_walks)
-                | set(self._guild_mail_runs) | set(self._crafter_walks))
+                | set(self._guild_mail_runs) | set(self._crafter_walks)
+                | set(getattr(self, "_train_walks", ())))
         busy -= self._stranded_knights_freed(members)
         cap = self._guild_walk_cap()
         self._guild_still = standstill.track(self._guild_still, members, now)
@@ -17721,6 +17727,7 @@ class Bridge(discord.Client):
         mid_job = (set(getattr(self, "_job_steps", ())) | set(getattr(self, "_corps_steps", ()))
                    | set(getattr(self, "_dues_walks", ())) | set(getattr(self, "_guild_mail_runs", ()))
                    | set(getattr(self, "_crafter_walks", ()))
+                   | set(getattr(self, "_train_walks", ()))
                    | {n for n, held in getattr(self, "_pvp_held", {}).items() if held}
                    | set(getattr(self, "_classquest_held", ())))
         doors = guildrun.doors(facts["finder_floors"], facts.get("boss_levels"))
