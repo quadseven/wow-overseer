@@ -592,6 +592,23 @@ class TheJujusAndTheSoupHaveNaturalRoads(unittest.TestCase):
             plan.notes,
         )
 
+    def test_a_cook_whose_trade_was_never_read_buys_nothing(self):
+        # Member.skill answers (0, 0) for a trade it holds no row for, so the
+        # gate reads 0 and refuses rather than raising.
+        plan = rs.plan_guild(
+            facts(
+                [cook(0, skills={}), *raider_members()],
+                posts=(COOK_POST,),
+                vendors={KALIMDOR: frozenset({NIGHTFIN_RECIPE})},
+            ),
+            {},
+            set(),
+        )
+        self.assertFalse([s for s in plan.steps if s.holder == "Cookie"])
+        self.assertIn(
+            "Cookie has cooking 0 of the 250 the Nightfin Soup recipe asks", plan.notes
+        )
+
     def test_a_cook_who_knows_it_buys_spring_water_by_its_name(self):
         plan = rs.plan_guild(
             facts(
