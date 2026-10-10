@@ -42,6 +42,7 @@ PURE MODULE: rows in, a plan and sentences out. No MySQL and no clock.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 LOG_PREFIX = "guild fund:"
@@ -203,10 +204,39 @@ def _withdrawn(row) -> int:
     return _int(words[2]) if words[:2] == ["bank", "withdraw"] else 0
 
 
+def _gold_left(row, copper) -> bool:
+    """Whether a refused letter's own result shows `copper` leaving the purse.
+
+    THE GOLD LEFT, SO THE LETTER IS IN THE POST. The module reads an offline
+    receiver's new letter back with a synchronous SELECT, while the core
+    commits the letter in an asynchronous transaction, so the row can say
+    "the mail did not read back" after the money has gone. Measured on the dev
+    realm: 14 of 1,809 `send` rows, 2 of them letters of gold (Becalin's 250
+    gold of dues to Grug, 2026-09-23: purse 19411739 -> 16911709). A letter
+    like that counts as posted, or the next pass posts it again.
+    """
+    result = row.get("result")
+    if isinstance(result, (bytes, str)):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            return False
+    if not isinstance(result, dict) or _int(copper) <= 0:
+        return False
+    before = _int(result.get("money_before"), -1)
+    after = _int(result.get("money_after"), -1)
+    return before >= 0 and after >= 0 and before - after >= _int(copper)
+
+
 def _letter_kind(row) -> tuple:
-    """(kind, member) of a fund letter the world did not refuse; else None."""
+    """(kind, member) of a fund letter the world did not refuse, or whose gold
+    left the purse anyway (`_gold_left`); else None."""
     parts = str(row.get("source") or "").split(":", 2)
-    if len(parts) != 3 or parts[0] != SOURCE or str(row.get("status")) == "error":
+    if len(parts) != 3 or parts[0] != SOURCE:
+        return None
+    if str(row.get("status")) == "error" and not _gold_left(
+        row, _letter_copper(row.get("command"))
+    ):
         return None
     return parts[1], parts[2]
 
@@ -242,8 +272,9 @@ def ledger(rows, master) -> Ledger:
 def dues_paid(rows, renames=None) -> dict:
     """member -> copper of guild dues it posted, under the name it has now.
 
-    `rows` are the command log's dues letters (target_name, source, status);
-    only a delivered letter counts. `renames` maps a name a letter was posted
+    `rows` are the command log's dues letters (target_name, source, status,
+    result); a delivered letter counts, and so does a refused one whose gold
+    left the purse (`_gold_left`). `renames` maps a name a letter was posted
     under to the character's name now (the approved lineup renamed most of the
     guild after the dues were taken).
     """
@@ -251,12 +282,14 @@ def dues_paid(rows, renames=None) -> dict:
     out = {}
     for row in rows or ():
         source = str(row.get("source") or "")
-        if (
-            not source.startswith(DUES_SOURCE + ":")
-            or str(row.get("status")) != "delivered"
-        ):
+        if not source.startswith(DUES_SOURCE + ":"):
             continue
         copper = _int(source.rsplit(":", 1)[1])
+        status = str(row.get("status"))
+        if status != "delivered" and not (
+            status == "error" and _gold_left(row, copper)
+        ):
+            continue
         name = str(row.get("target_name") or "")
         name = renames.get(name, name)
         if name and copper > 0:

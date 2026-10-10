@@ -24139,7 +24139,7 @@ def _holders_at_mailbox(holders: list, positions: dict) -> set:
 
 # A holder's fresh snapshot row, with what a mail run is gated on (#185).
 _ROUTE_WALKER_SQL = (
-    "SELECT name, map_id, pos_x, pos_y, in_combat FROM overseer_snapshot "
+    "SELECT name, map_id, zone_id, pos_x, pos_y, in_combat FROM overseer_snapshot "
     "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
 )
 
@@ -24534,12 +24534,12 @@ def _guild_train_rows() -> list:
 # The refunds in it are the record that a member was refunded, so a restart
 # refunds nobody twice.
 _GUILD_FUND_ROWS_SQL = (
-    "SELECT target_name, target_arg, command, source, status, "
+    "SELECT target_name, target_arg, command, source, status, result, "
     "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
     "WHERE source LIKE %s"
 )
 _DUES_LETTERS_SQL = (
-    "SELECT target_name, source, status FROM overseer_command "
+    "SELECT target_name, source, status, result FROM overseer_command "
     "WHERE kind = 'mail' AND source LIKE %s"
 )
 # The names the dues letters were posted under, and each character's name now.

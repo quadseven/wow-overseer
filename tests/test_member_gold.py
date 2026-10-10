@@ -508,5 +508,121 @@ class BridgeWiring(unittest.TestCase):
         self.assertIn("list(names) * slots", body)
 
 
+# A letter of gold the world answered "the mail did not read back" although the
+# money left the purse. Measured on the dev realm: 14 of 1,809 `send` rows
+# ended that way, and 2 of the 116 `send money:` rows: Becalin's 250 gold of
+# dues to Grug on 2026-09-23 (money_before 19411739, money_after 16911709) and
+# Whiona's to Zug the next night. The module reads an offline receiver's
+# letter back with a synchronous SELECT while the core commits the letter in
+# an asynchronous transaction, so the letter is in the post and the row says
+# error.
+def read_back_row(source, copper, moved, command=None):
+    return {
+        "target_name": "Grug",
+        "source": source,
+        "command": command or "send money:%d subject:Dues refund" % copper,
+        "status": "error",
+        "detail": "the mail did not read back",
+        "result": (
+            '{"outcome":"refused","reason":"the mail did not read back",'
+            '"money_before":1000000,"money_after":%d}' % (1000000 - moved)
+        ),
+        "age": 30,
+    }
+
+
+class ALetterWhoseGoldLeftIsPosted(unittest.TestCase):
+    def test_a_refund_whose_gold_left_is_never_posted_again(self):
+        rows = [read_back_row("guildfund:refund:1184", 73485, 73485 + 30)]
+        book = guildfund.ledger(rows, "Grug")
+        self.assertEqual(book.refunded, frozenset({"1184"}))
+        self.assertEqual(book.posted, 73485)
+        eggrok = guildfund.Member("Eggrok", "Cave", 25, 0, 60100, guid=1184)
+        plan = guildfund.plan(
+            "Grug", [eggrok], 155 * GOLD, book, {"Eggrok": 250 * GOLD}
+        )
+        self.assertFalse([x for x in plan.letters if x.kind == guildfund.REFUND])
+
+    def test_a_training_letter_whose_gold_left_counts_against_the_day(self):
+        rows = [
+            read_back_row(
+                "guildfund:train:1184",
+                60000,
+                60030,
+                "send money:60000 subject:For your training",
+            )
+        ]
+        book = guildfund.ledger(rows, "Grug")
+        self.assertEqual(book.given_today, {"1184": 60000})
+        self.assertEqual(book.spent_today, 60000)
+
+    def test_a_refused_letter_whose_gold_stayed_is_tried_again(self):
+        rows = [read_back_row("guildfund:refund:1184", 73485, 0)]
+        rows[0]["detail"] = "mailbox not in range"
+        book = guildfund.ledger(rows, "Grug")
+        self.assertEqual(book.refunded, frozenset())
+        self.assertEqual(book.posted, 0)
+
+    def test_dues_whose_gold_left_count_as_paid(self):
+        rows = [
+            {
+                "target_name": "Becalin",
+                "source": "guilddues:2500000",
+                "status": "error",
+                "result": '{"money_before":19411739,"money_after":16911709}',
+            },
+            {
+                "target_name": "Hokk",
+                "source": "guilddues:2500000",
+                "status": "error",
+                "result": '{"money_before":5000000,"money_after":5000000}',
+            },
+        ]
+        self.assertEqual(guildfund.dues_paid(rows), {"Becalin": 250 * GOLD})
+
+    def test_the_bridge_reads_each_row_s_result(self):
+        for sql in ("_GUILD_FUND_ROWS_SQL", "_DUES_LETTERS_SQL"):
+            start = BRIDGE.index(sql + " = (")
+            self.assertIn("result", BRIDGE[start : BRIDGE.index(")\n", start)], sql)
+
+
+# The Draenei and Blood Elf starting lands are on map 530, and the module walks
+# a character inside them to a trainer there (mod-overseer#765). Measured on the
+# dev realm on 2026-10-10: 13 of Cave's members stood on Azuremyst and Bloodmyst
+# Isles and in the Exodar, and 6 of Bonkers' in Eversong, the Ghostlands and
+# Silvermoon City.
+class TheStartingLandsTrain(unittest.TestCase):
+    def test_a_member_in_the_starting_lands_walks_to_its_trainer(self):
+        walks, notes = classtrain.plan(
+            [trainee("Vashti", 9000)],
+            {"Vashti": walker("Vashti", map_id=530, zone_id=3525)},
+            set(),
+            set(),
+        )
+        self.assertEqual([w.name for w in walks], ["Vashti"], notes)
+
+    def test_outland_proper_still_waits(self):
+        walks, notes = classtrain.plan(
+            [trainee("Vashti", 9000)],
+            {"Vashti": walker("Vashti", map_id=530, zone_id=3483)},
+            set(),
+            set(),
+        )
+        self.assertEqual(walks, [])
+        self.assertTrue(any("outside the classic world" in n for n in notes))
+
+    def test_the_walker_reads_its_zone(self):
+        w = guildroute.walker_from(
+            "Vashti",
+            {"map_id": 530, "zone_id": 3557, "in_combat": 0},
+            {},
+            set(),
+            None,
+        )
+        self.assertEqual(w.zone_id, 3557)
+        start = BRIDGE.index("_ROUTE_WALKER_SQL = (")
+        self.assertIn("zone_id", BRIDGE[start : BRIDGE.index(")\n", start)])
+
+
 if __name__ == "__main__":
     unittest.main()
