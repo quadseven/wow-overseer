@@ -768,6 +768,137 @@ class SalePlannerTest(unittest.TestCase):
         self.assertEqual((sale.bid, sale.buyout), (400, 500))
 
 
+class SalesByHouseTest(unittest.TestCase):
+    """Sale candidates are grouped by the house EACH HOLDER can reach.
+
+    `_auction_sales_once` used to gate every listing on the LEADER standing
+    at an auctioneer, so a holder already at a counter never got their items
+    listed while the leader walked elsewhere (wow-overseer#478). The bridge
+    now asks each holder where they are standing; this pure function groups
+    the candidates by the answer so one market read and one `plan_sales`
+    covers each house.
+    """
+
+    def _candidate(self, holder, entry=100, guid=1):
+        return {
+            "holder": holder,
+            "item_guid": guid,
+            "entry": entry,
+            "label": "item %d" % entry,
+            "quality": 2,
+            "binding": "boe",
+            "quest_item": False,
+            "recipient": "",
+            "sell_price": 100,
+            "count": 1,
+        }
+
+    def test_holders_are_grouped_by_their_own_house(self):
+        candidates = [
+            self._candidate("Grug", entry=100, guid=1),
+            self._candidate("Grog", entry=200, guid=2),
+        ]
+        by_house = auction.sales_by_house(
+            candidates, {"Grug": auction.HOUSE_ALLIANCE, "Grog": auction.HOUSE_NEUTRAL}
+        )
+        self.assertEqual(set(by_house), {auction.HOUSE_ALLIANCE, auction.HOUSE_NEUTRAL})
+        self.assertEqual(
+            [c["holder"] for c in by_house[auction.HOUSE_ALLIANCE]], ["Grug"]
+        )
+        self.assertEqual(
+            [c["holder"] for c in by_house[auction.HOUSE_NEUTRAL]], ["Grog"]
+        )
+
+    def test_two_holders_at_one_counter_share_a_house(self):
+        candidates = [
+            self._candidate("Grug", entry=100, guid=1),
+            self._candidate("Grog", entry=200, guid=2),
+        ]
+        by_house = auction.sales_by_house(
+            candidates,
+            {"Grug": auction.HOUSE_ALLIANCE, "Grog": auction.HOUSE_ALLIANCE},
+        )
+        self.assertEqual(set(by_house), {auction.HOUSE_ALLIANCE})
+        self.assertEqual(len(by_house[auction.HOUSE_ALLIANCE]), 2)
+
+    def test_a_holder_with_no_counter_is_dropped(self):
+        candidates = [
+            self._candidate("Grug", entry=100, guid=1),
+            self._candidate("Grog", entry=200, guid=2),
+        ]
+        by_house = auction.sales_by_house(candidates, {"Grug": auction.HOUSE_ALLIANCE})
+        self.assertEqual(set(by_house), {auction.HOUSE_ALLIANCE})
+        self.assertEqual(
+            [c["holder"] for c in by_house[auction.HOUSE_ALLIANCE]], ["Grug"]
+        )
+
+    def test_a_house_of_zero_is_dropped(self):
+        candidates = [self._candidate("Grug", entry=100, guid=1)]
+        self.assertEqual(auction.sales_by_house(candidates, {"Grug": 0}), {})
+
+    def test_empty_candidates_is_empty(self):
+        self.assertEqual(
+            auction.sales_by_house([], {"Grug": auction.HOUSE_ALLIANCE}), {}
+        )
+
+    def test_candidate_order_is_preserved_within_a_house(self):
+        candidates = [
+            self._candidate("Grog", entry=300, guid=3),
+            self._candidate("Grug", entry=100, guid=1),
+            self._candidate("Grog", entry=200, guid=2),
+        ]
+        by_house = auction.sales_by_house(
+            candidates,
+            {"Grug": auction.HOUSE_ALLIANCE, "Grog": auction.HOUSE_ALLIANCE},
+        )
+        self.assertEqual(
+            [c["item_guid"] for c in by_house[auction.HOUSE_ALLIANCE]],
+            [3, 1, 2],
+        )
+
+
+class SalesPassWiringTest(unittest.TestCase):
+    """`_auction_sales_once` asks each holder where they stand (wow-overseer#478).
+
+    bridge.py imports discord and cannot be imported here, so this reads it
+    as text. What is pinned: the pass fetches an auctioneer counter PER
+    HOLDER and groups by `sales_by_house`, rather than gating every listing
+    on the leader's counter alone.
+    """
+
+    def _body(self):
+        src = BRIDGE.read_text(encoding="utf-8", errors="ignore")
+        start = src.index("async def _auction_sales_once(")
+        end = src.index("async def _keep_at_auctioneer(")
+        return src[start:end]
+
+    def test_the_pass_checks_each_holder_for_a_counter(self):
+        body = self._body()
+        # The per-holder read: every candidate holder is asked, not just the
+        # leader. The old code read `_fetch_auctioneer` once, for the leader.
+        self.assertIn("_fetch_auctioneer, holder", body)
+
+    def test_the_pass_groups_candidates_by_house(self):
+        body = self._body()
+        self.assertIn("auction.sales_by_house(candidates, holder_house)", body)
+
+    def test_the_pass_prices_each_house_against_its_own_market(self):
+        src = BRIDGE.read_text(encoding="utf-8", errors="ignore")
+        start = src.index("async def _auction_sell_house(")
+        end = src.index("async def _keep_at_auctioneer(")
+        body = src[start:end]
+        # One market read per house: a price from the wrong pool is a row
+        # DoAuction refuses as WrongHouse.
+        self.assertIn("_fetch_auction_listings, house_entries, house", body)
+
+    def test_no_single_leader_house_gate_remains(self):
+        body = self._body()
+        # The old shape: one counter for the leader, one house for everybody.
+        # The per-holder loop above replaces it; a leftover would mean two
+        # code paths disagreeing about which house a listing is priced in.
+        self.assertNotIn("_fetch_auctioneer, leader", body)
+
+
 class VocabularyTest(unittest.TestCase):
     """The keyword this module aims with, across its three copies."""
 
