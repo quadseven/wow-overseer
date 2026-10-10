@@ -8,6 +8,7 @@ import * as D from "./now/data.js";
 import * as streams from "./now/streams.js";
 import { openPanel, pressed } from "./now/panel.js";
 import * as wm from "./now/worldmap.js";
+import { seatChips } from "./_runs.js";
 
 const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/v2/roster", "/api/map", "/shapes.json"];
 // The realm strip's two reads are the cheap ones, so they are asked for every
@@ -169,12 +170,12 @@ function runCard(r, at) {
   const total = Number(r.bosses_total) || 0;
   const pips = [];
   for (let i = 0; i < total; i++) pips.push(html`<span class="pip${i < r.bosses_done ? " on" : ""}"></span>`);
-  const seats = (r.members || []).map((m) => m.name).join(", ");
-  return html`<a class="card runcard" href="#/runs/${encodeURIComponent(r.id)}">
-<div class="runcard-top"><span class="b">${r.guild} | ${r.place || r.keyword}</span><span class="dim small">${duration(r.seconds_inside) || "not measured"} inside</span></div>
+  return html`<div class="card runcard stretch-card">
+<div class="runcard-top"><a class="b stretch-link" href="#/runs/${encodeURIComponent(r.id)}">${r.guild} | ${r.place || r.keyword}</a><span class="dim small">${duration(r.seconds_inside) || "not measured"} inside</span></div>
 ${total ? html`<div class="pips" role="img" aria-label="${r.bosses_done} of ${total} bosses down">${pips}</div>` : ""}
-<div class="dim small">${total ? r.bosses_done + " of " + total + " bosses down" : "bosses not measured"} | ${seats || "no seats read"} | read ${ago(at ? (Date.now() - at) / 1000 : null)}</div>
-</a>`;
+<div class="dim small">${total ? r.bosses_done + " of " + total + " bosses down" : "bosses not measured"}${(r.members || []).length ? "" : " | no seats read"} | read ${ago(at ? (Date.now() - at) / 1000 : null)}</div>
+${seatChips(r)}
+</div>`;
 }
 
 function runsBlock(ctx) {

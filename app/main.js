@@ -13,6 +13,7 @@ import * as search from "./search.js";
 import "./searchv2.js";
 import * as tooltip from "./tooltip.js";
 import * as gestures from "./gestures.js";
+import * as update from "./update.js";
 import { legacy, parse, resolve } from "./router.js";
 import { savedTheme, saveTheme, lastPage, saveLastPage, stampVisit, previousVisit } from "./store.js";
 import { html, ago, plural } from "./ui.js";
@@ -104,7 +105,9 @@ function draw(keepPlace) {
   const caret = focused && typeof focused.selectionStart === "number" ? [focused.selectionStart, focused.selectionEnd] : null;
   const h = api.health(current.reads);
   const pull = pulling ? html`<div class="refreshing" role="status"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>Refreshing. Data was ${h.at ? ago((Date.now() - h.at) / 1000) : "not read yet"}.</div>` : "";
+  const hadSkeleton = !!main.querySelector(".skeleton");
   main.innerHTML = html`${pull}${banner(h)}${module.render(ctx)}`.s;
+  if (hadSkeleton && !main.querySelector(".skeleton")) easeIn();
   if (module.after) module.after(main, ctx);
   // A view may widen its reads once its first data is in (a member page reads
   // the roster first, then that member's own reads), so they are asked again
@@ -153,8 +156,9 @@ async function route() {
   document.title = (module.title ? module.title(ctx) : "Overseer") + " | Overseer";
   draw(!fresh);
   if (fresh) {
-    window.scrollTo(0, 0);
+    window.scrollTo(0, update.takePlace(hash));
     main.focus({ preventScroll: true });
+    easeIn();
   }
   api.watch(current.reads, module.every || 15000, module.quick);
 }
@@ -165,7 +169,11 @@ api.onChange((path, changed) => {
   else drawShell();
 });
 
-window.addEventListener("hashchange", () => { search.close(true); route(); });
+window.addEventListener("hashchange", () => {
+  if (update.reloadIfPending()) return;
+  search.close(true);
+  route();
+});
 
 // ---- global controls ---------------------------------------------------------
 document.addEventListener("click", (e) => {
@@ -192,6 +200,7 @@ gestures.install(main, {
 });
 
 tooltip.install();
+update.install();
 
 document.addEventListener("visibilitychange", () => { if (document.hidden) stampVisit(); });
 window.addEventListener("pagehide", stampVisit);
@@ -221,5 +230,23 @@ function refreshBadges() {
 }
 refreshBadges();
 window.setInterval(refreshBadges, 60000);
+
+// ---- easing in -------------------------------------------------------------------
+// A new page, and a page's first data replacing its skeletons, ease in
+// (app.css, main.enter). The reduced-motion rule there turns it off.
+// The class comes off once the motion is done, so a later redraw (a poll's
+// new data) does not ease in again.
+let easing = 0;
+function easeIn() {
+  main.classList.remove("enter");
+  void main.offsetWidth;
+  main.classList.add("enter");
+  window.clearTimeout(easing);
+  easing = window.setTimeout(() => main.classList.remove("enter"), 400);
+}
+
+// iOS Safari applies :active (the press feedback in app.css) only on a page
+// that listens for touches.
+document.addEventListener("touchstart", () => {}, { passive: true });
 
 route();

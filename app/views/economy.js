@@ -308,6 +308,26 @@ function bankCell(c) {
   return html`<span class="eco-cell">${item({ entry: c.entry, name: c.name, quality: c.quality, icon: c.icon, mark: c.letters })}${c.count > 1 ? html`<span class="ct" aria-hidden="true">${c.count}</span>` : ""}</span>`;
 }
 
+// A tab's stacks under small headers by kind (cloth, herbs, recipes...),
+// when the guild bank read says each stack's category; the slot order holds
+// inside each. One block, as the game draws it, when it does not.
+export function bankGroups(cells) {
+  if (!cells.some((c) => c.category)) return [{ label: "", cells }];
+  const groups = new Map();
+  cells.forEach((c) => {
+    const label = c.category || "Other";
+    if (!groups.has(label)) groups.set(label, { label, rank: Number.isFinite(c.category_rank) ? c.category_rank : 99, cells: [] });
+    groups.get(label).cells.push(c);
+  });
+  return Array.from(groups.values()).sort((a, b) => a.rank - b.rank);
+}
+
+function bankGrid(cells) {
+  const groups = bankGroups(cells);
+  if (groups.length < 2) return html`<div class="eco-grid">${cells.map(bankCell)}</div>`;
+  return html`<div class="eco-cats">${groups.map((g) => html`<section class="eco-cat" aria-label="${g.label}"><h3 class="eco-cat-head"><span>${g.label}</span><span class="num">${g.cells.length}</span></h3><div class="eco-grid">${g.cells.map(bankCell)}</div></section>`)}</div>`;
+}
+
 // Also the Now tiles' Guild bank panel (now/panel.js).
 export function bankTab(ctx, get) {
   const reads = BANK_NAMES.map((n) => get(bankPath(n)));
@@ -324,7 +344,7 @@ export function bankTab(ctx, get) {
   const tabCards = tabs.map((t) => html`<a class="card eco-btab" href="${ecoHref("bank", { guild: g, tab: t.tab })}"${t === at ? raw(' aria-current="true"') : ""}><div class="eco-line"><span class="eco-trade">${t.name}</span><span class="eco-meta">${t.used} of ${t.total}</span></div>${bar((100 * t.used) / (t.total || 1), "accent")}${t.holds ? html`<span class="eco-meta">${sentence(t.holds)}</span>` : ""}</a>`);
   const cells = (at.cells || []).filter(Boolean);
   return html`${pick}${head}<div class="eco-btabs">${tabCards}</div>
-<div class="section">${sectionHead("", at.name, plural(cells.length, "stack"))}${cells.length ? html`<div class="eco-grid">${cells.map(bankCell)}</div>` : state("empty", "This tab is empty.")}</div>`;
+<div class="section eco-bank">${sectionHead("", at.name, plural(cells.length, "stack"))}${cells.length ? bankGrid(cells) : state("empty", "This tab is empty.")}</div>`;
 }
 
 // ---- the view -----------------------------------------------------------------

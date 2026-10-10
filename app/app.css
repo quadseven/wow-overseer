@@ -297,6 +297,11 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
 .tipcard .ln-src { color: var(--tip-source); padding-top: 6px; }
 .tipcard .ln-sep { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--tip-ring); }
 .tipcard .ln-where { color: var(--tip-where); }
+/* Several bosses under one "Drops from": each zone once, dim, then its
+   bosses with their chance on the right. */
+.tipcard .ln-zone { color: var(--tip-dim); font-size: 12px; padding-top: 4px; }
+.tipcard .ln-drop { color: var(--tip-where); }
+.tipcard .ln-drop .ln-r { color: var(--tip-source); font-variant-numeric: tabular-nums; }
 .tipcard .ln-gap { padding-top: 4px; }
 .tipcard .ticon { width: 36px; height: 36px; border-radius: 6px; flex-shrink: 0; box-shadow: 0 0 0 1px currentColor; }
 .tipcard .ticon.noicon { display: inline-grid; place-items: center; font-size: 11px; color: var(--tip-dim); background: #292b31; box-shadow: 0 0 0 1px var(--tip-ring); }
@@ -392,3 +397,135 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
 .histo a.hit:hover { background: none; }
 .histo a.hit:hover .bar:not(.median) { background: var(--color-neutral-600); }
 @media (min-width: 760px) { [data-slot="thumb"] { display: none; } }
+
+/* ---- Native feel: chrome, safe areas, press feedback, motion --------------------- */
+/* The phone's own tap flash is off; every control below answers a press
+   itself, with a small scale or a dim. The page does not rubber-band, so the
+   header and tab bar stay put at either end of a scroll. */
+html { -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
+.sheet, .search-results, .tabs, .hscroll { overscroll-behavior: contain; }
+.age { font-variant-numeric: tabular-nums; }
+
+/* The header, the page tabs under it and the tab bar are translucent, so
+   the page shows through as it scrolls beneath them. */
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .topbar, .tabs {
+    background: color-mix(in srgb, var(--color-bg) 76%, transparent);
+    -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
+  }
+  .tabbar {
+    background: color-mix(in srgb, var(--color-surface) 78%, transparent);
+    -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
+  }
+}
+
+/* Notch, rounded corners and home indicator (viewport-fit=cover). */
+@media (max-width: 759.98px) {
+  .topbar { padding-left: calc(16px + env(safe-area-inset-left)); padding-right: calc(8px + env(safe-area-inset-right)); }
+  main.main { padding-left: calc(12px + env(safe-area-inset-left)); padding-right: calc(12px + env(safe-area-inset-right)); }
+  .tabbar { padding-left: calc(4px + env(safe-area-inset-left)); padding-right: calc(4px + env(safe-area-inset-right)); }
+}
+@media (min-width: 760px) {
+  .sidebar { padding-left: calc(12px + env(safe-area-inset-left)); }
+  main.main { padding-right: calc(28px + env(safe-area-inset-right)); }
+}
+[data-slot="thumb"] { bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 4px); }
+
+/* The segmented control: the current choice is a raised, rounded segment
+   inside a quiet track, not a square ring cut into the border. */
+.seg { padding: 2px; gap: 2px; background: color-mix(in srgb, var(--color-text) 5%, transparent); }
+.seg > * + * { border-left: 0; }
+.seg > a, .seg > button { border-radius: 6px; }
+.seg > [aria-current="page"], .seg > [aria-pressed="true"] {
+  background: var(--color-surface); box-shadow: inset 0 0 0 1px var(--color-accent), 0 1px 3px rgb(0 0 0 / 0.18);
+}
+.thumb .seg { background: color-mix(in srgb, var(--color-surface) 86%, transparent); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+
+/* Press feedback. */
+.btn, .chip, .seg > a, .seg > button, .tab, .navlink, .subnav, .search-btn, a.card, a.kpi,
+.search-hit, .icell, .eco-cell .item, .seat-chip, .stretch-card, .update-btn, .tabs a, .fold > summary {
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 160ms ease-out,
+    background-color 160ms ease-out, box-shadow 160ms ease-out, color 160ms ease-out;
+}
+.btn:active:not(:disabled), .chip:active, .seg > a:active, .seg > button:active, .search-btn:active,
+.seat-chip:active, .update-btn:active { transform: scale(0.96); }
+a.card:active, a.kpi:active, .stretch-card:has(.stretch-link:active) { transform: scale(0.985); }
+.icell:active:not(.empty), .eco-cell .item:active { transform: scale(0.92); }
+.tab:active, .navlink:active, .subnav:active, .tabs a:active, .fold > summary:active { opacity: 0.6; }
+.search-hit:active { background: var(--color-neutral-900); }
+a:not([class]):active { opacity: 0.6; }
+
+/* A page eases in when it opens and when its first data replaces its
+   skeletons (main.js easeIn). Children move, not main, so nothing inside
+   loses its sticky or fixed place. */
+@keyframes enter { from { opacity: 0.35; transform: translateY(8px); } }
+main.main.enter > :not([data-stale-cache]) { animation: enter 300ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* Sheets rise from the bottom edge; the search box settles in. */
+@keyframes sheet-in { from { transform: translateY(100%); } }
+@keyframes scrim-in { from { background-color: transparent; } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(-6px) scale(0.98); } }
+.scrim:not([hidden]) { animation: scrim-in 240ms ease-out; }
+.scrim:not([hidden]) > .sheet { animation: sheet-in 380ms cubic-bezier(0.32, 0.72, 0, 1); }
+.scrim:not([hidden]) > .search-box { animation: pop-in 220ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* The copy saved for this tab floats under the header instead of sitting in
+   the page, so the page does not jump up when the world answers. */
+.banner[data-stale-cache] {
+  position: fixed; z-index: 7; top: 16px; right: calc(24px + env(safe-area-inset-right)); max-width: min(360px, calc(100vw - 32px));
+  align-items: center; padding: 8px 14px; border-radius: var(--radius-lg); font-size: var(--fs-1);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent); box-shadow: var(--shadow-md);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+}
+.banner[data-stale-cache] i { font-size: 16px; }
+@media (max-width: 759.98px) {
+  .banner[data-stale-cache] { top: calc(var(--header-h) + env(safe-area-inset-top) + 8px); left: 50%; right: auto; transform: translateX(-50%); width: max-content; }
+}
+
+/* "Updated, tap to refresh" (update.js). */
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 12px); } }
+.update-toast {
+  position: fixed; z-index: 45; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 64px); animation: toast-in 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.update-btn {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px;
+  cursor: pointer; white-space: nowrap; font-size: var(--fs-2); font-weight: 500;
+  color: var(--color-accent-200); background: var(--color-accent-900); box-shadow: inset 0 0 0 1px var(--color-accent-700), var(--shadow-md);
+}
+.update-btn i { font-size: 18px; }
+@keyframes toast-in-wide { from { opacity: 0; transform: translateY(12px); } }
+@media (min-width: 760px) {
+  .update-toast { left: auto; right: calc(24px + env(safe-area-inset-right)); bottom: 24px; transform: none; animation-name: toast-in-wide; }
+}
+
+/* A card that is one link with other links inside it: the card's own link
+   stretches over it, and the inner links sit above (the run cards). */
+.stretch-card { position: relative; }
+.stretch-link { color: inherit; text-decoration: none; }
+.stretch-link:hover { color: inherit; }
+.stretch-link::after { content: ""; position: absolute; inset: 0; z-index: 0; }
+.stretch-link:focus-visible { outline: none; }
+.stretch-card:has(.stretch-link:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.stretch-card:hover { box-shadow: var(--shadow-sm); }
+.stretch-card .seat-chips { position: relative; z-index: 1; }
+
+/* A run's seats: tank, healer, then damage, each a chip in its class colour
+   with its role symbol (views/_runs.js seatChips). */
+.seat-chips { display: flex; flex-wrap: wrap; gap: 2px 6px; margin: 0; padding: 0; list-style: none; }
+.seat-chips > li { display: flex; }
+.seat-chip { display: inline-flex; align-items: center; text-decoration: none; white-space: nowrap; font-size: var(--fs-1); font-weight: 500; }
+.seat-pill {
+  display: inline-flex; align-items: center; gap: 5px; min-height: 26px; padding: 2px 10px; border-radius: 999px;
+  background: var(--color-neutral-900); box-shadow: inset 0 0 0 1px var(--color-neutral-800);
+  transition: box-shadow 160ms ease-out;
+}
+.seat-chip:hover .seat-pill { box-shadow: inset 0 0 0 1px currentColor; }
+.seat-chip:focus-visible { outline: none; }
+.seat-chip:focus-visible .seat-pill { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.seat-ic { font-size: 14px; flex-shrink: 0; }
+.g-seat-name .seat-ic { margin-right: 6px; vertical-align: -2px; }
+@media (pointer: coarse) {
+  .seat-chip { min-height: 44px; }
+  .seat-pill { min-height: 30px; padding: 3px 11px; }
+}

@@ -220,10 +220,20 @@ export function questsTab(ctx, m) {
 
 // ---- Inventory -------------------------------------------------------------------------------
 
-function invCells(frame) {
-  return (frame.containers || []).flatMap((c) => c.cells || []).map((x) => (x
+function invCells(cells) {
+  return (cells || []).map((x) => (x
     ? cell({ entry: x.entry, name: x.name, quality: x.quality, icon: x.icon, corner: x.count > 1 ? String(x.count) : "", title: x.name + (x.count > 1 ? " x" + x.count : ""), size: "c44" })
     : emptyCell("", "slot", "Empty slot", "c44")));
+}
+
+// Each bag its own small grid under its name and how full it is, as the game
+// opens them, so a long inventory reads bag by bag.
+function invBags(frame) {
+  const bags = (frame.containers || []).filter((c) => (c.cells || []).length);
+  return html`<div class="inv-bags">${bags.map((c) => {
+    const used = c.cells.filter(Boolean).length;
+    return html`<section class="inv-bag" aria-label="${c.name}"><h3 class="inv-bag-head"><span>${c.name}</span><span class="num">${used} of ${c.cells.length}</span></h3><div class="inv-grid">${invCells(c.cells)}</div></section>`;
+  })}</div>`;
 }
 
 export function inventoryTab(ctx, m, tab) {
@@ -233,7 +243,7 @@ export function inventoryTab(ctx, m, tab) {
   const wait = pendingRead(r, 2);
   if (wait) return html`${s}${wait}`;
   const f = r.data;
-  return html`${s}<span class="muted">${bank ? "Bank" : "Bags"}: ${f.used ?? "?"} of ${f.total ?? "?"} slots used | hover or tap an item${!bank && f.money ? " | " + coins(f.money.gold * 10000 + f.money.silver * 100 + f.money.copper) : ""}</span>${f.note ? html`<span class="dim mb-s">${f.note}</span>` : ""}<div class="inv-grid">${invCells(f)}</div>`;
+  return html`${s}<span class="muted">${bank ? "Bank" : "Bags"}: ${f.used ?? "?"} of ${f.total ?? "?"} slots used | hover or tap an item${!bank && f.money ? " | " + coins(f.money.gold * 10000 + f.money.silver * 100 + f.money.copper) : ""}</span>${f.note ? html`<span class="dim mb-s">${f.note}</span>` : ""}${invBags(f)}`;
 }
 
 // ---- Activity ---------------------------------------------------------------------------------
