@@ -320,6 +320,22 @@ class TheServer(unittest.TestCase):
         self.assertEqual(css.header("Content-Type"), "text/css; charset=utf-8")
         self.assertEqual(get("/app/views/operator.js").status(), 200)
 
+    def test_an_app_file_is_opened_at_the_real_path_that_was_checked(self):
+        # _app_file hands _send_file the real path it resolved and checked,
+        # and _send_file opens exactly that path, never one rebuilt from the
+        # request (CodeQL alert 26).
+        sent = []
+        real = map_server.Handler._send_file
+
+        def spy(handler, name, ctype, transform=None, path=""):
+            sent.append(path)
+            return real(handler, name, ctype, transform, path=path)
+
+        with mock.patch.object(map_server.Handler, "_send_file", spy):
+            self.assertEqual(get("/app/views/now.js").status(), 200)
+        app = os.path.realpath(os.path.join(map_server.HERE, "app"))
+        self.assertEqual(sent, [os.path.join(app, "views", "now.js")])
+
     def test_nothing_else_is_reachable_through_the_app_prefix(self):
         for path in (
             "/app/../map_server.py",
@@ -443,6 +459,23 @@ class TheRouter(unittest.TestCase):
             % json.dumps(list(cases)),
         )
         self.assertEqual(dict(zip(cases, got)), cases)
+
+    def test_a_legacy_hash_never_reaches_object_prototype(self):
+        # LEGACY is a plain object: "#constructor" once called Object() and
+        # handed the router an object instead of a hash (CodeQL alert 27).
+        names = [
+            "#constructor",
+            "#toString",
+            "#__proto__",
+            "#hasOwnProperty",
+            "#valueOf",
+        ]
+        got = node_module(
+            "router.js",
+            "console.log(JSON.stringify(%s.map((h) => M.legacy(h))));"
+            % json.dumps(names),
+        )
+        self.assertEqual(got, ["#/now"] * len(names))
 
     def test_new_routes_are_not_redirected(self):
         got = node_module(

@@ -4947,7 +4947,8 @@ class Handler(BaseHTTPRequestHandler):
         if not kind or not full.startswith(_APP_DIR + os.sep) or not os.path.isfile(full):
             self._send(404, "text/plain", b"not found")
             return
-        self._send_file(os.path.join("app", rel), _APP_TYPES[kind])
+        # Open the path that was checked, not one rebuilt from `rel`.
+        self._send_file(os.path.join("app", rel), _APP_TYPES[kind], path=full)
 
     def _v2(self, path: str, query: dict) -> None:
         """GET /api/v2/... - the reads the operations app adds (apiv2/)."""
@@ -6352,7 +6353,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return body
 
-    def _send_file(self, name: str, ctype: str, transform=None) -> None:
+    def _send_file(self, name: str, ctype: str, transform=None, path: str = "") -> None:
         # A file missing from the image must be a readable 500, not a bare
         # connection reset - the page keys its error banner off r.ok.
         #
@@ -6363,7 +6364,9 @@ class Handler(BaseHTTPRequestHandler):
         # perfectly normal while addressing the realm at the root. So it
         # has to reach the browser as an error rather than as a page.
         try:
-            with open(os.path.join(HERE, name), "rb") as f:
+            # `path` is a caller-checked real path (see _app_file); every
+            # other caller names a fixed file of the image.
+            with open(path or os.path.join(HERE, name), "rb") as f:
                 body = f.read()
             if transform is not None:
                 body = transform(body)
