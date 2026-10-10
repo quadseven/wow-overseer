@@ -17533,9 +17533,10 @@ class Bridge(discord.Client):
 
     async def _standin_out_facts(self, key: str, leader: str, ordered: str,
                                  roster: tuple) -> tuple:
-        """(skills, out member, the others' levels, guild, faction) for the
-        member ordered to sit out. Reads only."""
+        """(skills, known spells, out member, the others' levels, guild,
+        faction) for the member ordered to sit out. Reads only."""
         skills = (await asyncio.to_thread(_fetch_trade_skills, [ordered])).get(ordered, {})
+        known = await asyncio.to_thread(_fetch_standin_known, ordered)
         read = await asyncio.to_thread(_fetch_standin_members, list(roster))
         members = {n: guildrun.member_from_row(r) for n, r in read.items()}
         levels = tuple(m.level for n, m in sorted(members.items())
@@ -17543,23 +17544,24 @@ class Bridge(discord.Client):
         head = members.get(key) or members.get(leader)
         guild = head.guild if head is not None else ""
         faction = guildrun.faction_of([m for m in members.values() if m is not None])
-        return skills, members.get(ordered), levels, guild, faction
+        return skills, known, members.get(ordered), levels, guild, faction
 
     async def _standin_facts(self, key: str, ordered: str, current, rows: list,
                              fam, gfacts: dict, doors: dict, candidates: tuple):
         """standin.Facts for one family. Reads only."""
         roster = tuple(fam["names"]) if fam else ()
         leader = str(fam["leader"].get("name") or "") if fam else ""
-        skills, out_member, levels, guild, faction = {}, None, (), "", ""
+        skills, known, out_member, levels, guild, faction = {}, None, None, (), "", ""
         if ordered and ordered in roster:
-            skills, out_member, levels, guild, faction = await self._standin_out_facts(
-                key, leader, ordered, roster)
+            (skills, known, out_member, levels, guild,
+             faction) = await self._standin_out_facts(key, leader, ordered, roster)
         door = _standin_door(rows, doors)
         mid_run = bool(roster and (current is not None or ordered in roster)
                        and await self._mid_run(list(roster)))
         return standin.Facts(
             family=key, leader=leader, ordered=ordered, roster=roster, skills=skills,
-            out_member=out_member, family_levels=levels, guild=guild, faction=faction,
+            known=known, out_member=out_member, family_levels=levels, guild=guild,
+            faction=faction,
             door=door, candidates=candidates, busy=frozenset(gfacts["busy"]),
             resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
             owed=frozenset(_class_owed_names(self)),
@@ -21517,6 +21519,22 @@ def _standin_tell(name: str, mode: str, now: float) -> bool:
     _insert_job(name, mode, standin.SOURCE)
     _STANDIN_TOLD[name] = (mode, now)
     return True
+
+
+def _fetch_standin_known(name: str):
+    """The spells the member ordered to sit out holds, or None unread.
+
+    For standin.walled: a trainer recipe persists to character_spell, so its
+    absence there is real. A failed read answers None, which standin does not
+    judge, so the row stands as it did.
+    """
+    try:
+        rows = _fetch_town_spells([name])
+    except pymysql.err.MySQLError:
+        log.warning("standin: %s's spellbook could not be read; its craft is "
+                    "not judged this pass", name)
+        return None
+    return frozenset(int(r["spell"]) for r in rows if r.get("holder") == name)
 
 
 def _standin_crafts(name: str, family: str) -> None:
@@ -29569,7 +29587,7 @@ def _fetch_town_carried(names: list) -> list:
 
 
 def _fetch_town_spells(names: list) -> list:
-    """Known spell ids, for the conjure check and nothing else."""
+    """Known spell ids, for the conjure check and the stand-in's craft wall."""
     if not names:
         return []
     sql = _TOWN_SPELLS_SQL % ",".join(["%s"] * len(names))
