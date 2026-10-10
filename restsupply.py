@@ -101,6 +101,21 @@ def wanted(member) -> tuple:
     return tuple(out)
 
 
+def empty(member) -> bool:
+    """Whether the member carries nothing to eat, or (a class that drinks)
+    nothing to drink: the one case its food comes ahead of its purchase order
+    (purse.py). Unread bags are not empty."""
+    food = getattr(member, "food", None)
+    drink = getattr(member, "drink", None)
+    if food is not None and int(food) <= 0:
+        return True
+    return (
+        _int(member.class_id) in MANA_CLASS_IDS
+        and drink is not None
+        and int(drink) <= 0
+    )
+
+
 def budget(member, junk) -> int:
     """Copper the member spends on food and drink: PURSE_SHARE of its purse and
     of what its junk sells for at the same counter."""

@@ -25,7 +25,7 @@ guild corps' own `Step` shape, run by the corps' own runner in the bridge.
                3. post: mail the materials it carries to whoever in the guild
                   uses them (see WHERE MATERIALS GO).
                4. sell: walk to any vendor that buys (`walk-to-vendor any`)
-                  and sell its grey loot.
+                  and sell what it has no use for (vendorsale.py).
                5. farm: walk to a field of nodes its skill can open at a level
                   it can survive (gatheraim.choose, over the world's own node
                   spawns), with `walk-to-spawn gameobject:`; there the module
@@ -123,11 +123,13 @@ import guildcorps
 import guildlevel
 import guildroute
 import keep
+import purse
 import pvpgear
 import raidroles
 import restsupply
 import situation
 import standstill
+import vendorsale
 
 HERBALISM = guildcorps.HERBALISM
 MINING = guildcorps.MINING
@@ -357,10 +359,14 @@ POST_MIN = {MAINTENANCE: 5, SUMMONER: 10, RAIDER: 20}
 MAX_LETTERS = 6
 POSTAGE_COPPER = 30
 
-# THE BAR FOR A SALE: this many grey stacks, or this much grey worth.
+# THE BAR FOR A SALE: this many stacks to sell, or this much worth, or bags
+# short of room for loot (loot_room_short).
 SELL_MIN_STACKS = {MAINTENANCE: 4, SUMMONER: 6, RAIDER: 8}
 SELL_MIN_COPPER = 5000
 MAX_SALES = 12
+# A quarter of the bag slots free or fewer: mod-playerbots stops looting what
+# does not stack past 80% full (loot_room_short).
+LOOT_ROOM_SHARE = (1, 4)
 
 # HOW OFTEN EACH KIND OF STEP MAY BE ASKED OF ONE MEMBER, in minutes, counted
 # from the command log so a restart forgets nothing.
@@ -372,6 +378,8 @@ COOLDOWN_MINUTES = {
     "tool": 60,
     "post": 60,
     "sell": 120,
+    # A walk to a riding trainer (riding_step): a rank is bought once.
+    "riding": 180,
     # Making room for a class quest (class_room_step): the sale cooldown above
     # is overridden for it, and this is its own, long enough for the walk to a
     # vendor and the sales to be written.
@@ -479,6 +487,12 @@ class Carried:
     sell_price: int = 0
     name: str = ""
     item_level: int = 0
+    # For the vendor's verdict on a weapon or armor piece (vendorsale.py):
+    # item_template.RequiredLevel, InventoryType and AllowableClass (-1 is
+    # every class).
+    required_level: int = 0
+    inventory_type: int = 0
+    allowable_class: int = -1
 
     @property
     def material(self) -> str:
@@ -560,6 +574,18 @@ class Member:
     # Where its hearthstone is bound (character_homebind), None when unread.
     home_map: int | None = None
     home_zone: int | None = None
+    # Every slot of the backpack and the worn bags, None when unread
+    # (`loot_room_short`).
+    bag_slots: int | None = None
+    # The worn gear (gear.CharacterState), None when unread: a weapon or armor
+    # piece short of outgrown is then never sold (vendorsale.py).
+    worn: object = None
+    # The entries the guild's bank forecast keeps, None when the forecast is
+    # unread: no trade good, gem or recipe is then sold (vendorsale.py).
+    reserved: frozenset | None = None
+    # The member's purchase order (purse.Order), None when unread: gear and
+    # food then spend as they did before it existed.
+    purse: object = None
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -1380,16 +1406,39 @@ def friendly_vendor_rows(member, vendor_rows) -> list:
     ]
 
 
-def _junk(member, kept) -> list:
-    """The stacks junk_sales sells, priciest first."""
+def vendor_judge(member, protected=frozenset()) -> vendorsale.Judge:
+    """What this member's sales are judged against (vendorsale.py): its level,
+    its worn gear, its guild's reserved materials, and what is never sold here:
+    the trades' tools, a Soul Shard, what a maintenance member's own next casts
+    eat, and `protected` (a class quest's items, from the make-room step)."""
+    guard = {e for tools in TOOL_ENTRIES.values() for e in tools} | {SOUL_SHARD}
+    if member.role == MAINTENANCE:
+        guard |= craft_entries(member)
+    return vendorsale.Judge(
+        level=int(member.level),
+        worn=member.worn,
+        reserved=member.reserved,
+        protected=frozenset(guard) | frozenset(protected),
+    )
+
+
+def vendor_stacks(member, kept, protected=frozenset()) -> list:
+    """The stacks this member sells at the counter, priciest first, at most
+    MAX_SALES: every one vendorsale lets go that overseer_keep does not hold."""
+    judge = vendor_judge(member, protected)
     return sorted(
         (
             c
             for c in (member.carried or ())
-            if c.sellable(member.level) and not _kept(member.name, c, kept)
+            if vendorsale.sells(c, judge) and not _kept(member.name, c, kept)
         ),
         key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
     )[:MAX_SALES]
+
+
+def _junk(member, kept) -> list:
+    """The stacks junk_sales sells, priciest first (vendor_stacks)."""
+    return vendor_stacks(member, kept)
 
 
 def junk_value(member, kept) -> int:
@@ -1413,6 +1462,77 @@ def junk_sales(member, kept, action="gear") -> tuple:
     )
 
 
+def spendable(member, kind, copper) -> int:
+    """Copper of `copper` (the purse and what its sales bring) that `kind` may
+    spend under the member's purchase order (purse.py): everything above what
+    is kept for the wants ahead of it. No order read: all of it, as before."""
+    order = member.purse
+    if order is None:
+        return max(0, int(copper))
+    if kind == purse.FOOD and order.hungry:
+        return max(0, int(copper))
+    return max(0, int(copper) - order.held_before(kind))
+
+
+RIDING_ACTION = "riding"
+
+
+def riding_step(m, recent):
+    """(step or None, a note): a member whose purchase order reaches riding
+    and whose purse covers it after its class spells walks to a riding
+    trainer, where the module buys the rank through the core's
+    Trainer::TeachSpell with the member's own gold. The row is the trade
+    walk's, `walk-to-trainer skill:762 learn:<rank>`: Riding is not a
+    profession, so the module offers it as a named spell on the riding
+    trainer's 762 line (its TrainerOffers), not as a profession rank. Never
+    while offline, dead or fighting, and once per COOLDOWN_MINUTES["riding"]."""
+    order = m.purse
+    want = order.want(purse.RIDING) if order is not None else None
+    if want is None or not m.eligible:
+        return None, ""
+    if not order.affords(purse.RIDING):
+        return (
+            None,
+            "%s saves for %s (%s, after %s kept for its class spells; it holds %s)"
+            % (
+                m.name,
+                want.what,
+                purse.money(want.copper),
+                purse.money(order.held_before(purse.RIDING)),
+                purse.money(order.money),
+            ),
+        )
+    if not m.online or not m.alive or m.in_combat or _cooling(m, RIDING_ACTION, recent):
+        return None, ""
+    said = "%s walks to a riding trainer to buy %s for %s of its own" % (
+        m.name,
+        want.what,
+        purse.money(want.copper),
+    )
+    return (
+        guildcorps.Step(
+            m.name,
+            RIDING_ACTION,
+            purse.RIDING_SKILL,
+            said,
+            rows=(
+                guildcorps.Row(
+                    "cast",
+                    "walk-to-trainer skill:%d learn:%d%s"
+                    % (
+                        purse.RIDING_SKILL,
+                        want.spell,
+                        _cap_word(guildroute.FAR_WALK_YARDS),
+                    ),
+                    "",
+                    source_for(RIDING_ACTION, m.name),
+                ),
+            ),
+        ),
+        "",
+    )
+
+
 def gear_step(member, character, vendor_rows, cap, kept=None):
     """(step or None, why not) for one gear-short member.
 
@@ -1432,7 +1552,11 @@ def gear_step(member, character, vendor_rows, cap, kept=None):
     # was never sold either.
     character = dict(
         character,
-        purse=int(character.get("purse") or 0) + junk_value(member, kept),
+        purse=spendable(
+            member,
+            purse.GEAR,
+            int(character.get("purse") or 0) + junk_value(member, kept),
+        ),
     )
     if member.map_id is None:
         return None, "%s is short of gear; where it stands is not read" % member.name
@@ -1502,7 +1626,9 @@ def supply_step(member, vendor_rows, cap, kept=None):
     rows = friendly_vendor_rows(member, vendor_rows)
     if vendor_rows and not rows:
         return None, "no vendor in reach will sell %s food or drink" % member.name
-    buys, why = restsupply.plan(member, rows, junk_value(member, kept))
+    junk = junk_value(member, kept)
+    left = spendable(member, purse.FOOD, int(member.money) + junk)
+    buys, why = restsupply.plan(replace(member, money=left), rows, 0)
     if not buys:
         return None, why
     # The walk names the item the chosen vendor is the nearest seller of, so
@@ -1754,24 +1880,42 @@ def _post_step(member, crafters, master, kept, cap, crafting=False, bar=None):
     return step, ""
 
 
+def loot_room_short(member) -> bool:
+    """Whether the member's bags are full enough that its own AI leaves loot on
+    the corpse, or nearly so.
+
+    mod-playerbots' StoreLootAction skips every item that does not stack once
+    "bag space" (used slots over all slots) passes 80% for a bot with no real
+    master. A quarter of the slots free or fewer is that line with a margin, so
+    the sale comes before the loot stops. Unread bags are never short.
+    """
+    free, slots = member.free_slots, member.bag_slots
+    if free is None or not slots:
+        return False
+    return int(free) * LOOT_ROOM_SHARE[1] <= int(slots) * LOOT_ROOM_SHARE[0]
+
+
 def _sell_step(member, kept, cap):
-    junk = [
-        c
-        for c in member.carried
-        if c.sellable(member.level) and not _kept(member.name, c, kept)
-    ]
-    worth = sum(int(c.sell_price) * int(c.count) for c in junk)
+    junk = vendor_stacks(member, kept)
+    worth = vendorsale.worth(junk)
     bar = SELL_MIN_STACKS.get(member.role, SELL_MIN_STACKS[RAIDER])
-    if not junk or (len(junk) < bar and worth < SELL_MIN_COPPER):
+    if not junk:
         return None
-    junk.sort(key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)))
-    junk = junk[:MAX_SALES]
+    if not loot_room_short(member) and len(junk) < bar and worth < SELL_MIN_COPPER:
+        return None
     return guildcorps.Step(
         member.name,
         "sell",
         len(junk),
-        "%s walks to a vendor to sell %d grey or outgrown stack(s) worth %dc"
-        % (member.name, len(junk), sum(int(c.sell_price) * int(c.count) for c in junk)),
+        "%s walks to a vendor to sell %d stack(s) it has no use for, worth %dc%s"
+        % (
+            member.name,
+            len(junk),
+            worth,
+            " (%d of %d bag slots free)" % (member.free_slots, member.bag_slots)
+            if loot_room_short(member)
+            else "",
+        ),
         rows=tuple(
             guildcorps.Row(
                 "sell", "guid:%d" % int(c.guid), "", source_for("sell", member.name)
@@ -1785,6 +1929,17 @@ def _sell_step(member, kept, cap):
             source_for("sell-walk", member.name),
         ),
     )
+
+
+def _full_bags_first(m, kept, recent, cap):
+    """A member whose bags are full enough to leave loot on the corpse sells
+    what it has no use for before any job but its class quest, the stood-still
+    hearth and its food: every kill until then drops its items on the ground."""
+    if not m.online or not m.alive or m.in_combat or not m.eligible:
+        return None
+    if not loot_room_short(m) or _cooling(m, "sell", recent):
+        return None
+    return _sell_step(m, kept, cap)
 
 
 def _spot_step(member, spot, action, cap, said):
@@ -2422,9 +2577,13 @@ def _member_step(
     still_for=0,
     supply=None,
 ):
-    """A class quest first, then a hearth out of a spot it cannot leave, then gear, then PvP for an upgrade, then the post, then a walk out of an
-    outgrown zone, then the member's ordinary job (a craft-focus guild's trade
-    work when `crafting`), keeping the notes.
+    """A class quest first, then a hearth out of a spot it cannot leave, then
+    food for a member with nothing to eat or drink, then a sale for bags that
+    leave loot on the corpse (loot_room_short), then the inn, then riding,
+    gear and food in its purchase order (purse.py), then PvP for an upgrade,
+    then the post, then a walk out of an outgrown zone, then the member's
+    ordinary job (a craft-focus guild's trade work when `crafting`), keeping
+    the notes.
 
     THE CLASS QUEST COMES FIRST (the operator, 2026-10-06: the highest-priority
     job in the guild). It is the first rung here, ahead of gear, PvP, post, the
@@ -2453,15 +2612,32 @@ def _member_step(
     step = stood_still_step(m, still_for, recent, leveling)
     if step is not None:
         return step, step.said, quest_note, ""
-    step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
+    # FOOD FIRST ONLY FOR A MEMBER WITH NOTHING TO EAT OR DRINK (purse.py): it
+    # dies between pulls without. Otherwise the purchase order puts its class
+    # spells, riding and gear ahead of food.
+    hungry = restsupply.empty(m)
+    supply_note = ""
+    if hungry:
+        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
+        if step is not None:
+            return step, doing, quest_note, ""
+    step = _full_bags_first(m, kept, recent, cap)
     if step is not None:
-        return step, doing, quest_note, ""
+        return step, step.said, quest_note, ""
     step, doing, _ = _inn_first(m, leveling, recent, cap)
     if step is not None:
         return step, doing, quest_note, ""
+    step, riding_note = riding_step(m, recent)
+    if step is not None:
+        return step, step.said, quest_note, ""
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
     if step is not None:
         return step, doing, "", ""
+    if not hungry:
+        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
+        if step is not None:
+            return step, doing, quest_note, ""
+    supply_note = "; ".join(n for n in (supply_note, riding_note) if n)
     step, doing, held = _pvp_first(m, pvp, recent, cap, kept)
     if step is not None or held:
         return step, doing, supply_note, gear_note
@@ -3332,11 +3508,9 @@ def class_room_step(m, move, book, recent, cap, kept=None, crafters=None, master
 
 
 def _room_sale(m, said, kept, book, cap):
-    """The sale step: grey and outgrown stacks, best price first."""
-    junk = sorted(
-        _room_rows(m, [c for c in m.carried if c.sellable(m.level)], kept, book),
-        key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
-    )[:MAX_SALES]
+    """The sale step: what the member has no use for (vendor_stacks), best
+    price first, never a class quest's item."""
+    junk = vendor_stacks(m, kept, _protected_entries(book))
     return _room_vendor_step(m, said, junk, cap)
 
 
@@ -4574,6 +4748,9 @@ def carried_from_rows(rows) -> dict:
                 sell_price=_int(row.get("sell_price")),
                 name=str(row.get("item_name") or ""),
                 item_level=_int(row.get("item_level")),
+                required_level=_int(row.get("required_level")),
+                inventory_type=_int(row.get("inventory_type")),
+                allowable_class=_int(row.get("allowable_class"), -1),
             )
         )
     return {k: tuple(v) for k, v in out.items()}

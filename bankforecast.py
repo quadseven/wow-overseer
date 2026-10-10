@@ -36,8 +36,9 @@ humanoid), so the bank keeps the horizon's need and not the whole ladder's.
 
 THE OTHER KINDS. A recipe is kept once for each member whose trade can reach
 its rank at its level; past that it is surplus. A gem is surplus while nobody
-cuts gems. A trade good no rung eats is kept while somebody works a trade that
-uses it (guildshare.FEEDS), and is surplus otherwise. Raid supplies and their
+cuts gems. A trade good no rung eats keeps SAFETY_STACKS stacks while somebody
+works a trade that uses it (guildshare.FEEDS), and is surplus past them and
+otherwise. A gem with a cutter keeps the same. Raid supplies and their
 reagents (bankpolicy) are never sold. A grey item is junk. Anything else is
 not judged here and is kept.
 
@@ -294,6 +295,18 @@ class Forecast:
     short: dict = field(default_factory=dict)
     # The guild's name, for the headline.
     guild: str = ""
+    # Every entry the forecast judged: the vault's, the ladders' and what the
+    # guild's members carry (read). Empty when the forecast is unread.
+    judged: frozenset = frozenset()
+
+    @property
+    def reserved(self) -> frozenset | None:
+        """The entries the guild keeps: judged and not past its target. A
+        member never sells one of them at a vendor (vendorsale.py). None when
+        the forecast is unread, which keeps every material."""
+        if not self.judged:
+            return None
+        return frozenset(self.judged) - frozenset(self.over_target)
 
     def decisions(self) -> tuple:
         return tuple(d for line in self.lines for d in line.decisions)
@@ -598,12 +611,31 @@ def _judge_recipe(item: Item, members) -> tuple:
     )
 
 
+def _no_rung_target(item: Item, held: int) -> int:
+    """What the guild keeps of a material no rung eats while somebody works a
+    trade that uses it: SAFETY_STACKS full stacks, never more than it holds.
+
+    WHY NOT ALL OF IT (#771). Read on the dev realm on 2026-10-10: the members
+    off the roster carried 1,116 slots of white trade goods no rung eats,
+    mostly meat, with the family's Cooking at 1. Kept whole while anybody
+    held the trade, they filled the bags until mod-playerbots stopped looting
+    what does not stack. No rung eats them, so the guild's need is the safety
+    stock and nothing more.
+    """
+    return min(max(0, int(held)), SAFETY_STACKS * max(1, int(item.max_stack)))
+
+
 def _judge_gem(item: Item, held: int, members) -> tuple:
-    """(kind, target, why) for a gem: kept while somebody cuts gems."""
+    """(kind, target, why) for a gem: a stack is kept while somebody cuts gems."""
     cutters = tuple(m.name for m in members if m.skill(JEWELCRAFTING) > 0)
     if not cutters:
         return SURPLUS, 0, "nobody in the guild cuts gems and no rung eats it"
-    return LATER, held, "%s cut(s) gems" % ", ".join(cutters[:3])
+    return (
+        LATER,
+        _no_rung_target(item, held),
+        "%s cut(s) gems; no rung eats it, so %d stack(s) are kept"
+        % (", ".join(cutters[:3]), SAFETY_STACKS),
+    )
 
 
 def _judge_trade_good(item: Item, held: int, members) -> tuple:
@@ -613,8 +645,9 @@ def _judge_trade_good(item: Item, held: int, members) -> tuple:
         return SURPLUS, 0, "no rung eats it and nobody works a trade that uses it"
     return (
         LATER,
-        held,
-        "no rung eats it, and %d member(s) work a trade that uses it" % len(feeders),
+        _no_rung_target(item, held),
+        "no rung eats it, and %d member(s) work a trade that uses it; %d stack(s) "
+        "are kept" % (len(feeders), SAFETY_STACKS),
     )
 
 
@@ -622,7 +655,8 @@ def judge(item: Item, held: int, members, need: Need | None) -> tuple:
     """(kind, target units, why) for one item the guild holds `held` of.
 
     The target is what the guild keeps; past it a material is surplus. RAID,
-    UNJUDGED and LATER keep everything, which is a target of `held`.
+    UNJUDGED and a ladder's LATER keep everything, which is a target of
+    `held`; a trade good or gem no rung eats keeps its safety stock.
     """
     if item.entry in RAID_ENTRIES:
         return RAID, held, "a Molten Core supply or its reagent, never sold"
@@ -843,7 +877,13 @@ def plan(
             house,
             carried,
         )
-    return Forecast(tuple(acc.lines), acc.over, acc.fair, _short(need_of, carried))
+    return Forecast(
+        tuple(acc.lines),
+        acc.over,
+        acc.fair,
+        _short(need_of, carried),
+        judged=frozenset(e for e in judged if e in items),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -892,6 +932,17 @@ CARRIED_SQL = (
     "JOIN item_instance ii ON ii.guid = ci.item "
     "WHERE gm.guildid = %%s AND NOT (ci.bag = 0 AND ci.slot < 19) "
     "AND ii.itemEntry IN (%s) GROUP BY c.name, ii.itemEntry"
+)
+
+# The trade goods, gems and recipes the guild's members carry in their bags,
+# so the forecast judges each one a member might sell (vendorsale.py).
+CARRIED_ENTRIES_SQL = (
+    "SELECT DISTINCT ii.itemEntry AS entry "
+    "FROM guild_member gm JOIN character_inventory ci ON ci.guid = gm.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE gm.guildid = %s AND NOT (ci.bag = 0 AND ci.slot < 19) "
+    "AND it.class IN (3, 7, 9) AND it.SellPrice > 0"
 )
 
 POSTED_SQL = (
@@ -966,6 +1017,10 @@ class Facts:
     carried: dict = field(default_factory=dict)
     casts: tuple = ()
     history: tuple = ()
+    # Entries the guild's members carry that the forecast judges as well as
+    # the ladders' (CARRIED_ENTRIES_SQL): what a member may sell is judged by
+    # the same model as the vault (vendorsale.py, #771).
+    extra: frozenset = frozenset()
 
     def plan(self, house: int = 0) -> Forecast:
         """The forecast over these facts, named for their guild."""
@@ -978,7 +1033,7 @@ class Facts:
             history=self.history,
             house=house,
             carried=self.carried,
-            entries=LADDER_ENTRIES,
+            entries=LADDER_ENTRIES | frozenset(self.extra),
         )
         return replace(forecast, guild=self.guild)
 
@@ -1040,7 +1095,9 @@ def read(cur, names) -> Facts:
     stacks, items = _read_vault(cur, guild_id)
     cur.execute(MEMBERS_SQL, (guild_id,))
     members = members_from_rows([dict(r) for r in cur.fetchall()], names)
-    entries = sorted(set(items) | LADDER_ENTRIES)
+    cur.execute(CARRIED_ENTRIES_SQL, (guild_id,))
+    extra = frozenset(_int(r["entry"]) for r in cur.fetchall()) - LADDER_ENTRIES
+    entries = sorted(set(items) | LADDER_ENTRIES | extra)
     items.update(_read_templates(cur, [e for e in entries if e not in items]))
     held, carried = _read_held(cur, guild_id, entries)
     cur.execute(CASTS_SQL, (guild_id, PACE_DAYS))
@@ -1058,4 +1115,5 @@ def read(cur, names) -> Facts:
         carried,
         casts,
         history,
+        extra,
     )

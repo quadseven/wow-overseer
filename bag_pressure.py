@@ -1687,6 +1687,51 @@ def family_claimants(gear_rows, equipped_rows, names) -> dict:
     return gear.claims(gear.holdings_from_rows(gear_rows), characters)
 
 
+# ---------------------------------------------------------------------------
+# WHAT A GUILD MEMBER SELLS AT A VENDOR (#771)
+#
+# vendorsale keeps a carried weapon or armor piece the member would wear and
+# sells the rest. "Would wear" is gear.py's one opinion, read HERE like every
+# other gear question: this module stays the one place a world row becomes a
+# Holding or a CharacterState.
+
+
+def member_characters(worn_rows) -> dict:
+    """name -> gear.CharacterState from the members' worn rows (name,
+    class_id, level, equipment_slot, inventory_type, item_level)."""
+    rows = list(worn_rows or ())
+    names = {str(r.get("name") or "") for r in rows} - {""}
+    return {c.name: c for c in gear.characters_from_rows(rows, names)}
+
+
+def own_piece(item) -> gear.Holding:
+    """gear.Holding for one carried piece of a member (guildjobs.Carried)."""
+    return gear.Holding(
+        holder="",
+        guid=int(item.guid),
+        entry=int(item.entry),
+        name=str(getattr(item, "name", "") or ""),
+        quality=int(item.quality),
+        item_level=int(getattr(item, "item_level", 0) or 0),
+        required_level=int(getattr(item, "required_level", 0) or 0),
+        allowable_class=int(getattr(item, "allowable_class", -1)),
+        inventory_type=int(getattr(item, "inventory_type", 0) or 0),
+        item_class=int(item.item_class),
+        item_subclass=int(item.subclass),
+    )
+
+
+def has_slot_bucket(item) -> bool:
+    """Whether gear.py weighs this piece against a worn slot at all (a ring, a
+    neck, a trinket, a shirt or a tabard is not)."""
+    return bool(gear.bucket_of(own_piece(item)))
+
+
+def holder_would_wear(item, character, level) -> tuple:
+    """gear.would_wear for the holder's own piece, judged at `level`."""
+    return gear.would_wear(own_piece(item), replace(character, level=int(level)))
+
+
 def family_gifts(
     gear_rows,
     equipped_rows,
