@@ -460,9 +460,17 @@ class TheHostileCapitalDoorIsNeverOffered(unittest.TestCase):
     ALLIANCE_MAP, HORDE_MAP = 34, 389
 
     def offered(self, level, faction):
+        """The doors offered to five members at `level` who carry no door key:
+        a keyed wing comes in only with its key (guildrun.opens_for)."""
+        five = [
+            guildrun.Member(name="M%d" % i, guild="Cave", level=level, class_id=1)
+            for i in range(5)
+        ]
         return [
             d.keyword
-            for d in guildrun.fitting_doors([level] * 5, guildrun.doors(), faction)
+            for d in guildrun.fitting_doors(
+                [level] * 5, guildrun.doors(), faction, five
+            )
         ]
 
     def test_alliance_never_gets_ragefire_at_any_level(self):
@@ -574,18 +582,30 @@ class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):
         "gnomeregan", "razorfen-kraul", "razorfen-downs", "uldaman",
         "zulfarrak", "ragefire", "stockades", "maraudon-orange", "maraudon-purple", "sunken-temple",
         "blackrock-depths", "scholomance", "scarlet-library", "lower-blackrock-spire",
-    }  # fmt: skip
-    # Doors a run could not finish through (see guildrun.BLOCKED_DOORS).
-    BLOCKED = {
         "scarlet-armory", "scarlet-cathedral", "dire-maul-east-east",
         "dire-maul-west-north", "dire-maul-north",
     }  # fmt: skip
+    # Keyed wings (campaignplan.DOOR_KEYS): offered to a group that carries the
+    # key, never to one that does not (guildrun.opens_for, #785).
+    KEYED = {
+        "scarlet-armory", "scarlet-cathedral", "dire-maul-west-north",
+        "dire-maul-north", "blackrock-depths",
+    }  # fmt: skip
     FIRST_LEVEL = {"Alliance": 17, "Horde": 15}
 
-    def offered(self, level, faction):
+    def offered(self, level, faction, keys=frozenset()):
+        """The doors offered to five members at `level` who carry `keys`."""
+        five = [
+            guildrun.Member(
+                name="M%d" % i, guild="Cave", level=level, class_id=1, keys=keys
+            )
+            for i in range(5)
+        ]
         return [
             d.keyword
-            for d in guildrun.fitting_doors([level] * 5, guildrun.doors(), faction)
+            for d in guildrun.fitting_doors(
+                [level] * 5, guildrun.doors(), faction, five
+            )
         ]
 
     def test_each_side_uses_every_queueable_door_but_the_hostile_capital(self):
@@ -594,10 +614,11 @@ class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):
         )
         self.assertEqual(guildrun.GUILD_DOORS["Horde"], self.QUEUEABLE - {"stockades"})
 
-    def test_no_blocked_door_is_on_either_ladder(self):
-        for faction, keywords in guildrun.GUILD_DOORS.items():
-            self.assertFalse(keywords & self.BLOCKED, faction)
-        self.assertEqual(set(guildrun.BLOCKED_DOORS), self.BLOCKED)
+    def test_no_door_is_held_back(self):
+        """Dire Maul's East and West doors find their wings' finder rows
+        (mod-overseer's FinderWingDoorFor), and a keyed wing is held to its
+        key by the seat, not by a list (#783, #785)."""
+        self.assertEqual(guildrun.BLOCKED_DOORS, {})
 
     def test_every_level_from_the_first_door_to_sixty_has_a_door(self):
         for faction, first in self.FIRST_LEVEL.items():
@@ -613,20 +634,33 @@ class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):
             self.assertIn("scarlet-library", self.offered(35, faction), faction)
             self.assertIn("lower-blackrock-spire", self.offered(58, faction), faction)
 
-    def test_a_door_whose_boss_is_behind_a_keyed_door_stays_off(self):
-        """The Armory (Herod's Door), the Cathedral (the Chapel Door) and Dire
-        Maul North (the Gordok doors) are keyed, no seat brings the key, and
-        Dire Maul's other two doors do not land on their wing's finder start."""
+    def test_a_keyed_wing_is_offered_only_to_a_group_with_its_key(self):
+        """The Armory (Herod's Door), the Cathedral (the Chapel Door), Dire
+        Maul West and North (the Crescent doors) and Blackrock Depths (the
+        Shadowforge gates) need their key: a group that carries none is never
+        offered them, and one that carries it is."""
         for faction in ("Alliance", "Horde"):
             for level in range(36, 61):
                 offered = set(self.offered(level, faction))
-                self.assertFalse(offered & self.BLOCKED, (faction, level))
+                self.assertFalse(offered & self.KEYED, (faction, level))
+            self.assertIn(
+                "scarlet-armory", self.offered(38, faction, frozenset({7146}))
+            )
+            self.assertIn(
+                "blackrock-depths", self.offered(56, faction, frozenset({11000}))
+            )
+            self.assertIn(
+                "dire-maul-west-north", self.offered(58, faction, frozenset({18249}))
+            )
+            self.assertIn("dire-maul-east-east", self.offered(58, faction))
 
     def test_the_ladder_climbs_through_the_high_dungeons(self):
         self.assertIn("razorfen-kraul", self.offered(32, "Horde"))
         self.assertIn("zulfarrak", self.offered(40, "Alliance"))
         self.assertIn("sunken-temple", self.offered(52, "Horde"))
-        self.assertIn("blackrock-depths", self.offered(56, "Alliance"))
+        self.assertIn(
+            "blackrock-depths", self.offered(56, "Alliance", frozenset({11000}))
+        )
         self.assertIn("scholomance", self.offered(60, "Horde"))
 
 

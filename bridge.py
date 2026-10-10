@@ -17558,10 +17558,11 @@ class Bridge(discord.Client):
         run_id = await asyncio.to_thread(_start_guild_run, decision)
         self._guild_run_formed_at = now
         self._guild_run_names |= set(decision.chosen.names)
-        log.info("guild runs: run %d - %s sends %s into %s (band %s, %s; prior %s)",
+        key_said = guildrun.key_words(decision.chosen.members, decision.door)
+        log.info("guild runs: run %d - %s sends %s into %s (band %s, %s; prior %s)%s",
                  run_id, plan.pool.guild, ", ".join(decision.chosen.names),
                  decision.door.place, plan.band, decision.chosen.key,
-                 decision.prior.words())
+                 decision.prior.words(), "; " + key_said if key_said else "")
 
     async def _guild_social_once(self) -> None:
         """One pass of the guild's asks and answers (guildsocial, #568, #569).
@@ -17636,12 +17637,16 @@ class Bridge(discord.Client):
             self._guild_run_formed_at = now
             self._guild_run_names |= set(social.form.composition.names)
         self._guild_social_names = await asyncio.to_thread(_guild_social_names)
+        # A keyed wing's run names the member who carries the key (#785).
+        key_said = (guildrun.key_words(social.form.composition.members, social.form.door)
+                    if run_id else "")
         log.info("guild social: %d ask(s) said, %d yes(es), %d expired, %d cancelled, "
                  "%d withdrawn%s%s", len(social.posts), len(social.replies),
                  len(social.expire), len(social.cancel), len(social.withdraw),
-                 "; run %d - %s's %s group: %s" % (
+                 "; run %d - %s's %s group: %s%s" % (
                      run_id, social.form.ask.asker, social.form.door.place,
-                     ", ".join(social.form.composition.names)) if run_id else "",
+                     ", ".join(social.form.composition.names),
+                     " (%s)" % key_said if key_said else "") if run_id else "",
                  "; " + "; ".join(social.notes) if social.notes else "")
         # THE SEATS AN HOUR (seatmeter, #784). Looked up so a test driving
         # this pass on a bare object needs no reads for it.
@@ -22145,6 +22150,16 @@ _GUILD_RUN_MEMBERS_SQL = (
     "AND ci.bag = 0 AND ci.slot = 16 AND it.class = 4 AND it.subclass = 6) AS has_shield, "
     # The spell its class tanks with (raidroles.TANK_KIT), for guildrun.tank_ready.
     + raidroles.TANK_KIT_COLUMN + ", "
+    # The door keys it carries (campaignplan.KEY_ITEMS), for a keyed wing's seat
+    # (guildrun.opens_for, #785): its bags and key ring, never the bank (bank
+    # slots 39 to 73, and the bags in them), as the dungeon brain's
+    # HasItemCount reads them.
+    "(SELECT GROUP_CONCAT(DISTINCT ii.itemEntry) FROM character_inventory ci "
+    "JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = s.guid "
+    "AND ii.itemEntry IN (" + ", ".join(str(int(k)) for k in campaignplan.KEY_ITEMS) + ") "
+    "AND ((ci.bag = 0 AND ci.slot NOT BETWEEN 39 AND 73) OR ci.bag IN ("
+    "SELECT b.item FROM character_inventory b WHERE b.guid = s.guid AND b.bag = 0 "
+    "AND b.slot BETWEEN 19 AND 22))) AS door_keys, "
     # IN THE WORLD IS A FRESH SNAPSHOT, NOT characters.online. The flag reads
     # 0 for random bots that are in the world (8 guild members flipped to 0 at
     # once on the dev realm while their snapshots kept updating), and the
