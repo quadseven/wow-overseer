@@ -74,7 +74,6 @@ import raidsupply
 import readcache
 import recap
 import realm
-import runstory
 import runtimeline
 import stream
 import tradespec
@@ -2641,87 +2640,21 @@ _RAID_OBJECT = ("SELECT DISTINCT Item AS item FROM "
 # the Lineup page shows. The skill ids are crafters.TRADES, bound as values.
 # The guild coordinator's runs, newest first: enough ended ones for the
 # records guildrun.rates folds (ROLLING per key) and the Guild tab's list.
-_GUILD_RUNS_SQL = (
-    "SELECT id, guild, band, composition, keyword, tank, members, dungeon_by, "
-    "dungeon_jev, dungeon_confidence, composition_by, composition_jev, "
-    "composition_confidence, prior_rate, prior_runs, state, outcome, why, deaths, "
-    "seconds_inside, bosses_done, bosses_total, loot_items, loot_notable, "
-    "ilvl_gained, levels_gained, created_at, ended_at, proposer "
-    "FROM overseer_guild_run ORDER BY id DESC LIMIT 500"
-)
-# Who asked for each run in guild chat (`proposer`, which the bridge adds):
-# without it every asked run read "a member asked for it". A world whose table
-# predates the column reads the rest.
-_GUILD_RUNS_SQL_THIN = _GUILD_RUNS_SQL.replace(", proposer ", " ")
-
-# WHY A RUN WENT THE WAY IT DID (runstory). The deaths of the shown runs'
-# members inside those runs' own windows, and which creatures are bosses.
-# Every column here has been on overseer_death since its first migration, so
-# no thinner fallback is needed for 1054; a world without the table reads no
-# deaths, and each story then says only what the run's own counts say. The
-# windows are bound datetimes and the names bound values; `{holes}` and
-# `{spans}` are placeholders sized by runstory.death_scope.
-_RUN_DEATHS_SQL = (
-    "SELECT character_name, level, map, zone, killer_name, killer_type, killer_entry, "
-    "created_at FROM overseer_death WHERE character_name IN ({holes}) AND ({spans}) "
-    "ORDER BY id DESC LIMIT %s"
-)
-_RUN_DEATHS_SPAN = "created_at BETWEEN %s AND %s"
-RUN_DEATHS_LIMIT = 3000
-# The bosses, by creature entry: what tells a boss's kill from a trash pull.
-_RUN_BOSSES_SQL = (
-    "SELECT DISTINCT creditEntry FROM acore_world.instance_encounters "
-    "WHERE creditType = 0"
-)
+GUILD_RUNS_LIMIT = 500
 
 
+# The bosses, by creature entry (guildrun.BOSSES_SQL): what tells a boss's kill
+# from a trash pull in a family run's timeline.
 def _run_bosses(cur) -> frozenset:
-    rows = _wide_guarded(cur, _RUN_BOSSES_SQL, (), "", "instance_encounters")
+    rows = _wide_guarded(cur, guildrun.BOSSES_SQL, (), "", "instance_encounters")
     return frozenset(int(r["creditEntry"]) for r in rows if r.get("creditEntry"))
-
-
-# Read once per process, as the bridge does: the world's bosses do not change
-# under a running site. An empty read is not kept, so it is tried again.
-_RUN_BOSS_LEVELS: dict = {}
-
-
-def _run_boss_levels(cur) -> dict:
-    """map id -> its bosses' level (guildrun.BOSS_LEVELS_SQL), the level a
-    story holds each seat to; {} unread, and then no seat is called low."""
-    if _RUN_BOSS_LEVELS:
-        return _RUN_BOSS_LEVELS
-    rows = _wide_guarded(cur, guildrun.BOSS_LEVELS_SQL, (), "", "instance_encounters")
-    found = {int(r["map_id"]): int(r["level"]) for r in rows
-             if r.get("map_id") is not None and r.get("level") is not None}
-    if found:
-        _RUN_BOSS_LEVELS.update(found)
-        log.info("run stories: a seat is told against the bosses' level of %d dungeon "
-                 "map(s) (the Deadmines' %s); one healer is never a cause", len(found),
-                 found.get(36, "unread"))
-    return found
-
-
-def _guild_run_stories(cur, runs: list) -> list:
-    """Add runstory's story, cause and causes to each ended guild run, from
-    one read of its members' deaths. Returns `runs`."""
-    names, spans = runstory.death_scope(runs)
-    deaths = []
-    if names and spans:
-        sql = _RUN_DEATHS_SQL.format(  # noqa: S608 - placeholders only
-            holes=", ".join(["%s"] * len(names)),
-            spans=" OR ".join([_RUN_DEATHS_SPAN] * len(spans)))
-        params = tuple(names) + tuple(t for span in spans for t in span)
-        deaths = _wide_guarded(cur, sql, params + (RUN_DEATHS_LIMIT,), "",
-                               "overseer_death")
-    return runstory.tell_guild_runs(runs, deaths, _run_bosses(cur),
-                                    recap.zone_names(GEO.continents),
-                                    _run_boss_levels(cur))
 
 
 # THE GUILD CHAT FEED (#570). The asks a guild's members made in guild chat,
 # newest first, and the answers to them. The guild name is a bound parameter
 # and is only ever one of the configured guilds (guildrun.limits); `limit` is
-# an int the handler clamped. The run an ask became is read by its ids.
+# an int the handler clamped. The run an ask became is read by its ids
+# (guildrun.by_ids), and carries these of its columns.
 _GUILD_ASKS_SQL = (
     "SELECT id, guild, asker, kind, target, target_label, roles_needed, reason, "
     "said, created_at, expires_at, state, run_id "
@@ -2731,10 +2664,9 @@ _GUILD_ANSWERS_SQL = (
     "SELECT id, ask_id, member, role, stance, said, created_at, state "
     "FROM overseer_guild_answer WHERE ask_id IN ({holes}) ORDER BY id"
 )
-_GUILD_ASK_RUNS_SQL = (
-    "SELECT id, state, outcome, bosses_done, bosses_total, deaths, ended_at, "
-    "keyword, members, why, seconds_inside, created_at "
-    "FROM overseer_guild_run WHERE id IN ({holes})"
+_GUILD_ASK_RUN_KEYS = (
+    "id", "state", "outcome", "bosses_done", "bosses_total", "deaths", "ended_at",
+    "keyword", "members", "why", "seconds_inside", "created_at",
 )
 # The asker's call for a pug in the faction's public channel (guildpug, #591);
 # a world without the table reads none.
@@ -2778,13 +2710,11 @@ def _fetch_guild_chat(guild: str, limit: int) -> dict:
                 cur, _GUILD_PUG_CALLS_SQL.format(holes=", ".join(["%s"] * len(ids))),
                 tuple(ids), "", "overseer_guild_pug_call")
             run_ids = sorted({a["run_id"] for a in asks if a.get("run_id")})
-            runs = []
-            if run_ids:
-                runs = _wide_guarded(
-                    cur, _GUILD_ASK_RUNS_SQL.format(holes=", ".join(["%s"] * len(run_ids))),
-                    tuple(run_ids), "", "overseer_guild_run")
-                # The same story the Guild tab tells about this run.
-                runs = _guild_run_stories(cur, [dict(r) for r in runs])
+            runs = [dict({k: r.get(k) for k in _GUILD_ASK_RUN_KEYS},
+                         run_state=guildrun.run_state(r))
+                    for r in guildrun.by_ids(cur, run_ids)]
+            # The same story the Guild tab tells about this run.
+            guildrun.with_stories(cur, runs)
     finally:
         conn.close()
     by_ask: dict = {}
@@ -6293,11 +6223,9 @@ class Handler(BaseHTTPRequestHandler):
             conn = _connect()
             try:
                 with conn.cursor() as cur:
-                    rows = _wide_guarded(cur, _GUILD_RUNS_SQL, (), _GUILD_RUNS_SQL_THIN,
-                                         "overseer_guild_run")
-                    payload = guildrun.page(list(rows))
+                    payload = guildrun.page(guildrun.recent(cur, n=GUILD_RUNS_LIMIT))
                     # Why each run that came back went the way it did.
-                    _guild_run_stories(cur, payload["recent"])
+                    guildrun.with_stories(cur, payload["recent"])
             finally:
                 conn.close()
             self._send(200, "application/json", json.dumps(payload, default=str).encode())

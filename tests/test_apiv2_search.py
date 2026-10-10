@@ -215,7 +215,7 @@ class TheSearch(unittest.TestCase):
         self.assertNotIn("q0", search._cache)
 
     def test_a_world_without_the_runs_table_still_answers(self):
-        missing = Exception(search.NO_TABLE, "no table")
+        missing = Exception(1146, "no table")
         conn = Conn(dict(answers(), overseer_guild_run=missing))
         status, p, _c = self.run_q("dead", conn)
         self.assertEqual(status, 200)
