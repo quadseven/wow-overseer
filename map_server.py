@@ -42,6 +42,7 @@ import decree
 import director
 import dungeonplan
 import eye
+import families
 import family
 import frames
 import goals
@@ -222,6 +223,30 @@ def _connect() -> pymysql.connections.Connection:
     )
 
 
+# WHO THE FAMILIES ARE, their guilds, and who a read may answer about
+# (families.py). Read at most once per GET: do_GET opens FAMILIES.request()
+# around every handler. The lambda keeps _connect late-bound.
+FAMILIES = families.Families(families.SqlStore(lambda: _connect()), family.roster)
+
+
+def _realm_families() -> dict:
+    """/api/realm's `families` and `guilds`: the app's nav, routes and guild
+    pages are drawn from these rather than from names written into it.
+
+    Read apart from the realm banner, and a failed read is null in both
+    fields rather than a failed banner: which world this is does not depend
+    on who is in it.
+    """
+    try:
+        return {
+            "families": [{"key": k, "names": v} for k, v in FAMILIES.families().items()],
+            "guilds": FAMILIES.guilds(),
+        }
+    except (pymysql.err.MySQLError, OSError):
+        log.exception("realm: the families read failed; the app draws no family")
+        return {"families": None, "guilds": None}
+
+
 # --- which realm this is (quadseven/mod-overseer#184) ------------------------
 #
 # FIRST AMONG THE FETCHES ON PURPOSE, and the handler is likewise first among
@@ -358,72 +383,6 @@ def _fetch_rows() -> list[dict]:
             return list(cur.fetchall())
     finally:
         conn.close()
-
-
-def _fetch_rosters() -> dict:
-    """{family: [names, lead first]} for every family the roster table names.
-
-    One read, shared by the per-family lookup below and by /api/heads, which
-    needs every family at once. Empty when no roster row carries a family.
-    """
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT name, family, `lead` FROM overseer_roster "
-                "WHERE family IS NOT NULL AND family <> '' "
-                "ORDER BY `lead` DESC, name"
-            )
-            rows = cur.fetchall()
-    finally:
-        conn.close()
-
-    by_family = {}
-    for row in rows:
-        by_family.setdefault(row["family"], []).append(row["name"])
-    return by_family
-
-
-def _fetch_family_names(which=None):
-    """Who is in `which` family, which one that resolved to, and all of them.
-
-    WHY THIS READS overseer_roster AND NOT bonds. bonds knows ONE family: it
-    is a table of personas, renamed per world, and it is the right answer to
-    "how does Ugga speak". It is the wrong answer to "who is in the world"
-    now that there are two - an Alliance five and a Horde five - and the
-    roster has carried a `family` column all along for exactly this.
-
-    THE CALLER STILL CANNOT PASS A ROSTER, which is the rule /api/family was
-    written with and which this keeps. `which` selects among families the
-    SERVER knows; anything else falls back to the default. No name from a
-    request reaches the SQL below - only a key matched against a list the
-    database produced.
-    """
-    by_family = _fetch_rosters()
-    if not by_family:
-        # No roster rows at all: degrade to exactly the old behaviour rather
-        # than serving a blank tab.
-        return family.roster(), "", []
-
-    known = sorted(by_family)
-    chosen = which if which in by_family else _default_family(known)
-    return by_family[chosen], chosen, known
-
-
-def _fetch_families() -> dict:
-    """{family: [names]} for every family on overseer_roster, default first.
-
-    The same read as the Family tab's, ordered for views that have to show
-    BOTH families rather than the one bonds holds. Empty when the roster
-    carries no families at all; a caller that needs somebody falls back to
-    family.roster() and says nothing about a second family it cannot see.
-    """
-    by_family = _fetch_rosters()
-    if not by_family:
-        return {}
-    first = _default_family(sorted(by_family))
-    return {name: by_family[name]
-            for name in [first] + sorted(k for k in by_family if k != first)}
 
 
 def _aura_name(spell: int) -> str | None:
@@ -657,32 +616,6 @@ def _cached_meter_payload(rosters: dict) -> dict:
         return payload
 
 
-def _all_roster_names() -> list:
-    """Every family's names, or bonds' five when the roster names no family.
-
-    WHY NOT family.roster(). That is bonds' one family, and a guild read bound
-    to it can only ever find that family's guild: the Horde guild was missing
-    from the Lineup and the Raid tab for exactly that reason.
-    """
-    families = _fetch_families()
-    if not families:
-        return list(family.roster())
-    return [name for names in families.values() for name in names]
-
-
-def _default_family(known):
-    """Which family the tab opens on when the request names none.
-
-    bonds' own leader wins when it is one of them, so the world this process
-    was configured for is still what a person sees first; otherwise the first
-    alphabetically, which at least does not vary between polls.
-    """
-    for name in family.roster():
-        if name in known:
-            return name
-    return known[0]
-
-
 def _fetch_profiles(names) -> dict:
     """{name: {"class": id, "race": id}} for a family, from `characters`.
 
@@ -742,7 +675,7 @@ def _faction_sides() -> list[dict]:
     achievements' words, so a side here and a Chronicle chapter name a family
     the same way. No roster families at all is bonds' one family, keyed "".
     """
-    groups = _fetch_family_groups()
+    groups = list(FAMILIES.families().items())
     profiles = _fetch_profiles([n for _key, names in groups for n in names])
     sides = []
     for key, names in groups:
@@ -905,7 +838,7 @@ def _fetch_wealth(names: list[str] | None = None) -> dict:
 
     Names come from bonds via family.roster(), never from the request, so
     every IN list here is a fixed five with no user input in it. `names`
-    widens that to every family the roster knows (_fetch_family_groups).
+    widens that to every family the roster knows (FAMILIES.families()).
     """
     names = family.roster() if names is None else names
     holes = ", ".join(["%s"] * len(names))
@@ -1118,11 +1051,7 @@ def _upgrades_payload(wanted: str) -> tuple[int, dict]:
     it. A name that fails the world's rule, is not on a family guild's roster
     or is not present is a 404.
     """
-    if not _NAME_RE.fullmatch(wanted):
-        return 404, dict(_NOT_A_GUILD_MEMBER)
-    groups = _fetch_family_groups()
-    names = [n for _key, group in groups for n in group]
-    if not _is_family_guildmate(wanted, names):
+    if not FAMILIES.may_answer(wanted):
         return 404, dict(_NOT_A_GUILD_MEMBER)
     fetched = _fetch_armory([wanted])
     fetched.pop("equip_event_rows")
@@ -1300,38 +1229,11 @@ def _item_payload(entry: int) -> dict | None:
     return payload
 
 
-def _fetch_family_groups() -> list[tuple[str, list[str]]]:
-    """Every family the roster knows, as (key, names), lead first.
-
-    The Armory draws all of them side by side, where the Family tab draws
-    one at a time; the read and its fallback are _fetch_family_names', so
-    the two tabs cannot disagree about who is in which family. No roster
-    rows at all degrades to the one family bonds holds.
-    """
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT name, family, `lead` FROM overseer_roster "
-                "WHERE family IS NOT NULL AND family <> '' "
-                "ORDER BY `lead` DESC, name"
-            )
-            rows = cur.fetchall()
-    finally:
-        conn.close()
-    by_family: dict[str, list[str]] = {}
-    for row in rows:
-        by_family.setdefault(row["family"], []).append(row["name"])
-    if not by_family:
-        return [("", family.roster())]
-    return [(key, by_family[key]) for key in sorted(by_family)]
-
-
 # The guild sections under the Armory's pairs: how big each family guild is,
-# who is in one (for the collapsed list) and whether a name belongs to one
-# (the only names /api/armory/member will draw). All three are bound to the
-# guilds the FAMILIES are in, read from the database; a name or a guild from
-# the request is only ever compared against that set, never trusted.
+# bound to the guilds the families are in, read from the database. Whether a
+# name belongs to one (the only names /api/armory/member will draw) is
+# FAMILIES.may_answer (families.py); a name from the request is only ever
+# compared against that set, never trusted.
 _ARMORY_GUILD_SIZES = (
     "SELECT g.name, COUNT(*) AS size FROM guild g "
     "JOIN guild_member gm ON gm.guildid = g.guildid "
@@ -1350,29 +1252,6 @@ def _fetch_guild_sizes(names: list[str]) -> dict[str, int]:
             cur.execute(_ARMORY_GUILD_SIZES.format(holes=holes),  # noqa: S608
                         tuple(names))
             return {r["name"]: int(r["size"]) for r in cur.fetchall()}
-    finally:
-        conn.close()
-
-
-# One read: is this name in a guild any family member is in?
-_ARMORY_IS_GUILDMATE = (
-    "SELECT 1 FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
-    "WHERE c.name = %s AND gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
-    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes})) LIMIT 1"
-)
-
-
-def _is_family_guildmate(name: str, family_names: list[str]) -> bool:
-    if not family_names:
-        return False
-    holes = ", ".join(["%s"] * len(family_names))
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            # S608: placeholders only; the name and every roster name are bound.
-            cur.execute(_ARMORY_IS_GUILDMATE.format(holes=holes),  # noqa: S608
-                        (name, *family_names))
-            return cur.fetchone() is not None
     finally:
         conn.close()
 
@@ -1404,7 +1283,7 @@ _GUILD_GEAR = (
 def _fetch_guild_gear() -> list[dict]:
     """The rows guildgear.build reads, for every family guild at once, each
     with its member's `online` and `life` from apiv2.presence."""
-    names = _all_roster_names()
+    names = FAMILIES.names()
     if not names:
         return []
     holes = ", ".join(["%s"] * len(names))
@@ -2390,7 +2269,7 @@ def _fetch_eye() -> dict:
     """
     # EVERY FAMILY, not bonds' one: the FAMILY tier read "One family" over
     # Grug's five while the Horde five were saved beside them.
-    groups = _fetch_family_groups()
+    groups = FAMILIES.families().items()
     family_of = {n: key for key, group in groups for n in group}
     names = list(family_of)
     holes = ", ".join(["%s"] * len(names))
@@ -2865,11 +2744,8 @@ def _fetch_raidgoals() -> dict:
     each guild gets its own readiness card, so the roster bound here is every
     family's names; `families` rides along for the handler to split by.
     """
-    families = _fetch_families()
-    if not families:
-        five = list(family.roster())
-        families = {five[0] if five else "": five}
-    names = [name for group in families.values() for name in group]
+    families = FAMILIES.families()
+    names = FAMILIES.names()
     holes = ", ".join(["%s"] * len(names))
     plan_names = raidgoals.plan_item_names()
     name_holes = ", ".join(["%s"] * len(plan_names))
@@ -4092,13 +3968,6 @@ def _fetch_streams() -> list:
         return list(cur.fetchall())
 
 
-def _roster_names() -> list:
-    """Every family character's name, from the roster the module reads."""
-    with _connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT name FROM overseer_roster")
-        return [r["name"] if isinstance(r, dict) else r[0] for r in cur.fetchall()]
-
-
 def _request_stream(name: str, mode: str) -> None:
     """Ask for a client. REPLACE, so re-watching a character that ended
     earlier reuses its row rather than colliding on the primary key."""
@@ -4727,7 +4596,7 @@ def _apply_order(order) -> int:
 
 # --- the virtual game client over the Watch streams -----------------------
 # One character at a time, and only a character on a family roster: the name
-# from the request is compared against _fetch_family_groups() before any of
+# from the request is compared against FAMILIES.families() before any of
 # these run, so every query below is bound to a name the database already
 # listed as family. Read only, like every other GET here.
 _CLIENT_INVENTORY = (
@@ -4870,15 +4739,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._app_file(path[len(APP_PREFIX):])
                 return
             if path.startswith(apiv2.PREFIX):
-                self._v2(path, parse_qs(urlsplit(self.path).query))
+                with FAMILIES.request():
+                    self._v2(path, parse_qs(urlsplit(self.path).query))
                 return
             self._send(404, "text/plain", b"not found")
             return
         query = parse_qs(urlsplit(self.path).query)
-        if path in SHARED_GET_PATHS:
-            self._shared_get(handler, path, query)
-            return
-        handler(self, query)
+        with FAMILIES.request():
+            if path in SHARED_GET_PATHS:
+                self._shared_get(handler, path, query)
+                return
+            handler(self, query)
 
     def _shared_get(self, handler, path: str, query: dict) -> None:
         """Answer from a build shared with callers of the last few seconds.
@@ -5016,6 +4887,7 @@ class Handler(BaseHTTPRequestHandler):
             # The page and every app script and stylesheet (appbuild.py):
             # a deploy that changes only app/ moves this and not `page`.
             payload["app_build"] = appbuild.fingerprint(HERE)
+            payload.update(_realm_families())
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             log.exception("realm query failed")
@@ -5047,7 +4919,7 @@ class Handler(BaseHTTPRequestHandler):
         already knows about.
         """
         try:
-            names, chosen, known = _fetch_family_names(query.get("family", [""])[0])
+            names, chosen, known = self._family_scope(query)
             payload = family.build_family(
                 _fetch_family(names), GEO, names, _fetch_profiles(names))
             # The page builds one tab per family off these, so it never has to
@@ -5075,15 +4947,12 @@ class Handler(BaseHTTPRequestHandler):
         handed and a merged set would hand one family the other's leader.
         """
         try:
-            rosters = _fetch_rosters()
-            if not rosters:
-                rosters = {"": family.roster()}
-            everyone = [n for names in rosters.values() for n in names]
+            rosters = FAMILIES.families()
+            everyone = FAMILIES.names()
             rows = _fetch_family(everyone)
             profiles = _fetch_profiles(everyone)
             built = []
-            for key in sorted(rosters):
-                names = rosters[key]
+            for key, names in rosters.items():
                 mine = [r for r in rows if r["name"] in names]
                 built.append((key, family.build_family(
                     mine, GEO, names, {n: profiles[n] for n in names if n in profiles})))
@@ -5115,8 +4984,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, "application/json", b'{"error": "no query parameters accepted"}')
             return
         try:
-            rosters = _fetch_families()
-            payload = _cached_auras_payload(rosters)
+            payload = _cached_auras_payload(FAMILIES.families())
             self._send(200, "application/json", json.dumps(payload).encode())
         except (pymysql.err.MySQLError, OSError):
             log.exception("aura probe failed")
@@ -5132,7 +5000,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, "application/json", b'{"error": "no query parameters accepted"}')
             return
         try:
-            payload = _cached_meter_payload(_fetch_families())
+            payload = _cached_meter_payload(FAMILIES.families())
             self._send(200, "application/json", json.dumps(payload).encode())
         except (pymysql.err.MySQLError, OSError):
             log.exception("meter probe failed")
@@ -5147,7 +5015,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             # BOTH FAMILIES, from the roster, never from the request.
-            groups = _fetch_family_groups()
+            groups = list(FAMILIES.families().items())
             names = [n for _key, group in groups for n in group]
             fetched = _fetch_armory(names)
             # WHERE each worn item was first seen worn, from the same equip
@@ -5536,7 +5404,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             # Both families, from the roster, never from the request.
-            groups = _fetch_family_groups()
+            groups = list(FAMILIES.families().items())
             names = [n for _key, group in groups for n in group]
             payload = wealth.build_wealth(**_fetch_wealth(names), icons=ITEMS.icons,
                                           families=groups)
@@ -5663,7 +5531,10 @@ class Handler(BaseHTTPRequestHandler):
         among families the DATABASE reports and nothing else from the request
         reaches a reader.
         """
-        return _fetch_family_names(query.get("family", [""])[0])
+        which = query.get("family", [""])[0]
+        rosters = FAMILIES.families()
+        chosen = which if which in rosters else FAMILIES.default()
+        return rosters.get(chosen, []), chosen, list(rosters)
 
     def _chat_post(self) -> None:
         """POST /api/chat - the Overseer speaks, and one character answers.
@@ -5909,7 +5780,7 @@ class Handler(BaseHTTPRequestHandler):
         # NO ON-DEMAND CLIENT FOR A FAMILY CHARACTER (stream.family_client_refusal).
         # A heartbeat for one ends its row, so the agent tears down a client it
         # already launched, and a start is refused.
-        refusal = stream.family_client_refusal(name, _roster_names())
+        refusal = stream.family_client_refusal(name, FAMILIES.names())
         if refusal and action != "stop":
             _stop_stream(name)
             log.info("stream: %s for %s refused - %s", action, name, refusal)
@@ -6084,12 +5955,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             wanted = query.get("name", [""])[0]
-            if not _NAME_RE.fullmatch(wanted):
-                self._send(404, "application/json", b'{"error": "not a guild member"}')
-                return
-            groups = _fetch_family_groups()
-            names = [n for _key, group in groups for n in group]
-            if not _is_family_guildmate(wanted, names):
+            if not FAMILIES.may_answer(wanted):
                 self._send(404, "application/json", b'{"error": "not a guild member"}')
                 return
             fetched = _fetch_armory([wanted])
@@ -6142,15 +6008,13 @@ class Handler(BaseHTTPRequestHandler):
         wanted = query.get("name", [""])[0]
         if not _NAME_RE.fullmatch(wanted):
             return None
-        groups = _fetch_family_groups()
-        for key, names in groups:
+        for key, names in FAMILIES.families().items():
             if wanted in names:
                 return wanted, key, names
         # A MEMBER OF A FAMILY GUILD gets the same frames, as a family of one
         # with no family key: the Lineup tab's gear table opens them. Still a
-        # closed set: the guilds the families are in, as the database says.
-        everyone = [n for _key, names in groups for n in names]
-        if _is_family_guildmate(wanted, everyone):
+        # closed set: FAMILIES.may_answer, the guilds the families are in.
+        if FAMILIES.may_answer(wanted):
             return wanted, "", [wanted]
         return None
 

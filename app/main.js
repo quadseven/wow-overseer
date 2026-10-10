@@ -15,6 +15,7 @@ import * as tooltip from "./tooltip.js";
 import * as gestures from "./gestures.js";
 import * as update from "./update.js";
 import { legacy, parse, resolve } from "./router.js";
+import { learn as learnRealm } from "./families.js";
 import { savedTheme, saveTheme, lastPage, saveLastPage, stampVisit, previousVisit } from "./store.js";
 import { html, ago, plural } from "./ui.js";
 import badgeProviders from "./badges.js";
@@ -249,4 +250,11 @@ function easeIn() {
 // that listens for touches.
 document.addEventListener("touchstart", () => {}, { passive: true });
 
-route();
+// ---- the realm's families and guilds (families.js), before the first route --
+// The routes and the nav name them, so the first route waits for them: from
+// this tab's saved copy at once when it has them, else from the realm read
+// above. Every later answer is learned too.
+api.onChange((path) => {
+  if (path === "/api/realm" && learnRealm(api.peek(path).data)) drawShell();
+});
+(learnRealm(api.peek("/api/realm").data) ? Promise.resolve() : api.load("/api/realm")).then(() => route());

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import dungeonplan
 import recap
-from apiv2 import _allow
+from apiv2 import _scope
 
 LOOKAHEAD = 5
 
@@ -127,7 +127,7 @@ def dungeonups(query: dict, ctx) -> tuple[int, object]:
     # Nothing from the query reaches SQL here: the family is matched against
     # the roster's own heads below, and the map id only filters rows in
     # memory. The shapes are still checked first, before the world is read.
-    if not _allow.name(family):
+    if not _scope.name_shaped(family):
         return 400, {"error": "family= is a family head's name"}
     map_id = None
     if dungeon:

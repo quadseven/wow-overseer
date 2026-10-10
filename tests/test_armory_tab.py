@@ -49,8 +49,8 @@ class TheEndpoint(unittest.TestCase):
         handler = self.server[self.server.index("def _armory") :]
         handler = handler[: handler.index("def _thoughts")]
         # Both families now, and still from the roster: the names reach the
-        # fetch from _fetch_family_groups and nowhere else.
-        self.assertIn("groups = _fetch_family_groups()", handler)
+        # fetch from FAMILIES (families.py) and nowhere else.
+        self.assertIn("groups = list(FAMILIES.families().items())", handler)
         self.assertIn("fetched = _fetch_armory(names)", handler)
         self.assertIn("armory.build_armory(**fetched, book=BOOK, items=ITEMS,", handler)
         self.assertIn("families=groups,", handler)
@@ -144,8 +144,7 @@ class TheTwoFamiliesAndTheGuilds(unittest.TestCase):
         refused otherwise."""
         member = self.server[self.server.index("def _armory_member") :]
         member = member[: member.index("def _read_json_body")]
-        self.assertIn("if not _NAME_RE.fullmatch(wanted):", member)
-        self.assertIn("if not _is_family_guildmate(wanted, names):", member)
+        self.assertIn("if not FAMILIES.may_answer(wanted):", member)
         self.assertIn("self._send(404", member)
 
 

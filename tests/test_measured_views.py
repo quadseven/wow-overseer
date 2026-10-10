@@ -30,6 +30,25 @@ PRELUDE = (
 )
 
 
+# The families and guilds /api/realm reports; app/families.js learns them
+# before a view is drawn, as main.js does before the first route.
+REALM = {
+    "families": [{"key": "Grug", "names": ["Grug"]}, {"key": "Zug", "names": ["Zug"]}],
+    "guilds": [
+        {"name": "Cave", "family": "Grug"},
+        {"name": "Bonkers", "family": "Zug"},
+    ],
+}
+
+
+def learn(root):
+    """The line that teaches the copied app the realm's families and guilds."""
+    return "(await import(%s)).learn(%s);\n" % (
+        json.dumps((root / "families.js").as_uri()),
+        json.dumps(REALM),
+    )
+
+
 def render(module, script, hash_="#/members"):
     """Run `script` with the app copied to a module package; M is `module`."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -38,6 +57,7 @@ def render(module, script, hash_="#/members"):
         (root / "package.json").write_text('{"type": "module"}', encoding="utf-8")
         code = (
             PRELUDE % json.dumps(hash_)
+            + learn(root)
             + "const M = await import(%s);\n" % json.dumps((root / module).as_uri())
             + script
         )

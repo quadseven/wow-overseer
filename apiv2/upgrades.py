@@ -28,7 +28,7 @@ import threading
 import achievements
 import dungeonplan
 
-from ._scope import NOT_A_MEMBER, guarded, guild_member, holes, wanted_name
+from ._scope import NOT_A_MEMBER, guarded, may_answer, holes, wanted_name
 
 _WORLD: dict = {}
 _WORLD_LOCK = threading.Lock()
@@ -219,7 +219,7 @@ def item_index(rows, icons: dict) -> dict:
 
 def upgrades(query: dict, ctx) -> tuple[int, dict]:
     name = wanted_name(query)
-    if not guild_member(ctx, name):
+    if not may_answer(ctx, name):
         return 404, dict(NOT_A_MEMBER)
     code, payload = ctx.server._upgrades_payload(name)
     if code != 200:

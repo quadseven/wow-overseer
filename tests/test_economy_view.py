@@ -14,6 +14,25 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 APP = HERE / "app"
 
 
+# The families and guilds /api/realm reports; app/families.js learns them
+# before a view is drawn, as main.js does before the first route.
+REALM = {
+    "families": [{"key": "Grug", "names": ["Grug"]}, {"key": "Zug", "names": ["Zug"]}],
+    "guilds": [
+        {"name": "Cave", "family": "Grug"},
+        {"name": "Bonkers", "family": "Zug"},
+    ],
+}
+
+
+def learn(root):
+    """The line that teaches the copied app the realm's families and guilds."""
+    return "(await import(%s)).learn(%s);\n" % (
+        json.dumps((root / "families.js").as_uri()),
+        json.dumps(REALM),
+    )
+
+
 def render(script):
     """Run `script` with the app copied to a module package; V is the view."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -23,6 +42,7 @@ def render(script):
         code = (
             "globalThis.window = {setTimeout: (f) => f()}; globalThis.location = {hash: '#/now'};\n"
             "globalThis.document = {querySelector: () => null, addEventListener() {}};\n"
+            "%s"
             "const V = (await import(%s)).default;\n"
             "const S = await import(%s);\n"
             "function ctx(tab, query, reads) {\n"
@@ -31,6 +51,7 @@ def render(script):
             " : {data: undefined, at: 0, error: null, loading: true})};\n"
             "}\n%s"
         ) % (
+            learn(root),
             json.dumps((root / "views" / "economy.js").as_uri()),
             json.dumps((root / "searchv2.js").as_uri()),
             script,

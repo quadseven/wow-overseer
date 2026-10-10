@@ -18,6 +18,7 @@ sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 import armory  # noqa: E402
 import gearscore  # noqa: E402
 import gearupgrades  # noqa: E402
+import families  # noqa: E402
 import map_server  # noqa: E402  (must follow the pymysql stub)
 
 map_server.log.propagate = False
@@ -191,8 +192,11 @@ def get(name="Aldren"):
 FETCHED = {"equipment_rows": [worn("head", 9001, 12)], "equip_event_rows": []}
 
 
-@mock.patch.object(map_server, "_fetch_family_groups", return_value=[("A", ["Aldren"])])
-@mock.patch.object(map_server, "_is_family_guildmate", return_value=True)
+@mock.patch.object(
+    map_server,
+    "FAMILIES",
+    families.Families(families.MemoryStore({"A": ["Aldren"]}), fallback=lambda: []),
+)
 @mock.patch.object(map_server, "_fetch_armory", side_effect=lambda n: dict(FETCHED))
 @mock.patch.object(map_server, "_fetch_upgrade_items", return_value=LIST_ROWS)
 @mock.patch.object(
@@ -222,8 +226,7 @@ class TheUpgradesEndpoint(unittest.TestCase):
         code, _ = get("Bad%20Name")
         self.assertEqual(code, 404)
 
-    def test_a_name_outside_the_family_guilds_is_a_404(self, *mocks):
-        mocks[3].return_value = False  # _is_family_guildmate
+    def test_a_name_outside_the_family_guilds_is_a_404(self, *_):
         code, body = get("Stranger")
         self.assertEqual(code, 404)
         self.assertEqual(body["error"], "not a guild member")

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import guildrun
 import council
-from apiv2 import _allow
+from apiv2 import _scope
 
 DAYS = 7
 HOUR = 3600
@@ -204,10 +204,10 @@ def build(cur, guilds: list, maps: dict) -> dict:
 
 def chronicle(query: dict, ctx) -> tuple[int, dict]:
     asked = (query.get("guild") or [""])[0].strip()
-    # Only a managed guild, refused before any query (_allow).
-    if asked and _allow.guild(asked) is None:
-        return 404, {"error": "no such guild", "guilds": sorted(_allow.GUILDS)}
-    guilds = [_allow.guild(asked)] if asked else list(_allow.GUILDS.values())
+    # Only a family guild, refused before this read opens a connection.
+    if asked and _scope.guild(ctx, asked) is None:
+        return 404, _scope.no_such_guild(ctx)
+    guilds = [_scope.guild(ctx, asked)] if asked else list(_scope.guilds(ctx).values())
     maps = ctx.server.achievements.MAP_NAMES
     conn = ctx.connect()
     try:

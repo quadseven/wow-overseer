@@ -36,6 +36,7 @@ if not hasattr(sys.modules["pymysql"], "err"):
 
 import eye  # noqa: E402
 import map_server  # noqa: E402  (must follow the pymysql stub)
+from tests.test_vclient import realm_of  # noqa: E402
 import wealth  # noqa: E402
 
 map_server.log.propagate = False
@@ -122,7 +123,7 @@ class TheEyeCountsEveryFamily(unittest.TestCase):
         conn = mock.MagicMock()
         conn.cursor.return_value = cur
         with (
-            mock.patch.object(map_server, "_fetch_family_groups", return_value=GROUPS),
+            mock.patch.object(map_server, "FAMILIES", realm_of(GROUPS)),
             mock.patch.object(map_server, "_connect", return_value=conn),
         ):
             rows = map_server._fetch_eye()["family_rows"]

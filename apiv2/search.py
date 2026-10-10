@@ -191,7 +191,7 @@ def _limit_statements(cur) -> None:
 
 def build(q: str, conn, server) -> dict:
     """The five groups for `q` (already normalised), from one connection."""
-    roster = list(server._all_roster_names())
+    roster = server.FAMILIES.names()
     keywords = server.council.DUNGEON_KEYWORDS
     place = server.council.keyword_place
     guilds = list(server.guildrun.limits().guilds)

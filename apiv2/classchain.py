@@ -34,7 +34,7 @@ import classquest
 from panel import _CLASS_NAMES
 
 from . import members as roster
-from ._scope import NOT_A_MEMBER, guarded, guild_member, holes, wanted_name
+from ._scope import NOT_A_MEMBER, guarded, may_answer, holes, wanted_name
 
 CHAR_SQL = "SELECT guid, level, class AS class_id, race FROM characters WHERE name = %s"
 KNOWN_SQL = "SELECT spell FROM character_spell WHERE guid = %s"
@@ -267,7 +267,7 @@ def build(name: str, f: dict) -> dict:
 
 def classchain(query: dict, ctx) -> tuple[int, dict]:
     name = wanted_name(query)
-    if not guild_member(ctx, name):
+    if not may_answer(ctx, name):
         return 404, dict(NOT_A_MEMBER)
     f = fetch(ctx, name)
     if f is None:
