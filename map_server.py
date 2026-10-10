@@ -1539,7 +1539,7 @@ def _fetch_guild_gear() -> list[dict]:
             cur.execute(_GUILD_GEAR.format(  # noqa: S608
                 holes=holes, slots=len(armory.EQUIPPED_SLOTS)), tuple(names))
             rows = list(cur.fetchall())
-            readings = v2_presence.of(cur, [r["name"] for r in rows])
+            readings = v2_presence.of(_V2_CONTEXT, cur, [r["name"] for r in rows])
     finally:
         conn.close()
     for r in rows:

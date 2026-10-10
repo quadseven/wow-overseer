@@ -1,8 +1,8 @@
 """Who is in the world now, and alive, dead or a ghost: one reading for every page.
 
-    of(cur, names) -> {name: {"online": bool,
-                              "life": "alive" | "dead" | "ghost" | None,
-                              "fresh_at": int | None}}
+    of(ctx, cur, names) -> {name: {"online": bool,
+                                   "life": "alive" | "dead" | "ghost" | None,
+                                   "fresh_at": int | None}}
 
 ONLINE MEANS A FRESH SNAPSHOT. The module writes every character in the world
 to overseer_snapshot every few seconds and deletes a row a minute after its
@@ -30,9 +30,18 @@ written. The caller passes names, not the character rows it may already hold:
 the gear table's read selects no playerFlags, and a row without them would
 read every offline ghost as None. One small read of the offline names is the
 price of a rule no caller can feed the wrong columns.
+
+A REALM WITHOUT THE MODULE'S SCHEMA. Both reads go through the map server's
+own guard (_scope.guarded, which is ctx.server._wide_guarded): a missing
+overseer_snapshot table (1146) reads as no snapshots, so everyone is offline,
+and a missing playerFlags column (1054) reads as no flag, so no offline
+ghosts. Any other error still raises: a lost connection is not "everyone is
+offline".
 """
 
 from __future__ import annotations
+
+from ._scope import guarded, holes
 
 # A snapshot younger than this is a character in the world. The module's own
 # sweep deletes rows at the same age.
@@ -48,14 +57,10 @@ _SNAP_SQL = (
 _FLAGS_SQL = "SELECT name, playerFlags AS flags FROM characters WHERE name IN ({holes})"
 
 
-def _holes(n: int) -> str:
-    return ", ".join(["%s"] * n)
-
-
-def _rows(cur, sql: str, names: list, *before) -> list:
+def _rows(ctx, cur, sql: str, what: str, names: list, *before) -> list:
     # S608: `holes` is a run of placeholders; every value is bound.
-    cur.execute(sql.format(holes=_holes(len(names))), (*before, *names))  # noqa: S608
-    return list(cur.fetchall())
+    sql = sql.format(holes=holes(len(names)))  # noqa: S608
+    return guarded(ctx, cur, sql, (*before, *names), what)
 
 
 def _life_in_world(snap: dict) -> str:
@@ -82,14 +87,20 @@ def _reading(snap: dict | None, flags) -> dict:
     }
 
 
-def of(cur, names) -> dict:
+def of(ctx, cur, names) -> dict:
     """Each name's reading: online, life and fresh_at (see the module doc)."""
     names = list(dict.fromkeys(names or ()))
     if not names:
         return {}
-    snaps = {r["name"]: r for r in _rows(cur, _SNAP_SQL, names, FRESH_SECONDS)}
+    snaps = {
+        r["name"]: r
+        for r in _rows(ctx, cur, _SNAP_SQL, "overseer_snapshot", names, FRESH_SECONDS)
+    }
     away = [n for n in names if n not in snaps]
     flags = {}
     if away:
-        flags = {r["name"]: r.get("flags") for r in _rows(cur, _FLAGS_SQL, away)}
+        flags = {
+            r["name"]: r.get("flags")
+            for r in _rows(ctx, cur, _FLAGS_SQL, "playerFlags", away)
+        }
     return {n: _reading(snaps.get(n), flags.get(n)) for n in names}

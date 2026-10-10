@@ -26,6 +26,7 @@ sys.path.insert(0, str(HERE))
 import guildgear  # noqa: E402
 import map_server  # noqa: E402  (must follow the pymysql stub)
 from apiv2 import guild, members, presence  # noqa: E402
+from apiv2._context import Context  # noqa: E402
 from tests.test_apiv2_guilds import Ctx as GuildCtx  # noqa: E402
 from tests.test_members_v2 import ctx_for, roster_rules, server  # noqa: E402
 from tests.test_vclient import get  # noqa: E402
@@ -34,16 +35,27 @@ NOW = 1_800_000_000
 GHOST_FLAG = 0x10  # PLAYER_FLAGS_GHOST in the saved playerFlags
 
 
+class MySQLError(Exception):
+    """pymysql.err.MySQLError, as the map server's guard catches it."""
+
+
+NO_TABLE = "no overseer_snapshot table"  # error 1146
+NO_COLUMN = "no playerFlags column"  # error 1054
+LINK_LOST = "connection lost"  # error 2013: never a degraded schema
+
+
 class World:
     """overseer_snapshot and characters, answering as the database would.
 
     snaps: name -> (age in seconds, health, max_health)
     flags: name -> saved playerFlags
+    missing: what this realm's schema lacks (NO_TABLE, NO_COLUMN), or LINK_LOST
     """
 
-    def __init__(self, snaps=None, flags=None):
+    def __init__(self, snaps=None, flags=None, missing=()):
         self.snaps = snaps or {}
         self.flags = flags or {}
+        self.missing = set(missing)
         self.seen = []
         self.rows = []
 
@@ -56,6 +68,12 @@ class World:
     def execute(self, sql, params=()):
         self.seen.append((sql, params))
         names = [p for p in params if isinstance(p, str)]
+        if "FROM overseer_snapshot" in sql and LINK_LOST in self.missing:
+            raise MySQLError(2013, "Lost connection to MySQL server during query")
+        if "FROM overseer_snapshot" in sql and NO_TABLE in self.missing:
+            raise MySQLError(1146, "Table 'overseer_snapshot' doesn't exist")
+        if "playerFlags" in sql and NO_COLUMN in self.missing:
+            raise MySQLError(1054, "Unknown column 'playerFlags' in 'field list'")
         if "FROM overseer_snapshot" in sql:
             bound = next(p for p in params if isinstance(p, int))
             self.rows = [
@@ -75,6 +93,18 @@ class World:
 
     def fetchone(self):
         return self.rows[0] if self.rows else None
+
+
+# The map server's own guard (_wide_guarded), reached the way every v2 read
+# reaches it: through ctx.server.
+CTX = Context(connect=None, server=map_server)
+GUARD_ERRORS = types.SimpleNamespace(err=types.SimpleNamespace(MySQLError=MySQLError))
+
+
+def read(world, names):
+    """presence.of over `world`, with the guard catching this file's errors."""
+    with mock.patch.object(map_server, "pymysql", GUARD_ERRORS):
+        return presence.of(CTX, world, names)
 
 
 FRESH, STALE = 5, 61
@@ -112,42 +142,72 @@ CASES = [
     (None, None, None, SET, False, "ghost"),
 ]
 
+# A realm whose schema predates the module's tables reads as nothing there:
+# no overseer_snapshot table is no snapshots, no playerFlags column is no
+# flag. Each row is read against a realm that lacks what it names.
+#   what is missing, then the CASES columns
+SCHEMA_CASES = [
+    (NO_TABLE, FRESH, 300, 300, UNSET, False, None),
+    (NO_TABLE, FRESH, 1, 300, SET, False, "ghost"),
+    (NO_TABLE, None, None, None, SET, False, "ghost"),
+    (NO_COLUMN, FRESH, 1, 300, SET, True, "ghost"),
+    (NO_COLUMN, FRESH, 0, 300, UNSET, True, "dead"),
+    (NO_COLUMN, STALE, 1, 300, SET, False, None),
+    (NO_COLUMN, None, None, None, SET, False, None),
+]
+
+
+def table_rows():
+    """Every case as (missing, case), the plain realm's first."""
+    return [((), c) for c in CASES] + [((m,), c) for m, *c in SCHEMA_CASES]
+
 
 class OneReading(unittest.TestCase):
     def test_the_case_table(self):
-        snaps, flags, want = {}, {}, {}
-        for i, (age, health, max_health, flag, online, life) in enumerate(CASES):
+        realms: dict = {}
+        for i, (missing, case) in enumerate(table_rows()):
+            age, health, max_health, flag, online, life = case
+            snaps, flags, want = realms.setdefault(missing, ({}, {}, {}))
             name = "Case%02d" % i
             if age is not None:
                 snaps[name] = (age, health, max_health)
             flags[name] = flag
             fresh_at = NOW - age if online else None
-            want[name] = {"online": online, "life": life, "fresh_at": fresh_at}
-        got = presence.of(World(snaps, flags), sorted(want))
-        for name, case in zip(sorted(want), CASES, strict=True):
-            with self.subTest(name=name, case=case):
-                self.assertEqual(got[name], want[name])
+            want[name] = ({"online": online, "life": life, "fresh_at": fresh_at}, case)
+        for missing, (snaps, flags, want) in realms.items():
+            with self.subTest(missing=missing):
+                got = read(World(snaps, flags, missing), sorted(want))
+                for name, (expected, case) in want.items():
+                    with self.subTest(name=name, missing=missing, case=case):
+                        self.assertEqual(got[name], expected)
+
+    def test_any_other_error_still_raises(self):
+        # A lost connection is not a degraded schema: an empty reading would
+        # say "everyone is offline" when nothing was read.
+        world = World({"Grug": (FRESH, 9, 9)}, missing=(LINK_LOST,))
+        with self.assertRaises(MySQLError):
+            read(world, ["Grug"])
 
     def test_a_minute_is_the_edge_of_fresh(self):
         world = World({"Edge": (59, 300, 300), "Over": (60, 300, 300)})
-        got = presence.of(world, ["Edge", "Over"])
+        got = read(world, ["Edge", "Over"])
         self.assertTrue(got["Edge"]["online"])
         self.assertFalse(got["Over"]["online"])
 
     def test_a_name_nothing_knows_is_offline_with_no_reading(self):
         self.assertEqual(
-            presence.of(World(), ["Nobody"]),
+            read(World(), ["Nobody"]),
             {"Nobody": {"online": False, "life": None, "fresh_at": None}},
         )
 
     def test_no_names_reads_nothing(self):
         world = World()
-        self.assertEqual(presence.of(world, []), {})
+        self.assertEqual(read(world, []), {})
         self.assertEqual(world.seen, [])
 
     def test_the_reads_are_bounded_and_every_name_is_bound(self):
         world = World({"Grug": (FRESH, 9, 9)}, {"Grug": 0, "Ugga": SET})
-        presence.of(world, ["Grug", "Ugga"])
+        read(world, ["Grug", "Ugga"])
         self.assertLessEqual(len(world.seen), 2)
         for sql, params in world.seen:
             self.assertNotIn("Grug", sql)
@@ -172,7 +232,7 @@ def contrary(readings):
     """A stand-in for presence.of that answers `readings` and records the call."""
     calls = []
 
-    def of(cur, names):
+    def of(ctx, cur, names):
         calls.append(list(names))
         nothing = {"online": False, "life": None, "fresh_at": None}
         return {n: readings.get(n, nothing) for n in names}

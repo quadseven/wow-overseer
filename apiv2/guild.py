@@ -381,11 +381,11 @@ def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
     }
 
 
-def build(cur, row: dict, zones: dict, maps: dict) -> dict:
+def build(ctx, cur, row: dict, zones: dict, maps: dict) -> dict:
     gid = int(row["guildid"])
     now = int(_all(cur, _NOW_SQL)[0]["now"])
     raw = _all(cur, _MEMBERS_SQL, (gid, MAX_MEMBERS))
-    members = member_rows(raw, presence.of(cur, [r["name"] for r in raw]))
+    members = member_rows(raw, presence.of(ctx, cur, [r["name"] for r in raw]))
     names = [m["name"] for m in members]
     classes = {m["name"]: m["class"] for m in members}
     faction = faction_of(r["race"] for r in raw)
@@ -429,7 +429,7 @@ def guild(query: dict, ctx) -> tuple[int, dict]:
             found = _all(cur, _GUILD_SQL, (name,))
             if not found:
                 return 404, {"error": "no such guild", "guild": name}
-            return 200, build(cur, found[0], zones, maps)
+            return 200, build(ctx, cur, found[0], zones, maps)
     finally:
         conn.close()
 

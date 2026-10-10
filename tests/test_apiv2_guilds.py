@@ -419,6 +419,12 @@ class TheGuild(unittest.TestCase):
             GEO = types.SimpleNamespace(continents={})
             achievements = types.SimpleNamespace(MAP_NAMES={36: "The Deadmines"})
 
+            @staticmethod
+            def _wide_guarded(cur, sql, params=(), fallback="", what=""):
+                # presence.of reads through the server's schema guard.
+                cur.execute(sql, params)
+                return list(cur.fetchall())
+
         answers = [
             (
                 "FROM guild WHERE name",

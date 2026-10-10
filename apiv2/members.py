@@ -145,7 +145,7 @@ def _read(ctx, names: list) -> dict:
             chars = guarded(
                 ctx, cur, CHARS_SQL.format(holes=h), tuple(everyone), "characters"
             )
-            readings = presence.of(cur, everyone)
+            readings = presence.of(ctx, cur, everyone)
             online = [n for n in everyone if readings[n]["online"]]
             snaps = []
             if online:
