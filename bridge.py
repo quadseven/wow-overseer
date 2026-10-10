@@ -24677,6 +24677,23 @@ def _hunts_open(cur):
     return int(rows[0]["open_hunts"]) if rows else None
 
 
+def _read_job_spawns_once(cur) -> None:
+    """The world's spawns the job reads once per process, since spawns do not
+    move: the meeting stones, the hub flight masters and the Silvermoon orb."""
+    if not _JOB_STONES:
+        _JOB_STONES.extend(_job_read(cur, "meeting stones", _JOB_STONES_SQL,
+                                     (MEETING_STONE_GO_TYPE,)))
+    if not _JOB_HUB_MASTERS:
+        _JOB_HUB_MASTERS.extend(_job_read(
+            cur, "hub flight masters", _JOB_HUB_MASTERS_SQL,
+            # Map 530 for the starting-land hubs (levelroute.STARTING_LAND_HUBS).
+            (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP,
+             flightlearn.FLIGHT_MASTER_NPC_FLAG)))
+    if not _JOB_ORBS:
+        _JOB_ORBS.extend(_job_read(cur, "the Silvermoon orb", _JOB_ORBS_SQL,
+                                   (guildlevel.ORB_ENTRY, classic.OUTLAND_MAP)))
+
+
 def _fetch_job_facts(family_names: list) -> dict:
     """Everything guildjobs.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
@@ -24704,18 +24721,7 @@ def _fetch_job_facts(family_names: list) -> dict:
         unclaimed_rows = _job_read(cur, "unopened material posts", _JOB_UNCLAIMED_SQL,
                                    (guildjobs.POST_SUBJECT, guildjobs.MAILBOX_FULL_LETTERS))
         bank_rows = _job_read(cur, "guild bank tabs", _JOB_BANK_TABS_SQL)
-        if not _JOB_STONES:
-            _JOB_STONES.extend(_job_read(cur, "meeting stones", _JOB_STONES_SQL,
-                                         (MEETING_STONE_GO_TYPE,)))
-        if not _JOB_HUB_MASTERS:
-            _JOB_HUB_MASTERS.extend(_job_read(
-                cur, "hub flight masters", _JOB_HUB_MASTERS_SQL,
-                # Map 530 for the starting-land hubs (levelroute.STARTING_LAND_HUBS).
-                (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP,
-                 flightlearn.FLIGHT_MASTER_NPC_FLAG)))
-        if not _JOB_ORBS:
-            _JOB_ORBS.extend(_job_read(cur, "the Silvermoon orb", _JOB_ORBS_SQL,
-                                       (guildlevel.ORB_ENTRY, classic.OUTLAND_MAP)))
+        _read_job_spawns_once(cur)
         roster_rows = _job_read(cur, "roster names", _JOB_ROSTER_SQL)
         far_open = _far_walks_open(cur)
         hunt_open = _hunts_open(cur)
