@@ -599,42 +599,54 @@ GUILD_DOORS = {
     "Alliance": frozenset(
         {
             "deadmines", "wailing", "shadowfang", "blackfathom", "stockades",
-            "scarlet", "gnomeregan", "razorfen-kraul", "razorfen-downs",
-            "uldaman", "zulfarrak", "maraudon-orange", "maraudon-purple",
-            "sunken-temple", "blackrock-depths", "scholomance",
+            "scarlet", "gnomeregan", "razorfen-kraul", "scarlet-library",
+            "razorfen-downs", "uldaman", "zulfarrak", "maraudon-orange",
+            "maraudon-purple", "sunken-temple", "blackrock-depths",
+            "lower-blackrock-spire", "scholomance",
         }
     ),
     "Horde": frozenset(
         {
             "ragefire", "deadmines", "wailing", "shadowfang", "blackfathom",
-            "scarlet", "gnomeregan", "razorfen-kraul", "razorfen-downs",
-            "uldaman", "zulfarrak", "maraudon-orange", "maraudon-purple",
-            "sunken-temple", "blackrock-depths", "scholomance",
+            "scarlet", "gnomeregan", "razorfen-kraul", "scarlet-library",
+            "razorfen-downs", "uldaman", "zulfarrak", "maraudon-orange",
+            "maraudon-purple", "sunken-temple", "blackrock-depths",
+            "lower-blackrock-spire", "scholomance",
         }
     ),
 }  # fmt: skip
-# DOORS NEITHER SIDE IS OFFERED because mod-overseer's finder cannot resolve
-# them today (FinderDungeonForDoor / ChooseFinderDungeon). Adding a keyword to
-# GUILD_DOORS while it is here would queue a run the module refuses.
-#   * scarlet-library, scarlet-armory, scarlet-cathedral: only the Graveyard
-#     has a finder row with an entrance on map 189; the other wings share the
-#     map's entrance, so the module refuses them as "the wrong one". Needs
-#     lfg_dungeon_template rows for the three wings, with entrances matching
-#     each door's landing, in mod-overseer's world data.
-#   * dire-maul-*, lower-blackrock-spire: several finder wings share the map
-#     (Dire Maul has three, the Spire has the lower and upper); whether each
-#     door lands within 60 yards of its own wing's lfg_dungeon_template start
-#     is not confirmed. Needs that check against the realm's world DB, then a
-#     row fix in mod-overseer if a landing misses.
+# DOORS NEITHER SIDE IS OFFERED, each for a reason read off the realm's own
+# world data (wow-dev, 2026-10-10). Adding one to GUILD_DOORS while it is here
+# queues a run that cannot finish as a group of players would.
+#
+# WHICH FINDER WING A DOOR GETS. mod-overseer's FinderDungeonForDoor takes the
+# normal, non-holiday LFGDungeons.dbc rows on the door's map: one row is the
+# door's dungeon outright, and with several the row whose lfg_dungeon_template
+# start is within 60 yards of the door's landing wins. Measured: the Library's
+# landing is the Library row's start (165, 0 yards), and the Spire has one
+# normal row (32, Lower Blackrock Spire; the Upper Spire is not a five-man
+# row), so both are on the ladder above. Dire Maul East's door lands 683 yards
+# from the East row's start and West's North door 95 yards from the West
+# row's; those two rows start at the east-west and west-south doors' landings,
+# which campaignplan.RUNS does not use.
+#
+# KEYS NOBODY IS SEATED FOR. Herod's Door (gameobject 101854) stands between
+# the Armory's start and Herod, and the Chapel Door (104591) between the
+# Cathedral's start and Mograine and Whitemane; both are lock 299, the Scarlet
+# Key (Doan's Strongbox, in the Library) or Pick Lock. The Gordok Courtyard
+# Door (177219) and Gordok Inner Door (177217) stand between Dire Maul North's
+# start and King Gordok, on the Courtyard and Inner Door keys. Guild runs seat
+# nobody for carrying a key, and mod-dungeon-clear opens these doors as if
+# the tank held one (DcEventDoorRegistry::IsKeyExempt), which a player without
+# the key cannot do. So these wait for a seating rule that brings the key.
+#
 # Stratholme is separate: dungeonpath.WITHHELD_DOORS (mod-overseer#582).
 BLOCKED_DOORS = {
-    "scarlet-library": "no finder entrance for the wing",
-    "scarlet-armory": "no finder entrance for the wing",
-    "scarlet-cathedral": "no finder entrance for the wing",
-    "lower-blackrock-spire": "finder wing match unconfirmed",
-    "dire-maul-east-east": "finder wing match unconfirmed",
-    "dire-maul-west-north": "finder wing match unconfirmed",
-    "dire-maul-north": "finder wing match unconfirmed",
+    "scarlet-armory": "Herod's Door needs the Scarlet Key, and no seat brings it",
+    "scarlet-cathedral": "the Chapel Door needs the Scarlet Key, and no seat brings it",
+    "dire-maul-east-east": "the door lands 683 yards from the East wing's finder start",
+    "dire-maul-west-north": "the door lands 95 yards from the West wing's finder start",
+    "dire-maul-north": "the Gordok doors need their keys, and no seat brings them",
 }
 # NO ITEM-LEVEL GATE BELOW 60, A COVERAGE GATE FOR THE TWO SEATS THAT CARRY A
 # GROUP (decided in #532, 2026-10-04). The old gate held a member out when its

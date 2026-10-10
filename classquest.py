@@ -212,7 +212,28 @@ USE_HERE = "use-item-here"
 # take does not hand the sword over (it is the quest's ItemDrop4, not its
 # StartItem): it is looted from a Battle-worn Sword chest (gameobject 190584)
 # on Acherus, so these items are read in the chest read (CHEST_SQL) too.
-FOCUS_ITEMS = {38607: 1552}
+#
+# THE WARLOCK'S BINDINGS (2026-10-10). Each The Binding hands its item over on
+# the take and asks for one Summoned Voidwalker (5676), Succubus (5677) or
+# Felhunter (6268) killed. No creature row spawns them: the item's spell needs a
+# summoning circle (Spell.dbc RequiresSpellFocus) and sends an event whose
+# event_scripts row summons the demon beside it. Voidwalker: 6284 Runes of
+# Summoning (Undercity, 43), 7464 Glyphs of Summoning (Orgrimmar, 203), 6928
+# Bloodstone Choker (Stormwind, 83), 23732 Voidstone (the Rune of Summoning on
+# map 530, 1375). Succubus: 6286 Pure Hearts (43), 6626 Dogran's Pendant (203),
+# 6913 Heartswood Core (83). Felhunter: 6999 Tome of the Cabal (the Barrens
+# circle, 103, which has no spawn row on the dev realm, so it stays named).
+FOCUS_ITEMS = {
+    38607: 1552,
+    6284: 43,
+    7464: 203,
+    6928: 83,
+    23732: 1375,
+    6286: 43,
+    6626: 203,
+    6913: 83,
+    6999: 103,
+}
 # A member this near its target (yards) is already beside it: the use row is
 # written with no walk. The module's creature reach is 8 yards.
 USE_NEAR = 4.0
@@ -1176,7 +1197,9 @@ def _unmet(quest: Quest) -> bool:
     spawned = {s.entry for s in quest.fields}
     chested = {u.item for u in quest.uses if u.verb == USE_OBJECT and u.item}
     given = set(quest.provided)
-    fed = any(u.verb == USE_ITEM for u in quest.uses)
+    # A kill is credited by an item used on a creature, or by the creature an
+    # item used beside a spell focus summons there (a warlock's Binding).
+    fed = any(u.verb in (USE_ITEM, USE_HERE) for u in quest.uses)
     # An item made by using another beside a forge is no unmet source.
     made = any(u.verb == USE_HERE for u in quest.uses)
     if any(e not in spawned and not fed for e, _n in quest.kills):
@@ -1205,12 +1228,22 @@ def _pending_use(quest: Quest, member):
     for use in quest.uses:
         if use.verb == USE_OBJECT and use.item and member.count(use.item) >= use.count:
             continue
-        if use.verb == USE_HERE and all(member.count(i) >= n for i, n in quest.items):
+        if use.verb == USE_HERE and _made_here(quest, use, member):
             continue
         if use.fetch is not None and not member.carries(use.item):
             return use.fetch
         return use
     return None
+
+
+def _made_here(quest: Quest, use: Use, member) -> bool:
+    """True when a USE_HERE has done its work: the member carries every item it
+    makes, the quest's required items other than the one it uses. A use whose
+    item is the quest's only required item makes nothing to carry (a Binding's
+    choker summons a demon to kill), so it is never done while the quest is
+    incomplete."""
+    made = [(i, n) for i, n in quest.items if i != use.item]
+    return bool(made) and all(member.count(i) >= n for i, n in made)
 
 
 def _missing_item_blocker(quest: Quest, member, use: Use) -> tuple:

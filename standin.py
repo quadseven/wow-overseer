@@ -35,6 +35,14 @@ WHAT THIS DECIDES, one family at a time (`step`):
                  along. The row is written with `in_name` empty
                  (`Seat.has_guest`), and a guest found between runs later
                  takes the empty seat.
+  a craft that   the ordered member does not sit out while its craft cannot
+  cannot move    move (`walled`): its ladder (craft.recipe_for) names a
+                 trainer recipe it does not hold, or no rung at all. A roster
+                 member cannot buy a trainer recipe, so sitting out would make
+                 nothing: on wow-dev, 2026-10-06 to 2026-10-10, Og sat out four
+                 and a half days at Tailoring 81 without Bolt of Woolen Cloth
+                 (2964) while his family ran four-handed. It sits out again
+                 the pass the recipe is held.
   when it ends   the order is removed, the crafting goal is met, or, between
                  runs, the guest is no longer free (offline, in a guild run,
                  dead, inside another instance, gone from the guild or out of
@@ -61,6 +69,9 @@ import os
 from dataclasses import dataclass
 
 import classic
+import craft
+import goals
+import guildjobs
 import guildrun
 import guildsocial
 import professions
@@ -140,6 +151,36 @@ def goal(skills: dict, cap: int = CAP) -> str:
     if value >= cap:
         return ""
     return "%s %d/%d" % (trade, value, cap)
+
+
+def walled(skills: dict, known) -> str:
+    """Why the member's craft cannot move ("tailoring 81 needs Bolt of Woolen
+    Cloth (2964), a trainer recipe it does not hold"), or "" when it can.
+
+    The rung is the one craft.recipe_for names at the trade's value, the same
+    rung the craft errand casts. It can move when the rung is granted with the
+    trade (guildjobs.AUTO_LEARNED, never written to character_spell) or held;
+    every other rung is a trainer purchase, which persists to character_spell,
+    so its absence there is real (guildjobs._open_recipe reads it the same
+    way). `known` None means the spellbook was not read: not judged.
+    """
+    if known is None:
+        return ""
+    trade = craft_trade(skills)
+    if not trade:
+        return ""
+    value = int(skills[trade] or 0)
+    recipe = craft.recipe_for(goals.SKILL_IDS[trade], value)
+    if recipe is None:
+        return "%s %d has no rung on its ladder to cast" % (trade, value)
+    if recipe.spell_id in guildjobs.AUTO_LEARNED or recipe.spell_id in known:
+        return ""
+    return "%s %d needs %s (%d), a trainer recipe it does not hold" % (
+        trade,
+        value,
+        recipe.name,
+        recipe.spell_id,
+    )
 
 
 def seat_of(member: guildrun.Member) -> str:
@@ -291,6 +332,9 @@ class Facts:
     roster: tuple = ()
     # The ordered member's trade skills, {trade: value}.
     skills: dict | None = None
+    # The spells the ordered member holds (character_spell), or None when the
+    # spellbook was not read, which `walled` does not judge.
+    known: frozenset | None = None
     # The ordered member as a guildrun.Member (None when it could not be read).
     out_member: guildrun.Member | None = None
     # The levels of the members who run (the family without the ordered one).
@@ -334,6 +378,12 @@ def sits_out(facts: Facts) -> str:
             name,
             craft_trade(facts.skills),
             CAP,
+        )
+    wall = walled(facts.skills, facts.known)
+    if wall:
+        return (
+            "%s's craft cannot move (%s, and a roster member cannot buy one), "
+            "so sitting out makes nothing" % (name, wall)
         )
     return ""
 
