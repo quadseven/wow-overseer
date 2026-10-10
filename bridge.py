@@ -17660,12 +17660,14 @@ class Bridge(discord.Client):
                           "%s; the queue steps as before", campaignqueue._family(key))
             return False
         waiting = familyseat.waiting_for(fam["names"], in_runs)
-        said = familyseat.hold_line(waiting) if waiting else ""
-        if _LENT_HOLD_SAID.get(key, "") != said:
+        if not waiting:
+            _LENT_HOLD_SAID.pop(key, None)
+            return False
+        said = familyseat.hold_line(waiting)
+        if _LENT_HOLD_SAID.get(key) != said:
             _LENT_HOLD_SAID[key] = said
-            if said:
-                log.info("queue: %s %s", campaignqueue._family(key), said)
-        return bool(waiting)
+            log.info("queue: %s %s", campaignqueue._family(key), said)
+        return True
 
     async def _queue_holds(self, key: str, rows: list, fam: dict) -> bool:
         """Whether the queue's step waits this pass: the ladder took it
@@ -21843,7 +21845,7 @@ def _fetch_seat_meter_runs() -> list:
         return list(cur.fetchall())
 
 
-# family -> the last familyseat.hold_line said for it ("" none).
+# family -> the last familyseat.hold_line said for it, only while it waits.
 _LENT_HOLD_SAID: dict = {}
 
 

@@ -251,6 +251,7 @@ class TheBridgeHalf(unittest.TestCase):
         with mock.patch.object(bridge, "_guild_run_members_out", lambda: {"Mok"}):
             held = asyncio.run(bridge.Bridge._family_lent_hold(this, "Grug", fam))
         self.assertFalse(held)
+        self.assertNotIn("Grug", bridge._LENT_HOLD_SAID)
 
     def test_off_the_queue_holds_nobody(self):
         this = types.SimpleNamespace()
