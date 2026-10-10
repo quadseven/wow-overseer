@@ -5,12 +5,13 @@
 // it came back) with what each seat said while the run lasted, from
 // /api/thoughts, read once per visit after the run itself is known.
 
-import { html, raw, state, pendingRead, plural, member } from "../ui.js";
+import { html, raw, state, pendingRead, plural, member, readState } from "../ui.js";
 import { load, peek } from "../api.js";
 import {
-  utc, since, findRun, stateTag, pips, bossText, chose, cause, seatRows,
-  steps, clock, inside,
+  findRun, stateTag, pips, seatRows, steps, inside,
 } from "./_runs.js";
+import { toSeconds, fromClock, ageOf, nowSeconds, since, clock } from "../models/time.js";
+import { formedAt, endedAt, lastAt, bossText, chose, cause } from "../models/guildruns.js";
 import { guilds, guildSlug, firstGuild } from "../families.js";
 
 const THOUGHTS = 30;
@@ -27,14 +28,14 @@ function guildKey(r) {
 // What the seats said between the run forming and coming back, oldest first.
 // Null while any seat's read is still on its way.
 function said(r) {
-  const from = utc(r.created_at);
-  const to = utc(r.ended_at) || Date.now() / 1000;
+  const from = formedAt(r);
+  const to = endedAt(r) || nowSeconds();
   const reads = (r.members || []).map((m) => [m.name, peek(thoughtsPath(m.name))]);
-  if (reads.some(([, t]) => t.data === undefined && !t.error)) return null;
+  if (reads.some(([, t]) => readState(t) === "loading")) return null;
   const out = [];
   reads.forEach(([name, t]) => {
     ((t.data && t.data.thoughts) || []).forEach((x) => {
-      const at = utc(x.created_at);
+      const at = toSeconds(x.created_at);
       if (at && from && at >= from && at <= to) out.push({ t: at, who: name, text: x.text });
     });
   });
@@ -96,7 +97,7 @@ export default {
 ${state("empty", "No run #" + ctx.params.id + " in the guild runs the realm has recorded.", raw(guilds().map((g) => html`<a href="${"#/guilds/" + g.slug + "/runs"}">${g.name} runs</a>`.s).join(" | ")))}`;
     }
     const g = guildKey(r);
-    const when = r.state === "inside" ? "started " + since(utc(r.created_at)) : since(utc(r.ended_at) || utc(r.created_at));
+    const when = r.state === "inside" ? "started " + since(formedAt(r)) : since(lastAt(r));
     const extra = [plural(r.deaths || 0, "death"), inside(r), r.loot_items ? plural(r.loot_items, "item") + " looted" : ""].filter(Boolean).join(" | ");
     return html`<a class="g-r-back" href="${"#/guilds/" + g + "/runs"}"><i class="ph ph-caret-left" aria-hidden="true"></i>${r.guild} runs</a>
 <header class="g-r-head"><h1>${r.place || "A dungeon"}</h1><span class="muted">run #${r.id} | ${r.guild} | ${when}</span>${stateTag(r)}</header>
@@ -119,7 +120,7 @@ ${r.story ? html`<span class="muted">${r.story}</span>` : ""}
     // Read once per visit, and again when what is held is over a minute old.
     const missing = (r.members || []).filter((m) => {
       const t = peek(thoughtsPath(m.name));
-      return (t.data === undefined && !t.error) || (t.at && Date.now() - t.at > 60000);
+      return readState(t) === "loading" || ageOf(fromClock(t.at)) > 60;
     });
     if (!missing.length) return;
     Promise.all(missing.map((m) => load(thoughtsPath(m.name)))).then(() => {
