@@ -125,6 +125,7 @@ import gearup
 import guildcorps
 import guildlevel
 import guildroute
+import hunterpet
 import keep
 import pvpgear
 import raidroles
@@ -429,6 +430,8 @@ COOLDOWN_MINUTES = {
     # Food and drink bought with its own gold (restsupply.py): bought, the bags
     # show it; refused, the trip waits an hour.
     restsupply.ACTION: 60,
+    # A hunter's walk to a beast and its Tame Beast (hunterpet.py).
+    hunterpet.ACTION: hunterpet.COOLDOWN_MINUTES,
 }
 
 # A TRAINER WALK THAT KEEPS FAILING IS ASKED LESS OFTEN (#766). Measured on the
@@ -635,10 +638,14 @@ class Spot:
     y: float
     name: str = ""
     why: str = ""
+    # The walk ends this near the spawn (`near:`), 0 for the module's place
+    # radius: scripted ground (classquest.SCRIPTED_NEAR).
+    near: int = 0
 
     @property
     def command(self) -> str:
-        return "walk-to-spawn %s:%d" % (self.kind, int(self.spawn))
+        word = " near:%d" % int(self.near) if self.near else ""
+        return "walk-to-spawn %s:%d%s" % (self.kind, int(self.spawn), word)
 
 
 @dataclass(frozen=True)
@@ -1691,6 +1698,66 @@ def supply_step(member, vendor_rows, cap, kept=None):
     )
 
 
+def _pet_first(m, beasts, recent, cap):
+    """A hunter that knows Tame Beast and has no pet tames one before any other
+    job but the class quest (hunterpet.py): a hunter without a pet fights every
+    mob alone and died three times as often as a mage on 2026-10-10. `beasts`
+    is None for every member the bridge did not read as wanting a pet."""
+    if beasts is None or not m.online or not m.alive or m.in_combat:
+        return None, "", ""
+    if _cooling(m, hunterpet.ACTION, recent):
+        return None, "", ""
+    return pet_step(m, beasts, recent, cap)
+
+
+def pet_step(m, beasts, recent, cap):
+    """(step or None, what it does, a note): the walk to the nearest beast the
+    hunter may tame (hunterpet.choose) and the `use-spell-on` row that casts Tame
+    Beast at it there. A beast walked to inside hunterpet.AVOID_MINUTES is left
+    for another; with none left the reason is the note."""
+    beast = hunterpet.choose(m, beasts, hunterpet.avoided(m.name, recent))
+    if beast is None:
+        return (
+            None,
+            "",
+            (
+                "%s knows Tame Beast and has no pet, and no beast of level %d to %d it "
+                "may tame stands within %d yards that it has not tried lately"
+                % (
+                    m.name,
+                    hunterpet.lowest_level(m.level),
+                    int(m.level),
+                    int(hunterpet.BEAST_YARDS),
+                )
+            ),
+        )
+    spot = Spot("creature", beast.guid, beast.map_id, beast.x, beast.y, beast.name)
+    said = "tames a %s (level %d) as its first pet" % (beast.name, beast.level)
+    step = guildcorps.Step(
+        m.name,
+        hunterpet.ACTION,
+        int(beast.entry),
+        said,
+        rows=(
+            guildcorps.Row(
+                "quest",
+                hunterpet.command(beast),
+                "",
+                source_for(hunterpet.ACTION, m.name),
+            ),
+        ),
+        walk=guildcorps.Row(
+            "job",
+            spot.command + _cap_word(cap),
+            "",
+            source_for(hunterpet.ACTION + "-walk", m.name),
+        ),
+        goal=beast.name,
+        spot=spot,
+    )
+    return step, said, ""
+
+
 def _supply_first(m, offer, recent, cap, kept=None):
     """A member with no food or drink buys some before any other job but the
     class quest and the stood-still hearth: a member that cannot rest between
@@ -2345,6 +2412,7 @@ def plan(
     owing=None,
     still=None,
     supply=None,
+    pets=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -2371,7 +2439,8 @@ def plan(
     call); `still` name -> minutes the member has stood on one spot
     (standstill.py), None to read no stand (stood_still_step); `supply` name
     -> the food and drink sold in reach of a member short of them
-    (restsupply.py, supply_step).
+    (restsupply.py, supply_step); `pets` name -> the tameable beasts around a
+    hunter that knows Tame Beast and has no pet (hunterpet.py, pet_step).
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -2398,6 +2467,7 @@ def plan(
         "room": {},
         "supply": {},
         "inn": {},
+        "pet": {},
     }
     far = classquest.FarSlots(far_slots) if far_slots is not None else None
     for m in _class_ordered(members, classes):
@@ -2428,6 +2498,7 @@ def plan(
             level_room,
             int((still or {}).get(m.name, 0)),
             _offer_for(supply, m.name),
+            _offer_for(pets, m.name),
         )
         lines[m.name] = doing
         helps += class_helps(m, classes, hunts, now, recent)
@@ -2501,6 +2572,8 @@ def _allowance(step, counters, per_guild):
         return counters["room"], ROOM_STEPS_PER_GUILD
     if step.action == restsupply.ACTION:
         return counters["supply"], restsupply.STEPS_PER_GUILD
+    if step.action == hunterpet.ACTION:
+        return counters["pet"], hunterpet.STEPS_PER_GUILD
     if step.action == guildlevel.INN_ACTION:
         return counters["inn"], guildlevel.INN_STEPS_PER_GUILD
     if step.action == classquest.ACTION:
@@ -2575,8 +2648,9 @@ def _member_step(
     level_room=True,
     still_for=0,
     supply=None,
+    pet=None,
 ):
-    """A class quest first, then a hearth out of a spot it cannot leave, then gear, then PvP for an upgrade, then the post, then a walk out of an
+    """A class quest first, then a hunter's first pet, then a hearth out of a spot it cannot leave, then gear, then PvP for an upgrade, then the post, then a walk out of an
     outgrown zone, then the member's ordinary job (a craft-focus guild's trade
     work when `crafting`), keeping the notes.
 
@@ -2604,6 +2678,10 @@ def _member_step(
     )
     if step is not None or doing:
         return step, doing, quest_note, ""
+    step, doing, pet_note = _pet_first(m, pet, recent, cap)
+    if step is not None:
+        return step, doing, quest_note, ""
+    quest_note = _join(quest_note, pet_note)
     step = stood_still_step(m, still_for, recent, leveling)
     if step is not None:
         return step, step.said, quest_note, ""
@@ -2894,14 +2972,18 @@ def _class_spot(move) -> Spot:
         classquest.USE_OBJECT,
         classquest.USE_HERE,
     )
+    # Scripted ground is a creature spawn even for a use beside a focus
+    # (classquest.SCRIPTED_FOCI), and its walk ends near it.
+    creature = bool(getattr(s, "creature", False))
     return Spot(
-        kind="gameobject" if chest else "creature",
+        kind="gameobject" if chest and not creature else "creature",
         spawn=int(s.guid),
         map_id=int(s.map_id),
         x=float(s.x),
         y=float(s.y),
         name=s.name,
         why=move.why,
+        near=int(getattr(s, "near", 0) or 0),
     )
 
 
