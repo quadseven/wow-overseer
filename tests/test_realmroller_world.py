@@ -163,6 +163,108 @@ class GitMarker(unittest.TestCase):
     def test_not_a_repo_is_none(self):
         self.assertIsNone(world.git_marker_time(self.tmp, "HEAD", "x", "y"))
 
+    def test_an_unreadable_commit_time_is_none_not_a_crash(self):
+        class Out:
+            returncode = 0
+            stderr = ""
+            stdout = "abc not-a-time\n"
+
+        self.assertIsNone(
+            world.git_marker_time(
+                self.tmp, "HEAD", "x", "y", run=lambda *a, **k: Out()
+            )
+        )
+
+
+def _two_image_repo(tmp):
+    """One overlay file pinning a gated and an ungated image by digest.
+
+    The gated image's digest moves at 01:00Z, the ungated one's at 02:00Z.
+    """
+    repo = tmp / "two"
+    (repo / "overlay").mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
+    k = repo / "overlay" / "kustomization.yaml"
+    k.write_text(
+        "images:\n  - name: worldserver\n    digest: sha256:%s\n"
+        "  - name: site\n    digest: sha256:%s\n" % ("a" * 64, "1" * 64)
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "first", when="2026-10-05T00:00:00Z")
+    k.write_text(k.read_text().replace("a" * 64, "b" * 64))
+    _git(repo, "commit", "-qam", "worldserver roll", when="2026-10-05T01:00:00Z")
+    k.write_text(k.read_text().replace("1" * 64, "2" * 64))
+    _git(repo, "commit", "-qam", "site roll", when="2026-10-05T02:00:00Z")
+    return repo
+
+
+WS_DIGEST = r"name: worldserver\n\s+digest: (sha256:[0-9a-f]{64})"
+
+
+class GitMarkerValue(unittest.TestCase):
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.repo = _two_image_repo(self.tmp)
+
+    def marker(self, **kw):
+        return world.git_marker_time(
+            self.repo, "HEAD", "overlay/kustomization.yaml", "digest: sha256:", **kw
+        )
+
+    def test_an_ungated_digest_move_is_the_mark_without_a_value(self):
+        # The old behaviour, and the bug: the site's digest line matches too.
+        self.assertEqual(
+            self.marker(), datetime(2026, 10, 5, 2, 0, tzinfo=timezone.utc)
+        )
+
+    def test_with_a_value_only_the_gated_digest_marks_the_roll(self):
+        self.assertEqual(
+            self.marker(value=WS_DIGEST),
+            datetime(2026, 10, 5, 1, 0, tzinfo=timezone.utc),
+        )
+
+    def test_a_root_commit_has_no_parent_and_counts_as_moved(self):
+        when = world.git_marker_time(
+            self.repo,
+            "HEAD~2",
+            "overlay/kustomization.yaml",
+            "digest: sha256:",
+            value=WS_DIGEST,
+        )
+        self.assertEqual(when, datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc))
+
+    def test_a_value_that_never_moved_is_none(self):
+        self.assertIsNone(self.marker(value=r"(no such text)"))
+
+
+class OnlineReader(unittest.TestCase):
+    def test_counts_dots_and_the_unplaced(self):
+        got = world.characters_online(
+            BASE, Fake({BASE + "/api/map": {"dots": [{}, {}, {}], "unplaced": 2}})
+        )
+        self.assertEqual(got, 5)
+
+    def test_a_missing_unplaced_count_is_zero(self):
+        got = world.characters_online(BASE, Fake({BASE + "/api/map": {"dots": [{}]}}))
+        self.assertEqual(got, 1)
+
+    def test_a_payload_without_dots_is_unreadable(self):
+        self.assertIsNone(
+            world.characters_online(BASE, Fake({BASE + "/api/map": {"error": "x"}}))
+        )
+        self.assertIsNone(world.characters_online(BASE, Fake({})))
+
+    def test_low_since_starts_keeps_and_clears(self):
+        later = T0 + timedelta(minutes=3)
+        low = world.carry_low_since(None, 100, 49, 50, T0)
+        self.assertEqual(low, T0)
+        self.assertEqual(world.carry_low_since(low, 100, 40, 50, later), T0)
+        self.assertEqual(world.carry_low_since(low, 100, None, 50, later), T0)
+        self.assertIsNone(world.carry_low_since(low, 100, 50, 50, later))
+        self.assertIsNone(world.carry_low_since(None, None, 0, 50, T0))
+        self.assertIsNone(world.carry_low_since(None, 0, 0, 50, T0))
+
 
 class _Site(BaseHTTPRequestHandler):
     answers: dict = {}
@@ -244,6 +346,29 @@ class DryRun(unittest.TestCase):
             lines[-1],
             "dry-run  would wait r2026.10.04-2: 2 family member(s) in an instance",
         )
+
+    def test_a_release_on_the_realm_is_not_called_a_rollback(self):
+        # The dry run reads gates only. A live release whose verify text it
+        # never looked for is not "never seen"; it is not judged at all.
+        ch = json.loads((self.roller / "channel.json").read_text())
+        ch["paused"] = False
+        (self.roller / "channel.json").write_text(json.dumps(ch))
+        path = self.roller / "releases" / ("%s.json" % ch["current"])
+        rel = json.loads(path.read_text())
+        rel["state"] = "live"
+        rel["history"] = [e for e in rel["history"] if e["to"] != "verified"]
+        rel["changes"] = [
+            {
+                "pr": "#1",
+                "what": "x",
+                "verify": {"log": "worldserver", "grep": "up", "within": "1m"},
+            }
+        ]
+        path.write_text(json.dumps(rel))
+        _, lines = self.run_cli()
+        self.assertTrue(lines[-1].startswith("dry-run  would wait %s:" % ch["current"]))
+        self.assertIn("does not read readiness", lines[-1])
+        self.assertNotIn("rollback", lines[-1])
 
     def test_an_invalid_file_fails_before_any_read(self):
         (self.roller / "releases" / "r2026.10.04-2.json").write_text("{}")

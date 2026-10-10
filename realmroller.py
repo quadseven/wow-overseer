@@ -132,6 +132,12 @@ class Policy:
     # file whose digest lines a roll changes, and the regex `git log -G` uses.
     roll_marker_path: str
     roll_marker_pattern: str
+    # Optional. A regex with ONE group over the marker file's text: a commit
+    # counts as a roll only when what the group captures differs from the
+    # parent's. The line pattern alone cannot tell the gated image's digest
+    # from an ungated one's in the same file, and an ungated roll must not
+    # start the hourly clock.
+    roll_marker_value: str = ""
 
 
 @dataclass(frozen=True)
@@ -278,17 +284,7 @@ def _parse_policy(raw: object, problems: list[str]) -> Policy:
     pct = _need(rb, "bots_below_pct", int, problems, "policy.rollback.")
     if isinstance(pct, int) and not 0 < pct < 100:
         problems.append("policy.rollback.bots_below_pct must be between 1 and 99")
-    marker = raw.get("roll_marker")
-    if not isinstance(marker, dict):
-        problems.append("policy.roll_marker must be an object with path and pattern")
-        marker = {}
-    path = _need(marker, "path", str, problems, "policy.roll_marker.") or ""
-    pattern = _need(marker, "pattern", str, problems, "policy.roll_marker.") or ""
-    if pattern:
-        try:
-            re.compile(pattern)
-        except re.error as exc:
-            problems.append("policy.roll_marker.pattern: %s" % exc)
+    path, pattern, value = _parse_marker(raw.get("roll_marker"), problems)
     return Policy(
         min_interval=_duration_of(raw, "min_interval", problems, "policy."),
         settle=_duration_of(raw, "settle", problems, "policy."),
@@ -308,7 +304,33 @@ def _parse_policy(raw: object, problems: list[str]) -> Policy:
         ),
         roll_marker_path=path,
         roll_marker_pattern=pattern,
+        roll_marker_value=value,
     )
+
+
+def _parse_marker(marker: object, problems: list[str]) -> tuple[str, str, str]:
+    """(path, pattern, value) of policy.roll_marker, each problem appended."""
+    if not isinstance(marker, dict):
+        problems.append("policy.roll_marker must be an object with path and pattern")
+        marker = {}
+    path = _need(marker, "path", str, problems, "policy.roll_marker.") or ""
+    pattern = _need(marker, "pattern", str, problems, "policy.roll_marker.") or ""
+    if pattern:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            problems.append("policy.roll_marker.pattern: %s" % exc)
+    value = marker.get("value", "")
+    if not isinstance(value, str):
+        problems.append("policy.roll_marker.value must be a string")
+        value = ""
+    elif value:
+        try:
+            if re.compile(value).groups != 1:
+                problems.append("policy.roll_marker.value needs exactly one group")
+        except re.error as exc:
+            problems.append("policy.roll_marker.value: %s" % exc)
+    return path, pattern, value
 
 
 # --- the release ----------------------------------------------------------
