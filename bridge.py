@@ -27766,13 +27766,15 @@ def _recent_guild_setup_keys(minutes: int) -> set[tuple[str, str]]:
 _VAULT_SQL = (
     "SELECT g.map AS map_id, g.position_x AS x, g.position_y AS y, "
     "g.position_z AS z, "
-    "(POW(g.position_x - s.pos_x, 2) + POW(g.position_y - s.pos_y, 2)) AS d2 "
+    "(POW(g.position_x - s.pos_x, 2) + POW(g.position_y - s.pos_y, 2)) AS d2, "
+    "ga.faction AS faction, s.race AS race "
     "FROM overseer_snapshot s "
     "JOIN acore_world.gameobject g ON g.map = s.map_id "
     "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "LEFT JOIN acore_world.gameobject_template_addon ga ON ga.entry = g.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
     "AND gt.type = %s "
-    "ORDER BY d2 LIMIT 1"
+    "ORDER BY d2 LIMIT 16"
 )
 
 
@@ -27801,7 +27803,10 @@ def _nearest_vault(name: str):
                 log.warning("guild bank: cannot see where the family is standing")
                 return None
             raise
-        row = cur.fetchone()
+        # NEVER THE OTHER SIDE'S CAPITAL (travel.own_side_vault): the nearest
+        # spawns come back with their faction, and the pick skips a vault
+        # behind the other side's guards.
+        row = travel.own_side_vault([dict(r) for r in cur.fetchall()])
         return dict(row) if row else None
 
 
