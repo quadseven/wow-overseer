@@ -28,7 +28,10 @@ TOKENS = (HERE / "app" / "tokens.css").read_text(encoding="utf-8")
 def background(block_start):
     """--color-bg in the first token block that opens with `block_start`."""
     block = TOKENS[TOKENS.index(block_start) :]
-    return re.search(r"--color-bg:\s*(#[0-9a-fA-F]{6})", block).group(1).lower()
+    found = re.search(r"--color-bg:\s*(#[0-9a-fA-F]{6})", block)
+    if found is None:
+        raise AssertionError("no --color-bg after " + block_start)
+    return found.group(1).lower()
 
 
 DARK = background(":root {")

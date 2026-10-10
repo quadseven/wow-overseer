@@ -132,7 +132,9 @@ class ServedPageTest(unittest.TestCase):
         for prefix in ("", "/dev"):
             _code, _ctype, page = self.serve(prefix)
             text = page.decode("utf-8")
-            link = re.search(r'<link rel="manifest" href="([^"]+)">', text).group(1)
+            found = re.search(r'<link rel="manifest" href="([^"]+)">', text)
+            self.assertIsNotNone(found, "the page links no manifest")
+            link = found.group(1)
             self.assertEqual(link, prefix + "/manifest.webmanifest")
             self.assertIn(
                 '<link rel="apple-touch-icon" href="%s/apple-touch-icon.png">' % prefix,
