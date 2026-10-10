@@ -14164,6 +14164,9 @@ class Bridge(discord.Client):
             members, facts, busy, cap, spawn_walks, cohort)
         self._log_guild_job_plan(members, plan)
         _log_capped("guild jobs", plan.notes)
+        # A class quest that yields to levelling is named every pass, uncapped.
+        for line in plan.yields:
+            log.info("guild jobs: %s", line)
         sale_walks = now >= self._job_walks_unsupported.get("sale", 0.0)
         started = self._start_guild_job_steps(plan, now, cap, sale_walks)
         await self._say_pvp_lines(plan, facts["recent"])

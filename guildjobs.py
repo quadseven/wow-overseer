@@ -659,6 +659,9 @@ class JobsPlan:
     # hold after classquest.OWED_HOURS with no progress.
     owed: dict = field(default_factory=dict)
     released: dict = field(default_factory=dict)
+    # One line per member whose class step yields to levelling this pass
+    # (class_yield), logged uncapped by the bridge.
+    yields: tuple = ()
 
 
 def _yards(ax, ay, bx, by) -> float:
@@ -2227,7 +2230,7 @@ def plan(
     trades = cloth_trades(split_trades(members, tailors), tailors)
     trades.update(focus_trades(members, focus))
     tally = _focus_tally(members, focus)
-    steps, lines, notes, helps = [], {}, [], []
+    steps, lines, notes, helps, yields = [], {}, [], [], []
     # One counter per allowance, each keyed by guild (_allowance).
     counters = {
         "jobs": {},
@@ -2271,6 +2274,9 @@ def plan(
         )
         lines[m.name] = doing
         helps += class_helps(m, classes, hunts, now, recent)
+        yielded = class_yield(m, recent) if _class_ready(m, classes) else ""
+        if yielded:
+            yields.append(yielded)
         if note:
             notes.append(note)
         if step is None:
@@ -2300,6 +2306,7 @@ def plan(
         helps=tuple(helps),
         owed=owed,
         released=released,
+        yields=tuple(yields),
     )
 
 

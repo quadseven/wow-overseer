@@ -92,6 +92,20 @@ class TheYield(unittest.TestCase):
             result.notes,
         )
 
+    def test_the_plan_names_each_yield_for_the_log(self):
+        result = plan(
+            [fits(), who("Chillmon", quests_done=frozenset({1505}))],
+            failing(10, 40, 70),
+        )
+        self.assertEqual(len(result.yields), 1)
+        self.assertIn("Bigzug's class quest step failed 3 times", result.yields[0])
+
+    def test_the_bridge_logs_the_yields_uncapped(self):
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
+        self.assertTrue("for line in plan.yields:" in source)
+
     def test_the_member_is_not_held_on_the_quest_meanwhile(self):
         result = plan([fits()], failing(10, 40, 70))
         self.assertNotIn("Path of Defense", result.lines.get("Bigzug", ""))
