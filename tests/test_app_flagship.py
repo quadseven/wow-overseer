@@ -34,6 +34,7 @@ import appbuild  # noqa: E402
 import vclient  # noqa: E402
 
 NODE = shutil.which("node")
+needs_node = unittest.skipIf(NODE is None, "node is not on PATH")
 
 
 def run_node(files, script):
@@ -130,6 +131,8 @@ class TheAppBuild(unittest.TestCase):
 
 UPDATE_HARNESS = r"""
 const store = {};
+const timers = [];
+const docListeners = {};
 let reloads = 0;
 let active = { tagName: "BODY" };
 globalThis.location = { hash: "#/members", reload() { reloads += 1; } };
@@ -140,13 +143,13 @@ globalThis.window = {
     setItem: (k, v) => { store[k] = String(v); },
     removeItem: (k) => { delete store[k]; },
   },
-  addEventListener() {}, setInterval() {}, requestAnimationFrame(fn) { fn(); }, scrollTo() {},
+  addEventListener() {}, setInterval(fn, ms) { timers.push([fn, ms]); }, requestAnimationFrame(fn) { fn(); }, scrollTo() {},
 };
 const appended = [];
 globalThis.document = {
   hidden: false,
   get activeElement() { return active; },
-  addEventListener() {},
+  addEventListener(type, fn) { (docListeners[type] = docListeners[type] || []).push(fn); },
   querySelector: (s) => (s === 'meta[name="overseer-build"]' ? { getAttribute: () => SERVED } : null),
   createElement: () => ({ setAttribute() {}, addEventListener() {}, set innerHTML(v) { this.markup = v; }, className: "" }),
   body: { appendChild: (el) => appended.push(el) },
@@ -178,6 +181,7 @@ def run_update(body, served="0123456789ab"):
     return run_node(files, script)
 
 
+@needs_node
 class TheUpdatePickup(unittest.TestCase):
     def test_only_a_different_real_build_is_newer(self):
         out = run_update(
@@ -229,6 +233,34 @@ console.log(JSON.stringify({ moved: U.reloadIfPending(), reloads, toasts: append
         )
         self.assertEqual(out, {"moved": False, "reloads": 0, "toasts": 0})
 
+    def test_coming_back_on_screen_and_the_timer_both_read_the_build(self):
+        out = run_update(
+            r"""
+U.install();
+await new Promise((r) => setTimeout(r, 0));
+const every = timers.map((t) => t[1]);
+REALM("ba9876543210");
+docListeners.visibilitychange.forEach((fn) => fn());
+await new Promise((r) => setTimeout(r, 0));
+const onScreen = U.pendingUpdate();
+console.log(JSON.stringify({ every, onScreen, toasts: appended.length }));
+"""
+        )
+        self.assertEqual(out["every"], [300000])
+        self.assertTrue(out["onScreen"])
+        self.assertEqual(out["toasts"], 1)
+        out = run_update(
+            r"""
+U.install();
+await new Promise((r) => setTimeout(r, 0));
+REALM("ba9876543210");
+timers[0][0]();
+await new Promise((r) => setTimeout(r, 0));
+console.log(JSON.stringify({ byTimer: U.pendingUpdate() }));
+"""
+        )
+        self.assertTrue(out["byTimer"])
+
     def test_the_toast_keeps_the_place_on_this_page(self):
         out = run_update(
             r"""
@@ -277,6 +309,7 @@ def card(sources):
     return run_node(files, script)
 
 
+@needs_node
 class TheDropChances(unittest.TestCase):
     def test_a_chance_too_small_to_show_is_a_rare_drop_never_zero(self):
         out = card(
@@ -327,6 +360,17 @@ class TheDropChances(unittest.TestCase):
         self.assertIn("Source: Quest", rows)
         heading = next(x for x in out["lines"] if "Drops from" in x)
         self.assertIn("ln-src ln-sep", heading)
+
+    def test_a_drop_with_no_chance_says_none(self):
+        out = card(
+            [
+                {"kind": "drop", "boss": "Gelihast", "where": "Blackfathom Deeps"},
+                {"kind": "drop", "boss": "Ferra", "where": "Dire Maul", "chance": 0},
+            ]
+        )
+        rows = [text_of(x) for x in out["lines"]]
+        self.assertIn("Gelihast", rows)
+        self.assertIn("Ferra rare drop", rows)
 
     def test_one_drop_keeps_its_source_line(self):
         out = card(
@@ -400,6 +444,7 @@ class TheBankCategories(unittest.TestCase):
         self.assertEqual(cell["category"], "Cloth")
         self.assertEqual(cell["count"], 20)
 
+    @needs_node
     def test_the_grid_groups_by_category_in_rank_order(self):
         script = (
             "globalThis.window = { addEventListener() {} };\n"
@@ -456,6 +501,7 @@ def run_markup():
     return run_node(files, script)
 
 
+@needs_node
 class TheRunSeats(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -514,8 +560,12 @@ class TheRunSeats(unittest.TestCase):
 
     def test_a_seat_is_a_44px_tap_on_a_touch_screen(self):
         css = re.sub(r"/\*.*?\*/", "", app_file("app.css"), flags=re.S)
-        coarse = css[css.rindex("@media (pointer: coarse)") :]
-        self.assertRegex(coarse, r"\.seat-chip\s*\{[^}]*min-height:\s*44px")
+        blocks = re.findall(
+            r"@media \(pointer: coarse\)\s*\{((?:[^{}]*\{[^{}]*\})*)\s*\}", css
+        )
+        self.assertTrue(blocks, "no touch-screen block in app.css")
+        rule = r"\.seat-chip\s*\{[^}]*min-height:\s*44px"
+        self.assertTrue(any(re.search(rule, b) for b in blocks))
 
 
 if __name__ == "__main__":

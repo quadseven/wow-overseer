@@ -81,7 +81,7 @@ function dropGroup(drops, first) {
   });
   zones.forEach((g) => {
     if (g.zone) out.push(row("ln-where ln-zone", g.zone));
-    g.list.forEach((d) => out.push(row("ln-drop", d.boss || d.name || "A creature", chanceText(d.chance))));
+    g.list.forEach((d) => out.push(row("ln-drop", d.boss || d.name || "A creature", chanceCell(d).replace(/ chance$/, ""))));
   });
   return out;
 }
