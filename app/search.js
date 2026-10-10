@@ -111,7 +111,11 @@ export function open() {
   scrim.hidden = false;
   input.value = "";
   run("");
-  window.setTimeout(() => input.focus(), 0);
+  // Focus now, not on a timer: whatever is typed straight after "/" goes to
+  // the box. A deferred focus let a quick "/Grug" lose its letters to the
+  // page, and Enter then had no hit to open. The "/" itself is never typed:
+  // its keydown is cancelled before this runs.
+  input.focus();
 }
 
 export function close(navigated) {
