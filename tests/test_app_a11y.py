@@ -293,6 +293,11 @@ class TheTouchTargets(unittest.TestCase):
         self.assertIn(".chip", m.group(1))
         self.assertIn("min-height: 44px", m.group(2))
 
+    def test_sortable_headers_are_44px_on_a_touch_screen(self):
+        start = self.CSS.index("@media (pointer: coarse) {")
+        block = self.CSS[start : self.CSS.index("\n}", start)]
+        self.assertRegex(block, r"\.table th button \{[^}]*min-height: 44px")
+
     def test_the_phone_quest_holders_are_44px_wide(self):
         family = (APP / "views" / "family.css").read_text(encoding="utf-8")
         self.assertIn("width: 44px; height: 44px;", family)

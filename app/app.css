@@ -368,6 +368,7 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
 @media (pointer: coarse) {
   .item, a.member, .chip { min-height: 44px; }
   .card > a:not([class]) { min-height: 44px; display: flex; align-items: center; }
+  .table th button { min-height: 44px; }
 }
 .tabs a { min-width: 44px; justify-content: center; flex-shrink: 0; }
 .skip { min-height: 44px; }
