@@ -630,6 +630,53 @@ class EachSideHasADoorAtEveryLevelItCanPlay(unittest.TestCase):
         self.assertIn("scholomance", self.offered(60, "Horde"))
 
 
+class NoRunFormsForADoorTheClearCannotFinish(unittest.TestCase):
+    """wow-overseer#782: Blackfathom Deeps took 9 guild runs and cleared none.
+    Five sat out the two-hour ceiling at 1 to 4 of 7 bosses, about 10
+    member-hours each, because mod-dungeon-clear had no data for it: nothing
+    lit the Fires of Aku'mai that open the door to its last bosses. Gnomeregan
+    has no data either. A run that cannot finish does not form."""
+
+    HELD = {"blackfathom", "gnomeregan"}
+
+    def offered(self, levels, faction):
+        return {
+            d.keyword for d in guildrun.fitting_doors(levels, guildrun.doors(), faction)
+        }
+
+    def test_the_held_doors_say_why(self):
+        self.assertEqual(set(guildrun.NO_CLEAR_DATA), self.HELD)
+        # Each held keyword is a real door, so a typo cannot hold nothing.
+        keywords = {d.keyword for d in guildrun.doors()}
+        self.assertLessEqual(self.HELD, keywords)
+        for keyword, why in guildrun.NO_CLEAR_DATA.items():
+            self.assertTrue(why.strip(), keyword)
+
+    def test_a_held_door_is_offered_to_no_band_on_either_side(self):
+        for faction in ("Alliance", "Horde"):
+            for level in range(15, 61):
+                offered = self.offered([level] * 5, faction)
+                self.assertFalse(offered & self.HELD, (faction, level))
+
+    def test_the_band_that_fit_blackfathom_keeps_its_other_doors(self):
+        """Live: Bonkers' 24 to 26 band went to Blackfathom Deeps. Shadowfang
+        Keep still fits it."""
+        offered = self.offered([24, 25, 25, 25, 26], "Horde")
+        self.assertNotIn("blackfathom", offered)
+        self.assertIn("shadowfang", offered)
+
+    def test_razorfen_kraul_stays_on_the_ladder(self):
+        """Its derived boss order ends at Charlga Razorflank, the finder's
+        finish, with no scripted door on the way, so it is not held."""
+        self.assertIn("razorfen-kraul", self.offered([32] * 5, "Horde"))
+        self.assertIn("razorfen-kraul", self.offered([32] * 5, "Alliance"))
+
+    def test_a_single_held_door_does_not_fit_a_member(self):
+        """The pug and social paths ask fitting_doors about one door."""
+        door = next(d for d in guildrun.doors() if d.keyword == "blackfathom")
+        self.assertEqual(guildrun.fitting_doors([26], [door], "Horde"), [])
+
+
 class TheDoorsThatFit(unittest.TestCase):
     def test_a_band_of_seventeen_to_nineteen_gets_ragefire_first(self):
         keywords = [

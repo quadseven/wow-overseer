@@ -346,9 +346,10 @@ class _Log:
     warning = exception = info
 
 
-def _queue_pass(world, holds=None):
+def _queue_pass(world, holds=None, **hooks):
     """One queue pass against `world`; the lines it logged. `holds` maps a
-    family key to the Jev interlude holding its job (#216)."""
+    family key to the Jev interlude holding its job (#216); `hooks` are more
+    of the bridge's optional hooks (`_family_lent_hold`, #784)."""
     holds = holds or {}
     log = _Log()
     ns = _load(
@@ -393,6 +394,7 @@ def _queue_pass(world, holds=None):
         _queue_holds=no_queue_hold,
         _leave_town_when_done=no_town,
         _plan_campaigns=no_plan,
+        **hooks,
     )
 
     async def family_once(key, rows, fams, held):

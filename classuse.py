@@ -62,6 +62,9 @@ NEVER_REASONS = (
     "that item has no spell that takes a creature target",
     "the character does not carry that item",
     "the core will not let this character use that item",
+    "malformed use-spell-on command",
+    "the character does not know that spell",
+    "that spell takes no creature target",
 )
 ELSEWHERE_REASONS = ("character is inside an instance or battleground",)
 # A target out of reach: one walk toward it again may fix it.
@@ -93,9 +96,14 @@ class UseAnswer:
 
 
 def is_use_row(command) -> bool:
-    """True for a quest row that uses an item or a gameobject."""
+    """True for a quest row that uses an item, a gameobject or a spell."""
     head = str(command or "").split(" ", 1)[0]
-    return head in (classquest.USE_ITEM, classquest.USE_OBJECT, classquest.USE_HERE)
+    return head in (
+        classquest.USE_ITEM,
+        classquest.USE_OBJECT,
+        classquest.USE_HERE,
+        classquest.USE_SPELL,
+    )
 
 
 def _body(result) -> dict:

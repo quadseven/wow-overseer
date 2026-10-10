@@ -36,14 +36,14 @@ COPY core.py bridge.py voice.py transform.py \
      dungeonplan.py dungeonpath.py raidgoals.py raidcraft.py raidprep.py raidlineup.py raidgear.py raidroles.py raidteams.py teamsync.py attunestep.py raidready.py raidrun.py raidsupply.py readcache.py \
      dungeonprogression.py dungeonquests.py \
      dungeonprogression.py dungeonquests.py \
-     guildcraft.py tradespec.py guildbank.py guildshare.py guildroute.py guildpost.py guildwork.py guildfund.py classtrain.py classcasts.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guildlevel.py classquest.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildpug.py guildsocial.py crafters.py recruit.py \
+     guildcraft.py tradespec.py guildbank.py guildshare.py guildroute.py guildpost.py guildwork.py guildfund.py classtrain.py classcasts.py purse.py vendorsale.py bankbags.py natural.py guildcorps.py guildjobs.py guildlevel.py classquest.py classask.py classparty.py classuse.py classhunt.py guildrun.py guildpug.py familyseat.py seatmeter.py guildsocial.py crafters.py recruit.py \
      bag_pressure.py bag_upgrade.py bag_economy.py bag_market.py disposition.py bagfate.py tidy.py \
      lockbox.py clearance.py \
      item_plan.py \
      jev.py jev_items.py jev_choices.py jev_recovery.py jev_activity.py jev_keep.py jevview.py \
      lootcouncil.py statweights.py \
      bank.py bankpolicy.py bankforecast.py \
-     mailrun.py holdings.py \
+     mailrun.py holdings.py hunterpet.py \
      realm.py realmread.py basepath.py appbuild.py watchwall.py nowstatus.py realmnav.py classic.py \
      needs.py partystatus.py lootcard.py lootstory.py towntrip.py \
      townerrand.py townslot.py tradechoice.py \
