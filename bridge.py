@@ -4676,6 +4676,40 @@ def _release_weapon_training_aim(character: str, travel_npc: str) -> bool:
         return bool(cur.rowcount)
 
 
+def _release_flight_aim(character: str, node: int) -> bool:
+    """Blank the `flight master:<node>` aim, and only that exact one (#816).
+
+    A node the bridge has given up on must not stay in the column: the module
+    walks whatever it finds there, and the give-up memory that would have
+    stopped the re-issue is in this process's memory only.
+    """
+    aim = travel.flight_master_aim(node)
+    if aim is None:
+        return False
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_roster SET travel_npc = '' "
+            "WHERE name = %s AND travel_npc = %s",
+            (character, aim),
+        )
+        return bool(cur.rowcount)
+
+
+def _release_any_flight_aim(character: str) -> bool:
+    """Blank whatever discovery walk the column holds (#816).
+
+    For a process that has just started and so cannot say how many times the
+    walk has been sent. The next pass issues it afresh, and counts it.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_roster SET travel_npc = '' "
+            "WHERE name = %s AND travel_npc LIKE %s",
+            (character, travel.FLIGHT_MASTER_NODE_AIM_PREFIX + "%"),
+        )
+        return bool(cur.rowcount)
+
+
 def _release_learn_aim(character: str) -> bool:
     """Blank a trainer walk and leave `learn_skill` pending (#227).
 
@@ -5795,6 +5829,8 @@ class Bridge(discord.Client):
         # streak and costs at most one repeated walk, which is cheaper than
         # the walk being repeated for ever.
         self._flight_attempts: dict = {}
+        # Whether this process has cleared a flight aim it cannot count (#816).
+        self._flight_aims_swept = False
         # GUILD MAIL RUNS UNDER WAY (#185): holder -> monotonic start, and the
         # start times of the last day's runs. In memory for the town slot's
         # reason; the daily cap also reads the command log, which a restart
@@ -16874,6 +16910,27 @@ class Bridge(discord.Client):
                     "'no'", name, node, tried,
                 )
 
+    def _release_spent_flight_aims(self, leader: str) -> None:
+        """Clear a flight aim this process has given up on or cannot count.
+
+        The first call after a start clears any flight aim in the column,
+        because the walk count did not survive the restart (#816).
+        """
+        if not self._flight_aims_swept:
+            self._flight_aims_swept = True
+            if _release_any_flight_aim(leader):
+                log.info(
+                    "flight: %s held a discovery aim from before this "
+                    "process started; released it, the walk count is lost",
+                    leader,
+                )
+        for node, (tried, _before) in sorted(self._flight_attempts.items()):
+            if tried >= FLIGHT_LEARN_ATTEMPTS and _release_flight_aim(leader, node):
+                log.info(
+                    "flight: released the given-up aim for taxi node %d "
+                    "held by %s", node, leader,
+                )
+
     async def _flight_learn_once(self) -> None:
         """Send the family's traveller to learn one taxi node (infra#4206).
 
@@ -16949,6 +17006,7 @@ class Bridge(discord.Client):
         # node comes next. The other order would let a freshly learned node
         # count a walk against itself one more time.
         self._settle_flight_attempts(leader, taximask)
+        await asyncio.to_thread(self._release_spent_flight_aims, leader)
         masters = await asyncio.to_thread(
             _fetch_flight_masters, where.get("map_id") if where else None,
         )
