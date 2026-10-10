@@ -358,6 +358,7 @@ def build(
     list_rows: dict,
     slot_names: list[str],
     book=None,
+    stats_by_id: dict | None = None,
 ) -> dict:
     """The tracker payload for one member.
 
@@ -365,7 +366,9 @@ def build(
     `equipment_rows` are the worn rows as _fetch_armory reads them (`slot` is
     the paper-doll index into `slot_names`). `list_rows` maps item id to an
     item_template row for every id the spec's lists name. `book` is armory's
-    ItemBook; without it only template stats are scored.
+    ItemBook; without it only template stats are scored. `stats_by_id` is
+    item_stats(list_rows), for a caller scoring many members against the same
+    rows; without it the rows are scored here.
     """
     level = int(member.get("level") or 1)
     tree = (member.get("spec") or {}).get("primary")
@@ -384,7 +387,8 @@ def build(
             "slots": [],
         }
     data = gearscore.load_spec(spec)
-    stats_by_id = {int(i): gearscore.stats_from_row(r) for i, r in list_rows.items()}
+    if stats_by_id is None:
+        stats_by_id = item_stats(list_rows)
     worn_by_slot = {}
     for r in equipment_rows:
         idx = r.get("slot")
@@ -427,3 +431,8 @@ def build(
         },
         "slots": slots,
     }
+
+
+def item_stats(list_rows: dict) -> dict:
+    """item id -> normalized stats, for every row build() is handed."""
+    return {int(i): gearscore.stats_from_row(r) for i, r in list_rows.items()}

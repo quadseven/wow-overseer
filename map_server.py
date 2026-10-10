@@ -68,6 +68,7 @@ import raidroles
 import preraid
 import raidready
 import raidsupply
+import readcache
 import recap
 import realm
 import runstory
@@ -2195,7 +2196,14 @@ def _fetch_guild_routes() -> dict:
                     "detail, source FROM overseer_command "
                     "WHERE source LIKE %s "
                     "AND created_at > NOW() - INTERVAL %s HOUR "
-                    "ORDER BY id DESC LIMIT %s",
+                    # ORDERED BY THE TIME, NOT THE ID, though both say
+                    # newest first. On a realm with no index led by
+                    # `source`, and fewer matches in the window than the
+                    # LIMIT, `ORDER BY id` walks the primary key back
+                    # through the whole table (about 15 s at 800k commands,
+                    # and the Economy page waited on it); `created_at`
+                    # keeps the read inside the window's own index.
+                    "ORDER BY created_at DESC, id DESC LIMIT %s",
                     (guildroute.SOURCE + ":%", GUILD_ROUTE_HOURS, GUILD_ROUTE_ROWS),
                 )
                 rows = list(cur.fetchall())
@@ -4422,8 +4430,47 @@ def _app_file_kind(rel: str) -> str:
 
 _APP_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8"}
 
-# What a /api/v2 handler is given: this server's own connection and module.
-_V2_CONTEXT = _V2Context(connect=lambda: _connect(), server=sys.modules[__name__])
+# THE SHARED READS. These GETs are the expensive ones a cold page load asks
+# for together (the nav badges and the view on screen) and every open page
+# polls, so callers inside a few seconds of each other share one build
+# (readcache.py). Keyed by path and query; only a 200 is kept, so an error is
+# never served to anyone who did not cause it. The answer still carries its
+# ETag and `no-cache`, because _send runs for every caller.
+SHARED_READ_SECONDS = 5.0
+SHARED_READS = readcache.ReadCache(SHARED_READ_SECONDS)
+SHARED_GET_PATHS = frozenset({
+    "/api/map", "/api/wall", "/api/guildgear", "/api/raidgoals", "/api/wealth",
+})
+
+
+class _Captured:
+    """Stands in for the handler while a shared read builds: keeps what it sends."""
+
+    def __init__(self) -> None:
+        self.sent: tuple | None = None
+
+    def _send(self, code: int, ctype: str, body: bytes,
+              cache_control: str = "no-store") -> None:
+        self.sent = (code, ctype, body, cache_control)
+
+
+class _NotShared(Exception):
+    """A shared build that answered anything but a plain 200."""
+
+    def __init__(self, sent: tuple | None) -> None:
+        super().__init__("not a shareable answer")
+        self.sent = sent
+
+
+def _shared_key(path: str, query: dict) -> str:
+    return path + "?" + "&".join(
+        "%s=%s" % (k, v) for k in sorted(query) for v in query[k])
+
+
+# What a /api/v2 handler is given: this server's own connection and module,
+# and the shared reads for a build two endpoints have in common.
+_V2_CONTEXT = _V2Context(connect=lambda: _connect(), server=sys.modules[__name__],
+                         shared=SHARED_READS)
 
 
 def _etag(body: bytes) -> str:
@@ -4863,7 +4910,29 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(404, "text/plain", b"not found")
             return
-        handler(self, parse_qs(urlsplit(self.path).query))
+        query = parse_qs(urlsplit(self.path).query)
+        if path in SHARED_GET_PATHS:
+            self._shared_get(handler, path, query)
+            return
+        handler(self, query)
+
+    def _shared_get(self, handler, path: str, query: dict) -> None:
+        """Answer from a build shared with callers of the last few seconds.
+
+        The handler runs against a stand-in that keeps what it would send. A
+        200 is shared; anything else is sent as it is and kept for nobody.
+        """
+        def build():
+            stand_in = _Captured()
+            handler(stand_in, query)
+            if stand_in.sent is None or stand_in.sent[0] != 200 or stand_in.sent[3] != "no-store":
+                raise _NotShared(stand_in.sent)
+            return stand_in.sent
+
+        try:
+            self._send(*SHARED_READS.get(_shared_key(path, query), build))
+        except _NotShared as refused:
+            self._send(*(refused.sent or (500, "text/plain", b"no answer")))
 
     def _modelviewer(self, path: str) -> None:
         """GET /modelviewer/<path> - Wowhead's model data, through the cache.

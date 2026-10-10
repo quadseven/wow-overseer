@@ -83,9 +83,16 @@ function useCss(path) {
 }
 
 function banner(h) {
+  if (h.state === "saved") return savedBanner(h);
   if (h.state !== "stale") return "";
   const secs = h.at ? (Date.now() - h.at) / 1000 : null;
   return html`<div class="banner" role="status"><i class="ph ph-clock-countdown" aria-hidden="true"></i><div><div style="font-weight:500">Showing data from ${ago(secs)}</div><div class="muted">The world did not answer the last ${plural(h.failures, "read")}. Nothing below has been refreshed since then.</div></div></div>`;
+}
+
+// A reload drawn from the copy this tab kept (api.js), until the world answers.
+function savedBanner(h) {
+  const secs = h.at ? (Date.now() - h.at) / 1000 : null;
+  return html`<div class="banner" role="status" data-stale-cache><i class="ph ph-clock-counter-clockwise" aria-hidden="true"></i><div><div style="font-weight:500">Showing the copy saved ${ago(secs)}</div><div class="muted">Reading the world for fresh data.</div></div></div>`;
 }
 
 function draw(keepPlace) {
