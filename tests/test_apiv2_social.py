@@ -1,8 +1,8 @@
 """GET /api/v2/social: the Social panel's read, back after #717 removed
 /api/client/social with the classic page.
 
-The handler runs against a fake connection and a fake map server, so the gate
-(a family guild member, or a 404) and the reads are exercised with no
+The handler runs against the in-memory realm reader and a fake map server, so
+the gate (a family guild member, or a 404) and the reads are exercised with no
 database. It only ever reads.
 """
 
@@ -18,63 +18,29 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
 import apiv2  # noqa: E402
+import realmread  # noqa: E402
 import vclient  # noqa: E402
 from apiv2 import social  # noqa: E402
 from apiv2._context import Context  # noqa: E402
 
 
-class FakeCursor:
-    """Answers each execute() with the rows of the first rule whose words are
-    all in the SQL."""
-
-    def __init__(self, rules, log):
-        self.rules, self.log, self.rows = rules, log, []
-
-    def execute(self, sql, params=()):
-        self.log.append((sql, params))
-        self.rows = []
-        for words, rows in self.rules:
-            if all(w in sql for w in words):
-                self.rows = list(rows)
-                return
-
-    def fetchall(self):
-        return list(self.rows)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-
-class FakeConn:
-    def __init__(self, rules, log):
-        self.rules, self.log = rules, log
-
-    def cursor(self):
-        return FakeCursor(self.rules, self.log)
-
-    def close(self):
-        pass
-
-
 def server(families, guildmates=()):
-    def wide(cur, sql, params=(), fallback="", what=""):
-        cur.execute(sql, params)
-        return list(cur.fetchall())
-
     return types.SimpleNamespace(
         _NAME_RE=re.compile(r"^[A-Za-z]{2,12}$"),
         _fetch_family_groups=lambda: list(families.items()),
         _is_family_guildmate=lambda name, names: name in guildmates,
-        _wide_guarded=wide,
     )
 
 
-def ctx_for(rules, srv):
-    log = []
-    return Context(connect=lambda: FakeConn(rules, log), server=srv), log
+def ctx_for(answers, srv):
+    """The handler's context over a reader that knows `answers` and no other
+    statement: a renamed read fails here instead of reading as empty."""
+    rd = realmread.Memory(answers)
+    return Context(read=rd, server=srv), rd.asked
+
+
+def family_sql(n):
+    return social.FAMILY_SQL + "(" + ", ".join(["%s"] * n) + ")"
 
 
 FAMILY = [
@@ -122,12 +88,13 @@ FRIENDS = [
         "note": "",
     },
 ]
-RULES = [
-    (("FROM characters WHERE name IN",), FAMILY),
-    (("JOIN guild g",), GUILD),
-    (("LEFT JOIN guild_rank",), ROSTER),
-    (("character_social",), FRIENDS),
-]
+RULES = {
+    family_sql(2): FAMILY,
+    family_sql(1): FAMILY[1:],
+    social.GUILD_SQL: GUILD,
+    social.ROSTER_SQL: ROSTER,
+    social.FRIENDS_SQL: FRIENDS,
+}
 
 
 class TheRoute(unittest.TestCase):
@@ -179,14 +146,18 @@ class TheFrame(unittest.TestCase):
         self.assertEqual([m["name"] for m in p["family"]["members"]], ["Ugga"])
 
     def test_no_guild_and_no_friends_say_so(self):
-        rules = [(("FROM characters WHERE name IN",), FAMILY[:1])]
+        rules = {
+            family_sql(1): FAMILY[:1],
+            social.GUILD_SQL: [],
+            social.FRIENDS_SQL: [],
+        }
         ctx, log = ctx_for(rules, server({"Grug": ["Grug"]}))
         code, p = social.social({"name": ["Grug"]}, ctx)
         self.assertEqual(code, 200)
         self.assertIsNone(p["guild"]["name"])
         self.assertEqual(p["guild"]["note"], vclient.NO_GUILD_NOTE)
         self.assertEqual(p["friends_note"], vclient.NO_FRIENDS_NOTE)
-        self.assertFalse([x for x in log if "LEFT JOIN guild_rank" in x[0]])
+        self.assertFalse([x for x in log if x[0] == social.ROSTER_SQL])
 
 
 if __name__ == "__main__":

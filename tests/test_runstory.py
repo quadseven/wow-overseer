@@ -578,9 +578,9 @@ class TheSiteDrawsIt(unittest.TestCase):
         handler = SERVER[
             SERVER.index("def _guild_runs") : SERVER.index("def _guild_chat")
         ]
-        self.assertIn('guildrun.with_stories(cur, payload["recent"])', handler)
+        self.assertIn('guildrun.with_stories(rd, payload["recent"])', handler)
         chat = SERVER[SERVER.index("def _fetch_guild_chat") :]
-        self.assertIn("guildrun.with_stories(cur, runs)", chat[: chat.index("\n\n\n")])
+        self.assertIn("guildrun.with_stories(rd, runs)", chat[: chat.index("\n\n\n")])
         timeline = SERVER[
             SERVER.index("def _run_timeline") : SERVER.index("def _recap")
         ]

@@ -166,17 +166,12 @@ def death_items(rows: list, guild_of: dict, maps: dict) -> list:
     return items
 
 
-def _all(cur, sql: str, args=()) -> list:
-    cur.execute(sql, args)
-    return list(cur.fetchall())
-
-
 def _holes(n: int) -> str:
     return ", ".join(["%s"] * n)
 
 
-def build(cur, guilds: list, maps: dict) -> dict:
-    found = _all(cur, _GUILDS_SQL.format(holes=_holes(len(guilds))), tuple(guilds))
+def build(rd, guilds: list, maps: dict) -> dict:
+    found = rd.must(_GUILDS_SQL.format(holes=_holes(len(guilds))), tuple(guilds))
     guild_of = {int(r["guildid"]): r["name"] for r in found}
     names = [r["name"] for r in found]
     items: list = []
@@ -185,13 +180,12 @@ def build(cur, guilds: list, maps: dict) -> dict:
         ih = _holes(len(ids))
         conts = ", ".join(str(c) for c in CONTINENTS)
         items += level_items(
-            _all(cur, _LEVELS_SQL.format(holes=ih), (*ids, DAYS, MAX_ROWS)), guild_of
+            rd.must(_LEVELS_SQL.format(holes=ih), (*ids, DAYS, MAX_ROWS)), guild_of
         )
-        came_back = guildrun.came_back(cur, names, DAYS, MAX_ROWS)
+        came_back = guildrun.came_back(rd, names, DAYS, MAX_ROWS)
         items += run_items([dict(r, at=r["ended_unix"]) for r in came_back])
         items += death_items(
-            _all(
-                cur,
+            rd.must(
                 _DEATHS_SQL.format(holes=ih, continents=conts),
                 (*ids, DAYS, MAX_ROWS),
             ),
@@ -209,12 +203,7 @@ def chronicle(query: dict, ctx) -> tuple[int, dict]:
         return 404, {"error": "no such guild", "guilds": sorted(_allow.GUILDS)}
     guilds = [_allow.guild(asked)] if asked else list(_allow.GUILDS.values())
     maps = ctx.server.achievements.MAP_NAMES
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            payload = build(cur, guilds, maps)
-    finally:
-        conn.close()
+    payload = build(ctx.read, guilds, maps)
     if asked and not payload["guilds"]:
         return 404, {"error": "no such guild", "guild": asked}
     return 200, payload

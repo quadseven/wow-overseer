@@ -327,25 +327,20 @@ def dungeon_rows(doors: list, faction: str, runs: list) -> list:
 # ---- reads ---------------------------------------------------------------------
 
 
-def _all(cur, sql: str, args=()) -> list:
-    cur.execute(sql, args)
-    return list(cur.fetchall())
-
-
 def _holes(n: int) -> str:
     return ", ".join(["%s"] * n)
 
 
-def _deaths(cur, names: list, ghosts: list, zones: dict, maps: dict) -> dict:
+def _deaths(rd, names: list, ghosts: list, zones: dict, maps: dict) -> dict:
     if not names:
         return {"total": 0, "members": 0, "killers": [], "ghosts": []}
     holes = _holes(len(names))
-    total = _all(cur, _DEATH_TOTAL_SQL.format(holes=holes), tuple(names))[0]
-    killers = _all(cur, _KILLERS_SQL.format(holes=holes), (*names, TOP_KILLERS))
+    total = rd.must(_DEATH_TOTAL_SQL.format(holes=holes), tuple(names))[0]
+    killers = rd.must(_KILLERS_SQL.format(holes=holes), (*names, TOP_KILLERS))
     last = {}
     if ghosts:
-        found = _all(
-            cur, _LAST_DEATH_SQL.format(holes=_holes(len(ghosts))), tuple(ghosts)
+        found = rd.must(
+            _LAST_DEATH_SQL.format(holes=_holes(len(ghosts))), tuple(ghosts)
         )
         last = {r["name"]: r for r in found}
     return {
@@ -370,7 +365,7 @@ def _ghost(name: str, death, zones: dict, maps: dict) -> dict:
     }
 
 
-def _walk_creatures(cur, blocked: dict) -> dict:
+def _walk_creatures(rd, blocked: dict) -> dict:
     """entry -> name for the creatures the blocked walks name."""
     wanted = sorted(
         {
@@ -382,19 +377,18 @@ def _walk_creatures(cur, blocked: dict) -> dict:
     )
     if not wanted:
         return {}
-    found = _all(
-        cur, _CREATURE_NAMES_SQL.format(holes=_holes(len(wanted))), tuple(wanted)
+    found = rd.must(
+        _CREATURE_NAMES_SQL.format(holes=_holes(len(wanted))), tuple(wanted)
     )
     return {int(r["id"]): r["name"] for r in found}
 
 
-def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
-    done = _all(cur, _CQ_DONE_SQL, (guild_id,))[0]
-    open_rows = _all(cur, _CQ_OPEN_SQL, (guild_id, MAX_ROWS))
+def _class_quests(rd, guild_id: int, names: list, classes: dict) -> dict:
+    done = rd.must(_CQ_DONE_SQL, (guild_id,))[0]
+    open_rows = rd.must(_CQ_OPEN_SQL, (guild_id, MAX_ROWS))
     steps = []
     if names:
-        steps = _all(
-            cur,
+        steps = rd.must(
             _CQ_STEPS_SQL.format(holes=_holes(len(names))),
             (BLOCKED_HOURS, *names, MAX_ROWS),
         )[::-1]  # newest first under the bound, then back to oldest first
@@ -409,12 +403,12 @@ def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
     )
     titles = {}
     if wanted:
-        found = _all(
-            cur, _QUEST_TITLES_SQL.format(holes=_holes(len(wanted))), tuple(wanted)
+        found = rd.must(
+            _QUEST_TITLES_SQL.format(holes=_holes(len(wanted))), tuple(wanted)
         )
         titles = {int(r["id"]): r["title"] for r in found}
     rows = class_quest_rows(
-        open_rows, blocked, titles, classes, _walk_creatures(cur, blocked)
+        open_rows, blocked, titles, classes, _walk_creatures(rd, blocked)
     )
     return {
         "done": int(done["n"] or 0),
@@ -425,18 +419,18 @@ def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
     }
 
 
-def _runs(cur, guild_name: str) -> list:
+def _runs(rd, guild_name: str) -> list:
     """The guild's runs oldest first, each with its Unix times as `created`
     and `ended` (dungeon_rows' keys)."""
-    rows = guildrun.recent(cur, guild=guild_name, n=MAX_ROWS)[::-1]
+    rows = guildrun.recent(rd, guild=guild_name, n=MAX_ROWS)[::-1]
     return [dict(r, created=r["created_unix"], ended=r["ended_unix"]) for r in rows]
 
 
-def build(ctx, cur, row: dict, zones: dict, maps: dict) -> dict:
+def build(rd, row: dict, zones: dict, maps: dict) -> dict:
     gid = int(row["guildid"])
-    now = int(_all(cur, _NOW_SQL)[0]["now"])
-    raw = _all(cur, _MEMBERS_SQL, (gid, MAX_MEMBERS))
-    members = member_rows(raw, presence.of(ctx, cur, [r["name"] for r in raw]))
+    now = int(rd.must(_NOW_SQL, ())[0]["now"])
+    raw = rd.must(_MEMBERS_SQL, (gid, MAX_MEMBERS))
+    members = member_rows(raw, presence.of(rd, [r["name"] for r in raw]))
     names = [m["name"] for m in members]
     classes = {m["name"]: m["class"] for m in members}
     faction = faction_of(r["race"] for r in raw)
@@ -444,17 +438,17 @@ def build(ctx, cur, row: dict, zones: dict, maps: dict) -> dict:
     return {
         "guild": row["name"],
         "faction": faction,
-        "family": family_of(set(names), _all(cur, _ROSTER_SQL, (MAX_ROWS,))),
+        "family": family_of(set(names), rd.must(_ROSTER_SQL, (MAX_ROWS,))),
         "count": len(members),
         "online": sum(1 for m in members if m["online"]),
         "members": members,
         "gaining": [
             {"name": d["name"], "level": int(d["level"]), "at": int(d["at"])}
-            for d in _all(cur, _DINGS_SQL, (gid,))
+            for d in rd.must(_DINGS_SQL, (gid,))
         ],
-        "deaths": _deaths(cur, names, ghosts, zones, maps),
-        "class_quests": _class_quests(cur, gid, names, classes),
-        "dungeons": dungeon_rows(guildrun.doors(), faction, _runs(cur, row["name"])),
+        "deaths": _deaths(rd, names, ghosts, zones, maps),
+        "class_quests": _class_quests(rd, gid, names, classes),
+        "dungeons": dungeon_rows(guildrun.doors(), faction, _runs(rd, row["name"])),
         "now": now,
     }
 
@@ -470,15 +464,10 @@ def guild(query: dict, ctx) -> tuple[int, dict]:
     server = ctx.server
     zones = server.recap.zone_names(server.GEO.continents)
     maps = server.achievements.MAP_NAMES
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            found = _all(cur, _GUILD_SQL, (name,))
-            if not found:
-                return 404, {"error": "no such guild", "guild": name}
-            return 200, build(ctx, cur, found[0], zones, maps)
-    finally:
-        conn.close()
+    found = ctx.read.must(_GUILD_SQL, (name,))
+    if not found:
+        return 404, {"error": "no such guild", "guild": name}
+    return 200, build(ctx.read, found[0], zones, maps)
 
 
 ROUTES = {"/api/v2/guild": guild}

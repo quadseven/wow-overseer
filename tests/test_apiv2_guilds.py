@@ -1,7 +1,8 @@
 """The /api/v2 reads behind the Guilds section: series, dungeonups, guild and
 chronicle. The shaping is tested on rows written here; the handlers are run
-against a fake connection that answers each query by a piece of its SQL, so
-what a handler reads and what it sends back are both checked without a realm.
+against the in-memory realm reader, which answers each statement by the
+constant it is built from and raises on any other, so what a handler reads and
+what it sends back are both checked without a realm.
 """
 
 import pathlib
@@ -15,62 +16,23 @@ sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import apiv2  # noqa: E402
 import guildrun  # noqa: E402
+import realmread  # noqa: E402
 import recap  # noqa: E402
-from apiv2 import chronicle, dungeonups, guild, series  # noqa: E402
+from apiv2 import chronicle, dungeonups, guild, presence, series  # noqa: E402
 
 # Half past an hour, so a minute either side stays in the same hour.
 NOW = 1_800_001_800
 H = 3600
 
 
-class FakeCursor:
-    def __init__(self, answers):
-        self.answers = answers
-        self.seen = []
-        self.rows = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def execute(self, sql, args=()):
-        self.seen.append((sql, args))
-        for needle, rows in self.answers:
-            if needle in sql:
-                self.rows = rows(args) if callable(rows) else rows
-                return
-        self.rows = []
-
-    def fetchall(self):
-        return list(self.rows)
-
-    def fetchone(self):
-        return self.rows[0] if self.rows else None
-
-
-class FakeConn:
-    def __init__(self, answers):
-        self.cursor_ = FakeCursor(answers)
-        self.closed = False
-
-    def cursor(self):
-        return self.cursor_
-
-    def close(self):
-        self.closed = True
-
-
 class Ctx:
-    def __init__(self, answers=(), server=None):
-        self.conn = FakeConn(list(answers))
-        self.server = server
-        self.connects = 0
+    """A handler's context over the in-memory realm reader: `answers` maps each
+    statement (or the constant it is built from) to its rows, and any other
+    statement raises, so a renamed read cannot pass as an empty one."""
 
-    def connect(self):
-        self.connects += 1
-        return self.conn
+    def __init__(self, answers=None, server=None):
+        self.read = realmread.Memory(answers)
+        self.server = server
 
 
 XP = [{"level": lvl, "xp": 1000} for lvl in range(1, 60)]
@@ -183,34 +145,26 @@ class TheSeries(unittest.TestCase):
         )
 
     def _answers(self):
-        return [
-            ("UNIX_TIMESTAMP() AS now", [{"now": NOW}]),
-            ("player_xp_for_level", XP),
-            (
-                # Only a member of a managed guild: the query carries the list.
-                "WHERE c.name = %s AND g.name IN",
-                lambda a: (
-                    [{"guid": 7, "name": "Grug", "level": 11, "xp": 500}]
-                    if a == ("Grug", "Cave", "Bonkers")
-                    else []
-                ),
+        return {
+            series._NOW_SQL: [{"now": NOW}],
+            series._XP_TABLE_SQL: XP,
+            # Only a member of a managed guild: the query carries the list.
+            series._MEMBER_SQL: lambda a: (
+                [{"guid": 7, "name": "Grug", "level": 11, "xp": 500}]
+                if a == ("Grug", "Cave", "Bonkers")
+                else []
             ),
-            (
-                "FROM guild WHERE name",
-                lambda a: [{"guildid": 23, "name": "Cave"}] if a == ("Cave",) else [],
+            series._GUILD_SQL: lambda a: (
+                [{"guildid": 23, "name": "Cave"}] if a == ("Cave",) else []
             ),
-            (
-                "JOIN guild_member",
-                [{"guid": 7, "name": "Grug", "level": 11, "xp": 500}],
-            ),
-            (
-                "FROM overseer_level",
-                [
-                    {"guid": 7, "old_level": 9, "new_level": 10, "at": NOW - 10 * H},
-                    {"guid": 7, "old_level": 10, "new_level": 11, "at": NOW - 5 * H},
-                ],
-            ),
-        ]
+            series._GUILD_MEMBERS_SQL: [
+                {"guid": 7, "name": "Grug", "level": 11, "xp": 500}
+            ],
+            series._EVENTS_SQL: [
+                {"guid": 7, "old_level": 9, "new_level": 10, "at": NOW - 10 * H},
+                {"guid": 7, "old_level": 10, "new_level": 11, "at": NOW - 5 * H},
+            ],
+        }
 
     def test_the_handler_answers_a_member_and_a_guild(self):
         ctx = Ctx(self._answers())
@@ -219,7 +173,6 @@ class TheSeries(unittest.TestCase):
         self.assertEqual(body["name"], "Grug")
         self.assertEqual(body["xp_per_hour"][-1], [NOW, 100])
         self.assertEqual(body["xp_per_hour_24h"], 150)
-        self.assertTrue(ctx.conn.closed)
         code, body = series.series({"guild": ["cave"]}, Ctx(self._answers()))
         self.assertEqual((code, body["guild"], body["measured"]), (200, "Cave", 1))
         self.assertEqual(body["by_member"]["Grug"]["xp_per_hour_24h"], 150)
@@ -462,73 +415,55 @@ class TheGuild(unittest.TestCase):
             GEO = types.SimpleNamespace(continents={})
             achievements = types.SimpleNamespace(MAP_NAMES={36: "The Deadmines"})
 
-            @staticmethod
-            def _wide_guarded(cur, sql, params=(), fallback="", what=""):
-                # presence.of reads through the server's schema guard.
-                cur.execute(sql, params)
-                return list(cur.fetchall())
-
-        answers = [
-            (
-                "FROM guild WHERE name",
-                lambda a: [{"guildid": 23, "name": "Cave"}] if a == ("Cave",) else [],
+        answers = {
+            guild._GUILD_SQL: lambda a: (
+                [{"guildid": 23, "name": "Cave"}] if a == ("Cave",) else []
             ),
-            ("UNIX_TIMESTAMP() AS now", [{"now": NOW}]),
+            guild._NOW_SQL: [{"now": NOW}],
             # presence.of's two reads: Grug is in the world, Bonk's save has
             # the ghost flag.
-            (
-                "FROM overseer_snapshot",
-                [{"name": "Grug", "health": 900, "max_health": 900, "at": NOW}],
-            ),
-            ("playerFlags AS flags FROM characters", [{"name": "Bonk", "flags": 0x10}]),
-            (
-                "FROM characters c JOIN guild_member",
-                [
-                    {
-                        "guid": 1,
-                        "name": "Grug",
-                        "level": 42,
-                        "class": 1,
-                        "race": 1,
-                        "zone": 40,
-                    },
-                    {
-                        "guid": 2,
-                        "name": "Bonk",
-                        "level": 20,
-                        "class": 9,
-                        "race": 3,
-                        "zone": 40,
-                    },
-                ],
-            ),
-            ("FROM overseer_roster", [{"name": "Grug", "family": "Grug"}]),
-            ("FROM overseer_level", [{"name": "Bonk", "level": 20, "at": NOW - H}]),
-            ("GROUP BY killer_name", [{"killer": "Defias Pillager", "n": 7, "who": 2}]),
-            (
-                "COUNT(DISTINCT character_name) AS who FROM overseer_death",
-                [{"n": 9, "who": 2}],
-            ),
-            (
-                "SELECT MAX(id) FROM overseer_death",
-                [
-                    {
-                        "name": "Bonk",
-                        "killer": "Defias Pillager",
-                        "map": 0,
-                        "zone": 40,
-                        "at": NOW - 600,
-                    }
-                ],
-            ),
-            ("character_queststatus_rewarded", [{"n": 12, "who": 2}]),
-            (
-                "FROM character_queststatus s",
-                [{"name": "Bonk", "id": 5, "status": 3, "title": "Five"}],
-            ),
-            ("FROM overseer_command", []),
-            ("FROM overseer_guild_run", []),
-        ]
+            presence._SNAP_SQL: [
+                {"name": "Grug", "health": 900, "max_health": 900, "at": NOW}
+            ],
+            presence._FLAGS_SQL: [{"name": "Bonk", "flags": 0x10}],
+            guild._MEMBERS_SQL: [
+                {
+                    "guid": 1,
+                    "name": "Grug",
+                    "level": 42,
+                    "class": 1,
+                    "race": 1,
+                    "zone": 40,
+                },
+                {
+                    "guid": 2,
+                    "name": "Bonk",
+                    "level": 20,
+                    "class": 9,
+                    "race": 3,
+                    "zone": 40,
+                },
+            ],
+            guild._ROSTER_SQL: [{"name": "Grug", "family": "Grug"}],
+            guild._DINGS_SQL: [{"name": "Bonk", "level": 20, "at": NOW - H}],
+            guild._KILLERS_SQL: [{"killer": "Defias Pillager", "n": 7, "who": 2}],
+            guild._DEATH_TOTAL_SQL: [{"n": 9, "who": 2}],
+            guild._LAST_DEATH_SQL: [
+                {
+                    "name": "Bonk",
+                    "killer": "Defias Pillager",
+                    "map": 0,
+                    "zone": 40,
+                    "at": NOW - 600,
+                }
+            ],
+            guild._CQ_DONE_SQL: [{"n": 12, "who": 2}],
+            guild._CQ_OPEN_SQL: [
+                {"name": "Bonk", "id": 5, "status": 3, "title": "Five"}
+            ],
+            guild._CQ_STEPS_SQL: [],
+            guildrun._RUN_SQL: [],
+        }
         code, body = guild.guild({"guild": ["cave"]}, Ctx(answers, Server))
         self.assertEqual(code, 200)
         self.assertEqual(
@@ -655,15 +590,14 @@ class TheChronicle(unittest.TestCase):
             known = {"Cave": 23, "Bonkers": 24}
             return [{"guildid": known[a], "name": a} for a in args if a in known]
 
-        answers = [
-            ("FROM guild WHERE name IN", guilds),
-            (
-                "FROM overseer_level",
-                [{"name": "Bonk", "level": 25, "guild_id": 23, "at": NOW}],
-            ),
-            ("FROM overseer_guild_run", []),
-            ("FROM overseer_death", []),
-        ]
+        answers = {
+            chronicle._GUILDS_SQL: guilds,
+            chronicle._LEVELS_SQL: [
+                {"name": "Bonk", "level": 25, "guild_id": 23, "at": NOW}
+            ],
+            guildrun._RUN_SQL: [],
+            chronicle._DEATHS_SQL: [],
+        }
         code, body = chronicle.chronicle({}, Ctx(answers, Server))
         self.assertEqual(
             (code, body["guilds"], len(body["items"])), (200, ["Bonkers", "Cave"], 1)
@@ -671,7 +605,7 @@ class TheChronicle(unittest.TestCase):
         ctx = Ctx(answers, Server)
         code, body = chronicle.chronicle({"guild": ["Cave"]}, ctx)
         self.assertEqual(body["guilds"], ["Cave"])
-        self.assertTrue(ctx.conn.closed)
+        self.assertEqual(ctx.read.asked[0][1], ("Cave",))
         self.assertEqual(
             chronicle.chronicle({"guild": ["nowhere"]}, Ctx(answers, Server))[0], 404
         )
@@ -679,15 +613,15 @@ class TheChronicle(unittest.TestCase):
 
 class TheAllowlist(unittest.TestCase):
     """A guild outside the managed ones, or a value that is not a name, is
-    refused before a connection is opened, so it never reaches the realm."""
+    refused before any read, so it never reaches the realm."""
 
     OUTSIDERS = ["Adventurer Union", "x' OR '1'='1", "cave; DROP TABLE guild", ""]
 
     def _refused(self, handler, query, code):
-        ctx = Ctx([("", lambda a: self.fail("a query ran: %r" % (a,)))])
+        ctx = Ctx()
         got, body = handler(query, ctx)
         self.assertEqual(got, code, query)
-        self.assertEqual(ctx.connects, 0, query)
+        self.assertEqual(ctx.read.asked, [], query)
         self.assertIn("error", body)
 
     def test_only_managed_guilds_are_read(self):

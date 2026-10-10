@@ -32,6 +32,7 @@ import raidready
 import raidroles
 import raidsupply
 import raidteams
+import realmread
 
 GROUPS = 8
 GROUP_SIZE = 5
@@ -73,9 +74,6 @@ CONSUMABLES_SQL = (
     "GROUP BY c.name, ii.itemEntry"
 )
 
-# A schema this realm does not carry: no such table (1146) or column (1054).
-_UNREADABLE = (1054, 1146)
-
 
 def guild_key(query: dict) -> str:
     """The approved guild the query names, matched without case, or ""."""
@@ -86,29 +84,16 @@ def guild_key(query: dict) -> str:
     return ""
 
 
-def unreadable(exc: BaseException) -> bool:
-    """A driver error saying the table or column is not there. Matched by the
-    driver's module and error code, so this module does not import it."""
-    return (
-        type(exc).__module__.split(".")[0] == "pymysql"
-        and bool(exc.args)
-        and exc.args[0] in _UNREADABLE
-    )
-
-
 def _holes(n: int) -> str:
     return ", ".join(["%s"] * n)
 
 
-def _read(cur, sql: str, params: tuple):
+def _read(rd, sql: str, params: tuple):
     """The rows, or None when this realm cannot answer the read at all."""
     try:
-        cur.execute(sql, params)
-        return list(cur.fetchall())
-    except Exception as exc:
-        if unreadable(exc):
-            return None
-        raise
+        return rd.must(sql, params)
+    except realmread.Gap:
+        return None
 
 
 def seat_names(guild: str) -> list:
@@ -121,10 +106,10 @@ def seat_names(guild: str) -> list:
     return list(dict.fromkeys(out))
 
 
-def fetch(cur, guild: str) -> dict:
+def fetch(rd, guild: str) -> dict:
     """The four reads for `guild`, each None when the realm cannot answer."""
     names = seat_names(guild)
-    members = _read(cur, MEMBERS_SQL.format(holes=_holes(len(names))), tuple(names))  # noqa: S608
+    members = _read(rd, MEMBERS_SQL.format(holes=_holes(len(names))), tuple(names))  # noqa: S608
     found = sorted({r["name"] for r in in_guild(members or [])})
     out = {"members": members, "attuned": [], "worn": [], "consumables": []}
     if not found:
@@ -134,17 +119,17 @@ def fetch(cur, guild: str) -> dict:
     # S608: every format argument is a run of placeholders sized by a list
     # this module owns; every value is bound by the driver.
     out["attuned"] = _read(
-        cur,
+        rd,
         ATTUNED_SQL.format(holes=holes, quests=_holes(len(quests))),  # noqa: S608
         (*found, *quests),
     )
     out["worn"] = _read(
-        cur,
+        rd,
         WORN_SQL.format(holes=holes),  # noqa: S608
         (len(armory.EQUIPPED_SLOTS), *found),
     )
     out["consumables"] = _read(
-        cur,
+        rd,
         CONSUMABLES_SQL.format(holes=holes, entries=_holes(len(CONSUMABLES))),  # noqa: S608
         (*found, *CONSUMABLES),
     )
@@ -255,12 +240,7 @@ def raidteams_read(query: dict, ctx) -> tuple[int, dict]:
             "error": "guild must be one of the approved guilds",
             "guilds": [g.lower() for g in raidteams.GROUPS],
         }
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            fetched = fetch(cur, guild)
-    finally:
-        conn.close()
+    fetched = fetch(ctx.read, guild)
     return 200, build(guild, fetched)
 
 

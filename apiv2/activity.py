@@ -18,7 +18,7 @@ import re
 
 import commandwords
 
-from ._scope import NOT_A_MEMBER, guarded, guild_member, wanted_name
+from ._scope import NOT_A_MEMBER, guild_member, wanted_name
 
 LIMIT = 60
 LEVEL_DAYS = 7
@@ -141,13 +141,13 @@ def build(
     }
 
 
-def _names(ctx, cur, commands) -> dict:
+def _names(rd, commands) -> dict:
     """The names of the creatures, items, quests and objects the commands
     name by id: one bounded read per table (commandwords.NAMES_SQL)."""
     out = {}
     for table, ids in commandwords.wanted(commands).items():
         sql = commandwords.NAMES_SQL[table].format(holes=", ".join(["%s"] * len(ids)))
-        rows = guarded(ctx, cur, sql, tuple(ids), table)
+        rows = rd.rows(sql, tuple(ids), what=table)
         out[table] = {int(r["id"]): str(r["name"]) for r in rows if r.get("name")}
     return out
 
@@ -156,17 +156,11 @@ def activity(query: dict, ctx) -> tuple[int, dict]:
     name = wanted_name(query)
     if not guild_member(ctx, name):
         return 404, dict(NOT_A_MEMBER)
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            commands = guarded(
-                ctx, cur, COMMANDS_SQL, (name, LIMIT), "overseer_command"
-            )
-            levels = guarded(ctx, cur, LEVELS_SQL, (name, LEVEL_DAYS), "overseer_level")
-            now = guarded(ctx, cur, LEVEL_SQL, (name,), "characters")
-            names = _names(ctx, cur, commands)
-    finally:
-        conn.close()
+    rd = ctx.read
+    commands = rd.rows(COMMANDS_SQL, (name, LIMIT), what="overseer_command")
+    levels = rd.rows(LEVELS_SQL, (name, LEVEL_DAYS), what="overseer_level")
+    now = rd.rows(LEVEL_SQL, (name,), what="characters")
+    names = _names(rd, commands)
     level = int(now[0]["level"]) if now else None
     now_at = int(now[0]["now_at"]) if now and now[0].get("now_at") else None
     return 200, build(name, commands, levels, level, now_at, names)

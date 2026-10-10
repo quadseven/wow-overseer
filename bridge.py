@@ -20591,7 +20591,7 @@ def _fetch_guild_roster(names: list) -> list:
     the recap and the dungeon plan already hold themselves to.
 
     Degrades to "no guild" rather than raising when `guild_member` is missing,
-    the direction `_wide_guarded` takes on the map-server side: a realm image
+    the direction the map server's realm reader (realmread) takes: a realm image
     without the table is a family that shares with nobody, which is exactly
     what this service did before this pass existed.
     """

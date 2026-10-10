@@ -81,13 +81,13 @@ class TheEndpointIsAnAdapter(unittest.TestCase):
         fetch = fetch[: fetch.index("def _fetch_roster_rows")]
         self.assertIn("WHERE kind = 'job' GROUP BY target_name", fetch)
         self.assertIn('"newest_job_rows": newest_job_rows', fetch)
-        self.assertIn("_with_family(cur, roster_rows)", fetch)
+        self.assertIn("_with_family(rd, roster_rows)", fetch)
         self.assertIn("SELECT name, family FROM overseer_roster", fetch)
 
     def test_an_order_is_planned_against_the_same_families(self):
         plan = SERVER[SERVER.index("def _fetch_roster_rows") :]
         plan = plan[: plan.index("def _apply_order")]
-        self.assertIn("return _with_family(cur, rows)", plan)
+        self.assertIn("return _with_family(rd, rows)", plan)
 
     def test_it_is_in_the_route_table(self):
         table = SERVER[SERVER.index("GET_ROUTES = {") :]
@@ -114,7 +114,7 @@ class TheEndpointIsAnAdapter(unittest.TestCase):
         not a 503 on every poll."""
         fetch = SERVER[SERVER.index("def _fetch_decree") :]
         fetch = fetch[: fetch.index("class Handler")]
-        self.assertIn("_guarded(", fetch)
+        self.assertIn("rd.rows(", fetch)
 
     def test_the_orders_it_reads_back_are_its_own(self):
         """Scoped by `source`. A console showing the bridge's traffic would

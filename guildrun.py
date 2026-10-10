@@ -1885,11 +1885,11 @@ def page(rows: list) -> dict:
 
 # --- the site's reads --------------------------------------------------------------
 #
-# Every read the site makes of overseer_guild_run is here: one column list, one
-# guard for a world without the table, the run view above and its story. The
-# bridge never calls these. `reader` is a DB-API cursor with dict rows; _rows is
-# the only function that touches it, so the site's realm reader (#731) replaces
-# that one function and nothing else.
+# Every read the site makes of overseer_guild_run is here: one column list, the
+# run view above and its story. The bridge never calls these. `reader` is the
+# site's realm reader (realmread, #731): _rows is the only function that
+# touches it, and its rows() is the guard for a world without the table (1146)
+# or a column (1054); any other fault still raises.
 
 _log = logging.getLogger("wow-map")
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1909,8 +1909,6 @@ _RUN_SQL = (
 # world whose table predates the column reads the rest, and an asked run's
 # first line says its row does not name the asker.
 _RUN_SQL_THIN = _RUN_SQL.replace(" proposer,", "")
-# The errors a world without the table (1146) or a column (1054) raises.
-_DEGRADED = (1054, 1146)
 
 
 def _holes(n: int) -> str:
@@ -1921,18 +1919,7 @@ def _rows(reader, sql: str, params: tuple, what: str, thin: str = "") -> list:
     """`sql`'s rows; on a degraded schema `thin`'s, then none. Any other
     fault is raised, so it reaches the handler's 503 instead of reading as
     no runs."""
-    for attempt in (sql, thin):
-        if not attempt:
-            break
-        try:
-            reader.execute(attempt, params)
-            return [dict(r) for r in reader.fetchall()]
-        except Exception as exc:
-            if not (exc.args and exc.args[0] in _DEGRADED):
-                raise
-            _log.info("%s unavailable (%s); trying a thinner read", what, exc.args[0])
-    _log.info("%s unavailable; read as none", what)
-    return []
+    return [dict(r) for r in reader.rows(sql, params, fallback=thin, what=what)]
 
 
 def _runs(reader, where: str, params: tuple, n: int) -> list:

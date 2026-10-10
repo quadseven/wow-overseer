@@ -299,7 +299,7 @@ class RosterAndStuckAreOneBuild(unittest.TestCase):
     PAYLOAD = {"members": [], "checked_at": 1, "basis": "b"}
 
     def test_stuck_reuses_the_rosters_build(self):
-        ctx = Context(connect=None, server=None, shared=readcache.ReadCache(5.0))
+        ctx = Context(read=None, server=None, shared=readcache.ReadCache(5.0))
         with mock.patch.object(
             members, "_build_roster", return_value=self.PAYLOAD
         ) as build:
@@ -308,7 +308,7 @@ class RosterAndStuckAreOneBuild(unittest.TestCase):
         self.assertEqual(build.call_count, 1)
 
     def test_without_the_shared_reads_each_builds(self):
-        ctx = Context(connect=None, server=None)
+        ctx = Context(read=None, server=None)
         with mock.patch.object(
             members, "_build_roster", return_value=self.PAYLOAD
         ) as build:
@@ -317,7 +317,7 @@ class RosterAndStuckAreOneBuild(unittest.TestCase):
         self.assertEqual(build.call_count, 2)
 
     def test_the_server_hands_v2_its_shared_reads(self):
-        self.assertIs(map_server._V2_CONTEXT.shared, map_server.SHARED_READS)
+        self.assertIs(map_server._v2_context(None).shared, map_server.SHARED_READS)
 
 
 # ---- the two slow reads ---------------------------------------------------------

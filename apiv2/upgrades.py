@@ -28,7 +28,7 @@ import threading
 import achievements
 import dungeonplan
 
-from ._scope import NOT_A_MEMBER, guarded, guild_member, holes, wanted_name
+from ._scope import NOT_A_MEMBER, guild_member, holes, wanted_name
 
 _WORLD: dict = {}
 _WORLD_LOCK = threading.Lock()
@@ -45,36 +45,31 @@ BASIS = (
 )
 
 
-def _world(ctx, cur) -> dict:
+def _world(ctx) -> dict:
     """The catalogue, encounter and loot rows, read once and kept."""
     with _WORLD_LOCK:
         if _WORLD:
             return _WORLD
-        server = ctx.server
-        catalogue = server._wide_guarded(
-            cur,
+        server, rd = ctx.server, ctx.read
+        catalogue = rd.rows(
             server._PLAN_CATALOGUE,
             (),
-            server._PLAN_CATALOGUE_OLD,
-            "dungeon_access_template",
+            fallback=server._PLAN_CATALOGUE_OLD,
+            what="dungeon_access_template",
         )
         maps = dungeonplan.map_ids(catalogue, achievements.MAP_NAMES)
         encounters, loot = [], []
         if maps:
             h = holes(len(maps))
-            encounters = guarded(
-                ctx,
-                cur,
+            encounters = rd.rows(
                 server._PLAN_ENCOUNTERS.format(holes=h),
                 tuple(maps),
-                "instance_encounters",
+                what="instance_encounters",
             )
-            loot = guarded(
-                ctx,
-                cur,
+            loot = rd.rows(
                 server._PLAN_LOOT.format(holes=h),
                 tuple(maps),
-                "creature_loot_template",
+                what="creature_loot_template",
             )
         if catalogue and loot:
             _WORLD.update(catalogue=catalogue, encounters=encounters, loot=loot)
@@ -84,34 +79,25 @@ def _world(ctx, cur) -> dict:
 def fetch(ctx, name: str) -> dict:
     """The world rows and this member's own: level, worn gear, skills."""
     server = ctx.server
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            world = _world(ctx, cur)
-            one = holes(1)
-            chars = server._wide_guarded(
-                cur,
-                server._PLAN_CHARS.format(holes=one),
-                (name,),
-                server._PLAN_CHARS_OLD.format(holes=one),
-                "characters",
-            )
-            worn = guarded(
-                ctx,
-                cur,
-                server._RECAP_WORN.format(holes=one),
-                (len(server.armory.EQUIPPED_SLOTS), name),
-                "character_inventory",
-            )
-            skills = guarded(
-                ctx,
-                cur,
-                server._RECAP_SKILLS.format(holes=one),
-                (name,),
-                "character_skills",
-            )
-    finally:
-        conn.close()
+    rd = ctx.read
+    world = _world(ctx)
+    one = holes(1)
+    chars = rd.rows(
+        server._PLAN_CHARS.format(holes=one),
+        (name,),
+        fallback=server._PLAN_CHARS_OLD.format(holes=one),
+        what="characters",
+    )
+    worn = rd.rows(
+        server._RECAP_WORN.format(holes=one),
+        (len(server.armory.EQUIPPED_SLOTS), name),
+        what="character_inventory",
+    )
+    skills = rd.rows(
+        server._RECAP_SKILLS.format(holes=one),
+        (name,),
+        what="character_skills",
+    )
     return dict(world, chars=chars, worn=worn, skills=skills)
 
 
@@ -120,18 +106,11 @@ def item_rows(ctx, entries) -> list:
     entries = sorted({int(e) for e in entries if e})
     if not entries:
         return []
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            return guarded(
-                ctx,
-                cur,
-                ITEMS_SQL.format(holes=holes(len(entries))),
-                tuple(entries),
-                "item_template",
-            )
-    finally:
-        conn.close()
+    return ctx.read.rows(
+        ITEMS_SQL.format(holes=holes(len(entries))),
+        tuple(entries),
+        what="item_template",
+    )
 
 
 # --------------------------------------------------------------------- pure --
