@@ -1,6 +1,7 @@
 // One item tooltip for the whole app. Every item link carries data-item (see
 // ui.item). On a device that can hover, hover or keyboard focus shows a
-// 280px card beside the link; on a touch phone a tap opens a bottom sheet.
+// 280px card beside the link; on a touch phone a tap opens a bottom sheet,
+// and a second tap, on the item, the sheet or outside it, closes it.
 // The card is drawn from /api/item, read once per item and kept.
 
 import { load, peek } from "./api.js";
@@ -77,7 +78,8 @@ function ensure() {
   scrim.hidden = true;
   scrim.innerHTML = '<div class="sheet item-sheet" role="dialog" aria-modal="true" aria-label="Item"><span class="grab" aria-hidden="true"></span><div class="tip-body"></div><button type="button" class="close">Close</button></div>';
   document.body.appendChild(scrim);
-  scrim.addEventListener("click", (e) => { if (e.target === scrim || e.target.closest(".close")) hide(); });
+  // The sheet only shows the card, so any tap on it, or outside it, closes it.
+  scrim.addEventListener("click", () => hide());
 }
 
 function fill(target, entry, name) {
@@ -151,7 +153,9 @@ export function install() {
     const el = e.target.closest("[data-item]");
     if (!el) return;
     e.preventDefault();
-    if (touchFirst()) show(el);
+    if (!touchFirst()) return;
+    if (scrim && !scrim.hidden && anchor === el) hide();
+    else show(el);
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
   window.addEventListener("hashchange", hide);

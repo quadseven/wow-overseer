@@ -263,7 +263,8 @@ export default {
     mountModels(main);
     main.querySelectorAll("[data-jump]").forEach((b) => b.addEventListener("click", () => {
       const el = document.getElementById("armory-" + b.getAttribute("data-jump"));
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "start", inline: "start" });
+      const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (el) el.scrollIntoView({ behavior: still ? "auto" : "smooth", block: "start", inline: "start" });
     }));
   },
 };

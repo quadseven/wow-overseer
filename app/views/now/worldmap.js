@@ -147,7 +147,7 @@ function svgMarkup(o, vb, ppu) {
   const coast = (C.coast || []).map((d) => `<path d="${esc(d)}" fill="none" stroke="#9fd0e0" stroke-opacity=".22" stroke-width="18" filter="url(#wmg${id})"></path>`).join("")
     + (C.coast || []).map((d) => `<path d="${esc(d)}" fill="#b49c6c" stroke="#3b2c17" stroke-width="2.4"></path>`).join("");
   const zonePaths = zones.map((z) => `<path class="wm-zone" data-zone="${esc(z.z.name)}" d="${esc(z.z.d)}" fill="${z.tint}"${CONTESTED[z.z.label] ? ' stroke-dasharray="5 4"' : ""}></path>`).join("");
-  return `<svg class="wm-svg" viewBox="${vb.map(f1).join(" ")}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(C.name + " map with " + o.dots.length + " characters marked")}">`
+  return `<svg class="wm-svg" viewBox="${vb.map(f1).join(" ")}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="${esc(C.name + " map with " + o.dots.length + " characters marked")}">`
     + `<defs><filter id="wmt${id}" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="n"></feTurbulence><feColorMatrix in="n" type="saturate" values="0" result="g"></feColorMatrix><feComponentTransfer in="g" result="t"><feFuncA type="linear" slope="0.18"></feFuncA></feComponentTransfer><feComposite in="t" in2="SourceGraphic" operator="in" result="tex"></feComposite><feMerge><feMergeNode in="SourceGraphic"></feMergeNode><feMergeNode in="tex"></feMergeNode></feMerge></filter><filter id="wmg${id}"><feGaussianBlur stdDeviation="6"></feGaussianBlur></filter></defs>`
     + coast + `<g filter="url(#wmt${id})">${zonePaths}</g>` + labelSvg(zones, shown, dots, px)
     + dots.map((d) => dotSvg(d, px, !o.compact)).join("") + `</svg>`;

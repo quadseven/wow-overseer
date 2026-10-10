@@ -274,8 +274,6 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
 .q3 { color: var(--q-rare); --ring: var(--q-rare); }
 .q4 { color: var(--q-epic); --ring: var(--q-epic); }
 .q5 { color: var(--q-legendary); --ring: var(--q-legendary); }
-:root[data-theme="light"] .q2 { color: #1a7a00; }
-@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .q2 { color: #1a7a00; } }
 
 .tip {
   position: fixed; z-index: 40; width: 280px; background: var(--tip-bg); color: var(--tip-text);
@@ -363,3 +361,32 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
    sticky .thumb inside it had no room to move and scrolled away (Raid PR). */
 [data-slot="thumb"] { position: sticky; bottom: calc(var(--tabbar-h) + 4px); z-index: 5; }
 [data-slot="thumb"] > .thumb { position: static; }
+
+/* ---- Phone and accessibility pass ------------------------------------------ */
+/* On a touch screen an item or a member is a 44px target; a mouse keeps the
+   dense rows. Tabs and the skip link meet 44px everywhere. */
+@media (pointer: coarse) {
+  .item, a.member, .chip { min-height: 44px; }
+  .card > a:not([class]) { min-height: 44px; display: flex; align-items: center; }
+  .table th button { min-height: 44px; }
+}
+.tabs a { min-width: 44px; justify-content: center; flex-shrink: 0; }
+.skip { min-height: 44px; }
+/* A histogram bar that links takes its whole column, so the short bars are
+   as easy to hit as the tall ones. */
+.histo a.hit { align-self: stretch; display: flex; align-items: flex-end; background: none; border-radius: 0; }
+.histo a.hit .bar { flex: 1; }
+.histo a.hit:hover { background: none; }
+.histo a.hit:hover .bar:not(.median) { background: var(--color-neutral-600); }
+@media (min-width: 760px) { [data-slot="thumb"] { display: none; } }
+/* The phone sheet draws the same card lines as the hover card: each line
+   spread across, the name in its quality colour, the quiet lines quiet. */
+.item-sheet .ln { display: flex; justify-content: space-between; gap: 8px; }
+.item-sheet .ln-name { font-size: var(--fs-3); font-weight: 500; }
+.item-sheet .ln-dim { color: var(--tip-dim); }
+.item-sheet .ln-bonus { color: var(--tip-bonus); }
+.item-sheet .ln-src { color: var(--tip-source); padding-top: 6px; }
+.item-sheet .ln-where { color: var(--tip-where); }
+.item-sheet .ln-gap { padding-top: 4px; }
+.item-sheet .tq0 { color: #9d9d9d; } .item-sheet .tq1 { color: #e9e9ed; } .item-sheet .tq2 { color: #1eff00; }
+.item-sheet .tq3 { color: #3d8ff0; } .item-sheet .tq4 { color: #b16cf0; } .item-sheet .tq5 { color: #ff8000; }
