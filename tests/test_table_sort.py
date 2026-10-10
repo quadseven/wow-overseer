@@ -184,7 +184,13 @@ class TheMembersTable(unittest.TestCase):
         self.assertIn("dir=desc", hash2)
         self.assertEqual(
             heads(table2),
-            {"name": None, "level": "descending", "ilvl": None, "stuck": None},
+            {
+                "name": None,
+                "level": "descending",
+                "ilvl": None,
+                "xp": None,
+                "stuck": None,
+            },
         )
         self.assertEqual(order(table2), ["Zug", "Grug", "Og"])
 

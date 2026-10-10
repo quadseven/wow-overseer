@@ -57,9 +57,14 @@ export function pips(r, cls) {
   return html`<div class="g-pips ${cls || ""}" role="img" aria-label="${done + " of " + total + " bosses down"}">${cells}</div>`;
 }
 
+// The outcomes of a run that never reached the door (guildrun.OUTCOMES):
+// no instance was read, so there is no boss count to measure.
+const NEVER_IN = ["refused", "not entered"];
+
 export function bossText(r) {
   const total = Number(r.bosses_total) || 0;
-  return total ? (Number(r.bosses_done) || 0) + " of " + total + " bosses down" : "bosses not measured";
+  if (total) return (Number(r.bosses_done) || 0) + " of " + total + " bosses down";
+  return NEVER_IN.includes(r.outcome) && !Number(r.seconds_inside) ? "never went in" : "bosses not measured";
 }
 
 export function seatNames(r) { return (r.members || []).map((m) => m.name).join(", "); }
