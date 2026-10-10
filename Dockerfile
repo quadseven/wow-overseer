@@ -53,13 +53,13 @@ COPY core.py bridge.py voice.py transform.py \
      campaignqueue.py dungeonpace.py standin.py \
      campaignplan.py dungeonladder.py director.py levelroute.py \
      preraid.py gearscore.py gearupgrades.py pvpgear.py \
-     runtimeline.py runstory.py \
+     runtimeline.py runstory.py places.py commandwords.py \
      vclient.py guildgear.py \
      situation.py standstill.py restsupply.py vision.py llmmode.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py \
      realmroller.py realmroller_world.py realmroller_plan.py realmroller_act.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json bagicons.json spells.json bagspells.json viewerdisplays.json \
-     craftbook.json taxinodes.json itemextendedcost.json \
+     craftbook.json taxinodes.json itemextendedcost.json triggers.json \
      index.html /app/
 
 # The operations app (index.html above loads it): its modules and styles, and

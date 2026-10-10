@@ -112,7 +112,7 @@ class TheGrouping(unittest.TestCase):
             ],
         )
         last = payload["dungeons"][-1]
-        self.assertEqual(last["name"], "map %d" % OFF_PATH)
+        self.assertEqual(last["name"], "The Shattered Halls")
         self.assertIn("off the dungeon path", last["level_line"])
         self.assertIn("level 70", last["level_line"])
 

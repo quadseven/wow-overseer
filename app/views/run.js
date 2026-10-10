@@ -43,11 +43,30 @@ function said(r) {
   };
 }
 
+// What a seat said, as its timeline line: {lead, text}. A line that already
+// starts with the seat's name ("Durg entered The Deadmines.") is drawn with
+// the name once, as its subject, and not as "Durg: Durg entered".
+//
+// Lines the world narrated before maps were named say "crossed into an
+// unknown place". That fallback was written only for a map outside the four
+// continents, and the only such map a seat crosses into while its run lasts
+// is the run's dungeon, so the line names it.
+export function seatLine(name, text, place) {
+  let t = String(text || "");
+  if (place) t = t.replace(/\bcrossed into an unknown place\b/, "entered " + place);
+  const own = name && t.startsWith(name + " ");
+  return { lead: !!own, text: own ? t.slice(name.length + 1) : t };
+}
+
 function timeline(r) {
   const own = steps(r).filter((s) => s.t);
   const heard = said(r);
   const rows = own.concat(heard ? heard.list : []).sort((a, b) => (a.t || 0) - (b.t || 0));
-  const lines = rows.map((s) => html`<div class="g-step"><span class="g-step-t">${s.t ? clock(s.t) : ""}</span><span>${s.who ? html`${member({ name: s.who })}: ` : ""}${s.text}</span></div>`);
+  const lines = rows.map((s) => {
+    const l = s.who ? seatLine(s.who, s.text, r.place) : { text: s.text };
+    const who = s.who ? html`${member({ name: s.who })}${l.lead ? " " : ": "}` : "";
+    return html`<div class="g-step"><span class="g-step-t">${s.t ? clock(s.t) : ""}</span><span>${who}${l.text}</span></div>`;
+  });
   let note = "";
   if (!heard) note = html`<span class="muted">Reading what the seats said...</span>`;
   else if (heard.failed.length) note = html`<span class="muted">Not measured for ${heard.failed.join(", ")}: their reads did not answer.</span>`;
@@ -86,7 +105,7 @@ ${state("empty", "No run #" + ctx.params.id + " in the guild runs the realm has 
 ${chose(r) ? html`<span class="muted">${chose(r)}</span>` : ""}
 ${cause(r) ? html`<span>${cause(r)}</span>` : ""}
 ${r.story ? html`<span class="muted">${r.story}</span>` : ""}
-<span class="muted">${extra}${r.band_line ? " | " + r.band_line : ""}${r.composition ? " | " + r.composition : ""}</span></div>
+<span class="muted">${extra}${r.band_line ? " | " + r.band_line : ""}</span></div>
 <div class="card g-list"><div class="g-list-head"><span class="g-card-title">Seats</span><span class="muted">${plural((r.members || []).length, "seat")}</span></div>${seatRows(r)}</div>
 </div>
 <div class="card g-r-timeline"><span class="g-card-title">Timeline</span><div id="g-r-timeline">${timeline(r)}</div></div>

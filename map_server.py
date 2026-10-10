@@ -46,6 +46,7 @@ import frames
 import goals
 import guildbank
 import guildcraft
+import places
 import guildgear
 import guildroute
 import jevview
@@ -2644,9 +2645,13 @@ _GUILD_RUNS_SQL = (
     "dungeon_jev, dungeon_confidence, composition_by, composition_jev, "
     "composition_confidence, prior_rate, prior_runs, state, outcome, why, deaths, "
     "seconds_inside, bosses_done, bosses_total, loot_items, loot_notable, "
-    "ilvl_gained, levels_gained, created_at, ended_at "
+    "ilvl_gained, levels_gained, created_at, ended_at, proposer "
     "FROM overseer_guild_run ORDER BY id DESC LIMIT 500"
 )
+# Who asked for each run in guild chat (`proposer`, which the bridge adds):
+# without it every asked run read "a member asked for it". A world whose table
+# predates the column reads the rest.
+_GUILD_RUNS_SQL_THIN = _GUILD_RUNS_SQL.replace(", proposer ", " ")
 
 # WHY A RUN WENT THE WAY IT DID (runstory). The deaths of the shown runs'
 # members inside those runs' own windows, and which creatures are bosses.
@@ -5520,7 +5525,7 @@ class Handler(BaseHTTPRequestHandler):
             now=datetime.now(), **fetched)
         payload["board"] = recap.build_lootboard(
             board_map, achievements.MAP_NAMES.get(board_map,
-                                                  "map %d" % board_map),
+                                                  places.map_name(board_map)),
             board_encounters, loot_rows, char_rows, equipped_rows,
             ITEMS.icons, names, skill_rows, ITEMS)
         return payload
@@ -6279,7 +6284,8 @@ class Handler(BaseHTTPRequestHandler):
             conn = _connect()
             try:
                 with conn.cursor() as cur:
-                    rows = _wide_guarded(cur, _GUILD_RUNS_SQL, (), "", "overseer_guild_run")
+                    rows = _wide_guarded(cur, _GUILD_RUNS_SQL, (), _GUILD_RUNS_SQL_THIN,
+                                         "overseer_guild_run")
                     payload = guildrun.page(list(rows))
                     # Why each run that came back went the way it did.
                     _guild_run_stories(cur, payload["recent"])

@@ -65,6 +65,8 @@ class DetectLevelUpTest(unittest.TestCase):
 
 class DetectZoneChangeTest(unittest.TestCase):
     def test_zone_change_carries_zone_names_from_geometry(self):
+        # Geometry keeps the dbc's "Ogrimmar" (pinned above); the narration
+        # says the name the game says, through places.zone_display.
         prev = {"Grug": row("Grug", zone_id=14, pos=DUROTAR_POS)}
         curr = {"Grug": row("Grug", zone_id=1637, pos=OGRIMMAR_POS)}
         self.assertEqual(
@@ -73,7 +75,12 @@ class DetectZoneChangeTest(unittest.TestCase):
                 Event(
                     "zone_change",
                     "Grug",
-                    {"from_zone": "Durotar", "to_zone": "Ogrimmar"},
+                    {
+                        "from_zone": "Durotar",
+                        "to_zone": "Orgrimmar",
+                        "from_map": 1,
+                        "to_map": 1,
+                    },
                 )
             ],
         )

@@ -17,6 +17,8 @@ import json
 import os
 from dataclasses import dataclass
 
+import places
+
 CONTINENT_IDS = {0, 1, 530, 571}
 
 
@@ -110,15 +112,20 @@ class Geometry:
 
         Zone rectangles overlap (subzones inside parents); smallest wins.
         Exile-region zones are searched too - they belong to map 530.
+
+        A map with no region is an instance, a battleground, an arena or a
+        boat, and zones.json holds none of them: it is named by its map
+        (places.MAP_NAMES), "The Deadmines" for map 36. This said "an unknown
+        place" for every one of them, and the event narration printed it.
         """
         best = None
         best_area = None
-        fallback = "an unknown place"
+        fallback = None
         for _, region in self._regions_for(map_id):
-            fallback = region["name"] if fallback == "an unknown place" else fallback
+            fallback = fallback or region["name"]
             for z in region["zones"]:
                 if _inside(z, x, y):
                     area = (z["left"] - z["right"]) * (z["top"] - z["bottom"])
                     if best_area is None or area < best_area:
                         best, best_area = z["name"], area
-        return best or fallback
+        return best or fallback or places.map_name(map_id)

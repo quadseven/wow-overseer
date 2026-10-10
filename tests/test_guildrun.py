@@ -177,7 +177,7 @@ class WhoCanGo(unittest.TestCase):
         )
         self.assertEqual(
             guildrun.why_not(member("A", 15, MAGE, map_id=36), set(), set(), set()),
-            "inside an instance",
+            "inside The Deadmines",
         )
         self.assertEqual(
             guildrun.why_not(member("A", 15, MAGE, health=0), set(), set(), set()),
@@ -547,7 +547,8 @@ class MembersLeftInsideADungeonHearthOut(unittest.TestCase):
     def test_why_not_names_the_instance_before_the_gear(self):
         weak_inside = member("Q", 15, MAGE, map_id=43, gear_ilvl=2.0)
         self.assertEqual(
-            guildrun.why_not(weak_inside, set(), set(), set()), "inside an instance"
+            guildrun.why_not(weak_inside, set(), set(), set()),
+            "inside Wailing Caverns",
         )
 
     def test_the_bridge_never_hearths_a_family_member(self):

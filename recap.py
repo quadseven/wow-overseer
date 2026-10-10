@@ -86,6 +86,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import places
 from armory import (
     EQUIPPED_SLOTS,
     QUALITY_NAMES,
@@ -187,9 +188,10 @@ def place_name(map_id: int, zone_id: int, dungeons: dict, zones: dict) -> str:
     THREE SOURCES IN ORDER, AND A REFUSAL AT THE END. A dungeon map has a name
     in the caller's dungeon table, and that is the interesting case and the
     exact one. Otherwise the zone id is looked up in the frozen client zone
-    table, which covers the outdoor world. Otherwise the map and zone are
-    printed as numbers, because "map 169, zone 40" is a true thing to say and
-    "unknown" throws away the ids somebody could go and look up.
+    table, which covers the outdoor world. Otherwise the map is named from
+    the client's map list (places.MAP_NAMES), and a zone this file cannot name
+    keeps its number beside it: "Eastern Kingdoms, zone 40" is a true thing to
+    say, and "unknown" throws away the id somebody could go and look up.
 
     THERE IS NO ZONE NAME TABLE ON THIS REALM TO DO BETTER WITH. `areatable_dbc`
     exists and holds zero rows, as do `map_dbc` and `dungeonencounter_dbc`, so
@@ -202,10 +204,12 @@ def place_name(map_id: int, zone_id: int, dungeons: dict, zones: dict) -> str:
         return dungeon
     zone = zones.get(zone_id)
     if zone:
-        return zone
+        return places.zone_display(zone)
+    if places.MAP_NAMES.get(map_id) and (places.is_instance(map_id) or not zone_id):
+        return places.map_name(map_id)
     if zone_id:
-        return "map %d, zone %d" % (map_id, zone_id)
-    return "map %d" % map_id
+        return "%s, zone %d" % (places.map_name(map_id), zone_id)
+    return places.map_name(map_id)
 
 
 # --- items -----------------------------------------------------------------
@@ -608,7 +612,7 @@ def _ended_summary(
     end = run.get("ended_at") or run.get("last_progress_at") or run["started_at"]
     loot = run_loot(run, firsts, items, icons, now, dungeons, zones, book)
     return {
-        "dungeon": dungeons.get(map_id, "map %d" % map_id),
+        "dungeon": dungeons.get(map_id, places.map_name(map_id)),
         "leader": run.get("leader_name") or "",
         "ended_at": _iso(run.get("ended_at")),
         "ended_reason": _ending(run),
@@ -621,7 +625,7 @@ def _ended_summary(
         ),
         "line": "the last run was %s, led by %s, and it lasted %s"
         % (
-            dungeons.get(map_id, "map %d" % map_id),
+            dungeons.get(map_id, places.map_name(map_id)),
             run.get("leader_name") or "nobody named",
             elapsed(run["started_at"], end),
         ),
@@ -684,7 +688,7 @@ def build_recap(
 
     run = max(active, key=lambda r: r["started_at"])
     map_id = int(run["map_id"])
-    dungeon = dungeons.get(map_id, "map %d" % map_id)
+    dungeon = dungeons.get(map_id, places.map_name(map_id))
     progressed = run.get("last_progress_at") or run["started_at"]
     stalled = (now - progressed) > STALL_AFTER
     party = party_state(roster, snapshot_rows, run, now)

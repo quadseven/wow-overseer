@@ -36,7 +36,7 @@ const STATE = {
 
 export function runState(r) {
   const key = r.state === "inside" ? "inside" : r.outcome || r.status || r.state || "";
-  return STATE[key] || { text: String(key || "unknown").replace(/_/g, " "), tone: "warn", icon: "ph ph-warning-circle" };
+  return STATE[key] || { text: String(key || "state not recorded").replace(/_/g, " "), tone: "warn", icon: "ph ph-warning-circle" };
 }
 
 export function stateTag(r) {

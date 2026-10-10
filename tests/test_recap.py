@@ -225,7 +225,9 @@ class WherePlacesGetTheirNames(unittest.TestCase):
         """`areatable_dbc` holds zero rows on this realm, so this is a real
         state and not a defensive branch. The ids are what somebody can go
         and look up; "unknown" throws them away."""
-        self.assertEqual(recap.place_name(0, 1581, DUNGEONS, ZONES), "map 0, zone 1581")
+        self.assertEqual(
+            recap.place_name(0, 1581, DUNGEONS, ZONES), "Eastern Kingdoms, zone 1581"
+        )
 
     def test_a_place_with_no_zone_at_all_names_the_map(self):
         self.assertEqual(recap.place_name(169, 0, DUNGEONS, ZONES), "map 169")

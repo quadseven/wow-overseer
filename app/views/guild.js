@@ -147,7 +147,7 @@ function cqCard(ctx, g) {
     const blocked = q.state === "blocked";
     return html`<a class="g-row g-cq" href="${memberHref(q.member, "quests")}">
 <i class="${blocked ? "ph-fill ph-hand-palm" : "ph ph-circle-dashed"}" data-gt="${blocked ? "warn" : "accent"}" aria-hidden="true"></i>
-<span class="g-cq-body"><span class="g-cq-line"><span><b style="color:${classVar(q.class)}">${q.member}</b> <span class="muted">${q.quest || (q.quest_id ? "quest " + q.quest_id : notMeasured("quest not measured"))}</span></span><span class="g-cq-state" data-gt="${blocked ? "warn" : "accent"}">${q.state}</span></span>
+<span class="g-cq-body"><span class="g-cq-line"><span><b style="color:${classVar(q.class)}">${q.member}</b> <span class="muted">${q.quest || (q.quest_id ? "quest " + q.quest_id : q.walk_to || notMeasured("quest not recorded on its step"))}</span></span><span class="g-cq-state" data-gt="${blocked ? "warn" : "accent"}">${q.state}</span></span>
 ${blocked ? html`<span class="muted">${q.note}${q.at ? " | " + since(q.at) : ""}</span>` : ""}</span></a>`;
   };
   const first = cq.rows.slice(0, CQ_SHOWN), rest = cq.rows.slice(CQ_SHOWN);

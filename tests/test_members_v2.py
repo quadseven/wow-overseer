@@ -303,11 +303,11 @@ class TheRosterAndStuckReads(unittest.TestCase):
         self.assertEqual(members._step_of(m, None), "Guild job: level")
         self.assertEqual(
             members.job_step({"source": "guildjobs:classquest-walk:Chopp"}),
-            "Guild job: classquest walk",
+            "Guild job: class quest walk",
         )
         self.assertEqual(
             members.job_answer({"status": "error", "detail": "refused"}),
-            "error: refused",
+            "refused",
         )
 
     def test_roster_and_stuck_take_no_name_and_answer_the_same_to_one(self):
