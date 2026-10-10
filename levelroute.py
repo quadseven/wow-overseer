@@ -111,6 +111,20 @@ OUTGROWN = 2
 PCT_LOW = 0.1
 PCT_HIGH = 0.9
 
+# A LATE CHAIN SET IN A LOW ZONE IS NOT THE ZONE'S BAND (2026-10-10). The
+# percentiles shrug off one stray quest but not a cluster: Westfall holds five
+# level-44 Sweet Amber quests beside its own 9 to 20, which made its band 10 to
+# 44 for the Alliance. Westfall then fitted every Alliance member up to 44, was
+# the lowest band that did, and never read as outgrown before 45: on the dev
+# realm 33 Cave members, levels 13 to 28, were walked to Sentinel Hill in one
+# day. So before the percentiles are read, quests standing more than BAND_GAP
+# levels above all the zone's lower ones are left out, when they are at most
+# BAND_TAIL_SHARE of the zone's quests (`_main_body`). Read against the dev
+# world this moves only Westfall (to 10-18), Loch Modan (11-19) and, for the
+# Horde, Ashenvale (20-30) and Desolace (32-39).
+BAND_GAP = 8
+BAND_TAIL_SHARE = 0.25
+
 # Danger. DANGER_GAP levels over the weakest is a red mob; a zone where
 # DANGER_SHARE of the hostile spawns are red is put last. DEATHS_AVOID of the
 # family's own deaths inside DEATH_HOURS puts a zone last whatever the spawns
@@ -429,6 +443,18 @@ def _percentile(values: list, fraction: float) -> int:
     return int(ordered[index])
 
 
+def _main_body(levels: list) -> list:
+    """The zone's quest levels without a late chain far above them (BAND_GAP,
+    BAND_TAIL_SHARE): cut at the lowest gap wider than BAND_GAP whose quests
+    above it are few enough to be a chain and not the zone."""
+    ordered = sorted(levels)
+    chain = BAND_TAIL_SHARE * len(ordered)
+    for i in range(1, len(ordered)):
+        if ordered[i] - ordered[i - 1] > BAND_GAP and len(ordered) - i <= chain:
+            return ordered[:i]
+    return ordered
+
+
 def side_quests(quest_rows, team: str) -> tuple:
     """The quests this side can take: race mask open to it, no class lock."""
     mask = RACE_MASK[team]
@@ -446,18 +472,21 @@ def side_quests(quest_rows, team: str) -> tuple:
 
 
 def bands(quest_rows, team: str) -> dict:
-    """zone id -> (floor, ceiling, quest count) off the side's quest levels."""
+    """zone id -> (floor, ceiling, quest count) off the side's quest levels:
+    the percentiles of the zone's main body (`_main_body`), and every quest in
+    the count."""
     levels: dict = {}
     for row in side_quests(quest_rows, team):
         levels.setdefault(int(row["zone"]), []).append(int(row["level"]))
-    return {
-        zone: (
-            _percentile(found, PCT_LOW),
-            min(_percentile(found, PCT_HIGH), LEVEL_CAP),
+    out = {}
+    for zone, found in levels.items():
+        body = _main_body(found)
+        out[zone] = (
+            _percentile(body, PCT_LOW),
+            min(_percentile(body, PCT_HIGH), LEVEL_CAP),
             len(found),
         )
-        for zone, found in levels.items()
-    }
+    return out
 
 
 def here_of(spot) -> tuple | None:
