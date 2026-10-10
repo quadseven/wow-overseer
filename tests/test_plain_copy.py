@@ -29,7 +29,6 @@ import decree  # noqa: E402
 import dungeonpath  # noqa: E402
 import jobs  # noqa: E402
 import runtimeline  # noqa: E402
-import standing  # noqa: E402
 import tradespec  # noqa: E402
 
 NOW = datetime(2026, 10, 4, 20, 30, 0)
@@ -276,11 +275,10 @@ class TheOtherViewsArePlain(unittest.TestCase):
         line = council._job_said("dungeon:blackrock-depths")
         self.assertEqual(line, "Blackrock Depths runs")
 
-    def test_the_trade_and_standing_notes(self):
+    def test_the_trade_notes(self):
         for text in (
             tradespec.STEERING_LIMIT,
             tradespec.GRANT_REFUSAL,
-            standing.ENCHANTING_WHY,
         ):
             self.assertEqual(code_in(text), [], text)
         for spec in tradespec.SPECS:

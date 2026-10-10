@@ -1,11 +1,10 @@
 """Every tab shows the Horde family as fully as the Alliance one (#198).
 
 Two families live on the dev realm: Grug's five (Alliance, guild Cave) and
-Zug's five (Horde, guild Bonkers). Most tabs had already learned that. Five
+Zug's five (Horde, guild Bonkers). Most tabs had already learned that. Four
 places still read bonds' one family, or one guild, and so drew the Alliance
 alone or drew the Horde wrongly:
 
-  * the Armory's standing panel listed Grug's five only;
   * the Eye counted "One family" over Grug's five;
   * the Chronicle's live recap drew a Horde run with the Alliance party;
   * the Trades tab was Cave's alone;
@@ -35,11 +34,8 @@ if not hasattr(sys.modules["pymysql"], "err"):
     _err.MySQLError = _MySQLError
     sys.modules["pymysql"].err = _err
 
-import armory  # noqa: E402
-import bonds  # noqa: E402
 import eye  # noqa: E402
 import map_server  # noqa: E402  (must follow the pymysql stub)
-import standing  # noqa: E402
 import wealth  # noqa: E402
 
 map_server.log.propagate = False
@@ -133,61 +129,6 @@ class TheEyeCountsEveryFamily(unittest.TestCase):
         self.assertEqual(
             {"Grug": "Grug", "Zug": "Zug"}, {r["name"]: r["family"] for r in rows}
         )
-
-
-class TheStandingPanelHasASidePerFamily(unittest.TestCase):
-    BOOK = standing.StandingBook.load(".")
-    TALENTS = armory.TalentBook.load(".")
-
-    def build(self):
-        chars = [
-            {
-                "name": "Grug",
-                "level": 60,
-                "race": 1,
-                "class": 1,
-                "activeTalentGroup": 0,
-            },
-            {"name": "Zug", "level": 25, "race": 2, "class": 1, "activeTalentGroup": 0},
-        ]
-        return standing.build_standing(
-            chars, [], [], [], [], self.BOOK, self.TALENTS, families=GROUPS
-        )
-
-    def test_both_families_are_drawn_alliance_first(self):
-        p = self.build()
-        self.assertEqual(["alliance", "horde"], [s["faction"] for s in p["sides"]])
-        self.assertEqual(ALLIANCE + HORDE, [m["name"] for m in p["members"]])
-
-    def test_each_family_has_its_own_gap(self):
-        for side in self.build()["sides"]:
-            self.assertIn("missing", side["gap"])
-
-    def test_a_horde_member_gets_the_horde_bond(self):
-        """bonds.FAMILY is only the driven family; a Horde card had no role."""
-        zug = next(m for m in self.build()["members"] if m["name"] == "Zug")
-        self.assertEqual(bonds.bond_of("Zug").role, zug["role"])
-
-    def test_the_handler_reads_every_family(self):
-        h = handler()
-        fetched = {
-            "char_rows": [],
-            "skill_rows": [],
-            "reputation_rows": [],
-            "talent_rows": [],
-            "spell_rows": [],
-        }
-        with (
-            mock.patch.object(map_server, "_fetch_family_groups", return_value=GROUPS),
-            mock.patch.object(
-                map_server, "_fetch_standing", return_value=fetched
-            ) as fetch,
-        ):
-            h._standing({})
-        fetch.assert_called_once_with(ALLIANCE + HORDE)
-        code, p = body(h)
-        self.assertEqual(200, code)
-        self.assertEqual(2, len(p["sides"]))
 
 
 class TheRecapIsOnePerFamily(unittest.TestCase):
@@ -330,38 +271,6 @@ class TheGuildBankSpeaksForEachGuild(unittest.TestCase):
         g = wealth.build_guild_bank(guild_rows, [], [])
         self.assertEqual("The family is in Cave.", g["lead"])
         self.assertTrue(g["body"])
-
-
-class TheLineupPutsTheAllianceFirst(unittest.TestCase):
-    def test_a_tie_no_longer_puts_the_horde_guild_first(self):
-        rows = [
-            {
-                "guildid": 24,
-                "guild_name": "Bonkers",
-                "name": "Zug",
-                "class_id": 1,
-                "level": 25,
-                "race": 2,
-            },
-            {
-                "guildid": 23,
-                "guild_name": "Cave",
-                "name": "Grug",
-                "class_id": 1,
-                "level": 60,
-                "race": 1,
-            },
-        ]
-        h = handler()
-        with mock.patch.object(
-            map_server,
-            "_fetch_lineup",
-            return_value={"roster": ["Grug", "Zug"], "rows": rows},
-        ):
-            h._lineup({})
-        code, p = body(h)
-        self.assertEqual(200, code)
-        self.assertEqual(["Cave", "Bonkers"], [g["guild"] for g in p["guilds"]])
 
 
 if __name__ == "__main__":

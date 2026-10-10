@@ -63,7 +63,7 @@ FETCH = SERVER[
         "# --- which dungeon is worth running next"
     )
 ]
-HANDLER = SERVER[SERVER.index("def _trades") : SERVER.index("def _dungeons")]
+HANDLER = SERVER[SERVER.index("def _trades") : SERVER.index("def _run_timeline")]
 
 
 class WhereTheCodeIsAllowedToSit(unittest.TestCase):
@@ -82,9 +82,9 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
 
     def test_the_handler_sits_in_the_gap_between_two_claimed_windows(self):
         """The Armory, Family and Wealth handler windows all END at
-        `def _thoughts`, and the dungeon plan's BEGINS at `def _dungeons`."""
+        `def _thoughts`; this one ends at `def _run_timeline`."""
         self.assertGreater(SERVER.index("def _trades"), SERVER.index("def _thoughts"))
-        self.assertLess(SERVER.index("def _trades"), SERVER.index("def _dungeons"))
+        self.assertLess(SERVER.index("def _trades"), SERVER.index("def _run_timeline"))
 
 
 class TheEndpoint(unittest.TestCase):

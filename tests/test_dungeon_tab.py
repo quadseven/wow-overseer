@@ -56,10 +56,6 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     one, so a block dropped in the wrong window is silently asserted about by
     somebody else's suite."""
 
-    def test_the_handler_sits_above_the_recaps_own_window(self):
-        """That window runs from `def _recap` to `def _council`."""
-        self.assertLess(SERVER.index("def _dungeons"), SERVER.index("def _recap"))
-
     def test_the_fetch_sits_above_the_recaps_fetch_window(self):
         """test_recap_tab slices `def _fetch_recap` to the current-goal
         banner and forbids a bare cur.execute anywhere inside it."""
@@ -69,12 +65,9 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
 
 
 class TheEndpoint(unittest.TestCase):
-    def test_the_handler_takes_nothing_from_the_caller(self):
+    def test_the_families_are_read_from_the_roster(self):
         """WHO the families are belongs to the roster, exactly as /api/armory
-        and /api/family refuse a name. This one asks about every dungeon at
-        once, so there is no map id to steer either."""
-        handler = SERVER[SERVER.index("def _dungeons") : SERVER.index("def _recap")]
-        self.assertNotIn("query.get", handler)
+        and /api/family refuse a name."""
         fetch = SERVER[
             SERVER.index("def _fetch_dungeonplan") : SERVER.index(
                 "# --- the live dungeon recap"
@@ -96,16 +89,6 @@ class TheEndpoint(unittest.TestCase):
         """bonds knows one family. The roster's own `family` column knows the
         Alliance family and the Horde one, so that is what the path reads."""
         self.assertIn("SELECT name, family FROM overseer_roster", SERVER)
-        paths = SERVER[
-            SERVER.index("def _dungeon_paths") : SERVER.index(
-                "# --- the live dungeon recap"
-            )
-        ]
-        self.assertIn('for head, roster in fetched["families"].items():', paths)
-
-    def test_a_dead_database_is_a_503_that_keeps_what_is_drawn(self):
-        handler = SERVER[SERVER.index("def _dungeons") : SERVER.index("def _recap")]
-        self.assertIn("self._send(503", handler)
 
 
 class TheReads(unittest.TestCase):
@@ -225,14 +208,6 @@ class TheReads(unittest.TestCase):
         sql = sql[: sql.index(")" + chr(10))]
         self.assertNotIn("Chance", sql)
         self.assertNotIn("GroupId", sql)
-
-    def test_the_handler_hands_the_book_over(self):
-        paths = SERVER[
-            SERVER.index("def _dungeon_paths") : SERVER.index(
-                "# --- the live dungeon recap"
-            )
-        ]
-        self.assertIn('fetched["skill_rows"], ITEMS)', paths)
 
     def test_the_worn_and_skill_reads_are_the_loot_boards_own(self):
         """What a character wears and what they may hold are one question with

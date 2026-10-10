@@ -17,7 +17,6 @@ import raidlineup
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
-SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 GOLD = guildwork.COPPER_PER_GOLD
@@ -509,15 +508,6 @@ class TheBridgePass(unittest.TestCase):
 
 
 class ThePage(unittest.TestCase):
-    def test_the_lineup_endpoint_attaches_the_work(self):
-        lineup = SERVER[SERVER.index("    def _lineup(") :]
-        lineup = lineup[: lineup.index("    def _raidgoals(")]
-        self.assertIn("guildwork.attach_work(", lineup)
-        self.assertIn("guildwork.contributions(", lineup)
-
-    def test_the_dues_read_rides_the_kind_index(self):
-        self.assertIn("WHERE kind = 'mail' AND source LIKE %s", SERVER)
-
     def test_the_module_ships_in_the_image(self):
         self.assertIn("guildwork.py", DOCKERFILE)
 

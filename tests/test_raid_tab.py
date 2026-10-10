@@ -69,12 +69,6 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
             SERVER.index("def _fetch_raidgoals"), SERVER.index("def _fetch_dungeonplan")
         )
 
-    def test_the_handler_sits_outside_the_dungeon_plans_handler_window(self):
-        """That window runs from `def _dungeons` to the recap's handler."""
-        self.assertLess(
-            SERVER.index("    def _raidgoals"), SERVER.index("    def _dungeons")
-        )
-
 
 class TheEndpoint(unittest.TestCase):
     def test_the_handler_takes_nothing_from_the_caller(self):
@@ -82,9 +76,7 @@ class TheEndpoint(unittest.TestCase):
         tables, exactly as /api/armory and /api/family refuse a name. This one
         asks a single question about a single raid, so there is nothing to
         steer either."""
-        handler = SERVER[
-            SERVER.index("def _raidgoals") : SERVER.index("def _achievements")
-        ]
+        handler = SERVER[SERVER.index("def _raidgoals") : SERVER.index("def _loot")]
         self.assertIn("_fetch_raidgoals()", handler)
         self.assertNotIn("query.get", handler)
 
@@ -237,13 +229,10 @@ class BothGuildsGetAReadinessCard(unittest.TestCase):
     def test_the_guild_reads_are_bound_to_every_family_not_bonds_five(self):
         """family.roster() is bonds' one family, so a guild read bound to it
         can only ever find the Alliance guild. That is why the Horde guild
-        was missing from both the Lineup and the Raid tab."""
-        for fetch in ("def _fetch_raidgoals", "def _fetch_lineup"):
-            body = SERVER[SERVER.index(fetch) :]
-            body = body[: body.index("\ndef ")]
-            self.assertNotIn("names = family.roster()", body, fetch)
-        lineup = SERVER[SERVER.index("def _fetch_lineup") :]
-        self.assertIn("names = _all_roster_names()", lineup[: lineup.index("\ndef ")])
+        was missing from the Raid tab."""
+        body = SERVER[SERVER.index("def _fetch_raidgoals") :]
+        body = body[: body.index("\ndef ")]
+        self.assertNotIn("names = family.roster()", body)
 
     def test_the_new_reads_are_guarded(self):
         fetch = SERVER[

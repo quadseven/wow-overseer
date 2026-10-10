@@ -157,9 +157,9 @@ class Recipe:
     `spell` is the craft spell id and is MEASURED ground: `character_spell`
     says who has learned it, and `item_template.spellid_2` or
     `trainer_spell.SpellId` says what skill rank it needs. The spell ids below
-    come from the committed standing.json, which tools/gen_standing.py froze
-    out of the client's own Spell.dbc and SkillLineAbility.dbc, so they are
-    client data rather than anybody's memory.
+    come from the standing.json that tools/gen_standing.py writes out of the
+    client's own Spell.dbc and SkillLineAbility.dbc, so they are client data
+    rather than anybody's memory.
 
     `reagents` is the half nothing here can check, and `makes` is stated as
     ONE on purpose. See MAKES_ONE below.
@@ -190,9 +190,9 @@ MAKES_ONE = 1
 # --- the recipes, and every reagent line in them ---------------------------
 #
 # WHERE THESE CAME FROM, SAID ONCE HERE RATHER THAN PER ROW. The spell ids and
-# the product names are the committed standing.json's, frozen from the
-# client's own Spell.dbc. The REAGENT LINES were read from community data for
-# 3.3.5a and are not checked back against this realm, because checking them
+# the product names are standing.json's (tools/gen_standing.py), frozen from
+# the client's own Spell.dbc. The REAGENT LINES were read from community data
+# for 3.3.5a and are not checked back against this realm, because checking them
 # means opening the database and this module is not allowed to. That is a
 # weaker claim than bag_economy.py's eleven checked recipes and it is stated
 # in the page's own footer rather than left for somebody to discover.

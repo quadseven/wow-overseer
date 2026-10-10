@@ -38,8 +38,6 @@ import council
 import crossing
 import decree
 import director
-import dungeonladder
-import dungeonpath
 import dungeonplan
 import eye
 import family
@@ -61,17 +59,11 @@ import needs
 import partystatus
 import questlog
 import raidgoals
-import guildwork
 import holdings
 import itemsource
-import crafters
-import guildcorps
-import guildjobs
 import guildrun
-import natural
 import nowstatus
 import raidgear
-import raidlineup
 import raidroles
 import preraid
 import raidready
@@ -80,16 +72,13 @@ import recap
 import realm
 import runstory
 import runtimeline
-import standing
 import stream
 import tradespec
 import voice
 import vclient
 import watchwall
 import wealth
-from core import _ALLIANCE_RACES, _HORDE_RACES
 from map_core import build_payload
-from panel import build_character_panel
 from transform import Geometry
 
 log = logging.getLogger("wow-map")
@@ -106,15 +95,9 @@ BOOK = armory.TalentBook.load(HERE)
 # And the item tables, for the same reason: icons, spell text, sets and the
 # random-suffix tables are client data, frozen by tools/gen_items.py.
 ITEMS = armory.ItemBook.load(HERE)
-# The skill, faction and recipe tables, third of the frozen books and read
-# once for the same reason as the other two: acore_world's skillline_dbc,
-# faction_dbc and skilllineability_dbc are EMPTY, and `acore_world.faction`
-# does not exist at all, so a name for a skill or a faction can come from
-# nowhere else. Built by tools/gen_standing.py.
-STANDING = standing.StandingBook.load(HERE)
-# And the craft tables, fourth of the frozen books: every ability on every
+# And the craft tables, third of the frozen books: every ability on every
 # profession's skill line, which is the DENOMINATOR of the Trades view's
-# completion figure. Same reason as the other three - skilllineability_dbc is
+# completion figure. Same reason as the other two - skilllineability_dbc is
 # empty on this realm - and the same read-once-at-import shape. Built by
 # tools/craftbook_from_dbc.py.
 CRAFTBOOK = tradespec.load_craftbook(HERE)
@@ -370,100 +353,6 @@ def _fetch_rows() -> list[dict]:
                 "FROM overseer_snapshot WHERE updated_at > NOW() - INTERVAL 60 SECOND"
             )
             return list(cur.fetchall())
-    finally:
-        conn.close()
-
-
-def _fetch_character(name: str) -> dict:
-    """Everything build_character_panel needs, from one short-lived connection.
-
-    Row-fetching only - what the rows MEAN is panel.py's business. The 60s
-    freshness rule matches /api/map and the bridge exactly: the readers of
-    the snapshot must not disagree about who is online, and a swept
-    (logged-out) row returning None here is what the panel's calm
-    "left the world" state is built from.
-    """
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT guid, name, level, race, class, health, max_health, "
-                "in_combat, is_bot, guild_id, group_leader, target_guid, "
-                "TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS age_seconds "
-                "FROM overseer_snapshot "
-                "WHERE name = %s AND updated_at > NOW() - INTERVAL 60 SECOND",
-                (name,),
-            )
-            snapshot_row = cur.fetchone()
-            pieces = {
-                "name": name,
-                "snapshot_row": snapshot_row,
-                "char_row": None,
-                "action_rows": [],
-                "inventory_rows": [],
-                "guild_name": None,
-                "group_rows": [],
-                "target_player": None,
-                "target_creature_name": None,
-            }
-            if snapshot_row is None:
-                return pieces
-            guid = snapshot_row["guid"]
-            cur.execute(
-                "SELECT activeTalentGroup, power1, power2, power3, power4, "
-                "power5, power6, power7 FROM characters WHERE guid = %s",
-                (guid,),
-            )
-            pieces["char_row"] = cur.fetchone()
-            cur.execute(
-                "SELECT spec, button, action, type FROM character_action WHERE guid = %s",
-                (guid,),
-            )
-            pieces["action_rows"] = list(cur.fetchall())
-            cur.execute(
-                "SELECT ci.bag, ci.slot, ci.item AS item_guid, ii.itemEntry AS entry, "
-                "ii.count, it.name FROM character_inventory ci "
-                "JOIN item_instance ii ON ii.guid = ci.item "
-                "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-                "WHERE ci.guid = %s",
-                (guid,),
-            )
-            pieces["inventory_rows"] = list(cur.fetchall())
-            if snapshot_row["guild_id"]:
-                cur.execute(
-                    "SELECT name FROM guild WHERE guildid = %s",
-                    (snapshot_row["guild_id"],),
-                )
-                row = cur.fetchone()
-                pieces["guild_name"] = row["name"] if row else None
-            if snapshot_row["group_leader"]:
-                cur.execute(
-                    "SELECT guid, name, level, class FROM overseer_snapshot "
-                    "WHERE group_leader = %s "
-                    "AND updated_at > NOW() - INTERVAL 60 SECOND",
-                    (snapshot_row["group_leader"],),
-                )
-                pieces["group_rows"] = list(cur.fetchall())
-            if snapshot_row["target_guid"]:
-                cur.execute(
-                    "SELECT name, level FROM overseer_snapshot "
-                    "WHERE guid = %s AND updated_at > NOW() - INTERVAL 60 SECOND",
-                    (snapshot_row["target_guid"],),
-                )
-                pieces["target_player"] = cur.fetchone()
-                if pieces["target_player"] is None:
-                    # Not a live player: try the world's creature spawns.
-                    # Precedence itself is decided in panel.py; this only
-                    # avoids a pointless query when the player match hit.
-                    cur.execute(
-                        "SELECT ct.name FROM acore_world.creature c "
-                        "JOIN acore_world.creature_template ct ON ct.entry = c.id "
-                        "WHERE c.guid = %s",
-                        (snapshot_row["target_guid"],),
-                    )
-                    row = cur.fetchone()
-                    pieces["target_creature_name"] = row["name"] if row else None
-            return pieces
     finally:
         conn.close()
 
@@ -915,7 +804,7 @@ def _fetch_now_facts(names):
 def _fetch_family(names=None) -> list[dict]:
     """The family's fresh snapshot rows, in one query.
 
-    Deliberately the same 60s freshness rule as /api/map and /api/character:
+    Deliberately the same 60s freshness rule as /api/map:
     a member the sweep has already removed must read as "left the world" on
     the card at the same moment they leave the map, or the two surfaces
     disagree about who is online.
@@ -1447,20 +1336,6 @@ _ARMORY_GUILD_SIZES = (
     "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes})) "
     "GROUP BY g.guildid, g.name"
 )
-_ARMORY_GUILD_ROSTER = (
-    "SELECT c.name, c.level, c.class, c.race, c.online, "
-    "COUNT(it.entry) AS worn, AVG(it.ItemLevel) AS avg_item_level "
-    "FROM guild g JOIN guild_member gm ON gm.guildid = g.guildid "
-    "JOIN characters c ON c.guid = gm.guid "
-    "LEFT JOIN character_inventory ci ON ci.guid = c.guid "
-    "AND ci.bag = 0 AND ci.slot < %s "
-    "LEFT JOIN item_instance ii ON ii.guid = ci.item "
-    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-    "WHERE g.name = %s "
-    "GROUP BY c.guid, c.name, c.level, c.class, c.race, c.online"
-)
-
-
 def _fetch_guild_sizes(names: list[str]) -> dict[str, int]:
     if not names:
         return {}
@@ -1539,18 +1414,6 @@ def _fetch_guild_gear() -> list[dict]:
             # the length of a constant list.
             cur.execute(_GUILD_GEAR.format(  # noqa: S608
                 holes=holes, slots=len(armory.EQUIPPED_SLOTS)), tuple(names))
-            return list(cur.fetchall())
-    finally:
-        conn.close()
-
-
-def _fetch_guild_roster(guild: str) -> list[dict]:
-    """The compact list for one family guild. `guild` is already checked."""
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(_ARMORY_GUILD_ROSTER,
-                        (len(armory.EQUIPPED_SLOTS), guild))
             return list(cur.fetchall())
     finally:
         conn.close()
@@ -1762,85 +1625,6 @@ def _fetch_gear_origin(name: str) -> dict:
         conn.close()
     return {"worn": worn, "event_rows": event_rows, "command_rows": command_rows,
             "quest_rewards": achievements.quest_rewards_from_rows(quest_rows)}
-
-
-def _fetch_standing(names: list[str] | None = None) -> dict:
-    """What the family has LEARNED: trades, skills, reputations, talents.
-
-    Five queries, all against acore_characters and all of them plain reads.
-    NOT read from overseer_snapshot and, like /api/armory, deliberately not
-    subject to its 60s freshness rule: every one of these is a SAVE, so it
-    answers for a character who is logged out and it keeps answering while
-    the worldserver is down.
-
-    Nothing here joins a `*_dbc` table, and that is the point rather than an
-    omission - every one of them is empty on this realm (see standing.py).
-    The names come from the frozen book instead.
-
-    Names come from the roster table (every family) or from bonds via
-    family.roster(), never from the request, so every IN list is a fixed
-    roster with no user input in it.
-    """
-    names = family.roster() if names is None else names
-    holes = ", ".join(["%s"] * len(names))
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            # S608 on all five, and the same reasoning as _fetch_armory:
-            # `holes` is a run of "%s" placeholders whose only input is the
-            # LENGTH of family.roster() - a constant five, from bonds. Every
-            # VALUE is bound by the driver and this endpoint takes no
-            # parameters at all.
-            cur.execute(
-                "SELECT c.name, c.level, c.race, c.class, "  # noqa: S608
-                "c.activeTalentGroup "
-                "FROM characters c "
-                f"WHERE c.name IN ({holes})",
-                tuple(names),
-            )
-            char_rows = list(cur.fetchall())
-            cur.execute(
-                "SELECT c.name, s.skill, s.value, s.max "  # noqa: S608
-                "FROM characters c JOIN character_skills s ON s.guid = c.guid "
-                f"WHERE c.name IN ({holes})",
-                tuple(names),
-            )
-            skill_rows = list(cur.fetchall())
-            # Every faction in the game has a row here for every character,
-            # met or not - about a hundred each. `flags` is what tells them
-            # apart and the filtering is standing.met's job, not SQL's, so
-            # the rule lives where the suite can reach it.
-            cur.execute(
-                "SELECT c.name, r.faction, r.standing, r.flags "  # noqa: S608
-                "FROM characters c JOIN character_reputation r ON r.guid = c.guid "
-                f"WHERE c.name IN ({holes})",
-                tuple(names),
-            )
-            reputation_rows = list(cur.fetchall())
-            cur.execute(
-                "SELECT c.name, t.spell, t.specMask "  # noqa: S608
-                "FROM characters c JOIN character_talent t ON t.guid = c.guid "
-                f"WHERE c.name IN ({holes})",
-                tuple(names),
-            )
-            talent_rows = list(cur.fetchall())
-            # Every spell the character knows, which is where the recipes
-            # are. Around forty rows each; the book decides which of them
-            # are recipes rather than the query, because "is this spell a
-            # recipe" is a question about client data this database has
-            # none of.
-            cur.execute(
-                "SELECT c.name, s.spell "  # noqa: S608
-                "FROM characters c JOIN character_spell s ON s.guid = c.guid "
-                f"WHERE c.name IN ({holes})",
-                tuple(names),
-            )
-            spell_rows = list(cur.fetchall())
-    finally:
-        conn.close()
-    return {"char_rows": char_rows, "skill_rows": skill_rows,
-            "reputation_rows": reputation_rows, "talent_rows": talent_rows,
-            "spell_rows": spell_rows}
 
 
 # The quest log query, written out rather than generated. Forty column
@@ -2833,64 +2617,14 @@ _RAID_OBJECT = ("SELECT DISTINCT Item AS item FROM "
 # letter in the command log. `kind = 'mail'` first so the read rides the
 # (kind, status, updated_at) index rather than scanning the whole queue; the
 # `source` prefix is guildwork's own, which no other pass writes.
-_LINEUP_MASTERS = (
-    "SELECT g.guildid, c.name AS master FROM guild g "
-    "JOIN characters c ON c.guid = g.leaderguid "
-    "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
-    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
-)
-_LINEUP_DUES = (
-    "SELECT target_name, command, status, detail, result "
-    "FROM overseer_command WHERE kind = 'mail' AND source LIKE %s "
-    "AND command LIKE 'send %%' ORDER BY id"
-)
 # THE GUILD CRAFTING CORPS: each guild member's trades, so the page names the
 # same posts the bridge's corps pass fills, and every craft the corps wrote.
 # `kind = 'cast'` first, for the (kind, status, updated_at) index.
-_LINEUP_CORPS_SKILLS = (
-    "SELECT c.name, cs.skill, cs.value, cs.max FROM character_skills cs "
-    "JOIN characters c ON c.guid = cs.guid "
-    "JOIN guild_member gm ON gm.guid = c.guid "
-    "WHERE cs.skill IN ({skills}) AND gm.guildid IN (SELECT gm2.guildid "
-    "FROM guild_member gm2 JOIN characters c2 ON c2.guid = gm2.guid "
-    "WHERE c2.name IN ({holes}))"
-)
-_LINEUP_CORPS_CRAFTS = (
-    "SELECT target_name, source, status, result FROM overseer_command "
-    "WHERE kind = 'cast' AND source LIKE %s ORDER BY id"
-)
 # THE GUILD JOBS (#194): what each member posted and sold for its guild, who
 # knows Ritual of Summoning, and who has restarted naturally. `kind = 'mail'`
 # and `kind = 'sell'` first, for the (kind, status, updated_at) index.
-_LINEUP_JOBS = (
-    "SELECT target_name, source, status, result FROM overseer_command "
-    "WHERE kind IN ('mail', 'sell') AND source LIKE %s ORDER BY id"
-)
-_LINEUP_RITUAL = (
-    "SELECT c.name FROM character_spell s JOIN characters c ON c.guid = s.guid "
-    "JOIN guild_member gm ON gm.guid = c.guid WHERE s.spell = %s "
-    "AND gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
-    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
-)
-_LINEUP_NATURAL = (
-    "SELECT c.name, n.part FROM overseer_naturalized n "
-    "JOIN characters c ON c.guid = n.guid JOIN guild_member gm ON gm.guid = c.guid "
-    "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
-    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
-)
-
 # EVERY MEMBER'S RECIPE TRADES (#248), for the designated-crafters register
 # the Lineup page shows. The skill ids are crafters.TRADES, bound as values.
-_LINEUP_SKILLS = (
-    "SELECT c.name, cs.skill, cs.value FROM characters c "
-    "JOIN guild_member gm ON gm.guid = c.guid "
-    "JOIN character_skills cs ON cs.guid = c.guid "
-    "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
-    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes})) "
-    "AND cs.skill IN ({skills}) AND cs.value > 0"
-)
-
-
 # The guild coordinator's runs, newest first: enough ended ones for the
 # records guildrun.rates folds (ROLLING per key) and the Guild tab's list.
 _GUILD_RUNS_SQL = (
@@ -3026,126 +2760,6 @@ def _fetch_guild_chat(guild: str, limit: int) -> dict:
         row["run"] = by_run.get(a.get("run_id")) if a.get("run_id") else None
         out.append(row)
     return {"guild": guild, "ready": True, "asks": out}
-
-
-def _fetch_lineup() -> dict:
-    """Every guild the roster is in, with the class of every member.
-
-    ONE READ AND ONE GUARD. There is nothing to bind but the roster's own
-    names, so unlike the raid-goal fetch below this needs no second phase.
-    `_wide_guarded` degrades a missing `guild_member` to no rows rather than
-    an exception, which is what lets a world with no guild at all answer this
-    endpoint honestly instead of 503-ing.
-    """
-    names = _all_roster_names()
-    holes = ", ".join(["%s"] * len(names))
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            rows = _wide_guarded(cur, _LINEUP_GUILD.format(holes=holes),  # noqa: S608
-                                 tuple(names), "", "guild_member")
-            masters = _wide_guarded(cur, _LINEUP_MASTERS.format(holes=holes),  # noqa: S608
-                                    tuple(names), "", "guild")
-            dues = _wide_guarded(cur, _LINEUP_DUES, (guildwork.SOURCE + ":%",),
-                                 "", "overseer_command")
-            trades = sorted(crafters.TRADES)
-            skills = _wide_guarded(
-                cur, _LINEUP_SKILLS.format(  # noqa: S608
-                    holes=holes, skills=", ".join(["%s"] * len(trades))),
-                tuple(names) + tuple(trades), "", "character_skills")
-            corps_ids = ", ".join(str(int(k)) for k in sorted(guildcorps.SKILL_NAMES))
-            corps_skills = _wide_guarded(
-                cur, _LINEUP_CORPS_SKILLS.format(skills=corps_ids, holes=holes),  # noqa: S608
-                tuple(names), "", "character_skills")
-            corps_crafts = _wide_guarded(
-                cur, _LINEUP_CORPS_CRAFTS, (guildcorps.SOURCE + ":craft:%",),
-                "", "overseer_command")
-            job_rows = _wide_guarded(
-                cur, _LINEUP_JOBS, (guildjobs.SOURCE + ":%",), "", "overseer_command")
-            # SEATS BY PRE-RAID READINESS (#542): every guild member's worn
-            # gear, so the Lineup tab seats the people the raid card does.
-            members = sorted({r["name"] for r in rows if r.get("name")})
-            worn = _wide_guarded(
-                cur,
-                raidgear.WORN_SQL.format(  # noqa: S608
-                    holes=", ".join(["%s"] * len(members))),
-                (len(armory.EQUIPPED_SLOTS), *members), "",
-                "character_inventory worn") if members else []
-            list_items = _list_items(cur)
-            ritual = _wide_guarded(
-                cur, _LINEUP_RITUAL.format(holes=holes),  # noqa: S608
-                (guildjobs.RITUAL_OF_SUMMONING, *names), "", "character_spell")
-            ledger = _wide_guarded(
-                cur, _LINEUP_NATURAL.format(holes=holes),  # noqa: S608
-                tuple(names), "", "overseer_naturalized")
-    finally:
-        conn.close()
-    return {
-        "rows": rows,
-        "worn": worn,
-        "list_items": list_items,
-        "roster": names,
-        "masters": {m.get("guildid"): m.get("master") for m in masters},
-        "dues": dues,
-        "skills": skills,
-        "corps_skills": corps_skills,
-        "corps_crafts": corps_crafts,
-        "job_rows": job_rows,
-        "ritual": {str(r.get("name") or "") for r in ritual},
-        # natural.py's rule: a guild bot counts once the ledger holds its
-        # reset. The page names no family member's work, so no dues takers.
-        "natural": natural.contributors(
-            [r.get("name") for r in rows], names, natural.parts_by_name(ledger), ()),
-    }
-
-
-def _job_doing(lineup: dict, fetched: dict) -> dict:
-    """name -> what each placed member does now, as the page can read it:
-    guildjobs.page_doing over its level, gathering skills, the ritual and the
-    natural gate (#194)."""
-    skills = _job_skills(fetched.get("corps_skills"))
-    known = fetched.get("ritual") or set()
-    natural = fetched.get("natural") or set()
-    return {
-        m["name"]: guildjobs.page_doing(
-            role, m.get("level"), skills.get(m["name"], {}),
-            {guildjobs.RITUAL_OF_SUMMONING} if m["name"] in known else set(),
-            m["name"] in natural)
-        for m, role in _placed_job_members(lineup)
-    }
-
-
-def _job_skills(rows):
-    skills = {}
-    for row in rows or ():
-        skills.setdefault(str(row.get("name") or ""), {})[
-            int(row.get("skill") or 0)] = (
-                int(row.get("value") or 0), int(row.get("max") or 0))
-    return skills
-
-
-def _placed_job_members(lineup):
-    return ([(m, guildjobs.RAIDER) for g in lineup.get("groups") or ()
-             for m in g.get("members") or ()]
-            + [(m, guildjobs.MAINTENANCE)
-               for m in lineup.get("maintenance") or ()]
-            + [(m, guildjobs.SUMMONER) for m in lineup.get("summoners") or ()])
-
-
-def _crafter_register(members: list, roster: set, skill_rows: list) -> list:
-    """One guild's designated-crafters register, as the page draws it (#248)."""
-    skills: dict = {}
-    for row in skill_rows or ():
-        skills.setdefault(row.get("name"), {})[int(row.get("skill") or 0)] = int(
-            row.get("value") or 0)
-    people = [
-        crafters.Person(name=m["name"], skills=skills.get(m["name"], {}),
-                        level=int(m.get("level") or 0),
-                        family=m["name"] in roster)
-        for m in members
-    ]
-    return crafters.register_payload(
-        crafters.register(people, crafters.per_trade(os.environ)))
 
 
 # THE RAID SUPPLY'S READS (#275), per guild: what the guild holds of every
@@ -3917,110 +3531,6 @@ def _fetch_ladder_record(cur, head: str, members: list, capped: bool) -> dict:
                 members, prep["rewarded_rows"], prep["log_rows"],
                 prep["held_rows"])
     return record
-
-
-def _dungeon_paths(fetched: dict) -> dict:
-    """One path per family, from one set of world reads.
-
-    THE WORLD ROWS ARE SHARED AND THE ROSTERS ARE NOT. dungeonplan ranks one
-    family's gains, so it runs once per family over the same catalogue, loot
-    and worn rows; the guild's count runs over the same rows again with the
-    guild's names, bounded to the maps the path draws.
-    """
-    portals = dungeonpath.portals_by_map()
-    by_guild: dict = {}
-    guild_of: dict = {}
-    for row in fetched["guild_rows"]:
-        by_guild.setdefault(row["guildid"], []).append(row["name"])
-        guild_of[row["name"]] = (row["guildid"], row.get("guild_name") or "")
-    chars = {row["name"]: row for row in fetched["char_rows"]}
-    families = []
-    basis = ""
-    for head, roster in fetched["families"].items():
-        plan = dungeonplan.build_dungeonplan(
-            fetched["catalogue_rows"], fetched["encounter_rows"],
-            fetched["loot_rows"], fetched["char_rows"],
-            fetched["equipped_rows"], ITEMS.icons, roster,
-            achievements.MAP_NAMES, GEO.entrances, GEO.continents,
-            fetched["skill_rows"], ITEMS)
-        guild_id, guild_name = next(
-            (guild_of[n] for n in roster if n in guild_of), (None, ""))
-        guild_counts = {}
-        if guild_id is not None:
-            guild_counts = dungeonplan.gainer_counts(
-                fetched["encounter_rows"], fetched["loot_rows"],
-                fetched["char_rows"], fetched["equipped_rows"],
-                sorted(by_guild[guild_id]), list(dungeonpath.PATH_MAPS),
-                fetched["skill_rows"])
-        faction = dungeonpath.faction_of(
-            [int(chars[n].get("race") or 0) for n in roster if n in chars],
-            _ALLIANCE_RACES, _HORDE_RACES)
-        members = [{"name": n, "level": chars[n].get("level")}
-                   for n in roster if n in chars]
-        path = dungeonpath.build_family_path(
-            head, faction, members, plan, guild_name, guild_counts,
-            [r for r in fetched["run_rows"] if r.get("leader_name") in roster],
-            portals, achievements.MAP_NAMES)
-        # THE QUEUE, per family (#209): "Ragefire Chasm 12 of 50, then
-        # Wailing Caverns 50", read off the family's own leader.
-        path["queue"] = fetched.get("queue_views", {}).get(
-            head, campaignqueue.view([], None, head))
-        # NOW AND NEXT: the queue's head, and what follows it, as queued or as
-        # the campaign planner would choose once the queue runs out, with the
-        # last dungeon choice Jev was asked for and its reasons.
-        facts = _planner_facts(head, roster, chars, fetched)
-        record = fetched.get("records", {}).get(head) or {}
-        path["plan"] = campaignplan.page_view(
-            path["queue"], facts, path["queue"].get("done"),
-            (record.get("choice") or [None])[0])
-        # THE LADDER: every door before the raid, as this family stands to it.
-        path["ladder"] = dungeonladder.view(facts)
-        families.append(path)
-        basis = plan["basis"]
-    return {
-        "line": dungeonpath.headline(families),
-        "runnable": dungeonpath.runnable_line(portals, achievements.MAP_NAMES),
-        "order": dungeonpath.ORDER,
-        "families": families,
-        "basis": dungeonpath.BASIS + " " + basis,
-        "empty_note": ("the roster names no family, so there is no path to draw"
-                       if not families else ""),
-    }
-
-
-def _planner_facts(head: str, roster: list, chars: dict, fetched: dict):
-    """campaignplan.Facts for one family off the Dungeons page's own reads.
-
-    The roster is ordered leader first (_PLAN_FAMILIES), which is the member
-    whose map says which continent the family is on. The worn-gear summary
-    and the boss loot level are left unread: only Jev weighs them. The
-    record, the keys, the bosses' levels and a capped family's upgrades are
-    read (_fetch_ladder_record), because the heuristic and the ladder use them.
-    """
-    level_rows = tuple(
-        {"name": n, "level": chars[n].get("level"), "race": chars[n].get("race"),
-         "map_id": chars[n].get("map"), "lead": 1 if i == 0 else 0}
-        for i, n in enumerate(roster) if chars.get(n) is not None)
-    done, failed = campaignplan.ledger(fetched.get("run_rows") or [], roster)
-    quest_rows = fetched.get("quest_rows")
-    quests = (campaignplan.open_quests(
-        quest_rows, [r for r in fetched.get("rewarded_rows") or []
-                     if r.get("name") in roster], list(level_rows))
-        if quest_rows else None)
-    record = fetched.get("records", {}).get(head)
-    if record is None:
-        return campaignplan.Facts(family=head, level_rows=level_rows, done=done,
-                                  failed=failed, quests=quests)
-    runs = fetched.get("run_rows") or []
-    return campaignplan.Facts(
-        family=head, level_rows=level_rows, done=done, failed=failed,
-        quests=quests, upgrades=record.get("upgrades"),
-        progress=record.get("progress"),
-        outcomes=campaignplan.outcomes(runs, roster),
-        deaths=campaignplan.per_map(record.get("died")),
-        won=campaignplan.per_map(record.get("won")),
-        bosses=(fetched.get("records", {}).get("") or {}).get("bosses"),
-        keys=campaignplan.keys_held(record.get("keys")))
 
 
 # --- the campaign queue (#209) ------------------------------------------------
@@ -5201,27 +4711,7 @@ _CLIENT_GUILD_ITEMS = (
     "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "WHERE gbi.guildid = %s"
 )
-_CLIENT_GUILD_ROSTER = (
-    "SELECT c.name, c.level, c.class, c.race, c.online, gm.rank, "
-    "gr.rname AS rank_name "
-    "FROM guild_member gm JOIN characters c ON c.guid = gm.guid "
-    "LEFT JOIN guild_rank gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank "
-    "WHERE gm.guildid = %s"
-)
-_CLIENT_SOCIAL = (
-    "SELECT f.name, f.level, f.class, f.race, f.online, s.flags, s.note "
-    "FROM characters c JOIN character_social s ON s.guid = c.guid "
-    "JOIN characters f ON f.guid = s.friend WHERE c.name = %s"
-)
-_CLIENT_FAMILY = (
-    "SELECT name, level, class, race, online FROM characters WHERE name IN "
-)
-_CLIENT_ITEM = (
-    "SELECT it.entry, " + _ITEM_TEMPLATE_COLUMNS + " "
-    "FROM acore_world.item_template it WHERE it.entry = %s"
-)
 # Tooltips by item entry. A template does not change while the world is up.
-CLIENT_TOOLTIPS = vclient.TooltipCache()
 # The item book widened to what a bag holds: the Armory's covers only what can
 # be equipped, and a bag is mostly cloth, food and quest items.
 CLIENT_BOOK = vclient.load_book(HERE, ITEMS)
@@ -5304,44 +4794,6 @@ def _with_bank_reasons(rows, placed: dict) -> list:
             row["why"] = placement.line
         out.append(row)
     return out
-
-
-def _fetch_client_social(name: str, family_names: list[str]) -> dict:
-    """The family's rows, the character's guild roster and their social list."""
-    holes = ", ".join(["%s"] * len(family_names))
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            # S608: placeholders only, one per roster name from the database.
-            cur.execute(_CLIENT_FAMILY + "(" + holes + ")",  # noqa: S608
-                        tuple(family_names))
-            family_rows = list(cur.fetchall())
-            guild = _client_guild(cur, name)
-            guild_rows: list = []
-            if guild is not None:
-                cur.execute(_CLIENT_GUILD_ROSTER, (guild["guild_id"],))
-                guild_rows = list(cur.fetchall())
-            cur.execute(_CLIENT_SOCIAL, (name,))
-            social_rows = list(cur.fetchall())
-    finally:
-        conn.close()
-    return {"family_rows": family_rows, "guild": guild,
-            "guild_rows": guild_rows, "social_rows": social_rows}
-
-
-def _fetch_client_item(entry: int) -> dict | None:
-    """One item_template row, with every column a tooltip draws."""
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(_CLIENT_ITEM, (entry,))
-            return cur.fetchone()
-    finally:
-        conn.close()
-
-
-def _client_item(entry: int) -> dict | None:
-    return vclient.item_tooltip(_fetch_client_item(entry), CLIENT_BOOK)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -5429,9 +4881,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(code, "application/json", json.dumps(payload).encode())
 
-    def _zones_file(self, _query: dict) -> None:
-        self._send_file("zones.json", "application/json")
-
     def _jquery_file(self, _query: dict) -> None:
         # Wowhead's model viewer needs jQuery. Vendored (3.7.1, verified
         # against the hash code.jquery.com publishes) and served from here
@@ -5503,21 +4952,6 @@ class Handler(BaseHTTPRequestHandler):
             # The page shows its stale banner on failed polls; a dead
             # database must read as "stale", never a blank page.
             log.exception("map query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-
-    def _character(self, query: dict) -> None:
-        """GET /api/character?name=X - one character's in-game reality."""
-        name = query.get("name", [""])[0]
-        if not _NAME_RE.fullmatch(name):
-            self._send(400, "application/json", b'{"error": "not a character name"}')
-            return
-        try:
-            payload = build_character_panel(**_fetch_character(name))
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as /api/map: a dead database is a 503 the panel
-            # can show as "unreachable", never a hang or a blank.
-            log.exception("character query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
     def _family(self, query: dict) -> None:
@@ -5654,118 +5088,6 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("armory query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
-    def _standing(self, query: dict) -> None:
-        """GET /api/standing - what the five have learned, and what they have not.
-
-        No name parameter, for the same reason /api/armory takes none: WHO
-        the family is belongs to bonds, and accepting a roster here would
-        turn this into a general character query wearing a friendly name.
-        """
-        try:
-            # BOTH FAMILIES, from the roster, never from the request, exactly
-            # as the Armory above this panel reads them.
-            groups = _fetch_family_groups()
-            names = [n for _key, group in groups for n in group]
-            payload = standing.build_standing(**_fetch_standing(names), book=STANDING,
-                                              talents=BOOK, families=groups)
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the panel keeps what it has
-            # already drawn and says it may be stale. A blank standing panel
-            # reads as "they have learned nothing", which is a worse lie
-            # than an old answer honestly labelled.
-            log.exception("standing query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-
-    def _lineup(self, _query: dict) -> None:
-        """GET /api/lineup - the guild's places, filled, and who is surplus.
-
-        NO PARAMETERS, for the same reason /api/raidgoals takes none: it asks
-        one question about whole guilds, so there is nothing for a caller to
-        steer. WHO the roster is belongs to bonds.
-
-        ONE LINEUP PER GUILD, because two families are two guilds and a single
-        merged lineup would put a Horde character in an Alliance group - a
-        party the game itself would refuse to form.
-        """
-        try:
-            fetched = _fetch_lineup()
-            roster = set(fetched["roster"])
-            guilds = {}
-            for row in fetched["rows"]:
-                guild = guilds.setdefault(
-                    row.get("guildid"),
-                    {"guildid": row.get("guildid"),
-                     "name": row.get("guild_name") or "",
-                     "members": []})
-                class_name = raidlineup.CLASS_NAMES.get(row.get("class_id"), "")
-                guild["members"].append({
-                    "name": row.get("name"),
-                    "class_id": row.get("class_id"),
-                    "level": row.get("level"),
-                    "race": row.get("race"),
-                    raidroles.KEY: row.get(raidroles.KEY),
-                    # Resolved here rather than in the page, because every
-                    # other view on this site takes its class colour from the
-                    # server and a second palette could disagree with the
-                    # first.
-                    "class_colour": family.class_colour_by_name(class_name),
-                })
-            payload = []
-            contributed = guildwork.contributions(fetched.get("dues"))
-            posted = guildjobs.contributions(fetched.get("job_rows"))
-            made = guildcorps.bags_made(fetched.get("corps_crafts"))
-            masters = fetched.get("masters") or {}
-            for guild in guilds.values():
-                guild["members"] = raidgear.attach(
-                    guild["members"], fetched.get("worn"),
-                    fetched.get("list_items"))
-                lineup = raidlineup.build_lineup(
-                    guild["members"],
-                    guaranteed=[m["name"] for m in guild["members"]
-                                if m["name"] in roster])
-                lineup["guild"] = guild["name"]
-                lineup["guildid"] = guild["guildid"]
-                # Each maintenance member's job and what it has posted (#234).
-                guildwork.attach_work(
-                    lineup, masters.get(guild["guildid"]) or "", contributed)
-                # EVERY PLACED MEMBER'S JOB AND WHAT IT GAVE (#194): dues,
-                # materials posted and grey loot sold, by role.
-                guildjobs.attach_jobs(
-                    lineup, _job_doing(lineup, fetched), posted, contributed,
-                    family=roster)
-                # The side the guild fights for, off its family's own races.
-                lineup["faction"] = achievements.faction_of(
-                    m["race"] for m in guild["members"] if m["name"] in roster)
-                # Who receives which trade's recipes (#248).
-                lineup["crafters"] = _crafter_register(
-                    guild["members"], roster, fetched.get("skills"))
-                # Each maintenance member's corps post, its skill, and the
-                # bags the corps has crafted.
-                guildcorps.attach_corps(
-                    lineup,
-                    guildcorps.posts_for_lineup(
-                        lineup, guild["name"], fetched.get("corps_skills")),
-                    made)
-                payload.append(lineup)
-            # ALLIANCE FIRST, then Horde, the order every other two-family
-            # view on the page uses; within a side, the bigger guild first.
-            # Sorted by size alone, the Horde guild came first whenever the
-            # two tied, which put the Lineup in the opposite order to the
-            # Armory and the Raid tab beside it.
-            rank = {achievements.ALLIANCE: 0, achievements.HORDE: 1}
-            payload.sort(key=lambda g: (rank.get(g["faction"], 2),
-                                        -g["counts"]["considered"], g["guild"]))
-            self._send(200, "application/json",
-                       json.dumps({"guilds": payload,
-                                   "classes": raidlineup.CLASS_NAMES}).encode())
-        except Exception:
-            # Same contract as every other poll: the tab keeps what it has and
-            # says it may be stale. A blanked lineup would read as "nobody is
-            # in the guild", and the list under it is a kick list.
-            log.exception("raid lineup query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-
     def _raidgoals(self, _query: dict) -> None:
         """GET /api/raidgoals - what the guild still needs before it can raid.
 
@@ -5832,56 +5154,6 @@ class Handler(BaseHTTPRequestHandler):
             # The Chronicle keeps the list it has drawn and says it may be
             # stale, like every other poll on the page.
             log.exception("loot query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-
-    def _achievements(self, query: dict) -> None:
-        """GET /api/achievements - what the families have done, newest first.
-
-        No name parameter, for the same reason the other family endpoints
-        take none: WHO the families are belongs to the roster table.
-
-        ONE CHAPTER PER FAMILY, Alliance and Horde both. The top level is
-        still the default family's whole payload, so nothing that read it
-        before changes; `chapters` is what the Chronicle draws.
-        """
-        try:
-            # ONE roster read for every family, the same one /api/heads uses.
-            # No roster rows at all is the old single family, from bonds.
-            by_family = _fetch_rosters() or {"": family.roster()}
-            known = sorted(by_family)
-            default = _default_family(known) if known != [""] else ""
-            order = [default] + [f for f in known if f != default]
-            payload = None
-            chapters = []
-            for which in order:
-                # EACH FAMILY ON ITS OWN, so a failed READ of one says so in
-                # its own chapter rather than blanking the other one too. The
-                # traceback is logged with the family it belongs to. Only
-                # database faults are caught here: a bug in the code rises to
-                # the handler's own 503 rather than posing as an unread record.
-                try:
-                    names = by_family[which]
-                    built = achievements.build_achievements(
-                        **_fetch_achievements(names))
-                    faction = achievements.faction_of(
-                        p.get("race") for p in _fetch_profiles(names).values())
-                except (pymysql.err.MySQLError, OSError):
-                    log.exception("achievements query failed for family %r", which)
-                    chapters.append(achievements.unread_chapter(which))
-                    continue
-                chapters.append(achievements.chapter(built, which, faction))
-                if payload is None:
-                    payload = built
-            if payload is None:
-                raise RuntimeError("no family's record could be read")
-            payload["chapters"] = chapters
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the tab keeps the timeline it
-            # has drawn and says it may be stale. A blank achievements tab
-            # reads as "they have done nothing", which is the one thing this
-            # view exists to disprove.
-            log.exception("achievements query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
     def _thoughts(self, query: dict) -> None:
@@ -6027,36 +5299,10 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("guild trades query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
-    def _dungeons(self, _query: dict) -> None:
-        """GET /api/dungeons - the order to run dungeons in, for each family.
-
-        NO PARAMETERS AT ALL, and that is the shape of the view rather than an
-        omission: it asks about every dungeon for every family at once, so
-        there is nothing for a caller to steer and no map id to validate. WHO
-        the families are belongs to the roster, exactly as /api/armory and
-        /api/family refuse a name.
-        """
-        try:
-            # THE MODULE'S CROSSING FACT FIRST: this is a separate process from
-            # the bridge, and every door on the other continent reads "no way
-            # across yet" until it is told what the module can cross.
-            _note_module_crossing()
-            fetched = _fetch_dungeonplan()
-            payload = _dungeon_paths(fetched)
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the tab keeps what it has
-            # drawn and says it may be stale. A blanked list reads as "there
-            # is nothing worth running anywhere", which is a far stronger
-            # claim than "this one read failed".
-            log.exception("dungeon plan query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-
     def _run_timeline(self, _query: dict) -> None:
         """GET /api/runtimeline - each family's recent dungeon runs, step by step.
 
-        No parameters: the families come from the roster, exactly as
-        /api/dungeons takes none.
+        No parameters: the families come from the roster.
         """
         try:
             fetched = _fetch_run_timeline()
@@ -6305,7 +5551,7 @@ class Handler(BaseHTTPRequestHandler):
         """GET /api/questlog[?family=X] - what each of a family is working on.
 
         BELOW do_POST, with _family_scope, because it now takes the family
-        key: the suites for the Armory, the standing panel and the Wealth view
+        key: the suites for the Armory and the Wealth view
         each read a run of handlers above this as endpoints that take no
         query at all.
 
@@ -6733,35 +5979,6 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("levelroute query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
-    def _armory_guild(self, query: dict) -> None:
-        """GET /api/armory/guild?guild=X - one family guild, as a short list.
-
-        HERE, NEAR THE FOOT OF THE CLASS, ON PURPOSE: several suites slice
-        this class between two handlers and assert no request parameter is
-        read inside the slice. These two take one each, so they sit below
-        every such window.
-
-        Fetched only when its section is opened, so the default Armory never
-        carries a seventy-member guild. `guild` is matched against the guilds
-        the FAMILIES are in, as the database reports them; anything else is
-        a 404 and never reaches SQL as a guild name.
-        """
-        try:
-            groups = _fetch_family_groups()
-            names = [n for _key, group in groups for n in group]
-            wanted = query.get("guild", [""])[0]
-            if wanted not in _fetch_guild_sizes(names):
-                self._send(404, "application/json", b'{"error": "not a family guild"}')
-                return
-            payload = {"guild": wanted,
-                       "empty_note": armory.GUILD_EMPTY_NOTE,
-                       "members": armory.guild_roster(
-                           _fetch_guild_roster(wanted), exclude=names)}
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            log.exception("armory guild query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-
     def _guild_gear(self, _query: dict) -> None:
         """GET /api/guildgear - every family-guild member's gear, one table.
 
@@ -6901,13 +6118,6 @@ class Handler(BaseHTTPRequestHandler):
                                             icons=CLIENT_ICONS)
         self._client_frame(query, build, "guild bank")
 
-    def _client_social(self, query: dict) -> None:
-        """GET /api/client/social?name=X - family, guild roster, friends."""
-        def build(name, key, names):
-            return vclient.build_social(name, key, names,
-                                        **_fetch_client_social(name, names))
-        self._client_frame(query, build, "social")
-
     def _client_quests(self, query: dict) -> None:
         """GET /api/client/quests?name=X - one character's quest log, for the
         frame. By name rather than by family key, so a guildmate opened from
@@ -6918,32 +6128,6 @@ class Handler(BaseHTTPRequestHandler):
                            if m.get("name") == name), None)
             return {"member": member}
         self._client_frame(query, build, "quests")
-
-    def _client_item_tip(self, query: dict) -> None:
-        """GET /api/client/item?entry=N - one item's tooltip, cached per entry.
-
-        An item template is game data rather than anything about a family,
-        so this takes any entry; it is bounded to a positive integer before
-        it reaches SQL, and the answer is kept for the life of the process.
-        """
-        raw = query.get("entry", [""])[0]
-        if not raw.isdigit() or not 0 < int(raw) < 10_000_000:
-            self._send(400, "application/json", b'{"error": "not an item entry"}')
-            return
-        try:
-            tip = CLIENT_TOOLTIPS.get(int(raw), _client_item)
-        except (pymysql.err.MySQLError, OSError):
-            log.exception("client item query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-            return
-        except Exception:
-            log.exception("client item tooltip failed to build")
-            self._send(500, "application/json", b'{"error": "tooltip failed to build"}')
-            return
-        if tip is None:
-            self._send(404, "application/json", b'{"error": "no such item"}')
-            return
-        self._send(200, "application/json", json.dumps(tip).encode())
 
     def _guild_runs(self, _query: dict) -> None:
         """GET /api/guildruns - the guild coordinator's groups (guildrun).
@@ -7168,32 +6352,24 @@ class Handler(BaseHTTPRequestHandler):
         # inside of (quadseven/mod-overseer#184).
         "/api/realm": _realm,
         "/api/map": _map,
-        "/api/character": _character,
         "/api/family": _family,
         "/api/wall": _wall,
         "/api/auras": _auras,
         "/api/meter": _meter,
         "/api/armory": _armory,
-        "/api/armory/guild": _armory_guild,
         "/api/armory/member": _armory_member,
         "/api/upgrades": _upgrades,
         "/api/item": _item,
         "/api/client/bags": _client_bags,
         "/api/client/bank": _client_bank,
         "/api/client/guildbank": _client_guild_bank,
-        "/api/client/social": _client_social,
         "/api/client/quests": _client_quests,
-        "/api/client/item": _client_item_tip,
-        "/api/standing": _standing,
         "/api/wealth": _wealth,
         "/api/questlog": _questlog,
         "/api/needs": _needs,
-        "/api/achievements": _achievements,
         "/api/loot": _loot,
-        "/api/dungeons": _dungeons,
         "/api/runtimeline": _run_timeline,
         "/api/raidgoals": _raidgoals,
-        "/api/lineup": _lineup,
         "/api/guildgear": _guild_gear,
         "/api/trades": _trades,
         "/api/recap": _recap,
@@ -7210,7 +6386,6 @@ class Handler(BaseHTTPRequestHandler):
         "/api/director": _director_state,
         "/": _index,
         "/index.html": _index,
-        "/zones.json": _zones_file,
         "/shapes.json": _shapes_file,
         "/jquery.min.js": _jquery_file,
         "/manifest.webmanifest": _manifest_file,

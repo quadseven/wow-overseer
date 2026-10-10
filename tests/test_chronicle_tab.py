@@ -95,26 +95,6 @@ class BothFamiliesAndNoGearInTheWay(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
-        handler = cls.server[cls.server.index("    def _achievements(") :]
-        cls.handler = handler[: handler.index("    def _thoughts(")]
-
-    def test_the_endpoint_builds_a_chapter_for_every_family_in_the_roster(self):
-        self.assertIn("_fetch_rosters()", self.handler)
-        self.assertIn("for which in order:", self.handler)
-        self.assertIn("achievements.chapter(", self.handler)
-        self.assertIn('payload["chapters"] = chapters', self.handler)
-
-    def test_one_familys_failed_read_does_not_blank_the_other(self):
-        self.assertIn("achievements.unread_chapter(which)", self.handler)
-        self.assertIn("except (pymysql.err.MySQLError, OSError):", self.handler)
-        self.assertIn(
-            'log.exception("achievements query failed for family %r", which)',
-            self.handler,
-        )
-
-    def test_the_side_is_read_from_the_characters_table(self):
-        self.assertIn("achievements.faction_of(", self.handler)
-        self.assertIn("_fetch_profiles(names)", self.handler)
 
     def test_a_familys_runs_are_its_own(self):
         runs = self.server[self.server.index("def _fetch_family_runs") :]
