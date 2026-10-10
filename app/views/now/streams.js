@@ -7,6 +7,12 @@
 // view draws an empty slot (`data-stream="<name>"`) and mount() moves the
 // living picture into it. Leaving Now stops every picture; it never stops a
 // broadcast, which is not this page's to stop.
+//
+// Full screen takes the living picture itself (its video, badge and the
+// control that brings it back), so the WHEP stream plays on untouched. While
+// it is full screen the picture is held at the foot of <body>: a redraw
+// replaces the slot it came from, and a full screen element taken out of the
+// document leaves full screen. Leaving full screen moves it back into its slot.
 
 import { html, memberHref, duration, classVar } from "../../ui.js";
 import { makePlayer, hasSound } from "./whep.js";
@@ -57,8 +63,16 @@ function tile(name) {
   off.append(icon, offT, offB);
   const badge = el("span", "st-badge");
   badge.append(el("span", "st-badge-dot"), el("span"));
-  pic.append(video, off, badge);
-  t = { name, pic, video, off, offT, offB, badge, state: "off", started: false, lastAttempt: 0, lastFrame: 0, url: "" };
+  // An id, so a redraw that moves the picture gives the control its focus back.
+  const full = el("button", "st-full");
+  full.type = "button";
+  full.id = "st-full-" + name;
+  full.append(el("i"));
+  pic.append(video, off, badge, full);
+  t = { name, pic, video, off, offT, offB, badge, full, isFull: false, state: "off", started: false, lastAttempt: 0, lastFrame: 0, url: "" };
+  full.addEventListener("click", () => toggleFullscreen(t));
+  video.addEventListener("webkitendfullscreen", () => leftFullscreen(t));
+  fullLabel(t);
   t.player = makePlayer(video, (text, kind) => {
     if (kind === "live") setState(t, "live", "");
     else if (kind === "warn") setState(t, "off", text);
@@ -94,6 +108,7 @@ export function connect(name, url) {
 export function mount(root) {
   root.querySelectorAll("[data-stream]").forEach((slot) => {
     const t = tile(slot.getAttribute("data-stream"));
+    if (t.isFull) return;
     if (t.pic.parentElement !== slot) slot.appendChild(t.pic);
     if (t.video.srcObject && t.video.paused) t.video.play().catch(() => {});
   });
@@ -102,6 +117,7 @@ export function mount(root) {
 }
 
 export function stopAll() {
+  if (fullscreenElement(document)) exitFullscreen(document);
   tiles.forEach((t) => {
     t.player.stop();
     t.started = false;
@@ -109,6 +125,72 @@ export function stopAll() {
   });
   heard = null;
 }
+
+// ---- full screen ------------------------------------------------------------
+// The standard API on the picture where the browser has it (desktop, iPad,
+// Android), webkit's prefixed one on older Safari, and on iPhone, where only
+// a video may go full screen, the video's own native player. Returns which
+// one it asked: "element", "webkit", "video", or "" when there is none.
+// `refused` is called if the browser turns the standard request down.
+export function enterFullscreen(pic, video, refused) {
+  if (typeof pic.requestFullscreen === "function") {
+    const p = pic.requestFullscreen();
+    if (p && typeof p.catch === "function") p.catch(() => { if (refused) refused(); });
+    return "element";
+  }
+  if (typeof pic.webkitRequestFullscreen === "function") { pic.webkitRequestFullscreen(); return "webkit"; }
+  if (typeof video.webkitEnterFullscreen === "function") { video.webkitEnterFullscreen(); return "video"; }
+  return "";
+}
+
+export function fullscreenElement(doc) {
+  return doc.fullscreenElement || doc.webkitFullscreenElement || null;
+}
+
+function exitFullscreen(doc) {
+  if (typeof doc.exitFullscreen === "function") return doc.exitFullscreen().catch(() => {});
+  if (typeof doc.webkitExitFullscreen === "function") doc.webkitExitFullscreen();
+  return null;
+}
+
+function fullLabel(t) {
+  const on = t.isFull;
+  t.full.setAttribute("aria-label", (on ? "Exit full screen, " : "Full screen, ") + t.name + "'s stream");
+  t.full.title = on ? "Exit full screen" : "Full screen";
+  t.full.firstChild.className = on ? "ph ph-corners-in" : "ph ph-corners-out";
+  t.full.firstChild.setAttribute("aria-hidden", "true");
+  t.pic.classList.toggle("is-full", on);
+}
+
+export function toggleFullscreen(t) {
+  if (t.isFull && fullscreenElement(document) === t.pic) { exitFullscreen(document); return "exit"; }
+  // Held at the foot of <body> first, so no redraw can take it out of the page.
+  t.isFull = true;
+  document.body.appendChild(t.pic);
+  t.full.focus({ preventScroll: true });
+  const how = enterFullscreen(t.pic, t.video, () => { if (t.isFull) leftFullscreen(t); });
+  if (!how) { leftFullscreen(t); return ""; }
+  fullLabel(t);
+  if (t.video.srcObject && t.video.paused) t.video.play().catch(() => {});
+  return how;
+}
+
+// Back into its slot (if Now is still on screen) and playing.
+function leftFullscreen(t) {
+  t.isFull = false;
+  fullLabel(t);
+  const slot = document.querySelector('[data-stream="' + CSS.escape(t.name) + '"]');
+  if (slot) { slot.appendChild(t.pic); t.full.focus({ preventScroll: true }); }
+  else t.pic.remove();
+  if (t.video.srcObject && t.video.paused) t.video.play().catch(() => {});
+}
+
+function onFullscreenChange() {
+  const now = fullscreenElement(document);
+  tiles.forEach((t) => { if (t.isFull && now !== t.pic && !t.video.webkitDisplayingFullscreen) leftFullscreen(t); });
+}
+document.addEventListener("fullscreenchange", onFullscreenChange);
+document.addEventListener("webkitfullscreenchange", onFullscreenChange);
 
 // ---- sound: exactly one tile is ever heard -----------------------------
 function applyAudio() {
@@ -123,6 +205,8 @@ function applyAudio() {
     b.setAttribute("aria-pressed", String(on));
     const icon = b.querySelector("i");
     if (icon) icon.className = on ? "ph-fill ph-speaker-high" : "ph ph-speaker-slash";
+    const word = b.querySelector(".st-hear-l");
+    if (word) word.textContent = on ? "Hearing" : "Hear";
     const t = tiles.get(name);
     let say = "";
     if (on && (!t || !t.video.srcObject)) say = "Waiting for " + name + "'s stream.";
@@ -161,19 +245,16 @@ window.addEventListener("hashchange", () => {
 });
 
 // ---- the caption ----------------------------------------------------------
-const FRAMES = [
-  ["BAG", "Bags", "bags"],
-  ["BNK", "Bank", "bank"],
-  ["GBK", "Guild bank", "guildbank"],
-  ["CHR", "Character", "gear"],
-  ["SOC", "Social", ""],
-  ["QST", "Quest log", "quests"],
+// The member's frames, each opened as a panel over Now (panel.js), never a
+// page of its own: the pictures keep playing. [key, label, icon].
+export const ACTIONS = [
+  ["bags", "Bags", "ph-backpack"],
+  ["bank", "Bank", "ph-vault"],
+  ["guildbank", "Guild bank", "ph-bank"],
+  ["gear", "Character", "ph-t-shirt"],
+  ["social", "Social", "ph-users-three"],
+  ["quests", "Quests", "ph-scroll"],
 ];
-
-function frameHref(name, tab) {
-  if (tab === "guildbank") return "#/economy/bank";
-  return memberHref(name, tab);
-}
 
 function trim(s) { return String(s).replace(/[.\s]+$/, ""); }
 
@@ -190,19 +271,23 @@ function doingLine(now) {
 export function tileHtml(m, t) {
   const name = m.name;
   const sub = [t && t.standing, t && t.line].filter(Boolean).join(", ");
-  return html`<figure class="st">
+  return html`<figure class="st" data-class="${m["class"] || ""}">
 <div class="st-slot" data-stream="${name}"></div>
 <figcaption class="st-cap">
 <div class="st-head"><a class="st-name" href="${memberHref(name)}" style="color:${classVar(m["class"])}">${name}</a><span class="st-sub">${sub}</span><span class="st-age" data-frame-age="${name}">no frame</span></div>
 ${doingLine(t && t.now)}
-<div class="st-bar"><button type="button" class="btn btn-secondary st-hear" data-hear="${name}" aria-pressed="false"><i class="ph ph-speaker-slash" aria-hidden="true"></i>Hear</button><span class="st-hear-note dim" data-hear-note="${name}" role="status"></span>
-<div class="st-frames">${FRAMES.map(([mark, label, tab]) => html`<a class="st-frame" href="${frameHref(name, tab)}" title="${label}, ${name}" aria-label="${label}, ${name}">${mark}</a>`)}</div></div>
+<div class="st-bar"><button type="button" class="st-hear" data-hear="${name}" data-focus="${"hear-" + name}" aria-pressed="false"><i class="ph ph-speaker-slash" aria-hidden="true"></i><span class="st-hear-l">Hear</span></button><span class="st-hear-note dim" data-hear-note="${name}" role="status"></span></div>
+<div class="st-acts" role="group" aria-label="${name + "'s frames"}">${ACTIONS.map(([key, label, icon]) => html`<button type="button" class="st-act" data-panel="${key}" data-name="${name}" data-focus="${"act-" + key + "-" + name}" aria-haspopup="dialog" aria-label="${label + ", " + name}"><i class="${"ph " + icon}" aria-hidden="true"></i><span>${label}</span></button>`)}</div>
 </figcaption></figure>`;
 }
 
-// Bind the Hear buttons under `root`.
-export function bind(root) {
+// Bind the Hear buttons and the frame buttons under `root`. A frame button
+// calls `openPanel(name, key, button)`: a panel over this page, no navigation.
+export function bind(root, openPanel) {
   root.querySelectorAll("[data-hear]").forEach((b) => {
     b.addEventListener("click", () => toggleHear(b.getAttribute("data-hear")));
+  });
+  root.querySelectorAll("[data-panel]").forEach((b) => {
+    b.addEventListener("click", () => openPanel(b.getAttribute("data-name"), b.getAttribute("data-panel"), b));
   });
 }

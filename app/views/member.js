@@ -25,7 +25,8 @@ const TAB_OF = { upgrades: "gear", bank: "bags" };
 
 function q(name) { return "?name=" + encodeURIComponent(name); }
 
-function readsFor(name, tab) {
+// The reads and tabs below are also the Now tiles' panels (now/panel.js).
+export function readsFor(name, tab) {
   const n = q(name);
   switch (tab) {
     case "gear": return ["/api/armory/member" + n, "/api/v2/training" + n];
@@ -162,7 +163,7 @@ function standing(tr, name) {
 ${tradeRows.length ? html`<div class="st-trades"><span class="mb-kick">Trades</span>${tradeRows}</div>` : ""}<span class="dim mb-s">${tr.basis}</span></div>`;
 }
 
-function gearTab(ctx, m) {
+export function gearTab(ctx, m) {
   const n = q(m.name);
   const arm = read(ctx, "/api/armory/member" + n);
   const tr = read(ctx, "/api/v2/training" + n);
@@ -209,7 +210,7 @@ function questLog(cq) {
   return html`<div class="card qs-log"><span class="row mb-between"><span class="dim mb-s">Quest log</span><span class="muted mb-s">${mem.used} of ${mem.slots} slots</span></span>${qs.length ? qs.map((x) => html`<div class="qs-q"><span class="${x.failed ? "bad" : x.ready ? "ok" : ""}">${x.title} <span class="dim mb-s">L${x.level}</span></span><span class="muted mb-s">${x.ready ? "ready to hand in" : x.failed ? "failed" : (x.objectives || []).map((o) => o.have + "/" + o.need + " " + o.what).join(", ") || x.status}</span></div>`) : notMeasured("the log is empty")}</div>`;
 }
 
-function questsTab(ctx, m) {
+export function questsTab(ctx, m) {
   const n = q(m.name);
   const chain = read(ctx, "/api/v2/classchain" + n);
   const cq = read(ctx, "/api/client/quests" + n);
@@ -235,7 +236,7 @@ function invBags(frame) {
   })}</div>`;
 }
 
-function inventoryTab(ctx, m, tab) {
+export function inventoryTab(ctx, m, tab) {
   const bank = tab === "bank";
   const r = read(ctx, (bank ? "/api/client/bank" : "/api/client/bags") + q(m.name));
   const s = seg("Inventory", [{ label: "Bags", href: href(m.name, "bags"), current: !bank }, { label: "Bank", href: href(m.name, "bank"), current: bank }]);

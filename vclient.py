@@ -305,6 +305,8 @@ def person(row: dict) -> dict:
         "level": row.get("level"),
         "line": " ".join(w for w in words if w),
         "class_colour": CLASS_COLOURS.get(class_id, "#ffffff"),
+        # The class by name, so the page colours it from its own theme tokens.
+        "class": _CLASS_NAMES.get(class_id),
         "online": bool(row.get("online")),
     }
     if "rank_name" in row:
@@ -346,6 +348,7 @@ def build_social(
                     "level": None,
                     "line": "not on this realm",
                     "class_colour": "#ffffff",
+                    "class": None,
                     "online": False,
                 }
             )

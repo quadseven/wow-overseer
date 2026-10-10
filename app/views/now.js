@@ -6,6 +6,7 @@
 import { html, raw, ago, duration, plural, notMeasured, state, skeletons, STATUS } from "../ui.js";
 import * as D from "./now/data.js";
 import * as streams from "./now/streams.js";
+import { openPanel, pressed } from "./now/panel.js";
 import * as wm from "./now/worldmap.js";
 import { seatChips } from "./_runs.js";
 
@@ -234,7 +235,8 @@ function fold(ctx, agendas) {
 }
 
 export default {
-  css: ["views/now.css"],
+  // The tile panels draw the profile's and the guild bank's frames, in their styles.
+  css: ["views/now.css", "views/members.css", "views/economy.css"],
   reads: () => READS.concat(D.FAMILY_KEYS.map(D.agendaPath)),
   every: 15000,
   quick: QUICK,
@@ -256,7 +258,8 @@ ${fold(ctx, agendas)}`;
       streams.connect(m.name, (t && t.playable !== false && t.url) || m.broadcast_url || "");
     });
     streams.mount(main);
-    streams.bind(main);
+    streams.bind(main, openPanel);
+    pressed();
     drawMiniMaps(main, ctx);
     main.querySelectorAll("button[data-layout]").forEach((b) => b.addEventListener("click", () => {
       saveLayout(b.getAttribute("data-layout"));
