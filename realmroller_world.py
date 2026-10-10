@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
+import re
 import subprocess
 import urllib.parse
 import urllib.request
@@ -82,6 +83,45 @@ def guild_groups_inside(base_url: str, states, fetch=fetch_json) -> int | None:
     )
 
 
+def characters_online(base_url: str, fetch=fetch_json) -> int | None:
+    """How many characters are online, from /api/map: the placed dots plus the unplaced.
+
+    None when the answer is not that shape. The roller reads this before a
+    roll as the baseline and after it as the count that "bots online under
+    N%" is judged against.
+    """
+    data = fetch("%s/api/map" % base_url.rstrip("/"))
+    if not isinstance(data, dict) or not isinstance(data.get("dots"), list):
+        return None
+    unplaced = data.get("unplaced")
+    extra = (
+        unplaced if isinstance(unplaced, int) and not isinstance(unplaced, bool) else 0
+    )
+    return len(data["dots"]) + extra
+
+
+def carry_low_since(
+    prev: datetime | None,
+    baseline: int | None,
+    online: int | None,
+    pct: int,
+    now: datetime,
+) -> datetime | None:
+    """When the online count was first seen under `pct` percent of the baseline.
+
+    No baseline means nothing to judge against: None. An unreadable count
+    keeps what was known (a down site neither starts nor clears the clock);
+    a count back at or over the line clears it.
+    """
+    if not baseline:
+        return None
+    if online is None:
+        return prev
+    if online * 100 < pct * baseline:
+        return prev or now
+    return None
+
+
 def carry_out_since(
     prev: datetime | None, inside: int | None, now: datetime
 ) -> datetime | None:
@@ -96,22 +136,53 @@ def carry_out_since(
     return prev or now
 
 
+def value_moved(value: str, new: str | None, old: str | None) -> bool:
+    """Whether what `value`'s one group captures differs between two texts.
+
+    A missing text captures nothing, so a file that appeared or vanished moved.
+    """
+    rx = re.compile(value)
+    return rx.findall(new or "") != rx.findall(old or "")
+
+
+def _git_text(repo: pathlib.Path, spec: str, run) -> str | None:
+    """`git show spec`, or None when git says the object is not there."""
+    out = run(
+        ["git", "-C", str(repo), "show", spec],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return out.stdout if out.returncode == 0 else None
+
+
 def git_marker_time(
-    repo: pathlib.Path, ref: str, path: str, pattern: str, run=subprocess.run
+    repo: pathlib.Path,
+    ref: str,
+    path: str,
+    pattern: str,
+    run=subprocess.run,
+    value: str = "",
 ) -> datetime | None:
     """The commit time of the last change on `ref` to a line of `path` matching `pattern`.
 
     This is the hand-made roll's mark (a digest line moved in the overlay),
     so the hourly gate also counts rolls made before the roller existed.
-    None when git fails; the caller then has only the releases' history.
+    With `value`, a commit that touches a matching line still counts only if
+    the captured text moved (see value_moved): the overlay pins a gated and
+    an ungated image by digest in one file, and the ungated one's moves are
+    not roll starts. None when git fails; the caller then has only the
+    releases' history.
     """
     cmd = [
         "git",
         "-C",
         str(repo),
         "log",
-        "-1",
-        "--format=%cI",
+        "-n",
+        "30" if value else "1",
+        "--format=%H %cI",
         "-G",
         pattern,
         ref,
@@ -120,14 +191,23 @@ def git_marker_time(
     ]
     try:
         out = run(cmd, capture_output=True, text=True, timeout=60, check=False)
+        if out.returncode != 0:
+            log.warning("git log exited %d: %s", out.returncode, out.stderr.strip())
+            return None
+        for line in out.stdout.splitlines():
+            sha, _, when = line.partition(" ")
+            if not value or value_moved(
+                value,
+                _git_text(repo, "%s:%s" % (sha, path), run),
+                _git_text(repo, "%s^:%s" % (sha, path), run),
+            ):
+                try:
+                    return datetime.fromisoformat(when)
+                except ValueError:
+                    log.warning("git log gave a commit time it cannot read: %r", when)
     except (OSError, subprocess.SubprocessError) as exc:
         log.warning("git log failed: %s", exc)
-        return None
-    if out.returncode != 0:
-        log.warning("git log exited %d: %s", out.returncode, out.stderr.strip())
-        return None
-    text = out.stdout.strip()
-    return datetime.fromisoformat(text) if text else None
+    return None
 
 
 def load(
@@ -169,7 +249,12 @@ def observe(
     guild = guild_groups_inside(site_url, p.guild_run_states, fetch)
     inside = None if family is None or guild is None else family + guild
     marker = git_marker_time(
-        deploy_repo, ref, p.roll_marker_path, p.roll_marker_pattern, run
+        deploy_repo,
+        ref,
+        p.roll_marker_path,
+        p.roll_marker_pattern,
+        run,
+        p.roll_marker_value,
     )
     return realmroller.World(
         now=now,
@@ -178,6 +263,24 @@ def observe(
         out_since=carry_out_since(out_since, inside, now),
         last_roll_started=realmroller.last_roll_start(releases, marker),
     )
+
+
+def dry_action(channel, releases, w) -> realmroller.Action:
+    """The dry run's decision.
+
+    The dry run reads the gates only. A release on the realm is judged on
+    readiness, restarts, log text and bots online, none of which it reads, so
+    asking the tick would report a rollback for a release it never looked at.
+    """
+    cur = releases[channel.current]
+    if cur.state in realmroller.ON_REALM:
+        return realmroller.Action(
+            "wait",
+            cur.name,
+            "%s is %s on the realm; the dry run does not read readiness, restarts,"
+            " logs or bots online (act mode does)" % (cur.name, cur.state),
+        )
+    return realmroller.tick(channel, releases, w)
 
 
 def age(now: datetime, then: datetime | None) -> str:
