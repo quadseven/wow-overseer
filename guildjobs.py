@@ -255,6 +255,38 @@ RANKS[ALCHEMY] = (
     Rank(3465, 225, 20, 125, 5000),
     Rank(11612, 300, 35, 200, 50000),
 )
+# BLACKSMITHING, ENGINEERING AND ENCHANTING, THE SAME FOUR RANKS (#774,
+# 2026-10-10). Without these rows `ranks_due` never wrote a rank errand for a
+# family smith (Grug, Zug), engineer (Grog, Zrog) or enchanter (Og, Oz), and
+# each stopped at 75. Read from `trainer_spell` on the dev world (least
+# MoneyCost across trainers 58-60, 84-92 and 94-96) and from Spell.dbc (md5
+# 543b9fe6...): each is a wrapper whose SPELL_EFFECT_LEARN_SPELL teaches the
+# rank spell (Blacksmithing 2018, 3100, 3538, 9785; Engineering 4036, 4037,
+# 4038, 12656; Enchanting 7411, 7412, 7413, 13920) and whose
+# SPELL_EFFECT_SKILL_STEP (44) is step 1 to 4 of skill 164, 202 or 333:
+# ceilings 75, 150, 225, 300. The Outland ranks past 300 are left out under
+# the classic ruleset.
+BLACKSMITHING, ENGINEERING, ENCHANTING = 164, 202, 333
+RANKS[BLACKSMITHING] = (
+    Rank(2020, 75, 5, 0, 10),
+    Rank(2021, 150, 10, 50, 500),
+    Rank(3539, 225, 20, 125, 5000),
+    Rank(9786, 300, 35, 200, 50000),
+)
+RANKS[ENGINEERING] = (
+    Rank(4039, 75, 5, 0, 10),
+    Rank(4040, 150, 10, 50, 500),
+    Rank(4041, 225, 20, 125, 5000),
+    Rank(12657, 300, 35, 200, 50000),
+)
+RANKS[ENCHANTING] = (
+    Rank(7414, 75, 5, 0, 10),
+    Rank(7415, 150, 10, 50, 500),
+    Rank(7416, 225, 20, 125, 5000),
+    Rank(13921, 300, 35, 200, 50000),
+)
+SKILL_NAMES[ENCHANTING] = "Enchanting"
+
 # The crafting trades whose rank a member buys once it holds them, beside the
 # gathering trades `split_trades` hands out. A trade is never started here.
 RANKED_CRAFTS = (LEATHERWORKING, ALCHEMY)
@@ -268,14 +300,10 @@ TAILOR_EVERY = 3
 # the trade outside the family, so both guilds' posts stood empty (2026-10-10).
 ALCHEMIST_EVERY = 5
 
-# A RECIPE A TRAINER ADDS TO THE BOOK BY ITSELF. Linen Bandage comes with
-# Apprentice First Aid and Bolt of Linen Cloth with Apprentice Tailoring
-# (SkillLineAbility AcquireMethod 1, ClassMask 0); the other first rungs are
-# the rest of craft.py's list of nine auto-learned recipes: Rough Blasting
-# Powder, Smelt Copper, Minor Healing Potion, Rough Sharpening Stone, Light
-# Leather, Light Armor Kit and Handstitched Leather Cloak. Any other recipe is
-# cast only once `character_spell` says the member knows it.
-AUTO_LEARNED = frozenset({3275, 2963, 3918, 2657, 2330, 2660, 2881, 2152, 9058})
+# A RECIPE A TRAINER ADDS TO THE BOOK BY ITSELF: craft.AUTO_LEARNED, the one
+# set the crew, the family and the stand-in read. Any other recipe is cast
+# only once `character_spell` says the member knows it.
+AUTO_LEARNED = craft.AUTO_LEARNED
 # EVERY CRAFTING TRADE craft.RECIPES COVERS (2026-10-05). First Aid first, a
 # secondary trade every member may hold, then Tailoring, then the rest by
 # skill line. A trade with no recipe castable in place (Mining's smelts need a
@@ -1028,6 +1056,60 @@ def ranks_due(level: int, money: int, skills, wanted=()) -> tuple:
         rank = next_rank(skill, value, ceiling, int(level or 0))
         if rank is not None and int(money or 0) >= rank.cost:
             due.append((rank.cost, skill))
+    return tuple(skill for _cost, skill in sorted(due))
+
+
+# The purse a recipe purchase never spends below, in copper: mod-overseer's
+# RECIPE_PURSE_FLOOR_COPPER, so an errand written here is one the trainer
+# visit can complete.
+RECIPE_PURSE_FLOOR = 100
+
+
+def _rungs_ahead(skill: int, value: int) -> tuple:
+    """The rungs a crafter at `value` casts now or within RANK_UP_MARGIN, and
+    for a tailor the Linen Bag its bag errand sews (craft_rhythm.bag_errand)."""
+    out = []
+    for at in (value, value + RANK_UP_MARGIN):
+        recipe = craft.recipe_for(skill, at)
+        if recipe is not None and recipe not in out:
+            out.append(recipe)
+    for bag in craft.BAG_RECIPES.get(skill, ())[:1]:
+        if value >= bag.min_skill:
+            out.append(bag)
+    return tuple(out)
+
+
+def recipes_due(level: int, money: int, skills, known, wanted=()) -> tuple:
+    """The held trades whose next trainer recipe this character may buy now.
+
+    The recipe sibling of `ranks_due`, for a roster family member, whose
+    recipes are bought on arrival at its trade's trainer through the same
+    learn errand (`overseer_roster.learn_skill`, learnaim.py): mod-overseer's
+    TrainOnArrival buys the trade's recipes when no rank is on offer
+    (mod-overseer#862). Without this the column was written only for a rank,
+    and every family crafter stopped at its first bought rung (#769).
+
+    A trade is due when a rung it casts now or within RANK_UP_MARGIN
+    (`_rungs_ahead`) is a trainer recipe (craft.TRAINER_RECIPES) absent from
+    `known` (character_spell, where a bought recipe persists), the trainer
+    teaches it at the trade's value, and the purse covers its price above
+    RECIPE_PURSE_FLOOR. `skills` is {skill id: (value, max)}; only a held
+    primary the roster names in `wanted` is asked, cheapest first.
+    """
+    known = frozenset(int(s) for s in known or ())
+    wanted = tuple(int(s) for s in wanted or ())
+    due = []
+    for skill, (value, ceiling) in sorted((skills or {}).items()):
+        skill, value, ceiling = int(skill), int(value or 0), int(ceiling or 0)
+        if ceiling <= 0 or skill not in wanted:
+            continue
+        for recipe in _rungs_ahead(skill, value):
+            if craft.holds(recipe.spell_id, known):
+                continue
+            rank, cost = craft.TRAINER_RECIPES[recipe.spell_id]
+            if value >= rank and int(money or 0) >= cost + RECIPE_PURSE_FLOOR:
+                due.append((cost, skill))
+                break
     return tuple(skill for _cost, skill in sorted(due))
 
 

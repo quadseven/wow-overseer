@@ -5220,19 +5220,35 @@ def _aim_train_traveller(statements) -> None:
                 raise
 
 
-# Level, purse and the ceiling of every trade with a trainer rank table, for
-# guildjobs.ranks_due (the family's next rank). A LEFT JOIN so a character
+# Level, purse and the ceiling of every trade with a trainer rank table or a
+# craft ladder, for guildjobs.ranks_due and guildjobs.recipes_due (the
+# family's next rank and next trainer recipe). A LEFT JOIN so a character
 # holding none of them still answers with its level and purse.
 _RANK_FACTS_SQL = (
     "SELECT c.name, c.level, c.money, k.skill, k.value, k.max "
     "FROM characters c LEFT JOIN character_skills k ON k.guid = c.guid "
-    "AND k.skill IN (" + ",".join(str(int(s)) for s in sorted(guildjobs.RANKS))
+    "AND k.skill IN ("
+    + ",".join(
+        str(int(s))
+        for s in sorted(guildjobs.RANKS) + sorted(set(craft.RECIPES) - set(guildjobs.RANKS))
+    )
+    + ") WHERE c.name IN (%s)"
+)
+
+# The trainer recipes each member already holds, for guildjobs.recipes_due. A
+# bought recipe persists to character_spell (craft.AUTO_LEARNED rungs do not,
+# and are never asked about).
+_RECIPES_KNOWN_SQL = (
+    "SELECT c.name, sp.spell FROM characters c "
+    "JOIN character_spell sp ON sp.guid = c.guid AND sp.spell IN ("
+    + ",".join(str(int(s)) for s in sorted(craft.TRAINER_RECIPES))
     + ") WHERE c.name IN (%s)"
 )
 
 
 def _ranks_due(cur, roster) -> dict:
-    """name -> the held trades whose next rank is due now (learnaim.Row.ranks).
+    """name -> the held trades whose next rank or trainer recipe is due now
+    (learnaim.Row.ranks): the ranks first, then the recipes (#769).
 
     `roster` is the overseer_roster rows already read, whose `professions`
     column is the permission a primary rank needs. On a realm missing a table
@@ -5242,9 +5258,12 @@ def _ranks_due(cur, roster) -> dict:
     names = [str(row["name"]) for row in roster or ()]
     if not names:
         return {}
+    marks = ",".join(["%s"] * len(names))
     try:
-        cur.execute(_RANK_FACTS_SQL % ",".join(["%s"] * len(names)), names)
+        cur.execute(_RANK_FACTS_SQL % marks, names)
         rows = cur.fetchall()
+        cur.execute(_RECIPES_KNOWN_SQL % marks, names)
+        spells = cur.fetchall()
     except pymysql.err.MySQLError as exc:
         if exc.args and exc.args[0] in (1054, 1146):
             return {}
@@ -5255,12 +5274,18 @@ def _ranks_due(cur, roster) -> dict:
             row["name"], (int(row["level"] or 0), int(row["money"] or 0), {}))
         if row["skill"] is not None:
             skills[int(row["skill"])] = (int(row["value"] or 0), int(row["max"] or 0))
+    known: dict = {}
+    for row in spells:
+        known.setdefault(row["name"], set()).add(int(row["spell"]))
     wanted = {str(row["name"]): trainjob.parse_wanted(row.get("professions"))
               for row in roster}
-    return {
-        name: guildjobs.ranks_due(level, money, skills, wanted.get(name, ()))
-        for name, (level, money, skills) in facts.items()
-    }
+    due: dict = {}
+    for name, (level, money, skills) in facts.items():
+        ranks = guildjobs.ranks_due(level, money, skills, wanted.get(name, ()))
+        recipes = guildjobs.recipes_due(
+            level, money, skills, known.get(name, ()), wanted.get(name, ()))
+        due[name] = ranks + tuple(s for s in recipes if s not in ranks)
+    return due
 
 
 def _learn_aim_rows() -> list:
@@ -7182,11 +7207,17 @@ class Bridge(discord.Client):
                 floor)
         }
         counts = await asyncio.to_thread(_fetch_item_counts, sorted(wanted))
+        # THE SPELLBOOK, SO NO ERRAND NAMES A RECIPE NOT YET BOUGHT (#769).
+        # DriveCraft drops one every cycle ("does not know the recipe"); the
+        # learn errand (guildjobs.recipes_due) buys it. An unread book is None
+        # for everyone, which craft.holds does not judge.
+        known = await asyncio.to_thread(_fetch_crafters_known, names)
         for name in names:
             held = {entry: count for (who, entry), count in counts.items()
                     if who == name}
             chosen = craft_rhythm.errand(name, skills.get(name, {}), held,
-                                         primaries.get(name), bags_wanted, floor)
+                                         primaries.get(name), bags_wanted, floor,
+                                         known=known.get(name))
             await asyncio.to_thread(_write_craft_errand, name, chosen.spell)
             if chosen.spell:
                 log.info("craft: %s aimed at %s spell %s - %s",
@@ -7368,11 +7399,25 @@ class Bridge(discord.Client):
                 (name, craft_supply.REAGENT[craft_spell][0])
                 for name, craft_spell in candidates.items()
             ]
+            # AND THE HERBS THE VIALS WILL MEET (#769): at the counter a member
+            # buys the vials its herbs in hand will use, up to a stack.
+            pairs += [
+                (name, reagent.entry)
+                for name, craft_spell in candidates.items()
+                for reagent in craft_rhythm.GATHERED.get(craft_spell, ())
+            ]
             held_by = await asyncio.to_thread(_fetch_item_counts, pairs)
             for name, craft_spell in sorted(candidates.items()):
                 entry, _label, _price = craft_supply.REAGENT[craft_spell]
                 town = await asyncio.to_thread(_fetch_town, name)
                 held = held_by.get((name, entry), 0)
+                target = craft_supply.vial_target(
+                    craft_spell,
+                    craft_rhythm.casts_in_hand(
+                        craft_spell,
+                        {e: c for (who, e), c in held_by.items() if who == name},
+                    ),
+                )
                 # A NEED, NOT AN AIM (infra#3692). What used to stand here
                 # was one `travel_npc = 'vendor'` write per candidate, and
                 # both halves of it were wrong - the keyword cannot see the
@@ -7387,6 +7432,7 @@ class Bridge(discord.Client):
                 _spell_id, money = spells[name]
                 errand, note = craft_supply.reagent_errand(
                     name, craft_spell, held, money, free_slots.get(name, 0), town,
+                    target=target,
                 )
                 if note:
                     log.info("craft_supply: %s", note)
@@ -7926,10 +7972,14 @@ class Bridge(discord.Client):
                    if who == name}
             for name in names
         }
+        # The same spellbook `_craft_once` reads, so the two passes agree on
+        # the recipe (#769).
+        known = await asyncio.to_thread(_fetch_crafters_known, names)
         spells = {
             name: craft_rhythm.errand(
                 name, skills.get(name, {}), carried[name],
-                primaries.get(name), bags_wanted, floor).spell
+                primaries.get(name), bags_wanted, floor,
+                known=known.get(name)).spell
             for name in names
         }
 
@@ -21519,6 +21569,24 @@ def _standin_tell(name: str, mode: str, now: float) -> bool:
     _insert_job(name, mode, standin.SOURCE)
     _STANDIN_TOLD[name] = (mode, now)
     return True
+
+
+def _fetch_crafters_known(names: list) -> dict:
+    """name -> the spells it holds (character_spell), for craft_rhythm.errand.
+
+    {} when the read fails, so every crafter's book reads None (not judged)
+    and the errands stand as they would have before #769.
+    """
+    try:
+        rows = _fetch_town_spells(list(names))
+    except pymysql.err.MySQLError:
+        log.warning("craft: the crafters' spellbooks could not be read; no "
+                    "errand is judged on them this pass")
+        return {}
+    known: dict = {str(name): set() for name in names}
+    for row in rows:
+        known.setdefault(str(row.get("holder")), set()).add(int(row["spell"]))
+    return {name: frozenset(spells) for name, spells in known.items()}
 
 
 def _fetch_standin_known(name: str):

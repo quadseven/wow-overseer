@@ -37,12 +37,13 @@ WHAT THIS DECIDES, one family at a time (`step`):
                  takes the empty seat.
   a craft that   the ordered member does not sit out while its craft cannot
   cannot move    move (`walled`): its ladder (craft.recipe_for) names a
-                 trainer recipe it does not hold, or no rung at all. A roster
-                 member cannot buy a trainer recipe, so sitting out would make
-                 nothing: on wow-dev, 2026-10-06 to 2026-10-10, Og sat out four
-                 and a half days at Tailoring 81 without Bolt of Woolen Cloth
-                 (2964) while his family ran four-handed. It sits out again
-                 the pass the recipe is held.
+                 trainer recipe it does not hold, or no rung at all. Sitting
+                 out would make nothing: on wow-dev, 2026-10-06 to 2026-10-10,
+                 Og sat out four and a half days at Tailoring 81 without Bolt
+                 of Woolen Cloth (2964) while his family ran four-handed. With
+                 his family, its training stop walks him to his trainer to buy
+                 the recipe (guildjobs.recipes_due writes that learn errand,
+                 #769), and he sits out again the pass the recipe is held.
   when it ends   the order is removed, the crafting goal is met, or, between
                  runs, the guest is no longer free (offline, in a guild run,
                  dead, inside another instance, gone from the guild or out of
@@ -382,8 +383,8 @@ def sits_out(facts: Facts) -> str:
     wall = walled(facts.skills, facts.known)
     if wall:
         return (
-            "%s's craft cannot move (%s, and a roster member cannot buy one), "
-            "so sitting out makes nothing" % (name, wall)
+            "%s's craft cannot move (%s), so it rejoins its family, whose "
+            "training stop walks it to its trainer to buy it (#769)" % (name, wall)
         )
     return ""
 
