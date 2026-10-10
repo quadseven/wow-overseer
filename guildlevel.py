@@ -52,10 +52,24 @@ member past its starting lands is sent that way when a hub on the boat's far
 side fits its level (`Choice.cross_to`), and walks on to that hub from the
 landing on a later pass. Measured on the dev realm on 2026-10-10: Cave's
 Draenei at 22 to 26 stood on Bloodmyst and Azuremyst Isles with no level row
-in a day, every pass refusing them with "no row takes it". No row uses an orb,
-so a Blood Elf past its starting lands, or a member whose continent has no hub
-that fits, is still named in the pass's notes with the hub it would go to and
-the way there, and left where it stands.
+in a day, every pass refusing them with "no row takes it".
+
+THE ORB (`ORB_ENTRY`, `orbs_from`, `Choice.orb`). A Blood Elf player leaves by
+clicking the Orb of Translocation in Silvermoon City: gameobject 184502, whose
+spell (35376) runs the script that casts Translocate (25649) and sets the
+player down in the Undercity on map 0. Nothing is granted: it is the world's
+own object, open to any Horde player who walks up to it. The member walks to
+the orb's spawn (`walk-to-spawn gameobject:<spawn>`) and clicks it with the
+module's `use-gameobject <entry>` row (quadseven/mod-overseer#865, the click a
+class quest makes), when it stands in the starting lands (the far walk's ground
+there) and a hub on map 0 fits its level; it walks on to that hub from the
+Undercity on a later pass. Measured on the dev realm on 2026-10-10: 7 of
+Bonkers' Blood Elves stood on map 530 at levels 21 to 30 past the Ghostlands'
+band, and a hearth puts a Blood Elf back on Sunstrider Isle, so one that had
+levelled on Kalimdor came home to the island and stayed. A member whose
+continent has no hub that fits, or whose way off map 530 is unread, is still
+named in the pass's notes with the hub it would go to and the way there, and
+left where it stands.
 
 WHERE THE WALK ENDS (`hub_masters`). The hub's flight master: the flight-master
 spawn of the world's creature table nearest the hub's taxi node, within
@@ -69,7 +83,7 @@ PURE MODULE: rows in, choices and sentences out. No MySQL, no clock.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import classic
 import council
@@ -99,8 +113,7 @@ LEVEL_CAP = levelroute.LEVEL_CAP
 # A flight master belongs to a hub's node within this many yards of it.
 MASTER_YARDS = float(travel.FLIGHT_NODE_MATCH_YARDS)
 
-# The way off map 530 a player of each side takes, for the note. Named, never
-# walked: no row the bridge writes boards a boat or uses an orb.
+# The way off map 530 a player of each side takes, for the notes and the log.
 EXITS = {
     levelroute.ALLIANCE: "the boat from Valaar's Berth on Azuremyst Isle to "
     "Auberdine in Darkshore",
@@ -109,8 +122,24 @@ EXITS = {
 
 # The map a side's own boat off map 530 lands on: Elune's Blessing (world
 # transport 181646) from Valaar's Berth to Auberdine on Kalimdor. The Horde's
-# way is an orb, which no row uses, so it has none.
+# way is the orb below.
 BOAT_EXITS = {levelroute.ALLIANCE: 1}
+
+# THE HORDE'S WAY OFF MAP 530: the Orb of Translocation in Silvermoon City
+# (gameobject 184502). Its spell 35376 is a script effect whose spell_scripts
+# row casts Translocate (25649), whose spell_target_position is the Undercity on
+# map 0 (1804.9, 326.9). The Undercity's own orb (184503) is the way back and is
+# never taken here.
+ORB_ENTRY = 184502
+ORB_LANDS_ON = 0
+ORB_SIDE = levelroute.HORDE
+
+# The source action of the level step's orb rows (the walk to it and the click),
+# apart from the walk's and the boat's, and how long one holds the member: the
+# walk to the orb takes up to half an hour (guildroute.FAR_WALK_FOLLOW_SECONDS).
+ORB_ACTION = ACTION + "-orb"
+ORB_COOLDOWN_MINUTES = 60
+ORB_NAME = "the Orb of Translocation"
 
 # The source action of the level step's crossing row (guildjobs.source_for),
 # apart from the walk's so that the walk's cooldown never reads it.
@@ -129,13 +158,52 @@ class HubMaster:
 
 
 @dataclass(frozen=True)
+class Orb:
+    """A side's orb off map 530: its gameobject spawn id and entry, where it
+    stands, and the map it sets a member down on."""
+
+    spawn: int
+    entry: int
+    map_id: int
+    x: float
+    y: float
+    lands_on: int
+
+
+def orbs_from(rows) -> dict:
+    """side -> Orb off the world's gameobject rows (guid, entry, map_id, x, y).
+    Only the Silvermoon orb (ORB_ENTRY) on map 530; an unreadable row is left
+    out, and a side with none has no orb."""
+    out = {}
+    for row in rows or ():
+        try:
+            entry, map_id = int(row["entry"]), int(row["map_id"])
+            if entry != ORB_ENTRY or map_id != classic.OUTLAND_MAP:
+                continue
+            orb = Orb(
+                spawn=int(row["guid"]),
+                entry=entry,
+                map_id=map_id,
+                x=float(row["x"]),
+                y=float(row["y"]),
+                lands_on=ORB_LANDS_ON,
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        if ORB_SIDE not in out or orb.spawn < out[ORB_SIDE].spawn:
+            out[ORB_SIDE] = orb
+    return out
+
+
+@dataclass(frozen=True)
 class Choice:
     """The hub a member is sent to, or why it is not sent.
 
     A non-empty `refused` means `master` is None. `hub` and `band` may still
     name the hub it would go to, for the note. `cross_to` set means the member
-    first crosses to that map by its side's boat (BOAT_EXITS), with `master`
-    None: `hub` is where it levels once it has landed.
+    first crosses to that map by its side's boat (BOAT_EXITS), or by its orb
+    when `orb` is set, with `master` None: `hub` is where it levels once it
+    has landed.
     """
 
     hub: levelroute.Hub | None = None
@@ -143,6 +211,7 @@ class Choice:
     master: HubMaster | None = None
     refused: str = ""
     cross_to: int | None = None
+    orb: Orb | None = None
 
     @property
     def place(self) -> str:
@@ -254,13 +323,13 @@ def hubs_from(team, map_id, zone_id) -> tuple:
     return hubs
 
 
-def choose(level, race, map_id, bands, masters, zone_id=None) -> Choice:
+def choose(level, race, map_id, bands, masters, zone_id=None, orbs=None) -> Choice:
     """The hub a member of this level and race is walked to from `map_id`.
 
     The lowest band of its side that fits, then levelroute's order, among the
     hubs with a known flight master (`hubs_from`). Only on its own map, or,
-    from map 530, on the map its side's boat lands on (`Choice.cross_to`); see
-    the module docstring.
+    from map 530, on the map its side's boat or orb (`orbs`, orbs_from) lands
+    on (`Choice.cross_to`); see the module docstring.
     """
     team = side_of(race)
     if not team:
@@ -273,7 +342,15 @@ def choose(level, race, map_id, bands, masters, zone_id=None) -> Choice:
     if home:
         _floor, _order, hub, band, master = home[0]
         return Choice(hub=hub, band=band, master=master)
-    return _away(team, level, map_id, fitting)
+    return _away(team, level, map_id, fitting, _orb_for(team, map_id, zone_id, orbs))
+
+
+def _orb_for(team, map_id, zone_id, orbs):
+    """The side's orb, when the member stands in the starting lands, where a
+    far walk to it starts (mod-overseer#765); None otherwise."""
+    if not classic.is_starting_land(map_id, zone_id):
+        return None
+    return (orbs or {}).get(team)
 
 
 def _fitting(team, level, map_id, zone_id, bands, masters) -> list:
@@ -290,15 +367,18 @@ def _fitting(team, level, map_id, zone_id, bands, masters) -> list:
     return fitting
 
 
-def _away(team, level, map_id, fitting) -> Choice:
+def _away(team, level, map_id, fitting, orb=None) -> Choice:
     """The choice when no fitting hub stands on the member's own map: its
-    side's boat off map 530 to the lowest hub that fits where the boat lands
-    (BOAT_EXITS), or the lowest hub of all, named and refused."""
+    side's boat (BOAT_EXITS) or orb (`orb`) off map 530 to the lowest hub that
+    fits where it lands, or the lowest hub of all, named and refused."""
     boat = BOAT_EXITS.get(team) if classic.is_expansion_map(map_id) else None
-    landed = [f for f in fitting if boat is not None and f[4].map_id == boat]
+    if boat is not None or not classic.is_expansion_map(map_id):
+        orb = None
+    landing = boat if boat is not None else (orb.lands_on if orb else None)
+    landed = [f for f in fitting if landing is not None and f[4].map_id == landing]
     if landed:
         _floor, _order, hub, band, _master = landed[0]
-        return Choice(hub=hub, band=band, cross_to=boat)
+        return Choice(hub=hub, band=band, cross_to=landing, orb=orb)
     _floor, _order, hub, band, _master = fitting[0]
     if classic.is_expansion_map(map_id):
         why = "no walk leaves map %d; its way to %s is %s, and no row takes it" % (
@@ -356,6 +436,23 @@ def crossing_said(name, level, why, choice: Choice) -> str:
     )
 
 
+def orb_said(name, level, why, choice: Choice) -> str:
+    """The sentence the pass logs for a member sent to its side's orb."""
+    return (
+        "%s takes %s to level, then walks on to %s (quests %d to %d fit its "
+        "level %d): %s"
+        % (
+            name,
+            EXITS[choice.hub.team],
+            choice.place,
+            int(choice.band[0]),
+            int(choice.band[1]),
+            int(level),
+            why,
+        )
+    )
+
+
 def walled_note(name, level, why, choice: Choice, wall) -> str:
     """The note for a member the module will not carry across (`wall`, its own
     words in the newest crossing row)."""
@@ -387,16 +484,19 @@ class World:
     bands    side -> levelroute.bands for that side
     masters  hub key -> HubMaster (`hub_masters`)
     roster   every roster family member's name: levelroute serves those
+    orbs     side -> Orb (`orbs_from`), its way off map 530 by an orb
     """
 
     bands: dict
     masters: dict
     roster: frozenset = frozenset()
+    orbs: dict = field(default_factory=dict)
 
 
-def world(quest_rows, master_rows, roster=()) -> World | None:
-    """The World off levelroute.QUESTS_SQL's rows and the flight-master rows,
-    or None while the quests are unread (no step is taken from no bands)."""
+def world(quest_rows, master_rows, roster=(), orb_rows=()) -> World | None:
+    """The World off levelroute.QUESTS_SQL's rows, the flight-master rows and
+    the orb's gameobject rows, or None while the quests are unread (no step is
+    taken from no bands)."""
     if quest_rows is None:
         return None
     return World(
@@ -406,4 +506,5 @@ def world(quest_rows, master_rows, roster=()) -> World | None:
         },
         masters=hub_masters(master_rows),
         roster=frozenset(str(n) for n in roster or ()),
+        orbs=orbs_from(orb_rows),
     )
