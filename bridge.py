@@ -76,7 +76,9 @@ import guildcorps
 import guildjobs
 import guildlevel
 import guildrun
+import familyseat
 import guildpug
+import seatmeter
 import guildsocial
 import holdings
 import itemsource
@@ -17415,6 +17417,10 @@ class Bridge(discord.Client):
         owed = _class_owed_names(self)
         held, needs = _hold_owed(held, needs, owed)
         facts = dict(facts, busy=set(facts["busy"]) | owed)
+        # A FAMILY'S TANK AND HEALER WHILE THE FAMILY IS IDLE (familyseat,
+        # #784): free to a tank or healer seat of a guild ask, never to ask.
+        held, lent = familyseat.release(held, mates, facts.get("lendable", ()),
+                                        facts["busy"], facts["resting"], facts["benched"])
         log.info("guild social: %s", guildsocial.census(mates, held))
         # PICK-UP GROUPS (guildpug, #591): a pug who said yes counts as free.
         pugs_on = guildpug.enabled()
@@ -17432,7 +17438,7 @@ class Bridge(discord.Client):
             guildjobs.entrances(), facts["now"],
             room=max(0, bounds.max_groups - in_flight),
             can_form=spaced and in_flight < bounds.max_groups,
-            campaigns=facts["campaigns"], records=records, cleared=cleared)
+            campaigns=facts["campaigns"], records=records, cleared=cleared, lent=lent)
         social = await _guild_social_doors(getattr(self, "_jev", None), social)
         pug_pass = (_guild_pug_plan(social, facts, mates, held, doors, pug_all, bounds)
                     if pugs_on else None)
@@ -17452,6 +17458,33 @@ class Bridge(discord.Client):
                      run_id, social.form.ask.asker, social.form.door.place,
                      ", ".join(social.form.composition.names)) if run_id else "",
                  "; " + "; ".join(social.notes) if social.notes else "")
+        # THE SEATS AN HOUR (seatmeter, #784). Looked up so a test driving
+        # this pass on a bare object needs no reads for it.
+        meter = getattr(self, "_log_seat_meter", None)
+        if meter is not None:
+            await meter(bounds, facts, mates, held, doors, lent)
+
+    async def _log_seat_meter(self, bounds, facts: dict, mates: list, held: dict,
+                              doors: list, lent) -> None:
+        """Say the guild seats filled in the last hour and the members waiting
+        for one (seatmeter, #784), every seatmeter.EVERY_SECONDS."""
+        now = time.monotonic()
+        last = getattr(self, "_seat_meter_at", None)
+        if last is not None and now - last < seatmeter.EVERY_SECONDS:
+            return
+        self._seat_meter_at = now
+        try:
+            runs = await asyncio.to_thread(_fetch_seat_meter_runs)
+        except pymysql.err.MySQLError:
+            log.exception("guild seats: the last hour's runs could not be read")
+            return
+        guilds = list(bounds.guilds)
+        found = seatmeter.meters(
+            guilds, runs, facts["family"],
+            [m for m in mates if m.member.guild in guilds], held, doors,
+            guildpug.factions(mates, guilds))
+        log.info("guild seats: last hour: %s; %d family member(s) free to a tank or "
+                 "healer seat", seatmeter.line(found), len(lent))
 
     async def _campaign_queue_loop(self) -> None:
         """Advance every family's queue on its own clock.
@@ -17543,6 +17576,11 @@ class Bridge(discord.Client):
                 log.info("queue: %s's dungeon campaign clears %d stale quest "
                          "aim(s); the queue owns movement",
                          campaignqueue._family(key), cleared)
+        # A FAMILY MEMBER OUT IN A GUILD RUN COMES BACK FIRST (familyseat,
+        # #784): the campaign never pulls it from a run in progress.
+        lent_hold = getattr(self, "_family_lent_hold", None)
+        if lent_hold is not None and await lent_hold(key, fam):
+            return
         holds = getattr(self, "_queue_holds", None)
         if holds is not None and await holds(key, rows, fam):
             return
@@ -17708,6 +17746,29 @@ class Bridge(discord.Client):
             return
         for key, rows in pending.items():
             await self._campaign_queue_family_once(key, rows, fams, held)
+
+    async def _family_lent_hold(self, key: str, fam: dict) -> bool:
+        """Whether this family's queue waits for members lent to a guild run
+        (familyseat.waiting_for), said once each time who it waits for
+        changes. A failed read holds nothing: the module refuses a family
+        member to a guild run once its family's campaign is armed."""
+        if not familyseat.enabled():
+            return False
+        try:
+            in_runs = await asyncio.to_thread(_guild_run_members_out)
+        except pymysql.err.MySQLError:
+            log.exception("queue: who is out in a guild run could not be read for "
+                          "%s; the queue steps as before", campaignqueue._family(key))
+            return False
+        waiting = familyseat.waiting_for(fam["names"], in_runs)
+        if not waiting:
+            _LENT_HOLD_SAID.pop(key, None)
+            return False
+        said = familyseat.hold_line(waiting)
+        if _LENT_HOLD_SAID.get(key) != said:
+            _LENT_HOLD_SAID[key] = said
+            log.info("queue: %s %s", campaignqueue._family(key), said)
+        return True
 
     async def _queue_holds(self, key: str, rows: list, fam: dict) -> bool:
         """Whether the queue's step waits this pass: the ladder took it
@@ -22001,6 +22062,23 @@ def _fetch_guild_pugs(span: tuple, bounds) -> list:
         return list(cur.fetchall())
 
 
+def _fetch_seat_meter_runs() -> list:
+    """The guild runs formed in the last hour (seatmeter.RUNS_SQL)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(seatmeter.RUNS_SQL)
+        return list(cur.fetchall())
+
+
+# family -> the last familyseat.hold_line said for it, only while it waits.
+_LENT_HOLD_SAID: dict = {}
+
+
+def _guild_run_members_out() -> set:
+    """Everyone in a guild run that is queued or inside."""
+    with _connect() as conn, conn.cursor() as cur:
+        return set(_guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE)))
+
+
 def _guild_run_state_names(cur, states) -> list:
     cur.execute(
         "SELECT members FROM overseer_guild_run WHERE state IN (%s)"  # noqa: S608 - placeholders only
@@ -22341,11 +22419,18 @@ def _fetch_guild_social_facts(bounds) -> dict:
                 raise
         drops = _guild_social_drops(cur)
         pug_calls = _fetch_guild_pug_calls(cur) if guildpug.enabled() else {}
+        lendable = set()
+        if familyseat.enabled():
+            cur.execute(familyseat.ROSTER_SQL)
+            lendable = familyseat.lendable(list(cur.fetchall()),
+                                           familyseat.inside(facts["rows"]),
+                                           facts["in_runs"])
     facts.update({
         "now": now, "asks": asks, "answers": answers,
         "quests": guildsocial.quests_by_name(quest_rows),
         "gear": guildsocial.gear_by_name(facts["rows"], worn, skills),
         "campaigns": campaigns, "drops": drops, "pug_calls": pug_calls,
+        "lendable": lendable,
     })
     return facts
 

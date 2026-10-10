@@ -1025,6 +1025,9 @@ class _Board:
     records: dict = field(default_factory=dict)
     # guildrun.cleared_doors: (guild, keyword) for doors a guild has cleared.
     cleared: set = field(default_factory=set)
+    # Family members lent while their family is idle (familyseat.py, #784):
+    # they answer for a tank or healer seat only and never ask.
+    lent: set = field(default_factory=set)
 
     @property
     def free(self) -> dict:
@@ -1039,7 +1042,16 @@ class _Board:
 
 
 def _board(
-    mates, held, answers, needs, all_doors, entrances, now, records=None, cleared=None
+    mates,
+    held,
+    answers,
+    needs,
+    all_doors,
+    entrances,
+    now,
+    records=None,
+    cleared=None,
+    lent=None,
 ) -> _Board:
     by_ask: dict = {}
     for answer in answers:
@@ -1059,6 +1071,7 @@ def _board(
         now=now,
         records=dict(records or {}),
         cleared=set(cleared or ()),
+        lent=set(lent or ()),
     )
 
 
@@ -1163,6 +1176,9 @@ def _candidates(board: _Board, ask: Ask, open_seats: list, spoken: set) -> list:
         # The scarce seats first: a tank or healer for an open seat of its
         # own answers before another damage dealer.
         scarce = 0 if _seat_for(mate.member, open_seats, door) in (TANK, HEALER) else 1
+        # A lent family member answers for a tank or healer seat or not at all.
+        if name in board.lent and scarce:
+            continue
         options.append((scarce, -net, name, mate, stance, need))
     options.sort(key=lambda o: o[:3])
     return options
@@ -1183,6 +1199,8 @@ def _answers_to(board: _Board, ask: Ask, spoken: set) -> list:
             break
         role = _seat_for(mate.member, open_seats, door)
         if not role or (stance == HELPS and helpers >= MAX_HELPERS):
+            continue
+        if name in board.lent and role not in (TANK, HEALER):
             continue
         open_seats.remove(role)
         helpers += 1 if stance == HELPS else 0
@@ -1429,7 +1447,7 @@ def _best_askers(board: _Board, guild: str, barred: set, asked: set) -> list:
     """This guild's members with a need to ask for, strongest first."""
     choices = []
     for name, mate in board.free_mates.items():
-        if mate.member.guild != guild or name in barred:
+        if mate.member.guild != guild or name in barred or name in board.lent:
             continue
         if not seatable(mate.member):
             continue
@@ -1510,6 +1528,7 @@ def plan_pass(
     campaigns=(),
     records=None,
     cleared=None,
+    lent=(),
 ) -> Pass:
     """One pass of the social layer.
 
@@ -1525,12 +1544,15 @@ def plan_pass(
     campaigns family campaign rows (CAMPAIGNS_SQL)
     records   guildrun.shape_records over the guild's runs: no member asks
               for a door failing for the shape its guild can seat
+    lent      family members free to a tank or healer seat while their
+              family is idle (familyseat.lendable): they answer for those
+              seats only and never ask
 
     In order: asks that end now close, a full ask forms, the asks still short
     draw yeses, and members with a need ask.
     """
     board = _board(
-        mates, held, answers, needs, all_doors, entrances, now, records, cleared
+        mates, held, answers, needs, all_doors, entrances, now, records, cleared, lent
     )
     live = [a for a in asks if a.state in LIVE_ASKS and a.kind == KIND_DUNGEON]
     expire, cancel, withdraw, still = _close(board, live)
