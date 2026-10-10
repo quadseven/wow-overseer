@@ -18,6 +18,8 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
 import families as families_module  # noqa: E402
+import guildrun  # noqa: E402
+import realmread  # noqa: E402
 from apiv2 import achievements as A  # noqa: E402
 from apiv2._context import Context  # noqa: E402
 
@@ -573,55 +575,13 @@ class Copy(unittest.TestCase):
                 self.assertLessEqual(len(a["line"]), 140, a["line"])
 
 
-class FakeCursor:
-    """Answers each execute() with the rows of the first rule whose words are
-    all in the SQL."""
-
-    def __init__(self, rules, log):
-        self.rules, self.log, self.rows = rules, log, []
-
-    def execute(self, sql, params=()):
-        self.log.append((sql, params))
-        self.rows = []
-        for words, found in self.rules:
-            if all(w in sql for w in words):
-                self.rows = list(found)
-                return
-
-    def fetchall(self):
-        return list(self.rows)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-
-class FakeConn:
-    def __init__(self, rules, log):
-        self.rules, self.log = rules, log
-
-    def cursor(self):
-        return FakeCursor(self.rules, self.log)
-
-    def close(self):
-        pass
-
-
 def server():
     store = families_module.MemoryStore(
         {"Grug": ["Grug", "Ugga"], "Zug": ["Zug", "Oz"]},
         {"Cave": ["Grug", "Ugga", "Og"], "Bonkers": ["Zug", "Oz"]},
     )
-
-    def wide(cur, sql, params=(), fallback="", what=""):
-        cur.execute(sql, params)
-        return list(cur.fetchall())
-
     return types.SimpleNamespace(
         FAMILIES=families_module.Families(store, fallback=lambda: []),
-        _wide_guarded=wide,
         achievements=types.SimpleNamespace(MAP_NAMES=MAPS),
     )
 
@@ -632,48 +592,38 @@ def as_guildrun(r):
     return dict(out, state="ended", created_unix=r["started_at"], ended_unix=r["at"])
 
 
-LIVE = [
-    (
-        ("FROM characters", "guild_member"),
-        [{"name": n, "guild": g} for n, g in ROSTER.items()],
-    ),
-    (("UNIX_TIMESTAMP() AS now_at",), [{"now_at": T0 + 10**6}]),
-    (
-        ("FROM overseer_death", "fall_guard_standdown"),
-        [
-            death(7, map=33, **WATER),
-            death(8, name="Zug", killer_type="player", killer_name="Stabby"),
-        ],
-    ),
-    (
-        ("FROM overseer_guild_run",),
-        [
-            as_guildrun(r)
-            for r in (
-                run(1, outcome="cleared", bosses_done=7),
-                run(3, outcome="cleared", bosses_done=4, keyword="shadowfang"),
-                run(
-                    2,
-                    guild="Bonkers",
-                    members="Zug:tank:warrior:30,Oz:healer:priest:29",
-                ),
-            )
-        ],
-    ),
-    (("FROM overseer_level",), [level(1, "Oz", 20), level(2, "Ugga", 30)]),
-]
+# Every statement the endpoint reads, by the constant it is built from; the
+# in-memory reader raises on any other, so a reworded read fails here.
+LIVE = {
+    A.MEMBERS_SQL: [{"name": n, "guild": g} for n, g in ROSTER.items()],
+    A.NOW_SQL: [{"now_at": T0 + 10**6}],
+    A.DEATHS_SQL: [
+        death(7, map=33, **WATER),
+        death(8, name="Zug", killer_type="player", killer_name="Stabby"),
+    ],
+    A.DEATH_TIMES_SQL: [],
+    A.HEARTHS_SQL: [],
+    A.RUN_DEATHS_SQL: [],
+    guildrun._RUN_SQL: [
+        as_guildrun(r)
+        for r in (
+            run(1, outcome="cleared", bosses_done=7),
+            run(3, outcome="cleared", bosses_done=4, keyword="shadowfang"),
+            run(2, guild="Bonkers", members="Zug:tank:warrior:30,Oz:healer:priest:29"),
+        )
+    ],
+    A.LEVELS_SQL: [level(1, "Oz", 20), level(2, "Ugga", 30)],
+    A.EVENTS_SQL: [],
+    A.SALES_SQL: [],
+    A.ASKS_SQL: [],
+}
 
 
-def call(query, rules=LIVE):
-    log, opened = [], []
-
-    def connect():
-        opened.append(1)
-        return FakeConn(rules, log)
-
-    ctx = Context(connect=connect, server=server())
+def call(query, answers=None):
+    rd = realmread.Memory(LIVE if answers is None else answers)
+    ctx = Context(read=rd, server=server())
     status, payload = A.achievements(query, ctx)
-    return status, payload, log, opened
+    return status, payload, rd.asked
 
 
 class Gate(unittest.TestCase):
@@ -681,26 +631,26 @@ class Gate(unittest.TestCase):
         A.clear_cache()
 
     def test_a_name_outside_the_families_is_refused_before_any_read(self):
-        status, payload, log, opened = call({"name": ["Stranger"]})
+        status, payload, asked = call({"name": ["Stranger"]})
         self.assertEqual(status, 404)
         self.assertEqual(payload, {"error": "not a guild member"})
-        self.assertEqual(opened, [])
+        self.assertEqual(asked, [])
 
     def test_a_name_of_the_wrong_shape_is_refused(self):
         for bad in ("Grug1", "x" * 13, "Grug Ugga", ""):
             with self.subTest(bad=bad):
-                status, _, _, opened = call({"name": [bad]})
+                status, _, asked = call({"name": [bad]})
                 self.assertEqual(status, 404)
-                self.assertEqual(opened, [])
+                self.assertEqual(asked, [])
 
     def test_a_guild_outside_the_families_is_refused_before_any_read(self):
-        status, payload, _, opened = call({"guild": ["Pyreborne"]})
+        status, payload, asked = call({"guild": ["Pyreborne"]})
         self.assertEqual(status, 404)
         self.assertEqual(payload["error"], "no such guild")
-        self.assertEqual(opened, [])
+        self.assertEqual(asked, [])
 
     def test_a_member_gets_its_own_list_and_the_firsts_it_was_part_of(self):
-        status, payload, _, _ = call({"name": ["Grug"]})
+        status, payload, _ = call({"name": ["Grug"]})
         self.assertEqual(status, 200)
         self.assertEqual(payload["name"], "Grug")
         self.assertEqual(payload["guild"], "Cave")
@@ -714,14 +664,14 @@ class Gate(unittest.TestCase):
         self.assertEqual(payload["count"], len({a["rule"] for a in payload["earned"]}))
 
     def test_a_guild_feed_holds_only_that_guilds(self):
-        status, payload, _, _ = call({"guild": ["cave"]})
+        status, payload, _ = call({"guild": ["cave"]})
         self.assertEqual(status, 200)
         self.assertEqual(payload["guilds"], ["Cave"])
         self.assertTrue(payload["items"])
         self.assertEqual({a["guild"] for a in payload["items"]}, {"Cave"})
 
     def test_no_guild_is_both_family_guilds(self):
-        status, payload, _, _ = call({})
+        status, payload, _ = call({})
         self.assertEqual(status, 200)
         self.assertEqual(sorted(payload["guilds"]), ["Bonkers", "Cave"])
         self.assertEqual({a["guild"] for a in payload["items"]}, {"Bonkers", "Cave"})
@@ -729,7 +679,7 @@ class Gate(unittest.TestCase):
     def test_every_statement_reads_and_every_table_read_is_bounded(self):
         for query in ({"name": ["Grug"]}, {"guild": ["bonkers"]}, {}):
             A.clear_cache()
-            _, _, log, _ = call(query)
+            _, _, log = call(query)
             for sql, _params in log:
                 with self.subTest(sql=sql[:60]):
                     self.assertTrue(sql.lstrip().upper().startswith("SELECT"), sql)
@@ -749,22 +699,19 @@ class RunRows(unittest.TestCase):
 
 class EndedSince(unittest.TestCase):
     def test_guildrun_reads_every_ended_run_of_the_guilds_in_the_window(self):
-        import guildrun
-
-        log = []
-        cur = FakeCursor([(("FROM overseer_guild_run",), [as_guildrun(run(1))])], log)
-        got = guildrun.ended_since(cur, ["Cave", "Bonkers"], 90, 50)
+        rd = realmread.Memory({guildrun._RUN_SQL: [as_guildrun(run(1))]})
+        got = guildrun.ended_since(rd, ["Cave", "Bonkers"], 90, 50)
         self.assertEqual([r["id"] for r in got], [1])
-        sql, params = log[0]
+        sql, params = rd.asked[0]
         self.assertIn("state = 'ended'", sql)
         self.assertIn("INTERVAL %s DAY", sql)
         self.assertNotIn("outcome IN", sql)
         self.assertEqual(params, ("Cave", "Bonkers", 90, 50))
 
     def test_no_guild_reads_nothing(self):
-        import guildrun
-
-        self.assertEqual(guildrun.ended_since(None, [], 90, 50), [])
+        rd = realmread.Memory({})
+        self.assertEqual(guildrun.ended_since(rd, [], 90, 50), [])
+        self.assertEqual(rd.asked, [])
 
 
 class SaleRows(unittest.TestCase):

@@ -48,7 +48,6 @@ from .members import STREAK_GAP_SECONDS
 
 from ._scope import (
     NOT_A_MEMBER,
-    guarded,
     holes,
     may_answer,
     name_shaped,
@@ -957,54 +956,42 @@ def sale_row(row: dict) -> dict | None:
     }
 
 
-def _roster(ctx, cur) -> dict:
+def _roster(ctx) -> dict:
     """name -> guild for every member a v2 read may answer about: the family
     guilds' members, and the families (a member in no guild reads as "")."""
     names = list(_scope.guilds(ctx).values())
     found = []
     if names:
-        found = guarded(
-            ctx,
-            cur,
-            MEMBERS_SQL.format(holes=holes(len(names))),
-            tuple(names),
-            "guild_member",
-        )
+        sql = MEMBERS_SQL.format(holes=holes(len(names)))
+        found = ctx.read.rows(sql, tuple(names), what="guild_member")
     out = {n: "" for n in ctx.server.FAMILIES.names()}
     out.update({r["name"]: r["guild"] for r in found})
     return out
 
 
-def _named(ctx, cur, sql: str, names: list, args: tuple, what: str, **fmt) -> list:
-    return guarded(
-        ctx, cur, sql.format(holes=holes(len(names)), **fmt), (*names, *args), what
-    )
+def _named(rd, sql: str, names: list, args: tuple, what: str, **fmt) -> list:
+    text = sql.format(holes=holes(len(names)), **fmt)
+    return rd.rows(text, (*names, *args), what=what)
 
 
-def _deaths(ctx, cur, names: list) -> dict:
-    deaths = _named(
-        ctx,
-        cur,
-        DEATHS_SQL,
-        names,
-        (DEATH_DAYS, LETHAL_FALL_YARDS, PUNCHED_DOWN_LEVELS, MAX_ROWS),
-        "overseer_death",
-    )
-    times = _named(
-        ctx, cur, DEATH_TIMES_SQL, names, (DEATH_DAYS, TIMES_MAX_ROWS), "overseer_death"
-    )
-    hearths = _named(
-        ctx,
-        cur,
-        HEARTHS_SQL,
-        names,
-        (DEATH_DAYS, ARRIVED_LIKE, MAX_ROWS),
-        "overseer_command",
-    )
-    return {"deaths": deaths, "death_times": times, "hearths": hearths}
+def _deaths(rd, names: list) -> dict:
+    notable = (DEATH_DAYS, LETHAL_FALL_YARDS, PUNCHED_DOWN_LEVELS, MAX_ROWS)
+    return {
+        "deaths": _named(rd, DEATHS_SQL, names, notable, "overseer_death"),
+        "death_times": _named(
+            rd, DEATH_TIMES_SQL, names, (DEATH_DAYS, TIMES_MAX_ROWS), "overseer_death"
+        ),
+        "hearths": _named(
+            rd,
+            HEARTHS_SQL,
+            names,
+            (DEATH_DAYS, ARRIVED_LIKE, MAX_ROWS),
+            "overseer_command",
+        ),
+    }
 
 
-def _run_deaths(ctx, cur, runs: list, roster: dict) -> list:
+def _run_deaths(rd, runs: list, roster: dict) -> list:
     wiped = [r for r in runs if r.get("outcome") == WIPED][-WIPED_RUNS_READ:]
     names = sorted({n for r in wiped for n, _ in seats(r["members"]) if n in roster})
     if not names:
@@ -1012,13 +999,7 @@ def _run_deaths(ctx, cur, runs: list, roster: dict) -> list:
     spans = " OR ".join([RUN_SPAN] * len(wiped))
     times = tuple(t for r in wiped for t in (int(r["started_at"]), int(r["at"])))
     return _named(
-        ctx,
-        cur,
-        RUN_DEATHS_SQL,
-        names,
-        (*times, MAX_ROWS),
-        "overseer_death",
-        spans=spans,
+        rd, RUN_DEATHS_SQL, names, (*times, MAX_ROWS), "overseer_death", spans=spans
     )
 
 
@@ -1029,39 +1010,35 @@ def run_row(row: dict) -> dict:
     return dict(row, started_at=started, at=int(row.get("ended_unix") or started))
 
 
-def _runs(ctx, cur, guilds: list, roster: dict) -> dict:
+def _runs(rd, guilds: list, roster: dict) -> dict:
     if not guilds:
         return {"runs": [], "run_deaths": []}
-    found = guildrun.ended_since(cur, guilds, RUN_DAYS, RUNS_READ)
+    found = guildrun.ended_since(rd, guilds, RUN_DAYS, RUNS_READ)
     runs = sorted(map(run_row, found), key=lambda r: (r["at"], r["id"]))
-    return {"runs": runs, "run_deaths": _run_deaths(ctx, cur, runs, roster)}
+    return {"runs": runs, "run_deaths": _run_deaths(rd, runs, roster)}
 
 
-def _the_rest(ctx, cur, names: list) -> dict:
+def _the_rest(rd, names: list) -> dict:
     kinds = holes(len(EVENT_KINDS))
-    events = guarded(
-        ctx,
-        cur,
-        EVENTS_SQL.format(holes=holes(len(names)), kinds=kinds),
-        (*names, *EVENT_KINDS, EVENT_DAYS, MAX_ROWS),
+    events = _named(
+        rd,
+        EVENTS_SQL,
+        names,
+        (*EVENT_KINDS, EVENT_DAYS, MAX_ROWS),
         "overseer_event",
+        kinds=kinds,
     )
     sales = _named(
-        ctx,
-        cur,
+        rd,
         SALES_SQL,
         names,
         (DEATH_DAYS, SOLD_CLOTH_LIKE, MAX_ROWS),
         "overseer_command",
     )
     return {
-        "levels": _named(
-            ctx, cur, LEVELS_SQL, names, (RUN_DAYS, MAX_ROWS), "overseer_level"
-        ),
+        "levels": _named(rd, LEVELS_SQL, names, (RUN_DAYS, MAX_ROWS), "overseer_level"),
         "events": events,
-        "asks": _named(
-            ctx, cur, ASKS_SQL, names, (ASK_DAYS, MAX_ROWS), "overseer_guild_ask"
-        ),
+        "asks": _named(rd, ASKS_SQL, names, (ASK_DAYS, MAX_ROWS), "overseer_guild_ask"),
         "sales": [x for x in map(sale_row, sales) if x],
     }
 
@@ -1069,23 +1046,16 @@ def _the_rest(ctx, cur, names: list) -> dict:
 def fetch(ctx, names: list | None, guilds: list) -> dict:
     """The roster, the database's clock, and every row build() reads, for
     `names` (None: every member of `guilds`) and the runs of `guilds`."""
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            roster_ = _roster(ctx, cur)
-            now = guarded(ctx, cur, NOW_SQL, (), "now")
-            wanted = (
-                names
-                if names is not None
-                else sorted(n for n, g in roster_.items() if g in guilds)
-            )
-            r = {"maps": ctx.server.achievements.MAP_NAMES}
-            r.update(_runs(ctx, cur, guilds, roster_))
-            if wanted:
-                r.update(_deaths(ctx, cur, wanted))
-                r.update(_the_rest(ctx, cur, wanted))
-    finally:
-        conn.close()
+    rd = ctx.read
+    roster_ = _roster(ctx)
+    now = rd.must(NOW_SQL)
+    if names is None:
+        names = sorted(n for n, g in roster_.items() if g in guilds)
+    r = {"maps": ctx.server.achievements.MAP_NAMES}
+    r.update(_runs(rd, guilds, roster_))
+    if names:
+        r.update(_deaths(rd, names))
+        r.update(_the_rest(rd, names))
     now_at = int(now[0]["now_at"]) if now else 0
     return {"rows": r, "roster": roster_, "now_at": now_at}
 
@@ -1156,12 +1126,7 @@ def clear_cache() -> None:
 
 def _for_member(ctx, name: str) -> dict:
     def make():
-        conn = ctx.connect()
-        try:
-            with conn.cursor() as cur:
-                guild = _roster(ctx, cur).get(name, "")
-        finally:
-            conn.close()
+        guild = _roster(ctx).get(name, "")
         return member_view(name, fetch(ctx, [name], [guild] if guild else []))
 
     return _CACHE.get("name:" + name, make)
