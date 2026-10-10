@@ -45,8 +45,8 @@ import nowstatus
 import situation
 from panel import _CLASS_NAMES, _RACE_NAMES
 
-from . import presence
-from ._scope import guarded, holes
+from . import activity, presence
+from ._scope import holes
 
 # A class quest ask newer than this means the blocker still stands: the bridge
 # asks again every pass it stands, ASK_COOLDOWN_MINUTES (15) apart at the most
@@ -79,6 +79,7 @@ WHERE_SQL = (
 # "guildjobs:<job>:<name>", and the row's status is the realm's answer.
 JOBS_SQL = (
     "SELECT target_name AS name, source, command, status, detail, "
+    "LEFT(result, 600) AS result, "
     "UNIX_TIMESTAMP(created_at) AS at FROM overseer_command "
     "WHERE target_name IN ({holes}) AND source LIKE 'guildjobs:%%' "
     "AND created_at > NOW() - INTERVAL %s MINUTE ORDER BY id DESC"
@@ -105,11 +106,8 @@ BASIS = (
 def fetch(ctx) -> dict:
     """Every row build() reads, on one connection plus the now-step reads."""
     server = ctx.server
-    families = server._fetch_families()
-    names = [n for group in families.values() for n in group]
-    if not names:
-        names = list(server.family.roster())
-        families = {names[0]: names} if names else {}
+    families = server.FAMILIES.families()
+    names = server.FAMILIES.names()
     rows = {
         "guild": [],
         "chars": [],
@@ -128,53 +126,38 @@ def fetch(ctx) -> dict:
 
 def _read(ctx, names: list) -> dict:
     server = ctx.server
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            # S608 below: `holes` is a run of placeholders sized by the roster;
-            # every value is bound by the driver.
-            guild = guarded(
-                ctx,
-                cur,
-                server._LINEUP_GUILD.format(holes=holes(len(names))),
-                tuple(names),
-                "guild_member",
-            )
-            everyone = sorted(set(names) | {r["name"] for r in guild})
-            h = holes(len(everyone))
-            chars = guarded(
-                ctx, cur, CHARS_SQL.format(holes=h), tuple(everyone), "characters"
-            )
-            readings = presence.of(ctx, cur, everyone)
-            online = [n for n in everyone if readings[n]["online"]]
-            snaps = []
-            if online:
-                snaps = guarded(
-                    ctx,
-                    cur,
-                    WHERE_SQL.format(holes=holes(len(online))),
-                    tuple(online),
-                    "overseer_snapshot",
-                )
-            asks = guarded(
-                ctx,
-                cur,
-                ASKS_SQL.format(holes=h),
-                (*everyone, ASK_DAYS),
-                "overseer_guild_ask",
-            )
-            jobs = guarded(
-                ctx,
-                cur,
-                JOBS_SQL.format(holes=h),
-                (*everyone, JOB_MINUTES),
-                "overseer_command",
-            )
-            cur.execute("SELECT UNIX_TIMESTAMP() AS now_at")
-            row = cur.fetchone()
-            now_at = int(row["now_at"]) if row else 0
-    finally:
-        conn.close()
+    rd = ctx.read
+    # S608 below: `holes` is a run of placeholders sized by the roster;
+    # every value is bound by the driver.
+    guild = rd.rows(
+        server._LINEUP_GUILD.format(holes=holes(len(names))),
+        tuple(names),
+        what="guild_member",
+    )
+    everyone = sorted(set(names) | {r["name"] for r in guild})
+    h = holes(len(everyone))
+    chars = rd.rows(CHARS_SQL.format(holes=h), tuple(everyone), what="characters")
+    readings = presence.of(rd, everyone)
+    online = [n for n in everyone if readings[n]["online"]]
+    snaps = []
+    if online:
+        snaps = rd.rows(
+            WHERE_SQL.format(holes=holes(len(online))),
+            tuple(online),
+            what="overseer_snapshot",
+        )
+    asks = rd.rows(
+        ASKS_SQL.format(holes=h),
+        (*everyone, ASK_DAYS),
+        what="overseer_guild_ask",
+    )
+    jobs = rd.rows(
+        JOBS_SQL.format(holes=h),
+        (*everyone, JOB_MINUTES),
+        what="overseer_command",
+    )
+    clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
+    now_at = int(clock[0]["now_at"]) if clock else 0
     return {
         "guild": guild,
         "chars": chars,
@@ -218,7 +201,11 @@ def job_step(row: dict | None) -> str:
     if not row:
         return ""
     parts = str(row.get("source") or "").split(":")
-    job = parts[1].replace("-", " ") if len(parts) > 2 else ""
+    job = (
+        parts[1].replace("-", " ").replace("classquest", "class quest")
+        if len(parts) > 2
+        else ""
+    )
     return "Guild job: " + job if job else ""
 
 
@@ -226,8 +213,9 @@ def job_answer(row: dict | None) -> str:
     """The realm's answer to that job: its status, and why when it refused."""
     if not row:
         return ""
-    status, detail = str(row.get("status") or ""), str(row.get("detail") or "")
-    return status + (": " + detail if detail else "")
+    return activity.answer_words(
+        row.get("status"), row.get("detail"), row.get("result")
+    )
 
 
 # -------------------------------------------------------------------- stuck --

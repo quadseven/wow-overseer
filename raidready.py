@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import bank
 import jobs
+import places
 import raidgear
 import raidgoals
 import raidlineup
@@ -193,7 +194,11 @@ def _by_level(members: list) -> list:
 
 
 def _staffing_blockers(
-    lineup: dict, raiders: list, runnable: bool, clears: bool = True
+    lineup: dict,
+    raiders: list,
+    runnable: bool,
+    clears: bool = True,
+    gathers: bool = True,
 ) -> list:
     """The HARD blockers about who is there: the raid cannot start without."""
     out = []
@@ -212,6 +217,13 @@ def _staffing_blockers(
             "to the door and in with the head last, and then it holds at the "
             "entrance: the dungeon brain is kept off raid maps until clearing "
             "is built and ordered."
+        )
+    if runnable and not gathers:
+        out.append(
+            "Only the head is walked to the Molten Core door. A seated raider "
+            "who is not already near it when the raid forms is never brought "
+            "there (no walk, no crossing, no summon), and the raid goes in "
+            "after the assemble wait with whoever has arrived."
         )
     if short["raiders"]:
         out.append(
@@ -396,10 +408,11 @@ def _blockers(
     goals: dict,
     runnable: bool,
     clears: bool = True,
+    gathers: bool = True,
 ) -> list:
     """Everything between this guild and its first raid, hard ones first."""
     level_hard, level_soft = _level_blockers(raiders, min_level)
-    hard = _staffing_blockers(lineup, raiders, runnable, clears) + level_hard
+    hard = _staffing_blockers(lineup, raiders, runnable, clears, gathers) + level_hard
     soft = (
         level_soft
         + _thin_role_blockers(lineup)
@@ -623,8 +636,8 @@ def _cells(row: dict) -> list:
 def _where(member: dict) -> str:
     map_id = member.get("map")
     if map_id is None:
-        return "unknown"
-    place = CONTINENTS.get(int(map_id), "in an instance (map %d)" % int(map_id))
+        return "position not read"
+    place = CONTINENTS.get(int(map_id), "inside " + places.map_name(map_id))
     return place if member.get("online") else "%s, offline" % place
 
 
@@ -778,6 +791,7 @@ def build_guild(
         goals,
         RAID_PORTAL in jobs.RAID_KEYWORDS,
         raidrun.CLEARS,
+        raidrun.GATHERS,
     )
     names = [m["name"] for m in raiders]
     classes = {m["name"]: m.get("class_id") for m in members}

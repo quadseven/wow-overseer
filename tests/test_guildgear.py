@@ -20,7 +20,7 @@ sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import guildgear  # noqa: E402
 import map_server  # noqa: E402  (must follow the pymysql stub)
-from tests.test_vclient import FAMILIES, get  # noqa: E402
+from tests.test_vclient import get, realm_of  # noqa: E402
 
 map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
@@ -99,22 +99,25 @@ class TheRows(unittest.TestCase):
         self.assertEqual(p["slots"], 17)
 
 
-@mock.patch.object(map_server, "_fetch_family_groups", return_value=FAMILIES)
 class TheEndpoints(unittest.TestCase):
-    def test_the_gear_table_endpoint(self, _groups):
+    def setUp(self):
+        patch = mock.patch.object(
+            map_server, "FAMILIES", realm_of(guildmates=["Guildie"])
+        )
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_the_gear_table_endpoint(self):
         rows = [worn("Og", 4, 16)]
         with mock.patch.object(map_server, "_fetch_guild_gear", return_value=rows):
             h = get("/api/guildgear")
         self.assertEqual(h.code, 200)
         self.assertEqual(h.payload["guilds"][0]["members"][0]["name"], "Og")
 
-    def test_a_guildmate_gets_every_frame(self, _groups):
+    def test_a_guildmate_gets_every_frame(self):
         inv = {"rows": [], "money": 100}
         gb = {"guild": None, "tab_rows": [], "item_rows": []}
         with (
-            mock.patch.object(
-                map_server, "_is_family_guildmate", return_value=True
-            ) as mate,
             mock.patch.object(map_server, "_fetch_client_inventory", return_value=inv),
             mock.patch.object(map_server, "_fetch_client_guild_bank", return_value=gb),
             mock.patch.object(map_server, "_fetch_questlog", return_value={}),
@@ -133,18 +136,9 @@ class TheEndpoints(unittest.TestCase):
                 get("/api/client/quests?name=Guildie").payload["member"],
                 {"name": "Guildie"},
             )
-            # Checked against every family's names, never trusted.
-            self.assertEqual(mate.call_args.args[0], "Guildie")
-            self.assertEqual(
-                sorted(mate.call_args.args[1]),
-                sorted(n for _k, ns in FAMILIES for n in ns),
-            )
 
-    def test_a_stranger_still_gets_nothing(self, _groups):
-        with (
-            mock.patch.object(map_server, "_is_family_guildmate", return_value=False),
-            mock.patch.object(map_server, "_fetch_client_inventory") as inv,
-        ):
+    def test_a_stranger_still_gets_nothing(self):
+        with mock.patch.object(map_server, "_fetch_client_inventory") as inv:
             for frame in ("bags", "quests"):
                 self.assertEqual(get("/api/client/%s?name=Stranger" % frame).code, 404)
             inv.assert_not_called()

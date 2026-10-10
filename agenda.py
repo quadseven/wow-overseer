@@ -66,6 +66,7 @@ import achievements
 import campaignqueue
 import goals
 import jobs
+import places
 import travel
 
 # How long the family may go without moving before the page calls it stalled.
@@ -426,10 +427,9 @@ def describe_aim(value: str) -> str:
     text = str(value or "").strip()
     if not text:
         return "nowhere"
-    if text.startswith("at:"):
-        return "a spot in the world"
-    if text.startswith("trigger:"):
-        return "a doorway"
+    if text.startswith(("at:", "trigger:")):
+        # Named, not "a spot in the world" or "a doorway" (places.aim_place).
+        return places.aim_place(text)
     return travel.describe(text)
 
 

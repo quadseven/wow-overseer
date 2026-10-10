@@ -94,7 +94,7 @@ class TheMaps(unittest.TestCase):
         )
         self.assertEqual(
             classic.outside_note("Zora", 540),
-            "Zora stands in map 540, outside the classic world",
+            "Zora stands in The Shattered Halls, outside the classic world",
         )
 
 

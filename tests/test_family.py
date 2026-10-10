@@ -132,7 +132,7 @@ class WhereAndWhatTest(unittest.TestCase):
             family.build_family([row(map_id=34, pos_x=0.0, pos_y=0.0)], GEO), "Grug"
         )
         self.assertTrue(c["instance"])
-        self.assertEqual(c["zone"], "inside an instance")
+        self.assertEqual(c["zone"], "inside The Stockade")
 
     def test_leader_is_the_world_s_leader_and_carries_the_pov_warning(self):
         # stream.pov_changes_the_family says in as many words that the UI

@@ -15,6 +15,8 @@ sys.path.insert(0, str(HERE))
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import apiv2  # noqa: E402
+import guildrun  # noqa: E402
+import realmread  # noqa: E402
 from apiv2._context import Context  # noqa: E402
 
 ROW = {
@@ -41,61 +43,32 @@ ROW = {
 }
 
 
-class Server:
-    """The two map server helpers the endpoint uses, recorded."""
-
-    def __init__(self, rows):
-        self.rows = rows
-        self.sql = []
-        self.storied = []
-
-    def _wide_guarded(self, cur, sql, params, _fallback, _what):
-        self.sql.append((sql, params))
-        return self.rows
-
-    def _guild_run_stories(self, cur, runs):
-        self.storied.extend(r["id"] for r in runs)
-        for r in runs:
-            r["story"] = "a story"
-        return runs
-
-
-class Conn:
-    def __init__(self):
-        self.closed = False
-
-    def cursor(self):
-        return self
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def close(self):
-        self.closed = True
-
-
 def ask(value, rows=(ROW,)):
-    server = Server(list(rows))
-    conns = []
-
-    def connect():
-        conns.append(Conn())
-        return conns[-1]
-
+    """The handler over a reader that knows the run read and the story's
+    reads (deaths, bosses, their levels) and nothing else."""
+    rd = realmread.Memory(
+        {
+            guildrun._RUN_SQL: list(rows),
+            guildrun._DEATHS_SQL: [],
+            guildrun.BOSSES_SQL: [],
+            guildrun.BOSS_LEVELS_SQL: [],
+        }
+    )
     code, payload = apiv2.handle(
         "/api/v2/run",
         {"id": [value]} if value is not None else {},
-        Context(connect=connect, server=server),
+        Context(read=rd, server=None),
     )
-    return code, payload, server, conns
+    return code, payload, rd
+
+
+def reads(rd, table):
+    return [(sql, params) for sql, params in rd.asked if "FROM " + table in sql]
 
 
 class OneRun(unittest.TestCase):
     def test_an_old_run_is_read_by_its_id_and_shaped_like_the_list(self):
-        code, payload, server, conns = ask("398")
+        code, payload, rd = ask("398")
         self.assertEqual(code, 200)
         run = payload["run"]
         self.assertEqual(run["id"], 398)
@@ -105,21 +78,23 @@ class OneRun(unittest.TestCase):
             run["members"][0],
             {"name": "Grug", "seat": "tank", "class": "warrior", "level": 24},
         )
-        self.assertEqual(run["story"], "a story")
-        self.assertEqual(server.sql[0][1], (398,))
-        self.assertIn("WHERE id = %s LIMIT 1", server.sql[0][0])
-        self.assertTrue(conns[0].closed)
+        self.assertTrue(run["story"].startswith("Cleared The Deadmines"))
+        self.assertEqual(run["run_state"], "cleared")
+        ((sql, params),) = reads(rd, "overseer_guild_run")
+        self.assertEqual(params, (398, 1))
+        self.assertIn("WHERE id IN (%s) ORDER BY id DESC LIMIT %s", sql)
 
     def test_a_run_still_inside_has_no_story_read(self):
         inside = dict(ROW, state="inside", outcome="")
-        code, payload, server, _ = ask("398", rows=(inside,))
+        code, payload, rd = ask("398", rows=(inside,))
         self.assertEqual(code, 200)
-        self.assertEqual(server.storied, [])
+        self.assertEqual(reads(rd, "overseer_death"), [])
+        self.assertNotIn("story", payload["run"])
 
     def test_an_unknown_id_is_a_404(self):
-        code, payload, _, conns = ask("12345", rows=())
+        code, payload, rd = ask("12345", rows=())
         self.assertEqual(code, 404)
-        self.assertTrue(conns[0].closed)
+        self.assertEqual(len(rd.asked), 1)
 
     def test_anything_but_a_positive_number_is_refused_before_a_query(self):
         for bad in (
@@ -133,10 +108,9 @@ class OneRun(unittest.TestCase):
             "12345678901",
             chr(0x663) + chr(0x669) + chr(0x668),  # Arabic-Indic digits
         ):
-            code, _payload, server, conns = ask(bad)
+            code, _payload, rd = ask(bad)
             self.assertEqual(code, 400, bad)
-            self.assertEqual(conns, [], bad)
-            self.assertEqual(server.sql, [], bad)
+            self.assertEqual(rd.asked, [], bad)
 
 
 class TheRunPageAsksForIt(unittest.TestCase):

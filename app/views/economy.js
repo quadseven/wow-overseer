@@ -5,7 +5,8 @@
 // guild is shown lives in the URL query, so every state can be linked.
 
 import { html, raw, pageHead, sectionHead, tabs, item, notMeasured, gold, plural, duration, pendingRead, state, classVar, memberHref, member } from "../ui.js";
-import { build, FAMILIES } from "../router.js";
+import { build } from "../router.js";
+import { familyKeys } from "../families.js";
 
 const TABS = [
   ["gold", "Bags and gold"],
@@ -33,7 +34,6 @@ const pct = (n) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
 const ecoHref = (tab, query) => build(tab === "gold" ? ["economy"] : ["economy", tab], query || {});
 const skillPath = (skill, family) => TRADES + "?skill=" + encodeURIComponent(skill) + "&family=" + encodeURIComponent(family);
 const bankPath = (name) => "/api/client/guildbank?name=" + encodeURIComponent(name);
-const BANK_NAMES = FAMILIES.map(cap);
 
 function money(m) {
   return m && m.total !== undefined && m.total !== null ? html`<span class="eco-gold">${gold(m.total)}</span>` : notMeasured();
@@ -308,9 +308,30 @@ function bankCell(c) {
   return html`<span class="eco-cell">${item({ entry: c.entry, name: c.name, quality: c.quality, icon: c.icon, mark: c.letters })}${c.count > 1 ? html`<span class="ct" aria-hidden="true">${c.count}</span>` : ""}</span>`;
 }
 
+// A tab's stacks under small headers by kind (cloth, herbs, recipes...),
+// when the guild bank read says each stack's category; the slot order holds
+// inside each. One block, as the game draws it, when it does not.
+export function bankGroups(cells) {
+  if (!cells.some((c) => c.category)) return [{ label: "", cells }];
+  const groups = new Map();
+  cells.forEach((c) => {
+    const label = c.category || "Other";
+    if (!groups.has(label)) groups.set(label, { label, rank: Number.isFinite(c.category_rank) ? c.category_rank : 99, cells: [] });
+    groups.get(label).cells.push(c);
+  });
+  return Array.from(groups.values()).sort((a, b) => a.rank - b.rank);
+}
+
+function bankGrid(cells) {
+  const groups = bankGroups(cells);
+  if (groups.length < 2) return html`<div class="eco-grid">${cells.map(bankCell)}</div>`;
+  return html`<div class="eco-cats">${groups.map((g) => html`<section class="eco-cat" aria-label="${g.label}"><h3 class="eco-cat-head"><span>${g.label}</span><span class="num">${g.cells.length}</span></h3><div class="eco-grid">${g.cells.map(bankCell)}</div></section>`)}</div>`;
+}
+
 // Also the Now tiles' Guild bank panel (now/panel.js).
 export function bankTab(ctx, get) {
-  const reads = BANK_NAMES.map((n) => get(bankPath(n)));
+  const reads = familyKeys().map((n) => get(bankPath(n)));
+  if (!reads.length) return state("unmeasured", "Which families the realm has is not measured yet.");
   const ready = reads.filter((r) => r.data && r.data.guild);
   if (!ready.length) return pendingRead(reads[0], 3) || state("empty", "Neither family is in a guild.");
   const wanted = (ctx.query.guild || "").toLowerCase();
@@ -324,7 +345,7 @@ export function bankTab(ctx, get) {
   const tabCards = tabs.map((t) => html`<a class="card eco-btab" href="${ecoHref("bank", { guild: g, tab: t.tab })}"${t === at ? raw(' aria-current="true"') : ""}><div class="eco-line"><span class="eco-trade">${t.name}</span><span class="eco-meta">${t.used} of ${t.total}</span></div>${bar((100 * t.used) / (t.total || 1), "accent")}${t.holds ? html`<span class="eco-meta">${sentence(t.holds)}</span>` : ""}</a>`);
   const cells = (at.cells || []).filter(Boolean);
   return html`${pick}${head}<div class="eco-btabs">${tabCards}</div>
-<div class="section">${sectionHead("", at.name, plural(cells.length, "stack"))}${cells.length ? html`<div class="eco-grid">${cells.map(bankCell)}</div>` : state("empty", "This tab is empty.")}</div>`;
+<div class="section eco-bank">${sectionHead("", at.name, plural(cells.length, "stack"))}${cells.length ? bankGrid(cells) : state("empty", "This tab is empty.")}</div>`;
 }
 
 // ---- the view -----------------------------------------------------------------
@@ -332,7 +353,7 @@ export function bankTab(ctx, get) {
 export function readsFor(ctx) {
   const t = ctx.params.tab;
   if (t === "gold" || t === "auction") return [WEALTH];
-  if (t === "bank") return BANK_NAMES.map(bankPath);
+  if (t === "bank") return familyKeys().map(bankPath);
   const q = ctx.query;
   if (t === "trades" && q.open && q.family) return [TRADES, skillPath(q.open, cap(q.family))];
   return [TRADES];

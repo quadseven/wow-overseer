@@ -5,12 +5,14 @@
 // it came back) with what each seat said while the run lasted, from
 // /api/thoughts, read once per visit after the run itself is known.
 
-import { html, raw, state, pendingRead, plural, member } from "../ui.js";
+import { html, raw, state, pendingRead, plural, member, readState } from "../ui.js";
 import { load, peek } from "../api.js";
 import {
-  GUILD_NAME, utc, since, findRun, stateTag, pips, bossText, chose, cause, seatRows,
-  steps, clock, inside,
+  findRun, stateTag, pips, seatRows, steps, inside,
 } from "./_runs.js";
+import { toSeconds, fromClock, ageOf, nowSeconds, since, clock } from "../models/time.js";
+import { formedAt, endedAt, lastAt, bossText, chose, cause } from "../models/guildruns.js";
+import { guilds, guildSlug, firstGuild } from "../families.js";
 
 const THOUGHTS = 30;
 const SHOWN = 40;
@@ -20,20 +22,20 @@ function runPath(id) { return "/api/v2/run?id=" + encodeURIComponent(id); }
 function thoughtsPath(name) { return "/api/thoughts?name=" + encodeURIComponent(name) + "&limit=" + THOUGHTS; }
 
 function guildKey(r) {
-  return Object.keys(GUILD_NAME).find((k) => GUILD_NAME[k] === r.guild) || "cave";
+  return guildSlug(r.guild) || firstGuild();
 }
 
 // What the seats said between the run forming and coming back, oldest first.
 // Null while any seat's read is still on its way.
 function said(r) {
-  const from = utc(r.created_at);
-  const to = utc(r.ended_at) || Date.now() / 1000;
+  const from = formedAt(r);
+  const to = endedAt(r) || nowSeconds();
   const reads = (r.members || []).map((m) => [m.name, peek(thoughtsPath(m.name))]);
-  if (reads.some(([, t]) => t.data === undefined && !t.error)) return null;
+  if (reads.some(([, t]) => readState(t) === "loading")) return null;
   const out = [];
   reads.forEach(([name, t]) => {
     ((t.data && t.data.thoughts) || []).forEach((x) => {
-      const at = utc(x.created_at);
+      const at = toSeconds(x.created_at);
       if (at && from && at >= from && at <= to) out.push({ t: at, who: name, text: x.text });
     });
   });
@@ -43,11 +45,30 @@ function said(r) {
   };
 }
 
+// What a seat said, as its timeline line: {lead, text}. A line that already
+// starts with the seat's name ("Durg entered The Deadmines.") is drawn with
+// the name once, as its subject, and not as "Durg: Durg entered".
+//
+// Lines the world narrated before maps were named say "crossed into an
+// unknown place". That fallback was written only for a map outside the four
+// continents, and the only such map a seat crosses into while its run lasts
+// is the run's dungeon, so the line names it.
+export function seatLine(name, text, place) {
+  let t = String(text || "");
+  if (place) t = t.replace(/\bcrossed into an unknown place\b/, "entered " + place);
+  const own = name && t.startsWith(name + " ");
+  return { lead: !!own, text: own ? t.slice(name.length + 1) : t };
+}
+
 function timeline(r) {
   const own = steps(r).filter((s) => s.t);
   const heard = said(r);
   const rows = own.concat(heard ? heard.list : []).sort((a, b) => (a.t || 0) - (b.t || 0));
-  const lines = rows.map((s) => html`<div class="g-step"><span class="g-step-t">${s.t ? clock(s.t) : ""}</span><span>${s.who ? html`${member({ name: s.who })}: ` : ""}${s.text}</span></div>`);
+  const lines = rows.map((s) => {
+    const l = s.who ? seatLine(s.who, s.text, r.place) : { text: s.text };
+    const who = s.who ? html`${member({ name: s.who })}${l.lead ? " " : ": "}` : "";
+    return html`<div class="g-step"><span class="g-step-t">${s.t ? clock(s.t) : ""}</span><span>${who}${l.text}</span></div>`;
+  });
   let note = "";
   if (!heard) note = html`<span class="muted">Reading what the seats said...</span>`;
   else if (heard.failed.length) note = html`<span class="muted">Not measured for ${heard.failed.join(", ")}: their reads did not answer.</span>`;
@@ -73,10 +94,10 @@ export default {
     }
     if (!r) {
       return html`<header class="page-head"><h1>Not found</h1></header>
-${state("empty", "No run #" + ctx.params.id + " in the guild runs the realm has recorded.", raw('<a href="#/guilds/cave/runs">Cave runs</a> | <a href="#/guilds/bonkers/runs">Bonkers runs</a>'))}`;
+${state("empty", "No run #" + ctx.params.id + " in the guild runs the realm has recorded.", raw(guilds().map((g) => html`<a href="${"#/guilds/" + g.slug + "/runs"}">${g.name} runs</a>`.s).join(" | ")))}`;
     }
     const g = guildKey(r);
-    const when = r.state === "inside" ? "started " + since(utc(r.created_at)) : since(utc(r.ended_at) || utc(r.created_at));
+    const when = r.state === "inside" ? "started " + since(formedAt(r)) : since(lastAt(r));
     const extra = [plural(r.deaths || 0, "death"), inside(r), r.loot_items ? plural(r.loot_items, "item") + " looted" : ""].filter(Boolean).join(" | ");
     return html`<a class="g-r-back" href="${"#/guilds/" + g + "/runs"}"><i class="ph ph-caret-left" aria-hidden="true"></i>${r.guild} runs</a>
 <header class="g-r-head"><h1>${r.place || "A dungeon"}</h1><span class="muted">run #${r.id} | ${r.guild} | ${when}</span>${stateTag(r)}</header>
@@ -86,7 +107,7 @@ ${state("empty", "No run #" + ctx.params.id + " in the guild runs the realm has 
 ${chose(r) ? html`<span class="muted">${chose(r)}</span>` : ""}
 ${cause(r) ? html`<span>${cause(r)}</span>` : ""}
 ${r.story ? html`<span class="muted">${r.story}</span>` : ""}
-<span class="muted">${extra}${r.band_line ? " | " + r.band_line : ""}${r.composition ? " | " + r.composition : ""}</span></div>
+<span class="muted">${extra}${r.band_line ? " | " + r.band_line : ""}</span></div>
 <div class="card g-list"><div class="g-list-head"><span class="g-card-title">Seats</span><span class="muted">${plural((r.members || []).length, "seat")}</span></div>${seatRows(r)}</div>
 </div>
 <div class="card g-r-timeline"><span class="g-card-title">Timeline</span><div id="g-r-timeline">${timeline(r)}</div></div>
@@ -99,7 +120,7 @@ ${r.story ? html`<span class="muted">${r.story}</span>` : ""}
     // Read once per visit, and again when what is held is over a minute old.
     const missing = (r.members || []).filter((m) => {
       const t = peek(thoughtsPath(m.name));
-      return (t.data === undefined && !t.error) || (t.at && Date.now() - t.at > 60000);
+      return readState(t) === "loading" || ageOf(fromClock(t.at)) > 60;
     });
     if (!missing.length) return;
     Promise.all(missing.map((m) => load(thoughtsPath(m.name)))).then(() => {

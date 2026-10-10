@@ -46,6 +46,8 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 
+import places
+
 # --------------------------------------------------------------------- storage --
 
 CREATE_SQL = (
@@ -134,10 +136,19 @@ _RULES = (
         ),
     ),
     (
-        re.compile(r"^pace: (?P<s>\w+)'s family: (?P<dg>.+?) holds \((?P<why>.+)\)$"),
+        # The record line holds its own "(0%)", and the bridge appends the
+        # notes in a second pair: "holds (5 fought, 0 wiped (0%), ...) (six or
+        # more empty slots: Zork 6)". A greedy match split them mid-way.
+        re.compile(
+            r"^pace: (?P<s>\w+)'s family: (?P<dg>.+?) holds "
+            r"\((?P<why>[^()]*(?:\([^()]*\)[^()]*)*)\)(?: \((?P<note>.+)\))?$"
+        ),
         "family",
         "pace_hold",
-        lambda m: ("Holding the " + m["dg"] + " run", m["why"]),
+        lambda m: (
+            "Holding the " + m["dg"] + " run",
+            m["why"] + ("; " + m["note"] if m["note"] else ""),
+        ),
     ),
     (
         re.compile(r"^standin: (?P<s>\w+)'s family: (?P<why>.+)$"),
@@ -178,7 +189,7 @@ _RULES = (
         ),
         "character",
         "town_errand",
-        lambda m: ("Walking to " + aim_words(m["aim"]) + " on a town errand", ""),
+        lambda m: ("Walking " + places.walk_words(m["aim"]) + " on a town errand", ""),
     ),
     (
         re.compile(
@@ -319,24 +330,57 @@ def _intent_key(row: dict) -> tuple:
 
 
 def _owner(row: dict) -> str:
-    return str(row.get("current_owner") or "the module")
+    owner = str(row.get("current_owner") or "")
+    return _OWNER_WORDS.get(owner, owner or "the module")
 
 
 # --------------------------------------------------------------------- wording --
 
 
 def aim_words(target: str) -> str:
-    """A module aim in words: `trigger:194`, `at:0:x,y,z`, `banker`, `1234`."""
-    t = str(target or "").strip()
-    if not t:
-        return "nowhere"
-    if t.startswith("trigger:"):
-        return "trigger " + t.split(":", 1)[1]
-    if t.startswith("at:"):
-        return "a spot on the map"
-    if t.isdigit():
-        return "creature " + t
-    return "the " + t
+    """A module aim in words: `trigger:194` is "the way out of Shadowfang
+    Keep", `at:0:-3898,-597,5` "the Menethil Harbor docks (Wetlands)"
+    (places.aim_place)."""
+    return places.aim_place(target)
+
+
+# Words the module and the bridge use for their own parts, as a reader says
+# them: the travel column is the roster column that holds a walk's aim.
+_OWNER_WORDS = {
+    "travel column": "the errand walk",
+    "quest drive": "the quest drive",
+    "town trip": "the town trip",
+    "dungeon run": "the dungeon run",
+}
+_REWORD = (
+    (
+        re.compile(r"walking to trigger (\d+)", re.I),
+        lambda m: _cap(m[0], "walking " + places.walk_words("trigger:" + m[1])),
+    ),
+    (
+        re.compile(r"the vendor trip keeps the travel column"),
+        lambda m: "the vendor trip goes first and holds the leader's walk",
+    ),
+    (
+        re.compile(r"^(travel column|quest drive|town trip|dungeon run)\b"),
+        lambda m: _cap("A", _OWNER_WORDS[m[1]]),
+    ),
+)
+
+
+def _cap(like: str, text: str) -> str:
+    return text[:1].upper() + text[1:] if like[:1].isupper() else text
+
+
+def reword(text: str) -> str:
+    """A stored step's text with the module's ids and part names said in
+    words. Steps are kept KEEP_HOURS and were written by older bridges too,
+    so "walking to trigger 194" is named as it is read, not only as new rows
+    are written."""
+    out = str(text or "")
+    for pattern, say in _REWORD:
+        out = pattern.sub(say, out)
+    return out
 
 
 def duration_words(seconds) -> str:
@@ -369,7 +413,10 @@ _KIND_WORDS = {
 def _walk_words(row: dict) -> str:
     kind = str(row.get("current_kind") or "")
     pattern = _KIND_WORDS.get(kind, kind or "nothing")
-    return pattern.format(aim=aim_words(row.get("current_target")))
+    walk = places.walk_words(row.get("current_target"))
+    return pattern.replace("walking to {aim}", "walking " + walk).format(
+        aim=aim_words(row.get("current_target"))
+    )
 
 
 _MEMBER_STATES = {
@@ -472,7 +519,7 @@ def _stored_reason(fresh: list, doing: str, waiting: str, since):
     if not held:
         return doing, waiting, since
     top = held[0]
-    return (doing or top["doing"]), top["waiting"], int(top["first_at"])
+    return (doing or reword(top["doing"])), reword(top["waiting"]), int(top["first_at"])
 
 
 def compose(member: dict, facts: dict | None, now_at: int | None = None) -> dict:
@@ -521,7 +568,7 @@ def _from_intent(intent: dict, steps, now_at):
 
 
 def _from_step(step: dict):
-    return step["doing"], step.get("waiting") or "", int(step["first_at"])
+    return reword(step["doing"]), reword(step.get("waiting")), int(step["first_at"])
 
 
 def _from_member_state(state):
@@ -601,9 +648,9 @@ def sheet(steps, now_at: int) -> list[dict]:
     """The last few steps, newest first, each with a clock and how long ago."""
     out = []
     for s in steps[:SHEET_STEPS]:
-        text = str(s.get("doing"))
+        text = reword(s.get("doing"))
         if s.get("waiting"):
-            text += ": waiting for " + str(s["waiting"])
+            text += ": waiting for " + reword(s["waiting"])
         last = int(s.get("last_at") or 0)
         out.append(
             {

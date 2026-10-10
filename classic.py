@@ -38,6 +38,8 @@ PURE MODULE: numbers and questions, no MySQL, no clock.
 
 from __future__ import annotations
 
+import places
+
 MAX_LEVEL = 60
 MAX_PROFESSION_SKILL = 300
 
@@ -299,5 +301,5 @@ def outside_note(who, map_id) -> str:
     Callers ask it after is_expansion_map; any other map is named by number
     rather than called Northrend.
     """
-    land = _LANDS.get(int(map_id), "map %d" % int(map_id))
+    land = _LANDS.get(int(map_id), places.map_name(int(map_id)))
     return "%s stands in %s, outside the classic world" % (who, land)

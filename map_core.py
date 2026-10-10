@@ -6,6 +6,7 @@ page renders is decided here, which is the test seam.
 
 from __future__ import annotations
 
+import places
 from core import _ALLIANCE_RACES, _HORDE_RACES
 from transform import Geometry
 
@@ -35,9 +36,11 @@ def build_payload(rows: list[dict], geo: Geometry) -> dict:
                 else "horde"
                 if r["race"] in _HORDE_RACES
                 else "neutral",
+                # Inside an instance the zone is the instance: "The
+                # Deadmines", never "inside an instance".
                 "zone": geo.zone_name(r["map_id"], r["pos_x"], r["pos_y"])
                 if not in_instance
-                else "inside an instance",
+                else places.map_name(r["map_id"]),
                 "combat": bool(r["in_combat"]),
                 "bot": bool(r["is_bot"]),
                 "instance": in_instance,

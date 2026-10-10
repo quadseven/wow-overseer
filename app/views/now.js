@@ -3,13 +3,20 @@
 // last roll. Read-only: the live tiles watch broadcasts that are already
 // running and start nothing.
 
-import { html, raw, ago, duration, plural, notMeasured, state, skeletons, STATUS } from "../ui.js";
+import { html, raw, ago, duration, plural, notMeasured, state, skeletons, STATUS, readState } from "../ui.js";
 import * as D from "./now/data.js";
+import { since, fromClock } from "../models/time.js";
+import { roster as rosterModel } from "../models/roster.js";
+import { guildRuns } from "../models/guildruns.js";
+import { wall as wallModel, headOf } from "../models/wall.js";
 import * as streams from "./now/streams.js";
 import { openPanel, pressed } from "./now/panel.js";
 import * as wm from "./now/worldmap.js";
+import { seatChips } from "./_runs.js";
+import { firstFamily, firstGuild } from "../families.js";
+import { announce, CSS as ACH_CSS } from "./_achievements.js";
 
-const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/v2/roster", "/api/map", "/shapes.json"];
+const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/v2/roster", "/api/map", "/shapes.json", "/api/v2/achievements"];
 // The realm strip's two reads are the cheap ones, so they are asked for every
 // 5s while the rest keep 15s. Measured on the dev realm: /api/eye runs 9 SQL
 // statements in about 1KB, /api/v2/roll 5 in under 0.5KB, against 16 to 18
@@ -32,9 +39,9 @@ function chip(kind, label, href) {
 }
 
 function stalledChip(agendas) {
-  if (!agendas.every(D.ok)) return chip("stalled", "Stalled families not measured", "#/now/family/grug");
+  if (!agendas.every(D.ok)) return chip("stalled", "Stalled families not measured", "#/now/family/" + firstFamily());
   const stalled = agendas.filter((a) => a.data.stalled);
-  const href = "#/now/family/" + (stalled.length ? String(stalled[0].data.family).toLowerCase() : "grug");
+  const href = "#/now/family/" + (stalled.length ? String(stalled[0].data.family).toLowerCase() : firstFamily());
   return chip("stalled", plural(stalled.length, "family", "families") + " stalled", href);
 }
 
@@ -49,16 +56,18 @@ function ghostChip(gh) {
 }
 
 function chips(ctx, agendas) {
-  const runs = D.runsInside(ctx.get("/api/guildruns"));
-  const fresh = D.runsNewSince(ctx.get("/api/guildruns"), ctx.previousVisit);
+  const gr = guildRuns(ctx.get("/api/guildruns"));
+  const runs = gr.insideNow();
+  const runsHref = "#/guilds/" + firstGuild() + "/runs";
+  const fresh = gr.newSince(fromClock(ctx.previousVisit));
   const list = [
     stalledChip(agendas),
     stuckChip(D.stuck(ctx.get("/api/v2/stuck"))),
-    ghostChip(D.ghosts(ctx.get("/api/v2/roster"))),
-    runs ? chip("inside", plural(runs.length, "run") + " inside", runs.length ? "#/runs/" + runs[0].id : "#/guilds/cave/runs")
-      : chip("inside", "Runs inside not measured", "#/guilds/cave/runs"),
+    ghostChip(rosterModel(ctx.get("/api/v2/roster")).ghosts()),
+    runs ? chip("inside", plural(runs.length, "run") + " inside", runs.length ? "#/runs/" + runs[0].id : runsHref)
+      : chip("inside", "Runs inside not measured", runsHref),
   ];
-  if (fresh) list.push(chip("new", plural(fresh, "run") + " new since your last visit", "#/guilds/cave/runs"));
+  if (fresh) list.push(chip("new", plural(fresh, "run") + " new since your last visit", runsHref));
   return html`<div class="nchips" role="group" aria-label="What needs you">${list}</div>`;
 }
 
@@ -86,7 +95,7 @@ ${cell("Build", html`<span class="rv num">${r.build || notMeasured()}</span>`)}
 function agendaCard(fam, read) {
   const href = "#/now/family/" + fam.toLowerCase();
   if (!D.ok(read)) {
-    const body = read.data === undefined && !read.error ? skeletons(1) : state("unmeasured", fam + "'s family: agenda not measured", "The agenda read did not answer.");
+    const body = readState(read) === "loading" ? skeletons(1) : state("unmeasured", fam + "'s family: agenda not measured", "The agenda read did not answer.");
     return html`<div class="agenda-wait">${body}</div>`;
   }
   const a = read.data;
@@ -103,24 +112,22 @@ ${detail.length ? html`<span class="agenda-line">${detail.join(" ")}</span>` : "
 
 // ---- live -----------------------------------------------------------------------
 function heads(ctx) {
-  const wall = ctx.get("/api/wall");
-  if (!D.ok(wall)) return null;
-  const fams = D.families(wall.data);
-  return D.FAMILY_KEYS.map((f) => D.headOf(fams.get(f) || [], f)).filter(Boolean);
+  return wallModel(ctx.get("/api/wall")).heads(D.familyKeys());
 }
 
 function live(ctx) {
   const wall = ctx.get("/api/wall");
+  const w = wallModel(wall);
   const hs = heads(ctx);
   const layout = readLayout();
   const seg = html`<div class="seg live-seg" role="radiogroup" aria-label="Stream layout">${[["side", "Side by side"], ["stacked", "Stacked"]].map(([k, label]) => html`<button type="button" role="radio" aria-checked="${String(layout === k)}" data-layout="${k}">${label}</button>`)}</div>`;
   let body;
   if (!hs) {
-    body = wall.data === undefined && !wall.error ? skeletons(2) : state("error", "The streams did not answer", "The wall read failed, so no tile can be drawn.");
+    body = readState(wall) === "loading" ? skeletons(2) : state("error", "The streams did not answer", "The wall read failed, so no tile can be drawn.");
   } else {
-    body = html`<div class="live-tiles" data-wall="${layout}">${hs.map((m) => streams.tileHtml(m, D.tileOf(wall.data, m.name)))}</div>`;
+    body = html`<div class="live-tiles" data-wall="${layout}">${hs.map((m) => streams.tileHtml(m, w.tile(m.name)))}</div>`;
   }
-  const streamed = hs ? hs.filter((m) => (D.tileOf(wall.data, m.name) || {}).url || m.broadcast_url).length : null;
+  const streamed = hs ? hs.filter((m) => (w.tile(m.name) || {}).url || m.broadcast_url).length : null;
   return html`<div class="live-head"><h2 class="kicker">Live</h2><span class="dim small">${streamed === null ? "" : streamed + " of " + hs.length + " streamed"}</span>${seg}</div>
 ${body}
 <div class="watcher"><i class="ph ph-video-camera" aria-hidden="true"></i><div><span class="watcher-t">Watcher <span class="tag tag-neutral">Coming soon</span></span><span class="muted">The spectator camera gets a tile here once its stream is published.</span></div></div>`;
@@ -128,7 +135,7 @@ ${body}
 
 // ---- mini maps ---------------------------------------------------------------------
 function miniMaps(ctx) {
-  return html`<div class="minimaps">${D.FAMILY_KEYS.map((f) => html`<a class="minimap" data-minimap="${f}" href="#/now/map"><span class="kicker">Where ${f}'s family is</span><div class="wm wm-compact" data-map-box="${f}"><div class="wm-wait">Unrolling the map...</div></div></a>`)}</div>`;
+  return html`<div class="minimaps">${D.familyKeys().map((f) => html`<a class="minimap" data-minimap="${f}" href="#/now/map"><span class="kicker">Where ${f}'s family is</span><div class="wm wm-compact" data-map-box="${f}"><div class="wm-wait">Unrolling the map...</div></div></a>`)}</div>`;
 }
 
 function drawMiniMaps(main, ctx) {
@@ -137,9 +144,9 @@ function drawMiniMaps(main, ctx) {
     if ((shapes.error || map.error || wall.error)) main.querySelectorAll("[data-map-box] .wm-wait").forEach((n) => { n.textContent = "Positions not measured: the map read did not answer."; });
     return;
   }
-  const fams = D.families(wall.data);
-  const ghostNames = D.ghostNames(ctx.get("/api/v2/roster"));
-  D.FAMILY_KEYS.forEach((f) => {
+  const fams = wallModel(wall).families();
+  const ghostNames = rosterModel(ctx.get("/api/v2/roster")).ghostNames();
+  D.familyKeys().forEach((f) => {
     const box = main.querySelector('[data-map-box="' + f + '"]');
     const link = main.querySelector('[data-minimap="' + f + '"]');
     if (box) drawFamilyMap(box, link, f, fams.get(f) || [], map.data, shapes.data, ghostNames);
@@ -149,7 +156,7 @@ function drawMiniMaps(main, ctx) {
 function drawFamilyMap(box, link, fam, members, map, shapes, ghostNames) {
   const names = new Map(members.map((m) => [m.name, m]));
   const mine = (map.dots || []).filter((d) => names.has(d.name));
-  const head = D.headOf(members, fam);
+  const head = headOf(members, fam);
   const at = mine.find((d) => head && d.name === head.name) || mine[0];
   if (!at || !shapes[at.continent]) {
     box.innerHTML = html`<div class="wm-wait">${fam}'s family is not on a continent map right now${mine.length ? "" : " (no position read)"}.</div>`.s;
@@ -169,27 +176,27 @@ function runCard(r, at) {
   const total = Number(r.bosses_total) || 0;
   const pips = [];
   for (let i = 0; i < total; i++) pips.push(html`<span class="pip${i < r.bosses_done ? " on" : ""}"></span>`);
-  const seats = (r.members || []).map((m) => m.name).join(", ");
-  return html`<a class="card runcard" href="#/runs/${encodeURIComponent(r.id)}">
-<div class="runcard-top"><span class="b">${r.guild} | ${r.place || r.keyword}</span><span class="dim small">${duration(r.seconds_inside) || "not measured"} inside</span></div>
+  return html`<div class="card runcard stretch-card">
+<div class="runcard-top"><a class="b stretch-link" href="#/runs/${encodeURIComponent(r.id)}">${r.guild} | ${r.place || r.keyword}</a><span class="dim small">${duration(r.seconds_inside) || "not measured"} inside</span></div>
 ${total ? html`<div class="pips" role="img" aria-label="${r.bosses_done} of ${total} bosses down">${pips}</div>` : ""}
-<div class="dim small">${total ? r.bosses_done + " of " + total + " bosses down" : "bosses not measured"} | ${seats || "no seats read"} | read ${ago(at ? (Date.now() - at) / 1000 : null)}</div>
-</a>`;
+<div class="dim small">${total ? r.bosses_done + " of " + total + " bosses down" : "bosses not measured"}${(r.members || []).length ? "" : " | no seats read"} | read ${since(fromClock(at))}</div>
+${seatChips(r)}
+</div>`;
 }
 
 function runsBlock(ctx) {
   const read = ctx.get("/api/guildruns");
-  const runs = D.runsInside(read);
+  const runs = guildRuns(read).insideNow();
   let body;
-  if (runs === null) body = read.data === undefined && !read.error ? skeletons(1) : state("unmeasured", "Guild runs not measured", "The guild runs read did not answer.");
-  else if (!runs.length) body = state("empty", "No guild runs inside right now.", "Checked " + ago((Date.now() - read.at) / 1000) + ".");
+  if (runs === null) body = readState(read) === "loading" ? skeletons(1) : state("unmeasured", "Guild runs not measured", "The guild runs read did not answer.");
+  else if (!runs.length) body = state("empty", "No guild runs inside right now.", "Checked " + since(fromClock(read.at)) + ".");
   else body = runs.map((r) => runCard(r, read.at));
   return html`<div class="fold-col"><h2 class="kicker">Guild runs inside</h2>${body}</div>`;
 }
 
 function attention(ctx) {
   const st = D.stuck(ctx.get("/api/v2/stuck"));
-  const gh = D.ghosts(ctx.get("/api/v2/roster"));
+  const gh = rosterModel(ctx.get("/api/v2/roster")).ghosts();
   const stuckText = st ? plural(st.list.length, "member") + " stuck" : html`Stuck ${notMeasured()}`;
   const longest = st && st.list.length ? (st.longest === null ? "since not measured" : "longest " + duration(st.longest)) : "";
   const ghostText = gh ? plural(gh.length, "ghost") + (gh.length ? ": " + gh.map((g) => g.name).join(", ") : "") : html`Ghosts ${notMeasured()}`;
@@ -200,7 +207,7 @@ function attention(ctx) {
 }
 
 function campaigns(agendas) {
-  const rows = D.FAMILY_KEYS.map((f, i) => {
+  const rows = D.familyKeys().map((f, i) => {
     const read = agendas[i];
     if (!D.ok(read)) return html`<div class="crow"><span class="b">${f}'s family</span><span class="muted">Campaign ${notMeasured()}</span></div>`;
     const c = D.campaign(read.data);
@@ -214,7 +221,7 @@ function lastRoll(ctx) {
   const read = ctx.get("/api/v2/roll");
   let card;
   if (!D.ok(read)) {
-    card = read.data === undefined && !read.error ? skeletons(1) : state("unmeasured", "Last roll not measured", "The roll read did not answer.");
+    card = readState(read) === "loading" ? skeletons(1) : state("unmeasured", "Last roll not measured", "The roll read did not answer.");
   } else {
     const r = read.data;
     const when = r.when_seconds === null || r.when_seconds === undefined ? notMeasured() : ago(r.when_seconds);
@@ -235,31 +242,33 @@ function fold(ctx, agendas) {
 
 export default {
   // The tile panels draw the profile's and the guild bank's frames, in their styles.
-  css: ["views/now.css", "views/members.css", "views/economy.css"],
-  reads: () => READS.concat(D.FAMILY_KEYS.map(D.agendaPath)),
+  css: ["views/now.css", "views/members.css", "views/economy.css", ACH_CSS],
+  reads: () => READS.concat(D.familyKeys().map(D.agendaPath)),
   every: 15000,
   quick: QUICK,
   title: () => "Now",
   render(ctx) {
-    const agendas = D.FAMILY_KEYS.map((f) => ctx.get(D.agendaPath(f)));
+    const agendas = D.familyKeys().map((f) => ctx.get(D.agendaPath(f)));
     return html`<header class="page-head"><h1>Now</h1></header>
 ${chips(ctx, agendas)}
 ${strip(ctx)}
-<div class="agendas">${D.FAMILY_KEYS.map((f, i) => agendaCard(f, agendas[i]))}</div>
+<div class="agendas">${D.familyKeys().map((f, i) => agendaCard(f, agendas[i]))}</div>
 ${live(ctx)}
 ${miniMaps(ctx)}
 ${fold(ctx, agendas)}`;
   },
   after(main, ctx) {
-    const wall = ctx.get("/api/wall");
+    const w = wallModel(ctx.get("/api/wall"));
     (heads(ctx) || []).forEach((m) => {
-      const t = D.tileOf(wall.data, m.name);
+      const t = w.tile(m.name);
       streams.connect(m.name, (t && t.playable !== false && t.url) || m.broadcast_url || "");
     });
     streams.mount(main);
     streams.bind(main, openPanel);
     pressed();
     drawMiniMaps(main, ctx);
+    // A new achievement since the last visit: a brief toast, once per device.
+    announce(ctx.get("/api/v2/achievements"), ctx.previousVisit);
     main.querySelectorAll("button[data-layout]").forEach((b) => b.addEventListener("click", () => {
       saveLayout(b.getAttribute("data-layout"));
       const tilesEl = main.querySelector(".live-tiles");

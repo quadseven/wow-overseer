@@ -74,14 +74,34 @@ globalThis.docOn = docOn;
 """
 
 
+# The families and guilds /api/realm reports; app/families.js learns them
+# before a view is drawn, as main.js does before the first route.
+REALM = {
+    "families": [{"key": "Grug", "names": ["Grug"]}, {"key": "Zug", "names": ["Zug"]}],
+    "guilds": [
+        {"name": "Cave", "family": "Grug"},
+        {"name": "Bonkers", "family": "Zug"},
+    ],
+}
+
+
+def learn(root):
+    """The line that teaches the copied app the realm's families and guilds."""
+    return "(await import(%s)).learn(%s);\n" % (
+        json.dumps((root / "families.js").as_uri()),
+        json.dumps(REALM),
+    )
+
+
 def run(module, script):
     """Run `script` with app/<module> imported as M."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp) / "app"
         shutil.copytree(APP, root)
         (root / "package.json").write_text('{"type": "module"}', encoding="utf-8")
-        code = "%s\nconst M = await import(%s);\n%s" % (
+        code = "%s\n%sconst M = await import(%s);\n%s" % (
             BROWSER,
+            learn(root),
             json.dumps((root / module).as_uri()),
             script,
         )

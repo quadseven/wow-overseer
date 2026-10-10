@@ -6,7 +6,9 @@ Protection, Major Healing and Mana, Elixir of the Mongoose, a flask, Juju, food)
 and fire resistance per role, tanks first; the guild's alchemists crafting the
 potions, its gatherers feeding them, the auction house buying the rest within a
 budget drawn from the guild bank, and all of it routed to the raiders who are
-short. Jev picks what to make or buy next (`raid_supply`).
+short. What a quest rewards or a vendor recipe teaches never goes to the
+auction house (#778): on the dev realm it has no buyer and, since 2026-10-05,
+no seller. Jev picks what to make or buy next (`raid_supply`).
 
 WHAT THE REALM SAID (dev, read-only, 2026-09-23). Cave's forty raiders wore 10
 fire resistance between them and held no Greater Fire Protection Potion and no
@@ -29,8 +31,12 @@ flask. Reagents come from the running worldserver's Spell.dbc (md5
                                     Stratholme
     Smoked Desert Dumplings  24801  Sandworm Meat; most of the guild's cooks
                                     know it
-    Juju Power, Juju Might          quest-class items with no vendor, no drop
-                                    and no craft here: the auction house only
+    Nightfin Soup            13931  Raw Nightfin Snapper, Refreshing Spring
+                                    Water. Recipe 13945, Cooking 250, sold by
+                                    Gikkix in Tanaris for 2 gold (#778)
+    Juju Power, Juju Might          no vendor, no drop and no craft: the
+                                    rewards of quests 4802 and 4806 at
+                                    Witch Doctor Mau'ari in Everlook (#778)
     Wizardweave Leggings     18421  16 fire resistance. 4 Bolt of Runecloth,
                                     Dream Dust, Rune Thread; many tailors know it
 
@@ -68,6 +74,7 @@ COOKING = guildcorps.COOKING
 
 # The corps role that works each trade (guildcorps.ROLES).
 ROLE_OF_SKILL = {ALCHEMY: "alchemist", TAILORING: "tailor", COOKING: "cook"}
+ROLE_SKILL_WORDS = {ALCHEMY: "alchemy", TAILORING: "tailoring", COOKING: "cooking"}
 
 # ---------------------------------------------------------------------------
 # WHO A RAIDER IS, FOR THE PURPOSE OF A SHOPPING LIST.
@@ -183,7 +190,9 @@ class Make:
     `reagents` are gathered or looted (entry, count) pairs, posted in by the
     guild; `vendor` are (entry, count, copper each) pairs a vendor sells.
     `recipe_item` is the item that teaches the craft, 0 for a trainer recipe;
-    `recipe_price` is its vendor price, 0 when no vendor sells it.
+    `recipe_price` is its vendor price, 0 when no vendor sells it;
+    `recipe_skill` is the skill the recipe asks before it can be learned
+    (`item_template.RequiredSkillRank`), 0 when unread.
     """
 
     spell: int
@@ -192,6 +201,42 @@ class Make:
     vendor: tuple = ()
     recipe_item: int = 0
     recipe_price: int = 0
+    recipe_skill: int = 0
+
+
+@dataclass(frozen=True)
+class QuestSource:
+    """A quest whose reward is a supply, as the world database has it (#778).
+
+    `turn_in` are (entry, count) pairs the quest takes, and `title` is both
+    the quest's name and the name of the item it takes (each E'ko quest is
+    named for its E'ko); `reward` is how many of the supply one turn-in
+    gives. The quest is repeatable.
+    """
+
+    quest: int
+    title: str
+    giver: str
+    where: str
+    turn_in: tuple
+    reward: int
+    min_level: int
+
+    def said(self, name) -> str:
+        return (
+            "the reward for quest %d (%s): %d %s turned in to %s in %s, level %d and up, for %d %s"
+            % (
+                self.quest,
+                self.title,
+                sum(int(n) for _, n in self.turn_in),
+                self.title,
+                self.giver,
+                self.where,
+                self.min_level,
+                self.reward,
+                name,
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -203,6 +248,7 @@ class Supply:
     per_role: tuple  # (tank, healer, physical, caster)
     make: Make | None = None
     source: str = ""
+    quest: QuestSource | None = None
 
     def per_raider(self, raider: Raider) -> int:
         count = dict(zip(ROLE_ORDER, self.per_role)).get(raider.role, 0)
@@ -212,6 +258,8 @@ class Supply:
 
 
 CRYSTAL_VIAL = (8925, 1, 2500)
+SPRING_WATER = (159, 1, 25)
+RAW_NIGHTFIN_SNAPPER = 13759
 ELEMENTAL_FIRE, DREAMFOIL, GOLDEN_SANSAM = 7068, 13463, 13464
 MOUNTAIN_SILVERSAGE, PLAGUEBLOOM, ICECAP = 13465, 13466, 13467
 BLACK_LOTUS, GROMSBLOOD, STONESCALE_OIL = 13468, 8846, 13423
@@ -320,28 +368,60 @@ SUPPLIES = (
         "a quest teaches it, and most of the guild's cooks know it; Sandworm "
         "Meat drops in Silithus",
     ),
+    # Spell 18243 and its reagents read from the worldserver's Spell.dbc
+    # (md5 543b9fe61355b6a77a01714d52fea2e5); the recipe, its price, its
+    # Cooking 250 and its one vendor from `item_template` and `npc_vendor`
+    # on 2026-10-10 (#778).
     Supply(
         13931,
         "Nightfin Soup",
         (0, 2, 0, 2),
-        None,
-        "nobody in either guild knows the recipe, so it is bought",
+        Make(
+            18243,
+            COOKING,
+            ((RAW_NIGHTFIN_SNAPPER, 1),),
+            (SPRING_WATER,),
+            13945,
+            20000,
+            250,
+        ),
+        "Recipe 13945 is sold by Gikkix in Tanaris for 2 gold and asks Cooking "
+        "250; Raw Nightfin Snapper is fished",
     ),
+    # QUEST REWARDS, NOT AUCTION LOTS (#778). Read from `quest_template`,
+    # `quest_template_addon` (SpecialFlags 1, repeatable) and
+    # `creature_queststarter` on 2026-10-10.
     Supply(
         12451,
         "Juju Power",
         (1, 0, 1, 0),
         None,
-        "a quest-class item with no vendor, no drop and no craft on this realm: "
-        "the auction house only",
+        "E'ko drops from the Winterfall furbolgs in Winterspring",
+        QuestSource(
+            4802,
+            "Winterfall E'ko",
+            "Witch Doctor Mau'ari",
+            "Everlook",
+            ((12431, 3),),
+            3,
+            55,
+        ),
     ),
     Supply(
         12460,
         "Juju Might",
         (0, 0, 1, 0),
         None,
-        "a quest-class item with no vendor, no drop and no craft on this realm: "
-        "the auction house only",
+        "E'ko drops from the Frostmaul giants in Winterspring",
+        QuestSource(
+            4806,
+            "Frostmaul E'ko",
+            "Witch Doctor Mau'ari",
+            "Everlook",
+            ((12436, 3),),
+            3,
+            55,
+        ),
     ),
 )
 SUPPLY_BY_ENTRY = {s.entry: s for s in SUPPLIES}
@@ -410,8 +490,9 @@ FIRE_ROADS = (
 MAKE = "make"
 LEARN = "learn"
 VENDOR_RECIPE = "vendor recipe"
+QUEST = "quest"
 BUY = "buy"
-ROUTES = (MAKE, LEARN, VENDOR_RECIPE, BUY)
+ROUTES = (MAKE, LEARN, VENDOR_RECIPE, QUEST, BUY)
 
 
 @dataclass(frozen=True)
@@ -476,7 +557,10 @@ def _route_said(supply, route, knowers, short) -> str:
     if route == LEARN:
         return "a guild member carries the recipe and learns it first"
     if route == VENDOR_RECIPE:
-        return "an alchemist buys the recipe at a vendor first; " + supply.source
+        role = ROLE_OF_SKILL.get(supply.make.skill, "crafter")
+        return "a %s buys the recipe at a vendor first; %s" % (role, supply.source)
+    if route == QUEST:
+        return "%s; %s" % (supply.quest.said(supply.name), supply.source)
     return "bought on the auction house within the guild's budget; " + supply.source
 
 
@@ -497,7 +581,11 @@ def supply_lines(raiders, have, knowers, carriers=None, vendor_recipes=()) -> li
         make = supply.make
         who = tuple(sorted((knowers or {}).get(make.spell, ()))) if make else ()
         held = tuple((carriers or {}).get(make.recipe_item, ())) if make else ()
-        route = _route(make, who, held, frozenset(vendor_recipes or ()))
+        route = (
+            QUEST
+            if supply.quest is not None
+            else _route(make, who, held, frozenset(vendor_recipes or ()))
+        )
         got = int((have or {}).get(supply.entry, 0))
         lines.append(
             Line(
@@ -545,7 +633,17 @@ FOCUS_THRESHOLD = 0.6
 def option_for(line) -> str:
     if isinstance(line, FireGear):
         return "fire:%d" % line.entry
+    if line.route == QUEST:
+        return "quest:%d" % line.entry
     return "%s:%d" % ("buy" if line.route == BUY else "make", line.entry)
+
+
+def _verb(line) -> str:
+    if line.route == BUY:
+        return "buy on the auction house"
+    if line.route == QUEST:
+        return "earn by quest %d" % SUPPLY_BY_ENTRY[line.entry].quest.quest
+    return "craft"
 
 
 def options(lines, fire, gear_wanted) -> list:
@@ -553,7 +651,7 @@ def options(lines, fire, gear_wanted) -> list:
     out = []
     for line in lines:
         if line.short:
-            verb = "buy on the auction house" if line.route == BUY else "craft"
+            verb = _verb(line)
             out.append(
                 (
                     option_for(line),
@@ -618,7 +716,8 @@ def question(guild, lines, fire, opts, budget_left):
         "`guild` is a World of Warcraft guild preparing its first night in "
         "Molten Core. `supplies` is what the night needs against what the guild "
         "holds, and how each can be closed (make: a guild crafter knows the "
-        "recipe; buy: only the auction house has it). `fire_resistance` is what "
+        "recipe; quest: a raider earns it from a quest; buy: only the auction "
+        "house has it). `fire_resistance` is what "
         "each tank and healer wears against the target for Ragnaros. Choose the "
         "one thing the guild should make or buy next: what most raises the "
         "chance the raid succeeds, given what can actually be made and the "
@@ -872,7 +971,11 @@ def craft_step(crafter, make, name, want, vendors, cap):
                     ),
                 ),
             )
-        if make.recipe_price and make.recipe_item in vendors:
+        if (
+            make.recipe_price
+            and make.recipe_item in vendors
+            and crafter.skill(make.skill)[0] >= make.recipe_skill
+        ):
             return _buy_step(
                 crafter,
                 make.recipe_item,
@@ -901,12 +1004,7 @@ def craft_step(crafter, make, name, want, vendors, cap):
         if casts > 0 and crafter.count(entry) < casts * per and entry in vendors:
             count = casts * per - crafter.count(entry)
             return _buy_step(
-                crafter,
-                entry,
-                count,
-                price,
-                "vials" if entry == CRYSTAL_VIAL[0] else "thread",
-                cap,
+                crafter, entry, count, price, VENDOR_NAMES.get(entry, "reagents"), cap
             )
     return None
 
@@ -1218,8 +1316,25 @@ REAGENT_NAMES = {
 }
 
 
+# What a vendor reagent is called in the step's sentence.
+VENDOR_NAMES = {
+    CRYSTAL_VIAL[0]: "vials",
+    RUNE_THREAD: "thread",
+    SPRING_WATER[0]: "spring water",
+}
+
+
 def _why_not(crafter, make, name, members) -> str:
     """Why a crafter took no step toward `name`: the recipe, or which reagent."""
+    skill = crafter.skill(make.skill)[0]
+    if make.spell not in crafter.known and skill < make.recipe_skill:
+        return "%s has %s %d of the %d the %s recipe asks" % (
+            crafter.name,
+            ROLE_SKILL_WORDS.get(make.skill, "skill"),
+            skill,
+            make.recipe_skill,
+            name,
+        )
     if make.spell not in crafter.known:
         return "%s does not know %s and carries no recipe for it" % (crafter.name, name)
     missing = [
@@ -1668,9 +1783,15 @@ def summary(plan) -> str:
         for f in plan.fire
         if f.short
     ][:4]
-    return "raid supply: %s: short %s; fire resistance short %s; %d step(s)" % (
+    quests = [
+        "%s (quest %d)" % (line.name, SUPPLY_BY_ENTRY[line.entry].quest.quest)
+        for line in plan.lines
+        if line.short and line.route == QUEST
+    ]
+    return "raid supply: %s: short %s; fire resistance short %s; %d step(s)%s" % (
         plan.guild,
         ", ".join(short) or "nothing",
         ", ".join(fire) or "nobody",
         len(plan.steps),
+        "; by quest: " + ", ".join(quests) if quests else "",
     )

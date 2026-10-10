@@ -86,6 +86,7 @@ from typing import Mapping, Sequence
 import cast
 import goals
 import guildcraft
+import places
 import professions
 
 CRAFTBOOK_FILE = "craftbook.json"
@@ -1744,7 +1745,7 @@ def _where_lines(
             map_id = row.get("map")
             line = guildcraft._drop_line(row, geo, names)
             if map_id is not None and int(map_id) not in guildcraft.CONTINENT_MAPS:
-                dungeons.add(names.get(int(map_id)) or "map %d" % int(map_id))
+                dungeons.add(names.get(int(map_id)) or places.map_name(int(map_id)))
                 inside.append(line)
             else:
                 other.append(line)

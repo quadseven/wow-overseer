@@ -22,6 +22,7 @@ import os
 import re
 
 import bonds
+import places
 import stream
 import watchwall
 from core import _ALLIANCE_RACES, _HORDE_RACES
@@ -444,7 +445,9 @@ def _member(
         # a character on 1hp of 583 reads as 1% rather than 0% - "0%" next to
         # a living character is a card arguing with itself.
         "health_pct": _health_pct(health, max_health),
-        "zone": "inside an instance" if in_instance else _zone_of(row, geo),
+        "zone": "inside " + places.map_name(row["map_id"])
+        if in_instance
+        else _zone_of(row, geo),
         "broadcast_url": broadcast_url(row["name"]),
         "broadcast_renditions": broadcast_renditions(row["name"]),
         "instance": in_instance,

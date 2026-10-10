@@ -33,6 +33,7 @@ from __future__ import annotations
 import re
 
 import classic
+import places
 import recap
 
 # The continents a character can stand on. Anything else is an instance, and
@@ -556,7 +557,7 @@ def _catalogue(catalogue_rows: list[dict], names: dict) -> dict:
             "difficulty": difficulty,
             "min_level": int(row.get("min_level") or 0),
             "max_level": int(row.get("max_level") or 0),
-            "name": names.get(map_id) or comment or "map %d" % map_id,
+            "name": names.get(map_id) or comment or places.map_name(map_id),
             "source": ACCESS_TABLE,
             "party_size": party_size(comment),
         }

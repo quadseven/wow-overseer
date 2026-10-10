@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import vclient
 
-from ._scope import NOT_A_MEMBER, guarded, guild_member, holes, wanted_name
+from ._scope import NOT_A_MEMBER, holes, may_answer, wanted_name
 
 FAMILY_SQL = "SELECT name, level, class, race, online FROM characters WHERE name IN "
 GUILD_SQL = (
@@ -44,7 +44,7 @@ FRIENDS_SQL = (
 
 def family_of(ctx, name: str) -> tuple[str, list[str]]:
     """(family key, the family's names) for a member, or ("", [name])."""
-    for key, names in ctx.server._fetch_family_groups():
+    for key, names in ctx.server.FAMILIES.families().items():
         if name in names:
             return key, list(names)
     return "", [name]
@@ -52,24 +52,16 @@ def family_of(ctx, name: str) -> tuple[str, list[str]]:
 
 def fetch(ctx, name: str, family_names: list[str]) -> dict:
     """The family's rows, the member's guild and its roster, and the friends."""
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            # S608: placeholders only, one per roster name from the database.
-            family_sql = FAMILY_SQL + "(" + holes(len(family_names)) + ")"  # noqa: S608
-            family_rows = guarded(
-                ctx, cur, family_sql, tuple(family_names), "characters"
-            )
-            guilds = guarded(ctx, cur, GUILD_SQL, (name,), "guild_member")
-            guild = guilds[0] if guilds else None
-            roster = []
-            if guild is not None:
-                roster = guarded(
-                    ctx, cur, ROSTER_SQL, (guild["guild_id"],), "guild_member"
-                )
-            friends = guarded(ctx, cur, FRIENDS_SQL, (name,), "character_social")
-    finally:
-        conn.close()
+    rd = ctx.read
+    # S608: placeholders only, one per roster name from the database.
+    family_sql = FAMILY_SQL + "(" + holes(len(family_names)) + ")"  # noqa: S608
+    family_rows = rd.rows(family_sql, tuple(family_names), what="characters")
+    guilds = rd.rows(GUILD_SQL, (name,), what="guild_member")
+    guild = guilds[0] if guilds else None
+    roster = []
+    if guild is not None:
+        roster = rd.rows(ROSTER_SQL, (guild["guild_id"],), what="guild_member")
+    friends = rd.rows(FRIENDS_SQL, (name,), what="character_social")
     return {
         "family_rows": list(family_rows),
         "guild": guild,
@@ -80,7 +72,7 @@ def fetch(ctx, name: str, family_names: list[str]) -> dict:
 
 def social(query: dict, ctx) -> tuple[int, dict]:
     name = wanted_name(query)
-    if not guild_member(ctx, name):
+    if not may_answer(ctx, name):
         return 404, dict(NOT_A_MEMBER)
     key, names = family_of(ctx, name)
     payload = vclient.build_social(name, key, names, **fetch(ctx, name, names))

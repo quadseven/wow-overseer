@@ -382,7 +382,8 @@ class TravelTargetsTheModuleAccepts(unittest.TestCase):
     def test_a_coordinate_aim_is_a_place_not_nowhere(self):
         said = agenda.describe_aim("at:0:-10414.6,1047.07,44.5459")
         self.assertNotIn("nowhere", said)
-        self.assertIn("spot", said)
+        # Named by the flight master it stands beside, not "a spot".
+        self.assertEqual(said, "Sentinel Hill (Westfall)")
 
     def test_a_doorway_aim_is_a_doorway_not_nowhere(self):
         said = agenda.describe_aim("trigger:4247")

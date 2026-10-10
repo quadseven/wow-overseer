@@ -14,16 +14,10 @@ import apiv2  # noqa: E402
 import raidready  # noqa: E402
 import raidsupply  # noqa: E402
 import raidteams  # noqa: E402
+import realmread  # noqa: E402
 from apiv2 import raidteams as v2  # noqa: E402
 
 GUILD_ID = 7
-
-
-class Unreadable(Exception):
-    """Stands in for the driver's error on a missing table."""
-
-
-Unreadable.__module__ = "pymysql.err"
 
 
 def _rows(team, *, renamed=False, recruits=False, other_guild=()):
@@ -47,52 +41,22 @@ def _rows(team, *, renamed=False, recruits=False, other_guild=()):
     return out
 
 
-class FakeCursor:
-    """Answers the endpoint's four reads from canned rows, by SQL text."""
-
-    def __init__(self, members, attuned=(), worn=(), carried=(), fail=()):
-        self.answers = {
-            v2.MEMBERS_SQL[:40]: members,
-            v2.ATTUNED_SQL[:40]: list(attuned),
-            v2.WORN_SQL[:40]: list(worn),
-            v2.CONSUMABLES_SQL[:40]: list(carried),
-        }
-        self.fail = set(fail)
-        self.last = None
-        self.executed = []
-
-    def execute(self, sql, params=()):
-        self.executed.append((sql, params))
-        key = sql[:40]
-        if key in self.fail:
-            raise Unreadable(1146, "Table doesn't exist")
-        self.last = self.answers[key]
-
-    def fetchall(self):
-        return self.last
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
+def reader(members, attuned=(), worn=(), carried=(), fail=()):
+    """The endpoint's four reads, answered by name; `fail` names the reads
+    this realm has no table for."""
+    answers = {
+        v2.MEMBERS_SQL: members,
+        v2.ATTUNED_SQL: list(attuned),
+        v2.WORN_SQL: list(worn),
+        v2.CONSUMABLES_SQL: list(carried),
+    }
+    for sql in fail:
+        answers[sql] = realmread.MISSING_TABLE
+    return realmread.Memory(answers)
 
 
-class FakeConn:
-    def __init__(self, cur):
-        self.cur = cur
-        self.closed = False
-
-    def cursor(self):
-        return self.cur
-
-    def close(self):
-        self.closed = True
-
-
-def _ctx(cur):
-    conn = FakeConn(cur)
-    return types.SimpleNamespace(connect=lambda: conn, server=None), conn
+def _ctx(rd):
+    return types.SimpleNamespace(read=rd, server=None)
 
 
 class TheRoute(unittest.TestCase):
@@ -216,41 +180,35 @@ class TheRaidFields(unittest.TestCase):
 
 
 class TheReads(unittest.TestCase):
-    def test_the_handler_reads_and_closes_its_connection(self):
-        cur = FakeCursor(_rows("Cave"), attuned=[{"name": "Grug"}])
-        ctx, conn = _ctx(cur)
-        code, payload = v2.raidteams_read({"guild": ["cave"]}, ctx)
+    def test_the_handler_makes_the_four_reads(self):
+        rd = reader(_rows("Cave"), attuned=[{"name": "Grug"}])
+        code, payload = v2.raidteams_read({"guild": ["cave"]}, _ctx(rd))
         self.assertEqual(code, 200)
-        self.assertTrue(conn.closed)
         self.assertIs(payload["members"]["Grug"]["attuned"], True)
-        self.assertEqual(len(cur.executed), 4)
+        self.assertEqual(len(rd.asked), 4)
 
     def test_every_value_is_bound(self):
-        cur = FakeCursor(_rows("Cave"))
-        v2.fetch(cur, "Cave")
-        for sql, params in cur.executed:
+        rd = reader(_rows("Cave"))
+        v2.fetch(rd, "Cave")
+        for sql, params in rd.asked:
             self.assertEqual(sql.count("%s"), len(params), sql)
 
     def test_a_missing_table_thins_that_field_only(self):
-        cur = FakeCursor(_rows("Cave"), fail={v2.ATTUNED_SQL[:40]})
-        ctx, _ = _ctx(cur)
-        code, payload = v2.raidteams_read({"guild": ["cave"]}, ctx)
+        rd = reader(_rows("Cave"), fail={v2.ATTUNED_SQL})
+        code, payload = v2.raidteams_read({"guild": ["cave"]}, _ctx(rd))
         self.assertEqual(code, 200)
         self.assertIsNone(payload["members"]["Grug"]["attuned"])
         self.assertEqual(payload["members"]["Grug"]["fire_resistance"], 0)
 
     def test_any_other_error_still_rises_to_the_503(self):
-        class Broken:
-            def execute(self, *a):
-                raise OSError("connection reset")
-
+        rd = realmread.Memory({v2.MEMBERS_SQL: OSError("connection reset")})
         with self.assertRaises(OSError):
-            v2.fetch(Broken(), "Cave")
+            v2.fetch(rd, "Cave")
 
     def test_nobody_found_reads_nothing_more(self):
-        cur = FakeCursor([])
-        v2.fetch(cur, "Cave")
-        self.assertEqual(len(cur.executed), 1)
+        rd = reader([])
+        v2.fetch(rd, "Cave")
+        self.assertEqual(len(rd.asked), 1)
 
 
 if __name__ == "__main__":

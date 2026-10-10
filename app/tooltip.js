@@ -33,21 +33,70 @@ function row(cls, left, right) {
   return html`<div class="${c}"><span class="ln-l">${left}</span> <span class="ln-r">${right}</span></div>`;
 }
 
-function percent(n) { return Math.round(Number(n) * 10) / 10 + "%"; }
+// A drop chance as the card says it. /api/item reports a percent rounded to
+// two places (itemsource.py), so 0 there means a chance too small to keep,
+// never "cannot drop", and a chance under a tenth of a percent rounds to 0
+// at one place. Both read as "rare drop" rather than "0%".
+export function chanceText(n) {
+  const v = Number(n);
+  if (!isFinite(v) || v < 0.1) return "rare drop";
+  return Math.round(v * 10) / 10 + "%";
+}
 
-// Where an item comes from, set apart under a rule: the kind and its drop
-// chance on one row, the boss, quest or vendor and the zone under it.
-function sourceLines(sources) {
-  const out = [];
-  (sources || []).slice(0, 3).forEach((s, i) => {
-    const kind = SOURCE_KIND[s.kind] || (s.kind ? s.kind.charAt(0).toUpperCase() + s.kind.slice(1) : "Source");
-    const where = [s.boss || s.npc || s.quest || s.object || s.recipe || s.name, s.where || s.zone].filter(Boolean).join(", ");
-    let chance = "";
-    if (s.chance) chance = percent(s.chance) + " chance";
-    else if (s.chance_max) chance = "up to " + percent(s.chance_max);
-    out.push(row(i === 0 ? "ln-src ln-sep" : "ln-src", "Source: " + kind, chance));
-    if (where) out.push(row("ln-where", where));
+function kindOf(s) {
+  return SOURCE_KIND[s.kind] || (s.kind ? s.kind.charAt(0).toUpperCase() + s.kind.slice(1) : "Source");
+}
+
+function placeOf(s) {
+  return [s.boss || s.npc || s.quest || s.object || s.recipe || s.name, s.where || s.zone].filter(Boolean).join(", ");
+}
+
+// One source that is not one of several drops: the kind and its chance on
+// one row, the boss, quest or vendor and the zone under it.
+function chanceCell(s) {
+  const has = (v) => v !== undefined && v !== null;
+  if (!has(s.chance) && !has(s.chance_max)) return "";
+  const t = chanceText(has(s.chance) ? s.chance : s.chance_max);
+  if (t === "rare drop") return t;
+  return has(s.chance) ? t + " chance" : "up to " + t;
+}
+
+function oneSource(s, first) {
+  const out = [row(first ? "ln-src ln-sep" : "ln-src", "Source: " + kindOf(s), chanceCell(s))];
+  const where = placeOf(s);
+  if (where) out.push(row("ln-where", where));
+  return out;
+}
+
+// Several bosses dropping the item: one "Drops from" heading, then each
+// zone once with its bosses and their chances under it.
+function dropGroup(drops, first) {
+  const out = [row(first ? "ln-src ln-sep" : "ln-src", "Drops from")];
+  const zones = [];
+  drops.forEach((d) => {
+    const z = d.where || d.zone || "";
+    let g = zones.find((x) => x.zone === z);
+    if (!g) { g = { zone: z, list: [] }; zones.push(g); }
+    g.list.push(d);
   });
+  zones.forEach((g) => {
+    if (g.zone) out.push(row("ln-where ln-zone", g.zone));
+    g.list.forEach((d) => out.push(row("ln-drop", d.boss || d.name || "A creature", chanceCell(d).replace(/ chance$/, ""))));
+  });
+  return out;
+}
+
+// Where an item comes from, set apart under a rule.
+function sourceLines(sources) {
+  const list = sources || [];
+  const drops = list.filter((s) => s.kind === "drop");
+  const out = [];
+  if (drops.length > 1) {
+    out.push(...dropGroup(drops, true));
+    list.filter((s) => s.kind !== "drop").slice(0, 2).forEach((s) => out.push(...oneSource(s, false)));
+  } else {
+    list.slice(0, 3).forEach((s, i) => out.push(...oneSource(s, i === 0)));
+  }
   if (!out.length) out.push(row("ln-src ln-sep", "Source: not measured"));
   return out;
 }
