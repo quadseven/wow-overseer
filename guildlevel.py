@@ -473,31 +473,44 @@ def open_quests(book, level, race, done) -> dict | None:
     `quest_book`. None when the book or `done` is unread."""
     if book is None or done is None:
         return None
-    level = int(level)
-    bit = 1 << (int(race) - 1) if race and int(race) > 0 else 0
-    done = frozenset(int(q) for q in done)
-    takeable: dict = {}
-
-    def can_take(qid, depth=0) -> bool:
-        if qid in takeable:
-            return takeable[qid]
-        quest = book.get(qid)
-        takeable[qid] = False  # a chain that loops back is not takeable
-        if quest is None or qid in done or depth > CHAIN_DEPTH:
-            return False
-        if quest.min_level > level or (quest.races and not quest.races & bit):
-            return False
-        ok = quest.prev <= 0 or quest.prev in done or can_take(quest.prev, depth + 1)
-        takeable[qid] = ok
-        return ok
-
+    chain = _Chain(book, int(level), race, done)
     out: dict = {}
     for qid, quest in book.items():
-        if not level - GREEN_BELOW <= quest.level <= level + ABOVE:
+        if not chain.level - GREEN_BELOW <= quest.level <= chain.level + ABOVE:
             continue
-        if can_take(qid):
+        if chain.can_take(qid):
             out[quest.zone] = out.get(quest.zone, 0) + 1
     return out
+
+
+class _Chain:
+    """Which quests of a book one member can take now or after quests it can
+    take: each answer remembered, a chain followed at most CHAIN_DEPTH back."""
+
+    def __init__(self, book, level, race, done):
+        self.book = book
+        self.level = level
+        self.bit = 1 << (int(race) - 1) if race and int(race) > 0 else 0
+        self.done = frozenset(int(q) for q in done)
+        self.known: dict = {}
+
+    def can_take(self, qid, depth=0) -> bool:
+        if qid in self.known:
+            return self.known[qid]
+        self.known[qid] = False  # a chain that loops back is not takeable
+        quest = self.book.get(qid)
+        if not self._allowed(quest) or qid in self.done or depth > CHAIN_DEPTH:
+            return False
+        prev = quest.prev
+        ok = prev <= 0 or prev in self.done or self.can_take(prev, depth + 1)
+        self.known[qid] = ok
+        return ok
+
+    def _allowed(self, quest) -> bool:
+        """Its minimum level met and its race mask open to the member."""
+        if quest is None or quest.min_level > self.level:
+            return False
+        return not quest.races or bool(quest.races & self.bit)
 
 
 def member_opens(world, race, level, done) -> dict | None:
