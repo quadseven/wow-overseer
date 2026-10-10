@@ -287,34 +287,71 @@ def _say_head(head: str, rest: str, row: dict, args: dict, names: dict) -> str:
     return _BY_KIND_HEAD.get((str(row.get("kind") or ""), head), "")
 
 
+# Commands known by their shape and kind rather than a verb. Each sayer gets
+# (command, head, row, args, names) and returns "" when the shape is not its.
+def _job(command, head, row, args, names):
+    if command in _JOBS:
+        return "Take " + _JOBS[command]
+    if head.startswith("dungeon:") and head == command:
+        return "Take the %s dungeon job" % council.keyword_place(head[8:])
+    return ""
+
+
+def _buy(command, head, row, args, names):
+    if not head.startswith("entry:"):
+        return ""
+    count = _count(args)
+    item = _name(names, "item", args["entry"], "item")
+    return "Buy %s%s" % ("%d x " % count if count > 1 else "", item)
+
+
+_CARRY_VERBS = {"sell": "Sell", "give": "Give away", "trade": "Trade"}
+
+
+def _carry(command, head, row, args, names):
+    if not head.startswith("guid:"):
+        return ""
+    kind = str(row.get("kind") or "")
+    said = _carried(args, names, _CARRY_VERBS[kind])
+    target = _with_arg(row)
+    return said + (" to " + target if target and kind != "sell" else "")
+
+
+def _share(command, head, row, args, names):
+    if not head.startswith("quest:"):
+        return ""
+    target = _with_arg(row)
+    quest = _name(names, "quest", args["quest"], "quest")
+    return "Share %s%s" % (quest, " with " + target if target else "")
+
+
+def _equip(command, head, row, args, names):
+    found = _HITEM.search(command) if head == "e" else None
+    return "Equip " + _name(names, "item", int(found.group(1)), "item") if found else ""
+
+
+def _craft(command, head, row, args, names):
+    made = _crafts().get(int(command)) if command.isdigit() else None
+    return "Craft " + made if made else ""
+
+
+_BY_KIND = {
+    "job": _job,
+    "buy": _buy,
+    "sell": _carry,
+    "give": _carry,
+    "trade": _carry,
+    "share": _share,
+    "bot": _equip,
+    "cast": _craft,
+}
+
+
 def _say_shape(command: str, row: dict, args: dict, names: dict) -> str:
     """The sentence for a command known by its shape rather than its verb."""
-    kind = str(row.get("kind") or "")
+    sayer = _BY_KIND.get(str(row.get("kind") or ""))
     head = command.split(" ", 1)[0]
-    if kind == "job" and command in _JOBS:
-        return "Take " + _JOBS[command]
-    if kind == "job" and head.startswith("dungeon:") and head == command:
-        return "Take the %s dungeon job" % council.keyword_place(head[8:])
-    if kind == "buy" and head.startswith("entry:"):
-        count = _count(args)
-        item = _name(names, "item", args["entry"], "item")
-        return "Buy %s%s" % ("%d x " % count if count > 1 else "", item)
-    if head.startswith("guid:") and kind in ("sell", "give", "trade"):
-        verbs = {"sell": "Sell", "give": "Give away", "trade": "Trade"}
-        said = _carried(args, names, verbs[kind])
-        target = _with_arg(row)
-        return said + (" to " + target if target and kind != "sell" else "")
-    if kind == "share" and head.startswith("quest:"):
-        target = _with_arg(row)
-        quest = _name(names, "quest", args["quest"], "quest")
-        return "Share %s%s" % (quest, " with " + target if target else "")
-    if head == "e" and _HITEM.search(command):
-        item = int(_HITEM.search(command).group(1))
-        return "Equip " + _name(names, "item", item, "item")
-    if kind == "cast" and command.isdigit():
-        made = _crafts().get(int(command))
-        return "Craft " + made if made else ""
-    return ""
+    return sayer(command, head, row, args, names) if sayer else ""
 
 
 def say(row: dict, names: dict | None = None) -> str:

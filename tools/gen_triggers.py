@@ -38,6 +38,9 @@ def build(rows) -> dict:
 
 
 def main(argv: list[str]) -> int:
+    if len(argv) != 3:
+        print("usage: gen_triggers.py <teleport_tsv> <out_json>", file=sys.stderr)
+        return 2
     with open(argv[1], newline="") as f:
         data = build(csv.DictReader(f, delimiter="\t"))
     with open(argv[2], "w") as f:

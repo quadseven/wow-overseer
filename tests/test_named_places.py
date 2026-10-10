@@ -21,6 +21,7 @@ import guildrun
 import nowstatus
 import places
 import raidready
+import runtimeline
 from apiv2 import activity, guild
 from apiv2 import run as run_api
 from events import Event
@@ -223,6 +224,22 @@ def _asked(**over):
     return guildrun._run_view(row)
 
 
+class TheRunTimelineNamesTheMap(unittest.TestCase):
+    def test_a_module_line_with_a_map_id_names_the_map(self):
+        row = {
+            "kind": "recovery",
+            "character_name": "Zug",
+            "detail": "hearth cast for Zug on map 33 after EXIT could not walk "
+            "the party out (attempt 1)",
+        }
+        got = runtimeline._event(row, runtimeline.datetime.now())
+        self.assertEqual(
+            got["line"],
+            "Zug: hearth cast for Zug in Shadowfang Keep after EXIT could not walk "
+            "the party out (attempt 1)",
+        )
+
+
 class TheRunCardSaysWhoAndWhichSeats(unittest.TestCase):
     def test_the_seats_are_words_not_the_learning_key(self):
         view = _asked()
@@ -239,6 +256,12 @@ class TheRunCardSaysWhoAndWhichSeats(unittest.TestCase):
             "outside the guild",
         )
         self.assertEqual(view["band_line"], "levels 20 to 24")
+        # The count is the leading digits only, and a zero count is "no".
+        self.assertEqual(
+            guildrun.composition_words("spec-tank/spec-healer+0help+1pug2"),
+            "seats: a tank and a healer chosen by spec, plus no helper above the "
+            "dungeon's levels and 1pug2 (a seat kind this page does not know)",
+        )
 
     def test_the_asker_is_named_and_a_row_without_one_says_so(self):
         self.assertEqual(

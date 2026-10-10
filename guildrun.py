@@ -1687,13 +1687,19 @@ def composition_words(key: str) -> str:
 def _extra_words(extra: str) -> str:
     """ "1help" -> "1 helper above the dungeon's levels", "2pug" -> "2
     pick-up players from outside the guild"."""
-    digits = "".join(c for c in extra if c.isdigit())
+    # The count leads ("2pug"); a digit later in a kind word is part of it.
+    digits = extra[: len(extra) - len(extra.lstrip("0123456789"))]
     kind = extra[len(digits) :]
     n = int(digits or 0)
     if kind == "help":
-        return "%s above the dungeon's levels" % _n(n, "helper")
+        return "%s above the dungeon's levels" % (_n(n, "helper") if n else "no helper")
     if kind == "pug":
-        return "%d pick-up player%s from outside the guild" % (n, "" if n == 1 else "s")
+        said = (
+            "%d pick-up player%s" % (n, "" if n == 1 else "s")
+            if n
+            else "no pick-up player"
+        )
+        return said + " from outside the guild"
     return "%s (%s)" % (extra, "a seat kind this page does not know")
 
 

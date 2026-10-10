@@ -23,7 +23,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import re
+
 import council
+import places
 import runstory
 
 try:
@@ -233,9 +236,19 @@ def _summary(run: dict, latest: bool) -> tuple[str, str]:
     ), "plain"
 
 
+# The module writes a map by its id ("hearth cast for Zug on map 33"); the
+# timeline says the map's name ("in Shadowfang Keep").
+_MAP_IN_DETAIL = re.compile(r"\b(?:(on|inside|in) )?map (\d+)\b")
+
+
+def _map_words(m: re.Match) -> str:
+    name = places.map_name(int(m.group(2)))
+    return "in " + name if m.group(1) else name
+
+
 def _event(row: dict, now: datetime) -> dict:
     who = ("%s: " % row["character_name"]) if row.get("character_name") else ""
-    said = row.get("detail") or row.get("kind") or ""
+    said = _MAP_IN_DETAIL.sub(_map_words, row.get("detail") or row.get("kind") or "")
     if row.get("kind") == "phase":
         said = phase_line(said)
     elif row.get("kind") == "ended":
