@@ -648,6 +648,26 @@ BLOCKED_DOORS = {
     "dire-maul-west-north": "the door lands 95 yards from the West wing's finder start",
     "dire-maul-north": "the Gordok doors need their keys, and no seat brings them",
 }
+# DOORS THE DUNGEON CLEAR CANNOT FINISH (wow-overseer#782). A guild run is
+# driven by mod-dungeon-clear, which needs data for any dungeon whose bosses sit
+# behind a scripted event. Without it the run walks to the shut door and holds
+# there until the two-hour ceiling: Blackfathom Deeps took 9 guild runs on
+# wow-dev from 2026-10-08 and cleared none, five of them timing out at 1 to 4
+# of 7 bosses, about 10 member-hours each. These doors stay on GUILD_DOORS (the
+# finder can queue them) but no run forms for them until the module can finish
+# them, and fitting_doors says so for every caller.
+#
+# Blackfathom Deeps: the four Fires of Aku'mai open the Portal of Aku'Mai to
+# Aku'mai, the finder's finish. The module's data for it is mod-dungeon-clear
+# PR 19; drop this line in the deploy that rolls the worldserver with it.
+# Gnomeregan: Grubbis comes only with Blastmaster Emi Shortfuse's escort, and
+# the Workshop Door (gameobject 90858) takes the Workshop Key or lockpicking.
+# Razorfen Kraul is not here: its derived boss order ends at Charlga
+# Razorflank, the finder's finish, with no scripted door on the way.
+NO_CLEAR_DATA = {
+    "blackfathom": "the dungeon clear cannot light the Fires of Aku'mai on this realm yet",
+    "gnomeregan": "the dungeon clear has no data for Grubbis's escort or the Workshop Door",
+}
 # NO ITEM-LEVEL GATE BELOW 60, A COVERAGE GATE FOR THE TWO SEATS THAT CARRY A
 # GROUP (decided in #532, 2026-10-04). The old gate held a member out when its
 # worn gear averaged more than 6 item levels under its level: on wow-dev that
@@ -710,6 +730,8 @@ def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
     counts as the other one, as council does, so only the doors both sides
     use are offered.
 
+    A door the dungeon clear cannot finish (NO_CLEAR_DATA) is never offered.
+
     Fits: every member at or over the finder's minimum, the average at least
     the door's floor (plus LEVEL_MARGIN), and nobody past its ceiling.
     Best fit is the door whose band's middle is nearest the average.
@@ -725,6 +747,8 @@ def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
         if council._other_capital(door.map_id, faction):
             continue
         if door.keyword not in allowed:
+            continue
+        if door.keyword in NO_CLEAR_DATA:
             continue
         if low < door.finder_floor:
             continue
