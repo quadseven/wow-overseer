@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import os
 from dataclasses import dataclass, field, replace
 
@@ -1789,7 +1790,20 @@ _COUNTS = (
 )
 
 
-def _run_view(row: dict) -> dict:
+def run_state(row: dict) -> str:
+    """Where a run is, as one word: "queued" or "inside" while it is out,
+    else how it came back (OUTCOMES). An ended row with no known outcome is
+    lost, as outcome_from_row says. The app reads this field and no other."""
+    state = str(row.get("state") or "")
+    if state in (QUEUED, INSIDE):
+        return state
+    outcome = str(row.get("outcome") or "")
+    return outcome if outcome in OUTCOMES else "lost"
+
+
+def run_view(row: dict) -> dict:
+    """One overseer_guild_run row as the site shows a run. `run_state` is the
+    pinned state; `state`, `outcome` and `status` stay for older readers."""
     view = {key: row.get(key) or "" for key in _TEXT}
     view.update({key: _num(row, key) for key in _COUNTS})
     view.update(
@@ -1814,6 +1828,7 @@ def _run_view(row: dict) -> dict:
         "good" if view["outcome"] == CLEARED else ("bad" if ended_run else "")
     )
     view["lines"] = _run_lines(view)
+    view["run_state"] = run_state(row)
     return view
 
 
@@ -1835,9 +1850,9 @@ def _place(keyword: str) -> str:
 def page(rows: list) -> dict:
     """The Guild tab's payload from overseer_guild_run rows, newest first."""
     active = [
-        _run_view(r) for r in rows if str(r.get("state") or "") in (QUEUED, INSIDE)
+        run_view(r) for r in rows if str(r.get("state") or "") in (QUEUED, INSIDE)
     ]
-    recent = [_run_view(r) for r in rows if str(r.get("state") or "") == ENDED][:30]
+    recent = [run_view(r) for r in rows if str(r.get("state") or "") == ENDED][:30]
     table = rates(rows)
     records = [
         {
@@ -1866,3 +1881,197 @@ def page(rows: list) -> dict:
         "empty_recent": "No guild group has come back yet.",
         "empty_records": "Nothing learned yet: no run has an outcome.",
     }
+
+
+# --- the site's reads --------------------------------------------------------------
+#
+# Every read the site makes of overseer_guild_run is here: one column list, one
+# guard for a world without the table, the run view above and its story. The
+# bridge never calls these. `reader` is a DB-API cursor with dict rows; _rows is
+# the only function that touches it, so the site's realm reader (#731) replaces
+# that one function and nothing else.
+
+_log = logging.getLogger("wow-map")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+# The columns of a whole run: what run_view shapes, plus the two times as Unix
+# seconds off the database's own clock for the reads that count by time.
+_RUN_SQL = (
+    "SELECT id, guild, band, composition, keyword, tank, members, dungeon_by, "
+    "dungeon_jev, dungeon_confidence, composition_by, composition_jev, "
+    "composition_confidence, prior_rate, prior_runs, state, outcome, why, deaths, "
+    "seconds_inside, bosses_done, bosses_total, loot_items, loot_notable, "
+    "ilvl_gained, levels_gained, created_at, ended_at, proposer, "
+    "UNIX_TIMESTAMP(created_at) AS created_unix, UNIX_TIMESTAMP(ended_at) AS ended_unix "
+    "FROM overseer_guild_run WHERE {where} ORDER BY id DESC LIMIT %s"
+)
+# Who asked for a run in guild chat (`proposer`, which the bridge adds). A
+# world whose table predates the column reads the rest, and an asked run's
+# first line says its row does not name the asker.
+_RUN_SQL_THIN = _RUN_SQL.replace(" proposer,", "")
+# The errors a world without the table (1146) or a column (1054) raises.
+_DEGRADED = (1054, 1146)
+
+
+def _holes(n: int) -> str:
+    return ", ".join(["%s"] * n)
+
+
+def _rows(reader, sql: str, params: tuple, what: str, thin: str = "") -> list:
+    """`sql`'s rows; on a degraded schema `thin`'s, then none. Any other
+    fault is raised, so it reaches the handler's 503 instead of reading as
+    no runs."""
+    for attempt in (sql, thin):
+        if not attempt:
+            break
+        try:
+            reader.execute(attempt, params)
+            return [dict(r) for r in reader.fetchall()]
+        except Exception as exc:
+            if not (exc.args and exc.args[0] in _DEGRADED):
+                raise
+            _log.info("%s unavailable (%s); trying a thinner read", what, exc.args[0])
+    _log.info("%s unavailable; read as none", what)
+    return []
+
+
+def _runs(reader, where: str, params: tuple, n: int) -> list:
+    sql = _RUN_SQL.format(where=where)  # noqa: S608 - placeholders only
+    thin = _RUN_SQL_THIN.format(where=where)  # noqa: S608 - placeholders only
+    return _rows(reader, sql, params + (n,), "overseer_guild_run", thin)
+
+
+def recent(reader, guild: str | None = None, n: int = 30) -> list:
+    """The newest `n` runs in any state, of one guild or of every guild, as
+    rows newest first (page folds them; run_view shapes one)."""
+    if guild is None:
+        return _runs(reader, "1 = 1", (), n)
+    return _runs(reader, "guild = %s", (guild,), n)
+
+
+def by_ids(reader, ids) -> list:
+    """The runs with these ids, as rows newest first; none for no ids."""
+    ids = list(ids)
+    if not ids:
+        return []
+    return _runs(reader, "id IN (%s)" % _holes(len(ids)), tuple(ids), len(ids))
+
+
+def by_id(reader, run_id: int) -> dict | None:
+    """One run as the site shows it (run_view), with its story once it has
+    ended; None when the table holds no such run."""
+    rows = by_ids(reader, [run_id])
+    if not rows:
+        return None
+    view = run_view(rows[0])
+    if view["state"] == ENDED:
+        with_stories(reader, [view])
+    return view
+
+
+def came_back(reader, guilds: list, days: int, n: int) -> list:
+    """The guilds' runs that went in (WENT_IN) and ended in the last `days`
+    days by the database's clock, as rows newest first."""
+    if not guilds:
+        return []
+    where = (
+        "guild IN (%s) AND ended_at >= NOW() - INTERVAL %%s DAY AND outcome IN (%s)"
+        % (
+            _holes(len(guilds)),
+            _holes(len(WENT_IN)),
+        )
+    )
+    return _runs(reader, where, (*guilds, days, *WENT_IN), n)
+
+
+def matching(reader, keywords: list, members_like: str, n: int) -> list:
+    """Runs at one of `keywords`, or with a member whose lowered seat list
+    matches the LIKE pattern `members_like`, as rows newest first."""
+    where = "LOWER(members) LIKE %s"
+    if keywords:
+        where = "keyword IN (%s) OR %s" % (_holes(len(keywords)), where)
+    return _runs(reader, where, (*keywords, members_like), n)
+
+
+# WHY A RUN WENT THE WAY IT DID (runstory). The deaths of the runs' members
+# inside those runs' own windows, and which creatures are bosses. A world
+# without overseer_death reads no deaths, and each story then says only what
+# the run's own counts say. `{holes}` and `{spans}` are sized by
+# runstory.death_scope; every value is bound.
+_DEATHS_SQL = (
+    "SELECT character_name, level, map, zone, killer_name, killer_type, killer_entry, "
+    "created_at FROM overseer_death WHERE character_name IN ({holes}) AND ({spans}) "
+    "ORDER BY id DESC LIMIT %s"
+)
+_DEATHS_SPAN = "created_at BETWEEN %s AND %s"
+DEATHS_LIMIT = 3000
+# The bosses, by creature entry: what tells a boss's kill from a trash pull.
+BOSSES_SQL = (
+    "SELECT DISTINCT creditEntry FROM acore_world.instance_encounters "
+    "WHERE creditType = 0"
+)
+# map id -> its bosses' level, read once per process: the world's bosses do
+# not change under a running site. An empty read is not kept, so it is tried
+# again.
+_BOSS_LEVELS: dict = {}
+_ZONES: dict = {}
+
+
+def _bosses(reader) -> frozenset:
+    rows = _rows(reader, BOSSES_SQL, (), "instance_encounters")
+    return frozenset(int(r["creditEntry"]) for r in rows if r.get("creditEntry"))
+
+
+def _boss_levels(reader) -> dict:
+    """map id -> its bosses' level (BOSS_LEVELS_SQL), the level a story holds
+    each seat to; {} unread, and then no seat is called low."""
+    if _BOSS_LEVELS:
+        return _BOSS_LEVELS
+    rows = _rows(reader, BOSS_LEVELS_SQL, (), "instance_encounters")
+    found = {
+        int(r["map_id"]): int(r["level"])
+        for r in rows
+        if r.get("map_id") is not None and r.get("level") is not None
+    }
+    if found:
+        _BOSS_LEVELS.update(found)
+        _log.info(
+            "run stories: a seat is told against the bosses' level of %d dungeon "
+            "map(s) (the Deadmines' %s); one healer is never a cause",
+            len(found),
+            found.get(36, "unread"),
+        )
+    return found
+
+
+def _zone_names() -> dict:
+    """area id -> zone name, from the client zone table the map draws with."""
+    if not _ZONES:
+        # Here, not at the top: these are the site's modules, not the bridge's.
+        import recap
+        from transform import Geometry
+
+        _ZONES.update(recap.zone_names(Geometry.load(_HERE).continents))
+    return _ZONES
+
+
+def with_stories(reader, runs: list) -> list:
+    """Add runstory's story, cause and causes to each run (a run_view, or a
+    row), from one read of the members' deaths. A run still out gets an empty
+    story. Returns `runs`."""
+    if not runs:
+        return runs
+    # Here, not at the top: runstory imports this module.
+    import runstory
+
+    names, spans = runstory.death_scope(runs)
+    deaths = []
+    if names and spans:
+        sql = _DEATHS_SQL.format(  # noqa: S608 - placeholders only
+            holes=_holes(len(names)), spans=" OR ".join([_DEATHS_SPAN] * len(spans))
+        )
+        params = tuple(names) + tuple(t for span in spans for t in span)
+        deaths = _rows(reader, sql, params + (DEATHS_LIMIT,), "overseer_death")
+    return runstory.tell_guild_runs(
+        runs, deaths, _bosses(reader), _zone_names(), _boss_levels(reader)
+    )

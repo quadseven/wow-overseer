@@ -41,28 +41,15 @@ ROW = {
 }
 
 
-class Server:
-    """The two map server helpers the endpoint uses, recorded."""
+class Conn:
+    """A connection whose cursor answers the run read with `rows` and every
+    story read (deaths, bosses) with none, recording each statement."""
 
     def __init__(self, rows):
         self.rows = rows
         self.sql = []
-        self.storied = []
-
-    def _wide_guarded(self, cur, sql, params, _fallback, _what):
-        self.sql.append((sql, params))
-        return self.rows
-
-    def _guild_run_stories(self, cur, runs):
-        self.storied.extend(r["id"] for r in runs)
-        for r in runs:
-            r["story"] = "a story"
-        return runs
-
-
-class Conn:
-    def __init__(self):
         self.closed = False
+        self._last = []
 
     def cursor(self):
         return self
@@ -73,29 +60,38 @@ class Conn:
     def __exit__(self, *exc):
         return False
 
+    def execute(self, sql, params=()):
+        self.sql.append((sql, tuple(params)))
+        self._last = self.rows if "FROM overseer_guild_run" in sql else []
+
+    def fetchall(self):
+        return [dict(r) for r in self._last]
+
     def close(self):
         self.closed = True
 
+    def reads(self, table):
+        return [s for s in self.sql if "FROM " + table in s[0]]
+
 
 def ask(value, rows=(ROW,)):
-    server = Server(list(rows))
     conns = []
 
     def connect():
-        conns.append(Conn())
+        conns.append(Conn(list(rows)))
         return conns[-1]
 
     code, payload = apiv2.handle(
         "/api/v2/run",
         {"id": [value]} if value is not None else {},
-        Context(connect=connect, server=server),
+        Context(connect=connect, server=None),
     )
-    return code, payload, server, conns
+    return code, payload, conns
 
 
 class OneRun(unittest.TestCase):
     def test_an_old_run_is_read_by_its_id_and_shaped_like_the_list(self):
-        code, payload, server, conns = ask("398")
+        code, payload, conns = ask("398")
         self.assertEqual(code, 200)
         run = payload["run"]
         self.assertEqual(run["id"], 398)
@@ -105,19 +101,22 @@ class OneRun(unittest.TestCase):
             run["members"][0],
             {"name": "Grug", "seat": "tank", "class": "warrior", "level": 24},
         )
-        self.assertEqual(run["story"], "a story")
-        self.assertEqual(server.sql[0][1], (398,))
-        self.assertIn("WHERE id = %s LIMIT 1", server.sql[0][0])
+        self.assertTrue(run["story"].startswith("Cleared The Deadmines"))
+        self.assertEqual(run["run_state"], "cleared")
+        ((sql, params),) = conns[0].reads("overseer_guild_run")
+        self.assertEqual(params, (398, 1))
+        self.assertIn("WHERE id IN (%s) ORDER BY id DESC LIMIT %s", sql)
         self.assertTrue(conns[0].closed)
 
     def test_a_run_still_inside_has_no_story_read(self):
         inside = dict(ROW, state="inside", outcome="")
-        code, payload, server, _ = ask("398", rows=(inside,))
+        code, payload, conns = ask("398", rows=(inside,))
         self.assertEqual(code, 200)
-        self.assertEqual(server.storied, [])
+        self.assertEqual(conns[0].reads("overseer_death"), [])
+        self.assertNotIn("story", payload["run"])
 
     def test_an_unknown_id_is_a_404(self):
-        code, payload, _, conns = ask("12345", rows=())
+        code, payload, conns = ask("12345", rows=())
         self.assertEqual(code, 404)
         self.assertTrue(conns[0].closed)
 
@@ -133,10 +132,9 @@ class OneRun(unittest.TestCase):
             "12345678901",
             chr(0x663) + chr(0x669) + chr(0x668),  # Arabic-Indic digits
         ):
-            code, _payload, server, conns = ask(bad)
+            code, _payload, conns = ask(bad)
             self.assertEqual(code, 400, bad)
             self.assertEqual(conns, [], bad)
-            self.assertEqual(server.sql, [], bad)
 
 
 class TheRunPageAsksForIt(unittest.TestCase):

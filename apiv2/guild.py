@@ -24,7 +24,7 @@ read, and nothing is written:
                 guild job runner (guildjobs) in the last BLOCKED_HOURS failed,
                 with the reason the module gave.
   dungeons      the doors this guild's faction runs (guildrun.GUILD_DOORS), in
-                level order, with what overseer_guild_run says about each:
+                level order, with what the guild's runs (guildrun.recent) say of each:
                 runs that went in, clears, wipes, the best clear, the last run,
                 and the commonest way a run that went in did not clear.
 
@@ -115,11 +115,6 @@ _CQ_STEPS_SQL = (
 _QUEST_TITLES_SQL = (
     "SELECT ID AS id, LogTitle AS title FROM acore_world.quest_template "
     "WHERE ID IN ({holes})"
-)
-_RUNS_SQL = (
-    "SELECT keyword, state, outcome, why, deaths, seconds_inside, "
-    "UNIX_TIMESTAMP(created_at) AS created, UNIX_TIMESTAMP(ended_at) AS ended "
-    "FROM overseer_guild_run WHERE guild = %s ORDER BY id DESC LIMIT %s"
 )
 
 _QUEST_IN_COMMAND = re.compile(r"\bquest:(\d+)")
@@ -430,6 +425,13 @@ def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
     }
 
 
+def _runs(cur, guild_name: str) -> list:
+    """The guild's runs oldest first, each with its Unix times as `created`
+    and `ended` (dungeon_rows' keys)."""
+    rows = guildrun.recent(cur, guild=guild_name, n=MAX_ROWS)[::-1]
+    return [dict(r, created=r["created_unix"], ended=r["ended_unix"]) for r in rows]
+
+
 def build(ctx, cur, row: dict, zones: dict, maps: dict) -> dict:
     gid = int(row["guildid"])
     now = int(_all(cur, _NOW_SQL)[0]["now"])
@@ -452,11 +454,7 @@ def build(ctx, cur, row: dict, zones: dict, maps: dict) -> dict:
         ],
         "deaths": _deaths(cur, names, ghosts, zones, maps),
         "class_quests": _class_quests(cur, gid, names, classes),
-        "dungeons": dungeon_rows(
-            guildrun.doors(),
-            faction,
-            _all(cur, _RUNS_SQL, (row["name"], MAX_ROWS))[::-1],
-        ),
+        "dungeons": dungeon_rows(guildrun.doors(), faction, _runs(cur, row["name"])),
         "now": now,
     }
 

@@ -72,7 +72,7 @@ export function stuck(read) {
 // Guild runs inside a dungeon now.
 export function runsInside(read) {
   if (!ok(read)) return null;
-  return (read.data.active || []).filter((r) => (r.status || r.state) === "inside");
+  return (read.data.active || []).filter((r) => r.run_state === "inside");
 }
 
 // Runs that formed or came back since this device last looked.

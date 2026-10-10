@@ -34,8 +34,10 @@ const STATE = {
   wiped: { text: "wiped", tone: "bad", icon: "ph-fill ph-x-circle" },
 };
 
+// `run_state` is the one field that says where a run is (guildrun.run_state):
+// queued, inside, or how it came back.
 export function runState(r) {
-  const key = r.state === "inside" ? "inside" : r.outcome || r.status || r.state || "";
+  const key = r.run_state || "";
   return STATE[key] || { text: String(key || "state not recorded").replace(/_/g, " "), tone: "warn", icon: "ph ph-warning-circle" };
 }
 

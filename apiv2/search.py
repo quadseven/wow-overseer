@@ -16,6 +16,8 @@ import logging
 import threading
 import time
 
+import guildrun
+
 log = logging.getLogger(__name__)
 
 MIN_CHARS = 2
@@ -54,11 +56,6 @@ _QUESTS_SQL = (
     "WHERE c.name IN ({holes}) AND t.LogTitle LIKE %s "
     "ORDER BY t.LogTitle LIKE %s DESC, t.LogTitle, c.name LIMIT %s"
 )
-_RUNS_SQL = (
-    "SELECT id, guild, keyword, state, outcome, bosses_done, bosses_total, created_at "
-    "FROM overseer_guild_run WHERE {where} ORDER BY id DESC LIMIT %s"
-)
-NO_TABLE = 1146
 
 
 def normalise(text: str) -> str:
@@ -147,19 +144,9 @@ def _keywords_for(q: str, maps: list, keywords: dict, place) -> list:
 
 
 def _runs(cur, q: str, keywords: list) -> list:
-    where = "LOWER(members) LIKE %s"
-    args: list = [like(q)]
-    if keywords:
-        where = "keyword IN (%s) OR %s" % (", ".join(["%s"] * len(keywords)), where)
-        args = [*keywords, *args]
-    sql = _RUNS_SQL.format(where=where)  # noqa: S608
-    try:
-        cur.execute(sql, (*args, CAP * 4))
-    except Exception as exc:  # a world without the table has no runs yet
-        if getattr(exc, "args", None) and exc.args[0] == NO_TABLE:
-            return []
-        raise
-    return list(cur.fetchall())
+    """Runs at a matched dungeon or with a member named like `q`; a world
+    without the table has none yet (guildrun.matching)."""
+    return guildrun.matching(cur, keywords, like(q), CAP * 4)
 
 
 def _run_rows(rows: list, place) -> list:
@@ -169,6 +156,7 @@ def _run_rows(rows: list, place) -> list:
             "guild": r.get("guild") or "",
             "place": place(r.get("keyword") or ""),
             "state": r.get("state") or "",
+            "run_state": guildrun.run_state(r),
             "outcome": r.get("outcome") or "",
             "bosses_done": r.get("bosses_done"),
             "bosses_total": r.get("bosses_total"),

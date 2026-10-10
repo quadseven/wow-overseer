@@ -19,7 +19,7 @@ function runsHref(guild) {
 }
 
 function runSub(r) {
-  const how = r.state === "ended" ? r.outcome || "ended" : r.state;
+  const how = r.run_state || "";
   const bosses = r.bosses_total ? ", " + r.bosses_done + " of " + r.bosses_total + " bosses" : "";
   return [r.guild, how + bosses, r.when ? r.when.slice(0, 16) : ""].filter(Boolean).join(" | ");
 }

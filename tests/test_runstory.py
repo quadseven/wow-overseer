@@ -11,9 +11,7 @@ finder called finished after 2 of 4 bosses.
 import pathlib
 import re
 import sys
-import types
 import unittest
-from unittest import mock
 from datetime import datetime, timedelta
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
@@ -422,47 +420,6 @@ class TheDeadminesCausesNameRealFaults(unittest.TestCase):
         told = dm_story(RUN_482, [])
         self.assertEqual(told["cause"], "Cause not measured.")
 
-    def test_the_site_reads_the_bosses_level_for_the_stories(self):
-        stories = SERVER[
-            SERVER.index("def _guild_run_stories") : SERVER.index(
-                "# THE GUILD CHAT FEED"
-            )
-        ]
-        self.assertIn("guildrun.BOSS_LEVELS_SQL", SERVER)
-        self.assertIn("_run_boss_levels(cur)", stories)
-
-
-class TheSiteReadsTheBossesLevelOnce(unittest.TestCase):
-    def setUp(self):
-        sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
-        import map_server
-
-        self.ms = map_server
-        self.ms._RUN_BOSS_LEVELS.clear()
-        self.addCleanup(self.ms._RUN_BOSS_LEVELS.clear)
-        self.reads = []
-
-    def guard(self, rows):
-        def wide(cur, sql, params=(), fallback="", what=""):
-            self.reads.append(sql)
-            return rows
-
-        return mock.patch.object(self.ms, "_wide_guarded", wide)
-
-    def test_it_reads_the_levels_once_and_logs_them(self):
-        with self.guard([{"map_id": 36, "level": 20}, {"map_id": 43, "level": 20}]):
-            with self.assertLogs("wow-map", "INFO") as logs:
-                self.assertEqual(self.ms._run_boss_levels(None), {36: 20, 43: 20})
-            self.assertEqual(self.ms._run_boss_levels(None), {36: 20, 43: 20})
-        self.assertEqual(len(self.reads), 1)
-        self.assertIn("the Deadmines' 20", logs.output[0])
-
-    def test_an_empty_read_is_tried_again(self):
-        with self.guard([]):
-            self.assertEqual(self.ms._run_boss_levels(None), {})
-            self.assertEqual(self.ms._run_boss_levels(None), {})
-        self.assertEqual(len(self.reads), 2)
-
 
 class TheRagefireClear(unittest.TestCase):
     """Run 220: Ragefire, nobody died, 2 of 4 bosses, the finder called it."""
@@ -621,9 +578,9 @@ class TheSiteDrawsIt(unittest.TestCase):
         handler = SERVER[
             SERVER.index("def _guild_runs") : SERVER.index("def _guild_chat")
         ]
-        self.assertIn('_guild_run_stories(cur, payload["recent"])', handler)
+        self.assertIn('guildrun.with_stories(cur, payload["recent"])', handler)
         chat = SERVER[SERVER.index("def _fetch_guild_chat") :]
-        self.assertIn("_guild_run_stories(cur,", chat[: chat.index("\n\n\n")])
+        self.assertIn("guildrun.with_stories(cur, runs)", chat[: chat.index("\n\n\n")])
         timeline = SERVER[
             SERVER.index("def _run_timeline") : SERVER.index("def _recap")
         ]
