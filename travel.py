@@ -35,6 +35,8 @@ aim that reaches it instead.
 
 from dataclasses import dataclass
 
+from core import _ALLIANCE_RACES, _HORDE_RACES
+
 # Canonical keyword -> the UNIT_NPC_FLAG_* the module matches spawns on.
 #
 # Every flag here is in mod-playerbots' own allowed-RPG-target list at the
@@ -517,6 +519,38 @@ class VaultAim:
 
     aim: str = ""
     refused: str = ""
+
+
+# THE VAULTS EACH SIDE OWNS (`gameobject_template_addon.faction`), measured on
+# the dev realm 2026-10-10: 1732 on every Stormwind, Ironforge and Darnassus
+# vault, 1735 on every Undercity, Orgrimmar and Thunder Bluff vault, 35 on the
+# goblin and Everlook ones. A vault of the other side's faction stands in the
+# other side's capital, behind its guards.
+VAULT_FACTION_ALLIANCE = 1732
+VAULT_FACTION_HORDE = 1735
+
+
+def own_side_vault(rows):
+    """The nearest of `rows` that is not in the other side's capital, or None.
+
+    `rows` are the reader's spawn rows nearest first, each with the vault's
+    `faction` and the character's `race`. Distance alone aimed an Alliance
+    leader in the Hinterlands at Undercity and one in Desolace at Thunder
+    Bluff, and the core lets anybody open any vault it reaches, so this is
+    where the walk is refused. A neutral vault, or one with no faction row,
+    is anybody's; a race on neither side refuses nothing.
+    """
+    for row in rows or ():
+        race = int(row.get("race") or 0)
+        if race in _ALLIANCE_RACES:
+            hostile = VAULT_FACTION_HORDE
+        elif race in _HORDE_RACES:
+            hostile = VAULT_FACTION_ALLIANCE
+        else:
+            hostile = None
+        if hostile is None or int(row.get("faction") or 0) != hostile:
+            return row
+    return None
 
 
 def vault_aim(spawn, standing_on):
