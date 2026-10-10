@@ -69,6 +69,10 @@ _WHY_IN_RESULT = re.compile(r'"(?:why|reason)":\s*"((?:[^"\\]|\\.)*)"')
 def _result_why(result) -> str:
     """The reason a command's JSON `result` gives (its `why`, else `reason`),
     from the whole object or, for a read cut short, the first such field."""
+    # str() of bytes would be "b'...'": a BLOB result is decoded first, so
+    # json.loads always gets text and only a ValueError can come back.
+    if isinstance(result, (bytes, bytearray)):
+        result = result.decode("utf-8", "replace")
     text = str(result or "")
     try:
         said = json.loads(text) if text else None

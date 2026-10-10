@@ -288,6 +288,11 @@ class TheActivityLogSaysWhy(unittest.TestCase):
         )
         self.assertEqual(said, "refused: 'Divalicious' is in combat")
         self.assertEqual(activity.answer_words("error", "refused"), "refused")
+        blob = b'{"why":"\'Yamon\' is in combat"}'
+        self.assertEqual(
+            activity.answer_words("error", "refused: see result", blob),
+            "refused: 'Yamon' is in combat",
+        )
         cut = '{"outcome":"refused","reason":"character is held by another verb","sp'
         self.assertEqual(
             activity.answer_words("error", "refused: see result", cut),
