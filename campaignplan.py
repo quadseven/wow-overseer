@@ -119,16 +119,31 @@ DEATH_HOURS = 168
 FIT_ABOVE = 3
 FIT_BELOW = 6
 
-# DOORS THAT NEED A KEY, and where the key drops. mod-overseer stages a party
-# at each of these and does not check for the key (its portal table says so),
-# so a run aimed at one before anybody holds the key stands at a door that
-# will not move. Keyed by Run keyword: (item entry, the key, the run it drops
-# in).
+# DOORS THAT NEED A KEY, and the run a player earns it in. mod-dungeon-clear
+# opens a keyed door only for a party member who carries the key or picks the
+# lock (quadseven/wow-overseer#785), so a run aimed at one before anybody
+# holds the key stands at a door that will not move. Families (here) and guild
+# runs (guildrun.opens_for) read this one table. Keyed by Run keyword: (item
+# entry, the key, the run it comes from).
+#
+#   the Scarlet Key        Doan's Strongbox, in the Library, every time
+#   the Crescent Key       Pusillin, in Dire Maul East, every time
+#   the Shadowforge Key    the quest Dark Iron Legacy (3802): Fineous
+#                          Darkvire's hammer laid at the Shrine of Thaurissan,
+#                          in Blackrock Depths
+#   the Key to the City    Magistrate Barthilas, on Stratholme's main gate side
+#
+# Each door's key stands between the finder's start and the wing's last boss:
+# Herod's Door and the Chapel Door, Dire Maul West's Crescent doors (and the
+# North wing's outer door, on a family's walk in), Blackrock Depths' Shadowforge
+# gates and the Lyceum, Stratholme's Service Entrance Gate.
 DOOR_KEYS = {
     "scarlet-armory": (7146, "the Scarlet Key", "scarlet-library"),
     "scarlet-cathedral": (7146, "the Scarlet Key", "scarlet-library"),
     "dire-maul-west-north": (18249, "the Crescent Key", "dire-maul-east-east"),
     "dire-maul-north": (18249, "the Crescent Key", "dire-maul-east-east"),
+    "blackrock-depths": (11000, "the Shadowforge Key", "blackrock-depths"),
+    "stratholme-undead": (12382, "the Key to the City", "stratholme-live"),
 }
 KEY_ITEMS = tuple(sorted({key for key, _name, _where in DOOR_KEYS.values()}))
 
@@ -699,7 +714,7 @@ def _locked(facts: Facts, run: Run) -> str:
     entry, name, where = need
     if facts.keys is not None and entry in facts.keys:
         return ""
-    return "locked: it needs %s, which drops in %s, and %s" % (
+    return "locked: it needs %s, which comes from %s, and %s" % (
         name,
         council.keyword_place(where),
         "nobody carries one"

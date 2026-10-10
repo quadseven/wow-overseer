@@ -982,6 +982,33 @@ def _helping(answer) -> bool:
     return answer is not None and answer.stance == HELPS
 
 
+def _with_key(chosen: list, yes: list, free: dict, door) -> list | None:
+    """`chosen`, or with a damage seat given to a yes that carries the door's
+    key, or None when no yes carries it (guildrun.opens_for, #785). The asker
+    keeps its seat; the damage dealer who gives way is declined."""
+    if guildrun.opens_for([m for m, _a in chosen], door):
+        return chosen
+    seated = {m.name for m, _a in chosen}
+    holder = next(
+        (
+            (free[a.member], a)
+            for a in yes
+            if a.role == DPS
+            and a.member not in seated
+            and door.key in free[a.member].keys
+            and free[a.member].deals_damage()
+        ),
+        None,
+    )
+    if holder is None:
+        return None
+    # The last damage seat a yes holds gives way, never the asker's own.
+    for i in range(len(chosen) - 1, 1, -1):
+        if chosen[i][1] is not None:
+            return chosen[:i] + [holder] + chosen[i + 1 :]
+    return None
+
+
 def seat(ask: Ask, answers: list, free: dict, door, faction: str):
     """(Composition, seated answers, declined answers, helpers) from the
     asker and its yeses only, or None when they do not seat a group.
@@ -992,7 +1019,11 @@ def seat(ask: Ask, answers: list, free: dict, door, faction: str):
     asker = free.get(ask.asker)
     if asker is None:
         return None
-    chosen = _chosen(*_seats(asker, _yeses(answers, free), free, door))
+    yes = _yeses(answers, free)
+    chosen = _chosen(*_seats(asker, yes, free, door))
+    if chosen is None:
+        return None
+    chosen = _with_key(chosen, yes, free, door)
     if chosen is None:
         return None
     beneficiaries = [m.level for m, a in chosen if not _helping(a)]
@@ -1163,6 +1194,14 @@ def _candidates(board: _Board, ask: Ask, open_seats: list, spoken: set) -> list:
     faction = board.factions.get(ask.guild, "")
     before = {a.member for a in board.current(ask)}
     asker_level = board.free_mates[ask.asker].member.level
+    said_yes = [
+        board.free[a.member]
+        for a in board.current(ask)
+        if a.state == YES and a.member in board.free
+    ]
+    wants_key = not guildrun.opens_for(
+        [board.free_mates[ask.asker].member, *said_yes], door
+    )
     options = []
     for name, mate in board.free_mates.items():
         if mate.member.guild != ask.guild or name in spoken or name in before:
@@ -1174,11 +1213,14 @@ def _candidates(board: _Board, ask: Ask, open_seats: list, spoken: set) -> list:
         if net <= 0:
             continue
         # The scarce seats first: a tank or healer for an open seat of its
-        # own answers before another damage dealer.
+        # own answers before another damage dealer, and for a keyed wing
+        # nobody seated can open yet, the member who carries its key.
         scarce = 0 if _seat_for(mate.member, open_seats, door) in (TANK, HEALER) else 1
         # A lent family member answers for a tank or healer seat or not at all.
         if name in board.lent and scarce:
             continue
+        if wants_key and door.key in mate.member.keys:
+            scarce = -1
         options.append((scarce, -net, name, mate, stance, need))
     options.sort(key=lambda o: o[:3])
     return options
@@ -1228,13 +1270,22 @@ def ask_shape(board: _Board, mate: Mate, guild: str) -> str:
     )
 
 
-def _may_ask_for(member: guildrun.Member, door, faction: str) -> bool:
-    """Whether this member may ask for `door`: the door fits its level, and a
-    tank or healer can take its own seat there (can_take, the bosses' level)."""
+def _may_ask_for(member: guildrun.Member, door, faction: str, guildmates=()) -> bool:
+    """Whether this member may ask for `door`: the door fits its level, a
+    tank or healer can take its own seat there (can_take, the bosses' level),
+    and a keyed wing's key is carried by the asker or a free guildmate
+    (guildrun.opens_for): nobody asks for a door nobody free can open."""
     if not guildrun.fitting_doors([member.level], [door], faction):
+        return False
+    if not guildrun.opens_for([member, *guildmates], door):
         return False
     mine = role_of(member)
     return mine == DPS or can_take(member, mine, door)
+
+
+def _free_guildmates(board: _Board, guild: str) -> list:
+    """Every member of `guild` free now: whose keys a keyed ask may count on."""
+    return [m for m in board.free.values() if m.guild == guild]
 
 
 def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
@@ -1255,12 +1306,13 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
     faction = board.factions.get(guild, "")
     band = guildrun.band_of([mate.member.level])
     shape = ask_shape(board, mate, guild)
+    guildmates = _free_guildmates(board, guild)
     options, failing, done, seen = [], [], [], set()
     for need in board.needs.get(name, []):
         door = board.doors.get(need.keyword)
         if door is None or door.keyword in seen or (guild, door.keyword) in asked:
             continue
-        if not _may_ask_for(mate.member, door, faction):
+        if not _may_ask_for(mate.member, door, faction, guildmates):
             continue
         record = board.records.get(
             (door.keyword, band, shape), guildrun.NO_SHAPE_RECORD
