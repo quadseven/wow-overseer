@@ -11,11 +11,21 @@ around it and writes three things:
 - `causes`: tags from TAGS, so a later change can count causes across runs.
 
 HONESTY RULES. A sentence states only what a row holds. When a death was
-recorded on the dungeon's own map it was inside; when it came before the group
-got in and off that map it was on the way in. Whether a level was too low, or
-one healer too few, is a judgment, and the cause line says "likely" for it.
-Nothing is said about the order of a boss kill and a death, because no row
-records when a boss went down on a guild run.
+recorded on the dungeon's own map it was inside; when it came after the run was
+formed but before the group got in, and off that map, it was on the way in. A
+death before the run was formed is not the run's. Whether a level was too low,
+or which death broke a wipe, is a judgment, and the cause line says "likely"
+for it. Nothing is said about the order of a boss kill and a death, because no
+row records when a boss went down on a guild run, and nothing is said of a
+member's mana, which no death row holds. When nothing in the rows explains a
+wipe the cause line says so: "Cause not measured."
+
+ONE HEALER IS NO CAUSE. A classic five-man group is a tank, a healer and three
+damage dealers, and guildrun seats exactly that; since #721 the healer stands at
+the bosses' level. Cards that said "Likely cause: a lone level 20 healer." for
+every Deadmines wipe named the group's normal shape as its fault. A seat's
+level is told only against the bosses' level (guildrun.carry_floor), for any
+seat, and who died first in the wipe is told from the death rows.
 
 It is pure: it reads dicts and returns dicts, and map_server.py does the
 reading. The guild runs are overseer_guild_run rows as guildrun.page shapes
@@ -31,13 +41,15 @@ from datetime import datetime, timedelta
 
 import guildrun
 
-# Deaths this many seconds before a guild run was formed still belong to it:
-# the group gathers from wherever its members were.
-LEAD_SECONDS = 300
 # Rows are written on a poll, so the recorded end can trail the last death.
 SLACK_SECONDS = 90
 # Deaths no further apart than this are one fight.
 FIGHT_GAP_SECONDS = 15
+# Deaths no further apart than this are one wipe: a wipe spreads over a minute
+# as the last members are run down (run 493: 42 seconds, gaps up to 33).
+WIPE_GAP_SECONDS = 60
+# Deaths this close to the wipe's first are first with it.
+FIRST_TIE_SECONDS = 1
 # A group whose mean level is less than this far above the door's floor is at
 # the bottom of the dungeon's range.
 BOTTOM_MARGIN = 2
@@ -51,12 +63,15 @@ INSIDE_PHASES = frozenset({"STAGED_INSIDE", "CLEARING"})
 # Every tag this module writes. Inferred ones make the cause line "likely".
 TAGS = {
     "under_levelled": "under-leveled for the elites",
-    "single_healer": "only one healer",
+    "below_bosses": "seats below the bosses' level",
+    "tank_died_first": "the tank died first in the wipe",
+    "healer_died_first": "the healer died first in the wipe",
+    "died_alone_after": "one member died alone again and again after the wipe",
     "boss_burst": "burst from a boss",
     "pack_wipe": "a pull too big for the group",
     "died_on_the_way": "deaths on the way in",
     "restart_lost": "a world server restart lost the run",
-    "unexplained": "not clear from the death records",
+    "unexplained": "cause not measured",
     "refused_in_combat": "a member was in combat when the run was formed",
     "refused": "the world server refused the run",
     "never_entered": "the dungeon finder never took the group in",
@@ -74,7 +89,9 @@ TAGS = {
 INFERRED = frozenset(
     {
         "under_levelled",
-        "single_healer",
+        "below_bosses",
+        "tank_died_first",
+        "healer_died_first",
         "boss_burst",
         "pack_wipe",
         "died_on_the_way",
@@ -332,7 +349,9 @@ def _cause_line(tags: list, facts: dict) -> str:
     """ "Cause: x." when every tag is a fact, "Likely cause: x." when every
     tag is a judgment, and "Cause: x; likely y." when both. The line names
     the first CAUSE_PHRASES tags; `causes` keeps them all."""
-    tags = tags[:CAUSE_PHRASES]
+    if tags and all(t == "unexplained" for t in tags):
+        return "Cause not measured."
+    tags = [t for t in tags if t != "unexplained"][:CAUSE_PHRASES]
     said = []
     for tag in tags:
         said.append(facts.get(tag) or TAGS[tag])
@@ -352,8 +371,8 @@ def _story(sentences: list) -> str:
 # --- guild runs -----------------------------------------------------------------
 
 
-def _door(keyword: str):
-    for door in guildrun.doors():
+def _door(keyword: str, boss_levels: dict | None = None):
+    for door in guildrun.doors(None, boss_levels):
         if door.keyword == keyword:
             return door
     return None
@@ -363,8 +382,8 @@ def death_scope(views: list) -> tuple:
     """The names whose deaths the given guild runs need, and the windows
     (start, end) worth reading, overlapping ones merged, oldest first.
 
-    A window runs from LEAD_SECONDS before the run was formed to
-    SLACK_SECONDS after it ended. A run without both times has none."""
+    A window runs from the moment the run was formed to SLACK_SECONDS
+    after it ended. A run without both times has none."""
     names: set = set()
     spans = []
     for view in views:
@@ -372,12 +391,7 @@ def death_scope(views: list) -> tuple:
         if start is None or end is None:
             continue
         names |= {m["name"] for m in _members(view)}
-        spans.append(
-            (
-                start - timedelta(seconds=LEAD_SECONDS),
-                end + timedelta(seconds=SLACK_SECONDS),
-            )
-        )
+        spans.append((start, end + timedelta(seconds=SLACK_SECONDS)))
     merged: list = []
     for start, end in sorted(spans):
         if merged and start <= merged[-1][1]:
@@ -406,7 +420,7 @@ def _guild_deaths(
         if row.get("character_name") not in names:
             continue
         at = _clock(row.get("created_at"))
-        if at is None or not (start - LEAD_SECONDS <= at <= end + SLACK_SECONDS):
+        if at is None or not (start <= at <= end + SLACK_SECONDS):
             continue
         d = _death(row, at, bosses)
         if dungeon and d.map_id == dungeon:
@@ -503,8 +517,9 @@ class _GuildRun:
     outcome: str
     why: str
     classes: dict
+    seats: dict
     levels: list
-    healers: list
+    members: list
     seconds_inside: int
     deaths: int
     done: int
@@ -513,9 +528,11 @@ class _GuildRun:
     inside: list
 
 
-def _read_guild_run(run: dict, deaths: list, bosses: frozenset) -> _GuildRun:
+def _read_guild_run(
+    run: dict, deaths: list, bosses: frozenset, boss_levels: dict | None = None
+) -> _GuildRun:
     keyword = str(run.get("keyword") or "")
-    door = _door(keyword)
+    door = _door(keyword, boss_levels)
     members = _members(run)
     inside_secs = _int(run.get("seconds_inside"))
     start = _clock(run.get("created_at"))
@@ -530,8 +547,9 @@ def _read_guild_run(run: dict, deaths: list, bosses: frozenset) -> _GuildRun:
         outcome=str(run.get("outcome") or ""),
         why=str(run.get("why") or ""),
         classes={m["name"]: str(m.get("class") or "") for m in members},
+        seats={m["name"]: str(m.get("seat") or "") for m in members},
         levels=[_int(m.get("level")) for m in members if _int(m.get("level"))],
-        healers=[m for m in members if m.get("seat") == guildrun.HEALER],
+        members=members,
         seconds_inside=inside_secs,
         deaths=_int(run.get("deaths")),
         done=_int(run.get("bosses_done")),
@@ -598,15 +616,89 @@ def _tell_not_entered(g: _GuildRun, zones: dict) -> dict:
     return tale.told()
 
 
-def _healer_low(g: _GuildRun) -> int:
-    """The lone healer's level when it was at or under the door's floor, or
-    the lowest in a mixed group; 0 otherwise."""
-    if len(g.healers) != 1 or not g.levels:
-        return 0
-    level = _int(g.healers[0].get("level"))
-    floor = g.door.floor if g.door else 0
-    low = level <= floor or (level == min(g.levels) < max(g.levels))
-    return level if low else 0
+def _below_bosses(g: _GuildRun) -> list:
+    """The members under the bosses' level (the door's carry_floor), in seat
+    order; none when that level is unread."""
+    level = g.door.carry_floor if g.door else 0
+    if level <= 0:
+        return []
+    return [m["name"] for m in g.members if 0 < _int(m.get("level")) < level]
+
+
+def _wipe(inside: list) -> list:
+    """The deaths of the wipe: the run of deaths no more than
+    WIPE_GAP_SECONDS apart that took the most members, the first such.
+    Empty when no two members died together."""
+    best: list = []
+    run: list = []
+    for d in inside:
+        if run and d.at - run[-1].at > WIPE_GAP_SECONDS:
+            run = []
+        run.append(d)
+        if len({x.name for x in run}) > len({x.name for x in best}):
+            best = list(run)
+    return best if len({d.name for d in best}) >= 2 else []
+
+
+def _seat_word(name: str, seats: dict) -> str:
+    seat = seats.get(name, "")
+    if seat == guildrun.TANK:
+        return "the tank"
+    if seat == guildrun.HEALER:
+        return "the healer"
+    return name
+
+
+def _tell_wipe(tale: _Tale, g: _GuildRun, wipe: list) -> None:
+    """Who the wipe took first, when it was the tank or the healer."""
+    first = [d for d in wipe if d.at - wipe[0].at <= FIRST_TIE_SECONDS]
+    seats = [g.seats.get(d.name, "") for d in first]
+    if guildrun.TANK in seats:
+        tag = "tank_died_first"
+    elif guildrun.HEALER in seats:
+        tag = "healer_died_first"
+    else:
+        return
+    who = [w for w in ("the tank", "the healer") if w[4:] in seats]
+    fact = "%s killed %s first" % (_killers(first), _join(who))
+    healer = next((n for n, s in g.seats.items() if s == guildrun.HEALER), "")
+    if tag == "tank_died_first" and healer and healer not in {d.name for d in wipe}:
+        if not any(d.name == healer for d in g.inside):
+            fact += " while the healer lived"
+    tale.tag(tag, fact)
+
+
+def _alone_after(g: _GuildRun, after: list) -> str:
+    """ "the tank died alone 5 more times after the wipe" when every death
+    after the wipe was one member's; else ""."""
+    names = {d.name for d in after}
+    if len(names) != 1:
+        return ""
+    return "%s died alone %d more time%s after the wipe" % (
+        _seat_word(after[0].name, g.seats),
+        len(after),
+        "" if len(after) == 1 else "s",
+    )
+
+
+def _after_line(after: list) -> str:
+    names = []
+    for d in after:
+        if d.name not in names:
+            names.append(d.name)
+    n = len(after)
+    if len(names) == 1:
+        return "after the wipe only %s died again, %d more time%s, to %s" % (
+            names[0],
+            n,
+            "" if n == 1 else "s",
+            _killers(after),
+        )
+    return "after the wipe %s died %d more times, to %s" % (
+        _join(names),
+        n,
+        _killers(after),
+    )
 
 
 def _bosses_said(g: _GuildRun) -> str:
@@ -623,23 +715,54 @@ _ABANDONED = (
 )
 
 
+_EXPLAINING = (
+    "under_levelled",
+    "below_bosses",
+    "tank_died_first",
+    "healer_died_first",
+    "died_alone_after",
+    "boss_burst",
+    "pack_wipe",
+)
+
+
 def _tell_went_in(g: _GuildRun, zones: dict) -> dict:
     """A run that went in and did not clear: wiped, abandoned or timed out."""
     tale = _Tale()
     range_said, under = _range_clause(g.levels, g.door)
-    healer = _healer_low(g)
+    low = _below_bosses(g)
+    level = g.door.carry_floor if g.door else 0
     tale.say(
         "went into %s%s%s"
-        % (g.place, range_said, ", with one level %d healer" % healer if healer else "")
+        % (
+            g.place,
+            range_said,
+            ", with %s below the bosses' level %d" % (_join(low), level) if low else "",
+        )
     )
+    if low:
+        tale.tag(
+            "below_bosses",
+            "%s seat%s below the bosses' level %d"
+            % (_num(len(low)), "" if len(low) == 1 else "s", level),
+        )
     if under:
         tale.tag("under_levelled")
-    if healer:
-        tale.tag("single_healer", "a lone level %d healer" % healer)
     if g.way:
         tale.say(_way_in_line(g.way, zones))
     wiped = g.outcome == "wiped"
-    tale.fights(g.inside, g.classes, wiped, _bosses_said(g))
+    told, after = g.inside, []
+    wipe = _wipe(g.inside) if wiped else []
+    if wipe:
+        told = [d for d in g.inside if d.at <= wipe[-1].at]
+        after = [d for d in g.inside if d.at > wipe[-1].at]
+        alone = _alone_after(g, after)
+        if alone:
+            tale.tag("died_alone_after", alone, first=True)
+        _tell_wipe(tale, g, wipe)
+    tale.fights(told, g.classes, wiped, _bosses_said(g))
+    if after:
+        tale.say(_after_line(after))
     if g.way:
         tale.tag("died_on_the_way")
     if g.outcome == "abandoned":
@@ -647,7 +770,12 @@ def _tell_went_in(g: _GuildRun, zones: dict) -> dict:
         tale.tag(tag, first=True)
         tale.say("the run was called off: %s" % _plain(g.why))
     elif g.outcome == "timed out":
-        tale.tag("timed_out", first=True)
+        fact = (
+            "the run ran out of time after %d of %d bosses" % (g.done, g.total)
+            if g.total
+            else ""
+        )
+        tale.tag("timed_out", fact, first=True)
         tale.say(
             "the run was called off after %d minutes inside"
             % round(g.seconds_inside / 60.0)
@@ -655,9 +783,7 @@ def _tell_went_in(g: _GuildRun, zones: dict) -> dict:
     elif wiped and not g.inside:
         counted = " (%s)" % _deaths_said(g.deaths) if g.deaths else ""
         tale.say("everybody inside died%s, and no death record says to what" % counted)
-    tale.unexplained_if(
-        wiped, ("under_levelled", "single_healer", "boss_burst", "pack_wipe")
-    )
+    tale.unexplained_if(wiped, _EXPLAINING)
     return tale.told()
 
 
@@ -669,22 +795,27 @@ _GUILD_TELLERS = {
 }
 
 
-def guild_story(run: dict, deaths: list, bosses=frozenset(), zones=None) -> dict:
+def guild_story(
+    run: dict, deaths: list, bosses=frozenset(), zones=None, boss_levels=None
+) -> dict:
     """One ended guild run (a guildrun.page view, or an overseer_guild_run
     row) as {story, cause, causes}. `deaths` are overseer_death rows of any
     characters; only this run's members inside its window are read.
-    A run that has not ended has no story yet."""
+    `boss_levels` is map id -> its bosses' level (guildrun.BOSS_LEVELS_SQL);
+    unread, no seat is called low. A run that has not ended has no story yet."""
     if str(run.get("state") or "") != guildrun.ENDED:
         return dict(NO_STORY)
-    g = _read_guild_run(run, deaths, frozenset(bosses))
+    g = _read_guild_run(run, deaths, frozenset(bosses), boss_levels)
     teller = _GUILD_TELLERS.get(g.outcome, _tell_went_in)
     return teller(g, zones or {})
 
 
-def tell_guild_runs(views: list, deaths: list, bosses=frozenset(), zones=None) -> list:
+def tell_guild_runs(
+    views: list, deaths: list, bosses=frozenset(), zones=None, boss_levels=None
+) -> list:
     """Each view with its story, cause and causes added. Returns the views."""
     for view in views:
-        view.update(guild_story(view, deaths, bosses, zones))
+        view.update(guild_story(view, deaths, bosses, zones, boss_levels))
     return views
 
 
