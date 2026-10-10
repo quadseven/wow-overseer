@@ -145,6 +145,29 @@ ORB_NAME = "the Orb of Translocation"
 # apart from the walk's so that the walk's cooldown never reads it.
 CROSS_ACTION = ACTION + "-cross"
 
+# THE HEARTH AT THE ZONE A MEMBER LEVELS IN (2026-10-10). On the dev realm 140
+# of the two guilds' 142 members were bound at their starting inn, 39 of them on
+# map 530 (Ammen Vale, Sunstrider Isle), so a hearth put an outgrown Draenei or
+# Blood Elf back on its island and the boat or the orb had to take it off again.
+# A player rebinds at the inn of the zone it levels in. Once a member whose
+# hearth is bound somewhere it has outgrown stands in a zone whose band fits its
+# level, it walks to the innkeeper of that zone's hub (`bind_inn`) and binds
+# there: the walk ends within INN_NEAR_YARDS of the innkeeper (the spawn walk's
+# `near:`, quadseven/mod-overseer), inside the core's interaction distance, and
+# `kind='bind'` `here` is the core's own HandleBinderActivateOpcode. Nothing is
+# moved and nothing is granted. INN_ACTION is the source action of both rows.
+INN_ACTION = ACTION + "-bind"
+# A hub's inn is the friendly innkeeper nearest its taxi node within this many
+# yards: every hub of the dev world with an inn has one within 220 of its node,
+# and the next nearest innkeeper of the hubs without one stands 850 off.
+INN_YARDS = 300.0
+INN_NEAR_YARDS = 3
+# One bind walk per member in this long: a bind that went through moves the
+# home, and the member is not asked again; one that failed waits this long.
+INN_COOLDOWN_MINUTES = 6 * 60
+# New bind walks one guild starts in one pass (each may be a far walk).
+INN_STEPS_PER_GUILD = 2
+
 
 @dataclass(frozen=True)
 class HubMaster:
@@ -233,6 +256,19 @@ def hub_masters(rows) -> dict:
     nearest spawn to its taxi node within MASTER_YARDS whose faction does not
     attack the hub's side; a hub with none is left out, so it is never chosen.
     """
+    return _hub_spawns(rows, MASTER_YARDS)
+
+
+def hub_inns(rows) -> dict:
+    """hub key -> HubMaster of the hub's innkeeper, off the world's innkeeper
+    spawn rows (the same columns as hub_masters'): the nearest to its taxi
+    node within INN_YARDS whose faction does not attack the hub's side."""
+    return _hub_spawns(rows, INN_YARDS)
+
+
+def _hub_spawns(rows, reach) -> dict:
+    """hub key -> the friendly spawn of `rows` nearest the hub's taxi node
+    within `reach` yards."""
     spawns = []
     for row in rows or ():
         try:
@@ -267,7 +303,7 @@ def hub_masters(rows) -> dict:
             if situation.hostile(enemy, side) is True:
                 continue
             yards = math.hypot(master.x - point[1], master.y - point[2])
-            if yards > MASTER_YARDS:
+            if yards > reach:
                 continue
             if best is None or (yards, master.spawn) < best[0]:
                 best = ((yards, master.spawn), master)
@@ -403,6 +439,68 @@ def there(map_id, x, y, master: HubMaster) -> bool:
     return math.hypot(float(x) - master.x, float(y) - master.y) <= ARRIVED_YARDS
 
 
+def bind_inn(level, race, map_id, zone_id, x, y, home_map, home_zone, bands, inns):
+    """(inn, hub) a member sets its hearth at, or (None, None).
+
+    Only a member whose home is read and lies where it has outgrown
+    (`outgrown`), standing in a zone of its side's hub whose band fits its level
+    (`fits`), where that hub has an inn on the member's map (`hub_inns`). Of
+    several such hubs in the zone, the nearest inn."""
+    team = side_of(race)
+    if not _bind_due(team, level, race, map_id, zone_id, home_map, home_zone, bands):
+        return None, None
+    return _zone_inn(team, map_id, zone_id, x, y, inns)
+
+
+def _bind_due(team, level, race, map_id, zone_id, home_map, home_zone, bands) -> bool:
+    """Whether a member of `team` is bound where it has outgrown and stands in
+    a zone whose band fits its level; False when anything is unread."""
+    if not team or map_id is None or not zone_id or home_map is None:
+        return False
+    side_bands = (bands or {}).get(team, {})
+    if not home_zone or not outgrown(level, race, home_map, home_zone, side_bands):
+        return False
+    return fits(side_bands.get(int(zone_id)), level)
+
+
+def _zone_inn(team, map_id, zone_id, x, y, inns):
+    """(inn, hub) of the nearest inn of `team`'s friendly hubs in the zone, on
+    the member's map, or (None, None)."""
+    best = None
+    for hub in hubs_from(team, map_id, zone_id):
+        inn = (inns or {}).get(hub.key)
+        if hub.zone_id != int(zone_id) or not hub.friendly or inn is None:
+            continue
+        if inn.map_id != int(map_id):
+            continue
+        key = (_yards_to(x, y, inn), inn.spawn)
+        if best is None or key < best[0]:
+            best = (key, inn, hub)
+    return (best[1], best[2]) if best else (None, None)
+
+
+def _yards_to(x, y, spawn) -> float:
+    """Yards from (x, y) to a spawn, 0 when the position is unread."""
+    if x is None or y is None:
+        return 0.0
+    return math.hypot(float(x) - spawn.x, float(y) - spawn.y)
+
+
+def bind_said(name, level, inn, hub, home_zone) -> str:
+    """The sentence the pass logs for a walk to bind at a zone's inn."""
+    return (
+        "%s sets its hearth at %s in %s, the zone it levels in at %d: its "
+        "hearthstone is bound in %s, which it has outgrown"
+        % (
+            name,
+            inn.name or "the innkeeper",
+            "%s, %s" % (hub.name, hub.zone),
+            int(level),
+            levelroute.zone_name(home_zone),
+        )
+    )
+
+
 def said(name, level, why, choice: Choice) -> str:
     """The sentence the pass logs for a level walk."""
     return (
@@ -485,15 +583,17 @@ class World:
     masters  hub key -> HubMaster (`hub_masters`)
     roster   every roster family member's name: levelroute serves those
     orbs     side -> Orb (`orbs_from`), its way off map 530 by an orb
+    inns     hub key -> HubMaster of its innkeeper (`hub_inns`)
     """
 
     bands: dict
     masters: dict
     roster: frozenset = frozenset()
     orbs: dict = field(default_factory=dict)
+    inns: dict = field(default_factory=dict)
 
 
-def world(quest_rows, master_rows, roster=(), orb_rows=()) -> World | None:
+def world(quest_rows, master_rows, roster=(), orb_rows=(), inn_rows=()) -> World | None:
     """The World off levelroute.QUESTS_SQL's rows, the flight-master rows and
     the orb's gameobject rows, or None while the quests are unread (no step is
     taken from no bands)."""
@@ -507,4 +607,5 @@ def world(quest_rows, master_rows, roster=(), orb_rows=()) -> World | None:
         masters=hub_masters(master_rows),
         roster=frozenset(str(n) for n in roster or ()),
         orbs=orbs_from(orb_rows),
+        inns=hub_inns(inn_rows),
     )
