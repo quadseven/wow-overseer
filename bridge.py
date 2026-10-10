@@ -90,6 +90,7 @@ import gatherband
 import craft_supply
 import dungeonpace
 import dungeonprogression
+import equipscore
 import item_plan
 import jev
 import jev_items
@@ -11115,12 +11116,47 @@ class Bridge(discord.Client):
             )
         wanted = bag_pressure.holder_equips(
             gear_rows, worn, names, keep_names=OWNER_KEEPS)
+        # BY THE SPEC'S GEAR SCORE, NOT ITEM LEVEL (equipscore.py): every member
+        # the scorer can judge gets its picks, necks, rings, trinkets and the
+        # weapon hands as a set included; item level stays the judge only for
+        # a member it cannot.
+        wanted = await self._scored_equips(wanted, names, "")
         # JEV'S ANSWER, THROUGH THE SAME ROW (#95): a piece it chose is put on
         # with the same `e Hitem:` command, and one it judged worse than what
         # is worn is left in the bags. No plan leaves `wanted` as it is.
         wanted = bag_pressure.jev_equips(
             wanted, gear_rows, worn, names, jev_plan, keep_names=OWNER_KEEPS)
         await self._write_equips(wanted, current)
+
+    async def _scored_equips(self, legacy, names, label: str, tanks=()) -> tuple:
+        """`legacy` with every member equipscore can judge judged by its spec's
+        gear score instead (equipscore.plan), and the pass said in one line.
+
+        A member it cannot judge (no class row, or a world without the
+        columns) keeps the item-level pick. A weapon held back only by a
+        weapon skill is named, so the weapon-skill pass has its evidence.
+        """
+        wearers = await asyncio.to_thread(_fetch_wearers, list(names))
+        gear_rows = await asyncio.to_thread(_fetch_scored_gear, list(names))
+        if not wearers or not gear_rows:
+            return tuple(legacy)
+        plan = equipscore.plan(
+            legacy, wearers, gear_rows, names, keep_names=OWNER_KEEPS,
+            tanks=tanks, book=_jev_item_book())
+        if plan.waiting:
+            log.info("equip: %d %scarried weapon upgrade(s) wait on a weapon skill a "
+                     "weapon master teaches: %s", len(plan.waiting), label,
+                     "; ".join("%s %s (skill %d)" % w for w in plan.waiting[:8])
+                     + ("; ..." if len(plan.waiting) > 8 else ""))
+        log.info(
+            "equip: judged %d %smember(s) by gear score (spec weights): %d "
+            "carried upgrade(s) to put on, %d weapon(s) wait on a weapon skill; "
+            "%d member(s) left to item level",
+            len(plan.scored), label,
+            sum(1 for e in plan.equips if e.holder in plan.scored),
+            len(plan.waiting), len({str(n) for n in names} - set(plan.scored)),
+        )
+        return plan.equips
 
     async def _write_equips(self, wanted, current: list, label: str = "") -> None:
         """Queue and log the `e` rows for `wanted`, inside the retry window.
@@ -11174,12 +11210,14 @@ class Bridge(discord.Client):
         if not members:
             return
         gear_rows = await asyncio.to_thread(_fetch_surplus_gear, members)
-        if not gear_rows:
-            return
         worn = await asyncio.to_thread(_fetch_family_equipped, members)
         tanks = await asyncio.to_thread(_fetch_shield_tanks, members)
         wanted = bag_pressure.guild_equips(
             gear_rows, worn, members, names, keep_names=OWNER_KEEPS, tanks=tanks)
+        # The scorer reads every quality: the surplus read above keeps its
+        # uncommon floor for the hand-off and the vendor, and a level 20
+        # member's best chest is often white.
+        wanted = await self._scored_equips(wanted, members, "guild ", tanks=tanks)
         if not wanted:
             return
         history = await asyncio.to_thread(_equip_history, EQUIP_MEMORY_HOURS,
@@ -21000,6 +21038,95 @@ def _fetch_equip_candidate_gear(names: list) -> list:
                 return []
             raise
         return [dict(row) for row in cur.fetchall()]
+
+
+# WHAT THE EQUIP PASS SCORES (equipscore.py): every weapon and armour piece a
+# member wears or carries in its bags, of any quality, with the template stats
+# gearscore.stats_from_row reads, the instance's random suffix and enchants,
+# and the columns that say whether the member can put it on now. Necks, rings,
+# trinkets and relics are in, which the item-level judge never read. Worn rows
+# carry `equipment_slot` (bag 0, slot 0..18); carried rows carry NULL there.
+# The bank is not read: `e Hitem:` equips from the bags only.
+_SCORED_GEAR_SQL = (
+    "SELECT c.name AS holder, "
+    "IF(ci.bag = 0 AND ci.slot < 19, ci.slot, NULL) AS equipment_slot, "
+    "ii.guid AS item_guid, ii.itemEntry AS entry, "
+    "ii.randomPropertyId AS random_property_id, ii.enchantments AS enchantments, "
+    "it.name AS name, it.Quality AS quality, it.ItemLevel AS item_level, "
+    "it.RequiredLevel AS required_level, it.class AS item_class, "
+    "it.subclass AS item_subclass, it.InventoryType AS inventory_type, "
+    "it.AllowableClass AS allowable_class, it.AllowableRace AS allowable_race, "
+    "it.RequiredSkill AS required_skill, it.RequiredSkillRank AS required_skill_rank, "
+    "it.requiredspell AS required_spell, "
+    "it.RequiredReputationFaction AS required_reputation, "
+    "it.MaxCount AS max_count, it.Flags AS item_flags, "
+    "it.armor, it.block, it.fire_res, it.frost_res, it.nature_res, "
+    "it.shadow_res, it.arcane_res, it.dmg_min1, it.dmg_max1, it.delay, "
+    + ", ".join("it.stat_type%d, it.stat_value%d" % (n, n) for n in range(1, 11))
+    + " FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ((ci.bag = 0 AND ci.slot < 19) "
+    "OR (ci.bag = 0 AND ci.slot BETWEEN 19 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "AND it.class IN (2, 4) "
+    "AND it.InventoryType IN (1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, "
+    "16, 17, 20, 21, 22, 23, 25, 26, 28)"
+)
+
+# Who each member is to the scorer: class, level and race, the talents it has
+# spent and the raid plan's tree (its spec, gearupgrades.choose_spec), and the
+# skill lines it holds (its proficiencies, the core's own CanUseItem test).
+_WEARERS_SQL = (
+    "SELECT c.name AS name, c.class AS class_id, c.level AS level, c.race AS race, "
+    + raidroles.TALENTS_COLUMN + ", "
+    "{target} AS target_tree, "
+    "(SELECT GROUP_CONCAT(k.skill) FROM character_skills k "
+    "WHERE k.guid = c.guid AND k.value > 0) AS skills "
+    "FROM characters c WHERE c.name IN (%s)"
+)
+_RAID_TREE = "(SELECT s.tree FROM overseer_raid_spec s WHERE s.name = c.name LIMIT 1)"
+
+
+def _fetch_scored_gear(names: list) -> list:
+    """Worn and carried gear with its stats; equipscore decides what it means."""
+    if not names:
+        return []
+    sql = _SCORED_GEAR_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("equip: scored gear facts unavailable on this world image; "
+                            "the item-level judge decides")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _fetch_wearers(names: list) -> list:
+    """One row per member for equipscore.wearer_from_row. A world without
+    overseer_raid_spec reads the spent talents alone."""
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        for target in (_RAID_TREE, "''"):
+            try:
+                cur.execute(_WEARERS_SQL.format(target=target) % marks, names)
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    if target == _RAID_TREE:
+                        continue
+                    log.warning("equip: member facts unavailable on this world image; "
+                                "the item-level judge decides")
+                    return []
+                raise
+            return [dict(row) for row in cur.fetchall()]
+    return []
 
 
 # What each of the five is WEARING, which is the half of the family-fit gate
