@@ -155,9 +155,10 @@ def _gear_verdict(item, judge: Judge) -> tuple:
     )
     if wears:
         return KEEP, "an upgrade: %s" % why
-    if why.startswith("not an upgrade"):
-        return SELL, why
-    return SELL, "not an upgrade: %s" % why
+    # gear.py words a lower item level "not an upgrade (...)" itself; any
+    # other refusal (class, armour training, level) is prefixed to say so.
+    said = why if why.startswith("not an upgrade") else "not an upgrade: %s" % why
+    return SELL, said
 
 
 def _forecast_verdict(item, judge: Judge) -> tuple:

@@ -2083,9 +2083,10 @@ def _sell_step(member, kept, cap):
 
 
 def _full_bags_first(m, kept, recent, cap):
-    """A member whose bags are full enough to leave loot on the corpse sells
-    what it has no use for before any job but its class quest, the stood-still
-    hearth and its food: every kill until then drops its items on the ground."""
+    """The sale step for a member whose bags are full enough to leave loot on
+    the corpse (loot_room_short), unless its last sale is cooling down: every
+    kill until then drops its items on the ground. `_member_step` asks it
+    early, which is where the order is set."""
     if not m.online or not m.alive or m.in_combat or not m.eligible:
         return None
     if not loot_room_short(m) or _cooling(m, "sell", recent):
@@ -2775,12 +2776,12 @@ def _member_step(
         step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
         if step is not None:
             return step, doing, quest_note, ""
-    step = _full_bags_first(m, kept, recent, cap)
+    step = (
+        _full_bags_first(m, kept, recent, cap)
+        or _inn_first(m, leveling, recent, cap)[0]
+    )
     if step is not None:
         return step, step.said, quest_note, ""
-    step, doing, _ = _inn_first(m, leveling, recent, cap)
-    if step is not None:
-        return step, doing, quest_note, ""
     step, riding_note = riding_step(m, recent)
     if step is not None:
         return step, step.said, quest_note, ""
