@@ -447,7 +447,7 @@ def burst(times: list, n: int, seconds: int):
 
 
 def _count_rules(r: dict, roster: dict):
-    for name, times in _by_member(r.get("death_times")).items():
+    for times in _by_member(r.get("death_times")).values():
         for rule, (n, seconds) in (
             ("death_spiral", SPIRAL),
             ("death_marathon", MARATHON),
