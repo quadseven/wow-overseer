@@ -1283,6 +1283,11 @@ def _may_ask_for(member: guildrun.Member, door, faction: str, guildmates=()) -> 
     return mine == DPS or can_take(member, mine, door)
 
 
+def _free_guildmates(board: _Board, guild: str) -> list:
+    """Every member of `guild` free now: whose keys a keyed ask may count on."""
+    return [m for m in board.free.values() if m.guild == guild]
+
+
 def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
     """(rank, name, mate, options, band, shape) for this member's ask, or None.
 
@@ -1301,7 +1306,7 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
     faction = board.factions.get(guild, "")
     band = guildrun.band_of([mate.member.level])
     shape = ask_shape(board, mate, guild)
-    guildmates = [m for m in board.free.values() if m.guild == guild]
+    guildmates = _free_guildmates(board, guild)
     options, failing, done, seen = [], [], [], set()
     for need in board.needs.get(name, []):
         door = board.doors.get(need.keyword)
