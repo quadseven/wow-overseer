@@ -140,8 +140,11 @@ class Session(Reader):
     def _cursor(self):
         if self._cur is None:
             self._conn = self._connect()
-            self._cursor_cm = self._conn.cursor()
-            self._cur = self._cursor_cm.__enter__()
+            # Held only once open, so a cursor that fails to open leaves just
+            # the connection for close() to release.
+            cursor_cm = self._conn.cursor()
+            self._cur = cursor_cm.__enter__()
+            self._cursor_cm = cursor_cm
         return self._cur
 
     def _run(self, sql: str, params: Any) -> list:
@@ -164,7 +167,8 @@ class Session(Reader):
         if conn is None:
             return
         try:
-            cursor_cm.__exit__(None, None, None)
+            if cursor_cm is not None:
+                cursor_cm.__exit__(None, None, None)
         finally:
             conn.close()
 

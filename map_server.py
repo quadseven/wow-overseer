@@ -2470,8 +2470,9 @@ def _fetch_guild_chat(guild: str, limit: int) -> dict:
     """The guild's recent asks, each with its answers and, once run, its run.
 
     A world without the ask tables answers an empty feed with `ready: false`
-    (the handler catches error 1146 only; a missing column is a real fault)
-    rather than 503.
+    rather than 503: the asks are read with the reader's must(), whose
+    realmread.Gap the handler catches for a missing table (1146) only. A
+    missing column is a real fault and still reaches the 503.
     """
     with realmread.Session(_connect) as rd:
         # must(), not rows(): a missing table (1146) must reach the

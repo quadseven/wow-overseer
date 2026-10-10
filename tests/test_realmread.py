@@ -142,6 +142,23 @@ class TheDatabaseReader(unittest.TestCase):
             pass
         self.assertEqual((db.opened, db.closed), (0, 0))
 
+    def test_a_cursor_that_cannot_open_still_closes_the_connection(self):
+        """The connection opened, its cursor did not: the cursor's own error
+        reaches the caller, and the connection is closed, not leaked."""
+        db = Db({})
+
+        def no_cursor():
+            raise LOST
+
+        db.cursor = no_cursor
+        with (
+            self.assertRaises(ERR.OperationalError) as caught,
+            realmread.Session(db.connect) as rd,
+        ):
+            rd.rows("a")
+        self.assertIs(caught.exception, LOST)
+        self.assertEqual((db.opened, db.closed), (1, 1))
+
     def test_the_connection_is_closed_when_a_read_fails(self):
         db = Db({"a": LOST})
         with (
