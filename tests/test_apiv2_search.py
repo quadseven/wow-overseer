@@ -1,7 +1,7 @@
 """GET /api/v2/search: the app's global search (apiv2/search.py).
 
-A fake connection answers each statement by what it selects from, so these
-run with no database. They hold the contract the app's search provider
+The in-memory realm reader answers each statement by the constant it is built
+from, and raises on any other, so these run with no database. They hold the contract the app's search provider
 (app/searchv2.js) reads: five capped groups, bound LIKE patterns, and an
 in-process cache.
 """
@@ -18,6 +18,8 @@ sys.path.insert(0, str(HERE))
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import apiv2  # noqa: E402
+import guildrun  # noqa: E402
+import realmread  # noqa: E402
 from apiv2 import search  # noqa: E402
 
 ROSTER = ["Grug", "Bork", "Zug"]
@@ -27,10 +29,20 @@ class Lost(Exception):
     """A database error that is not a missing table."""
 
 
-class Cursor:
-    def __init__(self, conn):
-        self.conn = conn
+LIMIT_SQL = "SET SESSION MAX_EXECUTION_TIME = %s"
+
+
+class Wire:
+    """The database end of the map server's own reader, answering from an
+    in-memory reader: for the one test that goes through the server."""
+
+    def __init__(self, rd):
+        self.rd = rd
         self.rows = []
+        self.closed = False
+
+    def cursor(self):
+        return self
 
     def __enter__(self):
         return self
@@ -38,27 +50,11 @@ class Cursor:
     def __exit__(self, *exc):
         return False
 
-    def execute(self, sql, args=()):
-        self.conn.statements.append((sql, tuple(args)))
-        self.rows = []
-        for key, rows in self.conn.answers.items():
-            if key in sql:
-                if isinstance(rows, Exception):
-                    raise rows
-                self.rows = list(rows)
+    def execute(self, sql, params=None):
+        self.rows = self.rd.must(sql, params)
 
     def fetchall(self):
         return self.rows
-
-
-class Conn:
-    def __init__(self, answers):
-        self.answers = answers
-        self.statements = []
-        self.closed = False
-
-    def cursor(self):
-        return Cursor(self)
 
     def close(self):
         self.closed = True
@@ -66,7 +62,8 @@ class Conn:
 
 def answers(n=1):
     return {
-        "FROM characters c JOIN guild_member": [
+        LIMIT_SQL: [],
+        search._MEMBERS_SQL: [
             {
                 "name": "Grug%d" % i,
                 "level": 40,
@@ -76,11 +73,11 @@ def answers(n=1):
             }
             for i in range(n)
         ],
-        "item_template": [
+        search._ITEMS_SQL: [
             {"entry": 2589 + i, "name": "Linen Cloth", "quality": 1, "item_level": 5}
             for i in range(n)
         ],
-        "character_queststatus": [
+        search._QUESTS_SQL: [
             {"quest": 83, "title": "Red Linen Goods", "level": 9, "name": "Grug"},
             {"quest": 83, "title": "Red Linen Goods", "level": 9, "name": "Bork"},
         ]
@@ -88,7 +85,7 @@ def answers(n=1):
             {"quest": 100 + i, "title": "Quest %d" % i, "level": 9, "name": "Zug"}
             for i in range(n)
         ],
-        "overseer_guild_run": [
+        guildrun._RUN_SQL: [
             {
                 "id": 400 + i,
                 "guild": "Bonkers",
@@ -125,18 +122,26 @@ def server():
     )
 
 
-def ctx_for(conn):
-    return types.SimpleNamespace(connect=lambda: conn, server=server())
+def reader(answered):
+    return realmread.Memory(answered)
+
+
+def ctx_for(rd):
+    return types.SimpleNamespace(read=rd, server=server())
+
+
+def statements(rd):
+    return [(sql, tuple(args or ())) for sql, args in rd.asked]
 
 
 class TheSearch(unittest.TestCase):
     def setUp(self):
         search._cache.clear()
 
-    def run_q(self, q, conn=None):
-        conn = conn or Conn(answers())
-        status, payload = search.search({"q": [q]}, ctx_for(conn))
-        return status, payload, conn
+    def run_q(self, q, rd=None):
+        rd = rd or reader(answers())
+        status, payload = search.search({"q": [q]}, ctx_for(rd))
+        return status, payload, rd
 
     def test_it_is_a_v2_route(self):
         self.assertIs(apiv2.ROUTES["/api/v2/search"], search.search)
@@ -165,19 +170,18 @@ class TheSearch(unittest.TestCase):
         )
         self.assertEqual(p["runs"][0]["id"], 400)
         self.assertEqual(p["runs"][0]["place"], "The Deadmines")
-        self.assertTrue(conn.closed)
 
     def test_every_group_is_capped(self):
-        _s, p, _c = self.run_q("grug", Conn(answers(20)))
+        _s, p, _c = self.run_q("grug", reader(answers(20)))
         for group in search.GROUPS:
             self.assertLessEqual(len(p[group]), search.CAP, group)
         self.assertEqual(len(p["quests"]), search.CAP)
         self.assertEqual(len(p["runs"]), search.CAP)
 
     def test_every_statement_is_bounded_and_the_text_is_bound_not_formatted(self):
-        _s, _p, conn = self.run_q("50%_off'")
+        _s, _p, rd = self.run_q("50%_off'")
         selects = [
-            (sql, args) for sql, args in conn.statements if sql.startswith("SELECT")
+            (sql, args) for sql, args in statements(rd) if sql.startswith("SELECT")
         ]
         self.assertEqual(len(selects), 4)
         for sql, args in selects:
@@ -186,27 +190,27 @@ class TheSearch(unittest.TestCase):
             self.assertIn("%50\\%\\_off'%", args)
 
     def test_a_short_query_reads_nothing(self):
-        conn = Conn(answers())
-        status, p = search.search({"q": [" g "]}, ctx_for(conn))
+        rd = reader(answers())
+        status, p = search.search({"q": [" g "]}, ctx_for(rd))
         self.assertEqual(status, 200)
         self.assertEqual(p, search.empty("g"))
-        self.assertEqual(conn.statements, [])
-        status, p = search.search({}, ctx_for(conn))
+        self.assertEqual(rd.asked, [])
+        status, p = search.search({}, ctx_for(rd))
         self.assertEqual(p["members"], [])
 
     def test_the_same_text_is_answered_from_the_cache(self):
-        conn = Conn(answers())
-        search.search({"q": ["Linen"]}, ctx_for(conn))
-        seen = len(conn.statements)
-        search.search({"q": ["  linen "]}, ctx_for(conn))
-        self.assertEqual(len(conn.statements), seen)
+        rd = reader(answers())
+        search.search({"q": ["Linen"]}, ctx_for(rd))
+        seen = len(rd.asked)
+        search.search({"q": ["  linen "]}, ctx_for(rd))
+        self.assertEqual(len(rd.asked), seen)
         with mock.patch.object(
             search.time,
             "monotonic",
             return_value=search.time.monotonic() + search.TTL + 1,
         ):
-            search.search({"q": ["linen"]}, ctx_for(conn))
-        self.assertGreater(len(conn.statements), seen)
+            search.search({"q": ["linen"]}, ctx_for(rd))
+        self.assertGreater(len(rd.asked), seen)
 
     def test_the_cache_is_bounded(self):
         for i in range(search.CACHE_MAX + 5):
@@ -215,18 +219,24 @@ class TheSearch(unittest.TestCase):
         self.assertNotIn("q0", search._cache)
 
     def test_a_world_without_the_runs_table_still_answers(self):
-        missing = Exception(1146, "no table")
-        conn = Conn(dict(answers(), overseer_guild_run=missing))
-        status, p, _c = self.run_q("dead", conn)
+        missing = realmread.MISSING_TABLE
+        rd = reader(
+            dict(
+                answers(),
+                **{guildrun._RUN_SQL: missing, guildrun._RUN_SQL_THIN: missing},
+            )
+        )
+        status, p, _c = self.run_q("dead", rd)
         self.assertEqual(status, 200)
         self.assertEqual(p["runs"], [])
         self.assertEqual(p["dungeons"][0]["guild"], "Cave")
 
     def test_any_other_failure_is_the_namespaces_503(self):
-        conn = Conn(dict(answers(), item_template=Lost(2013, "lost connection")))
+        rd = reader(
+            dict(answers(), **{search._ITEMS_SQL: Lost(2013, "lost connection")})
+        )
         with self.assertRaises(Lost):
-            self.run_q("linen", conn)
-        self.assertTrue(conn.closed)
+            self.run_q("linen", rd)
 
     def test_the_text_is_trimmed_and_capped(self):
         self.assertEqual(search.normalise("  Big   Zug "), "big zug")
@@ -240,11 +250,15 @@ class TheServerRoute(unittest.TestCase):
         from test_app_shell import get
 
         search._cache.clear()
-        conn = Conn(answers())
-        with mock.patch("map_server._V2_CONTEXT", ctx_for(conn)):
+        wire = Wire(reader(answers()))
+        with (
+            mock.patch("map_server._connect", lambda: wire),
+            mock.patch("map_server._v2_context", ctx_for),
+        ):
             h = get("/api/v2/search?q=linen")
         self.assertEqual(h.status(), 200)
         self.assertEqual(json.loads(h.body())["items"][0]["name"], "Linen Cloth")
+        self.assertTrue(wire.closed)
 
 
 if __name__ == "__main__":

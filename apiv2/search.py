@@ -73,13 +73,13 @@ def empty(q: str) -> dict:
     return {"q": q, **{g: [] for g in GROUPS}}
 
 
-def _members(cur, q: str, roster: list, class_names: dict) -> list:
+def _members(rd, q: str, roster: list, class_names: dict) -> list:
     if not roster:
         return []
     holes = ", ".join(["%s"] * len(roster))
     # S608: only placeholders are formatted in; every value is bound.
     sql = _MEMBERS_SQL.format(holes=holes)  # noqa: S608
-    cur.execute(sql, (like(q), *roster, like(q, True), CAP))
+    rows = rd.must(sql, (like(q), *roster, like(q, True), CAP))
     return [
         {
             "name": r["name"],
@@ -88,12 +88,12 @@ def _members(cur, q: str, roster: list, class_names: dict) -> list:
             "guild": r.get("guild") or "",
             "online": bool(r.get("online")),
         }
-        for r in cur.fetchall()[:CAP]
+        for r in rows[:CAP]
     ]
 
 
-def _items(cur, q: str, icons: dict) -> list:
-    cur.execute(_ITEMS_SQL, (like(q), like(q, True), CAP))
+def _items(rd, q: str, icons: dict) -> list:
+    rows = rd.must(_ITEMS_SQL, (like(q), like(q, True), CAP))
     return [
         {
             "entry": int(r["entry"]),
@@ -102,18 +102,17 @@ def _items(cur, q: str, icons: dict) -> list:
             "item_level": r.get("item_level"),
             "icon": icons.get(int(r["entry"])),
         }
-        for r in cur.fetchall()[:CAP]
+        for r in rows[:CAP]
     ]
 
 
-def _quests(cur, q: str, roster: list) -> list:
+def _quests(rd, q: str, roster: list) -> list:
     if not roster:
         return []
     holes = ", ".join(["%s"] * len(roster))
     sql = _QUESTS_SQL.format(holes=holes)  # noqa: S608
-    cur.execute(sql, (*roster, like(q), like(q, True), CAP * 10))
     out: dict[int, dict] = {}
-    for r in cur.fetchall():
+    for r in rd.must(sql, (*roster, like(q), like(q, True), CAP * 10)):
         quest = out.get(r["quest"])
         if quest is None:
             if len(out) >= CAP:
@@ -143,10 +142,10 @@ def _keywords_for(q: str, maps: list, keywords: dict, place) -> list:
     )
 
 
-def _runs(cur, q: str, keywords: list) -> list:
+def _runs(rd, q: str, keywords: list) -> list:
     """Runs at a matched dungeon or with a member named like `q`; a world
     without the table has none yet (guildrun.matching)."""
-    return guildrun.matching(cur, keywords, like(q), CAP * 4)
+    return guildrun.matching(rd, keywords, like(q), CAP * 4)
 
 
 def _run_rows(rows: list, place) -> list:
@@ -180,28 +179,27 @@ def _dungeon_rows(
     ]
 
 
-def _limit_statements(cur) -> None:
+def _limit_statements(rd) -> None:
     try:
-        cur.execute("SET SESSION MAX_EXECUTION_TIME = %s", (STATEMENT_MS,))
+        rd.must("SET SESSION MAX_EXECUTION_TIME = %s", (STATEMENT_MS,))
     except Exception:  # noqa: BLE001 - a server without the setting still answers
         log.warning(
             "search: the database refused MAX_EXECUTION_TIME; statements rely on their LIMITs"
         )
 
 
-def build(q: str, conn, server) -> dict:
-    """The five groups for `q` (already normalised), from one connection."""
+def build(q: str, rd, server) -> dict:
+    """The five groups for `q` (already normalised), from one reader."""
     roster = list(server._all_roster_names())
     keywords = server.council.DUNGEON_KEYWORDS
     place = server.council.keyword_place
     guilds = list(server.guildrun.limits().guilds)
     maps = _dungeon_maps(q, server.achievements.MAP_NAMES)
-    with conn.cursor() as cur:
-        _limit_statements(cur)
-        members = _members(cur, q, roster, server._MAP_CLASS_NAMES)
-        items = _items(cur, q, server.ITEMS.icons)
-        quests = _quests(cur, q, roster)
-        run_rows = _runs(cur, q, _keywords_for(q, maps, keywords, place))
+    _limit_statements(rd)
+    members = _members(rd, q, roster, server._MAP_CLASS_NAMES)
+    items = _items(rd, q, server.ITEMS.icons)
+    quests = _quests(rd, q, roster)
+    run_rows = _runs(rd, q, _keywords_for(q, maps, keywords, place))
     return {
         "q": q,
         "members": members,
@@ -236,11 +234,7 @@ def search(query: dict, ctx) -> tuple[int, dict]:
     hit = _cached(q, now)
     if hit is not None:
         return 200, hit
-    conn = ctx.connect()
-    try:
-        payload = build(q, conn, ctx.server)
-    finally:
-        conn.close()
+    payload = build(q, ctx.read, ctx.server)
     _keep(q, now, payload)
     return 200, payload
 

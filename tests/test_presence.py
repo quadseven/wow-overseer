@@ -24,9 +24,10 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
 import guildgear  # noqa: E402
+import guildrun  # noqa: E402
 import map_server  # noqa: E402  (must follow the pymysql stub)
+import realmread  # noqa: E402
 from apiv2 import guild, members, presence  # noqa: E402
-from apiv2._context import Context  # noqa: E402
 from tests.test_apiv2_guilds import Ctx as GuildCtx  # noqa: E402
 from tests.test_members_v2 import ctx_for, roster_rules, server  # noqa: E402
 from tests.test_vclient import get  # noqa: E402
@@ -94,17 +95,26 @@ class World:
     def fetchone(self):
         return self.rows[0] if self.rows else None
 
+    # The world is its own connection: the realm reader asks it for a cursor
+    # and closes it.
+    def cursor(self):
+        return self
 
-# The map server's own guard (_wide_guarded), reached the way every v2 read
-# reaches it: through ctx.server.
-CTX = Context(connect=None, server=map_server)
+    def close(self):
+        pass
+
+
 GUARD_ERRORS = types.SimpleNamespace(err=types.SimpleNamespace(MySQLError=MySQLError))
 
 
 def read(world, names):
-    """presence.of over `world`, with the guard catching this file's errors."""
-    with mock.patch.object(map_server, "pymysql", GUARD_ERRORS):
-        return presence.of(CTX, world, names)
+    """presence.of over `world` through the realm reader's database adapter,
+    which recognises this file's errors as the driver's."""
+    with (
+        mock.patch.object(realmread, "pymysql", GUARD_ERRORS),
+        realmread.Session(lambda: world) as rd,
+    ):
+        return presence.of(rd, names)
 
 
 FRESH, STALE = 5, 61
@@ -232,7 +242,7 @@ def contrary(readings):
     """A stand-in for presence.of that answers `readings` and records the call."""
     calls = []
 
-    def of(ctx, cur, names):
+    def of(rd, names):
         calls.append(list(names))
         nothing = {"online": False, "life": None, "fresh_at": None}
         return {n: readings.get(n, nothing) for n in names}
@@ -288,25 +298,24 @@ class EveryEndpointAsks(unittest.TestCase):
                 "zone": 12,
             }
 
-        answers = [
-            ("FROM guild WHERE name", [{"guildid": 23, "name": "Cave"}]),
-            ("UNIX_TIMESTAMP() AS now", [{"now": NOW}]),
+        answers = {
+            guild._GUILD_SQL: [{"guildid": 23, "name": "Cave"}],
+            guild._NOW_SQL: [{"now": NOW}],
             # Grug online in the save, Bonk offline with the ghost flag.
-            (
-                "FROM characters c JOIN guild_member",
-                [
-                    member(1, "Grug", 1, 0),
-                    member(2, "Bonk", 0, GHOST_FLAG),
-                ],
-            ),
-            (
-                "FROM overseer_snapshot",
-                [{"name": "Grug", "health": 9, "max_health": 9}],
-            ),
-            ("GROUP BY killer_name", []),
-            ("COUNT(DISTINCT character_name) AS who", [{"n": 0, "who": 0}]),
-            ("character_queststatus_rewarded", [{"n": 0, "who": 0}]),
-        ]
+            guild._MEMBERS_SQL: [
+                member(1, "Grug", 1, 0),
+                member(2, "Bonk", 0, GHOST_FLAG),
+            ],
+            guild._ROSTER_SQL: [],
+            guild._DINGS_SQL: [],
+            guild._KILLERS_SQL: [],
+            guild._DEATH_TOTAL_SQL: [{"n": 0, "who": 0}],
+            guild._LAST_DEATH_SQL: [],
+            guild._CQ_DONE_SQL: [{"n": 0, "who": 0}],
+            guild._CQ_OPEN_SQL: [],
+            guild._CQ_STEPS_SQL: [],
+            guildrun._RUN_SQL: [],
+        }
         stub, calls = contrary(
             {"Grug": reading(False, None), "Bonk": reading(True, "dead")}
         )

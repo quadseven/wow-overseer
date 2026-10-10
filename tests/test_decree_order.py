@@ -637,17 +637,18 @@ class TheAdapterRunsAndDoesNotDecide(unittest.TestCase):
         is planned off the statements the console was drawn from."""
         fetch = SERVER[SERVER.index("def _fetch_roster_rows") :]
         fetch = fetch[: fetch.index("def _apply_order")]
-        self.assertIn("for attempt in (_ROSTER_FULL, _ROSTER_OLD):", fetch)
+        self.assertIn("rd.rows(_ROSTER_FULL, fallback=_ROSTER_OLD,", fetch)
 
     def test_the_roster_read_does_not_inherit_the_1054_gap(self):
-        """_guarded catches ProgrammingError, and 1054 is absent from
-        pymysql's error_map so a missing COLUMN arrives as an
-        OperationalError. On the read side that gap costs a banner; here it
-        would 503 every order on the realm most likely to need the fallback."""
+        """1054 is absent from pymysql's error_map, so a missing COLUMN
+        arrives as an OperationalError; the old _guarded caught only
+        ProgrammingError and would have 503'd every order on the realm most
+        likely to need the fallback. The realm reader's rows() takes both
+        (tests/test_realmread.py), and the plan's read goes through it."""
         fetch = SERVER[SERVER.index("def _fetch_roster_rows") :]
         fetch = fetch[: fetch.index("def _apply_order")]
-        self.assertNotIn("_guarded(", fetch)
-        self.assertIn("exc.args[0] in _DEGRADED", fetch)
+        self.assertIn("with realmread.Session(_connect) as rd:", fetch)
+        self.assertNotIn("cur.execute", fetch)
 
 
 class FakeCursor:

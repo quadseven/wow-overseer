@@ -46,7 +46,7 @@ import situation
 from panel import _CLASS_NAMES, _RACE_NAMES
 
 from . import activity, presence
-from ._scope import guarded, holes
+from ._scope import holes
 
 # A class quest ask newer than this means the blocker still stands: the bridge
 # asks again every pass it stands, ASK_COOLDOWN_MINUTES (15) apart at the most
@@ -129,53 +129,38 @@ def fetch(ctx) -> dict:
 
 def _read(ctx, names: list) -> dict:
     server = ctx.server
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            # S608 below: `holes` is a run of placeholders sized by the roster;
-            # every value is bound by the driver.
-            guild = guarded(
-                ctx,
-                cur,
-                server._LINEUP_GUILD.format(holes=holes(len(names))),
-                tuple(names),
-                "guild_member",
-            )
-            everyone = sorted(set(names) | {r["name"] for r in guild})
-            h = holes(len(everyone))
-            chars = guarded(
-                ctx, cur, CHARS_SQL.format(holes=h), tuple(everyone), "characters"
-            )
-            readings = presence.of(ctx, cur, everyone)
-            online = [n for n in everyone if readings[n]["online"]]
-            snaps = []
-            if online:
-                snaps = guarded(
-                    ctx,
-                    cur,
-                    WHERE_SQL.format(holes=holes(len(online))),
-                    tuple(online),
-                    "overseer_snapshot",
-                )
-            asks = guarded(
-                ctx,
-                cur,
-                ASKS_SQL.format(holes=h),
-                (*everyone, ASK_DAYS),
-                "overseer_guild_ask",
-            )
-            jobs = guarded(
-                ctx,
-                cur,
-                JOBS_SQL.format(holes=h),
-                (*everyone, JOB_MINUTES),
-                "overseer_command",
-            )
-            cur.execute("SELECT UNIX_TIMESTAMP() AS now_at")
-            row = cur.fetchone()
-            now_at = int(row["now_at"]) if row else 0
-    finally:
-        conn.close()
+    rd = ctx.read
+    # S608 below: `holes` is a run of placeholders sized by the roster;
+    # every value is bound by the driver.
+    guild = rd.rows(
+        server._LINEUP_GUILD.format(holes=holes(len(names))),
+        tuple(names),
+        what="guild_member",
+    )
+    everyone = sorted(set(names) | {r["name"] for r in guild})
+    h = holes(len(everyone))
+    chars = rd.rows(CHARS_SQL.format(holes=h), tuple(everyone), what="characters")
+    readings = presence.of(rd, everyone)
+    online = [n for n in everyone if readings[n]["online"]]
+    snaps = []
+    if online:
+        snaps = rd.rows(
+            WHERE_SQL.format(holes=holes(len(online))),
+            tuple(online),
+            what="overseer_snapshot",
+        )
+    asks = rd.rows(
+        ASKS_SQL.format(holes=h),
+        (*everyone, ASK_DAYS),
+        what="overseer_guild_ask",
+    )
+    jobs = rd.rows(
+        JOBS_SQL.format(holes=h),
+        (*everyone, JOB_MINUTES),
+        what="overseer_command",
+    )
+    clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
+    now_at = int(clock[0]["now_at"]) if clock else 0
     return {
         "guild": guild,
         "chars": chars,

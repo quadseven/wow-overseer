@@ -74,6 +74,7 @@ import raidsupply
 import readcache
 import recap
 import realm
+import realmread
 import runtimeline
 import stream
 import tradespec
@@ -256,42 +257,6 @@ _WORLD_VERSION_SQL = "SELECT core_version FROM acore_world.version LIMIT 1"
 _REALMLIST_SQL = "SELECT name FROM acore_auth.realmlist ORDER BY id LIMIT 1"
 
 
-def _realm_guarded(cur, sql: str, what: str) -> list:
-    """Run `sql`, returning [] on a degraded schema and raising on anything else.
-
-    WHY THIS DOES NOT REUSE _guarded, WHICH DOES ALMOST THE SAME THING. That
-    helper catches pymysql.err.ProgrammingError, and error 1054 is NOT a
-    ProgrammingError. Verified against pymysql 1.4.6 as deployed, by asking the
-    live realm's own database for a column that does not exist:
-
-        MISSING TABLE  -> pymysql.err.ProgrammingError 1146
-        MISSING COLUMN -> pymysql.err.OperationalError  1054
-
-    1054 is absent from pymysql's error_map, so raise_mysql_exception falls back
-    to OperationalError for it. The base class MySQLError is the only catch that
-    covers both, and it is what bridge.py already uses for exactly this pair.
-    Copying the more obvious helper would have produced a guard that reads
-    correctly, passes review, and never once fires on half of what it names.
-
-    (The same gap exists in _guarded itself. Widening it is a real fix and it
-    belongs to the banner it would change the behaviour of, not to this one.)
-    """
-    try:
-        cur.execute(sql)
-        return list(cur.fetchall())
-    except pymysql.err.MySQLError as exc:
-        # 1146 missing table, 1054 missing column: this realm's worldserver
-        # predates the migration. A thinner banner, not a broken one. Anything
-        # else is a real fault and must still reach the handler's 503, because
-        # a banner that silently reported "not verified" for a network blip
-        # would train the alarm away.
-        if not (exc.args and exc.args[0] in (1054, 1146)):
-            raise
-        log.info("realm: %s unavailable (%s); the banner runs without it",
-                 what, exc.args[0])
-        return []
-
-
 _CROSSING_SQL = "SELECT value FROM overseer_build WHERE name = 'crossing'"
 
 
@@ -305,12 +270,8 @@ def _note_module_crossing() -> None:
     predates the row reads as before: no crossing.
     """
     try:
-        conn = _connect()
-        try:
-            with conn.cursor() as cur:
-                rows = _realm_guarded(cur, _CROSSING_SQL, "overseer_build crossing")
-        finally:
-            conn.close()
+        with realmread.Session(_connect) as rd:
+            rows = rd.rows(_CROSSING_SQL, what="overseer_build crossing")
     except Exception:
         # A failed read must never block an order: the console keeps whatever
         # crossing fact it last read, which is what it did before this read.
@@ -329,16 +290,12 @@ def _fetch_realm() -> dict:
     No parameters and no user input anywhere in it: this endpoint answers a
     question about the deployment, not about anybody the caller can name.
     """
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            build_rows = _realm_guarded(cur, _BUILD_SQL, "overseer_build")
-            version_rows = _realm_guarded(cur, _WORLD_VERSION_SQL,
-                                          "acore_world.version")
-            realmlist_rows = _realm_guarded(cur, _REALMLIST_SQL,
-                                            "acore_auth.realmlist")
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        build_rows = rd.rows(_BUILD_SQL, what="overseer_build")
+        version_rows = rd.rows(_WORLD_VERSION_SQL,
+                               what="acore_world.version")
+        realmlist_rows = rd.rows(_REALMLIST_SQL,
+                                 what="acore_auth.realmlist")
     return {"build_rows": build_rows, "version_rows": version_rows,
             "realmlist_rows": realmlist_rows}
 
@@ -1408,17 +1365,12 @@ def _fetch_guild_gear() -> list[dict]:
     if not names:
         return []
     holes = ", ".join(["%s"] * len(names))
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            # S608: placeholders only, one per roster name; the slot bound is
-            # the length of a constant list.
-            cur.execute(_GUILD_GEAR.format(  # noqa: S608
-                holes=holes, slots=len(armory.EQUIPPED_SLOTS)), tuple(names))
-            rows = list(cur.fetchall())
-            readings = v2_presence.of(_V2_CONTEXT, cur, [r["name"] for r in rows])
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        # S608: placeholders only, one per roster name; the slot bound is
+        # the length of a constant list.
+        rows = rd.must(_GUILD_GEAR.format(  # noqa: S608
+            holes=holes, slots=len(armory.EQUIPPED_SLOTS)), tuple(names))
+        readings = v2_presence.of(rd, [r["name"] for r in rows])
     for r in rows:
         reading = readings[r["name"]]
         r["online"], r["life"] = reading["online"], reading["life"]
@@ -1443,119 +1395,108 @@ def _fetch_armory(names: list[str] | None = None) -> dict:
     """
     names = family.roster() if names is None else names
     holes = ", ".join(["%s"] * len(names))
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            # S608 on all three: `holes` is a run of "%s" placeholders whose
-            # only input is the LENGTH of family.roster() - a constant five,
-            # from bonds. Every VALUE is still bound by the driver, and this
-            # endpoint takes no parameters at all. Same reasoning, and the
-            # same refusal to hard-code five, as _fetch_family.
-            # The guild is a LEFT JOIN because most of the family are in
-            # none, and a character in no guild is a character with no
-            # guild line, not a missing row.
-            cur.execute(
-                "SELECT c.name, c.level, c.race, c.class, c.gender, c.online, "  # noqa: S608
-                "c.activeTalentGroup, c.totalKills, g.name AS guild, "
-                # The face the character was made with, for the 3D model:
-                # five indexes into the race's choice lists (armory.viewer_model).
-                "c.skin, c.face, c.hairStyle, c.hairColor, c.facialStyle "
-                "FROM characters c "
-                "LEFT JOIN guild_member gm ON gm.guid = c.guid "
-                "LEFT JOIN guild g ON g.guildid = gm.guildid "
-                f"WHERE c.name IN ({holes})",
-                tuple(names),
+    with realmread.Session(_connect) as rd:
+        # S608 on all three: `holes` is a run of "%s" placeholders whose
+        # only input is the LENGTH of family.roster() - a constant five,
+        # from bonds. Every VALUE is still bound by the driver, and this
+        # endpoint takes no parameters at all. Same reasoning, and the
+        # same refusal to hard-code five, as _fetch_family.
+        # The guild is a LEFT JOIN because most of the family are in
+        # none, and a character in no guild is a character with no
+        # guild line, not a missing row.
+        char_rows = rd.must(
+            "SELECT c.name, c.level, c.race, c.class, c.gender, c.online, "  # noqa: S608
+            "c.activeTalentGroup, c.totalKills, g.name AS guild, "
+            # The face the character was made with, for the 3D model:
+            # five indexes into the race's choice lists (armory.viewer_model).
+            "c.skin, c.face, c.hairStyle, c.hairColor, c.facialStyle "
+            "FROM characters c "
+            "LEFT JOIN guild_member gm ON gm.guid = c.guid "
+            "LEFT JOIN guild g ON g.guildid = gm.guildid "
+            f"WHERE c.name IN ({holes})",
+            tuple(names),
+        )
+        # The item's name, quality and level live in the WORLD database,
+        # not this one, so this is a cross-schema join - the same one
+        # panel's inventory query already makes. LEFT, so a custom or
+        # removed item still reports as equipped rather than as an empty
+        # slot. bag = 0 and the slot bound are the equipped paper doll;
+        # the bound comes from armory so the query and the grid cannot
+        # disagree about how many slots there are.
+        # enchantments and randomPropertyId are the item INSTANCE's:
+        # they are what makes this belt a "Belt of the Tiger" and not
+        # the template's plain belt, and they are where half the family's
+        # stats actually live.
+        equipment_rows = rd.must(
+            "SELECT c.name, ci.slot, ii.itemEntry AS entry, "  # noqa: S608
+            "ii.durability, ii.enchantments, "
+            "ii.randomPropertyId AS random_property_id, "
+            f"{_ITEM_TEMPLATE_COLUMNS} "
+            "FROM characters c "
+            "JOIN character_inventory ci ON ci.guid = c.guid "
+            "AND ci.bag = 0 AND ci.slot < %s "
+            "JOIN item_instance ii ON ii.guid = ci.item "
+            "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+            f"WHERE c.name IN ({holes})",
+            (len(armory.EQUIPPED_SLOTS), *names),
+        )
+        # The equip record, for the provenance line under each item. It is
+        # guarded where the reads above are not, and for a reason: those
+        # are core tables that are always there, and overseer_event is
+        # written by the in-world module, so a realm whose schema predates
+        # it must still get a paper doll. A grid with no provenance is a
+        # thinner tab; a 503 is a blank one (infra#3172).
+        equip_event_rows = rd.rows(
+            _RECAP_EQUIPS.format(holes=holes), tuple(names), what="overseer_event")
+        # The set a piece belongs to lists its other pieces by entry, and
+        # the tooltip names them: one more query, bounded by the sets
+        # anybody is actually wearing (usually none).
+        sets = sorted({r["itemset"] for r in equipment_rows if r["itemset"]})
+        set_rows: list[dict] = []
+        if sets:
+            set_holes = ", ".join(["%s"] * len(sets))
+            set_rows = rd.must(
+                "SELECT entry, name AS item_name "  # noqa: S608
+                "FROM acore_world.item_template "
+                f"WHERE itemset IN ({set_holes})",
+                tuple(sets),
             )
-            char_rows = list(cur.fetchall())
-            # The item's name, quality and level live in the WORLD database,
-            # not this one, so this is a cross-schema join - the same one
-            # panel's inventory query already makes. LEFT, so a custom or
-            # removed item still reports as equipped rather than as an empty
-            # slot. bag = 0 and the slot bound are the equipped paper doll;
-            # the bound comes from armory so the query and the grid cannot
-            # disagree about how many slots there are.
-            # enchantments and randomPropertyId are the item INSTANCE's:
-            # they are what makes this belt a "Belt of the Tiger" and not
-            # the template's plain belt, and they are where half the family's
-            # stats actually live.
-            cur.execute(
-                "SELECT c.name, ci.slot, ii.itemEntry AS entry, "  # noqa: S608
-                "ii.durability, ii.enchantments, "
-                "ii.randomPropertyId AS random_property_id, "
-                f"{_ITEM_TEMPLATE_COLUMNS} "
-                "FROM characters c "
-                "JOIN character_inventory ci ON ci.guid = c.guid "
-                "AND ci.bag = 0 AND ci.slot < %s "
-                "JOIN item_instance ii ON ii.guid = ci.item "
-                "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-                f"WHERE c.name IN ({holes})",
-                (len(armory.EQUIPPED_SLOTS), *names),
-            )
-            equipment_rows = list(cur.fetchall())
-            # The equip record, for the provenance line under each item. It is
-            # guarded where the reads above are not, and for a reason: those
-            # are core tables that are always there, and overseer_event is
-            # written by the in-world module, so a realm whose schema predates
-            # it must still get a paper doll. A grid with no provenance is a
-            # thinner tab; a 503 is a blank one (infra#3172).
-            equip_event_rows = _wide_guarded(
-                cur, _RECAP_EQUIPS.format(holes=holes), tuple(names), "",  # noqa: S608
-                "overseer_event")
-            # The set a piece belongs to lists its other pieces by entry, and
-            # the tooltip names them: one more query, bounded by the sets
-            # anybody is actually wearing (usually none).
-            sets = sorted({r["itemset"] for r in equipment_rows if r["itemset"]})
-            set_rows: list[dict] = []
-            if sets:
-                set_holes = ", ".join(["%s"] * len(sets))
-                cur.execute(
-                    "SELECT entry, name AS item_name "  # noqa: S608
-                    "FROM acore_world.item_template "
-                    f"WHERE itemset IN ({set_holes})",
-                    tuple(sets),
-                )
-                set_rows = list(cur.fetchall())
-            cur.execute(
-                "SELECT c.name, t.spell, t.specMask "  # noqa: S608
-                "FROM characters c JOIN character_talent t ON t.guid = c.guid "
-                f"WHERE c.name IN ({holes})",
-                tuple(names),
-            )
-            talent_rows = list(cur.fetchall())
-            # character_stats is the core's own derived numbers - written on
-            # save when PlayerSave.Stats.MinLevel allows, so a member may
-            # have no row yet. The builder falls back to base + gear for
-            # what it can and says "unavailable" for the rest.
-            cur.execute(
-                "SELECT c.name, s.maxhealth, s.maxpower1, s.maxpower2, "  # noqa: S608
-                "s.maxpower4, s.maxpower7, s.strength, s.agility, s.stamina, "
-                "s.intellect, s.spirit, s.armor, s.blockPct, s.dodgePct, "
-                "s.parryPct, s.critPct, s.rangedCritPct, s.spellCritPct, "
-                "s.attackPower, s.rangedAttackPower, s.spellPower "
-                "FROM characters c JOIN character_stats s ON s.guid = c.guid "
-                f"WHERE c.name IN ({holes})",
-                tuple(names),
-            )
-            stats_rows = list(cur.fetchall())
-            # The base stats a race and class have at a level, for the
-            # fallback. Two world tables, joined on nothing: the race row is
-            # a flat modifier added to every level of the class row.
-            cur.execute(
-                "SELECT r.Race AS race, cs.Class AS class, cs.Level AS level, "  # noqa: S608
-                "cs.BaseHP AS health, cs.BaseMana AS mana, "
-                "cs.Strength + r.Strength AS strength, cs.Agility + r.Agility AS agility, "
-                "cs.Stamina + r.Stamina AS stamina, cs.Intellect + r.Intellect AS intellect, "
-                "cs.Spirit + r.Spirit AS spirit "
-                "FROM acore_world.player_class_stats cs "
-                "JOIN acore_world.player_race_stats r "
-                "JOIN characters c ON c.class = cs.Class AND c.level = cs.Level "
-                "AND c.race = r.Race "
-                f"WHERE c.name IN ({holes})",
-                tuple(names),
-            )
-            base_rows = list(cur.fetchall())
-    finally:
-        conn.close()
+        talent_rows = rd.must(
+            "SELECT c.name, t.spell, t.specMask "  # noqa: S608
+            "FROM characters c JOIN character_talent t ON t.guid = c.guid "
+            f"WHERE c.name IN ({holes})",
+            tuple(names),
+        )
+        # character_stats is the core's own derived numbers - written on
+        # save when PlayerSave.Stats.MinLevel allows, so a member may
+        # have no row yet. The builder falls back to base + gear for
+        # what it can and says "unavailable" for the rest.
+        stats_rows = rd.must(
+            "SELECT c.name, s.maxhealth, s.maxpower1, s.maxpower2, "  # noqa: S608
+            "s.maxpower4, s.maxpower7, s.strength, s.agility, s.stamina, "
+            "s.intellect, s.spirit, s.armor, s.blockPct, s.dodgePct, "
+            "s.parryPct, s.critPct, s.rangedCritPct, s.spellCritPct, "
+            "s.attackPower, s.rangedAttackPower, s.spellPower "
+            "FROM characters c JOIN character_stats s ON s.guid = c.guid "
+            f"WHERE c.name IN ({holes})",
+            tuple(names),
+        )
+        # The base stats a race and class have at a level, for the
+        # fallback. Two world tables, joined on nothing: the race row is
+        # a flat modifier added to every level of the class row.
+        base_rows = rd.must(
+            "SELECT r.Race AS race, cs.Class AS class, cs.Level AS level, "  # noqa: S608
+            "cs.BaseHP AS health, cs.BaseMana AS mana, "
+            "cs.Strength + r.Strength AS strength, cs.Agility + r.Agility AS agility, "
+            "cs.Stamina + r.Stamina AS stamina, cs.Intellect + r.Intellect AS intellect, "
+            "cs.Spirit + r.Spirit AS spirit "
+            "FROM acore_world.player_class_stats cs "
+            "JOIN acore_world.player_race_stats r "
+            "JOIN characters c ON c.class = cs.Class AND c.level = cs.Level "
+            "AND c.race = r.Race "
+            f"WHERE c.name IN ({holes})",
+            tuple(names),
+        )
     return {"equip_event_rows": equip_event_rows,
             "char_rows": char_rows, "equipment_rows": equipment_rows,
             "talent_rows": talent_rows, "stats_rows": stats_rows,
@@ -1596,39 +1537,32 @@ _ORIGIN_BUYS = (
 def _fetch_gear_origin(name: str) -> dict:
     """The rows gearorigin.origins reads for one member; never raises on a
     realm whose overseer tables are missing or older (1146, 1054)."""
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(_ORIGIN_WORN, (len(armory.EQUIPPED_SLOTS), name))
-            worn = list(cur.fetchall())
-            event_rows = _wide_guarded(
-                cur, _ORIGIN_COLUMNS.format(story=_ORIGIN_STORY) + _ORIGIN_OWN,
-                (name,), _ORIGIN_COLUMNS.format(story="") + _ORIGIN_OWN,
-                "overseer_event")
-            # Hand-overs TO this member need the counterpart column; without
-            # it there are none to read.
-            event_rows += _wide_guarded(
-                cur, _ORIGIN_COLUMNS.format(story=_ORIGIN_STORY) + _ORIGIN_GIVEN,
-                (name,), "", "overseer_event")
-            command_rows = _wide_guarded(
-                cur, _ORIGIN_BUYS, (name, '%"outcome":"bought"%'), "",
-                "overseer_command")
-            quest_ids = sorted({int(r["subject_id"]) for r in event_rows
-                                if r["kind"] == gearorigin.QUEST_REWARD})
-            quest_rows = []
-            if quest_ids:
-                qholes = ", ".join(["%s"] * len(quest_ids))
-                cur.execute(
-                    "SELECT ID, RewardItem1, RewardItem2, RewardItem3, RewardItem4, "  # noqa: S608
-                    "RewardAmount1, RewardAmount2, RewardAmount3, RewardAmount4, "
-                    "RewardChoiceItemID1, RewardChoiceItemID2, RewardChoiceItemID3, "
-                    "RewardChoiceItemID4, RewardChoiceItemID5, RewardChoiceItemID6 "
-                    f"FROM acore_world.quest_template WHERE ID IN ({qholes})",
-                    tuple(quest_ids),
-                )
-                quest_rows = list(cur.fetchall())
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        worn = rd.must(_ORIGIN_WORN, (len(armory.EQUIPPED_SLOTS), name))
+        event_rows = rd.rows(
+            _ORIGIN_COLUMNS.format(story=_ORIGIN_STORY) + _ORIGIN_OWN,
+            (name,), fallback=_ORIGIN_COLUMNS.format(story="") + _ORIGIN_OWN,
+            what="overseer_event")
+        # Hand-overs TO this member need the counterpart column; without
+        # it there are none to read.
+        event_rows += rd.rows(
+            _ORIGIN_COLUMNS.format(story=_ORIGIN_STORY) + _ORIGIN_GIVEN,
+            (name,), what="overseer_event")
+        command_rows = rd.rows(
+            _ORIGIN_BUYS, (name, '%"outcome":"bought"%'), what="overseer_command")
+        quest_ids = sorted({int(r["subject_id"]) for r in event_rows
+                            if r["kind"] == gearorigin.QUEST_REWARD})
+        quest_rows = []
+        if quest_ids:
+            qholes = ", ".join(["%s"] * len(quest_ids))
+            quest_rows = rd.must(
+                "SELECT ID, RewardItem1, RewardItem2, RewardItem3, RewardItem4, "  # noqa: S608
+                "RewardAmount1, RewardAmount2, RewardAmount3, RewardAmount4, "
+                "RewardChoiceItemID1, RewardChoiceItemID2, RewardChoiceItemID3, "
+                "RewardChoiceItemID4, RewardChoiceItemID5, RewardChoiceItemID6 "
+                f"FROM acore_world.quest_template WHERE ID IN ({qholes})",
+                tuple(quest_ids),
+            )
     return {"worn": worn, "event_rows": event_rows, "command_rows": command_rows,
             "quest_rewards": achievements.quest_rewards_from_rows(quest_rows)}
 
@@ -1770,7 +1704,7 @@ def _fetch_questlog(names=None) -> dict:
             "done_rows": done_rows, "party_rows": party_rows}
 
 
-def _fetch_family_runs(cur, names, holes) -> list:
+def _fetch_family_runs(rd, names, holes) -> list:
     """The family's own dungeon runs, newest first, or [] on a realm whose
     schema predates overseer_dungeon_run (error 1146).
 
@@ -1779,16 +1713,15 @@ def _fetch_family_runs(cur, names, holes) -> list:
     runs in the other's chapter. `holes` is placeholders only, one per name.
     """
     try:
-        cur.execute(
+        return rd.must(
             "SELECT id, leader_name, map_id, state, started_at, "  # noqa: S608
             "last_progress_at, ended_at, ended_reason "
             f"FROM overseer_dungeon_run WHERE leader_name IN ({holes}) "
             "ORDER BY started_at DESC LIMIT 500",
             tuple(names),
         )
-        return list(cur.fetchall())
-    except pymysql.err.ProgrammingError as exc:
-        if not (exc.args and exc.args[0] == 1146):
+    except realmread.Gap as gap:
+        if gap.code != realmread.MISSING_TABLE:
             raise
         log.info("overseer_dungeon_run absent; achievements run without it")
         return []
@@ -1811,103 +1744,95 @@ def _fetch_achievements(names=None) -> dict:
     """
     names = family.roster() if names is None else list(names)
     holes = ", ".join(["%s"] * len(names))
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            run_rows = _fetch_family_runs(cur, names, holes)
-            # S608 on the three below: `holes` is a run of placeholders sized
-            # by the roster, and every VALUE is bound by the driver. Deaths
-            # come from overseer_death, the un-coalesced record, so the
-            # hourly-bucketed death rows in overseer_event are skipped here.
-            # THE SAME 1146 GUARD AS THE RUN TABLE ABOVE, AND FOR THE SAME
-            # REASON, LEARNED THE HARD WAY IN PRODUCTION. These tables are
-            # created by the in-world module, so a realm running an older
-            # worldserver simply does not have all of them yet: the live
-            # realm had `overseer_event` but no `overseer_death` on the day
-            # this tab shipped, and an unguarded query turned the whole tab
-            # into a 503 there while every other tab was fine. A world with
-            # no death record has nothing to say about deaths, which is a
-            # thinner page, not a broken one.
-            event_rows = _wide_guarded(
-                cur,
-                "SELECT character_name, kind, subject_id, subject_name, detail, "  # noqa: S608
-                "level, map, zone, first_seen, last_seen, occurrences, "
-                "item_guid, via, source FROM overseer_event "
-                f"WHERE kind <> 'death' AND character_name IN ({holes}) "
-                "ORDER BY first_seen ASC LIMIT 20000",
+    with realmread.Session(_connect) as rd:
+        run_rows = _fetch_family_runs(rd, names, holes)
+        # S608 on the three below: `holes` is a run of placeholders sized
+        # by the roster, and every VALUE is bound by the driver. Deaths
+        # come from overseer_death, the un-coalesced record, so the
+        # hourly-bucketed death rows in overseer_event are skipped here.
+        # THE SAME 1146 GUARD AS THE RUN TABLE ABOVE, AND FOR THE SAME
+        # REASON, LEARNED THE HARD WAY IN PRODUCTION. These tables are
+        # created by the in-world module, so a realm running an older
+        # worldserver simply does not have all of them yet: the live
+        # realm had `overseer_event` but no `overseer_death` on the day
+        # this tab shipped, and an unguarded query turned the whole tab
+        # into a 503 there while every other tab was fine. A world with
+        # no death record has nothing to say about deaths, which is a
+        # thinner page, not a broken one.
+        event_rows = rd.rows(
+            "SELECT character_name, kind, subject_id, subject_name, detail, "  # noqa: S608
+            "level, map, zone, first_seen, last_seen, occurrences, "
+            "item_guid, via, source FROM overseer_event "
+            f"WHERE kind <> 'death' AND character_name IN ({holes}) "
+            "ORDER BY first_seen ASC LIMIT 20000",
+            tuple(names),
+            fallback="SELECT character_name, kind, subject_id, subject_name, detail, "  # noqa: S608
+            "level, map, zone, first_seen, last_seen, occurrences "
+            "FROM overseer_event "
+            f"WHERE kind <> 'death' AND character_name IN ({holes}) "
+            "ORDER BY first_seen ASC LIMIT 20000",
+            what="Chronicle event source fields",
+        )
+        try:
+            death_rows = rd.must(
+                "SELECT character_name, map, zone, killer_name, killer_type, "  # noqa: S608
+                f"created_at FROM overseer_death WHERE character_name IN ({holes}) "
+                "ORDER BY created_at ASC LIMIT 20000",
                 tuple(names),
-                "SELECT character_name, kind, subject_id, subject_name, detail, "  # noqa: S608
-                "level, map, zone, first_seen, last_seen, occurrences "
-                "FROM overseer_event "
-                f"WHERE kind <> 'death' AND character_name IN ({holes}) "
-                "ORDER BY first_seen ASC LIMIT 20000",
-                "Chronicle event source fields",
             )
-            try:
-                cur.execute(
-                    "SELECT character_name, map, zone, killer_name, killer_type, "  # noqa: S608
-                    f"created_at FROM overseer_death WHERE character_name IN ({holes}) "
-                    "ORDER BY created_at ASC LIMIT 20000",
-                    tuple(names),
-                )
-                death_rows = list(cur.fetchall())
-            except pymysql.err.ProgrammingError as exc:
-                if not (exc.args and exc.args[0] == 1146):
-                    raise
-                log.info("overseer_death absent; achievements run without deaths")
-                death_rows = []
-            # Which world rows to look up is a decision about event kinds and
-            # dungeon boss lists; achievements owns it, the adapter just asks.
-            quest_ids = achievements.wanted_quests(event_rows)
-            quest_rows = []
-            if quest_ids:
-                qholes = ", ".join(["%s"] * len(quest_ids))
-                cur.execute(
-                    "SELECT ID, RewardItem1, RewardItem2, RewardItem3, RewardItem4, "  # noqa: S608
-                    "RewardAmount1, RewardAmount2, RewardAmount3, RewardAmount4, "
-                    "RewardChoiceItemID1, RewardChoiceItemID2, RewardChoiceItemID3, "
-                    "RewardChoiceItemID4, RewardChoiceItemID5, RewardChoiceItemID6 "
-                    f"FROM acore_world.quest_template WHERE ID IN ({qholes})",
-                    tuple(quest_ids),
-                )
-                quest_rows = list(cur.fetchall())
-            quest_rewards = achievements.quest_rewards_from_rows(quest_rows)
-            bosses = achievements.wanted_bosses(run_rows)
-            drop_rows = []
-            if bosses:
-                bholes = ", ".join(["%s"] * len(bosses))
-                cur.execute(
-                    "SELECT c.entry AS creature, l.Item AS item "  # noqa: S608
-                    "FROM acore_world.creature_template c "
-                    "JOIN acore_world.creature_loot_template l ON l.Entry = c.lootid "
-                    "JOIN acore_world.item_template i ON i.entry = l.Item "
-                    f"WHERE c.entry IN ({bholes}) AND l.Reference = 0 "
-                    "AND i.Quality >= %s",
-                    (*bosses, achievements.SIGNATURE_QUALITY),
-                )
-                drop_rows = list(cur.fetchall())
-            boss_drops = achievements.boss_drops_from_rows(drop_rows)
-            entries = achievements.wanted_entries(event_rows, quest_rewards, boss_drops)
-            items = {}
-            if entries:
-                iholes = ", ".join(["%s"] * len(entries))
-                # READ WIDE ENOUGH FOR A TOOLTIP (infra#3501). This used to
-                # select five columns, which is a name in a colour and
-                # nothing a reader could act on; the Chronicle's gear names
-                # now open the item's own lines in place, and those lines are
-                # built from these columns rather than fetched from wowhead.
-                # The list is bounded by achievements.wanted_entries, which is
-                # already narrowed to the items these cards actually draw, so
-                # the wider read is over the same handful of rows.
-                cur.execute(
-                    f"SELECT it.entry, {_ITEM_TEMPLATE_COLUMNS} "  # noqa: S608
-                    "FROM acore_world.item_template it "
-                    f"WHERE it.entry IN ({iholes})",
-                    tuple(entries),
-                )
-                items = {int(r["entry"]): r for r in cur.fetchall()}
-    finally:
-        conn.close()
+        except realmread.Gap as gap:
+            if gap.code != realmread.MISSING_TABLE:
+                raise
+            log.info("overseer_death absent; achievements run without deaths")
+            death_rows = []
+        # Which world rows to look up is a decision about event kinds and
+        # dungeon boss lists; achievements owns it, the adapter just asks.
+        quest_ids = achievements.wanted_quests(event_rows)
+        quest_rows = []
+        if quest_ids:
+            qholes = ", ".join(["%s"] * len(quest_ids))
+            quest_rows = rd.must(
+                "SELECT ID, RewardItem1, RewardItem2, RewardItem3, RewardItem4, "  # noqa: S608
+                "RewardAmount1, RewardAmount2, RewardAmount3, RewardAmount4, "
+                "RewardChoiceItemID1, RewardChoiceItemID2, RewardChoiceItemID3, "
+                "RewardChoiceItemID4, RewardChoiceItemID5, RewardChoiceItemID6 "
+                f"FROM acore_world.quest_template WHERE ID IN ({qholes})",
+                tuple(quest_ids),
+            )
+        quest_rewards = achievements.quest_rewards_from_rows(quest_rows)
+        bosses = achievements.wanted_bosses(run_rows)
+        drop_rows = []
+        if bosses:
+            bholes = ", ".join(["%s"] * len(bosses))
+            drop_rows = rd.must(
+                "SELECT c.entry AS creature, l.Item AS item "  # noqa: S608
+                "FROM acore_world.creature_template c "
+                "JOIN acore_world.creature_loot_template l ON l.Entry = c.lootid "
+                "JOIN acore_world.item_template i ON i.entry = l.Item "
+                f"WHERE c.entry IN ({bholes}) AND l.Reference = 0 "
+                "AND i.Quality >= %s",
+                (*bosses, achievements.SIGNATURE_QUALITY),
+            )
+        boss_drops = achievements.boss_drops_from_rows(drop_rows)
+        entries = achievements.wanted_entries(event_rows, quest_rewards, boss_drops)
+        items = {}
+        if entries:
+            iholes = ", ".join(["%s"] * len(entries))
+            # READ WIDE ENOUGH FOR A TOOLTIP (infra#3501). This used to
+            # select five columns, which is a name in a colour and
+            # nothing a reader could act on; the Chronicle's gear names
+            # now open the item's own lines in place, and those lines are
+            # built from these columns rather than fetched from wowhead.
+            # The list is bounded by achievements.wanted_entries, which is
+            # already narrowed to the items these cards actually draw, so
+            # the wider read is over the same handful of rows.
+            item_rows = rd.must(
+                f"SELECT it.entry, {_ITEM_TEMPLATE_COLUMNS} "  # noqa: S608
+                "FROM acore_world.item_template it "
+                f"WHERE it.entry IN ({iholes})",
+                tuple(entries),
+            )
+            items = {int(r["entry"]): r for r in item_rows}
     return {"run_rows": run_rows, "event_rows": event_rows, "death_rows": death_rows,
             "items": items, "icons": ITEMS.icons, "book": ITEMS,
             "boss_drops": boss_drops,
@@ -1930,52 +1855,47 @@ def _fetch_loot() -> dict:
     gets its equips, joined by entry instead of by guid, and a realm with no
     event table at all (1146) gets an empty list.
     """
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            base = (
-                "SELECT e.id, e.character_name, e.kind, e.subject_id, e.subject_name, "
-                "e.subject_quality, e.detail, e.map, e.zone, e.first_seen, e.last_seen, "
-                "{story}g.name AS guild "
-                "FROM overseer_event e "
-                "LEFT JOIN characters c ON c.name = e.character_name "
-                "LEFT JOIN guild_member gm ON gm.guid = c.guid "
-                "LEFT JOIN guild g ON g.guildid = gm.guildid "
-                "WHERE e.kind IN ('item_loot', 'item_given', 'item_equip') "
-                "AND e.subject_quality >= %s "
-                "AND e.last_seen >= NOW() - INTERVAL 14 DAY "
-                "ORDER BY e.last_seen DESC LIMIT 2000"
+    with realmread.Session(_connect) as rd:
+        base = (
+            "SELECT e.id, e.character_name, e.kind, e.subject_id, e.subject_name, "
+            "e.subject_quality, e.detail, e.map, e.zone, e.first_seen, e.last_seen, "
+            "{story}g.name AS guild "
+            "FROM overseer_event e "
+            "LEFT JOIN characters c ON c.name = e.character_name "
+            "LEFT JOIN guild_member gm ON gm.guid = c.guid "
+            "LEFT JOIN guild g ON g.guildid = gm.guildid "
+            "WHERE e.kind IN ('item_loot', 'item_given', 'item_equip') "
+            "AND e.subject_quality >= %s "
+            "AND e.last_seen >= NOW() - INTERVAL 14 DAY "
+            "ORDER BY e.last_seen DESC LIMIT 2000"
+        )
+        rows = rd.rows(
+            base.format(story="e.item_guid, e.counterpart, e.via, e.source, "),
+            (lootstory.NOTABLE_QUALITY,),
+            fallback=base.format(story=""),
+            what="the loot story",
+        )
+        council_rows = rd.rows(
+            _LOOT_COUNCIL_SQL % 14, what="the loot council")
+        entries = sorted(set(lootstory.wanted_entries(rows)) | {
+            int(r["item_entry"]) for r in council_rows if r.get("item_entry")})
+        items = {}
+        if entries:
+            iholes = ", ".join(["%s"] * len(entries))
+            item_rows = rd.must(
+                f"SELECT it.entry, {_ITEM_TEMPLATE_COLUMNS} "  # noqa: S608
+                "FROM acore_world.item_template it "
+                f"WHERE it.entry IN ({iholes})",
+                tuple(entries),
             )
-            rows = _guarded(
-                cur,
-                base.format(story="e.item_guid, e.counterpart, e.via, e.source, "),
-                (lootstory.NOTABLE_QUALITY,),
-                fallback=base.format(story=""),
-                what="the loot story",
-            )
-            council_rows = _guarded(
-                cur, _LOOT_COUNCIL_SQL % 14, what="the loot council")
-            entries = sorted(set(lootstory.wanted_entries(rows)) | {
-                int(r["item_entry"]) for r in council_rows if r.get("item_entry")})
-            items = {}
-            if entries:
-                iholes = ", ".join(["%s"] * len(entries))
-                cur.execute(
-                    f"SELECT it.entry, {_ITEM_TEMPLATE_COLUMNS} "  # noqa: S608
-                    "FROM acore_world.item_template it "
-                    f"WHERE it.entry IN ({iholes})",
-                    tuple(entries),
-                )
-                items = {int(r["entry"]): r for r in cur.fetchall()}
-    finally:
-        conn.close()
+            items = {int(r["entry"]): r for r in item_rows}
     return {"rows": rows, "items": items, "icons": ITEMS.icons, "book": ITEMS,
             "council_rows": council_rows}
 
 
 # THE LOOT COUNCIL'S ROWS (#194), newest first, for the Chronicle and Bags.
 # mod-overseer writes them (its #642); the bridge answers them. A realm that
-# has not applied the table (1146) reads as no rows through _guarded.
+# has not applied the table (1146) reads as no rows through the reader's rows().
 _LOOT_COUNCIL_SQL = (
     "SELECT council_key, kind, family, source, item_entry, item_name, "
     "item_quality, status, recipient, reason, decided_by, given_to, item_guid, "
@@ -1992,12 +1912,8 @@ def _fetch_loot_council_view() -> dict:
     failed read is an empty strip rather than a 503 for the bags.
     """
     try:
-        conn = _connect()
-        try:
-            with conn.cursor() as cur:
-                rows = _guarded(cur, _LOOT_COUNCIL_SQL % 1, what="the loot council")
-        finally:
-            conn.close()
+        with realmread.Session(_connect) as rd:
+            rows = rd.rows(_LOOT_COUNCIL_SQL % 1, what="the loot council")
         return lootcouncil.view(rows)
     except Exception:
         log.exception("loot council read failed; the Bags tab runs without it")
@@ -2293,11 +2209,9 @@ def _fetch_jev_view() -> dict:
 # BECOMES that boundary, and the first draft of this block moved the Wealth
 # suite's window up here by saying where it started.
 #
-# EVERY OVERSEER TABLE GOES THROUGH _guarded, for the reason the banner below
-# spells out at length: infra#3172 turned a whole tab into a 503 on the live
-# realm over one unguarded read of a table that world does not have. _guarded
-# itself is defined with that banner, a few dozen lines down, and is reached
-# here by name at call time like every other helper in this file.
+# EVERY OVERSEER TABLE GOES THROUGH THE REALM READER'S rows() (realmread.py):
+# infra#3172 turned a whole tab into a 503 on the live realm over one
+# unguarded read of a table that world does not have.
 
 # Nobody reads a transcript longer than this, and a council is a handful of
 # lines. Enough to hold the last sitting several times over, so the module can
@@ -2330,51 +2244,44 @@ def _fetch_council() -> dict:
     column reads, which is how a dungeon decision is checked for being in
     effect rather than only announced.
     """
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            roster_rows = _guarded(cur, _COUNCIL_FAMILIES, (),
-                                   _COUNCIL_FAMILIES_THIN, "overseer_roster")
-            names = sorted({str(r["name"]) for r in roster_rows}
-                           | set(family.roster()))
-            holes = ", ".join(["%s"] * len(names))
-            # S608: `holes` is a run of placeholders sized by the roster, and
-            # every VALUE is bound by the driver on the line below.
-            thought_rows = _guarded(
-                cur,
-                "SELECT character_name, text, created_at "  # noqa: S608
-                "FROM overseer_thought "
-                f"WHERE source = %s AND character_name IN ({holes}) "
-                f"ORDER BY id DESC LIMIT {_COUNCIL_LINES}",
-                (council.COUNCIL_SOURCE, *names), "", "overseer_thought")
-            goal_rows = _guarded(
-                cur,
-                "SELECT character_name, kind, skill_name, target, status, "
-                "quest_id, created_at FROM overseer_goal "
-                "ORDER BY created_at DESC LIMIT 200",
-                (), "", "overseer_goal")
-            # SAVED levels, not the snapshot's. The gate on a dungeon has to
-            # answer "are they high enough" for a family who logged out ten
-            # minutes ago, and a snapshot swept clean would report every
-            # member at level 0 and every door shut.
-            level_rows = _guarded(
-                cur,
-                f"SELECT name, level, race FROM characters WHERE name IN ({holes})",  # noqa: S608
-                tuple(names), "", "characters")
-            wanted = {int(r["quest_id"]) for r in goal_rows
-                      if int(r.get("quest_id") or 0)}
-            quest_titles = {}
-            if wanted:
-                qholes = ", ".join(["%s"] * len(wanted))
-                cur.execute(
-                    "SELECT ID, LogTitle FROM acore_world.quest_template "  # noqa: S608
-                    f"WHERE ID IN ({qholes})",
-                    tuple(sorted(wanted)),
-                )
-                quest_titles = {int(r["ID"]): r["LogTitle"]
-                                for r in cur.fetchall()}
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        roster_rows = rd.rows(_COUNCIL_FAMILIES, (),
+                              fallback=_COUNCIL_FAMILIES_THIN, what="overseer_roster")
+        names = sorted({str(r["name"]) for r in roster_rows}
+                       | set(family.roster()))
+        holes = ", ".join(["%s"] * len(names))
+        # S608: `holes` is a run of placeholders sized by the roster, and
+        # every VALUE is bound by the driver on the line below.
+        thought_rows = rd.rows(
+            "SELECT character_name, text, created_at "  # noqa: S608
+            "FROM overseer_thought "
+            f"WHERE source = %s AND character_name IN ({holes}) "
+            f"ORDER BY id DESC LIMIT {_COUNCIL_LINES}",
+            (council.COUNCIL_SOURCE, *names), what="overseer_thought")
+        goal_rows = rd.rows(
+            "SELECT character_name, kind, skill_name, target, status, "
+            "quest_id, created_at FROM overseer_goal "
+            "ORDER BY created_at DESC LIMIT 200",
+            (), what="overseer_goal")
+        # SAVED levels, not the snapshot's. The gate on a dungeon has to
+        # answer "are they high enough" for a family who logged out ten
+        # minutes ago, and a snapshot swept clean would report every
+        # member at level 0 and every door shut.
+        level_rows = rd.rows(
+            f"SELECT name, level, race FROM characters WHERE name IN ({holes})",  # noqa: S608
+            tuple(names), what="characters")
+        wanted = {int(r["quest_id"]) for r in goal_rows
+                  if int(r.get("quest_id") or 0)}
+        quest_titles = {}
+        if wanted:
+            qholes = ", ".join(["%s"] * len(wanted))
+            title_rows = rd.must(
+                "SELECT ID, LogTitle FROM acore_world.quest_template "  # noqa: S608
+                f"WHERE ID IN ({qholes})",
+                tuple(sorted(wanted)),
+            )
+            quest_titles = {int(r["ID"]): r["LogTitle"]
+                            for r in title_rows}
     return {"thought_rows": thought_rows, "goal_rows": goal_rows,
             "level_rows": level_rows, "quest_titles": quest_titles,
             "roster_rows": roster_rows}
@@ -2394,28 +2301,22 @@ def _fetch_eye() -> dict:
     family_of = {n: key for key, group in groups for n in group}
     names = list(family_of)
     holes = ", ".join(["%s"] * len(names))
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            # Same 60s freshness rule as /api/map: the two surfaces must not
-            # disagree about who is in the world.
-            snapshot_rows = _guarded(
-                cur,
-                "SELECT name, is_bot, group_leader FROM overseer_snapshot "
-                "WHERE updated_at > NOW() - INTERVAL 60 SECOND",
-                (), "", "overseer_snapshot")
-            family_rows = _guarded(
-                cur,
-                f"SELECT name FROM characters WHERE name IN ({holes})",  # noqa: S608
-                tuple(names), "", "characters")
-            realm_rows = _guarded(
-                cur, "SELECT COUNT(*) AS characters FROM characters",
-                (), "", "characters")
-            guild_rows = _guarded(
-                cur, "SELECT COUNT(*) AS guilds FROM guild",
-                (), "", "guild")
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        # Same 60s freshness rule as /api/map: the two surfaces must not
+        # disagree about who is in the world.
+        snapshot_rows = rd.rows(
+            "SELECT name, is_bot, group_leader FROM overseer_snapshot "
+            "WHERE updated_at > NOW() - INTERVAL 60 SECOND",
+            (), what="overseer_snapshot")
+        family_rows = rd.rows(
+            f"SELECT name FROM characters WHERE name IN ({holes})",  # noqa: S608
+            tuple(names), what="characters")
+        realm_rows = rd.rows(
+            "SELECT COUNT(*) AS characters FROM characters",
+            (), what="characters")
+        guild_rows = rd.rows(
+            "SELECT COUNT(*) AS guilds FROM guild",
+            (), what="guild")
     for row in family_rows:
         row["family"] = family_of.get(row["name"], "")
     return {"snapshot_rows": snapshot_rows, "family_rows": family_rows,
@@ -2576,16 +2477,16 @@ _RAID_HOLDINGS = (
 _RAID_WORN = raidgear.WORN_SQL
 
 
-def _list_items(cur) -> dict:
+def _list_items(rd) -> dict:
     """item_template rows for every item any spec's lists name, by entry.
 
     The ids come from the committed lists in data/bis, never from a request.
     A world that cannot answer degrades to {} (nobody's gear is read).
     """
     ids = raidgear.every_list_id()
-    rows = _wide_guarded(
-        cur, raidgear.LIST_SQL.format(holes=", ".join(["%s"] * len(ids))),  # noqa: S608
-        tuple(ids), "", "item_template gear lists") if ids else []
+    rows = rd.rows(
+        raidgear.LIST_SQL.format(holes=", ".join(["%s"] * len(ids))),  # noqa: S608
+        tuple(ids), what="item_template gear lists") if ids else []
     return {int(r["entry"]): r for r in rows}
 
 
@@ -2645,8 +2546,8 @@ GUILD_RUNS_LIMIT = 500
 
 # The bosses, by creature entry (guildrun.BOSSES_SQL): what tells a boss's kill
 # from a trash pull in a family run's timeline.
-def _run_bosses(cur) -> frozenset:
-    rows = _wide_guarded(cur, guildrun.BOSSES_SQL, (), "", "instance_encounters")
+def _run_bosses(rd) -> frozenset:
+    rows = rd.rows(guildrun.BOSSES_SQL, (), what="instance_encounters")
     return frozenset(int(r["creditEntry"]) for r in rows if r.get("creditEntry"))
 
 
@@ -2693,30 +2594,25 @@ def _fetch_guild_chat(guild: str, limit: int) -> dict:
     (the handler catches error 1146 only; a missing column is a real fault)
     rather than 503.
     """
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            # Not _wide_guarded: a missing table (1146) must reach the
-            # handler, which turns it into the `ready: false` answer.
-            cur.execute(_GUILD_ASKS_SQL, (guild, limit))
-            asks = list(cur.fetchall())
-            if not asks:
-                return {"guild": guild, "ready": True, "asks": []}
-            ids = [a["id"] for a in asks]
-            answers = _wide_guarded(
-                cur, _GUILD_ANSWERS_SQL.format(holes=", ".join(["%s"] * len(ids))),
-                tuple(ids), "", "overseer_guild_answer")
-            calls = _wide_guarded(
-                cur, _GUILD_PUG_CALLS_SQL.format(holes=", ".join(["%s"] * len(ids))),
-                tuple(ids), "", "overseer_guild_pug_call")
-            run_ids = sorted({a["run_id"] for a in asks if a.get("run_id")})
-            runs = [dict({k: r.get(k) for k in _GUILD_ASK_RUN_KEYS},
-                         run_state=guildrun.run_state(r))
-                    for r in guildrun.by_ids(cur, run_ids)]
-            # The same story the Guild tab tells about this run.
-            guildrun.with_stories(cur, runs)
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        # must(), not rows(): a missing table (1146) must reach the
+        # handler, which turns it into the `ready: false` answer.
+        asks = rd.must(_GUILD_ASKS_SQL, (guild, limit))
+        if not asks:
+            return {"guild": guild, "ready": True, "asks": []}
+        ids = [a["id"] for a in asks]
+        answers = rd.rows(
+            _GUILD_ANSWERS_SQL.format(holes=", ".join(["%s"] * len(ids))),
+            tuple(ids), what="overseer_guild_answer")
+        calls = rd.rows(
+            _GUILD_PUG_CALLS_SQL.format(holes=", ".join(["%s"] * len(ids))),
+            tuple(ids), what="overseer_guild_pug_call")
+        run_ids = sorted({a["run_id"] for a in asks if a.get("run_id")})
+        runs = [dict({k: r.get(k) for k in _GUILD_ASK_RUN_KEYS},
+                     run_state=guildrun.run_state(r))
+                for r in guildrun.by_ids(rd, run_ids)]
+        # The same story the Guild tab tells about this run.
+        guildrun.with_stories(rd, runs)
     by_ask: dict = {}
     for ans in answers:
         by_ask.setdefault(ans["ask_id"], []).append(dict(ans))
@@ -2760,7 +2656,7 @@ _RAID_SUPPLY_MONEY = (
 )
 
 
-def _fetch_raid_supply(cur, guild_ids: list) -> dict:
+def _fetch_raid_supply(rd, guild_ids: list) -> dict:
     """guild id -> {have, knowers, bank} for the supply section; guarded."""
     out = {g: {"have": {}, "knowers": {}, "bank": None} for g in guild_ids}
     if not guild_ids:
@@ -2770,14 +2666,14 @@ def _fetch_raid_supply(cur, guild_ids: list) -> dict:
     spells = sorted(raidsupply.SUPPLY_SPELLS)
     eholes = ", ".join(["%s"] * len(entries))
     sholes = ", ".join(["%s"] * len(spells))
-    held = _wide_guarded(cur, _RAID_SUPPLY_HAVE.format(guilds=guilds, entries=eholes),  # noqa: S608
-                         (*guild_ids, *entries), "", "character_inventory supply")
-    banked = _wide_guarded(cur, _RAID_SUPPLY_GBANK.format(guilds=guilds, entries=eholes),  # noqa: S608
-                           (*guild_ids, *entries), "", "guild_bank_item")
-    known = _wide_guarded(cur, _RAID_SUPPLY_KNOWN.format(guilds=guilds, spells=sholes),  # noqa: S608
-                          (*guild_ids, *spells), "", "character_spell supply")
-    money = _wide_guarded(cur, _RAID_SUPPLY_MONEY.format(guilds=guilds),  # noqa: S608
-                          tuple(guild_ids), "", "guild")
+    held = rd.rows(_RAID_SUPPLY_HAVE.format(guilds=guilds, entries=eholes),  # noqa: S608
+                   (*guild_ids, *entries), what="character_inventory supply")
+    banked = rd.rows(_RAID_SUPPLY_GBANK.format(guilds=guilds, entries=eholes),  # noqa: S608
+                     (*guild_ids, *entries), what="guild_bank_item")
+    known = rd.rows(_RAID_SUPPLY_KNOWN.format(guilds=guilds, spells=sholes),  # noqa: S608
+                    (*guild_ids, *spells), what="character_spell supply")
+    money = rd.rows(_RAID_SUPPLY_MONEY.format(guilds=guilds),  # noqa: S608
+                    tuple(guild_ids), what="guild")
     for row in list(held) + list(banked):
         have = out.setdefault(row.get("guildid"), {"have": {}, "knowers": {}, "bank": None})["have"]
         entry = int(row.get("entry") or 0)
@@ -2795,18 +2691,18 @@ def _fetch_raid_supply(cur, guild_ids: list) -> dict:
 _PRERAID_CATALOG: dict | None = None
 
 
-def _preraid_catalog(cur) -> dict:
+def _preraid_catalog(rd) -> dict:
     """preraid's catalog, read once; {} when this realm cannot answer."""
     global _PRERAID_CATALOG
     if _PRERAID_CATALOG is not None:
         return _PRERAID_CATALOG
-    drops = _wide_guarded(cur, preraid.DROPS_SQL, (), "", "level 60 loot")
-    anchors = _wide_guarded(cur, preraid.ANCHORS_SQL, (), "", "wing bosses")
-    rewards = _wide_guarded(cur, preraid.REWARDS_SQL, (), "", "dungeon rewards")
+    drops = rd.rows(preraid.DROPS_SQL, (), what="level 60 loot")
+    anchors = rd.rows(preraid.ANCHORS_SQL, (), what="wing bosses")
+    rewards = rd.rows(preraid.REWARDS_SQL, (), what="dungeon rewards")
     entries = preraid.catalog_entries(drops, rewards)
-    items = _wide_guarded(
-        cur, preraid.ITEMS_SQL.format(holes=preraid.holes(len(entries))),  # noqa: S608
-        tuple(entries) or (0,), "", "level 60 items")
+    items = rd.rows(
+        preraid.ITEMS_SQL.format(holes=preraid.holes(len(entries))),  # noqa: S608
+        tuple(entries) or (0,), what="level 60 items")
     found = preraid.catalog(drops, anchors, rewards, items)
     if found:
         _PRERAID_CATALOG = found
@@ -2814,27 +2710,27 @@ def _preraid_catalog(cur) -> dict:
     return found
 
 
-def _fetch_preraid(cur, names: list) -> dict:
+def _fetch_preraid(rd, names: list) -> dict:
     """The pre-raid plan's reads for `names`, on the raid fetch's cursor."""
     holes = preraid.holes(len(names))
     args = tuple(names)
     # S608: `holes` is a run of placeholders sized by a list this process
     # owns; every value is bound.
     return {
-        "items": _preraid_catalog(cur),
-        "member_rows": _wide_guarded(cur, preraid.MEMBERS_SQL.format(holes=holes),  # noqa: S608
-                                     args, "", "preraid members"),
-        "worn_rows": _wide_guarded(cur, preraid.WORN_SQL.format(holes=holes),  # noqa: S608
-                                   args, "", "preraid worn"),
-        "rewarded_rows": _wide_guarded(
-            cur, preraid.PROGRESS_REWARDED_SQL.format(holes=holes),  # noqa: S608
-            args, "", "preraid quests rewarded"),
-        "log_rows": _wide_guarded(
-            cur, preraid.PROGRESS_LOG_SQL.format(holes=holes),  # noqa: S608
-            args, "", "preraid quests held"),
-        "held_rows": _wide_guarded(
-            cur, preraid.PROGRESS_ITEMS_SQL.format(holes=holes),  # noqa: S608
-            args, "", "preraid items held"),
+        "items": _preraid_catalog(rd),
+        "member_rows": rd.rows(preraid.MEMBERS_SQL.format(holes=holes),  # noqa: S608
+                               args, what="preraid members"),
+        "worn_rows": rd.rows(preraid.WORN_SQL.format(holes=holes),  # noqa: S608
+                             args, what="preraid worn"),
+        "rewarded_rows": rd.rows(
+            preraid.PROGRESS_REWARDED_SQL.format(holes=holes),  # noqa: S608
+            args, what="preraid quests rewarded"),
+        "log_rows": rd.rows(
+            preraid.PROGRESS_LOG_SQL.format(holes=holes),  # noqa: S608
+            args, what="preraid quests held"),
+        "held_rows": rd.rows(
+            preraid.PROGRESS_ITEMS_SQL.format(holes=holes),  # noqa: S608
+            args, what="preraid items held"),
     }
 
 
@@ -2851,8 +2747,8 @@ def _fetch_raidgoals() -> dict:
     widens that to whoever else is in their guild, which is how a page written
     for five stops being a page written for five.
 
-    `_wide_guarded` and the roster read this borrows are defined with the loot
-    board's below, and this section sits ABOVE that one deliberately. The
+    The roster read this borrows is defined with the loot board's below, and
+    this section sits ABOVE that one deliberately. The
     recap suite slices its own fetch window from that function to the
     current-goal banner and forbids an unguarded read anywhere inside it, so a
     section dropped in there would be asserted about by a suite that knows
@@ -2875,85 +2771,77 @@ def _fetch_raidgoals() -> dict:
     name_holes = ", ".join(["%s"] * len(plan_names))
     spells = raidgoals.craft_spells()
     spell_holes = ", ".join(["%s"] * len(spells))
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            # S608 throughout: every `holes` is a run of placeholders sized by
-            # a list this process owns, and every VALUE is still bound by the
-            # driver.
-            guild = _wide_guarded(cur, _RAID_GUILD.format(holes=holes),  # noqa: S608
-                                  tuple(names), "", "guild_member")
-            # WHO THE REST OF THE READS ARE ABOUT. The guild widens the roster
-            # and every read below binds the WIDER list, or a guild of forty
-            # would be counted against five characters' bags.
-            roster = sorted({row["name"] for row in guild if row.get("name")}
-                            | set(names))
-            rholes = ", ".join(["%s"] * len(roster))
-            items = _wide_guarded(cur, _RAID_ITEMS.format(holes=name_holes),  # noqa: S608
-                                  tuple(plan_names), "", "item_template")
-            recipes = _wide_guarded(
-                cur, _RAID_RECIPES.format(holes=spell_holes),  # noqa: S608
-                tuple(spells), "", "item_template recipes")
-            trainer = _wide_guarded(
-                cur, _RAID_TRAINER.format(holes=spell_holes),  # noqa: S608
-                tuple(spells), "", "trainer_spell")
-            chars = _wide_guarded(cur, _RAID_CHARS.format(holes=rholes),  # noqa: S608
-                                  tuple(roster), "", "characters")
-            skills = _wide_guarded(cur, _RECAP_SKILLS.format(holes=rholes),  # noqa: S608
-                                   tuple(roster), "", "character_skills")
-            known = _wide_guarded(
-                cur,
-                _RAID_SPELLS.format(holes=rholes, spells=spell_holes),  # noqa: S608
-                (*roster, *spells), "", "character_spell")
-            holdings = _wide_guarded(
-                cur, _RAID_HOLDINGS.format(holes=rholes),  # noqa: S608
-                tuple(roster), "", "character_inventory")
-            list_items = _list_items(cur)
-            worn = _wide_guarded(cur, _RAID_WORN.format(holes=rholes),  # noqa: S608
-                                 (len(armory.EQUIPPED_SLOTS), *roster),
-                                 _RAID_WORN_OLD.format(holes=rholes),  # noqa: S608
-                                 "character_inventory worn")
-            quests = raidready.ATTUNEMENT_QUESTS
-            attuned = _wide_guarded(
-                cur,
-                _RAID_ATTUNED.format(  # noqa: S608
-                    holes=rholes, quests=", ".join(["%s"] * len(quests))),
-                (*roster, *quests), "", "character_queststatus_rewarded")
-            quest_log = _wide_guarded(
-                cur,
-                _RAID_ATTUNE_LOG.format(  # noqa: S608
-                    holes=rholes, quests=", ".join(["%s"] * len(quests))),
-                (*roster, *quests), "", "character_queststatus")
-            access = _wide_guarded(cur, _RAID_ACCESS,
-                                   (raidgoals.MOLTEN_CORE,), "",
-                                   "dungeon_access_template")
-            supply = _fetch_raid_supply(cur, sorted(
-                {row["guildid"] for row in guild if row.get("guildid") is not None}))
-            # THE PRE-RAID PLAN (#280), for the families only: a guild bot
-            # has no drive that could send it after an upgrade.
-            prep = _fetch_preraid(cur, names)
-            # NO ENTRIES MEANS NOTHING TO BIND, and `IN ()` is a syntax error
-            # rather than an empty result. Every reagent then reports that
-            # this realm carries no item under its name, which is what
-            # happened.
-            entries = sorted({int(row["entry"]) for row in items
-                              if row.get("entry") is not None})
-            vendor: list = []
-            creature: list = []
-            objects: list = []
-            if entries:
-                eholes = ", ".join(["%s"] * len(entries))
-                vendor = _wide_guarded(
-                    cur, _RAID_VENDOR.format(holes=eholes),  # noqa: S608
-                    tuple(entries), "", "npc_vendor")
-                creature = _wide_guarded(
-                    cur, _RAID_CREATURE.format(holes=eholes),  # noqa: S608
-                    tuple(entries), "", "creature_loot_template")
-                objects = _wide_guarded(
-                    cur, _RAID_OBJECT.format(holes=eholes),  # noqa: S608
-                    tuple(entries), "", "gameobject_loot_template")
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        # S608 throughout: every `holes` is a run of placeholders sized by
+        # a list this process owns, and every VALUE is still bound by the
+        # driver.
+        guild = rd.rows(_RAID_GUILD.format(holes=holes),  # noqa: S608
+                        tuple(names), what="guild_member")
+        # WHO THE REST OF THE READS ARE ABOUT. The guild widens the roster
+        # and every read below binds the WIDER list, or a guild of forty
+        # would be counted against five characters' bags.
+        roster = sorted({row["name"] for row in guild if row.get("name")}
+                        | set(names))
+        rholes = ", ".join(["%s"] * len(roster))
+        items = rd.rows(_RAID_ITEMS.format(holes=name_holes),  # noqa: S608
+                        tuple(plan_names), what="item_template")
+        recipes = rd.rows(
+            _RAID_RECIPES.format(holes=spell_holes),  # noqa: S608
+            tuple(spells), what="item_template recipes")
+        trainer = rd.rows(
+            _RAID_TRAINER.format(holes=spell_holes),  # noqa: S608
+            tuple(spells), what="trainer_spell")
+        chars = rd.rows(_RAID_CHARS.format(holes=rholes),  # noqa: S608
+                        tuple(roster), what="characters")
+        skills = rd.rows(_RECAP_SKILLS.format(holes=rholes),  # noqa: S608
+                         tuple(roster), what="character_skills")
+        known = rd.rows(
+            _RAID_SPELLS.format(holes=rholes, spells=spell_holes),  # noqa: S608
+            (*roster, *spells), what="character_spell")
+        holdings = rd.rows(
+            _RAID_HOLDINGS.format(holes=rholes),  # noqa: S608
+            tuple(roster), what="character_inventory")
+        list_items = _list_items(rd)
+        worn = rd.rows(_RAID_WORN.format(holes=rholes),  # noqa: S608
+                       (len(armory.EQUIPPED_SLOTS), *roster),
+                       fallback=_RAID_WORN_OLD.format(holes=rholes),  # noqa: S608
+                       what="character_inventory worn")
+        quests = raidready.ATTUNEMENT_QUESTS
+        attuned = rd.rows(
+            _RAID_ATTUNED.format(  # noqa: S608
+                holes=rholes, quests=", ".join(["%s"] * len(quests))),
+            (*roster, *quests), what="character_queststatus_rewarded")
+        quest_log = rd.rows(
+            _RAID_ATTUNE_LOG.format(  # noqa: S608
+                holes=rholes, quests=", ".join(["%s"] * len(quests))),
+            (*roster, *quests), what="character_queststatus")
+        access = rd.rows(_RAID_ACCESS,
+                         (raidgoals.MOLTEN_CORE,), what="dungeon_access_template")
+        supply = _fetch_raid_supply(rd, sorted(
+            {row["guildid"] for row in guild if row.get("guildid") is not None}))
+        # THE PRE-RAID PLAN (#280), for the families only: a guild bot
+        # has no drive that could send it after an upgrade.
+        prep = _fetch_preraid(rd, names)
+        # NO ENTRIES MEANS NOTHING TO BIND, and `IN ()` is a syntax error
+        # rather than an empty result. Every reagent then reports that
+        # this realm carries no item under its name, which is what
+        # happened.
+        entries = sorted({int(row["entry"]) for row in items
+                          if row.get("entry") is not None})
+        vendor: list = []
+        creature: list = []
+        objects: list = []
+        if entries:
+            eholes = ", ".join(["%s"] * len(entries))
+            vendor = rd.rows(
+                _RAID_VENDOR.format(holes=eholes),  # noqa: S608
+                tuple(entries), what="npc_vendor")
+            creature = rd.rows(
+                _RAID_CREATURE.format(holes=eholes),  # noqa: S608
+                tuple(entries), what="creature_loot_template")
+            objects = rd.rows(
+                _RAID_OBJECT.format(holes=eholes),  # noqa: S608
+                tuple(entries), what="gameobject_loot_template")
     return {"item_rows": items, "recipe_rows": recipes,
             "trainer_rows": trainer, "char_rows": chars,
             "skill_rows": skills, "spell_rows": known,
@@ -2984,10 +2872,9 @@ def _fetch_raidgoals() -> dict:
 # Guarded for both 1146 and 1054 like every other read in this file. A world
 # without `guild_member` gets an empty guild and a page covering the family,
 # rather than a 503 on a tab that has nothing to do with the missing table
-# (infra#3172). `_wide_guarded` is defined further down with the recap's reads,
-# for the same reason `_fetch_dungeonplan` below sits above it: this section
-# must stay OUTSIDE the recap suite's fetch window, and a module-level function
-# is resolved when it is called rather than when this one is defined.
+# (infra#3172). This section sits above the recap's reads for the same reason
+# `_fetch_dungeonplan` below does: it must stay OUTSIDE the recap suite's fetch
+# window.
 
 # The trade skill ids, inlined as text rather than bound, exactly as
 # bridge.py's `_TRADE_SKILL_IDS` is and for the same reason: every element is
@@ -3168,48 +3055,38 @@ def _fetch_guildcraft(groups: list[tuple[str, list[str]]] | None = None) -> dict
     family under "families", keyed as `groups` is.
     """
     groups = groups if groups is not None else [("", family.roster())]
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            per_family = {}
-            for key, names in groups:
-                holes = ", ".join(["%s"] * len(names))
-                # S608 on every roster read below: `holes` is a run of "%s"
-                # placeholders sized by the roster's length, and every VALUE
-                # is still bound by the driver. The skill-id lists are ints
-                # from goals.SKILL_IDS and no request can reach them.
-                guild = _wide_guarded(cur, _TRADE_GUILD.format(holes=holes),  # noqa: S608
-                                      tuple(names), "", "guild_member")
-                covered = guildcraft.covered_names(names, guild)
-                choles = ", ".join(["%s"] * len(covered))
-                members = _wide_guarded(cur, _TRADE_MEMBERS.format(holes=choles),  # noqa: S608
-                                        tuple(covered), "", "characters")
-                skills = _wide_guarded(cur, _TRADE_SKILLS.format(holes=choles),  # noqa: S608
-                                       tuple(covered), "", "character_skills")
-                spells = _wide_guarded(cur, _TRADE_SPELLS.format(holes=choles),  # noqa: S608
-                                       tuple(covered), "", "character_spell")
-                per_family[key] = {"guild_rows": guild, "member_rows": members,
-                                   "skill_rows": skills, "spell_rows": spells}
-            # THE ONE READ WHOSE ABSENCE CHANGES A SENTENCE. An empty list here
-            # is either "nobody is assigned anything" or "the column is not in
-            # this world yet", and those are different admissions, so the page
-            # is told which it got rather than being left to guess from a
-            # length.
-            roster_rows = _wide_guarded(cur, _TRADE_ROSTER, (), "",
-                                        "overseer_roster")
-            recipes = _wide_guarded(cur, _TRADE_RECIPES, (), "",
-                                    "item_template")
-            trainer = _wide_guarded(cur, _TRADE_TRAINER, (), "",
-                                    "trainer_spell")
-            crafts = _wide_guarded(cur, _TRADE_CRAFT_FACTS, (), "",
-                                   "trainer_spell")
-            vendors = _wide_guarded(cur, _TRADE_VENDORS, (), "", "npc_vendor")
-            drops = _wide_guarded(cur, _TRADE_DROPS, (), "",
-                                  "creature_loot_template")
-            quests = _wide_guarded(cur, _TRADE_QUESTS, (), "",
-                                   "quest_template")
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        per_family = {}
+        for key, names in groups:
+            holes = ", ".join(["%s"] * len(names))
+            # S608 on every roster read below: `holes` is a run of "%s"
+            # placeholders sized by the roster's length, and every VALUE
+            # is still bound by the driver. The skill-id lists are ints
+            # from goals.SKILL_IDS and no request can reach them.
+            guild = rd.rows(_TRADE_GUILD.format(holes=holes),  # noqa: S608
+                            tuple(names), what="guild_member")
+            covered = guildcraft.covered_names(names, guild)
+            choles = ", ".join(["%s"] * len(covered))
+            members = rd.rows(_TRADE_MEMBERS.format(holes=choles),  # noqa: S608
+                              tuple(covered), what="characters")
+            skills = rd.rows(_TRADE_SKILLS.format(holes=choles),  # noqa: S608
+                             tuple(covered), what="character_skills")
+            spells = rd.rows(_TRADE_SPELLS.format(holes=choles),  # noqa: S608
+                             tuple(covered), what="character_spell")
+            per_family[key] = {"guild_rows": guild, "member_rows": members,
+                               "skill_rows": skills, "spell_rows": spells}
+        # THE ONE READ WHOSE ABSENCE CHANGES A SENTENCE. An empty list here
+        # is either "nobody is assigned anything" or "the column is not in
+        # this world yet", and those are different admissions, so the page
+        # is told which it got rather than being left to guess from a
+        # length.
+        roster_rows = rd.rows(_TRADE_ROSTER, (), what="overseer_roster")
+        recipes = rd.rows(_TRADE_RECIPES, (), what="item_template")
+        trainer = rd.rows(_TRADE_TRAINER, (), what="trainer_spell")
+        crafts = rd.rows(_TRADE_CRAFT_FACTS, (), what="trainer_spell")
+        vendors = rd.rows(_TRADE_VENDORS, (), what="npc_vendor")
+        drops = rd.rows(_TRADE_DROPS, (), what="creature_loot_template")
+        quests = rd.rows(_TRADE_QUESTS, (), what="quest_template")
     return {"families": per_family, "roster_rows": roster_rows,
             "recipe_rows": recipes, "trainer_rows": trainer,
             "vendor_rows": vendors, "drop_rows": drops, "quest_rows": quests,
@@ -3330,103 +3207,97 @@ def _fetch_dungeonplan() -> dict:
     roster and the guild tables and never from the request, exactly as
     /api/armory and /api/family refuse a name parameter.
 
-    `_wide_guarded` and the two roster reads this borrows are defined with the
-    loot board's below, and this section sits ABOVE that one deliberately. The
+    The two roster reads this borrows are defined with the loot board's
+    below, and this section sits ABOVE that one deliberately. The
     recap suite slices its own fetch window from that function to the
     current-goal banner and forbids an unguarded read anywhere inside it, so a
     section dropped in there would be asserted about by a suite that knows
     nothing of it.
     """
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            catalogue = _wide_guarded(cur, _PLAN_CATALOGUE, (),
-                                      _PLAN_CATALOGUE_OLD,
-                                      "dungeon_access_template")
-            # THE UNION, AND THE MODULE DECIDES IT. dungeonplan.map_ids is the
-            # one answer to which maps get a row, and it is asked here so the
-            # reads cannot fall behind it. NO MAPS MEANS NOTHING TO BIND, and
-            # `IN ()` is a syntax error rather than an empty result.
-            maps = dungeonplan.map_ids(catalogue, achievements.MAP_NAMES)
-            encounters: list = []
-            loot: list = []
-            if maps:
-                mholes = ", ".join(["%s"] * len(maps))
-                encounters = _wide_guarded(
-                    cur, _PLAN_ENCOUNTERS.format(holes=mholes),  # noqa: S608
-                    tuple(maps), "", "instance_encounters")
-                loot = _wide_guarded(
-                    cur, _PLAN_LOOT.format(holes=mholes),  # noqa: S608
-                    tuple(maps), "", "creature_loot_template")
-            queue_views = _queue_views(cur)
-            families: dict = {}
-            for row in _wide_guarded(cur, _PLAN_FAMILIES, (), "",
-                                     "overseer_roster"):
-                if row.get("family") and row.get("name"):
-                    families.setdefault(row["family"], []).append(row["name"])
-            if not families:
-                # No roster rows: the one family bonds knows, exactly as the
-                # Family tab degrades, and no family at all when bonds has
-                # none either.
-                roster = family.roster()
-                families = {roster[0]: roster} if roster else {}
-            names = [n for members in families.values() for n in members]
-            # NOBODY TO BIND MEANS NOTHING TO READ: `IN ()` is a syntax error,
-            # not an empty result, so the character reads are skipped and the
-            # page says the roster names no family.
-            guild_rows: list = []
-            chars: list = []
-            worn: list = []
-            skills: list = []
-            runs: list = []
-            quest_rows: list = []
-            rewarded: list = []
-            records: dict = {}
-            if names:
-                holes = ", ".join(["%s"] * len(names))
-                # S608 on the roster reads: `holes` is a run of placeholders
-                # sized by the roster, and every VALUE is bound by the driver.
-                guild_rows = _wide_guarded(
-                    cur, _LINEUP_GUILD.format(holes=holes),  # noqa: S608
-                    tuple(names), "", "guild_member")
-                # THE GUILD'S MEMBERS TOO, because the page counts who in the
-                # guild would gain. Measured on the dev realm with a guild of
-                # 71 and a second of 5: the whole fetch takes about 0.2s.
-                everyone = sorted(set(names) | {r["name"] for r in guild_rows})
-                eholes = ", ".join(["%s"] * len(everyone))
-                chars = _wide_guarded(
-                    cur, _PLAN_CHARS.format(holes=eholes),  # noqa: S608
-                    tuple(everyone), _PLAN_CHARS_OLD.format(holes=eholes),  # noqa: S608
-                    "characters")
-                worn = _wide_guarded(
-                    cur, _RECAP_WORN.format(holes=eholes),  # noqa: S608
-                    (len(armory.EQUIPPED_SLOTS), *everyone), "",
-                    "character_inventory")
-                # Guarded like everything else, and the empty list this hands
-                # back on a degraded schema is a real answer: an unknown
-                # proficiency, which the basis says out loud.
-                skills = _wide_guarded(
-                    cur, _RECAP_SKILLS.format(holes=eholes),  # noqa: S608
-                    tuple(everyone), "", "character_skills")
-                # Bound to the roster: only runs the families led are drawn.
-                runs = _wide_guarded(
-                    cur, _PLAN_RUNS.format(holes=holes),  # noqa: S608
-                    tuple(names), _PLAN_RUNS_OLD.format(holes=holes),  # noqa: S608
-                    "overseer_dungeon_run")
-                # WHAT THE PLANNER READS (campaignplan.py), so the page's "next
-                # planned" is the bridge's own heuristic over the same facts.
-                quest_rows = _wide_guarded(cur, campaignplan.QUESTS_SQL, (),
-                                           "", "quest_template")
-                rewarded = _wide_guarded(
-                    cur, campaignplan.REWARDED_SQL.format(holes=holes),
-                    tuple(names), "", "character_queststatus_rewarded")
-                # THE LADDER AND JEV'S REASONS (dungeonladder.py): per family,
-                # the record the planner weighs, the door keys, what a capped
-                # family's runs are worth, and the last dungeon choice Jev was
-                # asked for. The bridge planner's own statements.
-                records = _fetch_ladder_records(cur, families, chars)
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        catalogue = rd.rows(_PLAN_CATALOGUE, (),
+                            fallback=_PLAN_CATALOGUE_OLD,
+                            what="dungeon_access_template")
+        # THE UNION, AND THE MODULE DECIDES IT. dungeonplan.map_ids is the
+        # one answer to which maps get a row, and it is asked here so the
+        # reads cannot fall behind it. NO MAPS MEANS NOTHING TO BIND, and
+        # `IN ()` is a syntax error rather than an empty result.
+        maps = dungeonplan.map_ids(catalogue, achievements.MAP_NAMES)
+        encounters: list = []
+        loot: list = []
+        if maps:
+            mholes = ", ".join(["%s"] * len(maps))
+            encounters = rd.rows(
+                _PLAN_ENCOUNTERS.format(holes=mholes),  # noqa: S608
+                tuple(maps), what="instance_encounters")
+            loot = rd.rows(
+                _PLAN_LOOT.format(holes=mholes),  # noqa: S608
+                tuple(maps), what="creature_loot_template")
+        queue_views = _queue_views(rd)
+        families: dict = {}
+        for row in rd.rows(_PLAN_FAMILIES, (), what="overseer_roster"):
+            if row.get("family") and row.get("name"):
+                families.setdefault(row["family"], []).append(row["name"])
+        if not families:
+            # No roster rows: the one family bonds knows, exactly as the
+            # Family tab degrades, and no family at all when bonds has
+            # none either.
+            roster = family.roster()
+            families = {roster[0]: roster} if roster else {}
+        names = [n for members in families.values() for n in members]
+        # NOBODY TO BIND MEANS NOTHING TO READ: `IN ()` is a syntax error,
+        # not an empty result, so the character reads are skipped and the
+        # page says the roster names no family.
+        guild_rows: list = []
+        chars: list = []
+        worn: list = []
+        skills: list = []
+        runs: list = []
+        quest_rows: list = []
+        rewarded: list = []
+        records: dict = {}
+        if names:
+            holes = ", ".join(["%s"] * len(names))
+            # S608 on the roster reads: `holes` is a run of placeholders
+            # sized by the roster, and every VALUE is bound by the driver.
+            guild_rows = rd.rows(
+                _LINEUP_GUILD.format(holes=holes),  # noqa: S608
+                tuple(names), what="guild_member")
+            # THE GUILD'S MEMBERS TOO, because the page counts who in the
+            # guild would gain. Measured on the dev realm with a guild of
+            # 71 and a second of 5: the whole fetch takes about 0.2s.
+            everyone = sorted(set(names) | {r["name"] for r in guild_rows})
+            eholes = ", ".join(["%s"] * len(everyone))
+            chars = rd.rows(
+                _PLAN_CHARS.format(holes=eholes),  # noqa: S608
+                tuple(everyone), fallback=_PLAN_CHARS_OLD.format(holes=eholes),  # noqa: S608
+                what="characters")
+            worn = rd.rows(
+                _RECAP_WORN.format(holes=eholes),  # noqa: S608
+                (len(armory.EQUIPPED_SLOTS), *everyone), what="character_inventory")
+            # Guarded like everything else, and the empty list this hands
+            # back on a degraded schema is a real answer: an unknown
+            # proficiency, which the basis says out loud.
+            skills = rd.rows(
+                _RECAP_SKILLS.format(holes=eholes),  # noqa: S608
+                tuple(everyone), what="character_skills")
+            # Bound to the roster: only runs the families led are drawn.
+            runs = rd.rows(
+                _PLAN_RUNS.format(holes=holes),  # noqa: S608
+                tuple(names), fallback=_PLAN_RUNS_OLD.format(holes=holes),  # noqa: S608
+                what="overseer_dungeon_run")
+            # WHAT THE PLANNER READS (campaignplan.py), so the page's "next
+            # planned" is the bridge's own heuristic over the same facts.
+            quest_rows = rd.rows(campaignplan.QUESTS_SQL, (),
+                                 what="quest_template")
+            rewarded = rd.rows(
+                campaignplan.REWARDED_SQL.format(holes=holes),
+                tuple(names), what="character_queststatus_rewarded")
+            # THE LADDER AND JEV'S REASONS (dungeonladder.py): per family,
+            # the record the planner weighs, the door keys, what a capped
+            # family's runs are worth, and the last dungeon choice Jev was
+            # asked for. The bridge planner's own statements.
+            records = _fetch_ladder_records(rd, families, chars)
     return {"catalogue_rows": catalogue, "encounter_rows": encounters,
             "loot_rows": loot, "char_rows": chars, "equipped_rows": worn,
             "skill_rows": skills, "families": families,
@@ -3440,32 +3311,32 @@ def _fetch_dungeonplan() -> dict:
 _LADDER_BOSSES: dict | None = None
 
 
-def _ladder_bosses(cur) -> dict | None:
+def _ladder_bosses(rd) -> dict | None:
     """campaignplan.bosses off the world, read once; None when unread."""
     global _LADDER_BOSSES
     if _LADDER_BOSSES is None:
-        found = campaignplan.bosses(_wide_guarded(
-            cur, campaignplan.BOSSES_SQL, (), "", "instance_encounters"))
+        found = campaignplan.bosses(rd.rows(
+            campaignplan.BOSSES_SQL, (), what="instance_encounters"))
         if found:
             _LADDER_BOSSES = found
         return found or None
     return _LADDER_BOSSES
 
 
-def _fetch_ladder_records(cur, families: dict, chars: list) -> dict:
+def _fetch_ladder_records(rd, families: dict, chars: list) -> dict:
     """family -> _fetch_ladder_record, and "" -> the world's boss levels."""
     levels = {r["name"]: int(r.get("level") or 0) for r in chars}
     records = {
         head: _fetch_ladder_record(
-            cur, head, members,
+            rd, head, members,
             all(levels.get(n, 0) >= campaignplan.LEVEL_CAP for n in members))
         for head, members in families.items()
     }
-    records[""] = {"bosses": _ladder_bosses(cur)}
+    records[""] = {"bosses": _ladder_bosses(rd)}
     return records
 
 
-def _fetch_ladder_record(cur, head: str, members: list, capped: bool) -> dict:
+def _fetch_ladder_record(rd, head: str, members: list, capped: bool) -> dict:
     """One family's rows for the ladder and Jev's reasons. Reads only.
 
     `capped` reads the pre-raid plan too, because at the level cap a lower
@@ -3476,22 +3347,21 @@ def _fetch_ladder_record(cur, head: str, members: list, capped: bool) -> dict:
     # S608: `holes` is a run of placeholders sized by the roster; every value
     # is bound by the driver.
     record = {
-        "died": _wide_guarded(
-            cur, campaignplan.DEATHS_SQL.format(holes=holes),  # noqa: S608
-            args + (campaignplan.DEATH_HOURS,), "", "overseer_death"),
-        "won": _wide_guarded(cur, campaignplan.WON_SQL, (head,), "",
-                             "overseer_loot_council"),
-        "keys": _wide_guarded(
-            cur, campaignplan.KEYS_SQL.format(holes=holes),  # noqa: S608
-            args, "", "character_inventory"),
-        "choice": _wide_guarded(
-            cur, campaignplan.CHOICE_SQL,
-            (campaignplan.CHOICE_KIND, head[:12]), "", "overseer_jev_judgment"),
+        "died": rd.rows(
+            campaignplan.DEATHS_SQL.format(holes=holes),  # noqa: S608
+            args + (campaignplan.DEATH_HOURS,), what="overseer_death"),
+        "won": rd.rows(campaignplan.WON_SQL, (head,), what="overseer_loot_council"),
+        "keys": rd.rows(
+            campaignplan.KEYS_SQL.format(holes=holes),  # noqa: S608
+            args, what="character_inventory"),
+        "choice": rd.rows(
+            campaignplan.CHOICE_SQL,
+            (campaignplan.CHOICE_KIND, head[:12]), what="overseer_jev_judgment"),
         "upgrades": None,
         "progress": None,
     }
     if capped:
-        prep = _fetch_preraid(cur, members)
+        prep = _fetch_preraid(rd, members)
         if prep["items"] and prep["member_rows"]:
             plans = [preraid.plan(m, prep["items"])
                      for m in preraid.members(prep["member_rows"],
@@ -3516,22 +3386,17 @@ _QUEUE_LEADERS_OLD = (
 )
 
 
-def _queue_views(cur) -> dict:
+def _queue_views(rd) -> dict:
     """family -> campaignqueue.view, off one cursor. {} on a bare schema."""
-    queue_rows = _wide_guarded(cur, campaignqueue.SELECT_PENDING_SQL, (), "",
-                               campaignqueue.TABLE)
-    roster_rows = _wide_guarded(cur, _QUEUE_LEADERS, (), _QUEUE_LEADERS_OLD,
-                                "overseer_roster")
+    queue_rows = rd.rows(campaignqueue.SELECT_PENDING_SQL, (), what=campaignqueue.TABLE)
+    roster_rows = rd.rows(_QUEUE_LEADERS, (), fallback=_QUEUE_LEADERS_OLD,
+                          what="overseer_roster")
     return campaignqueue.views(queue_rows, roster_rows)
 
 
 def _fetch_queue_views() -> dict:
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            return _queue_views(cur)
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        return _queue_views(rd)
 
 
 # --- the leveling route (levelroute.py) ---------------------------------------
@@ -3551,11 +3416,11 @@ _LEVEL_CHOICE = (
 )
 
 
-def _level_world(cur) -> tuple:
+def _level_world(rd) -> tuple:
     global _LEVEL_WORLD
     if _LEVEL_WORLD is None:
-        quests = _wide_guarded(cur, levelroute.QUESTS_SQL, (), "", "quest_template")
-        spawns = _wide_guarded(cur, levelroute.DANGER_SQL, (), "", "creature")
+        quests = rd.rows(levelroute.QUESTS_SQL, (), what="quest_template")
+        spawns = rd.rows(levelroute.DANGER_SQL, (), what="creature")
         if quests and spawns:
             _LEVEL_WORLD = (tuple(quests), levelroute.cells(spawns))
         return (tuple(quests) or None, levelroute.cells(spawns) or None)
@@ -3566,35 +3431,27 @@ def _level_reads(names: list, key: str) -> dict:
     """The rows /api/levelroute is drawn from, for one family. Reads only."""
     holes = ", ".join(["%s"] * len(names))
     args = tuple(names)
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            quests, spawns = _level_world(cur)
-            return {
-                "quests": quests,
-                "spawns": spawns,
-                "members": _wide_guarded(
-                    cur, levelroute.MEMBERS_SQL.format(holes=holes), args, "",
-                    "characters"),
-                "rewarded": _wide_guarded(
-                    cur, campaignplan.REWARDED_SQL.format(holes=holes), args, "",
-                    "character_queststatus_rewarded"),
-                "held": _wide_guarded(
-                    cur, levelroute.HELD_SQL.format(holes=holes), args, "",
-                    "character_queststatus"),
-                "died": _wide_guarded(
-                    cur, levelroute.DEATHS_SQL.format(holes=holes),
-                    args + (levelroute.DEATH_HOURS,), "", "overseer_death"),
-                "where": _wide_guarded(
-                    cur, _LEVEL_POSITIONS.format(holes=holes), args, "",
-                    "overseer_snapshot"),
-                "choice": _wide_guarded(
-                    cur, _LEVEL_CHOICE, (levelroute.KIND, key[:12]), "",
-                    "overseer_jev_judgment"),
-                "queue": _queue_views(cur).get(key) or {},
-            }
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        quests, spawns = _level_world(rd)
+        return {
+            "quests": quests,
+            "spawns": spawns,
+            "members": rd.rows(
+                levelroute.MEMBERS_SQL.format(holes=holes), args, what="characters"),
+            "rewarded": rd.rows(
+                campaignplan.REWARDED_SQL.format(holes=holes), args,
+                what="character_queststatus_rewarded"),
+            "held": rd.rows(
+                levelroute.HELD_SQL.format(holes=holes), args, what="character_queststatus"),
+            "died": rd.rows(
+                levelroute.DEATHS_SQL.format(holes=holes),
+                args + (levelroute.DEATH_HOURS,), what="overseer_death"),
+            "where": rd.rows(
+                _LEVEL_POSITIONS.format(holes=holes), args, what="overseer_snapshot"),
+            "choice": rd.rows(
+                _LEVEL_CHOICE, (levelroute.KIND, key[:12]), what="overseer_jev_judgment"),
+            "queue": _queue_views(rd).get(key) or {},
+        }
 
 
 def _fetch_levelroute(names: list, key: str) -> dict:
@@ -3651,32 +3508,26 @@ def _fetch_run_timeline() -> dict:
     Takes nothing from the request. A realm whose worldserver predates the
     table reads as `present = False` and the page says so, rather than a 503.
     """
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            families: dict = {}
-            for row in _wide_guarded(cur, _PLAN_FAMILIES, (), "",
-                                     "overseer_roster"):
-                if row.get("family") and row.get("name"):
-                    families.setdefault(row["family"], []).append(row["name"])
-            table = _wide_guarded(cur, _RUN_TIMELINE_TABLE, (), "",
-                                  "overseer_dungeon_run_event")
-            present = bool(table and table[0].get("n"))
-            rows = (_wide_guarded(cur, _RUN_TIMELINE,
-                                  (runtimeline.WINDOW_HOURS, runtimeline.ROW_LIMIT),
-                                  "", "overseer_dungeon_run_event")
-                    if present else [])
-            names = sorted({n for members in families.values() for n in members})
-            deaths = []
-            if rows and names:
-                deaths = _wide_guarded(
-                    cur, _RUN_TIMELINE_DEATHS.format(  # noqa: S608 - placeholders only
-                        holes=", ".join(["%s"] * len(names))),
-                    (*names, runtimeline.WINDOW_HOURS, runtimeline.ROW_LIMIT), "",
-                    "overseer_death")
-            bosses = _run_bosses(cur) if deaths else frozenset()
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        families: dict = {}
+        for row in rd.rows(_PLAN_FAMILIES, (), what="overseer_roster"):
+            if row.get("family") and row.get("name"):
+                families.setdefault(row["family"], []).append(row["name"])
+        table = rd.rows(_RUN_TIMELINE_TABLE, (), what="overseer_dungeon_run_event")
+        present = bool(table and table[0].get("n"))
+        rows = (rd.rows(_RUN_TIMELINE,
+                        (runtimeline.WINDOW_HOURS, runtimeline.ROW_LIMIT),
+                        what="overseer_dungeon_run_event")
+                if present else [])
+        names = sorted({n for members in families.values() for n in members})
+        deaths = []
+        if rows and names:
+            deaths = rd.rows(
+                _RUN_TIMELINE_DEATHS.format(  # noqa: S608 - placeholders only
+                    holes=", ".join(["%s"] * len(names))),
+                (*names, runtimeline.WINDOW_HOURS, runtimeline.ROW_LIMIT),
+                what="overseer_death")
+        bosses = _run_bosses(rd) if deaths else frozenset()
     return {"rows": rows, "families": families, "present": present,
             "deaths": deaths, "bosses": bosses}
 
@@ -3802,42 +3653,6 @@ _RECAP_SKILLS = (
 )
 
 
-def _wide_guarded(cur, sql: str, params: tuple = (), fallback: str = "",
-                  what: str = "") -> list:
-    """Run `sql`, dropping to `fallback` (then to []) on a degraded schema.
-
-    A THIRD GUARD IN THIS FILE, AND DELIBERATELY NOT ONE OF THE TWO ALREADY
-    HERE. `_guarded` takes a fallback but catches only ProgrammingError, and
-    error 1054 is NOT a ProgrammingError: pymysql has no entry for it in
-    error_map, so raise_mysql_exception falls back to OperationalError. A
-    read guarded by `_guarded` therefore survives a missing table and dies on
-    a missing column, which is half a guard. `_realm_guarded` catches the
-    right base class but takes neither parameters nor a fallback.
-
-    This is the widened form with both, and the note in `_realm_guarded` is
-    why it is a new function rather than an edit to `_guarded`: widening that
-    one changes the behaviour of the banner it belongs to, which is a
-    different change with a different blast radius, and it is not this one.
-
-    Anything that is not 1146 or 1054 still reaches the handler's 503. A guard
-    that swallowed a network blip would render an empty recap and train the
-    alarm away.
-    """
-    for attempt in (sql, fallback):
-        if not attempt:
-            break
-        try:
-            cur.execute(attempt, params)
-            return list(cur.fetchall())
-        except pymysql.err.MySQLError as exc:
-            if not (exc.args and exc.args[0] in (1054, 1146)):
-                raise
-            log.info("%s unavailable (%s) - trying a thinner read",
-                     what, exc.args[0])
-    log.info("%s unavailable; using an empty read", what)
-    return []
-
-
 def _fetch_recap(map_id: int | None, names: list[str] | None = None) -> dict:
     """Everything the recap and the loot board read, in one connection.
 
@@ -3855,61 +3670,54 @@ def _fetch_recap(map_id: int | None, names: list[str] | None = None) -> dict:
     """
     names = family.roster() if names is None else names
     holes = ", ".join(["%s"] * len(names))
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            runs = _wide_guarded(cur, _RECAP_RUNS, (), _RECAP_RUNS_OLD,
-                                 "overseer_dungeon_run")
-            led = set(names)
-            runs = [r for r in runs if r.get("leader_name") in led]
-            # S608 on the roster reads below: `holes` is a run of placeholders
-            # sized by len(family.roster()), and every VALUE is still bound by
-            # the driver.
-            equips = _wide_guarded(cur, _RECAP_EQUIPS.format(holes=holes),  # noqa: S608
-                                   tuple(names), "", "overseer_event")
-            deaths = _wide_guarded(cur, _RECAP_DEATHS.format(holes=holes),  # noqa: S608
-                                   tuple(names), "", "overseer_death")
-            snaps = _wide_guarded(cur, _RECAP_SNAPSHOT.format(holes=holes),  # noqa: S608
-                                  tuple(names), "", "overseer_snapshot")
-            instances = _wide_guarded(cur, _RECAP_INSTANCE.format(holes=holes),  # noqa: S608
-                                      tuple(names), "", "instance")
-            chars = _wide_guarded(cur, _RECAP_CHARS.format(holes=holes),  # noqa: S608
-                                  tuple(names), "", "characters")
-            worn = _wide_guarded(cur, _RECAP_WORN.format(holes=holes),  # noqa: S608
-                                 (len(armory.EQUIPPED_SLOTS), *names), "",
-                                 "character_inventory")
-            # GUARDED LIKE EVERYTHING ELSE HERE, and the empty list this hands
-            # back on a degraded schema is a real answer rather than a silent
-            # one: recap.family_members turns "no rows for this character" into an
-            # unknown, and an unknown proficiency ranks the board exactly the
-            # way it was ranked before and keeps printing the caveat that says
-            # so. A failed read must not be able to empty the board.
-            skills = _wide_guarded(cur, _RECAP_SKILLS.format(holes=holes),  # noqa: S608
-                                   tuple(names), "", "character_skills")
-            # TWO MAPS, AND THEY ARE ONLY USUALLY THE SAME ONE. The board is
-            # whichever dungeon is being browsed; the progress bar is the map
-            # the family is actually in. Both decisions are the module's, and
-            # conflating them counted a Wailing Caverns lockout mask against
-            # the Deadmines' encounter list.
-            board = recap.board_map(runs, map_id)
-            here = recap.run_map(runs)
-            board_encounters = _wide_guarded(cur, _RECAP_ENCOUNTERS, (board,),
-                                             "", "instance_encounters")
-            encounters = board_encounters if here in (None, board) else (
-                _wide_guarded(cur, _RECAP_ENCOUNTERS, (here,), "",
-                              "instance_encounters"))
-            loot = _wide_guarded(cur, _RECAP_LOOT, (board,), "",
-                                 "creature_loot_template")
-            # Only the items somebody has actually worn need naming, and which
-            # those are is the module's answer, not a guess here.
-            wanted = recap.wanted_items(equips)
-            items = []
-            if wanted:
-                iholes = ", ".join(["%s"] * len(wanted))
-                items = _wide_guarded(cur, _RECAP_ITEMS.format(holes=iholes),  # noqa: S608
-                                      tuple(wanted), "", "item_template")
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        runs = rd.rows(_RECAP_RUNS, (), fallback=_RECAP_RUNS_OLD,
+                       what="overseer_dungeon_run")
+        led = set(names)
+        runs = [r for r in runs if r.get("leader_name") in led]
+        # S608 on the roster reads below: `holes` is a run of placeholders
+        # sized by len(family.roster()), and every VALUE is still bound by
+        # the driver.
+        equips = rd.rows(_RECAP_EQUIPS.format(holes=holes),  # noqa: S608
+                         tuple(names), what="overseer_event")
+        deaths = rd.rows(_RECAP_DEATHS.format(holes=holes),  # noqa: S608
+                         tuple(names), what="overseer_death")
+        snaps = rd.rows(_RECAP_SNAPSHOT.format(holes=holes),  # noqa: S608
+                        tuple(names), what="overseer_snapshot")
+        instances = rd.rows(_RECAP_INSTANCE.format(holes=holes),  # noqa: S608
+                            tuple(names), what="instance")
+        chars = rd.rows(_RECAP_CHARS.format(holes=holes),  # noqa: S608
+                        tuple(names), what="characters")
+        worn = rd.rows(_RECAP_WORN.format(holes=holes),  # noqa: S608
+                       (len(armory.EQUIPPED_SLOTS), *names), what="character_inventory")
+        # GUARDED LIKE EVERYTHING ELSE HERE, and the empty list this hands
+        # back on a degraded schema is a real answer rather than a silent
+        # one: recap.family_members turns "no rows for this character" into an
+        # unknown, and an unknown proficiency ranks the board exactly the
+        # way it was ranked before and keeps printing the caveat that says
+        # so. A failed read must not be able to empty the board.
+        skills = rd.rows(_RECAP_SKILLS.format(holes=holes),  # noqa: S608
+                         tuple(names), what="character_skills")
+        # TWO MAPS, AND THEY ARE ONLY USUALLY THE SAME ONE. The board is
+        # whichever dungeon is being browsed; the progress bar is the map
+        # the family is actually in. Both decisions are the module's, and
+        # conflating them counted a Wailing Caverns lockout mask against
+        # the Deadmines' encounter list.
+        board = recap.board_map(runs, map_id)
+        here = recap.run_map(runs)
+        board_encounters = rd.rows(_RECAP_ENCOUNTERS, (board,),
+                                   what="instance_encounters")
+        encounters = board_encounters if here in (None, board) else (
+            rd.rows(_RECAP_ENCOUNTERS, (here,), what="instance_encounters"))
+        loot = rd.rows(_RECAP_LOOT, (board,), what="creature_loot_template")
+        # Only the items somebody has actually worn need naming, and which
+        # those are is the module's answer, not a guess here.
+        wanted = recap.wanted_items(equips)
+        items = []
+        if wanted:
+            iholes = ", ".join(["%s"] * len(wanted))
+            items = rd.rows(_RECAP_ITEMS.format(holes=iholes),  # noqa: S608
+                            tuple(wanted), what="item_template")
     return {"run_rows": runs, "event_rows": equips, "death_rows": deaths,
             "snapshot_rows": snaps, "instance_rows": instances,
             "encounter_rows": encounters,
@@ -3977,33 +3785,6 @@ _INSTANCE_SQL = (
 )
 
 
-def _guarded(cur, sql: str, params: tuple = (), fallback: str = "",
-             what: str = "") -> list:
-    """Run `sql`, dropping to `fallback` (then to []) on a degraded schema.
-
-    Returns rows. 1146 and 1054 are the only two errors swallowed, and only
-    those two: anything else is a real fault and must still reach the handler's
-    503 rather than being silently rendered as an empty banner.
-    """
-    for attempt in (sql, fallback):
-        if not attempt:
-            break
-        try:
-            cur.execute(attempt, params)
-            return list(cur.fetchall())
-        # MySQLError, not ProgrammingError: pymysql has no error_map entry for
-        # 1054, so a missing COLUMN arrives as OperationalError (see
-        # _wide_guarded). Catching only ProgrammingError made every fallback
-        # here dead for missing columns; the loot story 503'd on it.
-        except pymysql.err.MySQLError as exc:
-            if not (exc.args and exc.args[0] in (1054, 1146)):
-                raise
-            log.info("agenda: %s unavailable (%s) - trying a thinner read",
-                     what, exc.args[0])
-    log.info("agenda: %s unavailable; the banner runs without it", what)
-    return []
-
-
 def _fetch_agenda(names=None) -> dict:
     """Everything the current-goal banner reads, in one connection.
 
@@ -4018,57 +3799,50 @@ def _fetch_agenda(names=None) -> dict:
     """
     names = family.roster() if names is None else names
     holes = ", ".join(["%s"] * len(names))
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            roster_rows = _guarded(cur, _ROSTER_FULL, (), _ROSTER_OLD,
-                                   "overseer_roster")
-            run_rows = _guarded(cur, _RUNS_FULL, (), _RUNS_OLD,
-                                "overseer_dungeon_run")
-            goal_rows = _guarded(
-                cur,
-                "SELECT character_name, kind, skill_name, target, status, "
-                "channel_id, last_report, created_at, quest_id "
-                "FROM overseer_goal ORDER BY created_at DESC LIMIT 200",
-                (), "", "overseer_goal")
-            trade_rows = _guarded(
-                cur,
-                "SELECT character_name, verb, skill_name, reason, status, "
-                "decided_at FROM overseer_trade ORDER BY decided_at DESC "
-                "LIMIT 200",
-                (), "", "overseer_trade")
-            # ONE ROW PER EVENT KIND, not the feed. The banner asks the event
-            # table exactly one question - when did anything last actually
-            # happen - and grouping in SQL answers it in seven rows instead of
-            # ten thousand. S608: `holes` is a run of placeholders sized by the
-            # roster, and every VALUE is bound by the driver below.
-            event_rows = _guarded(
-                cur,
-                "SELECT kind, MAX(last_seen) AS last_seen "  # noqa: S608
-                f"FROM overseer_event WHERE character_name IN ({holes}) "
-                "GROUP BY kind",
-                tuple(names), "", "overseer_event")
-            instance_rows = _guarded(cur, _INSTANCE_SQL % holes, tuple(names),
-                                     "", "instance")
-            # The quests anything is aimed at, named. Looked up after the rows
-            # are in hand rather than joined, because acore_world is a second
-            # schema and the ids are a handful.
-            wanted = {int(r["drive_quest"]) for r in roster_rows
-                      if int(r.get("drive_quest") or 0)}
-            wanted |= {int(r["quest_id"]) for r in goal_rows
-                       if int(r.get("quest_id") or 0)}
-            quest_titles = {}
-            if wanted:
-                qholes = ", ".join(["%s"] * len(wanted))
-                cur.execute(
-                    "SELECT ID, LogTitle FROM acore_world.quest_template "  # noqa: S608
-                    f"WHERE ID IN ({qholes})",
-                    tuple(sorted(wanted)),
-                )
-                quest_titles = {int(r["ID"]): r["LogTitle"]
-                                for r in cur.fetchall()}
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        roster_rows = rd.rows(_ROSTER_FULL, (), fallback=_ROSTER_OLD,
+                              what="overseer_roster")
+        run_rows = rd.rows(_RUNS_FULL, (), fallback=_RUNS_OLD,
+                           what="overseer_dungeon_run")
+        goal_rows = rd.rows(
+            "SELECT character_name, kind, skill_name, target, status, "
+            "channel_id, last_report, created_at, quest_id "
+            "FROM overseer_goal ORDER BY created_at DESC LIMIT 200",
+            (), what="overseer_goal")
+        trade_rows = rd.rows(
+            "SELECT character_name, verb, skill_name, reason, status, "
+            "decided_at FROM overseer_trade ORDER BY decided_at DESC "
+            "LIMIT 200",
+            (), what="overseer_trade")
+        # ONE ROW PER EVENT KIND, not the feed. The banner asks the event
+        # table exactly one question - when did anything last actually
+        # happen - and grouping in SQL answers it in seven rows instead of
+        # ten thousand. S608: `holes` is a run of placeholders sized by the
+        # roster, and every VALUE is bound by the driver below.
+        event_rows = rd.rows(
+            "SELECT kind, MAX(last_seen) AS last_seen "  # noqa: S608
+            f"FROM overseer_event WHERE character_name IN ({holes}) "
+            "GROUP BY kind",
+            tuple(names), what="overseer_event")
+        instance_rows = rd.rows(_INSTANCE_SQL % holes, tuple(names),
+                                what="instance")
+        # The quests anything is aimed at, named. Looked up after the rows
+        # are in hand rather than joined, because acore_world is a second
+        # schema and the ids are a handful.
+        wanted = {int(r["drive_quest"]) for r in roster_rows
+                  if int(r.get("drive_quest") or 0)}
+        wanted |= {int(r["quest_id"]) for r in goal_rows
+                   if int(r.get("quest_id") or 0)}
+        quest_titles = {}
+        if wanted:
+            qholes = ", ".join(["%s"] * len(wanted))
+            title_rows = rd.must(
+                "SELECT ID, LogTitle FROM acore_world.quest_template "  # noqa: S608
+                f"WHERE ID IN ({qholes})",
+                tuple(sorted(wanted)),
+            )
+            quest_titles = {int(r["ID"]): r["LogTitle"]
+                            for r in title_rows}
     return {"roster_rows": roster_rows, "run_rows": run_rows,
             "instance_rows": instance_rows, "goal_rows": goal_rows,
             "trade_rows": trade_rows, "event_rows": event_rows,
@@ -4429,10 +4203,10 @@ def _shared_key(path: str, query: dict) -> str:
         "%s=%s" % (k, v) for k in sorted(query) for v in query[k])
 
 
-# What a /api/v2 handler is given: this server's own connection and module,
-# and the shared reads for a build two endpoints have in common.
-_V2_CONTEXT = _V2Context(connect=lambda: _connect(), server=sys.modules[__name__],
-                         shared=SHARED_READS)
+# What a /api/v2 handler is given: the request's realm reader, this server's
+# own module, and the shared reads for a build two endpoints have in common.
+def _v2_context(read) -> _V2Context:
+    return _V2Context(read=read, server=sys.modules[__name__], shared=SHARED_READS)
 
 
 def _etag(body: bytes) -> str:
@@ -4459,37 +4233,31 @@ def _fetch_decree() -> dict:
     their own fetch window, and a fetch dropped into one of them is read as
     part of a contract it has nothing to do with.
     """
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            roster_rows = _guarded(cur, _ROSTER_FULL, (), _ROSTER_OLD,
-                                   "overseer_roster")
-            command_rows = _guarded(
-                cur,
-                "SELECT id, target_name, command, kind, status, detail, "
-                "source, created_at FROM overseer_command WHERE source = %s "
-                "ORDER BY id DESC LIMIT %s",
-                (WEB_SOURCE, decree.OUTCOME_ROWS), "", "overseer_command")
-            # THE NEWEST JOB ROW PER CHARACTER, FROM ANY SOURCE. The goal loop
-            # and the Discord bridge write job rows too, and this is what lets
-            # decree.py tell "a later order replaced it" from "it never took".
-            newest_job_rows = _guarded(
-                cur,
-                "SELECT target_name, MAX(id) AS id FROM overseer_command "
-                "WHERE kind = 'job' GROUP BY target_name",
-                (), "", "overseer_command")
-            _with_family(cur, roster_rows)
-            # The campaign queue (#209). The bridge's table, so a realm whose
-            # bridge predates it reads as nothing queued.
-            queue_rows = _wide_guarded(cur, campaignqueue.SELECT_PENDING_SQL,
-                                       (), "", campaignqueue.TABLE)
-    finally:
-        conn.close()
+    with realmread.Session(_connect) as rd:
+        roster_rows = rd.rows(_ROSTER_FULL, (), fallback=_ROSTER_OLD,
+                              what="overseer_roster")
+        command_rows = rd.rows(
+            "SELECT id, target_name, command, kind, status, detail, "
+            "source, created_at FROM overseer_command WHERE source = %s "
+            "ORDER BY id DESC LIMIT %s",
+            (WEB_SOURCE, decree.OUTCOME_ROWS), what="overseer_command")
+        # THE NEWEST JOB ROW PER CHARACTER, FROM ANY SOURCE. The goal loop
+        # and the Discord bridge write job rows too, and this is what lets
+        # decree.py tell "a later order replaced it" from "it never took".
+        newest_job_rows = rd.rows(
+            "SELECT target_name, MAX(id) AS id FROM overseer_command "
+            "WHERE kind = 'job' GROUP BY target_name",
+            (), what="overseer_command")
+        _with_family(rd, roster_rows)
+        # The campaign queue (#209). The bridge's table, so a realm whose
+        # bridge predates it reads as nothing queued.
+        queue_rows = rd.rows(campaignqueue.SELECT_PENDING_SQL,
+                             (), what=campaignqueue.TABLE)
     return {"roster_rows": roster_rows, "command_rows": command_rows,
             "newest_job_rows": newest_job_rows, "queue_rows": queue_rows}
 
 
-def _with_family(cur, roster_rows: list) -> list:
+def _with_family(rd, roster_rows: list) -> list:
     """Stamp each roster row with its overseer_roster.family, in place.
 
     A SEPARATE READ, not a column added to _ROSTER_FULL: that statement is
@@ -4499,25 +4267,15 @@ def _with_family(cur, roster_rows: list) -> list:
     the family split, and every row reads as one family, which is what the
     console did before there were two.
     """
-    # NOT _guarded: a missing column arrives as an OperationalError, which
-    # that helper does not catch (see _fetch_roster_rows), so it would 503
-    # the very realm this fallback exists for.
-    try:
-        cur.execute("SELECT name, family FROM overseer_roster")
-        family_rows = list(cur.fetchall())
-    except pymysql.err.MySQLError as exc:
-        if not (exc.args and exc.args[0] in _DEGRADED):
-            raise
-        log.info("decree: overseer_roster has no family column (%s) - "
-                 "reading the roster as one family", exc.args[0])
-        family_rows = []
+    family_rows = rd.rows("SELECT name, family FROM overseer_roster",
+                          what="overseer_roster family")
     by_name = {r["name"]: r.get("family") or "" for r in family_rows}
     for row in roster_rows:
         row["family"] = by_name.get(row.get("name"), "")
     return roster_rows
 
 
-def _with_levels(cur, roster_rows: list) -> list:
+def _with_levels(rd, roster_rows: list) -> list:
     """Stamp each roster row with its saved level, race and map_id, in place.
 
     Read for the queue card (#209), whose every entry is checked against the
@@ -4528,15 +4286,9 @@ def _with_levels(cur, roster_rows: list) -> list:
     names = sorted({str(r.get("name")) for r in roster_rows if r.get("name")})
     if not names:
         return roster_rows
-    try:
-        cur.execute(campaignqueue.level_rows_sql(len(names)), tuple(names))
-        found = {r["name"]: r for r in cur.fetchall()}
-    except pymysql.err.MySQLError as exc:
-        if not (exc.args and exc.args[0] in _DEGRADED):
-            raise
-        log.info("decree: characters could not be read for levels (%s)",
-                 exc.args[0])
-        return roster_rows
+    found = {r["name"]: r for r in rd.rows(
+        campaignqueue.level_rows_sql(len(names)), tuple(names),
+        what="characters for levels")}
     for row in roster_rows:
         got = found.get(row.get("name"))
         if got is not None:
@@ -4621,37 +4373,17 @@ def _fetch_roster_rows() -> list:
     agree about who is enabled - and every planner needs only `name`, `enabled`
     and `lead`, which is exactly what the fallback carries.
 
-    IT DOES NOT REUSE _guarded, AND THE REASON IS NOT STYLE. That helper
-    catches pymysql.err.ProgrammingError, and 1054 is absent from pymysql's
-    error_map so a MISSING COLUMN arrives as an OperationalError instead -
-    _realm_guarded documents the measurement. On the read side that gap costs
-    a banner; here it would 503 every order on a realm whose overseer_roster
-    predates the campaign columns, which is the one realm most likely to need
-    the fallback. So this guards on _DEGRADED like the writes below it.
+    A realm whose overseer_roster predates the campaign columns (a missing
+    column, 1054) is the one most likely to need the thinner read, so this
+    goes through the realm reader's guarded read like the console's own.
     """
-    conn = _connect()
-    try:
-        with conn.cursor() as cur:
-            for attempt in (_ROSTER_FULL, _ROSTER_OLD):
-                try:
-                    cur.execute(attempt)
-                    rows = list(cur.fetchall())
-                except pymysql.err.MySQLError as exc:
-                    if not (exc.args and exc.args[0] in _DEGRADED):
-                        raise
-                    log.info("decree: overseer_roster is thinner than this "
-                             "image expects (%s) - trying a thinner read",
-                             exc.args[0])
-                    continue
-                # Each member's level, race and map, which the queue card
-                # checks (#209); then the same family stamp the console's read
-                # gets, so an order is planned against the families the page
-                # drew.
-                rows = _with_levels(cur, rows)
-                return _with_family(cur, rows)
-    finally:
-        conn.close()
-    return []
+    with realmread.Session(_connect) as rd:
+        rows = rd.rows(_ROSTER_FULL, fallback=_ROSTER_OLD, what="overseer_roster")
+        # Each member's level, race and map, which the queue card checks
+        # (#209); then the same family stamp the console's read gets, so an
+        # order is planned against the families the page drew.
+        rows = _with_levels(rd, rows)
+        return _with_family(rd, rows)
 
 
 def _apply_order(order) -> int:
@@ -4952,7 +4684,10 @@ class Handler(BaseHTTPRequestHandler):
     def _v2(self, path: str, query: dict) -> None:
         """GET /api/v2/... - the reads the operations app adds (apiv2/)."""
         try:
-            code, payload = apiv2.handle(path, query, _V2_CONTEXT)
+            # One reader per request: it connects on the first read, so a
+            # request refused before any read opens nothing.
+            with realmread.Session(_connect) as rd:
+                code, payload = apiv2.handle(path, query, _v2_context(rd))
         except Exception:
             log.exception("v2 read failed: %s", path)
             self._send(503, "application/json", b'{"error": "world unreachable"}')
@@ -6013,8 +5748,8 @@ class Handler(BaseHTTPRequestHandler):
         is reused whole rather than replaced by a thinner query of its own, for
         the same reason agenda.py adds no table: two surfaces querying the same
         family separately is two surfaces that can disagree about it, and every
-        `overseer_*` read in there is already behind `_guarded` for 1146 and
-        1054.
+        `overseer_*` read in there is already the realm reader's guarded
+        rows() for 1146 and 1054.
 
         No name parameter. The line carries the whole roster because the addon
         renders the whole party, and a per-character endpoint would answer a
@@ -6220,14 +5955,10 @@ class Handler(BaseHTTPRequestHandler):
         table (the bridge creates it) answers empty rather than 503.
         """
         try:
-            conn = _connect()
-            try:
-                with conn.cursor() as cur:
-                    payload = guildrun.page(guildrun.recent(cur, n=GUILD_RUNS_LIMIT))
-                    # Why each run that came back went the way it did.
-                    guildrun.with_stories(cur, payload["recent"])
-            finally:
-                conn.close()
+            with realmread.Session(_connect) as rd:
+                payload = guildrun.page(guildrun.recent(rd, n=GUILD_RUNS_LIMIT))
+                # Why each run that came back went the way it did.
+                guildrun.with_stories(rd, payload["recent"])
             self._send(200, "application/json", json.dumps(payload, default=str).encode())
         except Exception:
             log.exception("guild runs query failed")
@@ -6252,8 +5983,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = _fetch_guild_chat(wanted, limit)
                 payload["guilds"] = list(guilds)
-            except pymysql.err.MySQLError as exc:
-                if not (exc.args and exc.args[0] == 1146):
+            except realmread.Gap as gap:
+                if gap.code != realmread.MISSING_TABLE:
                     raise
                 payload = {"guild": wanted, "guilds": list(guilds),
                            "ready": False, "asks": []}

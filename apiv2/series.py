@@ -258,22 +258,17 @@ def guild_series(name: str, chars: list, events: list, table: dict, now: float) 
 # ---- reads -------------------------------------------------------------------
 
 
-def _one(cur, sql: str, args=()):
-    cur.execute(sql, args)
-    return cur.fetchone()
+def _one(rd, sql: str, args=()):
+    found = rd.must(sql, args)
+    return found[0] if found else None
 
 
-def _all(cur, sql: str, args=()) -> list:
-    cur.execute(sql, args)
-    return list(cur.fetchall())
-
-
-def _events(cur, guids: list, now: float) -> list:
+def _events(rd, guids: list, now: float) -> list:
     if not guids:
         return []
     holes = ", ".join(["%s"] * len(guids))
-    return _all(
-        cur, _EVENTS_SQL.format(holes=holes), (*guids, int(now - LOOKBACK), MAX_EVENTS)
+    return rd.must(
+        _EVENTS_SQL.format(holes=holes), (*guids, int(now - LOOKBACK), MAX_EVENTS)
     )  # noqa: S608
 
 
@@ -290,25 +285,21 @@ def series(query: dict, ctx) -> tuple[int, dict]:
         return 400, {"error": "name= is a character name"}
     if not name and not _allow.guild(guild):
         return 404, {"error": "no such guild", "guilds": sorted(_allow.GUILDS)}
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            now = float(_one(cur, _NOW_SQL)["now"])
-            table = {int(r["level"]): int(r["xp"]) for r in _all(cur, _XP_TABLE_SQL)}
-            if name:
-                char = _one(cur, _MEMBER_SQL, (name, *_allow.guild_args()))
-                if not char:
-                    return 404, {"error": "no such character", "name": name}
-                events = _events(cur, [int(char["guid"])], now)
-                return 200, member_series(char, events, table, now)
-            row = _one(cur, _GUILD_SQL, (_allow.guild(guild),))
-            if not row:
-                return 404, {"error": "no such guild", "guild": guild}
-            chars = _all(cur, _GUILD_MEMBERS_SQL, (row["guildid"], MAX_MEMBERS))
-            events = _events(cur, [int(c["guid"]) for c in chars], now)
-            return 200, guild_series(row["name"], chars, events, table, now)
-    finally:
-        conn.close()
+    rd = ctx.read
+    now = float(_one(rd, _NOW_SQL)["now"])
+    table = {int(r["level"]): int(r["xp"]) for r in rd.must(_XP_TABLE_SQL, ())}
+    if name:
+        char = _one(rd, _MEMBER_SQL, (name, *_allow.guild_args()))
+        if not char:
+            return 404, {"error": "no such character", "name": name}
+        events = _events(rd, [int(char["guid"])], now)
+        return 200, member_series(char, events, table, now)
+    row = _one(rd, _GUILD_SQL, (_allow.guild(guild),))
+    if not row:
+        return 404, {"error": "no such guild", "guild": guild}
+    chars = rd.must(_GUILD_MEMBERS_SQL, (row["guildid"], MAX_MEMBERS))
+    events = _events(rd, [int(c["guid"]) for c in chars], now)
+    return 200, guild_series(row["name"], chars, events, table, now)
 
 
 ROUTES = {"/api/v2/series": series}

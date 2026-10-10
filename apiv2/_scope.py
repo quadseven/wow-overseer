@@ -29,9 +29,3 @@ def guild_member(ctx, name: str) -> bool:
 def holes(n: int) -> str:
     """A run of `n` placeholders for an IN list; every value is still bound."""
     return ", ".join(["%s"] * n)
-
-
-def guarded(ctx, cur, sql: str, params: tuple = (), what: str = "") -> list:
-    """The map server's own degraded-schema guard: a missing table or column
-    is an empty read, anything else still fails the request."""
-    return ctx.server._wide_guarded(cur, sql, params, "", what)

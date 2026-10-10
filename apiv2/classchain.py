@@ -34,7 +34,7 @@ import classquest
 from panel import _CLASS_NAMES
 
 from . import members as roster
-from ._scope import NOT_A_MEMBER, guarded, guild_member, holes, wanted_name
+from ._scope import NOT_A_MEMBER, guild_member, holes, wanted_name
 
 CHAR_SQL = "SELECT guid, level, class AS class_id, race FROM characters WHERE name = %s"
 KNOWN_SQL = "SELECT spell FROM character_spell WHERE guid = %s"
@@ -53,35 +53,31 @@ _WORLD: dict = {}
 _LOCK = threading.Lock()
 
 
-def _world(ctx, cur) -> dict:
+def _world(rd) -> dict:
     """The class quest rows, which of them something starts, and the reward
     spells a trainer sells: read once and kept."""
     with _LOCK:
         if _WORLD:
             return _WORLD
-        quests = guarded(ctx, cur, classquest.QUESTS_SQL, (), "quest_template")
+        quests = rd.rows(classquest.QUESTS_SQL, (), what="quest_template")
         ids = [int(r["id"]) for r in quests]
         started, trained = [], []
         if ids:
             h = holes(len(ids))
-            started = guarded(
-                ctx,
-                cur,
+            started = rd.rows(
                 STARTED_SQL.format(holes=h),
                 tuple(ids) * 3,
-                "creature_queststarter",
+                what="creature_queststarter",
             )
             spells = sorted(
                 {int(r.get(k) or 0) for r in quests for k in ("reward", "display")}
                 - {0}
             )
             if spells:
-                trained = guarded(
-                    ctx,
-                    cur,
+                trained = rd.rows(
                     classquest.TRAINED_SQL.format(spells=holes(len(spells))),
                     tuple(spells),
-                    "trainer_spell",
+                    what="trainer_spell",
                 )
         found = {
             "quests": quests,
@@ -94,42 +90,31 @@ def _world(ctx, cur) -> dict:
 
 
 def fetch(ctx, name: str) -> dict | None:
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            world = _world(ctx, cur)
-            chars = guarded(ctx, cur, CHAR_SQL, (name,), "characters")
-            if not chars:
-                return None
-            char = chars[0]
-            guid = int(char["guid"])
-            ids = [int(r["id"]) for r in world["quests"]]
-            log, rewarded = [], []
-            if ids:
-                h = holes(len(ids))
-                log = guarded(
-                    ctx,
-                    cur,
-                    classquest.LOG_SQL.format(guids="%s", quests=h),
-                    (guid, *ids),
-                    "character_queststatus",
-                )
-                rewarded = guarded(
-                    ctx,
-                    cur,
-                    classquest.REWARDED_SQL.format(guids="%s", quests=h),
-                    (guid, *ids),
-                    "character_queststatus_rewarded",
-                )
-            known = guarded(ctx, cur, KNOWN_SQL, (guid,), "character_spell")
-            asks = guarded(
-                ctx, cur, ASK_SQL, (name, roster.ASK_DAYS), "overseer_guild_ask"
-            )
-            cur.execute("SELECT UNIX_TIMESTAMP() AS now_at")
-            row = cur.fetchone()
-            now_at = int(row["now_at"]) if row else 0
-    finally:
-        conn.close()
+    rd = ctx.read
+    world = _world(rd)
+    chars = rd.rows(CHAR_SQL, (name,), what="characters")
+    if not chars:
+        return None
+    char = chars[0]
+    guid = int(char["guid"])
+    ids = [int(r["id"]) for r in world["quests"]]
+    log, rewarded = [], []
+    if ids:
+        h = holes(len(ids))
+        log = rd.rows(
+            classquest.LOG_SQL.format(guids="%s", quests=h),
+            (guid, *ids),
+            what="character_queststatus",
+        )
+        rewarded = rd.rows(
+            classquest.REWARDED_SQL.format(guids="%s", quests=h),
+            (guid, *ids),
+            what="character_queststatus_rewarded",
+        )
+    known = rd.rows(KNOWN_SQL, (guid,), what="character_spell")
+    asks = rd.rows(ASK_SQL, (name, roster.ASK_DAYS), what="overseer_guild_ask")
+    clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
+    now_at = int(clock[0]["now_at"]) if clock else 0
     return dict(
         world,
         char=char,
