@@ -282,15 +282,26 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
   line-height: 1.45; pointer-events: none;
 }
 .tip[hidden] { display: none; }
-.tip .ln { display: flex; justify-content: space-between; gap: 8px; }
-.tip .ln-name { font-size: 15px; font-weight: 500; }
-.tip .ln-dim { color: var(--tip-dim); }
-.tip .ln-bonus { color: var(--tip-bonus); }
-.tip .ln-src { color: var(--tip-source); padding-top: 6px; }
-.tip .ln-where { color: var(--tip-where); }
-.tip .ln-gap { padding-top: 4px; }
-.tip .tq0 { color: #9d9d9d; } .tip .tq1 { color: #e9e9ed; } .tip .tq2 { color: #1eff00; }
-.tip .tq3 { color: #3d8ff0; } .tip .tq4 { color: #b16cf0; } .tip .tq5 { color: #ff8000; }
+/* The card's lines, the same in the hover card and the phone sheet
+   (.tipcard): a two-cell row spreads its cells left and right, the name in
+   its quality colour, Equip and Use lines green, requirements dim, and the
+   source set apart under a rule. */
+.tipcard .ln { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.tipcard .ln-l { min-width: 0; overflow-wrap: anywhere; }
+.tipcard .ln-r { flex-shrink: 0; text-align: right; }
+.tipcard .ln-name { font-size: 15px; font-weight: 500; align-items: center; justify-content: flex-start; gap: 10px; }
+.tipcard .ln-dim { color: var(--tip-dim); }
+.tipcard .ln-req { color: var(--tip-dim); }
+.tipcard .ln-bonus { color: var(--tip-bonus); }
+.tipcard .ln-flavor { color: #ffd100; }
+.tipcard .ln-src { color: var(--tip-source); padding-top: 6px; }
+.tipcard .ln-sep { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--tip-ring); }
+.tipcard .ln-where { color: var(--tip-where); }
+.tipcard .ln-gap { padding-top: 4px; }
+.tipcard .ticon { width: 36px; height: 36px; border-radius: 6px; flex-shrink: 0; box-shadow: 0 0 0 1px currentColor; }
+.tipcard .ticon.noicon { display: inline-grid; place-items: center; font-size: 11px; color: var(--tip-dim); background: #292b31; box-shadow: 0 0 0 1px var(--tip-ring); }
+.tipcard .tq0 { color: #9d9d9d; } .tipcard .tq1 { color: #e9e9ed; } .tipcard .tq2 { color: #1eff00; }
+.tipcard .tq3 { color: #3d8ff0; } .tipcard .tq4 { color: #b16cf0; } .tipcard .tq5 { color: #ff8000; }
 
 /* ---- Sheets and dialogs --------------------------------------------------- */
 .scrim {
@@ -304,8 +315,10 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
   padding: 10px 16px calc(env(safe-area-inset-bottom) + 16px); display: flex; flex-direction: column; gap: 8px;
 }
 .sheet .grab { align-self: center; width: 36px; height: 4px; border-radius: 2px; background: var(--color-neutral-700); margin-bottom: 6px; }
-.sheet.item-sheet { background: var(--tip-bg); color: var(--tip-text); box-shadow: 0 0 0 1px var(--tip-ring); font-size: var(--fs-2); gap: 3px; padding: 10px 18px calc(env(safe-area-inset-bottom) + 18px); }
-.item-sheet .tip-body { display: flex; flex-direction: column; gap: 2px; }
+.sheet.item-sheet { background: var(--tip-bg); color: var(--tip-text); box-shadow: 0 0 0 1px var(--tip-ring); font-size: 15px; line-height: 1.45; gap: 3px; padding: 10px 20px calc(env(safe-area-inset-bottom) + 18px); }
+.item-sheet .tip-body { display: flex; flex-direction: column; gap: 4px; }
+.item-sheet .ln-name { font-size: 20px; line-height: 1.25; padding-bottom: 4px; }
+.item-sheet .ln-sep { margin-top: 10px; padding-top: 12px; }
 .item-sheet .close { margin-top: 12px; min-height: 44px; border-radius: 8px; border: 1px solid #9184d9; background: transparent; color: #b5abfc; cursor: pointer; }
 .search-scrim { align-items: flex-start; padding: 12vh 16px 16px; z-index: 20; }
 @media (max-width: 759.98px) { .search-scrim { padding: calc(env(safe-area-inset-top) + 12px) 8px 8px; } }
@@ -379,14 +392,3 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
 .histo a.hit:hover { background: none; }
 .histo a.hit:hover .bar:not(.median) { background: var(--color-neutral-600); }
 @media (min-width: 760px) { [data-slot="thumb"] { display: none; } }
-/* The phone sheet draws the same card lines as the hover card: each line
-   spread across, the name in its quality colour, the quiet lines quiet. */
-.item-sheet .ln { display: flex; justify-content: space-between; gap: 8px; }
-.item-sheet .ln-name { font-size: var(--fs-3); font-weight: 500; }
-.item-sheet .ln-dim { color: var(--tip-dim); }
-.item-sheet .ln-bonus { color: var(--tip-bonus); }
-.item-sheet .ln-src { color: var(--tip-source); padding-top: 6px; }
-.item-sheet .ln-where { color: var(--tip-where); }
-.item-sheet .ln-gap { padding-top: 4px; }
-.item-sheet .tq0 { color: #9d9d9d; } .item-sheet .tq1 { color: #e9e9ed; } .item-sheet .tq2 { color: #1eff00; }
-.item-sheet .tq3 { color: #3d8ff0; } .item-sheet .tq4 { color: #b16cf0; } .item-sheet .tq5 { color: #ff8000; }

@@ -7,7 +7,11 @@
 - On a touch phone an item opens its sheet on a tap, and a second tap (on
   the item, the sheet or outside it) closes it. tooltip.js runs under node
   against a small stand-in for the DOM.
-- The phone sheet styles every card line the hover card does.
+- The card's two-cell rows (slot | type, damage | speed) are separate
+  cells laid out left and right, never one run-together string; the hover
+  card and the phone sheet share one set of line rules; every colour those
+  rules paint text with reads at 4.5:1 on the card; a long line wraps
+  instead of pushing the sheet wider than a 375px phone.
 - A tab with a minimum width never shrinks below its label.
 - A histogram whose bars link is a group of links, not an image.
 - Motion a script starts (a smooth scroll, a turning model) asks for
@@ -221,9 +225,12 @@ T.install();
 const item = new El("button");
 item.setAttribute("data-item", "123");
 item.setAttribute("data-name", "Cape");
+item.parts["img"] = new El("img");
+item.parts["img"].setAttribute("src", "https://example.com/cape.jpg");
 const open = () => { const s = document.body.children[1]; return !!s && !s.hidden; };
 const out = {};
 tap(item); out.first_tap_opens = open();
+out.sheet_shows_the_icon = document.body.children[1].parts[".tip-body"].innerHTML.includes('<img class="ticon" src="https://example.com/cape.jpg"');
 out.hover_card_stays_shut = document.body.children[0].hidden;
 const scrim = document.body.children[1];
 fire(scrim.listeners, "click", scrim.parts[".tip-body"]); out.tap_on_sheet_closes = !open();
@@ -246,6 +253,7 @@ console.log(JSON.stringify(out));
             self.run_taps(),
             {
                 "first_tap_opens": True,
+                "sheet_shows_the_icon": True,
                 "hover_card_stays_shut": True,
                 "tap_on_sheet_closes": True,
                 "second_tap_on_item_closes": True,
@@ -304,25 +312,157 @@ class TheTouchTargets(unittest.TestCase):
         self.assertNotIn(".qwho { width: 40px; }", family)
 
 
-class TheItemSheetLines(unittest.TestCase):
-    def test_the_sheet_styles_every_line_the_card_draws(self):
-        # The phone sheet is not a .tip, so the hover card's rules do not
-        # reach it: without its own, "Item level 37" and "Rare" run together
-        # and the name loses its quality colour.
-        css = (APP / "app.css").read_text(encoding="utf-8")
-        drawn = set(
-            re.findall(
-                r'class="ln ?([\w-]*)', (APP / "tooltip.js").read_text(encoding="utf-8")
-            )
+# A two-handed staff as /api/item answers it, with every kind of line.
+STAFF = {
+    "entry": 2042,
+    "name": "Staff of Westfall",
+    "quality": 3,
+    "tooltip": {
+        "name": "Staff of Westfall",
+        "quality": 3,
+        "item_level": 24,
+        "binding": "Binds when picked up",
+        "slot": "Two-Hand",
+        "kind": "Staff",
+        "damage": {"min": 49.0, "max": 74.0, "speed": 3.0, "dps": 20.5},
+        "armor": 10,
+        "block": 5,
+        "stats": ["+11 Spirit", "+5 Intellect"],
+        "resistances": ["+5 Fire Resistance"],
+        "enchant": ["Crusader"],
+        "durability": "90 / 90",
+        "classes": ["Mage"],
+        "requires_level": 20,
+        "effects": ["Equip: Increases healing done by up to 4."],
+        "set": "Westfall Set",
+        "flavor": "Old wood",
+    },
+    "sources": [
+        {
+            "kind": "drop",
+            "boss": "Edwin VanCleef",
+            "where": "The Deadmines",
+            "chance": 12.34,
+        },
+        {"kind": "quest", "quest": "The Defias Brotherhood", "zone": "Westfall"},
+    ],
+}
+
+
+def card_lines(payload, art=None):
+    """tooltip.lines() run under node: the card's markup, one string a line."""
+    script = (
+        'const T = await import("./tooltip.js");\nconsole.log(JSON.stringify(T.lines(%s, "Staff", %s).map(String)));\n'
+        % (
+            json.dumps(payload),
+            json.dumps(art),
         )
-        drawn = {c for c in drawn if c} | {"ln"} | {"tq%d" % q for q in range(6)}
+    )
+    files = {
+        "tooltip.js": (APP / "tooltip.js").read_text(encoding="utf-8"),
+        "ui.js": (APP / "ui.js").read_text(encoding="utf-8"),
+        "api.js": API_STUB,
+    }
+    return node_dir(files, script)
+
+
+def text_of(markup):
+    return re.sub(r"<[^>]+>", "", markup)
+
+
+def tipcard_rules():
+    """The declarations of every `.tipcard ...` rule in app.css, by selector."""
+    css = re.sub(
+        r"/\*.*?\*/", "", (APP / "app.css").read_text(encoding="utf-8"), flags=re.S
+    )
+    out = {}
+    for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        for one in sel.split(","):
+            one = one.strip()
+            if one.startswith(".tipcard ") or one.startswith(".item-sheet "):
+                out.setdefault(one, "")
+                out[one] += body
+    return out
+
+
+class TheItemCardLines(unittest.TestCase):
+    def test_two_cell_rows_are_separate_cells_left_and_right(self):
+        lines = card_lines(STAFF)
+        rows = [text_of(x) for x in lines]
+        self.assertIn("Two-Hand Staff", rows)
+        self.assertIn("49 - 74 Damage Speed 3.00", rows)
+        self.assertIn("Item level 24 Rare", rows)
+        self.assertIn("Source: Drop 12.3% chance", rows)
+        joined = "".join(rows)
+        for glued in ("Two-HandStaff", "DamageSpeed", "24Rare"):
+            self.assertNotIn(glued, joined)
+        slot = next(x for x in lines if "Two-Hand" in x)
+        self.assertIn(
+            '<span class="ln-l">Two-Hand</span> <span class="ln-r">Staff</span>', slot
+        )
+
+    def test_lines_take_the_game_colours(self):
+        lines = card_lines(STAFF)
+        cls = {text_of(x): re.search(r'class="([^"]*)"', x).group(1) for x in lines}
+        self.assertEqual(cls["+11 Spirit"], "ln")
+        self.assertEqual(
+            cls["Equip: Increases healing done by up to 4."], "ln ln-bonus"
+        )
+        self.assertEqual(cls["Requires level 20"], "ln ln-req")
+        self.assertEqual(cls["Classes: Mage"], "ln ln-req")
+        self.assertEqual(cls["Source: Drop 12.3% chance"], "ln ln-src ln-sep")
+        self.assertEqual(cls["The Defias Brotherhood, Westfall"], "ln ln-where")
+
+    def test_the_sheet_name_row_carries_the_icon_or_the_slot_mark(self):
+        icon = card_lines(STAFF, {"icon": "https://example.com/staff.jpg"})[0]
+        self.assertIn('class="ln ln-name tq3"', icon)
+        self.assertIn('<img class="ticon" src="https://example.com/staff.jpg"', icon)
+        mark = card_lines(STAFF, {"mark": "MH"})[0]
+        self.assertIn('<span class="ticon noicon" aria-hidden="true">MH</span>', mark)
+        self.assertNotIn("ticon", card_lines(STAFF)[0])
+
+    def test_one_set_of_rules_styles_every_line_in_both_cards(self):
+        tooltip = (APP / "tooltip.js").read_text(encoding="utf-8")
+        self.assertIn('tip.className = "tip tipcard"', tooltip)
+        self.assertIn('<div class="tip-body tipcard">', tooltip)
+        rules = tipcard_rules()
+        drawn = set()
+        for line in card_lines(STAFF, {"mark": "MH"}):
+            for c in re.findall(r'class="([^"]*)"', line):
+                drawn.update(c.split())
+        drawn -= {"noicon"}
         for cls in sorted(drawn):
             with self.subTest(cls=cls):
-                self.assertIn(".tip .%s " % cls, css)
-                self.assertIn(".item-sheet .%s " % cls, css)
-        self.assertRegex(
-            css, r"\.item-sheet \.ln \{[^}]*justify-content: space-between"
-        )
+                self.assertTrue(
+                    any(sel.split()[-1].endswith("." + cls) for sel in rules), cls
+                )
+        self.assertIn("justify-content: space-between", rules[".tipcard .ln"])
+
+    def test_every_card_colour_reads_at_4_5_on_the_card(self):
+        dark = themes()["dark"]
+        ground = dark["--tip-bg"]
+        colours = []
+        for sel, body in tipcard_rules().items():
+            for value in re.findall(r"(?<![\w-])color:\s*([^;]+);", body):
+                value = value.strip()
+                if value.startswith("var("):
+                    value = dark[value[4:-1]]
+                if value == "currentColor":
+                    continue
+                colours.append((sel, value))
+        self.assertGreaterEqual(len(colours), 12)
+        for sel, value in colours:
+            with self.subTest(sel=sel, colour=value):
+                self.assertGreaterEqual(contrast(value, ground), 4.5)
+
+    def test_a_long_line_wraps_inside_a_375px_phone(self):
+        # A flex child will not shrink below its longest word unless its
+        # minimum width is dropped, so a long name or source would push the
+        # sheet past the screen edge; the short right cell never shrinks.
+        rules = tipcard_rules()
+        self.assertIn("min-width: 0", rules[".tipcard .ln-l"])
+        self.assertIn("overflow-wrap: anywhere", rules[".tipcard .ln-l"])
+        self.assertIn("flex-shrink: 0", rules[".tipcard .ln-r"])
 
 
 class TheTabRow(unittest.TestCase):
