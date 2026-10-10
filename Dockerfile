@@ -55,7 +55,7 @@ COPY core.py bridge.py voice.py transform.py \
      preraid.py gearscore.py gearupgrades.py pvpgear.py \
      runtimeline.py runstory.py \
      vclient.py guildgear.py \
-     situation.py standstill.py vision.py llmmode.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py \
+     situation.py standstill.py restsupply.py vision.py llmmode.py jev_movement.py jev_family_intent.py jev_outcomes.py leadcmd.py \
      realmroller.py realmroller_world.py realmroller_plan.py realmroller_act.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json bagicons.json spells.json bagspells.json viewerdisplays.json \
