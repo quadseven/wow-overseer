@@ -14,7 +14,7 @@
 import { html, raw, notMeasured, pendingRead, state, classVar } from "../ui.js";
 import {
   liveQuery, setQuery, byName, stateOf, stateLabel, sectionTabs, gearSeg, head, paperdoll, bindTrees, roleWord,
-  upgradesHead, upgradesControls, upgradesBody, upgradesFoot, bindUpgrades,
+  upgradesHead, upgradesControls, upgradesBody, upgradesFoot, bindUpgrades, flipSort, sortHead,
 } from "./_members.js";
 import { mountModels } from "./_model.js";
 
@@ -128,6 +128,22 @@ const COLS = [
   ["state", "State", (m) => m._state],
 ];
 
+// The table's sort as the query has it: `sort=ilvl` is low to high, `sort=-ilvl`
+// high to low, and no sort is worst first.
+function gearSort(q) {
+  const sort = q.sort || "";
+  return { key: sort.replace(/^-/, ""), dir: sort.startsWith("-") ? "desc" : "asc" };
+}
+
+const WORST = "worst first: flagged, then no weapon, most empty slots, lowest item level";
+
+function gearNote(q) {
+  const cur = gearSort(q);
+  const col = COLS.find((c) => c[0] === cur.key);
+  if (!col) return html`${WORST}`;
+  return html`sorted by ${col[1]}, ${cur.dir === "asc" ? "ascending" : "descending"}<button type="button" class="btn btn-ghost" data-gworst>Worst first</button>`;
+}
+
 function worstFirst(a, b) {
   return (!a.flags.length - !b.flags.length) || (a.weapon - b.weapon) || (b.empty - a.empty) || (a.avg_item_level - b.avg_item_level) || a.name.localeCompare(b.name);
 }
@@ -152,12 +168,8 @@ function weakText(m) { return m.weakest ? (SLOT_WORDS[m.weakest.slot] || m.weake
 function stateCell(m, at) { return m._r ? stateLabel(m._r, at) : html`<span class="dim mb-s">${m.presence}</span>`; }
 
 function gearTable(rows, q, at) {
-  const sort = q.sort || "";
-  const th = COLS.map(([k, label]) => {
-    const on = sort.replace(/^-/, "") === k;
-    const dir = sort.startsWith("-") ? "descending" : "ascending";
-    return html`<th scope="col"${on ? raw(' aria-sort="' + dir + '"') : ""}><button type="button" data-gsort="${k}">${label}${on ? html`<i class="${sort.startsWith("-") ? "ph ph-caret-down" : "ph ph-caret-up"}" aria-hidden="true"></i>` : ""}</button></th>`;
-  });
+  const cur = gearSort(q);
+  const th = COLS.map(([k, label]) => sortHead(label, k, cur, "data-gsort"));
   const tr = rows.map((m) => html`<tr><td><a class="mname" href="${"#/m/" + encodeURIComponent(m.name) + "/gear"}" style="color:${classVar(m.class)}">${m.name}</a></td><td>${m.class}</td><td class="num">${m.level}</td><td>${roleWord(m.role)}</td><td class="num">${m.avg_item_level}</td><td class="num">${m.worn}</td><td class="${"num" + (m.empty ? " warn" : " dim")}">${m.empty}</td><td class="${m.weapon ? "" : "bad"}">${m.weapon ? "yes" : "none"}</td><td class="muted">${weakText(m)}</td><td class="num">${m.gold ? m.gold.text : notMeasured()}</td><td>${stateCell(m, at)}</td></tr>`);
   return html`<div class="card gt-table"><table class="table"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
 }
@@ -175,7 +187,7 @@ function tableBody(gg, roster, q) {
 
 function guildChips(q) {
   const g = (q.guild || "").toLowerCase();
-  return html`<div class="row"><div class="row" role="group" aria-label="Guild">${[["", "Both guilds"], ["cave", "Cave"], ["bonkers", "Bonkers"]].map(([k, label]) => html`<button type="button" class="chip" data-guild="${k}" aria-pressed="${g === k ? "true" : "false"}">${label}</button>`)}</div><span class="dim mb-s gt-note">${q.sort ? "sorted by " + q.sort.replace(/^-/, "") : "worst first: flagged, then no weapon, most empty slots, lowest item level"}</span></div>`;
+  return html`<div class="row"><div class="row" role="group" aria-label="Guild">${[["", "Both guilds"], ["cave", "Cave"], ["bonkers", "Bonkers"]].map(([k, label]) => html`<button type="button" class="chip" data-guild="${k}" aria-pressed="${g === k ? "true" : "false"}">${label}</button>`)}</div><span class="dim mb-s gt-note">${gearNote(q)}</span></div>`;
 }
 
 function tableTab(ctx) {
@@ -192,20 +204,22 @@ function bindTable(main, ctx) {
   if (!wrap) return;
   const region = wrap.querySelector("[data-region=gtable]");
   wrap.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-gsort], [data-guild]");
+    const b = e.target.closest("[data-gsort], [data-guild], [data-gworst]");
     if (!b) return;
     const q = liveQuery();
     let next;
     if (b.hasAttribute("data-guild")) next = setQuery({ guild: b.getAttribute("data-guild") });
+    else if (b.hasAttribute("data-gworst")) next = setQuery({ sort: "" });
     else {
-      const k = b.getAttribute("data-gsort");
-      next = setQuery({ sort: q.sort === k ? "-" + k : q.sort === "-" + k ? "" : k });
+      const n = flipSort(gearSort(q), b.getAttribute("data-gsort"), "asc");
+      next = setQuery({ sort: (n.dir === "desc" ? "-" : "") + n.key });
     }
     region.innerHTML = tableBody(ctx.get("/api/guildgear").data, ctx.get("/api/v2/roster").data, next).s;
     wrap.querySelectorAll("[data-guild]").forEach((c) => c.setAttribute("aria-pressed", String(c.getAttribute("data-guild") === (next.guild || ""))));
     const note = wrap.querySelector(".gt-note");
-    if (note) note.textContent = next.sort ? "sorted by " + next.sort.replace(/^-/, "") : "worst first: flagged, then no weapon, most empty slots, lowest item level";
-    const focus = b.hasAttribute("data-gsort") ? region.querySelector('[data-gsort="' + b.getAttribute("data-gsort") + '"]') : null;
+    if (note) note.innerHTML = gearNote(next).s;
+    const focus = b.hasAttribute("data-gsort") ? region.querySelector('[data-gsort="' + b.getAttribute("data-gsort") + '"]')
+      : b.hasAttribute("data-gworst") ? region.querySelector("[data-gsort]") : null;
     if (focus) focus.focus({ preventScroll: true });
   });
 }
