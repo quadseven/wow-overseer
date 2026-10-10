@@ -24,7 +24,6 @@ sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import apiv2  # noqa: E402
 import basepath  # noqa: E402
-import families  # noqa: E402
 import map_server  # noqa: E402
 from apiv2 import operator as v2operator  # noqa: E402
 
@@ -373,11 +372,6 @@ class TheServer(unittest.TestCase):
         with (
             mock.patch.object(map_server, "_fetch_realm", return_value={}),
             mock.patch.object(map_server.realm, "build_realm", return_value={}),
-            mock.patch.object(
-                map_server,
-                "FAMILIES",
-                families.Families(families.MemoryStore({}), fallback=lambda: []),
-            ),
         ):
             h._realm({})
         payload = json.loads(h.body())

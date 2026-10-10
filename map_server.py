@@ -233,16 +233,16 @@ def _realm_families() -> dict:
     """/api/realm's `families` and `guilds`: the app's nav, routes and guild
     pages are drawn from these rather than from names written into it.
 
-    Read apart from the realm banner, and a failed read is null in both
-    fields rather than a failed banner: which world this is does not depend
-    on who is in it.
+    Read apart from the realm banner, and ANY failure here is null in both
+    fields, logged, rather than a failed banner: which world this is, and
+    whether it is production, does not depend on who is in it.
     """
     try:
         return {
             "families": [{"key": k, "names": v} for k, v in FAMILIES.families().items()],
             "guilds": FAMILIES.guilds(),
         }
-    except (pymysql.err.MySQLError, OSError):
+    except Exception:  # noqa: BLE001 - the banner must stand; logged below
         log.exception("realm: the families read failed; the app draws no family")
         return {"families": None, "guilds": None}
 
