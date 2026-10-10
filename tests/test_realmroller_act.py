@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 
@@ -356,7 +357,7 @@ DEPLOY = "/apis/apps/v1/namespaces/dev-realm/deployments/worldserver"
 PODS = "/api/v1/namespaces/dev-realm/pods"
 
 
-def _site(grug=0, zug=0, active=()):
+def _site(grug=0, zug=0, active=(), online=None):
     def fam(name, inside):
         return {
             "family": name,
@@ -368,6 +369,11 @@ def _site(grug=0, zug=0, active=()):
         "http://site.example/api/family?family=Zug": fam("Zug", zug),
         "http://site.example/api/guildruns": {"active": list(active), "recent": []},
     }
+    if online is not None:
+        answers["http://site.example/api/map"] = {
+            "dots": [{}] * online,
+            "unplaced": 0,
+        }
     return answers.get
 
 
@@ -801,7 +807,7 @@ class OnTheRealm(Harness):
 
     def setUp(self):
         super().setUp()
-        self.make()
+        self.make(site=_site(online=1000))
         self.before = self.gh.refs["main"]
         self.step()  # open the roll PR
         self.step(5)  # merge it
@@ -878,6 +884,72 @@ class OnTheRealm(Harness):
         self.assertEqual(
             self.gh.text("main", "build/pins.env"),
             self.gh.text(self.before, "build/pins.env"),
+        )
+
+    def test_a_log_of_a_container_that_has_not_started_does_not_stop_the_tick(self):
+        # A pod still in init answers 400 to a log read. The tick must go on
+        # (and so reach the not-Ready rollback), not die with the ApiError.
+        self.kube.objects[DEPLOY] = _deployment(NEW_WS, ready=False)
+        self.kube.objects[PODS + "/ws-new"] = _pod("ws-new", NEW_WS)
+
+        def refuse(path):
+            raise act.ApiError("GET", path, 400, "waiting to start: PodInitializing")
+
+        self.kube.log = refuse
+        notes = self.step(2)
+        self.assertIn("restarting", " ".join(notes))
+        self.step(40)  # past ready_within, still not Ready
+        self.assertTrue(
+            any(
+                p["head"]["ref"].startswith("realm-roller/rollback-")
+                for p in self.gh.prs.values()
+            )
+        )
+
+    def test_any_other_log_failure_still_stops_the_tick(self):
+        self.kube.objects[DEPLOY] = _deployment(NEW_WS)
+        self.kube.objects[PODS + "/ws-new"] = _pod("ws-new", NEW_WS)
+
+        def broken(path):
+            raise act.ApiError("GET", path, 500, "boom")
+
+        self.kube.log = broken
+        with self.assertRaises(act.ApiError):
+            self.step(2)
+
+    def test_the_bots_baseline_is_read_before_the_roll_and_judged_after(self):
+        self.assertEqual(self.status()["online_before"], 1000)
+        self.live("boot\n")
+        self.site = _site(online=400)
+        self.step(1)  # first seen under 50% of 1000
+        self.assertIsNotNone(self.status()["bots_low_since"])
+        self.assertEqual(self.held(NEXT)["state"], "live")
+        self.step(11)  # ten minutes under the line
+        self.assertTrue(
+            any(
+                p["head"]["ref"].startswith("realm-roller/rollback-")
+                for p in self.gh.prs.values()
+            )
+        )
+
+    def test_bots_back_over_the_line_clear_the_clock(self):
+        self.live("boot\n")
+        self.site = _site(online=400)
+        self.step(1)
+        self.site = _site(online=900)
+        self.step(1)
+        self.assertIsNone(self.status()["bots_low_since"])
+        self.assertEqual(self.status()["online_before"], 1000)
+
+    def test_a_site_without_a_count_never_rolls_back_on_bots(self):
+        self.live("boot\n")
+        self.site = _site()
+        self.step(30)
+        self.assertFalse(
+            any(
+                p["head"]["ref"].startswith("realm-roller/rollback-")
+                for p in self.gh.prs.values()
+            )
         )
 
     def test_a_crash_loop_rolls_back(self):
@@ -1008,6 +1080,44 @@ class Adapters(unittest.TestCase):
 
         when = act.marker_time(G(), "main", "o/k.yaml", "digest: sha256:")
         self.assertEqual(when, datetime(2026, 10, 4, 10, 0, tzinfo=timezone.utc))
+
+    def test_marker_time_with_a_value_skips_an_ungated_digest_move(self):
+        ws = r"name: ws\n\s+digest: (sha256:\w+)"
+        texts = {
+            (
+                "c3",
+                "o/k.yaml",
+            ): "name: ws\n  digest: sha256:b\nname: site\n  digest: sha256:2\n",
+            (
+                "c2",
+                "o/k.yaml",
+            ): "name: ws\n  digest: sha256:b\nname: site\n  digest: sha256:1\n",
+            (
+                "c1",
+                "o/k.yaml",
+            ): "name: ws\n  digest: sha256:a\nname: site\n  digest: sha256:1\n",
+        }
+        dates = {"c3": "2026-10-04T12:00:00Z", "c2": "2026-10-04T10:00:00Z"}
+        parents = {"c3": "c2", "c2": "c1"}
+
+        class G:
+            def path_commits(self, path, branch, limit=20):
+                return [{"sha": "c3"}, {"sha": "c2"}]
+
+            def commit_detail(self, sha):
+                return {
+                    "files": [{"filename": "o/k.yaml", "patch": "+  digest: sha256:x"}],
+                    "parents": [{"sha": parents[sha]}],
+                    "commit": {"committer": {"date": dates[sha]}},
+                }
+
+        with unittest.mock.patch.object(
+            act, "text_at", lambda gh, sha, path: texts.get((sha, path))
+        ):
+            plain = act.marker_time(G(), "main", "o/k.yaml", "digest: sha256:")
+            gated = act.marker_time(G(), "main", "o/k.yaml", "digest: sha256:", ws)
+        self.assertEqual(plain, datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(gated, datetime(2026, 10, 4, 10, 0, tzinfo=timezone.utc))
 
 
 @unittest.skipUnless(shutil.which("openssl"), "openssl is not installed")
