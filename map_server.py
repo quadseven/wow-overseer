@@ -4948,7 +4948,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "text/plain", b"not found")
             return
         # Open the path that was checked, not one rebuilt from `rel`.
-        self._send_file(os.path.join("app", rel), _APP_TYPES[kind], path=full)
+        self._send_file("app file", _APP_TYPES[kind], path=full)
 
     def _v2(self, path: str, query: dict) -> None:
         """GET /api/v2/... - the reads the operations app adds (apiv2/)."""
