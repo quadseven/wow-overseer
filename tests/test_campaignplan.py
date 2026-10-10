@@ -47,6 +47,8 @@ ALLIANCE = (
 
 # The Crescent Key in a member's bags, which opens Dire Maul West and North.
 CRESCENT = frozenset({18249})
+SHADOWFORGE = frozenset({11000})
+KEY_TO_THE_CITY = frozenset({12382})
 
 
 def rows(family=HORDE, map_id=RAGEFIRE, level=None):
@@ -117,7 +119,7 @@ class WhatAFamilyIsOffered(unittest.TestCase):
         self.assertIn("other faction", refused["ragefire"])
 
     def test_the_alliance_at_60_on_the_eastern_kingdoms_runs_the_rest(self):
-        opts = campaignplan.options(facts(ALLIANCE, EASTERN_KINGDOMS))
+        opts = campaignplan.options(facts(ALLIANCE, EASTERN_KINGDOMS, keys=SHADOWFORGE))
         self.assertEqual(
             keywords(opts),
             [
@@ -128,11 +130,29 @@ class WhatAFamilyIsOffered(unittest.TestCase):
             ],
         )
 
+    def test_blackrock_depths_waits_for_the_shadowforge_key(self):
+        """The Shadowforge gates and the Lyceum open only for a member who
+        carries the key (#785); it comes from the quest Dark Iron Legacy."""
+        opts = campaignplan.options(facts(ALLIANCE, EASTERN_KINGDOMS))
+        self.assertNotIn("blackrock-depths", keywords(opts))
+        refused = campaignplan.refusals(
+            facts(ALLIANCE, EASTERN_KINGDOMS, keys=frozenset())
+        )
+        self.assertIn("the Shadowforge Key", refused["blackrock-depths"])
+
     def test_stratholme_joins_once_it_is_no_longer_withheld(self):
         with mock.patch.dict(dungeonpath.WITHHELD_DOORS, {}, clear=True):
-            opts = campaignplan.options(facts(ALLIANCE, EASTERN_KINGDOMS))
-        self.assertIn("stratholme-live", keywords(opts))
-        self.assertIn("stratholme-undead", keywords(opts))
+            opts = campaignplan.options(
+                facts(ALLIANCE, EASTERN_KINGDOMS, keys=KEY_TO_THE_CITY)
+            )
+            self.assertIn("stratholme-live", keywords(opts))
+            self.assertIn("stratholme-undead", keywords(opts))
+            keyless = campaignplan.options(facts(ALLIANCE, EASTERN_KINGDOMS))
+            self.assertNotIn(
+                "stratholme-undead",
+                keywords(keyless),
+                "the Service Entrance Gate wants the Key to the City",
+            )
 
     def test_nothing_is_offered_without_a_level(self):
         self.assertEqual(campaignplan.options(facts(level=0)), [])

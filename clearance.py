@@ -138,6 +138,11 @@ class Route:
     route: str
     taker: str = ""
     why: str = ""
+    # AUCTION only: the copper per unit the listing was judged at, the live
+    # lowest buyout or, past the guild's target, the fair price from the
+    # house's history. The listing asks it when the house has no live listing
+    # of the entry, so a stack routed to the house is not dropped there.
+    price: int = 0
 
 
 def _stack_from_row(row) -> Stack:
@@ -341,7 +346,9 @@ def _past_target_route(
     price = (market or {}).get(stack.entry) or fair
     listed = _listed(stack, {stack.entry: price} if price else {}, auction_open)
     if listed is not None:
-        return Route(stack, AUCTION, why="%s; %s" % (listed.why, over))
+        return Route(
+            stack, AUCTION, why="%s; %s" % (listed.why, over), price=listed.price
+        )
     if stack.sell_price > 0:
         return Route(
             stack,
@@ -384,6 +391,7 @@ def _listed(stack: Stack, market, auction_open: bool) -> Route | None:
             why="nobody in the family or guild can use %s, and it sells for "
             "%d copper each listed against %d at a vendor"
             % (stack.name, price, stack.sell_price),
+            price=int(price),
         )
     return None
 

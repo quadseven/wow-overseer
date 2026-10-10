@@ -209,6 +209,9 @@ class Member:
     # Whether it knows the spell its class tanks with (raidroles.TANK_KIT:
     # Defensive Stance, Bear Form); None when unread.
     has_tank_kit: bool | None = None
+    # The door keys it carries in its bags or key ring (campaignplan.KEY_ITEMS;
+    # the bank does not count), empty when none or unread.
+    keys: frozenset = frozenset()
 
     @property
     def played_tree(self) -> str:
@@ -298,7 +301,18 @@ def member_from_row(row: dict) -> Member | None:
         has_weapon=_optional(row, "has_weapon", bool),
         has_shield=_optional(row, "has_shield", bool),
         has_tank_kit=_optional(row, "has_tank_kit", bool),
+        keys=keys_of(row.get("door_keys")),
     )
+
+
+def keys_of(text) -> frozenset:
+    """The key entries in a `door_keys` column (comma-separated), or none."""
+    out = set()
+    for part in str(text or "").split(","):
+        part = part.strip()
+        if part.isdigit():
+            out.add(int(part))
+    return frozenset(out)
 
 
 # why_not's word for a member already in a party. A class quest party's own
@@ -438,6 +452,10 @@ class Door:
     finder_floor: int
     # The level the tank and healer seats must stand at (carries); 0 unread.
     carry_floor: int = 0
+    # THE KEY THE WING NEEDS, item entry and name (campaignplan.DOOR_KEYS), or
+    # 0 and "": a run there seats a member who carries it (opens_for).
+    key: int = 0
+    key_name: str = ""
 
 
 # THE SEATS THAT CARRY A GROUP STAND AT ITS BOSSES' LEVEL. Measured on wow-dev
@@ -485,6 +503,7 @@ def doors(finder_floors: dict | None = None, boss_levels: dict | None = None) ->
         if run.keyword in dungeonpath.WITHHELD_DOORS:
             continue
         floor = council.door_floor(run.keyword)
+        key, key_name, _where = campaignplan.DOOR_KEYS.get(run.keyword, (0, "", ""))
         out.append(
             Door(
                 keyword=run.keyword,
@@ -496,9 +515,40 @@ def doors(finder_floors: dict | None = None, boss_levels: dict | None = None) ->
                 carry_floor=carry_floor(
                     int(bosses.get(run.map_id, 0)), floor, int(run.ceiling)
                 ),
+                key=int(key),
+                key_name=key_name,
             )
         )
     return out
+
+
+# A KEYED WING SEATS A MEMBER WHO CARRIES THE KEY (#785). mod-dungeon-clear
+# opens a keyed door only for a party member who carries its key or picks its
+# lock, as a party of players would, so a group without one stops at the door:
+# the Armory at Herod's Door, the Cathedral at the Chapel Door, Dire Maul West
+# at its Crescent doors, Blackrock Depths at the Shadowforge gates. Nothing
+# grants a key. Each comes the way a player gets it: the Scarlet Key from
+# Doan's Strongbox in the Library, the Crescent Key from Pusillin in Dire Maul
+# East, the Shadowforge Key from the quest Dark Iron Legacy, the Key to the
+# City from Magistrate Barthilas.
+def key_holder(members, door) -> Member | None:
+    """The first of `members` who carries `door`'s key, or None (also None
+    for a door that needs no key)."""
+    if not getattr(door, "key", 0):
+        return None
+    return next((m for m in members if door.key in m.keys), None)
+
+
+def opens_for(members, door) -> bool:
+    """Whether these members can get through `door`: it needs no key, or one
+    of them carries it."""
+    return not getattr(door, "key", 0) or key_holder(members, door) is not None
+
+
+def key_words(members, door) -> str:
+    """ "'Name' carries the Scarlet Key" for a keyed door, "" for any other."""
+    holder = key_holder(members, door)
+    return "'%s' carries %s" % (holder.name, door.key_name) if holder else ""
 
 
 def carries(member: Member, door: Door) -> bool:
@@ -603,54 +653,47 @@ GUILD_DOORS = {
         {
             "deadmines", "wailing", "shadowfang", "blackfathom", "stockades",
             "scarlet", "gnomeregan", "razorfen-kraul", "scarlet-library",
+            "scarlet-armory", "scarlet-cathedral",
             "razorfen-downs", "uldaman", "zulfarrak", "maraudon-orange",
             "maraudon-purple", "sunken-temple", "blackrock-depths",
-            "lower-blackrock-spire", "scholomance",
+            "lower-blackrock-spire", "dire-maul-east-east", "dire-maul-west-north",
+            "dire-maul-north", "scholomance",
         }
     ),
     "Horde": frozenset(
         {
             "ragefire", "deadmines", "wailing", "shadowfang", "blackfathom",
             "scarlet", "gnomeregan", "razorfen-kraul", "scarlet-library",
+            "scarlet-armory", "scarlet-cathedral",
             "razorfen-downs", "uldaman", "zulfarrak", "maraudon-orange",
             "maraudon-purple", "sunken-temple", "blackrock-depths",
-            "lower-blackrock-spire", "scholomance",
+            "lower-blackrock-spire", "dire-maul-east-east", "dire-maul-west-north",
+            "dire-maul-north", "scholomance",
         }
     ),
 }  # fmt: skip
-# DOORS NEITHER SIDE IS OFFERED, each for a reason read off the realm's own
-# world data (wow-dev, 2026-10-10). Adding one to GUILD_DOORS while it is here
-# queues a run that cannot finish as a group of players would.
-#
 # WHICH FINDER WING A DOOR GETS. mod-overseer's FinderDungeonForDoor takes the
 # normal, non-holiday LFGDungeons.dbc rows on the door's map: one row is the
 # door's dungeon outright, and with several the row whose lfg_dungeon_template
-# start is within 60 yards of the door's landing wins. Measured: the Library's
-# landing is the Library row's start (165, 0 yards), and the Spire has one
-# normal row (32, Lower Blackrock Spire; the Upper Spire is not a five-man
-# row), so both are on the ladder above. Dire Maul East's door lands 683 yards
-# from the East row's start and West's North door 95 yards from the West
-# row's; those two rows start at the east-west and west-south doors' landings,
-# which campaignplan.RUNS does not use.
+# start is within 60 yards of the door's landing wins. Measured (wow-dev,
+# 2026-10-10): the Library's landing is the Library row's start (165, 0
+# yards), and the Spire has one normal row (32, Lower Blackrock Spire; the
+# Upper Spire is not a five-man row). Dire Maul's East door lands 683 yards
+# from the East row's start and its West North door 95 yards from the West
+# row's, so those two are matched by the landing of the door into the same
+# wing that the finder starts at (mod-overseer's FinderWingDoorFor).
 #
-# KEYS NOBODY IS SEATED FOR. Herod's Door (gameobject 101854) stands between
-# the Armory's start and Herod, and the Chapel Door (104591) between the
-# Cathedral's start and Mograine and Whitemane; both are lock 299, the Scarlet
-# Key (Doan's Strongbox, in the Library) or Pick Lock. The Gordok Courtyard
-# Door (177219) and Gordok Inner Door (177217) stand between Dire Maul North's
-# start and King Gordok, on the Courtyard and Inner Door keys. Guild runs seat
-# nobody for carrying a key, and mod-dungeon-clear opens these doors as if
-# the tank held one (DcEventDoorRegistry::IsKeyExempt), which a player without
-# the key cannot do. So these wait for a seating rule that brings the key.
+# THE KEYED WINGS. The Armory and the Cathedral (the Scarlet Key), Dire Maul
+# West and North (the Crescent Key) and Blackrock Depths (the Shadowforge Key)
+# are on the ladder for a group that seats a member who carries the key
+# (opens_for, campaignplan.DOOR_KEYS); mod-dungeon-clear opens the doors only
+# for such a party. Dire Maul North's Gordok doors take keys the run itself
+# finds: Fengus's Chest and Guard Mol'dar.
 #
-# Stratholme is separate: dungeonpath.WITHHELD_DOORS (mod-overseer#582).
-BLOCKED_DOORS = {
-    "scarlet-armory": "Herod's Door needs the Scarlet Key, and no seat brings it",
-    "scarlet-cathedral": "the Chapel Door needs the Scarlet Key, and no seat brings it",
-    "dire-maul-east-east": "the door lands 683 yards from the East wing's finder start",
-    "dire-maul-west-north": "the door lands 95 yards from the West wing's finder start",
-    "dire-maul-north": "the Gordok doors need their keys, and no seat brings them",
-}
+# DOORS NEITHER SIDE IS OFFERED, each for a reason read off the realm's own
+# world data. None today. Stratholme is separate:
+# dungeonpath.WITHHELD_DOORS (mod-overseer#582).
+BLOCKED_DOORS: dict = {}
 # DOORS THE DUNGEON CLEAR CANNOT FINISH (wow-overseer#782). A guild run is
 # driven by mod-dungeon-clear, which needs data for any dungeon whose bosses sit
 # behind a scripted event. Without it the run walks to the shut door and holds
@@ -725,8 +768,12 @@ def covered(member: Member) -> bool:
     return bool(member.has_weapon) and int(member.worn_slots) >= COVERED_SLOTS
 
 
-def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
+def fitting_doors(levels, all_doors: list, faction: str = "", members=None) -> list:
     """The doors this set of levels fits, best fit first.
+
+    `members`, when given, is the group itself: a keyed wing none of them can
+    open (opens_for) is left out before the best MAX_DUNGEONS are kept, so a
+    group with no Scarlet Key is offered Zul'Farrak, not the Armory.
 
     A door inside the other faction's capital (council._other_capital) is
     never offered: its members come out among that capital's guards. A
@@ -759,6 +806,8 @@ def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
         if mean < door.floor + LEVEL_MARGIN:
             continue
         if high > door.ceiling:
+            continue
+        if members is not None and not opens_for(members, door):
             continue
         out.append(door)
     out.sort(
@@ -936,7 +985,9 @@ def pools(members: list, all_doors: list) -> list:
             comps = compositions(window)
             if not comps:
                 continue
-            if not fitting_doors(comps[0].levels, all_doors, faction_of(window)):
+            if not fitting_doors(
+                comps[0].levels, all_doors, faction_of(window), comps[0].members
+            ):
                 continue
             out.append(Pool(guild=guild, members=tuple(window)))
             taken.update(m.name for m in window)
@@ -1183,7 +1234,9 @@ def plan_for(pool: Pool, all_doors: list, table: dict) -> Plan | None:
         return None
     best = [
         door
-        for door in fitting_doors(comps[0].levels, all_doors, faction_of(pool.members))
+        for door in fitting_doors(
+            comps[0].levels, all_doors, faction_of(pool.members), comps[0].members
+        )
         if carries(comps[0].tank, door) and carries(comps[0].healer, door)
     ]
     if not best:
@@ -1517,15 +1570,25 @@ async def decide(client, plan: Plan, environ=None) -> Decision:
         ),
     )
     chosen = plan.composition(comp.chosen)
-    fits = {d.keyword for d in fitting_doors(chosen.levels, list(plan.doors))}
+    fits = {
+        d.keyword
+        for d in fitting_doors(chosen.levels, list(plan.doors))
+        if opens_for(chosen.members, d)
+    }
     # Jev may not send a group to a door that keeps failing either, unless only
     # failing doors fit (FAILING_RUNS says why).
     healthy_fits = fits - failing_doors(plan)
     if healthy_fits:
         fits = healthy_fits
     if door_keyword not in fits and fits:
-        # The heuristic's door, re-asked for the composition that was chosen.
-        door_keyword, door_why = heuristic_door(plan, chosen)
+        # The heuristic's door, re-asked for the composition that was chosen,
+        # among the doors its members can open (opens_for).
+        door_keyword, door_why = heuristic_door(
+            replace(
+                plan, doors=tuple(d for d in plan.doors if opens_for(chosen.members, d))
+            ),
+            chosen,
+        )
         base_door = replace(base_door, heuristic=door_keyword, heuristic_why=door_why)
     door = replace(
         base_door,
