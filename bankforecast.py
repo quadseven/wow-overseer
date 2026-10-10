@@ -433,7 +433,7 @@ def needs(members, casts=(), days=PACE_DAYS) -> dict:
                 need.by_member[member.name] = need.by_member.get(member.name, 0) + units
                 if member.family:
                     need.rungs += units
-    for name, spell, count in casts:
+    for _name, spell, count in casts:
         try:
             spell, count = int(spell), int(count)
         except (TypeError, ValueError):
@@ -545,6 +545,78 @@ def _feeders(item: Item, members) -> tuple:
     return tuple(sorted(m.name for m in members if any(m.skill(s) > 0 for s in lines)))
 
 
+def _judge_ladder(item: Item, held: int, need: Need) -> tuple:
+    """(kind, target, why) for a material a rung still eats."""
+    horizon = need.horizon
+    if horizon <= 0:
+        # NEEDED LATER: nobody eats it this fortnight, and a member will climb
+        # the rungs that do. It is kept whole until then.
+        return (
+            LATER,
+            held,
+            "nobody eats it in the next %d days; members' ladders can still eat %d"
+            % (HORIZON_DAYS, need.ladder),
+        )
+    target = horizon + SAFETY_STACKS * max(1, item.max_stack)
+    if need.casts:
+        pace = "%.1f a day from %d cast(s) in %d days" % (
+            need.pace,
+            need.casts,
+            PACE_DAYS,
+        )
+    else:
+        pace = "no casts measured"
+    return (
+        NOW,
+        target,
+        "the guild eats %d over %d days (%s, family rungs %d), its ladders can "
+        "still eat %d; target %d with %d stack(s) of safety"
+        % (horizon, HORIZON_DAYS, pace, need.rungs, need.ladder, target, SAFETY_STACKS),
+    )
+
+
+def _judge_recipe(item: Item, members) -> tuple:
+    """(kind, target, why) for a recipe: one copy per member who can learn it."""
+    now, later = _recipe_users(item, members)
+    users = now + later
+    if not users:
+        return (
+            SURPLUS,
+            0,
+            "nobody in the guild works the trade it teaches to rank %d"
+            % item.required_rank,
+        )
+    named = ", ".join(users[:4]) + (" and more" if len(users) > 4 else "")
+    if now:
+        return NOW, len(users), "%d member(s) can learn it: %s" % (len(users), named)
+    return (
+        LATER,
+        len(users),
+        "%d member(s) can learn it once their trade reaches %d: %s"
+        % (len(users), item.required_rank, named),
+    )
+
+
+def _judge_gem(item: Item, held: int, members) -> tuple:
+    """(kind, target, why) for a gem: kept while somebody cuts gems."""
+    cutters = tuple(m.name for m in members if m.skill(JEWELCRAFTING) > 0)
+    if not cutters:
+        return SURPLUS, 0, "nobody in the guild cuts gems and no rung eats it"
+    return LATER, held, "%s cut(s) gems" % ", ".join(cutters[:3])
+
+
+def _judge_trade_good(item: Item, held: int, members) -> tuple:
+    """(kind, target, why) for a trade good no rung eats."""
+    feeders = _feeders(item, members)
+    if not feeders:
+        return SURPLUS, 0, "no rung eats it and nobody works a trade that uses it"
+    return (
+        LATER,
+        held,
+        "no rung eats it, and %d member(s) work a trade that uses it" % len(feeders),
+    )
+
+
 def judge(item: Item, held: int, members, need: Need | None) -> tuple:
     """(kind, target units, why) for one item the guild holds `held` of.
 
@@ -556,76 +628,17 @@ def judge(item: Item, held: int, members, need: Need | None) -> tuple:
     if item.quality <= POOR:
         return JUNK, 0, "grey, and nothing uses it"
     if need is not None and need.ladder > 0:
-        horizon = need.horizon
-        target = horizon + SAFETY_STACKS * max(1, item.max_stack)
-        why = (
-            "the guild eats %d over %d days (%s, family rungs %d), its ladders "
-            "can still eat %d; target %d with %d stack(s) of safety"
-            % (
-                horizon,
-                HORIZON_DAYS,
-                "%.1f a day from %d cast(s) in %d days"
-                % (need.pace, need.casts, PACE_DAYS)
-                if need.casts
-                else "no casts measured",
-                need.rungs,
-                need.ladder,
-                target,
-                SAFETY_STACKS,
-            )
-        )
-        if horizon <= 0:
-            # NEEDED LATER: nobody eats it this fortnight, and a member will
-            # climb the rungs that do. It is kept whole until then.
-            return (
-                LATER,
-                held,
-                (
-                    "nobody eats it in the next %d days; members' ladders can still eat %d"
-                    % (HORIZON_DAYS, need.ladder)
-                ),
-            )
-        return NOW, target, why
+        return _judge_ladder(item, held, need)
     if item.entry in LADDER_ENTRIES:
         # A rung eats it, and every member has climbed past that rung, or no
         # member climbs a trade whose rungs eat it.
         return SURPLUS, 0, "no member still climbs a rung that eats it"
     if item.item_class == ITEM_CLASS_RECIPE and item.required_skill > 0:
-        now, later = _recipe_users(item, members)
-        users = now + later
-        if not users:
-            return (
-                SURPLUS,
-                0,
-                "nobody in the guild works the trade it teaches to rank %d"
-                % (item.required_rank),
-            )
-        kind = NOW if now else LATER
-        return (
-            kind,
-            len(users),
-            "%d member(s) can learn it%s: %s"
-            % (
-                len(users),
-                "" if now else " once their trade reaches %d" % item.required_rank,
-                ", ".join(users[:4]) + (" and more" if len(users) > 4 else ""),
-            ),
-        )
+        return _judge_recipe(item, members)
     if item.item_class == ITEM_CLASS_GEM:
-        cutters = tuple(m.name for m in members if m.skill(JEWELCRAFTING) > 0)
-        if not cutters:
-            return SURPLUS, 0, "nobody in the guild cuts gems and no rung eats it"
-        return LATER, held, "%s cut(s) gems" % ", ".join(cutters[:3])
+        return _judge_gem(item, held, members)
     if item.item_class == ITEM_CLASS_TRADE_GOODS:
-        feeders = _feeders(item, members)
-        if not feeders:
-            return SURPLUS, 0, "no rung eats it and nobody works a trade that uses it"
-        return (
-            LATER,
-            held,
-            "no rung eats it, and %d member(s) work a trade that uses it"
-            % (len(feeders)),
-        )
+        return _judge_trade_good(item, held, members)
     return UNJUDGED, held, "not a material, recipe or gem this model judges"
 
 
@@ -645,7 +658,8 @@ def _give(stacks, need: Need, carried: dict, item: Item, given: dict) -> dict:
                 short.append((-gap, name, units, have))
         if not short:
             break
-        _gap, name, units, have = min(short)
+        # The biggest gap first, then the name: a tie is broken on purpose.
+        _gap, name, units, have = min(short, key=lambda s: (s[0], s[1]))
         out[stack.guid] = (
             name,
             "%s's current rung eats %d %s and it carries %d"
@@ -680,6 +694,113 @@ def _sell_or_vendor(stack, item, price, price_why, kind, why) -> Decision:
     )
 
 
+def _vault_decisions(mine, item, kind, target, why, outside, price, price_why):
+    """(decisions without the hand-offs, the stacks the vault keeps).
+
+    THE MEMBERS' OWN STOCK IS EATEN FIRST: it is in the bags where the casts
+    happen. The vault keeps only what the target still asks for, in whole
+    stacks, largest first.
+    """
+    if kind in (RAID, UNJUDGED):
+        keep_units = sum(s.count for s in mine)
+    else:
+        keep_units = max(0, target - outside)
+    decisions, keep_stacks = [], []
+    kept = 0
+    for stack in mine:
+        if kind == JUNK:
+            decisions.append(_sell_or_vendor(stack, item, 0, "it is grey", kind, why))
+        elif kept < keep_units:
+            kept += stack.count
+            keep_stacks.append(stack)
+        else:
+            decisions.append(
+                _sell_or_vendor(stack, item, price, price_why, SURPLUS, why)
+            )
+    return decisions, keep_stacks
+
+
+def _kept(keep_stacks, item, kind, why, gives) -> list:
+    """KEEP for each kept stack, or GIVE when a short member takes it."""
+    out = []
+    for stack in keep_stacks:
+        if stack.guid in gives:
+            taker, because = gives[stack.guid]
+            out.append(
+                Decision(stack, item.name, GIVE, kind, why, taker=taker, note=because)
+            )
+        else:
+            out.append(Decision(stack, item.name, KEEP, kind, why))
+    return out
+
+
+def _short(need_of: dict, carried: dict) -> dict:
+    """entry -> the members whose current rung eats more than they carry."""
+    out = {}
+    for entry, need in need_of.items():
+        names = frozenset(
+            name
+            for name, units in need.by_member.items()
+            if units > _int((carried.get(name) or {}).get(entry))
+        )
+        if names:
+            out[entry] = names
+    return out
+
+
+@dataclass
+class _Plan:
+    """What `plan` gathers as it walks the items."""
+
+    lines: list = field(default_factory=list)
+    over: dict = field(default_factory=dict)
+    fair: dict = field(default_factory=dict)
+    given: dict = field(default_factory=dict)
+
+
+def _plan_item(acc, item, mine, outside, members, need, history, house, carried):
+    """Judge one item, record its target, and decide each of its vault stacks."""
+    vault = sum(s.count for s in mine)
+    total = vault + outside
+    kind, target, why = judge(item, total, members, need)
+    surplus = max(0, total - target)
+    price, price_why = fair_price(history, item.entry, house)
+    if surplus and kind in (NOW, LATER, SURPLUS, JUNK):
+        acc.over[item.entry] = "the guild holds %d %s against a target of %d" % (
+            total,
+            item.name,
+            target,
+        )
+        if price:
+            acc.fair[item.entry] = price
+    if not mine:
+        if surplus and kind != RAID:
+            acc.lines.append(
+                Line(item.entry, item.name, 0, 0, total, target, kind, why)
+            )
+        return
+    decisions, keep_stacks = _vault_decisions(
+        mine, item, kind, target, why, outside, price, price_why
+    )
+    gives = {}
+    if need is not None and kind == NOW:
+        gives = _give(keep_stacks, need, carried, item, acc.given)
+    decisions += _kept(keep_stacks, item, kind, why, gives)
+    acc.lines.append(
+        Line(
+            item.entry,
+            item.name,
+            vault,
+            len(mine),
+            total,
+            target,
+            kind,
+            why,
+            tuple(sorted(decisions, key=lambda d: d.stack.guid)),
+        )
+    )
+
+
 def plan(
     stacks,
     items: dict,
@@ -705,95 +826,23 @@ def plan(
     by_entry: dict = {}
     for stack in stacks:
         by_entry.setdefault(int(stack.entry), []).append(stack)
-    lines = []
-    over: dict = {}
-    fair: dict = {}
-    given: dict = {}
+    acc = _Plan()
     judged = set(by_entry) | {int(e) for e in entries}
-    for entry in sorted(
-        judged,
-        key=lambda e: (items.get(e) is None, getattr(items.get(e), "name", ""), e),
-    ):
-        item = items.get(entry)
-        if item is None:
-            continue
+    known = sorted((items[e].name, e) for e in judged if e in items)
+    for _name, entry in known:
         mine = sorted(by_entry.get(entry, ()), key=lambda s: (-s.count, s.guid))
-        vault = sum(s.count for s in mine)
-        outside = max(0, _int(held.get(entry)))
-        total = vault + outside
-        kind, target, why = judge(item, total, members, need_of.get(entry))
-        surplus = max(0, total - target)
-        price, price_why = fair_price(history, entry, house)
-        if surplus and kind in (NOW, LATER, SURPLUS, JUNK):
-            over[entry] = "the guild holds %d %s against a target of %d" % (
-                total,
-                item.name,
-                target,
-            )
-            if price:
-                fair[entry] = price
-        if not mine:
-            if surplus and kind != RAID:
-                lines.append(Line(entry, item.name, 0, 0, total, target, kind, why))
-            continue
-        # THE MEMBERS' OWN STOCK IS EATEN FIRST: it is in the bags where the
-        # casts happen. The vault keeps only what the target still asks for.
-        keep_units = max(0, target - outside) if kind not in (RAID, UNJUDGED) else vault
-        decisions = []
-        kept = 0
-        keep_stacks = []
-        for stack in mine:
-            if kind == JUNK:
-                decisions.append(
-                    _sell_or_vendor(stack, item, 0, "it is grey", kind, why)
-                )
-                continue
-            if kept < keep_units:
-                kept += stack.count
-                keep_stacks.append(stack)
-                continue
-            decisions.append(
-                _sell_or_vendor(stack, item, price, price_why, SURPLUS, why)
-            )
-        need = need_of.get(entry)
-        gives = (
-            _give(keep_stacks, need, carried, item, given)
-            if need and kind == NOW
-            else {}
+        _plan_item(
+            acc,
+            items[entry],
+            mine,
+            max(0, _int(held.get(entry))),
+            members,
+            need_of.get(entry),
+            history,
+            house,
+            carried,
         )
-        for stack in keep_stacks:
-            if stack.guid in gives:
-                taker, because = gives[stack.guid]
-                decisions.append(
-                    Decision(
-                        stack, item.name, GIVE, kind, why, taker=taker, note=because
-                    )
-                )
-            else:
-                decisions.append(Decision(stack, item.name, KEEP, kind, why))
-        lines.append(
-            Line(
-                entry,
-                item.name,
-                vault,
-                len(mine),
-                total,
-                target,
-                kind,
-                why,
-                tuple(sorted(decisions, key=lambda d: d.stack.guid)),
-            )
-        )
-    short = {}
-    for entry, need in need_of.items():
-        names = frozenset(
-            name
-            for name, units in need.by_member.items()
-            if units > _int((carried.get(name) or {}).get(entry))
-        )
-        if names:
-            short[entry] = names
-    return Forecast(tuple(lines), over, fair, short)
+    return Forecast(tuple(acc.lines), acc.over, acc.fair, _short(need_of, carried))
 
 
 # ---------------------------------------------------------------------------
@@ -806,6 +855,8 @@ _TEMPLATE_COLUMNS = (
     "it.RequiredSkillRank AS required_rank"
 )
 
+# S608: every piece of these strings is a module constant or a run of `%s`
+# placeholders (`_marks`); every value is bound as a parameter by `read`.
 GUILD_SQL = (
     "SELECT gm.guildid AS guildid, g.name AS guild FROM guild_member gm "
     "JOIN characters c ON c.guid = gm.guid JOIN guild g ON g.guildid = gm.guildid "
@@ -813,7 +864,7 @@ GUILD_SQL = (
 )
 
 VAULT_SQL = (
-    "SELECT gbi.item_guid AS guid, gbi.TabId AS tab, ii.itemEntry AS item_entry, "
+    "SELECT gbi.item_guid AS guid, gbi.TabId AS tab, ii.itemEntry AS item_entry, "  # noqa: S608
     "ii.count AS count, " + _TEMPLATE_COLUMNS + " FROM guild_bank_item gbi "
     "JOIN item_instance ii ON ii.guid = gbi.item_guid "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -866,7 +917,7 @@ HISTORY_SQL = (
 )
 
 TEMPLATES_SQL = (
-    "SELECT "
+    "SELECT "  # noqa: S608
     + _TEMPLATE_COLUMNS
     + " FROM acore_world.item_template it WHERE it.entry IN (%s)"
 )
@@ -935,18 +986,10 @@ def _marks(values) -> str:
     return ",".join(["%s"] * len(values))
 
 
-def read(cur, names) -> Facts:
-    """Every fact `plan` needs for the guild of `names`, over `cur`."""
-    names = [str(n) for n in names or () if n]
-    if not names:
-        return Facts()
-    cur.execute(GUILD_SQL % _marks(names), names)
-    row = cur.fetchone()
-    if not row:
-        return Facts()
-    guild_id = _int(row["guildid"])
+def _read_vault(cur, guild_id) -> tuple:
+    """(the vault's Stacks, entry -> Item for what they hold)."""
     cur.execute(VAULT_SQL, (guild_id,))
-    vault_rows = [dict(r) for r in cur.fetchall()]
+    rows = [dict(r) for r in cur.fetchall()]
     stacks = tuple(
         Stack(
             _int(r["guid"]),
@@ -954,18 +997,22 @@ def read(cur, names) -> Facts:
             max(1, _int(r["count"], 1)),
             _int(r.get("tab")),
         )
-        for r in vault_rows
+        for r in rows
     )
-    items = {i.entry: i for i in (item_from_row(r) for r in vault_rows)}
-    cur.execute(MEMBERS_SQL, (guild_id,))
-    members = members_from_rows([dict(r) for r in cur.fetchall()], names)
-    entries = sorted(set(items) | LADDER_ENTRIES)
-    missing = [e for e in entries if e not in items]
-    if missing:
-        cur.execute(TEMPLATES_SQL % _marks(missing), missing)
-        items.update(
-            {i.entry: i for i in (item_from_row(dict(r)) for r in cur.fetchall())}
-        )
+    return stacks, {i.entry: i for i in map(item_from_row, rows)}
+
+
+def _read_templates(cur, entries) -> dict:
+    """entry -> Item for `entries`."""
+    if not entries:
+        return {}
+    cur.execute(TEMPLATES_SQL % _marks(entries), list(entries))
+    return {i.entry: i for i in (item_from_row(dict(r)) for r in cur.fetchall())}
+
+
+def _read_held(cur, guild_id, entries) -> tuple:
+    """(entry -> units the members hold outside the vault, name -> {entry:
+    units in that member's bags and bank})."""
     cur.execute(CARRIED_SQL % _marks(entries), (guild_id, *entries))
     carried: dict = {}
     held: dict = {}
@@ -976,6 +1023,25 @@ def read(cur, names) -> Facts:
     cur.execute(POSTED_SQL % _marks(entries), (guild_id, *entries))
     for r in cur.fetchall():
         held[_int(r["entry"])] = held.get(_int(r["entry"]), 0) + _int(r["units"])
+    return held, carried
+
+
+def read(cur, names) -> Facts:
+    """Every fact `plan` needs for the guild of `names`, over `cur`."""
+    names = [str(n) for n in names or () if n]
+    if not names:
+        return Facts()
+    cur.execute(GUILD_SQL % _marks(names), names)
+    row = cur.fetchone()
+    if not row:
+        return Facts()
+    guild_id = _int(row["guildid"])
+    stacks, items = _read_vault(cur, guild_id)
+    cur.execute(MEMBERS_SQL, (guild_id,))
+    members = members_from_rows([dict(r) for r in cur.fetchall()], names)
+    entries = sorted(set(items) | LADDER_ENTRIES)
+    items.update(_read_templates(cur, [e for e in entries if e not in items]))
+    held, carried = _read_held(cur, guild_id, entries)
     cur.execute(CASTS_SQL, (guild_id, PACE_DAYS))
     casts = tuple(
         (str(r["name"]), _int(r["spell"]), _int(r["n"])) for r in cur.fetchall()

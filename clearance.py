@@ -257,19 +257,20 @@ def route(
     house's history; `short` an entry to the members whose current rung is
     short of it.
     """
-    if stack.material and stack.entry in (over_target or {}):
-        return _past_target_route(
-            stack,
-            people,
-            kept,
-            market,
-            auction_open,
-            busy,
-            over_target[stack.entry],
-            (fair or {}).get(stack.entry, 0),
-            frozenset((short or {}).get(stack.entry, ())),
-        )
     if stack.material:
+        past = (over_target or {}).get(stack.entry)
+        if past:
+            return _past_target_route(
+                stack,
+                people,
+                kept,
+                market,
+                auction_open,
+                busy,
+                past,
+                (fair or {}).get(stack.entry, 0),
+                frozenset((short or {}).get(stack.entry, ())),
+            )
         return _material_route(stack, people, kept, market, auction_open, busy, vault)
     pick = (picks or {}).get(stack.guid) if stack.recipe else None
     if pick is not None and pick.taker:

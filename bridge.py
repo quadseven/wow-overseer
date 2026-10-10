@@ -26282,7 +26282,9 @@ def _bank_forecast(names: list, fresh: bool = False) -> "bankforecast.Forecast":
         with _connect() as conn, conn.cursor() as cur:
             facts = bankforecast.read(cur, list(key))
         forecast = facts.plan(house)
-    except Exception:
+    except (pymysql.err.MySQLError, OSError):
+        # THE READ'S OWN FAILURES ONLY: a bug in the model raises, and the
+        # pass's loop logs it, rather than passing for an empty forecast.
         log.exception("bank forecast: unreadable; nothing is held back on its word")
         forecast = bankforecast.Forecast()
     _BANK_FORECAST_CACHE[key] = (now, forecast)
