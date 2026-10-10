@@ -3,9 +3,10 @@
 // and the upgrades panel. Every sentence the server writes is printed as it
 // comes; this file only lays it out.
 
-import { html, raw, status, statusColor, classVar, iconUrl, item, notMeasured, duration, gold, plural, esc } from "../ui.js";
+import { html, raw, status, statusColor, classVar, iconUrl, item, notMeasured, gold, plural, esc } from "../ui.js";
 import { parse, build } from "../router.js";
 import { modelStage } from "./_model.js";
+import { stateOf, stuckFor } from "../models/roster.js";
 
 // ---- the query the view state lives in --------------------------------------
 
@@ -23,12 +24,8 @@ export function setQuery(patch) {
 }
 
 // ---- reads by name -------------------------------------------------------------
-
-export function byName(list) {
-  const out = new Map();
-  (list || []).forEach((m) => { if (m && m.name) out.set(m.name, m); });
-  return out;
-}
+// A roster row by name, and a member's state, are the roster model's
+// (models/roster.js).
 
 // Every guild member's gear row from /api/guildgear, by name.
 export function gearRows(gg) {
@@ -38,19 +35,6 @@ export function gearRows(gg) {
 }
 
 // ---- member state ----------------------------------------------------------------
-
-export function stateOf(m) {
-  if (!m) return "offline";
-  if (m.life === "ghost" || m.life === "dead") return "ghost";
-  if (m.stuck) return "stuck";
-  return m.online ? "online" : "offline";
-}
-
-export function stuckFor(m, checkedAt) {
-  if (!m || !m.stuck) return null;
-  if (m.since === null || m.since === undefined || !checkedAt) return null;
-  return duration(checkedAt - m.since);
-}
 
 // The status label a member wears in a list.
 export function stateLabel(m, checkedAt) {

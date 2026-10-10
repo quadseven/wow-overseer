@@ -15,7 +15,8 @@ import { html, classVar, memberHref, notMeasured, plural, pendingRead, statusCol
 import { parse } from "../../router.js";
 import * as member from "../member.js";
 import * as economy from "../economy.js";
-import { byName, bindTrees } from "../_members.js";
+import { bindTrees } from "../_members.js";
+import { roster as rosterModel } from "../../models/roster.js";
 import { mountModels } from "../_model.js";
 import { ACTIONS } from "./streams.js";
 
@@ -72,9 +73,7 @@ ${(s.ignored || []).length ? group("Ignored", "", html`<p class="muted np-note">
 
 // ---- drawing -------------------------------------------------------------------
 function who(name) {
-  const roster = peek("/api/v2/roster").data;
-  const m = roster ? byName(roster.members || []).get(name) : null;
-  return m || { name, class: open && open.cls };
+  return rosterModel(peek("/api/v2/roster")).member(name) || { name, class: open && open.cls };
 }
 
 function readsOf(o) { return PANELS[o.kind].reads(o.name); }

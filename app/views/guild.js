@@ -14,8 +14,11 @@ import {
   state, pendingRead, item, member, memberHref, plural, duration, classVar,
 } from "../ui.js";
 import { peek } from "../api.js";
-import { utc, since, runCard, bindRunCards, runHref, seatChips } from "./_runs.js";
+import { runCard, bindRunCards, runHref, seatChips } from "./_runs.js";
 import { guilds, guildName, guildFamily } from "../families.js";
+import { since, toSeconds, fromClock } from "../models/time.js";
+import { guild as guildModel } from "../models/guild.js";
+import { roster as rosterModel } from "../models/roster.js";
 
 const TABS = [["progress", "Progress"], ["runs", "Runs"], ["chronicle", "Chronicle"]];
 const FEED_KINDS = [
@@ -34,6 +37,7 @@ function gname(ctx) { return guildName(key(ctx)); }
 // read says the family it found too; the view checks the two agree.
 function family(ctx) { return guildFamily(key(ctx)); }
 function base(ctx) { return "#/guilds/" + key(ctx); }
+function model(ctx) { return guildModel(peek(P.guild(ctx))); }
 
 const P = {
   guild: (ctx) => "/api/v2/guild?guild=" + key(ctx),
@@ -59,19 +63,12 @@ const TAB_READS = {
 // which path rows are open. The feed filter is in the URL (?kind=).
 const view = { kind: "all", shown: FEED_PAGE, open: new Set(), hash: "" };
 
-function median(nums) {
-  const s = nums.slice().sort((a, b) => a - b);
-  if (!s.length) return null;
-  return s[Math.floor(s.length / 2)];
-}
-
 function n(v) { return Number(v || 0).toLocaleString("en-US"); }
 
 // ---- header -----------------------------------------------------------------
 
-function summary(g) {
-  const levels = g.members.map((m) => m.level);
-  return g.guild + ": median level " + median(levels) + ", " + g.gaining.length + " of " + g.count + " reached a new level in the last 24 hours" + (g.deaths.ghosts.length ? ", " + plural(g.deaths.ghosts.length, "ghost") + " now" : "") + ".";
+function summary(ctx, g) {
+  return g.guild + ": median level " + model(ctx).medianLevel() + ", " + g.gaining.length + " of " + g.count + " reached a new level in the last 24 hours" + (g.deaths.ghosts.length ? ", " + plural(g.deaths.ghosts.length, "ghost") + " now" : "") + ".";
 }
 
 function header(ctx, g) {
@@ -81,7 +78,7 @@ function header(ctx, g) {
     : "";
   return html`<header class="page-head g-head">
 <div class="g-title"><h1>${gname(ctx)}</h1><span class="g-facts">${facts}</span>${pick}</div>
-${g ? html`<p class="summary g-summary">${summary(g)}</p>` : ""}
+${g ? html`<p class="summary g-summary">${summary(ctx, g)}</p>` : ""}
 </header>
 ${tabs("Guild views", TABS.map(([k, label]) => ({ label, href: base(ctx) + (k === "progress" ? "" : "/" + k), current: k === ctx.params.tab })))}`;
 }
@@ -90,19 +87,19 @@ ${tabs("Guild views", TABS.map(([k, label]) => ({ label, href: base(ctx) + (k ==
 
 function kpis(ctx, g) {
   const q = "#/members?guild=" + key(ctx);
-  const levels = g.members.map((m) => m.level);
-  const ghosts = g.members.filter((m) => m.ghost).length;
+  const G = model(ctx);
+  const levels = G.levels();
+  const ghosts = G.ghostsNow();
   const cq = g.class_quests;
   // Stuck is the roster's reading (the Members page's), counted for this guild.
   const roster = peek(P.roster(ctx));
-  const list = roster.data && Array.isArray(roster.data.members) ? roster.data.members : null;
-  const mine = list ? list.filter((m) => m.guild === g.guild) : null;
+  const mine = rosterModel(roster).inGuild(g.guild);
   const stuck = mine ? mine.filter((m) => m.stuck).length : null;
   const stuckSub = mine ? "of " + plural(mine.length, "member") + ", waiting on help" : roster.loading ? "reading the roster" : "the roster read did not answer";
   const tile = (label, v, sub, href, tone) => html`<a class="kpi g-kpi" href="${href}"><span class="k">${label}</span><span class="v"${tone ? raw(' data-gt="' + tone + '"') : ""}>${v}</span><span class="s">${sub}</span></a>`;
   return html`<div class="g-kpis">
 ${tile("Gaining XP", g.gaining.length + "/" + g.count, "a new level in the last 24h", q + "&sort=xp")}
-${tile("Median level", levels.length ? median(levels) : notMeasured(), levels.length ? Math.min(...levels) + " to " + Math.max(...levels) : "", q + "&sort=level")}
+${tile("Median level", levels.length ? G.medianLevel() : notMeasured(), levels.length ? Math.min(...levels) + " to " + Math.max(...levels) : "", q + "&sort=level")}
 ${tile("Class quests done", n(cq.done), cq.open + " in progress, " + cq.blocked + " blocked", q)}
 ${tile("Stuck", stuck === null ? notMeasured() : stuck, stuckSub, q + "&stuck=1", stuck ? "warn" : "")}
 ${tile("Ghosts now", ghosts, g.deaths.total + " deaths in 24h", q + "&ghost=1", ghosts ? "bad" : "")}
@@ -127,15 +124,11 @@ ${known.length >= 2 ? html`<div class="g-spark">${sparkline(vals, { w: 300, h: 8
 </div>`;
 }
 
-function spreadCard(ctx, g) {
-  const levels = g.members.map((m) => m.level).filter((l) => l > 0);
-  if (!levels.length) return html`<div class="card g-card"><span class="g-card-title">Level spread</span>${notMeasured()}</div>`;
-  const lo = Math.min(...levels), hi = Math.max(...levels), med = median(levels);
-  const bins = [];
-  for (let a = lo - (lo % 2); a <= hi; a += 2) {
-    const b = a + 1;
-    bins.push({ label: a + "-" + b, n: levels.filter((l) => l >= a && l <= b).length, median: med >= a && med <= b, href: "#/members?guild=" + key(ctx) + "&lvl=" + a + "-" + b });
-  }
+function spreadCard(ctx) {
+  const spread = model(ctx).levelSpread();
+  if (!spread) return html`<div class="card g-card"><span class="g-card-title">Level spread</span>${notMeasured()}</div>`;
+  const { lo, hi, median: med } = spread;
+  const bins = spread.bins.map((b) => ({ label: b.from + "-" + b.to, n: b.n, median: b.median, href: "#/members?guild=" + key(ctx) + "&lvl=" + b.from + "-" + b.to }));
   return html`<div class="card g-card">
 <div class="g-card-head"><span class="g-card-title">Level spread</span><span class="muted">median ${med} | ${lo} to ${hi}</span></div>
 ${histogram(bins, { label: "Members by level, two levels a bar", unit: "member" })}
@@ -180,7 +173,7 @@ function levelsOf(d) { return d.floor ? d.floor + "-" + d.ceiling : "levels not 
 
 function deathsCard(ctx, g) {
   const d = g.deaths;
-  const ghosts = d.ghosts.map((x) => html`<div class="g-row g-death"><i class="ph-fill ph-ghost" aria-hidden="true"></i><span class="g-grow">${member({ name: x.name, cls: (g.members.find((m) => m.name === x.name) || {}).class })} is a ghost${x.killer ? ": killed by " + x.killer : ""}${x.where ? " in " + x.where : ""}</span><span class="muted">${x.at ? since(x.at) : "now"}</span></div>`);
+  const ghosts = d.ghosts.map((x) => html`<div class="g-row g-death"><i class="ph-fill ph-ghost" aria-hidden="true"></i><span class="g-grow">${member({ name: x.name, cls: model(ctx).classOf(x.name) })} is a ghost${x.killer ? ": killed by " + x.killer : ""}${x.where ? " in " + x.where : ""}</span><span class="muted">${x.at ? since(x.at) : "now"}</span></div>`);
   const killers = d.killers.map((k) => html`<div class="g-row g-death"><i class="ph ph-skull" aria-hidden="true"></i><span class="g-grow">${k.killer || "The world"} killed ${plural(k.members, "member")}, ${plural(k.n, "time")} in 24h</span></div>`);
   return html`<div class="card g-list">
 <div class="g-list-head"><span class="g-card-title">Deaths and ghosts</span><span class="muted">${n(d.total)} deaths in 24h | ${d.ghosts.length} ${d.ghosts.length === 1 ? "ghost" : "ghosts"} now</span></div>
@@ -191,7 +184,7 @@ ${!ghosts.length && !killers.length ? html`<div class="g-row muted">Nobody died 
 
 function progress(ctx, g) {
   return html`${kpis(ctx, g)}
-<div class="g-two">${xpCard(ctx)}${spreadCard(ctx, g)}</div>
+<div class="g-two">${xpCard(ctx)}${spreadCard(ctx)}</div>
 <div class="g-two">${cqCard(ctx, g)}${dungeonCard(ctx, g)}</div>
 ${deathsCard(ctx, g)}`;
 }
@@ -233,7 +226,7 @@ function runsTab(ctx, g) {
   const gr = peek(P.runs());
   const upsRead = peek(P.ups(ctx));
   const tl = peek(P.timeline());
-  const checked = gr.at ? "Checked " + since(gr.at / 1000) + "." : "";
+  const checked = gr.at ? "Checked " + since(fromClock(gr.at)) + "." : "";
   let now = pendingRead(gr, 1), done = now;
   if (gr.data) {
     const out = mine(ctx, gr.data.active);
@@ -241,8 +234,8 @@ function runsTab(ctx, g) {
     now = out.length ? html`<div class="g-cards">${out.map((r) => runCard(r))}</div>` : state("empty", "No group from " + gname(ctx) + " is out right now.", checked);
     done = back.length ? html`<div class="g-cards">${back.map((r) => runCard(r, { done: true }))}</div>` : state("empty", "No group from " + gname(ctx) + " has come back in the recent runs.", checked);
   }
-  const learned = g.dungeons.filter((d) => d.runs > 0);
-  const med = median(g.members.map((m) => m.level));
+  const learned = model(ctx).learned();
+  const med = model(ctx).medianLevel();
   return html`
 <section class="section">${sectionHead("01", "Groups out now")}${now}</section>
 <section class="section">${sectionHead("02", "How they came back")}${done}</section>
@@ -276,15 +269,13 @@ function timelines(ctx, tl) {
 
 // ---- chronicle ----------------------------------------------------------------
 
-function loottime(s) { return utc(s.at); }
-
 function feedItems(ctx) {
   const c = peek(P.chronicle(ctx));
   const loot = peek(P.loot());
   const items = c.data ? c.data.items.slice() : [];
   if (loot.data) {
     (loot.data.stories || []).filter((s) => s.guild === gname(ctx)).forEach((s) => {
-      items.push({ kind: "loot", at: loottime(s), text: s.line, item: s.item });
+      items.push({ kind: "loot", at: toSeconds(s.at), text: s.line, item: s.item });
     });
   }
   items.sort((a, b) => (b.at || 0) - (a.at || 0));
@@ -297,7 +288,8 @@ const FEED_ICON = {
 };
 
 function feedRow(ctx, x) {
-  const fresh = ctx.previousVisit && x.at && x.at * 1000 > ctx.previousVisit;
+  const seen = fromClock(ctx.previousVisit);
+  const fresh = seen && x.at && x.at > seen;
   const [icon, tone] = FEED_ICON[x.kind] || ["ph ph-circle", ""];
   const body = x.kind === "loot" && x.item
     ? html`${item({ entry: x.item.entry, name: x.item.name, quality: x.item.quality, icon: x.item.icon })} <span>${x.text}</span>`
@@ -329,7 +321,7 @@ function rightNow(ctx) {
   const live = rc.data && rc.data.live && rc.data.family === family(ctx) ? recapCard(ctx, rc.data) : "";
   if (!cards.length && !live) {
     if (!gr.data) return pendingRead(gr, 1);
-    return state("empty", "Nobody from " + gname(ctx) + " is inside a dungeon right now.", gr.at ? "Checked " + since(gr.at / 1000) + "." : "");
+    return state("empty", "Nobody from " + gname(ctx) + " is inside a dungeon right now.", gr.at ? "Checked " + since(fromClock(gr.at)) + "." : "");
   }
   return html`${live}${cards}`;
 }
@@ -358,11 +350,11 @@ function lootSection(ctx) {
   const wait = pendingRead(l, 2);
   if (wait) return { loot: wait, council: wait };
   const stories = (l.data.stories || []).filter((s) => s.guild === gname(ctx)).slice(0, 12);
-  const loot = html`<div class="card g-list">${stories.length ? stories.map((s) => html`<div class="g-row g-loot"><span class="g-loot-top">${item(s.item)}<span class="muted g-when">${since(utc(s.at))}</span></span><span class="muted">${s.line}</span></div>`) : html`<div class="g-row muted">${l.data.empty || "No notable loot yet."}</div>`}</div>
+  const loot = html`<div class="card g-list">${stories.length ? stories.map((s) => html`<div class="g-row g-loot"><span class="g-loot-top">${item(s.item)}<span class="muted g-when">${since(s.at)}</span></span><span class="muted">${s.line}</span></div>`) : html`<div class="g-row muted">${l.data.empty || "No notable loot yet."}</div>`}</div>
 <details class="fold"><summary>How this is worked out</summary><p class="muted g-basis">${l.data.basis || ""}</p></details>`;
   const c = l.data.council || {};
   const awards = (c.awards || []).filter((a) => a.family === family(ctx)).slice(0, 12);
-  const council = html`<div class="card g-list">${awards.length ? awards.map((a) => html`<div class="g-row g-loot"><span class="g-loot-top"><span>${item({ entry: a.item_entry, name: a.item_name, quality: a.quality })} <span class="muted">to</span> ${a.to ? member({ name: a.to }) : "nobody"}</span><span class="muted g-when">${since(utc(a.at))}</span></span><span class="muted">${a.reason || a.outcome || ""}</span></div>`) : html`<div class="g-row muted">${c.empty || "The loot council has not handed anything out."}</div>`}</div>`;
+  const council = html`<div class="card g-list">${awards.length ? awards.map((a) => html`<div class="g-row g-loot"><span class="g-loot-top"><span>${item({ entry: a.item_entry, name: a.item_name, quality: a.quality })} <span class="muted">to</span> ${a.to ? member({ name: a.to }) : "nobody"}</span><span class="muted g-when">${since(a.at)}</span></span><span class="muted">${a.reason || a.outcome || ""}</span></div>`) : html`<div class="g-row muted">${c.empty || "The loot council has not handed anything out."}</div>`}</div>`;
   return { loot, council };
 }
 
@@ -375,7 +367,7 @@ function sittings(ctx) {
   const k = f.consensus;
   if (!k) return state("empty", f.note || f.quiet || f.undecided || "No sitting on record.");
   return html`<div class="card g-sitting">
-<div class="g-card-head"><span class="g-name">${f.title}</span><span class="muted">sat ${since(utc(k.at))}</span></div>
+<div class="g-card-head"><span class="g-name">${f.title}</span><span class="muted">sat ${since(k.at)}</span></div>
 <span class="tag tag-outline g-label">${k.label}</span>
 <span>${k.decision}</span>
 ${k.who_line ? html`<span class="muted">${k.who_line}</span>` : ""}
@@ -409,7 +401,7 @@ function chat(ctx) {
     const answers = a.answers || [];
     const out = a.run ? html`<a href="${runHref(a.run)}">${a.run.outcome ? "The run " + a.run.outcome : "The run is " + (a.run.state || "on")}${a.run.bosses_total ? ", " + a.run.bosses_done + " of " + a.run.bosses_total + " bosses" : ""}</a>` : "";
     return html`<div class="g-chat">
-<div class="g-chat-top"><span>${member({ name: a.asker })} <span class="g-said">${said(a.said)}</span></span><span class="muted g-when">${since(utc(a.created_at))}</span></div>
+<div class="g-chat-top"><span>${member({ name: a.asker })} <span class="g-said">${said(a.said)}</span></span><span class="muted g-when">${since(a.created_at)}</span></div>
 <div class="g-answers">${answers.length ? answers.map((x) => html`<span>${member({ name: x.member })}: ${said(x.said)}</span>`) : html`<span data-gt="warn">${a.state === "open" ? "No answer yet." : "No answer: the ask " + a.state + "."}</span>`}${out}</div>
 </div>`;
   };

@@ -664,12 +664,13 @@ class TheQualityStrip(unittest.TestCase):
 @unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
 class TheMembersBadge(unittest.TestCase):
     def run_badge(self, data):
+        # The app is copied whole into a module package: badges.js reads its
+        # times through models/time.js.
         with tempfile.TemporaryDirectory() as tmp:
-            dst = pathlib.Path(tmp) / "badges.mjs"
-            dst.write_text(
-                (HERE / "app" / "badges.js").read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
+            root = pathlib.Path(tmp) / "app"
+            shutil.copytree(HERE / "app", root)
+            (root / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+            dst = root / "badges.js"
             code = (
                 "import P from %s;\n"
                 "const p = P.find((b) => b.section === 'members');\n"
