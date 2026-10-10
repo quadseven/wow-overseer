@@ -267,9 +267,9 @@ function whereText(where) {
 
 function upgradesFromRead(name, read, teams) {
   const cls = ((teams && teams.members && teams.members[name]) || {}).class;
-  const head = (line) => html`<summary><span class="fold-body"><span>${member({ name, cls })} <span class="muted">${line}</span></span></span></summary>`;
+  const head = (line) => html`<summary><span class="fold-body"><span>${foldName(name, cls)} <span class="muted">${line}</span></span></span></summary>`;
   if (read.data === undefined) {
-    return html`<details class="card raid-fold">${head(read.error ? "upgrades not measured" : "reading upgrades")}</details>`;
+    return html`<details class="card raid-fold">${head(read.error ? "upgrades not measured" : "reading upgrades")}<a class="raid-more" href="${memberHref(name, "upgrades")}">All slots for ${name}</a></details>`;
   }
   const d = read.data;
   const rows = (d.slots || []).filter((s) => s.next).sort((a, b) => (b.next.gain || 0) - (a.next.gain || 0)).slice(0, 5);
@@ -287,7 +287,7 @@ function preraidMember(m, columns, teams) {
     if (it && text.startsWith(it.name)) return html`${item({ entry: it.entry, name: it.name, quality: it.quality })}${text.slice(it.name.length)}`;
     return text;
   };
-  return html`<details class="card raid-fold"><summary><span class="fold-body"><span>${member({ name: m.name, cls })} <span class="muted">${m.line}</span></span></span></summary>${table(columns, m.rows || [], cell)}<a class="raid-more" href="${memberHref(m.name, "upgrades")}">All slots for ${m.name}</a></details>`;
+  return html`<details class="card raid-fold"><summary><span class="fold-body"><span>${foldName(m.name, cls)} <span class="muted">${m.line}</span></span></span></summary>${table(columns, m.rows || [], cell)}<a class="raid-more" href="${memberHref(m.name, "upgrades")}">All slots for ${m.name}</a></details>`;
 }
 
 function upgradesSection(ctx, card, teams) {
@@ -426,3 +426,10 @@ ${basis(goalsRead.data, card)}`;
     return { label: "Guild", items: GUILDS.map((g) => ({ label: cap(g), href: "#/raid/mc/" + g + keep, current: g === ctx.params.guild })) };
   },
 };
+
+// A name in a fold's summary: the member's class colour without a link,
+// because a link inside a <summary> is a control inside a control. The fold
+// body links to the member.
+function foldName(name, cls) {
+  return html`<span class="member" style="color:${classVar(cls)}">${name}</span>`;
+}

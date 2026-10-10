@@ -76,7 +76,7 @@ export function mount(root) {
     <button type="button" class="btn btn-icon" data-action="theme" data-slot="theme-icon"></button>
   </header>
   <main class="main" id="main" tabindex="-1"></main>
-  <div data-slot="thumb"></div>
+  <nav data-slot="thumb" aria-label="Switch guild" hidden></nav>
   <nav class="tabbar" aria-label="Sections" data-slot="tabbar"></nav>
 </div>`.s;
 }
@@ -114,6 +114,7 @@ export function updateAge(root, health) {
 // The floating Cave/Bonkers switch on phone (Guilds and Raid).
 export function setThumb(root, opts) {
   const slot = root.querySelector('[data-slot="thumb"]');
+  slot.hidden = !opts;
   if (!opts) { slot.innerHTML = ""; return; }
   slot.innerHTML = html`<div class="thumb"><div class="seg" role="group" aria-label="${opts.label}">${opts.items.map((o) => html`<a href="${o.href}"${o.current ? raw(' aria-current="page"') : ""}>${o.label}</a>`)}</div></div>`.s;
 }

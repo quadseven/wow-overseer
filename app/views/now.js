@@ -21,7 +21,7 @@ function saveLayout(v) {
 // ---- status chips -----------------------------------------------------------
 function chip(kind, label, href) {
   const s = STATUS[kind];
-  return html`<a class="nchip" role="listitem" href="${href}" data-tone="${kind}"><i class="${s[1]}" style="color:${s[2]}" aria-hidden="true"></i>${label}</a>`;
+  return html`<a class="nchip" href="${href}" data-tone="${kind}"><i class="${s[1]}" style="color:${s[2]}" aria-hidden="true"></i>${label}</a>`;
 }
 
 function stalledChip(agendas) {
@@ -52,7 +52,7 @@ function chips(ctx, agendas) {
       : chip("inside", "Runs inside not measured", "#/guilds/cave/runs"),
   ];
   if (fresh) list.push(chip("new", plural(fresh, "run") + " new since your last visit", "#/guilds/cave/runs"));
-  return html`<div class="nchips" role="list" aria-label="What needs you">${list}</div>`;
+  return html`<div class="nchips" role="group" aria-label="What needs you">${list}</div>`;
 }
 
 // ---- realm strip --------------------------------------------------------------

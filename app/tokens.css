@@ -1,8 +1,11 @@
 /* Overseer design tokens: the Nocturne base plus what the operations app adds.
    Dark is the ground; light inverts the ramps. The theme follows the system
-   preference unless the operator picked one (data-theme on <html>). Item
-   quality colours and the tooltip stay dark in both themes on purpose: they
-   are the game's own colours and read against the game's own dark ground. */
+   preference unless the operator picked one (data-theme on <html>). The
+   tooltip stays dark in both themes on purpose and keeps the game's own
+   quality colours. Everywhere else every text colour (text, the neutral ramp
+   down to 500, quality and class) reads at 4.5:1 or better on the ground,
+   the surface and neutral-900, in both themes; tests/test_app_shell.py
+   computes the ratios from this file. */
 
 :root {
   color-scheme: dark;
@@ -67,8 +70,8 @@
   --q-poor: #9d9d9d;
   --q-common: #e9e9ed;
   --q-uncommon: #1eff00;
-  --q-rare: #3d8ff0;
-  --q-epic: #b16cf0;
+  --q-rare: #529bf2;
+  --q-epic: #ba7af2;
   --q-legendary: #ff8000;
 
   --cls-warrior: #c69b6d;
@@ -76,11 +79,11 @@
   --cls-rogue: #fff468;
   --cls-priest: #f0f0f0;
   --cls-mage: #3fc7eb;
-  --cls-shaman: #3d8ff0;
+  --cls-shaman: #529bf2;
   --cls-druid: #ff7c0a;
   --cls-hunter: #aad372;
   --cls-warlock: #8788ee;
-  --cls-death-knight: #c41e3a;
+  --cls-death-knight: #ec6a7c;
 
   /* The tooltip is the game's: dark in both themes. */
   --tip-bg: #161826;
@@ -108,7 +111,7 @@
   --color-neutral-200: #3f424d;
   --color-neutral-300: #595d6c;
   --color-neutral-400: #595d6c;
-  --color-neutral-500: #75798c;
+  --color-neutral-500: #606476;
   --color-neutral-600: #9397ab;
   --color-neutral-700: #b2b6ca;
   --color-neutral-800: #cfd3e5;
@@ -130,17 +133,20 @@
   --bad: oklch(0.52 0.16 25);
   --warn-line: oklch(0.6 0.11 70 / 0.6);
   --bad-line: oklch(0.55 0.15 25 / 0.6);
+  --q-poor: #636363;
   --q-common: #292b31;
+  --q-uncommon: #187000;
   --q-rare: #0058b8;
   --q-epic: #7a35c2;
+  --q-legendary: #a04f00;
   --cls-warrior: #8a5a2b;
   --cls-paladin: #b03a78;
-  --cls-rogue: #7a6a00;
+  --cls-rogue: #6e6000;
   --cls-priest: #4a4d5a;
   --cls-mage: #0b6f8a;
   --cls-shaman: #0050b0;
   --cls-druid: #a84d00;
-  --cls-hunter: #4f7a1a;
+  --cls-hunter: #456c18;
   --cls-warlock: #5052b8;
   --cls-death-knight: #9b1028;
 }
@@ -157,7 +163,7 @@
     --color-neutral-200: #3f424d;
     --color-neutral-300: #595d6c;
     --color-neutral-400: #595d6c;
-    --color-neutral-500: #75798c;
+    --color-neutral-500: #606476;
     --color-neutral-600: #9397ab;
     --color-neutral-700: #b2b6ca;
     --color-neutral-800: #cfd3e5;
@@ -179,17 +185,20 @@
     --bad: oklch(0.52 0.16 25);
     --warn-line: oklch(0.6 0.11 70 / 0.6);
     --bad-line: oklch(0.55 0.15 25 / 0.6);
+    --q-poor: #636363;
     --q-common: #292b31;
+    --q-uncommon: #187000;
     --q-rare: #0058b8;
     --q-epic: #7a35c2;
+    --q-legendary: #a04f00;
     --cls-warrior: #8a5a2b;
     --cls-paladin: #b03a78;
-    --cls-rogue: #7a6a00;
+    --cls-rogue: #6e6000;
     --cls-priest: #4a4d5a;
     --cls-mage: #0b6f8a;
     --cls-shaman: #0050b0;
     --cls-druid: #a84d00;
-    --cls-hunter: #4f7a1a;
+    --cls-hunter: #456c18;
     --cls-warlock: #5052b8;
     --cls-death-knight: #9b1028;
   }

@@ -44,7 +44,7 @@ function bar(percent, tone) {
 }
 
 function chipLink(label, href, on) {
-  return html`<a class="chip eco-pick" href="${href}"${on ? raw(' aria-current="true" aria-pressed="true"') : ""}>${label}</a>`;
+  return html`<a class="chip eco-pick" href="${href}"${on ? raw(' aria-current="true"') : ""}>${label}</a>`;
 }
 
 function fold(key, summary, body, openByDefault) {

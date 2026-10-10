@@ -274,8 +274,6 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
 .q3 { color: var(--q-rare); --ring: var(--q-rare); }
 .q4 { color: var(--q-epic); --ring: var(--q-epic); }
 .q5 { color: var(--q-legendary); --ring: var(--q-legendary); }
-:root[data-theme="light"] .q2 { color: #1a7a00; }
-@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .q2 { color: #1a7a00; } }
 
 .tip {
   position: fixed; z-index: 40; width: 280px; background: var(--tip-bg); color: var(--tip-text);
@@ -363,3 +361,20 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
    sticky .thumb inside it had no room to move and scrolled away (Raid PR). */
 [data-slot="thumb"] { position: sticky; bottom: calc(var(--tabbar-h) + 4px); z-index: 5; }
 [data-slot="thumb"] > .thumb { position: static; }
+
+/* ---- Phone and accessibility pass ------------------------------------------ */
+/* On a touch screen an item or a member is a 44px target; a mouse keeps the
+   dense rows. Tabs and the skip link meet 44px everywhere. */
+@media (pointer: coarse) {
+  .item, a.member, .chip { min-height: 44px; }
+  .card > a:not([class]) { min-height: 44px; display: flex; align-items: center; }
+}
+.tabs a { min-width: 44px; justify-content: center; }
+.skip { min-height: 44px; }
+/* A histogram bar that links takes its whole column, so the short bars are
+   as easy to hit as the tall ones. */
+.histo a.hit { align-self: stretch; display: flex; align-items: flex-end; background: none; border-radius: 0; }
+.histo a.hit .bar { flex: 1; }
+.histo a.hit:hover { background: none; }
+.histo a.hit:hover .bar:not(.median) { background: var(--color-neutral-600); }
+@media (min-width: 760px) { [data-slot="thumb"] { display: none; } }

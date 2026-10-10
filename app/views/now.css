@@ -75,6 +75,7 @@
 .st-cap { padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 6px; }
 .st-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .st-name { font-weight: 500; font-size: 17px; text-decoration: none; }
+@media (pointer: coarse) { .st-name { display: inline-flex; align-items: center; min-height: 44px; } }
 .st-sub { font-size: var(--fs-1); color: var(--color-neutral-400); }
 .st-age { margin-left: auto; font-size: var(--fs-0); color: var(--color-neutral-500); font-variant-numeric: tabular-nums; }
 .st-doing { color: var(--color-neutral-200); text-wrap: pretty; line-height: 1.45; }

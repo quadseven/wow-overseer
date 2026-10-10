@@ -153,7 +153,7 @@ export function state(kind, title, body) {
 export function skeletons(n) {
   const cards = [];
   for (let i = 0; i < (n || 3); i++) cards.push(html`<div class="skeleton"></div>`);
-  return html`<div class="skeletons" aria-busy="true" aria-label="Loading">${cards}</div>`;
+  return html`<div class="skeletons" role="status" aria-busy="true" aria-label="Loading">${cards}</div>`;
 }
 
 // What a view draws for one read before it has data: the skeleton while the
@@ -217,9 +217,10 @@ export function histogram(bins, opts) {
     const cls = b.median ? "median" : "";
     const label = b.label + ": " + plural(b.n || 0, o.unit || "member");
     return b.href
-      ? html`<a class="${cls}" href="${b.href}" style="height:${h}%" aria-label="${label}" title="${label}"></a>`
+      ? html`<a class="hit" href="${b.href}" aria-label="${label}" title="${label}"><span class="bar ${cls}" style="height:${h}%"></span></a>`
       : html`<span class="bar ${cls}" style="height:${h}%" aria-label="${label}" title="${label}"></span>`;
   });
   const first = bins[0].label, last = bins[bins.length - 1].label;
-  return html`<div class="histo" role="img" aria-label="${o.label || "Distribution"}">${bars}</div><div class="histo-axis"><span>${first}</span><span>${last}</span></div>`;
+  const role = bins.some((b) => b.href) ? "group" : "img";
+  return html`<div class="histo" role="${role}" aria-label="${o.label || "Distribution"}">${bars}</div><div class="histo-axis"><span>${first}</span><span>${last}</span></div>`;
 }

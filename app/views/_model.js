@@ -95,6 +95,9 @@ function drop(name) {
   live.delete(name);
 }
 
+// The model turns on its own unless the system asks for reduced motion.
+const stillMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 function watch(name, entry) {
   const tick = () => {
     if (live.get(name) !== entry || !entry.viewer) return;
@@ -108,7 +111,7 @@ function watch(name, entry) {
           const stage = entry.pane.parentElement;
           if (stage) { stage.classList.add("live"); fit(entry, stage); }
         }
-      } else if (!entry.held && !r.mouseDown) {
+      } else if (!entry.held && !r.mouseDown && !stillMotion()) {
         r.azimuth = (r.azimuth + TURN) % (2 * Math.PI);
       }
     }

@@ -53,7 +53,7 @@
 
 .raid-viewhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .raid-viewhead .seg { margin-left: auto; align-self: center; }
-.raid-viewhead .seg > a { min-height: 36px; }
+@media (pointer: fine) { .raid-viewhead .seg > a { min-height: 36px; } }
 
 /* The eight groups. */
 .raid-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr)); gap: 8px; }

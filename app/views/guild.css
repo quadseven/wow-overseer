@@ -157,6 +157,10 @@ a.g-row:hover { background: var(--color-neutral-900); color: var(--color-text); 
 .g-filter { min-height: 44px; padding: 0 12px; }
 .g-feed > i { font-size: var(--fs-3); }
 .g-feed-link { color: var(--color-text); text-decoration: none; }
+@media (pointer: coarse) {
+  .g-feed-link { display: block; padding-block: 4px; }
+  .g-answers > a:not([class]) { min-height: 44px; display: flex; align-items: center; }
+}
 .g-feed-link:hover { text-decoration: underline; }
 .g-loot { flex-direction: column; align-items: stretch; gap: 2px; }
 .g-loot-top { display: flex; justify-content: space-between; gap: 8px; align-items: center; min-width: 0; }
