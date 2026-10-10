@@ -135,17 +135,13 @@ class TheTwoFamiliesAndTheGuilds(unittest.TestCase):
     def setUpClass(cls):
         cls.server = (HERE / "map_server.py").read_text()
 
-    def test_both_guild_routes_are_reachable(self):
-        self.assertIn('"/api/armory/guild": _armory_guild,', self.server)
+    def test_the_member_route_is_reachable(self):
         self.assertIn('"/api/armory/member": _armory_member,', self.server)
 
-    def test_a_guild_or_a_name_is_only_ever_matched_against_the_families(self):
-        """The two routes take a parameter; what makes them safe is that the
-        parameter is compared against a set the database produced for the
-        families' own guilds, and refused otherwise."""
-        guild = self.server[self.server.index("def _armory_guild") :]
-        guild = guild[: guild.index("def _armory_member")]
-        self.assertIn("if wanted not in _fetch_guild_sizes(names):", guild)
+    def test_a_name_is_only_ever_matched_against_the_families(self):
+        """The route takes a parameter; what makes it safe is that the
+        parameter is compared against the families' own guildmates, and
+        refused otherwise."""
         member = self.server[self.server.index("def _armory_member") :]
         member = member[: member.index("def _read_json_body")]
         self.assertIn("if not _NAME_RE.fullmatch(wanted):", member)

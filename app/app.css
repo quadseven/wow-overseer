@@ -151,7 +151,7 @@ a.card:hover { box-shadow: var(--shadow-sm); }
 .sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: 6px; padding: 12px 4px 0; }
 .age { display: flex; align-items: center; gap: 6px; font-size: var(--fs-1); color: var(--color-neutral-500); padding: 0 6px; }
 .age-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex-shrink: 0; }
-.age-dot[data-state="stale"] { background: var(--warn); }
+.age-dot[data-state="stale"], .age-dot[data-state="saved"] { background: var(--warn); }
 .age-dot[data-state="error"] { background: var(--bad); }
 .age-dot[data-state="loading"] { background: var(--color-neutral-600); animation: pulse 1.2s infinite; }
 .op-link { font-size: var(--fs-1); color: var(--color-neutral-500); text-decoration: none; padding: 4px 6px; display: flex; gap: 6px; align-items: center; min-height: 32px; }

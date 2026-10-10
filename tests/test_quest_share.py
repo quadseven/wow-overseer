@@ -324,7 +324,7 @@ class TheBridgeAsksForWhatTheDecisionNeeds(unittest.TestCase):
         """A loop nobody registers is a feature that exists only in the diff -
         and asyncio drops a task with no other referent, silently."""
         bridge = self._bridge()
-        self.assertIn("self._share_quests_loop,", bridge)
+        self.assertIn('    _Pass("_share_quests_loop"),\n', bridge)
         self.assertIn("async def _share_quests_loop", bridge)
 
     def test_the_decision_is_not_reimplemented_next_to_the_insert(self):

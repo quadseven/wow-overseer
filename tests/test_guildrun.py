@@ -1046,10 +1046,8 @@ class TheGuildTab(unittest.TestCase):
 
 class TheWiring(unittest.TestCase):
     def test_the_loop_runs_on_both_bridges(self):
-        self.assertEqual(BRIDGE.count("                self._guild_run_loop,\n"), 2)
-        self.assertEqual(
-            BRIDGE.count("await asyncio.to_thread(_ensure_guild_run_store)"), 2
-        )
+        self.assertEqual(BRIDGE.count('\n    _Pass("_guild_run_loop"),\n'), 1)
+        self.assertEqual(BRIDGE.count("            _ensure_guild_run_store,\n"), 1)
 
     def test_the_row_is_a_guild_row_on_the_tank(self):
         start = BRIDGE[BRIDGE.index("def _start_guild_run") :]

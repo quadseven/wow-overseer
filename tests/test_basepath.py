@@ -19,10 +19,13 @@ new endpoint is added to the page with a root-anchored URL.
 Ticket: infra#3239.
 """
 
+import json
 import pathlib
+import re
 import sys
 import types
 import unittest
+from urllib.parse import urljoin, urlsplit
 
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
@@ -119,6 +122,37 @@ class ServedPageTest(unittest.TestCase):
             text = body.decode("utf-8")
             self.assertNotIn(basepath.PLACEHOLDER, text)
             self.assertIn('<meta name="overseer-base" content="%s">' % prefix, text)
+
+    def test_the_home_screen_app_opens_its_own_mount(self):
+        # Added to the home screen, the app opens at the manifest's start_url.
+        # Under a prefix that has to be the prefix's page, or the icon on the
+        # phone opens the realm at the root. The manifest's URLs are relative,
+        # so the browser resolves them against the manifest's own address,
+        # which the page puts under the mount.
+        for prefix in ("", "/dev"):
+            _code, _ctype, page = self.serve(prefix)
+            text = page.decode("utf-8")
+            found = re.search(r'<link rel="manifest" href="([^"]+)">', text)
+            self.assertIsNotNone(found, "the page links no manifest")
+            link = found.group(1)
+            self.assertEqual(link, prefix + "/manifest.webmanifest")
+            self.assertIn(
+                '<link rel="apple-touch-icon" href="%s/apple-touch-icon.png">' % prefix,
+                text,
+            )
+            code, ctype, body = self.serve(prefix, "_manifest_file")
+            self.assertEqual(code, 200)
+            self.assertEqual(ctype, "application/manifest+json")
+            manifest = json.loads(body)
+            at = "https://example.com" + link
+            home = prefix + "/"
+            for key in ("start_url", "scope", "id"):
+                self.assertEqual(urlsplit(urljoin(at, manifest[key])).path, home, key)
+            for icon in manifest["icons"]:
+                path = urlsplit(urljoin(at, icon["src"])).path
+                self.assertTrue(path.startswith(home), path)
+                # The ingress strips the prefix; what is left is a route here.
+                self.assertIn(path[len(prefix) :], map_server.Handler.GET_ROUTES)
 
 
 if __name__ == "__main__":

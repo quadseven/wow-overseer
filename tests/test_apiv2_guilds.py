@@ -141,6 +141,47 @@ class TheSeries(unittest.TestCase):
         self.assertEqual(out["xp_per_hour"][-1], [NOW, 100])
         self.assertEqual(out["level"][-1][1], 15.5)
 
+    def test_a_member_rate_is_the_mean_of_its_measured_hours(self):
+        # Dings at now-10h and now-5h, 500 into 11 now: the first 14 hours
+        # are before any instant (null), then five at 200 and five at 100.
+        events = [
+            {"guid": 1, "old_level": 9, "new_level": 10, "at": NOW - 10 * H},
+            {"guid": 1, "old_level": 10, "new_level": 11, "at": NOW - 5 * H},
+        ]
+        char = {"guid": 1, "name": "Grug", "level": 11, "xp": 500}
+        out = series.member_series(char, events, self.TABLE, NOW)
+        self.assertEqual(out["xp_per_hour_24h"], 150)
+        self.assertEqual(out["xp_hours_measured"], 10)
+
+    def test_no_measured_hour_is_no_rate_not_zero(self):
+        self.assertEqual(
+            series.rate([[NOW, None], [NOW + H, None]]),
+            {"xp_per_hour_24h": None, "xp_hours_measured": 0},
+        )
+        char = {"guid": 2, "name": "Og", "level": 20, "xp": 0}
+        out = series.member_series(char, [], self.TABLE, NOW)
+        self.assertIsNone(out["xp_per_hour_24h"])
+        self.assertEqual(out["xp_hours_measured"], 0)
+
+    def test_a_guild_carries_every_members_rate_by_name(self):
+        chars = [
+            {"guid": 1, "name": "A", "level": 11, "xp": 200},
+            {"guid": 2, "name": "B", "level": 20, "xp": 0},
+        ]
+        events = [
+            {"guid": 1, "old_level": 9, "new_level": 10, "at": NOW - 30 * H},
+            {"guid": 1, "old_level": 10, "new_level": 11, "at": NOW - 5 * H},
+        ]
+        out = series.guild_series("Cave", chars, events, self.TABLE, NOW)
+        # A: 1000 XP over the 25 hours between the dings (40 an hour), then
+        # 200 over the last five (40 an hour): every hour measured, at 40.
+        self.assertEqual(
+            out["by_member"]["A"], {"xp_per_hour_24h": 40, "xp_hours_measured": 24}
+        )
+        self.assertEqual(
+            out["by_member"]["B"], {"xp_per_hour_24h": None, "xp_hours_measured": 0}
+        )
+
     def _answers(self):
         return [
             ("UNIX_TIMESTAMP() AS now", [{"now": NOW}]),
@@ -177,9 +218,11 @@ class TheSeries(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(body["name"], "Grug")
         self.assertEqual(body["xp_per_hour"][-1], [NOW, 100])
+        self.assertEqual(body["xp_per_hour_24h"], 150)
         self.assertTrue(ctx.conn.closed)
         code, body = series.series({"guild": ["cave"]}, Ctx(self._answers()))
         self.assertEqual((code, body["guild"], body["measured"]), (200, "Cave", 1))
+        self.assertEqual(body["by_member"]["Grug"]["xp_per_hour_24h"], 150)
 
     def test_the_handler_refuses_what_it_cannot_answer(self):
         self.assertEqual(series.series({}, Ctx())[0], 400)
@@ -291,60 +334,34 @@ class TheGuild(unittest.TestCase):
         ]
         self.assertEqual(guild.family_of({"Grug", "Og", "Bonk"}, rows), "Grug")
 
-    def test_ghosts_and_online_are_read_as_the_roster_reads_them(self):
-        # The saved ghost flag lags a member in the world: the guild page said
-        # no ghosts while the roster, reading the last minute's snapshot, said
-        # four. Both now read the snapshot first and the save when offline.
-        def row(name, online, flags=0):
-            return {
-                "name": name,
-                "level": 20,
-                "class": 1,
-                "online": online,
-                "flags": flags,
-            }
+    def test_a_corpse_and_a_spirit_are_both_ghosts_on_this_page(self):
+        # Online and life are presence.of's reading (tests/test_presence.py);
+        # this page shows a corpse and a released spirit alike as a ghost.
+        def row(name):
+            return {"name": name, "level": 20, "class": 1}
 
-        rows = [
-            row("Ghosty", 1),
-            row("Corpse", 1),
-            row("Fine", 1),
-            row("Saved", 0, flags=0x10),
-            row("Away", 0),
-            row("Lagging", 0),
-        ]
-        snaps = {
-            "Ghosty": {"health": 1, "max_health": 400},
-            "Corpse": {"health": 0, "max_health": 400},
-            "Fine": {"health": 400, "max_health": 400},
-            "Lagging": {"health": 300, "max_health": 400},
+        def reading(online, life):
+            return {"online": online, "life": life, "fresh_at": None}
+
+        readings = {
+            "Ghosty": reading(True, "ghost"),
+            "Corpse": reading(True, "dead"),
+            "Fine": reading(True, "alive"),
+            "Saved": reading(False, "ghost"),
+            "Away": reading(False, None),
         }
-        out = {m["name"]: m for m in guild.member_rows(rows, snaps)}
+        out = {
+            m["name"]: m
+            for m in guild.member_rows([row(n) for n in readings], readings)
+        }
         self.assertEqual(
             sorted(n for n, m in out.items() if m["ghost"]),
             ["Corpse", "Ghosty", "Saved"],
         )
         self.assertEqual(
             sorted(n for n, m in out.items() if m["online"]),
-            ["Corpse", "Fine", "Ghosty", "Lagging"],
+            ["Corpse", "Fine", "Ghosty"],
         )
-
-    def test_the_handler_reads_the_last_minutes_snapshots(self):
-        cur = FakeCursor(
-            [
-                (
-                    "FROM overseer_snapshot",
-                    [{"name": "Grug", "health": 1, "max_health": 9}],
-                )
-            ]
-        )
-        self.assertEqual(
-            guild._snaps(cur, ["Grug", "Bonk"]),
-            {"Grug": {"name": "Grug", "health": 1, "max_health": 9}},
-        )
-        sql, args = cur.seen[0]
-        self.assertIn("INTERVAL 60 SECOND", sql)
-        self.assertEqual(args, ("Grug", "Bonk"))
-        self.assertEqual(guild._snaps(FakeCursor([]), []), {})
 
     def test_a_member_is_blocked_when_its_latest_class_step_failed(self):
         steps = [
@@ -445,14 +462,27 @@ class TheGuild(unittest.TestCase):
             GEO = types.SimpleNamespace(continents={})
             achievements = types.SimpleNamespace(MAP_NAMES={36: "The Deadmines"})
 
+            @staticmethod
+            def _wide_guarded(cur, sql, params=(), fallback="", what=""):
+                # presence.of reads through the server's schema guard.
+                cur.execute(sql, params)
+                return list(cur.fetchall())
+
         answers = [
             (
                 "FROM guild WHERE name",
                 lambda a: [{"guildid": 23, "name": "Cave"}] if a == ("Cave",) else [],
             ),
             ("UNIX_TIMESTAMP() AS now", [{"now": NOW}]),
+            # presence.of's two reads: Grug is in the world, Bonk's save has
+            # the ghost flag.
             (
-                "c.playerFlags",
+                "FROM overseer_snapshot",
+                [{"name": "Grug", "health": 900, "max_health": 900, "at": NOW}],
+            ),
+            ("playerFlags AS flags FROM characters", [{"name": "Bonk", "flags": 0x10}]),
+            (
+                "FROM characters c JOIN guild_member",
                 [
                     {
                         "guid": 1,
@@ -460,8 +490,6 @@ class TheGuild(unittest.TestCase):
                         "level": 42,
                         "class": 1,
                         "race": 1,
-                        "online": 1,
-                        "flags": 0,
                         "zone": 40,
                     },
                     {
@@ -470,8 +498,6 @@ class TheGuild(unittest.TestCase):
                         "level": 20,
                         "class": 9,
                         "race": 3,
-                        "online": 0,
-                        "flags": 0x10,
                         "zone": 40,
                     },
                 ],

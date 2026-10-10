@@ -57,9 +57,7 @@ def _sql() -> str:
 class ThePassRunsAndInTheRightOrder(unittest.TestCase):
     def test_the_loop_is_started_with_the_others(self):
         """A loop nobody creates is a feature that ships and never runs."""
-        src = _source()
-        block = src[src.index("self._loops = {") : src.index("async def on_ready(")]
-        self.assertIn("self._bank_loop,", block)
+        self.assertIn('    _Pass("_bank_loop"),\n', _source())
 
     def test_the_loop_calls_the_pass_and_survives_a_failed_one(self):
         body = _block("    async def _bank_loop(")

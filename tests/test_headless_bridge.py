@@ -23,6 +23,8 @@ guarded on exactly that. A headless process cannot post to Discord because
 there is nothing to post through - not because it promises not to.
 """
 
+import ast
+import asyncio
 import pathlib
 import re
 import unittest
@@ -67,50 +69,204 @@ class TheHeadlessRuntimeExists(unittest.TestCase):
         self.assertRegex(src, r"def is_closed\(self\)\s*->\s*bool:\s*\n\s*return False")
 
 
+def _tree() -> ast.Module:
+    return ast.parse(_source())
+
+
+def _class(name: str) -> ast.ClassDef:
+    return next(
+        n for n in _tree().body if isinstance(n, ast.ClassDef) and n.name == name
+    )
+
+
+def _registry() -> list:
+    """PASSES as written: (method name, runs headless) per entry, in order."""
+    node = next(
+        n
+        for n in _tree().body
+        if isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "PASSES" for t in n.targets)
+    )
+    out = []
+    for call in node.value.elts:
+        headless = True
+        for kw in call.keywords:
+            if kw.arg == "headless":
+                headless = kw.value.value
+        out.append((call.args[0].value, headless))
+    return out
+
+
+def _bridge_coroutines() -> set:
+    return {
+        n.name for n in _class("Bridge").body if isinstance(n, ast.AsyncFunctionDef)
+    }
+
+
+def _segment(lines: list, node: ast.AST) -> str:
+    """A node's whole lines, decorators included, at their own indent."""
+    first = min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])])
+    return "\n".join(lines[first - 1 : node.end_lineno]) + "\n"
+
+
+def _start_harness():
+    """The two start paths, run for real against recorders.
+
+    bridge.py cannot be imported here (see the module docstring), so this
+    execs its own source for the pass registry, the store setup and both start
+    paths, with asyncio and every `_ensure_*_store` replaced by recorders.
+    """
+    import dataclasses
+    import types
+
+    src = _source()
+    lines = src.split("\n")
+    tree = ast.parse(src)
+    module = [
+        n
+        for n in tree.body
+        if (isinstance(n, ast.ClassDef) and n.name == "_Pass")
+        or (
+            isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "PASSES" for t in n.targets)
+        )
+    ]
+    wanted = {
+        "Bridge": ("setup_hook", "on_ready", "_pass_coroutines", "_ensure_stores"),
+        "HeadlessBridge": ("run_headless",),
+    }
+    methods = [
+        m
+        for c in tree.body
+        if isinstance(c, ast.ClassDef) and c.name in wanted
+        for m in c.body
+        if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and m.name in wanted[c.name]
+    ]
+    code = "".join(_segment(lines, n) for n in module)
+    code += "class Harness:\n" + "".join(_segment(lines, m) for m in methods)
+
+    started: list = []
+    ensured: list = []
+
+    async def to_thread(fn, *args):
+        return fn(*args)
+
+    async def gather(*tasks):
+        return None
+
+    def create_task(coro):
+        started.append(coro)
+        return object()
+
+    ns = {
+        "dataclasses": dataclasses,
+        "asyncio": types.SimpleNamespace(
+            create_task=create_task, gather=gather, to_thread=to_thread
+        ),
+        "log": types.SimpleNamespace(info=lambda *a: None, error=lambda *a: None),
+    }
+    for store in set(re.findall(r"_ensure_\w+_store", src)):
+        ns[store] = lambda store=store: ensured.append(store)
+    exec(code, ns)  # noqa: S102 - bridge.py's own source
+
+    def fake_pass(name):
+        def coro():
+            return name
+
+        coro.__name__ = name
+        return coro
+
+    class Harness(ns["Harness"]):
+        user = "the bridge"
+        guilds = ("a guild",)
+
+        def __getattr__(self, name):
+            return fake_pass(name)
+
+    return Harness(), started, ensured
+
+
+class EveryPassIsDeclaredOnce(unittest.TestCase):
+    """setup_hook and run_headless used to hold two hand-kept lists, and they
+    drifted: _loot_council_loop was started with a gateway and not without
+    one, so a headless world never answered a loot council. Both now start
+    the one registry, PASSES."""
+
+    def test_every_loop_method_is_in_the_registry(self):
+        """So a new pass cannot be written and never started."""
+        declared = {name for name, _ in _registry()}
+        loops = {n for n in _bridge_coroutines() if n.endswith("_loop")}
+        self.assertGreater(len(loops), 30)
+        self.assertEqual(set(), loops - declared)
+
+    def test_every_entry_names_a_bridge_coroutine_once(self):
+        names = [name for name, _ in _registry()]
+        self.assertEqual(len(names), len(set(names)), "a pass is declared twice")
+        self.assertEqual(set(), set(names) - _bridge_coroutines())
+
+    def test_loot_councils_are_answered_headless(self):
+        self.assertIn(("_loot_council_loop", True), _registry())
+
+    def test_the_council_loop_waits_for_ready_like_its_siblings(self):
+        """Headless the wait returns at once; with a gateway it holds the loop
+        until READY, as every other pass does."""
+        body = _block("async def _loot_council_loop(self)")
+        self.assertIn("await self.wait_until_ready()", body)
+
+
 class TheChatRelayIsTheOnlyThingLeftOut(unittest.TestCase):
     """Its whole job is carrying in-world chat TO Discord. Headless it can only
     warn that the channel is invisible, once every RELAY_SECONDS, forever -
     which buries the lines that matter. Everything else drives the world."""
 
-    def test_the_relay_is_skipped(self):
-        self.assertIn("_relay_chat", _block("HEADLESS_SKIP"))
+    def test_only_the_relay_is_discord_only(self):
+        self.assertEqual(
+            ["_relay_chat"], [name for name, headless in _registry() if not headless]
+        )
 
-    def test_nothing_else_is_skipped(self):
-        skip = _block("HEADLESS_SKIP = ")
-        for drive in (
-            "_supervise_goals",
-            "_hold_council",
-            "_share_quests_loop",
-            "_restore_lost_lives",
-            "_protect_characters",
-        ):
-            with self.subTest(drive=drive):
-                self.assertNotIn(drive, skip)
-
-    def test_the_quest_brain_is_actually_run(self):
-        """_supervise_goals is what aims the party at a quest at all. If it is
-        not in the headless loop list, dev gets a process that starts, logs
+    def test_the_quest_brain_is_declared_for_both_paths(self):
+        """_supervise_goals is what aims the party at a quest at all. If it
+        does not run headless, dev gets a process that starts, logs
         cheerfully, and still never gives anybody something to do."""
-        body = _block("async def run_headless(self)")
         for drive in ("_supervise_goals", "_hold_council", "_share_quests_loop"):
             with self.subTest(drive=drive):
-                self.assertIn(drive, body)
+                self.assertIn((drive, True), _registry())
 
 
-class TheSetupOnReadyDoesIsNotSkipped(unittest.TestCase):
-    """on_ready creates four tables before any loop queries them. A headless
-    run that skipped it would fail on the first query of every loop."""
+class BothStartPathsRunTheRegistry(unittest.TestCase):
+    def test_the_gateway_path_starts_every_pass_in_order(self):
+        bridge, started, _ = _start_harness()
+        asyncio.run(bridge.setup_hook())
+        self.assertEqual([name for name, _ in _registry()], started)
 
-    def test_every_store_on_ready_ensures_is_ensured_here(self):
-        on_ready = _block("async def on_ready(self)")
-        headless = _block("async def run_headless(self)")
-        stores = set(re.findall(r"_ensure_\w+_store", on_ready))
-        self.assertTrue(
-            stores, "on_ready no longer ensures any store - update this test"
-        )
-        for store in sorted(stores):
-            with self.subTest(store=store):
-                self.assertIn(store, headless)
+    def test_the_headless_path_starts_exactly_the_headless_passes(self):
+        bridge, started, _ = _start_harness()
+        asyncio.run(bridge.run_headless())
+        self.assertEqual([name for name, headless in _registry() if headless], started)
+        self.assertIn("_loot_council_loop", started)
+        self.assertNotIn("_relay_chat", started)
+
+
+class TheStoreSetupIsListedOnce(unittest.TestCase):
+    """on_ready creates the tables before any loop queries them. A headless
+    run that skipped one would fail on the first query of every loop that
+    reads it."""
+
+    def test_both_paths_ensure_the_same_stores(self):
+        bridge, _, on_ready = _start_harness()
+        asyncio.run(bridge.on_ready())
+        bridge, _, headless = _start_harness()
+        asyncio.run(bridge.run_headless())
+        self.assertGreaterEqual(len(on_ready), 10)
+        self.assertEqual(on_ready, headless)
+
+    def test_neither_path_lists_a_store_itself(self):
+        for sig in ("async def on_ready(self)", "async def run_headless(self)"):
+            with self.subTest(path=sig):
+                body = _block(sig)
+                self.assertEqual([], re.findall(r"_ensure_\w+_store", body))
+                self.assertIn("await self._ensure_stores()", body)
 
 
 class HeadlessIsChosenNeverFallenInto(unittest.TestCase):

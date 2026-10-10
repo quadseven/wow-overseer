@@ -323,7 +323,7 @@ class TheLoopServesEveryFamily(unittest.TestCase):
         text = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text(
             encoding="utf-8"
         )
-        self.assertEqual(2, text.count("                self._tidy_loop,\n"))
+        self.assertEqual(1, text.count('\n    _Pass("_tidy_loop"),\n'))
 
     def test_the_image_ships_the_module(self):
         import pathlib

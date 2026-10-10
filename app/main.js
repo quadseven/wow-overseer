@@ -1,7 +1,7 @@
 // Boot: theme, shell, router, fetch layer, search, tooltips and gestures.
 //
 // A view is a module in app/views/ whose default export is
-//   { reads(ctx) -> [paths], every?: ms, title?(ctx), render(ctx) -> markup,
+//   { reads(ctx) -> [paths], every?: ms, quick?: {reads, every}, title?(ctx), render(ctx) -> markup,
 //     after?(main, ctx), thumb?(ctx) -> {label, items}, css?: ["views/x.css"] }
 // (app/README.md has the whole contract).
 // render() draws from ctx.get(path) (what is cached, never a fetch), and is
@@ -34,8 +34,9 @@ function effectiveTheme() {
 
 function applyTheme(t) {
   if (t) document.documentElement.setAttribute("data-theme", t);
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", effectiveTheme() === "light" ? "#e4e7f5" : "#161826");
+  // The page's background token, so the bar matches whichever theme won.
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--color-bg").trim();
+  if (bg) document.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.setAttribute("content", bg));
 }
 
 function toggleTheme() {
@@ -82,9 +83,16 @@ function useCss(path) {
 }
 
 function banner(h) {
+  if (h.state === "saved") return savedBanner(h);
   if (h.state !== "stale") return "";
   const secs = h.at ? (Date.now() - h.at) / 1000 : null;
   return html`<div class="banner" role="status"><i class="ph ph-clock-countdown" aria-hidden="true"></i><div><div style="font-weight:500">Showing data from ${ago(secs)}</div><div class="muted">The world did not answer the last ${plural(h.failures, "read")}. Nothing below has been refreshed since then.</div></div></div>`;
+}
+
+// A reload drawn from the copy this tab kept (api.js), until the world answers.
+function savedBanner(h) {
+  const secs = h.at ? (Date.now() - h.at) / 1000 : null;
+  return html`<div class="banner" role="status" data-stale-cache><i class="ph ph-clock-counter-clockwise" aria-hidden="true"></i><div><div style="font-weight:500">Showing the copy saved ${ago(secs)}</div><div class="muted">Reading the world for fresh data.</div></div></div>`;
 }
 
 function draw(keepPlace) {
@@ -104,7 +112,7 @@ function draw(keepPlace) {
   const next = module.reads(ctx) || [];
   if (next.join("\n") !== current.reads.join("\n")) {
     current.reads = next;
-    api.watch(next, module.every || 15000);
+    api.watch(next, module.every || 15000, module.quick);
   }
   if (keepPlace) {
     window.scrollTo(0, y);
@@ -148,7 +156,7 @@ async function route() {
     window.scrollTo(0, 0);
     main.focus({ preventScroll: true });
   }
-  api.watch(current.reads, module.every || 15000);
+  api.watch(current.reads, module.every || 15000, module.quick);
 }
 
 api.onChange((path, changed) => {
@@ -187,7 +195,10 @@ tooltip.install();
 
 document.addEventListener("visibilitychange", () => { if (document.hidden) stampVisit(); });
 window.addEventListener("pagehide", stampVisit);
-window.setInterval(() => { if (!document.hidden) shell.updateAge(root, api.health(ageReads())); }, 5000);
+// Back on the network: read at once, as api.js does when the page is shown again.
+window.addEventListener("online", () => { if (!document.hidden) api.refreshNow(); });
+// The data age counts up by the second, between the reads that reset it.
+window.setInterval(() => { if (!document.hidden) shell.updateAge(root, api.health(ageReads())); }, shell.AGE_TICK_MS);
 
 // ---- realm tag and operator flag (read once) ------------------------------------
 api.load("/api/realm").then((e) => {

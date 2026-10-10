@@ -79,7 +79,7 @@ class TheGuildTakesItsPost(unittest.TestCase):
         self.assertEqual(letters({"receiver": "Bodo", "mail_id": None}), [])
 
     def test_the_bridge_runs_the_pass_on_its_own_loop(self):
-        self.assertEqual(BRIDGE.count("self._guild_post_loop,"), 2)
+        self.assertEqual(BRIDGE.count('_Pass("_guild_post_loop"),'), 1)
         self.assertIn("guildpost.visits(", BRIDGE)
 
 

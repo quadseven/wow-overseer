@@ -340,25 +340,17 @@ class TheEndpoints(unittest.TestCase):
     def test_both_families_answer_every_frame(self, _groups):
         inv = {"rows": ROWS, "money": 100}
         gb = {"guild": None, "tab_rows": [], "item_rows": []}
-        soc = {"family_rows": [], "guild": None, "guild_rows": [], "social_rows": []}
         with (
             mock.patch.object(map_server, "_fetch_client_inventory", return_value=inv),
             mock.patch.object(map_server, "_fetch_client_guild_bank", return_value=gb),
-            mock.patch.object(
-                map_server, "_fetch_client_social", return_value=soc
-            ) as s,
         ):
             for key, names in FAMILIES:
                 for name in (names[0], names[-1]):
-                    for frame in ("bags", "bank", "guildbank", "social"):
+                    for frame in ("bags", "bank", "guildbank"):
                         h = get("/api/client/%s?name=%s" % (frame, name))
                         self.assertEqual(h.code, 200, (frame, name))
                         self.assertEqual(h.payload["family_key"], key)
                         self.assertEqual(h.payload["name"], name)
-            social = get("/api/client/social?name=Zrog").payload
-            self.assertEqual(social["family"]["key"], "Zug")
-            # The family handed to the read is the one the roster names.
-            self.assertEqual(s.call_args.args, ("Zrog", FAMILIES[1][1]))
 
     def test_a_name_off_the_rosters_never_reaches_sql(self, _groups):
         with (
@@ -389,37 +381,6 @@ class TheEndpoints(unittest.TestCase):
                 ):
                     self.assertEqual(get("/api/client/bags?name=Zug").code, code)
 
-    def test_an_item_is_read_once_and_a_bad_entry_never_reaches_sql(self, _groups):
-        tpl = {
-            "entry": 2589,
-            "item_name": "Linen Cloth",
-            "quality": 1,
-            "item_level": 5,
-            "required_level": 0,
-            "displayid": 7383,
-            "sell_price": 13,
-        }
-        with (
-            mock.patch.object(map_server, "CLIENT_TOOLTIPS", vclient.TooltipCache()),
-            mock.patch.object(
-                map_server, "_fetch_client_item", return_value=tpl
-            ) as fetch,
-        ):
-            a = get("/api/client/item?entry=2589")
-            b = get("/api/client/item?entry=2589")
-            self.assertEqual((a.code, b.code), (200, 200))
-            self.assertEqual(fetch.call_count, 1)
-            self.assertEqual(a.payload["tooltip"]["name"], "Linen Cloth")
-            self.assertEqual(a.payload["tooltip"]["sell_price"]["copper"], 13)
-            for bad in ("abc", "-1", "0", "99999999", ""):
-                self.assertEqual(get("/api/client/item?entry=" + bad).code, 400, bad)
-            self.assertEqual(fetch.call_count, 1)
-        with (
-            mock.patch.object(map_server, "CLIENT_TOOLTIPS", vclient.TooltipCache()),
-            mock.patch.object(map_server, "_fetch_client_item", return_value=None),
-        ):
-            self.assertEqual(get("/api/client/item?entry=5").code, 404)
-
 
 class TheEndpointsAreReadOnly(unittest.TestCase):
     def test_every_client_route_is_a_get(self):
@@ -432,9 +393,7 @@ class TheEndpointsAreReadOnly(unittest.TestCase):
                 "/api/client/bags",
                 "/api/client/bank",
                 "/api/client/guildbank",
-                "/api/client/item",
                 "/api/client/quests",
-                "/api/client/social",
             ],
         )
         self.assertFalse(

@@ -827,12 +827,11 @@ class TheBridgeDecidesNothing(unittest.TestCase):
 
 
 class TheLoopIsRegisteredInBothPlaces(unittest.TestCase):
-    """test_headless_bridge holds the two lists to differ by exactly
-    HEADLESS_SKIP, so a loop added to one and not the other fails CI. Asserted
-    here as well, because the failure there names the wrong thing."""
+    """test_headless_bridge holds both start paths to the one PASSES registry.
+    Asserted here as well, because the failure there names the wrong thing."""
 
     def test_both_lists_carry_it(self):
-        self.assertEqual(_source().count("self._recipebook_loop,"), 2)
+        self.assertEqual(_source().count('_Pass("_recipebook_loop"),'), 1)
 
     def test_it_has_its_own_clock(self):
         body = _code(_block("    async def _recipebook_loop("))

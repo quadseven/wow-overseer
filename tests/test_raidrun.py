@@ -435,4 +435,4 @@ class TheSeatTargetsAreWrittenForTheModule(unittest.TestCase):
         self.assertFalse([e for e in events if e[0] == "spec"])
 
     def test_the_bridge_runs_the_pass_in_both_loop_lists(self):
-        self.assertEqual(2, BRIDGE.count("self._raid_spec_loop,"))
+        self.assertEqual(1, BRIDGE.count('_Pass("_raid_spec_loop"),'))

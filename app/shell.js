@@ -77,6 +77,7 @@ export function mount(root) {
   </header>
   <main class="main" id="main" tabindex="-1"></main>
   <nav data-slot="thumb" aria-label="Switch guild" hidden></nav>
+  <span class="sr-only" role="status" data-slot="age-state"></span>
   <nav class="tabbar" aria-label="Sections" data-slot="tabbar"></nav>
 </div>`.s;
 }
@@ -107,8 +108,9 @@ export function updateAge(root, health) {
   const dot = html`<span class="age-dot" data-state="${h.state}" aria-hidden="true"></span>`;
   const a = root.querySelector('[data-slot="age"]');
   const b = root.querySelector('[data-slot="age-short"]');
-  if (a) a.innerHTML = html`${dot}<span role="status">${long}</span>`.s;
+  if (a) a.innerHTML = html`${dot}<span>${long}</span>`.s;
   if (b) b.innerHTML = html`${dot}<span>${short}</span>`.s;
+  sayAgeState(root, h.state);
 }
 
 // The floating Cave/Bonkers switch on phone (Guilds and Raid).
@@ -120,3 +122,25 @@ export function setThumb(root, opts) {
 }
 
 export { NAV, SUBS };
+
+// ---- the ticking age -----------------------------------------------------------
+// The age is redrawn every second (main.js), which is too often for a live
+// region: a screen reader would read "Data 4s ago" without end. So the
+// counting text is silent, and one polite region says only when the state of
+// the data changes.
+export const AGE_TICK_MS = 1000;
+const AGE_WORDS = {
+  loading: "Reading the world",
+  fresh: "Data is current",
+  stale: "Data is stale: the world stopped answering",
+  error: "The world did not answer",
+};
+let saidState = "";
+
+function sayAgeState(root, state) {
+  if (state === saidState) return;
+  const el = root.querySelector('[data-slot="age-state"]');
+  if (!el) return;
+  saidState = state;
+  el.textContent = AGE_WORDS[state] || "";
+}

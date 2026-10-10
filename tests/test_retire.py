@@ -2,7 +2,6 @@
 
 import os
 import pathlib
-import re
 import sys
 import unittest
 
@@ -168,9 +167,9 @@ class TheBridgeRunsIt(unittest.TestCase):
         )
 
     def test_it_runs_in_both_runtimes(self):
-        """The dev realm runs headless; the loop must be in both lists."""
-        self.assertEqual(len(re.findall(r"self\._retire_loop,", _bridge())), 2)
-        self.assertIn("self._retire_loop,", _block("async def run_headless(self)"))
+        """One PASSES entry with no headless=False, so the gateway and the
+        headless paths both start it."""
+        self.assertEqual(_bridge().count('_Pass("_retire_loop"),'), 1)
 
 
 if __name__ == "__main__":

@@ -35,8 +35,8 @@ def worn(name, slot, ilvl, item="", **kw):
         "level": 35,
         "class_id": 8,
         "money": 99342,
-        "online": 1,
-        "dead": 0,
+        "online": True,
+        "life": "alive",
         "talent_spells": None,
         "slot": slot,
         "item_level": ilvl,
@@ -86,7 +86,7 @@ class TheRows(unittest.TestCase):
         self.assertEqual((m["empty"], m["flags"]), (16, []))
 
     def test_a_member_wearing_nothing_still_has_a_row_and_death_shows(self):
-        rows = [worn("Naked", None, None, dead=1)]
+        rows = [worn("Naked", None, None, life="dead")]
         (m,) = guildgear.members_from_rows(rows)
         self.assertEqual((m["worn"], m["empty"], m["presence"]), (0, 17, "dead"))
         self.assertIsNone(m["weakest"])
@@ -111,14 +111,12 @@ class TheEndpoints(unittest.TestCase):
     def test_a_guildmate_gets_every_frame(self, _groups):
         inv = {"rows": [], "money": 100}
         gb = {"guild": None, "tab_rows": [], "item_rows": []}
-        soc = {"family_rows": [], "guild": None, "guild_rows": [], "social_rows": []}
         with (
             mock.patch.object(
                 map_server, "_is_family_guildmate", return_value=True
             ) as mate,
             mock.patch.object(map_server, "_fetch_client_inventory", return_value=inv),
             mock.patch.object(map_server, "_fetch_client_guild_bank", return_value=gb),
-            mock.patch.object(map_server, "_fetch_client_social", return_value=soc),
             mock.patch.object(map_server, "_fetch_questlog", return_value={}),
             mock.patch.object(
                 map_server.questlog,
@@ -126,7 +124,7 @@ class TheEndpoints(unittest.TestCase):
                 return_value={"members": [{"name": "Guildie"}]},
             ),
         ):
-            for frame in ("bags", "bank", "guildbank", "social", "quests"):
+            for frame in ("bags", "bank", "guildbank", "quests"):
                 h = get("/api/client/%s?name=Guildie" % frame)
                 self.assertEqual(h.code, 200, frame)
                 self.assertEqual(h.payload["name"], "Guildie")

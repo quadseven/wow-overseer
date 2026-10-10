@@ -387,7 +387,7 @@ class TheBridge(unittest.TestCase):
         self.assertEqual(["Grug"], written["clear"])
 
     def test_the_loop_runs_in_both_lists_and_has_a_label(self):
-        self.assertEqual(2, BRIDGE.count("self._family_intent_loop,"))
+        self.assertEqual(1, BRIDGE.count('_Pass("_family_intent_loop"),'))
         self.assertIn("family_intent", jevview.KINDS)
 
     def test_the_situation_carries_the_intent_book(self):

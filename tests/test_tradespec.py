@@ -819,7 +819,9 @@ class TheEndpoint(unittest.TestCase):
     def test_the_craft_rows_are_lifted_out_before_the_splat(self):
         """They are not a build_guildcraft argument, and leaving them in the
         dict would be a TypeError on every poll."""
-        handler = SERVER[SERVER.index("def _trades") : SERVER.index("def _dungeons")]
+        handler = SERVER[
+            SERVER.index("def _trades") : SERVER.index("def _run_timeline")
+        ]
         self.assertIn('crafts = fetched.pop("craft_rows")', handler)
         self.assertIn("tradespec.build_tradespec(", handler)
 

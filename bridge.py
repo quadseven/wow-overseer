@@ -5603,6 +5603,76 @@ ACTIVITY_RESTORE_RETRY_SECONDS = 120.0
 ACTIVITY_REST_SECONDS = 20 * 60.0
 
 
+@dataclasses.dataclass(frozen=True)
+class _Pass:
+    """One forever-loop the bridge starts: the Bridge coroutine method it
+    runs, by name, and whether a headless world (HeadlessBridge) runs it too."""
+
+    name: str
+    headless: bool = True
+
+
+# EVERY PASS, DECLARED ONCE. setup_hook starts all of them and run_headless
+# starts the ones marked headless, both in this order. They used to be two
+# hand-kept lists, and those drifted: _loot_council_loop was in the gateway
+# list only, so a headless world never answered a loot council. Only the chat
+# relay is gateway-only: its whole job is carrying in-world chat TO Discord,
+# and headless it could only log "channel is not visible" every RELAY_SECONDS
+# forever, burying the lines that matter. _poll_outcomes is harmless headless:
+# its _pending map is filled by on_message, which never fires.
+PASSES = (
+    _Pass("_poll_outcomes"),
+    _Pass("_protect_characters"),
+    _Pass("_narrate_events"),
+    _Pass("_supervise_goals"),
+    _Pass("_relay_chat", headless=False),
+    _Pass("_hold_council"),
+    _Pass("_design_tabard"),
+    _Pass("_assign_trades"),
+    _Pass("_assign_crafts"),
+    _Pass("_sample_family"),
+    _Pass("_share_quests_loop"),
+    _Pass("_move_materials_loop"),
+    _Pass("_guild_share_loop"),
+    _Pass("_vendor_loop"),
+    _Pass("_bank_loop"),
+    _Pass("_guild_bank_loop"),
+    _Pass("_guild_dues_loop"),
+    _Pass("_crafter_mail_loop"),
+    _Pass("_guild_post_loop"),
+    _Pass("_guild_corps_loop"),
+    _Pass("_guild_jobs_loop"),
+    _Pass("_mail_loop"),
+    _Pass("_town_passing_loop"),
+    _Pass("_tidy_loop"),
+    _Pass("_town_errand_loop"),
+    _Pass("_weapon_skill_loop"),
+    _Pass("_recruit_loop"),
+    _Pass("_team_sync_loop"),
+    _Pass("_retire_loop"),
+    _Pass("_raid_spec_loop"),
+    _Pass("_craft_supply_loop"),
+    _Pass("_craft_rhythm_loop"),
+    _Pass("_forge_loop"),
+    _Pass("_auction_loop"),
+    _Pass("_recipebook_loop"),
+    _Pass("_towntrip_loop"),
+    _Pass("_flight_learn_loop"),
+    _Pass("_restore_lost_lives"),
+    _Pass("_campaign_queue_loop"),
+    _Pass("_activity_loop"),
+    _Pass("_run_recovery_loop"),
+    _Pass("_guild_run_loop"),
+    _Pass("_loot_council_loop"),
+    _Pass("_situation_loop"),
+    _Pass("_level_route_loop"),
+    _Pass("_movement_loop"),
+    _Pass("_family_intent_loop"),
+    _Pass("_now_loop"),
+    _Pass("_watch_loop"),
+)
+
+
 class Bridge(discord.Client):
     def __init__(self, allowed_ids: frozenset[str]):
         intents = discord.Intents.default()
@@ -5861,57 +5931,7 @@ class Bridge(discord.Client):
         # working, which is the shape this repo keeps meeting.
         self._loops = {
             asyncio.create_task(coro())
-            for coro in (
-                self._poll_outcomes,
-                self._protect_characters,
-                self._narrate_events,
-                self._supervise_goals,
-                self._relay_chat,
-                self._hold_council,
-                self._design_tabard,
-                self._assign_trades,
-                self._assign_crafts,
-                self._sample_family,
-                self._share_quests_loop,
-                self._move_materials_loop,
-                self._guild_share_loop,
-                self._vendor_loop,
-                self._bank_loop,
-                self._guild_bank_loop,
-                self._guild_dues_loop,
-                self._crafter_mail_loop,
-                self._guild_post_loop,
-                self._guild_corps_loop,
-                self._guild_jobs_loop,
-                self._mail_loop,
-                self._town_passing_loop,
-                self._tidy_loop,
-                self._town_errand_loop,
-                self._weapon_skill_loop,
-                self._recruit_loop,
-                self._team_sync_loop,
-                self._retire_loop,
-                self._raid_spec_loop,
-                self._craft_supply_loop,
-                self._craft_rhythm_loop,
-                self._forge_loop,
-                self._auction_loop,
-                self._recipebook_loop,
-                self._towntrip_loop,
-                self._flight_learn_loop,
-                self._restore_lost_lives,
-                self._campaign_queue_loop,
-                self._activity_loop,
-                self._run_recovery_loop,
-                self._guild_run_loop,
-                self._loot_council_loop,
-                self._situation_loop,
-                self._level_route_loop,
-                self._movement_loop,
-                self._family_intent_loop,
-                self._now_loop,
-                self._watch_loop,
-            )
+            for coro in self._pass_coroutines(headless=False)
         }
 
     async def on_ready(self) -> None:
@@ -5921,16 +5941,28 @@ class Bridge(discord.Client):
             # nothing forever - exactly how the never-invited bot hid for an
             # hour on 2026-08-21. Say so where DD can alert on it.
             log.error("connected but in ZERO guilds - the bot cannot hear anything")
-        await asyncio.to_thread(_ensure_thought_store)
-        await asyncio.to_thread(_ensure_goal_store)
-        await asyncio.to_thread(_ensure_sample_store)
-        await asyncio.to_thread(_ensure_economy_store)
-        await asyncio.to_thread(_ensure_trade_store)
-        await asyncio.to_thread(_ensure_jev_store)
-        await asyncio.to_thread(_ensure_guild_run_store)
-        await asyncio.to_thread(_ensure_standin_store)
-        await asyncio.to_thread(_ensure_queue_store)
-        await asyncio.to_thread(_ensure_watch_store)
+        await self._ensure_stores()
+
+    async def _ensure_stores(self) -> None:
+        """The tables the passes query, created before any of them starts.
+        Both start paths call this: on_ready and run_headless."""
+        for ensure in (
+            _ensure_thought_store,
+            _ensure_goal_store,
+            _ensure_sample_store,
+            _ensure_economy_store,
+            _ensure_trade_store,
+            _ensure_jev_store,
+            _ensure_guild_run_store,
+            _ensure_standin_store,
+            _ensure_queue_store,
+            _ensure_watch_store,
+        ):
+            await asyncio.to_thread(ensure)
+
+    def _pass_coroutines(self, *, headless: bool) -> list:
+        """The coroutine methods PASSES starts in this mode, in its order."""
+        return [getattr(self, p.name) for p in PASSES if p.headless or not headless]
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
@@ -11259,6 +11291,7 @@ class Bridge(discord.Client):
         written at once, which is the answer the module would have reached
         after its wait anyway, only sooner.
         """
+        await self.wait_until_ready()
         asking: set = set()
         missing_said = False
         while True:
@@ -30080,18 +30113,11 @@ class HeadlessBridge(Bridge):
     `_vendor_loop` and `_bank_loop` were started by setup_hook and not by
     `run_headless`, so a dev world could never answer "did the vendor pass
     empty the bags" - the one question a validation world exists to answer
-    about a change to the vendor pass. The list below and setup_hook's now
-    differ by exactly the skip set declared underneath this docstring, and
-    tests/test_headless_bridge.py holds them to that rather than to a
-    hand-kept enumeration.
+    about a change to the vendor pass. The two lists drifted again afterwards
+    (_loot_council_loop), so there is now one: PASSES, above class Bridge.
+    run_headless starts its headless entries and setup_hook starts all of
+    them, and tests/test_headless_bridge.py runs both paths against it.
     """
-
-    # The chat relay is left out ON PURPOSE rather than allowed to no-op. Its
-    # entire job is carrying in-world chat TO Discord; headless it can only
-    # log "channel is not visible" every RELAY_SECONDS forever, which buries
-    # the lines that matter. Nothing else is skipped: _poll_outcomes is
-    # harmless (its _pending map is filled by on_message, which never fires).
-    HEADLESS_SKIP = frozenset({"_relay_chat"})
 
     async def wait_until_ready(self) -> None:
         return
@@ -30102,69 +30128,9 @@ class HeadlessBridge(Bridge):
     async def run_headless(self) -> None:
         # The same setup on_ready does. Skipping it would leave the goal and
         # thought stores uncreated and every loop failing on its first query.
-        await asyncio.to_thread(_ensure_thought_store)
-        await asyncio.to_thread(_ensure_goal_store)
-        await asyncio.to_thread(_ensure_sample_store)
-        await asyncio.to_thread(_ensure_economy_store)
-        await asyncio.to_thread(_ensure_trade_store)
-        await asyncio.to_thread(_ensure_jev_store)
-        await asyncio.to_thread(_ensure_guild_run_store)
-        await asyncio.to_thread(_ensure_standin_store)
-        await asyncio.to_thread(_ensure_queue_store)
-        await asyncio.to_thread(_ensure_watch_store)
+        await self._ensure_stores()
 
-        loops = [
-            coro for coro in (
-                self._poll_outcomes,
-                self._protect_characters,
-                self._narrate_events,
-                self._supervise_goals,
-                self._relay_chat,
-                self._hold_council,
-                self._design_tabard,
-                self._assign_trades,
-                self._assign_crafts,
-                self._sample_family,
-                self._share_quests_loop,
-                self._move_materials_loop,
-                self._guild_share_loop,
-                self._vendor_loop,
-                self._bank_loop,
-                self._guild_bank_loop,
-                self._guild_dues_loop,
-                self._crafter_mail_loop,
-                self._guild_post_loop,
-                self._guild_corps_loop,
-                self._guild_jobs_loop,
-                self._mail_loop,
-                self._town_passing_loop,
-                self._tidy_loop,
-                self._town_errand_loop,
-                self._weapon_skill_loop,
-                self._recruit_loop,
-                self._team_sync_loop,
-                self._retire_loop,
-                self._raid_spec_loop,
-                self._craft_supply_loop,
-                self._craft_rhythm_loop,
-                self._forge_loop,
-                self._auction_loop,
-                self._recipebook_loop,
-                self._towntrip_loop,
-                self._flight_learn_loop,
-                self._restore_lost_lives,
-                self._campaign_queue_loop,
-                self._activity_loop,
-                self._run_recovery_loop,
-                self._guild_run_loop,
-                self._situation_loop,
-                self._level_route_loop,
-                self._movement_loop,
-                self._family_intent_loop,
-                self._now_loop,
-                self._watch_loop,
-            ) if coro.__name__ not in self.HEADLESS_SKIP
-        ]
+        loops = self._pass_coroutines(headless=True)
         log.info("headless: no Discord gateway; driving %d loop(s): %s",
                  len(loops), ", ".join(c.__name__ for c in loops))
         # Held in a set for the same reason setup_hook does it: asyncio keeps

@@ -9,9 +9,9 @@ once (each row says its own `map_id`), so the guild's path can count the
 upgrades on every row without one read per row.
 
 ONE DEFINITION OF AN UPGRADE, AND IT IS NOT THIS MODULE'S. The verdict is
-`recap.verdict`, the same one the loot board and /api/dungeons use, over the
-same reads (`_fetch_dungeonplan`), so "beats what is worn" cannot mean two
-things on two pages. This module adds one thing: a drop the member is not yet
+`recap.verdict`, the same one the loot board uses, over the dungeon plan's
+reads (`_fetch_dungeonplan`), so "beats what is worn" cannot mean two things
+on two pages. This module adds one thing: a drop the member is not yet
 high enough for (the verdict says `locked`) is asked again at the level it
 needs, and when it would beat what is worn then, it is listed with `now`
 false and `req` the level it needs. Only drops up to LOOKAHEAD levels ahead

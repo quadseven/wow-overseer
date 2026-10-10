@@ -1,8 +1,9 @@
 """GET /api/v2/series: level and XP per hour over time, for a member or a guild.
 
-    /api/v2/series?name=Grug     -> {name, level, xp_per_hour, basis}
+    /api/v2/series?name=Grug     -> {name, level, xp_per_hour,
+                                     xp_per_hour_24h, xp_hours_measured, basis}
     /api/v2/series?guild=cave    -> {guild, members, measured, level,
-                                     xp_per_hour, basis}
+                                     xp_per_hour, by_member, basis}
 
 `level` is [[ts, level]] over the last 7 days and `xp_per_hour` is [[ts, n]],
 one point per hour over the last 24. Every ts is a Unix time in seconds, read
@@ -26,6 +27,12 @@ window is measured the list is empty.
 A guild's XP per hour is the sum over its members of the hours that are
 measured, and `measured` says how many members that sum covers. A guild's
 level line is the median level of its members, every six hours.
+
+ONE NUMBER PER MEMBER. `xp_per_hour_24h` is the mean of a member's measured
+hours in the last 24 and `xp_hours_measured` how many hours that mean covers;
+with no measured hour it is null, never 0. A guild read carries the same two
+for every member under `by_member`, keyed by name, so the members table can
+print a rate per row from one read per guild.
 """
 
 from __future__ import annotations
@@ -180,12 +187,27 @@ def measured_or_empty(series: list) -> list:
     return series if any(v is not None for _, v in series) else []
 
 
+def rate(hours: list) -> dict:
+    """The mean of the measured hours and how many there are.
+
+    {"xp_per_hour_24h": n or None, "xp_hours_measured": k}: None when no hour
+    is measured, so "not measured" is never drawn as 0 XP an hour.
+    """
+    vals = [v for _, v in hours if v is not None]
+    return {
+        "xp_per_hour_24h": round(sum(vals) / len(vals)) if vals else None,
+        "xp_hours_measured": len(vals),
+    }
+
+
 def member_series(char: dict, events: list, table: dict, now: float) -> dict:
     points = anchors(events, char["level"], char["xp"], now, table)
+    hours = hourly(points, now)
     return {
         "name": char["name"],
         "level": level_line(events, char["level"], now),
-        "xp_per_hour": measured_or_empty(hourly(points, now)),
+        "xp_per_hour": measured_or_empty(hours),
+        **rate(hours),
         "basis": BASIS,
     }
 
@@ -207,10 +229,12 @@ def guild_series(name: str, chars: list, events: list, table: dict, now: float) 
     for ev in events:
         by_guid.setdefault(int(ev["guid"]), []).append(ev)
     hours = []
+    by_member = {}
     for char in chars:
         mine = by_guid.get(int(char["guid"]), [])
         points = anchors(mine, char["level"], char["xp"], now, table)
         hours.append(hourly(points, now))
+        by_member[char["name"]] = rate(hours[-1])
     measured = sum(1 for h in hours if any(v is not None for _, v in h))
     start = now - LEVEL_DAYS * DAY
     steps = int(LEVEL_DAYS * DAY // GUILD_LEVEL_STEP)
@@ -226,6 +250,7 @@ def guild_series(name: str, chars: list, events: list, table: dict, now: float) 
         "measured": measured,
         "level": level,
         "xp_per_hour": measured_or_empty(_sum_hours(hours)),
+        "by_member": by_member,
         "basis": BASIS,
     }
 

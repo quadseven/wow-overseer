@@ -192,22 +192,8 @@ class StuckIsTheBridgesOwnRecord(unittest.TestCase):
         self.assertIsNone(found["since"])
 
 
-class GhostsComeFromTheSnapshotOrTheSave(unittest.TestCase):
-    def test_the_fresh_snapshot_decides(self):
-        self.assertEqual(
-            members.life_of({"health": 0, "max_health": 300}, None), "dead"
-        )
-        self.assertEqual(
-            members.life_of({"health": 1, "max_health": 300}, None), "ghost"
-        )
-        self.assertEqual(
-            members.life_of({"health": 250, "max_health": 300}, None), "alive"
-        )
-
-    def test_offline_the_saved_ghost_flag_decides_and_nothing_else_is_guessed(self):
-        self.assertEqual(members.life_of(None, {"flags": 0x10}), "ghost")
-        self.assertIsNone(members.life_of(None, {"flags": 0}))
-
+class PlacesInWords(unittest.TestCase):
+    # Online and life are apiv2/presence.py's reading (tests/test_presence.py).
     def test_a_zone_key_is_said_in_words(self):
         self.assertEqual(members.place_words("SwampOfSorrows"), "Swamp of Sorrows")
         self.assertEqual(members.place_words("Stormwind"), "Stormwind")
@@ -239,7 +225,6 @@ def roster_rules():
             "gender": 0,
             "class_id": c,
             "level": lv,
-            "online": 1,
             "zone": 1519,
             "map": 0,
             "flags": 0,
@@ -653,7 +638,6 @@ class TheQualityStrip(unittest.TestCase):
                 "class_id": 8,
                 "money": 1,
                 "online": 1,
-                "dead": 0,
                 "slot": 0,
                 "item_level": 20,
                 "item_name": "Cap",
