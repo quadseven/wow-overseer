@@ -1093,5 +1093,76 @@ class ManyGroupsAtOnce(unittest.TestCase):
         self.assertGreaterEqual(gs.ANSWERS_PER_PASS, 4)
 
 
+# THE SEATS THAT CARRY A GROUP STAND AT ITS BOSSES' LEVEL (guildrun.carries).
+# On wow-dev 0 of 57 guild runs cleared the Deadmines from 2026-10-07 to
+# 10-09, and level-17 to 19 healers and tanks sat in most of them: the tank
+# died first in 33 of 51.
+CARRY_DOORS = guildrun.doors({}, {36: 20})
+
+
+def carry_plan(mates, asks=(), answers=(), needs=None, **kw):
+    return gs.plan_pass(
+        list(mates),
+        {},
+        list(asks),
+        list(answers),
+        dict(needs or {}),
+        CARRY_DOORS,
+        ENTRANCES,
+        NOW,
+        room=2,
+        can_form=True,
+        **kw,
+    )
+
+
+def low_healer_five():
+    """five(), with a level-19 Holy priest under the Deadmines' level-20
+    bosses."""
+    crowd = five()
+    crowd[2] = mate("Healy", 19, PRIEST, talent_spells=HOLY)
+    return crowd
+
+
+class TheSeatsThatCarryStandAtTheBossesLevel(unittest.TestCase):
+    def test_a_healer_under_the_bosses_level_is_not_seated(self):
+        out = carry_plan(
+            low_healer_five(), asks=[ask(7, "Auren")], answers=five_yeses()
+        )
+        self.assertIsNone(out.form)
+
+    def test_a_tank_under_the_bosses_level_is_not_seated(self):
+        crowd = five()
+        crowd[1] = mate("Tanky", 19, WARRIOR, talent_spells=PROTECTION, has_shield=1)
+        out = carry_plan(crowd, asks=[ask(7, "Auren")], answers=five_yeses())
+        self.assertIsNone(out.form)
+
+    def test_at_the_bosses_level_the_same_group_forms(self):
+        out = carry_plan(five(), asks=[ask(7, "Auren")], answers=five_yeses())
+        self.assertIsNotNone(out.form)
+        self.assertEqual(out.form.composition.healer.name, "Healy")
+
+    def test_a_healer_under_it_leaves_the_seat_for_one_who_can(self):
+        crowd = low_healer_five() + [mate("Mendy", 20, PRIEST, talent_spells=HOLY)]
+        out = carry_plan(crowd, asks=[ask(7, "Auren")])
+        healers = [r.member for r in out.replies if r.role == "healer"]
+        self.assertEqual(healers, ["Mendy"])
+        self.assertNotIn("Healy", [r.member for r in out.replies])
+
+    def test_a_tank_under_it_does_not_ask_for_the_door(self):
+        tank = mate("Tanky", 19, WARRIOR, talent_spells=PROTECTION, has_shield=1)
+        out = carry_plan([tank], needs={"Tanky": [cape_need("Tanky")]})
+        self.assertEqual(out.posts, ())
+        tank = mate("Tanky", 20, WARRIOR, talent_spells=PROTECTION, has_shield=1)
+        out = carry_plan([tank], needs={"Tanky": [cape_need("Tanky")]})
+        self.assertEqual(len(out.posts), 1)
+
+    def test_damage_dealers_are_not_held_to_it(self):
+        crowd = five()
+        crowd[3] = mate("Zappy", 17, MAGE)
+        out = carry_plan(crowd, asks=[ask(7, "Auren")], answers=five_yeses())
+        self.assertIsNotNone(out.form)
+
+
 if __name__ == "__main__":
     unittest.main()

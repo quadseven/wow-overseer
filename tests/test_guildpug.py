@@ -17,6 +17,7 @@ from unittest import mock
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import guildpug as gp  # noqa: E402
+import guildrun  # noqa: E402
 import guildsocial as gs  # noqa: E402
 from test_guildsocial import (  # noqa: E402
     DEADMINES,
@@ -495,6 +496,56 @@ def bridge_source():
     return (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
         encoding="utf-8"
     )
+
+
+# THE SEATS THAT CARRY A GROUP STAND AT ITS BOSSES' LEVEL (guildrun.carries):
+# a pug too, and a guild healer under it leaves the seat to the call.
+CARRY_DOORS_BY_KEY = {d.keyword: d for d in guildrun.doors({}, {36: 20})}
+
+
+def carry_pug_plan(mates, asks, answers, calls=None, pugs=()):
+    return gp.plan(
+        gs.Pass(),
+        list(asks),
+        list(answers),
+        dict(calls or {}),
+        {m.name: m.member for m in mates},
+        list(pugs),
+        CARRY_DOORS_BY_KEY,
+        {"Cave": "Alliance"},
+        ENTRANCES,
+        NOW,
+    )
+
+
+class TheSeatsThatCarryStandAtTheBossesLevel(unittest.TestCase):
+    def test_a_pug_under_the_bosses_level_does_not_answer(self):
+        deadmines = CARRY_DOORS_BY_KEY["deadmines"]
+        low = pug("Lowly", level=19)
+        why = gp.why_not_pug(
+            low, "healer", deadmines, 20, "Alliance", "Cave", ENTRANCES
+        )
+        self.assertIn("level", why)
+        out = carry_pug_plan(
+            guild_four(), [old_ask()], four_yeses(), calls={7: call()}, pugs=[low]
+        )
+        self.assertEqual(out.joins, ())
+
+    def test_a_pug_at_it_answers(self):
+        out = carry_pug_plan(
+            guild_four(),
+            [old_ask()],
+            four_yeses(),
+            calls={7: call()},
+            pugs=[pug("Mercy", level=20)],
+        )
+        self.assertEqual([j.member for j in out.joins], ["Mercy"])
+
+    def test_a_guild_healer_under_it_still_leaves_the_call_to_go_out(self):
+        crowd = guild_four() + [mate("Healy", 19, PRIEST, talent_spells=HOLY)]
+        answers = four_yeses() + [yes(2, 7, "Healy", "healer")]
+        out = carry_pug_plan(crowd, [old_ask()], answers)
+        self.assertEqual([c.seats for c in out.calls], [("healer",)])
 
 
 if __name__ == "__main__":

@@ -1070,5 +1070,69 @@ class TheWiring(unittest.TestCase):
         )
 
 
+# THE SEATS THAT CARRY A GROUP STAND AT ITS BOSSES' LEVEL. Measured on wow-dev
+# (2026-10-07 to 10-09): 0 of 57 guild runs cleared the Deadmines, and 60 of
+# its 68 runs ever had a tank or a healer under its bosses' level (20).
+# Ragefire's runs whose tank and healer stood at its bosses' 16 cleared 21 of
+# 38; those under, 10 of 89.
+BOSS_LEVELS = {389: 16, 43: 20, 36: 20, 189: 40, 289: 62}
+
+
+class TheSeatsThatCarryStandAtTheBossesLevel(unittest.TestCase):
+    def doors(self):
+        return {d.keyword: d for d in guildrun.doors({}, BOSS_LEVELS)}
+
+    def test_each_door_reads_its_bosses_level(self):
+        doors = self.doors()
+        self.assertEqual(doors["deadmines"].carry_floor, 20)
+        self.assertEqual(doors["ragefire"].carry_floor, 16)
+        self.assertEqual(doors["wailing"].carry_floor, 20)
+
+    def test_a_shared_map_never_asks_past_the_top_of_the_doors_first_band(self):
+        # The Graveyard shares the Monastery's map with the Cathedral's
+        # level-40 bosses; Scholomance's skull bosses read 62.
+        doors = self.doors()
+        scarlet = doors["scarlet"]
+        self.assertEqual(scarlet.carry_floor, scarlet.floor + guildrun.BAND_SPREAD)
+        self.assertEqual(doors["scholomance"].carry_floor, 60)
+
+    def test_an_unread_level_holds_nobody(self):
+        unread = next(d for d in guildrun.doors() if d.keyword == "deadmines")
+        self.assertEqual(unread.carry_floor, 0)
+        self.assertTrue(guildrun.carries(member("Low", 15, PRIEST), unread))
+
+    def test_under_the_bosses_level_does_not_carry(self):
+        deadmines = self.doors()["deadmines"]
+        self.assertFalse(guildrun.carries(member("Healy", 19, PRIEST), deadmines))
+        self.assertTrue(guildrun.carries(member("Healy", 20, PRIEST), deadmines))
+
+    def test_the_fallback_offers_no_door_its_tank_and_healer_cannot_carry(self):
+        # cave_band's best tank is 20 and its best healer 19: Ragefire's
+        # bosses are 16, Wailing Caverns' and the Deadmines' 20.
+        pool = guildrun.Pool("Cave", tuple(cave_band()))
+        doors = guildrun.doors({}, BOSS_LEVELS)
+        p = guildrun.plan_for(pool, doors, {})
+        keywords = [d.keyword for d in p.doors]
+        self.assertIn("ragefire", keywords)
+        self.assertNotIn("wailing", keywords)
+        self.assertNotIn("deadmines", keywords)
+
+    def test_the_bridge_reads_the_bosses_levels_for_every_guild_pass(self):
+        facts = BRIDGE[BRIDGE.index("def _fetch_guild_run_facts") :]
+        facts = facts[: facts.index("\ndef ")]
+        self.assertIn("boss_levels = _door_boss_levels(cur)", facts)
+        self.assertIn('"boss_levels": boss_levels', facts)
+        self.assertIn("guildrun.BOSS_LEVELS_SQL", BRIDGE)
+        self.assertIn("GROUP BY cr.map", guildrun.BOSS_LEVELS_SQL)
+        # The formation pass and the social pass.
+        self.assertEqual(BRIDGE.count('guildrun.doors(facts["finder_floors"])'), 0)
+        self.assertEqual(
+            BRIDGE.count(
+                'guildrun.doors(facts["finder_floors"], facts.get("boss_levels"))'
+            ),
+            2,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
