@@ -306,6 +306,9 @@ def member_from_row(row: dict) -> Member | None:
 GROUPED = "already in a group"
 # why_not's word for a member that owes a class quest (classquest.owed).
 OWES_CLASS_QUEST = "owes a class quest"
+# why_not's word for a family member; familyseat.release lends one of an idle
+# family to a tank or healer seat (#784).
+FAMILY_MEMBER = "a family member"
 
 
 def why_not(
@@ -321,7 +324,7 @@ def why_not(
     `owed` is the names of the members that owe a class quest: the operator's
     rule is that a class quest comes before any dungeon, so none is picked."""
     if member.name in family:
-        return "a family member"
+        return FAMILY_MEMBER
     if not member.online:
         return "offline"
     if member.name in busy:
