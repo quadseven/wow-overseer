@@ -385,6 +385,8 @@ COOLDOWN_MINUTES = {
     guildlevel.ACTION: guildlevel.COOLDOWN_MINUTES,
     # A Blood Elf's walk to the Orb of Translocation and its click.
     guildlevel.ORB_ACTION: guildlevel.ORB_COOLDOWN_MINUTES,
+    # A walk to the inn of the zone a member levels in, and its bind.
+    guildlevel.INN_ACTION: guildlevel.INN_COOLDOWN_MINUTES,
     # PvP for upgrades (#589): a queue row waits this long for its battle.
     "pvp": pvpgear.QUEUE_MINUTES,
     # Food and drink bought with its own gold (restsupply.py): bought, the bags
@@ -555,6 +557,9 @@ class Member:
     # which buys nothing.
     food: int | None = None
     drink: int | None = None
+    # Where its hearthstone is bound (character_homebind), None when unread.
+    home_map: int | None = None
+    home_zone: int | None = None
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -2232,6 +2237,7 @@ def plan(
         "classquest": {},
         "room": {},
         "supply": {},
+        "inn": {},
     }
     far = classquest.FarSlots(far_slots) if far_slots is not None else None
     for m in _class_ordered(members, classes):
@@ -2314,6 +2320,8 @@ def _allowance(step, counters, per_guild):
         return counters["room"], ROOM_STEPS_PER_GUILD
     if step.action == restsupply.ACTION:
         return counters["supply"], restsupply.STEPS_PER_GUILD
+    if step.action == guildlevel.INN_ACTION:
+        return counters["inn"], guildlevel.INN_STEPS_PER_GUILD
     if step.action == classquest.ACTION:
         return counters["classquest"], CLASSQUEST_STEPS_PER_GUILD
     if step.action == pvpgear.ACTION:
@@ -2421,6 +2429,9 @@ def _member_step(
     step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
     if step is not None:
         return step, doing, quest_note
+    step, doing, _ = _inn_first(m, leveling, recent, cap)
+    if step is not None:
+        return step, doing, quest_note
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
     gear_note = "; ".join(n for n in (supply_note, gear_note) if n)
     if step is not None:
@@ -2518,6 +2529,57 @@ def level_step(m, world, recent, cap):
         why=why,
     )
     return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, ""
+
+
+def inn_step(m, world, recent, cap):
+    """(step or None): a member that has reached a zone whose band fits its
+    level, with its hearthstone bound somewhere it has outgrown, walks to that
+    zone's innkeeper and sets its hearth there (guildlevel.bind_inn): the spawn
+    walk ending within guildlevel.INN_NEAR_YARDS, then `kind='bind'` `here`."""
+    if world is None or not (m.online and m.alive and not m.in_combat):
+        return None
+    if int(m.level) >= guildlevel.LEVEL_CAP or m.name in getattr(world, "roster", ()):
+        return None
+    if _cooling(m, guildlevel.INN_ACTION, recent):
+        return None
+    inn, hub = guildlevel.bind_inn(
+        m.level,
+        m.race,
+        m.map_id,
+        m.zone_id,
+        m.x,
+        m.y,
+        m.home_map,
+        m.home_zone,
+        world.bands,
+        getattr(world, "inns", {}),
+    )
+    if inn is None:
+        return None
+    source = source_for(guildlevel.INN_ACTION, m.name)
+    return guildcorps.Step(
+        m.name,
+        guildlevel.INN_ACTION,
+        int(inn.spawn),
+        guildlevel.bind_said(m.name, m.level, inn, hub, m.home_zone),
+        rows=(guildcorps.Row("bind", "here", "", source),),
+        walk=guildcorps.Row(
+            "job",
+            "walk-to-spawn creature:%d near:%d%s"
+            % (int(inn.spawn), guildlevel.INN_NEAR_YARDS, _cap_word(cap)),
+            "",
+            source,
+        ),
+        goal=inn.name or "the innkeeper",
+    )
+
+
+def _inn_first(m, world, recent, cap):
+    """The inn walk (inn_step) as a _member_step rung."""
+    step = inn_step(m, world, recent, cap)
+    if step is None:
+        return None, "", ""
+    return step, step.said, ""
 
 
 def level_orb_step(m, choice, why, recent, cap):

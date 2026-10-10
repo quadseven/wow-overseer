@@ -24468,11 +24468,14 @@ _JOB_MEMBERS_SQL = (
     "s.in_combat, "
     "s.zone_id, s.health, "
     "EXISTS (SELECT 1 FROM corpse k WHERE k.guid = c.guid) AS has_corpse, "
-    "lc.name AS master, " + raidroles.TALENTS_COLUMN + " "
+    "lc.name AS master, hb.mapId AS home_map, hb.zoneId AS home_zone, "
+    + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
     "JOIN guild g ON g.guildid = gm.guildid "
     "LEFT JOIN characters lc ON lc.guid = g.leaderguid "
+    # Where its hearthstone is bound (guildjobs.inn_step).
+    "LEFT JOIN character_homebind hb ON hb.guid = c.guid "
     "LEFT JOIN overseer_snapshot s ON s.name = c.name "
     "AND s.updated_at > NOW() - INTERVAL 120 SECOND "
     "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
@@ -24619,6 +24622,12 @@ _JOB_ORBS_SQL = (
     "g.position_y AS y FROM acore_world.gameobject g WHERE g.id = %s AND g.map = %s"
 )
 _JOB_ORBS: list = []
+# The innkeepers on the two continents and map 530, for the inn a member binds
+# at in the zone it levels in (guildlevel.hub_inns picks each hub's own), with
+# the faction's EnemyGroup. Read once per process.
+_JOB_INNS_SQL = _JOB_HUB_MASTERS_SQL
+INNKEEPER_NPC_FLAG = 0x10000
+_JOB_INNS: list = []
 # Every roster family member, of every family: the level step leaves them to
 # levelroute.py, which walks a family as one.
 _JOB_ROSTER_SQL = "SELECT name FROM overseer_roster WHERE enabled = 1"
@@ -24744,7 +24753,8 @@ def _hunts_open(cur):
 
 def _read_job_spawns_once(cur) -> None:
     """The world's spawns the job reads once per process, since spawns do not
-    move: the meeting stones, the hub flight masters and the Silvermoon orb."""
+    move: the meeting stones, the hub flight masters, the Silvermoon orb and the
+    innkeepers."""
     if not _JOB_STONES:
         _JOB_STONES.extend(_job_read(cur, "meeting stones", _JOB_STONES_SQL,
                                      (MEETING_STONE_GO_TYPE,)))
@@ -24757,6 +24767,10 @@ def _read_job_spawns_once(cur) -> None:
     if not _JOB_ORBS:
         _JOB_ORBS.extend(_job_read(cur, "the Silvermoon orb", _JOB_ORBS_SQL,
                                    (guildlevel.ORB_ENTRY, classic.OUTLAND_MAP)))
+    if not _JOB_INNS:
+        _JOB_INNS.extend(_job_read(
+            cur, "innkeepers", _JOB_INNS_SQL,
+            (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP, INNKEEPER_NPC_FLAG)))
 
 
 def _fetch_job_facts(family_names: list) -> dict:
@@ -24808,6 +24822,7 @@ def _fetch_job_facts(family_names: list) -> dict:
     facts["banks"] = {str(r.get("name") or "") for r in bank_rows} - {""}
     facts["hub_masters"] = list(_JOB_HUB_MASTERS)
     facts["orbs"] = list(_JOB_ORBS)
+    facts["inns"] = list(_JOB_INNS)
     # Plus this pass's own family names, so an unread roster still leaves
     # the family to levelroute.
     facts["roster"] = ({str(r.get("name") or "") for r in roster_rows}
@@ -24821,7 +24836,8 @@ def _job_leveling(facts):
     Silvermoon orb. None while the quests are unread, which takes no level step."""
     quests, _spawns = _level_world()
     return guildlevel.world(quests, facts.get("hub_masters"), facts.get("roster", ()),
-                            orb_rows=facts.get("orbs", ()))
+                            orb_rows=facts.get("orbs", ()),
+                            inn_rows=facts.get("inns", ()))
 
 
 def _guild_gathering_skills(member):
@@ -24933,7 +24949,9 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             free_slots=(free_slots or {}).get(name),
             # Unread bags (None) buy no food or drink (restsupply.py).
             food=None if supplies is None else supplies.get(guid, (0, 0))[0],
-            drink=None if supplies is None else supplies.get(guid, (0, 0))[1]))
+            drink=None if supplies is None else supplies.get(guid, (0, 0))[1],
+            home_map=_row_int(r, "home_map"),
+            home_zone=_row_int(r, "home_zone")))
     return members, crafters
 
 
