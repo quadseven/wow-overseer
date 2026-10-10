@@ -266,22 +266,34 @@ def choose(level, race, map_id, bands, masters, zone_id=None) -> Choice:
     if not team:
         return Choice(refused="its side cannot be read off its race")
     level = int(level)
-    fitting = []
-    for order, hub in enumerate(hubs_from(team, map_id, zone_id)):
-        band = (bands or {}).get(hub.zone_id)
-        if not hub.friendly or not fits(band, level):
-            continue
-        master = (masters or {}).get(hub.key)
-        if master is None:
-            continue
-        fitting.append((int(band[0]), order, hub, band, master))
+    fitting = _fitting(team, level, map_id, zone_id, bands, masters)
     if not fitting:
         return Choice(refused="no %s hub fits level %d" % (team, level))
-    fitting.sort(key=lambda f: f[:2])
     home = [f for f in fitting if map_id is not None and f[4].map_id == int(map_id)]
     if home:
         _floor, _order, hub, band, master = home[0]
         return Choice(hub=hub, band=band, master=master)
+    return _away(team, level, map_id, fitting)
+
+
+def _fitting(team, level, map_id, zone_id, bands, masters) -> list:
+    """(floor, order, hub, band, master) of every friendly hub of `team` whose
+    band fits `level` and whose flight master is known, lowest floor first,
+    then levelroute's order."""
+    fitting = []
+    for order, hub in enumerate(hubs_from(team, map_id, zone_id)):
+        band = (bands or {}).get(hub.zone_id)
+        master = (masters or {}).get(hub.key)
+        if hub.friendly and fits(band, level) and master is not None:
+            fitting.append((int(band[0]), order, hub, band, master))
+    fitting.sort(key=lambda f: f[:2])
+    return fitting
+
+
+def _away(team, level, map_id, fitting) -> Choice:
+    """The choice when no fitting hub stands on the member's own map: its
+    side's boat off map 530 to the lowest hub that fits where the boat lands
+    (BOAT_EXITS), or the lowest hub of all, named and refused."""
     boat = BOAT_EXITS.get(team) if classic.is_expansion_map(map_id) else None
     landed = [f for f in fitting if boat is not None and f[4].map_id == boat]
     if landed:
