@@ -23,7 +23,6 @@ import places
 import raidready
 import runtimeline
 from apiv2 import activity, guild
-from apiv2 import run as run_api
 from events import Event
 from transform import Geometry
 
@@ -221,7 +220,7 @@ def _asked(**over):
         "state": "inside",
     }
     row.update(over)
-    return guildrun._run_view(row)
+    return guildrun.run_view(row)
 
 
 class TheRunTimelineNamesTheMap(unittest.TestCase):
@@ -271,12 +270,11 @@ class TheRunCardSaysWhoAndWhichSeats(unittest.TestCase):
         self.assertNotIn("a member", bare)
         self.assertIn("does not name who asked", bare)
 
-    def test_both_run_reads_select_the_asker(self):
-        self.assertIn("proposer", run_api._RUN_SQL)
-        self.assertNotIn("proposer", run_api._RUN_SQL_THIN)
-        server = (HERE / "map_server.py").read_text(encoding="utf-8")
-        start = server.index("_GUILD_RUNS_SQL = (")
-        self.assertIn("proposer", server[start : server.index(")", start)])
+    def test_the_run_read_selects_the_asker(self):
+        # guildrun owns every run read (#734); test_guildrun_reads covers the
+        # world whose table predates the column.
+        self.assertIn("proposer", guildrun._RUN_SQL)
+        self.assertNotIn("proposer", guildrun._RUN_SQL_THIN)
 
 
 class TheActivityLogSaysWhy(unittest.TestCase):

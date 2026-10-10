@@ -25,12 +25,25 @@ no guild or another guild) that is:
   on side  the race of the guild's side (guildrun.faction_of);
   in band  the door fits its level (guildrun.fitting_doors) and it is within
            guildrun.BAND_SPREAD of the asker;
-  near     on the door's continent, and the run is worth more than what it is
-           doing: guildsocial.XP_BAND less its activity and the walk, as the
-           social layer weighs a guildmate.
+  worth    the run is worth more than what it is doing: guildsocial.XP_BAND
+           less its activity, as the social layer weighs a guildmate. The
+           walk is not charged and the continent does not matter: the run
+           goes in by the dungeon finder, which carries the pug to the door
+           with the guildmates (guildsocial.FINDER_TELEPORTS).
 
-The best answers first: the most worth, then the level nearest the asker's,
-then the name.
+The best answers first: the most worth, then the shortest walk (a player
+picks the pug nearest the door), then the level nearest the asker's, then the
+name.
+
+WHY THE WALK IS NOT A GATE (#784). Until 2026-10-10 a pug still paid the walk
+and had to stand on the door's continent, as if it walked in. It does not: the
+finder row takes it with the group. The walk took every point of its worth (2.0
+for the band, less 1.0 for questing, less 2.5 to 4.0 for the walk), so on wow-dev
+the 627 calls of the 24 hours to 14:39 New York time on 2026-10-10 drew 60
+answers. Read against the random bots in the world at that minute, a pug
+answered 5 of those calls' 1,009 tank and healer seats with the walk charged,
+and 672 without it: a Horde tank of 20 to 24 in the Barrens for the Deadmines,
+an Alliance priest of 22 in the Wetlands for Shadowfang Keep.
 
 WHEN NOBODY ANSWERS (`silence`). On wow-dev on 2026-10-05 Bonkers called for
 a healer for Ragefire Chasm and a tank and healer for Wailing Caverns ten
@@ -288,24 +301,16 @@ def why_not_pug(
         return "outside the door's band"
     if abs(int(member.level) - int(asker_level)) > guildrun.BAND_SPREAD:
         return "too far from the asker's level"
-    spot = (entrances or {}).get(str(door.map_id))
-    if spot and int(spot.get("map", -1)) != int(member.map_id):
-        return "on another continent"
     if worth(mate, door, entrances) <= 0:
-        return "too far to walk for it"
+        return "busier than the run is worth"
     return ""
 
 
 def worth(mate, door, entrances: dict) -> float:
     """What the run is worth to a pug: its level's experience, less what it
-    is doing and the walk. The walk stays for a pug even though the finder
-    carries guildmates (guildsocial.FINDER_TELEPORTS): a pug is a stranger
-    picked from the door's side of the world, the nearest first."""
-    return (
-        guildsocial.XP_BAND
-        - guildsocial.activity_value(mate)
-        - guildsocial.travel_cost(mate, door, entrances)
-    )
+    is doing, and less the walk only if runs ever walk in again
+    (guildsocial.worth: the finder carries the whole group, the pug too)."""
+    return guildsocial.worth(mate, door, guildsocial.XP_BAND, entrances)
 
 
 # How many reasons a Silence names.
@@ -355,11 +360,13 @@ def best_pug(
     family=frozenset(),
 ):
     """The random bot that answers for the seat, or None: the most worth,
-    then the level nearest the asker's, then the name."""
+    then the shortest walk to the door, then the level nearest the asker's,
+    then the name."""
     ranked = sorted(
         (
             (
                 -worth(m, door, entrances),
+                guildsocial.travel_cost(m, door, entrances),
                 abs(int(m.member.level) - int(asker_level)),
                 m.name,
                 m,
@@ -369,9 +376,9 @@ def best_pug(
                 m, seat, door, asker_level, faction, guild, entrances, busy, family
             )
         ),
-        key=lambda r: r[:3],
+        key=lambda r: r[:4],
     )
-    return ranked[0][3] if ranked else None
+    return ranked[0][4] if ranked else None
 
 
 # --- the words ------------------------------------------------------------------

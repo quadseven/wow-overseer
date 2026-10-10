@@ -134,14 +134,14 @@ class TheReads(unittest.TestCase):
         """A name the page draws a row for but never read spells for renders
         as "knows nothing", which is a claim rather than a gap."""
         self.assertIn("guildcraft.covered_names(names, guild)", FETCH)
-        body = FETCH[FETCH.index("with conn.cursor()") :]
+        body = FETCH[FETCH.index("with realmread.Session(_connect)") :]
         self.assertIn("_TRADE_SPELLS.format(holes=choles)", body)
         self.assertIn("_TRADE_SKILLS.format(holes=choles)", body)
 
     def test_nothing_is_read_once_per_trade_or_once_per_recipe(self):
         """THE COST. A query per recipe is thousands of round trips on an
         endpoint with no auth in front of it."""
-        body = FETCH[FETCH.index("with conn.cursor()") :]
+        body = FETCH[FETCH.index("with realmread.Session(_connect)") :]
         for once in (
             "_TRADE_RECIPES",
             "_TRADE_VENDORS",

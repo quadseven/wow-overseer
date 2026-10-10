@@ -220,8 +220,6 @@ class WhoAnswers(unittest.TestCase):
             "dead": pug("Ghost", health=1, has_corpse=1),
             "outside the band": pug("Old", level=DEADMINES.ceiling + 1),
             "far from the asker's level": pug("High", level=DEADMINES.ceiling),
-            "another continent": pug("Away", map_id=1),
-            "too far to walk": pug("Far", at=(-9000.0, 300.0)),
             "a guildmate": pug("Mate", guild="Cave"),
             "unarmored": pug("Bare", worn_slots=1),
         }
@@ -239,6 +237,20 @@ class WhoAnswers(unittest.TestCase):
 
     def test_the_closer_one_wins(self):
         joins = self.joins([pug("Aaa", at=(-10200.0, 1200.0)), pug("Zed")])
+        self.assertEqual(joins[0].member, "Zed")
+
+    def test_the_finder_carries_a_pug_from_another_continent(self):
+        # #784: a Horde healer in the Barrens answers for the Deadmines; the
+        # finder row takes it to the door with the guild.
+        joins = self.joins([pug("Away", map_id=1, at=(-450.0, -2650.0))])
+        self.assertEqual([j.member for j in joins], ["Away"])
+
+    def test_the_finder_carries_a_pug_from_far_across_the_continent(self):
+        joins = self.joins([pug("Far", at=(-9000.0, 300.0))])
+        self.assertEqual([j.member for j in joins], ["Far"])
+
+    def test_a_pug_by_the_door_still_comes_before_one_far_away(self):
+        joins = self.joins([pug("Aaa", map_id=1), pug("Zed", at=(-9000.0, 300.0))])
         self.assertEqual(joins[0].member, "Zed")
 
     def test_a_pug_who_already_said_yes_is_not_asked_again(self):

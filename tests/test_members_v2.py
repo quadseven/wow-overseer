@@ -2,9 +2,9 @@
 training (Standing), class chains and activity, and the guild gear strip.
 
 Each read is built from rows by a pure function, tested here with rows; the
-handlers are run against a fake connection and a fake map server, so the gate
-(a family guild member, or a 404) and the reads are exercised with no
-database.
+handlers are run against a fake connection (through the realm reader's
+database adapter) and a fake map server, so the gate (a family guild member,
+or a 404) and the reads are exercised with no database.
 """
 
 import json
@@ -22,8 +22,10 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
 import apiv2  # noqa: E402
+import families as families_module  # noqa: E402
 import guildgear  # noqa: E402
 import guildjobs  # noqa: E402
+import realmread  # noqa: E402
 from apiv2 import activity, classchain, members, training, upgrades  # noqa: E402
 from apiv2._context import Context  # noqa: E402
 
@@ -72,19 +74,19 @@ class FakeConn:
         pass
 
 
+def realm_of(fams, guildmates=()):
+    """families.Families over plain data: `fams`, all in one guild with
+    `guildmates`."""
+    everyone = [n for names in fams.values() for n in names]
+    store = families_module.MemoryStore(fams, {"Guild": everyone + list(guildmates)})
+    return families_module.Families(store, fallback=lambda: [])
+
+
 def server(families=None, guildmates=(), **extra):
     fams = families if families is not None else {"Grug": ["Grug", "Ugga"]}
-
-    def wide(cur, sql, params=(), fallback="", what=""):
-        cur.execute(sql, params)
-        return list(cur.fetchall())
-
     ns = types.SimpleNamespace(
         _NAME_RE=__import__("re").compile(r"^[A-Za-z]{2,12}$"),
-        _fetch_families=lambda: fams,
-        _fetch_family_groups=lambda: list(fams.items()),
-        _is_family_guildmate=lambda name, names: name in guildmates,
-        _wide_guarded=wide,
+        FAMILIES=realm_of(fams, guildmates),
         _LINEUP_GUILD="SELECT lineup guild ({holes})",
         _fetch_now_facts=lambda names: {},
         family=types.SimpleNamespace(roster=lambda: []),
@@ -95,8 +97,11 @@ def server(families=None, guildmates=(), **extra):
 
 
 def ctx_for(rules, srv):
+    """The handler's context: the realm reader's database adapter over the
+    fake connection, so the reads run as the map server runs them."""
     log = []
-    return Context(connect=lambda: FakeConn(rules, log), server=srv), log
+    rd = realmread.Session(lambda: FakeConn(rules, log))
+    return Context(read=rd, server=srv), log
 
 
 # ---- the routes ------------------------------------------------------------------
@@ -657,12 +662,13 @@ class TheQualityStrip(unittest.TestCase):
 @unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
 class TheMembersBadge(unittest.TestCase):
     def run_badge(self, data):
+        # The app is copied whole into a module package: badges.js reads its
+        # times through models/time.js.
         with tempfile.TemporaryDirectory() as tmp:
-            dst = pathlib.Path(tmp) / "badges.mjs"
-            dst.write_text(
-                (HERE / "app" / "badges.js").read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
+            root = pathlib.Path(tmp) / "app"
+            shutil.copytree(HERE / "app", root)
+            (root / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+            dst = root / "badges.js"
             code = (
                 "import P from %s;\n"
                 "const p = P.find((b) => b.section === 'members');\n"

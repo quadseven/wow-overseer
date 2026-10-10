@@ -39,7 +39,7 @@ class TheFamilyTab(unittest.TestCase):
         handler = self.server[self.server.index("def _family") :]
         handler = handler[: handler.index("def _thoughts")]
         # the roster reaching the query comes from the lookup, not the request
-        self.assertIn("_fetch_family_names(", handler)
+        self.assertIn("self._family_scope(query)", handler)
         # Every reader here is handed `names`, the list that lookup produced.
         # Matched as a call ARGUMENT rather than as one exact line, because
         # pinning the whole spelling makes this fail on any rewording of the
@@ -51,17 +51,20 @@ class TheFamilyTab(unittest.TestCase):
                 reader + " must be given the looked-up roster",
             )
         self.assertIn("family.build_family(", handler)
-        # the only thing taken from the request is the family key
-        self.assertIn('query.get("family"', handler)
-        self.assertNotIn('query.get("name', handler)
+        # nothing is taken from the request here: the family key is read by
+        # _family_scope, below
+        self.assertNotIn("query.get", handler)
         # and nothing from the request is passed to a reader
         self.assertNotIn("_fetch_family(query", handler)
         self.assertNotIn("build_family(query", handler)
 
-        lookup = self.server[self.server.index("def _fetch_family_names") :]
-        lookup = lookup[: lookup.index("def _default_family")]
-        # an unrecognised key falls back rather than reaching SQL
-        self.assertIn("which if which in by_family else", lookup)
+        lookup = self.server[self.server.index("def _family_scope") :]
+        lookup = lookup[: lookup.index("def _chat_post")]
+        # the only thing taken from the request is the family key, and an
+        # unrecognised key falls back rather than reaching SQL
+        self.assertIn('which = query.get("family", [""])[0]', lookup)
+        self.assertIn("which if which in rosters else FAMILIES.default()", lookup)
+        self.assertNotIn('query.get("name', lookup)
 
 
 if __name__ == "__main__":
@@ -111,7 +114,8 @@ class TheQuestBoard(unittest.TestCase):
         self.assertNotIn("query.get", handler)
         scope = self.server[self.server.index("def _family_scope") :]
         scope = scope[: scope.index("def _chat_post")]
-        self.assertIn('_fetch_family_names(query.get("family", [""])[0])', scope)
+        self.assertIn('which = query.get("family", [""])[0]', scope)
+        self.assertIn("rosters = FAMILIES.families()", scope)
         self.assertNotIn('query.get("name', scope)
 
     def test_the_endpoint_is_wired_into_the_route_table(self):

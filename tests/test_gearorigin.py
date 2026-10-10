@@ -17,6 +17,7 @@ from unittest import mock
 
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
+import families  # noqa: E402
 import gearorigin  # noqa: E402
 import map_server  # noqa: E402  (must follow the pymysql stub)
 
@@ -196,8 +197,11 @@ ROWS = {
 }
 
 
-@mock.patch.object(map_server, "_fetch_family_groups", return_value=[("A", ["Aldren"])])
-@mock.patch.object(map_server, "_is_family_guildmate", return_value=True)
+@mock.patch.object(
+    map_server,
+    "FAMILIES",
+    families.Families(families.MemoryStore({"A": ["Aldren"]}), fallback=lambda: []),
+)
 @mock.patch.object(
     map_server, "_fetch_armory", side_effect=lambda names: {"equip_event_rows": []}
 )

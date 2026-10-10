@@ -88,15 +88,10 @@ def build_roll(
 
 
 def roll(_query: dict, ctx) -> tuple[int, dict]:
-    guarded = ctx.server._realm_guarded
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            build_rows = guarded(cur, BUILD_SQL, "overseer_build")
-            version_rows = guarded(cur, VERSION_SQL, "acore_world.version")
-            uptime_rows = guarded(cur, UPTIME_SQL, "acore_auth.uptime")
-    finally:
-        conn.close()
+    rd = ctx.read
+    build_rows = rd.rows(BUILD_SQL, what="overseer_build")
+    version_rows = rd.rows(VERSION_SQL, what="acore_world.version")
+    uptime_rows = rd.rows(UPTIME_SQL, what="acore_auth.uptime")
     return 200, build_roll(build_rows, version_rows, uptime_rows)
 
 

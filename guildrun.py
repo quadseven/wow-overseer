@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import os
 from dataclasses import dataclass, field, replace
 
@@ -305,6 +306,9 @@ def member_from_row(row: dict) -> Member | None:
 GROUPED = "already in a group"
 # why_not's word for a member that owes a class quest (classquest.owed).
 OWES_CLASS_QUEST = "owes a class quest"
+# why_not's word for a family member; familyseat.release lends one of an idle
+# family to a tank or healer seat (#784).
+FAMILY_MEMBER = "a family member"
 
 
 def why_not(
@@ -320,7 +324,7 @@ def why_not(
     `owed` is the names of the members that owe a class quest: the operator's
     rule is that a class quest comes before any dungeon, so none is picked."""
     if member.name in family:
-        return "a family member"
+        return FAMILY_MEMBER
     if not member.online:
         return "offline"
     if member.name in busy:
@@ -598,42 +602,75 @@ GUILD_DOORS = {
     "Alliance": frozenset(
         {
             "deadmines", "wailing", "shadowfang", "blackfathom", "stockades",
-            "scarlet", "gnomeregan", "razorfen-kraul", "razorfen-downs",
-            "uldaman", "zulfarrak", "maraudon-orange", "maraudon-purple",
-            "sunken-temple", "blackrock-depths", "scholomance",
+            "scarlet", "gnomeregan", "razorfen-kraul", "scarlet-library",
+            "razorfen-downs", "uldaman", "zulfarrak", "maraudon-orange",
+            "maraudon-purple", "sunken-temple", "blackrock-depths",
+            "lower-blackrock-spire", "scholomance",
         }
     ),
     "Horde": frozenset(
         {
             "ragefire", "deadmines", "wailing", "shadowfang", "blackfathom",
-            "scarlet", "gnomeregan", "razorfen-kraul", "razorfen-downs",
-            "uldaman", "zulfarrak", "maraudon-orange", "maraudon-purple",
-            "sunken-temple", "blackrock-depths", "scholomance",
+            "scarlet", "gnomeregan", "razorfen-kraul", "scarlet-library",
+            "razorfen-downs", "uldaman", "zulfarrak", "maraudon-orange",
+            "maraudon-purple", "sunken-temple", "blackrock-depths",
+            "lower-blackrock-spire", "scholomance",
         }
     ),
 }  # fmt: skip
-# DOORS NEITHER SIDE IS OFFERED because mod-overseer's finder cannot resolve
-# them today (FinderDungeonForDoor / ChooseFinderDungeon). Adding a keyword to
-# GUILD_DOORS while it is here would queue a run the module refuses.
-#   * scarlet-library, scarlet-armory, scarlet-cathedral: only the Graveyard
-#     has a finder row with an entrance on map 189; the other wings share the
-#     map's entrance, so the module refuses them as "the wrong one". Needs
-#     lfg_dungeon_template rows for the three wings, with entrances matching
-#     each door's landing, in mod-overseer's world data.
-#   * dire-maul-*, lower-blackrock-spire: several finder wings share the map
-#     (Dire Maul has three, the Spire has the lower and upper); whether each
-#     door lands within 60 yards of its own wing's lfg_dungeon_template start
-#     is not confirmed. Needs that check against the realm's world DB, then a
-#     row fix in mod-overseer if a landing misses.
+# DOORS NEITHER SIDE IS OFFERED, each for a reason read off the realm's own
+# world data (wow-dev, 2026-10-10). Adding one to GUILD_DOORS while it is here
+# queues a run that cannot finish as a group of players would.
+#
+# WHICH FINDER WING A DOOR GETS. mod-overseer's FinderDungeonForDoor takes the
+# normal, non-holiday LFGDungeons.dbc rows on the door's map: one row is the
+# door's dungeon outright, and with several the row whose lfg_dungeon_template
+# start is within 60 yards of the door's landing wins. Measured: the Library's
+# landing is the Library row's start (165, 0 yards), and the Spire has one
+# normal row (32, Lower Blackrock Spire; the Upper Spire is not a five-man
+# row), so both are on the ladder above. Dire Maul East's door lands 683 yards
+# from the East row's start and West's North door 95 yards from the West
+# row's; those two rows start at the east-west and west-south doors' landings,
+# which campaignplan.RUNS does not use.
+#
+# KEYS NOBODY IS SEATED FOR. Herod's Door (gameobject 101854) stands between
+# the Armory's start and Herod, and the Chapel Door (104591) between the
+# Cathedral's start and Mograine and Whitemane; both are lock 299, the Scarlet
+# Key (Doan's Strongbox, in the Library) or Pick Lock. The Gordok Courtyard
+# Door (177219) and Gordok Inner Door (177217) stand between Dire Maul North's
+# start and King Gordok, on the Courtyard and Inner Door keys. Guild runs seat
+# nobody for carrying a key, and mod-dungeon-clear opens these doors as if
+# the tank held one (DcEventDoorRegistry::IsKeyExempt), which a player without
+# the key cannot do. So these wait for a seating rule that brings the key.
+#
 # Stratholme is separate: dungeonpath.WITHHELD_DOORS (mod-overseer#582).
 BLOCKED_DOORS = {
-    "scarlet-library": "no finder entrance for the wing",
-    "scarlet-armory": "no finder entrance for the wing",
-    "scarlet-cathedral": "no finder entrance for the wing",
-    "lower-blackrock-spire": "finder wing match unconfirmed",
-    "dire-maul-east-east": "finder wing match unconfirmed",
-    "dire-maul-west-north": "finder wing match unconfirmed",
-    "dire-maul-north": "finder wing match unconfirmed",
+    "scarlet-armory": "Herod's Door needs the Scarlet Key, and no seat brings it",
+    "scarlet-cathedral": "the Chapel Door needs the Scarlet Key, and no seat brings it",
+    "dire-maul-east-east": "the door lands 683 yards from the East wing's finder start",
+    "dire-maul-west-north": "the door lands 95 yards from the West wing's finder start",
+    "dire-maul-north": "the Gordok doors need their keys, and no seat brings them",
+}
+# DOORS THE DUNGEON CLEAR CANNOT FINISH (wow-overseer#782). A guild run is
+# driven by mod-dungeon-clear, which needs data for any dungeon whose bosses sit
+# behind a scripted event. Without it the run walks to the shut door and holds
+# there until the two-hour ceiling: Blackfathom Deeps took 9 guild runs on
+# wow-dev from 2026-10-08 and cleared none, five of them timing out at 1 to 4
+# of 7 bosses, about 10 member-hours each. These doors stay on GUILD_DOORS (the
+# finder can queue them) but no run forms for them until the module can finish
+# them, and fitting_doors says so for every caller.
+#
+# Blackfathom Deeps: the four Fires of Aku'mai open the Portal of Aku'Mai to
+# Aku'mai, the finder's finish. The module's data for it is mod-dungeon-clear
+# PR 19; drop this line in the deploy that rolls the worldserver with it.
+# Gnomeregan: Grubbis comes only with Blastmaster Emi Shortfuse's escort, and
+# the Workshop Door (gameobject 90858) takes the Workshop Key or lockpicking
+# (#807).
+# Razorfen Kraul is not here: its derived boss order ends at Charlga
+# Razorflank, the finder's finish, with no scripted door on the way.
+NO_CLEAR_DATA = {
+    "blackfathom": "the dungeon clear cannot light the Fires of Aku'mai on this realm yet",
+    "gnomeregan": "the dungeon clear has no data for Grubbis's escort or the Workshop Door",
 }
 # NO ITEM-LEVEL GATE BELOW 60, A COVERAGE GATE FOR THE TWO SEATS THAT CARRY A
 # GROUP (decided in #532, 2026-10-04). The old gate held a member out when its
@@ -697,6 +734,8 @@ def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
     counts as the other one, as council does, so only the doors both sides
     use are offered.
 
+    A door the dungeon clear cannot finish (NO_CLEAR_DATA) is never offered.
+
     Fits: every member at or over the finder's minimum, the average at least
     the door's floor (plus LEVEL_MARGIN), and nobody past its ceiling.
     Best fit is the door whose band's middle is nearest the average.
@@ -712,6 +751,8 @@ def fitting_doors(levels, all_doors: list, faction: str = "") -> list:
         if council._other_capital(door.map_id, faction):
             continue
         if door.keyword not in allowed:
+            continue
+        if door.keyword in NO_CLEAR_DATA:
             continue
         if low < door.finder_floor:
             continue
@@ -1789,7 +1830,20 @@ _COUNTS = (
 )
 
 
-def _run_view(row: dict) -> dict:
+def run_state(row: dict) -> str:
+    """Where a run is, as one word: "queued" or "inside" while it is out,
+    else how it came back (OUTCOMES). An ended row with no known outcome is
+    lost, as outcome_from_row says. The app reads this field and no other."""
+    state = str(row.get("state") or "")
+    if state in (QUEUED, INSIDE):
+        return state
+    outcome = str(row.get("outcome") or "")
+    return outcome if outcome in OUTCOMES else "lost"
+
+
+def run_view(row: dict) -> dict:
+    """One overseer_guild_run row as the site shows a run. `run_state` is the
+    pinned state; `state`, `outcome` and `status` stay for older readers."""
     view = {key: row.get(key) or "" for key in _TEXT}
     view.update({key: _num(row, key) for key in _COUNTS})
     view.update(
@@ -1814,6 +1868,7 @@ def _run_view(row: dict) -> dict:
         "good" if view["outcome"] == CLEARED else ("bad" if ended_run else "")
     )
     view["lines"] = _run_lines(view)
+    view["run_state"] = run_state(row)
     return view
 
 
@@ -1835,9 +1890,9 @@ def _place(keyword: str) -> str:
 def page(rows: list) -> dict:
     """The Guild tab's payload from overseer_guild_run rows, newest first."""
     active = [
-        _run_view(r) for r in rows if str(r.get("state") or "") in (QUEUED, INSIDE)
+        run_view(r) for r in rows if str(r.get("state") or "") in (QUEUED, INSIDE)
     ]
-    recent = [_run_view(r) for r in rows if str(r.get("state") or "") == ENDED][:30]
+    recent = [run_view(r) for r in rows if str(r.get("state") or "") == ENDED][:30]
     table = rates(rows)
     records = [
         {
@@ -1866,3 +1921,197 @@ def page(rows: list) -> dict:
         "empty_recent": "No guild group has come back yet.",
         "empty_records": "Nothing learned yet: no run has an outcome.",
     }
+
+
+# --- the site's reads --------------------------------------------------------------
+#
+# Every read the site makes of overseer_guild_run is here: one column list, the
+# run view above and its story. The bridge never calls these. `reader` is the
+# site's realm reader (realmread, #731): _rows is the only function that
+# touches it, and its rows() is the guard for a world without the table (1146)
+# or a column (1054); any other fault still raises.
+
+_log = logging.getLogger("wow-map")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+# The columns of a whole run: what run_view shapes, plus the two times as Unix
+# seconds off the database's own clock for the reads that count by time.
+_RUN_SQL = (
+    "SELECT id, guild, band, composition, keyword, tank, members, dungeon_by, "
+    "dungeon_jev, dungeon_confidence, composition_by, composition_jev, "
+    "composition_confidence, prior_rate, prior_runs, state, outcome, why, deaths, "
+    "seconds_inside, bosses_done, bosses_total, loot_items, loot_notable, "
+    "ilvl_gained, levels_gained, created_at, ended_at, proposer, "
+    "UNIX_TIMESTAMP(created_at) AS created_unix, UNIX_TIMESTAMP(ended_at) AS ended_unix "
+    "FROM overseer_guild_run WHERE {where} ORDER BY id DESC LIMIT %s"
+)
+# Who asked for a run in guild chat (`proposer`, which the bridge adds). A
+# world whose table predates the column reads the rest, and an asked run's
+# first line says its row does not name the asker.
+_RUN_SQL_THIN = _RUN_SQL.replace(" proposer,", "")
+
+
+def _holes(n: int) -> str:
+    return ", ".join(["%s"] * n)
+
+
+def _rows(reader, sql: str, params: tuple, what: str, thin: str = "") -> list:
+    """`sql`'s rows; on a degraded schema `thin`'s, then none. Any other
+    fault is raised, so it reaches the handler's 503 instead of reading as
+    no runs."""
+    return [dict(r) for r in reader.rows(sql, params, fallback=thin, what=what)]
+
+
+def _runs(reader, where: str, params: tuple, n: int) -> list:
+    sql = _RUN_SQL.format(where=where)  # noqa: S608 - placeholders only
+    thin = _RUN_SQL_THIN.format(where=where)  # noqa: S608 - placeholders only
+    return _rows(reader, sql, params + (n,), "overseer_guild_run", thin)
+
+
+def recent(reader, guild: str | None = None, n: int = 30) -> list:
+    """The newest `n` runs in any state, of one guild or of every guild, as
+    rows newest first (page folds them; run_view shapes one)."""
+    if guild is None:
+        return _runs(reader, "1 = 1", (), n)
+    return _runs(reader, "guild = %s", (guild,), n)
+
+
+def by_ids(reader, ids) -> list:
+    """The runs with these ids, as rows newest first; none for no ids."""
+    ids = list(ids)
+    if not ids:
+        return []
+    return _runs(reader, "id IN (%s)" % _holes(len(ids)), tuple(ids), len(ids))
+
+
+def by_id(reader, run_id: int) -> dict | None:
+    """One run as the site shows it (run_view), with its story once it has
+    ended; None when the table holds no such run."""
+    rows = by_ids(reader, [run_id])
+    if not rows:
+        return None
+    view = run_view(rows[0])
+    if view["state"] == ENDED:
+        with_stories(reader, [view])
+    return view
+
+
+def came_back(reader, guilds: list, days: int, n: int) -> list:
+    """The guilds' runs that went in (WENT_IN) and ended in the last `days`
+    days by the database's clock, as rows newest first."""
+    if not guilds:
+        return []
+    where = (
+        "guild IN (%s) AND ended_at >= NOW() - INTERVAL %%s DAY AND outcome IN (%s)"
+        % (
+            _holes(len(guilds)),
+            _holes(len(WENT_IN)),
+        )
+    )
+    return _runs(reader, where, (*guilds, days, *WENT_IN), n)
+
+
+def ended_since(reader, guilds: list, days: int, n: int) -> list:
+    """The guilds' runs that ended, whatever their outcome (a refusal at the
+    door included), formed in the last `days` days, as rows newest first.
+    The announcer's achievements read these (apiv2/achievements.py)."""
+    if not guilds:
+        return []
+    where = (
+        "guild IN (%s) AND state = 'ended' AND created_at >= NOW() - INTERVAL %%s DAY"
+        % (_holes(len(guilds)),)
+    )
+    return _runs(reader, where, (*guilds, days), n)
+
+
+def matching(reader, keywords: list, members_like: str, n: int) -> list:
+    """Runs at one of `keywords`, or with a member whose lowered seat list
+    matches the LIKE pattern `members_like`, as rows newest first."""
+    where = "LOWER(members) LIKE %s"
+    if keywords:
+        where = "keyword IN (%s) OR %s" % (_holes(len(keywords)), where)
+    return _runs(reader, where, (*keywords, members_like), n)
+
+
+# WHY A RUN WENT THE WAY IT DID (runstory). The deaths of the runs' members
+# inside those runs' own windows, and which creatures are bosses. A world
+# without overseer_death reads no deaths, and each story then says only what
+# the run's own counts say. `{holes}` and `{spans}` are sized by
+# runstory.death_scope; every value is bound.
+_DEATHS_SQL = (
+    "SELECT character_name, level, map, zone, killer_name, killer_type, killer_entry, "
+    "created_at FROM overseer_death WHERE character_name IN ({holes}) AND ({spans}) "
+    "ORDER BY id DESC LIMIT %s"
+)
+_DEATHS_SPAN = "created_at BETWEEN %s AND %s"
+DEATHS_LIMIT = 3000
+# The bosses, by creature entry: what tells a boss's kill from a trash pull.
+BOSSES_SQL = (
+    "SELECT DISTINCT creditEntry FROM acore_world.instance_encounters "
+    "WHERE creditType = 0"
+)
+# map id -> its bosses' level, read once per process: the world's bosses do
+# not change under a running site. An empty read is not kept, so it is tried
+# again.
+_BOSS_LEVELS: dict = {}
+_ZONES: dict = {}
+
+
+def _bosses(reader) -> frozenset:
+    rows = _rows(reader, BOSSES_SQL, (), "instance_encounters")
+    return frozenset(int(r["creditEntry"]) for r in rows if r.get("creditEntry"))
+
+
+def _boss_levels(reader) -> dict:
+    """map id -> its bosses' level (BOSS_LEVELS_SQL), the level a story holds
+    each seat to; {} unread, and then no seat is called low."""
+    if _BOSS_LEVELS:
+        return _BOSS_LEVELS
+    rows = _rows(reader, BOSS_LEVELS_SQL, (), "instance_encounters")
+    found = {
+        int(r["map_id"]): int(r["level"])
+        for r in rows
+        if r.get("map_id") is not None and r.get("level") is not None
+    }
+    if found:
+        _BOSS_LEVELS.update(found)
+        _log.info(
+            "run stories: a seat is told against the bosses' level of %d dungeon "
+            "map(s) (the Deadmines' %s); one healer is never a cause",
+            len(found),
+            found.get(36, "unread"),
+        )
+    return found
+
+
+def _zone_names() -> dict:
+    """area id -> zone name, from the client zone table the map draws with."""
+    if not _ZONES:
+        # Here, not at the top: these are the site's modules, not the bridge's.
+        import recap
+        from transform import Geometry
+
+        _ZONES.update(recap.zone_names(Geometry.load(_HERE).continents))
+    return _ZONES
+
+
+def with_stories(reader, runs: list) -> list:
+    """Add runstory's story, cause and causes to each run (a run_view, or a
+    row), from one read of the members' deaths. A run still out gets an empty
+    story. Returns `runs`."""
+    if not runs:
+        return runs
+    # Here, not at the top: runstory imports this module.
+    import runstory
+
+    names, spans = runstory.death_scope(runs)
+    deaths = []
+    if names and spans:
+        sql = _DEATHS_SQL.format(  # noqa: S608 - placeholders only
+            holes=_holes(len(names)), spans=" OR ".join([_DEATHS_SPAN] * len(spans))
+        )
+        params = tuple(names) + tuple(t for span in spans for t in span)
+        deaths = _rows(reader, sql, params + (DEATHS_LIMIT,), "overseer_death")
+    return runstory.tell_guild_runs(
+        runs, deaths, _bosses(reader), _zone_names(), _boss_levels(reader)
+    )

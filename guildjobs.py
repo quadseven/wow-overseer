@@ -87,7 +87,10 @@ Tailoring in place of one gathering trade (`choose_tailors`). A member that
 holds either casts what the cloth in its own bags allows (`_craft_step`):
 Linen Bandage, then Bolt of Linen Cloth, each the recipe craft.py keeps for
 its skill value. Any other crafting trade craft.py covers is cast the same
-way from what the member carries (2026-10-05). It keeps the materials its
+way from what the member carries (2026-10-05). One member in five, never a
+tailor, takes Alchemy beside Herbalism (`choose_alchemists`): those are the
+alchemists guildcorps posts for the raid's potions, and before them nobody
+outside the family ever started the trade. It keeps the materials its
 next casts eat instead of posting them, and posts the rest as before. The
 trainer rows are `walk-to-trainer skill:` and the casts are `cast` rows:
 what a player does, paid for at a trainer.
@@ -122,6 +125,7 @@ import gearup
 import guildcorps
 import guildlevel
 import guildroute
+import hunterpet
 import keep
 import pvpgear
 import raidroles
@@ -252,6 +256,38 @@ RANKS[ALCHEMY] = (
     Rank(3465, 225, 20, 125, 5000),
     Rank(11612, 300, 35, 200, 50000),
 )
+# BLACKSMITHING, ENGINEERING AND ENCHANTING, THE SAME FOUR RANKS (#774,
+# 2026-10-10). Without these rows `ranks_due` never wrote a rank errand for a
+# family smith (Grug, Zug), engineer (Grog, Zrog) or enchanter (Og, Oz), and
+# each stopped at 75. Read from `trainer_spell` on the dev world (least
+# MoneyCost across trainers 58-60, 84-92 and 94-96) and from Spell.dbc (md5
+# 543b9fe6...): each is a wrapper whose SPELL_EFFECT_LEARN_SPELL teaches the
+# rank spell (Blacksmithing 2018, 3100, 3538, 9785; Engineering 4036, 4037,
+# 4038, 12656; Enchanting 7411, 7412, 7413, 13920) and whose
+# SPELL_EFFECT_SKILL_STEP (44) is step 1 to 4 of skill 164, 202 or 333:
+# ceilings 75, 150, 225, 300. The Outland ranks past 300 are left out under
+# the classic ruleset.
+BLACKSMITHING, ENGINEERING, ENCHANTING = 164, 202, 333
+RANKS[BLACKSMITHING] = (
+    Rank(2020, 75, 5, 0, 10),
+    Rank(2021, 150, 10, 50, 500),
+    Rank(3539, 225, 20, 125, 5000),
+    Rank(9786, 300, 35, 200, 50000),
+)
+RANKS[ENGINEERING] = (
+    Rank(4039, 75, 5, 0, 10),
+    Rank(4040, 150, 10, 50, 500),
+    Rank(4041, 225, 20, 125, 5000),
+    Rank(12657, 300, 35, 200, 50000),
+)
+RANKS[ENCHANTING] = (
+    Rank(7414, 75, 5, 0, 10),
+    Rank(7415, 150, 10, 50, 500),
+    Rank(7416, 225, 20, 125, 5000),
+    Rank(13921, 300, 35, 200, 50000),
+)
+SKILL_NAMES[ENCHANTING] = "Enchanting"
+
 # The crafting trades whose rank a member buys once it holds them, beside the
 # gathering trades `split_trades` hands out. A trade is never started here.
 RANKED_CRAFTS = (LEATHERWORKING, ALCHEMY)
@@ -259,14 +295,16 @@ RANKED_CRAFTS = (LEATHERWORKING, ALCHEMY)
 # One maintenance member in this many is a tailor: a crew of ten gives three.
 TAILOR_EVERY = 3
 
-# A RECIPE A TRAINER ADDS TO THE BOOK BY ITSELF. Linen Bandage comes with
-# Apprentice First Aid and Bolt of Linen Cloth with Apprentice Tailoring
-# (SkillLineAbility AcquireMethod 1, ClassMask 0); the other first rungs are
-# the rest of craft.py's list of nine auto-learned recipes: Rough Blasting
-# Powder, Smelt Copper, Minor Healing Potion, Rough Sharpening Stone, Light
-# Leather, Light Armor Kit and Handstitched Leather Cloak. Any other recipe is
-# cast only once `character_spell` says the member knows it.
-AUTO_LEARNED = frozenset({3275, 2963, 3918, 2657, 2330, 2660, 2881, 2152, 9058})
+# One maintenance member in this many is an alchemist: a crew of ten gives two,
+# the two guildcorps.ROLES asks for the raid's potions (#275). plan_corps fills
+# that post only from a member that already holds Alchemy, and nothing started
+# the trade outside the family, so both guilds' posts stood empty (2026-10-10).
+ALCHEMIST_EVERY = 5
+
+# A RECIPE A TRAINER ADDS TO THE BOOK BY ITSELF: craft.AUTO_LEARNED, the one
+# set the crew, the family and the stand-in read. Any other recipe is cast
+# only once `character_spell` says the member knows it.
+AUTO_LEARNED = craft.AUTO_LEARNED
 # EVERY CRAFTING TRADE craft.RECIPES COVERS (2026-10-05). First Aid first, a
 # secondary trade every member may hold, then Tailoring, then the rest by
 # skill line. A trade with no recipe castable in place (Mining's smelts need a
@@ -392,6 +430,8 @@ COOLDOWN_MINUTES = {
     # Food and drink bought with its own gold (restsupply.py): bought, the bags
     # show it; refused, the trip waits an hour.
     restsupply.ACTION: 60,
+    # A hunter's walk to a beast and its Tame Beast (hunterpet.py).
+    hunterpet.ACTION: hunterpet.COOLDOWN_MINUTES,
 }
 
 # A TRAINER WALK THAT KEEPS FAILING IS ASKED LESS OFTEN (#766). Measured on the
@@ -560,6 +600,12 @@ class Member:
     # Where its hearthstone is bound (character_homebind), None when unread.
     home_map: int | None = None
     home_zone: int | None = None
+    # Every quest id it was rewarded (character_queststatus_rewarded), None when
+    # unread: the level step then judges a zone by its band alone
+    # (guildlevel.open_quests).
+    rewarded: frozenset | None = None
+    # The taxi nodes it knows (flightlearn.known_nodes), None when unread.
+    taxi_nodes: frozenset | None = None
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -592,10 +638,14 @@ class Spot:
     y: float
     name: str = ""
     why: str = ""
+    # The walk ends this near the spawn (`near:`), 0 for the module's place
+    # radius: scripted ground (classquest.SCRIPTED_NEAR).
+    near: int = 0
 
     @property
     def command(self) -> str:
-        return "walk-to-spawn %s:%d" % (self.kind, int(self.spawn))
+        word = " near:%d" % int(self.near) if self.near else ""
+        return "walk-to-spawn %s:%d%s" % (self.kind, int(self.spawn), word)
 
 
 @dataclass(frozen=True)
@@ -650,6 +700,8 @@ class JobsPlan:
     trades: dict = field(default_factory=dict)  # name -> (skill, skill)
     doors: dict = field(default_factory=dict)  # name -> Door
     notes: tuple = ()
+    # One line per member that did not walk for gear this pass, and why.
+    gear_holds: tuple = ()
     # guild -> {"focus", "members", "craft", "farm", "gathering"} (GUILD_FOCUS)
     focus: dict = field(default_factory=dict)
     # classquest.Help: class quests a guildmate could help with (classask.py).
@@ -877,10 +929,48 @@ def choose_tailors(members) -> frozenset:
     return frozenset(out)
 
 
-def split_trades(members, tailors=frozenset()) -> dict:
+def choose_alchemists(members, tailors=frozenset()) -> frozenset:
+    """The maintenance members that take Alchemy, per guild.
+
+    One in ALCHEMIST_EVERY of a crew, rounded down as choose_tailors rounds
+    (a crew under five has none, a crew of ten has two), never a tailor. The
+    crew counted is the whole maintenance crew, tailors included; only the
+    choice skips them. A member that already
+    holds Alchemy comes first, then a herbalist with a primary slot to spare
+    (the herbs it gathers are what it brews), then the members with the
+    fewest primaries, by name. A member with both primary slots taken by
+    other trades is never asked to drop one.
+    """
+    crews = {}
+    for m in members or ():
+        if m.role == MAINTENANCE:
+            crews.setdefault(m.guild, []).append(m)
+    out = set()
+    for _guild, crew in sorted(crews.items()):
+        size = len(crew)
+        room = [
+            m
+            for m in crew
+            if m.name not in tailors
+            and (m.holds(ALCHEMY) or len(m.primaries) < MAX_PRIMARY)
+        ]
+        room.sort(
+            key=lambda m: (
+                not m.holds(ALCHEMY),
+                not m.holds(HERBALISM),
+                len(m.primaries),
+                m.name,
+            )
+        )
+        out.update(m.name for m in room[: size // ALCHEMIST_EVERY])
+    return frozenset(out)
+
+
+def split_trades(members, tailors=frozenset(), alchemists=frozenset()) -> dict:
     """name -> (skill, skill): the two gathering trades each maintenance
     member works, per guild. See TRADE SPLIT in the module docstring. A member
-    in `tailors` keeps one primary slot for Tailoring, so it gets one."""
+    in `tailors` or `alchemists` keeps one primary slot for that craft, so it
+    gets one; an alchemist's is Herbalism."""
     out = {}
     crews = {}
     for m in members or ():
@@ -892,34 +982,43 @@ def split_trades(members, tailors=frozenset()) -> dict:
         # learned a trade on its own keeps it and the split fills round it.
         counts = {s: sum(1 for m in crew if m.holds(s)) for s in GATHERING}
         for m in crew:
-            out[m.name] = _fill_gathering(m, counts, m.name in tailors)
+            out[m.name] = _fill_gathering(
+                m, counts, m.name in tailors, m.name in alchemists
+            )
     return out
 
 
-def _fill_gathering(m, counts, tailor) -> tuple:
+def _fill_gathering(m, counts, tailor, alchemist=False) -> tuple:
     """The gathering trades one member works: what it holds, then the trade the
-    crew has fewest of while a primary slot is left (a tailor keeps one back)."""
+    crew has fewest of while a primary slot is left (a tailor or an alchemist
+    keeps one back, and an alchemist's gathering trade is Herbalism)."""
     wanted = [s for s in GATHERING if m.holds(s)]
     others = [s for s in m.primaries if s not in GATHERING]
-    reserved = 1 if tailor and not m.holds(TAILORING) else 0
+    craft = (TAILORING if tailor else ALCHEMY) if (tailor or alchemist) else None
+    reserved = 1 if craft and not m.holds(craft) else 0
     room = max(0, MAX_PRIMARY - len(wanted) - len(others) - reserved)
     while room > 0:
         free = [s for s in GATHERING if s not in wanted]
         if not free:
             break
-        pick = min(free, key=lambda s: (counts[s], GATHERING.index(s)))
+        if alchemist and HERBALISM in free:
+            pick = HERBALISM
+        else:
+            pick = min(free, key=lambda s: (counts[s], GATHERING.index(s)))
         wanted.append(pick)
         counts[pick] += 1
         room -= 1
     return tuple(wanted)
 
 
-def cloth_trades(trades, tailors) -> dict:
-    """`split_trades` with the cloth trades added: Tailoring for a tailor and
-    First Aid, which takes no primary slot, for every maintenance member."""
+def cloth_trades(trades, tailors, alchemists=frozenset()) -> dict:
+    """`split_trades` with the crafting trades added: Tailoring for a tailor,
+    Alchemy for an alchemist, and First Aid, which takes no primary slot, for
+    every maintenance member."""
     return {
         name: tuple(gathering)
         + ((TAILORING,) if name in tailors else ())
+        + ((ALCHEMY,) if name in alchemists else ())
         + (FIRST_AID,)
         for name, gathering in (trades or {}).items()
     }
@@ -971,6 +1070,67 @@ def ranks_due(level: int, money: int, skills, wanted=()) -> tuple:
         if rank is not None and int(money or 0) >= rank.cost:
             due.append((rank.cost, skill))
     return tuple(skill for _cost, skill in sorted(due))
+
+
+# The purse a recipe purchase never spends below, in copper: mod-overseer's
+# RECIPE_PURSE_FLOOR_COPPER, so an errand written here is one the trainer
+# visit can complete.
+RECIPE_PURSE_FLOOR = 100
+
+
+def _rungs_ahead(skill: int, value: int) -> tuple:
+    """The rungs a crafter at `value` casts now or within RANK_UP_MARGIN, and
+    for a tailor the Linen Bag its bag errand sews (craft_rhythm.bag_errand)."""
+    out = []
+    for at in (value, value + RANK_UP_MARGIN):
+        recipe = craft.recipe_for(skill, at)
+        if recipe is not None and recipe not in out:
+            out.append(recipe)
+    for bag in craft.BAG_RECIPES.get(skill, ())[:1]:
+        if value >= bag.min_skill:
+            out.append(bag)
+    return tuple(out)
+
+
+def recipes_due(level: int, money: int, skills, known, wanted=()) -> tuple:
+    """The held trades whose next trainer recipe this character may buy now.
+
+    The recipe sibling of `ranks_due`, for a roster family member, whose
+    recipes are bought on arrival at its trade's trainer through the same
+    learn errand (`overseer_roster.learn_skill`, learnaim.py): mod-overseer's
+    TrainOnArrival buys the trade's recipes when no rank is on offer
+    (mod-overseer#862). Without this the column was written only for a rank,
+    and every family crafter stopped at its first bought rung (#769).
+
+    A trade is due when a rung it casts now or within RANK_UP_MARGIN
+    (`_rungs_ahead`) is a trainer recipe (craft.TRAINER_RECIPES) absent from
+    `known` (character_spell, where a bought recipe persists), the trainer
+    teaches it at the trade's value, and the purse covers its price above
+    RECIPE_PURSE_FLOOR. `skills` is {skill id: (value, max)}; only a held
+    primary the roster names in `wanted` is asked, cheapest first.
+    """
+    known = frozenset(int(s) for s in known or ())
+    wanted = tuple(int(s) for s in wanted or ())
+    due = []
+    for skill, (value, ceiling) in sorted((skills or {}).items()):
+        skill, value, ceiling = int(skill), int(value or 0), int(ceiling or 0)
+        if ceiling <= 0 or skill not in wanted:
+            continue
+        cost = _recipe_cost_due(skill, value, int(money or 0), known)
+        if cost is not None:
+            due.append((cost, skill))
+    return tuple(skill for _cost, skill in sorted(due))
+
+
+def _recipe_cost_due(skill: int, value: int, money: int, known) -> int | None:
+    """The price of the first unheld rung ahead that this visit can buy, or None."""
+    for recipe in _rungs_ahead(skill, value):
+        if craft.holds(recipe.spell_id, known):
+            continue
+        rank, cost = craft.TRAINER_RECIPES[recipe.spell_id]
+        if value >= rank and money >= cost + RECIPE_PURSE_FLOOR:
+            return cost
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1536,6 +1696,66 @@ def supply_step(member, vendor_rows, cap, kept=None):
         ),
         "",
     )
+
+
+def _pet_first(m, beasts, recent, cap):
+    """A hunter that knows Tame Beast and has no pet tames one before any other
+    job but the class quest (hunterpet.py): a hunter without a pet fights every
+    mob alone and died three times as often as a mage on 2026-10-10. `beasts`
+    is None for every member the bridge did not read as wanting a pet."""
+    if beasts is None or not m.online or not m.alive or m.in_combat:
+        return None, "", ""
+    if _cooling(m, hunterpet.ACTION, recent):
+        return None, "", ""
+    return pet_step(m, beasts, recent, cap)
+
+
+def pet_step(m, beasts, recent, cap):
+    """(step or None, what it does, a note): the walk to the nearest beast the
+    hunter may tame (hunterpet.choose) and the `use-spell-on` row that casts Tame
+    Beast at it there. A beast walked to inside hunterpet.AVOID_MINUTES is left
+    for another; with none left the reason is the note."""
+    beast = hunterpet.choose(m, beasts, hunterpet.avoided(m.name, recent))
+    if beast is None:
+        return (
+            None,
+            "",
+            (
+                "%s knows Tame Beast and has no pet, and no beast of level %d to %d it "
+                "may tame stands within %d yards that it has not tried lately"
+                % (
+                    m.name,
+                    hunterpet.lowest_level(m.level),
+                    int(m.level),
+                    int(hunterpet.BEAST_YARDS),
+                )
+            ),
+        )
+    spot = Spot("creature", beast.guid, beast.map_id, beast.x, beast.y, beast.name)
+    said = "tames a %s (level %d) as its first pet" % (beast.name, beast.level)
+    step = guildcorps.Step(
+        m.name,
+        hunterpet.ACTION,
+        int(beast.entry),
+        said,
+        rows=(
+            guildcorps.Row(
+                "quest",
+                hunterpet.command(beast),
+                "",
+                source_for(hunterpet.ACTION, m.name),
+            ),
+        ),
+        walk=guildcorps.Row(
+            "job",
+            spot.command + _cap_word(cap),
+            "",
+            source_for(hunterpet.ACTION + "-walk", m.name),
+        ),
+        goal=beast.name,
+        spot=spot,
+    )
+    return step, said, ""
 
 
 def _supply_first(m, offer, recent, cap, kept=None):
@@ -2192,6 +2412,7 @@ def plan(
     owing=None,
     still=None,
     supply=None,
+    pets=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -2218,7 +2439,8 @@ def plan(
     call); `still` name -> minutes the member has stood on one spot
     (standstill.py), None to read no stand (stood_still_step); `supply` name
     -> the food and drink sold in reach of a member short of them
-    (restsupply.py, supply_step).
+    (restsupply.py, supply_step); `pets` name -> the tameable beasts around a
+    hunter that knows Tame Beast and has no pet (hunterpet.py, pet_step).
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -2227,10 +2449,14 @@ def plan(
     busy = {str(n) for n in busy or ()}
     pending = {str(n) for n in pending or ()}
     tailors = choose_tailors(members)
-    trades = cloth_trades(split_trades(members, tailors), tailors)
+    alchemists = choose_alchemists(members, tailors)
+    trades = cloth_trades(
+        split_trades(members, tailors, alchemists), tailors, alchemists
+    )
     trades.update(focus_trades(members, focus))
     tally = _focus_tally(members, focus)
     steps, lines, notes, helps = [], {}, [], []
+    gear_holds = []
     # One counter per allowance, each keyed by guild (_allowance).
     counters = {
         "jobs": {},
@@ -2241,6 +2467,7 @@ def plan(
         "room": {},
         "supply": {},
         "inn": {},
+        "pet": {},
     }
     far = classquest.FarSlots(far_slots) if far_slots is not None else None
     for m in _class_ordered(members, classes):
@@ -2248,7 +2475,7 @@ def plan(
             continue
         master = str(masters.get(m.guild) or "")
         level_room = counters["level"].get(m.guild, 0) < guildlevel.STEPS_PER_GUILD
-        step, doing, note = _member_step(
+        step, doing, note, gear_why = _member_step(
             m,
             (gear or {}).get(m.name),
             (mail or {}).get(m.name, ()),
@@ -2271,11 +2498,14 @@ def plan(
             level_room,
             int((still or {}).get(m.name, 0)),
             _offer_for(supply, m.name),
+            _offer_for(pets, m.name),
         )
         lines[m.name] = doing
         helps += class_helps(m, classes, hunts, now, recent)
         if note:
             notes.append(note)
+        if gear_why:
+            gear_holds.append(gear_why)
         if step is None:
             _count_focus(tally, m, None, fields)
             continue
@@ -2299,6 +2529,7 @@ def plan(
         trades=trades,
         doors=doors,
         notes=tuple(notes),
+        gear_holds=tuple(gear_holds),
         focus=tally,
         helps=tuple(helps),
         owed=owed,
@@ -2341,6 +2572,8 @@ def _allowance(step, counters, per_guild):
         return counters["room"], ROOM_STEPS_PER_GUILD
     if step.action == restsupply.ACTION:
         return counters["supply"], restsupply.STEPS_PER_GUILD
+    if step.action == hunterpet.ACTION:
+        return counters["pet"], hunterpet.STEPS_PER_GUILD
     if step.action == guildlevel.INN_ACTION:
         return counters["inn"], guildlevel.INN_STEPS_PER_GUILD
     if step.action == classquest.ACTION:
@@ -2415,8 +2648,9 @@ def _member_step(
     level_room=True,
     still_for=0,
     supply=None,
+    pet=None,
 ):
-    """A class quest first, then a hearth out of a spot it cannot leave, then gear, then PvP for an upgrade, then the post, then a walk out of an
+    """A class quest first, then a hunter's first pet, then a hearth out of a spot it cannot leave, then gear, then PvP for an upgrade, then the post, then a walk out of an
     outgrown zone, then the member's ordinary job (a craft-focus guild's trade
     work when `crafting`), keeping the notes.
 
@@ -2438,34 +2672,37 @@ def _member_step(
     is asked (stood_still_step)."""
     first = stalled_level_first(m, leveling, recent, cap, level_room)
     if first is not None:
-        return first
+        return (*first, "")
     step, doing, quest_note = class_step(
         m, classes, recent, cap, hunts, now, far, kept, crafters, master
     )
     if step is not None or doing:
-        return step, doing, quest_note
+        return step, doing, quest_note, ""
+    step, doing, pet_note = _pet_first(m, pet, recent, cap)
+    if step is not None:
+        return step, doing, quest_note, ""
+    quest_note = _join(quest_note, pet_note)
     step = stood_still_step(m, still_for, recent, leveling)
     if step is not None:
-        return step, step.said, quest_note
+        return step, step.said, quest_note, ""
     step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
     if step is not None:
-        return step, doing, quest_note
+        return step, doing, quest_note, ""
     step, doing, _ = _inn_first(m, leveling, recent, cap)
     if step is not None:
-        return step, doing, quest_note
+        return step, doing, quest_note, ""
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
-    gear_note = "; ".join(n for n in (supply_note, gear_note) if n)
     if step is not None:
-        return step, doing, gear_note
+        return step, doing, "", ""
     step, doing, held = _pvp_first(m, pvp, recent, cap, kept)
     if step is not None or held:
-        return step, doing, gear_note
+        return step, doing, supply_note, gear_note
     step = _collect_first(m, mail, recent, cap)
     if step is not None:
-        return step, step.said, gear_note
+        return step, step.said, supply_note, gear_note
     step, doing, level_note = level_step(m, leveling, recent, cap)
     if step is not None or doing:
-        return step, doing, gear_note
+        return step, doing, supply_note, gear_note
     step, doing, note = _plan_member(
         m,
         trades,
@@ -2482,21 +2719,23 @@ def _member_step(
     return (
         step,
         doing,
-        "; ".join(n for n in (quest_note, gear_note, level_note, note) if n),
+        "; ".join(n for n in (quest_note, supply_note, level_note, note) if n),
+        gear_note,
     )
 
 
 def level_step(m, world, recent, cap):
     """(step or None, what it does, a note): a member that has outgrown
-    where it stands walks to the flight master of a quest hub whose
-    band fits its level (guildlevel.py).
+    where it stands (its quests there have run out, or its band) walks to the
+    flight master of a quest hub where it has open quests (guildlevel.py).
 
     Never a roster family member (levelroute walks those), never at the level
     cap, never while offline, fighting or dead, never on a way that has killed
     it (deadly_hub_note), and at most once per COOLDOWN_MINUTES["level"]. The
     walk is `walk-to-spawn creature:` naming the flight master's spawn, at the
-    pass's cap. From map 530, when the hub lies across the water, the step is
-    its side's boat (level_cross_step) or orb (level_orb_step) instead.
+    pass's cap. When the hub lies across the water, from map 530 or from a
+    continent, the step is its side's boat or zeppelin (level_cross_step) or
+    orb (level_orb_step) instead.
     """
     # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
     # a member contributes, not where it walks: on the dev realm 1 of Cave's
@@ -2507,7 +2746,10 @@ def level_step(m, world, recent, cap):
     if m.name in world.roster or m.level >= guildlevel.LEVEL_CAP:
         return None, "", ""
     bands = world.bands.get(guildlevel.side_of(m.race), {})
-    why = guildlevel.outgrown(m.level, m.race, m.map_id, m.zone_id, bands)
+    # A ZONE IS LEFT WHEN ITS QUESTS RUN OUT (2026-10-10): its open quests for
+    # this member (guildlevel.open_quests), once its rewarded quests are read.
+    opens = guildlevel.member_opens(world, m.race, m.level, m.rewarded)
+    why = guildlevel.outgrown(m.level, m.race, m.map_id, m.zone_id, bands, opens)
     if not why:
         return None, "", ""
     # A GHOST IS WALKED NOWHERE (2026-10-09). On the dev realm 45 of 207 level
@@ -2524,6 +2766,8 @@ def level_step(m, world, recent, cap):
         world.masters,
         zone_id=m.zone_id,
         orbs=getattr(world, "orbs", None),
+        opens=opens,
+        nodes=m.taxi_nodes,
     )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
@@ -2654,9 +2898,10 @@ def level_orb_step(m, choice, why, recent, cap):
 
 def level_cross_step(m, choice, why, recent):
     """(step or None, what it does, a note) for a member whose level hub lies
-    across the water from map 530 (guildlevel.Choice.cross_to): one
-    `cross-to-map map:<id>` row, no walk (the module walks to the berth, rides
-    the boat and walks off at the landing). While the member's last crossing
+    across the water, from map 530 or from the other continent
+    (guildlevel.Choice.cross_to): one `cross-to-map map:<id>` row, no walk
+    (the module walks to the berth, rides the boat or zeppelin and walks off at
+    the landing). While the member's last crossing
     is young (crossing_cooling) it is held with no row, saying where it goes,
     so no other job is written over the crossing; a crossing the module
     refused for good (class_walls) is named in the notes and not asked again
@@ -2727,14 +2972,18 @@ def _class_spot(move) -> Spot:
         classquest.USE_OBJECT,
         classquest.USE_HERE,
     )
+    # Scripted ground is a creature spawn even for a use beside a focus
+    # (classquest.SCRIPTED_FOCI), and its walk ends near it.
+    creature = bool(getattr(s, "creature", False))
     return Spot(
-        kind="gameobject" if chest else "creature",
+        kind="gameobject" if chest and not creature else "creature",
         spawn=int(s.guid),
         map_id=int(s.map_id),
         x=float(s.x),
         y=float(s.y),
         name=s.name,
         why=move.why,
+        near=int(getattr(s, "near", 0) or 0),
     )
 
 
@@ -3279,8 +3528,15 @@ def class_room_step(m, move, book, recent, cap, kept=None, crafters=None, master
 
     The order: sell the grey and outgrown stacks (the sale's own 120 minute
     cooldown and its bar of stacks do not apply: the member cannot work its
-    quest), mail its materials to the guild, destroy its lowest value material, one
-    stack a step (the destroy verb, Uncommon or below). Never an item a class quest needs, a
+    quest), mail its materials to the guild, sell its lowest value priced
+    materials at a vendor, as many stacks as the move needs, and destroy only a
+    material no vendor buys, one stack a step (the destroy verb, Uncommon or
+    below). The module refuses to destroy anything with a sell price ("item has
+    a sell price", retry never): read live 2026-10-10, every one of the 347
+    make-room destroys since 2026-10-07 was refused so. Four Bonkers members
+    (three with no bag beyond the backpack, and a guild with no bank tab to
+    post to) drew 295 of them and stood still on their class quests, asking
+    again every 20 minutes. Never an item a class quest needs, a
     stack reserved in overseer_keep, a trade's tool, or a weapon or piece of
     armor that is not outgrown, which the member may still wear. The step is
     its own kind (ROOM_ACTION) with its own cooldown and allowance, so the
@@ -3305,6 +3561,7 @@ def class_room_step(m, move, book, recent, cap, kept=None, crafters=None, master
     step = (
         _room_sale(m, said, kept, book, cap)
         or _room_mail(m, said, kept, crafters, master, cap)
+        or _room_material_sale(m, said, kept, book, cap, need)
         or _room_destroy(m, said, kept, book)
     )
     if step is None:
@@ -3323,18 +3580,44 @@ def _room_sale(m, said, kept, book, cap):
         _room_rows(m, [c for c in m.carried if c.sellable(m.level)], kept, book),
         key=lambda c: (-int(c.sell_price) * int(c.count), int(c.guid)),
     )[:MAX_SALES]
-    if not junk:
+    return _room_vendor_step(m, said, junk, cap)
+
+
+def _room_materials(m, kept, book):
+    """The material stacks a make-room step may let go of: not reserved, not a
+    class quest's, not what the member's own trade casts eat."""
+    eaten = craft_entries(m) if m.role == MAINTENANCE else frozenset()
+    return [
+        c
+        for c in _room_rows(m, [c for c in m.carried if c.material], kept, book)
+        if int(c.entry) not in eaten
+    ]
+
+
+def _room_material_sale(m, said, kept, book, cap, need):
+    """The vendor step for materials nobody in the guild took: the lowest
+    value stacks a vendor buys, as many as the move needs. A player out of
+    room sells its meat at the next vendor; it does not throw it away."""
+    priced = sorted(
+        (c for c in _room_materials(m, kept, book) if int(c.sell_price) > 0),
+        key=lambda c: (int(c.sell_price) * int(c.count), int(c.guid)),
+    )[: max(1, int(need))]
+    return _room_vendor_step(m, said, priced, cap)
+
+
+def _room_vendor_step(m, said, stacks, cap):
+    if not stacks:
         return None
     return guildcorps.Step(
         m.name,
         ROOM_ACTION,
-        len(junk),
-        "%s walks to a vendor to sell %d stack(s)" % (said, len(junk)),
+        len(stacks),
+        "%s walks to a vendor to sell %d stack(s)" % (said, len(stacks)),
         rows=tuple(
             guildcorps.Row(
                 "sell", "guid:%d" % int(c.guid), "", source_for(ROOM_ACTION, m.name)
             )
-            for c in junk
+            for c in stacks
         ),
         walk=guildcorps.Row(
             "buy",
@@ -3355,15 +3638,11 @@ def _room_mail(m, said, kept, crafters, master, cap):
 
 
 def _room_destroy(m, said, kept, book):
-    """The destroy step: the member's lowest value material, one stack."""
-    eaten = craft_entries(m) if m.role == MAINTENANCE else frozenset()
+    """The destroy step: one material stack no vendor buys. A priced stack
+    goes to `_room_material_sale`; the module refuses to destroy it."""
     stacks = sorted(
-        (
-            c
-            for c in _room_rows(m, [c for c in m.carried if c.material], kept, book)
-            if int(c.entry) not in eaten
-        ),
-        key=lambda c: (int(c.sell_price) * int(c.count), int(c.guid)),
+        (c for c in _room_materials(m, kept, book) if int(c.sell_price) <= 0),
+        key=lambda c: (int(c.count), int(c.guid)),
     )[:1]
     if not stacks:
         return None
@@ -4165,21 +4444,61 @@ def _in_the_open(m) -> bool:
     )
 
 
+def gear_candidates(members, recent) -> list:
+    """The members whose gear is read this pass: online, out of combat, placed,
+    and off the gear cooldown.
+
+    Natural or not. The natural reset gates what a member contributes, not
+    where it shops (the same decision as level_step, #638). A member with no
+    reset row that was gated here was never read, so it got no gear step and
+    no line saying why.
+    """
+    return [
+        m
+        for m in members
+        if m.online
+        and not m.in_combat
+        and m.map_id is not None
+        and m.x is not None
+        and m.y is not None
+        and not _cooling(m, "gear", recent)
+    ]
+
+
 def _gear_first(m, offer, recent, cap, kept=None):
-    """A natural member short of gear walks to a vendor before any other job."""
-    if not m.eligible or not m.online or m.in_combat:
-        return None, "", ""
+    """(step, doing, why not): a guild member short of gear walks to a vendor
+    before any other job.
+
+    Every early return says why, in one line, so a member that does not shop
+    is never silent: offline, in combat, cooling down, not read this pass, or
+    not short of anything it can buy.
+    """
+    if not m.online:
+        return None, "", "%s waits for gear: it is offline" % m.name
+    if m.in_combat:
+        return None, "", "%s waits for gear: it is in combat" % m.name
     if _cooling(m, "gear", recent):
         if last_gear_failed(m.name, recent) and not _cooling(m, "hearth", recent):
             step = hearth_step(m)
             return step, step.said, ""
-        return None, "", ""
+        return (
+            None,
+            "",
+            "%s waits for gear: its last gear walk is cooling down" % m.name,
+        )
     if not offer:
-        return None, "", ""
+        return (
+            None,
+            "",
+            (
+                "%s waits for gear: its gear was not read this pass "
+                "(not short, unplaced, or past the pass's reads)" % m.name
+            ),
+        )
     character, vendor_rows = offer
     step, why = gear_step(m, character, vendor_rows, cap, kept)
     if step is None:
-        return None, "", why
+        return None, "", why or "%s waits for gear: its gear is not short" % m.name
     return step, step.said, ""
 
 
