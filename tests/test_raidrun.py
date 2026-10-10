@@ -55,10 +55,44 @@ class TheKeywordIsAnOrderAndNeverAPlan(unittest.TestCase):
         self.assertEqual(set(jobs.RAID_KEYWORDS), set(raidrun.PLACES))
         self.assertEqual(set(jobs.RAID_KEYWORDS), set(raidrun.NAMES.values()))
 
-    def test_describe_says_it_does_not_clear(self):
+    def test_describe_says_it_clears_and_walks_only_the_head(self):
+        """mod-overseer#640 shipped HOLD, CLEAR and RECOVER on 2026-09-24, and
+        the deployed module carries it. The maintainer's sentence must say the
+        raid clears, and must still say who is not walked to the door."""
         said = jobs.describe("raid:moltencore")
-        self.assertIn("does not clear", said)
+        self.assertNotIn("does not clear", said)
+        self.assertIn("clears it", said)
+        self.assertIn("mod-overseer#640", said)
+        self.assertIn("only the head", said)
         self.assertNotIn("NOT BUILT YET", said)
+
+
+class TheRunLineSaysWhatShipped(unittest.TestCase):
+    """The Raid tab's run line and the job's reader sentence, unpatched: the
+    shipped answer is that an order clears, and that a raider away from the
+    door is not brought to it."""
+
+    def test_the_module_clears_and_does_not_gather(self):
+        self.assertTrue(raidrun.CLEARS)
+        self.assertFalse(raidrun.GATHERS)
+
+    def test_the_run_line_says_it_clears(self):
+        line = raidrun.run_line()
+        self.assertNotIn("does not clear", line)
+        self.assertNotIn("holds at the entrance", line)
+        self.assertIn("clears it with the dungeon brain", line)
+        self.assertIn("runs back after a wipe", line)
+
+    def test_the_run_line_says_who_is_not_brought(self):
+        line = raidrun.run_line()
+        self.assertIn("Only the head is walked to the door", line)
+        self.assertIn("not brought there", line)
+
+    def test_the_reader_sentence_says_it_clears(self):
+        said = jobs.say("raid:moltencore", "Molten Core")
+        self.assertNotIn("does not clear", said)
+        self.assertIn("clears it", said)
+        self.assertIn("Only the head", said)
 
 
 class TheQueueReadsARaidOrder(unittest.TestCase):
