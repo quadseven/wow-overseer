@@ -96,7 +96,9 @@ class OutgrownWhiteGearSells(unittest.TestCase):
         sql = source[source.index("_JOB_ITEMS_SQL = (") :]
         sql = sql[: sql.index("\n)\n")]
         self.assertIn("it.ItemLevel AS item_level", sql)
-        self.assertIn("it.class IN (2, 4) AND it.Quality = 1", sql)
+        # Every weapon and armor piece with a price, white or better, is read
+        # now: a member sells what it would not wear (vendorsale.py, #771).
+        self.assertIn("it.class IN (2, 3, 4, 7, 9, 15) AND it.SellPrice > 0", sql)
 
 
 if __name__ == "__main__":

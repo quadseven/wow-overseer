@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+import classcasts
 import classic
 import dungeonplan
 import guildroute
@@ -101,14 +102,20 @@ class Due:
         return self.count > 0 and _int(money) >= self.cheapest
 
 
-def due(trainer_rows, known, level) -> Due:
-    """The class spells trainable now, by `spell_state`, and what they cost."""
+def due(trainer_rows, known, level, class_id=None) -> Due:
+    """The class spells trainable now, by `spell_state`, and what they cost.
+
+    With `class_id`, only the spells a member of that class casts or holds
+    passively (classcasts.py): what the member's purchase order saves for
+    first (purse.py, #771).
+    """
     known = {_int(k) for k in known or ()}
     level = _int(level)
     costs = [
         _int(row.get("cost"))
         for row in trainer_rows or ()
         if spell_state(row, known, level, level) == "trainable"
+        and (class_id is None or classcasts.casts(class_id, row["spell"]))
     ]
     if not costs:
         return Due()

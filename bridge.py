@@ -85,6 +85,7 @@ import guildsocial
 import holdings
 import hunterpet
 import itemsource
+import purse
 import pvpgear
 import handover
 import craft
@@ -14639,6 +14640,12 @@ class Bridge(discord.Client):
     async def _plan_guild_jobs(self, members, facts, busy, cap, spawn_walks,
                                cohort=None):
         kept = await asyncio.to_thread(_kept_with_bank_policy, cohort)
+        # WHAT A MEMBER SELLS AND WHAT IT SAVES FOR (#771): its guild's bank
+        # forecast's reserved materials (vendorsale.py) and its purchase order
+        # (purse.py), laid on each member before the plan reads them.
+        members = await asyncio.to_thread(
+            _with_purses_and_reserves, members, facts.get("masters") or {})
+        self._log_purses(members)
         # GUILD_FOCUS: a craft-focus guild's members all farm and craft
         # (guildjobs.THE GUILD FOCUS); unset keeps every guild's jobs.
         focus = guildjobs.focus_from_env()
@@ -14689,6 +14696,22 @@ class Bridge(discord.Client):
                      "waiting unopened are collected; theirs go to the bank",
                      ", ".join(sorted(facts["unclaimed"])))
         return plan
+
+    def _log_purses(self, members) -> None:
+        """One `purse:` line per member whose purchase order changed since the
+        last pass, naming the order and what it is short for (purse.py). The
+        purse itself moves every pass, so it is not part of what "changed"
+        means: the wants, what the purse is short for, and hunger are."""
+        said = getattr(self, "_purse_said", None)
+        if said is None:
+            said = self._purse_said = {}
+        for m in members:
+            if m.purse is None:
+                continue
+            signature = m.purse.signature
+            if said.get(m.name) != signature:
+                said[m.name] = signature
+                log.info("%s", m.purse.line)
 
     def _class_book_for_plan(self, facts):
         """The class quest book, with no uses while this worldserver is known
@@ -21149,6 +21172,12 @@ def _fetch_guild_roster(names: list) -> list:
 
 def _fetch_free_slots(names: list) -> dict:
     """Read carried capacity facts; materials decides which refusals reopen."""
+    return {name: free for name, (free, _slots) in _fetch_bag_room(names).items()}
+
+
+def _fetch_bag_room(names: list) -> dict:
+    """name -> (free bag slots, all bag slots): the backpack's 16 and the worn
+    bags' sizes, less the slots in use."""
     if not names:
         return {}
     sql = (
@@ -21167,11 +21196,14 @@ def _fetch_free_slots(names: list) -> dict:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, names)
         return {
-            row["name"]: max(
-                0,
-                16 + int(row["bag_slots"] or 0)
-                - int(row["backpack_used"] or 0)
-                - int(row["bag_used"] or 0),
+            row["name"]: (
+                max(
+                    0,
+                    16 + int(row["bag_slots"] or 0)
+                    - int(row["backpack_used"] or 0)
+                    - int(row["bag_used"] or 0),
+                ),
+                16 + int(row["bag_slots"] or 0),
             )
             for row in cur.fetchall()
         }
@@ -25079,8 +25111,10 @@ def _class_trainer_rows(cur) -> dict:
     return _CLASS_TRAINER_ROWS
 
 
-def _class_training_due(names: list) -> dict:
-    """name -> classtrain.Due for each named member; no judgement here."""
+def _class_training_due(names: list, casts_only: bool = False) -> dict:
+    """name -> classtrain.Due for each named member; no judgement here. With
+    `casts_only`, only the spells the member's class AI casts or holds
+    passively (classcasts.py), for its purchase order (purse.py)."""
     if not names:
         return {}
     with _connect() as conn, conn.cursor() as cur:
@@ -25095,8 +25129,43 @@ def _class_training_due(names: list) -> dict:
         spells = known.setdefault(name, set())
         if row.get("spell"):
             spells.add(int(row["spell"]))
-    return {name: classtrain.due(trainer.get(klass[name], ()), known[name], level[name])
+    return {name: classtrain.due(trainer.get(klass[name], ()), known[name], level[name],
+                                 klass[name] if casts_only else None)
             for name in known}
+
+
+def _forecast_reserved(master: str):
+    """The entries the guild of `master` keeps by its bank forecast, None when
+    the forecast is unread (bankforecast.Forecast.reserved)."""
+    if not master:
+        return None
+    return _bank_forecast([master]).reserved
+
+
+def _with_purses_and_reserves(members, masters) -> list:
+    """The guild members with their guild's reserved materials and their
+    purchase orders laid on (vendorsale.py, purse.py); blocking.
+
+    A read that fails leaves the member as it was: no material sold, and gear
+    and food spending as they did before the order existed.
+    """
+    reserved = {guild: _forecast_reserved(str(master or ""))
+                for guild, master in (masters or {}).items()}
+    try:
+        due = _class_training_due([m.name for m in members], casts_only=True)
+    except pymysql.err.MySQLError:
+        log.exception("%s the class spells are unread; no member saves for them",
+                      purse.LOG_PREFIX)
+        due = {}
+    out = []
+    for m in members:
+        d = due.get(m.name)
+        order = None
+        if d is not None:
+            order = purse.order(m.name, m.level, m.money, d.copper, d.count,
+                                m.skill(purse.RIDING_SKILL)[1], restsupply.empty(m))
+        out.append(dataclasses.replace(m, reserved=reserved.get(m.guild), purse=order))
+    return out
 
 
 def _fetch_trainees(names: list) -> list:
@@ -25493,14 +25562,17 @@ _JOB_REWARDED_SQL = (
 _JOB_ITEMS_SQL = (
     "SELECT ci.guid AS owner, ii.guid AS item_guid, ii.itemEntry AS entry, ii.count, "
     "it.class, it.subclass, it.Quality AS quality, it.SellPrice AS sell_price, "
-    "it.name AS item_name, it.ItemLevel AS item_level "
+    "it.name AS item_name, it.ItemLevel AS item_level, "
+    "it.RequiredLevel AS required_level, it.InventoryType AS inventory_type, "
+    "it.AllowableClass AS allowable_class "
     "FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "WHERE ci.guid IN ({guids}) "
     "AND ((it.class = {goods} AND it.subclass IN ({subclasses})) "
     "OR (it.Quality = 0 AND it.SellPrice > 0) OR ii.itemEntry IN ({entries}) "
-    # White weapons and armor, for guildjobs.Carried.outgrown.
-    "OR (it.class IN (2, 4) AND it.Quality = 1 AND it.SellPrice > 0)) "
+    # What a vendor may buy (vendorsale.py): weapons, gems, armor, trade
+    # goods, recipes and miscellaneous items with a price.
+    "OR (it.class IN (2, 3, 4, 7, 9, 15) AND it.SellPrice > 0)) "
     "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
     "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
@@ -25600,7 +25672,7 @@ _JOB_STONES_SQL = (
 MEETING_STONE_GO_TYPE = 23
 # The skills a job reads: every primary trade (the split counts the slots),
 # and cooking and first aid, which the family's crafters use materials for.
-_JOB_SKILL_IDS = sorted(guildjobs.PRIMARY_SKILLS | {185, 129})
+_JOB_SKILL_IDS = sorted(guildjobs.PRIMARY_SKILLS | {185, 129, purse.RIDING_SKILL})
 _JOB_ENTRIES = sorted(
     {e for tools in guildjobs.TOOL_ENTRIES.values() for e in tools} | {guildjobs.SOUL_SHARD})
 # The world's meeting stones, read once per process: spawns do not move.
@@ -25800,6 +25872,7 @@ def _fetch_job_facts(family_names: list) -> dict:
             spells=ids([guildjobs.RITUAL_OF_SUMMONING, *sorted(guildjobs.CRAFT_SPELLS),
                         *(book.spell_ids() if book else ())])))
         log_rows, done_rows = _class_member_reads(cur, book, everyone)
+        worn_rows = _job_read(cur, "worn gear", _JOB_WORN_SQL.format(guids=everyone))
         rewarded_rows = _job_read(cur, "rewarded quests",
                                   _JOB_REWARDED_SQL.format(guids=everyone))
         item_rows = _job_read(cur, "carried items", _JOB_ITEMS_SQL.format(
@@ -25820,11 +25893,14 @@ def _fetch_job_facts(family_names: list) -> dict:
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
     # give the guild anything.
     eligible = _natural_contributors(list(guid_of), family_names)
+    room = _job_bag_room(list(guid_of))
     facts = _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows,
                                  item_rows, recent_rows, pending_rows,
                                  log_rows=log_rows, done_rows=done_rows,
-                                 free_slots=_job_free_slots(list(guid_of)),
-                                 supplies=supplies, rewarded_rows=rewarded_rows)
+                                 free_slots=_job_free_slots(room),
+                                 supplies=supplies, rewarded_rows=rewarded_rows,
+                                 bag_slots=_job_bag_slots(room),
+                                 worn=_job_worn(worn_rows))
     facts["class_book"] = book
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
@@ -25864,20 +25940,50 @@ def _guild_gathering_skills(member):
     }
 
 
-def _job_free_slots(names) -> dict:
-    """name -> free bag slots, for the make-room step of a class quest
-    (guildjobs.class_room_step). An unread count is {}: no quest then waits on
-    room it cannot see."""
+def _job_bag_room(names) -> dict:
+    """name -> (free bag slots, all bag slots), for the make-room step of a
+    class quest (guildjobs.class_room_step) and the sale of a member whose
+    bags leave loot on the corpse (guildjobs.loot_room_short). An unread count
+    is {}: no quest then waits on room it cannot see, and no sale is asked."""
     try:
-        return _fetch_free_slots(names)
+        return _fetch_bag_room(names)
     except pymysql.err.MySQLError:
         log.exception("guild jobs: free bag slots unread; no class quest waits on room")
         return {}
 
 
+def _job_free_slots(room) -> dict:
+    """name -> free bag slots, out of `_job_bag_room`."""
+    return {name: free for name, (free, _slots) in (room or {}).items()}
+
+
+def _job_bag_slots(room) -> dict:
+    """name -> every bag slot it has, out of `_job_bag_room`."""
+    return {name: slots for name, (_free, slots) in (room or {}).items()}
+
+
+# THE WORN GEAR (vendorsale.py): a carried weapon or armor piece is sold only
+# when it would not be an upgrade, which is gear.would_wear against these.
+_JOB_WORN_SQL = (
+    "SELECT c.name, c.class AS class_id, c.level, ci.slot AS equipment_slot, "
+    "it.InventoryType AS inventory_type, it.ItemLevel AS item_level "
+    "FROM characters c "
+    "LEFT JOIN character_inventory ci ON ci.guid = c.guid AND ci.bag = 0 AND ci.slot < 19 "
+    "LEFT JOIN item_instance ii ON ii.guid = ci.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.guid IN ({guids})"
+)
+
+
+def _job_worn(rows) -> dict:
+    """name -> gear.CharacterState from the worn rows (bag_pressure)."""
+    return bag_pressure.member_characters(rows)
+
+
 def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, item_rows,
                          recent_rows, pending_rows, log_rows=(), done_rows=(),
-                         free_slots=None, supplies=None, rewarded_rows=None) -> dict:
+                         free_slots=None, supplies=None, rewarded_rows=None,
+                         bag_slots=None, worn=None) -> dict:
     """The rows the job reads, turned into guildjobs' facts."""
     family = set(family_names)
     guild_members, masters = guildwork.members_from_rows(rows, family_names)
@@ -25887,7 +25993,7 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     members, crafters = _guild_members_and_crafters(
         rows, family, role_of, skills, known, carried, eligible,
         _class_quest_state(log_rows, done_rows), free_slots or {}, supplies,
-        _rewarded_of(rewarded_rows))
+        _rewarded_of(rewarded_rows), bag_slots or {}, worn or {})
     pending = {str(r.get(k) or "") for r in pending_rows
                for k in ("target_name", "target_arg")} - {""}
     return {
@@ -25953,7 +26059,7 @@ def _rewarded_of(rows):
 
 def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible,
                                 quest_state=({}, {}, {}), free_slots=None, supplies=None,
-                                rewarded=None):
+                                rewarded=None, bag_slots=None, worn=None):
     members, crafters = [], {}
     quest_log, quests_done, quest_progress = quest_state
     for r in rows:
@@ -25990,7 +26096,9 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             home_map=_row_int(r, "home_map"),
             home_zone=_row_int(r, "home_zone"),
             rewarded=None if rewarded is None else rewarded.get(guid, frozenset()),
-            taxi_nodes=flightlearn.known_nodes(r.get("taximask"))))
+            taxi_nodes=flightlearn.known_nodes(r.get("taximask")),
+            bag_slots=(bag_slots or {}).get(name),
+            worn=(worn or {}).get(name)))
     return members, crafters
 
 
