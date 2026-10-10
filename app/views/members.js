@@ -9,10 +9,11 @@
 
 import { html, raw, notMeasured, pendingRead, state, duration, classVar } from "../ui.js";
 import { liveQuery, setQuery, gearRows, stateOf, stateLabel, stuckFor, memberLink, sectionTabs, head, flipSort, sortHead } from "./_members.js";
-import { GUILDS } from "../router.js";
+import { guilds, guildSlugs } from "../families.js";
 
-const SERIES = GUILDS.map((g) => "/api/v2/series?guild=" + g);
-const READS = ["/api/v2/roster", "/api/guildgear", ...SERIES];
+// One series read per family guild, as the realm reports them.
+const series = () => guildSlugs().map((g) => "/api/v2/series?guild=" + g);
+const reads = () => ["/api/v2/roster", "/api/guildgear", ...series()];
 
 const SORTS = [["stuck", "Stuck longest"], ["level", "Level, high first"], ["ilvl", "Item level"], ["xp", "XP per hour"], ["name", "Name"]];
 // Each sort's first direction. `dir` in the query (asc or desc) reverses it.
@@ -21,7 +22,7 @@ const FIRST = { stuck: "desc", level: "desc", ilvl: "desc", xp: "desc", name: "a
 // name -> {xp_per_hour_24h, xp_hours_measured} from every guild's series read.
 function xpRates(get) {
   const out = new Map();
-  SERIES.forEach((path) => {
+  series().forEach((path) => {
     const d = get(path).data;
     Object.entries((d && d.by_member) || {}).forEach(([name, r]) => out.set(name, r));
   });
@@ -99,6 +100,9 @@ function body(roster, gg, xp, q) {
   return html`${cards(rows, ilvl, xp, roster.checked_at)}${table(rows, ilvl, xp, roster.checked_at, f)}`;
 }
 
+// A chip that filters to one guild: its key is the guild's slug.
+const isGuildChip = (k) => guildSlugs().includes(k);
+
 function chip(label, key, on, n) {
   return html`<button type="button" class="chip" data-chip="${key}" aria-pressed="${on ? "true" : "false"}">${label}${n !== undefined ? html`<span class="dim mb-s">${n}</span>` : ""}</button>`;
 }
@@ -110,7 +114,7 @@ function controls(roster, q) {
   const ghosts = all.filter((m) => stateOf(m) === "ghost").length;
   const fam = all.filter((m) => m.family).length;
   return html`<div class="row ro-controls"><label class="ro-filter"><i class="ph ph-funnel" aria-hidden="true"></i><input class="input" id="ro-filter" type="search" placeholder="Filter by name, class, zone" value="${q.q || ""}" aria-label="Filter members" autocomplete="off"></label>
-${chip("Stuck", "stuck", f.stuck, stuck)}${chip("Ghosts", "ghost", f.ghost, ghosts)}${chip("Families", "family", f.family, fam)}${chip("Cave", "cave", f.guild === "cave")}${chip("Bonkers", "bonkers", f.guild === "bonkers")}
+${chip("Stuck", "stuck", f.stuck, stuck)}${chip("Ghosts", "ghost", f.ghost, ghosts)}${chip("Families", "family", f.family, fam)}${guilds().map((g) => chip(g.name, g.slug, f.guild === g.slug))}
 <label class="ro-sort"><i class="ph ph-sort-descending" aria-hidden="true"></i><span class="sr-only">Sort members</span><select class="input" id="ro-sort" aria-label="Sort members">${SORTS.map(([k, label]) => html`<option value="${k}"${f.sort === k ? raw(" selected") : ""}>${label}</option>`)}</select></label></div>
 ${f.lvl ? html`<div class="row muted">Levels ${f.lvl[0]} to ${f.lvl[1]}<button type="button" class="btn btn-ghost" data-clear-lvl>clear</button></div>` : ""}`;
 }
@@ -138,7 +142,7 @@ function xpNote(roster, xp) {
 
 export default {
   css: ["views/members.css"],
-  reads: () => READS,
+  reads,
   every: 30000,
   title: () => "Members",
   render(ctx) {
@@ -163,7 +167,7 @@ export default {
       const f = filters(q);
       main.querySelectorAll("[data-chip]").forEach((c) => {
         const k = c.getAttribute("data-chip");
-        const on = k === "cave" || k === "bonkers" ? f.guild === k : !!f[k];
+        const on = isGuildChip(k) ? f.guild === k : !!f[k];
         c.setAttribute("aria-pressed", String(on));
       });
       const total = (roster.members || []).length;
@@ -183,7 +187,7 @@ export default {
       const q = liveQuery();
       if (c.hasAttribute("data-chip")) {
         const k = c.getAttribute("data-chip");
-        if (k === "cave" || k === "bonkers") redraw(setQuery({ guild: (q.guild || "") === k ? "" : k }));
+        if (isGuildChip(k)) redraw(setQuery({ guild: (q.guild || "") === k ? "" : k }));
         else redraw(setQuery({ [k]: q[k] ? "" : "1" }));
       } else if (c.hasAttribute("data-sort")) {
         const f = filters(q);

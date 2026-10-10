@@ -49,7 +49,7 @@ def family_in_instance(base_url: str, families, fetch=fetch_json) -> int | None:
     """How many members of `families` are in an instance, from /api/family.
 
     THE API FALLS BACK TO ITS DEFAULT FAMILY FOR A NAME IT DOES NOT KNOW
-    (map_server._fetch_family_names), so a renamed or missing family would
+    (map_server._family_scope), so a renamed or missing family would
     silently report the default family's members. The payload's own `family`
     must name the family asked for, or the read is None: unreadable, which
     the tick treats as inside.

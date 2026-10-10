@@ -9,6 +9,7 @@ import * as streams from "./now/streams.js";
 import { openPanel, pressed } from "./now/panel.js";
 import * as wm from "./now/worldmap.js";
 import { seatChips } from "./_runs.js";
+import { firstFamily, firstGuild } from "../families.js";
 
 const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/v2/roster", "/api/map", "/shapes.json"];
 // The realm strip's two reads are the cheap ones, so they are asked for every
@@ -33,9 +34,9 @@ function chip(kind, label, href) {
 }
 
 function stalledChip(agendas) {
-  if (!agendas.every(D.ok)) return chip("stalled", "Stalled families not measured", "#/now/family/grug");
+  if (!agendas.every(D.ok)) return chip("stalled", "Stalled families not measured", "#/now/family/" + firstFamily());
   const stalled = agendas.filter((a) => a.data.stalled);
-  const href = "#/now/family/" + (stalled.length ? String(stalled[0].data.family).toLowerCase() : "grug");
+  const href = "#/now/family/" + (stalled.length ? String(stalled[0].data.family).toLowerCase() : firstFamily());
   return chip("stalled", plural(stalled.length, "family", "families") + " stalled", href);
 }
 
@@ -51,15 +52,16 @@ function ghostChip(gh) {
 
 function chips(ctx, agendas) {
   const runs = D.runsInside(ctx.get("/api/guildruns"));
+  const runsHref = "#/guilds/" + firstGuild() + "/runs";
   const fresh = D.runsNewSince(ctx.get("/api/guildruns"), ctx.previousVisit);
   const list = [
     stalledChip(agendas),
     stuckChip(D.stuck(ctx.get("/api/v2/stuck"))),
     ghostChip(D.ghosts(ctx.get("/api/v2/roster"))),
-    runs ? chip("inside", plural(runs.length, "run") + " inside", runs.length ? "#/runs/" + runs[0].id : "#/guilds/cave/runs")
-      : chip("inside", "Runs inside not measured", "#/guilds/cave/runs"),
+    runs ? chip("inside", plural(runs.length, "run") + " inside", runs.length ? "#/runs/" + runs[0].id : runsHref)
+      : chip("inside", "Runs inside not measured", runsHref),
   ];
-  if (fresh) list.push(chip("new", plural(fresh, "run") + " new since your last visit", "#/guilds/cave/runs"));
+  if (fresh) list.push(chip("new", plural(fresh, "run") + " new since your last visit", runsHref));
   return html`<div class="nchips" role="group" aria-label="What needs you">${list}</div>`;
 }
 
@@ -107,7 +109,7 @@ function heads(ctx) {
   const wall = ctx.get("/api/wall");
   if (!D.ok(wall)) return null;
   const fams = D.families(wall.data);
-  return D.FAMILY_KEYS.map((f) => D.headOf(fams.get(f) || [], f)).filter(Boolean);
+  return D.familyKeys().map((f) => D.headOf(fams.get(f) || [], f)).filter(Boolean);
 }
 
 function live(ctx) {
@@ -129,7 +131,7 @@ ${body}
 
 // ---- mini maps ---------------------------------------------------------------------
 function miniMaps(ctx) {
-  return html`<div class="minimaps">${D.FAMILY_KEYS.map((f) => html`<a class="minimap" data-minimap="${f}" href="#/now/map"><span class="kicker">Where ${f}'s family is</span><div class="wm wm-compact" data-map-box="${f}"><div class="wm-wait">Unrolling the map...</div></div></a>`)}</div>`;
+  return html`<div class="minimaps">${D.familyKeys().map((f) => html`<a class="minimap" data-minimap="${f}" href="#/now/map"><span class="kicker">Where ${f}'s family is</span><div class="wm wm-compact" data-map-box="${f}"><div class="wm-wait">Unrolling the map...</div></div></a>`)}</div>`;
 }
 
 function drawMiniMaps(main, ctx) {
@@ -140,7 +142,7 @@ function drawMiniMaps(main, ctx) {
   }
   const fams = D.families(wall.data);
   const ghostNames = D.ghostNames(ctx.get("/api/v2/roster"));
-  D.FAMILY_KEYS.forEach((f) => {
+  D.familyKeys().forEach((f) => {
     const box = main.querySelector('[data-map-box="' + f + '"]');
     const link = main.querySelector('[data-minimap="' + f + '"]');
     if (box) drawFamilyMap(box, link, f, fams.get(f) || [], map.data, shapes.data, ghostNames);
@@ -201,7 +203,7 @@ function attention(ctx) {
 }
 
 function campaigns(agendas) {
-  const rows = D.FAMILY_KEYS.map((f, i) => {
+  const rows = D.familyKeys().map((f, i) => {
     const read = agendas[i];
     if (!D.ok(read)) return html`<div class="crow"><span class="b">${f}'s family</span><span class="muted">Campaign ${notMeasured()}</span></div>`;
     const c = D.campaign(read.data);
@@ -237,16 +239,16 @@ function fold(ctx, agendas) {
 export default {
   // The tile panels draw the profile's and the guild bank's frames, in their styles.
   css: ["views/now.css", "views/members.css", "views/economy.css"],
-  reads: () => READS.concat(D.FAMILY_KEYS.map(D.agendaPath)),
+  reads: () => READS.concat(D.familyKeys().map(D.agendaPath)),
   every: 15000,
   quick: QUICK,
   title: () => "Now",
   render(ctx) {
-    const agendas = D.FAMILY_KEYS.map((f) => ctx.get(D.agendaPath(f)));
+    const agendas = D.familyKeys().map((f) => ctx.get(D.agendaPath(f)));
     return html`<header class="page-head"><h1>Now</h1></header>
 ${chips(ctx, agendas)}
 ${strip(ctx)}
-<div class="agendas">${D.FAMILY_KEYS.map((f, i) => agendaCard(f, agendas[i]))}</div>
+<div class="agendas">${D.familyKeys().map((f, i) => agendaCard(f, agendas[i]))}</div>
 ${live(ctx)}
 ${miniMaps(ctx)}
 ${fold(ctx, agendas)}`;

@@ -42,7 +42,7 @@ import statistics
 import classquest
 import council
 import guildrun
-from apiv2 import _allow, presence
+from apiv2 import _scope, presence
 
 BLOCKED_HOURS = 2
 TOP_KILLERS = 5
@@ -57,10 +57,6 @@ _NOW_SQL = "SELECT UNIX_TIMESTAMP() AS now"
 _MEMBERS_SQL = (
     "SELECT c.guid, c.name, c.level, c.class, c.race, c.zone FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid WHERE gm.guildid = %s LIMIT %s"
-)
-_ROSTER_SQL = (
-    "SELECT name, family FROM overseer_roster "
-    "WHERE family IS NOT NULL AND family <> '' LIMIT %s"
 )
 _DINGS_SQL = (
     "SELECT character_name AS name, MAX(new_level) AS level, "
@@ -156,12 +152,9 @@ def faction_of(races) -> str:
     return ""
 
 
-def family_of(names: set, roster_rows: list) -> str:
-    """The family with the most members in this guild, or ""."""
-    counts = collections.Counter(
-        r["family"] for r in roster_rows if r.get("name") in names
-    )
-    return counts.most_common(1)[0][0] if counts else ""
+def family_of(guild_name: str, family_guilds: list) -> str:
+    """The family this guild belongs to (families.Families.guilds), or ""."""
+    return next((g["family"] for g in family_guilds if g["name"] == guild_name), "")
 
 
 def member_rows(rows: list, readings: dict) -> list:
@@ -426,7 +419,7 @@ def _runs(rd, guild_name: str) -> list:
     return [dict(r, created=r["created_unix"], ended=r["ended_unix"]) for r in rows]
 
 
-def build(rd, row: dict, zones: dict, maps: dict) -> dict:
+def build(rd, row: dict, zones: dict, maps: dict, families: list) -> dict:
     gid = int(row["guildid"])
     now = int(rd.must(_NOW_SQL, ())[0]["now"])
     raw = rd.must(_MEMBERS_SQL, (gid, MAX_MEMBERS))
@@ -438,7 +431,7 @@ def build(rd, row: dict, zones: dict, maps: dict) -> dict:
     return {
         "guild": row["name"],
         "faction": faction,
-        "family": family_of(set(names), rd.must(_ROSTER_SQL, (MAX_ROWS,))),
+        "family": family_of(row["name"], families),
         "count": len(members),
         "online": sum(1 for m in members if m["online"]),
         "members": members,
@@ -457,17 +450,17 @@ def guild(query: dict, ctx) -> tuple[int, dict]:
     asked = (query.get("guild") or [""])[0].strip()
     if not asked:
         return 400, {"error": "say guild="}
-    # Only a managed guild, refused before any query (_allow).
-    name = _allow.guild(asked)
+    # Only a family guild, refused before this read opens a connection.
+    name = _scope.guild(ctx, asked)
     if name is None:
-        return 404, {"error": "no such guild", "guilds": sorted(_allow.GUILDS)}
+        return 404, _scope.no_such_guild(ctx)
     server = ctx.server
     zones = server.recap.zone_names(server.GEO.continents)
     maps = server.achievements.MAP_NAMES
     found = ctx.read.must(_GUILD_SQL, (name,))
     if not found:
         return 404, {"error": "no such guild", "guild": name}
-    return 200, build(ctx.read, found[0], zones, maps)
+    return 200, build(ctx.read, found[0], zones, maps, server.FAMILIES.guilds())
 
 
 ROUTES = {"/api/v2/guild": guild}

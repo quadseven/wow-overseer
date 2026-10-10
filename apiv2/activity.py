@@ -18,7 +18,7 @@ import re
 
 import commandwords
 
-from ._scope import NOT_A_MEMBER, guild_member, wanted_name
+from ._scope import NOT_A_MEMBER, may_answer, wanted_name
 
 LIMIT = 60
 LEVEL_DAYS = 7
@@ -154,7 +154,7 @@ def _names(rd, commands) -> dict:
 
 def activity(query: dict, ctx) -> tuple[int, dict]:
     name = wanted_name(query)
-    if not guild_member(ctx, name):
+    if not may_answer(ctx, name):
         return 404, dict(NOT_A_MEMBER)
     rd = ctx.read
     commands = rd.rows(COMMANDS_SQL, (name, LIMIT), what="overseer_command")

@@ -30,7 +30,7 @@ import realmread  # noqa: E402
 from apiv2 import guild, members, presence  # noqa: E402
 from tests.test_apiv2_guilds import Ctx as GuildCtx  # noqa: E402
 from tests.test_members_v2 import ctx_for, roster_rules, server  # noqa: E402
-from tests.test_vclient import get  # noqa: E402
+from tests.test_vclient import get, realm_of  # noqa: E402
 
 NOW = 1_800_000_000
 GHOST_FLAG = 0x10  # PLAYER_FLAGS_GHOST in the saved playerFlags
@@ -306,7 +306,6 @@ class EveryEndpointAsks(unittest.TestCase):
                 member(1, "Grug", 1, 0),
                 member(2, "Bonk", 0, GHOST_FLAG),
             ],
-            guild._ROSTER_SQL: [],
             guild._DINGS_SQL: [],
             guild._KILLERS_SQL: [],
             guild._DEATH_TOTAL_SQL: [{"n": 0, "who": 0}],
@@ -361,7 +360,7 @@ class EveryEndpointAsks(unittest.TestCase):
         stub, calls = contrary({"Og": reading(False, "ghost")})
         with (
             mock.patch.object(map_server, "_connect", Conn),
-            mock.patch.object(map_server, "_all_roster_names", lambda: ["Og"]),
+            mock.patch.object(map_server, "FAMILIES", realm_of([("Og", ["Og"])])),
             mock.patch.object(presence, "of", stub),
         ):
             h = get("/api/guildgear")

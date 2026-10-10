@@ -18,7 +18,7 @@ WORKDIR /app
 
 COPY core.py bridge.py voice.py transform.py \
      map_core.py map_server.py events.py \
-     panel.py family.py goals.py protect.py fanout.py chat.py \
+     panel.py family.py families.py goals.py protect.py fanout.py chat.py \
      kin.py keep.py cast.py bonds.py council.py persona.py \
      bonkers.py retire.py \
      quests.py overhear.py questbook.py \

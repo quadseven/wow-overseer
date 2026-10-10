@@ -190,7 +190,7 @@ def _limit_statements(rd) -> None:
 
 def build(q: str, rd, server) -> dict:
     """The five groups for `q` (already normalised), from one reader."""
-    roster = list(server._all_roster_names())
+    roster = server.FAMILIES.names()
     keywords = server.council.DUNGEON_KEYWORDS
     place = server.council.keyword_place
     guilds = list(server.guildrun.limits().guilds)

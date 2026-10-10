@@ -459,6 +459,7 @@ class TheBankCategories(unittest.TestCase):
             "views/economy.js": app_file("views/economy.js"),
             "ui.js": app_file("ui.js"),
             "router.js": app_file("router.js"),
+            "families.js": app_file("families.js"),
             "api.js": TOOLTIP_API_STUB,
         }
         out = run_node(files, script)
