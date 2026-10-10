@@ -27,6 +27,7 @@ import apiv2
 from apiv2 import presence as v2_presence
 from apiv2._context import Context as _V2Context
 import agenda
+import appbuild
 import armory
 import gearupgrades
 import bag_pressure
@@ -4820,7 +4821,9 @@ _CLIENT_GUILD_ITEMS = (
     "ii.itemEntry AS entry, ii.count, it.name AS item_name, "
     "it.Quality AS quality, it.displayid, "
     # What bankpolicy.why_stored reads (#320).
-    "it.class AS item_class, it.fire_res AS fire_res "
+    "it.class AS item_class, it.fire_res AS fire_res, "
+    # The grid's category headers (vclient.item_category).
+    "it.subclass AS item_subclass "
     "FROM guild_bank_item gbi "
     "JOIN item_instance ii ON ii.guid = gbi.item_guid "
     "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -4991,8 +4994,11 @@ class Handler(BaseHTTPRequestHandler):
         # because it has to know which path it was reached under before it
         # can build a single URL. basepath.py says what goes wrong when it
         # does not, and it is not a broken link.
+        # The build is stamped in beside the mount (appbuild.py), so an open
+        # tab can tell when the server holds newer app code than it runs.
         self._send_file("index.html", "text/html; charset=utf-8",
-                        transform=lambda body: basepath.apply(body, BASE_PATH))
+                        transform=lambda body: appbuild.stamp(
+                            basepath.apply(body, BASE_PATH), appbuild.fingerprint(HERE)))
 
     def _app_file(self, rel: str) -> None:
         """GET /app/<path>.js|.css - one file of the operations app.
@@ -5072,6 +5078,9 @@ class Handler(BaseHTTPRequestHandler):
             # with the one it was served as (basepath.PAGE_PLACEHOLDER).
             payload["page"] = _page_version()
             payload["app_page"] = _page_version("index.html")
+            # The page and every app script and stylesheet (appbuild.py):
+            # a deploy that changes only app/ moves this and not `page`.
+            payload["app_build"] = appbuild.fingerprint(HERE)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             log.exception("realm query failed")

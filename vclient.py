@@ -279,7 +279,7 @@ def build_guild_bank(
         tab = by_id.get(int(row["tab_id"]))
         slot = int(row["slot_id"])
         if tab is not None and 0 <= slot < GUILD_BANK_TAB_SLOTS:
-            tab["cells"][slot] = item_cell(row, icons)
+            tab["cells"][slot] = item_cell(row, icons) | item_category(row)
     for tab in tabs:
         tab["used"] = sum(1 for c in tab["cells"] if c is not None)
         tab["total"] = GUILD_BANK_TAB_SLOTS
@@ -417,3 +417,57 @@ def item_tooltip(row: dict | None, book) -> dict | None:
     cell = item_cell(dict(row, count=1), book.icons)
     cell["tooltip"] = tooltip
     return cell
+
+
+# ---- what kind of thing a stack is, for the guild bank grid's headers ----
+# The game's item classes and the trade-goods subclasses a vault fills with,
+# in the order the grid lists them: the crafting materials first, then
+# recipes, then everything else. Each label is (rank, words).
+_TRADE_GOODS = 7
+_GEM = 3
+_TRADE_SUB = {
+    5: (0, "Cloth"),
+    6: (1, "Leather"),
+    7: (2, "Metal and stone"),
+    9: (3, "Herbs"),
+    4: (4, "Gems"),
+    10: (5, "Elemental"),
+    12: (6, "Enchanting"),
+    8: (7, "Meat"),
+    1: (8, "Parts and devices"),
+    2: (8, "Parts and devices"),
+    3: (8, "Parts and devices"),
+}
+_CLASS_LABEL = {
+    9: (10, "Recipes"),
+    0: (11, "Consumables"),
+    2: (12, "Weapons"),
+    4: (13, "Armor"),
+    1: (14, "Bags"),
+    5: (15, "Reagents"),
+    12: (16, "Quest items"),
+    15: (17, "Miscellaneous"),
+}
+_OTHER_TRADE = (9, "Other trade goods")
+_OTHER = (18, "Other")
+
+
+def item_category(row: dict) -> dict:
+    """{"category", "category_rank"} for a row that carries its item class.
+
+    A row without `item_class` (the query did not read it) gets nothing, so
+    the grid draws one block as before rather than a guessed header.
+    """
+    item_class = row.get("item_class")
+    if item_class is None:
+        return {}
+    item_class = int(item_class)
+    sub = row.get("item_subclass")
+    sub = int(sub) if sub is not None else -1
+    if item_class == _GEM:
+        rank, label = _TRADE_SUB[4]
+    elif item_class == _TRADE_GOODS:
+        rank, label = _TRADE_SUB.get(sub, _OTHER_TRADE)
+    else:
+        rank, label = _CLASS_LABEL.get(item_class, _OTHER)
+    return {"category": label, "category_rank": rank}

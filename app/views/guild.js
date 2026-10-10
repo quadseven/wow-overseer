@@ -15,7 +15,7 @@ import {
 } from "../ui.js";
 import { peek } from "../api.js";
 import {
-  GUILD_NAME, GUILD_FAMILY, utc, since, runCard, bindRunCards, runHref,
+  GUILD_NAME, GUILD_FAMILY, utc, since, runCard, bindRunCards, runHref, seatChips,
 } from "./_runs.js";
 
 const TABS = [["progress", "Progress"], ["runs", "Runs"], ["chronicle", "Chronicle"]];
@@ -324,7 +324,7 @@ function rightNow(ctx) {
   const gr = peek(P.runs());
   const rc = peek(P.recap());
   const out = gr.data ? mine(ctx, gr.data.active) : [];
-  const cards = out.map((r) => html`<a class="card g-now" href="${runHref(r)}" data-run="${r.id}"><span class="g-name">${gname(ctx)} is in ${r.place}: ${r.bosses_total ? r.bosses_done + " of " + r.bosses_total + " bosses down" : "bosses not measured"}, ${plural(r.deaths || 0, "death")}${r.seconds_inside ? ", " + duration(r.seconds_inside) + " inside" : ""}.</span><span class="muted">${(r.members || []).map((m) => m.name).join(", ")}</span></a>`);
+  const cards = out.map((r) => html`<div class="card g-now stretch-card"><a class="g-name stretch-link" href="${runHref(r)}" data-run="${r.id}">${gname(ctx)} is in ${r.place}: ${r.bosses_total ? r.bosses_done + " of " + r.bosses_total + " bosses down" : "bosses not measured"}, ${plural(r.deaths || 0, "death")}${r.seconds_inside ? ", " + duration(r.seconds_inside) + " inside" : ""}.</a>${seatChips(r)}</div>`);
   const live = rc.data && rc.data.live && rc.data.family === family(ctx) ? recapCard(ctx, rc.data) : "";
   if (!cards.length && !live) {
     if (!gr.data) return pendingRead(gr, 1);
