@@ -124,7 +124,7 @@ class OneReading(unittest.TestCase):
             fresh_at = NOW - age if online else None
             want[name] = {"online": online, "life": life, "fresh_at": fresh_at}
         got = presence.of(World(snaps, flags), sorted(want))
-        for name, case in zip(sorted(want), CASES):
+        for name, case in zip(sorted(want), CASES, strict=True):
             with self.subTest(name=name, case=case):
                 self.assertEqual(got[name], want[name])
 
