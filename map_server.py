@@ -4167,7 +4167,8 @@ def stream_expire(rows: list, now_seconds: float) -> list:
 
     THE SWEEP IS THE WHOLE LIFECYCLE. A viewer who closed the tab sends
     nothing again, so their own silence cannot end anything - this runs on
-    every read of the watch endpoint, which the open map does constantly.
+    the server's own timer (sweep_quiet_streams), and on every watch read
+    and every watch POST as well.
     """
     stale = [r["character"] for r in rows if stream.is_stale(r, now_seconds)]
     if not stale:
@@ -4181,6 +4182,47 @@ def stream_expire(rows: list, now_seconds: float) -> list:
             tuple(stale),
         )
     return stale
+
+
+# How often the server sweeps on its own. A quiet watch is stale after
+# stream.STALE_AFTER_SECONDS, so on this cadence it lives at most one beat
+# longer than that.
+STREAM_SWEEP_SECONDS = stream.HEARTBEAT_SECONDS
+
+
+def sweep_quiet_streams(clock=time.time) -> list:
+    """Expire every stream nobody is watching. Returns the names expired.
+
+    The same read and the same write GET /api/watch makes on every read, run
+    by the server itself, because nothing polls that endpoint any more.
+    """
+    expired = stream_expire(_fetch_streams(), clock())
+    if expired:
+        log.info("stream: expiring %d stale row(s): %s",
+                 len(expired), ", ".join(expired))
+    return expired
+
+
+def _sweep_until(stop: threading.Event, every: float, sweep) -> None:
+    while not stop.wait(every):
+        try:
+            sweep()
+        except Exception:
+            # Never fatal: the next tick tries again, and a database that is
+            # down is already a 503 everywhere else.
+            log.exception("stream sweep failed")
+
+
+def start_stream_sweeper(every: float = STREAM_SWEEP_SECONDS, sweep=None,
+                         stop: threading.Event | None = None) -> threading.Thread:
+    """Run `sweep` (sweep_quiet_streams) every `every` seconds on a daemon
+    thread until `stop` is set, which in the server is never."""
+    thread = threading.Thread(
+        target=_sweep_until,
+        args=(stop or threading.Event(), every, sweep or sweep_quiet_streams),
+        name="stream-sweep", daemon=True)
+    thread.start()
+    return thread
 
 
 def _character_exists_by_name(name: str) -> bool:
@@ -5749,7 +5791,8 @@ class Handler(BaseHTTPRequestHandler):
         Also the SWEEP. A viewer who closed the tab sends nothing ever again,
         so nothing they do can end their stream - something else has to
         notice. Every read of this endpoint expires whatever has gone quiet,
-        which means the map merely being open keeps the world tidy.
+        and the server's own sweeper does the same on a timer, so a stream
+        expires even when nothing is reading this.
         """
         name = query.get("name", [""])[0]
         try:
@@ -6420,6 +6463,10 @@ def main() -> None:
         _ensure_stream_store()
     except Exception:
         log.exception("stream store unavailable - watch controls will fail")
+
+    # Started whatever the store said: a sweep that fails logs and tries
+    # again on the next tick.
+    start_stream_sweeper()
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     log.info("serving on :%d (threads: %s)", PORT, threading.active_count())
