@@ -101,7 +101,7 @@ function kpis(ctx, g) {
   const tile = (label, v, sub, href, tone) => html`<a class="kpi g-kpi" href="${href}"><span class="k">${label}</span><span class="v"${tone ? raw(' data-gt="' + tone + '"') : ""}>${v}</span><span class="s">${sub}</span></a>`;
   return html`<div class="g-kpis">
 ${tile("Gaining XP", g.gaining.length + "/" + g.count, "a new level in the last 24h", q + "&sort=xp")}
-${tile("Median level", levels.length ? median(levels) : notMeasured(), levels.length ? Math.min(...levels) + " to " + Math.max(...levels) : "", q + "&sort=lvl")}
+${tile("Median level", levels.length ? median(levels) : notMeasured(), levels.length ? Math.min(...levels) + " to " + Math.max(...levels) : "", q + "&sort=level")}
 ${tile("Class quests done", n(cq.done), cq.open + " in progress, " + cq.blocked + " blocked", q)}
 ${tile("Stuck", stuck === null ? notMeasured() : stuck, stuckSub, q + "&stuck=1", stuck ? "warn" : "")}
 ${tile("Ghosts now", ghosts, g.deaths.total + " deaths in 24h", q + "&ghost=1", ghosts ? "bad" : "")}

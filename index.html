@@ -12,7 +12,10 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Overseer">
-<meta name="theme-color" content="#161826">
+<!-- The bar color behind the page: each theme's background token (tokens.css).
+     Once the app is up, main.js sets both to the theme in use. -->
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161826">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#e4e7f5">
 <title>Overseer</title>
 <link rel="manifest" href="__OVERSEER_BASE__/manifest.webmanifest">
 <link rel="apple-touch-icon" href="__OVERSEER_BASE__/apple-touch-icon.png">

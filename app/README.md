@@ -28,6 +28,7 @@ export default {
   css: ["views/now.css"],                       // optional
   reads: (ctx) => ["/api/realm", "/api/agenda"], // polled while on screen
   every: 15000,                                  // poll interval, ms
+  quick: { reads: ["/api/realm"], every: 5000 }, // optional: cheap reads polled faster
   title: (ctx) => "Now",
   render(ctx) {                                  // markup from the cache only
     const realm = ctx.get("/api/realm");         // {data, at, error, failures, loading}
@@ -43,7 +44,8 @@ export default {
 The `ctx` passed to every method is `{view, section, params, query, hash, get, isPhone, previousVisit}`.
 
 - `render` is called again whenever one of its reads answers with new data. The scroll position and the focused input are kept across the redraw.
-- Keep filter and sort state in the URL query (`#/members?stuck=1&sort=lvl`), so every view state can be linked.
+- Keep filter and sort state in the URL query (`#/members?stuck=1&sort=level&dir=asc`), so every view state can be linked. A sortable table header is `sortHead` from `views/_members.js`: clicking the column already sorted reverses it (`flipSort`).
+- Polling stops while the page is hidden, and every read is asked again at once when the page comes back on screen or the network comes back.
 
 ## Rules
 

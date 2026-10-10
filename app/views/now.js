@@ -9,6 +9,12 @@ import * as streams from "./now/streams.js";
 import * as wm from "./now/worldmap.js";
 
 const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/v2/roster", "/api/map", "/shapes.json"];
+// The realm strip's two reads are the cheap ones, so they are asked for every
+// 5s while the rest keep 15s. Measured on the dev realm: /api/eye runs 9 SQL
+// statements in about 1KB, /api/v2/roll 5 in under 0.5KB, against 16 to 18
+// for the wall, the roster, stuck and each agenda. /api/map is cheap to build
+// (3 statements) but about 170KB a read, so it stays at 15s for a phone's sake.
+const QUICK = { reads: ["/api/eye", "/api/v2/roll"], every: 5000 };
 let foldOpen = null; // null: the default (open on desktop, closed on phone)
 
 function readLayout() {
@@ -230,6 +236,7 @@ export default {
   css: ["views/now.css"],
   reads: () => READS.concat(D.FAMILY_KEYS.map(D.agendaPath)),
   every: 15000,
+  quick: QUICK,
   title: () => "Now",
   render(ctx) {
     const agendas = D.FAMILY_KEYS.map((f) => ctx.get(D.agendaPath(f)));

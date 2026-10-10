@@ -8,13 +8,15 @@
 // reads them back from the address bar.
 
 import { html, raw, notMeasured, pendingRead, state, duration, classVar } from "../ui.js";
-import { liveQuery, setQuery, gearRows, stateOf, stateLabel, stuckFor, memberLink, sectionTabs, head } from "./_members.js";
+import { liveQuery, setQuery, gearRows, stateOf, stateLabel, stuckFor, memberLink, sectionTabs, head, flipSort, sortHead } from "./_members.js";
 import { GUILDS } from "../router.js";
 
 const SERIES = GUILDS.map((g) => "/api/v2/series?guild=" + g);
 const READS = ["/api/v2/roster", "/api/guildgear", ...SERIES];
 
 const SORTS = [["stuck", "Stuck longest"], ["level", "Level, high first"], ["ilvl", "Item level"], ["xp", "XP per hour"], ["name", "Name"]];
+// Each sort's first direction. `dir` in the query (asc or desc) reverses it.
+const FIRST = { stuck: "desc", level: "desc", ilvl: "desc", xp: "desc", name: "asc" };
 
 // name -> {xp_per_hour_24h, xp_hours_measured} from every guild's series read.
 function xpRates(get) {
@@ -31,12 +33,13 @@ function xpValue(r) { return r && r.xp_per_hour_24h !== null && r.xp_per_hour_24
 function xpText(r) { const v = xpValue(r); return v === null ? notMeasured() : v.toLocaleString("en-US"); }
 
 function filters(q) {
+  const sort = SORTS.some((s) => s[0] === q.sort) ? q.sort : "stuck";
   const lvl = /^(\d+)-(\d+)$/.exec(q.lvl || "");
   return {
     stuck: !!q.stuck, ghost: !!q.ghost, family: !!q.family,
     guild: (q.guild || "").toLowerCase(), text: (q.q || "").trim().toLowerCase(),
     lvl: lvl ? [Number(lvl[1]), Number(lvl[2])] : null,
-    sort: SORTS.some((s) => s[0] === q.sort) ? q.sort : "stuck",
+    sort, dir: q.dir === "asc" || q.dir === "desc" ? q.dir : FIRST[sort],
   };
 }
 
@@ -50,15 +53,19 @@ function keep(m, f) {
   return true;
 }
 
-function sorter(sort, ilvl, xp) {
+// Each key compares low to high; "desc" turns it round. Ties go by name, A to Z.
+function sorter(sort, dir, ilvl, xp) {
   const il = (m) => { const g = ilvl.get(m.name); return g ? g.avg_item_level : -1; };
   const rate = (m) => { const v = xpValue(xp.get(m.name)); return v === null ? -1 : v; };
   const waited = (m) => (m.stuck ? (m.since === null || m.since === undefined ? 0 : Number.MAX_SAFE_INTEGER - m.since) : -1);
-  if (sort === "level") return (a, b) => b.level - a.level || a.name.localeCompare(b.name);
-  if (sort === "ilvl") return (a, b) => il(b) - il(a) || a.name.localeCompare(b.name);
-  if (sort === "xp") return (a, b) => rate(b) - rate(a) || a.name.localeCompare(b.name);
-  if (sort === "name") return (a, b) => a.name.localeCompare(b.name);
-  return (a, b) => (b.stuck - a.stuck) || (waited(b) - waited(a)) || ((stateOf(b) === "ghost") - (stateOf(a) === "ghost")) || b.level - a.level || a.name.localeCompare(b.name);
+  const ghost = (m) => Number(stateOf(m) === "ghost");
+  let by = (a, b) => (a.stuck - b.stuck) || (waited(a) - waited(b)) || (ghost(a) - ghost(b)) || a.level - b.level;
+  if (sort === "level") by = (a, b) => a.level - b.level;
+  else if (sort === "ilvl") by = (a, b) => il(a) - il(b);
+  else if (sort === "xp") by = (a, b) => rate(a) - rate(b);
+  else if (sort === "name") by = (a, b) => a.name.localeCompare(b.name);
+  const d = dir === "asc" ? 1 : -1;
+  return (a, b) => d * by(a, b) || a.name.localeCompare(b.name);
 }
 
 function ilvlText(g) { return g ? String(Math.round(g.avg_item_level)) : notMeasured(); }
@@ -69,12 +76,9 @@ function cards(rows, ilvl, xp, at) {
 
 const HEADS = [["Name", "name"], ["Lvl", "level"], ["Class"], ["Guild"], ["iLvl", "ilvl"], ["XP/h", "xp"], ["Current step"], ["Blocker"], ["Stuck for", "stuck"]];
 
-function table(rows, ilvl, xp, at, sort) {
-  const th = HEADS.map(([label, key]) => {
-    if (!key) return html`<th scope="col">${label}</th>`;
-    const on = sort === key;
-    return html`<th scope="col"${on ? raw(' aria-sort="descending"') : ""}><button type="button" data-sort="${key}">${label}${on ? html`<i class="ph ph-caret-down" aria-hidden="true"></i>` : ""}</button></th>`;
-  });
+function table(rows, ilvl, xp, at, f) {
+  const cur = { key: f.sort, dir: f.dir };
+  const th = HEADS.map(([label, key]) => (key ? sortHead(label, key, cur, "data-sort") : html`<th scope="col">${label}</th>`));
   const tr = rows.map((m) => {
     const d = stuckFor(m, at);
     const k = stateOf(m);
@@ -88,11 +92,11 @@ function body(roster, gg, xp, q) {
   const f = filters(q);
   const ilvl = gearRows(gg);
   const all = roster.members || [];
-  const rows = all.filter((m) => keep(m, f)).sort(sorter(f.sort, ilvl, xp));
+  const rows = all.filter((m) => keep(m, f)).sort(sorter(f.sort, f.dir, ilvl, xp));
   if (!rows.length) {
     return html`${state("empty", "No members match", "No member fits every filter you have on. Nothing is hidden by the server.")}<div><button type="button" class="btn btn-ghost" data-clear>Clear filters</button></div>`;
   }
-  return html`${cards(rows, ilvl, xp, roster.checked_at)}${table(rows, ilvl, xp, roster.checked_at, f.sort)}`;
+  return html`${cards(rows, ilvl, xp, roster.checked_at)}${table(rows, ilvl, xp, roster.checked_at, f)}`;
 }
 
 function chip(label, key, on, n) {
@@ -170,7 +174,7 @@ export default {
     const input = main.querySelector("#ro-filter");
     if (input) input.addEventListener("input", () => redraw(setQuery({ q: input.value })));
     const sel = main.querySelector("#ro-sort");
-    if (sel) sel.addEventListener("change", () => redraw(setQuery({ sort: sel.value === "stuck" ? "" : sel.value })));
+    if (sel) sel.addEventListener("change", () => redraw(setQuery({ sort: sel.value === "stuck" ? "" : sel.value, dir: "" })));
     const wrap = main.querySelector(".ro-wrap");
     if (!wrap) return;
     wrap.addEventListener("click", (e) => {
@@ -182,9 +186,12 @@ export default {
         if (k === "cave" || k === "bonkers") redraw(setQuery({ guild: (q.guild || "") === k ? "" : k }));
         else redraw(setQuery({ [k]: q[k] ? "" : "1" }));
       } else if (c.hasAttribute("data-sort")) {
-        const k = c.getAttribute("data-sort");
-        redraw(setQuery({ sort: k === "stuck" ? "" : k }));
-        if (sel) sel.value = k;
+        const f = filters(q);
+        const n = flipSort({ key: f.sort, dir: f.dir }, c.getAttribute("data-sort"), FIRST[c.getAttribute("data-sort")]);
+        redraw(setQuery({ sort: n.key, dir: n.dir }));
+        if (sel) sel.value = n.key;
+        const again = region.querySelector('[data-sort="' + n.key + '"]');
+        if (again) again.focus({ preventScroll: true });
       } else if (c.hasAttribute("data-clear-lvl")) {
         setQuery({ lvl: "" });
         c.parentElement.remove();

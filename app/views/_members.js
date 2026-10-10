@@ -287,3 +287,22 @@ export function coins(c) { return c === null || c === undefined ? notMeasured() 
 export function count(n, one, many) { return plural(n, one, many); }
 export function attr(s) { return esc(s); }
 export { statusColor };
+
+// ---- sortable table headers ------------------------------------------------------
+// A sort is {key, dir} with dir "asc" or "desc". Clicking the column the table
+// is already sorted by reverses it; any other column starts in its own first
+// direction. Both roster tables (members.js, gear.js) use these two.
+
+export function flipSort(cur, key, first) {
+  return cur.key === key ? { key, dir: cur.dir === "asc" ? "desc" : "asc" } : { key, dir: first };
+}
+
+// One sortable <th>. aria-sort names the direction the rows are in, and the
+// caret points the same way; the button carries `attr="<key>"` for the click,
+// and a data-focus that keeps it focused across a poll's redraw.
+export function sortHead(label, key, cur, attr) {
+  const on = cur.key === key;
+  const sorted = on ? raw(' aria-sort="' + (cur.dir === "asc" ? "ascending" : "descending") + '"') : "";
+  const caret = on ? html`<i class="${"ph ph-caret-" + (cur.dir === "asc" ? "up" : "down")}" aria-hidden="true"></i>` : "";
+  return html`<th scope="col"${sorted}><button type="button" ${raw(attr + '="' + esc(key) + '"')} data-focus="${"sort-" + key}">${label}${caret}</button></th>`;
+}

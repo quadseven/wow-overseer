@@ -69,40 +69,51 @@ export function load(path) {
 
 export function loadAll(paths) { return Promise.all(paths.map(load)); }
 
-// Polling for the view on screen. One timer; restarted on every route.
+// Polling for the view on screen, restarted on every route. One timer per
+// pace: the view's reads at its own `every`, and the few it names as `quick`
+// at their shorter one. A pace waits for its own reads to answer before it
+// counts again, so a slow read never piles up behind itself.
 let pollPaths = [];
-let pollEvery = 0;
-let timer = null;
+let paces = []; // [{paths, every, timer}]
 
-function tick() {
-  timer = null;
-  if (document.hidden || !pollPaths.length) return;
-  loadAll(pollPaths).finally(schedule);
+function tick(p) {
+  p.timer = null;
+  if (document.hidden || !p.paths.length) return;
+  loadAll(p.paths).finally(() => schedule(p));
 }
 
-function schedule() {
-  if (timer || !pollEvery || document.hidden) return;
-  timer = window.setTimeout(tick, pollEvery);
+function schedule(p) {
+  if (p.timer || !p.every || document.hidden || !paces.includes(p)) return;
+  p.timer = window.setTimeout(() => tick(p), p.every);
 }
 
-export function watch(paths, everyMs) {
-  if (timer) { window.clearTimeout(timer); timer = null; }
+function stop() {
+  paces.forEach((p) => { if (p.timer) { window.clearTimeout(p.timer); p.timer = null; } });
+}
+
+// `quick` is optional: {reads: [paths], every: ms} for reads cheap enough to
+// ask for more often than the rest.
+export function watch(paths, everyMs, quick) {
+  stop();
   pollPaths = paths.slice();
-  pollEvery = everyMs || 0;
-  loadAll(pollPaths).finally(schedule);
+  const fast = quick && quick.every ? pollPaths.filter((p) => quick.reads.includes(p)) : [];
+  paces = [{ paths: pollPaths.filter((p) => !fast.includes(p)), every: everyMs || 0, timer: null }];
+  if (fast.length) paces.push({ paths: fast, every: quick.every, timer: null });
+  return refreshNow();
 }
 
 export function refreshNow() {
-  if (timer) { window.clearTimeout(timer); timer = null; }
-  return loadAll(pollPaths).finally(schedule);
+  stop();
+  const now = paces;
+  return loadAll(pollPaths).finally(() => now.forEach(schedule));
 }
 
+// Back on screen: read at once rather than at the next tick, so a page left
+// in a pocket for an hour does not show an hour's data. main.js does the same
+// when the network comes back.
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) {
-    if (timer) { window.clearTimeout(timer); timer = null; }
-  } else {
-    refreshNow();
-  }
+  if (document.hidden) stop();
+  else refreshNow();
 });
 
 // The age and health of what the screen shows: the oldest successful read
