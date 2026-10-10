@@ -170,9 +170,7 @@ class GitMarker(unittest.TestCase):
             stdout = "abc not-a-time\n"
 
         self.assertIsNone(
-            world.git_marker_time(
-                self.tmp, "HEAD", "x", "y", run=lambda *a, **k: Out()
-            )
+            world.git_marker_time(self.tmp, "HEAD", "x", "y", run=lambda *a, **k: Out())
         )
 
 
