@@ -204,6 +204,12 @@ def walk_refusal(walker, name) -> str:
 
     The mailbox walk's own refusals (guildroute) without its mailbox distance:
     the module chooses the trainer, on the walker's own map.
+
+    THE STARTING LANDS ARE OPEN. A Draenei or a Blood Elf on Azuremyst or
+    Bloodmyst Isle, in Eversong, the Ghostlands or either capital stands on map
+    530, and the module walks it to a trainer inside those lands
+    (mod-overseer#765), which is where its race's class trainers stand. Measured
+    on the dev realm on 2026-10-10: 13 of Cave's members and 6 of Bonkers'.
     """
     if walker is None or walker.map_id is None:
         return "%s is not in the world" % name
@@ -211,9 +217,10 @@ def walk_refusal(walker, name) -> str:
         return "%s is %s" % (name, walker.unwalkable)
     if walker.in_combat:
         return "%s is in combat" % name
-    if classic.is_expansion_map(walker.map_id):
+    starting = classic.is_starting_land(walker.map_id, getattr(walker, "zone_id", None))
+    if classic.is_expansion_map(walker.map_id) and not starting:
         return classic.outside_note(name, walker.map_id)
-    if walker.map_id not in dungeonplan.CONTINENT_MAPS:
+    if walker.map_id not in dungeonplan.CONTINENT_MAPS and not starting:
         return "%s is inside an instance" % name
     if not walker.by_row:
         return "%s cannot be walked by the trainer walk row" % name

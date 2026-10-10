@@ -279,6 +279,9 @@ class Walker:
     aim: str = ""
     no_aim: str = ""
     by_row: bool = False
+    # The snapshot's zone, so a planner can tell the Draenei and Blood Elf
+    # starting lands (classic.is_starting_land) from the rest of map 530.
+    zone_id: int | None = None
 
 
 def walker_from(
@@ -310,6 +313,10 @@ def walker_from(
         map_id = int(state.get("map_id"))
     except (TypeError, ValueError):
         map_id = None
+    try:
+        zone_id = int(state.get("zone_id"))
+    except (TypeError, ValueError):
+        zone_id = None
     yards = None
     if spawn and spawn.get("d2") is not None:
         try:
@@ -330,6 +337,7 @@ def walker_from(
         aim=post.aim or "",
         no_aim=no_aim,
         by_row=by_row,
+        zone_id=zone_id,
     )
 
 
