@@ -8675,9 +8675,9 @@ class Bridge(discord.Client):
         for listing in listings:
             market[listing.entry] = min(
                 market.get(listing.entry, listing.per_unit), listing.per_unit)
-        for candidate in house_candidates:
-            candidate["market_price"] = market.get(candidate["entry"], 0)
-        sales = auction.plan_sales(house_candidates)
+        # A HOUSE WITH NO LIVE LISTING OF THE ENTRY prices a clearance stack
+        # at the price its route was judged at (auction.price_candidates).
+        sales = auction.plan_sales(auction.price_candidates(house_candidates, market))
         house_queued = 0
         for sale in sales:
             if (sale.candidate.holder, sale.command) in seen:
@@ -22927,6 +22927,7 @@ def _clearance_listings(routes) -> list:
             "quality": r.stack.quality,
             "binding": disposition.BIND_NONE, "quest_item": False,
             "sell_price": r.stack.sell_price, "count": r.stack.count,
+            "fair_price": r.price,
         }
         for r in routes if r.route == clearance.AUCTION
     ]
