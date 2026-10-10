@@ -48,7 +48,8 @@ export function legacy(hash) {
   const cut = text.indexOf("/");
   const name = (cut < 0 ? text : text.slice(0, cut)).toLowerCase();
   const rest = cut < 0 ? "" : text.slice(cut + 1);
-  const fn = LEGACY[name];
+  // Own keys only: a hash such as #constructor must not reach Object.prototype.
+  const fn = Object.prototype.hasOwnProperty.call(LEGACY, name) ? LEGACY[name] : null;
   return fn ? fn(rest) : "#/now";
 }
 
