@@ -652,6 +652,35 @@ def plan_sales(rows, *, max_items: int = 10, hours: int = 12) -> tuple:
     )
 
 
+def sales_by_house(candidates, holder_houses) -> dict:
+    """Group sale candidates by the auction house each holder can reach.
+
+    `holder_houses` is `{holder name: house id}` for the holders already
+    standing at an auctioneer - the bridge reads it off `_fetch_auctioneer`
+    per holder rather than per leader (wow-overseer#478). A candidate whose
+    holder is not standing at a counter, or whose house cannot be named
+    (house 0), is dropped: `DoAuction` shops in exactly the house its
+    auctioneer serves and refuses anything else as `WrongHouse`, so a row for
+    a holder with nowhere to stand could only ever be refused.
+
+    Returns `{house id: [candidate, ...]}`, with each house's candidates in
+    the order they arrived, so one market read and one `plan_sales` covers
+    each house.
+    """
+    houses = dict(holder_houses or {})
+    by_house: dict = {}
+    for candidate in candidates or ():
+        try:
+            holder = str(candidate["holder"])
+        except (KeyError, TypeError):
+            continue
+        house = int(houses.get(holder, 0) or 0)
+        if house <= 0:
+            continue
+        by_house.setdefault(house, []).append(candidate)
+    return by_house
+
+
 def wanted(
     craft_spell: int, carried: dict, in_mail: dict, casts: int = CASTS_PER_TRIP
 ) -> list:
