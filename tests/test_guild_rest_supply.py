@@ -224,7 +224,9 @@ class GearCountsTheJunk(unittest.TestCase):
     def test_without_junk_still_nothing(self):
         from test_guild_gear_step import ROWS, _character, _member
 
-        step, _why = guildjobs.gear_step(_member(money=0), _character(purse=0), ROWS, 600.0)
+        step, _why = guildjobs.gear_step(
+            _member(money=0), _character(purse=0), ROWS, 600.0
+        )
         self.assertIsNone(step)
 
 

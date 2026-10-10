@@ -167,11 +167,15 @@ def plan(member, rows, junk=0) -> tuple:
         if best is None or key < best[0]:
             best = (key, buys)
     if best is None:
-        return (), "%s cannot afford %d of the %s a vendor in reach sells (%d copper)" % (
-            member.name,
-            MIN_UNITS,
-            words,
-            budget(member, junk),
+        return (
+            (),
+            "%s cannot afford %d of the %s a vendor in reach sells (%d copper)"
+            % (
+                member.name,
+                MIN_UNITS,
+                words,
+                budget(member, junk),
+            ),
         )
     return best[1], ""
 
@@ -181,9 +185,12 @@ def said(member, buys) -> str:
     kinds = " and ".join(KIND_WORDS[b.category] for b in buys)
     if len(buys) == 2:
         kinds = "food and drink"
-    return "%s walks to %s to buy %s with its own gold, so it rests between fights: %s" % (
-        member.name,
-        buys[0].vendor_name or "a vendor",
-        kinds,
-        ", ".join("%d %s" % (b.units, b.name or "item %d" % b.entry) for b in buys),
+    return (
+        "%s walks to %s to buy %s with its own gold, so it rests between fights: %s"
+        % (
+            member.name,
+            buys[0].vendor_name or "a vendor",
+            kinds,
+            ", ".join("%d %s" % (b.units, b.name or "item %d" % b.entry) for b in buys),
+        )
     )

@@ -21,13 +21,9 @@ import guildlevel
 import guildroute
 from test_guildlevel import (
     ALL_HUBS,
-    AZUREMYST,
-    BLOODMYST,
-    DARKSHORE,
     DRAENEI,
     EASTERN_KINGDOMS,
     ELWYNN,
-    HUMAN,
     KALIMDOR,
     OUTLAND,
     QUESTS,
@@ -98,7 +94,11 @@ def plan(members, recent=(), leveling=None):
 
 
 def bind_steps(result, name="Cleric"):
-    return [s for s in result.steps if s.holder == name and s.action == guildlevel.INN_ACTION]
+    return [
+        s
+        for s in result.steps
+        if s.holder == name and s.action == guildlevel.INN_ACTION
+    ]
 
 
 class TheInns(unittest.TestCase):
@@ -124,7 +124,11 @@ class WhoBinds(unittest.TestCase):
         self.assertEqual(
             step.walk.command,
             "walk-to-spawn creature:%d near:%d max:%d"
-            % (inn_of("westfall"), guildlevel.INN_NEAR_YARDS, int(guildroute.FAR_WALK_YARDS)),
+            % (
+                inn_of("westfall"),
+                guildlevel.INN_NEAR_YARDS,
+                int(guildroute.FAR_WALK_YARDS),
+            ),
         )
         self.assertEqual([(r.kind, r.command) for r in step.rows], [("bind", "here")])
         self.assertEqual(step.rows[0].source, "guildjobs:level-bind:Cleric")
@@ -157,15 +161,15 @@ class WhoBinds(unittest.TestCase):
         self.assertEqual(bind_steps(plan([home])), [])
 
     def test_a_draenei_in_bloodmyst_at_its_level_binds_at_blood_watch(self):
-        draenei = at(
-            "bloodmyst", race=DRAENEI, home_map=OUTLAND, home_zone=AMMEN_VALE
-        )
+        draenei = at("bloodmyst", race=DRAENEI, home_map=OUTLAND, home_zone=AMMEN_VALE)
         steps = bind_steps(plan([draenei]))
         self.assertEqual(len(steps), 1)
         self.assertIn("creature:%d " % inn_of("bloodmyst"), steps[0].walk.command)
 
     def test_no_inn_for_the_zone_no_bind(self):
-        self.assertEqual(bind_steps(plan([at("westfall")], leveling=world(inns=[]))), [])
+        self.assertEqual(
+            bind_steps(plan([at("westfall")], leveling=world(inns=[]))), []
+        )
 
     def test_an_unread_home_does_not(self):
         self.assertEqual(
@@ -186,7 +190,10 @@ class WhoBinds(unittest.TestCase):
         row = guildjobs.Recent("Cleric", guildlevel.INN_ACTION, 30, status="error")
         self.assertEqual(bind_steps(plan([at("westfall")], recent=(row,))), [])
         old = guildjobs.Recent(
-            "Cleric", guildlevel.INN_ACTION, guildlevel.INN_COOLDOWN_MINUTES, status="error"
+            "Cleric",
+            guildlevel.INN_ACTION,
+            guildlevel.INN_COOLDOWN_MINUTES,
+            status="error",
         )
         self.assertEqual(len(bind_steps(plan([at("westfall")], recent=(old,)))), 1)
 
@@ -202,9 +209,9 @@ class TheBridge(unittest.TestCase):
         source = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
         for needle in (
             "character_homebind hb ON hb.guid = c.guid",
-            "home_map=_row_int(r, \"home_map\")",
+            'home_map=_row_int(r, "home_map")',
             "_JOB_INNS_SQL",
-            "inn_rows=facts.get(\"inns\", ())",
+            'inn_rows=facts.get("inns", ())',
         ):
             self.assertTrue(needle in source, needle)
 

@@ -85,7 +85,10 @@ class TheYield(unittest.TestCase):
         result = plan([fits()], failing(10, 40, 70))
         left = guildjobs.CLASS_STALL_HOLD_MINUTES - 10
         self.assertTrue(
-            any("failed 3 times" in n and "%d more minute" % left in n for n in result.notes),
+            any(
+                "failed 3 times" in n and "%d more minute" % left in n
+                for n in result.notes
+            ),
             result.notes,
         )
 
