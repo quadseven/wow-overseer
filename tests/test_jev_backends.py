@@ -70,7 +70,11 @@ class Selection(unittest.TestCase):
 
     def test_unreadable_token_file_is_unconfigured(self):
         client = jev.Client.from_env(
-            {"JEV_BACKEND": "clef", "CLEF_ACCOUNT_ID": "a", "CLEF_TOKEN_FILE": "/nope/x"}
+            {
+                "JEV_BACKEND": "clef",
+                "CLEF_ACCOUNT_ID": "a",
+                "CLEF_TOKEN_FILE": "/nope/x",
+            }
         )
         self.assertFalse(client.configured)
 
@@ -100,7 +104,9 @@ class Selection(unittest.TestCase):
             transport=transport,
         )
         run(client.ask("k", {}, {"route": ROUTE}))
-        self.assertTrue(transport.calls[0][0].endswith("/ai/run/@cf/cloudflare/clef-flash"))
+        self.assertTrue(
+            transport.calls[0][0].endswith("/ai/run/@cf/cloudflare/clef-flash")
+        )
         self.assertEqual(transport.calls[0][1]["model"], "clef-flash")
 
 
@@ -167,13 +173,13 @@ class OpenAIAdapter(unittest.TestCase):
         self.assertEqual(
             {c["value"] for c in sent["route"]["choices"]}, {"keep", "vendor", "equip"}
         )
-        self.assertEqual([x["label"] for x in sent["sev"]["levels"]], ["low", "mid", "high"])
+        self.assertEqual(
+            [x["label"] for x in sent["sev"]["levels"]], ["low", "mid", "high"]
+        )
         self.assertEqual(transport.calls[0][2]["Authorization"], "Bearer k")
 
     def test_a_refusal_or_a_missing_answer_is_none(self):
-        client, _ = self.client(
-            openai_reply([{"type": "refusal", "name": "route"}])
-        )
+        client, _ = self.client(openai_reply([{"type": "refusal", "name": "route"}]))
         out = run(client.ask("k", {}, {"route": ROUTE}))
         self.assertEqual(out.status, jev.INVALID)
         self.assertIsNone(out.answers)
@@ -226,12 +232,17 @@ class Compare(unittest.TestCase):
             rows.extend(batch)
 
         shadow = jev.Client(
-            "s", backend=jev.CLEF, url="https://example.com/s",
+            "s",
+            backend=jev.CLEF,
+            url="https://example.com/s",
             transport=Transport(result=shadow_result),
         )
         active = jev.Client(
-            "a", url="https://example.com/a", transport=Transport(result=active_result),
-            shadow=shadow, compare_sink=sink,
+            "a",
+            url="https://example.com/a",
+            transport=Transport(result=active_result),
+            shadow=shadow,
+            compare_sink=sink,
         )
         return active, rows
 
@@ -244,16 +255,26 @@ class Compare(unittest.TestCase):
         return run(go())
 
     def test_both_answers_are_recorded_on_identical_questions(self):
-        active, rows = self.pair(reply(good_choice("equip")), reply(good_choice("keep")))
+        active, rows = self.pair(
+            reply(good_choice("equip")), reply(good_choice("keep"))
+        )
         out = self.settle(active)
         self.assertEqual(out.answers["route"].choice, "equip")
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertEqual(
-            (row["kind"], row["backend"], row["answer"], row["active_answer"], row["agree"]),
+            (
+                row["kind"],
+                row["backend"],
+                row["answer"],
+                row["active_answer"],
+                row["agree"],
+            ),
             ("item_keep", "clef", "keep", "equip", False),
         )
         self.assertEqual(row["active_backend"], "jev")
+        self.assertEqual(len(active.shadow._transport.calls), 1)
+        self.assertEqual(len(active._compares), 0)
 
     def test_active_failure_does_not_block_and_is_recorded(self):
         active, rows = self.pair((402, b"{}"), reply(good_choice("keep")))
@@ -267,6 +288,7 @@ class Compare(unittest.TestCase):
         out = self.settle(active)
         self.assertEqual(out.status, jev.ANSWERED)
         self.assertEqual(rows[0]["status"], jev.ERROR)
+        self.assertEqual(len(active.shadow._transport.calls), 1)
 
     def test_a_repeat_is_not_recorded_twice(self):
         active, rows = self.pair(reply(good_choice()), reply(good_choice()))
@@ -309,7 +331,13 @@ class Tally(unittest.TestCase):
         now[0] = 3601.0
         lines = tally.lines()
         self.assertEqual(len(lines), 1)
-        for part in ("backend=clef", "kind=item_keep", "answered=2", "disagreed=1", "errors=1"):
+        for part in (
+            "backend=clef",
+            "kind=item_keep",
+            "answered=2",
+            "disagreed=1",
+            "errors=1",
+        ):
             self.assertIn(part, lines[0])
         self.assertEqual(tally.lines(), [])
 
@@ -327,6 +355,7 @@ class Tally(unittest.TestCase):
             run(go())
         failures = [x for x in logs.output if "http 402" in x]
         self.assertEqual(len(failures), 1)
+        self.assertEqual(jev.TALLY._counts["k"]["errors"], 5)
 
 
 class BridgeWiring(unittest.TestCase):
@@ -340,6 +369,58 @@ class BridgeWiring(unittest.TestCase):
         self.assertIn("COLUMN_NAME = 'backend'", store)
         self.assertIn("ADD COLUMN backend VARCHAR(12) NOT NULL DEFAULT ''", store)
         self.assertIn("ADD_ACTED_SQL", store)
+
+    def test_a_comparison_row_binds_each_value_to_its_column(self):
+        insert = self.BRIDGE[self.BRIDGE.index("def _insert_jev_comparisons(") :]
+        insert = insert[: insert.index("\n\n\n")]
+        executed = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def execute(self, sql, args):
+                executed.append((sql, args))
+
+        class Conn(Cursor):
+            def cursor(self):
+                return Cursor()
+
+        scope = {"_connect": Conn, "json": json}
+        exec(insert, scope)  # noqa: S102 - bridge.py's own source
+        scope["_insert_jev_comparisons"](
+            [
+                {
+                    "kind": "item_keep",
+                    "question": "route",
+                    "backend": "clef",
+                    "active_backend": "jev",
+                    "active_answer": "equip",
+                    "answer": "keep",
+                    "confidence": 0.7,
+                    "probabilities": {"keep": 0.7},
+                    "status": "answered",
+                    "latency_ms": 40,
+                    "model": "clef",
+                    "agree": False,
+                }
+            ]
+        )
+        sql, args = executed[0]
+        columns = sql[sql.index("(kind") + 1 : sql.index(") VALUES")].split(", ")
+        values = sql[sql.index("VALUES (") + 8 :].rstrip(")").split(", ")
+        self.assertEqual(len(columns), len(values))
+        bound = iter(args)
+        row = {c: (next(bound) if v == "%s" else v) for c, v in zip(columns, values)}
+        self.assertEqual(row["heuristic"], "equip")
+        self.assertEqual(row["heuristic_why"], "active backend jev")
+        self.assertEqual(
+            (row["jev"], row["agree"], row["backend"]), ("keep", 0, "clef")
+        )
+        self.assertEqual((row["item_name"], row["mode"]), ("route", "'compare'"))
 
     def test_the_client_is_given_the_comparison_sink(self):
         self.assertIn("self._jev.compare_sink = _jev_compare_sink", self.BRIDGE)

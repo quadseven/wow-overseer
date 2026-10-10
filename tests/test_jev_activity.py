@@ -879,7 +879,9 @@ class TheRecordAndTheCard(unittest.TestCase):
     def test_the_card_reads_the_facts_and_survives_an_older_record(self):
         fetch = SERVER[SERVER.index("def _fetch_jev_view()") :]
         fetch = fetch[: fetch.index("\n\n\n")]
-        self.assertIn('"acted, facts, backend, latency_ms", "acted, facts", "acted"', fetch)
+        self.assertIn(
+            '"acted, facts, backend, latency_ms", "acted, facts", "acted"', fetch
+        )
         self.assertIn("exc.args[0] == 1054", fetch)
 
 

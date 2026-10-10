@@ -438,7 +438,9 @@ class ClefBackend(JevBackend):
     name = "clef"
 
     def request(self, url, model, key, state, questions) -> tuple:
-        return super().request(url, str(model).rsplit("/", 1)[-1], key, state, questions)
+        return super().request(
+            url, str(model).rsplit("/", 1)[-1], key, state, questions
+        )
 
 
 class OpenAIBackend:
@@ -452,23 +454,29 @@ class OpenAIBackend:
         for qid, q in questions.items():
             kind = q["type"]
             if kind == "choice":
-                sent.append({
-                    "type": "choice", "name": qid,
-                    "instructions": q["instructions"],
-                    "choices": [
-                        {"value": k, "description": str(v)}
-                        for k, v in q["criteria"].items()
-                    ],
-                })
+                sent.append(
+                    {
+                        "type": "choice",
+                        "name": qid,
+                        "instructions": q["instructions"],
+                        "choices": [
+                            {"value": k, "description": str(v)}
+                            for k, v in q["criteria"].items()
+                        ],
+                    }
+                )
             elif kind == "score":
-                sent.append({
-                    "type": "score", "name": qid,
-                    "instructions": q["instructions"],
-                    "levels": [
-                        {"label": str(v), "description": str(v)}
-                        for v in q["criteria"]
-                    ],
-                })
+                sent.append(
+                    {
+                        "type": "score",
+                        "name": qid,
+                        "instructions": q["instructions"],
+                        "levels": [
+                            {"label": str(v), "description": str(v)}
+                            for v in q["criteria"]
+                        ],
+                    }
+                )
             else:
                 text = q["instructions"]
                 if q.get("criteria"):
@@ -476,12 +484,14 @@ class OpenAIBackend:
                         "%s: %s" % kv for kv in q["criteria"].items()
                     )
                 sent.append({"type": "predicate", "name": qid, "instructions": text})
-        text = state if isinstance(state, str) else json.dumps(
-            state, sort_keys=True, default=str
+        text = (
+            state
+            if isinstance(state, str)
+            else json.dumps(state, sort_keys=True, default=str)
         )
-        body = json.dumps(
-            {"model": model, "input": text, "questions": sent}
-        ).encode("utf-8")
+        body = json.dumps({"model": model, "input": text, "questions": sent}).encode(
+            "utf-8"
+        )
         headers = {
             "Authorization": "Bearer " + key,
             "Content-Type": "application/json",
@@ -491,9 +501,7 @@ class OpenAIBackend:
     def read(self, questions: dict, data) -> tuple:
         if not isinstance(data, dict) or not isinstance(data.get("answers"), list):
             return None, ""
-        by_name = {
-            a.get("name"): a for a in data["answers"] if isinstance(a, dict)
-        }
+        by_name = {a.get("name"): a for a in data["answers"] if isinstance(a, dict)}
         answers = {}
         for qid, question in questions.items():
             typed = parse(question, self._translate(question, by_name.get(qid)))
@@ -515,13 +523,14 @@ class OpenAIBackend:
         if answer.get("type") != kind:
             return None
         listed = answer.get("probabilities")
-        if not isinstance(listed, list) or not all(
-            isinstance(p, dict) for p in listed
-        ):
+        if not isinstance(listed, list) or not all(isinstance(p, dict) for p in listed):
             return None
         probabilities = {str(p.get("value")): p.get("probability") for p in listed}
-        out = {"type": kind, "probabilities": probabilities,
-               "confidence": answer.get("confidence")}
+        out = {
+            "type": kind,
+            "probabilities": probabilities,
+            "confidence": answer.get("confidence"),
+        }
         out["choice" if kind == "choice" else "score"] = answer.get(
             "choice" if kind == "choice" else "score"
         )
@@ -541,7 +550,9 @@ def backend_name(environ=None, var: str = "JEV_BACKEND") -> str:
     if not raw:
         return "jev" if var == "JEV_BACKEND" else ""
     if raw not in BACKENDS:
-        log.warning("jev: %s=%r is not one of %s; ignored", var, raw, "/".join(BACKENDS))
+        log.warning(
+            "jev: %s=%r is not one of %s; ignored", var, raw, "/".join(BACKENDS)
+        )
         return "jev" if var == "JEV_BACKEND" else ""
     return raw
 
@@ -602,7 +613,9 @@ class Tally:
     def status(self, backend: str, kind: str, status: str) -> None:
         with self._lock:
             self._backend = backend
-            c = self._counts.setdefault(kind, {"answered": 0, "disagreed": 0, "errors": 0})
+            c = self._counts.setdefault(
+                kind, {"answered": 0, "disagreed": 0, "errors": 0}
+            )
             if status in (ANSWERED, CACHED):
                 c["answered"] += 1
             elif status in (ERROR, TIMEOUT, INVALID):
@@ -611,7 +624,9 @@ class Tally:
     def agreement(self, kind: str, agree) -> None:
         if agree is False:
             with self._lock:
-                c = self._counts.setdefault(kind, {"answered": 0, "disagreed": 0, "errors": 0})
+                c = self._counts.setdefault(
+                    kind, {"answered": 0, "disagreed": 0, "errors": 0}
+                )
                 c["disagreed"] += 1
 
     def first_failure(self, key: tuple) -> int | None:
@@ -674,14 +689,22 @@ def compare_rows(kind, questions, active, shadow, active_name, shadow_name) -> l
         b = (shadow.answers or {}).get(qid)
         mine, theirs = top_answer(a), top_answer(b)
         probs = getattr(b, "probabilities", None)
-        rows.append({
-            "kind": kind, "question": qid, "backend": shadow_name,
-            "active_backend": active_name, "active_answer": mine,
-            "answer": theirs, "confidence": _confidence_of(b),
-            "probabilities": probs, "status": shadow.status,
-            "latency_ms": shadow.latency_ms, "model": shadow.model,
-            "agree": (mine == theirs) if (mine and theirs) else None,
-        })
+        rows.append(
+            {
+                "kind": kind,
+                "question": qid,
+                "backend": shadow_name,
+                "active_backend": active_name,
+                "active_answer": mine,
+                "answer": theirs,
+                "confidence": _confidence_of(b),
+                "probabilities": probs,
+                "status": shadow.status,
+                "latency_ms": shadow.latency_ms,
+                "model": shadow.model,
+                "agree": (mine == theirs) if (mine and theirs) else None,
+            }
+        )
     return rows
 
 
@@ -747,7 +770,9 @@ class Client:
         settings = _settings(name, env)
         other = backend_name(env, "JEV_COMPARE_BACKEND")
         if other and other != name and "shadow" not in kw:
-            kw["shadow"] = cls.from_env(env, backend_name=other, transport=kw.get("transport"))
+            kw["shadow"] = cls.from_env(
+                env, backend_name=other, transport=kw.get("transport")
+            )
             # A second backend never gets a sink of its own.
         return cls(
             settings.pop("api_key"), backend=BACKENDS[name], **settings, **common, **kw
@@ -824,8 +849,12 @@ class Client:
             if other.status in (CACHED, BUSY, NO_KEY):
                 return
             rows = compare_rows(
-                kind, questions, active, other,
-                self.backend.name, self.shadow.backend.name,
+                kind,
+                questions,
+                active,
+                other,
+                self.backend.name,
+                self.shadow.backend.name,
             )
             await self.compare_sink(rows)
         except Exception:
@@ -897,7 +926,9 @@ class Client:
             return self._said(kind, Outcome(INVALID, elapsed(), detail="not json"))
         answers, model = self.backend.read(questions, data)
         if answers is None:
-            return self._said(kind, Outcome(INVALID, elapsed(), detail="no typed answers"))
+            return self._said(
+                kind, Outcome(INVALID, elapsed(), detail="no typed answers")
+            )
         self._remember(key, (answers, model))
         return self._said(
             kind, Outcome(ANSWERED, elapsed(), answers=answers, model=model)
@@ -910,13 +941,18 @@ class Client:
         if outcome.answers is None:
             # A failure that repeats is said once an hour with the count it
             # swallowed, not once per call (#797).
-            held = TALLY.first_failure((self.backend.name, outcome.status, outcome.detail))
+            held = TALLY.first_failure(
+                (self.backend.name, outcome.status, outcome.detail)
+            )
             if held is None:
                 return outcome
             log.warning(
                 "jev: backend=%s kind=%s status=%s%s (%d like it held back this hour)",
-                self.backend.name, kind, outcome.status,
-                (" detail=" + outcome.detail) if outcome.detail else "", held,
+                self.backend.name,
+                kind,
+                outcome.status,
+                (" detail=" + outcome.detail) if outcome.detail else "",
+                held,
             )
             return outcome
         log.info(

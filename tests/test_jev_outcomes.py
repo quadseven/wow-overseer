@@ -88,15 +88,24 @@ class TheRecord(unittest.TestCase):
 
     def test_agreements_are_sampled_and_no_answer_is_never_recorded(self):
         agree = ja.Judgment(
-            subject="Zug", heuristic=ja.SELL, heuristic_why="", mode=jev.ACT,
-            status="answered", jev=ja.SELL, confidence=0.9, acted=jev.BOTH,
+            subject="Zug",
+            heuristic=ja.SELL,
+            heuristic_why="",
+            mode=jev.ACT,
+            status="answered",
+            jev=ja.SELL,
+            confidence=0.9,
+            acted=jev.BOTH,
         )
         self.assertIsNone(jo.record_args(agree, {}, sample=0.1, rand=lambda: 0.5))
         kept = jo.record_args(agree, {}, sample=0.1, rand=lambda: 0.05)
         self.assertEqual(kept[6], jev.BOTH)
         self.assertIsNone(jo.record_args(agree, {}, sample=0.0, rand=lambda: 0.0))
         silent = ja.Judgment(
-            subject="Zug", heuristic=ja.SELL, heuristic_why="", mode=jev.ACT,
+            subject="Zug",
+            heuristic=ja.SELL,
+            heuristic_why="",
+            mode=jev.ACT,
             status="timeout",
         )
         self.assertIsNone(jo.record_args(silent, {}, sample=1.0))
@@ -104,8 +113,12 @@ class TheRecord(unittest.TestCase):
     def test_sample_rate_reads_env_and_fails_safe(self):
         self.assertEqual(jo.sample_rate({}), jo.DEFAULT_SAMPLE)
         self.assertEqual(jo.sample_rate({"JEV_OUTCOME_AGREE_SAMPLE": "0.5"}), 0.5)
-        self.assertEqual(jo.sample_rate({"JEV_OUTCOME_AGREE_SAMPLE": "x"}), jo.DEFAULT_SAMPLE)
-        self.assertEqual(jo.sample_rate({"JEV_OUTCOME_AGREE_SAMPLE": "7"}), jo.DEFAULT_SAMPLE)
+        self.assertEqual(
+            jo.sample_rate({"JEV_OUTCOME_AGREE_SAMPLE": "x"}), jo.DEFAULT_SAMPLE
+        )
+        self.assertEqual(
+            jo.sample_rate({"JEV_OUTCOME_AGREE_SAMPLE": "7"}), jo.DEFAULT_SAMPLE
+        )
 
     def test_the_fed_back_history_is_overrides_only(self):
         self.assertIn("acted = 'jev'", jo.HISTORY_SQL)
