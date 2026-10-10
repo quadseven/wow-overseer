@@ -308,7 +308,8 @@ function bankCell(c) {
   return html`<span class="eco-cell">${item({ entry: c.entry, name: c.name, quality: c.quality, icon: c.icon, mark: c.letters })}${c.count > 1 ? html`<span class="ct" aria-hidden="true">${c.count}</span>` : ""}</span>`;
 }
 
-function bankTab(ctx, get) {
+// Also the Now tiles' Guild bank panel (now/panel.js).
+export function bankTab(ctx, get) {
   const reads = BANK_NAMES.map((n) => get(bankPath(n)));
   const ready = reads.filter((r) => r.data && r.data.guild);
   if (!ready.length) return pendingRead(reads[0], 3) || state("empty", "Neither family is in a guild.");
@@ -328,7 +329,7 @@ function bankTab(ctx, get) {
 
 // ---- the view -----------------------------------------------------------------
 
-function readsFor(ctx) {
+export function readsFor(ctx) {
   const t = ctx.params.tab;
   if (t === "gold" || t === "auction") return [WEALTH];
   if (t === "bank") return BANK_NAMES.map(bankPath);
