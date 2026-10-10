@@ -243,11 +243,12 @@ function body(ctx, m, roster) {
 
 export default {
   css: ["views/members.css"],
-  // A name the roster (already read) does not hold is not a guild member: its
-  // per-member reads would only be refused, so only the roster is read.
+  // The roster first: a name it does not hold is not a guild member, and that
+  // member's own reads would only be refused. Once the roster is in and holds
+  // the name, main.js widens the reads to the tab's.
   reads: (ctx) => {
     const roster = ctx.get("/api/v2/roster").data;
-    if (roster && !byName(roster.members).has(ctx.params.name)) return ["/api/v2/roster"];
+    if (!roster || !byName(roster.members).has(ctx.params.name)) return ["/api/v2/roster"];
     return ["/api/v2/roster"].concat(readsFor(ctx.params.name, ctx.params.tab));
   },
   every: 30000,

@@ -15,6 +15,8 @@ import {
 const THOUGHTS = 30;
 const SHOWN = 40;
 
+function runPath(id) { return "/api/v2/run?id=" + encodeURIComponent(id); }
+
 function thoughtsPath(name) { return "/api/thoughts?name=" + encodeURIComponent(name) + "&limit=" + THOUGHTS; }
 
 function guildKey(r) {
@@ -56,16 +58,22 @@ function timeline(r) {
 export default {
   css: ["views/guild.css"],
   every: 15000,
-  reads: () => ["/api/guildruns"],
+  // The runs out now and the last thirty back come with /api/guildruns; an
+  // older run (the chronicle links them) is read on its own by id.
+  reads: (ctx) => ["/api/guildruns", runPath(ctx.params.id)],
   title: (ctx) => "Run " + ctx.params.id,
   render(ctx) {
     const gr = peek("/api/guildruns");
     const wait = pendingRead(gr, 2);
     if (wait) return html`<header class="page-head"><h1>Run ${ctx.params.id}</h1></header>${wait}`;
-    const r = findRun(ctx.params.id);
+    const one = ctx.get(runPath(ctx.params.id));
+    const r = findRun(ctx.params.id) || (one.data && one.data.run) || null;
+    if (!r && one.data === undefined && !one.error) {
+      return html`<header class="page-head"><h1>Run ${ctx.params.id}</h1></header>${pendingRead(one, 2)}`;
+    }
     if (!r) {
       return html`<header class="page-head"><h1>Not found</h1></header>
-${state("empty", "No run #" + ctx.params.id + " among the groups out now or the recent runs back.", raw('<a href="#/guilds/cave/runs">Cave runs</a> | <a href="#/guilds/bonkers/runs">Bonkers runs</a>'))}`;
+${state("empty", "No run #" + ctx.params.id + " in the guild runs the realm has recorded.", raw('<a href="#/guilds/cave/runs">Cave runs</a> | <a href="#/guilds/bonkers/runs">Bonkers runs</a>'))}`;
     }
     const g = guildKey(r);
     const when = r.state === "inside" ? "started " + since(utc(r.created_at)) : since(utc(r.ended_at) || utc(r.created_at));
