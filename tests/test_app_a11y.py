@@ -7,6 +7,8 @@
 - On a touch phone an item opens its sheet on a tap, and a second tap (on
   the item, the sheet or outside it) closes it. tooltip.js runs under node
   against a small stand-in for the DOM.
+- The phone sheet styles every card line the hover card does.
+- A tab with a minimum width never shrinks below its label.
 - A histogram whose bars link is a group of links, not an image.
 - Motion a script starts (a smooth scroll, a turning model) asks for
   reduced motion first, because the CSS switch cannot reach it.
@@ -295,6 +297,37 @@ class TheTouchTargets(unittest.TestCase):
         family = (APP / "views" / "family.css").read_text(encoding="utf-8")
         self.assertIn("width: 44px; height: 44px;", family)
         self.assertNotIn(".qwho { width: 40px; }", family)
+
+
+class TheItemSheetLines(unittest.TestCase):
+    def test_the_sheet_styles_every_line_the_card_draws(self):
+        # The phone sheet is not a .tip, so the hover card's rules do not
+        # reach it: without its own, "Item level 37" and "Rare" run together
+        # and the name loses its quality colour.
+        css = (APP / "app.css").read_text(encoding="utf-8")
+        drawn = set(
+            re.findall(
+                r'class="ln ?([\w-]*)', (APP / "tooltip.js").read_text(encoding="utf-8")
+            )
+        )
+        drawn = {c for c in drawn if c} | {"ln"} | {"tq%d" % q for q in range(6)}
+        for cls in sorted(drawn):
+            with self.subTest(cls=cls):
+                self.assertIn(".tip .%s " % cls, css)
+                self.assertIn(".item-sheet .%s " % cls, css)
+        self.assertRegex(
+            css, r"\.item-sheet \.ln \{[^}]*justify-content: space-between"
+        )
+
+
+class TheTabRow(unittest.TestCase):
+    def test_a_tab_never_shrinks_below_its_label(self):
+        # A min-width on a flex item drops its automatic minimum, so the row
+        # would squeeze the labels into each other instead of scrolling.
+        css = (APP / "app.css").read_text(encoding="utf-8")
+        for body in re.findall(r"\.tabs a \{([^}]*)\}", css):
+            if "min-width" in body:
+                self.assertIn("flex-shrink: 0", body)
 
 
 class TheReducedMotion(unittest.TestCase):

@@ -369,7 +369,7 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
   .item, a.member, .chip { min-height: 44px; }
   .card > a:not([class]) { min-height: 44px; display: flex; align-items: center; }
 }
-.tabs a { min-width: 44px; justify-content: center; }
+.tabs a { min-width: 44px; justify-content: center; flex-shrink: 0; }
 .skip { min-height: 44px; }
 /* A histogram bar that links takes its whole column, so the short bars are
    as easy to hit as the tall ones. */
@@ -378,3 +378,14 @@ button.chip { background: transparent; cursor: pointer; border: 0; }
 .histo a.hit:hover { background: none; }
 .histo a.hit:hover .bar:not(.median) { background: var(--color-neutral-600); }
 @media (min-width: 760px) { [data-slot="thumb"] { display: none; } }
+/* The phone sheet draws the same card lines as the hover card: each line
+   spread across, the name in its quality colour, the quiet lines quiet. */
+.item-sheet .ln { display: flex; justify-content: space-between; gap: 8px; }
+.item-sheet .ln-name { font-size: var(--fs-3); font-weight: 500; }
+.item-sheet .ln-dim { color: var(--tip-dim); }
+.item-sheet .ln-bonus { color: var(--tip-bonus); }
+.item-sheet .ln-src { color: var(--tip-source); padding-top: 6px; }
+.item-sheet .ln-where { color: var(--tip-where); }
+.item-sheet .ln-gap { padding-top: 4px; }
+.item-sheet .tq0 { color: #9d9d9d; } .item-sheet .tq1 { color: #e9e9ed; } .item-sheet .tq2 { color: #1eff00; }
+.item-sheet .tq3 { color: #3d8ff0; } .item-sheet .tq4 { color: #b16cf0; } .item-sheet .tq5 { color: #ff8000; }
