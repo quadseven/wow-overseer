@@ -486,7 +486,7 @@ class TheBridgeWiring(unittest.TestCase):
     the picture, and the rank column is quoted (a MySQL 8 reserved word)."""
 
     def test_the_sampler_is_a_loop_in_both_lists(self):
-        self.assertEqual(2, BRIDGE.count("self._situation_loop,"))
+        self.assertEqual(1, BRIDGE.count('_Pass("_situation_loop"),'))
 
     def test_both_kinds_carry_it(self):
         self.assertIn("situation=where)", BRIDGE)

@@ -306,9 +306,9 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         cls.code = cls.body[cls.body.index('"""', opened + 3) + 3 :]
 
     def test_the_loop_runs_under_the_gateway_and_headless_alike(self):
-        """Two lists, and a loop registered in only one of them is a feature
-        that silently does not exist in dev."""
-        self.assertEqual(self.source.count("self._forge_loop,"), 2)
+        """One PASSES entry with no headless=False, so the gateway and the
+        headless paths both start it."""
+        self.assertEqual(self.source.count('_Pass("_forge_loop"),'), 1)
 
     def test_it_writes_nothing_unless_somebody_needs_a_forge(self):
         """THE SAFETY PROPERTY, not an optimisation. The demand read is the

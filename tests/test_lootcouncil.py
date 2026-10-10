@@ -640,7 +640,7 @@ class TheBridgeWiring(unittest.TestCase):
             cls.site = f.read()
 
     def test_the_council_loop_runs(self):
-        self.assertIn("self._loot_council_loop,", self.bridge)
+        self.assertIn('    _Pass("_loot_council_loop"),\n', self.bridge)
         self.assertIn("lootcouncil.answer(", self.bridge)
 
     def test_an_answer_never_overwrites_the_modules_heuristic(self):

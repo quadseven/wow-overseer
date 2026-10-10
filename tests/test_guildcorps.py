@@ -522,7 +522,7 @@ class TheBridgePass(unittest.TestCase):
         return BRIDGE[start : min(ends)]
 
     def test_the_loop_runs_in_both_bridges(self):
-        self.assertEqual(BRIDGE.count("                self._guild_corps_loop,\n"), 2)
+        self.assertEqual(BRIDGE.count('\n    _Pass("_guild_corps_loop"),\n'), 1)
 
     def test_rows_are_the_players_own_verbs(self):
         for name in ("_guild_corps_once", "_run_corps_step", "_corps_row"):

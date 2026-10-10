@@ -349,7 +349,7 @@ class ActTest(unittest.TestCase):
 
 class BridgeWiringTest(unittest.TestCase):
     def test_the_loop_runs_under_the_gateway_and_headless(self):
-        self.assertEqual(BRIDGE.count("self._run_recovery_loop,"), 2)
+        self.assertEqual(BRIDGE.count('_Pass("_run_recovery_loop"),'), 1)
 
     def test_the_answer_only_lands_on_a_pending_row(self):
         self.assertIn("WHERE id = %s AND status = 'pending'", BRIDGE)

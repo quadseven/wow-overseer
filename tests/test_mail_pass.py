@@ -76,11 +76,8 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
     def test_the_loop_is_started_with_the_others(self):
         """A loop nobody creates is a feature that ships and never runs, which
         is the exact failure this pass exists to undo one table over."""
-        src = _source()
-        gateway = src[src.index("self._loops = {") : src.index("async def on_ready(")]
-        self.assertIn("self._mail_loop,", gateway)
-        headless = src[src.index("loops = [") : src.index('log.info("headless:')]
-        self.assertIn("self._mail_loop,", headless)
+        # No headless=False, so both start paths run it.
+        self.assertIn('    _Pass("_mail_loop"),\n', _source())
 
     def test_the_loop_calls_the_pass_and_survives_a_failed_one(self):
         body = _block("    async def _mail_loop(")

@@ -357,7 +357,7 @@ class TheTileCarriesIt(unittest.TestCase):
 class ThePlumbingIsConnected(unittest.TestCase):
     def test_the_bridge_runs_the_loop_in_both_loop_lists(self):
         src = read("bridge.py")
-        self.assertEqual(src.count("                self._now_loop,\n"), 2)
+        self.assertEqual(src.count('\n    _Pass("_now_loop"),\n'), 1)
         self.assertIn("log.addHandler(NOW_TAP)", src)
         self.assertIn("nowstatus.CREATE_SQL", src)
 

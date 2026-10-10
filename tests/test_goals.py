@@ -651,12 +651,14 @@ class TheReturnLoopIsActuallyWired(unittest.TestCase):
         """asyncio keeps only a weak reference to a running task, so a loop
         created and not held can be collected mid-flight - and it stops with
         no error and nothing in the log."""
-        hook = next(
+        # setup_hook holds every task PASSES names (tests/test_headless_bridge.py).
+        registry = next(
             n
-            for n in ast.walk(self.tree)
-            if isinstance(n, ast.AsyncFunctionDef) and n.name == "setup_hook"
+            for n in self.tree.body
+            if isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "PASSES" for t in n.targets)
         )
-        started = {n.attr for n in ast.walk(hook) if isinstance(n, ast.Attribute)}
+        started = {n.value for n in ast.walk(registry) if isinstance(n, ast.Constant)}
         self.assertIn("_restore_lost_lives", started)
 
     def test_it_asks_who_came_back_rather_than_re_issuing_to_everyone(self):

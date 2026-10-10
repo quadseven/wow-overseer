@@ -434,8 +434,10 @@ class TheBridgeWritesTheWeek(unittest.TestCase):
         self.assertEqual(cols, holdings.SAMPLE_COLUMNS)
 
     def test_it_is_ensured_at_start_in_both_modes(self):
-        for sig in ("async def on_ready(self)", "async def run_headless(self)"):
-            self.assertIn("_ensure_economy_store", _block(self.src, sig))
+        # Both start paths call _ensure_stores (tests/test_headless_bridge.py).
+        self.assertIn(
+            "_ensure_economy_store", _block(self.src, "async def _ensure_stores(self)")
+        )
 
     def test_it_runs_on_the_sample_beat_in_its_own_handler(self):
         """Exactly two `except Exception:` in `_sample_family`, and the count

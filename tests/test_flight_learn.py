@@ -621,9 +621,9 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         self.assertIn("import flightlearn", self.source)
 
     def test_the_loop_runs_under_the_gateway_and_headless_alike(self):
-        """Two lists, and a loop registered in only one of them is a feature
-        that silently does not exist in dev - which is the realm this is for."""
-        self.assertEqual(self.source.count("self._flight_learn_loop,"), 2)
+        """One PASSES entry with no headless=False, so the gateway and the
+        headless paths both start it."""
+        self.assertEqual(self.source.count('_Pass("_flight_learn_loop"),'), 1)
 
     def test_it_goes_through_the_one_sanctioned_writer(self):
         """`_claim_town_slot` is the single door every travel aim goes through
