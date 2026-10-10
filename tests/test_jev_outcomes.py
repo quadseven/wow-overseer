@@ -67,7 +67,7 @@ SCORED = [
 
 
 class TheRecord(unittest.TestCase):
-    def test_only_an_override_is_recorded(self):
+    def test_every_disagreement_is_recorded_whoever_acted(self):
         base = ja.Judgment(
             subject="Zug",
             heuristic=ja.CAMPAIGN,
@@ -78,14 +78,50 @@ class TheRecord(unittest.TestCase):
             confidence=0.97,
         )
         before = ja.snapshot(activity_facts())
-        args = jo.record_args(
-            ja.Judgment(**{**base.__dict__, "acted": jev.JEV}), before
+        for acted in (jev.JEV, jev.HEURISTIC):
+            args = jo.record_args(
+                ja.Judgment(**{**base.__dict__, "acted": acted}), before, sample=0.0
+            )
+            self.assertEqual(args[:5], (ja.KIND, "Zug", ja.SELL, ja.CAMPAIGN, 0.97))
+            self.assertEqual(jo.before_of({"before_state": args[5]}), before)
+            self.assertEqual(args[6], acted)
+
+    def test_agreements_are_sampled_and_no_answer_is_never_recorded(self):
+        agree = ja.Judgment(
+            subject="Zug",
+            heuristic=ja.SELL,
+            heuristic_why="",
+            mode=jev.ACT,
+            status="answered",
+            jev=ja.SELL,
+            confidence=0.9,
+            acted=jev.BOTH,
         )
-        self.assertEqual(args[:5], (ja.KIND, "Zug", ja.SELL, ja.CAMPAIGN, 0.97))
-        self.assertEqual(jo.before_of({"before_state": args[5]}), before)
-        for acted in (jev.BOTH, jev.HEURISTIC):
-            judged = ja.Judgment(**{**base.__dict__, "acted": acted})
-            self.assertIsNone(jo.record_args(judged, before))
+        self.assertIsNone(jo.record_args(agree, {}, sample=0.1, rand=lambda: 0.5))
+        kept = jo.record_args(agree, {}, sample=0.1, rand=lambda: 0.05)
+        self.assertEqual(kept[6], jev.BOTH)
+        self.assertIsNone(jo.record_args(agree, {}, sample=0.0, rand=lambda: 0.0))
+        silent = ja.Judgment(
+            subject="Zug",
+            heuristic=ja.SELL,
+            heuristic_why="",
+            mode=jev.ACT,
+            status="timeout",
+        )
+        self.assertIsNone(jo.record_args(silent, {}, sample=1.0))
+
+    def test_sample_rate_reads_env_and_fails_safe(self):
+        self.assertEqual(jo.sample_rate({}), jo.DEFAULT_SAMPLE)
+        self.assertEqual(jo.sample_rate({"JEV_OUTCOME_AGREE_SAMPLE": "0.5"}), 0.5)
+        self.assertEqual(
+            jo.sample_rate({"JEV_OUTCOME_AGREE_SAMPLE": "x"}), jo.DEFAULT_SAMPLE
+        )
+        self.assertEqual(
+            jo.sample_rate({"JEV_OUTCOME_AGREE_SAMPLE": "7"}), jo.DEFAULT_SAMPLE
+        )
+
+    def test_the_fed_back_history_is_overrides_only(self):
+        self.assertIn("acted = 'jev'", jo.HISTORY_SQL)
 
     def test_history_is_oldest_first_and_compact(self):
         out = jo.history(SCORED)
@@ -254,7 +290,7 @@ class TheBridgeScoresAndRecords(unittest.TestCase):
         self.assertEqual(scored, [("after 12 min", 5)])
         self.assertEqual([h["family"] for h in out], ["Ugg", "Zug"])
 
-    def test_an_override_is_inserted_and_nothing_else(self):
+    def test_a_disagreement_is_inserted_whoever_acted(self):
         sql = []
         judgment = ja.Judgment(
             subject="Zug",
@@ -269,9 +305,12 @@ class TheBridgeScoresAndRecords(unittest.TestCase):
         with mock.patch.object(self.bridge, "_connect", lambda: _Conn(sql, {})):
             self.bridge._record_jev_override(judgment, {"free": 6})
             self.bridge._record_jev_override(
-                ja.Judgment(**{**judgment.__dict__, "acted": jev.BOTH}), {}
+                ja.Judgment(**{**judgment.__dict__, "acted": jev.HEURISTIC}), {}
             )
-        self.assertEqual([s for s, _a in sql], [jo.INSERT_SQL])
+            self.bridge._record_jev_override(
+                ja.Judgment(**{**judgment.__dict__, "jev": "", "status": "error"}), {}
+            )
+        self.assertEqual([s for s, _a in sql], [jo.INSERT_SQL, jo.INSERT_SQL])
 
     def test_history_goes_into_the_facts_and_a_failure_leaves_them(self):
         f = activity_facts()

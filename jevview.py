@@ -133,9 +133,51 @@ def keep_line(row: dict) -> str:
     )
 
 
+COMPARE = "compare"
+
+
+def backend_line(backend: str, rows: list) -> str:
+    """One comparison backend's summary: its answers set beside the active
+    backend's on the identical questions (#820)."""
+    answered = [r for r in rows if r.get("jev")]
+    judged = [r for r in answered if r.get("agree") is not None]
+    agreed = sum(1 for r in judged if r.get("agree"))
+    errors = sum(1 for r in rows if not r.get("jev"))
+    latencies = [int(r.get("latency_ms") or 0) for r in answered]
+    parts = "%d question%s, %d answered" % (
+        len(rows),
+        "" if len(rows) == 1 else "s",
+        len(answered),
+    )
+    if judged:
+        parts += ", agreed on %d of %d (%d%%)" % (
+            agreed,
+            len(judged),
+            round(100.0 * agreed / len(judged)),
+        )
+    if latencies:
+        parts += ", mean latency %d ms" % (sum(latencies) // len(latencies))
+    parts += ", %d error%s" % (errors, "" if errors == 1 else "s")
+    return "%s, asked alongside the active backend, never acting: %s." % (
+        backend,
+        parts,
+    )
+
+
+def _split_compare(rows) -> tuple:
+    """(the judgment rows, comparison rows by backend)."""
+    own, compared = [], {}
+    for r in rows or ():
+        if str(r.get("mode")) == COMPARE:
+            compared.setdefault(str(r.get("backend") or "?"), []).append(r)
+        else:
+            own.append(r)
+    return own, compared
+
+
 def view(rows, recent: int = 12) -> dict:
     """The Decree's Jev card from overseer_jev_judgment rows, newest first."""
-    rows = list(rows or ())
+    rows, compared = _split_compare(rows)
     by_kind: dict = {}
     for row in rows:
         by_kind.setdefault(str(row.get("kind") or "?"), []).append(row)
@@ -149,6 +191,7 @@ def view(rows, recent: int = 12) -> dict:
         "recent": [recent_line(r) for r in rows if str(r.get("kind")) != KEEP_KIND][
             : max(0, int(recent))
         ],
+        "backends": [backend_line(b, compared[b]) for b in sorted(compared)],
         "empty": EMPTY,
         "keep_title": KEEP_TITLE,
         "keep_differ": [

@@ -2047,10 +2047,10 @@ def _fetch_jev_view() -> dict:
             with conn.cursor() as cur:
                 # `facts` arrives with the bridge's start-up (#216); a record
                 # read before that has none, and the card simply omits it.
-                for columns in ("acted, facts", "acted"):
+                for columns in ("acted, facts, backend, latency_ms", "acted, facts", "acted"):
                     try:
                         cur.execute(
-                            "SELECT kind, subject, item_name, heuristic, jev, "  # noqa: S608 - the column list is one of two fixed strings; every value is bound
+                            "SELECT kind, subject, item_name, heuristic, jev, "  # noqa: S608 - the column list is one of three fixed strings; every value is bound
                             "confidence, agree, status, mode, " + columns + " "
                             "FROM overseer_jev_judgment "
                             "WHERE created_at > NOW() - INTERVAL %s DAY "

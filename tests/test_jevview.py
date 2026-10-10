@@ -105,3 +105,61 @@ class ThePageComposesNothing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BackendCompareTest(unittest.TestCase):
+    def test_compare_rows_stay_out_of_the_kind_lines_and_get_their_own(self):
+        rows = [
+            row(backend="jev"),
+            row(
+                kind="item_keep",
+                mode="compare",
+                backend="clef",
+                heuristic="keep",
+                jev="vendor",
+                agree=0,
+                status="answered",
+                latency_ms=40,
+                acted="",
+            ),
+            row(
+                kind="item_keep",
+                mode="compare",
+                backend="clef",
+                heuristic="keep",
+                jev="keep",
+                agree=1,
+                status="answered",
+                latency_ms=60,
+                acted="",
+            ),
+            row(
+                kind="item_keep",
+                mode="compare",
+                backend="clef",
+                heuristic="keep",
+                jev=None,
+                agree=None,
+                status="error",
+                latency_ms=5,
+                acted="",
+            ),
+        ]
+        out = jevview.view(rows)
+        self.assertEqual(len(out["kinds"]), 1)
+        self.assertEqual(len(out["backends"]), 1)
+        line = out["backends"][0]
+        for part in (
+            "clef",
+            "3 questions",
+            "2 answered",
+            "agreed on 1 of 2",
+            "1 error",
+        ):
+            self.assertIn(part, line)
+
+    def test_no_compare_rows_means_no_backend_lines(self):
+        self.assertEqual(jevview.view([row()])["backends"], [])
+
+    def test_the_server_reads_the_backend_column_when_it_exists(self):
+        self.assertIn("acted, facts, backend, latency_ms", SERVER)
