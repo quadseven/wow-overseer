@@ -427,13 +427,20 @@ class BridgeWiring(unittest.TestCase):
 
     def test_the_fund_withdraws_at_a_vault_and_posts_at_a_mailbox(self):
         body = function_source("_guild_fund_once")
-        self.assertIn("guildfund.withdraw_command(plan.withdraw)", body)
+        self.assertIn("self._fund_withdraw(", body)
+        self.assertIn("self._fund_post(", body)
+        withdraw = function_source("_fund_withdraw")
+        self.assertIn("guildfund.withdraw_command(plan.withdraw)", withdraw)
+        self.assertIn("guildfund.WITHDRAW_SOURCE", withdraw)
+        self.assertIn("_nearest_vault", withdraw)
+        self.assertLess(
+            withdraw.index("spawn_in_reach"), withdraw.index("_insert_guild")
+        )
         self.assertEqual(guildfund.withdraw_command(80000), "bank withdraw 80000")
-        self.assertIn("guildfund.WITHDRAW_SOURCE", body)
-        self.assertIn("_nearest_vault", body)
-        self.assertIn("_holders_at_mailbox", body)
-        self.assertIn("guildfund.postable(plan, carried)", body)
-        self.assertNotIn("kind='give'", body)
+        post = function_source("_fund_post")
+        self.assertIn("_holders_at_mailbox", post)
+        self.assertIn("guildfund.postable(plan, carried)", post)
+        self.assertNotIn("kind='give'", body + withdraw + post)
 
     def test_the_bank_pass_walks_for_the_fund(self):
         self.assertIn('"_fund_wants"', function_source("_guild_bank_once"))

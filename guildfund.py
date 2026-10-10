@@ -185,6 +185,22 @@ def _letter_copper(command) -> int:
     return 0
 
 
+def _withdrawn(row) -> int:
+    """Copper an applied `bank withdraw` row of the fund took out; else 0."""
+    words = str(row.get("command") or "").split()
+    if str(row.get("status")) != "applied" or len(words) != 3:
+        return 0
+    return _int(words[2]) if words[:2] == ["bank", "withdraw"] else 0
+
+
+def _letter_kind(row) -> tuple:
+    """(kind, member) of a fund letter the world did not refuse; else None."""
+    parts = str(row.get("source") or "").split(":", 2)
+    if len(parts) != 3 or parts[0] != SOURCE or str(row.get("status")) == "error":
+        return None
+    return parts[1], parts[2]
+
+
 def ledger(rows, master) -> Ledger:
     """The fund's ledger for this master over the command log's rows.
 
@@ -194,29 +210,20 @@ def ledger(rows, master) -> Ledger:
     """
     withdrawn = posted = spent = 0
     refunded, given = set(), {}
-    for row in rows or ():
-        if str(row.get("target_name") or "") != master:
+    mine = [r for r in rows or () if str(r.get("target_name") or "") == master]
+    for row in mine:
+        if str(row.get("source") or "") == WITHDRAW_SOURCE:
+            withdrawn += _withdrawn(row)
             continue
-        source = str(row.get("source") or "")
-        status = str(row.get("status") or "")
-        if source == WITHDRAW_SOURCE:
-            words = str(row.get("command") or "").split()
-            if (
-                status == "applied"
-                and len(words) == 3
-                and words[:2] == ["bank", "withdraw"]
-            ):
-                withdrawn += _int(words[2])
+        letter = _letter_kind(row)
+        if letter is None:
             continue
-        parts = source.split(":", 2)
-        if len(parts) != 3 or parts[0] != SOURCE or status == "error":
-            continue
+        kind, member = letter
         copper = _letter_copper(row.get("command"))
         posted += copper
-        member = parts[2]
-        if parts[1] == REFUND:
+        if kind == REFUND:
             refunded.add(member)
-        elif parts[1] == TRAIN and _int(row.get("age"), 99999) < 24 * 60:
+        elif kind == TRAIN and _int(row.get("age"), 99999) < 24 * 60:
             given[member] = given.get(member, 0) + copper
             spent += copper
     return Ledger(withdrawn, posted, frozenset(refunded), given, spent)
@@ -265,68 +272,78 @@ def daily_budget(bank) -> int:
     return max(0, _int(bank)) * num // den
 
 
+def _refunds(master, pool, book, paid, purse) -> tuple:
+    """(letters, notes, purse left): once each, up to the dues paid and what
+    the member is short of its reserve, while the purse holds it."""
+    letters, notes = [], []
+    for m in sorted(pool, key=lambda m: (m.money - m.reserve, m.name)):
+        dues = _int(paid.get(m.name))
+        if dues <= 0 or m.name in book.refunded:
+            continue
+        copper = min(dues, m.reserve - m.money, purse)
+        if m.reserve <= m.money:
+            notes.append(
+                "%s paid %s of dues and holds its %s reserve; no refund"
+                % (m.name, gold(dues), gold(m.reserve))
+            )
+        elif copper < MIN_LETTER_COPPER:
+            notes.append(
+                "%s waits for a refund: the bank holds %s" % (m.name, gold(purse))
+            )
+        else:
+            purse -= copper
+            letters.append(
+                Letter(master, m.name, copper, REFUND, dues, m.money, m.reserve)
+            )
+    return letters, notes, purse
+
+
+def _training(master, pool, book, skip, budget) -> tuple:
+    """(letters, notes): the difference to the trainer's price, a day's limit
+    a member, the budget in all."""
+    letters, notes = [], []
+    given = dict(book.given_today or {})
+    for m in sorted(pool, key=lambda m: (m.training - m.money, -m.level, m.name)):
+        short = m.training - m.money
+        if m.name in skip or short <= 0:
+            continue
+        room = MEMBER_DAILY_COPPER - given.get(m.name, 0)
+        copper = min(short, room, budget)
+        if room < MIN_LETTER_COPPER:
+            notes.append(
+                "%s has had today's %s for training"
+                % (m.name, gold(MEMBER_DAILY_COPPER))
+            )
+        elif copper >= MIN_LETTER_COPPER:
+            budget -= copper
+            letters.append(
+                Letter(master, m.name, copper, TRAIN, 0, m.money, m.training)
+            )
+    return letters, notes
+
+
 def plan(master, members, bank, book, paid, roster=frozenset()) -> Plan:
     """The refunds first, then the training letters, inside the bank.
 
     `members` are Member rows of the master's guild; `bank` the guild bank's
     money; `book` the master's Ledger; `paid` dues_paid's map. `roster` names
     the family, whose own passes fund it. The master's carried fund gold
-    counts as money the bank already gave.
+    counts as money the bank already gave. The training letters share, a
+    day, DAILY_SHARE of what the refunds left.
     """
     roster = {str(n) for n in roster or ()}
-    purse = max(0, _int(bank)) + book.carried
-    letters, notes = [], []
-    given = dict(book.given_today or {})
     pool = [m for m in members or () if m.name != master and m.name not in roster]
-
-    # THE REFUNDS: once each, up to the dues paid and what the member is short.
-    for m in sorted(pool, key=lambda m: (m.money - m.reserve, m.name)):
-        dues = _int(paid.get(m.name))
-        if dues <= 0 or m.name in book.refunded:
-            continue
-        short = m.reserve - m.money
-        if short <= 0:
-            notes.append(
-                "%s paid %s of dues and holds its %s reserve; no refund"
-                % (m.name, gold(dues), gold(m.reserve))
-            )
-            continue
-        copper = min(dues, short, purse)
-        if copper < MIN_LETTER_COPPER:
-            notes.append(
-                "%s waits for a refund: the bank holds %s" % (m.name, gold(purse))
-            )
-            continue
-        purse -= copper
-        letters.append(Letter(master, m.name, copper, REFUND, dues, m.money, m.reserve))
-
-    # THE TRAINING LETTERS: the difference to the trainer's price, a day's
-    # limit a member, and in all the daily share of what the refunds left.
+    refunds, notes, purse = _refunds(
+        master, pool, book, paid, max(0, _int(bank)) + book.carried
+    )
     budget = min(purse, daily_budget(purse) - book.spent_today)
-    refunding = {x.member for x in letters}
-    for m in sorted(pool, key=lambda m: (m.training - m.money, -m.level, m.name)):
-        if m.name in refunding or m.training <= 0:
-            continue
-        short = m.training - m.money
-        if short <= 0:
-            continue
-        room = MEMBER_DAILY_COPPER - given.get(m.name, 0)
-        copper = min(short, room, budget)
-        if copper < MIN_LETTER_COPPER:
-            if room < MIN_LETTER_COPPER:
-                notes.append(
-                    "%s has had today's %s for training"
-                    % (m.name, gold(MEMBER_DAILY_COPPER))
-                )
-            continue
-        budget -= copper
-        letters.append(Letter(master, m.name, copper, TRAIN, 0, m.money, m.training))
-
+    training, more = _training(master, pool, book, {x.member for x in refunds}, budget)
+    letters = refunds + training
     total = sum(x.copper for x in letters)
     withdraw = min(max(0, total - book.carried), max(0, _int(bank)))
     if withdraw < MIN_WITHDRAW_COPPER:
         withdraw = 0
-    return Plan(tuple(letters), withdraw, tuple(notes))
+    return Plan(tuple(letters), withdraw, tuple(notes + more))
 
 
 def postable(plan_, carried, limit=LETTERS_PER_PASS) -> tuple:
@@ -340,6 +357,56 @@ def postable(plan_, carried, limit=LETTERS_PER_PASS) -> tuple:
             out.append(letter)
             left -= letter.copper
     return tuple(out)
+
+
+def pass_line(guild, bank, carried, plan_, refunded) -> str:
+    """The fund pass's one line for the log."""
+    kinds = [x.kind for x in plan_.letters]
+    return (
+        "%s %s: the bank holds %s, the master carries %s of it; %d refund(s) and "
+        "%d training letter(s) planned for %s, %s to withdraw; %d member(s) "
+        "refunded so far"
+        % (
+            LOG_PREFIX,
+            guild or "?",
+            gold(bank),
+            gold(carried),
+            kinds.count(REFUND),
+            kinds.count(TRAIN),
+            gold(plan_.total),
+            gold(plan_.withdraw),
+            len(refunded),
+        )
+    )
+
+
+def members_from_rows(rows, guild, dues) -> list:
+    """Member rows out of the bridge's guild rows and classtrain.due's map
+    (name -> a Due, whose `copper` is the training due)."""
+    out = []
+    for r in rows or ():
+        name = str(r.get("name") or "")
+        if name:
+            due = (dues or {}).get(name)
+            out.append(
+                Member(
+                    name,
+                    guild,
+                    _int(r.get("level")),
+                    _int(r.get("money")),
+                    _int(getattr(due, "copper", 0)),
+                )
+            )
+    return out
+
+
+def withdraw_open(rows) -> bool:
+    """Whether a fund withdrawal is still waiting for the world's answer."""
+    return any(
+        str(r.get("source")) == WITHDRAW_SOURCE
+        and str(r.get("status")) in ("pending", "claimed", "verifying")
+        for r in rows or ()
+    )
 
 
 def withdraw_command(copper) -> str:

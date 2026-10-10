@@ -164,6 +164,41 @@ class Walk:
         )
 
 
+def trainees_from_rows(rows, dues) -> list:
+    """Trainee rows out of the bridge's guild rows and classtrain.due's map."""
+    return [
+        Trainee(
+            str(r["name"]),
+            str(r.get("guild_name") or ""),
+            _int(r.get("level")),
+            _int(r.get("money")),
+            (dues or {}).get(str(r["name"]), Due()),
+            bool(_int(r.get("online"))),
+        )
+        for r in rows or ()
+        if r.get("name")
+    ]
+
+
+def within(rows, seconds) -> list:
+    """The log rows no older than `seconds` (their `age` is in minutes)."""
+    return [r for r in rows or () if _int(r.get("age"), 10**9) * 60 <= seconds]
+
+
+def pass_line(trainees, started) -> str:
+    """The training pass's one line for the log."""
+    return (
+        "%s %d class spell(s) wait for %d member(s); %d can pay for one; started %d trainer walk(s)"
+        % (
+            LOG_PREFIX,
+            sum(t.due.count for t in trainees),
+            sum(1 for t in trainees if t.due.count),
+            sum(1 for t in trainees if t.due.affords(t.money)),
+            started,
+        )
+    )
+
+
 def walk_refusal(walker, name) -> str:
     """Why this member is not walked to a trainer now, "" when it can be.
 

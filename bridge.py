@@ -12913,7 +12913,7 @@ class Bridge(discord.Client):
         items = await asyncio.to_thread(_not_kept_at_home, items, names)
         # THE GUILD FUND NEEDS THE VAULT TOO (guildfund.py): the master walks
         # there to withdraw what it posts to the members.
-        fund = sum(int(getattr(self, "_fund_wants", {}).get(n) or 0) for n in names)
+        fund = sum(getattr(self, "_fund_wants", {}).get(n, 0) for n in names)
         if not actions and not deposits and not items:
             if not fund:
                 log.info("guild bank: nobody is carrying more than the float")
@@ -13850,37 +13850,18 @@ class Bridge(discord.Client):
         from its own gold. Never a learn, never a GM command.
         """
         names = await asyncio.to_thread(_names_of, cohort)
-        if not names:
+        trainees = await asyncio.to_thread(_fetch_trainees, names) if names else []
+        if not trainees:
             return
-        rows = await asyncio.to_thread(_fetch_dues_rows, names)
-        roster = await asyncio.to_thread(_roster_names)
-        rows = [r for r in rows if str(r.get("name") or "") not in roster]
-        if not rows:
-            return
-        dues = await asyncio.to_thread(_class_training_due, [r["name"] for r in rows])
         recent = await asyncio.to_thread(_guild_train_rows)
         log.info("%s", classtrain.summary(recent))
-        if classtrain.unsupported([r for r in recent
-                                   if int(r.get("age") or 0) * 60 <= classtrain.UNSUPPORTED_SECONDS]):
+        if classtrain.unsupported(classtrain.within(recent, classtrain.UNSUPPORTED_SECONDS)):
             log.info("%s this worldserver refuses `walk-to-trainer class` as malformed; "
                      "no class trainer walk until it is rolled%s",
                      classtrain.LOG_PREFIX, _family_label(cohort))
             return
-        trainees = [
-            classtrain.Trainee(
-                str(r["name"]), str(r.get("guild_name") or ""), int(r.get("level") or 0),
-                int(r.get("money") or 0), dues.get(str(r["name"]), classtrain.Due()),
-                bool(int(r.get("online") or 0)))
-            for r in rows
-        ]
-        waiting = sum(t.due.count for t in trainees)
         now = time.monotonic()
-        self._train_walks = guildroute.live_runs(
-            self._train_walks, now, guildroute.GUILD_STEP_SECONDS)
-        busy = (set(getattr(self, "_guild_run_names", ())) | set(self._train_walks)
-                | set(self._dues_walks) | set(self._guild_mail_runs)
-                | set(self._corps_steps) | set(getattr(self, "_post_walks", ()))
-                | set(getattr(self, "_job_steps", ())))
+        busy = self._guild_walkers_busy(now)
         candidates = [t.name for t in trainees
                       if t.online and t.due.affords(t.money) and t.name not in busy]
         row_walks = now >= self._mail_walk_unsupported_until
@@ -13892,19 +13873,29 @@ class Bridge(discord.Client):
         _log_capped("guild training", notes)
         started = 0
         for walk in walks:
-            self._train_walks[walk.name] = now
-            row_id = await asyncio.to_thread(
-                _insert_crafter_row, walk.name, walk.command, classtrain.KIND, walk.source)
-            if not row_id:
-                self._train_walks.pop(walk.name, None)
-                continue
-            started += 1
-            log.info("%s (walk row %d)", walk.said, row_id)
-        log.info("%s %d class spell(s) wait for %d member(s); %d can pay for one; "
-                 "started %d trainer walk(s)%s", classtrain.LOG_PREFIX, waiting,
-                 sum(1 for t in trainees if t.due.count),
-                 sum(1 for t in trainees if t.due.affords(t.money)), started,
-                 _family_label(cohort))
+            started += await self._start_train_walk(walk, now)
+        log.info("%s%s", classtrain.pass_line(trainees, started), _family_label(cohort))
+
+    def _guild_walkers_busy(self, now: float) -> set:
+        """Every member another guild pass has on a walk, after the class
+        trainer walks past their step window are let go."""
+        self._train_walks = guildroute.live_runs(
+            self._train_walks, now, guildroute.GUILD_STEP_SECONDS)
+        return (set(getattr(self, "_guild_run_names", ())) | set(self._train_walks)
+                | set(self._dues_walks) | set(self._guild_mail_runs)
+                | set(self._corps_steps) | set(getattr(self, "_post_walks", ()))
+                | set(getattr(self, "_job_steps", ())))
+
+    async def _start_train_walk(self, walk, now: float) -> int:
+        """Write one class trainer walk row; 1 when written."""
+        self._train_walks[walk.name] = now
+        row_id = await asyncio.to_thread(
+            _insert_crafter_row, walk.name, walk.command, classtrain.KIND, walk.source)
+        if not row_id:
+            self._train_walks.pop(walk.name, None)
+            return 0
+        log.info("%s (walk row %d)", walk.said, row_id)
+        return 1
 
     async def _guild_fund_loop(self) -> None:
         """The guild fund (guildfund.py): training letters and the dues refund."""
@@ -13930,9 +13921,7 @@ class Bridge(discord.Client):
         command, never a table write.
         """
         names = await asyncio.to_thread(_names_of, cohort)
-        if not names:
-            return
-        facts = await asyncio.to_thread(_fetch_fund_facts, names)
+        facts = await asyncio.to_thread(_fetch_fund_facts, names) if names else {}
         master = facts.get("master") or ""
         if not master or master not in names:
             return
@@ -13943,30 +13932,33 @@ class Bridge(discord.Client):
         self._fund_wants[master] = plan.withdraw
         _log_capped("guild fund", plan.notes)
         carried = min(book.carried, int(facts.get("purse") or 0))
-        log.info("%s %s: the bank holds %s, the master carries %s of it; %d refund(s) "
-                 "and %d training letter(s) planned for %s, %s to withdraw; %d member(s) "
-                 "refunded so far%s", guildfund.LOG_PREFIX, facts.get("guild") or "?",
-                 guildfund.gold(facts["bank"]), guildfund.gold(carried),
-                 sum(1 for x in plan.letters if x.kind == guildfund.REFUND),
-                 sum(1 for x in plan.letters if x.kind == guildfund.TRAIN),
-                 guildfund.gold(plan.total), guildfund.gold(plan.withdraw),
-                 len(book.refunded), _family_label(cohort))
-        if not plan.letters:
-            return
-        positions = await asyncio.to_thread(_fetch_positions, [master])
+        log.info("%s%s", guildfund.pass_line(facts.get("guild"), facts["bank"], carried,
+                                             plan, book.refunded), _family_label(cohort))
+        positions = (await asyncio.to_thread(_fetch_positions, [master])
+                     if plan.letters else {})
         if master not in positions:
             return
         if plan.withdraw and not facts.get("withdraw_open"):
-            spawn = await asyncio.to_thread(_nearest_vault, master)
-            if travel.spawn_in_reach(spawn, positions.get(master), TOWN_COUNTER_YARDS):
-                row = await asyncio.to_thread(
-                    _insert_guild, master, guildfund.withdraw_command(plan.withdraw),
-                    guildfund.WITHDRAW_SOURCE)
-                log.info("%s the guild master %s withdraws %s at the vault for %d "
-                         "letter(s) (row %d)", guildfund.LOG_PREFIX, master,
-                         guildfund.gold(plan.withdraw), len(plan.letters), row)
-        if not carried:
+            await self._fund_withdraw(master, plan, positions)
+        if carried:
+            await self._fund_post(master, plan, carried, positions)
+
+    async def _fund_withdraw(self, master: str, plan, positions: dict) -> None:
+        """The master's withdrawal, written only where it stands at a vault:
+        `bank withdraw` answers 'no guild bank in reach' anywhere else."""
+        spawn = await asyncio.to_thread(_nearest_vault, master)
+        if not travel.spawn_in_reach(spawn, positions.get(master), TOWN_COUNTER_YARDS):
             return
+        row = await asyncio.to_thread(
+            _insert_guild, master, guildfund.withdraw_command(plan.withdraw),
+            guildfund.WITHDRAW_SOURCE)
+        log.info("%s the guild master %s withdraws %s at the vault for %d "
+                 "letter(s) (row %d)", guildfund.LOG_PREFIX, master,
+                 guildfund.gold(plan.withdraw), len(plan.letters), row)
+
+    async def _fund_post(self, master: str, plan, carried: int, positions: dict) -> None:
+        """The fund's letters the master can pay for, written only where it
+        stands at a mailbox; one log line each."""
         if master not in await asyncio.to_thread(_holders_at_mailbox, [master], positions):
             log.info("%s %s carries %s of the guild's gold to post and is not at a "
                      "mailbox yet", guildfund.LOG_PREFIX, master, guildfund.gold(carried))
@@ -24494,6 +24486,15 @@ def _class_training_due(names: list) -> dict:
             for name in known}
 
 
+def _fetch_trainees(names: list) -> list:
+    """classtrain.Trainee for each member of the family's guild off the
+    roster; no judgement here."""
+    roster = _roster_names()
+    rows = [r for r in _fetch_dues_rows(names) if str(r.get("name") or "") not in roster]
+    due = _class_training_due([str(r["name"]) for r in rows])
+    return classtrain.trainees_from_rows(rows, due)
+
+
 def _with_reserves(rows: list) -> list:
     """The dues rows with each member's training and gear reserve
     (guildfund.reserve) laid on, for guildwork.dues_for."""
@@ -24545,22 +24546,25 @@ _RENAMES_SQL = (
 )
 
 
+def _fund_guild_rows(names: list) -> tuple:
+    """(guild, master, rows) of the family's own guild, from the dues read."""
+    rows = _fetch_dues_rows(names)
+    family = set(names)
+    mine = next((r for r in rows if str(r.get("name")) in family), None)
+    if mine is None:
+        return "", "", []
+    guild = str(mine.get("guild_name") or "")
+    rows = [r for r in rows if str(r.get("guild_name") or "") == guild]
+    master = next((str(r["master"]) for r in rows if r.get("master")), "")
+    return guild, master, rows
+
+
 def _fetch_fund_facts(names: list) -> dict:
     """What guildfund.plan reads for the family's guild; no judgement here."""
-    rows = _fetch_dues_rows(names)
+    guild, master, rows = _fund_guild_rows(names)
     if not rows:
         return {}
-    mine = next((r for r in rows if str(r.get("name")) in set(names)), None)
-    guild = str((mine or rows[0]).get("guild_name") or "")
-    rows = [r for r in rows if str(r.get("guild_name") or "") == guild]
-    master = str(next((r.get("master") for r in rows if r.get("master")), "") or "")
     due = _class_training_due([str(r["name"]) for r in rows])
-    members = [
-        guildfund.Member(str(r["name"]), guild, int(r.get("level") or 0),
-                         int(r.get("money") or 0),
-                         due.get(str(r["name"]), classtrain.Due()).copper)
-        for r in rows
-    ]
     with _connect() as conn, conn.cursor() as cur:
         bank = _corps_read(cur, "guild bank money",
                            "SELECT BankMoney FROM guild WHERE name = %s", (guild,))
@@ -24569,20 +24573,16 @@ def _fetch_fund_facts(names: list) -> dict:
         dues = _corps_read(cur, "dues letters", _DUES_LETTERS_SQL,
                            (guildfund.DUES_SOURCE + ":%",))
         renames = _corps_read(cur, "renamed members", _RENAMES_SQL)
-    purse = next((int(r.get("money") or 0) for r in rows if str(r.get("name")) == master), 0)
     return {
         "guild": guild,
         "master": master,
-        "purse": purse,
-        "members": members,
+        "purse": sum(int(r.get("money") or 0) for r in rows if str(r.get("name")) == master),
+        "members": guildfund.members_from_rows(rows, guild, due),
         "bank": int(bank[0]["BankMoney"] or 0) if bank else 0,
         "ledger": ledger,
         "dues": dues,
         "renames": {str(r["was"]): str(r["now"]) for r in renames if r.get("was")},
-        "withdraw_open": any(
-            str(r.get("source")) == guildfund.WITHDRAW_SOURCE
-            and str(r.get("status")) in ("pending", "claimed", "verifying")
-            for r in ledger),
+        "withdraw_open": guildfund.withdraw_open(ledger),
     }
 
 
