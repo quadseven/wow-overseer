@@ -11,8 +11,9 @@ app/, by path and content. The page is served with the build it belongs to
 holds now as `app_build`, and app/update.js offers a refresh when the two
 differ.
 
-The fingerprint is kept until a file under app/ changes its size or its
-modification time, so the realm poll does not read forty files each time.
+Each call lists the files and stats them; their contents are read and
+hashed again only when a file was added or removed or one changed its size
+or modification time, so the realm poll does not hash forty files each time.
 """
 
 from __future__ import annotations
