@@ -3234,6 +3234,9 @@ def class_step(
     early = _class_early(m, book, recent)
     if early is not None:
         return early
+    yielded = class_yield(m, recent)
+    if yielded:
+        return None, "", yielded
     m = with_recent_takes(m, recent)
     move, blocked = _class_move(m, book, recent, hunts, now)
     note = "; ".join(blocked)
@@ -3800,6 +3803,20 @@ def stranded_recall_step(m, recent, book=None):
 # and once a class row goes through or the hold runs out, the class step is
 # first again.
 #
+# A FAILING CLASS QUEST YIELDS TO LEVELLING (2026-10-10, the operator's rule: a
+# mandatory class quest that keeps failing must yield to levelling until it can
+# move). The hold above only let a level walk out of an outgrown zone go first.
+# Diggo, a level 14 Cave hunter in Teldrassil, had no such walk to make, so for
+# 68 hours at his level his Taming the Beast step kept him ("the creature is
+# dead", "no such target within reach on this map") and no other job was asked
+# of him; in 24 hours 43 guild members had three or more class rows fail. While
+# the hold lasts the class step now steps aside altogether (class_yield): the
+# member's stood-still hearth, food, gear, post, level walk and ordinary job
+# run, and its own AI levels. The hold is CLASS_STALL_HOLD_MINUTES after the
+# newest failure, then the class step tries again. The window is long enough to
+# keep the failed run in view across the hold, so a retry that fails once more
+# yields again at once rather than after three more failures.
+#
 # WHAT COUNTS. A row that failed (TRAIN_FAILED) counts, a walk that ended in a
 # death among them. A refusal the module calls retryable (a far walk wall, a
 # fight, another verb's hold, a dead character) says nothing about the quest
@@ -3807,8 +3824,8 @@ def stranded_recall_step(m, recent, book=None):
 # progress until the take goes through. A row that went through (a take, a
 # hand-in, a use the module spent), took a quest or made a kill ends the run.
 CLASS_STALL_ROWS = 3
-CLASS_STALL_WINDOW_MINUTES = STRANDED_WALK_WINDOW_MINUTES
-CLASS_STALL_HOLD_MINUTES = guildlevel.COOLDOWN_MINUTES
+CLASS_STALL_WINDOW_MINUTES = 12 * 60
+CLASS_STALL_HOLD_MINUTES = 3 * 60
 
 
 def class_stall_hold(name, recent) -> tuple:
@@ -3851,6 +3868,19 @@ def _failed_run(rows) -> list:
         elif moved or not r.walk:
             break
     return failed
+
+
+def class_yield(m, recent) -> str:
+    """The note for a member whose class step yields to levelling
+    (class_stall_hold), or "" when it does not."""
+    left, failed = class_stall_hold(m.name, recent)
+    if not left:
+        return ""
+    return (
+        "%s's class quest step failed %d times in a row without progress; it "
+        "steps aside for %d more minute(s) of levelling, then tries again"
+        % (m.name, failed, left)
+    )
 
 
 def stalled_level_first(m, leveling, recent, cap, room=True):

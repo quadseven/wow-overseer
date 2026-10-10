@@ -12,9 +12,11 @@ walks to a giver or an ender, which the death hold did not reach; 45 of 207
 level walks went to a dead member, and 54 ended in the member's death.
 
 These tests hold the operator's rule (the class quest first) with its one
-bound: a run of failed class rows holds the class step for the level walk's
-cooldown, the level walk goes ahead of it meanwhile, and the class step is
-first again afterwards.
+bound: a run of failed class rows holds the class step for
+CLASS_STALL_HOLD_MINUTES, the level walk goes ahead of it meanwhile, and the
+class step is first again afterwards. Since 2026-10-10 the held class step steps
+aside altogether (test_classquest_yield.py), so a member with no level walk to
+make goes about its other jobs instead.
 """
 
 import json
@@ -132,6 +134,9 @@ def hold(recent):
     return guildjobs.class_stall_hold("Bigzug", recent)
 
 
+HOLD = guildjobs.CLASS_STALL_HOLD_MINUTES
+
+
 def stuck(name="Bigzug", **over):
     """test_classquest's level 20 orc warrior in Durotar, which has outgrown
     it (no Horde band there in test_guildlevel's world), with Path of Defense
@@ -151,18 +156,15 @@ def step_of(result, name="Bigzug"):
 
 class TheHold(unittest.TestCase):
     def test_three_failed_rows_in_a_row_hold_the_class_step(self):
-        self.assertEqual(hold(failing(10, 40, 70)), (110, 3))
+        self.assertEqual(hold(failing(10, 40, 70)), (HOLD - 10, 3))
 
     def test_two_do_not(self):
         self.assertEqual(hold(failing(10, 40)), (0, 2))
 
-    def test_the_hold_is_the_level_walks_cooldown_after_the_newest_failure(self):
-        self.assertEqual(
-            guildjobs.CLASS_STALL_HOLD_MINUTES, guildlevel.COOLDOWN_MINUTES
-        )
+    def test_the_hold_runs_from_the_newest_failure(self):
         newest = guildjobs.CLASS_STALL_HOLD_MINUTES
-        self.assertEqual(hold(failing(newest - 1, 150, 160)), (1, 3))
-        self.assertEqual(hold(failing(newest, 150, 160)), (0, 3))
+        self.assertEqual(hold(failing(newest - 1, newest + 30, newest + 40)), (1, 3))
+        self.assertEqual(hold(failing(newest, newest + 30, newest + 40)), (0, 3))
 
     def test_rows_past_the_window_do_not_count(self):
         window = guildjobs.CLASS_STALL_WINDOW_MINUTES
@@ -177,14 +179,14 @@ class TheHold(unittest.TestCase):
             take_failed(60),
             walk(61),
         )
-        self.assertEqual(hold(recent), (115, 3))
+        self.assertEqual(hold(recent), (HOLD - 5, 3))
 
     def test_a_death_on_the_way_is_a_failure(self):
-        self.assertEqual(hold((died(10), died(40), died(70))), (110, 3))
+        self.assertEqual(hold((died(10), died(40), died(70))), (HOLD - 10, 3))
 
     def test_a_use_that_changed_nothing_is_a_failure(self):
         recent = (use_nothing(44), use_nothing(85), use_nothing(156))
-        self.assertEqual(hold(recent), (76, 3))
+        self.assertEqual(hold(recent), (HOLD - 44, 3))
 
     def test_a_refusal_the_module_calls_retryable_is_passed_over(self):
         for reason in (
@@ -198,7 +200,7 @@ class TheHold(unittest.TestCase):
                 walls = tuple(walled(a, reason) for a in (5, 15, 25, 35))
                 self.assertEqual(hold(walls), (0, 0))
                 mixed = (walled(5, reason),) + failing(10, 40, 70)
-                self.assertEqual(hold(mixed), (110, 3))
+                self.assertEqual(hold(mixed), (HOLD - 10, 3))
 
     def test_a_take_that_went_through_ends_the_run(self):
         recent = failing(10, 40) + (take_went(50),) + failing(60, 70)
@@ -207,7 +209,7 @@ class TheHold(unittest.TestCase):
     def test_a_hunt_that_made_a_kill_ends_the_run(self):
         recent = failing(10, 40) + (hunted(50, kills=2),) + failing(60, 70)
         self.assertEqual(hold(recent), (0, 2))
-        self.assertEqual(hold(failing(10, 40) + (hunted(50, kills=0),)), (110, 3))
+        self.assertEqual(hold(failing(10, 40) + (hunted(50, kills=0),)), (HOLD - 10, 3))
 
     def test_another_members_rows_do_not_count(self):
         recent = tuple(take_failed(a, name="Chillmon") for a in (10, 40, 70))
@@ -237,7 +239,10 @@ class TheLevelWalkFirst(unittest.TestCase):
         self.assertIn("creature:%d " % spawn_of("barrens"), step.rows[0].command)
         self.assertEqual(result.lines["Bigzug"], step.said)
         self.assertTrue(
-            any("failed 3 times in a row" in n and "110" in n for n in result.notes),
+            any(
+                "failed 3 times in a row" in n and str(HOLD - 10) in n
+                for n in result.notes
+            ),
             result.notes,
         )
 
@@ -245,16 +250,16 @@ class TheLevelWalkFirst(unittest.TestCase):
         result = plan([stuck()], failing(10, 40))
         self.assertEqual(step_of(result).action, classquest.ACTION)
 
-    def test_with_the_level_walk_cooling_the_class_step_is_first(self):
+    def test_with_the_level_walk_cooling_the_class_step_still_yields(self):
         walked = step_of(plan([stuck()], failing(10, 40, 70))).rows[0]
         self.assertEqual(walked.source, "guildjobs:level:Bigzug")
         cooling = written(walked, "applied", 30)
         result = plan([stuck()], failing(10, 40, 70) + (cooling,))
-        self.assertEqual(step_of(result).action, classquest.ACTION)
+        self.assertIsNone(step_of(result))
 
-    def test_a_member_whose_zone_still_fits_does_its_class_step(self):
+    def test_a_member_whose_zone_still_fits_yields_its_class_step(self):
         result = plan([stuck(zone_id=BARRENS)], failing(10, 40, 70))
-        self.assertEqual(step_of(result).action, classquest.ACTION)
+        self.assertIsNone(step_of(result))
 
     def test_once_the_hold_runs_out_the_class_step_is_first_again(self):
         old = guildjobs.CLASS_STALL_HOLD_MINUTES
@@ -267,16 +272,16 @@ class TheLevelWalkFirst(unittest.TestCase):
         self.assertEqual(step_of(result, "Bigzug").action, guildlevel.ACTION)
         self.assertEqual(step_of(result, "Chillmon").action, classquest.ACTION)
 
-    def test_with_the_guilds_level_walks_spent_the_class_step_goes_on(self):
+    def test_with_the_guilds_level_walks_spent_the_class_step_still_yields(self):
         names = ["W%d" % i for i in range(guildlevel.STEPS_PER_GUILD + 1)]
         crew = [stuck(n, x=-282.0 + i) for i, n in enumerate(names)]
         recent = tuple(take_failed(a, name=n) for n in names for a in (10, 40, 70))
         result = plan(crew, recent)
-        actions = sorted(step_of(result, n).action for n in names)
+        actions = sorted(getattr(step_of(result, n), "action", "") for n in names)
         self.assertEqual(
             actions.count(guildlevel.ACTION), guildlevel.STEPS_PER_GUILD, actions
         )
-        self.assertEqual(actions.count(classquest.ACTION), 1, actions)
+        self.assertEqual(actions.count(classquest.ACTION), 0, actions)
 
     def test_nothing_else_comes_before_the_class_step(self):
         source = guildjobs._member_step.__code__.co_names
@@ -349,7 +354,10 @@ class TheDeadlyWay(unittest.TestCase):
         # Both packs held; the older mark is past SPAWN_RETRY_MINUTES, so
         # roll_oldest asks the lizards again: the way there killed it twice.
         hunter = who(quest_log={1498: 3}, quests_done=frozenset({1505}))
+        # A kill newer than the deaths ends the failed run, so the class step
+        # does not yield (test_classquest_yield.py) and the deadly way is read.
         rows = (
+            hunted(5, kills=1),
             died(40, spawn=4788),
             died(200, spawn=4788),
             died(10, spawn=12197),
@@ -366,7 +374,10 @@ class TheDeadlyWay(unittest.TestCase):
         hunter = who(
             quest_log={1498: 3}, quests_done=frozenset({1505}), x=720.0, y=-4100.0
         )
+        # A kill newer than the deaths ends the failed run, so the class step
+        # does not yield (test_classquest_yield.py) and the deadly way is read.
         rows = (
+            hunted(5, kills=1),
             died(40, spawn=4788),
             died(200, spawn=4788),
             died(10, spawn=12197),
@@ -424,7 +435,7 @@ class TheDeadlyHub(unittest.TestCase):
         body = {"outcome": "died", "reason": classquest.DEATH_REASON}
         deaths = tuple(written(walked, "error", age, body) for age in (150, 400))
         result = plan([stuck()], failing(10, 40, 70) + deaths)
-        self.assertEqual(step_of(result).action, classquest.ACTION)
+        self.assertIsNone(step_of(result))
 
 
 if __name__ == "__main__":
