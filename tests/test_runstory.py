@@ -20,7 +20,6 @@ sys.path.insert(0, str(HERE))
 import runstory  # noqa: E402
 import runtimeline  # noqa: E402
 
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 
 ANACONDRA = 3671
@@ -331,16 +330,6 @@ class AFamilyRun(unittest.TestCase):
 
 
 class TheSiteDrawsIt(unittest.TestCase):
-    def test_the_guild_card_the_timeline_and_the_chat_print_it(self):
-        for start, end in (
-            ("function gdCard", "function gdList"),
-            ("function rtlRender", "async function pollRunTimeline"),
-            ("function gcOutcome", "function gcMessage"),
-        ):
-            block = PAGE[PAGE.index(start) : PAGE.index(end)]
-            self.assertIn("run.story", block, start)
-            self.assertIn("run.cause", block, start)
-
     def test_the_endpoints_tell_the_stories(self):
         handler = SERVER[
             SERVER.index("def _guild_runs") : SERVER.index("def _guild_chat")

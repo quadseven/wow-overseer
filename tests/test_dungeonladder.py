@@ -43,7 +43,6 @@ import preraid  # noqa: E402
 HERE = pathlib.Path(__file__).resolve().parent.parent
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 
 # The bosses' levels as the dev realm's encounter credits give them.
 BOSSES = {
@@ -470,11 +469,3 @@ class TheBridgeAndTheSiteReadIt(unittest.TestCase):
             self.assertIn(read, BRIDGE, read)
         self.assertIn("campaignplan.source_for(by_jev)", BRIDGE)
         self.assertIn("due.finish, chosen, source)", BRIDGE)
-
-    def test_the_site_draws_the_ladder_and_jevs_reasons(self):
-        self.assertIn("dungeonladder.view(facts)", SERVER)
-        self.assertIn("campaignplan.CHOICE_SQL", SERVER)
-        self.assertIn("f.plan.jev", PAGE)
-        self.assertIn("f.ladder", PAGE)
-        for key in ("r.head", "r.detail", "r.line", "ladder.title", "ladder.line"):
-            self.assertIn(key, PAGE, key)

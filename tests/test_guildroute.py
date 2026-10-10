@@ -517,13 +517,6 @@ class TheRowsAndThePage(unittest.TestCase):
         self.assertIn("it.bonding IN (0, 2, 3)", sql)
         self.assertIn("AS has_effect", sql)
 
-    def test_the_bags_page_draws_the_routes(self):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
-        self.assertIn('<div id="wroute"></div>', page)
-        self.assertIn("renderRoutes(p.guild_routes);", page)
-        server = (HERE / "map_server.py").read_text(encoding="utf-8")
-        self.assertIn('payload["guild_routes"] = _fetch_guild_routes()', server)
-
 
 def _box(d2=100.0 * 100.0, map_id=1):
     # A mailbox spawn row as _nearest_mailbox returns it, d2 from the holder.

@@ -5,11 +5,13 @@ out, bytes over HTTP. No logic here that tests would want to reach.
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 import urllib.error
@@ -21,6 +23,8 @@ from urllib.parse import parse_qs, urlsplit
 import pymysql
 
 import achievements
+import apiv2
+from apiv2._context import Context as _V2Context
 import agenda
 import armory
 import gearupgrades
@@ -821,15 +825,19 @@ def _fetch_profiles(names) -> dict:
         conn.close()
 
 
-def _page_version() -> str:
-    """basepath.page_version of index.html as it is on disk now.
+def _page_version(name: str = "index.html") -> str:
+    """basepath.page_version of a page as it is on disk now.
 
     Read per call rather than once at import: it is one small file, /api/realm
     is polled once a minute, and a value frozen at import would go on
     reporting the old page if the file were ever replaced under a running
     process.
+
+    `page` in /api/realm is the app page's version, and `app_page` beside it
+    is the same: it named the classic page's version while that page was
+    served, and both fields stay so no reader of the payload loses one.
     """
-    with open(os.path.join(HERE, "index.html"), "rb") as f:
+    with open(os.path.join(HERE, name), "rb") as f:
         return basepath.page_version(f.read())
 
 
@@ -1207,6 +1215,38 @@ def _fetch_upgrade_items(ids: list[int]) -> dict[int, dict]:
         conn.close()
 
 
+_NOT_A_GUILD_MEMBER = {"error": "not a guild member"}
+
+
+def _upgrades_payload(wanted: str) -> tuple[int, dict]:
+    """(status, payload) for /api/upgrades?name=`wanted`.
+
+    The gate and the build of the upgrade tracker (#541), apart from the
+    handler so /api/v2/upgrades can extend the same payload rather than copy
+    it. A name that fails the world's rule, is not on a family guild's roster
+    or is not present is a 404.
+    """
+    if not _NAME_RE.fullmatch(wanted):
+        return 404, dict(_NOT_A_GUILD_MEMBER)
+    groups = _fetch_family_groups()
+    names = [n for _key, group in groups for n in group]
+    if not _is_family_guildmate(wanted, names):
+        return 404, dict(_NOT_A_GUILD_MEMBER)
+    fetched = _fetch_armory([wanted])
+    fetched.pop("equip_event_rows")
+    payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
+                                  families=[("", [wanted])])
+    member = (payload.get("members") or [None])[0]
+    if not member or not member.get("present"):
+        return 404, dict(_NOT_A_GUILD_MEMBER)
+    spec, _note = gearupgrades.choose_spec(
+        member.get("class"), (member.get("spec") or {}).get("primary"))
+    ids = gearupgrades.all_list_ids(spec) if spec else []
+    return 200, gearupgrades.build(
+        member, fetched["equipment_rows"], _fetch_upgrade_items(ids),
+        list(armory.EQUIPPED_SLOTS), book=ITEMS)
+
+
 # --- /api/item: where one item comes from ---------------------------------
 #
 # Item data is static, so the answer is kept in-process, bounded. A restart
@@ -1474,7 +1514,7 @@ _GUILD_GEAR = (
     "AND s.health = 0 AND s.updated_at > NOW() - INTERVAL 60 SECOND) AS dead, "
     + raidroles.TALENTS_COLUMN + ", "
     "ci.slot, it.ItemLevel AS item_level, it.name AS item_name, "
-    "it.entry AS item_entry "
+    "it.entry AS item_entry, it.Quality AS item_quality "
     "FROM guild g JOIN guild_member gm ON gm.guildid = g.guildid "
     "JOIN characters c ON c.guid = gm.guid "
     "LEFT JOIN character_inventory ci ON ci.guid = c.guid "
@@ -4806,6 +4846,38 @@ _FRAMES_LOCK = threading.Lock()
 # page's window.CONTENT_PATH, which the viewer appends its file paths to.
 MODEL_PREFIX = "/modelviewer/"
 
+# The operations app's files (index.html loads them) and how they are typed.
+APP_PREFIX = "/app/"
+_APP_DIR = os.path.realpath(os.path.join(HERE, "app"))
+_APP_SEGMENT = re.compile(r"[a-z0-9_-]{1,64}")
+
+
+def _app_file_kind(rel: str) -> str:
+    """'js' or 'css' for a plain app path such as "views/now.js", else "".
+
+    Checked segment by segment (lower-case letters, digits, '-' and '_', no
+    dots but the one before the extension), so no dot segment, hidden file or
+    other kind of file can be named.
+    """
+    if len(rel) > 256:
+        return ""
+    stem, dot, ext = rel.rpartition(".")
+    if not dot or ext not in _APP_TYPES:
+        return ""
+    if not all(_APP_SEGMENT.fullmatch(seg) for seg in stem.split("/")):
+        return ""
+    return ext
+
+_APP_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8"}
+
+# What a /api/v2 handler is given: this server's own connection and module.
+_V2_CONTEXT = _V2Context(connect=lambda: _connect(), server=sys.modules[__name__])
+
+
+def _etag(body: bytes) -> str:
+    """A strong validator for a response body: same bytes, same tag."""
+    return '"' + hashlib.sha256(body).hexdigest()[:24] + '"'
+
 
 def _fetch_decree() -> dict:
     """Everything the decree console reads, in one connection.
@@ -5287,6 +5359,14 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith(MODEL_PREFIX):
                 self._modelviewer(path[len(MODEL_PREFIX):])
                 return
+            # The app's own modules and styles, and the v2 reads: one file
+            # or one endpoint per name, so neither fits a fixed table.
+            if path.startswith(APP_PREFIX):
+                self._app_file(path[len(APP_PREFIX):])
+                return
+            if path.startswith(apiv2.PREFIX):
+                self._v2(path, parse_qs(urlsplit(self.path).query))
+                return
             self._send(404, "text/plain", b"not found")
             return
         handler(self, parse_qs(urlsplit(self.path).query))
@@ -5324,6 +5404,30 @@ class Handler(BaseHTTPRequestHandler):
         # does not, and it is not a broken link.
         self._send_file("index.html", "text/html; charset=utf-8",
                         transform=lambda body: basepath.apply(body, BASE_PATH))
+
+    def _app_file(self, rel: str) -> None:
+        """GET /app/<path>.js|.css - one file of the operations app.
+
+        Only plain lower-case paths ending in .js or .css, inside app/, are
+        served: no dot segments, no other kinds of file, nothing outside the
+        directory. Anything else is a 404, never a read.
+        """
+        kind = _app_file_kind(rel)
+        full = os.path.realpath(os.path.join(HERE, "app", rel)) if kind else ""
+        if not kind or not full.startswith(_APP_DIR + os.sep) or not os.path.isfile(full):
+            self._send(404, "text/plain", b"not found")
+            return
+        self._send_file(os.path.join("app", rel), _APP_TYPES[kind])
+
+    def _v2(self, path: str, query: dict) -> None:
+        """GET /api/v2/... - the reads the operations app adds (apiv2/)."""
+        try:
+            code, payload = apiv2.handle(path, query, _V2_CONTEXT)
+        except Exception:
+            log.exception("v2 read failed: %s", path)
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            return
+        self._send(code, "application/json", json.dumps(payload).encode())
 
     def _zones_file(self, _query: dict) -> None:
         self._send_file("zones.json", "application/json")
@@ -5381,6 +5485,7 @@ class Handler(BaseHTTPRequestHandler):
             # The page this server would serve now; an open tab compares it
             # with the one it was served as (basepath.PAGE_PLACEHOLDER).
             payload["page"] = _page_version()
+            payload["app_page"] = _page_version("index.html")
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             log.exception("realm query failed")
@@ -6718,33 +6823,12 @@ class Handler(BaseHTTPRequestHandler):
         as the database reports it; anything else is a 404. Like /api/armory it
         reads saved gear, not overseer_snapshot, so it is not subject to the
         60s freshness rule and answers for someone offline. Every score is
-        gearscore's; gearupgrades only lays the slots out.
+        gearscore's; gearupgrades only lays the slots out. The payload is
+        _upgrades_payload's, which /api/v2/upgrades extends.
         """
         try:
-            wanted = query.get("name", [""])[0]
-            if not _NAME_RE.fullmatch(wanted):
-                self._send(404, "application/json", b'{"error": "not a guild member"}')
-                return
-            groups = _fetch_family_groups()
-            names = [n for _key, group in groups for n in group]
-            if not _is_family_guildmate(wanted, names):
-                self._send(404, "application/json", b'{"error": "not a guild member"}')
-                return
-            fetched = _fetch_armory([wanted])
-            fetched.pop("equip_event_rows")
-            payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
-                                          families=[("", [wanted])])
-            member = (payload.get("members") or [None])[0]
-            if not member or not member.get("present"):
-                self._send(404, "application/json", b'{"error": "not a guild member"}')
-                return
-            spec, _note = gearupgrades.choose_spec(
-                member.get("class"), (member.get("spec") or {}).get("primary"))
-            ids = gearupgrades.all_list_ids(spec) if spec else []
-            result = gearupgrades.build(
-                member, fetched["equipment_rows"], _fetch_upgrade_items(ids),
-                list(armory.EQUIPPED_SLOTS), book=ITEMS)
-            self._send(200, "application/json", json.dumps(result).encode())
+            code, payload = _upgrades_payload(query.get("name", [""])[0])
+            self._send(code, "application/json", json.dumps(payload).encode())
         except Exception:
             log.exception("upgrades query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
@@ -7026,12 +7110,28 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send(self, code: int, ctype: str, body: bytes,
               cache_control: str = "no-store") -> None:
+        # A successful GET is revalidated rather than refetched: it carries
+        # an ETag of its bytes and `no-cache`, so the app's poll of an
+        # unchanged answer costs a 304 and no body. The model-viewer files
+        # are the one immutable thing here and say so themselves; POSTs and
+        # errors keep no-store.
+        tag = ""
+        if code == 200 and cache_control == "no-store" and getattr(self, "command", "") == "GET":
+            cache_control = "no-cache"
+            tag = _etag(body)
+            asked = self.headers.get("If-None-Match", "") if getattr(self, "headers", None) else ""
+            if tag in [t.strip() for t in asked.split(",")]:
+                self.send_response(304)
+                self.send_header("ETag", tag)
+                self.send_header("Cache-Control", cache_control)
+                self.end_headers()
+                return
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        # no-store for everything the page polls; the model-viewer files
-        # are the one immutable thing here and say so themselves.
         self.send_header("Cache-Control", cache_control)
+        if tag:
+            self.send_header("ETag", tag)
         self.end_headers()
         self.wfile.write(body)
 

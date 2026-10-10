@@ -175,14 +175,6 @@ class TheSourceLabelIsTrue(unittest.TestCase):
         for line in [out["headline"], *out["detail"], out["orders"]["text"]]:
             self.assertNotIn("Discord", line)
 
-    def test_the_page_prints_the_payloads_label_and_no_discord_badge(self):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
-        self.assertNotIn("from a Discord order", page)
-        start = page.index("function renderAgenda(p)")
-        body = page[start : page.index("\n}\n", start)]
-        self.assertIn("o.textContent = p.source", body)
-        self.assertNotIn("channel_id", body)
-
 
 class EveryJobSaysWhatItDoesPlainly(unittest.TestCase):
     def test_every_mode_and_every_door_form(self):
@@ -294,27 +286,6 @@ class TheOtherViewsArePlain(unittest.TestCase):
         for spec in tradespec.SPECS:
             if spec.unreachable:
                 self.assertEqual(code_in(spec.unreachable), [], spec.key)
-
-
-class TheLightThemeKeepsClassNamesReadable(unittest.TestCase):
-    """#563: Rogue yellow and Priest white on a white Lineup card measured
-    1.13:1 and 1:1. The Lineup paints names through classInk, which mixes the
-    class colour toward black by --class-mix: 50% on light (Priest white
-    then reads at about 6:1), whole on dark."""
-
-    PAGE = (HERE / "index.html").read_text(encoding="utf-8")
-
-    def test_the_lineup_names_go_through_class_ink(self):
-        for fn in ("function lnCard(", "function lgRender("):
-            start = self.PAGE.index(fn)
-            body = self.PAGE[start : self.PAGE.index("\n}\n", start)]
-            self.assertIn("classInk(m.class_colour)", body, fn)
-            self.assertNotIn("style.color = m.class_colour", body, fn)
-
-    def test_the_mix_is_set_for_every_theme_state(self):
-        self.assertIn("--class-mix:50%;", self.PAGE)
-        # Once under the OS dark preference, once under the explicit choice.
-        self.assertEqual(self.PAGE.count("--class-mix:100%;"), 2)
 
 
 if __name__ == "__main__":

@@ -45,16 +45,12 @@ import professions
 import tradespec
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 MODULE = (HERE / "tradespec.py").read_text(encoding="utf-8")
 CRAFTBOOK = json.loads((HERE / "craftbook.json").read_text(encoding="utf-8"))
 
 BANNER = "// --- the hundred per cent, and who is first in line (infra#3507"
 NEXT = "// --- where to go next (infra#3500)"
-BLOCK = PAGE[PAGE.index(BANNER) : PAGE.index(NEXT, PAGE.index(BANNER))]
-SECTION = PAGE[PAGE.index('<section id="trades">') :]
-SECTION = SECTION[: SECTION.index("</section>")]
 
 
 def code(block: str) -> str:
@@ -68,9 +64,6 @@ def code(block: str) -> str:
     return "\n".join(
         line for line in block.splitlines() if not line.lstrip().startswith("//")
     )
-
-
-CODE = code(BLOCK)
 
 
 class TheCatalogue(unittest.TestCase):
@@ -791,163 +784,6 @@ class TheCommittedProjection(unittest.TestCase):
             self.assertIn(str(spec.skill), CRAFTBOOK, spec.key)
 
 
-class ThePageDecidesNothing(unittest.TestCase):
-    """Every sentence arrives written, the contract test_recap_tab set."""
-
-    def test_the_four_paragraphs_are_printed_and_not_composed(self):
-        for printed in ("g.line", "g.order", "g.limit_line", "g.grant_line", "g.basis"):
-            self.assertIn(printed, CODE, printed)
-
-    def test_the_headline_stands_down_for_the_empty_note(self):
-        """A completion figure describes a measurement, so it must not stand
-        over one that could not be made."""
-        self.assertIn("g.empty_note || g.line", CODE)
-
-    def test_no_sentence_about_a_branch_is_built_here(self):
-        for invented in (
-            '"crafts"',
-            '"recipes"',
-            '" of "',
-            '"behind"',
-            '"nobody"',
-            '"backup"',
-            '"Armorsmith"',
-            "row.unlocks +",
-            "row.holder +",
-        ):
-            self.assertNotIn(invented, CODE, invented)
-
-    def test_the_counts_are_the_modules_and_not_a_length(self):
-        for counted in (
-            "g.professions.length",
-            "g.hierarchy.length",
-            "g.specs.length",
-            "row.counts",
-        ):
-            self.assertNotIn(counted, CODE, counted)
-
-    def test_the_place_in_the_order_is_the_modules_and_not_a_loop_index(self):
-        """The page would agree with it today and disagree the first time this
-        list was filtered, with nothing failing."""
-        self.assertIn('el("span", "gcr-rank", String(row.rank))', CODE)
-        self.assertNotIn("index + 1", CODE)
-
-    def test_the_reason_a_person_was_chosen_is_the_modules(self):
-        self.assertIn("row.why", CODE)
-
-    def test_the_only_number_it_turns_into_anything_is_the_percent(self):
-        """The bar's fill is the module's own rounded-down figure. A width
-        worked out here from the counts would be a second opinion about it."""
-        self.assertIn('fill.style.width = row.percent + "%"', CODE)
-        self.assertNotIn("row.known /", CODE)
-        self.assertNotIn("row.total", CODE)
-
-    def test_the_chips_reuse_the_one_tone_mapping_on_this_tab(self):
-        """Two mappings would be two chances to disagree about what "no"
-        means, on one tab."""
-        self.assertIn("gcrChips", CODE)
-        self.assertNotIn("chip.tone ===", CODE)
-
-    def test_an_older_server_with_no_goal_draws_nothing_rather_than_blanks(self):
-        """This tab is served by two deployments that are promoted separately.
-        Blanking four paragraphs would make an old server look like a family
-        with no professions and no plan."""
-        self.assertIn("if (!g) return;", CODE)
-
-
-class TheMarkup(unittest.TestCase):
-    def test_every_element_the_render_writes_into_exists(self):
-        for element in (
-            'id="gclgoal"',
-            'id="gclbars"',
-            'id="gclspecs"',
-            'id="gclorder"',
-            'id="gcllimit"',
-            'id="gclladder"',
-            'id="gclgrant"',
-            'id="gclbasis"',
-        ):
-            self.assertIn(element, SECTION, element)
-
-    def test_the_completion_figure_is_above_everything_it_explains(self):
-        """It is the answer to the question the whole tab was asked, and a
-        reader who has scrolled past sixteen ladder rungs has stopped looking
-        for it."""
-        self.assertLess(SECTION.index('id="gclgoal"'), SECTION.index('id="gclladder"'))
-        self.assertLess(SECTION.index('id="gclgoal"'), SECTION.index('id="gcrlist"'))
-
-    def test_the_limit_sits_above_the_ladder_and_not_below_it(self):
-        """A ladder of sixteen rungs where eleven are empty slots reads as work
-        in progress until the sentence saying nothing can fill them, and a
-        reader who stops early takes it for a plan."""
-        self.assertLess(SECTION.index('id="gcllimit"'), SECTION.index('id="gclladder"'))
-
-    def test_the_basis_sits_below_the_ladder_it_describes(self):
-        self.assertGreater(
-            SECTION.index('id="gclbasis"'), SECTION.index('id="gclladder"')
-        )
-
-    def test_the_rules_are_numbered_without_a_gap_or_a_repeat(self):
-        """Six blocks now stand where two did, the sixth being rare recipes by
-        dungeon. A duplicated index reads as two parts of one section and a
-        missing one reads as a section that failed to render."""
-        found = re.findall(r'<span class="ix">(\d+)</span>', SECTION)
-        self.assertEqual(found, ["01", "02", "03", "04", "05", "06"])
-
-
-class TheMobileRules(unittest.TestCase):
-    """The page is read on a phone. Nothing scrolls sideways."""
-
-    CSS_BANNER = "  #gclgoal, #gclorder, #gcllimit, #gclgrant, #gclbasis"
-    CSS = PAGE[
-        PAGE.index(CSS_BANNER) : PAGE.index("  .gcr-body {", PAGE.index(CSS_BANNER))
-    ]
-
-    def test_nothing_in_the_new_styles_sets_a_width_in_pixels(self):
-        """Including the progress bar, whose fill is a percentage of its own
-        row so that it is the same shape on a phone and on a desk."""
-        self.assertIsNone(re.search(r"width:\s*\d+px", self.CSS))
-
-    def test_both_new_grids_cannot_be_pushed_wider_than_their_column(self):
-        """A grid column defaults to min-content, so a long profession name
-        would widen the row and take the page sideways with it. Named rule by
-        rule rather than counted: this window also holds the trade card's own
-        grid, so a count would pass on the strength of somebody else's rule."""
-        for rule in (".tp-head", ".tp-ghead", ".tp-chead", ".gcl-card > summary"):
-            block = self.CSS[self.CSS.index(rule + " {") :]
-            block = block[: block.index("}")]
-            self.assertIn("minmax(0, 1fr)", block, rule)
-
-    def test_long_names_break_rather_than_scroll(self):
-        for rule in (
-            ".tp-name",
-            ".tp-brief",
-            ".tp-cname",
-            ".tp-dline",
-            ".tp-src",
-            ".gcl-label",
-            ".gcl-sum",
-            ".gcl-reason",
-        ):
-            block = self.CSS[self.CSS.index(rule + " {") :]
-            block = block[: block.index("}")]
-            self.assertIn("overflow-wrap:anywhere", block, rule)
-
-    def test_the_new_cards_hide_their_marker_in_both_engines(self):
-        """Safari draws its own triangle from a pseudo-element list-style does
-        not reach."""
-        self.assertIn(".gcl-card > summary { list-style:none", self.CSS)
-        self.assertIn(".gcl-card > summary::-webkit-details-marker", self.CSS)
-
-    def test_the_new_cards_can_be_reached_from_a_keyboard(self):
-        self.assertIn(".gcl-card > summary:focus-visible", self.CSS)
-
-    def test_the_block_declares_no_breakpoint_of_its_own(self):
-        """Mobile first: one column at every width, so a media query here would
-        be a second opinion about what small means."""
-        self.assertNotIn("@media", self.CSS)
-
-
 class TheEndpoint(unittest.TestCase):
     def test_the_craft_facts_read_unions_both_tables(self):
         """THE BUG THIS EXISTS TO STOP. The three tailoring branches gate no
@@ -1000,7 +836,6 @@ class TheHouseRules(unittest.TestCase):
     def test_no_em_dashes(self):
         for name in (
             "tradespec.py",
-            "index.html",
             "map_server.py",
             "tools/craftbook_from_dbc.py",
             "tests/test_tradespec.py",
@@ -1008,15 +843,6 @@ class TheHouseRules(unittest.TestCase):
             self.assertNotIn(
                 chr(0x2014), (HERE / name).read_text(encoding="utf-8"), name
             )
-
-    def test_the_page_reaches_no_new_outside_host(self):
-        self.assertNotIn("http", BLOCK)
-
-    def test_nothing_from_a_payload_is_parsed_as_markup(self):
-        """Profession names and craft names come from the world database and
-        from client files, and neither is trusted."""
-        for parsed in ("innerHTML", "insertAdjacentHTML"):
-            self.assertNotIn(parsed, BLOCK, parsed)
 
     def test_the_module_and_the_book_both_ship_in_the_image(self):
         """A module the page imports and the image does not carry is a 503 on

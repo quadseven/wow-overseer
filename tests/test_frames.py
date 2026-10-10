@@ -110,7 +110,6 @@ class TheEndpointIsWired(unittest.TestCase):
     def setUpClass(cls):
         here = pathlib.Path(__file__).resolve().parent.parent
         cls.server = (here / "map_server.py").read_text()
-        cls.page = (here / "index.html").read_text()
 
     def test_both_verbs_reach_the_right_half(self):
         get = self.server[self.server.index("GET_ROUTES = {") :]
@@ -125,12 +124,3 @@ class TheEndpointIsWired(unittest.TestCase):
         a table becomes unqueryable."""
         self.assertIn("_FRAMES: dict = {}", self.server)
         self.assertIn("_FRAMES_LOCK", self.server)
-
-    def test_the_page_shows_the_reason_and_not_just_the_word_failed(self):
-        self.assertIn("m.detail", self.page)
-
-    def test_the_page_forces_a_refetch_when_a_newer_frame_lands(self):
-        """An <img> whose src never changes is never re-fetched, no-store or
-        not - the panel would show one picture forever."""
-        self.assertIn("frameSeen", self.page)
-        self.assertIn("captured_seconds_ago < frameSeen.ago", self.page)

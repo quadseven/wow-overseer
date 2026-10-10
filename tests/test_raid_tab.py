@@ -29,13 +29,10 @@ Tickets: infra#3508, infra#3500, infra#2597.
 """
 
 import pathlib
-import re
 import unittest
 
-import raidgoals
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 MODULE = (HERE / "raidgoals.py").read_text(encoding="utf-8")
 DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
@@ -44,11 +41,6 @@ BANNER = "// --- what the guild still needs before it can raid (infra#3508)"
 CSS_BANNER = "/* --- what the guild still needs before it can raid (infra#3508)"
 NEXT = "// --- the item tooltip, on every gear name (infra#3501)"
 NEXT_CSS = "/* --- the item tooltip, on every gear name (infra#3501)"
-
-BLOCK = PAGE[PAGE.index(BANNER) : PAGE.index(NEXT, PAGE.index(BANNER))]
-CSS = PAGE[PAGE.index(CSS_BANNER) : PAGE.index(NEXT_CSS, PAGE.index(CSS_BANNER))]
-SECTION = PAGE[PAGE.index('<section id="raid">') :]
-SECTION = SECTION[: SECTION.index("</section>")]
 
 
 def code(block: str) -> str:
@@ -64,40 +56,11 @@ def code(block: str) -> str:
     )
 
 
-CODE = code(BLOCK)
-
-
 class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     """Every other view on this page is sliced from its own banner to the next
     one, so a block dropped in the wrong window is silently asserted about by
     somebody else's suite, and takes their assertions with it when it changes.
     """
-
-    def test_the_script_sits_in_the_one_gap_no_suite_claims(self):
-        """The routing slice ends at setInterval(pollFamily, and the item
-        tooltip's, the dungeon plan's and the console's windows all begin at
-        their own banners below this one."""
-        start = PAGE.index(BANNER)
-        self.assertGreater(start, PAGE.index("setInterval(pollFamily"))
-        self.assertLess(start, PAGE.index(NEXT))
-
-    def test_the_script_sits_above_the_armorys_window(self):
-        """test_armory_tab slices from its banner to `</script>`, which is the
-        end of the file, so anything below it is read as Armory code."""
-        self.assertLess(
-            PAGE.index(BANNER),
-            PAGE.index("// --- the Armory tab (infra#3096, infra#3139)"),
-        )
-
-    def test_the_styles_sit_between_the_furniture_and_the_first_view(self):
-        """The shared furniture has to stay above every view window or the
-        first view to claim it takes the others hostage; the item tooltip's is
-        the first window that starts at a banner."""
-        self.assertLess(
-            PAGE.index("/* --- the redesign furniture (infra#2597)"),
-            PAGE.index(CSS_BANNER),
-        )
-        self.assertLess(PAGE.index(CSS_BANNER), PAGE.index(NEXT_CSS))
 
     def test_the_fetch_sits_above_the_dungeon_plans_fetch_window(self):
         """test_dungeon_tab slices its fetch from its own function to the
@@ -112,206 +75,8 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
             SERVER.index("    def _raidgoals"), SERVER.index("    def _dungeons")
         )
 
-    def test_the_section_sits_before_the_council(self):
-        self.assertLess(
-            PAGE.index('<section id="raid">'), PAGE.index('<section id="council">')
-        )
-
-
-class TheTabIsReachable(unittest.TestCase):
-    def test_it_has_a_button_and_it_sits_next_to_the_dungeons(self):
-        """The Dungeons tab says which five-man is worth the walk; this says
-        what is still missing before the raid above them. Same subject, one
-        rung up."""
-        self.assertIn("rb.dataset.view = RAID_VIEW;", PAGE)
-        self.assertLess(
-            PAGE.index("tabs.appendChild(gb);"), PAGE.index("tabs.appendChild(rb);")
-        )
-        self.assertLess(
-            PAGE.index("tabs.appendChild(rb);"), PAGE.index("tabs.appendChild(db);")
-        )
-
-    def test_the_view_is_in_the_routing_table(self):
-        """A view missing from HASH_VIEWS falls through to the unrecognised
-        branch and silently opens the Family tab, which is exactly the failure
-        the routing TABLE replaced a ladder of ifs to prevent."""
-        listed = PAGE[PAGE.index("const HASH_VIEWS = [") :]
-        self.assertIn("RAID_VIEW", listed[: listed.index("]")])
-
-    def test_show_view_shows_and_hides_the_section(self):
-        show = PAGE[PAGE.index("function showView") :]
-        show = show[: show.index("// Read once, at startup")]
-        self.assertIn("const isRaid = v === RAID_VIEW;", show)
-        self.assertIn('rgsection.style.display = isRaid ? "block" : "none";', show)
-
-    def test_it_fetches_on_the_way_in_rather_than_waiting_for_the_timer(self):
-        """A minute of empty goal list under a heading is indistinguishable
-        from a broken one."""
-        show = PAGE[PAGE.index("function showView") :]
-        show = show[: show.index("// Read once, at startup")]
-        branch = show[show.index("  if (isRaid) {") :]
-        self.assertIn("pollRaid();", branch[: branch.index("  }")])
-
-    def test_it_stops_the_grid_and_closes_the_panel_like_every_read_view(self):
-        """Both are map and Family things that would go on running behind a
-        view that does not show them, keeping a second player alive off
-        screen."""
-        show = PAGE[PAGE.index("function showView") :]
-        branch = show[show.index("  if (isRaid) {") :]
-        branch = branch[: branch.index("  }")]
-        self.assertIn("closePanel();", branch)
-        self.assertIn("stopBroadcasts();", branch)
-
-    def test_the_markup_exists_and_every_box_the_script_fills_is_in_it(self):
-        for element in (
-            'id="rghead"',
-            'id="rgroster"',
-            'id="rgraid"',
-            'id="rgstrip"',
-            'id="rgorder"',
-            'id="rglist"',
-            'id="rgothers"',
-            'id="rgotherlist"',
-            'id="rgbasis"',
-            'id="rrgoal"',
-            'id="rrlist"',
-            'id="rrbasis"',
-            'id="rgpick"',
-            'id="rgline"',
-        ):
-            self.assertIn(element, SECTION, element)
-
-    def test_the_markup_holds_no_sentence_of_its_own(self):
-        """Two section labels, the loading word and the method fold's label,
-        and nothing else: every other word on this tab arrives from the
-        module."""
-        text = re.sub(r"<[^>]+>", " ", SECTION)
-        text = text.replace("how this is worked out", " ")
-        words = [
-            w
-            for w in text.split()
-            if w
-            not in (
-                "loading...",
-                "the",
-                "01",
-                "02",
-                "consumables,",
-                "per",
-                "guild",
-                "rest",
-                "of",
-                "tier",
-            )
-        ]
-        self.assertEqual(words, [], words)
-
-
-class ThePageDecidesNothing(unittest.TestCase):
-    """Every sentence arrives written. This is the contract the Chronicle
-    redesign established and the reason raidgoals.py is a separate module. It
-    matters more here than anywhere else on the site: this is the one view
-    carrying numbers no table on this realm states, so a sentence composed in
-    JavaScript would be a made-up requirement nothing can test."""
-
-    def test_the_headline_is_printed_and_not_composed(self):
-        self.assertIn("p.line", CODE)
-        for invented in ('"Molten Core"', '" goals"', '" of "', '" ready"'):
-            self.assertNotIn(invented, CODE, invented)
-
-    def test_the_roster_and_raid_lines_are_the_modules(self):
-        self.assertIn("p.roster_line", CODE)
-        self.assertIn("p.raid_line", CODE)
-        for invented in ('" members"', '" guild"', '"no guild"'):
-            self.assertNotIn(invented, CODE, invented)
-
-    def test_the_order_and_the_basis_are_both_rendered(self):
-        """A list in an order is read as a finding whether or not anybody
-        meant it to be, and this page's footer is the only thing separating a
-        measurement from a convention."""
-        self.assertIn("p.order", CODE)
-        self.assertIn("p.basis", CODE)
-
-    def test_the_basis_yields_to_the_modules_empty_note(self):
-        """The basis describes how a list was built, so it must not stand over
-        one that was not built at all."""
-        self.assertIn("p.empty_note || p.basis", CODE)
-
-    def test_every_goal_sentence_is_the_modules(self):
-        self.assertIn("goal.line", CODE)
-        self.assertIn("goal.need_line", CODE)
-        self.assertIn("goal.recipes_line", CODE)
-        for invented in (
-            '" short"',
-            '" needed"',
-            '" held"',
-            '"blocked"',
-            '"unreachable"',
-            '" enough"',
-        ):
-            self.assertNotIn(invented, CODE, invented)
-
-    def test_the_status_is_never_worked_out_on_the_page(self):
-        """Whether a goal is short, blocked or unreachable is the whole
-        finding, and the module carries it as a chip with a tone on it."""
-        self.assertNotIn("goal.status", CODE)
-        self.assertNotIn("goal.short >", CODE)
-        self.assertNotIn("goal.held <", CODE)
-
-    def test_the_member_and_product_lines_are_printed_whole(self):
-        """Not the name and the count joined here: that is a sentence about a
-        character assembled where no Python test can read it."""
-        self.assertIn("m.line", CODE)
-        self.assertIn("p.line", CODE)
-        self.assertNotIn("m.who +", CODE)
-        self.assertNotIn("m.held +", CODE)
-
-    def test_every_recipe_sentence_is_the_modules(self):
-        self.assertIn("recipe.line", CODE)
-        self.assertIn("recipe.who_line", CODE)
-        self.assertIn("recipe.rank_line", CODE)
-        for invented in ('"needs "', '"known by"', '" casts"'):
-            self.assertNotIn(invented, CODE, invented)
-
-    def test_a_blocker_and_an_unknown_are_both_printed_and_kept_apart(self):
-        """A blocker is something the module knows stops the craft; an unknown
-        is something it cannot answer. Painting the second like the first
-        reports the page's own blind spot as the guild's problem."""
-        self.assertIn("recipe.blocked", CODE)
-        self.assertIn("recipe.unknown", CODE)
-        self.assertIn('"rg-block"', CODE)
-        self.assertIn('"rg-unknown"', CODE)
-
-    def test_every_reagent_sentence_is_the_modules(self):
-        self.assertIn("reagent.line", CODE)
-        self.assertIn("reagent.source", CODE)
-        self.assertIn("reagent.made_line", CODE)
-        for invented in ('" short"', '"gathered"', '"vendor"', '" per cast"'):
-            self.assertNotIn(invented, CODE, invented)
-
-    def test_the_strip_prints_the_modules_label_and_value(self):
-        self.assertIn("tile.value", CODE)
-        self.assertIn("tile.label", CODE)
-        self.assertNotIn("p.goals.length", CODE)
-
-    def test_a_tone_is_a_class_and_never_a_colour(self):
-        """`tone` is a ROLE NAME the module chose. The stylesheet decides what
-        it looks like on each of the two grounds this page is drawn on."""
-        self.assertIn('"chip" + (chip.tone ? " " + chip.tone : "")', CODE)
-        self.assertNotIn("#", CODE.split("function rgChips")[1][:400])
-
-    def test_an_empty_string_draws_nothing_rather_than_an_empty_line(self):
-        """An empty string is a real answer from the module and means "there
-        is nothing to say here"."""
-        self.assertIn("if (text) parent.appendChild", CODE)
-
 
 class TheEndpoint(unittest.TestCase):
-    def test_it_is_routed_and_the_builder_is_pure(self):
-        self.assertIn('"/api/raidgoals": _raidgoals,', SERVER)
-        self.assertIn("raidgoals.build_raidgoals(", SERVER)
-        self.assertIn('fetch(u("/api/raidgoals"),', BLOCK)
-
     def test_the_handler_takes_nothing_from_the_caller(self):
         """WHO the roster is belongs to bonds and to the world's own guild
         tables, exactly as /api/armory and /api/family refuse a name. This one
@@ -322,13 +87,6 @@ class TheEndpoint(unittest.TestCase):
         ]
         self.assertIn("_fetch_raidgoals()", handler)
         self.assertNotIn("query.get", handler)
-
-    def test_a_dead_database_is_a_503_that_keeps_what_is_drawn(self):
-        handler = SERVER[
-            SERVER.index("def _raidgoals") : SERVER.index("def _achievements")
-        ]
-        self.assertIn("self._send(503", handler)
-        self.assertIn("may be stale", BLOCK)
 
     def test_the_module_ships_in_the_image(self):
         """A module the page imports and the image does not carry is a crash
@@ -471,121 +229,10 @@ class TheReads(unittest.TestCase):
             self.assertNotIn(forbidden, MODULE, forbidden)
 
 
-class TheMobileRules(unittest.TestCase):
-    """The page is read on a phone. A goal, every way of finishing it and
-    every line of every one is three levels of list, and drawn flat it is a
-    wall nobody reads."""
-
-    def test_nothing_in_the_block_sets_a_width_in_pixels(self):
-        self.assertNotIn("width:", CSS.replace("max-width:72ch", ""))
-
-    def test_the_long_names_break_rather_than_scrolling_the_page(self):
-        self.assertIn("overflow-wrap:anywhere", CSS)
-
-    def test_the_only_grid_column_cannot_overflow_its_track(self):
-        """minmax(0, 1fr) and not 1fr: a grid track's default minimum is
-        auto, which a long unbroken item name pushes wider than the screen."""
-        self.assertIn("minmax(0, 1fr)", CSS)
-
-    def test_the_chips_wrap(self):
-        self.assertIn("flex-wrap:wrap", CSS)
-
-    def test_it_declares_no_media_query_of_its_own(self):
-        """The shell already has one and a second breakpoint in here is a
-        second opinion about where a phone stops being a phone."""
-        self.assertNotIn("@media", CSS)
-
-    def test_a_goal_and_a_recipe_are_both_collapsed_by_default(self):
-        """Six goals times three recipes times ten reagents is far more than a
-        thumb can scan, so the row is a details and the recipe inside it is
-        another."""
-        self.assertIn('el("details", "chr-card rg-card")', CODE)
-        self.assertIn('el("details", "rg-recipe")', CODE)
-
-    def test_the_native_marker_is_hidden_in_safari_too(self):
-        """Safari draws its own triangle from a pseudo-element `list-style`
-        does not reach."""
-        self.assertEqual(CSS.count("::-webkit-details-marker"), 2)
-
-    def test_a_summary_keeps_a_visible_focus_ring(self):
-        """The three summaries (a goal, a recipe, the per-raider table) and
-        the guild picker are the controls on this tab, and list-style:none on
-        a summary is where a focus ring usually goes missing."""
-        self.assertEqual(CSS.count(":focus-visible"), 4)
-        self.assertIn(".rr-raiders > summary:focus-visible", CSS)
-
-    def test_it_draws_no_item_quality_colour(self):
-        """A quality colour is designed for the dark ground the Armory and the
-        Bags tab override their tokens to keep; #1eff00 on a white card is
-        about 1.3:1, which is the bug test_theme exists to stop. There are no
-        icons for these items either: icons.json freezes them for displayids
-        the client marks equippable, and a flask has no inventory type."""
-        self.assertNotIn("quality", CODE)
-        self.assertNotIn("chrItem", CODE)
-        self.assertNotIn("icon", CODE)
-
-
-class ThePollIsGuarded(unittest.TestCase):
-    def test_one_pull_at_a_time_and_a_clock_on_it(self):
-        """These are one guard and not two. Started from showView and from the
-        interval, two can be in flight at once; and a server that accepts the
-        connection and never answers leaves the promise pending for ever, so
-        the flag would never be cleared and no later poll could replace the
-        loading line."""
-        self.assertIn("rgPulling", CODE)
-        self.assertIn("AbortSignal.timeout(20000)", CODE)
-
-    def test_the_flag_is_released_in_a_finally(self):
-        """Cleared at the end of the try it would be skipped by the very
-        failure that most needs the next poll to be allowed to run."""
-        block = CODE[CODE.index("async function pollRaid") :]
-        self.assertIn("finally", block[: block.index("\n}")])
-
-    def test_it_polls_only_while_the_tab_is_open(self):
-        """It is a wide read: every roster member's whole inventory plus three
-        source tables."""
-        self.assertIn("if (view === RAID_VIEW) pollRaid();", CODE)
-        self.assertIn("60000);", CODE)
-
-    def test_a_failed_poll_keeps_what_is_drawn(self):
-        """A blanked list here reads as "there is nothing left to farm", which
-        is the one claim this view must never make by accident."""
-        block = CODE[CODE.index("async function pollRaid") :]
-        self.assertNotIn("replaceChildren()", block[: block.index("\n}")])
-
-
 class BothGuildsGetAReadinessCard(unittest.TestCase):
     """The operator called the old tab pointless: one guild's shopping list and
     no verdict. It now opens on one readiness card per guild, both factions,
     each saying whether its first raid can happen and what stops it."""
-
-    def test_the_payload_is_per_guild_and_the_page_draws_every_one(self):
-        self.assertIn("raidready.group_guilds(", SERVER)
-        self.assertIn("raidready.build_guild(", SERVER)
-        self.assertIn("raidready.build_readiness(", SERVER)
-        self.assertIn("for (const g of p.guilds) rrlist.appendChild(rrCard(g));", CODE)
-
-    def test_every_readiness_sentence_is_the_modules(self):
-        for key in (
-            "g.title",
-            "g.headline",
-            "g.roster_line",
-            "g.gear_line",
-            "g.blockers_line",
-            "b.text",
-            "tile.value",
-            "tile.label",
-            "p.goal_line",
-        ):
-            self.assertIn(key, CODE, key)
-
-    def test_a_hard_blocker_and_a_soft_one_are_drawn_apart(self):
-        self.assertIn('b.tone === "hard" ? "rg-block" : "rr-soft"', CODE)
-        self.assertIn(".rr-soft", CSS)
-
-    def test_the_consumables_are_drawn_for_the_guild_picked(self):
-        self.assertIn("rgRender(chosen.goals);", CODE)
-        self.assertIn("rrRender(await r.json());", CODE)
 
     def test_the_guild_reads_are_bound_to_every_family_not_bonds_five(self):
         """family.roster() is bonds' one family, so a guild read bound to it
@@ -611,117 +258,6 @@ class BothGuildsGetAReadinessCard(unittest.TestCase):
 
     def test_the_module_ships_in_the_image(self):
         self.assertIn("raidready.py", DOCKERFILE)
-
-
-class TheModuleAndThePageAgree(unittest.TestCase):
-    """A key the page reads and the module does not write is an undefined on a
-    phone, which renders as a blank line rather than as an error."""
-
-    def test_every_payload_key_the_script_reads_is_one_the_module_writes(self):
-        payload = raidgoals.build_raidgoals(
-            item_rows=[],
-            recipe_rows=[],
-            trainer_rows=[],
-            char_rows=[],
-            skill_rows=[],
-            spell_rows=[],
-            holding_rows=[],
-            worn_rows=[],
-            vendor_rows=[],
-            creature_rows=[],
-            object_rows=[],
-            guild_rows=[],
-            roster=["Ugga"],
-        )
-        for key in (
-            "line",
-            "roster_line",
-            "raid_line",
-            "strip",
-            "order",
-            "goals",
-            "others",
-            "others_line",
-            "basis",
-            "empty_note",
-        ):
-            self.assertIn("p." + key, CODE, key)
-            self.assertIn(key, payload, key)
-
-    def test_every_goal_key_the_script_reads_is_one_the_module_writes(self):
-        payload = raidgoals.build_raidgoals(
-            item_rows=[],
-            recipe_rows=[],
-            trainer_rows=[],
-            char_rows=[],
-            skill_rows=[],
-            spell_rows=[],
-            holding_rows=[],
-            worn_rows=[],
-            vendor_rows=[],
-            creature_rows=[],
-            object_rows=[],
-            guild_rows=[],
-            roster=["Ugga"],
-        )
-        goal = payload["goals"][0]
-        for key in (
-            "name",
-            "line",
-            "chips",
-            "need_line",
-            "recipes_line",
-            "members",
-            "products",
-            "recipes",
-        ):
-            self.assertIn("goal." + key, CODE, key)
-            self.assertIn(key, goal, key)
-
-    def test_every_readiness_key_the_script_reads_is_one_the_module_writes(self):
-        import raidready
-
-        group = {
-            "guildid": None,
-            "guild": "",
-            "family": "Ugga",
-            "family_names": ["Ugga"],
-            "rows": [],
-        }
-        goals = raidgoals.build_raidgoals(
-            item_rows=[],
-            recipe_rows=[],
-            trainer_rows=[],
-            char_rows=[],
-            skill_rows=[],
-            spell_rows=[],
-            holding_rows=[],
-            worn_rows=[],
-            vendor_rows=[],
-            creature_rows=[],
-            object_rows=[],
-            guild_rows=[],
-            roster=["Ugga"],
-        )
-        card = raidready.build_guild(group, [], [], [], None, goals)
-        payload = raidready.build_readiness([card])
-        for key in ("line", "goal_line", "guilds", "basis"):
-            self.assertIn("p." + key, CODE, key)
-            self.assertIn(key, payload, key)
-        for key in (
-            "title",
-            "headline",
-            "tiles",
-            "roster_line",
-            "gear_line",
-            "blockers_line",
-            "blockers",
-            "groups",
-            "gap_line",
-            "gaps",
-        ):
-            self.assertIn("g." + key, CODE, key)
-            self.assertIn(key, card, key)
 
 
 if __name__ == "__main__":

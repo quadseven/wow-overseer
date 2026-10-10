@@ -8,7 +8,6 @@ test_gearorigin: rows in the shape _fetch_armory and _fetch_upgrade_items read.
 import io
 import json
 import logging
-import pathlib
 import sys
 import types
 import unittest
@@ -246,34 +245,6 @@ class TheUpgradesEndpoint(unittest.TestCase):
         code, body = get()
         self.assertEqual(code, 503)
         self.assertEqual(body["error"], "world unreachable")
-
-
-PAGE = (pathlib.Path(__file__).resolve().parent.parent / "index.html").read_text(
-    encoding="utf-8"
-)
-
-
-class ThePageDrawsIt(unittest.TestCase):
-    def test_the_section_and_its_controls_exist(self):
-        self.assertIn('<section id="upgrades">', PAGE)
-        section = PAGE[PAGE.index('<section id="upgrades">') :]
-        section = section[: section.index("</section>")]
-        for ident in ("upsel", "upready", "uptable", "upbasis"):
-            self.assertIn(f'id="{ident}"', section)
-        self.assertIn('<label for="upsel">', section)
-
-    def test_the_tab_is_wired_and_routable(self):
-        self.assertIn('const UPGRADES_VIEW = "upgrades";', PAGE)
-        self.assertIn("showView(UPGRADES_VIEW)", PAGE)
-        hashes = PAGE[PAGE.index("const HASH_VIEWS = [") :]
-        self.assertIn("UPGRADES_VIEW", hashes[: hashes.index("];")])
-        self.assertIn('upsection.style.display = isUp ? "block" : "none";', PAGE)
-
-    def test_it_reads_the_endpoint_by_name_and_paints_text_only(self):
-        block = PAGE[PAGE.index("// --- the Upgrades tab") :]
-        block = block[: block.index("upsel.addEventListener")]
-        self.assertIn('u("/api/upgrades?name=" + encodeURIComponent(name))', block)
-        self.assertNotIn("innerHTML", block)
 
 
 INTELLECT_ENCHANT, SUFFIX_ENCHANT, TEMP_ENCHANT = 7001, 7002, 7003

@@ -26,7 +26,6 @@ map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text()
 
 
 def worn(name, slot, ilvl, item="", **kw):
@@ -153,64 +152,9 @@ class TheEndpoints(unittest.TestCase):
             inv.assert_not_called()
 
 
-def js(start, end):
-    block = PAGE[PAGE.index(start) :]
-    return block[: block.index(end)]
-
-
 class ThePage(unittest.TestCase):
-    def test_the_lineup_tab_draws_the_table_and_fetches_it(self):
-        section = js('<section id="lineup">', "</section>")
-        self.assertIn('id="lgtable"', section)
-        self.assertIn('class="lg-scroll"', section)
-        branch = js("  if (isLineup) {", "    return;")
-        self.assertIn("pollGuildGear();", branch)
-        self.assertIn('u("/api/guildgear")', PAGE)
-
-    def test_a_row_opens_the_tiles_own_frame_bar(self):
-        render = js("function lgRender()", "\nasync function pollGuildGear")
-        self.assertIn("vclientBar(m.name)", render)
-        for key in (
-            "name",
-            "class",
-            "level",
-            "role",
-            "avg",
-            "worn",
-            "empty",
-            "weapon",
-            "weakest",
-            "gold",
-            "state",
-        ):
-            self.assertIn('key: "%s"' % key, PAGE)
-
-    def test_the_table_scrolls_in_its_own_box_never_the_page(self):
-        """On a phone it is cards (tests/test_lineup_cards.py); on a wide
-        screen whose columns do not fit, the box scrolls, never the page."""
-        self.assertRegex(PAGE, r"\.lg-scroll \{ overflow-x:auto;")
-
     def test_the_read_carries_each_worn_items_entry(self):
         self.assertIn("it.entry AS item_entry", map_server._GUILD_GEAR)
-
-    def test_frames_open_in_the_section_they_were_opened_from(self):
-        open_ = js("function vcOpen(kind, name, anchor) {", "\n}")
-        self.assertIn("vcHost(anchor);", open_)
-        self.assertIn('anchor.closest("section")', js("function vcHost(", "\n}"))
-
-    def test_the_item_card_is_always_above_every_frame(self):
-        self.assertIn("vc.tip.style.zIndex = String(vc.z + 1);", PAGE)
-        self.assertIn("vcTipTop();", js("function vcFront(f) {", "\n}"))
-        self.assertIn("vcTipTop();", js("async function vcShowTip(", "\n}"))
-
-    def test_a_frame_that_grew_past_the_bottom_is_raised(self):
-        load = js("async function vcLoad(f) {", "\n}")
-        self.assertIn("window.innerHeight - h - 8", load)
-
-    def test_the_picker_offers_the_guild_too(self):
-        picker = js("async function vcPicker(f) {", "\n}")
-        self.assertIn("s.guild.members", picker)
-        self.assertIn("bar.disabled = true;", picker)
 
 
 if __name__ == "__main__":

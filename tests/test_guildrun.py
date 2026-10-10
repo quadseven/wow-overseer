@@ -23,7 +23,6 @@ from test_jev_items import FakeJev
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 
 WARRIOR, PALADIN, ROGUE, PRIEST, MAGE, WARLOCK, DRUID = 1, 2, 4, 5, 8, 9, 11
 PROTECTION_TALENT = "12301"
@@ -1071,17 +1070,6 @@ class TheWiring(unittest.TestCase):
         self.assertLess(
             loop.index("_follow_guild_runs"), loop.index("if guildrun.enabled():")
         )
-
-    def test_the_site_serves_and_routes_the_tab(self):
-        self.assertIn('"/api/guildruns": _guild_runs,', SERVER)
-        listed = PAGE[PAGE.index("const HASH_VIEWS = [") :]
-        self.assertIn("GUILD_VIEW", listed[: listed.index("];")])
-        layout = PAGE[PAGE.index("function hubLayout()") :]
-        self.assertIn("GUILD_VIEW", layout[: layout.index("\n}\n")])
-        show = PAGE[PAGE.index("function showView") :]
-        branch = show[show.index("  if (isGuild) {") :]
-        self.assertIn("pollGuild();", branch[: branch.index("  }")])
-        self.assertIn('fetch(u("/api/guildruns")', PAGE)
 
 
 if __name__ == "__main__":

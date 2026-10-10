@@ -9,14 +9,12 @@ text, the seam every other tab suite uses.
 
 import json
 import pathlib
-import re
 import unittest
 
 import tradespec
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 BOOK = json.loads((HERE / "craftbook.json").read_text(encoding="utf-8"))
 
 ARMOR = tradespec.BY_KEY["armorsmith"].spell
@@ -418,99 +416,6 @@ class TheRealBook(unittest.TestCase):
         )
         self.assertEqual(out["total"], len(crafts))
         self.assertLess(len(json.dumps(out)), 250000)
-
-
-CSS = PAGE[
-    PAGE.index("  #gclbars { display:grid") : PAGE.index("  /* A BRANCH, AND A RUNG")
-]
-JS = PAGE[
-    PAGE.index("let gclOpen = 0;") : PAGE.index("// ONE BRANCH ONE OF THE FAMILY")
-]
-
-
-def rule(selector: str) -> str:
-    start = CSS.index("  " + selector + " {")
-    return CSS[start : CSS.index("}", start)]
-
-
-class ThePhoneRows(unittest.TestCase):
-    """The page contract for the tap-to-open rows: size, state, and words."""
-
-    def test_every_tap_target_is_at_least_44_pixels_tall(self):
-        for sel in (".tp-head", ".tp-ghead", ".tp-chead", ".tp-chip", ".tp-more"):
-            m = re.search(r"min-height:(\d+)px", rule(sel))
-            self.assertIsNotNone(m, sel)
-            self.assertGreaterEqual(int(m.group(1)), 44, sel)
-
-    def test_no_text_in_the_rows_is_under_16_pixels(self):
-        for size in re.findall(r"font-size:\s*([\d.]+)px", CSS):
-            self.assertGreaterEqual(float(size), 16, size)
-        for size in re.findall(r"font-size:\s*([\d.]+)rem", CSS):
-            self.assertGreaterEqual(float(size), 1, size)
-
-    def test_colours_are_roles_so_both_themes_follow(self):
-        self.assertIsNone(re.search(r"#[0-9a-fA-F]{3,6}\b", CSS))
-
-    def test_nothing_sets_a_pixel_width_or_a_breakpoint(self):
-        self.assertIsNone(re.search(r"width:\s*\d+px", CSS))
-        self.assertNotIn("@media", CSS)
-
-    def test_the_character_filter_scrolls_sideways_inside_its_own_box(self):
-        self.assertIn("overflow-x:auto", rule(".tp-pick"))
-        self.assertIn("flex:0 0 auto", rule(".tp-chip"))
-
-    def test_the_rows_are_buttons_that_say_whether_they_are_open(self):
-        self.assertGreaterEqual(JS.count('setAttribute("aria-expanded"'), 3)
-        self.assertIn('setAttribute("aria-pressed"', JS)
-
-    def test_one_profession_is_open_at_a_time(self):
-        self.assertIn("let gclOpen = 0;", JS)
-        self.assertIn("gclOpen = gclOpen === skill ? 0 : skill;", JS)
-
-    def test_the_state_survives_the_refresh(self):
-        poll = PAGE[PAGE.index("async function pollTrades") :]
-        poll = poll[: poll.index("} finally {")]
-        self.assertIn("if (gclOpen) gclFetch(gclOpen);", poll)
-        for kept in ("gclView", "gclSpell", "gclGroups", "gclLists"):
-            self.assertIn(
-                "let %s" % kept
-                if kept in ("gclView", "gclSpell")
-                else "const %s" % kept,
-                JS,
-            )
-
-    def test_the_list_is_asked_for_on_demand_with_a_timeout(self):
-        self.assertIn('"/api/trades" + q', JS)
-        self.assertIn("AbortSignal.timeout(20000)", JS)
-        self.assertIn("encodeURIComponent(skill)", JS)
-
-    def test_every_sentence_is_the_modules(self):
-        for printed in (
-            "row.brief",
-            "view.brief",
-            "list.reagents_line",
-            "group.label",
-            "craft.how_line",
-            "craft.where_line",
-            "craft.dungeon_line",
-            "craft.gate_line",
-            "list.ask_label",
-        ):
-            self.assertIn(printed, JS, printed)
-
-    def test_the_groups_are_the_modules_and_the_page_counts_nothing(self):
-        self.assertIn("group.count", JS)
-        self.assertNotIn(".length +", JS)
-        self.assertNotIn("row.counts", JS)
-
-    def test_nothing_from_a_payload_is_parsed_as_markup(self):
-        self.assertNotIn("innerHTML", JS)
-
-    def test_a_group_with_nothing_in_it_is_not_a_button(self):
-        self.assertIn("if (!group.count) {", JS)
-
-    def test_the_old_paragraph_is_no_longer_the_row(self):
-        self.assertNotIn("row.line", JS)
 
 
 if __name__ == "__main__":

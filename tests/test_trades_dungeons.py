@@ -30,7 +30,6 @@ map_server.log.propagate = False
 map_server.log.addHandler(logging.NullHandler())
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 
 DEADMINES = 36
 WAILING = 43
@@ -301,33 +300,6 @@ class ThePage(unittest.TestCase):
     """The section is drawn from the module's sentences and composes none."""
 
     BANNER = "// --- rare recipes by dungeon"
-
-    def block(self) -> str:
-        start = PAGE.index(self.BANNER)
-        return PAGE[start : PAGE.index("// --- the hundred per cent", start)]
-
-    def test_the_section_is_in_the_trades_view(self):
-        section = PAGE[PAGE.index('<section id="trades">') :]
-        section = section[: section.index("</section>")]
-        self.assertIn("rare recipes by dungeon", section)
-        for element in ('id="gcdline"', 'id="gcdorder"', 'id="gcdlist"'):
-            self.assertIn(element, section, element)
-        self.assertLess(section.index('id="gcdorder"'), section.index('id="gcdlist"'))
-
-    def test_the_render_reads_the_payload_key(self):
-        self.assertIn("gcdRender(p.dungeons);", PAGE)
-
-    def test_every_sentence_arrives_written(self):
-        code = "\n".join(
-            line
-            for line in self.block().splitlines()
-            if not line.lstrip().startswith("//")
-        )
-        for field in ("d.line", "d.level_line", "recipe.need_line", "recipe.rare_line"):
-            self.assertIn(field, code, field)
-        self.assertIn('el("span", "gcr-rank", String(d.rank))', code)
-        for invented in ('"rare"', '"still needed', "index + 1", "innerHTML"):
-            self.assertNotIn(invented, code, invented)
 
     def test_no_em_dashes_in_this_suite(self):
         text = pathlib.Path(__file__).read_text(encoding="utf-8")

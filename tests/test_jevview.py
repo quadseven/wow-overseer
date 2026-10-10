@@ -1,13 +1,11 @@
 """The Decree's Jev card: sentences from Python, drawn by the page as text (#95)."""
 
 import pathlib
-import re
 import unittest
 
 import jevview
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 
 
@@ -94,27 +92,6 @@ class ViewTest(unittest.TestCase):
 
 
 class ThePageComposesNothing(unittest.TestCase):
-    def body(self):
-        fn = PAGE[PAGE.index("function dcrRenderJev(j) {") :]
-        return fn[: fn.index("\n}\n")]
-
-    def test_every_string_the_card_draws_is_the_modules(self):
-        body = self.body()
-        self.assertEqual(set(re.findall(r'"([^"]*)"', body)), {"", "div"})
-        self.assertNotIn("innerHTML", body)
-        for key in ("j.title", "j.lede", "j.kinds", "j.recent", "j.empty"):
-            self.assertIn(key, body)
-
-    def test_the_poll_draws_it(self):
-        poll = PAGE[PAGE.index("async function pollDecree() {") :]
-        poll = poll[: poll.index("\n}\n")]
-        self.assertIn("dcrRenderJev(p.jev);", poll)
-
-    def test_the_markup_carries_no_sentence(self):
-        card = PAGE[PAGE.index('<h2 id="dcrjevtitle"></h2>') :]
-        card = card[: card.index("</div>\n    </div>")]
-        self.assertNotIn("Jev", card.replace("dcrjev", ""))
-
     def test_the_decree_carries_the_card_and_the_read_never_raises(self):
         handler = SERVER[SERVER.index("    def _decree(self") :]
         handler = handler[: handler.index("    def _decree_post(self")]

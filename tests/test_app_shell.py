@@ -1,296 +1,559 @@
-"""The page opens and behaves like an app on the operator's phone.
+"""The operations app's shell: the page, the files it loads, the router, the
+fetch layer's server half and the /api/v2 namespace.
 
-Added to the Home Screen it runs full screen, so the things Safari drew around
-it are the page's own now: the manifest and icon it is installed from, the
-status bar's strip, the pressed state of a control, the edges a scroll stops
-at, the sheets panels rise in, and where each view was left. The behaviour is
-run under node with fake elements; the furniture is read from the files.
+The page is index.html; its modules live in app/ and are served one file at a
+time from /app/. The classic page it replaced is gone, and /classic with it.
+The router and the markup helpers are pure modules, run under node.
 """
 
 import json
+import os
 import pathlib
+import re
 import shutil
-import struct
 import subprocess
 import sys
+import tempfile
 import types
 import unittest
+from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
-import map_server  # noqa: E402  (must follow the pymysql stub)
+import apiv2  # noqa: E402
+import basepath  # noqa: E402
+import map_server  # noqa: E402
+from apiv2 import operator as v2operator  # noqa: E402
 
 PAGE = (HERE / "index.html").read_text(encoding="utf-8")
-HEAD = PAGE[: PAGE.index("</head>")]
-ICONS = {"apple-touch-icon.png": 180, "icon-192.png": 192, "icon-512.png": 512}
+APP = HERE / "app"
+APP_FILES = sorted(p for p in APP.rglob("*") if p.suffix in (".js", ".css"))
 
 
-def fn(name):
-    js = PAGE[PAGE.index("function %s(" % name) :]
-    return js[: js.index("\n}\n") + 3]
-
-
-def node(script):
-    out = subprocess.run(
-        [shutil.which("node"), "-e", script],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+def node_module(module, script):
+    """Run `script` (ES module code) with `module` (a file in app/) imported
+    as M. The file is copied to a .mjs so node reads it as a module whatever
+    its version."""
+    with tempfile.TemporaryDirectory() as tmp:
+        src = APP / module
+        dst = pathlib.Path(tmp) / (src.stem + ".mjs")
+        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        code = "import * as M from %s;\n%s" % (json.dumps(dst.as_uri()), script)
+        out = subprocess.run(
+            [shutil.which("node"), "--input-type=module", "-e", code],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
     if out.returncode != 0:
         raise AssertionError(out.stderr)
     return json.loads(out.stdout)
 
 
-class InstallsFromTheHomeScreen(unittest.TestCase):
-    def test_the_manifest_opens_this_realm_full_screen(self):
-        m = json.loads((HERE / "manifest.webmanifest").read_text(encoding="utf-8"))
-        self.assertEqual(m["display"], "standalone")
-        # Relative, so each realm's copy resolves against its own mount.
-        self.assertEqual(m["start_url"], "./")
-        self.assertEqual(m["scope"], "./")
-        self.assertTrue(m["name"] and m["short_name"])
-        sizes = {i["sizes"] for i in m["icons"]}
-        self.assertIn("192x192", sizes)
-        self.assertIn("512x512", sizes)
-        for icon in m["icons"]:
-            self.assertFalse(icon["src"].startswith("/"), icon["src"])
-            self.assertTrue((HERE / icon["src"]).exists(), icon["src"])
+class FakeHandler(map_server.Handler):
+    """A Handler with the socket cut off: a request in, what was sent out."""
 
-    def test_every_icon_is_a_png_of_its_size_and_small(self):
-        for name, size in ICONS.items():
-            data = (HERE / name).read_bytes()
-            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n", name)
-            w, h = struct.unpack(">II", data[16:24])
-            self.assertEqual((w, h), (size, size), name)
-            self.assertLess(len(data), 64 * 1024, name)
+    def __init__(self, path="/", headers=None, command="GET"):
+        self.path = path
+        self.command = command
+        self.headers = headers or {}
+        self.sent = []
+        self.lines = []
+        self.wfile = self
 
-    def test_the_page_links_the_manifest_and_icon_through_the_mount(self):
-        for path in ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-192.png"):
-            self.assertIn('u("%s")' % path, HEAD)
-        self.assertIn('["manifest", u("/manifest.webmanifest")', HEAD)
-        self.assertIn('["apple-touch-icon", u("/apple-touch-icon.png")', HEAD)
+    # The real _send runs; only the socket is fake.
+    def send_response(self, code, message=None):
+        self.lines.append(("status", code))
 
-    def test_the_page_asks_to_open_full_screen(self):
+    def send_header(self, key, value):
+        self.lines.append((key, value))
+
+    def end_headers(self):
+        self.lines.append(("end", None))
+
+    def write(self, body):
+        self.sent.append(body)
+
+    def status(self):
+        return next(v for k, v in self.lines if k == "status")
+
+    def header(self, name):
+        return next((v for k, v in self.lines if k == name), None)
+
+    def body(self):
+        return b"".join(self.sent)
+
+
+def get(path, headers=None):
+    h = FakeHandler(path, headers)
+    h.do_GET()
+    return h
+
+
+class ThePage(unittest.TestCase):
+    def test_every_url_on_the_page_starts_at_the_mount(self):
+        # A root-anchored URL on a page served under a prefix reads the realm
+        # at the root (basepath.py). Every same-origin URL here is built on
+        # the placeholder; the only other hosts are the font and icon CDNs.
+        for m in re.finditer(r'(?:href|src)="([^"]+)"', PAGE):
+            url = m.group(1)
+            if url.startswith("https://"):
+                self.assertTrue(
+                    url.startswith(
+                        (
+                            "https://fonts.googleapis.com",
+                            "https://fonts.gstatic.com",
+                            "https://unpkg.com/@phosphor-icons/web@2.1.1/",
+                        )
+                    ),
+                    url,
+                )
+                continue
+            self.assertTrue(url.startswith(basepath.PLACEHOLDER + "/"), url)
+
+    def test_the_page_tells_the_app_where_it_is_mounted(self):
+        self.assertIn(
+            '<meta name="overseer-base" content="%s">' % basepath.PLACEHOLDER, PAGE
+        )
+        app = (APP / "api.js").read_text(encoding="utf-8")
+        self.assertIn('meta[name="overseer-base"]', app)
+        self.assertIn("export function u(path)", app)
+
+    def test_the_app_never_fetches_outside_the_mount_helper(self):
+        for path in APP_FILES:
+            if path.suffix != ".js":
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotRegex(text, r"""fetch\(\s*["'`]/""", path.name)
+            self.assertNotRegex(text, r"""import\(\s*["'`]/""", path.name)
+
+    def test_the_icon_styles_are_pinned_by_integrity(self):
+        links = re.findall(r"<link[^>]+unpkg\.com[^>]+>", PAGE)
+        self.assertEqual(len(links), 2)
+        for link in links:
+            self.assertRegex(link, r'integrity="sha384-[A-Za-z0-9+/=]{64}"')
+            self.assertIn('crossorigin="anonymous"', link)
+        self.assertNotIn('<script src="https://', PAGE)
+
+    def test_it_opens_full_screen_from_the_home_screen(self):
         for tag in (
             '<meta name="apple-mobile-web-app-capable" content="yes">',
             '<meta name="mobile-web-app-capable" content="yes">',
-            '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">',
-            '<meta name="apple-mobile-web-app-title" content="Overseer">',
-            '<meta name="theme-color"',
+            "viewport-fit=cover",
+            'rel="manifest" href="__OVERSEER_BASE__/manifest.webmanifest"',
+            'rel="apple-touch-icon" href="__OVERSEER_BASE__/apple-touch-icon.png"',
         ):
-            self.assertIn(tag, HEAD)
-        self.assertIn("viewport-fit=cover", HEAD)
+            self.assertIn(tag, PAGE)
 
-    def test_the_server_serves_every_file_with_its_type(self):
-        class Fake(map_server.Handler):
-            def __init__(self):
-                self.sent = []
+    def test_jquery_is_gone_from_the_app(self):
+        # One exception, and only one: the paperdoll's model stage reuses the
+        # classic Armory's 3D viewer, a third-party script that needs jQuery.
+        # It loads both lazily, when a model comes near the screen; the page
+        # and every other module stay free of it.
+        self.assertNotIn("jquery", PAGE.lower())
+        for path in APP_FILES:
+            if path.relative_to(APP).as_posix() == "views/_model.js":
+                continue
+            self.assertNotIn(
+                "jquery", path.read_text(encoding="utf-8").lower(), path.name
+            )
 
-            def _send(self, code, ctype, body, cache_control="no-store"):
-                self.sent.append((code, ctype, body))
+    def test_the_theme_is_set_before_the_first_paint(self):
+        boot = PAGE.index('localStorage.getItem("overseer.theme")')
+        self.assertLess(boot, PAGE.index("app/tokens.css"))
 
-        want = {
-            "/manifest.webmanifest": (
-                "manifest.webmanifest",
-                "application/manifest+json",
-            ),
-            "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
-            "/icon-192.png": ("icon-192.png", "image/png"),
-            "/icon-512.png": ("icon-512.png", "image/png"),
-        }
-        for path, (name, ctype) in want.items():
-            h = Fake()
-            map_server.Handler.GET_ROUTES[path](h, {})
-            code, got_type, body = h.sent[-1]
-            self.assertEqual((code, got_type), (200, ctype), path)
-            self.assertEqual(body, (HERE / name).read_bytes(), path)
-
-    def test_the_image_ships_them(self):
-        docker = (HERE / "Dockerfile").read_text(encoding="utf-8")
-        line = [
-            x for x in docker.splitlines() if x.startswith("COPY manifest.webmanifest")
-        ]
-        self.assertEqual(len(line), 1)
-        for name in ["manifest.webmanifest", *ICONS]:
-            self.assertIn(name, line[0])
+    def test_the_module_loads_last(self):
+        self.assertTrue(
+            PAGE.rstrip().endswith(
+                '<script type="module" src="__OVERSEER_BASE__/app/main.js"></script>\n</body>\n</html>'.strip()
+            )
+        )
 
 
-class TheShellAroundTheViews(unittest.TestCase):
-    def test_the_status_bar_strip_and_the_bars_clear_the_notch(self):
-        self.assertIn("body { padding-top:env(safe-area-inset-top); }", PAGE)
-        self.assertIn("height:env(safe-area-inset-top); background:#0A140E;", PAGE)
+class TheTokens(unittest.TestCase):
+    TOKENS = (APP / "tokens.css").read_text(encoding="utf-8")
+    CSS = (APP / "app.css").read_text(encoding="utf-8")
+
+    def test_dark_and_light_both_exist_and_the_system_decides_by_default(self):
+        self.assertIn("--color-bg: #161826;", self.TOKENS)
+        self.assertIn(':root[data-theme="light"]', self.TOKENS)
+        self.assertIn("@media (prefers-color-scheme: light)", self.TOKENS)
+        self.assertIn(':root:not([data-theme="dark"])', self.TOKENS)
+
+    def test_the_type_scale_and_status_colours(self):
+        for token in (
+            "--fs-0: 11px",
+            "--fs-2: 14px",
+            "--fs-5: 28px",
+            "--ok:",
+            "--warn:",
+            "--bad:",
+            "--warn-line:",
+            "--bad-line:",
+        ):
+            self.assertIn(token, self.TOKENS)
+
+    def test_every_class_colour_exists_in_both_themes(self):
+        for cls in (
+            "warrior",
+            "paladin",
+            "rogue",
+            "priest",
+            "mage",
+            "shaman",
+            "druid",
+            "hunter",
+            "warlock",
+        ):
+            self.assertEqual(self.TOKENS.count("--cls-%s:" % cls), 3, cls)
+
+    def test_focus_is_visible_and_taps_are_44px(self):
         self.assertIn(
-            ":root :is(#tabbar, #ajump, #stjump) { top:env(safe-area-inset-top); }",
-            PAGE,
+            ":focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px;",
+            self.CSS,
         )
         self.assertIn(
-            "env(safe-area-inset-bottom)",
-            PAGE[PAGE.index("#hubs { position:fixed") :][:200],
+            "min-height: 44px",
+            self.CSS[self.CSS.index(".btn {") : self.CSS.index(".btn:disabled")],
         )
+        self.assertIn("min-height: 48px", self.CSS[self.CSS.index(".tab {") :])
+
+    def test_headings_never_go_above_500(self):
+        for weight in re.findall(r"font-weight:\s*(\d+)", self.TOKENS + self.CSS):
+            self.assertLessEqual(int(weight), 500)
+
+    def test_the_tooltip_stays_dark_in_both_themes(self):
+        light = self.TOKENS[self.TOKENS.index(':root[data-theme="light"]') :]
+        self.assertNotIn("--tip-bg", light)
+
+
+class TheHouseRules(unittest.TestCase):
+    def test_ascii_and_no_em_dashes(self):
+        for path in [
+            HERE / "index.html",
+            *APP_FILES,
+            *sorted((HERE / "apiv2").glob("*.py")),
+        ]:
+            text = path.read_text(encoding="utf-8")
+            self.assertTrue(text.isascii(), path.name)
+
+
+class TheServer(unittest.TestCase):
+    def test_a_worn_bonus_is_read_as_its_score(self):
+        # /api/upgrades sends a worn item's extras as {enchants, stats, score};
+        # the panel once printed the object as a number: "+NaN".
+        src = (APP / "views" / "_members.js").read_text(encoding="utf-8")
+        self.assertIn("function bonusScore(b)", src)
+        self.assertNotIn("score(s.worn.bonus)", src)
+
+    def test_a_name_outside_the_roster_reads_only_the_roster(self):
+        src = (APP / "views" / "member.js").read_text(encoding="utf-8")
         self.assertIn(
-            ":root #itemtip { padding-bottom:env(safe-area-inset-bottom); }", PAGE
+            'if (roster && !byName(roster.members).has(ctx.params.name)) return ["/api/v2/roster"];',
+            src,
         )
 
-    def test_a_tap_is_answered_by_the_control(self):
-        self.assertIn("-webkit-tap-highlight-color:transparent;", PAGE)
-        self.assertRegex(
-            PAGE,
-            r"@media \(hover: none\) \{\s*:is\(a, button, summary, \.aslot, "
-            r"tr\[tabindex\]\):active:not\(:disabled\) \{\s*opacity:\.6;",
-        )
-        self.assertIn(
-            'document.addEventListener("touchstart", () => {}, { passive: true });',
-            PAGE,
-        )
+    def test_nothing_still_points_at_the_classic_page(self):
+        # Every section has its own view now: no stub, no link to /classic.
+        self.assertFalse((APP / "views" / "_pending.js").exists())
+        self.assertNotIn("classicFor", (APP / "router.js").read_text(encoding="utf-8"))
+        self.assertNotIn("/classic", PAGE)
 
-    def test_the_page_does_not_rubber_band_and_fields_do_not_zoom(self):
-        self.assertIn("overscroll-behavior-y:none;", PAGE)
-        self.assertRegex(
-            PAGE,
-            r"@media \(pointer: coarse\) \{\s*:root :is\(input, select, textarea, "
-            r"#pinput, #dcrtext, #dcrqueuetext\) \{\s*font-size:max\(16px, 1em\);",
-        )
+    def test_the_root_serves_the_app_and_the_classic_page_is_gone(self):
+        app = get("/")
+        self.assertEqual(app.status(), 200)
+        self.assertIn(b'<script type="module" src="/app/main.js">', app.body())
+        for old in ("/classic", "/classic.html"):
+            self.assertNotIn(old, map_server.Handler.GET_ROUTES)
+            self.assertEqual(get(old).status(), 404, old)
+        self.assertFalse((HERE / "classic.html").exists())
 
-    def test_the_native_controls_follow_the_theme(self):
-        self.assertIn(":root { color-scheme:light; }", PAGE)
-        self.assertIn(':root:not([data-theme="light"]) { color-scheme:dark; }', PAGE)
-        self.assertIn(':root[data-theme="dark"] { color-scheme:dark; }', PAGE)
+    def test_a_prefixed_realm_gets_its_prefix_in_the_app(self):
+        original = map_server.BASE_PATH
+        map_server.BASE_PATH = "/dev"
+        try:
+            body = get("/").body().decode("utf-8")
+        finally:
+            map_server.BASE_PATH = original
+        self.assertIn('<meta name="overseer-base" content="/dev">', body)
+        self.assertIn('src="/dev/app/main.js"', body)
+        self.assertNotIn(basepath.PLACEHOLDER, body)
 
-    def test_motion_has_a_reduced_path(self):
-        block = PAGE[PAGE.index("@keyframes sheet-up") :][:4000]
-        reduced = block[block.index("@media (prefers-reduced-motion: reduce)") :]
-        self.assertIn(
-            "#itemtip:not([hidden]), #panel.sheet-open { animation:none; }", reduced
-        )
-        self.assertIn(".sheet-settling { transition:none; }", reduced)
+    def test_app_files_are_served_with_their_types(self):
+        js = get("/app/main.js")
+        self.assertEqual(js.status(), 200)
+        self.assertEqual(js.header("Content-Type"), "text/javascript; charset=utf-8")
+        css = get("/app/tokens.css")
+        self.assertEqual(css.header("Content-Type"), "text/css; charset=utf-8")
+        self.assertEqual(get("/app/views/operator.js").status(), 200)
 
-    def test_the_dungeon_link_scrolls_once_not_every_poll(self):
-        render = fn("dgnRender")
-        self.assertIn(
-            "dungeonTargetMap !== null && dungeonScrolledTo !== dungeonTargetMap",
-            render,
-        )
-        self.assertIn("dungeonScrolledTo = dungeonTargetMap;", render)
+    def test_nothing_else_is_reachable_through_the_app_prefix(self):
+        for path in (
+            "/app/../map_server.py",
+            "/app/..%2Fmap_server.py",
+            "/app/x.py",
+            "/app/Main.js",
+            "/app/views/../../bridge.py",
+            "/app/",
+            "/app/missing.js",
+            "/app/.hidden.js",
+            "/app//main.js",
+        ):
+            self.assertEqual(get(path).status(), 404, path)
 
+    def test_a_get_carries_an_etag_and_an_unchanged_one_is_a_304(self):
+        first = get("/app/app.css")
+        tag = first.header("ETag")
+        self.assertRegex(tag, r'^"[0-9a-f]{24}"$')
+        self.assertEqual(first.header("Cache-Control"), "no-cache")
+        again = get("/app/app.css", {"If-None-Match": tag})
+        self.assertEqual(again.status(), 304)
+        self.assertEqual(again.body(), b"")
+        other = get("/app/app.css", {"If-None-Match": '"0000"'})
+        self.assertEqual(other.status(), 200)
 
-SHEET = """
-const PHONE = { matches: %s }, STILL = { matches: true };
-function listeners() { const l = {}; return { l,
-  addEventListener: (t, f) => { l[t] = f; } }; }
-const sheet = Object.assign(listeners(), { style: {}, offsetHeight: 600,
-  classList: { s: new Set(), add(c) { this.s.add(c); }, remove(c) { this.s.delete(c); } } });
-const scroller = { scrollTop: %d };
-let dismissed = 0;
-const grip = {};
-globalThis.Element = function () {};
-Object.setPrototypeOf(grip, Element.prototype);
-grip.closest = () => grip;
-const body = Object.create(Element.prototype);
-body.closest = () => null;
-globalThis.setTimeout = (f) => f();
-function ev(y, t, target) { return { touches: [{ clientY: y }], target, timeStamp: t,
-  preventDefault() { this.prevented = true; } }; }
-function drag(from, to, ms, target) {
-  sheet.l.touchstart(ev(from, 0, target));
-  const steps = 10; let last;
-  for (let i = 1; i <= steps; i++) {
-    last = ev(from + (to - from) * i / steps, ms * i / steps, target);
-    sheet.l.touchmove(last);
-  }
-  sheet.l.touchend({});
-  return !!last.prevented;
-}
-"""
+    def test_posts_and_errors_stay_uncached(self):
+        h = FakeHandler("/api/chat", command="POST")
+        h._send(200, "application/json", b"{}")
+        self.assertEqual(h.header("Cache-Control"), "no-store")
+        self.assertIsNone(h.header("ETag"))
+        missing = get("/nope")
+        self.assertEqual(missing.header("Cache-Control"), "no-store")
 
-
-@unittest.skipUnless(shutil.which("node"), "needs node to run the sheet")
-class SheetsFollowAFinger(unittest.TestCase):
-    def run_sheet(self, body, phone=True, scroll_top=0):
-        return node(
-            SHEET % ("true" if phone else "false", scroll_top)
-            + fn("sheetReset")
-            + fn("sheetGestures")
-            + "sheetGestures(sheet, scroller, () => { dismissed += 1; });\n"
-            + body
-            + "process.stdout.write(JSON.stringify({dismissed, out: globalThis.out, "
-            "transform: sheet.style.transform}));"
-        )
-
-    def test_a_long_pull_on_the_handle_puts_it_away(self):
-        got = self.run_sheet("globalThis.out = drag(100, 400, 600, grip);")
-        self.assertEqual(got["dismissed"], 1)
-        self.assertTrue(got["out"], "the drag must not also scroll the page")
-
-    def test_a_flick_puts_it_away(self):
-        self.assertEqual(self.run_sheet("drag(100, 160, 60, grip);")["dismissed"], 1)
-
-    def test_a_slow_nudge_settles_back(self):
-        got = self.run_sheet("drag(100, 140, 800, grip);")
-        self.assertEqual(got["dismissed"], 0)
-        self.assertEqual(got["transform"], "")
-
-    def test_a_drag_up_scrolls_the_reading(self):
-        got = self.run_sheet("globalThis.out = drag(400, 100, 300, body);")
-        self.assertEqual(got["dismissed"], 0)
-        self.assertFalse(got["out"])
-
-    def test_a_pull_on_a_scrolled_reading_scrolls_it(self):
-        got = self.run_sheet(
-            "globalThis.out = drag(100, 400, 600, body);", scroll_top=200
-        )
-        self.assertEqual(got["dismissed"], 0)
-        self.assertFalse(got["out"])
-
-    def test_a_wide_screen_has_no_sheet(self):
+    def test_the_realm_reports_the_pages_version(self):
+        # `page` and `app_page` stay in the payload (the contract is kept);
+        # with the classic page gone both are the app's page.
+        h = FakeHandler("/api/realm")
+        with (
+            mock.patch.object(map_server, "_fetch_realm", return_value={}),
+            mock.patch.object(map_server.realm, "build_realm", return_value={}),
+        ):
+            h._realm({})
+        payload = json.loads(h.body())
         self.assertEqual(
-            self.run_sheet("drag(100, 400, 600, grip);", phone=False)["dismissed"], 0
+            payload["page"], basepath.page_version((HERE / "index.html").read_bytes())
+        )
+        self.assertEqual(
+            payload["app_page"],
+            basepath.page_version((HERE / "index.html").read_bytes()),
+        )
+
+    def test_the_post_routes_are_unchanged(self):
+        self.assertEqual(
+            sorted(map_server.Handler.POST_ROUTES),
+            ["/api/chat", "/api/decree", "/api/director", "/api/frame", "/api/watch"],
         )
 
 
-VIEWS = """
-const MAP_VIEW = "map", STILL = { matches: true };
-let view = "guild", opened = [], scrolled = [];
-const viewScroll = new Map([["chronicle", 953]]);
-function hubOf(v) { return { guild: "guild", council: "guild", chronicle: "families" }[v]; }
-function openHub(k) { opened.push(k); }
-const node = { classList: { add() {}, remove() {} }, offsetWidth: 1 };
-globalThis.document = { getElementById: () => node };
-globalThis.window = { scrollTo: (a, b) => scrolled.push(typeof a === "object" ? a.top : b) };
-"""
+class TheV2Namespace(unittest.TestCase):
+    def test_operator_actions_are_off_unless_the_server_says_so(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(v2operator.ENV_VAR, None)
+            h = get("/api/v2/operator")
+        self.assertEqual(h.status(), 200)
+        self.assertFalse(json.loads(h.body())["enabled"])
+        with mock.patch.dict(os.environ, {v2operator.ENV_VAR: "on"}):
+            self.assertTrue(json.loads(get("/api/v2/operator").body())["enabled"])
+        for word in ("", "0", "off", "no", "maybe"):
+            self.assertFalse(v2operator.enabled({v2operator.ENV_VAR: word}), word)
+
+    def test_an_unknown_v2_path_is_a_json_404(self):
+        h = get("/api/v2/nothing-here")
+        self.assertEqual(h.status(), 404)
+        self.assertIn("/api/v2/operator", json.loads(h.body())["endpoints"])
+
+    def test_every_v2_route_lives_under_the_prefix(self):
+        self.assertTrue(apiv2.ROUTES)
+        for path in apiv2.ROUTES:
+            self.assertTrue(path.startswith(apiv2.PREFIX), path)
+
+    def test_a_failing_handler_is_a_503_not_a_crash(self):
+        def boom(_q, _ctx):
+            raise RuntimeError("world gone")
+
+        with mock.patch.dict(apiv2.ROUTES, {"/api/v2/boom": boom}):
+            h = get("/api/v2/boom")
+        self.assertEqual(h.status(), 503)
 
 
-@unittest.skipUnless(shutil.which("node"), "needs node to run the hubs")
-class EachViewKeepsItsPlace(unittest.TestCase):
-    def run_views(self, body):
-        return node(
-            VIEWS
-            + fn("viewNode")
-            + fn("arriveAt")
-            + fn("tapHub")
-            + body
-            + "process.stdout.write(JSON.stringify({opened, scrolled}));"
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class TheRouter(unittest.TestCase):
+    def test_every_old_address_has_a_new_home(self):
+        cases = {
+            "#armory": "#/members/gear",
+            "#bags": "#/economy",
+            "#upgrades": "#/members/gear/upgrades",
+            "#lineup": "#/members/gear/table",
+            "#trades": "#/economy/trades",
+            "#family": "#/now/family/grug",
+            "#family/Zug": "#/now/family/zug",
+            "#watch": "#/now",
+            "#dungeons": "#/guilds/cave/runs",
+            "#dungeons/33": "#/guilds/cave/runs",
+            "#guild": "#/guilds/cave/runs",
+            "#guildchat": "#/guilds/cave/chronicle",
+            "#chronicle": "#/guilds/cave/chronicle",
+            "#achievements": "#/guilds/cave/chronicle",
+            "#council": "#/guilds/cave/chronicle",
+            "#raid": "#/raid/mc",
+            "#eye": "#/now/server",
+            "#map": "#/now/map",
+            "#map/kalimdor": "#/now/map?c=kal",
+            "#decree": "#/operator",
+            "#aprof-Grog": "#/m/Grog/gear",
+            "#aprof-Some%20One": "#/m/Some%20One/gear",
+            "#nonsense": "#/now",
+        }
+        got = node_module(
+            "router.js",
+            "console.log(JSON.stringify(%s.map((h) => M.legacy(h))));"
+            % json.dumps(list(cases)),
+        )
+        self.assertEqual(dict(zip(cases, got)), cases)
+
+    def test_new_routes_are_not_redirected(self):
+        got = node_module(
+            "router.js",
+            'console.log(JSON.stringify(["#/now", "#/m/Grug", "", "#"].map(M.legacy)));',
+        )
+        self.assertEqual(got, ["", "", "", ""])
+
+    def test_routes_resolve_to_views_and_bad_ones_redirect(self):
+        script = """
+const r = (h) => M.resolve(M.parse(h));
+console.log(JSON.stringify([
+  r("#/now"), r("#/now/family/zug"), r("#/now/family/x"), r("#/now/map?c=ek"), r("#/guilds/bonkers/runs"),
+  r("#/guilds/elsewhere"), r("#/runs/391"), r("#/members?stuck=1"), r("#/members/gear/table"),
+  r("#/m/Grug/bags"), r("#/m/Grug/nope"), r("#/raid/mc"), r("#/raid/mc/bonkers"), r("#/economy/trades"),
+  r("#/operator"), r("#/nothing"), r("")
+]));"""
+        got = node_module("router.js", script)
+        self.assertEqual(got[0], {"view": "now", "section": "now", "params": {}})
+        self.assertEqual(got[1]["params"], {"family": "zug"})
+        self.assertEqual(got[2], {"redirect": "#/now/family/grug"})
+        self.assertEqual(got[3]["params"], {"continent": "ek"})
+        self.assertEqual(got[4]["params"], {"guild": "bonkers", "tab": "runs"})
+        self.assertEqual(got[5], {"redirect": "#/guilds/cave"})
+        self.assertEqual(got[6]["params"], {"id": "391"})
+        self.assertEqual(got[7]["view"], "members")
+        self.assertEqual(got[8]["params"], {"tab": "table"})
+        self.assertEqual(got[9]["params"], {"name": "Grug", "tab": "bags"})
+        self.assertEqual(got[10]["params"]["tab"], "overview")
+        self.assertEqual(got[11], {"redirect": "#/raid/mc/cave"})
+        self.assertEqual(got[12]["params"], {"guild": "bonkers"})
+        self.assertEqual(got[13]["params"], {"tab": "trades"})
+        self.assertEqual(got[14]["view"], "operator")
+        self.assertEqual(got[15]["view"], "notfound")
+        self.assertEqual(got[16], {"redirect": "#/now"})
+
+    def test_queries_round_trip(self):
+        got = node_module(
+            "router.js",
+            """
+const p = M.parse("#/members?stuck=1&lvl=10-20&q=Gr%C3%BCg");
+console.log(JSON.stringify([p, M.build(p.parts, p.query), M.build(["m", "Some One"], {})]));""",
+        )
+        self.assertEqual(got[0]["query"], {"stuck": "1", "lvl": "10-20", "q": "Grüg"})
+        self.assertEqual(got[1], "#/members?stuck=1&lvl=10-20&q=Gr%C3%BCg")
+        self.assertEqual(got[2], "#/m/Some%20One")
+
+    def test_a_swipe_walks_the_tab_row(self):
+        got = node_module(
+            "router.js",
+            """
+console.log(JSON.stringify([M.swipeSiblings(["a", "b", "c"], "b"), M.swipeSiblings(["a", "b"], "a"), M.swipeSiblings(["a"], "z")]));""",
+        )
+        self.assertEqual(
+            got,
+            [
+                {"prev": "a", "next": "c"},
+                {"prev": "", "next": "b"},
+                {"prev": "", "next": ""},
+            ],
         )
 
-    def test_a_view_opens_where_it_was_left_and_a_new_one_at_the_top(self):
-        got = self.run_views('arriveAt("chronicle"); arriveAt("raid");')
-        self.assertEqual(got["scrolled"], [953, 0])
+    def test_every_view_the_router_names_exists(self):
+        views = {p.stem for p in (APP / "views").glob("*.js")}
+        router = (APP / "router.js").read_text(encoding="utf-8")
+        named = set(re.findall(r'view: "([a-z]+)"', router))
+        self.assertTrue(named)
+        self.assertLessEqual(named, views)
 
-    def test_the_hub_you_are_in_tapped_again_goes_to_the_top(self):
-        got = self.run_views('tapHub("guild"); tapHub("families");')
-        self.assertEqual(got["scrolled"], [0])
-        self.assertEqual(got["opened"], ["families"])
 
-    def test_show_view_notes_the_place_before_it_hides_the_view(self):
-        show = fn("showView")
-        self.assertLess(
-            show.index("viewScroll.set(from, window.scrollY)"),
-            show.index("fsection.style.display"),
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class TheMarkup(unittest.TestCase):
+    def test_text_from_the_realm_never_becomes_markup(self):
+        got = node_module(
+            "ui.js",
+            r"""
+const evil = '<img src=x onerror=alert(1)>"&\'';
+console.log(JSON.stringify([
+  String(M.html`<b>${evil}</b>`),
+  String(M.html`<a title="${evil}">x</a>`),
+  String(M.html`<i>${[evil, M.html`<u>${evil}</u>`]}</i>`),
+  String(M.member({name: evil, cls: "Warrior"})),
+  String(M.item({entry: 5, name: evil, quality: 9})),
+]));""",
         )
-        self.assertIn("if (from !== v) arriveAt(v);", show)
+        for out in got:
+            self.assertNotIn("<img", out)
+            self.assertNotIn("\"&'", out)
+
+    def test_a_missing_number_says_not_measured(self):
+        got = node_module(
+            "ui.js",
+            """
+console.log(JSON.stringify([String(M.value(null)), String(M.value(undefined)), String(M.value(0)), M.ago(null), M.ago(42), M.ago(3700), M.gold(123456), M.gold(null)]));""",
+        )
+        self.assertIn("not measured", got[0])
+        self.assertIn("not measured", got[1])
+        self.assertEqual(got[2], "0")
+        self.assertEqual(got[3], "not measured")
+        self.assertEqual(got[4:7], ["42s ago", "1h ago", "12g 34s"])
+        self.assertIsNone(got[7])
+
+    def test_a_sparkline_needs_two_points(self):
+        got = node_module(
+            "ui.js",
+            """
+console.log(JSON.stringify([String(M.sparkline([5])), String(M.sparkline([1, null, 3]))]));""",
+        )
+        self.assertIn("not measured", got[0])
+        self.assertIn("<polyline", got[1])
+
+    def test_the_status_vocabulary(self):
+        got = node_module(
+            "ui.js", "console.log(JSON.stringify(Object.keys(M.STATUS)));"
+        )
+        self.assertEqual(
+            got,
+            [
+                "stuck",
+                "stalled",
+                "ghost",
+                "live",
+                "online",
+                "offline",
+                "upgrade",
+                "best",
+                "near",
+                "inside",
+                "cleared",
+                "wiped",
+                "new",
+            ],
+        )
+
+
+class TheImage(unittest.TestCase):
+    def test_the_image_carries_the_app_and_v2_and_not_the_old_page(self):
+        docker = (HERE / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("COPY app /app/app", docker)
+        self.assertIn("COPY apiv2 /app/apiv2", docker)
+        self.assertNotIn("classic.html", docker)
 
 
 if __name__ == "__main__":

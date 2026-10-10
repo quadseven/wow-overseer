@@ -808,78 +808,7 @@ class ThePagePanel(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text()
         cls.server = (HERE / "map_server.py").read_text()
-        start = cls.page.index("// --- the standing panel (mod-overseer#88")
-        cls.js = cls.page[start : cls.page.index("// --- the front door", start)]
-
-    def test_the_panel_lives_inside_the_armory_tab(self):
-        """It is the same question about the same five. A sixth tab button
-        is one more thing to find on a phone."""
-        armory_section = self.page[self.page.index('<section id="armory">') :]
-        armory_section = armory_section[: armory_section.index("</section>")]
-        self.assertIn('<div id="standing">', armory_section)
-
-    def test_opening_the_tab_does_not_wait_for_the_timer(self):
-        show = self.page[self.page.index("function showView") :]
-        show = show[: show.index("setInterval(pollFamily")]
-        arm = show[show.index("if (isArm) {") :]
-        self.assertIn("pollStanding();", arm[: arm.index("return;")])
-
-    def test_the_poll_is_gated_on_the_tab_being_open(self):
-        poll = self.js[self.js.index("async function pollStanding") :]
-        self.assertIn("if (view !== ARMORY_VIEW) return;", poll)
-
-    def test_a_failed_poll_keeps_the_cards_it_has_already_drawn(self):
-        """A blank panel reads as 'they have learned nothing'."""
-        poll = self.js[self.js.index("async function pollStanding") :]
-        self.assertIn("may be stale", poll)
-        self.assertNotIn("stcards.textContent", poll)
-
-    def test_nothing_reaches_the_page_as_markup(self):
-        self.assertNotIn("innerHTML", self.js)
-        self.assertNotIn("insertAdjacentHTML", self.js)
-
-    def test_it_borrows_the_tabs_icon_host_rather_than_naming_a_second(self):
-        """The Armory's own test counts the page's outbound hosts and finds
-        exactly two. Every link here arrives already built in the payload."""
-        self.assertNotIn("https://", self.js)
-        self.assertIn("iconImg(", self.js)
-
-    def test_the_roster_is_not_retyped_into_the_page(self):
-        for name in ROSTER:
-            self.assertNotIn('"' + name + '"', self.js)
-
-    def test_the_group_names_are_not_retyped_into_the_page(self):
-        """The payload carries the groups and their order, exactly as it
-        carries the doll layout, so the two ends cannot disagree.
-
-        `class` is exempt and only `class`: it is also the name of a
-        MEMBER field, and `class` is a reserved word in JavaScript, so
-        `m["class"]` is the only way to read a character's class at all -
-        the Armory tab spells it the same way. The exemption is for that
-        one string, not for the rule."""
-        for group in standing.GROUP_ORDER:
-            if group == standing.GROUP_CLASS:
-                continue
-            self.assertNotIn('"' + group + '"', self.js, group)
-
-    def test_the_group_list_is_taken_from_the_payload(self):
-        """The other half of the rule above: the page draws whatever groups
-        it is sent, in the order it is sent them."""
-        self.assertIn("for (const g of m.skills.groups)", self.js)
-        self.assertIn("g.group", self.js)
-
-    def test_the_gap_is_drawn_before_any_card(self):
-        """Five cards each listing two trades look complete. Only the union
-        shows that nobody can disenchant."""
-        render = self.js[self.js.index("function renderStanding") :]
-        render = render[: render.index("async function pollStanding")]
-        # One gap per family now (#198), each drawn before any card.
-        self.assertLess(
-            render.index("renderGap(s.gap, side.gap)"),
-            render.index("for (const m of p.members)"),
-        )
 
     def test_the_endpoint_is_routed(self):
         self.assertIn('"/api/standing": _standing,', self.server)

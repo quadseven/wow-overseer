@@ -42,24 +42,7 @@ MODULE_SRC = (
 class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
-
-    def test_the_styles_sit_above_every_other_css_slice(self):
-        """The earliest CSS windows on the page start at the current-goal
-        banner and the redesign furniture, so this block goes ahead of both or
-        it is swept into one of them."""
-        self.assertLess(self.page.index(CSS_BANNER), self.page.index(AGENDA_CSS))
-        self.assertLess(self.page.index(CSS_BANNER), self.page.index(ACH_CSS))
-        self.assertLess(self.page.index(CSS_BANNER), self.page.index(FAMILY_CSS))
-
-    def test_the_script_sits_in_the_one_gap_no_suite_claims(self):
-        """The Family tab's window ends at loadZones().then(, the current-goal
-        banner's begins at its own comment, and the Chronicle and Armory
-        windows are further down again."""
-        start = self.page.index(JS_BANNER)
-        self.assertGreater(start, self.page.index("loadZones().then("))
-        self.assertLess(start, self.page.index(AGENDA_JS))
 
     def test_the_handler_sits_outside_every_window_in_map_server(self):
         """The Family and Armory suites slice to `def _thoughts`, the
@@ -95,146 +78,10 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
             self.assertLess(fetch_at, self.server.index(later), later)
 
 
-class TheBannerIsAlwaysVisible(unittest.TestCase):
-    """The whole point. A label that only shows on one tab, or that a view
-    switch can hide, is not a label."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
-
-    def test_it_is_not_inside_any_section(self):
-        realm_at = self.page.index('<div id="realm"')
-        for section in (
-            '<section id="family">',
-            '<section id="armory">',
-            '<section id="chronicle">',
-            '<div id="wrap">',
-        ):
-            self.assertLess(realm_at, self.page.index(section), section)
-
-    def test_it_is_the_first_thing_in_the_body_and_above_every_other_banner(self):
-        """WHICH world outranks both "the world is unreachable" and what the
-        family wants, because neither of those sentences means anything until
-        you know which realm they are about."""
-        realm_at = self.page.index('<div id="realm"')
-        self.assertLess(self.page.index("<body>"), realm_at)
-        self.assertLess(realm_at, self.page.index("<header>"))
-        self.assertLess(realm_at, self.page.index('<div id="stale">'))
-        self.assertLess(realm_at, self.page.index('<div id="agenda">'))
-        self.assertLess(realm_at, self.page.index('<nav id="tabs">'))
-
-    def test_showview_never_hides_it(self):
-        show = self.page[self.page.index("function showView") :]
-        show = show[: show.index("setInterval(pollFamily")]
-        for name in ("realm", "rklabel", "realmEl"):
-            self.assertNotIn(name, show, name)
-
-    def test_it_polls_unconditionally_and_not_per_view(self):
-        tab = self._tab()
-        self.assertIn("setInterval(pollRealm, 60000);", tab)
-        self.assertNotIn("if (view ===", tab)
-
-    def _tab(self):
-        start = self.page.index(JS_BANNER)
-        return self.page[start : self.page.index(AGENDA_JS, start)]
-
-
-class TheMarkupShipsTheAlarmState(unittest.TestCase):
-    """THE LOAD-BEARING DETAIL OF THE WHOLE ELEMENT, and the one thing here that
-    is not like any other banner on this page.
-
-    Every other banner starts empty and is filled in by its first poll. If this
-    one did that, a page whose very first /api/realm call failed would sit there
-    unlabelled - which is exactly the state the reader must never be in, and
-    exactly the state they are most likely to be in when something is already
-    wrong. So the static markup IS the unverified state, and the script only
-    ever replaces it with something the server actually said.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
-        start = cls.page.index('<div id="realm"')
-        cls.markup = cls.page[
-            start : cls.page.index("</div>", cls.page.index('id="rkbuild"'))
-        ]
-
-    def test_the_default_class_is_the_unverified_one(self):
-        self.assertIn('class="rk-unknown"', self.markup)
-        self.assertNotIn("rk-non-production", self.markup)
-
-    def test_the_default_text_is_the_alarm_and_not_a_placeholder(self):
-        self.assertIn("REALM NOT VERIFIED", self.markup)
-        self.assertIn("Treat what you are seeing as live", self.markup)
-
-    def test_the_default_never_says_anything_reassuring(self):
-        for calm in ("NOT PRODUCTION", "development", "dev", "test", "safe"):
-            self.assertNotIn(calm, self.markup, calm)
-
-    def test_the_three_states_all_have_styles(self):
-        """The page sets className to "rk-" + kind. A kind with no rule would
-        render as an unstyled strip, which reads as no warning at all."""
-        for kind in ("production", "non-production", "unknown"):
-            self.assertIn("#realm.rk-%s" % kind, self.page, kind)
-
-    def test_production_does_not_depend_on_colour_alone(self):
-        """A colourblind reader, a monochrome screenshot, or a stylesheet that
-        failed to load all have to leave the word standing."""
-        self.assertIn("REALM NOT VERIFIED", self.page)
-        self.assertIn("rkLabel.textContent = d.label;", self.page)
-
-
-class TheBannerDrawsWhatItIsGiven(unittest.TestCase):
-    """The payload arrives fully decided. A second copy of "is this production"
-    written in JavaScript is a second copy free to drift, and not drifting is
-    the only thing this banner is for."""
-
-    @classmethod
-    def setUpClass(cls):
-        page = (HERE / "index.html").read_text(encoding="utf-8")
-        start = page.index(JS_BANNER)
-        cls.tab = page[start : page.index(AGENDA_JS, start)]
-
-    def test_every_string_it_shows_is_set_as_text(self):
-        self.assertNotIn("innerHTML", self.tab)
-        self.assertNotIn("insertAdjacentHTML", self.tab)
-        self.assertIn("textContent", self.tab)
-
-    def test_it_decides_no_realm_kind_of_its_own(self):
-        """No comparison against a kind, no label text, no name-to-kind map.
-        Everything it draws was named by realm.py."""
-        for decided in (
-            '"production"',
-            "'production'",
-            '"NOT PRODUCTION"',
-            "REALM NOT VERIFIED",
-            '"stale"',
-            "Homelab",
-        ):
-            self.assertNotIn(decided, self.tab, decided)
-
-    def test_it_composes_no_sentence_of_its_own(self):
-        """realm.py returns realm_line, build_line and warning_text already
-        written, precisely so the suite can assert on what a reader sees."""
-        for field in ("d.label", "d.realm_line", "d.build_line", "d.warning_text"):
-            self.assertIn(field, self.tab, field)
-
-    def test_a_failed_poll_leaves_the_banner_exactly_as_it_was(self):
-        """The realm has not changed because a query timed out. Blanking a
-        correct PRODUCTION label over a network blip would be the page throwing
-        away the one fact it is here to hold on to."""
-        catch = self.tab[self.tab.index("catch (e)") :]
-        catch = catch[: catch.index("pollRealm();")]
-        for wipe in ("textContent", "className", "renderRealm"):
-            self.assertNotIn(wipe, catch, wipe)
-
-
 class TheEndpointIsWiredUp(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
-        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
 
     def test_the_route_exists(self):
         self.assertIn('"/api/realm": _realm,', self.server)
@@ -249,9 +96,6 @@ class TheEndpointIsWiredUp(unittest.TestCase):
         handler = self.server[self.server.index("    def _realm(") :]
         handler = handler[: handler.index("def _healthz")]
         self.assertIn("503", handler)
-
-    def test_the_page_asks_for_it(self):
-        self.assertIn('fetch(u("/api/realm"))', self.page)
 
     def test_the_pure_module_imports_no_database(self):
         source = (HERE / "realm.py").read_text(encoding="utf-8")

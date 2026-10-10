@@ -93,11 +93,6 @@ class TheRouteIsWired(unittest.TestCase):
     def test_the_image_carries_the_module(self):
         self.assertIn(" meter.py ", (ROOT / "Dockerfile").read_text(encoding="utf-8"))
 
-    def test_the_page_polls_it(self):
-        page = (ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn('id="family-meter"', page)
-        self.assertIn('fetch(u("/api/meter")', page)
-
 
 if __name__ == "__main__":
     unittest.main()

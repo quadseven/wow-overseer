@@ -1,0 +1,196 @@
+/* Overseer design tokens: the Nocturne base plus what the operations app adds.
+   Dark is the ground; light inverts the ramps. The theme follows the system
+   preference unless the operator picked one (data-theme on <html>). Item
+   quality colours and the tooltip stay dark in both themes on purpose: they
+   are the game's own colours and read against the game's own dark ground. */
+
+:root {
+  color-scheme: dark;
+
+  --color-bg: #161826;
+  --color-surface: #232532;
+  --color-text: #e9e9ed;
+  --color-accent: #9184d9;
+  --color-divider: color-mix(in srgb, #e9e9ed 16%, transparent);
+
+  --color-neutral-100: #f3f5fe;
+  --color-neutral-200: #e4e7f5;
+  --color-neutral-300: #cfd3e5;
+  --color-neutral-400: #b2b6ca;
+  --color-neutral-500: #9397ab;
+  --color-neutral-600: #75798c;
+  --color-neutral-700: #595d6c;
+  --color-neutral-800: #3f424d;
+  --color-neutral-900: #292b31;
+
+  --color-accent-100: #f5f4ff;
+  --color-accent-200: #e7e5fe;
+  --color-accent-300: #d2cefd;
+  --color-accent-400: #b5abfc;
+  --color-accent-500: #968ae0;
+  --color-accent-600: #796cbf;
+  --color-accent-700: #5d5294;
+  --color-accent-800: #423a6a;
+  --color-accent-900: #2b2741;
+
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-map: Georgia, "Times New Roman", serif;
+
+  --fs-0: 11px;
+  --fs-1: 12px;
+  --fs-2: 14px;
+  --fs-3: 16px;
+  --fs-4: 22px;
+  --fs-5: 28px;
+
+  --space-1: 2.8px;
+  --space-2: 5.6px;
+  --space-3: 8.4px;
+  --space-4: 11.2px;
+  --space-6: 16.8px;
+  --space-8: 22.4px;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+
+  --shadow-sm: 0 0 0 1px #3f424d;
+  --shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 0 0 1px #9397ab, 0 16px 40px rgba(0, 0, 0, 0.65);
+
+  --ok: oklch(0.78 0.11 155);
+  --warn: oklch(0.82 0.11 80);
+  --bad: oklch(0.72 0.15 25);
+  --warn-line: oklch(0.82 0.11 80 / 0.45);
+  --bad-line: oklch(0.72 0.15 25 / 0.55);
+
+  --q-poor: #9d9d9d;
+  --q-common: #e9e9ed;
+  --q-uncommon: #1eff00;
+  --q-rare: #3d8ff0;
+  --q-epic: #b16cf0;
+  --q-legendary: #ff8000;
+
+  --cls-warrior: #c69b6d;
+  --cls-paladin: #f48cba;
+  --cls-rogue: #fff468;
+  --cls-priest: #f0f0f0;
+  --cls-mage: #3fc7eb;
+  --cls-shaman: #3d8ff0;
+  --cls-druid: #ff7c0a;
+  --cls-hunter: #aad372;
+  --cls-warlock: #8788ee;
+  --cls-death-knight: #c41e3a;
+
+  /* The tooltip is the game's: dark in both themes. */
+  --tip-bg: #161826;
+  --tip-text: #e9e9ed;
+  --tip-ring: #595d6c;
+  --tip-dim: #b2b6ca;
+  --tip-source: #d2cefd;
+  --tip-where: #cfd3e5;
+  --tip-bonus: #1eff00;
+
+  --sidebar-w: 228px;
+  --tabbar-h: 60px;
+  --header-h: 60px;
+}
+
+/* Light, by the operator's choice or, with no choice made, by the system. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-bg: #e4e7f5;
+  --color-surface: #f3f5fe;
+  --color-text: #292b31;
+  --color-accent: #796cbf;
+  --color-divider: color-mix(in srgb, #292b31 14%, transparent);
+  --color-neutral-100: #292b31;
+  --color-neutral-200: #3f424d;
+  --color-neutral-300: #595d6c;
+  --color-neutral-400: #595d6c;
+  --color-neutral-500: #75798c;
+  --color-neutral-600: #9397ab;
+  --color-neutral-700: #b2b6ca;
+  --color-neutral-800: #cfd3e5;
+  --color-neutral-900: #e4e7f5;
+  --color-accent-100: #2b2741;
+  --color-accent-200: #423a6a;
+  --color-accent-300: #5d5294;
+  --color-accent-400: #796cbf;
+  --color-accent-500: #796cbf;
+  --color-accent-600: #9a8fe0;
+  --color-accent-700: #d2cefd;
+  --color-accent-800: #e7e5fe;
+  --color-accent-900: #e7e5fe;
+  --shadow-sm: 0 0 0 1px #cfd3e5;
+  --shadow-md: 0 0 0 1px #b2b6ca, 0 6px 18px rgba(41, 43, 49, 0.12);
+  --shadow-lg: 0 0 0 1px #cfd3e5, 0 16px 40px rgba(41, 43, 49, 0.18);
+  --ok: oklch(0.5 0.11 155);
+  --warn: oklch(0.52 0.11 70);
+  --bad: oklch(0.52 0.16 25);
+  --warn-line: oklch(0.6 0.11 70 / 0.6);
+  --bad-line: oklch(0.55 0.15 25 / 0.6);
+  --q-common: #292b31;
+  --q-rare: #0058b8;
+  --q-epic: #7a35c2;
+  --cls-warrior: #8a5a2b;
+  --cls-paladin: #b03a78;
+  --cls-rogue: #7a6a00;
+  --cls-priest: #4a4d5a;
+  --cls-mage: #0b6f8a;
+  --cls-shaman: #0050b0;
+  --cls-druid: #a84d00;
+  --cls-hunter: #4f7a1a;
+  --cls-warlock: #5052b8;
+  --cls-death-knight: #9b1028;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --color-bg: #e4e7f5;
+    --color-surface: #f3f5fe;
+    --color-text: #292b31;
+    --color-accent: #796cbf;
+    --color-divider: color-mix(in srgb, #292b31 14%, transparent);
+    --color-neutral-100: #292b31;
+    --color-neutral-200: #3f424d;
+    --color-neutral-300: #595d6c;
+    --color-neutral-400: #595d6c;
+    --color-neutral-500: #75798c;
+    --color-neutral-600: #9397ab;
+    --color-neutral-700: #b2b6ca;
+    --color-neutral-800: #cfd3e5;
+    --color-neutral-900: #e4e7f5;
+    --color-accent-100: #2b2741;
+    --color-accent-200: #423a6a;
+    --color-accent-300: #5d5294;
+    --color-accent-400: #796cbf;
+    --color-accent-500: #796cbf;
+    --color-accent-600: #9a8fe0;
+    --color-accent-700: #d2cefd;
+    --color-accent-800: #e7e5fe;
+    --color-accent-900: #e7e5fe;
+    --shadow-sm: 0 0 0 1px #cfd3e5;
+    --shadow-md: 0 0 0 1px #b2b6ca, 0 6px 18px rgba(41, 43, 49, 0.12);
+    --shadow-lg: 0 0 0 1px #cfd3e5, 0 16px 40px rgba(41, 43, 49, 0.18);
+    --ok: oklch(0.5 0.11 155);
+    --warn: oklch(0.52 0.11 70);
+    --bad: oklch(0.52 0.16 25);
+    --warn-line: oklch(0.6 0.11 70 / 0.6);
+    --bad-line: oklch(0.55 0.15 25 / 0.6);
+    --q-common: #292b31;
+    --q-rare: #0058b8;
+    --q-epic: #7a35c2;
+    --cls-warrior: #8a5a2b;
+    --cls-paladin: #b03a78;
+    --cls-rogue: #7a6a00;
+    --cls-priest: #4a4d5a;
+    --cls-mage: #0b6f8a;
+    --cls-shaman: #0050b0;
+    --cls-druid: #a84d00;
+    --cls-hunter: #4f7a1a;
+    --cls-warlock: #5052b8;
+    --cls-death-knight: #9b1028;
+  }
+}
