@@ -14352,14 +14352,12 @@ class Bridge(discord.Client):
     async def _job_gear_offers(self, members, recent) -> dict:
         """name -> (gearup facts, vendor rows in reach) for gear-short members.
 
-        Only natural members online, out of combat, placed and off the gear
-        cooldown, and at most GUILD_GEAR_READS_PER_PASS of them: each one is a
-        vendor stock read around where it stands.
+        Members online, out of combat, placed and off the gear cooldown (natural
+        or not, guildjobs.gear_candidates), and at most
+        GUILD_GEAR_READS_PER_PASS of them: each one is a vendor stock read
+        around where it stands.
         """
-        wanted = [m for m in members
-                  if m.eligible and m.online and not m.in_combat
-                  and m.map_id is not None and m.x is not None and m.y is not None
-                  and not guildjobs._cooling(m, "gear", recent)]
+        wanted = guildjobs.gear_candidates(members, recent)
         if not wanted:
             return {}
         facts = await asyncio.to_thread(_fetch_gearup_facts, [m.name for m in wanted])
@@ -14426,6 +14424,9 @@ class Bridge(discord.Client):
         for line in guildjobs.focus_lines(plan):
             log.info("guild jobs: %s", line)
         self._log_stranded_knights(members, plan)
+        # One line per member that did not walk for gear this pass: never silent.
+        for line in plan.gear_holds:
+            log.info("guild gear: %s", line)
 
     def _start_guild_job_steps(self, plan, now, cap, sale_walks):
         started = 0

@@ -650,6 +650,8 @@ class JobsPlan:
     trades: dict = field(default_factory=dict)  # name -> (skill, skill)
     doors: dict = field(default_factory=dict)  # name -> Door
     notes: tuple = ()
+    # One line per member that did not walk for gear this pass, and why.
+    gear_holds: tuple = ()
     # guild -> {"focus", "members", "craft", "farm", "gathering"} (GUILD_FOCUS)
     focus: dict = field(default_factory=dict)
     # classquest.Help: class quests a guildmate could help with (classask.py).
@@ -2231,6 +2233,7 @@ def plan(
     trades.update(focus_trades(members, focus))
     tally = _focus_tally(members, focus)
     steps, lines, notes, helps = [], {}, [], []
+    gear_holds = []
     # One counter per allowance, each keyed by guild (_allowance).
     counters = {
         "jobs": {},
@@ -2248,7 +2251,7 @@ def plan(
             continue
         master = str(masters.get(m.guild) or "")
         level_room = counters["level"].get(m.guild, 0) < guildlevel.STEPS_PER_GUILD
-        step, doing, note = _member_step(
+        step, doing, note, gear_why = _member_step(
             m,
             (gear or {}).get(m.name),
             (mail or {}).get(m.name, ()),
@@ -2276,6 +2279,8 @@ def plan(
         helps += class_helps(m, classes, hunts, now, recent)
         if note:
             notes.append(note)
+        if gear_why:
+            gear_holds.append(gear_why)
         if step is None:
             _count_focus(tally, m, None, fields)
             continue
@@ -2299,6 +2304,7 @@ def plan(
         trades=trades,
         doors=doors,
         notes=tuple(notes),
+        gear_holds=tuple(gear_holds),
         focus=tally,
         helps=tuple(helps),
         owed=owed,
@@ -2438,34 +2444,33 @@ def _member_step(
     is asked (stood_still_step)."""
     first = stalled_level_first(m, leveling, recent, cap, level_room)
     if first is not None:
-        return first
+        return (*first, "")
     step, doing, quest_note = class_step(
         m, classes, recent, cap, hunts, now, far, kept, crafters, master
     )
     if step is not None or doing:
-        return step, doing, quest_note
+        return step, doing, quest_note, ""
     step = stood_still_step(m, still_for, recent, leveling)
     if step is not None:
-        return step, step.said, quest_note
+        return step, step.said, quest_note, ""
     step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
     if step is not None:
-        return step, doing, quest_note
+        return step, doing, quest_note, ""
     step, doing, _ = _inn_first(m, leveling, recent, cap)
     if step is not None:
-        return step, doing, quest_note
+        return step, doing, quest_note, ""
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
-    gear_note = "; ".join(n for n in (supply_note, gear_note) if n)
     if step is not None:
-        return step, doing, gear_note
+        return step, doing, "", ""
     step, doing, held = _pvp_first(m, pvp, recent, cap, kept)
     if step is not None or held:
-        return step, doing, gear_note
+        return step, doing, supply_note, gear_note
     step = _collect_first(m, mail, recent, cap)
     if step is not None:
-        return step, step.said, gear_note
+        return step, step.said, supply_note, gear_note
     step, doing, level_note = level_step(m, leveling, recent, cap)
     if step is not None or doing:
-        return step, doing, gear_note
+        return step, doing, supply_note, gear_note
     step, doing, note = _plan_member(
         m,
         trades,
@@ -2482,7 +2487,8 @@ def _member_step(
     return (
         step,
         doing,
-        "; ".join(n for n in (quest_note, gear_note, level_note, note) if n),
+        "; ".join(n for n in (quest_note, supply_note, level_note, note) if n),
+        gear_note,
     )
 
 
@@ -4165,21 +4171,61 @@ def _in_the_open(m) -> bool:
     )
 
 
+def gear_candidates(members, recent) -> list:
+    """The members whose gear is read this pass: online, out of combat, placed,
+    and off the gear cooldown.
+
+    Natural or not. The natural reset gates what a member contributes, not
+    where it shops (the same decision as level_step, #638). A member with no
+    reset row that was gated here was never read, so it got no gear step and
+    no line saying why.
+    """
+    return [
+        m
+        for m in members
+        if m.online
+        and not m.in_combat
+        and m.map_id is not None
+        and m.x is not None
+        and m.y is not None
+        and not _cooling(m, "gear", recent)
+    ]
+
+
 def _gear_first(m, offer, recent, cap, kept=None):
-    """A natural member short of gear walks to a vendor before any other job."""
-    if not m.eligible or not m.online or m.in_combat:
-        return None, "", ""
+    """(step, doing, why not): a guild member short of gear walks to a vendor
+    before any other job.
+
+    Every early return says why, in one line, so a member that does not shop
+    is never silent: offline, in combat, cooling down, not read this pass, or
+    not short of anything it can buy.
+    """
+    if not m.online:
+        return None, "", "%s waits for gear: it is offline" % m.name
+    if m.in_combat:
+        return None, "", "%s waits for gear: it is in combat" % m.name
     if _cooling(m, "gear", recent):
         if last_gear_failed(m.name, recent) and not _cooling(m, "hearth", recent):
             step = hearth_step(m)
             return step, step.said, ""
-        return None, "", ""
+        return (
+            None,
+            "",
+            "%s waits for gear: its last gear walk is cooling down" % m.name,
+        )
     if not offer:
-        return None, "", ""
+        return (
+            None,
+            "",
+            (
+                "%s waits for gear: its gear was not read this pass "
+                "(not short, unplaced, or past the pass's reads)" % m.name
+            ),
+        )
     character, vendor_rows = offer
     step, why = gear_step(m, character, vendor_rows, cap, kept)
     if step is None:
-        return None, "", why
+        return None, "", why or "%s waits for gear: its gear is not short" % m.name
     return step, step.said, ""
 
 
