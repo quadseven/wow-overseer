@@ -41,12 +41,10 @@ function sorter(sort, dir, ilvl) {
   const il = (m) => { const g = ilvl.get(m.name); return g ? g.avg_item_level : -1; };
   const waited = (m) => (m.stuck ? (m.since === null || m.since === undefined ? 0 : Number.MAX_SAFE_INTEGER - m.since) : -1);
   const ghost = (m) => Number(stateOf(m) === "ghost");
-  const by = {
-    level: (a, b) => a.level - b.level,
-    ilvl: (a, b) => il(a) - il(b),
-    name: (a, b) => a.name.localeCompare(b.name),
-    stuck: (a, b) => (a.stuck - b.stuck) || (waited(a) - waited(b)) || (ghost(a) - ghost(b)) || a.level - b.level,
-  }[sort];
+  let by = (a, b) => (a.stuck - b.stuck) || (waited(a) - waited(b)) || (ghost(a) - ghost(b)) || a.level - b.level;
+  if (sort === "level") by = (a, b) => a.level - b.level;
+  else if (sort === "ilvl") by = (a, b) => il(a) - il(b);
+  else if (sort === "name") by = (a, b) => a.name.localeCompare(b.name);
   const d = dir === "asc" ? 1 : -1;
   return (a, b) => d * by(a, b) || a.name.localeCompare(b.name);
 }
