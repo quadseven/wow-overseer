@@ -731,6 +731,15 @@ def _expire_stale_claims(seconds: int) -> int:
     the paragraph above exists to avoid. The module keeps its outstanding
     read-backs in memory (mod_overseer.cpp, _pendingChecks), so a worldserver
     restart is precisely when this fires.
+
+    A guild run's `finder-run` row is the one 'verifying' row it must not
+    touch. It stays 'verifying' for the whole run, and after a restart the
+    module re-adopts it from this table (mod-overseer #896) and may not touch
+    it again while the members log back in, which can take fifteen minutes.
+    Erroring it then ends a run the module is still driving: the module's
+    write-back is guarded on 'verifying' and writes nothing, so the run reads
+    as lost while its members stay in the dungeon's group. The module ends
+    those rows itself, on a clear, a wipe or a run nobody came back to.
     """
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -745,7 +754,8 @@ def _expire_stale_claims(seconds: int) -> int:
             "UPDATE overseer_command SET status = 'error', "
             "detail = 'handed to the bot, but the worldserver never reported "
             "whether anything changed' "
-            "WHERE status = 'verifying' AND updated_at < NOW() - INTERVAL %s SECOND",
+            "WHERE status = 'verifying' AND updated_at < NOW() - INTERVAL %s SECOND "
+            "AND NOT (kind = 'guild' AND command LIKE 'finder-run %%')",
             (seconds,),
         )
         return swept + cur.rowcount
