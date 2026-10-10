@@ -495,9 +495,13 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
         errand's hub, a walk past) still gets their takes queued."""
         code = _statements("    async def _mail_once(")
         # The gate that decides which rows are written is the per-taker one.
-        gate_idx = code.index("_mail_takes_in_reach(")
+        marker = "_mail_takes_in_reach("
+        self.assertIn(marker, code, "wow-overseer#477: the per-taker gate moved")
+        gate_idx = code.index(marker)
         # The lost-slot branch must not return before reaching it.
-        lost_slot = code.index("if not aimed and not at_the_mailbox:")
+        marker = "if not aimed and not at_the_mailbox:"
+        self.assertIn(marker, code, "wow-overseer#477: the lost-slot branch moved")
+        lost_slot = code.index(marker)
         branch = code[lost_slot:gate_idx]
         self.assertNotIn("\n            return", branch)
 
