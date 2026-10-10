@@ -495,6 +495,8 @@ def run_markup():
     )
     files = {
         "views/_runs.js": app_file("views/_runs.js"),
+        "models/time.js": app_file("models/time.js"),
+        "models/guildruns.js": app_file("models/guildruns.js"),
         "ui.js": app_file("ui.js"),
         "api.js": TOOLTIP_API_STUB,
     }

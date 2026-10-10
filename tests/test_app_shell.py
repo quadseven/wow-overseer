@@ -33,13 +33,15 @@ APP_FILES = sorted(p for p in APP.rglob("*") if p.suffix in (".js", ".css"))
 
 
 def node_module(module, script):
-    """Run `script` (ES module code) with `module` (a file in app/) imported
-    as M. The file is copied to a .mjs so node reads it as a module whatever
-    its version."""
+    """Run `script` (ES module code) with `module` (a path under app/)
+    imported as M. The app is copied whole into a module package, so a
+    module's own imports (the read models' time.js, ui.js) resolve as they do
+    in the browser."""
     with tempfile.TemporaryDirectory() as tmp:
-        src = APP / module
-        dst = pathlib.Path(tmp) / (src.stem + ".mjs")
-        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        root = pathlib.Path(tmp) / "app"
+        shutil.copytree(APP, root)
+        (root / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+        dst = root / module
         code = "import * as M from %s;\n%s" % (json.dumps(dst.as_uri()), script)
         out = subprocess.run(
             [shutil.which("node"), "--input-type=module", "-e", code],
@@ -274,11 +276,12 @@ class TheServer(unittest.TestCase):
         # while Members listed ghosts; the guild's Stuck tile never counted.
         views = APP / "views"
         now = (views / "now.js").read_text(encoding="utf-8")
-        data = (views / "now" / "data.js").read_text(encoding="utf-8")
         guild = (views / "guild.js").read_text(encoding="utf-8")
         self.assertIn('"/api/v2/stuck", "/api/v2/roster"', now)
-        self.assertEqual(now.count('D.ghosts(ctx.get("/api/v2/roster"))'), 2)
-        self.assertIn('m.life === "ghost" || m.life === "dead"', data)
+        # Who is a ghost is the roster model's answer (test_app_models.py).
+        self.assertEqual(
+            now.count('rosterModel(ctx.get("/api/v2/roster")).ghosts()'), 2
+        )
         self.assertNotIn("m.ghost === true", now)
         self.assertNotIn(
             "m.ghost === true", (views / "map.js").read_text(encoding="utf-8")

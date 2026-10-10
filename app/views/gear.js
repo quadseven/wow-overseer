@@ -13,10 +13,11 @@
 
 import { html, raw, notMeasured, pendingRead, state, classVar } from "../ui.js";
 import {
-  liveQuery, setQuery, byName, stateOf, stateLabel, sectionTabs, gearSeg, head, paperdoll, bindTrees, roleWord,
+  liveQuery, setQuery, stateLabel, sectionTabs, gearSeg, head, paperdoll, bindTrees, roleWord,
   upgradesHead, upgradesControls, upgradesBody, upgradesFoot, bindUpgrades, flipSort, sortHead,
 } from "./_members.js";
 import { mountModels } from "./_model.js";
+import { byName, stateOf } from "../models/roster.js";
 
 const SLOT_WORDS = {
   head: "head", neck: "neck", shoulders: "shoulders", back: "back", chest: "chest", wrists: "wrists",

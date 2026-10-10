@@ -1,28 +1,16 @@
 // Guild runs as the Guilds view and the run page both draw them: the card,
 // the boss pips, the seats, and the phone's bottom sheet. Runs come from
-// /api/guildruns (`active` and `recent`), one shape for both lists.
+// /api/guildruns (`active` and `recent`), read by models/guildruns.js.
 
-import { html, ago, duration, plural, classVar, memberHref } from "../ui.js";
+import { html, duration, plural, classVar, memberHref } from "../ui.js";
 import { peek } from "../api.js";
+import { since, clock } from "../models/time.js";
+import { guildRuns, formedAt, endedAt, lastAt, bossText, chose, cause } from "../models/guildruns.js";
 
 export const GUILD_NAME = { cave: "Cave", bonkers: "Bonkers" };
 // Each guild's family (Grug's family plays in Cave, Zug's in Bonkers). The
 // guild read says the family it found too; the view checks the two agree.
 export const GUILD_FAMILY = { cave: "Grug", bonkers: "Zug" };
-
-// The realm's database clock is UTC and its timestamps arrive without a zone
-// ("2026-10-09 20:12:04"), so they are read as UTC. Unix seconds pass through.
-export function utc(v) {
-  if (v === null || v === undefined || v === "") return null;
-  if (typeof v === "number") return v;
-  const s = String(v).trim().replace(" ", "T");
-  const t = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s + "Z");
-  return isFinite(t) ? t / 1000 : null;
-}
-
-export function since(ts) {
-  return ts === null || ts === undefined ? "not measured" : ago(Date.now() / 1000 - ts);
-}
 
 export function titleCase(s) {
   return String(s || "").replace(/(^|[\s-])([a-z])/g, (m, a, b) => a + b.toUpperCase());
@@ -57,16 +45,6 @@ export function pips(r, cls) {
     cells.push(html`<span class="${kind}"></span>`);
   }
   return html`<div class="g-pips ${cls || ""}" role="img" aria-label="${done + " of " + total + " bosses down"}">${cells}</div>`;
-}
-
-// The outcomes of a run that never reached the door (guildrun.OUTCOMES):
-// no instance was read, so there is no boss count to measure.
-const NEVER_IN = ["refused", "not entered"];
-
-export function bossText(r) {
-  const total = Number(r.bosses_total) || 0;
-  if (total) return (Number(r.bosses_done) || 0) + " of " + total + " bosses down";
-  return NEVER_IN.includes(r.outcome) && !Number(r.seconds_inside) ? "never went in" : "bosses not measured";
 }
 
 // A run's seats in the order a group reads: tank, healer, then damage, and
@@ -105,24 +83,8 @@ export function inside(r) {
 
 export function runHref(r) { return "#/runs/" + encodeURIComponent(r.id); }
 
-export function allRuns(gr) {
-  const d = gr && gr.data;
-  if (!d) return [];
-  return (d.active || []).concat(d.recent || []);
-}
-
 export function findRun(id) {
-  return allRuns(peek("/api/guildruns")).find((r) => String(r.id) === String(id)) || null;
-}
-
-// Why the run went where it went: the coordinator's first lines.
-export function chose(r) {
-  return (r.lines || []).filter((l) => /^(dungeon|group):/.test(l)).join(". ");
-}
-
-export function cause(r) {
-  const c = r.cause || r.why || "";
-  return c.replace(/^Cause: /, "");
+  return guildRuns(peek("/api/guildruns")).find(id);
 }
 
 // The card is one tap to the run, and each seat in it a tap to that member:
@@ -130,7 +92,7 @@ export function cause(r) {
 // sit above it, so no link is nested in another.
 export function runCard(r, opts) {
   const o = opts || {};
-  const when = r.state === "inside" ? "" : " | " + since(utc(r.ended_at) || utc(r.created_at));
+  const when = r.state === "inside" ? "" : " | " + since(lastAt(r));
   const meta = [bossText(r), o.done ? "" : inside(r)].filter(Boolean).join(" | ");
   return html`<div class="card g-run-card stretch-card">
 <div class="g-run-top"><a class="g-run-name stretch-link" href="${runHref(r)}" data-run="${r.id}">${r.place || "A dungeon"} <span class="muted">#${r.id}${when}</span></a>${stateTag(r)}</div>
@@ -150,17 +112,12 @@ export function seatRows(r) {
 // the coordinator's lines, and how it came back.
 export function steps(r) {
   const out = [];
-  const formed = utc(r.created_at);
+  const formed = formedAt(r);
   if (formed) out.push({ t: formed, text: "Formed: " + plural((r.members || []).length, "seat") + " filled." });
   (r.lines || []).forEach((l) => out.push({ t: null, text: l }));
-  const ended = utc(r.ended_at);
+  const ended = endedAt(r);
   if (ended) out.push({ t: ended, text: "Came back: " + (r.story || cause(r) || runState(r).text) });
   return out;
-}
-
-export function clock(ts) {
-  if (!ts) return "";
-  return new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 export function stepRows(list) {

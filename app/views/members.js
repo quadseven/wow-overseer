@@ -8,7 +8,8 @@
 // reads them back from the address bar.
 
 import { html, raw, notMeasured, pendingRead, state, duration, classVar } from "../ui.js";
-import { liveQuery, setQuery, gearRows, stateOf, stateLabel, stuckFor, memberLink, sectionTabs, head, flipSort, sortHead } from "./_members.js";
+import { liveQuery, setQuery, gearRows, stateLabel, memberLink, sectionTabs, head, flipSort, sortHead } from "./_members.js";
+import { stateOf, stuckFor } from "../models/roster.js";
 import { GUILDS } from "../router.js";
 
 const SERIES = GUILDS.map((g) => "/api/v2/series?guild=" + g);

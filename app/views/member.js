@@ -15,10 +15,12 @@
 
 import { html, notMeasured, pendingRead, state, classVar, iconUrl, sparkline, gold, plural, status } from "../ui.js";
 import {
-  liveQuery, byName, stateLabel, stuckFor, seg, paperdoll, bindTrees, cell, emptyCell,
+  liveQuery, stateLabel, seg, paperdoll, bindTrees, cell, emptyCell,
   upgradesHead, upgradesControls, upgradesBody, upgradesFoot, bindUpgrades, coins,
 } from "./_members.js";
 import { mountModels } from "./_model.js";
+import { byName, stuckFor } from "../models/roster.js";
+import { nowSeconds } from "../models/time.js";
 
 const TABS = [["overview", "Overview"], ["gear", "Gear"], ["quests", "Quests"], ["bags", "Inventory"], ["activity", "Activity"]];
 const TAB_OF = { upgrades: "gear", bank: "bags" };
@@ -96,7 +98,7 @@ function levelLine(act, ser) {
   if (!act) return pendingRead({ data: undefined }, 1);
   const start = act.start_level ?? act.level;
   // One value per hour over the window, so the line's x axis is time.
-  const end = act.checked_at || Math.floor(Date.now() / 1000);
+  const end = act.checked_at || Math.floor(nowSeconds());
   const ups = act.levels || [];
   const values = [];
   for (let h = act.days * 24; h >= 0; h--) {

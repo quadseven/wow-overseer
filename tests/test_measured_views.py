@@ -200,7 +200,7 @@ class TheMemberProfile(unittest.TestCase):
 class TheRunBossLine(unittest.TestCase):
     def test_a_run_that_never_went_in_says_so(self):
         got = render(
-            "views/_runs.js",
+            "models/guildruns.js",
             """
 console.log(JSON.stringify([
   M.bossText({outcome: "refused", seconds_inside: 0, bosses_total: 0}),
