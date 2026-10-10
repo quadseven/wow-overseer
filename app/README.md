@@ -10,7 +10,7 @@ A read-only operations app for the realm: plain HTML, CSS and ES modules served 
 | `app.css` | Base styles, components (buttons, cards, tags, tables), the shell, and the shared primitives. |
 | `main.js` | Boot: theme, shell, router, polling, search, tooltip, gestures, nav badges. |
 | `router.js` | Hash routes, legacy redirects, and route-to-view resolution. Pure functions, tested under node. |
-| `api.js` | Reads (`load`, `peek`, `watch`), the mount helper `u()`, and the data age (`health`). |
+| `api.js` | Reads (`load`, `peek`, `watch`), the mount helper `u()`, the data age (`health`), and `post()`, the operator view's one write. |
 | `ui.js` | The `html` builder (escapes every value) and the primitives: `status`, `member`, `memberChip`, `item`, `state`, `pendingRead`, `pageHead`, `sectionHead`, `tabs`, `kpi`, `sparkline`, `histogram`, `notMeasured`, `value`, `ago`, `gold`. |
 | `tooltip.js` | The one item tooltip, for any element with `data-item="<entry>"`. It reads `/api/item`. |
 | `search.js` | The search dialog and `addProvider(fn)`. |
@@ -47,7 +47,7 @@ The `ctx` passed to every method is `{view, section, params, query, hash, get, i
 
 ## Rules
 
-- **Read-only.** Nothing here sends a POST. Operator actions live on `#/operator`, locked.
+- **Read-only.** No view sends a POST except `#/operator`, which draws no form unless `/api/v2/operator` reports the operator setting on. Its forms send through `post()` in `api.js`, only after a confirmation step, to the existing POST routes.
 - **Every number comes from the server.** When the server does not report a value, show `notMeasured()` ("not measured"), never 0, a dash or a guess.
 - **Every URL goes through the mount.** Build reads with paths like `/api/...`, and `api.js` prefixes the mount. Never write an origin-relative URL into markup.
 - **Copy:** ASCII only, no em dashes, sentence case.
