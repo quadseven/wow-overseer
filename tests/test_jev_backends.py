@@ -414,7 +414,7 @@ class BridgeWiring(unittest.TestCase):
         values = sql[sql.index("VALUES (") + 8 :].rstrip(")").split(", ")
         self.assertEqual(len(columns), len(values))
         bound = iter(args)
-        row = {c: (next(bound) if v == "%s" else v) for c, v in zip(columns, values)}
+        row = {c: (next(bound) if v == "%s" else v) for c, v in zip(columns, values, strict=True)}
         self.assertEqual(row["heuristic"], "equip")
         self.assertEqual(row["heuristic_why"], "active backend jev")
         self.assertEqual(
