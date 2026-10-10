@@ -102,12 +102,13 @@ class TheDatabaseReader(unittest.TestCase):
             rd.rows("wide", (), fallback="thin")
         self.assertEqual([s for s, _ in db.executed], ["wide"])
 
-    def test_a_must_read_raises_a_missing_table_as_a_gap(self):
+    def test_a_must_read_raises_a_missing_table_or_column_as_a_gap(self):
         db = Db({"core": MISSING_TABLE, "col": MISSING_COLUMN})
         with realmread.Session(db.connect) as rd:
-            for sql in ("core", "col"):
+            for sql, code in (("core", 1146), ("col", 1054)):
                 with self.assertRaises(realmread.Gap) as caught:
                     rd.must(sql)
+                self.assertEqual(caught.exception.code, code)
                 self.assertIsInstance(caught.exception.__cause__, ERR.MySQLError)
 
     def test_a_must_read_raises_any_other_error_as_it_is(self):
@@ -173,6 +174,14 @@ class TheMemoryReader(unittest.TestCase):
         self.assertEqual(rd.rows("wide"), [])
         with self.assertRaises(realmread.Gap):
             rd.must("wide")
+
+    def test_a_missing_column_is_answered_like_the_database(self):
+        rd = realmread.Memory({"wide": realmread.MISSING_COLUMN, "thin": [{"a": 1}]})
+        self.assertEqual(rd.rows("wide", (), fallback="thin"), [{"a": 1}])
+        self.assertEqual(rd.rows("wide"), [])
+        with self.assertRaises(realmread.Gap) as caught:
+            rd.must("wide")
+        self.assertEqual(caught.exception.code, realmread.MISSING_COLUMN)
 
     def test_every_statement_is_recorded_with_its_values(self):
         rd = realmread.Memory({"q": []})
