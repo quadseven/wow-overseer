@@ -12934,7 +12934,7 @@ class Bridge(discord.Client):
         # THE GUILD MASTER BANKS THE GUILD'S GOLD (#775): with member deposits
         # off, the dues stopped in the master's purse and Cave's vault sat at
         # 155.0g for twelve days. guildbank.gold_deposits has the rule.
-        master = str((setup or {}).get("master") or "")
+        master = _guild_master(setup)
         deposits = guildbank.gold_deposits(
             members, master=master, purchased_tabs=purchased_tabs,
             buyer=_setup_buyer(setup, names, leader))
@@ -12947,16 +12947,7 @@ class Bridge(discord.Client):
         if not actions and not deposits and not items:
             log.info("guild bank: nobody is carrying more than the float")
             return
-        if not actions and not items and not guildbank.worth_a_walk(deposits):
-            # A FEW GOLD IS NOT A TRIP TO A CAPITAL. The passing pass banks it
-            # the next time the master stands at a vault.
-            log.info(
-                "guild bank: %s carries %s above what it keeps, under the %dg "
-                "a trip is made for - it banks it at the next vault it passes%s",
-                ", ".join(d.name for d in deposits),
-                guildbank.gold(sum(d.copper for d in deposits)),
-                guildbank.MASTER_DEPOSIT_WALK_COPPER // 10_000,
-                _family_label(cohort))
+        if _gold_waits_for_a_vault(actions, items, deposits, cohort):
             return
         # ONE POSITION READ, FOR TWO QUESTIONS (infra#3804): which map the
         # LEADER aims from, and whether each DEPOSITOR is at the vault now.
@@ -13086,10 +13077,7 @@ class Bridge(discord.Client):
                 continue
             await asyncio.to_thread(_insert_guild, deposit.name, command, "guildbank")
             fresh.append(deposit)
-            if deposit.name == master and not guildbank.MEMBER_GOLD_DEPOSITS:
-                purse = {str(m.get("name")): m.get("money") for m in members}.get(master)
-                log.info("%s%s", guildbank.master_deposit_line(
-                    deposit, purse, purchased_tabs), _family_label(cohort))
+            _say_master_deposit(deposit, master, members, purchased_tabs, cohort)
         if walking:
             # LOGGED: a pass that writes nothing and a broken one look
             # identical otherwise (infra#3660, restated for the rows).
@@ -13148,7 +13136,7 @@ class Bridge(discord.Client):
         deposits = guildbank.gold_deposits(
             natural.only_contributors(
                 await asyncio.to_thread(_fetch_guild_money, names), eligible),
-            master=str((setup or {}).get("master") or ""),
+            master=_guild_master(setup),
             purchased_tabs=purchased_tabs,
             buyer=_setup_buyer(setup, names, leader))
         if not deposits:
@@ -26656,6 +26644,37 @@ def _setup_buyer(setup: dict | None, names: list, leader: str) -> str:
     """
     master = str((setup or {}).get("master") or "")
     return master if master and master in names else leader
+
+
+def _guild_master(setup: dict | None) -> str:
+    """The guild master's name off `_fetch_guild_bank_setup`, or ''."""
+    return str((setup or {}).get("master") or "")
+
+
+def _gold_waits_for_a_vault(actions, items, deposits, cohort=None) -> bool:
+    """True, and said, when gold alone is all the guild bank pass would walk
+    for and it is under the walk's worth (#775). A few gold is not a trip to a
+    capital: the passing pass banks it the next time the master stands at a
+    vault."""
+    if actions or items or not deposits or guildbank.worth_a_walk(deposits):
+        return False
+    log.info(
+        "guild bank: %s carries %s above what it keeps, under the %dg "
+        "a trip is made for - it banks it at the next vault it passes%s",
+        ", ".join(d.name for d in deposits),
+        guildbank.gold(sum(d.copper for d in deposits)),
+        guildbank.MASTER_DEPOSIT_WALK_COPPER // 10_000,
+        _family_label(cohort))
+    return True
+
+
+def _say_master_deposit(deposit, master, members, purchased_tabs, cohort=None) -> None:
+    """Log the guild master's deposit of the guild's gold (#775)."""
+    if deposit.name != master or guildbank.MEMBER_GOLD_DEPOSITS:
+        return
+    purse = {str(m.get("name")): m.get("money") for m in members}.get(master)
+    log.info("%s%s", guildbank.master_deposit_line(deposit, purse, purchased_tabs),
+             _family_label(cohort))
 
 
 def _plan_guild_setup(setup: dict | None, purchased_tabs: int, names: list,

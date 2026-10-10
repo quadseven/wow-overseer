@@ -233,7 +233,9 @@ class TheVaultLookDepositsOnlyForWhoeverIsAtAVault(unittest.TestCase):
                 "travel": types.SimpleNamespace(spawn_in_reach=_at(world)),
             }
         )
-        ns = _load(["_guild_bank_passing_once", "_setup_buyer", *HELPERS], ns)
+        ns = _load(
+            ["_guild_bank_passing_once", "_setup_buyer", "_guild_master", *HELPERS], ns
+        )
         asyncio.run(ns["_guild_bank_passing_once"](object(), HORDE))
         self.assertEqual([("Zug", "bank deposit 1000", "guildbank")], world["written"])
         self.assertTrue(
@@ -284,7 +286,9 @@ class TheMasterBanksAtAVaultItPasses(unittest.TestCase):
                 "travel": types.SimpleNamespace(spawn_in_reach=_at(world)),
             }
         )
-        ns = _load(["_guild_bank_passing_once", "_setup_buyer", *HELPERS], ns)
+        ns = _load(
+            ["_guild_bank_passing_once", "_setup_buyer", "_guild_master", *HELPERS], ns
+        )
         asyncio.run(ns["_guild_bank_passing_once"](object(), HORDE))
         self.assertEqual([("Zug", "bank deposit 30000", "guildbank")], world["written"])
 
