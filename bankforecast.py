@@ -298,9 +298,10 @@ class Forecast:
     def decisions(self) -> tuple:
         return tuple(d for line in self.lines for d in line.decisions)
 
-    def headline(self, guild: str = "the guild") -> str:
+    def headline(self, guild: str = "") -> str:
         """`Cave's vault holds 98 stack(s): 41 surplus, ...; keep 56, give 1,
-        list 19, vendor 22`."""
+        list 19, vendor 22`, named `guild`, else the forecast's own guild."""
+        guild = guild or self.guild or "the guild"
         decisions = self.decisions()
         kinds: dict = {}
         for d in decisions:

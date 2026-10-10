@@ -13063,7 +13063,7 @@ class Bridge(discord.Client):
             return
         self._bank_forecast_said[key] = signature
         moving = [d for d in forecast.decisions() if d.action != bankforecast.KEEP]
-        log.info("bank forecast: %s%s%s", forecast.headline(forecast.guild or "the guild"),
+        log.info("bank forecast: %s%s%s", forecast.headline(),
                  "; the vault's %d give, list and vendor decision(s) wait for an "
                  "item withdrawal verb in mod-overseer" % len(moving) if moving else "",
                  _family_label(cohort))

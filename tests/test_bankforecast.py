@@ -272,6 +272,11 @@ class TheVaultKeepsWhatTheGuildWillEat(unittest.TestCase):
         self.assertIn("none in the vault, 5589 guild-wide", line.summary)
         self.assertIn(LINEN, forecast.over_target)
 
+    def test_the_headline_names_the_forecasts_own_guild(self):
+        forecast = bf.Forecast(guild="Cave")
+        self.assertTrue(forecast.headline().startswith("Cave's vault"))
+        self.assertTrue(bf.Forecast().headline().startswith("the guild's vault"))
+
     def test_the_headline_counts_the_vault(self):
         line = self.cave().headline("Cave")
         self.assertEqual("Cave's vault holds 14 stack(s): 14 surplus; list 14", line)
