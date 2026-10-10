@@ -17118,7 +17118,7 @@ class Bridge(discord.Client):
             log.info("guild runs: the last run was refused over %s; forming again "
                      "without %s", guildrun.refused_member(gate["latest"][0].get("why")),
                      ", ".join(sorted(facts["benched"])) or "them")
-        doors = guildrun.doors(facts["finder_floors"])
+        doors = guildrun.doors(facts["finder_floors"], facts.get("boss_levels"))
 
         members, skipped = guildrun.free_members(
             facts["rows"], facts["busy"], facts["resting"],
@@ -17172,7 +17172,7 @@ class Bridge(discord.Client):
                    | set(getattr(self, "_crafter_walks", ()))
                    | {n for n, held in getattr(self, "_pvp_held", {}).items() if held}
                    | set(getattr(self, "_classquest_held", ())))
-        doors = guildrun.doors(facts["finder_floors"])
+        doors = guildrun.doors(facts["finder_floors"], facts.get("boss_levels"))
         mates, held, needs = _guild_social_mates(facts, mid_job, doors)
         # THE CLASS QUEST COMES BEFORE THE DUNGEON: a member in a class quest
         # party that is up, or about to be formed from a filled ask, is not
@@ -21718,6 +21718,7 @@ def _fetch_guild_run_facts(bounds) -> dict:
             "WHERE difficulty = 0"
         )
         floors = {int(r["map_id"]): int(r["min_level"]) for r in cur.fetchall()}
+        boss_levels = _door_boss_levels(cur)
         cur.execute(
             "SELECT outcome, why FROM overseer_guild_run WHERE state = 'ended' "
             "AND ended_at > NOW() - INTERVAL %s MINUTE",
@@ -21727,7 +21728,33 @@ def _fetch_guild_run_facts(bounds) -> dict:
     return {"rows": rows, "family": family, "busy": busy, "in_runs": in_runs,
             "resting": resting,
             "benched": benched, "in_flight_by_guild": by_guild, "history": history,
-            "finder_floors": floors}
+            "finder_floors": floors, "boss_levels": boss_levels}
+
+
+# THE LEVEL OF EACH DUNGEON'S BOSSES, by map (guildrun.BOSS_LEVELS_SQL), for
+# the seats that carry a guild group (guildrun.carries). Read once per
+# process: the world's bosses do not change under a running bridge.
+_DOOR_BOSS_LEVELS: dict | None = None
+
+
+def _door_boss_levels(cur) -> dict:
+    """map_id -> the level of its highest credited boss; {} unread, which
+    holds nobody (guildrun.carry_floor)."""
+    global _DOOR_BOSS_LEVELS
+    if _DOOR_BOSS_LEVELS is not None:
+        return _DOOR_BOSS_LEVELS
+    cur.execute(guildrun.BOSS_LEVELS_SQL)
+    found = {
+        int(r["map_id"]): int(r["level"])
+        for r in cur.fetchall()
+        if r.get("map_id") is not None and r.get("level") is not None
+    }
+    if found:
+        _DOOR_BOSS_LEVELS = found
+        log.info("guild runs: read the bosses' level of %d dungeon map(s); the tank and "
+                 "healer seats stand at it (the Deadmines' %s)", len(found),
+                 found.get(36, "unread"))
+    return found
 
 
 def _hearth_stranded_guild_members() -> int:

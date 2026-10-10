@@ -21,6 +21,7 @@ no guild or another guild) that is:
            not grouped, not a family member, not in a guild run;
   real     its spent talents play the seat, and it is dressed for it
            (guildsocial.can_take: Member.plays plus tank_ready or covered);
+  carries  at or over the level of the dungeon's bosses (guildrun.carries);
   on side  the race of the guild's side (guildrun.faction_of);
   in band  the door fits its level (guildrun.fitting_doors) and it is within
            guildrun.BAND_SPREAD of the asker;
@@ -202,11 +203,13 @@ def _minutes_since(when, now) -> float:
 # --- when to look --------------------------------------------------------------
 
 
-def short_seats(ask, answers: list, free: dict) -> tuple:
-    """The tank and healer seats still empty when every other seat is filled
-    by the asker and its yeses, tank first; () when anything else is short
-    (a guild group fills its damage seats first) or nothing is."""
-    sofar = guildsocial.seats_so_far(ask, answers, free)
+def short_seats(ask, answers: list, free: dict, door=None) -> tuple:
+    """The tank and healer seats still empty at `door` when every other seat
+    is filled by the asker and its yeses, tank first; () when anything else
+    is short (a guild group fills its damage seats first) or nothing is. A
+    yes under the door's bosses' level leaves its seat empty
+    (guildrun.carries)."""
+    sofar = guildsocial.seats_so_far(ask, answers, free, door)
     if sofar is None:
         return ()
     seats, damage = sofar
@@ -279,6 +282,8 @@ def why_not_pug(
         return "the other side"
     if not guildsocial.can_take(member, seat):
         return "does not play the %s seat" % seat
+    if not guildrun.carries(member, door):
+        return "under the level of the dungeon's bosses"
     if not guildrun.fitting_doors([member.level], [door], faction):
         return "outside the door's band"
     if abs(int(member.level) - int(asker_level)) > guildrun.BAND_SPREAD:
@@ -513,7 +518,7 @@ def plan(
         asker = free.get(ask.asker)
         if door is None or asker is None:
             continue
-        short = short_seats(ask, by_ask.get(ask.id, []), free)
+        short = short_seats(ask, by_ask.get(ask.id, []), free, door)
         if not short:
             continue
         call = calls.get(ask.id)

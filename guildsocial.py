@@ -45,8 +45,10 @@ is doing now:
          OTHER_CONTINENT across the sea). Far away usually means no.
 
 A seat comes from the tree it plays (raidroles): a tank or healer seat only to
-a member that passes guildrun.tank_ready or guildrun.covered. A member whose
-seat is taken answers as damage. At most ANSWERS_PER_PASS answers an ask a
+a member that passes guildrun.tank_ready or guildrun.covered, and stands at or
+over the level of the door's bosses (guildrun.carries; a tank or healer under
+it neither asks for that door nor answers for its seat). A member whose seat
+is taken answers as damage. At most ANSWERS_PER_PASS answers an ask a
 pass, so yeses trickle in the way people type them.
 
 FORMING (#569). When an ask's yeses seat a tank, a healer and three damage
@@ -587,9 +589,16 @@ def role_of(member: guildrun.Member) -> str:
     return DPS
 
 
-def can_take(member: guildrun.Member, seat: str) -> bool:
+def can_take(member: guildrun.Member, seat: str, door=None) -> bool:
     """Only a member whose spent talents play the seat takes a tank or healer
-    seat (guildrun.Member.plays, #575)."""
+    seat (guildrun.Member.plays, #575), and at `door` only at or over the
+    level of its bosses (guildrun.carries)."""
+    if (
+        seat in (TANK, HEALER)
+        and door is not None
+        and not guildrun.carries(member, door)
+    ):
+        return False
     if seat == TANK:
         return member.plays(guildrun.TANK) and guildrun.tank_ready(member)
     if seat == HEALER:
@@ -917,14 +926,15 @@ def _minutes_since(when, now) -> float:
     return (now - when).total_seconds() / 60.0
 
 
-def seats_so_far(ask: Ask, answers: list, free: dict) -> tuple | None:
+def seats_so_far(ask: Ask, answers: list, free: dict, door=None) -> tuple | None:
     """({tank, healer} -> (member, answer) or None, [damage (member, answer)])
-    for the asker and its yeses from members free now, as `seat` fills them;
-    None when the asker is not free (guildpug reads which seat is short)."""
+    for the asker and its yeses from members free now, as `seat` fills them
+    at `door`; None when the asker is not free (guildpug reads which seat is
+    short)."""
     asker = free.get(ask.asker)
     if asker is None:
         return None
-    return _seats(asker, _yeses(answers, free), free)
+    return _seats(asker, _yeses(answers, free), free, door)
 
 
 def _yeses(answers: list, free: dict) -> list:
@@ -938,20 +948,23 @@ def _yeses(answers: list, free: dict) -> list:
     return [a for a in yes if a.stance != HELPS or a.id in keep]
 
 
-def _seats(asker: guildrun.Member, yes: list, free: dict) -> tuple:
+def _seats(asker: guildrun.Member, yes: list, free: dict, door=None) -> tuple:
     """({tank, healer} -> (member, answer or None), [damage (member, answer)]):
-    the asker in the seat its tree plays, then each yes in the seat it said."""
+    the asker in the seat its tree plays, then each yes in the seat it said.
+    A tank or healer under `door`'s bosses' level (guildrun.carries) is not
+    seated there."""
     seats = {TANK: None, HEALER: None}
     damage = []
     mine = role_of(asker)
     if mine in seats:
-        seats[mine] = (asker, None)
+        if door is None or guildrun.carries(asker, door):
+            seats[mine] = (asker, None)
     elif asker.deals_damage():
         damage.append((asker, None))
     for answer in yes:
         member = free[answer.member]
         open_seat = answer.role in seats and seats[answer.role] is None
-        if open_seat and can_take(member, answer.role):
+        if open_seat and can_take(member, answer.role, door):
             seats[answer.role] = (member, answer)
         elif answer.role == DPS and len(damage) < 3 and member.deals_damage():
             damage.append((member, answer))
@@ -979,7 +992,7 @@ def seat(ask: Ask, answers: list, free: dict, door, faction: str):
     asker = free.get(ask.asker)
     if asker is None:
         return None
-    chosen = _chosen(*_seats(asker, _yeses(answers, free), free))
+    chosen = _chosen(*_seats(asker, _yeses(answers, free), free, door))
     if chosen is None:
         return None
     beneficiaries = [m.level for m, a in chosen if not _helping(a)]
@@ -1149,7 +1162,7 @@ def _candidates(board: _Board, ask: Ask, open_seats: list, spoken: set) -> list:
             continue
         # The scarce seats first: a tank or healer for an open seat of its
         # own answers before another damage dealer.
-        scarce = 0 if _seat_for(mate.member, open_seats) in (TANK, HEALER) else 1
+        scarce = 0 if _seat_for(mate.member, open_seats, door) in (TANK, HEALER) else 1
         options.append((scarce, -net, name, mate, stance, need))
     options.sort(key=lambda o: o[:3])
     return options
@@ -1168,7 +1181,7 @@ def _answers_to(board: _Board, ask: Ask, spoken: set) -> list:
     ):
         if len(out) >= ANSWERS_PER_PASS:
             break
-        role = _seat_for(mate.member, open_seats)
+        role = _seat_for(mate.member, open_seats, door)
         if not role or (stance == HELPS and helpers >= MAX_HELPERS):
             continue
         open_seats.remove(role)
@@ -1197,6 +1210,15 @@ def ask_shape(board: _Board, mate: Mate, guild: str) -> str:
     )
 
 
+def _may_ask_for(member: guildrun.Member, door, faction: str) -> bool:
+    """Whether this member may ask for `door`: the door fits its level, and a
+    tank or healer can take its own seat there (can_take, the bosses' level)."""
+    if not guildrun.fitting_doors([member.level], [door], faction):
+        return False
+    mine = role_of(member)
+    return mine == DPS or can_take(member, mine, door)
+
+
 def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
     """(rank, name, mate, options, band, shape) for this member's ask, or None.
 
@@ -1220,7 +1242,7 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
         door = board.doors.get(need.keyword)
         if door is None or door.keyword in seen or (guild, door.keyword) in asked:
             continue
-        if not guildrun.fitting_doors([mate.member.level], [door], faction):
+        if not _may_ask_for(mate.member, door, faction):
             continue
         record = board.records.get(
             (door.keyword, band, shape), guildrun.NO_SHAPE_RECORD
@@ -1537,16 +1559,19 @@ def plan_pass(
     )
 
 
-def _seat_for(member: guildrun.Member, open_seats: list) -> str:
-    """The seat this member answers for: its own tree's seat when open, a
-    tank or healer seat its class can take untalented, else damage when its
-    tree is not a tank or healer tree, else none."""
+def _seat_for(member: guildrun.Member, open_seats: list, door=None) -> str:
+    """The seat this member answers for at `door`: its own tree's seat when
+    open and it stands at the door's bosses' level (can_take), a tank or
+    healer seat its class can take untalented, else damage when its tree is
+    not a tank or healer tree, else none."""
     mine = role_of(member)
-    if mine in open_seats and (mine != DPS or member.deals_damage()):
+    if mine in open_seats and (
+        can_take(member, mine, door) if mine != DPS else member.deals_damage()
+    ):
         return mine
     if not member.played_tree:
         for seat_name in (TANK, HEALER):
-            if seat_name in open_seats and can_take(member, seat_name):
+            if seat_name in open_seats and can_take(member, seat_name, door):
                 return seat_name
     return DPS if DPS in open_seats and member.deals_damage() else ""
 

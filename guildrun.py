@@ -431,14 +431,50 @@ class Door:
     ceiling: int
     map_id: int
     finder_floor: int
+    # The level the tank and healer seats must stand at (carries); 0 unread.
+    carry_floor: int = 0
 
 
-def doors(finder_floors: dict | None = None) -> list:
+# THE SEATS THAT CARRY A GROUP STAND AT ITS BOSSES' LEVEL. Measured on wow-dev
+# (2026-10-07 to 10-09): 0 of 57 guild runs cleared the Deadmines. 60 of the 68
+# Deadmines runs ever made sat a tank or a healer under its bosses' level 20
+# (level-17 to 19 priests and an 18 to 19 paladin tank), and the tank died
+# first in 33 of the 51 runs with deaths read. The same line splits the doors
+# the guilds do clear: Ragefire runs whose tank and healer both stood at its
+# bosses' 16 cleared 21 of 38, those under it 10 of 89; Wailing Caverns at its
+# bosses' 20, 3 of 11 against 3 of 111. A damage dealer goes in at the door's
+# floor as before; only the two seats that carry the group wait for the level.
+#
+# The bosses' level is the highest credited encounter on the door's map
+# (BOSS_LEVELS_SQL), never more than the top of the door's first band (floor
+# plus BAND_SPREAD, so the Graveyard is not held to the Cathedral's bosses on
+# the Monastery's shared map) or its ceiling (a level-60 door's skull bosses
+# read 62 and 63).
+BOSS_LEVELS_SQL = (
+    "SELECT cr.map AS map_id, MAX(ct.maxlevel) AS level "
+    "FROM acore_world.instance_encounters ie "
+    "JOIN acore_world.creature_template ct ON ct.entry = ie.creditEntry "
+    "JOIN acore_world.creature cr ON cr.id = ie.creditEntry "
+    "WHERE ie.creditType = 0 GROUP BY cr.map"
+)
+
+
+def carry_floor(boss_level: int, floor: int, ceiling: int) -> int:
+    """The level a door's tank and healer must stand at: its bosses', capped
+    at the top of its first band and at its ceiling; 0 (no hold) unread."""
+    if int(boss_level) <= 0:
+        return 0
+    return min(int(boss_level), int(floor) + BAND_SPREAD, int(ceiling))
+
+
+def doors(finder_floors: dict | None = None, boss_levels: dict | None = None) -> list:
     """Every door mod-overseer has a portal for, with the level it wants
-    (council's floor), the level it is outgrown at (campaignplan's ceiling)
-    and the finder's own minimum (dungeon_access_template, by map, read by
-    the bridge; the council floor when unread)."""
+    (council's floor), the level it is outgrown at (campaignplan's ceiling),
+    the finder's own minimum (dungeon_access_template, by map, read by
+    the bridge; the council floor when unread) and the level its tank and
+    healer must stand at (carry_floor, off BOSS_LEVELS_SQL by map)."""
     floors = finder_floors or {}
+    bosses = boss_levels or {}
     out = []
     for run in campaignplan.RUNS:
         if run.keyword in dungeonpath.WITHHELD_DOORS:
@@ -452,9 +488,18 @@ def doors(finder_floors: dict | None = None) -> list:
                 ceiling=int(run.ceiling),
                 map_id=run.map_id,
                 finder_floor=int(floors.get(run.map_id, floor)),
+                carry_floor=carry_floor(
+                    int(bosses.get(run.map_id, 0)), floor, int(run.ceiling)
+                ),
             )
         )
     return out
+
+
+def carries(member: Member, door: Door) -> bool:
+    """May this member take the tank or healer seat at this door: at or over
+    its carry_floor. An unread bosses' level holds nobody."""
+    return int(member.level) >= int(door.carry_floor)
 
 
 def band_of(levels) -> str:
@@ -1094,7 +1139,11 @@ def plan_for(pool: Pool, all_doors: list, table: dict) -> Plan | None:
     comps = compositions(list(pool.members))
     if not comps:
         return None
-    best = fitting_doors(comps[0].levels, all_doors, faction_of(pool.members))
+    best = [
+        door
+        for door in fitting_doors(comps[0].levels, all_doors, faction_of(pool.members))
+        if carries(comps[0].tank, door) and carries(comps[0].healer, door)
+    ]
     if not best:
         return None
     return Plan(
