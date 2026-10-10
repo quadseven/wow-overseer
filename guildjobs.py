@@ -2317,7 +2317,7 @@ def _member_step(
     if step is not None:
         return step, step.said, gear_note
     step, doing, level_note = level_step(m, leveling, recent, cap)
-    if step is not None:
+    if step is not None or doing:
         return step, doing, gear_note
     step, doing, note = _plan_member(
         m,
@@ -2348,7 +2348,8 @@ def level_step(m, world, recent, cap):
     cap, never while offline, fighting or dead, never on a way that has killed
     it (deadly_hub_note), and at most once per COOLDOWN_MINUTES["level"]. The
     walk is `walk-to-spawn creature:` naming the flight master's spawn, at the
-    pass's cap.
+    pass's cap. From map 530, when the hub lies across the water, the step is
+    its side's boat instead (level_cross_step).
     """
     # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
     # a member contributes, not where it walks: on the dev realm 1 of Cave's
@@ -2373,6 +2374,8 @@ def level_step(m, world, recent, cap):
     )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
+    if choice.cross_to is not None:
+        return level_cross_step(m, choice, why, recent)
     master = choice.master
     if guildlevel.there(m.map_id, m.x, m.y, master):
         return None, "", ""
@@ -2392,6 +2395,39 @@ def level_step(m, world, recent, cap):
         why=why,
     )
     return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, ""
+
+
+def level_cross_step(m, choice, why, recent):
+    """(step or None, what it does, a note) for a member whose level hub lies
+    across the water from map 530 (guildlevel.Choice.cross_to): one
+    `cross-to-map map:<id>` row, no walk (the module walks to the berth, rides
+    the boat and walks off at the landing). While the member's last crossing
+    is young (crossing_cooling) it is held with no row, saying where it goes,
+    so no other job is written over the crossing; a crossing the module
+    refused for good (class_walls) is named in the notes and not asked again
+    until classquest.CROSS_WALL_MINUTES have passed."""
+    wall = class_walls(m.name, recent).get(int(choice.cross_to))
+    if wall:
+        return None, "", guildlevel.walled_note(m.name, m.level, why, choice, wall)
+    said = guildlevel.crossing_said(m.name, m.level, why, choice)
+    if crossing_cooling(m.name, recent):
+        return None, said, ""
+    step = guildcorps.Step(
+        m.name,
+        guildlevel.ACTION,
+        int(choice.cross_to),
+        said,
+        rows=(
+            guildcorps.Row(
+                "job",
+                classquest.cross_command(choice.cross_to),
+                "",
+                source_for(guildlevel.CROSS_ACTION, m.name),
+            ),
+        ),
+        goal=classquest.CONTINENTS.get(int(choice.cross_to), ""),
+    )
+    return step, said, ""
 
 
 # A WAY TO A HUB THAT KILLS IS NOT WALKED AGAIN FOR HOURS (2026-10-09). On the
@@ -2788,14 +2824,22 @@ def class_helps(m, book, hunts=None, now=0.0, recent=()) -> list:
     ]
 
 
+# A MEMBER MAKES ONE CROSSING AT A TIME, whichever step asked it: a class
+# quest's (classquest.CROSS_ACTION) or the level step's off map 530
+# (guildlevel.CROSS_ACTION). Their rows share one clock (crossing_cooling) and
+# one set of walls (class_walls), since what the module says about carrying a
+# member to a map is a fact about the member and the map, not about the step.
+CROSS_ACTIONS = frozenset({classquest.CROSS_ACTION, guildlevel.CROSS_ACTION})
+
+
 def class_walls(name, recent) -> dict:
     """map id -> the module's reason, for each map the module refused to cross
     this member to for good (classquest.CROSS_WALLS) in its newest crossing row
-    to that map, inside classquest.CROSS_WALL_MINUTES. A later row to the map
-    that was not refused that way lifts the wall."""
+    to that map (CROSS_ACTIONS), inside classquest.CROSS_WALL_MINUTES. A later
+    row to the map that was not refused that way lifts the wall."""
     newest: dict = {}
     for r in recent or ():
-        if r.name != name or r.action != classquest.CROSS_ACTION or not r.dest:
+        if r.name != name or r.action not in CROSS_ACTIONS or not r.dest:
             continue
         if r.dest not in newest or int(r.age_minutes) < int(newest[r.dest].age_minutes):
             newest[r.dest] = r
@@ -2819,11 +2863,7 @@ def crossing_cooling(name, recent) -> bool:
     asked again after classquest.CROSS_RETRY_MINUTES, any other row after
     classquest.CROSS_COOLDOWN_MINUTES (over the module's own 30 minute backstop,
     so a row still crossing is always inside it)."""
-    rows = [
-        r
-        for r in recent or ()
-        if r.name == name and r.action == classquest.CROSS_ACTION
-    ]
+    rows = [r for r in recent or () if r.name == name and r.action in CROSS_ACTIONS]
     if not rows:
         return False
     newest = min(rows, key=lambda r: int(r.age_minutes))
@@ -3746,14 +3786,15 @@ def stalled_level_first(m, leveling, recent, cap, room=True):
     """(step, what it does, note) of the level walk for a member whose class
     step is held for failing (class_stall_hold), or None: no hold, no level
     walk left to the guild this pass (`room`), or no walk to make
-    (level_step)."""
+    (level_step). A member held on its level crossing (level_cross_step) stays
+    held, with no class row written over the crossing."""
     if not room or leveling is None:
         return None
     left, failed = class_stall_hold(m.name, recent)
     if not left:
         return None
     step, doing, _note = level_step(m, leveling, recent, cap)
-    if step is None:
+    if step is None and not doing:
         return None
     note = (
         "%s's class quest step failed %d times in a row without progress; its "

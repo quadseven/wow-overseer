@@ -42,14 +42,20 @@ in the starting lands is offered their second zone's hub as well: Blood Watch
 on Bloodmyst Isle for the Alliance, Tranquillien in the Ghostlands for the
 Horde, which is where a Draenei or a Blood Elf player goes from 10 to 20.
 
-LEAVING MAP 530 (`EXITS`). A Draenei leaves by the boat from Valaar's Berth on
-Azuremyst Isle to Auberdine in Darkshore; a Blood Elf by the Orb of
-Translocation in Silvermoon City to the Undercity. No row the bridge can write
-takes either today: walk-to-spawn refuses a spawn on another map, the module's
-boat crossing serves only a family member whose leader is on the far map, and
-nothing uses an orb. So a member past its starting lands, or one whose
-continent has no hub that fits, is named in the pass's notes with the hub it
-would go to and the way there, and left where it stands.
+LEAVING MAP 530 (`EXITS`, `BOAT_EXITS`). A Draenei leaves by the boat from
+Valaar's Berth on Azuremyst Isle to Auberdine in Darkshore; a Blood Elf by the
+Orb of Translocation in Silvermoon City to the Undercity. walk-to-spawn refuses
+a spawn on another map, so the Draenei's way is the module's `cross-to-map
+map:<id>` row (classquest.CROSSING_VERB): the member walks to its own side's
+berth, waits for Elune's Blessing, rides it and walks off at Auberdine. A
+member past its starting lands is sent that way when a hub on the boat's far
+side fits its level (`Choice.cross_to`), and walks on to that hub from the
+landing on a later pass. Measured on the dev realm on 2026-10-10: Cave's
+Draenei at 22 to 26 stood on Bloodmyst and Azuremyst Isles with no level row
+in a day, every pass refusing them with "no row takes it". No row uses an orb,
+so a Blood Elf past its starting lands, or a member whose continent has no hub
+that fits, is still named in the pass's notes with the hub it would go to and
+the way there, and left where it stands.
 
 WHERE THE WALK ENDS (`hub_masters`). The hub's flight master: the flight-master
 spawn of the world's creature table nearest the hub's taxi node, within
@@ -101,6 +107,15 @@ EXITS = {
     levelroute.HORDE: "the Orb of Translocation in Silvermoon City to the Undercity",
 }
 
+# The map a side's own boat off map 530 lands on: Elune's Blessing (world
+# transport 181646) from Valaar's Berth to Auberdine on Kalimdor. The Horde's
+# way is an orb, which no row uses, so it has none.
+BOAT_EXITS = {levelroute.ALLIANCE: 1}
+
+# The source action of the level step's crossing row (guildjobs.source_for),
+# apart from the walk's so that the walk's cooldown never reads it.
+CROSS_ACTION = ACTION + "-cross"
+
 
 @dataclass(frozen=True)
 class HubMaster:
@@ -118,13 +133,16 @@ class Choice:
     """The hub a member is sent to, or why it is not sent.
 
     A non-empty `refused` means `master` is None. `hub` and `band` may still
-    name the hub it would go to, for the note.
+    name the hub it would go to, for the note. `cross_to` set means the member
+    first crosses to that map by its side's boat (BOAT_EXITS), with `master`
+    None: `hub` is where it levels once it has landed.
     """
 
     hub: levelroute.Hub | None = None
     band: tuple | None = None
     master: HubMaster | None = None
     refused: str = ""
+    cross_to: int | None = None
 
     @property
     def place(self) -> str:
@@ -240,29 +258,47 @@ def choose(level, race, map_id, bands, masters, zone_id=None) -> Choice:
     """The hub a member of this level and race is walked to from `map_id`.
 
     The lowest band of its side that fits, then levelroute's order, among the
-    hubs with a known flight master (`hubs_from`). Only on its own map; see
+    hubs with a known flight master (`hubs_from`). Only on its own map, or,
+    from map 530, on the map its side's boat lands on (`Choice.cross_to`); see
     the module docstring.
     """
     team = side_of(race)
     if not team:
         return Choice(refused="its side cannot be read off its race")
     level = int(level)
-    fitting = []
-    for order, hub in enumerate(hubs_from(team, map_id, zone_id)):
-        band = (bands or {}).get(hub.zone_id)
-        if not hub.friendly or not fits(band, level):
-            continue
-        master = (masters or {}).get(hub.key)
-        if master is None:
-            continue
-        fitting.append((int(band[0]), order, hub, band, master))
+    fitting = _fitting(team, level, map_id, zone_id, bands, masters)
     if not fitting:
         return Choice(refused="no %s hub fits level %d" % (team, level))
-    fitting.sort(key=lambda f: f[:2])
     home = [f for f in fitting if map_id is not None and f[4].map_id == int(map_id)]
     if home:
         _floor, _order, hub, band, master = home[0]
         return Choice(hub=hub, band=band, master=master)
+    return _away(team, level, map_id, fitting)
+
+
+def _fitting(team, level, map_id, zone_id, bands, masters) -> list:
+    """(floor, order, hub, band, master) of every friendly hub of `team` whose
+    band fits `level` and whose flight master is known, lowest floor first,
+    then levelroute's order."""
+    fitting = []
+    for order, hub in enumerate(hubs_from(team, map_id, zone_id)):
+        band = (bands or {}).get(hub.zone_id)
+        master = (masters or {}).get(hub.key)
+        if hub.friendly and fits(band, level) and master is not None:
+            fitting.append((int(band[0]), order, hub, band, master))
+    fitting.sort(key=lambda f: f[:2])
+    return fitting
+
+
+def _away(team, level, map_id, fitting) -> Choice:
+    """The choice when no fitting hub stands on the member's own map: its
+    side's boat off map 530 to the lowest hub that fits where the boat lands
+    (BOAT_EXITS), or the lowest hub of all, named and refused."""
+    boat = BOAT_EXITS.get(team) if classic.is_expansion_map(map_id) else None
+    landed = [f for f in fitting if boat is not None and f[4].map_id == boat]
+    if landed:
+        _floor, _order, hub, band, _master = landed[0]
+        return Choice(hub=hub, band=band, cross_to=boat)
     _floor, _order, hub, band, _master = fitting[0]
     if classic.is_expansion_map(map_id):
         why = "no walk leaves map %d; its way to %s is %s, and no row takes it" % (
@@ -300,6 +336,35 @@ def said(name, level, why, choice: Choice) -> str:
             int(level),
             why,
         )
+    )
+
+
+def crossing_said(name, level, why, choice: Choice) -> str:
+    """The sentence the pass logs for a member sent to its side's boat."""
+    return (
+        "%s takes the boat off map 530 to level: %s, then on to %s (quests %d "
+        "to %d fit its level %d): %s"
+        % (
+            name,
+            EXITS[choice.hub.team],
+            choice.place,
+            int(choice.band[0]),
+            int(choice.band[1]),
+            int(level),
+            why,
+        )
+    )
+
+
+def walled_note(name, level, why, choice: Choice, wall) -> str:
+    """The note for a member the module will not carry across (`wall`, its own
+    words in the newest crossing row)."""
+    return "%s at level %d stays: %s, and the module will not cross it (%s)%s" % (
+        name,
+        int(level),
+        why,
+        wall,
+        (" (it would go to %s)" % choice.place) if choice.hub is not None else "",
     )
 
 
