@@ -10,6 +10,7 @@ it needs a network.
 Ticket: infra#88.
 """
 
+import hashlib
 import os
 import tempfile
 import time
@@ -196,6 +197,50 @@ class TheDisk(unittest.TestCase):
         finally:
             del os.environ["MODEL_CACHE_DIR"]
         self.assertTrue(modelviewer.default_cache_dir().endswith("wow-modelviewer"))
+
+
+class TheCacheStaysInsideItsDirectory(unittest.TestCase):
+    """Alerts 8-10 (py/path-injection): no path reaches a file outside the cache."""
+
+    def setUp(self):
+        self.outer = os.path.realpath(tempfile.mkdtemp(prefix="mv-test-"))
+        self.dir = os.path.join(self.outer, "cache")
+        os.makedirs(self.dir)
+        self.cache = DiskCache(self.dir)
+
+    def test_valid_file_round_trips(self):
+        self.cache.put("m2/1.m2", b"abc")
+        self.assertEqual(self.cache.get("m2/1.m2"), b"abc")
+        self.assertEqual(len(os.listdir(self.dir)), 1)
+
+    def test_hostile_paths_are_refused_by_cache_and_store(self):
+        for bad in (
+            "m2/..%2f..%2fx.m2",
+            "m2/../../etc/passwd",
+            "/etc/passwd",
+            "m2/./1.m2",
+            "m2/1.m2\x00.png",
+            "m2/a/../b.m2",
+            "meta/item/1.json/",
+        ):
+            self.assertIsNone(classify(bad), bad)
+            r = Store(self.cache, lambda url: (200, b"x")).serve(bad)
+            self.assertEqual(r.status, 404, bad)
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_cache_itself_refuses_a_bad_extension(self):
+        self.assertIsNone(self.cache.get("m2/1.m-2"))
+        with self.assertRaises(OSError):
+            self.cache.put("m2/1.m-2", b"no")
+        self.assertEqual(os.listdir(self.outer), ["cache"])
+
+    def test_symlinked_cache_file_pointing_out_is_not_read(self):
+        secret = os.path.join(self.outer, "secret.m2")
+        with open(secret, "wb") as f:
+            f.write(b"secret")
+        digest = hashlib.sha256(b"m2/9.m2").hexdigest()
+        os.symlink(secret, os.path.join(self.dir, digest + ".m2"))
+        self.assertIsNone(self.cache.get("m2/9.m2"))
 
 
 class TheEndpoint(unittest.TestCase):

@@ -114,6 +114,7 @@ def _card(
     goals=NO_GOALS,
     runnable=True,
     clears=True,
+    gathers=True,
     chars=(),
     quest_rows=(),
     holding_rows=(),
@@ -124,6 +125,7 @@ def _card(
     with (
         mock.patch.object(raidready.jobs, "RAID_KEYWORDS", raids),
         mock.patch.object(raidready.raidrun, "CLEARS", clears),
+        mock.patch.object(raidready.raidrun, "GATHERS", gathers),
     ):
         return raidready.build_guild(
             group,
@@ -220,12 +222,34 @@ class HardBlockers(unittest.TestCase):
         self.assertIn("Nothing clears Molten Core yet", hard[0])
         self.assertIn("holds at the entrance", hard[0])
 
-    def test_the_shipped_answer_is_that_nothing_clears(self):
-        """Unpatched, the card states today's truth: the run exists and does
-        not clear. This fails the moment raidrun claims a clear it has not got,
-        or drops the run the module now has."""
+    def test_the_shipped_answer_is_that_it_clears_but_does_not_gather(self):
+        """Unpatched, the card states today's truth: the run clears
+        (mod-overseer#640, in the deployed module since 2026-09-24), and only
+        the head is walked to the door. This fails the moment raidrun claims
+        a gather it has not got, or drops the clear the module has."""
         self.assertIn(raidready.RAID_PORTAL, raidready.jobs.RAID_KEYWORDS)
-        self.assertFalse(raidready.raidrun.CLEARS)
+        self.assertTrue(raidready.raidrun.CLEARS)
+        self.assertFalse(raidready.raidrun.GATHERS)
+
+    def test_a_run_that_does_not_gather_is_a_hard_blocker_said_plainly(self):
+        """The raid run clears, but ASSEMBLE walks only the head: a seated
+        raider who is not already near the door is never brought there, and
+        the raid goes in with whoever arrived. A forty-seat one-shot cannot
+        start that way, so the card must not call the guild ready."""
+        rows = _guild("Cave", 23, FULL)
+        card = _card(
+            rows,
+            [rows[0]["name"]],
+            attuned=[r["name"] for r in rows],
+            worn=[{"name": r["name"], "slot": 0, "item_level": 60} for r in rows],
+            gathers=False,
+        )
+        self.assertFalse(card["ready"])
+        hard = [b["text"] for b in card["blockers"] if b["tone"] == raidready.HARD]
+        self.assertEqual(1, len(hard), hard)
+        self.assertIn("Only the head is walked to the Molten Core door", hard[0])
+        self.assertIn("whoever has arrived", hard[0])
+        self.assertNotIn("Nothing clears", hard[0])
 
     def test_a_small_guild_is_short_raiders_tanks_and_healers(self):
         rows = _guild(
@@ -459,7 +483,7 @@ class EachRaiderIsReported(unittest.TestCase):
             worn=self.worn,
             item_rows=ITEM_ROWS,
             attuned=[self.head],
-            clears=False,
+            gathers=False,
         )
         self.by_name = {r["name"]: r for r in self.card["raiders"]}
 
@@ -512,10 +536,12 @@ class EachRaiderIsReported(unittest.TestCase):
         self.assertIn("1 wearing any fire resistance (17 in all)", line)
         self.assertIn("0 fire protection potions carried", line)
 
-    def test_the_card_says_what_the_run_does_and_that_clearing_is_off(self):
+    def test_the_card_says_what_the_run_does_and_that_it_clears(self):
         self.assertIn("moltencore 1", self.card["run_line"])
-        self.assertIn("does not clear", self.card["run_line"])
+        self.assertNotIn("does not clear", self.card["run_line"])
+        self.assertIn("clears it with the dungeon brain", self.card["run_line"])
         self.assertIn("none of it has been validated live", self.card["clearing_line"])
+        self.assertIn("until the raid run reaches CLEAR", self.card["clearing_line"])
 
     def test_the_attunement_path_is_on_the_card(self):
         att = self.card["attunement"]

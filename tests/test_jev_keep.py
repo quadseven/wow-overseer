@@ -652,7 +652,9 @@ class BridgeTest(unittest.TestCase):
         body = self.body("_guild_bank_once")
         at = body.index("self._jev_keep_deposits(names, setup, items)")
         self.assertLess(body.index("_plan_bank, names)).guild"), at)
-        self.assertLess(at, body.index("if not actions and not deposits and not items"))
+        self.assertLess(
+            at, body.index("if not any((actions, deposits, items, withdrawals))")
+        )
         self.assertLess(at, body.index("_fetch_positions, sorted({leader}"))
 
     def test_the_judgments_carry_their_facts_to_the_record(self):

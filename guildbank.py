@@ -106,7 +106,20 @@ FLOAT_COPPER = 100_000
 # guild keeps what it earns and pays dues; the guild's gold comes from the dues
 # pass (guildwork.py). So the passes no longer plan member gold deposits;
 # `plan_deposits` stays for its tests and for a guild that asks for it again.
+# The guild master still banks the guild's gold (`plan_master_deposit`, #775).
 MEMBER_GOLD_DEPOSITS = False
+
+# THE GUILD MASTER BANKS THE GUILD'S GOLD (#775). Switching member deposits
+# off took the master's deposit with it, and the dues stopped in its purse:
+# read on the dev realm 2026-10-10, Cave's vault held exactly 155.0g every day
+# from 2026-09-28 while Grug carried 45.7g, and Bonkers' held nothing while Zug
+# carried 96.3g. The dues are the guild's gold already, and a guild master
+# banks them at a vault through the game's own deposit, so the master alone
+# deposits what sits above its float. Under a gold is not worth a row; under
+# ten gold is not worth a walk to a capital, so it waits for a vault the master
+# passes (the passing pass) or for a trip made for a tab or a stack.
+MASTER_DEPOSIT_MIN_COPPER = 10_000
+MASTER_DEPOSIT_WALK_COPPER = 100_000
 
 # What the guild's FIRST bank tab costs, in copper. One hundred gold.
 #
@@ -562,6 +575,98 @@ def plan_deposits(
     return deposits
 
 
+def master_reserve(purse, purchased_tabs) -> int:
+    """Copper the guild master keeps when it banks the guild's gold (#775).
+
+    Its float, and the next tab's price when that tab is tab 0 (a guild
+    without one cannot store an item, and the tab is paid from this purse) or
+    when the purse already pays for it (`can_buy_tab`), so a tab the setup
+    plan is about to buy is never banked away first. A later tab the purse
+    cannot pay for holds nothing back: on the dev realm Grug's purse read 41g
+    to 48g from 2026-10-05 to 2026-10-10 against tab 1's 250g, and holding it
+    back left the guild's gold where no member's training could reach it.
+    """
+    tab = next_tab(purchased_tabs)
+    keep = FLOAT_COPPER
+    if tab is not None and (tab == 0 or can_buy_tab(purse, tab)):
+        keep += tab_cost(tab)
+    return keep
+
+
+def plan_master_deposit(
+    members: list[dict], *, master: str, purchased_tabs: int
+) -> list[Deposit]:
+    """The guild master's deposit of the guild's gold, or none (#775).
+
+    `members` are `plan_deposits`' rows; only the row named `master`, in a
+    guild, counts. It banks what sits above `master_reserve`, and nothing
+    under MASTER_DEPOSIT_MIN_COPPER. An unreadable purse banks nothing.
+    """
+    if not master:
+        return []
+    row = next((m for m in members or () if m.get("name") == master), None)
+    if row is None or not row.get("in_guild"):
+        return []
+    money = row.get("money")
+    if isinstance(money, bool) or not isinstance(money, int):
+        return []
+    try:
+        tabs = int(purchased_tabs)
+    except (TypeError, ValueError):
+        return []
+    copper = money - master_reserve(money, tabs)
+    if copper < MASTER_DEPOSIT_MIN_COPPER:
+        return []
+    return [Deposit(name=master, copper=copper)]
+
+
+def gold_deposits(
+    members: list[dict],
+    *,
+    master: str,
+    purchased_tabs: int,
+    buyer: str = "",
+) -> list[Deposit]:
+    """The gold deposits both guild bank passes plan: every member's while
+    MEMBER_GOLD_DEPOSITS is on, the guild master's alone otherwise."""
+    if MEMBER_GOLD_DEPOSITS:
+        return plan_deposits(
+            members,
+            guild_has_tab=purchased_tabs > 0,
+            buyer=buyer,
+            reserve_for_buyer=buyer_reserve(purchased_tabs),
+        )
+    return plan_master_deposit(members, master=master, purchased_tabs=purchased_tabs)
+
+
+def worth_a_walk(deposits) -> bool:
+    """Whether the gold alone is worth the walk to a vault."""
+    return sum(int(d.copper) for d in deposits or ()) >= MASTER_DEPOSIT_WALK_COPPER
+
+
+def gold(copper) -> str:
+    g, rest = divmod(max(0, int(copper)), 10_000)
+    s = rest // 100
+    if g:
+        return "%dg %02ds" % (g, s) if s else "%dg" % g
+    return "%ds" % s if s else "%dc" % rest
+
+
+def master_deposit_line(deposit: Deposit, purse, purchased_tabs) -> str:
+    """The pass's sentence for the guild master's deposit."""
+    keep = master_reserve(purse, purchased_tabs)
+    tab = next_tab(purchased_tabs)
+    why = ""
+    if keep > FLOAT_COPPER and tab is not None:
+        why = ", its float and tab %d's price" % tab
+    return "guild bank: %s banks %s of the guild's gold and keeps %s%s" % (
+        deposit.name,
+        gold(deposit.copper),
+        gold(keep),
+        why,
+    )
+
+
 def format_item_deposit(
     *, item_guid: int | None = None, entry: int | None = None, tab: int = 0
 ) -> str:
@@ -599,6 +704,27 @@ def format_item_deposit(
     if not isinstance(entry, int) or entry <= 0:
         raise ValueError("entry must be a positive integer")
     return f"bank deposit-item entry:{entry}{suffix}"
+
+
+def format_item_withdraw(*, item_guid: int, tab: int) -> str:
+    """The `bank withdraw-item guid:<n> tab:<t>` text `GuildVerb::BankWithdrawItem`
+    parses (mod-overseer, overseer_decisions.cpp) and `DoGuild` executes
+    against `Guild::SwapItemsWithInventory` with toChar=true.
+
+    One named stack in one named tab, by guid only: the same entry can fill a
+    dozen slots of a tab and the caller chose one. The tab is always written,
+    so a row read later says where the stack was taken from. A pure
+    formatter: `bankforecast.plan_withdrawals` decides which stacks.
+    """
+    if not isinstance(item_guid, int) or isinstance(item_guid, bool) or item_guid <= 0:
+        raise ValueError("item_guid must be a positive integer")
+    if (
+        not isinstance(tab, int)
+        or isinstance(tab, bool)
+        or not 0 <= tab < len(TAB_COSTS_COPPER)
+    ):
+        raise ValueError("tab must be 0 to 5")
+    return f"bank withdraw-item guid:{item_guid} tab:{tab}"
 
 
 def tab_deposit_blockers(*, purchased_tabs: int, ranks_with_deposit: int) -> list[str]:

@@ -149,7 +149,8 @@ class HowEachSupplyCloses(unittest.TestCase):
         lines = {line.entry: line for line in rs.supply_lines(RAIDERS, {}, {})}
         self.assertEqual(lines[rs.GREATER_FIRE_PROTECTION].route, rs.BUY)
         self.assertIn("Lower Blackrock Spire", lines[rs.GREATER_FIRE_PROTECTION].said)
-        self.assertEqual(lines[12451].route, rs.BUY)  # Juju Power: nothing makes it
+        # Juju Power is a quest's reward (#778), never the auction house's.
+        self.assertEqual(lines[12451].route, rs.QUEST)
 
     def test_a_known_recipe_is_made_and_a_vendor_recipe_is_bought_first(self):
         lines = {
@@ -453,7 +454,9 @@ class TheBudget(unittest.TestCase):
             auction.Listing(2, rs.GREATER_FIRE_PROTECTION, "GFPP", 5, 20_000, 2),
             auction.Listing(3, 12451, "Juju Power", 1, 90_000, 2),
         ]
-        self.assertEqual(rs.market_cost(needs, listings, 2), 135_000)
+        # The Juju Power listing is not bought: it is a quest reward (#778).
+        self.assertNotIn(12451, entries)
+        self.assertEqual(rs.market_cost(needs, listings, 2), 45_000)
         buys, _ = rs.plan_market(needs, listings, 2, "Grug", 500_000, 30_000, 0, 10)
         self.assertEqual([b.auction_id for b in buys], [2])
         buys, notes = rs.plan_market(needs, listings, 2, "Grug", 500_000, 0, 0, 10)
@@ -466,6 +469,165 @@ class TheBudget(unittest.TestCase):
         self.assertNotIn(
             rs.MAJOR_HEALING, [n.entry for n in rs.market_needs(plan, "Grug")]
         )
+
+
+COOK_SPELL = 18243  # Nightfin Soup, read from the worldserver's Spell.dbc
+NIGHTFIN_RECIPE = 13945
+NIGHTFIN_SOUP = 13931
+
+
+def cook(value, **over):
+    over.setdefault("known", frozenset())
+    over.setdefault("skills", {gc.COOKING: (value, 300)})
+    return member("Cookie", **over)
+
+
+COOK_POST = gc.Post("Cookie", "cook", gc.COOKING, 250, 300)
+
+
+class TheJujusAndTheSoupHaveNaturalRoads(unittest.TestCase):
+    """#778, read on the dev realm 2026-10-10: the auction house held 0 rows,
+    none of the 1,000 random bots had ever bought a lot, and raid supply still
+    sent Juju Power, Juju Might and Nightfin Soup there. The world database
+    gives each a natural source."""
+
+    def lines(self, **kw):
+        return {line.entry: line for line in rs.supply_lines(RAIDERS, {}, {}, **kw)}
+
+    def test_juju_power_is_the_reward_for_quest_4802(self):
+        line = self.lines()[12451]
+        self.assertEqual(line.route, rs.QUEST)
+        self.assertIn("quest 4802", line.said)
+        self.assertIn("Winterfall E'ko", line.said)
+        self.assertIn("Witch Doctor Mau'ari", line.said)
+
+    def test_juju_might_is_the_reward_for_quest_4806(self):
+        line = self.lines()[12460]
+        self.assertEqual(line.route, rs.QUEST)
+        self.assertIn("quest 4806", line.said)
+        self.assertIn("Frostmaul E'ko", line.said)
+
+    def test_the_quests_are_named_as_the_world_database_has_them(self):
+        power = rs.SUPPLY_BY_ENTRY[12451].quest
+        might = rs.SUPPLY_BY_ENTRY[12460].quest
+        self.assertEqual(
+            (4802, ((12431, 3),), 3, 55),
+            (power.quest, power.turn_in, power.reward, power.min_level),
+        )
+        self.assertEqual(
+            (4806, ((12436, 3),), 3, 55),
+            (might.quest, might.turn_in, might.reward, might.min_level),
+        )
+
+    def test_nightfin_soup_is_cooked_from_a_vendor_recipe(self):
+        make = rs.SUPPLY_BY_ENTRY[NIGHTFIN_SOUP].make
+        self.assertEqual(COOK_SPELL, make.spell)
+        self.assertEqual(gc.COOKING, make.skill)
+        self.assertEqual(((13759, 1),), make.reagents)  # Raw Nightfin Snapper
+        self.assertEqual(((159, 1, 25),), make.vendor)  # Refreshing Spring Water
+        self.assertEqual(
+            (NIGHTFIN_RECIPE, 20_000, 250),
+            (make.recipe_item, make.recipe_price, make.recipe_skill),
+        )
+        line = self.lines(vendor_recipes={NIGHTFIN_RECIPE})[NIGHTFIN_SOUP]
+        self.assertEqual(rs.VENDOR_RECIPE, line.route)
+
+    def test_no_quest_reward_and_no_vendor_recipe_goes_to_the_auction_house(self):
+        plan = rs.plan_guild(
+            facts(
+                [*raider_members()], vendors={KALIMDOR: frozenset({NIGHTFIN_RECIPE})}
+            ),
+            {},
+            set(),
+        )
+        needs = {n.entry for n in rs.market_needs(plan, "Grug")}
+        self.assertFalse(needs & {12451, 12460, NIGHTFIN_SOUP, NIGHTFIN_RECIPE}, needs)
+
+    def test_the_options_say_a_quest_earns_it(self):
+        plan = rs.plan_guild(facts([*raider_members()]), {}, set())
+        opts = dict(rs.options(plan.lines, plan.fire, rs.FIRE_GEAR))
+        self.assertIn("quest:12451", opts)
+        self.assertTrue(
+            opts["quest:12451"].startswith("earn by quest 4802"), opts["quest:12451"]
+        )
+
+    def test_the_log_line_names_the_quests(self):
+        plan = rs.plan_guild(facts([*raider_members()]), {}, set())
+        self.assertTrue(
+            rs.summary(plan).endswith(
+                "; by quest: Juju Power (quest 4802), Juju Might (quest 4806)"
+            ),
+            rs.summary(plan),
+        )
+
+    def test_a_cook_at_250_buys_the_recipe_at_the_vendor(self):
+        plan = rs.plan_guild(
+            facts(
+                [cook(250), *raider_members()],
+                posts=(COOK_POST,),
+                vendors={KALIMDOR: frozenset({NIGHTFIN_RECIPE})},
+            ),
+            {},
+            set(),
+        )
+        step = next(s for s in plan.steps if s.holder == "Cookie")
+        self.assertEqual("buy", step.action)
+        self.assertTrue(
+            step.rows[0].command.startswith("entry:13945 count:1 max:25000")
+        )
+
+    def test_a_cook_under_250_buys_no_recipe_it_cannot_learn(self):
+        plan = rs.plan_guild(
+            facts(
+                [cook(180), *raider_members()],
+                posts=(COOK_POST,),
+                vendors={KALIMDOR: frozenset({NIGHTFIN_RECIPE})},
+            ),
+            {},
+            set(),
+        )
+        self.assertFalse([s for s in plan.steps if s.holder == "Cookie"])
+        self.assertIn(
+            "Cookie has cooking 180 of the 250 the Nightfin Soup recipe asks",
+            plan.notes,
+        )
+
+    def test_a_cook_whose_trade_was_never_read_buys_nothing(self):
+        # Member.skill answers (0, 0) for a trade it holds no row for, so the
+        # gate reads 0 and refuses rather than raising.
+        plan = rs.plan_guild(
+            facts(
+                [cook(0, skills={}), *raider_members()],
+                posts=(COOK_POST,),
+                vendors={KALIMDOR: frozenset({NIGHTFIN_RECIPE})},
+            ),
+            {},
+            set(),
+        )
+        self.assertFalse([s for s in plan.steps if s.holder == "Cookie"])
+        self.assertIn(
+            "Cookie has cooking 0 of the 250 the Nightfin Soup recipe asks", plan.notes
+        )
+
+    def test_a_cook_who_knows_it_buys_spring_water_by_its_name(self):
+        plan = rs.plan_guild(
+            facts(
+                [
+                    cook(
+                        260, known=frozenset({COOK_SPELL}), carried=(held(7, 13759, 4),)
+                    ),
+                    *raider_members(),
+                ],
+                posts=(COOK_POST,),
+                vendors={KALIMDOR: frozenset({159})},
+            ),
+            {},
+            set(),
+        )
+        step = next(s for s in plan.steps if s.holder == "Cookie")
+        self.assertEqual("buy", step.action)
+        self.assertTrue(step.rows[0].command.startswith("entry:159 count:4 "))
+        self.assertIn("spring water", step.said)
 
 
 class FakeClient:

@@ -26,10 +26,11 @@ from __future__ import annotations
 import threading
 
 import campaignplan
+import classtrain
 import guildjobs
 from panel import _CLASS_NAMES
 
-from ._scope import NOT_A_MEMBER, guarded, may_answer, wanted_name
+from ._scope import NOT_A_MEMBER, may_answer, wanted_name
 
 CHAR_SQL = (
     "SELECT guid, level, class AS class_id, money FROM characters WHERE name = %s"
@@ -49,7 +50,7 @@ _TRAINERS: dict = {}
 _LOCK = threading.Lock()
 
 
-def _trainer_rows(ctx, cur, class_id: int) -> list:
+def _trainer_rows(rd, class_id: int) -> list:
     """A class's trainer rows, read once. The lock guards the dict only: the
     read itself runs outside it, so one class's first read never holds up a
     request for another (two first reads of one class both read, and agree)."""
@@ -57,7 +58,7 @@ def _trainer_rows(ctx, cur, class_id: int) -> list:
         kept = _TRAINERS.get(class_id)
     if kept is not None:
         return kept
-    rows = guarded(ctx, cur, TRAINER_SQL, (class_id,), "trainer_spell")
+    rows = rd.rows(TRAINER_SQL, (class_id,), what="trainer_spell")
     if rows:
         with _LOCK:
             _TRAINERS.setdefault(class_id, rows)
@@ -66,40 +67,24 @@ def _trainer_rows(ctx, cur, class_id: int) -> list:
 
 def fetch(ctx, name: str) -> dict | None:
     """The member's row, its spells and skills, and its class's trainer rows."""
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            chars = guarded(ctx, cur, CHAR_SQL, (name,), "characters")
-            if not chars:
-                return None
-            char = chars[0]
-            guid = int(char["guid"])
-            known = guarded(ctx, cur, KNOWN_SQL, (guid,), "character_spell")
-            skills = guarded(ctx, cur, SKILLS_SQL, (guid,), "character_skills")
-            trainer = _trainer_rows(ctx, cur, int(char.get("class_id") or 0))
-    finally:
-        conn.close()
+    rd = ctx.read
+    chars = rd.rows(CHAR_SQL, (name,), what="characters")
+    if not chars:
+        return None
+    char = chars[0]
+    guid = int(char["guid"])
+    known = rd.rows(KNOWN_SQL, (guid,), what="character_spell")
+    skills = rd.rows(SKILLS_SQL, (guid,), what="character_skills")
+    trainer = _trainer_rows(rd, int(char.get("class_id") or 0))
     return {"char": char, "known": known, "skills": skills, "trainer": trainer}
 
 
 # --------------------------------------------------------------------- pure --
 
 
-def _needs(row: dict) -> list:
-    return [int(row[k]) for k in ("req1", "req2", "req3") if int(row.get(k) or 0)]
-
-
-def spell_state(row: dict, known: set, level: int, cap: int) -> str:
-    """'learned', 'trainable', 'needs', 'above' or '' (past the level cap)."""
-    spell = int(row["spell"])
-    if spell in known:
-        return "learned"
-    asks = int(row.get("level") or 0)
-    if asks > level:
-        return "above" if asks <= cap else ""
-    if all(n in known for n in _needs(row)):
-        return "trainable"
-    return "needs"
+# THE RULE IS classtrain's, which the guild training pass also walks members
+# by, so the Standing card and the pass cannot disagree about a spell.
+spell_state = classtrain.spell_state
 
 
 def spells(trainer: list, known: set, level: int, cap: int) -> dict:
