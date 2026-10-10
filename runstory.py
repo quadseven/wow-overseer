@@ -726,31 +726,28 @@ _EXPLAINING = (
 )
 
 
-def _tell_went_in(g: _GuildRun, zones: dict) -> dict:
-    """A run that went in and did not clear: wiped, abandoned or timed out."""
-    tale = _Tale()
+# A card names at most this many low seats; more are counted.
+LOW_NAMES = 2
+
+
+def _tell_levels(tale: _Tale, g: _GuildRun) -> None:
+    """The opener, with the levels and any seat below the bosses' level."""
     range_said, under = _range_clause(g.levels, g.door)
     low = _below_bosses(g)
     level = g.door.carry_floor if g.door else 0
-    tale.say(
-        "went into %s%s%s"
-        % (
-            g.place,
-            range_said,
-            ", with %s below the bosses' level %d" % (_join(low), level) if low else "",
-        )
-    )
+    seats = "%s seat%s" % (_num(len(low)), "" if len(low) == 1 else "s")
+    who = _join(low) if len(low) <= LOW_NAMES else seats
+    said = ", with %s below the bosses' level %d" % (who, level) if low else ""
+    tale.say("went into %s%s%s" % (g.place, range_said, said))
     if low:
-        tale.tag(
-            "below_bosses",
-            "%s seat%s below the bosses' level %d"
-            % (_num(len(low)), "" if len(low) == 1 else "s", level),
-        )
+        tale.tag("below_bosses", "%s below the bosses' level %d" % (seats, level))
     if under:
         tale.tag("under_levelled")
-    if g.way:
-        tale.say(_way_in_line(g.way, zones))
-    wiped = g.outcome == "wiped"
+
+
+def _tell_inside(tale: _Tale, g: _GuildRun, wiped: bool) -> None:
+    """The fights inside: for a wipe, who it took first and who kept dying
+    after it."""
     told, after = g.inside, []
     wipe = _wipe(g.inside) if wiped else []
     if wipe:
@@ -763,8 +760,10 @@ def _tell_went_in(g: _GuildRun, zones: dict) -> dict:
     tale.fights(told, g.classes, wiped, _bosses_said(g))
     if after:
         tale.say(_after_line(after))
-    if g.way:
-        tale.tag("died_on_the_way")
+
+
+def _tell_ending(tale: _Tale, g: _GuildRun, wiped: bool) -> None:
+    """How the run was called off, or that no death record says why."""
     if g.outcome == "abandoned":
         tag = next((t for said, t in _ABANDONED if said in g.why), "roles_down")
         tale.tag(tag, first=True)
@@ -783,6 +782,19 @@ def _tell_went_in(g: _GuildRun, zones: dict) -> dict:
     elif wiped and not g.inside:
         counted = " (%s)" % _deaths_said(g.deaths) if g.deaths else ""
         tale.say("everybody inside died%s, and no death record says to what" % counted)
+
+
+def _tell_went_in(g: _GuildRun, zones: dict) -> dict:
+    """A run that went in and did not clear: wiped, abandoned or timed out."""
+    tale = _Tale()
+    wiped = g.outcome == "wiped"
+    _tell_levels(tale, g)
+    if g.way:
+        tale.say(_way_in_line(g.way, zones))
+    _tell_inside(tale, g, wiped)
+    if g.way:
+        tale.tag("died_on_the_way")
+    _tell_ending(tale, g, wiped)
     tale.unexplained_if(wiped, _EXPLAINING)
     return tale.told()
 

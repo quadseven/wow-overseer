@@ -403,6 +403,17 @@ class TheDeadminesCausesNameRealFaults(unittest.TestCase):
         )
         self.assertIn("with Oot below the bosses' level 20", told["story"])
 
+    def test_many_low_seats_are_counted_not_listed(self):
+        run = dict(RUN_473)
+        run["members"] = (
+            "Durg:tank:warrior:19,Ortimo:healer:paladin:19,Oot:dps:warlock:18,"
+            "Rubba:dps:mage:23,Tugga:dps:shaman:26"
+        )
+        told = dm_story(run, [])
+        self.assertIn("with three seats below the bosses' level 20", told["story"])
+        self.assertNotIn("Oot", told["story"])
+        self.assertIn("likely three seats below the bosses' level 20", told["cause"])
+
     def test_without_the_bosses_level_no_seat_is_called_low(self):
         told = dm_story(RUN_473, [], boss_levels=None)
         self.assertEqual(told["causes"], ["timed_out"])
