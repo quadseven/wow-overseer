@@ -601,6 +601,27 @@ def format_item_deposit(
     return f"bank deposit-item entry:{entry}{suffix}"
 
 
+def format_item_withdraw(*, item_guid: int, tab: int) -> str:
+    """The `bank withdraw-item guid:<n> tab:<t>` text `GuildVerb::BankWithdrawItem`
+    parses (mod-overseer, overseer_decisions.cpp) and `DoGuild` executes
+    against `Guild::SwapItemsWithInventory` with toChar=true.
+
+    One named stack in one named tab, by guid only: the same entry can fill a
+    dozen slots of a tab and the caller chose one. The tab is always written,
+    so a row read later says where the stack was taken from. A pure
+    formatter: `bankforecast.plan_withdrawals` decides which stacks.
+    """
+    if not isinstance(item_guid, int) or isinstance(item_guid, bool) or item_guid <= 0:
+        raise ValueError("item_guid must be a positive integer")
+    if (
+        not isinstance(tab, int)
+        or isinstance(tab, bool)
+        or not 0 <= tab < len(TAB_COSTS_COPPER)
+    ):
+        raise ValueError("tab must be 0 to 5")
+    return f"bank withdraw-item guid:{item_guid} tab:{tab}"
+
+
 def tab_deposit_blockers(*, purchased_tabs: int, ranks_with_deposit: int) -> list[str]:
     """Why an item deposit would not land, in the order it has to be fixed.
 

@@ -11689,6 +11689,11 @@ class Bridge(discord.Client):
         over = disposition.material_surplus(materials_over, materials.REAGENTS)
         surplus_rows = [dict(row, material_surplus=True)
                         for row in materials_over if row["item_guid"] in over]
+        # WHAT A MEMBER TOOK OUT OF THE VAULT FOR THE HOUSE (bankforecast) is
+        # surplus whatever the keep cap says: it left the vault to be listed.
+        counted = {row["item_guid"] for row in surplus_rows}
+        surplus_rows += [row for row in await asyncio.to_thread(
+            _fetch_withdrawn_for_sale, names) if row["item_guid"] not in counted]
         stacks = clearance.stacks_from_rows(rows + surplus_rows)
         # THE DESIGNATED CRAFTERS PLACE EVERY RECIPE FIRST (#248), and the
         # family recipe hand-off leaves what they route to `_route_clearance`.
@@ -12722,8 +12727,10 @@ class Bridge(discord.Client):
     async def _guild_bank_once(self, cohort=None) -> None:
         """One pass of the guild bank: park gold above each character's float.
 
-        Deposit only (mod-overseer#437, infra#2831) - see guildbank.py for
-        why withdrawal is a separate, harder feature and not attempted here.
+        Deposits (mod-overseer#437, infra#2831), and the one withdrawal the
+        guild's forecast asks for: a stack the vault holds past what the guild
+        will eat is taken out by a member whose rank may, for clearance to
+        list (bankforecast.plan_withdrawals). Gold is never withdrawn here.
 
         THE AIM IS SHAPED LIKE _bank_once'S AND THE ROWS ARE NOT. Only the
         leader can be aimed (followers arrive by following, mod-overseer#209),
@@ -12901,7 +12908,13 @@ class Bridge(discord.Client):
         # NOTHING THE POLICY KEEPS IN ITS OWNER'S BANK GOES TO THE GUILD
         # (#320): a second set, or an item the operator reserved.
         items = await asyncio.to_thread(_not_kept_at_home, items, names)
-        if not actions and not deposits and not items:
+        # THE VAULT'S STACKS TO LIST LEAVE IT BY A MEMBER'S OWN HAND
+        # (bankforecast). Cave's one tab stood full at 98 of 98 with fourteen
+        # stacks of linen the forecast lists; nothing could take them out, so
+        # every new keeper went to a personal bank instead. They ride the same
+        # walk and the same per-member range gate as the deposits.
+        withdrawals = await asyncio.to_thread(_plan_guild_withdrawals, names)
+        if not any((actions, deposits, items, withdrawals)):
             log.info("guild bank: nobody is carrying more than the float")
             return
         # ONE POSITION READ, FOR TWO QUESTIONS (infra#3804): which map the
@@ -12909,7 +12922,8 @@ class Bridge(discord.Client):
         # `_fetch_positions` batches, so this is the one query it always was.
         positions = await asyncio.to_thread(
             _fetch_positions, sorted({leader} | {d.name for d in deposits}
-                                     | {m.character for m in items}))
+                                     | {m.character for m in items}
+                                     | {w.character for w in withdrawals}))
         where = positions.get(leader)
         spawn = await asyncio.to_thread(_nearest_vault, leader)
         vault = travel.vault_aim(spawn, where.get("map_id") if where else None)
@@ -13008,10 +13022,12 @@ class Bridge(discord.Client):
                          action.command, action.target, _family_label(cohort))
         if items:
             await self._queue_guild_items(items, spawn, positions)
+        if withdrawals:
+            await self._queue_guild_withdrawals(withdrawals, spawn, positions)
         if not deposits:
-            # REACHED WHEN SETUP OR ITEMS ARE THE WHOLE REASON THIS PASS
-            # WALKED. `not actions and not deposits and not items` already
-            # returned far above, so this arm means nobody is over their
+            # REACHED WHEN SETUP, ITEMS OR WITHDRAWALS ARE THE WHOLE REASON
+            # THIS PASS WALKED. The gate far above already returned when there
+            # was none of the four, so this arm means nobody is over their
             # float - which is a complete, uninteresting pass and not a
             # failure.
             log.info("guild bank: nobody is carrying more than the float")
@@ -13050,9 +13066,9 @@ class Bridge(discord.Client):
 
         Only when it differs from the last one logged for this family, so a
         ten-minute cycle does not bury the log under the same seventy lines.
-        THE VAULT'S OWN STACKS CANNOT LEAVE IT YET: mod-overseer has no verb
-        that takes an item out of a guild bank tab, so a give, a listing or a
-        sale of a vault stack is the plan, and the line says it waits.
+        A listing of a vault stack is withdrawn for the house by the guild
+        bank pass (`_queue_guild_withdrawals`); a give or a vendor sale of a
+        vault stack is still only the plan, and the line says so.
         """
         forecast = await asyncio.to_thread(_bank_forecast, names, True)
         lines = [line.summary for line in forecast.lines]
@@ -13062,10 +13078,12 @@ class Bridge(discord.Client):
         if not lines or self._bank_forecast_said.get(key) == signature:
             return
         self._bank_forecast_said[key] = signature
-        moving = [d for d in forecast.decisions() if d.action != bankforecast.KEEP]
+        planned = [d for d in forecast.decisions()
+                   if d.action in (bankforecast.GIVE, bankforecast.VENDOR)]
         log.info("bank forecast: %s%s%s", forecast.headline(),
-                 "; the vault's %d give, list and vendor decision(s) wait for an "
-                 "item withdrawal verb in mod-overseer" % len(moving) if moving else "",
+                 "; the vault's %d give and vendor decision(s) are the plan only, "
+                 "and its listings are withdrawn for the house" % len(planned)
+                 if planned else "",
                  _family_label(cohort))
         for line in lines:
             log.info("bank forecast: %s", line)
@@ -13149,6 +13167,41 @@ class Bridge(discord.Client):
             log.info("guild bank: %s", line)
         log.info("guild bank: queued %d/%d kept stack(s) for the guild bank "
                  "tab", len(fresh), len(items))
+
+    async def _queue_guild_withdrawals(self, withdrawals, spawn, positions) -> None:
+        """Write the forecast's withdrawals for members stood at the vault.
+
+        The same two gates as `_queue_guild_items`: a (character, command)
+        already asked inside the retry window is not asked again, and a row is
+        only written for a member within TOWN_COUNTER_YARDS of the vault,
+        because DoGuild answers `no guild bank in reach` a second after a row
+        written from anywhere else. The core decides the rest: the rank's
+        withdraw right on the tab and its allowance for the day.
+        """
+        seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
+        fresh = []
+        walking = set()
+        for withdrawal in withdrawals:
+            command = withdrawal.command
+            if (withdrawal.character, command) in seen:
+                continue
+            if not travel.spawn_in_reach(
+                    spawn, positions.get(withdrawal.character), TOWN_COUNTER_YARDS):
+                walking.add(withdrawal.character)
+                continue
+            if await asyncio.to_thread(
+                    _insert_guild, withdrawal.character, command, "guildbank-withdraw"):
+                fresh.append(withdrawal)
+        if walking:
+            log.info(
+                "guild bank: %s not within %d yards of the vault, so no vault "
+                "stack is taken out for the house until the walk lands",
+                ", ".join(sorted(walking)), TOWN_COUNTER_YARDS,
+            )
+        for withdrawal in fresh:
+            log.info("guild bank: %s", withdrawal.line)
+        log.info("guild bank: queued %d/%d withdrawal(s) of the vault's stacks "
+                 "to list", len(fresh), len(withdrawals))
 
     async def _recruit_once(self) -> None:
         """One pass of the recruit sweep: shortlist, or invite, or say why not.
@@ -22855,6 +22908,84 @@ def _fetch_clearance_materials(names: list) -> list:
         return [dict(row) for row in cur.fetchall()]
 
 
+# The clearance shape of a carried stack the family took out of a guild vault
+# for the house, found by guid (bankforecast.read_withdrawn) rather than by
+# name, because whatever the forecast lists may be withdrawn.
+_WITHDRAWN_FOR_SALE_SQL = (
+    "SELECT c.name AS holder, ii.guid AS item_guid, ii.itemEntry AS entry, "
+    "ii.count AS count, ii.flags AS instance_flags, it.name AS name, "
+    "it.class AS item_class, it.subclass AS subclass, it.Quality AS quality, "
+    "it.SellPrice AS sell_price, it.bonding AS bonding, "
+    "it.BagFamily AS bag_family, "
+    "it.RequiredSkill AS required_skill, it.RequiredSkillRank AS required_rank "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ii.guid IN (%s) "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
+)
+
+
+def _fetch_withdrawn_for_sale(names: list) -> list:
+    """Clearance rows for each stack `names` took out of a guild vault for the
+    house and still carry, marked surplus; blocking.
+
+    A failed read finds nothing, which leaves those stacks to the keep cap and
+    the keeper rule as before; it is logged, never passed off as an answer.
+    """
+    if not names:
+        return []
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            guids = sorted(bankforecast.read_withdrawn(cur, names))
+            if not guids:
+                return []
+            sql = _WITHDRAWN_FOR_SALE_SQL % (
+                ",".join(["%s"] * len(names)), ",".join(["%s"] * len(guids)))
+            cur.execute(sql, list(names) + guids)
+            return [dict(row, material_surplus=True) for row in cur.fetchall()]
+    except pymysql.err.MySQLError:
+        log.exception("guild bank: the stacks withdrawn for the house could not "
+                      "be read; none is listed or held out of the bank this pass")
+        return []
+
+
+def _withdrawn_for_sale_routes(names: list) -> dict:
+    """item guid -> 'the auction house' for each stack withdrawn for it.
+
+    The bank plan's `routed` map: a stack on its way to the house is never
+    put back down by the keeper rule. Blocking.
+    """
+    return {int(row["item_guid"]): "the auction house"
+            for row in _fetch_withdrawn_for_sale(names)}
+
+
+def _plan_guild_withdrawals(names: list) -> tuple:
+    """bankforecast.plan_withdrawals over the guild's live facts; blocking.
+
+    Who may take what from which tab is the members' ranks' (guild_bank_right
+    and the day's guild_member_withdraw), and an entry with a withdrawn stack
+    still waiting to be listed is not taken again. A read that fails takes
+    nothing, which leaves the vault as it was.
+    """
+    forecast = _bank_forecast(names)
+    if not any(d.action == bankforecast.SELL for d in forecast.decisions()):
+        return ()
+    try:
+        free = _fetch_free_slots(names)
+        with _connect() as conn, conn.cursor() as cur:
+            takers = bankforecast.read_withdrawers(cur, names, free)
+    except pymysql.err.MySQLError:
+        log.exception("guild bank: the withdraw rights could not be read; no "
+                      "vault stack is taken out this pass")
+        return ()
+    pending = frozenset(int(row["entry"]) for row in _fetch_withdrawn_for_sale(names))
+    return bankforecast.plan_withdrawals(forecast, takers, pending=pending)
+
+
 def _clearance_sales(routes) -> tuple:
     """The vendor pass's SellCandidate for every stack `clearance` sends there."""
     return tuple(
@@ -26235,7 +26366,8 @@ def _plan_bank(names: list) -> "bank.Plan":
     # for the hand-off, and comes back out of the bank for it (#248).
     storage = bank.storage_from(
         held, _worked_by(names), REAGENT_TRADES, _fetch_guild_bank_setup(names),
-        routed=_crafter_plan(names).routed | _tidy_routes(names),
+        routed=_crafter_plan(names).routed | _tidy_routes(names)
+        | _withdrawn_for_sale_routes(names),
         guild_later=dict(_GUILD_BANK_KEEPS),
         policy=_bank_policy(names),
         spare=_bank_spare(names),
@@ -27482,14 +27614,18 @@ def _recent_guild_bank_keys(minutes: int) -> set:
     deposit rows this pass itself is responsible for re-queuing. The item
     rows (`bank deposit-item guid:<n>`, #233) are the same pass's too, and
     need their own pattern because a hyphen, not a space, follows `deposit`.
+    The vault's withdrawals for the house (`bank withdraw-item guid:<n>
+    tab:<t>`, bankforecast.plan_withdrawals) are the same pass's as well.
     """
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 "SELECT target_name, command FROM overseer_command "
-                "WHERE kind = 'guild' AND (command LIKE %s OR command LIKE %s) "
+                "WHERE kind = 'guild' AND (command LIKE %s OR command LIKE %s "
+                "OR command LIKE %s) "
                 "AND created_at > NOW() - INTERVAL %s MINUTE",
-                ("bank deposit %", "bank deposit-item %", int(minutes)),
+                ("bank deposit %", "bank deposit-item %", bankforecast.WITHDRAW_LIKE,
+                 int(minutes)),
             )
         except pymysql.err.MySQLError as exc:
             # 1054 missing column, 1146 missing table, 1265 a `kind` ENUM with

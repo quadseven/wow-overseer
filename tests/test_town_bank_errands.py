@@ -1298,7 +1298,7 @@ class TheItemDepositHasOneCaller(unittest.TestCase):
         body = _statements("    async def _guild_bank_once(")
         self.assertIn("_plan_bank, names)).guild", body)
         self.assertIn("self._queue_guild_items(items, spawn, positions)", body)
-        self.assertIn("if not actions and not deposits and not items:", body)
+        self.assertIn("if not any((actions, deposits, items, withdrawals)):", body)
         queue = _statements("    async def _queue_guild_items(")
         self.assertIn("bank.command(move)", queue)
         self.assertIn("_recent_guild_bank_keys", queue)
