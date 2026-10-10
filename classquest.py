@@ -204,6 +204,10 @@ USE_ITEM, USE_OBJECT = "use-item-on", "use-gameobject"
 # A carried item used where the member stands, beside a spell-focus gameobject
 # (mod-overseer `use-item-here`, 2026-10-08).
 USE_HERE = "use-item-here"
+# A known spell cast at a creature (mod-overseer `use-spell-on`, 2026-10-10): a
+# hunter's Tame Beast at the beast it tames (hunterpet.py). No class quest step
+# writes it.
+USE_SPELL = "use-spell-on"
 # The items whose on-use spell works only near a spell-focus gameobject, and
 # the focus. The world data does not say it (the spell is in the client DBC, not
 # the database), so each is written down: 38607 Battle-worn Sword (spell 51769,
@@ -233,7 +237,44 @@ FOCUS_ITEMS = {
     6626: 203,
     6913: 83,
     6999: 103,
+    # THE SHAMAN'S CALL OF WATER (2026-10-10). 1535, 1536 and 1534 hand over an
+    # Empty Waterskin whose spell fills it only beside a water spell focus
+    # (Spell.dbc RequiresSpellFocus): 7766 Brown (9586) at the Quilboar Watering
+    # Hole (224), 7768 Red (9583) at the Spring Well (226), 7767 Blue (9584) at
+    # the Ruins of Stardust Fountain or the Wrathscale Fountain (223).
+    7766: 224,
+    7768: 226,
+    7767: 223,
 }
+
+# GROUND A SCRIPT WATCHES (2026-10-10). Two class quest objectives appear only
+# when a member stands at one place, so no spawn row holds them and the book
+# named both blocked for good:
+#   The Affray (1719): Twiggy Flathead's script (npc_twiggy_flathead) starts
+#     the fight when a warrior holding the quest comes within 10 yards of him
+#     and steps on the grate (x -1684 to -1674, y -4334 to -4324), and summons
+#     six challengers and then Big Will (6238). Spawn 13575, a Muck Frenzy
+#     (8236), lies on the grate's center, 9.4 yards from Twiggy.
+#   The Binding (1795): Acolyte Magaz (6252) summons the Barrens Summoning
+#     Circle (gameobject 92388, spell focus 103) at (-770.5, -3720.4) when the
+#     quest is taken from Strahad Farsan (smart_scripts 6251 and 625200), and it
+#     lasts until the felhunter dies or Strahad walks on, about 15 minutes. The
+#     static spawn was deleted upstream (2021_06_11_01.sql). Magaz's spawn 14370
+#     stands 4.7 yards from it, inside the circle's 10 yard focus.
+# Each names (the creature entry whose spawn marks the ground, that spawn's
+# guid); the spawn is read with the objective's (scripted_entries), and the
+# walk there ends SCRIPTED_NEAR yards from it, not the place radius of 20.
+SCRIPTED_KILLS = {6238: (8236, 13575)}
+SCRIPTED_FOCI = {103: (6252, 14370)}
+SCRIPTED_NEAR = 2
+
+
+def scripted_entries() -> frozenset:
+    """The creature entries whose spawns mark scripted ground, for the spawn
+    read (SPAWNS_SQL)."""
+    return frozenset(e for e, _g in (*SCRIPTED_KILLS.values(), *SCRIPTED_FOCI.values()))
+
+
 # A member this near its target (yards) is already beside it: the use row is
 # written with no walk. The module's creature reach is 8 yards.
 USE_NEAR = 4.0
@@ -629,6 +670,10 @@ class Spawn:
     # The spawn's height; None when the row does not say (2026-10-09: a death
     # knight below Acherus is told from one standing on it by height alone).
     z: float | None = None
+    # Scripted ground (SCRIPTED_KILLS, SCRIPTED_FOCI): the walk ends this near
+    # the spawn (0: the place radius), and a focus's ground is a creature spawn.
+    near: int = 0
+    creature: bool = False
 
 
 @dataclass(frozen=True)
@@ -723,7 +768,12 @@ class Book:
         worldserver does not carry the use verbs (classuse.py)."""
         if not any(q.uses for q in self.quests.values()):
             return self
-        quests = {i: replace(q, uses=()) for i, q in self.quests.items()}
+        # A quest that had a use keeps no StartItem either: a Taming Rod asked
+        # back is no delivery while nothing can use it (blocker_of, _unmet).
+        quests = {
+            i: replace(q, uses=(), provided=()) if q.uses else q
+            for i, q in self.quests.items()
+        }
         return Book(quests, self.groups, self.trained)
 
     def watch_items(self) -> list:
@@ -827,6 +877,33 @@ def _spawns_by_entry(spawn_rows) -> dict:
     return out
 
 
+def _ground(by_entry, mark):
+    """The spawn a SCRIPTED_KILLS or SCRIPTED_FOCI entry names, None when the
+    spawn read does not hold it."""
+    entry, guid = mark
+    return next((s for s in by_entry.get(entry, ()) if s.guid == guid), None)
+
+
+def _with_scripted_kills(by_entry) -> dict:
+    """`by_entry` with each script-summoned creature that has no spawn row at the
+    ground its script watches (SCRIPTED_KILLS): a spawn of its own entry there."""
+    out = dict(by_entry)
+    for kill, mark in SCRIPTED_KILLS.items():
+        ground = _ground(by_entry, mark)
+        if ground is not None and not out.get(kill):
+            out[kill] = [
+                replace(
+                    ground,
+                    entry=kill,
+                    rank=0,
+                    level=0,
+                    near=SCRIPTED_NEAR,
+                    creature=True,
+                )
+            ]
+    return out
+
+
 def _droppers(loot_rows) -> dict:
     out = {}
     for r in loot_rows or ():
@@ -894,12 +971,25 @@ def _item_use(item, provided, aims):
     foci = focus.get(item, ())
     if foci:
         spots = tuple(s for g in foci for s in object_spawns.get(g, ()))
+        if not spots:
+            spots = _scripted_focus(item, creature_spawns)
         return Use(USE_HERE, item, 1, foci, spots, handed, fetch)
     targets = item_aims.get(item, ())
     if targets:
         spots = tuple(s for t in targets for s in creature_spawns.get(t, ()))
         return Use(USE_ITEM, item, 1, targets, spots, handed, fetch)
     return None
+
+
+def _scripted_focus(item, creature_spawns) -> tuple:
+    """The ground beside which a script summons the spell focus `item` works at
+    (SCRIPTED_FOCI), as a spawn the walk ends SCRIPTED_NEAR yards from; () when
+    the focus has none or the spawn read does not hold it."""
+    mark = SCRIPTED_FOCI.get(FOCUS_ITEMS.get(item))
+    ground = _ground(creature_spawns, mark) if mark else None
+    if ground is None:
+        return ()
+    return (replace(ground, near=SCRIPTED_NEAR, creature=True),)
 
 
 def _uses(r, items, provided, droppers, aims) -> tuple:
@@ -1017,7 +1107,7 @@ def build(
     """
     starts, ends = _givers(giver_rows)
     others = _other_starts(start_rows)
-    by_entry = _spawns_by_entry(spawn_rows)
+    by_entry = _with_scripted_kills(_spawns_by_entry(spawn_rows))
     droppers = _droppers(loot_rows)
     aims = (
         _targets(use_rows),
@@ -1267,8 +1357,7 @@ def _missing_item_blocker(quest: Quest, member, use: Use) -> tuple:
 def _use_blocker(quest: Quest, member) -> tuple:
     """(kind, sentence) when a quest with uses cannot be done now, else
     ("", "")."""
-    spots = [s for u in quest.uses for s in u.spots] + list(quest.fields)
-    if any(s.rank >= ELITE_RANK for s in spots):
+    if _elite_only(quest):
         return GROUP, "%s's objective is an elite" % quest.title
     if _unmet(quest):
         return _source_blocker(quest)
@@ -1299,6 +1388,38 @@ def _use_blocker(quest: Quest, member) -> tuple:
     return _missing_item_blocker(quest, member, use)
 
 
+def _all_elite(spawns) -> bool:
+    spawns = list(spawns)
+    return bool(spawns) and all(s.rank >= ELITE_RANK for s in spawns)
+
+
+def _elite_only(quest: Quest) -> bool:
+    """True when some objective can be met only at an elite: every spawn of a
+    creature it kills, of every creature that drops an item it needs, or of
+    every creature an item is used on is elite (or rare).
+
+    ONE ELITE AMONG THE DROPPERS IS NO GROUP (2026-10-10). The Tome of Divinity
+    (1644, 1648) needs 10 Linen Cloth, which 10,501 spawns drop; 875 of them are
+    elite or rare, and naming the quest GROUP for `any` of them kept every
+    paladin from Redemption. The solo hunt goes to the others (solo_fields)."""
+    for entry, _n in quest.kills:
+        if _all_elite(s for s in quest.fields if s.entry == entry):
+            return True
+    for item, _n in quest.items:
+        droppers = {e for i, e in quest.drops if i == item}
+        if droppers and _all_elite(s for s in quest.fields if s.entry in droppers):
+            return True
+    return any(u.verb == USE_ITEM and _all_elite(u.spots) for u in quest.uses)
+
+
+def solo_fields(quest: Quest) -> tuple:
+    """The objective spawns a member hunts alone: every one but the elites,
+    unless an objective is met only at elites (a group's hunt, _elite_only)."""
+    if _elite_only(quest):
+        return quest.fields
+    return tuple(s for s in quest.fields if s.rank < ELITE_RANK)
+
+
 def blocker_of(quest: Quest, member) -> tuple:
     """(kind, sentence) when this quest cannot be hunted solo, else ("", "")."""
     if quest.group >= 2:
@@ -1307,9 +1428,9 @@ def blocker_of(quest: Quest, member) -> tuple:
         return _use_blocker(quest, member)
     if quest.objects:
         return OBJECT, "%s needs a gameobject used, which no verb does" % quest.title
-    if any(s.rank >= ELITE_RANK for s in quest.fields):
+    if _elite_only(quest):
         return GROUP, "%s's objective is an elite" % quest.title
-    if (quest.kills or quest.items) and not quest.fields:
+    if (quest.kills or quest.items) and not quest.fields and _unmet(quest):
         return _source_blocker(quest)
     if quest.fields and _nearest(member, quest.fields) is None:
         return MAP, "%s's objective is on another map than the member%s" % (
@@ -1615,7 +1736,7 @@ def marked_places(book: Book, marks) -> dict:
 
 def all_tried(member, quest: Quest, avoid) -> bool:
     """Whether every pack of the quest the member could hunt is in `avoid`."""
-    fields = within_level(member, quest.fields)
+    fields = within_level(member, solo_fields(quest))
     return bool(fields) and _densest(member, fields, avoid) is None
 
 
@@ -1709,7 +1830,7 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
         return Move(
             BLOCKED, quest.id, quest.klass, None, said, UNKNOWN, why, 0, quest.title
         )
-    fields = within_level(member, quest.fields)
+    fields = within_level(member, solo_fields(quest))
     if quest.fields and not fields:
         return Move(
             BLOCKED,

@@ -79,6 +79,7 @@ import guildrun
 import guildpug
 import guildsocial
 import holdings
+import hunterpet
 import itemsource
 import pvpgear
 import handover
@@ -14403,6 +14404,9 @@ class Bridge(discord.Client):
             gear=await self._job_gear_offers(members, facts["recent"]),
             # Food and drink for a member with none (restsupply.py).
             supply=await self._job_supply_offers(members, facts["recent"]),
+            # A hunter's first pet (hunterpet.py): the beasts around each hunter
+            # that knows Tame Beast and has none.
+            pets=await self._job_pet_offers(members, facts["recent"]),
             mail=await asyncio.to_thread(_job_mail_commands, members),
             pvp=await self._job_pvp_moves(members, facts["recent"]),
             # The level step is a spawn walk too (guildlevel.py).
@@ -14534,6 +14538,27 @@ class Bridge(discord.Client):
         for name in chosen:
             offers[name] = await asyncio.to_thread(
                 _fetch_supply_vendors, by_name[name], guildjobs.GUILD_GEAR_VENDOR_YARDS)
+        return offers
+
+    async def _job_pet_offers(self, members, recent) -> dict:
+        """name -> the tameable beasts around it, for each hunter that knows
+        Tame Beast and has no pet (hunterpet.wants_pet), off the tame cooldown."""
+        hunters = [m for m in members
+                   if int(m.class_id or 0) == hunterpet.HUNTER and m.online
+                   and not guildjobs._cooling(m, hunterpet.ACTION, recent)]
+        if not hunters:
+            return {}
+        unpetted = await asyncio.to_thread(_fetch_unpetted, [m.name for m in hunters])
+        offers = {}
+        for m in hunters:
+            if not hunterpet.wants_pet(m, unpetted):
+                continue
+            rows = await asyncio.to_thread(_fetch_beasts, m)
+            offers[m.name] = hunterpet.beasts_from_rows(rows)
+            log.info("guild jobs: %s knows Tame Beast and has no pet; %d tameable "
+                     "beast spawn(s) of level %d to %d within %d yards",
+                     m.name, len(offers[m.name]), hunterpet.lowest_level(m.level),
+                     int(m.level), int(hunterpet.BEAST_YARDS))
         return offers
 
     def _log_stranded_knights(self, members, plan):
@@ -25001,6 +25026,9 @@ def _class_book_reads(cur) -> tuple:
                           "spells", spells)
     use_rows, chest_rows, object_rows, focus_rows = _class_use_reads(cur, quests, items)
     entries |= {int(r["target"]) for r in use_rows}
+    # The spawns that mark ground a script watches (The Affray's grate, the
+    # felhunter's summoning circle): classquest.SCRIPTED_KILLS, SCRIPTED_FOCI.
+    entries |= classquest.scripted_entries()
     spawns = _class_rows(cur, "class quest spawns", classquest.SPAWNS_SQL, "entries", entries)
     started = _job_read(cur, "class quest other starters", classquest.STARTERS_SQL.format(
         quests=ids(r["id"] for r in quests)))
@@ -26196,6 +26224,41 @@ def _fetch_supply_vendors(here, cap_yards) -> list:
                 (x, y, int(here.map_id), towntrip.NPC_FLAG_VENDOR,
                  restsupply.FOOD_CATEGORY, restsupply.DRINK_CATEGORY,
                  int(here.level), x, cap, y, cap, cap),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _fetch_unpetted(names) -> set:
+    """The hunters among `names` that know Tame Beast and have no pet
+    (hunterpet.UNPETTED_SQL). An unread table reads as none, which tames nothing."""
+    names = [str(n) for n in names or ()]
+    if not names:
+        return set()
+    sql = hunterpet.UNPETTED_SQL % ", ".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, tuple(names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return set()
+            raise
+        return {str(row["name"]) for row in cur.fetchall()}
+
+
+def _fetch_beasts(here) -> list:
+    """Rows for hunterpet.beasts_from_rows: the tameable beasts around where
+    the hunter stands, of its level band (hunterpet.BEASTS_SQL)."""
+    x, y, box = float(here.x), float(here.y), float(hunterpet.BEAST_YARDS)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                hunterpet.BEASTS_SQL,
+                (x, y, int(here.map_id), int(here.level),
+                 hunterpet.lowest_level(here.level), x, box, y, box, box),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
