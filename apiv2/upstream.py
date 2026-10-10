@@ -205,7 +205,9 @@ def seconds_of(iso: str | None) -> int | None:
 
 def github(path: str) -> tuple[int, object, dict]:
     """(status, JSON body, headers). Status 0 is a network failure. No token."""
-    request = urllib.request.Request(
+    # API is a fixed https URL and `path` is built from the COMPONENTS table and
+    # validated hex pins, so no file: or custom scheme can reach urlopen.
+    request = urllib.request.Request(  # noqa: S310
         API + path,
         headers={
             "Accept": "application/vnd.github+json",
