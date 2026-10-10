@@ -99,7 +99,9 @@ class MemoryStore:
     {guild: [member names]}. For tests, and for anything that must not touch
     a database."""
 
-    def __init__(self, families: dict, guilds: dict | None = None) -> None:
+    def __init__(
+        self, families: dict[str, list[str]], guilds: dict[str, list[str]] | None = None
+    ) -> None:
         self._families = {k: list(v) for k, v in families.items()}
         self._guilds = {k: list(v) for k, v in (guilds or {}).items()}
 
@@ -122,8 +124,8 @@ class MemoryStore:
         return any(name in self._guilds.get(g, ()) for g in guild_ids)
 
 
-def _by_family(rows: list) -> dict:
-    out: dict = {}
+def _by_family(rows: list[dict]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
     for row in rows:
         out.setdefault(row["family"], []).append(row["name"])
     return out
@@ -182,10 +184,10 @@ class Families:
             memo[key] = read()
         return memo[key]
 
-    def _families(self) -> dict:
+    def _families(self) -> dict[str, list[str]]:
         return self._once("families", self._read_families)
 
-    def _read_families(self) -> dict:
+    def _read_families(self) -> dict[str, list[str]]:
         by_family = _by_family(self._store.roster())
         leaders = list(self._fallback())
         if not by_family:
