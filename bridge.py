@@ -59,11 +59,13 @@ import campaignplan
 import campaignqueue
 import classic
 import classask
+import classtrain
 import classparty
 import classhunt
 import classquest
 import classuse
 import guildbank
+import guildfund
 import guildshare
 import guildpost
 import guildroute
@@ -5641,6 +5643,8 @@ PASSES = (
     _Pass("_bank_loop"),
     _Pass("_guild_bank_loop"),
     _Pass("_guild_dues_loop"),
+    _Pass("_guild_train_loop"),
+    _Pass("_guild_fund_loop"),
     _Pass("_crafter_mail_loop"),
     _Pass("_guild_post_loop"),
     _Pass("_guild_corps_loop"),
@@ -5765,6 +5769,12 @@ class Bridge(discord.Client):
         # start. In memory like the mail runs above; the daily limit is read
         # from the command log, which a restart does not forget.
         self._dues_walks: dict = {}
+        # CLASS TRAINER WALKS UNDER WAY (classtrain.py): member -> monotonic
+        # start. The cooldown is read from the command log.
+        self._train_walks: dict = {}
+        # WHAT EACH GUILD MASTER WOULD WITHDRAW FOR THE GUILD FUND
+        # (guildfund.py), so the guild bank pass walks it to a vault.
+        self._fund_wants: dict = {}
         # GUILD CRAFTING CORPS STEPS UNDER WAY: holder -> monotonic start. In
         # memory like the dues walks; every cooldown is read from the command
         # log, which a restart does not forget.
@@ -12901,9 +12911,15 @@ class Bridge(discord.Client):
         # NOTHING THE POLICY KEEPS IN ITS OWNER'S BANK GOES TO THE GUILD
         # (#320): a second set, or an item the operator reserved.
         items = await asyncio.to_thread(_not_kept_at_home, items, names)
+        # THE GUILD FUND NEEDS THE VAULT TOO (guildfund.py): the master walks
+        # there to withdraw what it posts to the members.
+        fund = sum(getattr(self, "_fund_wants", {}).get(n, 0) for n in names)
         if not actions and not deposits and not items:
-            log.info("guild bank: nobody is carrying more than the float")
-            return
+            if not fund:
+                log.info("guild bank: nobody is carrying more than the float")
+                return
+            log.info("guild bank: the guild fund needs the vault: %s to withdraw "
+                     "for the members", guildfund.gold(fund))
         # ONE POSITION READ, FOR TWO QUESTIONS (infra#3804): which map the
         # LEADER aims from, and whether each DEPOSITOR is at the vault now.
         # `_fetch_positions` batches, so this is the one query it always was.
@@ -13404,6 +13420,9 @@ class Bridge(discord.Client):
         if not names:
             return
         rows = await asyncio.to_thread(_fetch_dues_rows, names)
+        # TRAINING FIRST (the operator, 2026-10-10): each member keeps what its
+        # class trainer would charge it now and a gear budget (guildfund).
+        rows = await asyncio.to_thread(_with_reserves, rows)
         # EVERY PLACED MEMBER POSTS, MAINTENANCE THE MOST (#194): the lineup's
         # roles. Only earned gold is posted: `eligible` below, natural.py.
         # A GUILD WITH NO BANK TAB KEEPS A SMALLER FLOAT (the operator,
@@ -13707,7 +13726,7 @@ class Bridge(discord.Client):
         sitting = await asyncio.to_thread(_sitting_out_to_walk, names)
         plan, notes = guildpost.visits(letters, online, busy, free_slots, roster,
                                        sitting)
-        log.info("%s %d letter(s) with items wait for %d guild member(s) of %s's "
+        log.info("%s %d letter(s) with items or gold wait for %d guild member(s) of %s's "
                  "guild; %d walk(s) this pass", guildpost.LOG_PREFIX, len(letters),
                  len({x.receiver for x in letters}), names[0] if names else "?",
                  len(plan))
@@ -13807,6 +13826,147 @@ class Bridge(discord.Client):
                 log.exception("guild dues pass failed; retrying next cycle")
             await self._for_other_families("guild dues", self._guild_dues_once)
             await asyncio.sleep(cycle)
+
+    async def _guild_train_loop(self) -> None:
+        """Guild members to their class trainers (classtrain.py), on its own clock."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("GUILD_TRAIN_CYCLE_SECONDS", "600"))
+        await asyncio.sleep(min(cycle, 240.0))
+        while not self.is_closed():
+            try:
+                await self._guild_train_once()
+            except Exception:
+                log.exception("%s pass failed; retrying next cycle", classtrain.LOG_PREFIX)
+            await self._for_other_families("guild training", self._guild_train_once)
+            await asyncio.sleep(cycle)
+
+    async def _guild_train_once(self, cohort=None) -> None:
+        """Walk the guild members who can pay for a waiting class spell to
+        their class trainer.
+
+        classtrain.py decides who; the row is the module's own
+        `walk-to-trainer class`, and on arrival the module buys each spell the
+        purse covers through the core's Trainer::TeachSpell. The member pays
+        from its own gold. Never a learn, never a GM command.
+        """
+        names = await asyncio.to_thread(_names_of, cohort)
+        trainees = await asyncio.to_thread(_fetch_trainees, names) if names else []
+        if not trainees:
+            return
+        recent = await asyncio.to_thread(_guild_train_rows)
+        log.info("%s", classtrain.summary(recent))
+        if classtrain.unsupported(classtrain.within(recent, classtrain.UNSUPPORTED_SECONDS)):
+            log.info("%s this worldserver refuses `walk-to-trainer class` as malformed; "
+                     "no class trainer walk until it is rolled%s",
+                     classtrain.LOG_PREFIX, _family_label(cohort))
+            return
+        now = time.monotonic()
+        busy = self._guild_walkers_busy(now)
+        candidates = [t.name for t in trainees
+                      if t.online and t.due.affords(t.money) and t.name not in busy]
+        row_walks = now >= self._mail_walk_unsupported_until
+        walkers = (await asyncio.to_thread(_route_walkers, candidates, names, row_walks)
+                   if candidates else {})
+        walks, notes = classtrain.plan(
+            trainees, walkers, classtrain.recent_walkers(recent), busy,
+            cap=self._guild_walk_cap())
+        _log_capped("guild training", notes)
+        started = 0
+        for walk in walks:
+            started += await self._start_train_walk(walk, now)
+        log.info("%s%s", classtrain.pass_line(trainees, started), _family_label(cohort))
+
+    def _guild_walkers_busy(self, now: float) -> set:
+        """Every member another guild pass has on a walk, after the class
+        trainer walks past their step window are let go."""
+        self._train_walks = guildroute.live_runs(
+            self._train_walks, now, guildroute.GUILD_STEP_SECONDS)
+        return (set(getattr(self, "_guild_run_names", ())) | set(self._train_walks)
+                | set(self._dues_walks) | set(self._guild_mail_runs)
+                | set(self._corps_steps) | set(getattr(self, "_post_walks", ()))
+                | set(getattr(self, "_job_steps", ())))
+
+    async def _start_train_walk(self, walk, now: float) -> int:
+        """Write one class trainer walk row; 1 when written."""
+        self._train_walks[walk.name] = now
+        row_id = await asyncio.to_thread(
+            _insert_crafter_row, walk.name, walk.command, classtrain.KIND, walk.source)
+        if not row_id:
+            self._train_walks.pop(walk.name, None)
+            return 0
+        log.info("%s (walk row %d)", walk.said, row_id)
+        return 1
+
+    async def _guild_fund_loop(self) -> None:
+        """The guild fund (guildfund.py): training letters and the dues refund."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("GUILD_FUND_CYCLE_SECONDS", "300"))
+        await asyncio.sleep(min(cycle, 180.0))
+        while not self.is_closed():
+            try:
+                await self._guild_fund_once()
+            except Exception:
+                log.exception("%s pass failed; retrying next cycle", guildfund.LOG_PREFIX)
+            await self._for_other_families("guild fund", self._guild_fund_once)
+            await asyncio.sleep(cycle)
+
+    async def _guild_fund_once(self, cohort=None) -> None:
+        """One pass of the guild fund, for the family's guild.
+
+        guildfund.py decides who gets what; this reads the facts and writes
+        the guild master's own rows: `bank withdraw <copper>` (kind='guild')
+        while it stands at a guild vault, and a `send money:` letter per member
+        while it stands at a mailbox. The core judges the withdrawal by the
+        master's rank; the post carries the gold. Never a give, never a GM
+        command, never a table write.
+        """
+        names = await asyncio.to_thread(_names_of, cohort)
+        facts = await asyncio.to_thread(_fetch_fund_facts, names) if names else {}
+        master = facts.get("master") or ""
+        if not master or master not in names:
+            return
+        roster = await asyncio.to_thread(_roster_names)
+        book = guildfund.ledger(facts["ledger"], master)
+        paid = guildfund.dues_paid(facts["dues"], facts["renames"])
+        plan = guildfund.plan(master, facts["members"], facts["bank"], book, paid, roster)
+        self._fund_wants[master] = plan.withdraw
+        _log_capped("guild fund", plan.notes)
+        carried = min(book.carried, int(facts.get("purse") or 0))
+        log.info("%s%s", guildfund.pass_line(facts.get("guild"), facts["bank"], carried,
+                                             plan, book.refunded), _family_label(cohort))
+        positions = (await asyncio.to_thread(_fetch_positions, [master])
+                     if plan.letters else {})
+        if master not in positions:
+            return
+        if plan.withdraw and not facts.get("withdraw_open"):
+            await self._fund_withdraw(master, plan, positions)
+        if carried:
+            await self._fund_post(master, plan, carried, positions)
+
+    async def _fund_withdraw(self, master: str, plan, positions: dict) -> None:
+        """The master's withdrawal, written only where it stands at a vault:
+        `bank withdraw` answers 'no guild bank in reach' anywhere else."""
+        spawn = await asyncio.to_thread(_nearest_vault, master)
+        if not travel.spawn_in_reach(spawn, positions.get(master), TOWN_COUNTER_YARDS):
+            return
+        row = await asyncio.to_thread(
+            _insert_guild, master, guildfund.withdraw_command(plan.withdraw),
+            guildfund.WITHDRAW_SOURCE)
+        log.info("%s the guild master %s withdraws %s at the vault for %d "
+                 "letter(s) (row %d)", guildfund.LOG_PREFIX, master,
+                 guildfund.gold(plan.withdraw), len(plan.letters), row)
+
+    async def _fund_post(self, master: str, plan, carried: int, positions: dict) -> None:
+        """The fund's letters the master can pay for, written only where it
+        stands at a mailbox; one log line each."""
+        if master not in await asyncio.to_thread(_holders_at_mailbox, [master], positions):
+            log.info("%s %s carries %s of the guild's gold to post and is not at a "
+                     "mailbox yet", guildfund.LOG_PREFIX, master, guildfund.gold(carried))
+            return
+        for letter in guildfund.postable(plan, carried):
+            row = await asyncio.to_thread(_insert_fund_letter_row, letter)
+            if row:
+                log.info("%s (letter row %d)", letter.said, row)
 
     async def _guild_corps_once(self, cohort=None) -> None:
         """One pass of the guild crafting corps (#256): bags crafted, not only bought.
@@ -23137,7 +23297,7 @@ def _fetch_crafter_letters(receivers: list, senders: list) -> list:
 _GUILD_POST_SQL = (
     "SELECT r.name AS receiver, r.online AS online, m.id AS mail_id, "
     "mi.item_guid AS item_guid, it.name AS name, "
-    "(m.deliver_time <= UNIX_TIMESTAMP()) AS delivered, m.cod AS cod "
+    "(m.deliver_time <= UNIX_TIMESTAMP()) AS delivered, m.cod AS cod, 0 AS money "
     "FROM mail m "
     "JOIN mail_items mi ON mi.mail_id = m.id "
     "JOIN characters r ON r.guid = m.receiver "
@@ -23145,8 +23305,18 @@ _GUILD_POST_SQL = (
     "JOIN item_instance ii ON ii.guid = mi.item_guid "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
-    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s)) "
-    "ORDER BY m.id"
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({names})) "
+    # AND THE LETTERS OF GOLD (2026-10-10): the guild fund's training letters
+    # and dues refunds, taken out with `take-money` (guildpost.letter_from_row).
+    "UNION ALL SELECT r.name AS receiver, r.online AS online, m.id AS mail_id, "
+    "0 AS item_guid, NULL AS name, "
+    "(m.deliver_time <= UNIX_TIMESTAMP()) AS delivered, m.cod AS cod, m.money AS money "
+    "FROM mail m "
+    "JOIN characters r ON r.guid = m.receiver "
+    "JOIN guild_member gm ON gm.guid = r.guid "
+    "WHERE m.money > 0 AND gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({names})) "
+    "ORDER BY mail_id"
 )
 
 
@@ -23154,10 +23324,10 @@ def _fetch_guild_post(names: list) -> list:
     """Rows for guildpost.letter_from_row; no judgement here."""
     if not names:
         return []
-    sql = _GUILD_POST_SQL % ",".join(["%s"] * len(names))
+    sql = _GUILD_POST_SQL.format(names=",".join(["%s"] * len(names)))
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(sql, list(names))  # noqa: S608 - placeholders from a COUNT
+            cur.execute(sql, list(names) * 2)  # noqa: S608 - placeholders from a COUNT
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("guild post: the mail tables cannot be read")
@@ -24264,6 +24434,176 @@ def _insert_dues_row(holder: str, command: str, taker: str, source: str) -> int:
             raise
         return cur.lastrowid or 0
 
+
+# THE CLASS TRAINER READS (classtrain.py). Every class trainer spell in the
+# world, by class: they do not change under a running server, so they are read
+# once. A member's known spells are read only where a trainer teaches them.
+_CLASS_TRAINER_SQL = (
+    "SELECT t.Requirement AS class_id, ts.SpellId AS spell, "
+    "MIN(ts.ReqLevel) AS level, MIN(ts.MoneyCost) AS cost, "
+    "MAX(ts.ReqAbility1) AS req1, MAX(ts.ReqAbility2) AS req2, "
+    "MAX(ts.ReqAbility3) AS req3 "
+    "FROM acore_world.trainer_spell ts "
+    "JOIN acore_world.trainer t ON t.Id = ts.TrainerId "
+    "WHERE t.Type = 0 GROUP BY t.Requirement, ts.SpellId"
+)
+_CLASS_KNOWN_SQL = (
+    "SELECT c.name, c.class AS class_id, c.level, cs.spell "
+    "FROM characters c LEFT JOIN character_spell cs ON cs.guid = c.guid "
+    "AND cs.spell IN (SELECT ts.SpellId FROM acore_world.trainer_spell ts "
+    "JOIN acore_world.trainer t ON t.Id = ts.TrainerId WHERE t.Type = 0) "
+    "WHERE c.name IN (%s)"
+)
+_CLASS_TRAINER_ROWS: dict = {}
+
+
+def _class_trainer_rows(cur) -> dict:
+    """class id -> its class trainer rows, read once per process."""
+    if not _CLASS_TRAINER_ROWS:
+        rows = _corps_read(cur, "class trainer spells", _CLASS_TRAINER_SQL)
+        for row in rows:
+            _CLASS_TRAINER_ROWS.setdefault(int(row["class_id"] or 0), []).append(dict(row))
+    return _CLASS_TRAINER_ROWS
+
+
+def _class_training_due(names: list) -> dict:
+    """name -> classtrain.Due for each named member; no judgement here."""
+    if not names:
+        return {}
+    with _connect() as conn, conn.cursor() as cur:
+        trainer = _class_trainer_rows(cur)
+        rows = _corps_read(cur, "known class spells",
+                           _CLASS_KNOWN_SQL % ",".join(["%s"] * len(names)), list(names))
+    known, level, klass = {}, {}, {}
+    for row in rows:
+        name = str(row["name"])
+        level[name] = int(row.get("level") or 0)
+        klass[name] = int(row.get("class_id") or 0)
+        spells = known.setdefault(name, set())
+        if row.get("spell"):
+            spells.add(int(row["spell"]))
+    return {name: classtrain.due(trainer.get(klass[name], ()), known[name], level[name])
+            for name in known}
+
+
+def _fetch_trainees(names: list) -> list:
+    """classtrain.Trainee for each member of the family's guild off the
+    roster; no judgement here."""
+    roster = _roster_names()
+    rows = [r for r in _fetch_dues_rows(names) if str(r.get("name") or "") not in roster]
+    due = _class_training_due([str(r["name"]) for r in rows])
+    return classtrain.trainees_from_rows(rows, due)
+
+
+def _with_reserves(rows: list) -> list:
+    """The dues rows with each member's training and gear reserve
+    (guildfund.reserve) laid on, for guildwork.dues_for."""
+    due = _class_training_due([str(r["name"]) for r in rows if r.get("name")])
+    out = []
+    for row in rows:
+        row = dict(row)
+        d = due.get(str(row.get("name") or ""))
+        row["reserve"] = guildfund.reserve(d.copper if d else 0, row.get("level"))
+        out.append(row)
+    return out
+
+
+def _roster_names() -> set:
+    """Every roster character's name: the families, whose own passes fund and
+    train them."""
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _corps_read(cur, "roster names", "SELECT name FROM overseer_roster")
+    return {str(r["name"]) for r in rows if r.get("name")}
+
+
+def _guild_train_rows() -> list:
+    """The class trainer walks of the last day, for classtrain."""
+    with _connect() as conn, conn.cursor() as cur:
+        return _corps_read(
+            cur, "class trainer walks",
+            "SELECT target_name, source, status, detail, result, "
+            "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
+            "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY",
+            (classtrain.SOURCE + ":%",))
+
+
+# THE GUILD FUND'S LEDGER: every row it ever wrote, which is a handful a day.
+# The refunds in it are the record that a member was refunded, so a restart
+# refunds nobody twice.
+_GUILD_FUND_ROWS_SQL = (
+    "SELECT target_name, target_arg, command, source, status, "
+    "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
+    "WHERE source LIKE %s"
+)
+_DUES_LETTERS_SQL = (
+    "SELECT target_name, source, status FROM overseer_command "
+    "WHERE kind = 'mail' AND source LIKE %s"
+)
+# The names the dues letters were posted under, and each character's name now.
+_RENAMES_SQL = (
+    "SELECT n.name AS was, c.name AS now FROM overseer_naturalized n "
+    "JOIN characters c ON c.guid = n.guid"
+)
+
+
+def _fund_guild_rows(names: list) -> tuple:
+    """(guild, master, rows) of the family's own guild, from the dues read."""
+    rows = _fetch_dues_rows(names)
+    family = set(names)
+    mine = next((r for r in rows if str(r.get("name")) in family), None)
+    if mine is None:
+        return "", "", []
+    guild = str(mine.get("guild_name") or "")
+    rows = [r for r in rows if str(r.get("guild_name") or "") == guild]
+    master = next((str(r["master"]) for r in rows if r.get("master")), "")
+    return guild, master, rows
+
+
+def _fetch_fund_facts(names: list) -> dict:
+    """What guildfund.plan reads for the family's guild; no judgement here."""
+    guild, master, rows = _fund_guild_rows(names)
+    if not rows:
+        return {}
+    due = _class_training_due([str(r["name"]) for r in rows])
+    with _connect() as conn, conn.cursor() as cur:
+        bank = _corps_read(cur, "guild bank money",
+                           "SELECT BankMoney FROM guild WHERE name = %s", (guild,))
+        ledger = _corps_read(cur, "guild fund rows", _GUILD_FUND_ROWS_SQL,
+                             (guildfund.SOURCE + ":%",))
+        dues = _corps_read(cur, "dues letters", _DUES_LETTERS_SQL,
+                           (guildfund.DUES_SOURCE + ":%",))
+        renames = _corps_read(cur, "renamed members", _RENAMES_SQL)
+    return {
+        "guild": guild,
+        "master": master,
+        "purse": sum(int(r.get("money") or 0) for r in rows if str(r.get("name")) == master),
+        "members": guildfund.members_from_rows(rows, guild, due),
+        "bank": int(bank[0]["BankMoney"] or 0) if bank else 0,
+        "ledger": ledger,
+        "dues": dues,
+        "renames": {str(r["was"]): str(r["now"]) for r in renames if r.get("was")},
+        "withdraw_open": guildfund.withdraw_open(ledger),
+    }
+
+
+def _insert_fund_letter_row(letter) -> int:
+    """One `kind='mail'` send row: the guild master posts the guild's gold to
+    a member (guildfund.Letter). Guarded like `_insert_dues_row`."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'mail', %s, %s)",
+                (letter.master, letter.command, letter.member, letter.source),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning("guild fund: cannot queue a letter for %s on this "
+                            "worldserver image", letter.master)
+                return 0
+            raise
+        return cur.lastrowid or 0
 
 # THE GUILD CRAFTING CORPS READS AND ROW. Every member of every family guild,
 # with its map; the corps' skills, recipes, mail and carried materials; the
@@ -26459,7 +26799,12 @@ def _fetch_guild_money(names: list) -> list:
         # for the auction house and has not spent is not deposited back.
         ledger = _corps_read(cur, "raid supply rows", _RAID_SUPPLY_ROWS_SQL,
                              (raidsupply.SOURCE + ":%",))
-    return raidsupply.hold_back(rows, ledger)
+        # AND THE GUILD FUND'S (guildfund.py): what the master withdrew to post
+        # to the members is not deposited back before it is posted.
+        fund = _corps_read(cur, "guild fund rows", _GUILD_FUND_ROWS_SQL,
+                           (guildfund.SOURCE + ":%",))
+    carried = {str(r["name"]): guildfund.ledger(fund, str(r["name"])).carried for r in rows}
+    return guildfund.hold_back(raidsupply.hold_back(rows, ledger), carried)
 
 
 def _fetch_guild_bank_setup(names: list) -> dict | None:
