@@ -135,6 +135,7 @@ import retire
 import situation
 import skillgoal
 import standin
+import standstill
 import tabard
 import teamsync
 import towntrip
@@ -5903,6 +5904,11 @@ class Bridge(discord.Client):
         # (vision.py). Both in memory; a restart reads progress as unknown
         # until the trail is a minute long again.
         self._situation_trail = situation.Tracker()
+        # THE GUILD MEMBERS' STANDS (standstill.py): where each member was first
+        # read standing and since when, on the monotonic clock, kept across the
+        # guild jobs passes of both guilds. In memory; a restart counts every
+        # stand again from its first pass.
+        self._guild_still: dict = {}
         # family -> {"asked": when, "acted": when}, monotonic, for the
         # movement choice's own clock (jev_movement.ASK_SECONDS and
         # ACT_COOLDOWN_SECONDS). In memory; a restart may ask once early.
@@ -14144,6 +14150,7 @@ class Bridge(discord.Client):
                 | set(self._guild_mail_runs) | set(self._crafter_walks))
         busy -= self._stranded_knights_freed(members)
         cap = self._guild_walk_cap()
+        self._guild_still = standstill.track(self._guild_still, members, now)
         spawn_walks = now >= self._job_walks_unsupported.get("spawn", 0.0)
         # The hunt slots the realm has free (classhunt.py); none while this
         # worldserver is known not to hunt, which keeps the walk-only hunt.
@@ -14223,7 +14230,9 @@ class Bridge(discord.Client):
             owing=self._class_owing,
             # The class quest walks the realm has room for (guildroute).
             far_slots=guildroute.far_slots_free(
-                facts.get("far_open"), FAR_WALKS_AT_ONCE))
+                facts.get("far_open"), FAR_WALKS_AT_ONCE),
+            # How long each member has stood on one spot (stood_still_step).
+            still=standstill.all_minutes(self._guild_still, time.monotonic()))
         # Members held on a class quest are kept out of every dungeon pass
         # (the guild's asks, its runs): _class_priority_names.
         self._classquest_held = guildjobs.class_held(plan.lines)
@@ -14609,7 +14618,10 @@ class Bridge(discord.Client):
                             "for %d minutes", int(guildroute.WALK_UNSUPPORTED_SECONDS // 60))
                 return False
             if verdict.state == classuse.NEVER:
-                self._class_hunts.give_up(step.holder, step.key, time.time())
+                # Only a class quest is given up; the level step's orb click
+                # (guildjobs.level_orb_step) is asked again after its cooldown.
+                if step.action == classquest.ACTION:
+                    self._class_hunts.give_up(step.holder, step.key, time.time())
                 return False
             if verdict.state not in (classuse.RETRY, classuse.ELSEWHERE):
                 return False
@@ -24535,6 +24547,13 @@ _JOB_HUB_MASTERS_SQL = (
     "WHERE c.map IN (%s, %s, %s) AND (ct.npcflag & %s) <> 0"
 )
 _JOB_HUB_MASTERS: list = []
+# The Orb of Translocation in Silvermoon City, the level step's way off map 530
+# for a Blood Elf (guildlevel.orbs_from). Read once per process.
+_JOB_ORBS_SQL = (
+    "SELECT g.guid, g.id AS entry, g.map AS map_id, g.position_x AS x, "
+    "g.position_y AS y FROM acore_world.gameobject g WHERE g.id = %s AND g.map = %s"
+)
+_JOB_ORBS: list = []
 # Every roster family member, of every family: the level step leaves them to
 # levelroute.py, which walks a family as one.
 _JOB_ROSTER_SQL = "SELECT name FROM overseer_roster WHERE enabled = 1"
@@ -24658,6 +24677,23 @@ def _hunts_open(cur):
     return int(rows[0]["open_hunts"]) if rows else None
 
 
+def _read_job_spawns_once(cur) -> None:
+    """The world's spawns the job reads once per process, since spawns do not
+    move: the meeting stones, the hub flight masters and the Silvermoon orb."""
+    if not _JOB_STONES:
+        _JOB_STONES.extend(_job_read(cur, "meeting stones", _JOB_STONES_SQL,
+                                     (MEETING_STONE_GO_TYPE,)))
+    if not _JOB_HUB_MASTERS:
+        _JOB_HUB_MASTERS.extend(_job_read(
+            cur, "hub flight masters", _JOB_HUB_MASTERS_SQL,
+            # Map 530 for the starting-land hubs (levelroute.STARTING_LAND_HUBS).
+            (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP,
+             flightlearn.FLIGHT_MASTER_NPC_FLAG)))
+    if not _JOB_ORBS:
+        _JOB_ORBS.extend(_job_read(cur, "the Silvermoon orb", _JOB_ORBS_SQL,
+                                   (guildlevel.ORB_ENTRY, classic.OUTLAND_MAP)))
+
+
 def _fetch_job_facts(family_names: list) -> dict:
     """Everything guildjobs.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
@@ -24685,15 +24721,7 @@ def _fetch_job_facts(family_names: list) -> dict:
         unclaimed_rows = _job_read(cur, "unopened material posts", _JOB_UNCLAIMED_SQL,
                                    (guildjobs.POST_SUBJECT, guildjobs.MAILBOX_FULL_LETTERS))
         bank_rows = _job_read(cur, "guild bank tabs", _JOB_BANK_TABS_SQL)
-        if not _JOB_STONES:
-            _JOB_STONES.extend(_job_read(cur, "meeting stones", _JOB_STONES_SQL,
-                                         (MEETING_STONE_GO_TYPE,)))
-        if not _JOB_HUB_MASTERS:
-            _JOB_HUB_MASTERS.extend(_job_read(
-                cur, "hub flight masters", _JOB_HUB_MASTERS_SQL,
-                # Map 530 for the starting-land hubs (levelroute.STARTING_LAND_HUBS).
-                (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP,
-                 flightlearn.FLIGHT_MASTER_NPC_FLAG)))
+        _read_job_spawns_once(cur)
         roster_rows = _job_read(cur, "roster names", _JOB_ROSTER_SQL)
         far_open = _far_walks_open(cur)
         hunt_open = _hunts_open(cur)
@@ -24712,6 +24740,7 @@ def _fetch_job_facts(family_names: list) -> dict:
     # none, so a post never goes to a bank this world cannot show exists.
     facts["banks"] = {str(r.get("name") or "") for r in bank_rows} - {""}
     facts["hub_masters"] = list(_JOB_HUB_MASTERS)
+    facts["orbs"] = list(_JOB_ORBS)
     # Plus this pass's own family names, so an unread roster still leaves
     # the family to levelroute.
     facts["roster"] = ({str(r.get("name") or "") for r in roster_rows}
@@ -24721,10 +24750,11 @@ def _fetch_job_facts(family_names: list) -> dict:
 
 def _job_leveling(facts):
     """guildlevel.World for the level step: levelroute's hub quests (read once
-    per process by `_level_world`), the hub flight masters and the roster.
-    None while the quests are unread, which takes no level step."""
+    per process by `_level_world`), the hub flight masters, the roster and the
+    Silvermoon orb. None while the quests are unread, which takes no level step."""
     quests, _spawns = _level_world()
-    return guildlevel.world(quests, facts.get("hub_masters"), facts.get("roster", ()))
+    return guildlevel.world(quests, facts.get("hub_masters"), facts.get("roster", ()),
+                            orb_rows=facts.get("orbs", ()))
 
 
 def _guild_gathering_skills(member):

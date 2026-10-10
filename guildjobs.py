@@ -126,6 +126,7 @@ import keep
 import pvpgear
 import raidroles
 import situation
+import standstill
 
 HERBALISM = guildcorps.HERBALISM
 MINING = guildcorps.MINING
@@ -381,6 +382,8 @@ COOLDOWN_MINUTES = {
     classquest.ACTION: 10,
     # A walk out of an outgrown zone to a quest hub (guildlevel.py).
     guildlevel.ACTION: guildlevel.COOLDOWN_MINUTES,
+    # A Blood Elf's walk to the Orb of Translocation and its click.
+    guildlevel.ORB_ACTION: guildlevel.ORB_COOLDOWN_MINUTES,
     # PvP for upgrades (#589): a queue row waits this long for its battle.
     "pvp": pvpgear.QUEUE_MINUTES,
 }
@@ -2090,6 +2093,7 @@ def plan(
     now=0.0,
     far_slots=None,
     owing=None,
+    still=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -2113,7 +2117,8 @@ def plan(
     quest walks past it wait, and the members are planned tank-spec warriors
     and healers first, then by level (class_priority); `owing` the
     classquest.Owing clock (None keeps none, so a hold never lapses within one
-    call).
+    call); `still` name -> minutes the member has stood on one spot
+    (standstill.py), None to read no stand (stood_still_step).
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -2162,6 +2167,7 @@ def plan(
             now,
             far,
             level_room,
+            int((still or {}).get(m.name, 0)),
         )
         lines[m.name] = doing
         helps += class_helps(m, classes, hunts, now, recent)
@@ -2282,8 +2288,9 @@ def _member_step(
     now=0.0,
     far=None,
     level_room=True,
+    still_for=0,
 ):
-    """A class quest first, then gear, then PvP for an upgrade, then the post, then a walk out of an
+    """A class quest first, then a hearth out of a spot it cannot leave, then gear, then PvP for an upgrade, then the post, then a walk out of an
     outgrown zone, then the member's ordinary job (a craft-focus guild's trade
     work when `crafting`), keeping the notes.
 
@@ -2298,7 +2305,11 @@ def _member_step(
     while its hold lasts, the member's level walk out of an outgrown zone goes
     ahead of it, when the guild has a level walk left this pass (`level_room`)
     and the member has a walk to make. Otherwise the class step is first, as
-    above."""
+    above.
+
+    A member that has stood on one spot for standstill.STILL_MINUTES
+    (`still_for`) with nothing asked of it hearths home before anything else
+    is asked (stood_still_step)."""
     first = stalled_level_first(m, leveling, recent, cap, level_room)
     if first is not None:
         return first
@@ -2307,6 +2318,9 @@ def _member_step(
     )
     if step is not None or doing:
         return step, doing, quest_note
+    step = stood_still_step(m, still_for, recent, leveling)
+    if step is not None:
+        return step, step.said, quest_note
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
     if step is not None:
         return step, doing, gear_note
@@ -2349,7 +2363,7 @@ def level_step(m, world, recent, cap):
     it (deadly_hub_note), and at most once per COOLDOWN_MINUTES["level"]. The
     walk is `walk-to-spawn creature:` naming the flight master's spawn, at the
     pass's cap. From map 530, when the hub lies across the water, the step is
-    its side's boat instead (level_cross_step).
+    its side's boat (level_cross_step) or orb (level_orb_step) instead.
     """
     # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
     # a member contributes, not where it walks: on the dev realm 1 of Cave's
@@ -2370,10 +2384,18 @@ def level_step(m, world, recent, cap):
     if not m.alive:
         return None, "", _held_note(m, 0)
     choice = guildlevel.choose(
-        m.level, m.race, m.map_id, bands, world.masters, zone_id=m.zone_id
+        m.level,
+        m.race,
+        m.map_id,
+        bands,
+        world.masters,
+        zone_id=m.zone_id,
+        orbs=getattr(world, "orbs", None),
     )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
+    if choice.orb is not None:
+        return level_orb_step(m, choice, why, recent, cap)
     if choice.cross_to is not None:
         return level_cross_step(m, choice, why, recent)
     master = choice.master
@@ -2395,6 +2417,55 @@ def level_step(m, world, recent, cap):
         why=why,
     )
     return _spot_step(m, spot, guildlevel.ACTION, cap, said), said, ""
+
+
+def level_orb_step(m, choice, why, recent, cap):
+    """(step or None, what it does, a note) for a Blood Elf whose level hub
+    lies beyond the Orb of Translocation (guildlevel.Choice.orb): the walk to
+    the orb's spawn (`walk-to-spawn gameobject:`, none when it stands beside
+    it) and one kind='quest' `use-gameobject <entry>` row, the click a player
+    makes. The orb's own spell carries it to the Undercity, and the level step
+    walks it on from there on a later pass. While its last orb row is younger
+    than guildlevel.ORB_COOLDOWN_MINUTES it is held with no row, saying where
+    it goes, so no other job is written over the walk to the orb."""
+    said = guildlevel.orb_said(m.name, m.level, why, choice)
+    if _cooling(m, guildlevel.ORB_ACTION, recent):
+        return None, said, ""
+    orb = choice.orb
+    spot = Spot(
+        kind="gameobject",
+        spawn=orb.spawn,
+        map_id=orb.map_id,
+        x=orb.x,
+        y=orb.y,
+        name=guildlevel.ORB_NAME,
+        why=why,
+    )
+    walk = None
+    if not _near(m, spot, classquest.USE_NEAR):
+        walk = guildcorps.Row(
+            "job",
+            spot.command + _cap_word(cap),
+            "",
+            source_for(guildlevel.ORB_ACTION + "-walk", m.name),
+        )
+    step = guildcorps.Step(
+        m.name,
+        guildlevel.ACTION,
+        int(orb.spawn),
+        said,
+        rows=(
+            guildcorps.Row(
+                "quest",
+                "%s %d" % (classquest.USE_OBJECT, int(orb.entry)),
+                "",
+                source_for(guildlevel.ORB_ACTION, m.name),
+            ),
+        ),
+        walk=walk,
+        goal=spot.name,
+    )
+    return step, said, ""
 
 
 def level_cross_step(m, choice, why, recent):
@@ -3820,6 +3891,62 @@ def hearth_step(m):
         0,
         "%s hearths home: its last walk to a vendor could not start" % m.name,
         rows=(guildcorps.Row("hearth", "use", "", source_for("hearth", m.name)),),
+    )
+
+
+# A MEMBER THAT CANNOT LEAVE A SPOT HEARTHS HOME (2026-10-10). Highlights, a
+# level 7 Blood Elf of Bonkers, stood at one point in Eversong Woods for 10.8
+# hours played at her level while her own AI gave up 119 walks "stuck when moving
+# far" from that point; Diggo, Dug and Totta of Cave stood the same way. No step
+# reached them: no job was left, no zone was outgrown and the pass read no
+# position history (standstill.py). A player whose character will not move uses
+# the hearthstone, and its own AI starts again at the inn.
+def stood_still_step(m, still_for, recent, leveling=None):
+    """The hearth of a member that has stood on one spot (standstill.track)
+    for standstill.STILL_MINUTES with nothing asked of it, or None.
+
+    Only a member online, alive and out of combat, below the level cap, on a
+    continent or in the starting lands (never inside an instance), that is no
+    roster family member (levelroute walks those), with no guild job row but
+    its own hearth written for it while it stood, and no hearth inside the
+    hearth cooldown."""
+    minutes = int(still_for or 0)
+    if minutes < standstill.STILL_MINUTES:
+        return None
+    if not (m.online and m.alive and not m.in_combat):
+        return None
+    if int(m.level) >= guildlevel.LEVEL_CAP:
+        return None
+    if m.name in getattr(leveling, "roster", ()):
+        return None
+    if not _in_the_open(m):
+        return None
+    # Its own hearth is held by the hearthstone's cooldown, not by the stand: a
+    # hearth refused for a cast or a fight is asked again an hour on.
+    if any(
+        r.name == m.name and r.action != "hearth" and int(r.age_minutes) < minutes
+        for r in recent or ()
+    ):
+        return None
+    if _cooling(m, "hearth", recent):
+        return None
+    return guildcorps.Step(
+        m.name,
+        "hearth",
+        0,
+        "%s hearths home: it has stood within %d yards of one spot for %d minutes "
+        "at level %d with nothing asked of it"
+        % (m.name, int(standstill.STILL_YARDS), minutes, int(m.level)),
+        rows=(guildcorps.Row("hearth", "use", "", source_for("hearth", m.name)),),
+    )
+
+
+def _in_the_open(m) -> bool:
+    """On one of the two continents or in the starting lands of map 530."""
+    if m.map_id is None:
+        return False
+    return int(m.map_id) in classic.CLASSIC_CONTINENTS or classic.is_starting_land(
+        m.map_id, m.zone_id
     )
 
 
