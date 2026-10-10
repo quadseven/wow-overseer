@@ -486,7 +486,9 @@ class TheOtherGuildPaysItsDues(unittest.TestCase):
 
 
 class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
-    def run_bank(self, cohort, purse, master="Zug", tabs=0, natural_names=None):
+    def run_bank(
+        self, cohort, purse, master="Zug", tabs=0, natural_names=None, others=20_000
+    ):
         world, log = {}, _Log()
         me = TheSelf(world)
         names = sorted(HORDE.names) if cohort else ALLIANCE
@@ -508,7 +510,7 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
                 "_fetch_guild_money": lambda n: [
                     {
                         "name": x,
-                        "money": purse if x == master else 20_000,
+                        "money": purse if x == master else others,
                         "in_guild": 1,
                     }
                     for x in n
@@ -536,7 +538,16 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
             }
         )
         ns = _load(
-            ["_guild_bank_once", "_plan_guild_setup", "_setup_buyer", *HELPERS], ns
+            [
+                "_guild_bank_once",
+                "_plan_guild_setup",
+                "_setup_buyer",
+                "_guild_master",
+                "_gold_waits_for_a_vault",
+                "_say_master_deposit",
+                *HELPERS,
+            ],
+            ns,
         )
         asyncio.run(ns["_guild_bank_once"](me, cohort))
         self.assertEqual([names], world.get("mid_run_names"))
@@ -564,11 +575,12 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
     def test_a_master_holding_the_price_walks_and_buys_it(self):
         world, me, _ = self.run_bank(HORDE, purse=1_200_000)
         self.assertEqual([("guild bank", "Zug", "at:1:3,3,3", "Zug")], me.claims)
-        # The tab, named so a stale count can never buy tab 1 (#496). No gold
-        # deposit follows: members keep the gold they earn (the operator,
-        # 2026-09-28, guildbank.MEMBER_GOLD_DEPOSITS).
+        # The tab, named so a stale count can never buy tab 1 (#496). Then the
+        # master banks what sits above the tab's price and its float (#775);
+        # the other members keep the gold they earn (the operator, 2026-09-28,
+        # guildbank.MEMBER_GOLD_DEPOSITS).
         self.assertEqual(
-            [("Zug", "bank buy-tab tab:0")],
+            [("Zug", "bank buy-tab tab:0"), ("Zug", "bank deposit 100000")],
             world["guild_rows"],
         )
 
@@ -579,10 +591,40 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
         self.assertEqual("Grug", world["vault_for"])
         self.assertEqual([("guild bank", "Grug", "at:1:3,3,3", None)], me.claims)
         self.assertEqual(
-            [("Grug", "bank buy-tab tab:1")],
+            [("Grug", "bank buy-tab tab:1"), ("Grug", "bank deposit 2400000")],
             world["guild_rows"],
         )
         self.assertFalse(any("tab 0 waits" in ln for ln in log.lines))
+
+    def test_grug_walks_to_the_vault_and_banks_the_guilds_gold(self):
+        """#775: Cave's vault held 155.0g for twelve days while Grug carried
+        45.7g; nothing deposited, because member deposits were off."""
+        world, me, log = self.run_bank(None, purse=457_496, master="Grug", tabs=1)
+        self.assertEqual([("guild bank", "Grug", "at:1:3,3,3", None)], me.claims)
+        self.assertEqual([("Grug", "bank deposit 357496")], world["guild_rows"])
+        self.assertTrue(
+            any(
+                ln.startswith("guild bank: Grug banks 35g 74s of the guild's gold")
+                for ln in log.lines
+            ),
+            log.lines,
+        )
+
+    def test_a_few_gold_waits_for_a_vault_the_master_passes(self):
+        purse = guildbank.FLOAT_COPPER + 50_000
+        world, me, log = self.run_bank(None, purse=purse, master="Grug", tabs=1)
+        self.assertEqual([], me.claims)
+        self.assertNotIn("guild_rows", world)
+        self.assertTrue(
+            any("under the 10g a trip is made for" in ln for ln in log.lines),
+            log.lines,
+        )
+
+    def test_the_other_members_keep_their_gold(self):
+        world, _me, _log = self.run_bank(
+            None, purse=457_496, master="Grug", tabs=1, others=5_000_000
+        )
+        self.assertEqual([("Grug", "bank deposit 357496")], world["guild_rows"])
 
     def test_a_master_short_of_the_next_tab_says_so_with_its_dues(self):
         world, _me, log = self.run_bank(None, purse=1_000_000, master="Grug", tabs=1)
