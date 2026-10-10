@@ -123,3 +123,28 @@ export function health(paths) {
 }
 
 export function currentReads() { return pollPaths.slice(); }
+
+// The one write, used only by the operator view after a person has confirmed
+// it. A JSON body to a path under the mount; a header (the Watcher's token)
+// when given. Never rejects: resolves to {ok, status, body, failed}, where
+// `body` is the server's JSON answer (its refusal sentence on a 4xx) or null,
+// and `failed` says why no answer came. A chat waits on the language model,
+// so the wait is longer than a read's.
+const POST_TIMEOUT_MS = 150000;
+
+export async function post(path, body, headers) {
+  try {
+    const r = await fetch(u(path), {
+      method: "POST",
+      cache: "no-store",
+      headers: Object.assign({ "Content-Type": "application/json" }, headers || {}),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(POST_TIMEOUT_MS),
+    });
+    let data = null;
+    try { data = await r.json(); } catch (err) { data = null; }
+    return { ok: r.ok, status: r.status, body: data, failed: "" };
+  } catch (err) {
+    return { ok: false, status: 0, body: null, failed: String((err && err.message) || err) };
+  }
+}
