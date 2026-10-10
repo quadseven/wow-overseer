@@ -213,6 +213,9 @@ LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT_SECONDS", "120"))
 # jev.mode, where they are documented.
 JEV_SHADOW_LIMIT = int(os.environ.get("JEV_SHADOW_LIMIT", "16"))
 JEV_RETENTION_DAYS = int(os.environ.get("JEV_RETENTION_DAYS", "30"))
+# The decision backend in use (#820): jev, clef or openai, from JEV_BACKEND.
+# Recorded on every judgment so backends can be compared row for row.
+JEV_ACTIVE_BACKEND = jev.backend_name()
 # How long a pass with a kind in act mode waits for Jev before the heuristic
 # acts without it: the client's own deadline, so a slow Jev costs a pass at
 # most that and never more. The answers still arrive and are recorded.
@@ -5900,6 +5903,7 @@ class Bridge(discord.Client):
         # heuristic keeps deciding, which is also what it does when Jev is
         # slow or down.
         self._jev = jev.Client.from_env()
+        self._jev.compare_sink = _jev_compare_sink
         # THE GUILD COORDINATOR (guildrun). The names of every member in a
         # guild run in flight, so the guild's own job passes leave them alone
         # while they are in a dungeon, and when the last group was formed.
@@ -21901,6 +21905,7 @@ def _create_jev_store() -> None:
             " mode VARCHAR(8) NOT NULL,"
             " facts VARCHAR(1000) NOT NULL DEFAULT '',"
             " acted VARCHAR(10) NOT NULL DEFAULT '',"
+            " backend VARCHAR(12) NOT NULL DEFAULT '',"
             " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
             " PRIMARY KEY (id), KEY idx_kind_time (kind, created_at),"
             " KEY idx_item (item_guid, id)"
@@ -21935,6 +21940,20 @@ def _create_jev_store() -> None:
                 "ADD COLUMN facts VARCHAR(1000) NOT NULL DEFAULT '' AFTER mode"
             )
             log.info("overseer_jev_judgment: added facts")
+        # `backend` arrived with the decision backends (#820): which model
+        # family gave the answer ('compare' rows carry the comparison
+        # backend's). A row written before it reads '' (Jev, the only one).
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() "
+            "  AND TABLE_NAME = 'overseer_jev_judgment' AND COLUMN_NAME = 'backend'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute(
+                "ALTER TABLE overseer_jev_judgment "
+                "ADD COLUMN backend VARCHAR(12) NOT NULL DEFAULT '' AFTER acted"
+            )
+            log.info("overseer_jev_judgment: added backend")
         cur.execute(
             "DELETE FROM overseer_jev_judgment "
             "WHERE created_at < NOW() - INTERVAL %s DAY",
@@ -21943,6 +21962,10 @@ def _create_jev_store() -> None:
         # What followed each override (jev_outcomes, #584), kept as long as
         # the judgments it follows.
         cur.execute(jev_outcomes.TABLE_SQL)
+        cur.execute(jev_outcomes.ACTED_COLUMN_SQL)
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute(jev_outcomes.ADD_ACTED_SQL)
+            log.info("overseer_jev_outcome: added acted")
         cur.execute(
             "DELETE FROM overseer_jev_outcome "
             "WHERE created_at < NOW() - INTERVAL %s DAY",
@@ -21973,8 +21996,8 @@ def _jev_outcome_history(kind: str, subject: str, score, wait_minutes: int) -> l
 
 
 def _record_jev_override(judgment, before: dict) -> None:
-    """One overseer_jev_outcome row for a judgment carried out over the
-    heuristic; nothing for any other (jev_outcomes.record_args)."""
+    """One overseer_jev_outcome row for every disagreement, whichever side
+    acted, and a sample of agreements (jev_outcomes.record_args, #820)."""
     args = jev_outcomes.record_args(judgment, before)
     if args is None:
         return
@@ -22019,13 +22042,16 @@ def _insert_jev_judgment(judgment) -> None:
     acted = str(getattr(judgment, "acted", "") or "")
     # Only the activity choice carries its facts (#216); every other kind ''.
     facts = str(getattr(judgment, "facts", "") or "")
+    backend = str(getattr(judgment, "backend", "") or JEV_ACTIVE_BACKEND)
+    jev.TALLY.agreement(judgment.kind, agree)
+    jev.TALLY.maybe_log()
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO overseer_jev_judgment (kind, subject, holder, "
             "item_guid, item_entry, item_name, heuristic, heuristic_why, jev, "
             "confidence, probabilities, agree, status, latency_ms, model, mode, "
-            "facts, acted) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-            "%s, %s, %s, %s, %s, %s, %s)",
+            "facts, acted, backend) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, "
+            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 judgment.kind, judgment.subject[:12], judgment.holder[:12],
                 judgment.item_guid, judgment.item_entry,
@@ -22034,9 +22060,40 @@ def _insert_jev_judgment(judgment) -> None:
                 judgment.confidence, judgment.probabilities_json() or None,
                 None if agree is None else int(agree), judgment.status[:16],
                 max(0, judgment.latency_ms), judgment.model[:40],
-                judgment.mode[:8], facts[:1000], acted[:10],
+                judgment.mode[:8], facts[:1000], acted[:10], backend[:12],
             ),
         )
+
+
+def _insert_jev_comparisons(rows: list) -> None:
+    """Comparison rows (jev.compare_rows): one per question, the comparison
+    backend's answer beside the active backend's, mode `compare`. They never
+    act; jevview keeps them out of the per-kind lines."""
+    with _connect() as conn, conn.cursor() as cur:
+        for row in rows:
+            probabilities = row.get("probabilities")
+            cur.execute(
+                "INSERT INTO overseer_jev_judgment (kind, subject, holder, "
+                "item_guid, item_entry, item_name, heuristic, heuristic_why, "
+                "jev, confidence, probabilities, agree, status, latency_ms, "
+                "model, mode, facts, acted, backend) VALUES (%s, '', '', 0, 0, "
+                "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'compare', '', '', %s)",
+                (
+                    row["kind"][:32], row["question"][:120],
+                    row["active_answer"][:40],
+                    ("active backend " + row["active_backend"])[:300],
+                    row["answer"][:40] or None, row["confidence"],
+                    json.dumps(probabilities, sort_keys=True)[:1000]
+                    if probabilities else None,
+                    None if row["agree"] is None else int(row["agree"]),
+                    row["status"][:16], max(0, row["latency_ms"]),
+                    row["model"][:40], row["backend"][:12],
+                ),
+            )
+
+
+async def _jev_compare_sink(rows: list) -> None:
+    await asyncio.to_thread(_insert_jev_comparisons, rows)
 
 
 # THE FAMILY STAND-IN (standin.py): one row per family, shared with the

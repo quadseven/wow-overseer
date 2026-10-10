@@ -841,7 +841,7 @@ class TheRecordAndTheCard(unittest.TestCase):
             def cursor(self):
                 return Cursor()
 
-        scope = {"_connect": Conn}
+        scope = {"_connect": Conn, "jev": jev, "JEV_ACTIVE_BACKEND": "jev"}
         exec(insert, scope)  # noqa: S102 - bridge.py's own source
         j = ask(
             facts(withheld=True), FakeJev(picks={"activity": ja.SELL}, confidence=0.8)
@@ -849,7 +849,7 @@ class TheRecordAndTheCard(unittest.TestCase):
         scope["_insert_jev_judgment"](j)
         sql, args = executed[0]
         self.assertEqual(sql.count("%s"), len(args))
-        self.assertEqual((args[-2], args[-1]), (j.facts, jev.JEV))
+        self.assertEqual((args[-3], args[-2], args[-1]), (j.facts, jev.JEV, "jev"))
         self.assertEqual(ja.KIND, args[0])
 
     def test_the_card_names_the_kind_and_shows_the_facts(self):
@@ -879,7 +879,7 @@ class TheRecordAndTheCard(unittest.TestCase):
     def test_the_card_reads_the_facts_and_survives_an_older_record(self):
         fetch = SERVER[SERVER.index("def _fetch_jev_view()") :]
         fetch = fetch[: fetch.index("\n\n\n")]
-        self.assertIn('for columns in ("acted, facts", "acted"):', fetch)
+        self.assertIn('"acted, facts, backend, latency_ms", "acted, facts", "acted"', fetch)
         self.assertIn("exc.args[0] == 1054", fetch)
 
 

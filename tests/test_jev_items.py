@@ -620,7 +620,7 @@ class BridgeWiringTest(unittest.TestCase):
             def cursor(self):
                 return Cursor()
 
-        scope = {"_connect": Conn}
+        scope = {"_connect": Conn, "jev": jev, "JEV_ACTIVE_BACKEND": "jev"}
         exec(insert, scope)  # noqa: S102 - bridge.py's own source
         judgment = tradechoice.Judgment(
             subject="Grog",
@@ -633,11 +633,11 @@ class BridgeWiringTest(unittest.TestCase):
         )
         self.assertFalse(hasattr(judgment, "acted"))
         scope["_insert_jev_judgment"](judgment)
-        self.assertEqual(executed[0][-1], "")
+        self.assertEqual(executed[0][-2], "")
         executed.clear()
         marked = replace(jev_items.heuristic_acted([_JUDGED])[0])
         scope["_insert_jev_judgment"](marked)
-        self.assertEqual(executed[0][-1], jev.HEURISTIC)
+        self.assertEqual(executed[0][-2], jev.HEURISTIC)
 
 
 if __name__ == "__main__":

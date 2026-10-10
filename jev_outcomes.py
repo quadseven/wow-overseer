@@ -8,6 +8,12 @@ to. jev_recovery is the pattern that works: record what followed each
 decision, then show the next question the recent outcomes of the same kind of
 choice. This module is that pattern made reusable.
 
+CONTROL ARM (#820). Every disagreement is recorded whichever side acted
+(`acted` = jev, heuristic or both), plus a sample of agreements
+(JEV_OUTCOME_AGREE_SAMPLE, default 0.1), so the outcome of Jev carried out
+can be set against the outcome of the heuristic on the same kind of
+question. Only `acted = 'jev'` rows are fed back into a question as history.
+
 HOW IT WORKS.
 
   record   When a kind's answer is carried out over the heuristic's
@@ -31,6 +37,13 @@ PURE: SQL and row shaping only; the bridge runs the statements.
 from __future__ import annotations
 
 import json
+import os
+import random
+
+# The share of AGREEMENTS recorded as a control arm (#820). Every
+# disagreement is recorded; without agreements beside them there is nothing
+# to compare an override's outcome with.
+DEFAULT_SAMPLE = 0.1
 
 HISTORY_LIMIT = 8
 
@@ -42,6 +55,7 @@ TABLE_SQL = (
     " chose VARCHAR(40) NOT NULL,"
     " instead_of VARCHAR(40) NOT NULL,"
     " confidence FLOAT NULL DEFAULT NULL,"
+    " acted VARCHAR(10) NOT NULL DEFAULT 'jev',"
     " before_state VARCHAR(255) NOT NULL DEFAULT '',"
     " outcome VARCHAR(255) NULL DEFAULT NULL,"
     " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
@@ -52,7 +66,18 @@ TABLE_SQL = (
 )
 INSERT_SQL = (
     "INSERT INTO overseer_jev_outcome (kind, subject, chose, instead_of, "
-    "confidence, before_state) VALUES (%s, %s, %s, %s, %s, %s)"
+    "confidence, before_state, acted) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+)
+# A table made before `acted` held only overrides, so the column defaults to
+# 'jev' for those rows.
+ACTED_COLUMN_SQL = (
+    "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+    "WHERE TABLE_SCHEMA = DATABASE() "
+    "  AND TABLE_NAME = 'overseer_jev_outcome' AND COLUMN_NAME = 'acted'"
+)
+ADD_ACTED_SQL = (
+    "ALTER TABLE overseer_jev_outcome "
+    "ADD COLUMN acted VARCHAR(10) NOT NULL DEFAULT 'jev' AFTER confidence"
 )
 OPEN_SQL = (
     "SELECT id, chose, instead_of, before_state, "
@@ -66,15 +91,39 @@ SCORE_SQL = (
 )
 HISTORY_SQL = (
     "SELECT subject, chose, instead_of, confidence, outcome FROM overseer_jev_outcome "
-    "WHERE kind = %s AND scored_at IS NOT NULL ORDER BY id DESC LIMIT %s"
+    "WHERE kind = %s AND scored_at IS NOT NULL AND acted = 'jev' "
+    "ORDER BY id DESC LIMIT %s"
 )
 
 
-def record_args(judgment, before: dict) -> tuple | None:
-    """INSERT_SQL's arguments for a judgment carried out over the heuristic,
-    or None for any other: only an override has an outcome to score."""
-    if getattr(judgment, "acted", "") != "jev" or not judgment.jev:
+def sample_rate(environ=None) -> float:
+    """JEV_OUTCOME_AGREE_SAMPLE as a probability; unreadable is the default."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get("JEV_OUTCOME_AGREE_SAMPLE", "") or "").strip()
+    if not raw:
+        return DEFAULT_SAMPLE
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_SAMPLE
+    return value if 0.0 <= value <= 1.0 else DEFAULT_SAMPLE
+
+
+def record_args(
+    judgment, before: dict, sample: float | None = None, rand=random.random
+) -> tuple | None:
+    """INSERT_SQL's arguments for a judgment Jev answered, or None.
+
+    Every disagreement is recorded, whoever acted; an agreement is recorded
+    at the sample rate. No answer from Jev has no outcome to score.
+    """
+    if not getattr(judgment, "jev", ""):
         return None
+    if judgment.jev == judgment.heuristic:
+        rate = sample_rate() if sample is None else sample
+        if rate <= 0.0 or rand() >= rate:
+            return None
+    acted = str(getattr(judgment, "acted", "") or "heuristic")
     return (
         judgment.kind[:32],
         judgment.subject[:24],
@@ -82,6 +131,7 @@ def record_args(judgment, before: dict) -> tuple | None:
         judgment.heuristic[:40],
         judgment.confidence,
         snapshot_text(before),
+        acted[:10],
     )
 
 
