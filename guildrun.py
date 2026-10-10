@@ -661,7 +661,8 @@ BLOCKED_DOORS = {
 # Aku'mai, the finder's finish. The module's data for it is mod-dungeon-clear
 # PR 19; drop this line in the deploy that rolls the worldserver with it.
 # Gnomeregan: Grubbis comes only with Blastmaster Emi Shortfuse's escort, and
-# the Workshop Door (gameobject 90858) takes the Workshop Key or lockpicking.
+# the Workshop Door (gameobject 90858) takes the Workshop Key or lockpicking
+# (#807).
 # Razorfen Kraul is not here: its derived boss order ends at Charlga
 # Razorflank, the finder's finish, with no scripted door on the way.
 NO_CLEAR_DATA = {
