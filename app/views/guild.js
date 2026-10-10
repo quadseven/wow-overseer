@@ -36,6 +36,7 @@ function base(ctx) { return "#/guilds/" + key(ctx); }
 
 const P = {
   guild: (ctx) => "/api/v2/guild?guild=" + key(ctx),
+  roster: () => "/api/v2/roster",
   series: (ctx) => "/api/v2/series?guild=" + key(ctx),
   runs: () => "/api/guildruns",
   ups: (ctx) => "/api/v2/dungeonups?family=" + family(ctx).toLowerCase(),
@@ -48,7 +49,7 @@ const P = {
 };
 
 const TAB_READS = {
-  progress: ["guild", "series"],
+  progress: ["guild", "series", "roster"],
   runs: ["guild", "runs", "ups", "timeline"],
   chronicle: ["guild", "runs", "chronicle", "loot", "recap", "council", "chat"],
 };
@@ -91,12 +92,18 @@ function kpis(ctx, g) {
   const levels = g.members.map((m) => m.level);
   const ghosts = g.members.filter((m) => m.ghost).length;
   const cq = g.class_quests;
+  // Stuck is the roster's reading (the Members page's), counted for this guild.
+  const roster = peek(P.roster(ctx));
+  const list = roster.data && Array.isArray(roster.data.members) ? roster.data.members : null;
+  const mine = list ? list.filter((m) => m.guild === g.guild) : null;
+  const stuck = mine ? mine.filter((m) => m.stuck).length : null;
+  const stuckSub = mine ? "of " + plural(mine.length, "member") + ", waiting on help" : roster.loading ? "reading the roster" : "the roster read did not answer";
   const tile = (label, v, sub, href, tone) => html`<a class="kpi g-kpi" href="${href}"><span class="k">${label}</span><span class="v"${tone ? raw(' data-gt="' + tone + '"') : ""}>${v}</span><span class="s">${sub}</span></a>`;
   return html`<div class="g-kpis">
 ${tile("Gaining XP", g.gaining.length + "/" + g.count, "a new level in the last 24h", q + "&sort=xp")}
 ${tile("Median level", levels.length ? median(levels) : notMeasured(), levels.length ? Math.min(...levels) + " to " + Math.max(...levels) : "", q + "&sort=lvl")}
 ${tile("Class quests done", n(cq.done), cq.open + " in progress, " + cq.blocked + " blocked", q)}
-${tile("Stuck", notMeasured(), "open the roster's stuck filter", q + "&stuck=1")}
+${tile("Stuck", stuck === null ? notMeasured() : stuck, stuckSub, q + "&stuck=1", stuck ? "warn" : "")}
 ${tile("Ghosts now", ghosts, g.deaths.total + " deaths in 24h", q + "&ghost=1", ghosts ? "bad" : "")}
 </div>`;
 }

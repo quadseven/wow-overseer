@@ -98,6 +98,14 @@ function draw(keepPlace) {
   const pull = pulling ? html`<div class="refreshing" role="status"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>Refreshing. Data was ${h.at ? ago((Date.now() - h.at) / 1000) : "not read yet"}.</div>` : "";
   main.innerHTML = html`${pull}${banner(h)}${module.render(ctx)}`.s;
   if (module.after) module.after(main, ctx);
+  // A view may widen its reads once its first data is in (a member page reads
+  // the roster first, then that member's own reads), so they are asked again
+  // after every draw and polling follows when they change.
+  const next = module.reads(ctx) || [];
+  if (next.join("\n") !== current.reads.join("\n")) {
+    current.reads = next;
+    api.watch(next, module.every || 15000);
+  }
   if (keepPlace) {
     window.scrollTo(0, y);
     if (focusKey) {
@@ -140,7 +148,7 @@ async function route() {
     window.scrollTo(0, 0);
     main.focus({ preventScroll: true });
   }
-  api.watch(reads, module.every || 15000);
+  api.watch(current.reads, module.every || 15000);
 }
 
 api.onChange((path, changed) => {

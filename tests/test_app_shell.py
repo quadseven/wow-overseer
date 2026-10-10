@@ -251,10 +251,31 @@ class TheServer(unittest.TestCase):
 
     def test_a_name_outside_the_roster_reads_only_the_roster(self):
         src = (APP / "views" / "member.js").read_text(encoding="utf-8")
+        # Until the roster is in and holds the name, only the roster is read:
+        # main.js widens the reads once it holds the name.
         self.assertIn(
-            'if (roster && !byName(roster.members).has(ctx.params.name)) return ["/api/v2/roster"];',
+            'if (!roster || !byName(roster.members).has(ctx.params.name)) return ["/api/v2/roster"];',
             src,
         )
+        main = (APP / "main.js").read_text(encoding="utf-8")
+        self.assertIn("module.reads(ctx)", main)
+
+    def test_ghosts_and_stuck_are_counted_from_the_roster_everywhere(self):
+        # The wall carries no ghost state, so Now said "Ghosts not measured"
+        # while Members listed ghosts; the guild's Stuck tile never counted.
+        views = APP / "views"
+        now = (views / "now.js").read_text(encoding="utf-8")
+        data = (views / "now" / "data.js").read_text(encoding="utf-8")
+        guild = (views / "guild.js").read_text(encoding="utf-8")
+        self.assertIn('"/api/v2/stuck", "/api/v2/roster"', now)
+        self.assertEqual(now.count('D.ghosts(ctx.get("/api/v2/roster"))'), 2)
+        self.assertIn('m.life === "ghost" || m.life === "dead"', data)
+        self.assertNotIn("m.ghost === true", now)
+        self.assertNotIn(
+            "m.ghost === true", (views / "map.js").read_text(encoding="utf-8")
+        )
+        self.assertIn('progress: ["guild", "series", "roster"]', guild)
+        self.assertNotIn('tile("Stuck", notMeasured()', guild)
 
     def test_nothing_still_points_at_the_classic_page(self):
         # Every section has its own view now: no stub, no link to /classic.

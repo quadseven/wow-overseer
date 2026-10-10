@@ -160,8 +160,10 @@ ${pips(r, "g-pips-lg")}
     if (e.target === scrim || e.target.closest('[data-sheet="close"]')) closeSheet();
   });
   document.addEventListener("keydown", onKey);
-  document.body.appendChild(scrim);
+  // Known before it is on the page, so anything that closes it from here on
+  // finds it.
   open = { scrim, back, onKey };
+  document.body.appendChild(scrim);
   const first = scrim.querySelector("button");
   if (first) first.focus({ preventScroll: true });
 }

@@ -8,7 +8,7 @@ import * as D from "./now/data.js";
 import * as streams from "./now/streams.js";
 import * as wm from "./now/worldmap.js";
 
-const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/map", "/shapes.json"];
+const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/v2/roster", "/api/map", "/shapes.json"];
 let foldOpen = null; // null: the default (open on desktop, closed on phone)
 
 function readLayout() {
@@ -44,11 +44,10 @@ function ghostChip(gh) {
 function chips(ctx, agendas) {
   const runs = D.runsInside(ctx.get("/api/guildruns"));
   const fresh = D.runsNewSince(ctx.get("/api/guildruns"), ctx.previousVisit);
-  const members = D.ok(ctx.get("/api/wall")) ? ctx.get("/api/wall").data.members || [] : [];
   const list = [
     stalledChip(agendas),
     stuckChip(D.stuck(ctx.get("/api/v2/stuck"))),
-    ghostChip(D.ghosts(members)),
+    ghostChip(D.ghosts(ctx.get("/api/v2/roster"))),
     runs ? chip("inside", plural(runs.length, "run") + " inside", runs.length ? "#/runs/" + runs[0].id : "#/guilds/cave/runs")
       : chip("inside", "Runs inside not measured", "#/guilds/cave/runs"),
   ];
@@ -132,14 +131,15 @@ function drawMiniMaps(main, ctx) {
     return;
   }
   const fams = D.families(wall.data);
+  const ghostNames = D.ghostNames(ctx.get("/api/v2/roster"));
   D.FAMILY_KEYS.forEach((f) => {
     const box = main.querySelector('[data-map-box="' + f + '"]');
     const link = main.querySelector('[data-minimap="' + f + '"]');
-    if (box) drawFamilyMap(box, link, f, fams.get(f) || [], map.data, shapes.data);
+    if (box) drawFamilyMap(box, link, f, fams.get(f) || [], map.data, shapes.data, ghostNames);
   });
 }
 
-function drawFamilyMap(box, link, fam, members, map, shapes) {
+function drawFamilyMap(box, link, fam, members, map, shapes, ghostNames) {
   const names = new Map(members.map((m) => [m.name, m]));
   const mine = (map.dots || []).filter((d) => names.has(d.name));
   const head = D.headOf(members, fam);
@@ -149,7 +149,7 @@ function drawFamilyMap(box, link, fam, members, map, shapes) {
     return;
   }
   const shape = shapes[at.continent];
-  const people = new Map(members.map((m) => [m.name, { family: true, color: m.class_colour, ghost: m.ghost === true, head: m.leader }]));
+  const people = new Map(members.map((m) => [m.name, { family: true, color: m.class_colour, ghost: ghostNames.has(m.name), head: m.leader }]));
   const dots = wm.dotsFor(shape, at.continent, mine, people);
   const c = at.continent === "1" ? "kal" : at.continent === "0" ? "ek" : "";
   if (link) link.setAttribute("href", "#/now/map" + (c ? "?c=" + c : ""));
@@ -182,8 +182,7 @@ function runsBlock(ctx) {
 
 function attention(ctx) {
   const st = D.stuck(ctx.get("/api/v2/stuck"));
-  const members = D.ok(ctx.get("/api/wall")) ? ctx.get("/api/wall").data.members || [] : [];
-  const gh = D.ghosts(members);
+  const gh = D.ghosts(ctx.get("/api/v2/roster"));
   const stuckText = st ? plural(st.list.length, "member") + " stuck" : html`Stuck ${notMeasured()}`;
   const longest = st && st.list.length ? (st.longest === null ? "since not measured" : "longest " + duration(st.longest)) : "";
   const ghostText = gh ? plural(gh.length, "ghost") + (gh.length ? ": " + gh.map((g) => g.name).join(", ") : "") : html`Ghosts ${notMeasured()}`;

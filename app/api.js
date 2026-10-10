@@ -54,7 +54,11 @@ export function load(path) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       const text = await r.text();
       const changed = text !== e.text;
-      if (changed) { e.data = JSON.parse(text); e.text = text; }
+      if (changed) {
+        let data;
+        try { data = JSON.parse(text); } catch (err) { throw new Error("not JSON from " + path); }
+        e.data = data; e.text = text;
+      }
       e.at = Date.now(); e.error = null; e.failures = 0;
       return changed;
     })
