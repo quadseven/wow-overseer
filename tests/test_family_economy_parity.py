@@ -119,6 +119,10 @@ class TheSelf:
         self.world.setdefault("mid_run_names", []).append(list(names))
         return False
 
+    async def _say_bank_forecast(self, names, cohort=None):
+        """The guild's bank forecast (bankforecast): read, never acted on here."""
+        self.world.setdefault("forecast_names", []).append(list(names))
+
     async def _settled_positions(self, names):
         return {n: {"map_id": 1} for n in names}
 

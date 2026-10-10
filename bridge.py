@@ -35,6 +35,7 @@ import bag_pressure
 import bag_upgrade
 import bank
 import bankbags
+import bankforecast
 import bankpolicy
 import chat
 import clearance
@@ -5868,6 +5869,8 @@ class Bridge(discord.Client):
         # crafters are on a mailbox walk right now.
         self._crafter_routed: dict = {}
         self._crafter_said: dict = {}
+        # family -> the signature of the bank forecast last logged for it.
+        self._bank_forecast_said: dict = {}
         self._crafter_walks: dict = {}
         # THE GUILD'S OWN POST (#625): who is on a walk to take its letters
         # out, and when each grounded walker last used its hearthstone.
@@ -11711,9 +11714,14 @@ class Bridge(discord.Client):
         if surplus_rows:
             vault, vault_room = bank.guild_room(
                 await asyncio.to_thread(_fetch_guild_bank_setup, names))
+        # PAST THE GUILD'S TARGET (bankforecast): never the vault, a guildmate
+        # only when its rung is short, and the house's own history for a price.
+        forecast = await asyncio.to_thread(_bank_forecast, names)
         routes = clearance.plan(stacks, people, kept=kept, market=market,
                                 auction_open=auction_open, picks=crafting.picks,
-                                vault=vault, vault_room=vault_room)
+                                vault=vault, vault_room=vault_room,
+                                over_target=forecast.over_target,
+                                fair=forecast.fair, short=forecast.short)
         log.info("clearance: %d gem, recipe and surplus material stack(s) - %s",
                  len(routes),
                  ", ".join("%s %d" % pair
@@ -12814,7 +12822,12 @@ class Bridge(discord.Client):
         family under the gold float can still have full bags.
         """
         names, leader = await asyncio.to_thread(_family_of, cohort)
-        if not names or await self._mid_run(names):
+        if not names:
+            return
+        # WHAT THE GUILD NEEDS, AND WHAT IT CAN LET GO (bankforecast). Read
+        # fresh once a cycle, logged when it changes, mid-run or not.
+        await self._say_bank_forecast(names, cohort)
+        if await self._mid_run(names):
             return
         setup = await asyncio.to_thread(_fetch_guild_bank_setup, names)
         purchased_tabs = int(setup["purchased_tabs"]) if setup else 0
@@ -13031,6 +13044,31 @@ class Bridge(discord.Client):
         log.info("guild bank: queued %d/%d deposit(s), leader=%s aimed at %s%s",
                  len(fresh), len(deposits), leader, vault.aim,
                  _family_label(cohort))
+
+    async def _say_bank_forecast(self, names: list, cohort=None) -> None:
+        """Log the guild's bank forecast: a headline and one line per item.
+
+        Only when it differs from the last one logged for this family, so a
+        ten-minute cycle does not bury the log under the same seventy lines.
+        THE VAULT'S OWN STACKS CANNOT LEAVE IT YET: mod-overseer has no verb
+        that takes an item out of a guild bank tab, so a give, a listing or a
+        sale of a vault stack is the plan, and the line says it waits.
+        """
+        forecast = await asyncio.to_thread(_bank_forecast, names, True)
+        lines = [line.summary for line in forecast.lines]
+        lines += [d.line for d in forecast.decisions() if d.action == bankforecast.GIVE]
+        signature = hash(tuple(lines))
+        key = tuple(sorted(names))
+        if not lines or self._bank_forecast_said.get(key) == signature:
+            return
+        self._bank_forecast_said[key] = signature
+        moving = [d for d in forecast.decisions() if d.action != bankforecast.KEEP]
+        log.info("bank forecast: %s%s%s", forecast.headline(),
+                 "; the vault's %d give, list and vendor decision(s) wait for an "
+                 "item withdrawal verb in mod-overseer" % len(moving) if moving else "",
+                 _family_label(cohort))
+        for line in lines:
+            log.info("bank forecast: %s", line)
 
     async def _guild_bank_passing_once(self, cohort=None) -> None:
         """The quick look: deposit for whoever stands at a vault, nothing else.
@@ -26201,6 +26239,9 @@ def _plan_bank(names: list) -> "bank.Plan":
         guild_later=dict(_GUILD_BANK_KEEPS),
         policy=_bank_policy(names),
         spare=_bank_spare(names),
+        # WHAT THE GUILD ALREADY HOLDS PAST ITS TARGET NEVER GOES TO THE
+        # GUILD VAULT (bankforecast); the holder's own bank takes it as before.
+        over_target=_bank_forecast(names).over_target,
     )
     # WHILE A CAMPAIGN WAITS, BAGS ARE KEPT AT RUN ROOM: a member short of
     # the resume floor puts its trade goods down, and nothing is fetched back
@@ -26212,6 +26253,42 @@ def _plan_bank(names: list) -> "bank.Plan":
         bank.members_from_rows(rows, names), bank.family_from_skills(held),
         storage=storage, room_floor=room_floor,
     )
+
+
+# THE GUILD'S BANK FORECAST, READ ONCE PER GUILD BANK CYCLE PER FAMILY
+# (bankforecast). The keeper rule and clearance ask it on every plan; the
+# answer moves only as members climb and stock is eaten.
+BANK_FORECAST_SECONDS = 600.0
+_BANK_FORECAST_CACHE: dict = {}
+
+
+def _bank_forecast(names: list, fresh: bool = False) -> "bankforecast.Forecast":
+    """The forecast for the guild of `names`, cached; blocking.
+
+    A forecast that cannot be read is empty, which keeps every pass on the
+    behaviour it had before the forecast existed: nothing is held back from a
+    bank and nothing is sold on its word.
+    """
+    key = tuple(sorted(str(n) for n in names or ()))
+    if not key:
+        return bankforecast.Forecast()
+    now = time.monotonic()
+    hit = _BANK_FORECAST_CACHE.get(key)
+    if not fresh and hit is not None and now - hit[0] < BANK_FORECAST_SECONDS:
+        return hit[1]
+    try:
+        teams = _fetch_teams(list(key)[:1])
+        house = auction.TEAM_HOUSE.get(teams.get(key[0], ""), 0)
+        with _connect() as conn, conn.cursor() as cur:
+            facts = bankforecast.read(cur, list(key))
+        forecast = facts.plan(house)
+    except (pymysql.err.MySQLError, OSError):
+        # THE READ'S OWN FAILURES ONLY: a bug in the model raises, and the
+        # pass's loop logs it, rather than passing for an empty forecast.
+        log.exception("bank forecast: unreadable; nothing is held back on its word")
+        forecast = bankforecast.Forecast()
+    _BANK_FORECAST_CACHE[key] = (now, forecast)
+    return forecast
 
 
 # THE BANK POLICY, READ ONCE A MINUTE OR TWO PER FAMILY (#320). Four passes

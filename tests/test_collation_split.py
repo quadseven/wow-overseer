@@ -127,6 +127,9 @@ COLLATIONS = {
     # Module-owned (2026_09_24_06_overseer_keep.sql), named in its own CREATE
     # TABLE the same way. The bridge reads it, joined to `characters` by name.
     "overseer_keep": "utf8mb4_unicode_ci",
+    # Read on the dev realm's information_schema (2026-10-10), for the bank
+    # forecast's fair price (bankforecast.HISTORY_SQL).
+    "overseer_auction_history": "utf8mb4_unicode_ci",
     # Shared with the module (a family member's stand-in), named in
     # standin.TABLE_SQL as the module's own tables name theirs, so either side
     # may create it first and its names join the roster without a COLLATE.
@@ -320,6 +323,8 @@ STRING_COLUMNS = {
     "overseer_raid_spec": frozenset({"duty", "guild", "name", "tree"}),
     # From its own DDL (mod-overseer's 2026_09_24_06): every VARCHAR column.
     "overseer_keep": frozenset({"character_name", "reason"}),
+    # information_schema.COLUMNS on wow-dev (2026-10-10): every string column.
+    "overseer_auction_history": frozenset({"buyer_kind", "outcome", "seller_kind"}),
     # From its own DDL (mod-overseer's 2026_09_24_01): every VARCHAR column.
     "overseer_loot_council": frozenset(
         {

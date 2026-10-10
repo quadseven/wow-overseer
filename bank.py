@@ -590,6 +590,10 @@ class Storage:
     # guids of gear copies past what the family can wear (bankpolicy.redundant):
     # banked ones come out to be sold from the bags, never put back.
     spare: frozenset = frozenset()
+    # entry -> why, for every item the guild already holds past its reserve
+    # target (bankforecast.Forecast.over_target). The guild bank takes no
+    # more of it: the vault keeps what the guild will eat, not the overflow.
+    over_target: dict = field(default_factory=dict)
 
 
 def _trades_and_skills(held, worked_by):
@@ -657,6 +661,7 @@ def storage_from(
     guild_later=None,
     policy=None,
     spare=frozenset(),
+    over_target=None,
 ):
     """The Storage this family is today, from what the bridge already reads.
 
@@ -686,6 +691,7 @@ def storage_from(
         policy=dict(policy or {}),
         guild_tab_free=tabs,
         spare=frozenset(spare or ()),
+        over_target=dict(over_target or {}),
     )
 
 
@@ -996,6 +1002,16 @@ def _plan_deposits(member, candidates, storage, guild_room, visit_limit, notes):
             and not holding.bound
             and member.name in storage.guild_depositors
         )
+        if to_guild and holding.template_id in storage.over_target:
+            # THE VAULT KEEPS WHAT THE GUILD WILL EAT (bankforecast). Fourteen
+            # stacks of one tailor's linen filled Cave's tab past anything the
+            # guild ate in a fortnight; a stack past the target is the
+            # holder's to bank, list or sell, never the guild's to hoard.
+            notes.append(
+                "%s stays out of the guild bank: %s"
+                % (holding.item.name, storage.over_target[holding.template_id])
+            )
+            to_guild = False
         tab = _guild_tab_for(holding, storage, guild_room) if to_guild else None
         if to_guild and tab is None:
             notes.append(

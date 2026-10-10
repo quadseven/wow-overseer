@@ -42,6 +42,12 @@ The order for a surplus material stack is now
               vendor price.
     VENDOR    the last resort, when nobody can use it and nothing else takes it.
 
+PAST THE GUILD'S TARGET (bankforecast, 2026-10-10) a material takes a shorter
+road. The guild already holds more of it than it will eat over the forecast's
+horizon, so the vault is skipped, a guildmate takes it only when its current
+rung is short of it (`short`), and the house is asked at the fair price read
+from its own history (`fair`) when no live listing names one.
+
 A material never WAITs for an offline guildmate: cloth is not scarce enough to
 hold a full bag for, and the next pass asks again. The family is not a taker
 for a material either; `materials.py` owns hand-offs inside the family.
@@ -226,6 +232,9 @@ def route(
     busy=frozenset(),
     picks=None,
     vault=frozenset(),
+    over_target=None,
+    fair=None,
+    short=None,
 ) -> Route:
     """One stack's route. See the module docstring for the order.
 
@@ -242,8 +251,26 @@ def route(
 
     `vault` names the holders whose surplus the guild bank will take now: the
     guild has a tab with room and the holder's rank may deposit into it.
+
+    `over_target` maps an entry the guild holds past its reserve target to
+    why (bankforecast); `fair` an entry to a fair price per unit from the
+    house's history; `short` an entry to the members whose current rung is
+    short of it.
     """
     if stack.material:
+        past = (over_target or {}).get(stack.entry)
+        if past:
+            return _past_target_route(
+                stack,
+                people,
+                kept,
+                market,
+                auction_open,
+                busy,
+                past,
+                (fair or {}).get(stack.entry, 0),
+                frozenset((short or {}).get(stack.entry, ())),
+            )
         return _material_route(stack, people, kept, market, auction_open, busy, vault)
     pick = (picks or {}).get(stack.guid) if stack.recipe else None
     if pick is not None and pick.taker:
@@ -294,6 +321,33 @@ def _material_route(stack, people, kept, market, auction_open, busy, vault) -> R
             why="nobody can use %s, the guild bank has no room for it and the "
             "house does not pay enough; a vendor pays %d copper each"
             % (stack.name, stack.sell_price),
+        )
+    return Route(stack, KEEP, why="%s has no route and no vendor price" % stack.name)
+
+
+def _past_target_route(
+    stack, people, kept, market, auction_open, busy, over, fair, short
+) -> Route:
+    """GUILD to a short member, AUCTION at the live or fair price, then VENDOR,
+    for a material the guild holds past its reserve target. Never the vault."""
+    if stack.guid in kept:
+        return Route(stack, KEEP, why="another pass owns %s" % stack.name)
+    takers = [p for p in people if p.name in short and not p.family]
+    person, need = _first(stack, takers, family=False, online=True, skip=busy)
+    if person is not None:
+        return Route(
+            stack, GUILD, person.name, "%s, and its current rung is short of it" % need
+        )
+    price = (market or {}).get(stack.entry) or fair
+    listed = _listed(stack, {stack.entry: price} if price else {}, auction_open)
+    if listed is not None:
+        return Route(stack, AUCTION, why="%s; %s" % (listed.why, over))
+    if stack.sell_price > 0:
+        return Route(
+            stack,
+            VENDOR,
+            why="%s; nobody short of it can take it and the house does not pay "
+            "enough; a vendor pays %d copper each" % (over, stack.sell_price),
         )
     return Route(stack, KEEP, why="%s has no route and no vendor price" % stack.name)
 
@@ -375,6 +429,9 @@ def plan(
     picks=None,
     vault=frozenset(),
     vault_room=0,
+    over_target=None,
+    fair=None,
+    short=None,
 ) -> tuple:
     """Every stack's Route, holders in name order.
 
@@ -384,6 +441,7 @@ def plan(
 
     `vault_room` is tab 0's free slots: each BANK route takes one, and a
     material past the room goes on to the auction house or the vendor.
+    `over_target`, `fair` and `short` are `route`'s.
     """
     people = list(people)
     by_name = {p.name: p for p in people}
@@ -400,6 +458,9 @@ def plan(
             busy=frozenset(taken),
             picks=picks,
             vault=vault if vault_room > 0 else frozenset(),
+            over_target=over_target,
+            fair=fair,
+            short=short,
         )
         if got.route in GIVEN:
             taken.add(got.taker)
