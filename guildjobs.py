@@ -87,7 +87,10 @@ Tailoring in place of one gathering trade (`choose_tailors`). A member that
 holds either casts what the cloth in its own bags allows (`_craft_step`):
 Linen Bandage, then Bolt of Linen Cloth, each the recipe craft.py keeps for
 its skill value. Any other crafting trade craft.py covers is cast the same
-way from what the member carries (2026-10-05). It keeps the materials its
+way from what the member carries (2026-10-05). One member in five, never a
+tailor, takes Alchemy beside Herbalism (`choose_alchemists`): those are the
+alchemists guildcorps posts for the raid's potions, and before them nobody
+outside the family ever started the trade. It keeps the materials its
 next casts eat instead of posting them, and posts the rest as before. The
 trainer rows are `walk-to-trainer skill:` and the casts are `cast` rows:
 what a player does, paid for at a trainer.
@@ -258,6 +261,12 @@ RANKED_CRAFTS = (LEATHERWORKING, ALCHEMY)
 
 # One maintenance member in this many is a tailor: a crew of ten gives three.
 TAILOR_EVERY = 3
+
+# One maintenance member in this many is an alchemist: a crew of ten gives two,
+# the two guildcorps.ROLES asks for the raid's potions (#275). plan_corps fills
+# that post only from a member that already holds Alchemy, and nothing started
+# the trade outside the family, so both guilds' posts stood empty (2026-10-10).
+ALCHEMIST_EVERY = 5
 
 # A RECIPE A TRAINER ADDS TO THE BOOK BY ITSELF. Linen Bandage comes with
 # Apprentice First Aid and Bolt of Linen Cloth with Apprentice Tailoring
@@ -879,10 +888,48 @@ def choose_tailors(members) -> frozenset:
     return frozenset(out)
 
 
-def split_trades(members, tailors=frozenset()) -> dict:
+def choose_alchemists(members, tailors=frozenset()) -> frozenset:
+    """The maintenance members that take Alchemy, per guild.
+
+    One in ALCHEMIST_EVERY of a crew, rounded down as choose_tailors rounds
+    (a crew under five has none, a crew of ten has two), never a tailor. The
+    crew counted is the whole maintenance crew, tailors included; only the
+    choice skips them. A member that already
+    holds Alchemy comes first, then a herbalist with a primary slot to spare
+    (the herbs it gathers are what it brews), then the members with the
+    fewest primaries, by name. A member with both primary slots taken by
+    other trades is never asked to drop one.
+    """
+    crews = {}
+    for m in members or ():
+        if m.role == MAINTENANCE:
+            crews.setdefault(m.guild, []).append(m)
+    out = set()
+    for _guild, crew in sorted(crews.items()):
+        size = len(crew)
+        room = [
+            m
+            for m in crew
+            if m.name not in tailors
+            and (m.holds(ALCHEMY) or len(m.primaries) < MAX_PRIMARY)
+        ]
+        room.sort(
+            key=lambda m: (
+                not m.holds(ALCHEMY),
+                not m.holds(HERBALISM),
+                len(m.primaries),
+                m.name,
+            )
+        )
+        out.update(m.name for m in room[: size // ALCHEMIST_EVERY])
+    return frozenset(out)
+
+
+def split_trades(members, tailors=frozenset(), alchemists=frozenset()) -> dict:
     """name -> (skill, skill): the two gathering trades each maintenance
     member works, per guild. See TRADE SPLIT in the module docstring. A member
-    in `tailors` keeps one primary slot for Tailoring, so it gets one."""
+    in `tailors` or `alchemists` keeps one primary slot for that craft, so it
+    gets one; an alchemist's is Herbalism."""
     out = {}
     crews = {}
     for m in members or ():
@@ -894,34 +941,43 @@ def split_trades(members, tailors=frozenset()) -> dict:
         # learned a trade on its own keeps it and the split fills round it.
         counts = {s: sum(1 for m in crew if m.holds(s)) for s in GATHERING}
         for m in crew:
-            out[m.name] = _fill_gathering(m, counts, m.name in tailors)
+            out[m.name] = _fill_gathering(
+                m, counts, m.name in tailors, m.name in alchemists
+            )
     return out
 
 
-def _fill_gathering(m, counts, tailor) -> tuple:
+def _fill_gathering(m, counts, tailor, alchemist=False) -> tuple:
     """The gathering trades one member works: what it holds, then the trade the
-    crew has fewest of while a primary slot is left (a tailor keeps one back)."""
+    crew has fewest of while a primary slot is left (a tailor or an alchemist
+    keeps one back, and an alchemist's gathering trade is Herbalism)."""
     wanted = [s for s in GATHERING if m.holds(s)]
     others = [s for s in m.primaries if s not in GATHERING]
-    reserved = 1 if tailor and not m.holds(TAILORING) else 0
+    craft = (TAILORING if tailor else ALCHEMY) if (tailor or alchemist) else None
+    reserved = 1 if craft and not m.holds(craft) else 0
     room = max(0, MAX_PRIMARY - len(wanted) - len(others) - reserved)
     while room > 0:
         free = [s for s in GATHERING if s not in wanted]
         if not free:
             break
-        pick = min(free, key=lambda s: (counts[s], GATHERING.index(s)))
+        if alchemist and HERBALISM in free:
+            pick = HERBALISM
+        else:
+            pick = min(free, key=lambda s: (counts[s], GATHERING.index(s)))
         wanted.append(pick)
         counts[pick] += 1
         room -= 1
     return tuple(wanted)
 
 
-def cloth_trades(trades, tailors) -> dict:
-    """`split_trades` with the cloth trades added: Tailoring for a tailor and
-    First Aid, which takes no primary slot, for every maintenance member."""
+def cloth_trades(trades, tailors, alchemists=frozenset()) -> dict:
+    """`split_trades` with the crafting trades added: Tailoring for a tailor,
+    Alchemy for an alchemist, and First Aid, which takes no primary slot, for
+    every maintenance member."""
     return {
         name: tuple(gathering)
         + ((TAILORING,) if name in tailors else ())
+        + ((ALCHEMY,) if name in alchemists else ())
         + (FIRST_AID,)
         for name, gathering in (trades or {}).items()
     }
@@ -2229,7 +2285,10 @@ def plan(
     busy = {str(n) for n in busy or ()}
     pending = {str(n) for n in pending or ()}
     tailors = choose_tailors(members)
-    trades = cloth_trades(split_trades(members, tailors), tailors)
+    alchemists = choose_alchemists(members, tailors)
+    trades = cloth_trades(
+        split_trades(members, tailors, alchemists), tailors, alchemists
+    )
     trades.update(focus_trades(members, focus))
     tally = _focus_tally(members, focus)
     steps, lines, notes, helps = [], {}, [], []
