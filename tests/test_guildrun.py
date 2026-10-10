@@ -646,6 +646,9 @@ class NoRunFormsForADoorTheClearCannotFinish(unittest.TestCase):
 
     def test_the_held_doors_say_why(self):
         self.assertEqual(set(guildrun.NO_CLEAR_DATA), self.HELD)
+        # Each held keyword is a real door, so a typo cannot hold nothing.
+        keywords = {d.keyword for d in guildrun.doors()}
+        self.assertLessEqual(self.HELD, keywords)
         for keyword, why in guildrun.NO_CLEAR_DATA.items():
             self.assertTrue(why.strip(), keyword)
 
