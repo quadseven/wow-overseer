@@ -209,6 +209,13 @@ class TheLoopWakesForAChainRow(unittest.TestCase):
     def test_a_take_that_failed_does_not(self):
         self.assertFalse(self.run_step(step_of("take quest:12619"), answers=False))
 
+    def test_a_use_that_went_through_wakes_the_loop(self):
+        self.assertTrue(self.run_step(step_of("use-gameobject 190584")))
+        self.assertTrue(self.run_step(step_of("use-item-here item:38607")))
+
+    def test_a_use_that_failed_does_not(self):
+        self.assertFalse(self.run_step(step_of("use-gameobject 190584"), answers=False))
+
     def test_a_job_step_does_not(self):
         self.assertFalse(self.run_step(step_of("2964", action="job")))
 
