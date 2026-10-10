@@ -482,9 +482,9 @@ class TheLoopIsActuallyWired(unittest.TestCase):
         }
 
     def test_the_loop_is_registered_in_both_lists(self):
-        """setup_hook and the headless driver. A loop in only one runs only
-        under Discord, and wow-dev runs headless."""
-        self.assertEqual(self.source.count("self._recruit_loop,"), 2)
+        """One PASSES entry with no headless=False, so the gateway and the
+        headless paths both start it."""
+        self.assertEqual(self.source.count('_Pass("_recruit_loop"),'), 1)
 
     def test_the_pass_asks_the_pure_planner(self):
         self.assertIn("plan_recruit", self._names_in("_recruit_once"))

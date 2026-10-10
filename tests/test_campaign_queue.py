@@ -620,10 +620,8 @@ class NothingElseStompsTheQueue(unittest.TestCase):
         self.assertTrue(ns["_queue_owns_job"]())
 
     def test_the_loop_runs_and_the_store_is_created_in_both_starts(self):
-        self.assertEqual(2, BRIDGE.count("self._campaign_queue_loop,"))
-        self.assertEqual(
-            2, BRIDGE.count("await asyncio.to_thread(_ensure_queue_store)")
-        )
+        self.assertEqual(1, BRIDGE.count('_Pass("_campaign_queue_loop"),'))
+        self.assertEqual(1, BRIDGE.count("            _ensure_queue_store,\n"))
 
 
 class TheDiscordOrder(unittest.TestCase):

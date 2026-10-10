@@ -394,7 +394,7 @@ class TheWiring(unittest.TestCase):
         return BRIDGE[start : BRIDGE.index("async def _goal_thought")]
 
     def test_the_pass_is_scheduled_in_both_loop_lists(self):
-        self.assertEqual(BRIDGE.count("self._level_route_loop,"), 2)
+        self.assertEqual(BRIDGE.count('_Pass("_level_route_loop"),'), 1)
 
     def test_jev_is_asked_and_the_answer_recorded(self):
         body = self.pass_body()

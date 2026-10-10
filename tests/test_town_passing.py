@@ -248,14 +248,8 @@ class TheVaultLookDepositsOnlyForWhoeverIsAtAVault(unittest.TestCase):
 
 class TheLookRunsForEveryFamilyAndNeverWalks(unittest.TestCase):
     def test_the_loop_is_started_in_both_modes(self):
-        gateway = BRIDGE[
-            BRIDGE.index("self._loops = {") : BRIDGE.index("async def on_ready(")
-        ]
-        self.assertIn("self._town_passing_loop,", gateway)
-        headless = BRIDGE[
-            BRIDGE.index("loops = [") : BRIDGE.index('log.info("headless:')
-        ]
-        self.assertIn("self._town_passing_loop,", headless)
+        # No headless=False, so both start paths run it.
+        self.assertIn('    _Pass("_town_passing_loop"),\n', BRIDGE)
 
     def test_each_look_is_guarded_and_every_family_is_served(self):
         world, log = {}, _Log()

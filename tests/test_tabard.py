@@ -270,9 +270,9 @@ class TheGuardAsksWhetherItHappenedNotWhetherWeTried(unittest.TestCase):
         )
 
     def test_the_loop_is_registered_in_both_lists(self):
-        """setup_hook and the headless driver. A loop in only one runs only
-        under Discord, and wow-dev runs headless."""
-        self.assertEqual(BRIDGE.count("self._design_tabard,"), 2)
+        """One PASSES entry with no headless=False, so the gateway and the
+        headless paths both start it."""
+        self.assertEqual(BRIDGE.count('_Pass("_design_tabard"),'), 1)
 
 
 class TheSceneIsNotStagedToAnEmptyRoom(unittest.TestCase):

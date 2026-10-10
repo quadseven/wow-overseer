@@ -628,10 +628,9 @@ class TheBridgeActuallyCallsThisTest(unittest.TestCase):
         self.assertIn("\nimport guildshare\n", self.source)
 
     def test_the_loop_is_registered_in_both_schedulers(self):
-        # setup_hook and run_headless hold two literal tuples that must stay
-        # in step; a pass added to one and not the other is live in the
-        # Discord bridge and dark in the headless one, or the reverse.
-        self.assertEqual(self.source.count("self._guild_share_loop,"), 2)
+        # One PASSES entry with no headless=False: setup_hook and
+        # run_headless both start it.
+        self.assertEqual(self.source.count('_Pass("_guild_share_loop"),'), 1)
 
     def test_the_pass_writes_a_command_and_does_not_merely_log(self):
         body = self._body("async def _guild_share_once")

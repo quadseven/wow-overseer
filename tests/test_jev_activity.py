@@ -810,7 +810,7 @@ class TheQueueHoldsForAnInterlude(unittest.TestCase):
         )
 
     def test_the_loop_runs_in_both_starts(self):
-        self.assertEqual(2, BRIDGE.count("self._activity_loop,"))
+        self.assertEqual(1, BRIDGE.count('_Pass("_activity_loop"),'))
 
 
 class TheRecordAndTheCard(unittest.TestCase):

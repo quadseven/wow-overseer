@@ -224,9 +224,17 @@ class WiringTest(unittest.TestCase):
         }
 
     def test_the_council_loop_is_actually_started(self):
+        # Both start paths run PASSES; see tests/test_headless_bridge.py.
+        ast = self.ast
+        registry = next(
+            n
+            for n in self.tree.body
+            if isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "PASSES" for t in n.targets)
+        )
         self.assertIn(
             "_hold_council",
-            self._names_in("setup_hook"),
+            {n.value for n in ast.walk(registry) if isinstance(n, ast.Constant)},
             "the loop is defined but never scheduled",
         )
 

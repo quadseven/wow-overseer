@@ -575,7 +575,8 @@ class BridgeWiringTest(unittest.TestCase):
         )
 
     def test_the_record_is_created_at_both_start_ups(self):
-        self.assertEqual(BRIDGE.count("await asyncio.to_thread(_ensure_jev_store)"), 2)
+        # _ensure_stores, which both start paths call.
+        self.assertEqual(BRIDGE.count("            _ensure_jev_store,\n"), 1)
 
     def test_act_is_wired_and_read_per_kind(self):
         self.assertNotIn("act_supported=False", BRIDGE)

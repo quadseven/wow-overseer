@@ -540,9 +540,9 @@ class TheCallerIsWiredAndWritesOnlyAJobMode(unittest.TestCase):
         ]
 
     def test_the_loop_runs_under_the_gateway_and_headless_alike(self):
-        """Two lists, and a loop registered in only one of them is a feature
-        that silently does not exist in dev."""
-        self.assertEqual(self.source.count("self._craft_rhythm_loop,"), 2)
+        """One PASSES entry with no headless=False, so the gateway and the
+        headless paths both start it."""
+        self.assertEqual(self.source.count('_Pass("_craft_rhythm_loop"),'), 1)
 
     def test_the_only_write_is_a_job_mode(self):
         """NOT `travel_npc`, and this is a rule rather than an oversight: a

@@ -467,7 +467,7 @@ class TheBridge(unittest.TestCase):
         self.assertIsNone(slot.holder)
 
     def test_the_loop_runs_in_both_lists(self):
-        self.assertEqual(2, BRIDGE.count("self._movement_loop,"))
+        self.assertEqual(1, BRIDGE.count('_Pass("_movement_loop"),'))
         # A hearth that did not happen (error, or a cast that never started)
         # starts no cooldown.
         self.assertIn("AND status NOT IN ('error', 'unchanged') AND created_at", BRIDGE)

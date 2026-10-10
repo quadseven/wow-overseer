@@ -520,7 +520,7 @@ class TheBridgeWiring(unittest.TestCase):
         return ast.get_source_segment(BRIDGE, fn)
 
     def test_the_pickup_loop_is_registered_in_both_lists(self):
-        self.assertEqual(BRIDGE.count("self._crafter_mail_loop,"), 2)
+        self.assertEqual(BRIDGE.count('_Pass("_crafter_mail_loop"),'), 1)
 
     def test_clearance_routes_by_the_register(self):
         body = self.body("_clearance_plan")

@@ -521,11 +521,14 @@ class BridgeWiring(unittest.TestCase):
         """
         import ast
 
-        names = {
-            n.attr
-            for n in ast.walk(self._function("setup_hook"))
-            if isinstance(n, ast.Attribute)
-        }
+        # setup_hook starts every pass PASSES names (tests/test_headless_bridge.py).
+        registry = next(
+            n
+            for n in self._tree().body
+            if isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "PASSES" for t in n.targets)
+        )
+        names = {n.value for n in ast.walk(registry) if isinstance(n, ast.Constant)}
         self.assertIn("_sample_family", names)
 
     def test_the_optional_event_table_can_never_take_the_report_down(self):

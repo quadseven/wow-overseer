@@ -446,8 +446,9 @@ class TheBridgePass(unittest.TestCase):
         return ast.get_source_segment(BRIDGE, fn)
 
     def test_the_loop_is_registered_in_both_lists(self):
-        """setup_hook and the headless driver; wow-dev runs headless."""
-        self.assertEqual(BRIDGE.count("self._guild_dues_loop,"), 2)
+        """One PASSES entry with no headless=False, so the gateway and the
+        headless paths both start it."""
+        self.assertEqual(BRIDGE.count('_Pass("_guild_dues_loop"),'), 1)
 
     def test_the_pass_asks_the_pure_planner_for_the_pages_lineup(self):
         body = self.body("_guild_dues_once")

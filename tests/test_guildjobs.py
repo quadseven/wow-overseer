@@ -1210,7 +1210,7 @@ class TheBridgePass(unittest.TestCase):
         return ast.get_source_segment(BRIDGE, fn)
 
     def test_the_loop_is_registered_in_both_lists(self):
-        self.assertEqual(BRIDGE.count("self._guild_jobs_loop,"), 2)
+        self.assertEqual(BRIDGE.count('_Pass("_guild_jobs_loop"),'), 1)
 
     def test_the_pass_plans_through_the_pure_module(self):
         body = self.body("_guild_jobs_once")
