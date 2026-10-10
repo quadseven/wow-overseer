@@ -45,6 +45,8 @@ class BuildPayloadTest(unittest.TestCase):
         (dot,) = p["dots"]
         self.assertEqual(dot["continent"], "0")
         self.assertTrue(dot["instance"])
+        # The instance by name, never "inside an instance".
+        self.assertEqual(dot["zone"], "The Stockade")
 
     def test_unplaceable_rows_are_counted_not_dropped_silently(self):
         p = build_payload([row(), row(map_id=99999)], GEO)

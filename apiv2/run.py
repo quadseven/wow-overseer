@@ -22,9 +22,12 @@ _RUN_SQL = (
     "dungeon_jev, dungeon_confidence, composition_by, composition_jev, "
     "composition_confidence, prior_rate, prior_runs, state, outcome, why, deaths, "
     "seconds_inside, bosses_done, bosses_total, loot_items, loot_notable, "
-    "ilvl_gained, levels_gained, created_at, ended_at "
+    "ilvl_gained, levels_gained, created_at, ended_at, proposer "
     "FROM overseer_guild_run WHERE id = %s LIMIT 1"
 )
+# A world whose table predates `proposer` (who asked in guild chat) reads the
+# rest, and the run's first line says the row does not name the asker.
+_RUN_SQL_THIN = _RUN_SQL.replace(", proposer ", " ")
 
 
 def run_id(value: str) -> int | None:
@@ -49,7 +52,7 @@ def run(query: dict, ctx) -> tuple[int, dict]:
     try:
         with conn.cursor() as cur:
             rows = ctx.server._wide_guarded(
-                cur, _RUN_SQL, (wanted,), "", "overseer_guild_run"
+                cur, _RUN_SQL, (wanted,), _RUN_SQL_THIN, "overseer_guild_run"
             )
             if not rows:
                 return 404, {"error": "no such run", "id": wanted}

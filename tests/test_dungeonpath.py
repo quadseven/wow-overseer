@@ -301,7 +301,7 @@ class RunsAndUpgrades(unittest.TestCase):
         self.assertIn(
             {"text": "Cave: 3 of 71 gain", "tone": "up"}, step(path, 230)["chips"]
         )
-        self.assertIn("map 230 (3)", path["guild_upgrades"])
+        self.assertIn("Blackrock Depths (3)", path["guild_upgrades"])
 
     def test_no_guild_says_nothing_about_a_guild(self):
         path = build()

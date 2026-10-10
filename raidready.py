@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import bank
 import jobs
+import places
 import raidgear
 import raidgoals
 import raidlineup
@@ -623,8 +624,8 @@ def _cells(row: dict) -> list:
 def _where(member: dict) -> str:
     map_id = member.get("map")
     if map_id is None:
-        return "unknown"
-    place = CONTINENTS.get(int(map_id), "in an instance (map %d)" % int(map_id))
+        return "position not read"
+    place = CONTINENTS.get(int(map_id), "inside " + places.map_name(map_id))
     return place if member.get("online") else "%s, offline" % place
 
 

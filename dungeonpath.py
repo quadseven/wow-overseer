@@ -32,6 +32,7 @@ from dataclasses import dataclass
 
 import council
 import jobs
+import places
 
 DUNGEON = "dungeon"
 RAID = "raid"
@@ -566,7 +567,7 @@ def _step_name(step: Step, card: dict | None, names: dict) -> str:
         step.name
         or names.get(step.map_id)
         or (card.get("name") if card else None)
-        or "map %d" % step.map_id
+        or places.map_name(step.map_id)
     )
 
 
@@ -737,7 +738,7 @@ def runnable_line(portals: dict, names: dict) -> str:
         wings = len(_open_doors(portals[map_id]))
         if not wings:
             continue
-        name = names.get(map_id) or "map %d" % map_id
+        name = names.get(map_id) or places.map_name(map_id)
         listed.append(name if wings == 1 else "%s (%d wings)" % (name, wings))
     if not listed:
         return "The overseer cannot run any dungeon on its own yet."

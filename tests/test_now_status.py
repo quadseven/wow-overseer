@@ -133,7 +133,7 @@ class TheLogTapReadsTheBridgesOwnReasons(unittest.TestCase):
             "town slot: town errand takes the traveller Grug for 'at:0:-8815.2,652.9,94.9'; the column was free"
         )
         self.assertEqual((s.subject, s.scope), ("Grug", "character"))
-        self.assertIn("a spot on the map", s.doing)
+        self.assertEqual(s.doing, "Walking to Stormwind City on a town errand")
 
     def test_character_lines(self):
         s = self.one(
@@ -185,7 +185,9 @@ class TheIntentBookBecomesSteps(unittest.TestCase):
     def test_first_sighting_records_what_holds_now(self):
         got = nowstatus.intent_steps(None, self.row())
         self.assertEqual(len(got), 1)
-        self.assertIn("took over: walking to trigger 194", got[0].doing)
+        self.assertIn(
+            "the dungeon run took over: walking out of Shadowfang Keep", got[0].doing
+        )
 
     def test_same_walk_later_is_nothing(self):
         self.assertEqual(nowstatus.intent_steps(self.row(age=20), self.row(age=30)), [])
@@ -224,7 +226,7 @@ class TheSentenceNamesTheWork(unittest.TestCase):
         got = line_of("Zug", [took])
         self.assertEqual(
             got["line"],
-            "Doing: Walking to trigger 194 for the dungeon run. Waiting for: a way "
+            "Doing: Walking out of Shadowfang Keep for the dungeon run. Waiting for: a way "
             "there; the walk has ended and restarted 6 times (for 4 min).",
         )
         self.assertTrue(got["known"])
@@ -242,10 +244,12 @@ class TheSentenceNamesTheWork(unittest.TestCase):
         )
         lead = line_of("Grug", [held])
         self.assertIn(
-            "Waiting for: bag room (the vendor trip keeps the travel column) (for 4 min).",
+            "Waiting for: bag room (the vendor trip goes first and holds the leader's "
+            "walk) (for 4 min).",
             lead["line"],
         )
-        self.assertTrue(lead["line"].startswith("Doing: Walking to a spot on the map"))
+        self.assertTrue(lead["line"].startswith("Doing: Walking to "))
+        self.assertNotIn("a spot on the map", lead["line"])
         follower = line_of("Bork", [held])
         self.assertIn("Doing: Following Grug (9 yards behind).", follower["line"])
         self.assertIn("bag room", follower["line"])

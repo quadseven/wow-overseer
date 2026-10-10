@@ -68,6 +68,7 @@ import campaignplan
 import council
 import dungeonpath
 import jev
+import places
 import raidroles
 
 # --- the switch and the limits ---------------------------------------------
@@ -333,7 +334,7 @@ def why_not(
     # Where a member stands is read before its gear: a member left inside a
     # dungeon read as "gear too weak", which hid 50 of them (2026-10-04).
     if member.map_id not in OPEN_WORLD_MAPS:
-        return "inside an instance"
+        return "inside " + places.map_name(member.map_id)
     if not member.alive:
         return "dead"
     if member.in_combat:
@@ -1633,11 +1634,73 @@ ASKED, ANSWERED = "ask", "answers"
 
 
 def _asked_lines(view: dict) -> list:
-    who = view.get("proposer") or "a member"
+    who = view.get("proposer")
+    asked = (
+        "dungeon: %s asked for it in guild chat" % who
+        if who
+        else "dungeon: asked for in guild chat; this run's row does not name who asked"
+    )
     return [
-        "dungeon: %s asked for it in guild chat" % who,
-        "group: the guildmates who answered yes (%s)" % view["composition"],
+        asked,
+        "group: the guildmates who answered yes; %s"
+        % composition_words(view["composition"]),
     ]
+
+
+# How well a seat's member fits it (Member.fit), as Composition.key spells it.
+_FIT_WORDS = {"spec": "by spec", "class": "by class (not spec)"}
+
+
+def _seat_fit(word: str, seat: str) -> tuple:
+    fit, _, named = word.partition("-")
+    return (named or seat), _FIT_WORDS.get(fit, "fit not recorded (%s)" % fit)
+
+
+def composition_words(key: str) -> str:
+    """Composition.key, plus guildsocial's helper and pug counts, in words.
+
+    "spec-tank/spec-healer+1help" -> "seats: a tank and a healer chosen by
+    spec, plus 1 helper above the dungeon's levels". The key is what the
+    learning loop groups runs by; a reader needs the seats it describes.
+    """
+    key = str(key or "").strip()
+    if not key:
+        return "seats: not recorded on this run"
+    shape, *extras = key.split("+")
+    tank, _, healer = shape.partition("/")
+    tank_seat, tank_fit = _seat_fit(tank, "tank")
+    healer_seat, healer_fit = _seat_fit(healer, "healer")
+    if tank_fit == healer_fit:
+        said = "a %s and a %s chosen %s" % (tank_seat, healer_seat, tank_fit)
+    else:
+        said = "a %s chosen %s and a %s chosen %s" % (
+            tank_seat,
+            tank_fit,
+            healer_seat,
+            healer_fit,
+        )
+    if extras:
+        said += ", plus " + " and ".join(_extra_words(e) for e in extras)
+    return "seats: " + said
+
+
+def _extra_words(extra: str) -> str:
+    """ "1help" -> "1 helper above the dungeon's levels", "2pug" -> "2
+    pick-up players from outside the guild"."""
+    # The count leads ("2pug"); a digit later in a kind word is part of it.
+    digits = extra[: len(extra) - len(extra.lstrip("0123456789"))]
+    kind = extra[len(digits) :]
+    n = int(digits or 0)
+    if kind == "help":
+        return "%s above the dungeon's levels" % (_n(n, "helper") if n else "no helper")
+    if kind == "pug":
+        said = (
+            "%d pick-up player%s" % (n, "" if n == 1 else "s")
+            if n
+            else "no pick-up player"
+        )
+        return said + " from outside the guild"
+    return "%s (%s)" % (extra, "a seat kind this page does not know")
 
 
 def _run_lines(view: dict) -> list:
@@ -1656,7 +1719,7 @@ def _run_lines(view: dict) -> list:
             view["choice"]["jev"],
             view["choice"]["confidence"],
         )
-        + " (%s)" % view["composition"],
+        + "; %s" % composition_words(view["composition"]),
     ]
     if view["prior_runs"]:
         lines.append(
@@ -1744,13 +1807,22 @@ def _run_view(row: dict) -> dict:
     )
     ended_run = view["state"] == ENDED
     view["title"] = "%s - %s" % (view["guild"], view["place"])
-    view["band_line"] = "band %s" % view["band"]
+    view["band_line"] = band_words(view["band"])
+    view["composition_line"] = composition_words(view["composition"])
     view["status"] = view["outcome"] if ended_run else view["state"]
     view["tone"] = (
         "good" if view["outcome"] == CLEARED else ("bad" if ended_run else "")
     )
     view["lines"] = _run_lines(view)
     return view
+
+
+def band_words(band: str) -> str:
+    """ "20-24" -> "levels 20 to 24": the level band the run was formed for."""
+    low, _, high = str(band or "").partition("-")
+    if low.isdigit() and high.isdigit():
+        return "levels %s to %s" % (low, high)
+    return "level band %s" % band if band else "level band not recorded"
 
 
 def _place(keyword: str) -> str:
@@ -1777,7 +1849,8 @@ def page(rows: list) -> dict:
             "cleared": r.cleared,
             "rate": round(r.smoothed, 2),
             "words": r.words(),
-            "line": "%s, band %s, %s: %s" % (_place(k), b, c, r.words()),
+            "line": "%s, %s, %s: %s"
+            % (_place(k), band_words(b), composition_words(c), r.words()),
         }
         for (k, b, c), r in sorted(
             table.items(), key=lambda kv: (kv[0][1], kv[0][0], kv[0][2])

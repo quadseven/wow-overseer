@@ -52,7 +52,7 @@ function familyLine(m) {
     const head = D.headOf(fams.get(f) || [], f);
     const dot = head && (m.map.dots || []).find((d) => d.name === head.name);
     if (!dot) return f + "'s family is not placed";
-    if (dot.zone === "inside an instance") return f + "'s family is inside an instance";
+    if (dot.instance) return f + "'s family is inside " + dot.zone;
     const there = m.shapes[dot.continent];
     if (!there) return f + "'s family is off these maps";
     return f + "'s family is in " + wm.zoneLabel(there, dot.zone) + (dot.continent === m.cont ? "" : " (" + there.name + ")");

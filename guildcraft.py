@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import dungeonpath
 import goals
+import places
 import professions
 import recap
 
@@ -276,7 +277,7 @@ def _place(map_id, x, y, geo, names: dict) -> str:
     map_id = int(map_id)
     if map_id in CONTINENT_MAPS:
         return geo.zone_name(map_id, float(x), float(y))
-    return names.get(map_id) or "map %d" % map_id
+    return names.get(map_id) or places.map_name(map_id)
 
 
 def _chance_line(chance) -> str:
@@ -1389,7 +1390,7 @@ def _dungeon_card(map_id: int, items: dict, recipes: dict, names: dict, reads) -
     wanted_count = len([c for c in cards if c["needed_by"]])
     return {
         "map": map_id,
-        "name": names.get(map_id) or "map %d" % map_id,
+        "name": names.get(map_id) or places.map_name(map_id),
         "place": place,
         "level_line": level_line,
         "line": _dungeon_line(len(cards), rare_count, wanted_count, LISTED_PER_DUNGEON),

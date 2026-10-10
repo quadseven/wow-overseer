@@ -123,6 +123,26 @@ _RUNS_SQL = (
 )
 
 _QUEST_IN_COMMAND = re.compile(r"\bquest:(\d+)")
+# A class quest walk names the creature it walks to, not the quest
+# (`walk-to-spawn creature:39536`), so a blocked walk is named by its creature.
+_CREATURE_IN_COMMAND = re.compile(r"\bcreature:(\d+)")
+_CREATURE_NAMES_SQL = (
+    "SELECT entry AS id, name FROM acore_world.creature_template "
+    "WHERE entry IN ({holes})"
+)
+
+
+def walk_target(command: str, creatures: dict) -> str:
+    """The creature a blocked class quest walk was walking to, by name; an
+    entry the world database does not hold says so with its number."""
+    found = _CREATURE_IN_COMMAND.search(command or "")
+    if not found:
+        return ""
+    entry = int(found.group(1))
+    name = creatures.get(entry)
+    if name:
+        return "walking to " + name
+    return "walking to creature %d, which the world database does not hold" % entry
 
 
 # ---- pure shaping --------------------------------------------------------------
@@ -193,9 +213,17 @@ def blocked_steps(steps: list) -> dict:
 
 
 def class_quest_rows(
-    open_rows: list, blocked: dict, titles: dict, classes: dict
+    open_rows: list,
+    blocked: dict,
+    titles: dict,
+    classes: dict,
+    creatures: dict | None = None,
 ) -> list:
-    """Blocked first, then in progress; one blocked row per member."""
+    """Blocked first, then in progress; one blocked row per member.
+
+    A blocked step that names no quest (a walk to a creature) carries
+    `walk_to`, the creature by name, so the row is never a bare "quest not
+    measured"."""
     rows = []
     for name, step in sorted(blocked.items()):
         found = _QUEST_IN_COMMAND.search(step.get("command") or "")
@@ -213,6 +241,7 @@ def class_quest_rows(
                 "state": "blocked",
                 "note": _reason(step),
                 "at": int(step["at"]),
+                "walk_to": walk_target(step.get("command"), creatures or {}),
             }
         )
     taken = {(r["member"], r["quest_id"]) for r in rows}
@@ -346,6 +375,24 @@ def _ghost(name: str, death, zones: dict, maps: dict) -> dict:
     }
 
 
+def _walk_creatures(cur, blocked: dict) -> dict:
+    """entry -> name for the creatures the blocked walks name."""
+    wanted = sorted(
+        {
+            int(m.group(1))
+            for s in blocked.values()
+            for m in [_CREATURE_IN_COMMAND.search(s.get("command") or "")]
+            if m
+        }
+    )
+    if not wanted:
+        return {}
+    found = _all(
+        cur, _CREATURE_NAMES_SQL.format(holes=_holes(len(wanted))), tuple(wanted)
+    )
+    return {int(r["id"]): r["name"] for r in found}
+
+
 def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
     done = _all(cur, _CQ_DONE_SQL, (guild_id,))[0]
     open_rows = _all(cur, _CQ_OPEN_SQL, (guild_id, MAX_ROWS))
@@ -371,7 +418,9 @@ def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
             cur, _QUEST_TITLES_SQL.format(holes=_holes(len(wanted))), tuple(wanted)
         )
         titles = {int(r["id"]): r["title"] for r in found}
-    rows = class_quest_rows(open_rows, blocked, titles, classes)
+    rows = class_quest_rows(
+        open_rows, blocked, titles, classes, _walk_creatures(cur, blocked)
+    )
     return {
         "done": int(done["n"] or 0),
         "done_members": int(done["who"] or 0),

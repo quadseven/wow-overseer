@@ -45,7 +45,7 @@ import nowstatus
 import situation
 from panel import _CLASS_NAMES, _RACE_NAMES
 
-from . import presence
+from . import activity, presence
 from ._scope import guarded, holes
 
 # A class quest ask newer than this means the blocker still stands: the bridge
@@ -79,6 +79,7 @@ WHERE_SQL = (
 # "guildjobs:<job>:<name>", and the row's status is the realm's answer.
 JOBS_SQL = (
     "SELECT target_name AS name, source, command, status, detail, "
+    "LEFT(result, 600) AS result, "
     "UNIX_TIMESTAMP(created_at) AS at FROM overseer_command "
     "WHERE target_name IN ({holes}) AND source LIKE 'guildjobs:%%' "
     "AND created_at > NOW() - INTERVAL %s MINUTE ORDER BY id DESC"
@@ -218,7 +219,11 @@ def job_step(row: dict | None) -> str:
     if not row:
         return ""
     parts = str(row.get("source") or "").split(":")
-    job = parts[1].replace("-", " ") if len(parts) > 2 else ""
+    job = (
+        parts[1].replace("-", " ").replace("classquest", "class quest")
+        if len(parts) > 2
+        else ""
+    )
     return "Guild job: " + job if job else ""
 
 
@@ -226,8 +231,9 @@ def job_answer(row: dict | None) -> str:
     """The realm's answer to that job: its status, and why when it refused."""
     if not row:
         return ""
-    status, detail = str(row.get("status") or ""), str(row.get("detail") or "")
-    return status + (": " + detail if detail else "")
+    return activity.answer_words(
+        row.get("status"), row.get("detail"), row.get("result")
+    )
 
 
 # -------------------------------------------------------------------- stuck --

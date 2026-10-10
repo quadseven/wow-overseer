@@ -111,7 +111,7 @@ function levelLine(act, ser) {
 }
 
 function commandRows(list) {
-  return list.map((c) => html`<div class="pf-cmd"><span class="dim mb-s">${c.at ? new Date(c.at * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "time not measured"} | ${c.kind} | ${c.source}</span><span class="pf-cmdtext">${c.command}</span><span class="${c.status === "error" ? "warn mb-s" : "muted mb-s"}">${c.answer}</span></div>`);
+  return list.map((c) => html`<div class="pf-cmd"><span class="dim mb-s">${c.at ? new Date(c.at * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "time not measured"} | ${c.kind} | ${c.source}</span><span class="pf-cmdtext">${c.said || c.command}</span><span class="${c.status === "error" ? "warn mb-s" : "muted mb-s"}">${c.answer}</span></div>`);
 }
 
 function family(m, roster) {

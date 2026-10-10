@@ -56,6 +56,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import places
 from armory import QUALITY_NAMES, UNKNOWN_QUALITY, ItemBook, template_tooltip
 from core import _ALLIANCE_RACES, _HORDE_RACES
 from recap import LOOT_CAVEAT, first_equips, run_state, slots_for
@@ -166,7 +167,7 @@ MAP_NAMES = {map_id: entry["name"] for map_id, entry in DUNGEONS.items()}
 
 def dungeon_name(map_id: int) -> str:
     entry = DUNGEONS.get(map_id)
-    return entry["name"] if entry else "map %d" % map_id
+    return entry["name"] if entry else places.map_name(map_id)
 
 
 def boss_creatures(map_id: int) -> list[int]:

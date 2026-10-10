@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+import places
 from voice import MAX_SAY
 
 # Lower number wins the bounded LLM voice budget. Level ups are the rarest
@@ -63,10 +64,14 @@ def detect_events(prev: dict[str, dict], curr: dict[str, dict], geo) -> list[Eve
         if row["level"] > before["level"]:
             events.append(Event("level_up", name, {"level": row["level"]}))
         if row["zone_id"] != before["zone_id"]:
-            from_zone = geo.zone_name(
-                before["map_id"], before["pos_x"], before["pos_y"]
+            # The game's own spelling: zones.json files Orgrimmar as
+            # "Ogrimmar" and Shattrath as "ShattrathCity".
+            from_zone = places.zone_display(
+                geo.zone_name(before["map_id"], before["pos_x"], before["pos_y"])
             )
-            to_zone = geo.zone_name(row["map_id"], row["pos_x"], row["pos_y"])
+            to_zone = places.zone_display(
+                geo.zone_name(row["map_id"], row["pos_x"], row["pos_y"])
+            )
             # zones.json rectangles are coarser than zone_id; a transition
             # that resolves to the same name would narrate "left X for X",
             # which reads as a glitch rather than a journey. Skip those.
@@ -75,7 +80,12 @@ def detect_events(prev: dict[str, dict], curr: dict[str, dict], geo) -> list[Eve
                     Event(
                         "zone_change",
                         name,
-                        {"from_zone": from_zone, "to_zone": to_zone},
+                        {
+                            "from_zone": from_zone,
+                            "to_zone": to_zone,
+                            "from_map": before["map_id"],
+                            "to_map": row["map_id"],
+                        },
                     )
                 )
         died = before["health"] > 0 and row["health"] <= 0
@@ -118,11 +128,33 @@ def split_for_voicing(events: list[Event], cap: int) -> tuple[list[Event], list[
     return events[:cap], events[cap:]
 
 
+def crossing_words(data: dict) -> str:
+    """A zone change as a clause: "entered The Deadmines", "left The Deadmines
+    for Westfall", "crossed into The Barrens".
+
+    An instance is a place a character enters and leaves through a door, so
+    a crossing that starts or ends on one says so by name. Events written
+    before the maps were on the event carry only the zone names, and read as
+    a plain crossing.
+    """
+    into = places.is_instance(data.get("to_map"))
+    out_of = places.is_instance(data.get("from_map"))
+    if out_of:
+        return f"left {data['from_zone']} for {data['to_zone']}"
+    if into:
+        return f"entered {data['to_zone']}"
+    return f"crossed into {data['to_zone']}"
+
+
 def describe(event: Event) -> str:
     """Third-person clause handed to the model - data given, never asked."""
     if event.kind == "level_up":
         return f"reached level {event.data['level']}"
     if event.kind == "zone_change":
+        if places.is_instance(event.data.get("from_map")) or places.is_instance(
+            event.data.get("to_map")
+        ):
+            return crossing_words(event.data)
         return f"crossed from {event.data['from_zone']} into {event.data['to_zone']}"
     if event.kind == "death":
         return "collapsed, beaten down to nothing"
@@ -136,7 +168,7 @@ def template_line(event: Event) -> str:
     if event.kind == "level_up":
         return f"{event.name} reached level {event.data['level']}."
     if event.kind == "zone_change":
-        return f"{event.name} crossed into {event.data['to_zone']}."
+        return f"{event.name} {crossing_words(event.data)}."
     if event.kind == "death":
         return f"{event.name} fell in battle."
     if event.kind == "combat_entered":
