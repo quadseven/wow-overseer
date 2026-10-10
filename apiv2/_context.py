@@ -15,9 +15,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import realmread
+
 
 @dataclass(frozen=True)
 class Context:
-    read: Any
+    # rows() for a table a realm may not have yet (a schema gap reads as no
+    # rows); must() for one every realm has (a schema gap raises realmread.Gap).
+    read: realmread.Reader
     server: Any
     shared: Any = None
