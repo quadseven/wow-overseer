@@ -141,6 +141,47 @@ class TheSeries(unittest.TestCase):
         self.assertEqual(out["xp_per_hour"][-1], [NOW, 100])
         self.assertEqual(out["level"][-1][1], 15.5)
 
+    def test_a_member_rate_is_the_mean_of_its_measured_hours(self):
+        # Dings at now-10h and now-5h, 500 into 11 now: the first 14 hours
+        # are before any instant (null), then five at 200 and five at 100.
+        events = [
+            {"guid": 1, "old_level": 9, "new_level": 10, "at": NOW - 10 * H},
+            {"guid": 1, "old_level": 10, "new_level": 11, "at": NOW - 5 * H},
+        ]
+        char = {"guid": 1, "name": "Grug", "level": 11, "xp": 500}
+        out = series.member_series(char, events, self.TABLE, NOW)
+        self.assertEqual(out["xp_per_hour_24h"], 150)
+        self.assertEqual(out["xp_hours_measured"], 10)
+
+    def test_no_measured_hour_is_no_rate_not_zero(self):
+        self.assertEqual(
+            series.rate([[NOW, None], [NOW + H, None]]),
+            {"xp_per_hour_24h": None, "xp_hours_measured": 0},
+        )
+        char = {"guid": 2, "name": "Og", "level": 20, "xp": 0}
+        out = series.member_series(char, [], self.TABLE, NOW)
+        self.assertIsNone(out["xp_per_hour_24h"])
+        self.assertEqual(out["xp_hours_measured"], 0)
+
+    def test_a_guild_carries_every_members_rate_by_name(self):
+        chars = [
+            {"guid": 1, "name": "A", "level": 11, "xp": 200},
+            {"guid": 2, "name": "B", "level": 20, "xp": 0},
+        ]
+        events = [
+            {"guid": 1, "old_level": 9, "new_level": 10, "at": NOW - 30 * H},
+            {"guid": 1, "old_level": 10, "new_level": 11, "at": NOW - 5 * H},
+        ]
+        out = series.guild_series("Cave", chars, events, self.TABLE, NOW)
+        # A: 1000 XP over the 25 hours between the dings (40 an hour), then
+        # 200 over the last five (40 an hour): every hour measured, at 40.
+        self.assertEqual(
+            out["by_member"]["A"], {"xp_per_hour_24h": 40, "xp_hours_measured": 24}
+        )
+        self.assertEqual(
+            out["by_member"]["B"], {"xp_per_hour_24h": None, "xp_hours_measured": 0}
+        )
+
     def _answers(self):
         return [
             ("UNIX_TIMESTAMP() AS now", [{"now": NOW}]),
@@ -177,9 +218,11 @@ class TheSeries(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(body["name"], "Grug")
         self.assertEqual(body["xp_per_hour"][-1], [NOW, 100])
+        self.assertEqual(body["xp_per_hour_24h"], 150)
         self.assertTrue(ctx.conn.closed)
         code, body = series.series({"guild": ["cave"]}, Ctx(self._answers()))
         self.assertEqual((code, body["guild"], body["measured"]), (200, "Cave", 1))
+        self.assertEqual(body["by_member"]["Grug"]["xp_per_hour_24h"], 150)
 
     def test_the_handler_refuses_what_it_cannot_answer(self):
         self.assertEqual(series.series({}, Ctx())[0], 400)

@@ -2,9 +2,10 @@
 //
 // The header comes from /api/v2/roster (level, class, guild, zone, state), and
 // each tab reads only what it draws:
-//   Overview   stuck card or current step, item level, gold, bags, the level
-//              line of the last week and the latest commands
-//              (/api/v2/activity, /api/armory/member, /api/client/bags)
+//   Overview   stuck card or current step, XP per hour, item level, gold,
+//              bags, the level line of the last week and the latest commands
+//              (/api/v2/activity, /api/armory/member, /api/client/bags,
+//              /api/v2/series for XP per hour)
 //   Gear       the paperdoll card (/api/armory/member) and Standing
 //              (/api/v2/training); Upgrades is /api/v2/upgrades
 //   Quests     the class quest chains (/api/v2/classchain) and the quest log
@@ -33,7 +34,7 @@ function readsFor(name, tab) {
     case "bags": return ["/api/client/bags" + n];
     case "bank": return ["/api/client/bank" + n];
     case "activity": return ["/api/v2/activity" + n];
-    default: return ["/api/v2/activity" + n, "/api/armory/member" + n, "/api/client/bags" + n];
+    default: return ["/api/v2/activity" + n, "/api/armory/member" + n, "/api/client/bags" + n, "/api/v2/series" + n];
   }
 }
 
@@ -67,16 +68,30 @@ function stepCard(m, at) {
   return html`<div class="card"><span class="dim mb-s">Current step</span><span class="mb-b">${m.step || notMeasured()}</span>${m.line && m.line !== m.step ? html`<span class="muted mb-s">${m.line}</span>` : ""}${m.job && m.job !== m.step ? html`<span class="muted mb-s">${m.job}${m.job_answer ? ": " + m.job_answer : ""}</span>` : ""}</div>`;
 }
 
-function numbers(arm, bags) {
+// XP per hour over the last 24 hours, from /api/v2/series: the mean of the
+// hours it could measure, or null when it measured none (or did not answer).
+function xpRate(ser) {
+  const v = ser && ser.xp_per_hour_24h;
+  return v === null || v === undefined ? null : v.toLocaleString("en-US");
+}
+
+function xpLine(ser) {
+  const rate = xpRate(ser);
+  if (rate === null) return notMeasured();
+  const k = ser.xp_hours_measured;
+  return k && k < 24 ? rate + ", over the " + plural(k, "hour") + " measured" : rate;
+}
+
+function numbers(arm, bags, ser) {
   const g = arm && arm.member && arm.member.gear;
   const ilvl = g && g.average_item_level !== undefined ? g.average_item_level : null;
   const money = bags && bags.money ? bags.money.gold * 10000 + bags.money.silver * 100 + bags.money.copper : null;
   const fill = bags && bags.total ? Math.round((100 * bags.used) / bags.total) + "% full" : null;
   const cellOf = (k, v) => html`<div class="pf-num"><span class="dim mb-s">${k}</span><span class="mb-b num">${v === null || v === undefined ? notMeasured() : v}</span></div>`;
-  return html`<div class="card pf-nums">${cellOf("XP per hour", null)}${cellOf("Item level", ilvl)}${cellOf("Gold", money === null ? null : gold(money))}${cellOf("Bags", fill)}</div>`;
+  return html`<div class="card pf-nums">${cellOf("XP per hour", xpRate(ser))}${cellOf("Item level", ilvl)}${cellOf("Gold", money === null ? null : gold(money))}${cellOf("Bags", fill)}</div>`;
 }
 
-function levelLine(act) {
+function levelLine(act, ser) {
   if (!act) return pendingRead({ data: undefined }, 1);
   const start = act.start_level ?? act.level;
   // One value per hour over the window, so the line's x axis is time.
@@ -91,7 +106,7 @@ function levelLine(act) {
   }
   const gained = (act.level ?? 0) - (start ?? 0);
   const label = gained > 0 ? "Level rose from " + start + " to " + act.level + " over " + act.days + " days" : "No level gained in " + act.days + " days";
-  return html`<div class="card"><div class="row mb-between"><span class="dim mb-s">Level, last ${act.days} days</span><span class="muted mb-s">${gained > 0 ? "+" + plural(gained, "level") : "no change"}</span></div>${sparkline(values, { h: 64, fit: true, label })}<div class="row mb-between dim mb-s"><span>${act.days}d ago, L${start ?? "?"}</span><span>now, L${act.level ?? "?"}</span></div><span class="dim mb-s">XP per hour, 24h: ${notMeasured()}</span></div>`;
+  return html`<div class="card"><div class="row mb-between"><span class="dim mb-s">Level, last ${act.days} days</span><span class="muted mb-s">${gained > 0 ? "+" + plural(gained, "level") : "no change"}</span></div>${sparkline(values, { h: 64, fit: true, label })}<div class="row mb-between dim mb-s"><span>${act.days}d ago, L${start ?? "?"}</span><span>now, L${act.level ?? "?"}</span></div><span class="dim mb-s">XP per hour, 24h: ${xpLine(ser)}</span></div>`;
 }
 
 function commandRows(list) {
@@ -113,8 +128,9 @@ function overview(ctx, m, roster) {
   const act = read(ctx, "/api/v2/activity" + n);
   const arm = read(ctx, "/api/armory/member" + n);
   const bags = read(ctx, "/api/client/bags" + n);
+  const ser = read(ctx, "/api/v2/series" + n).data;
   const cmds = act.data ? (act.data.commands || []).slice(0, 3) : [];
-  return html`<div class="pf-grid"><div class="pf-col">${stepCard(m, roster.checked_at)}${numbers(arm.data, bags.data)}</div><div class="pf-col">${levelLine(act.data)}<div class="card"><span class="dim mb-s">Recent commands and answers</span>${act.data ? (cmds.length ? commandRows(cmds) : notMeasured("no commands recorded")) : pendingRead(act, 1)}<a href="${href(m.name, "activity")}">All activity</a></div></div></div>${family(m, roster)}`;
+  return html`<div class="pf-grid"><div class="pf-col">${stepCard(m, roster.checked_at)}${numbers(arm.data, bags.data, ser)}</div><div class="pf-col">${levelLine(act.data, ser)}<div class="card"><span class="dim mb-s">Recent commands and answers</span>${act.data ? (cmds.length ? commandRows(cmds) : notMeasured("no commands recorded")) : pendingRead(act, 1)}<a href="${href(m.name, "activity")}">All activity</a></div></div></div>${family(m, roster)}`;
 }
 
 // ---- Gear and Standing --------------------------------------------------------------------
