@@ -190,7 +190,7 @@ export default {
     const p = paths(fam);
     const agenda = ctx.get(p.agenda);
     const lead = D.ok(agenda) ? [agenda.data.headline, agenda.data.queue && agenda.data.queue.line].filter(Boolean).join(". ").replace(/\.\./g, ".") : "";
-    const pick = D.FAMILY_KEYS.map((f) => html`<a href="#/now/family/${f.toLowerCase()}"${f === fam ? raw(' aria-current="page"') : ""}>${f}'s family</a>`);
+    const pick = D.familyKeys().map((f) => html`<a href="#/now/family/${f.toLowerCase()}"${f === fam ? raw(' aria-current="page"') : ""}>${f}'s family</a>`);
     return html`<a class="back" href="#/now"><i class="ph ph-caret-left" aria-hidden="true"></i>Now</a>
 <div class="head-row"><h1>Family board</h1><nav class="seg" aria-label="Family">${pick}</nav></div>
 ${lead ? html`<p class="lead">${lead}</p>` : D.ok(agenda) ? "" : html`<p class="lead">${notMeasured("The agenda is not measured.")}</p>`}

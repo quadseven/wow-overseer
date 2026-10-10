@@ -22,6 +22,7 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
 import apiv2  # noqa: E402
+import families as families_module  # noqa: E402
 import guildgear  # noqa: E402
 import guildjobs  # noqa: E402
 from apiv2 import activity, classchain, members, training, upgrades  # noqa: E402
@@ -72,6 +73,14 @@ class FakeConn:
         pass
 
 
+def realm_of(fams, guildmates=()):
+    """families.Families over plain data: `fams`, all in one guild with
+    `guildmates`."""
+    everyone = [n for names in fams.values() for n in names]
+    store = families_module.MemoryStore(fams, {"Guild": everyone + list(guildmates)})
+    return families_module.Families(store, fallback=lambda: [])
+
+
 def server(families=None, guildmates=(), **extra):
     fams = families if families is not None else {"Grug": ["Grug", "Ugga"]}
 
@@ -81,9 +90,7 @@ def server(families=None, guildmates=(), **extra):
 
     ns = types.SimpleNamespace(
         _NAME_RE=__import__("re").compile(r"^[A-Za-z]{2,12}$"),
-        _fetch_families=lambda: fams,
-        _fetch_family_groups=lambda: list(fams.items()),
-        _is_family_guildmate=lambda name, names: name in guildmates,
+        FAMILIES=realm_of(fams, guildmates),
         _wide_guarded=wide,
         _LINEUP_GUILD="SELECT lineup guild ({holes})",
         _fetch_now_facts=lambda names: {},

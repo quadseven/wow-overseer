@@ -7,11 +7,6 @@ import { peek } from "../api.js";
 import { since, clock } from "../models/time.js";
 import { guildRuns, formedAt, endedAt, lastAt, bossText, chose, cause } from "../models/guildruns.js";
 
-export const GUILD_NAME = { cave: "Cave", bonkers: "Bonkers" };
-// Each guild's family (Grug's family plays in Cave, Zug's in Bonkers). The
-// guild read says the family it found too; the view checks the two agree.
-export const GUILD_FAMILY = { cave: "Grug", bonkers: "Zug" };
-
 export function titleCase(s) {
   return String(s || "").replace(/(^|[\s-])([a-z])/g, (m, a, b) => a + b.toUpperCase());
 }

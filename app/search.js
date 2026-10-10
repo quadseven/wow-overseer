@@ -5,6 +5,7 @@
 // quests, dungeons and runs.
 
 import { html, raw } from "./ui.js";
+import { families, guilds } from "./families.js";
 
 const providers = [];
 let scrim = null;
@@ -15,25 +16,22 @@ let lastFocus = null;
 
 export function addProvider(fn) { providers.push(fn); }
 
-const PAGES = [
+// The family and guild pages are the realm's own (families.js), listed when
+// a query is asked.
+const pages = () => [
   ["Now", "#/now", "Realm, families, live streams"],
-  ["Grug family", "#/now/family/grug", "Family board"],
-  ["Zug family", "#/now/family/zug", "Family board"],
+  ...families().map((f) => [f.key + " family", "#/now/family/" + f.slug, "Family board"]),
   ["World map", "#/now/map", "Where everyone is"],
   ["Server", "#/now/server", "Server tiers"],
-  ["Cave", "#/guilds/cave", "Guild progress"],
-  ["Bonkers", "#/guilds/bonkers", "Guild progress"],
-  ["Cave runs", "#/guilds/cave/runs", "Dungeon runs"],
-  ["Bonkers runs", "#/guilds/bonkers/runs", "Dungeon runs"],
-  ["Cave chronicle", "#/guilds/cave/chronicle", "Feed, loot, council, guild chat"],
-  ["Bonkers chronicle", "#/guilds/bonkers/chronicle", "Feed, loot, council, guild chat"],
+  ...guilds().map((g) => [g.name, "#/guilds/" + g.slug, "Guild progress"]),
+  ...guilds().map((g) => [g.name + " runs", "#/guilds/" + g.slug + "/runs", "Dungeon runs"]),
+  ...guilds().map((g) => [g.name + " chronicle", "#/guilds/" + g.slug + "/chronicle", "Feed, loot, council, guild chat"]),
   ["Roster", "#/members", "Every member"],
   ["Stuck members", "#/members?stuck=1", "Who is stuck and why"],
   ["Gear", "#/members/gear", "Paperdolls"],
   ["Upgrades", "#/members/gear/upgrades", "What to wear next"],
   ["Gear table", "#/members/gear/table", "Every member's gear"],
-  ["Molten Core, Cave", "#/raid/mc/cave", "Raid readiness"],
-  ["Molten Core, Bonkers", "#/raid/mc/bonkers", "Raid readiness"],
+  ...guilds().map((g) => ["Molten Core, " + g.name, "#/raid/mc/" + g.slug, "Raid readiness"]),
   ["Bags and gold", "#/economy", "Economy"],
   ["Auction house", "#/economy/auction", "Our listings"],
   ["Trades", "#/economy/trades", "Professions and recipes"],
@@ -43,7 +41,7 @@ const PAGES = [
 ];
 
 addProvider((q) => {
-  const rows = PAGES.filter(([name, , sub]) => (name + " " + sub).toLowerCase().includes(q))
+  const rows = pages().filter(([name, , sub]) => (name + " " + sub).toLowerCase().includes(q))
     .slice(0, 6).map(([name, href, sub]) => ({ name, href, sub }));
   return rows.length ? [{ label: "Pages", rows }] : [];
 });

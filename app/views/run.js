@@ -8,10 +8,11 @@
 import { html, raw, state, pendingRead, plural, member, readState } from "../ui.js";
 import { load, peek } from "../api.js";
 import {
-  GUILD_NAME, findRun, stateTag, pips, seatRows, steps, inside,
+  findRun, stateTag, pips, seatRows, steps, inside,
 } from "./_runs.js";
 import { toSeconds, fromClock, ageOf, nowSeconds, since, clock } from "../models/time.js";
 import { formedAt, endedAt, lastAt, bossText, chose, cause } from "../models/guildruns.js";
+import { guilds, guildSlug, firstGuild } from "../families.js";
 
 const THOUGHTS = 30;
 const SHOWN = 40;
@@ -21,7 +22,7 @@ function runPath(id) { return "/api/v2/run?id=" + encodeURIComponent(id); }
 function thoughtsPath(name) { return "/api/thoughts?name=" + encodeURIComponent(name) + "&limit=" + THOUGHTS; }
 
 function guildKey(r) {
-  return Object.keys(GUILD_NAME).find((k) => GUILD_NAME[k] === r.guild) || "cave";
+  return guildSlug(r.guild) || firstGuild();
 }
 
 // What the seats said between the run forming and coming back, oldest first.
@@ -93,7 +94,7 @@ export default {
     }
     if (!r) {
       return html`<header class="page-head"><h1>Not found</h1></header>
-${state("empty", "No run #" + ctx.params.id + " in the guild runs the realm has recorded.", raw('<a href="#/guilds/cave/runs">Cave runs</a> | <a href="#/guilds/bonkers/runs">Bonkers runs</a>'))}`;
+${state("empty", "No run #" + ctx.params.id + " in the guild runs the realm has recorded.", raw(guilds().map((g) => html`<a href="${"#/guilds/" + g.slug + "/runs"}">${g.name} runs</a>`.s).join(" | ")))}`;
     }
     const g = guildKey(r);
     const when = r.state === "inside" ? "started " + since(formedAt(r)) : since(lastAt(r));

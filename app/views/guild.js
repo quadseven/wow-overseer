@@ -1,8 +1,8 @@
 // Guilds: one guild's progress, its runs and its chronicle.
 //
-//   #/guilds/<cave|bonkers>             Progress
-//   #/guilds/<cave|bonkers>/runs        Runs
-//   #/guilds/<cave|bonkers>/chronicle   Chronicle
+//   #/guilds/<guild>                    Progress
+//   #/guilds/<guild>/runs               Runs
+//   #/guilds/<guild>/chronicle          Chronicle
 //
 // Reads: /api/v2/guild (header, tiles, class quests, deaths, the path),
 // /api/v2/series (guild XP per hour), /api/guildruns, /api/v2/dungeonups, /api/runtimeline, and for the
@@ -14,9 +14,8 @@ import {
   state, pendingRead, item, member, memberHref, plural, duration, classVar,
 } from "../ui.js";
 import { peek } from "../api.js";
-import {
-  GUILD_NAME, GUILD_FAMILY, runCard, bindRunCards, runHref, seatChips,
-} from "./_runs.js";
+import { runCard, bindRunCards, runHref, seatChips } from "./_runs.js";
+import { guilds, guildName, guildFamily } from "../families.js";
 import { since, toSeconds, fromClock } from "../models/time.js";
 import { guild as guildModel } from "../models/guild.js";
 import { roster as rosterModel } from "../models/roster.js";
@@ -33,8 +32,10 @@ const CQ_SHOWN = 8;
 const CHAT_SHOWN = 10;
 
 function key(ctx) { return ctx.params.guild; }
-function gname(ctx) { return GUILD_NAME[key(ctx)]; }
-function family(ctx) { return GUILD_FAMILY[key(ctx)]; }
+function gname(ctx) { return guildName(key(ctx)); }
+// The family that plays in this guild, as the realm reports it. The guild
+// read says the family it found too; the view checks the two agree.
+function family(ctx) { return guildFamily(key(ctx)); }
 function base(ctx) { return "#/guilds/" + key(ctx); }
 function model(ctx) { return guildModel(peek(P.guild(ctx))); }
 
@@ -71,7 +72,7 @@ function summary(ctx, g) {
 }
 
 function header(ctx, g) {
-  const pick = html`<div class="seg g-pick" role="group" aria-label="Guild">${Object.keys(GUILD_NAME).map((k) => html`<a href="${"#/guilds/" + k + (ctx.params.tab === "progress" ? "" : "/" + ctx.params.tab)}"${k === key(ctx) ? raw(' aria-current="page"') : ""}>${GUILD_NAME[k]}</a>`)}</div>`;
+  const pick = html`<div class="seg g-pick" role="group" aria-label="Guild">${guilds().map((g) => html`<a href="${"#/guilds/" + g.slug + (ctx.params.tab === "progress" ? "" : "/" + ctx.params.tab)}"${g.slug === key(ctx) ? raw(' aria-current="page"') : ""}>${g.name}</a>`)}</div>`;
   const facts = g
     ? html`${plural(g.count, "member")} | ${g.online} online | ${g.faction || notMeasured("faction not measured")}`
     : "";
@@ -477,7 +478,7 @@ export default {
   thumb(ctx) {
     return {
       label: "Guild",
-      items: Object.keys(GUILD_NAME).map((k) => ({ label: GUILD_NAME[k], href: "#/guilds/" + k + (ctx.params.tab === "progress" ? "" : "/" + ctx.params.tab), current: k === key(ctx) })),
+      items: guilds().map((g) => ({ label: g.name, href: "#/guilds/" + g.slug + (ctx.params.tab === "progress" ? "" : "/" + ctx.params.tab), current: g.slug === key(ctx) })),
     };
   },
 };

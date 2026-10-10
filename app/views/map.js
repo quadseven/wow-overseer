@@ -45,7 +45,7 @@ function model(ctx) {
 }
 
 function familyLine(m) {
-  const parts = D.FAMILY_KEYS.map((f) => {
+  const parts = D.familyKeys().map((f) => {
     const head = m.wall.head(f);
     const dot = head && (m.map.dots || []).find((d) => d.name === head.name);
     if (!dot) return f + "'s family is not placed";

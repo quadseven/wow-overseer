@@ -32,17 +32,27 @@ APP = HERE / "app"
 APP_FILES = sorted(p for p in APP.rglob("*") if p.suffix in (".js", ".css"))
 
 
-def node_module(module, script):
-    """Run `script` (ES module code) with `module` (a path under app/)
-    imported as M. The app is copied whole into a module package, so a
-    module's own imports (the read models' time.js, ui.js) resolve as they do
-    in the browser."""
+def node_module(module, script, realm=None):
+    """Run `script` (ES module code) with `module` (a file in app/) imported
+    as M. The app is copied whole beside a package.json saying it is ES
+    modules, so a module's own imports resolve whatever node's version.
+    `realm`, when given, is an /api/realm payload families.js learns first."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp) / "app"
         shutil.copytree(APP, root)
         (root / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+        learn = ""
+        if realm is not None:
+            learn = "import * as F from %s;\nF.learn(%s);\n" % (
+                json.dumps((root / "families.js").as_uri()),
+                json.dumps(realm),
+            )
         dst = root / module
-        code = "import * as M from %s;\n%s" % (json.dumps(dst.as_uri()), script)
+        code = "%simport * as M from %s;\n%s" % (
+            learn,
+            json.dumps(dst.as_uri()),
+            script,
+        )
         out = subprocess.run(
             [shutil.which("node"), "--input-type=module", "-e", code],
             capture_output=True,
@@ -412,6 +422,19 @@ class TheV2Namespace(unittest.TestCase):
         self.assertEqual(h.status(), 503)
 
 
+# The families and guilds /api/realm reports for a realm like the live one.
+REALM = {
+    "families": [
+        {"key": "Grug", "names": ["Grug", "Bork"]},
+        {"key": "Zug", "names": ["Zug", "Oz"]},
+    ],
+    "guilds": [
+        {"name": "Cave", "family": "Grug"},
+        {"name": "Bonkers", "family": "Zug"},
+    ],
+}
+
+
 @unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
 class TheRouter(unittest.TestCase):
     def test_every_old_address_has_a_new_home(self):
@@ -444,6 +467,7 @@ class TheRouter(unittest.TestCase):
             "router.js",
             "console.log(JSON.stringify(%s.map((h) => M.legacy(h))));"
             % json.dumps(list(cases)),
+            realm=REALM,
         )
         self.assertEqual(dict(zip(cases, got)), cases)
 
@@ -463,7 +487,7 @@ console.log(JSON.stringify([
   r("#/m/Grug/bags"), r("#/m/Grug/nope"), r("#/raid/mc"), r("#/raid/mc/bonkers"), r("#/economy/trades"),
   r("#/operator"), r("#/nothing"), r("")
 ]));"""
-        got = node_module("router.js", script)
+        got = node_module("router.js", script, realm=REALM)
         self.assertEqual(got[0], {"view": "now", "section": "now", "params": {}})
         self.assertEqual(got[1]["params"], {"family": "zug"})
         self.assertEqual(got[2], {"redirect": "#/now/family/grug"})
@@ -481,6 +505,63 @@ console.log(JSON.stringify([
         self.assertEqual(got[14]["view"], "operator")
         self.assertEqual(got[15]["view"], "notfound")
         self.assertEqual(got[16], {"redirect": "#/now"})
+
+    def test_the_families_and_guilds_are_the_realms_own(self):
+        """Another realm's names route the same way: nothing is written in."""
+        realm = {
+            "families": [{"key": "Ard", "names": ["Ard"]}],
+            "guilds": [{"name": "Ironpact", "family": "Ard"}],
+        }
+        script = """
+const r = (h) => M.resolve(M.parse(h));
+console.log(JSON.stringify([
+  r("#/guilds/ironpact"), r("#/guilds/cave"), r("#/now/family/grug"), r("#/raid/mc/ironpact"),
+  r("#/raid/mc"), M.legacy("#family"), M.legacy("#guild")
+]));"""
+        got = node_module("router.js", script, realm=realm)
+        self.assertEqual(got[0]["params"], {"guild": "ironpact", "tab": "progress"})
+        self.assertEqual(got[1], {"redirect": "#/guilds/ironpact"})
+        self.assertEqual(got[2], {"redirect": "#/now/family/ard"})
+        self.assertEqual(got[3]["params"], {"guild": "ironpact"})
+        self.assertEqual(got[4], {"redirect": "#/raid/mc/ironpact"})
+        self.assertEqual(got[5:], ["#/now/family/ard", "#/guilds/ironpact/runs"])
+
+    def test_before_the_realm_answers_a_route_keeps_its_slug(self):
+        script = """
+const r = (h) => M.resolve(M.parse(h));
+console.log(JSON.stringify([r("#/guilds/cave/runs"), r("#/guilds"), r("#/now/family/zug"), r("#/raid/mc")]));"""
+        got = node_module("router.js", script)
+        self.assertEqual(got[0]["params"], {"guild": "cave", "tab": "runs"})
+        self.assertEqual(got[1], {"redirect": "#/now"})
+        self.assertEqual(got[2]["params"], {"family": "zug"})
+        self.assertEqual(got[3], {"redirect": "#/now"})
+
+    def test_the_nav_lists_the_realms_families_and_guilds(self):
+        realm = {
+            "families": [{"key": "Ard", "names": ["Ard"]}],
+            "guilds": [{"name": "Ironpact", "family": "Ard"}],
+        }
+        got = node_module(
+            "shell.js",
+            "console.log(JSON.stringify([M.SUBS.now, M.SUBS.guilds, M.SUBS.raid]));",
+            realm=realm,
+        )
+        self.assertIn(["Ard family", "#/now/family/ard"], got[0])
+        self.assertEqual(got[1], [["Ironpact", "#/guilds/ironpact"]])
+        self.assertEqual(got[2], [["Ironpact", "#/raid/mc/ironpact"]])
+
+    def test_a_realm_answer_without_the_names_keeps_what_was_learned(self):
+        got = node_module(
+            "families.js",
+            """
+const before = M.learn({realm: "older server"});
+const after = M.learn({families: null, guilds: null});
+console.log(JSON.stringify([before, after, M.guildSlugs(), M.familyKeys(), M.guildFamily("bonkers")]));""",
+            realm=REALM,
+        )
+        self.assertEqual(
+            got, [False, False, ["cave", "bonkers"], ["Grug", "Zug"], "Zug"]
+        )
 
     def test_queries_round_trip(self):
         got = node_module(

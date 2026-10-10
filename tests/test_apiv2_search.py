@@ -18,6 +18,7 @@ sys.path.insert(0, str(HERE))
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import apiv2  # noqa: E402
+import families  # noqa: E402
 from apiv2 import search  # noqa: E402
 
 ROSTER = ["Grug", "Bork", "Zug"]
@@ -106,7 +107,9 @@ def answers(n=1):
 
 def server():
     return types.SimpleNamespace(
-        _all_roster_names=lambda: list(ROSTER),
+        FAMILIES=families.Families(
+            families.MemoryStore({ROSTER[0]: list(ROSTER)}), fallback=lambda: []
+        ),
         _MAP_CLASS_NAMES={1: "Warrior"},
         ITEMS=types.SimpleNamespace(icons={2589: "inv_fabric_linen_01"}),
         council=types.SimpleNamespace(

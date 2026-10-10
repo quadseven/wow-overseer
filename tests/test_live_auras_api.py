@@ -242,10 +242,10 @@ class AuraResponseContract(unittest.TestCase):
         handler = map_server.Handler.__new__(map_server.Handler)
         sent = []
         handler._send = lambda *args, **kwargs: sent.append(args)
-        with patch.object(map_server, "_fetch_families") as rosters:
+        with patch.object(map_server, "FAMILIES") as rosters:
             handler._auras({"name": ["arbitrary character"]})
         self.assertEqual(sent[0][0], 400)
-        rosters.assert_not_called()
+        rosters.families.assert_not_called()
 
 
 if __name__ == "__main__":

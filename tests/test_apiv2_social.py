@@ -7,7 +7,6 @@ database. It only ever reads.
 """
 
 import pathlib
-import re
 import sys
 import types
 import unittest
@@ -18,6 +17,7 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
 import apiv2  # noqa: E402
+import families as families_module  # noqa: E402
 import vclient  # noqa: E402
 from apiv2 import social  # noqa: E402
 from apiv2._context import Context  # noqa: E402
@@ -59,15 +59,21 @@ class FakeConn:
         pass
 
 
+def realm_of(fams, guildmates=()):
+    """families.Families over plain data: `fams`, all in one guild with
+    `guildmates`."""
+    everyone = [n for names in fams.values() for n in names]
+    store = families_module.MemoryStore(fams, {"Guild": everyone + list(guildmates)})
+    return families_module.Families(store, fallback=lambda: [])
+
+
 def server(families, guildmates=()):
     def wide(cur, sql, params=(), fallback="", what=""):
         cur.execute(sql, params)
         return list(cur.fetchall())
 
     return types.SimpleNamespace(
-        _NAME_RE=re.compile(r"^[A-Za-z]{2,12}$"),
-        _fetch_family_groups=lambda: list(families.items()),
-        _is_family_guildmate=lambda name, names: name in guildmates,
+        FAMILIES=realm_of(families, guildmates),
         _wide_guarded=wide,
     )
 

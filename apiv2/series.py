@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import statistics
 
-from apiv2 import _allow
+from apiv2 import _scope
 
 DAY = 86400
 HOUR = 3600
@@ -62,16 +62,11 @@ _NOW_SQL = "SELECT UNIX_TIMESTAMP() AS now"
 _XP_TABLE_SQL = (
     "SELECT Level AS level, Experience AS xp FROM acore_world.player_xp_for_level"
 )
-# Only a member of a managed guild (_allow): a name outside them reads as
-# unknown, in the same query that reads it.
-# S608: the only text joined in is a run of %s placeholders sized by the
-# allowlist; every value is bound by the driver.
-_MEMBER_SQL = (  # noqa: S608
-    "SELECT c.guid, c.name, c.level, c.xp FROM characters c "
-    "JOIN guild_member gm ON gm.guid = c.guid "
-    "JOIN guild g ON g.guildid = gm.guildid "
-    "WHERE c.name = %s AND g.name IN ({holes}) LIMIT 1"
-).format(holes=_allow.guild_holes())
+# Read only for a name _scope.may_answer has passed: a family member or a
+# member of a family guild.
+_MEMBER_SQL = (
+    "SELECT c.guid, c.name, c.level, c.xp FROM characters c WHERE c.name = %s LIMIT 1"
+)
 _GUILD_SQL = "SELECT guildid, name FROM guild WHERE name = %s LIMIT 1"
 # A guild holds at most a thousand members; the bound is the game's.
 MAX_MEMBERS = 1000
@@ -285,23 +280,26 @@ def series(query: dict, ctx) -> tuple[int, dict]:
     name, guild = _arg(query, "name"), _arg(query, "guild")
     if not name and not guild:
         return 400, {"error": "say name= or guild="}
-    # Refused before any query: only a managed guild, only a name's shape.
-    if name and not _allow.name(name):
+    # Refused before this read opens a connection: only a name's shape, only
+    # a family guild, and only a name the closed set answers for.
+    if name and not _scope.name_shaped(name):
         return 400, {"error": "name= is a character name"}
-    if not name and not _allow.guild(guild):
-        return 404, {"error": "no such guild", "guilds": sorted(_allow.GUILDS)}
+    if not name and not _scope.guild(ctx, guild):
+        return 404, _scope.no_such_guild(ctx)
+    if name and not _scope.may_answer(ctx, name):
+        return 404, {"error": "no such character", "name": name}
     conn = ctx.connect()
     try:
         with conn.cursor() as cur:
             now = float(_one(cur, _NOW_SQL)["now"])
             table = {int(r["level"]): int(r["xp"]) for r in _all(cur, _XP_TABLE_SQL)}
             if name:
-                char = _one(cur, _MEMBER_SQL, (name, *_allow.guild_args()))
+                char = _one(cur, _MEMBER_SQL, (name,))
                 if not char:
                     return 404, {"error": "no such character", "name": name}
                 events = _events(cur, [int(char["guid"])], now)
                 return 200, member_series(char, events, table, now)
-            row = _one(cur, _GUILD_SQL, (_allow.guild(guild),))
+            row = _one(cur, _GUILD_SQL, (_scope.guild(ctx, guild),))
             if not row:
                 return 404, {"error": "no such guild", "guild": guild}
             chars = _all(cur, _GUILD_MEMBERS_SQL, (row["guildid"], MAX_MEMBERS))

@@ -16,7 +16,8 @@ A read-only operations app for the realm: plain HTML, CSS and ES modules served 
 | `models/<payload>.js` | One read model per payload the views share: `roster.js` (/api/v2/roster), `guildruns.js` (/api/guildruns), `wall.js` (/api/wall), `guild.js` (/api/v2/guild). Each turns a read into named accessors, and answers null (not measured) until the read is ready. Tested under node in `tests/test_app_models.py`. |
 | `tooltip.js` | The one item tooltip, for any element with `data-item="<entry>"`. It reads `/api/item`. |
 | `search.js` | The search dialog and `addProvider(fn)`. |
-| `shell.js` | The sidebar, phone header and tab bar, data age, `setBadge`, and `setThumb` (the Cave/Bonkers switch on phone). |
+| `shell.js` | The sidebar, phone header and tab bar, data age, `setBadge`, and `setThumb` (the guild switch on phone). |
+| `families.js` | The realm's families and family guilds from `/api/realm`: the routes, the nav and the views draw these, never names written into the app. |
 | `badges.js` | Nav badge providers. |
 | `views/<name>.js` | One view per route kind. |
 | `views/<name>.css` | That view's own styles, listed in its `css`. |
@@ -39,7 +40,7 @@ export default {
     return html`${pageHead("Now")}<p>${realm.data.realm}</p>`;
   },
   after(main, ctx) {},                           // optional: bind events after a draw
-  thumb(ctx) { return null; },                   // optional: phone Cave/Bonkers switch
+  thumb(ctx) { return null; },                   // optional: phone guild switch
 };
 ```
 

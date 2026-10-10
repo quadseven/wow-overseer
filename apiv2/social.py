@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import vclient
 
-from ._scope import NOT_A_MEMBER, guarded, guild_member, holes, wanted_name
+from ._scope import NOT_A_MEMBER, guarded, may_answer, holes, wanted_name
 
 FAMILY_SQL = "SELECT name, level, class, race, online FROM characters WHERE name IN "
 GUILD_SQL = (
@@ -44,7 +44,7 @@ FRIENDS_SQL = (
 
 def family_of(ctx, name: str) -> tuple[str, list[str]]:
     """(family key, the family's names) for a member, or ("", [name])."""
-    for key, names in ctx.server._fetch_family_groups():
+    for key, names in ctx.server.FAMILIES.families().items():
         if name in names:
             return key, list(names)
     return "", [name]
@@ -80,7 +80,7 @@ def fetch(ctx, name: str, family_names: list[str]) -> dict:
 
 def social(query: dict, ctx) -> tuple[int, dict]:
     name = wanted_name(query)
-    if not guild_member(ctx, name):
+    if not may_answer(ctx, name):
         return 404, dict(NOT_A_MEMBER)
     key, names = family_of(ctx, name)
     payload = vclient.build_social(name, key, names, **fetch(ctx, name, names))

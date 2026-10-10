@@ -3,11 +3,11 @@
 // read models of their own (app/models/), and every time is read by
 // models/time.js, in unix seconds.
 
-import { FAMILIES } from "../../router.js";
 import { ready } from "../../ui.js";
 import { ageOf } from "../../models/time.js";
 
-export const FAMILY_KEYS = FAMILIES.map((f) => f.charAt(0).toUpperCase() + f.slice(1));
+// familyKeys(): "Grug", "Zug", every family the realm reports, default first.
+export { familyKeys } from "../../families.js";
 
 export function agendaPath(fam) { return "/api/agenda?family=" + encodeURIComponent(fam); }
 

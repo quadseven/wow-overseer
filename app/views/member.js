@@ -21,6 +21,7 @@ import {
 import { mountModels } from "./_model.js";
 import { byName, stuckFor } from "../models/roster.js";
 import { nowSeconds } from "../models/time.js";
+import { guildSlug } from "../families.js";
 
 const TABS = [["overview", "Overview"], ["gear", "Gear"], ["quests", "Quests"], ["bags", "Inventory"], ["activity", "Activity"]];
 const TAB_OF = { upgrades: "gear", bank: "bags" };
@@ -122,7 +123,7 @@ function family(m, roster) {
   const title = m.family ? m.family + "'s family" : "The families in " + (m.guild || "the guild");
   const g = all.filter((x) => x.guild === m.guild);
   const online = g.filter((x) => x.online).length;
-  const guildHref = /^(cave|bonkers)$/i.test(m.guild || "") ? "#/guilds/" + m.guild.toLowerCase() : "";
+  const guildHref = guildSlug(m.guild) ? "#/guilds/" + guildSlug(m.guild) : "";
   return html`<div class="pf-grid"><div class="card pf-list"><span class="dim mb-s">${title}</span>${mine.length ? mine.map((x) => html`<a class="pf-row" href="${href(x.name)}"><span class="mb-b" style="color:${classVar(x.class)}">${x.name}</span><span class="dim mb-s">L${x.level} ${x.class}</span></a>`) : notMeasured("no one else")}</div><div class="card"><span class="dim mb-s">Guild</span><span class="mb-b">${m.guild || notMeasured("no guild")}</span><span class="muted">${plural(g.length, "member")}, ${online} online</span>${guildHref ? html`<a href="${guildHref}">Open ${m.guild}</a>` : ""}</div></div>`;
 }
 

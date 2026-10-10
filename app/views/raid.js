@@ -1,4 +1,4 @@
-// Raid: Molten Core, one guild at a time (#/raid/mc/cave|bonkers).
+// Raid: Molten Core, one guild at a time (#/raid/mc/<guild>).
 //
 // Every sentence, tile, blocker, table cell and goal is the server's
 // (/api/raidgoals: raidready, raidsupply, raidgoals, raidrun, preraid). The
@@ -11,7 +11,7 @@
 // View state lives in the URL: ?view=group|gate&gate=<key>.
 
 import { html, raw, item, member, memberHref, notMeasured, pendingRead, state, plural, classVar } from "../ui.js";
-import { GUILDS } from "../router.js";
+import { guildSlugs, guildName } from "../families.js";
 
 const TEAMS = (g) => "/api/v2/raidteams?guild=" + g;
 const GOALS = "/api/raidgoals";
@@ -361,7 +361,7 @@ function summaryLine(card, teams, gates, raiders) {
 }
 
 function header(ctx, line, seats) {
-  const pick = GUILDS.map((g) => html`<a href="#/raid/mc/${g}"${g === ctx.params.guild ? raw(' aria-current="page"') : ""}>${cap(g)}</a>`);
+  const pick = guildSlugs().map((g) => html`<a href="#/raid/mc/${g}"${g === ctx.params.guild ? raw(' aria-current="page"') : ""}>${guildName(g)}</a>`);
   return html`<header class="page-head"><div class="raid-title"><h1>Molten Core</h1>${seats ? html`<span class="muted">${seats}</span>` : ""}<div class="seg raid-pick" role="group" aria-label="Guild">${pick}</div></div>${line ? html`<p class="summary">${line}</p>` : ""}</header>`;
 }
 
@@ -423,7 +423,7 @@ ${basis(goalsRead.data, card)}`;
     if (!ctx.isPhone) return null;
     const q = ctx.hash.indexOf("?");
     const keep = q < 0 ? "" : ctx.hash.slice(q);
-    return { label: "Guild", items: GUILDS.map((g) => ({ label: cap(g), href: "#/raid/mc/" + g + keep, current: g === ctx.params.guild })) };
+    return { label: "Guild", items: guildSlugs().map((g) => ({ label: guildName(g), href: "#/raid/mc/" + g + keep, current: g === ctx.params.guild })) };
   },
 };
 

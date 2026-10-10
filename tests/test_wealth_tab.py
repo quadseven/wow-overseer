@@ -179,7 +179,7 @@ class TheEndpoint(unittest.TestCase):
         """WHO the family is belongs to bonds. Accepting a roster would make
         this a general character query wearing a friendly name."""
         # Both families now (#88), and still from the roster alone.
-        self.assertIn("groups = _fetch_family_groups()", self.handler)
+        self.assertIn("groups = list(FAMILIES.families().items())", self.handler)
         self.assertIn(
             "wealth.build_wealth(**_fetch_wealth(names), icons=ITEMS.icons,",
             self.handler,

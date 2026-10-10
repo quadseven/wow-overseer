@@ -18,6 +18,7 @@ import {
 } from "./_members.js";
 import { mountModels } from "./_model.js";
 import { byName, stateOf } from "../models/roster.js";
+import { guilds } from "../families.js";
 
 const SLOT_WORDS = {
   head: "head", neck: "neck", shoulders: "shoulders", back: "back", chest: "chest", wrists: "wrists",
@@ -87,9 +88,10 @@ function paperdollTab(ctx) {
 function picker(roster, name) {
   const members = (roster && roster.members) || [];
   const fams = Object.keys((roster && roster.families) || {});
+  const guildNames = guilds().map((g) => g.name);
   const groups = fams.map((f) => [f + "'s family", members.filter((m) => m.family === f)])
-    .concat(["Cave", "Bonkers"].map((g) => [g, members.filter((m) => !m.family && m.guild === g)]))
-    .concat([["Other", members.filter((m) => !m.family && m.guild !== "Cave" && m.guild !== "Bonkers")]])
+    .concat(guildNames.map((g) => [g, members.filter((m) => !m.family && m.guild === g)]))
+    .concat([["Other", members.filter((m) => !m.family && !guildNames.includes(m.guild))]])
     .filter((g) => g[1].length);
   return html`<label class="up-pick"><span class="dim mb-s">Guild member</span><select class="input" id="up-pick">${groups.map(([label, list]) => html`<optgroup label="${label}">${list.map((m) => html`<option value="${m.name}"${m.name === name ? raw(" selected") : ""}>${m.name}</option>`)}</optgroup>`)}</select></label>`;
 }
@@ -190,7 +192,7 @@ function tableBody(gg, roster, q) {
 
 function guildChips(q) {
   const g = (q.guild || "").toLowerCase();
-  return html`<div class="row"><div class="row" role="group" aria-label="Guild">${[["", "Both guilds"], ["cave", "Cave"], ["bonkers", "Bonkers"]].map(([k, label]) => html`<button type="button" class="chip" data-guild="${k}" aria-pressed="${g === k ? "true" : "false"}">${label}</button>`)}</div><span class="dim mb-s gt-note">${gearNote(q)}</span></div>`;
+  return html`<div class="row"><div class="row" role="group" aria-label="Guild">${[["", guilds().length === 2 ? "Both guilds" : "All guilds"]].concat(guilds().map((x) => [x.slug, x.name])).map(([k, label]) => html`<button type="button" class="chip" data-guild="${k}" aria-pressed="${g === k ? "true" : "false"}">${label}</button>`)}</div><span class="dim mb-s gt-note">${gearNote(q)}</span></div>`;
 }
 
 function tableTab(ctx) {

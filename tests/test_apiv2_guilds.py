@@ -14,6 +14,7 @@ sys.path.insert(0, str(HERE))
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import apiv2  # noqa: E402
+import families  # noqa: E402
 import guildrun  # noqa: E402
 import recap  # noqa: E402
 from apiv2 import chronicle, dungeonups, guild, series  # noqa: E402
@@ -62,10 +63,27 @@ class FakeConn:
         self.closed = True
 
 
+# The realm every handler here answers inside: two families, each in its
+# own guild with a guildmate, and a guild no family plays in.
+FAMILIES = families.Families(
+    families.MemoryStore(
+        {"Grug": ["Grug", "Og"], "Zug": ["Zug", "Oz"]},
+        {
+            "Cave": ["Grug", "Og", "Bonk"],
+            "Bonkers": ["Zug", "Oz", "Crag"],
+            "Adventurer Union": ["Alianora"],
+        },
+    ),
+    fallback=lambda: [],
+)
+
+
 class Ctx:
     def __init__(self, answers=(), server=None):
         self.conn = FakeConn(list(answers))
-        self.server = server
+        self.server = server if server is not None else types.SimpleNamespace()
+        if not hasattr(self.server, "FAMILIES"):
+            self.server.FAMILIES = FAMILIES
         self.connects = 0
 
     def connect(self):
@@ -187,11 +205,11 @@ class TheSeries(unittest.TestCase):
             ("UNIX_TIMESTAMP() AS now", [{"now": NOW}]),
             ("player_xp_for_level", XP),
             (
-                # Only a member of a managed guild: the query carries the list.
-                "WHERE c.name = %s AND g.name IN",
+                # Read only for a name the closed set answers for.
+                "FROM characters c WHERE c.name = %s",
                 lambda a: (
                     [{"guid": 7, "name": "Grug", "level": 11, "xp": 500}]
-                    if a == ("Grug", "Cave", "Bonkers")
+                    if a == ("Grug",)
                     else []
                 ),
             ),
@@ -226,9 +244,10 @@ class TheSeries(unittest.TestCase):
 
     def test_the_handler_refuses_what_it_cannot_answer(self):
         self.assertEqual(series.series({}, Ctx())[0], 400)
-        self.assertEqual(
-            series.series({"name": ["Nobody"]}, Ctx(self._answers()))[0], 404
-        )
+        for outsider in ("Nobody", "Alianora"):
+            ctx = Ctx(self._answers())
+            self.assertEqual(series.series({"name": [outsider]}, ctx)[0], 404)
+            self.assertEqual(ctx.connects, 0)
         self.assertEqual(
             series.series({"guild": ["nowhere"]}, Ctx(self._answers()))[0], 404
         )
@@ -327,12 +346,10 @@ class TheGuild(unittest.TestCase):
         self.assertEqual(guild.faction_of([1, 3, 1]), "Alliance")
         self.assertEqual(guild.faction_of([2, 5]), "Horde")
         self.assertEqual(guild.faction_of([1, 2]), "")
-        rows = [
-            {"name": "Grug", "family": "Grug"},
-            {"name": "Zug", "family": "Zug"},
-            {"name": "Og", "family": "Grug"},
-        ]
-        self.assertEqual(guild.family_of({"Grug", "Og", "Bonk"}, rows), "Grug")
+        guilds = FAMILIES.guilds()
+        self.assertEqual(guild.family_of("Cave", guilds), "Grug")
+        self.assertEqual(guild.family_of("Bonkers", guilds), "Zug")
+        self.assertEqual(guild.family_of("Adventurer Union", guilds), "")
 
     def test_a_corpse_and_a_spirit_are_both_ghosts_on_this_page(self):
         # Online and life are presence.of's reading (tests/test_presence.py);
@@ -502,7 +519,6 @@ class TheGuild(unittest.TestCase):
                     },
                 ],
             ),
-            ("FROM overseer_roster", [{"name": "Grug", "family": "Grug"}]),
             ("FROM overseer_level", [{"name": "Bonk", "level": 20, "at": NOW - H}]),
             ("GROUP BY killer_name", [{"killer": "Defias Pillager", "n": 7, "who": 2}]),
             (
@@ -690,7 +706,7 @@ class TheAllowlist(unittest.TestCase):
         self.assertEqual(ctx.connects, 0, query)
         self.assertIn("error", body)
 
-    def test_only_managed_guilds_are_read(self):
+    def test_only_family_guilds_are_read(self):
         for g in self.OUTSIDERS[:-1]:
             self._refused(guild.guild, {"guild": [g]}, 404)
             self._refused(chronicle.chronicle, {"guild": [g]}, 404)
@@ -709,12 +725,17 @@ class TheAllowlist(unittest.TestCase):
             ctx = Ctx(server=Server)
             self.assertEqual(dungeonups.dungeonups(q, ctx)[0], 400)
 
-    def test_a_managed_guild_is_matched_in_any_case(self):
-        from apiv2 import _allow
+    def test_a_family_guild_is_matched_in_any_case(self):
+        from apiv2 import _scope
 
-        self.assertEqual(_allow.guild("CAVE"), "Cave")
-        self.assertEqual(_allow.guild(" bonkers "), "Bonkers")
-        self.assertIsNone(_allow.guild("Adventurer Union"))
+        ctx = Ctx()
+        self.assertEqual(_scope.guild(ctx, "CAVE"), "Cave")
+        self.assertEqual(_scope.guild(ctx, " bonkers "), "Bonkers")
+        self.assertIsNone(_scope.guild(ctx, "Adventurer Union"))
+        self.assertEqual(
+            _scope.no_such_guild(ctx),
+            {"error": "no such guild", "guilds": ["bonkers", "cave"]},
+        )
 
 
 if __name__ == "__main__":

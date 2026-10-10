@@ -23,6 +23,7 @@ from unittest import mock
 
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
+import families  # noqa: E402
 import map_server  # noqa: E402  (must follow the pymysql stub)
 import vclient  # noqa: E402
 
@@ -37,6 +38,14 @@ FAMILIES = [
     ("Grug", ["Grug", "Bork", "Grog", "Og", "Ugga"]),
     ("Zug", ["Zug", "Oz", "Uzza", "Zork", "Zrog"]),
 ]
+
+
+def realm_of(groups=FAMILIES, guildmates=()):
+    """map_server.FAMILIES over plain data: these families, all in one guild
+    with `guildmates`."""
+    everyone = [n for _key, names in groups for n in names]
+    store = families.MemoryStore(dict(groups), {"Guild": everyone + list(guildmates)})
+    return families.Families(store, fallback=lambda: [])
 
 
 def row(bag, slot, entry, name, guid, count=1, quality=1, display=0, size=0):
@@ -335,9 +344,13 @@ def get(path):
     return h
 
 
-@mock.patch.object(map_server, "_fetch_family_groups", return_value=FAMILIES)
 class TheEndpoints(unittest.TestCase):
-    def test_both_families_answer_every_frame(self, _groups):
+    def setUp(self):
+        patch = mock.patch.object(map_server, "FAMILIES", realm_of())
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_both_families_answer_every_frame(self):
         inv = {"rows": ROWS, "money": 100}
         gb = {"guild": None, "tab_rows": [], "item_rows": []}
         with (
@@ -352,17 +365,14 @@ class TheEndpoints(unittest.TestCase):
                         self.assertEqual(h.payload["family_key"], key)
                         self.assertEqual(h.payload["name"], name)
 
-    def test_a_name_off_the_rosters_never_reaches_sql(self, _groups):
-        with (
-            mock.patch.object(map_server, "_fetch_client_inventory") as inv,
-            mock.patch.object(map_server, "_is_family_guildmate", return_value=False),
-        ):
+    def test_a_name_off_the_rosters_never_reaches_sql(self):
+        with mock.patch.object(map_server, "_fetch_client_inventory") as inv:
             for bad in ("Stranger", "x", "Grug'--", ""):
                 h = get("/api/client/bags?name=" + bad)
                 self.assertEqual(h.code, 404, bad)
             inv.assert_not_called()
 
-    def test_a_dead_database_is_a_503_and_a_bug_is_a_500(self, _groups):
+    def test_a_dead_database_is_a_503_and_a_bug_is_a_500(self):
         """Only a database or network fault reads as an unreachable world; a
         builder's own bug is a 500, so it is not dressed as an outage."""
 
