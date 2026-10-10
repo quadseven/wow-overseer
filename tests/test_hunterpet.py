@@ -106,6 +106,8 @@ class WhoTames(unittest.TestCase):
         self.assertIn("s.spell = 1515", hunterpet.UNPETTED_SQL)
         self.assertIn("character_pet", hunterpet.UNPETTED_SQL)
         self.assertIn("(ct.type_flags & 1) <> 0", hunterpet.BEASTS_SQL)
+        self.assertIn("c.class = %d " % hunterpet.HUNTER, hunterpet.UNPETTED_SQL)
+        self.assertIn("ct.type = %d " % hunterpet.BEAST_TYPE, hunterpet.BEASTS_SQL)
 
 
 def plan(members, pets=None, recent=()):

@@ -58,7 +58,8 @@ TAMEABLE_FLAG = 1
 # silithid, worm, rhino, core hound, spirit beast. Tame Beast refuses them.
 EXOTIC_FAMILIES = frozenset({38, 39, 41, 42, 43, 45, 46})
 
-# The tameable beasts around one hunter, nearest first. The %s are, in order:
+# The tameable beasts around one hunter, nearest first (BEAST_TYPE and
+# TAMEABLE_FLAG written out, so the query is one literal). The %s are, in order:
 # x, y, map, the hunter's level (top), the lowest level, x, the box, y, the box,
 # and the radius.
 BEASTS_SQL = (
@@ -67,19 +68,19 @@ BEASTS_SQL = (
     "SQRT(POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2)) AS yards "
     "FROM acore_world.creature c "
     "JOIN acore_world.creature_template ct ON ct.entry = c.id "
-    "WHERE c.map = %s AND ct.type = " + str(BEAST_TYPE) + " "
-    "AND (ct.type_flags & " + str(TAMEABLE_FLAG) + ") <> 0 AND ct.family > 0 "
+    "WHERE c.map = %s AND ct.type = 1 "
+    "AND (ct.type_flags & 1) <> 0 AND ct.family > 0 "
     "AND ct.`rank` = 0 AND ct.maxlevel <= %s AND ct.maxlevel >= %s "
     "AND ABS(c.position_x - %s) <= %s AND ABS(c.position_y - %s) <= %s "
     "HAVING yards <= %s ORDER BY yards, guid LIMIT 60"
 )
 
-# The hunters that know Tame Beast and have no pet, by name. The %s is the
-# names' placeholders.
+# The hunters (class HUNTER) that know Tame Beast (TAME_BEAST) and have no pet,
+# by name. The %s is the names' placeholders, one per name, bound by the driver.
 UNPETTED_SQL = (
     "SELECT c.name AS name FROM characters c "
-    "JOIN character_spell s ON s.guid = c.guid AND s.spell = " + str(TAME_BEAST) + " "
-    "WHERE c.class = " + str(HUNTER) + " AND c.name IN (%s) "
+    "JOIN character_spell s ON s.guid = c.guid AND s.spell = 1515 "
+    "WHERE c.class = 3 AND c.name IN (%s) "
     "AND NOT EXISTS (SELECT 1 FROM character_pet p WHERE p.owner = c.guid)"
 )
 
