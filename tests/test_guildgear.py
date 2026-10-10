@@ -35,8 +35,8 @@ def worn(name, slot, ilvl, item="", **kw):
         "level": 35,
         "class_id": 8,
         "money": 99342,
-        "online": 1,
-        "dead": 0,
+        "online": True,
+        "life": "alive",
         "talent_spells": None,
         "slot": slot,
         "item_level": ilvl,
@@ -86,7 +86,7 @@ class TheRows(unittest.TestCase):
         self.assertEqual((m["empty"], m["flags"]), (16, []))
 
     def test_a_member_wearing_nothing_still_has_a_row_and_death_shows(self):
-        rows = [worn("Naked", None, None, dead=1)]
+        rows = [worn("Naked", None, None, life="dead")]
         (m,) = guildgear.members_from_rows(rows)
         self.assertEqual((m["worn"], m["empty"], m["presence"]), (0, 17, "dead"))
         self.assertIsNone(m["weakest"])

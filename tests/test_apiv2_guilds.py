@@ -291,60 +291,34 @@ class TheGuild(unittest.TestCase):
         ]
         self.assertEqual(guild.family_of({"Grug", "Og", "Bonk"}, rows), "Grug")
 
-    def test_ghosts_and_online_are_read_as_the_roster_reads_them(self):
-        # The saved ghost flag lags a member in the world: the guild page said
-        # no ghosts while the roster, reading the last minute's snapshot, said
-        # four. Both now read the snapshot first and the save when offline.
-        def row(name, online, flags=0):
-            return {
-                "name": name,
-                "level": 20,
-                "class": 1,
-                "online": online,
-                "flags": flags,
-            }
+    def test_a_corpse_and_a_spirit_are_both_ghosts_on_this_page(self):
+        # Online and life are presence.of's reading (tests/test_presence.py);
+        # this page shows a corpse and a released spirit alike as a ghost.
+        def row(name):
+            return {"name": name, "level": 20, "class": 1}
 
-        rows = [
-            row("Ghosty", 1),
-            row("Corpse", 1),
-            row("Fine", 1),
-            row("Saved", 0, flags=0x10),
-            row("Away", 0),
-            row("Lagging", 0),
-        ]
-        snaps = {
-            "Ghosty": {"health": 1, "max_health": 400},
-            "Corpse": {"health": 0, "max_health": 400},
-            "Fine": {"health": 400, "max_health": 400},
-            "Lagging": {"health": 300, "max_health": 400},
+        def reading(online, life):
+            return {"online": online, "life": life, "fresh_at": None}
+
+        readings = {
+            "Ghosty": reading(True, "ghost"),
+            "Corpse": reading(True, "dead"),
+            "Fine": reading(True, "alive"),
+            "Saved": reading(False, "ghost"),
+            "Away": reading(False, None),
         }
-        out = {m["name"]: m for m in guild.member_rows(rows, snaps)}
+        out = {
+            m["name"]: m
+            for m in guild.member_rows([row(n) for n in readings], readings)
+        }
         self.assertEqual(
             sorted(n for n, m in out.items() if m["ghost"]),
             ["Corpse", "Ghosty", "Saved"],
         )
         self.assertEqual(
             sorted(n for n, m in out.items() if m["online"]),
-            ["Corpse", "Fine", "Ghosty", "Lagging"],
+            ["Corpse", "Fine", "Ghosty"],
         )
-
-    def test_the_handler_reads_the_last_minutes_snapshots(self):
-        cur = FakeCursor(
-            [
-                (
-                    "FROM overseer_snapshot",
-                    [{"name": "Grug", "health": 1, "max_health": 9}],
-                )
-            ]
-        )
-        self.assertEqual(
-            guild._snaps(cur, ["Grug", "Bonk"]),
-            {"Grug": {"name": "Grug", "health": 1, "max_health": 9}},
-        )
-        sql, args = cur.seen[0]
-        self.assertIn("INTERVAL 60 SECOND", sql)
-        self.assertEqual(args, ("Grug", "Bonk"))
-        self.assertEqual(guild._snaps(FakeCursor([]), []), {})
 
     def test_a_member_is_blocked_when_its_latest_class_step_failed(self):
         steps = [
@@ -451,8 +425,15 @@ class TheGuild(unittest.TestCase):
                 lambda a: [{"guildid": 23, "name": "Cave"}] if a == ("Cave",) else [],
             ),
             ("UNIX_TIMESTAMP() AS now", [{"now": NOW}]),
+            # presence.of's two reads: Grug is in the world, Bonk's save has
+            # the ghost flag.
             (
-                "c.playerFlags",
+                "FROM overseer_snapshot",
+                [{"name": "Grug", "health": 900, "max_health": 900, "at": NOW}],
+            ),
+            ("playerFlags AS flags FROM characters", [{"name": "Bonk", "flags": 0x10}]),
+            (
+                "FROM characters c JOIN guild_member",
                 [
                     {
                         "guid": 1,
@@ -460,8 +441,6 @@ class TheGuild(unittest.TestCase):
                         "level": 42,
                         "class": 1,
                         "race": 1,
-                        "online": 1,
-                        "flags": 0,
                         "zone": 40,
                     },
                     {
@@ -470,8 +449,6 @@ class TheGuild(unittest.TestCase):
                         "level": 20,
                         "class": 9,
                         "race": 3,
-                        "online": 0,
-                        "flags": 0x10,
                         "zone": 40,
                     },
                 ],

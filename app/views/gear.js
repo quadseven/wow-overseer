@@ -136,7 +136,7 @@ function tableRows(gg, roster, q) {
   const r = byName((roster && roster.members) || []);
   const guild = (q.guild || "").toLowerCase();
   let rows = ((gg && gg.guilds) || []).flatMap((g) => g.members || []).filter((m) => !guild || (m.guild || "").toLowerCase() === guild)
-    .map((m) => Object.assign({}, m, { _r: r.get(m.name), _state: stateOf(r.get(m.name)) }));
+    .map((m) => Object.assign({}, m, { _r: r.get(m.name), _state: stateOf(r.get(m.name) || m) }));
   const sort = q.sort || "";
   const col = COLS.find((c) => c[0] === sort.replace(/^-/, ""));
   if (!col) return rows.sort(worstFirst);
@@ -149,7 +149,9 @@ function tableRows(gg, roster, q) {
 
 function weakText(m) { return m.weakest ? (SLOT_WORDS[m.weakest.slot] || m.weakest.slot) + ", " + m.weakest.item_level : notMeasured("nothing worn"); }
 
-function stateCell(m, at) { return m._r ? stateLabel(m._r, at) : html`<span class="dim mb-s">${m.presence}</span>`; }
+// The roster's row when it has one (it adds stuck), else the gear row: both
+// carry `online` and `life`, the one reading apiv2/presence.py makes.
+function stateCell(m, at) { return stateLabel(m._r || m, at); }
 
 function gearTable(rows, q, at) {
   const sort = q.sort || "";
