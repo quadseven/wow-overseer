@@ -26,6 +26,7 @@ from __future__ import annotations
 import threading
 
 import campaignplan
+import classtrain
 import guildjobs
 from panel import _CLASS_NAMES
 
@@ -85,21 +86,9 @@ def fetch(ctx, name: str) -> dict | None:
 # --------------------------------------------------------------------- pure --
 
 
-def _needs(row: dict) -> list:
-    return [int(row[k]) for k in ("req1", "req2", "req3") if int(row.get(k) or 0)]
-
-
-def spell_state(row: dict, known: set, level: int, cap: int) -> str:
-    """'learned', 'trainable', 'needs', 'above' or '' (past the level cap)."""
-    spell = int(row["spell"])
-    if spell in known:
-        return "learned"
-    asks = int(row.get("level") or 0)
-    if asks > level:
-        return "above" if asks <= cap else ""
-    if all(n in known for n in _needs(row)):
-        return "trainable"
-    return "needs"
+# THE RULE IS classtrain's, which the guild training pass also walks members
+# by, so the Standing card and the pass cannot disagree about a spell.
+spell_state = classtrain.spell_state
 
 
 def spells(trainer: list, known: set, level: int, cap: int) -> dict:
