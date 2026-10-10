@@ -260,6 +260,15 @@ class TheServer(unittest.TestCase):
         main = (APP / "main.js").read_text(encoding="utf-8")
         self.assertIn("module.reads(ctx)", main)
 
+    def test_search_takes_the_keys_typed_straight_after_the_slash(self):
+        # The box was focused on a timer, so a quick "/Grug" lost its letters
+        # to the page and Enter opened nothing. open() focuses it at once.
+        src = (APP / "search.js").read_text(encoding="utf-8")
+        opener = src[src.index("export function open()") :]
+        opener = opener[: opener.index("\n}\n")]
+        self.assertIn("input.focus();", opener)
+        self.assertNotIn("setTimeout", opener)
+
     def test_ghosts_and_stuck_are_counted_from_the_roster_everywhere(self):
         # The wall carries no ghost state, so Now said "Ghosts not measured"
         # while Members listed ghosts; the guild's Stuck tile never counted.
