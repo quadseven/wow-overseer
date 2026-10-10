@@ -462,6 +462,16 @@ def stuck_view(roster: dict) -> dict:
 
 
 def _roster_payload(ctx) -> dict:
+    # /api/v2/roster and /api/v2/stuck are the same build, and a cold page
+    # load asks for both at once (the view and the nav badge): one build
+    # serves both when the server shares its reads.
+    shared = getattr(ctx, "shared", None)
+    if shared is not None:
+        return shared.get("/api/v2/roster", lambda: _build_roster(ctx))
+    return _build_roster(ctx)
+
+
+def _build_roster(ctx) -> dict:
     f = fetch(ctx)
     return build(
         f["families"],

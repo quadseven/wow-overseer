@@ -68,7 +68,9 @@ def every_list_id() -> list[int]:
     return sorted(ids)
 
 
-def _share(member: dict, rows: list, item_rows: dict) -> float | None:
+def _share(
+    member: dict, rows: list, item_rows: dict, item_stats: dict | None = None
+) -> float | None:
     cid = member.get("class_id")
     tree = member.get("spec")
     if tree is None:
@@ -84,7 +86,9 @@ def _share(member: dict, rows: list, item_rows: dict) -> float | None:
         "level": member.get("level"),
         "spec": {"primary": tree or None},
     }
-    built = gearupgrades.build(slim, rows, item_rows, list(armory.EQUIPPED_SLOTS))
+    built = gearupgrades.build(
+        slim, rows, item_rows, list(armory.EQUIPPED_SLOTS), stats_by_id=item_stats
+    )
     ready = built.get("ready")
     return None if not ready else ready.get("pct")
 
@@ -98,8 +102,11 @@ def readiness_by_name(members: list, worn_rows: list, item_rows: dict) -> dict:
     by_name: dict = {}
     for row in worn_rows or ():
         by_name.setdefault(row.get("name"), []).append(row)
+    # The lists' items are scored once for the whole roster, not once per
+    # member: a guild of 140 rescored the same 750 rows 140 times.
+    stats = gearupgrades.item_stats(item_rows or {})
     return {
-        m["name"]: _share(m, by_name.get(m["name"], []), item_rows or {})
+        m["name"]: _share(m, by_name.get(m["name"], []), item_rows or {}, stats)
         for m in members
         if m.get("name")
     }
