@@ -1,17 +1,34 @@
 // Members: every member of both family guilds, stuck first.
 //
 // Reads /api/v2/roster (who, where, what each is doing, stuck and ghost
-// state) and /api/guildgear (item level). The filter text, the chips, the
+// state), /api/guildgear (item level) and each guild's /api/v2/series (XP per
+// hour over the last 24 hours, per member). The filter text, the chips, the
 // level range and the sort live in the URL query (#/members?stuck=1&q=og),
 // written with replaceState so typing never loses the caret; a poll redraw
 // reads them back from the address bar.
 
 import { html, raw, notMeasured, pendingRead, state, duration, classVar } from "../ui.js";
 import { liveQuery, setQuery, gearRows, stateOf, stateLabel, stuckFor, memberLink, sectionTabs, head } from "./_members.js";
+import { GUILDS } from "../router.js";
 
-const READS = ["/api/v2/roster", "/api/guildgear"];
+const SERIES = GUILDS.map((g) => "/api/v2/series?guild=" + g);
+const READS = ["/api/v2/roster", "/api/guildgear", ...SERIES];
 
-const SORTS = [["stuck", "Stuck longest"], ["level", "Level, high first"], ["ilvl", "Item level"], ["name", "Name"]];
+const SORTS = [["stuck", "Stuck longest"], ["level", "Level, high first"], ["ilvl", "Item level"], ["xp", "XP per hour"], ["name", "Name"]];
+
+// name -> {xp_per_hour_24h, xp_hours_measured} from every guild's series read.
+function xpRates(get) {
+  const out = new Map();
+  SERIES.forEach((path) => {
+    const d = get(path).data;
+    Object.entries((d && d.by_member) || {}).forEach(([name, r]) => out.set(name, r));
+  });
+  return out;
+}
+
+function xpValue(r) { return r && r.xp_per_hour_24h !== null && r.xp_per_hour_24h !== undefined ? r.xp_per_hour_24h : null; }
+
+function xpText(r) { const v = xpValue(r); return v === null ? notMeasured() : v.toLocaleString("en-US"); }
 
 function filters(q) {
   const lvl = /^(\d+)-(\d+)$/.exec(q.lvl || "");
@@ -33,24 +50,26 @@ function keep(m, f) {
   return true;
 }
 
-function sorter(sort, ilvl) {
+function sorter(sort, ilvl, xp) {
   const il = (m) => { const g = ilvl.get(m.name); return g ? g.avg_item_level : -1; };
+  const rate = (m) => { const v = xpValue(xp.get(m.name)); return v === null ? -1 : v; };
   const waited = (m) => (m.stuck ? (m.since === null || m.since === undefined ? 0 : Number.MAX_SAFE_INTEGER - m.since) : -1);
   if (sort === "level") return (a, b) => b.level - a.level || a.name.localeCompare(b.name);
   if (sort === "ilvl") return (a, b) => il(b) - il(a) || a.name.localeCompare(b.name);
+  if (sort === "xp") return (a, b) => rate(b) - rate(a) || a.name.localeCompare(b.name);
   if (sort === "name") return (a, b) => a.name.localeCompare(b.name);
   return (a, b) => (b.stuck - a.stuck) || (waited(b) - waited(a)) || ((stateOf(b) === "ghost") - (stateOf(a) === "ghost")) || b.level - a.level || a.name.localeCompare(b.name);
 }
 
 function ilvlText(g) { return g ? String(Math.round(g.avg_item_level)) : notMeasured(); }
 
-function cards(rows, ilvl, at) {
-  return html`<div class="ro-cards">${rows.map((m) => html`<a class="card ro-card" href="${"#/m/" + encodeURIComponent(m.name)}"><span class="row ro-top"><span class="mname" style="color:${classVar(m.class)}">${m.name}</span>${stateLabel(m, at)}</span><span class="dim mb-s">L${m.level} ${m.class} | ${m.guild || "no guild"} | ${m.zone || "zone not measured"} | iLvl ${ilvlText(ilvl.get(m.name))}</span><span>${m.step || notMeasured("step not measured")}</span>${m.blocker ? html`<span class="muted">${m.blocker}</span>` : ""}</a>`)}</div>`;
+function cards(rows, ilvl, xp, at) {
+  return html`<div class="ro-cards">${rows.map((m) => html`<a class="card ro-card" href="${"#/m/" + encodeURIComponent(m.name)}"><span class="row ro-top"><span class="mname" style="color:${classVar(m.class)}">${m.name}</span>${stateLabel(m, at)}</span><span class="dim mb-s">L${m.level} ${m.class} | ${m.guild || "no guild"} | ${m.zone || "zone not measured"} | iLvl ${ilvlText(ilvl.get(m.name))} | XP/h ${xpText(xp.get(m.name))}</span><span>${m.step || notMeasured("step not measured")}</span>${m.blocker ? html`<span class="muted">${m.blocker}</span>` : ""}</a>`)}</div>`;
 }
 
-const HEADS = [["Name", "name"], ["Lvl", "level"], ["Class"], ["Guild"], ["iLvl", "ilvl"], ["XP/h"], ["Current step"], ["Blocker"], ["Stuck for", "stuck"]];
+const HEADS = [["Name", "name"], ["Lvl", "level"], ["Class"], ["Guild"], ["iLvl", "ilvl"], ["XP/h", "xp"], ["Current step"], ["Blocker"], ["Stuck for", "stuck"]];
 
-function table(rows, ilvl, at, sort) {
+function table(rows, ilvl, xp, at, sort) {
   const th = HEADS.map(([label, key]) => {
     if (!key) return html`<th scope="col">${label}</th>`;
     const on = sort === key;
@@ -60,20 +79,20 @@ function table(rows, ilvl, at, sort) {
     const d = stuckFor(m, at);
     const k = stateOf(m);
     const tail = m.stuck ? (d ? html`<span class="warn">${d}</span>` : html`<span class="dim">since not measured</span>`) : k === "ghost" ? html`<span class="bad">${m.life === "dead" ? "dead" : "ghost"}</span>` : "";
-    return html`<tr><td>${memberLink(m)}</td><td class="num">${m.level}</td><td>${m.class}</td><td>${m.guild}</td><td class="num">${ilvlText(ilvl.get(m.name))}</td><td>${notMeasured()}</td><td>${m.step || notMeasured()}</td><td class="muted">${m.blocker}</td><td>${tail}</td></tr>`;
+    return html`<tr><td>${memberLink(m)}</td><td class="num">${m.level}</td><td>${m.class}</td><td>${m.guild}</td><td class="num">${ilvlText(ilvl.get(m.name))}</td><td class="num">${xpText(xp.get(m.name))}</td><td>${m.step || notMeasured()}</td><td class="muted">${m.blocker}</td><td>${tail}</td></tr>`;
   });
   return html`<div class="card ro-table"><table class="table"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
 }
 
-function body(roster, gg, q) {
+function body(roster, gg, xp, q) {
   const f = filters(q);
   const ilvl = gearRows(gg);
   const all = roster.members || [];
-  const rows = all.filter((m) => keep(m, f)).sort(sorter(f.sort, ilvl));
+  const rows = all.filter((m) => keep(m, f)).sort(sorter(f.sort, ilvl, xp));
   if (!rows.length) {
     return html`${state("empty", "No members match", "No member fits every filter you have on. Nothing is hidden by the server.")}<div><button type="button" class="btn btn-ghost" data-clear>Clear filters</button></div>`;
   }
-  return html`${cards(rows, ilvl, roster.checked_at)}${table(rows, ilvl, roster.checked_at, f.sort)}`;
+  return html`${cards(rows, ilvl, xp, roster.checked_at)}${table(rows, ilvl, xp, roster.checked_at, f.sort)}`;
 }
 
 function chip(label, key, on, n) {
@@ -102,6 +121,17 @@ function pageLine(roster) {
   return n + " " + first.name + " has waited " + (d ? "longest, " + d : "longest; since not measured") + ": " + first.blocker;
 }
 
+// The footnote under the table: how XP per hour is counted and how many of
+// the roster it covers.
+function xpNote(roster, xp) {
+  const names = (roster.members || []).map((m) => m.name);
+  const known = names.filter((n) => xp.has(n));
+  if (!known.length) return "XP per hour is not measured: the series reads have not answered.";
+  const measured = known.filter((n) => xpValue(xp.get(n)) !== null).length;
+  return "XP per hour is the mean over the last 24 hours of the straight line between a member's level changes and the experience held now. " +
+    measured + " of " + names.length + " members have a level change on record to measure it from; the rest are not measured.";
+}
+
 export default {
   css: ["views/members.css"],
   reads: () => READS,
@@ -115,15 +145,17 @@ export default {
     const q = liveQuery();
     const total = (roster.data.members || []).length;
     const shown = (roster.data.members || []).filter((m) => keep(m, filters(q))).length;
-    return html`${head("Members", shown + " of " + total, pageLine(roster.data))}${sectionTabs("roster")}<div class="ro-wrap">${controls(roster.data, q)}<div data-region="roster">${body(roster.data, gg.data, q)}</div></div><p class="dim mb-s">${roster.data.basis || ""} XP per hour is not measured yet.</p>`;
+    const xp = xpRates(ctx.get);
+    return html`${head("Members", shown + " of " + total, pageLine(roster.data))}${sectionTabs("roster")}<div class="ro-wrap">${controls(roster.data, q)}<div data-region="roster">${body(roster.data, gg.data, xp, q)}</div></div><p class="dim mb-s">${roster.data.basis || ""} ${xpNote(roster.data, xp)}</p>`;
   },
   after(main, ctx) {
     const roster = ctx.get("/api/v2/roster").data;
     if (!roster) return;
     const gg = ctx.get("/api/guildgear").data;
+    const xp = xpRates(ctx.get);
     const region = main.querySelector("[data-region=roster]");
     const redraw = (q) => {
-      region.innerHTML = body(roster, gg, q).s;
+      region.innerHTML = body(roster, gg, xp, q).s;
       const f = filters(q);
       main.querySelectorAll("[data-chip]").forEach((c) => {
         const k = c.getAttribute("data-chip");
