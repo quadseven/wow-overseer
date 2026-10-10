@@ -2674,6 +2674,27 @@ def _run_bosses(cur) -> frozenset:
     return frozenset(int(r["creditEntry"]) for r in rows if r.get("creditEntry"))
 
 
+# Read once per process, as the bridge does: the world's bosses do not change
+# under a running site. An empty read is not kept, so it is tried again.
+_RUN_BOSS_LEVELS: dict = {}
+
+
+def _run_boss_levels(cur) -> dict:
+    """map id -> its bosses' level (guildrun.BOSS_LEVELS_SQL), the level a
+    story holds each seat to; {} unread, and then no seat is called low."""
+    if _RUN_BOSS_LEVELS:
+        return _RUN_BOSS_LEVELS
+    rows = _wide_guarded(cur, guildrun.BOSS_LEVELS_SQL, (), "", "instance_encounters")
+    found = {int(r["map_id"]): int(r["level"]) for r in rows
+             if r.get("map_id") is not None and r.get("level") is not None}
+    if found:
+        _RUN_BOSS_LEVELS.update(found)
+        log.info("run stories: a seat is told against the bosses' level of %d dungeon "
+                 "map(s) (the Deadmines' %s); one healer is never a cause", len(found),
+                 found.get(36, "unread"))
+    return found
+
+
 def _guild_run_stories(cur, runs: list) -> list:
     """Add runstory's story, cause and causes to each ended guild run, from
     one read of its members' deaths. Returns `runs`."""
@@ -2687,7 +2708,8 @@ def _guild_run_stories(cur, runs: list) -> list:
         deaths = _wide_guarded(cur, sql, params + (RUN_DEATHS_LIMIT,), "",
                                "overseer_death")
     return runstory.tell_guild_runs(runs, deaths, _run_bosses(cur),
-                                    recap.zone_names(GEO.continents))
+                                    recap.zone_names(GEO.continents),
+                                    _run_boss_levels(cur))
 
 
 # THE GUILD CHAT FEED (#570). The asks a guild's members made in guild chat,
