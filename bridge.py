@@ -14570,9 +14570,13 @@ class Bridge(discord.Client):
                 if not await self._run_step_row(step, row, cap):
                     return
             if step.action == classquest.ACTION and any(
-                guildjobs.is_chain_row(r.command) for r in step.rows
+                guildjobs.is_chain_row(r.command) or classuse.is_use_row(r.command)
+                for r in step.rows
             ):
                 # The next class step is asked for soon, not a cycle from now.
+                # A use that went through counts (2026-10-09): Brug looted the
+                # sword at 16:43, settled 300 s on the deck, and was let go
+                # before a full cycle brought the Runeforge step.
                 self._note_follow_up()
         except pymysql.err.MySQLError:
             log.exception("guild jobs: step for %s failed", step.holder)
