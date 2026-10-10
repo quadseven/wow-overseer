@@ -1103,14 +1103,21 @@ def recipes_due(level: int, money: int, skills, known, wanted=()) -> tuple:
         skill, value, ceiling = int(skill), int(value or 0), int(ceiling or 0)
         if ceiling <= 0 or skill not in wanted:
             continue
-        for recipe in _rungs_ahead(skill, value):
-            if craft.holds(recipe.spell_id, known):
-                continue
-            rank, cost = craft.TRAINER_RECIPES[recipe.spell_id]
-            if value >= rank and int(money or 0) >= cost + RECIPE_PURSE_FLOOR:
-                due.append((cost, skill))
-                break
+        cost = _recipe_cost_due(skill, value, int(money or 0), known)
+        if cost is not None:
+            due.append((cost, skill))
     return tuple(skill for _cost, skill in sorted(due))
+
+
+def _recipe_cost_due(skill: int, value: int, money: int, known) -> int | None:
+    """The price of the first unheld rung ahead that this visit can buy, or None."""
+    for recipe in _rungs_ahead(skill, value):
+        if craft.holds(recipe.spell_id, known):
+            continue
+        rank, cost = craft.TRAINER_RECIPES[recipe.spell_id]
+        if value >= rank and money >= cost + RECIPE_PURSE_FLOOR:
+            return cost
+    return None
 
 
 # ---------------------------------------------------------------------------

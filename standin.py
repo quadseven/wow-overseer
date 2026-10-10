@@ -37,7 +37,9 @@ WHAT THIS DECIDES, one family at a time (`step`):
                  takes the empty seat.
   a craft that   the ordered member does not sit out while its craft cannot
   cannot move    move (`walled`): its ladder (craft.recipe_for) names a
-                 trainer recipe it does not hold, or no rung at all. Sitting
+                 trainer recipe it does not hold (a rung granted with the
+                 trade, craft.AUTO_LEARNED, is never one), or no rung at all.
+                 Sitting
                  out would make nothing: on wow-dev, 2026-10-06 to 2026-10-10,
                  Og sat out four and a half days at Tailoring 81 without Bolt
                  of Woolen Cloth (2964) while his family ran four-handed. With

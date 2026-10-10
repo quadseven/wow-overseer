@@ -5246,6 +5246,17 @@ _RECIPES_KNOWN_SQL = (
 )
 
 
+def _rank_facts(rows) -> dict:
+    """name -> (level, money, {skill: (value, max)}) from _RANK_FACTS_SQL rows."""
+    facts: dict = {}
+    for row in rows:
+        _level, _money, skills = facts.setdefault(
+            row["name"], (int(row["level"] or 0), int(row["money"] or 0), {}))
+        if row["skill"] is not None:
+            skills[int(row["skill"])] = (int(row["value"] or 0), int(row["max"] or 0))
+    return facts
+
+
 def _ranks_due(cur, roster) -> dict:
     """name -> the held trades whose next rank or trainer recipe is due now
     (learnaim.Row.ranks): the ranks first, then the recipes (#769).
@@ -5268,12 +5279,7 @@ def _ranks_due(cur, roster) -> dict:
         if exc.args and exc.args[0] in (1054, 1146):
             return {}
         raise
-    facts: dict = {}
-    for row in rows:
-        _level, _money, skills = facts.setdefault(
-            row["name"], (int(row["level"] or 0), int(row["money"] or 0), {}))
-        if row["skill"] is not None:
-            skills[int(row["skill"])] = (int(row["value"] or 0), int(row["max"] or 0))
+    facts = _rank_facts(rows)
     known: dict = {}
     for row in spells:
         known.setdefault(row["name"], set()).add(int(row["spell"]))
@@ -7401,23 +7407,13 @@ class Bridge(discord.Client):
             ]
             # AND THE HERBS THE VIALS WILL MEET (#769): at the counter a member
             # buys the vials its herbs in hand will use, up to a stack.
-            pairs += [
-                (name, reagent.entry)
-                for name, craft_spell in candidates.items()
-                for reagent in craft_rhythm.GATHERED.get(craft_spell, ())
-            ]
+            pairs += _herb_pairs(candidates)
             held_by = await asyncio.to_thread(_fetch_item_counts, pairs)
             for name, craft_spell in sorted(candidates.items()):
                 entry, _label, _price = craft_supply.REAGENT[craft_spell]
                 town = await asyncio.to_thread(_fetch_town, name)
                 held = held_by.get((name, entry), 0)
-                target = craft_supply.vial_target(
-                    craft_spell,
-                    craft_rhythm.casts_in_hand(
-                        craft_spell,
-                        {e: c for (who, e), c in held_by.items() if who == name},
-                    ),
-                )
+                target = _vial_target(name, craft_spell, held_by)
                 # A NEED, NOT AN AIM (infra#3692). What used to stand here
                 # was one `travel_npc = 'vendor'` write per candidate, and
                 # both halves of it were wrong - the keyword cannot see the
@@ -21569,6 +21565,22 @@ def _standin_tell(name: str, mode: str, now: float) -> bool:
     _insert_job(name, mode, standin.SOURCE)
     _STANDIN_TOLD[name] = (mode, now)
     return True
+
+
+def _herb_pairs(candidates: dict) -> list:
+    """(name, entry) of the gathered reagents each vial buyer's recipe eats."""
+    return [
+        (name, reagent.entry)
+        for name, craft_spell in candidates.items()
+        for reagent in craft_rhythm.GATHERED.get(craft_spell, ())
+    ]
+
+
+def _vial_target(name: str, craft_spell: int, held_by: dict) -> int:
+    """craft_supply.vial_target for `name`, from its counted herbs (#769)."""
+    held = {entry: count for (who, entry), count in held_by.items() if who == name}
+    return craft_supply.vial_target(
+        craft_spell, craft_rhythm.casts_in_hand(craft_spell, held))
 
 
 def _fetch_crafters_known(names: list) -> dict:
