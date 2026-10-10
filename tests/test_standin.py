@@ -98,6 +98,61 @@ class TheCraftingGoal(unittest.TestCase):
         self.assertEqual("", standin.goal({"mining": 50, "first aid": 10}))
 
 
+class ACraftThatCannotMoveIsNoReasonToSitOut(unittest.TestCase):
+    """wow-dev, 2026-10-06 to 2026-10-10: Og sat out Grug's family's campaign
+    for four and a half days on job='craft' at Tailoring 81, holding Linen Belt
+    (8776) and not Bolt of Woolen Cloth (2964), the trainer recipe his ladder
+    names at 68 to 100. The worldserver dropped that craft errand 14 times in a
+    day ("does not know the recipe"), and a roster member cannot buy a trainer
+    recipe, so sitting out made nothing and his family ran four-handed."""
+
+    OG = {"tailoring": 81, "enchanting": 1}
+
+    def test_og_at_a_trainer_recipe_he_does_not_hold_does_not_sit_out(self):
+        why = standin.sits_out(facts(skills=self.OG, known=frozenset({8776})))
+        self.assertIn("Bolt of Woolen Cloth (2964)", why)
+        self.assertIn("tailoring 81", why)
+
+    def test_his_four_handed_row_is_cleared_so_he_rejoins(self):
+        step = standin.step(
+            facts(skills=self.OG, known=frozenset({8776}), current=seated(in_name=""))
+        )
+        self.assertEqual(standin.CLEAR, step.action)
+        self.assertIn("2964", step.why)
+
+    def test_a_guests_row_is_cleared_too(self):
+        step = standin.step(
+            facts(skills=self.OG, known=frozenset({8776}), current=seated())
+        )
+        self.assertEqual(standin.CLEAR, step.action)
+
+    def test_no_row_is_written_while_the_craft_cannot_move(self):
+        step = standin.step(facts(skills=self.OG, known=frozenset({8776})))
+        self.assertEqual(standin.NONE, step.action)
+
+    def test_holding_the_rung_keeps_him_out(self):
+        self.assertEqual(
+            "", standin.sits_out(facts(skills=self.OG, known=frozenset({8776, 2964})))
+        )
+
+    def test_an_auto_learned_rung_needs_no_spellbook_row(self):
+        # Bolt of Linen Cloth (2963) is granted with Apprentice Tailoring and is
+        # never written to character_spell, so its absence is not a wall.
+        self.assertEqual(
+            "",
+            standin.sits_out(
+                facts(skills={"tailoring": 30, "enchanting": 1}, known=frozenset())
+            ),
+        )
+
+    def test_a_trade_with_no_rung_at_its_value_cannot_move(self):
+        why = standin.sits_out(facts(skills={"enchanting": 1}, known=frozenset()))
+        self.assertIn("enchanting 1", why)
+
+    def test_an_unread_spellbook_is_not_judged(self):
+        self.assertEqual("", standin.sits_out(facts(skills=self.OG, known=None)))
+
+
 # --- who sits out and who stands in ----------------------------------------------
 
 
@@ -534,6 +589,7 @@ class TheBridgePass(unittest.TestCase):
         og_job="dungeon:deadmines",
         leader_job="dungeon:deadmines",
         guild_rows=None,
+        known=frozenset({3757}),
     ):
         written, jobs_told, lines = [], [], []
         gfacts = _guild_facts()
@@ -563,6 +619,8 @@ class TheBridgePass(unittest.TestCase):
                 _fetch_standin_rows=lambda: dict(rows or {}),
                 _fetch_guild_run_facts=lambda bounds: gfacts,
                 _fetch_trade_skills=lambda names: {"Og": dict(SKILLS)},
+                # Woolen Bag (3757) is the rung SKILLS' Tailoring 120 names.
+                _fetch_standin_known=lambda name: known,
                 _fetch_standin_members=lambda names: {
                     n: members[n] for n in names if n in members
                 },
@@ -623,6 +681,29 @@ class TheBridgePass(unittest.TestCase):
         self.assertTrue(
             any("Locky is released and Og rejoins" in line for line in lines), lines
         )
+
+    def test_a_craft_that_cannot_move_sends_og_back_to_his_family(self):
+        fams, written, jobs_told, lines = self.run_pass(
+            rows={"Grug": seated(in_name="")}, og_job="craft", known=frozenset()
+        )
+        self.assertEqual([("Grug", standin.CLEAR, None)], written)
+        self.assertIn("Og", fams["Grug"]["names"])
+        self.assertEqual([("Og", "dungeon:deadmines", standin.SOURCE)], jobs_told)
+        self.assertTrue(
+            any(
+                "nobody is released and Og rejoins" in line and "3757" in line
+                for line in lines
+            ),
+            lines,
+        )
+
+    def test_an_unread_spellbook_keeps_the_row(self):
+        fams, written, jobs_told, _ = self.run_pass(
+            rows={"Grug": seated(in_name="")}, og_job="craft", known=None
+        )
+        self.assertNotIn(standin.CLEAR, [action for _, action, _ in written])
+        self.assertNotIn("Og", fams["Grug"]["names"])
+        self.assertEqual([], jobs_told)
 
     def test_a_standing_row_is_kept_and_og_stays_out(self):
         fams, written, jobs_told, _ = self.run_pass(
