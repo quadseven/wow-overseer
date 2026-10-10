@@ -569,6 +569,12 @@ class Member:
     # Where its hearthstone is bound (character_homebind), None when unread.
     home_map: int | None = None
     home_zone: int | None = None
+    # Every quest id it was rewarded (character_queststatus_rewarded), None when
+    # unread: the level step then judges a zone by its band alone
+    # (guildlevel.open_quests).
+    rewarded: frozenset | None = None
+    # The taxi nodes it knows (flightlearn.known_nodes), None when unread.
+    taxi_nodes: frozenset | None = None
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -2553,15 +2559,16 @@ def _member_step(
 
 def level_step(m, world, recent, cap):
     """(step or None, what it does, a note): a member that has outgrown
-    where it stands walks to the flight master of a quest hub whose
-    band fits its level (guildlevel.py).
+    where it stands (its quests there have run out, or its band) walks to the
+    flight master of a quest hub where it has open quests (guildlevel.py).
 
     Never a roster family member (levelroute walks those), never at the level
     cap, never while offline, fighting or dead, never on a way that has killed
     it (deadly_hub_note), and at most once per COOLDOWN_MINUTES["level"]. The
     walk is `walk-to-spawn creature:` naming the flight master's spawn, at the
-    pass's cap. From map 530, when the hub lies across the water, the step is
-    its side's boat (level_cross_step) or orb (level_orb_step) instead.
+    pass's cap. When the hub lies across the water, from map 530 or from a
+    continent, the step is its side's boat or zeppelin (level_cross_step) or
+    orb (level_orb_step) instead.
     """
     # EVERY MEMBER, NATURAL OR NOT (2026-10-05). The natural reset gates what
     # a member contributes, not where it walks: on the dev realm 1 of Cave's
@@ -2572,7 +2579,10 @@ def level_step(m, world, recent, cap):
     if m.name in world.roster or m.level >= guildlevel.LEVEL_CAP:
         return None, "", ""
     bands = world.bands.get(guildlevel.side_of(m.race), {})
-    why = guildlevel.outgrown(m.level, m.race, m.map_id, m.zone_id, bands)
+    # A ZONE IS LEFT WHEN ITS QUESTS RUN OUT (2026-10-10): its open quests for
+    # this member (guildlevel.open_quests), once its rewarded quests are read.
+    opens = guildlevel.member_opens(world, m.race, m.level, m.rewarded)
+    why = guildlevel.outgrown(m.level, m.race, m.map_id, m.zone_id, bands, opens)
     if not why:
         return None, "", ""
     # A GHOST IS WALKED NOWHERE (2026-10-09). On the dev realm 45 of 207 level
@@ -2589,6 +2599,8 @@ def level_step(m, world, recent, cap):
         world.masters,
         zone_id=m.zone_id,
         orbs=getattr(world, "orbs", None),
+        opens=opens,
+        nodes=m.taxi_nodes,
     )
     if choice.refused:
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
@@ -2719,9 +2731,10 @@ def level_orb_step(m, choice, why, recent, cap):
 
 def level_cross_step(m, choice, why, recent):
     """(step or None, what it does, a note) for a member whose level hub lies
-    across the water from map 530 (guildlevel.Choice.cross_to): one
-    `cross-to-map map:<id>` row, no walk (the module walks to the berth, rides
-    the boat and walks off at the landing). While the member's last crossing
+    across the water, from map 530 or from the other continent
+    (guildlevel.Choice.cross_to): one `cross-to-map map:<id>` row, no walk
+    (the module walks to the berth, rides the boat or zeppelin and walks off at
+    the landing). While the member's last crossing
     is young (crossing_cooling) it is held with no row, saying where it goes,
     so no other job is written over the crossing; a crossing the module
     refused for good (class_walls) is named in the notes and not asked again

@@ -24590,6 +24590,8 @@ _JOB_MEMBERS_SQL = (
     "s.zone_id, s.health, "
     "EXISTS (SELECT 1 FROM corpse k WHERE k.guid = c.guid) AS has_corpse, "
     "lc.name AS master, hb.mapId AS home_map, hb.zoneId AS home_zone, "
+    # The taxi nodes it knows, for the level step's flight (guildlevel.choose).
+    "c.taximask, "
     + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
@@ -24608,6 +24610,11 @@ _JOB_SKILLS_SQL = (
 )
 _JOB_SPELLS_SQL = (
     "SELECT guid, spell FROM character_spell WHERE guid IN ({guids}) AND spell IN ({spells})"
+)
+# Every quest a member was rewarded, for its open quests in each hub zone
+# (guildlevel.open_quests): a chain's earlier quest may lie in any zone.
+_JOB_REWARDED_SQL = (
+    "SELECT guid, quest FROM character_queststatus_rewarded WHERE guid IN ({guids})"
 )
 # Carried: the backpack and the bags worn, never the bank, like the corps' read.
 _JOB_ITEMS_SQL = (
@@ -24752,6 +24759,9 @@ _JOB_INNS: list = []
 # Every roster family member, of every family: the level step leaves them to
 # levelroute.py, which walks a family as one.
 _JOB_ROSTER_SQL = "SELECT name FROM overseer_roster WHERE enabled = 1"
+# The hub quests' chains, kinds and spawned givers (guildlevel.QUEST_FACTS_SQL),
+# for a member's open quests. Read once per process: the world does not change.
+_JOB_QUEST_FACTS: list = []
 
 
 # THE CLASS QUEST BOOK (classquest.py): every class quest of the classic range,
@@ -24892,6 +24902,9 @@ def _read_job_spawns_once(cur) -> None:
         _JOB_INNS.extend(_job_read(
             cur, "innkeepers", _JOB_INNS_SQL,
             (*classic.CLASSIC_CONTINENTS, classic.OUTLAND_MAP, INNKEEPER_NPC_FLAG)))
+    if not _JOB_QUEST_FACTS:
+        _JOB_QUEST_FACTS.extend(_job_read(cur, "hub quest givers",
+                                          guildlevel.QUEST_FACTS_SQL))
 
 
 def _fetch_job_facts(family_names: list) -> dict:
@@ -24911,6 +24924,8 @@ def _fetch_job_facts(family_names: list) -> dict:
             spells=ids([guildjobs.RITUAL_OF_SUMMONING, *sorted(guildjobs.CRAFT_SPELLS),
                         *(book.spell_ids() if book else ())])))
         log_rows, done_rows = _class_member_reads(cur, book, everyone)
+        rewarded_rows = _job_read(cur, "rewarded quests",
+                                  _JOB_REWARDED_SQL.format(guids=everyone))
         item_rows = _job_read(cur, "carried items", _JOB_ITEMS_SQL.format(
             guids=everyone, goods=guildjobs.TRADE_GOODS,
             subclasses=ids(sorted(guildjobs.MATERIAL_SUBCLASSES)),
@@ -24933,7 +24948,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  item_rows, recent_rows, pending_rows,
                                  log_rows=log_rows, done_rows=done_rows,
                                  free_slots=_job_free_slots(list(guid_of)),
-                                 supplies=supplies)
+                                 supplies=supplies, rewarded_rows=rewarded_rows)
     facts["class_book"] = book
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
@@ -24944,6 +24959,7 @@ def _fetch_job_facts(family_names: list) -> dict:
     facts["hub_masters"] = list(_JOB_HUB_MASTERS)
     facts["orbs"] = list(_JOB_ORBS)
     facts["inns"] = list(_JOB_INNS)
+    facts["quest_facts"] = list(_JOB_QUEST_FACTS)
     # Plus this pass's own family names, so an unread roster still leaves
     # the family to levelroute.
     facts["roster"] = ({str(r.get("name") or "") for r in roster_rows}
@@ -24953,12 +24969,14 @@ def _fetch_job_facts(family_names: list) -> dict:
 
 def _job_leveling(facts):
     """guildlevel.World for the level step: levelroute's hub quests (read once
-    per process by `_level_world`), the hub flight masters, the roster and the
-    Silvermoon orb. None while the quests are unread, which takes no level step."""
+    per process by `_level_world`), the hub flight masters, the roster, the
+    Silvermoon orb, the innkeepers and the hub quests' givers and chains. None
+    while the quests are unread, which takes no level step."""
     quests, _spawns = _level_world()
     return guildlevel.world(quests, facts.get("hub_masters"), facts.get("roster", ()),
                             orb_rows=facts.get("orbs", ()),
-                            inn_rows=facts.get("inns", ()))
+                            inn_rows=facts.get("inns", ()),
+                            fact_rows=facts.get("quest_facts"))
 
 
 def _guild_gathering_skills(member):
@@ -24983,7 +25001,7 @@ def _job_free_slots(names) -> dict:
 
 def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, item_rows,
                          recent_rows, pending_rows, log_rows=(), done_rows=(),
-                         free_slots=None, supplies=None) -> dict:
+                         free_slots=None, supplies=None, rewarded_rows=None) -> dict:
     """The rows the job reads, turned into guildjobs' facts."""
     family = set(family_names)
     guild_members, masters = guildwork.members_from_rows(rows, family_names)
@@ -24992,7 +25010,8 @@ def _job_facts_from_rows(rows, family_names, eligible, skill_rows, spell_rows, i
     carried = guildjobs.carried_from_rows(item_rows)
     members, crafters = _guild_members_and_crafters(
         rows, family, role_of, skills, known, carried, eligible,
-        _class_quest_state(log_rows, done_rows), free_slots or {}, supplies)
+        _class_quest_state(log_rows, done_rows), free_slots or {}, supplies,
+        _rewarded_of(rewarded_rows))
     pending = {str(r.get(k) or "") for r in pending_rows
                for k in ("target_name", "target_arg")} - {""}
     return {
@@ -25043,8 +25062,22 @@ def _member_supplies(supplies, guid) -> tuple:
     return supplies.get(guid, (0, 0))
 
 
+def _rewarded_of(rows):
+    """guid -> frozenset of the quests it was rewarded, None when the read gave
+    no row: every member of a guild that levels has been rewarded for some
+    quest, so no row is an unread table, and the level step then judges a zone
+    by its band alone."""
+    if not rows:
+        return None
+    out: dict = {}
+    for r in rows:
+        out.setdefault(int(r["guid"]), set()).add(int(r["quest"]))
+    return {guid: frozenset(quests) for guid, quests in out.items()}
+
+
 def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, eligible,
-                                quest_state=({}, {}, {}), free_slots=None, supplies=None):
+                                quest_state=({}, {}, {}), free_slots=None, supplies=None,
+                                rewarded=None):
     members, crafters = [], {}
     quest_log, quests_done, quest_progress = quest_state
     for r in rows:
@@ -25079,7 +25112,9 @@ def _guild_members_and_crafters(rows, family, role_of, skills, known, carried, e
             food=_member_supplies(supplies, guid)[0],
             drink=_member_supplies(supplies, guid)[1],
             home_map=_row_int(r, "home_map"),
-            home_zone=_row_int(r, "home_zone")))
+            home_zone=_row_int(r, "home_zone"),
+            rewarded=None if rewarded is None else rewarded.get(guid, frozenset()),
+            taxi_nodes=flightlearn.known_nodes(r.get("taximask"))))
     return members, crafters
 
 
