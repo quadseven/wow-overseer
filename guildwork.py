@@ -37,6 +37,11 @@ NATURALLY EARNED ONLY. A member posts only once it has restarted naturally
 (`eligible`, from natural.py's gate), so no gold the random-bot
 factory handed out reaches the guild.
 
+TRAINING FIRST (the operator, 2026-10-10: "Members keep gold for training
+first, guild funds the rest"). A member keeps the larger of its float and its
+reserve: the class spells its trainer would sell it now and a gear budget
+(`keeps`, guildfund.reserve, classtrain.due). Dues come only from above it.
+
 WHY BY POST AND NOT BY GIVE. `kind='give'` moves an item across a continent in
 one database write; nothing here uses it. A letter goes from a mailbox the bot
 walked to, which is what a guildmate would do.
@@ -136,12 +141,31 @@ def float_for(level=FLOAT_LEVEL, tab_pending=False) -> int:
     return FLOAT_COPPER * level * level // (FLOAT_LEVEL * FLOAT_LEVEL)
 
 
-def dues_for(money, level=FLOAT_LEVEL, role=MAINTENANCE, tab_pending=False) -> int:
+def keeps(level=FLOAT_LEVEL, tab_pending=False, reserve=0) -> int:
+    """Copper a member keeps before any dues: its float, or its training and
+    gear reserve when that is more (guildfund.reserve).
+
+    TRAINING FIRST (the operator, 2026-10-10: "Members keep gold for training
+    first, guild funds the rest"). Dues are taken only from gold above what
+    the member's class trainer would charge it now and a gear budget. An
+    unreadable reserve keeps the float alone.
+    """
+    try:
+        reserve = max(0, int(reserve or 0))
+    except (TypeError, ValueError):
+        reserve = 0
+    return max(float_for(level, tab_pending), reserve)
+
+
+def dues_for(
+    money, level=FLOAT_LEVEL, role=MAINTENANCE, tab_pending=False, reserve=0
+) -> int:
     """Copper to post from a purse of `money` copper; 0 when nothing is due.
 
     A missing, negative or unreadable purse posts nothing: a stale or absent
     read may suppress a letter, never manufacture one. A role this module does
-    not know posts nothing.
+    not know posts nothing. `reserve` is the member's training and gear
+    reserve (`keeps`).
     """
     try:
         money = int(money)
@@ -149,7 +173,7 @@ def dues_for(money, level=FLOAT_LEVEL, role=MAINTENANCE, tab_pending=False) -> i
         return 0
     if role not in SHARES:
         return 0
-    spare = money - float_for(level, tab_pending)
+    spare = money - keeps(level, tab_pending, reserve)
     if spare <= 0:
         return 0
     numerator, denominator = SHARES[role]
@@ -178,10 +202,15 @@ class Member:
     level: int = FLOAT_LEVEL
     # The guild has no first bank tab yet, so the smaller float applies.
     tab_pending: bool = False
+    # Copper of the class spells its trainer would sell it now, and a gear
+    # budget (guildfund.reserve): never posted as dues.
+    reserve: int = 0
 
     @property
     def dues(self) -> int:
-        return dues_for(self.money, self.level, self.role, self.tab_pending)
+        return dues_for(
+            self.money, self.level, self.role, self.tab_pending, self.reserve
+        )
 
 
 @dataclass(frozen=True)
@@ -257,10 +286,20 @@ def _not_due(member, taker, posted, eligible) -> str | None:
     if not member.online:
         return "%s is offline" % name
     if not member.dues:
+        kept = keeps(member.level, member.tab_pending, member.reserve)
+        if member.reserve > float_for(member.level, member.tab_pending):
+            return (
+                "%s carries %s, not enough above its %s training and gear reserve to post"
+                % (
+                    name,
+                    gold(member.money),
+                    gold(kept),
+                )
+            )
         return "%s carries %s, not enough above the %s float to post" % (
             name,
             gold(member.money),
-            gold(float_for(member.level, member.tab_pending)),
+            gold(kept),
         )
     return None
 
@@ -515,6 +554,10 @@ def _member_from(guild, row, role=MAINTENANCE, tab_pending=False) -> Member:
         level = int(row.get("level") or 0) or FLOAT_LEVEL
     except (TypeError, ValueError):
         level = FLOAT_LEVEL
+    try:
+        reserve = max(0, int(row.get("reserve") or 0))
+    except (TypeError, ValueError):
+        reserve = 0
     name = str(row.get("name"))
     return Member(
         name=name,
@@ -524,6 +567,7 @@ def _member_from(guild, row, role=MAINTENANCE, tab_pending=False) -> Member:
         role=role,
         level=level,
         tab_pending=tab_pending,
+        reserve=reserve,
     )
 
 
