@@ -5,7 +5,8 @@
 //   Overview   stuck card or current step, XP per hour, item level, gold,
 //              bags, the level line of the last week and the latest commands
 //              (/api/v2/activity, /api/armory/member, /api/client/bags,
-//              /api/v2/series for XP per hour)
+//              /api/v2/series for XP per hour), and the achievements the
+//              announcer has handed out (/api/v2/achievements)
 //   Gear       the paperdoll card (/api/armory/member) and Standing
 //              (/api/v2/training); Upgrades is /api/v2/upgrades
 //   Quests     the class quest chains (/api/v2/classchain) and the quest log
@@ -15,10 +16,14 @@
 
 import { html, notMeasured, pendingRead, state, classVar, iconUrl, sparkline, gold, plural, status } from "../ui.js";
 import {
-  liveQuery, byName, stateLabel, stuckFor, seg, paperdoll, bindTrees, cell, emptyCell,
+  liveQuery, stateLabel, seg, paperdoll, bindTrees, cell, emptyCell,
   upgradesHead, upgradesControls, upgradesBody, upgradesFoot, bindUpgrades, coins,
 } from "./_members.js";
 import { mountModels } from "./_model.js";
+import { byName, stuckFor } from "../models/roster.js";
+import { nowSeconds } from "../models/time.js";
+import { guildSlug } from "../families.js";
+import { badgesCard, CSS as ACH_CSS } from "./_achievements.js";
 
 const TABS = [["overview", "Overview"], ["gear", "Gear"], ["quests", "Quests"], ["bags", "Inventory"], ["activity", "Activity"]];
 const TAB_OF = { upgrades: "gear", bank: "bags" };
@@ -35,7 +40,7 @@ export function readsFor(name, tab) {
     case "bags": return ["/api/client/bags" + n];
     case "bank": return ["/api/client/bank" + n];
     case "activity": return ["/api/v2/activity" + n];
-    default: return ["/api/v2/activity" + n, "/api/armory/member" + n, "/api/client/bags" + n, "/api/v2/series" + n];
+    default: return ["/api/v2/activity" + n, "/api/armory/member" + n, "/api/client/bags" + n, "/api/v2/series" + n, "/api/v2/achievements" + n];
   }
 }
 
@@ -96,7 +101,7 @@ function levelLine(act, ser) {
   if (!act) return pendingRead({ data: undefined }, 1);
   const start = act.start_level ?? act.level;
   // One value per hour over the window, so the line's x axis is time.
-  const end = act.checked_at || Math.floor(Date.now() / 1000);
+  const end = act.checked_at || Math.floor(nowSeconds());
   const ups = act.levels || [];
   const values = [];
   for (let h = act.days * 24; h >= 0; h--) {
@@ -120,7 +125,7 @@ function family(m, roster) {
   const title = m.family ? m.family + "'s family" : "The families in " + (m.guild || "the guild");
   const g = all.filter((x) => x.guild === m.guild);
   const online = g.filter((x) => x.online).length;
-  const guildHref = /^(cave|bonkers)$/i.test(m.guild || "") ? "#/guilds/" + m.guild.toLowerCase() : "";
+  const guildHref = guildSlug(m.guild) ? "#/guilds/" + guildSlug(m.guild) : "";
   return html`<div class="pf-grid"><div class="card pf-list"><span class="dim mb-s">${title}</span>${mine.length ? mine.map((x) => html`<a class="pf-row" href="${href(x.name)}"><span class="mb-b" style="color:${classVar(x.class)}">${x.name}</span><span class="dim mb-s">L${x.level} ${x.class}</span></a>`) : notMeasured("no one else")}</div><div class="card"><span class="dim mb-s">Guild</span><span class="mb-b">${m.guild || notMeasured("no guild")}</span><span class="muted">${plural(g.length, "member")}, ${online} online</span>${guildHref ? html`<a href="${guildHref}">Open ${m.guild}</a>` : ""}</div></div>`;
 }
 
@@ -131,7 +136,7 @@ function overview(ctx, m, roster) {
   const bags = read(ctx, "/api/client/bags" + n);
   const ser = read(ctx, "/api/v2/series" + n).data;
   const cmds = act.data ? (act.data.commands || []).slice(0, 3) : [];
-  return html`<div class="pf-grid"><div class="pf-col">${stepCard(m, roster.checked_at)}${numbers(arm.data, bags.data, ser)}</div><div class="pf-col">${levelLine(act.data, ser)}<div class="card"><span class="dim mb-s">Recent commands and answers</span>${act.data ? (cmds.length ? commandRows(cmds) : notMeasured("no commands recorded")) : pendingRead(act, 1)}<a href="${href(m.name, "activity")}">All activity</a></div></div></div>${family(m, roster)}`;
+  return html`<div class="pf-grid"><div class="pf-col">${stepCard(m, roster.checked_at)}${numbers(arm.data, bags.data, ser)}</div><div class="pf-col">${levelLine(act.data, ser)}<div class="card"><span class="dim mb-s">Recent commands and answers</span>${act.data ? (cmds.length ? commandRows(cmds) : notMeasured("no commands recorded")) : pendingRead(act, 1)}<a href="${href(m.name, "activity")}">All activity</a></div></div></div>${badgesCard(read(ctx, "/api/v2/achievements" + n), m.name)}${family(m, roster)}`;
 }
 
 // ---- Gear and Standing --------------------------------------------------------------------
@@ -269,7 +274,7 @@ function body(ctx, m, roster) {
 }
 
 export default {
-  css: ["views/members.css"],
+  css: ["views/members.css", ACH_CSS],
   // The roster first: a name it does not hold is not a guild member, and that
   // member's own reads would only be refused. Once the roster is in and holds
   // the name, main.js widens the reads to the tab's.

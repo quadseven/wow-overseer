@@ -14,9 +14,9 @@ player does.
 THE JOB. Once a day each maintenance member posts a share of the gold above
 its float to the guild master. From there the family's existing passes carry
 it: the mail pass takes money letters first (`mailrun.py`), and the guild-bank
-pass deposits a family member's gold above its float into the vault
-(`guildbank.py`), buying the guild's first tab before anything else when it has
-none. A member cannot deposit into the vault itself: a vault is in a capital
+pass has the guild master bank what sits above its float at a vault
+(`guildbank.plan_master_deposit`, #775), keeping the guild's first tab's price
+back until it has bought that tab. A member cannot deposit into the vault itself: a vault is in a capital
 city and no verb walks a bot off the roster to one.
 
 EVERY MEMBER POSTS DUES, MAINTENANCE THE MOST (the operator, 2026-09-24: "All

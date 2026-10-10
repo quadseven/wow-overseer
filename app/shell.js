@@ -3,20 +3,27 @@
 // button. Drawn once; `update` moves the current item, badges and age.
 
 import { html, raw, ago } from "./ui.js";
+import { families, guilds } from "./families.js";
 
 const NAV = [
   { key: "now", label: "Now", icon: "pulse", href: "#/now" },
-  { key: "guilds", label: "Guilds", icon: "users-three", href: "#/guilds/cave" },
+  { key: "guilds", label: "Guilds", icon: "users-three", href: "#/guilds" },
   { key: "members", label: "Members", icon: "user-list", href: "#/members" },
-  { key: "raid", label: "Raid", icon: "sword", href: "#/raid/mc/cave" },
+  { key: "raid", label: "Raid", icon: "sword", href: "#/raid/mc" },
   { key: "economy", label: "Economy", icon: "coins", href: "#/economy" },
 ];
 
+// The guilds' links (the Guilds and Raid sub-items) and the families' ones are
+// the realm's own families and guilds (families.js), so they are drawn when
+// the nav is.
+const familyLinks = () => families().map((f) => [f.key + " family", "#/now/family/" + f.slug]);
+const guildLinks = (prefix) => guilds().map((g) => [g.name, prefix + g.slug]);
+
 const SUBS = {
-  now: [["Now", "#/now"], ["Grug family", "#/now/family/grug"], ["Zug family", "#/now/family/zug"], ["World map", "#/now/map"], ["Server", "#/now/server"]],
-  guilds: [["Cave", "#/guilds/cave"], ["Bonkers", "#/guilds/bonkers"]],
+  get now() { return [["Now", "#/now"], ...familyLinks(), ["World map", "#/now/map"], ["Server", "#/now/server"]]; },
+  get guilds() { return guildLinks("#/guilds/"); },
   members: [["Roster", "#/members"], ["Gear", "#/members/gear"]],
-  raid: [["Cave", "#/raid/mc/cave"], ["Bonkers", "#/raid/mc/bonkers"]],
+  get raid() { return guildLinks("#/raid/mc/"); },
   economy: [["Bags and gold", "#/economy"], ["Auction house", "#/economy/auction"], ["Trades", "#/economy/trades"], ["Skill levels", "#/economy/professions"], ["Guild bank", "#/economy/bank"]],
 };
 
@@ -113,7 +120,7 @@ export function updateAge(root, health) {
   sayAgeState(root, h.state);
 }
 
-// The floating Cave/Bonkers switch on phone (Guilds and Raid).
+// The floating guild switch on phone (Guilds and Raid).
 export function setThumb(root, opts) {
   const slot = root.querySelector('[data-slot="thumb"]');
   slot.hidden = !opts;

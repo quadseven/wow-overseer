@@ -355,7 +355,12 @@ def _training(master, pool, book, skip, budget) -> tuple:
         short = m.training - m.money
         if m.name in skip or short <= 0:
             continue
-        room = MEMBER_DAILY_COPPER - given.get(m.key, given.get(m.name, 0))
+        # The ledger may hold a member under its guid, its name, or both
+        # (a letter posted before the guid was read): count each once.
+        used = given.get(m.key, 0)
+        if m.name != m.key:
+            used += given.get(m.name, 0)
+        room = MEMBER_DAILY_COPPER - used
         copper = min(short, room, budget)
         if room < MIN_LETTER_COPPER:
             notes.append(

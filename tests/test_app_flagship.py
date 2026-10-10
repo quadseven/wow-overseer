@@ -459,6 +459,7 @@ class TheBankCategories(unittest.TestCase):
             "views/economy.js": app_file("views/economy.js"),
             "ui.js": app_file("ui.js"),
             "router.js": app_file("router.js"),
+            "families.js": app_file("families.js"),
             "api.js": TOOLTIP_API_STUB,
         }
         out = run_node(files, script)
@@ -495,6 +496,8 @@ def run_markup():
     )
     files = {
         "views/_runs.js": app_file("views/_runs.js"),
+        "models/time.js": app_file("models/time.js"),
+        "models/guildruns.js": app_file("models/guildruns.js"),
         "ui.js": app_file("ui.js"),
         "api.js": TOOLTIP_API_STUB,
     }

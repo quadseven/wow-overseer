@@ -149,7 +149,10 @@ class TheClothTrades(unittest.TestCase):
         for name in tailors:
             gathering = [s for s in trades[name] if s in guildjobs.GATHERING]
             self.assertEqual(len(gathering), 1)
-        for name in set(trades) - set(tailors):
+        # The crew's alchemists keep one slot for Alchemy the same way
+        # (tests/test_guildjobs_alchemists.py); everyone else gathers two.
+        alchemists = {n for n, t in trades.items() if guildjobs.ALCHEMY in t}
+        for name in set(trades) - set(tailors) - alchemists:
             self.assertEqual(
                 len([s for s in trades[name] if s in guildjobs.GATHERING]), 2
             )

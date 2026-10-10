@@ -59,8 +59,8 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn("isdigit()", handler)
 
     def test_every_overseer_read_is_guarded_for_both_errors(self):
-        """1146 is a missing TABLE and 1054 a missing COLUMN, and only one of
-        the two guards already in this file catches both. Production lacks
+        """1146 is a missing TABLE and 1054 a missing COLUMN, and the realm
+        reader's rows() catches both. Production lacks
         tables dev has, so an unguarded read here is a 503 on the live realm
         for a feature it has nothing to do with."""
         fetch = SERVER[SERVER.index("def _fetch_recap") :]
@@ -79,18 +79,22 @@ class TheEndpoint(unittest.TestCase):
     def test_the_guard_catches_the_base_class_that_covers_both(self):
         """1054 is not a ProgrammingError. pymysql has no entry for it in
         error_map, so it falls back to OperationalError, and a guard that
-        catches only ProgrammingError is half a guard."""
-        guard = SERVER[SERVER.index("def _wide_guarded") :]
-        guard = guard[: guard.index("def _fetch_recap")]
-        self.assertIn("pymysql.err.MySQLError", guard)
-        self.assertIn("(1054, 1146)", guard)
+        catches only ProgrammingError is half a guard. The guard is the realm
+        reader's rows() (realmread.py), which tests/test_realmread.py runs."""
+        reader = (HERE / "realmread.py").read_text(encoding="utf-8")
+        guard = reader[reader.index("def _schema_gap") :]
+        guard = guard[: guard.index("class Session")]
+        self.assertIn('"MySQLError"', guard)
+        self.assertIn("_SCHEMA_GAPS = (MISSING_TABLE, MISSING_COLUMN)", reader)
+        self.assertIn("with realmread.Session(_connect) as rd:", SERVER)
 
     def test_anything_that_is_not_those_two_still_raises(self):
         """A guard that swallowed a network blip would render an empty recap
         and train the alarm away."""
-        guard = SERVER[SERVER.index("def _wide_guarded") :]
-        guard = guard[: guard.index("def _fetch_recap")]
-        self.assertIn("raise", guard)
+        reader = (HERE / "realmread.py").read_text(encoding="utf-8")
+        guard = reader[reader.index("def _schema_gap") :]
+        guard = guard[: guard.index("class Session")]
+        self.assertIn("return code if code in _SCHEMA_GAPS else None", guard)
 
     def test_the_run_read_falls_back_to_columns_that_always_existed(self):
         """outcome and members arrived on 2026-09-02. A world that predates
@@ -127,8 +131,7 @@ class TheArmoryLinksBackToTheChronicle(unittest.TestCase):
         doll."""
         fetch = SERVER[SERVER.index("def _fetch_armory") :]
         fetch = fetch[: fetch.index("_QUESTLOG_SQL = (")]
-        self.assertIn("_wide_guarded(", fetch)
-        self.assertIn("equip_event_rows", fetch)
+        self.assertIn("equip_event_rows = rd.rows(", fetch)
 
 
 class TheModuleShipsInTheImage(unittest.TestCase):

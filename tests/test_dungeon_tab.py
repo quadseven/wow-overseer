@@ -95,9 +95,8 @@ class TheReads(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # To the recap's own banner and not to `def _fetch_recap`: the recap's
-        # SQL constants and the shared `_wide_guarded` sit between the two, and
-        # a window that swept them in would be asserting about somebody else's
-        # code.
+        # SQL constants sit between the two, and a window that swept them in
+        # would be asserting about somebody else's code.
         cls.fetch = SERVER[
             SERVER.index("def _fetch_dungeonplan") : SERVER.index(
                 "# --- the live dungeon recap"
@@ -152,7 +151,7 @@ class TheReads(unittest.TestCase):
         self.assertEqual(self.fetch.count("_PLAN_LOOT"), 1)
         self.assertEqual(self.fetch.count("_PLAN_ENCOUNTERS"), 1)
         self.assertIn("map IN ({holes})", SERVER)
-        body = self.fetch[self.fetch.index("with conn.cursor()") :]
+        body = self.fetch[self.fetch.index("with realmread.Session(_connect)") :]
         self.assertNotIn("for map", body)
 
     def test_an_empty_catalogue_does_not_bind_an_empty_in_list(self):

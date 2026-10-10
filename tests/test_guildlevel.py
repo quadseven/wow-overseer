@@ -186,13 +186,16 @@ class TheHubChoice(unittest.TestCase):
         self.assertIsNone(got.master)
         self.assertIn("no alliance hub fits level 5", got.refused)
 
-    def test_no_fit_on_its_continent_is_named_not_walked(self):
+    def test_no_fit_on_its_continent_takes_its_sides_boat_not_a_walk(self):
+        # The module's `cross-to-map` rides the side's boat (guildlevel.TRANSPORTS).
         only_darkshore = {DARKSHORE: bands()[DARKSHORE]}
         got = guildlevel.choose(
             14, HUMAN, EASTERN_KINGDOMS, only_darkshore, self.masters()
         )
         self.assertIsNone(got.master)
-        self.assertIn("across the sea", got.refused)
+        self.assertEqual(got.refused, "")
+        self.assertEqual(got.cross_to, KALIMDOR)
+        self.assertEqual(got.transport, "the boat from Menethil Harbor to Auberdine")
         self.assertEqual(got.hub.key, "darkshore")
 
     def test_the_other_sides_master_at_the_node_is_never_matched(self):

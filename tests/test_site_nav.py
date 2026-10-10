@@ -31,7 +31,7 @@ class TheWatchWallIsBothHeads(unittest.TestCase):
     def test_the_server_reads_every_family_once(self):
         self.assertIn('"/api/wall": _wall,', SERVER)
         handler = between(SERVER, "    def _wall(", "    def _armory(")
-        self.assertIn("_fetch_rosters()", handler)
+        self.assertIn("rosters = FAMILIES.families()", handler)
         self.assertIn("_fetch_family(everyone)", handler)
         self.assertIn("watchwall.build_heads(", handler)
         self.assertNotIn("query.get", handler)

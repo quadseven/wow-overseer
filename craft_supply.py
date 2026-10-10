@@ -260,6 +260,27 @@ REAGENT: dict[int, tuple[int, str, int]] = {
 # food and drink, just a smaller number because a vial costs a slot too.
 TARGET = 5
 
+# ONE STACK OF VIALS FOR THE HERBS IN HAND (#769). TARGET alone held the
+# alchemists to five casts a vendor visit: on wow-dev Ugga cast 25 Minor
+# Healing Potions in the 14 days to 2026-10-10 while carrying the herbs for 27
+# more (30 Peacebloom, 27 Silverleaf, no vial), and Uzza carried the herbs for
+# 45. At the counter a member now buys the vials its herbs will use, up to a
+# stack, so one slot and one visit carry a whole bag of herbs into skill. A
+# walk is still made only for fewer than TARGET (`reagent_need`).
+VIAL_STACK = 20
+
+
+def vial_target(craft_spell: int, herb_casts) -> int:
+    """How many of its vial a member buys at the counter for this recipe.
+
+    `herb_casts` is craft_rhythm.casts_in_hand over the gathered reagents in
+    its bags, None when that recipe is not judged. Never below TARGET and
+    never above one stack.
+    """
+    if herb_casts is None:
+        return TARGET
+    return max(TARGET, min(VIAL_STACK, int(herb_casts)))
+
 
 def reagent_errand(
     name: str,
@@ -268,6 +289,7 @@ def reagent_errand(
     money: int,
     free_slots: int,
     town: "towntrip.Town",
+    target: int = TARGET,
 ) -> tuple["towntrip.Errand | None", "str | None"]:
     """The buy errand this character's craft errand needs, or why not.
 
@@ -276,17 +298,21 @@ def reagent_errand(
     (errand, None) when a row should be written, or (None, note) when
     something stopped it - the same two-outcome shape towntrip._buy uses, so
     a caller can log the note exactly like every other town-trip refusal.
+    `target` is the stock to buy up to (`vial_target`); a member holding
+    TARGET or more away from a counter is not short, so nothing is said.
     """
     need = REAGENT.get(craft_spell)
     if not need:
         return None, None  # this recipe needs no vendor reagent this module knows
 
     entry, label, price = need
-    short = TARGET - held
+    short = max(int(target), TARGET) - held
     if short <= 0:
         return None, None
 
     if entry not in town.stocks:
+        if held >= TARGET:
+            return None, None
         return None, f"no reachable vendor stocks {label} ({entry}) for {name}"
 
     if free_slots < 1:
@@ -303,7 +329,8 @@ def reagent_errand(
             name,
             "buy",
             f"entry:{entry} count:{short} max:{ceiling}",
-            f"carries {held} {label}, wants {TARGET} for craft_spell {craft_spell}",
+            f"carries {held} {label}, wants {max(int(target), TARGET)} for "
+            f"craft_spell {craft_spell}",
             ceiling,
         ),
         None,

@@ -24,7 +24,7 @@ read, and nothing is written:
                 guild job runner (guildjobs) in the last BLOCKED_HOURS failed,
                 with the reason the module gave.
   dungeons      the doors this guild's faction runs (guildrun.GUILD_DOORS), in
-                level order, with what overseer_guild_run says about each:
+                level order, with what the guild's runs (guildrun.recent) say of each:
                 runs that went in, clears, wipes, the best clear, the last run,
                 and the commonest way a run that went in did not clear.
 
@@ -42,7 +42,7 @@ import statistics
 import classquest
 import council
 import guildrun
-from apiv2 import _allow, presence
+from apiv2 import _scope, presence
 
 BLOCKED_HOURS = 2
 TOP_KILLERS = 5
@@ -57,10 +57,6 @@ _NOW_SQL = "SELECT UNIX_TIMESTAMP() AS now"
 _MEMBERS_SQL = (
     "SELECT c.guid, c.name, c.level, c.class, c.race, c.zone FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid WHERE gm.guildid = %s LIMIT %s"
-)
-_ROSTER_SQL = (
-    "SELECT name, family FROM overseer_roster "
-    "WHERE family IS NOT NULL AND family <> '' LIMIT %s"
 )
 _DINGS_SQL = (
     "SELECT character_name AS name, MAX(new_level) AS level, "
@@ -116,11 +112,6 @@ _QUEST_TITLES_SQL = (
     "SELECT ID AS id, LogTitle AS title FROM acore_world.quest_template "
     "WHERE ID IN ({holes})"
 )
-_RUNS_SQL = (
-    "SELECT keyword, state, outcome, why, deaths, seconds_inside, "
-    "UNIX_TIMESTAMP(created_at) AS created, UNIX_TIMESTAMP(ended_at) AS ended "
-    "FROM overseer_guild_run WHERE guild = %s ORDER BY id DESC LIMIT %s"
-)
 
 _QUEST_IN_COMMAND = re.compile(r"\bquest:(\d+)")
 # A class quest walk names the creature it walks to, not the quest
@@ -161,12 +152,9 @@ def faction_of(races) -> str:
     return ""
 
 
-def family_of(names: set, roster_rows: list) -> str:
-    """The family with the most members in this guild, or ""."""
-    counts = collections.Counter(
-        r["family"] for r in roster_rows if r.get("name") in names
-    )
-    return counts.most_common(1)[0][0] if counts else ""
+def family_of(guild_name: str, family_guilds: list) -> str:
+    """The family this guild belongs to (families.Families.guilds), or ""."""
+    return next((g["family"] for g in family_guilds if g["name"] == guild_name), "")
 
 
 def member_rows(rows: list, readings: dict) -> list:
@@ -332,25 +320,20 @@ def dungeon_rows(doors: list, faction: str, runs: list) -> list:
 # ---- reads ---------------------------------------------------------------------
 
 
-def _all(cur, sql: str, args=()) -> list:
-    cur.execute(sql, args)
-    return list(cur.fetchall())
-
-
 def _holes(n: int) -> str:
     return ", ".join(["%s"] * n)
 
 
-def _deaths(cur, names: list, ghosts: list, zones: dict, maps: dict) -> dict:
+def _deaths(rd, names: list, ghosts: list, zones: dict, maps: dict) -> dict:
     if not names:
         return {"total": 0, "members": 0, "killers": [], "ghosts": []}
     holes = _holes(len(names))
-    total = _all(cur, _DEATH_TOTAL_SQL.format(holes=holes), tuple(names))[0]
-    killers = _all(cur, _KILLERS_SQL.format(holes=holes), (*names, TOP_KILLERS))
+    total = rd.must(_DEATH_TOTAL_SQL.format(holes=holes), tuple(names))[0]
+    killers = rd.must(_KILLERS_SQL.format(holes=holes), (*names, TOP_KILLERS))
     last = {}
     if ghosts:
-        found = _all(
-            cur, _LAST_DEATH_SQL.format(holes=_holes(len(ghosts))), tuple(ghosts)
+        found = rd.must(
+            _LAST_DEATH_SQL.format(holes=_holes(len(ghosts))), tuple(ghosts)
         )
         last = {r["name"]: r for r in found}
     return {
@@ -375,7 +358,7 @@ def _ghost(name: str, death, zones: dict, maps: dict) -> dict:
     }
 
 
-def _walk_creatures(cur, blocked: dict) -> dict:
+def _walk_creatures(rd, blocked: dict) -> dict:
     """entry -> name for the creatures the blocked walks name."""
     wanted = sorted(
         {
@@ -387,19 +370,18 @@ def _walk_creatures(cur, blocked: dict) -> dict:
     )
     if not wanted:
         return {}
-    found = _all(
-        cur, _CREATURE_NAMES_SQL.format(holes=_holes(len(wanted))), tuple(wanted)
+    found = rd.must(
+        _CREATURE_NAMES_SQL.format(holes=_holes(len(wanted))), tuple(wanted)
     )
     return {int(r["id"]): r["name"] for r in found}
 
 
-def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
-    done = _all(cur, _CQ_DONE_SQL, (guild_id,))[0]
-    open_rows = _all(cur, _CQ_OPEN_SQL, (guild_id, MAX_ROWS))
+def _class_quests(rd, guild_id: int, names: list, classes: dict) -> dict:
+    done = rd.must(_CQ_DONE_SQL, (guild_id,))[0]
+    open_rows = rd.must(_CQ_OPEN_SQL, (guild_id, MAX_ROWS))
     steps = []
     if names:
-        steps = _all(
-            cur,
+        steps = rd.must(
             _CQ_STEPS_SQL.format(holes=_holes(len(names))),
             (BLOCKED_HOURS, *names, MAX_ROWS),
         )[::-1]  # newest first under the bound, then back to oldest first
@@ -414,12 +396,12 @@ def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
     )
     titles = {}
     if wanted:
-        found = _all(
-            cur, _QUEST_TITLES_SQL.format(holes=_holes(len(wanted))), tuple(wanted)
+        found = rd.must(
+            _QUEST_TITLES_SQL.format(holes=_holes(len(wanted))), tuple(wanted)
         )
         titles = {int(r["id"]): r["title"] for r in found}
     rows = class_quest_rows(
-        open_rows, blocked, titles, classes, _walk_creatures(cur, blocked)
+        open_rows, blocked, titles, classes, _walk_creatures(rd, blocked)
     )
     return {
         "done": int(done["n"] or 0),
@@ -430,11 +412,18 @@ def _class_quests(cur, guild_id: int, names: list, classes: dict) -> dict:
     }
 
 
-def build(ctx, cur, row: dict, zones: dict, maps: dict) -> dict:
+def _runs(rd, guild_name: str) -> list:
+    """The guild's runs oldest first, each with its Unix times as `created`
+    and `ended` (dungeon_rows' keys)."""
+    rows = guildrun.recent(rd, guild=guild_name, n=MAX_ROWS)[::-1]
+    return [dict(r, created=r["created_unix"], ended=r["ended_unix"]) for r in rows]
+
+
+def build(rd, row: dict, zones: dict, maps: dict, families: list) -> dict:
     gid = int(row["guildid"])
-    now = int(_all(cur, _NOW_SQL)[0]["now"])
-    raw = _all(cur, _MEMBERS_SQL, (gid, MAX_MEMBERS))
-    members = member_rows(raw, presence.of(ctx, cur, [r["name"] for r in raw]))
+    now = int(rd.must(_NOW_SQL, ())[0]["now"])
+    raw = rd.must(_MEMBERS_SQL, (gid, MAX_MEMBERS))
+    members = member_rows(raw, presence.of(rd, [r["name"] for r in raw]))
     names = [m["name"] for m in members]
     classes = {m["name"]: m["class"] for m in members}
     faction = faction_of(r["race"] for r in raw)
@@ -442,21 +431,17 @@ def build(ctx, cur, row: dict, zones: dict, maps: dict) -> dict:
     return {
         "guild": row["name"],
         "faction": faction,
-        "family": family_of(set(names), _all(cur, _ROSTER_SQL, (MAX_ROWS,))),
+        "family": family_of(row["name"], families),
         "count": len(members),
         "online": sum(1 for m in members if m["online"]),
         "members": members,
         "gaining": [
             {"name": d["name"], "level": int(d["level"]), "at": int(d["at"])}
-            for d in _all(cur, _DINGS_SQL, (gid,))
+            for d in rd.must(_DINGS_SQL, (gid,))
         ],
-        "deaths": _deaths(cur, names, ghosts, zones, maps),
-        "class_quests": _class_quests(cur, gid, names, classes),
-        "dungeons": dungeon_rows(
-            guildrun.doors(),
-            faction,
-            _all(cur, _RUNS_SQL, (row["name"], MAX_ROWS))[::-1],
-        ),
+        "deaths": _deaths(rd, names, ghosts, zones, maps),
+        "class_quests": _class_quests(rd, gid, names, classes),
+        "dungeons": dungeon_rows(guildrun.doors(), faction, _runs(rd, row["name"])),
         "now": now,
     }
 
@@ -465,22 +450,17 @@ def guild(query: dict, ctx) -> tuple[int, dict]:
     asked = (query.get("guild") or [""])[0].strip()
     if not asked:
         return 400, {"error": "say guild="}
-    # Only a managed guild, refused before any query (_allow).
-    name = _allow.guild(asked)
+    # Only a family guild, refused before this read opens a connection.
+    name = _scope.guild(ctx, asked)
     if name is None:
-        return 404, {"error": "no such guild", "guilds": sorted(_allow.GUILDS)}
+        return 404, _scope.no_such_guild(ctx)
     server = ctx.server
     zones = server.recap.zone_names(server.GEO.continents)
     maps = server.achievements.MAP_NAMES
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            found = _all(cur, _GUILD_SQL, (name,))
-            if not found:
-                return 404, {"error": "no such guild", "guild": name}
-            return 200, build(ctx, cur, found[0], zones, maps)
-    finally:
-        conn.close()
+    found = ctx.read.must(_GUILD_SQL, (name,))
+    if not found:
+        return 404, {"error": "no such guild", "guild": name}
+    return 200, build(ctx.read, found[0], zones, maps, server.FAMILIES.guilds())
 
 
 ROUTES = {"/api/v2/guild": guild}

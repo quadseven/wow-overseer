@@ -10,9 +10,9 @@ FOUR KINDS, each read straight off a table the realm writes:
 
   level   overseer_level: the members who reached a new level, one item per
           guild per hour so a busy hour is one line, not forty.
-  clear   overseer_guild_run, a run that went in and cleared.
-  run     overseer_guild_run, a run that went in and did not clear (wiped,
-          abandoned, timed out). Runs that never went in are not history.
+  clear   a guild run that went in and cleared (guildrun.came_back).
+  run     a guild run that went in and did not clear (wiped, abandoned,
+          timed out). Runs that never went in are not history.
   death   overseer_death inside a dungeon the site knows (achievements.MAP_NAMES),
           one item per guild, dungeon and hour. Deaths in the open world run
           to thousands a day and are counted on the Progress tab instead.
@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import guildrun
 import council
-from apiv2 import _allow
+from apiv2 import _scope
 
 DAYS = 7
 HOUR = 3600
@@ -42,12 +42,6 @@ _LEVELS_SQL = (
     "UNIX_TIMESTAMP(created_at) AS at FROM overseer_level "
     "WHERE guild_id IN ({holes}) AND created_at >= NOW() - INTERVAL %s DAY "
     "ORDER BY created_at DESC LIMIT %s"
-)
-_RUNS_SQL = (
-    "SELECT id, guild, keyword, outcome, members, deaths, bosses_done, "
-    "bosses_total, UNIX_TIMESTAMP(ended_at) AS at FROM overseer_guild_run "
-    "WHERE guild IN ({holes}) AND ended_at >= NOW() - INTERVAL %s DAY "
-    "AND outcome IN ({went}) ORDER BY id DESC LIMIT %s"
 )
 _DEATHS_SQL = (
     "SELECT d.character_name AS name, d.map, d.killer_name AS killer, "
@@ -172,38 +166,26 @@ def death_items(rows: list, guild_of: dict, maps: dict) -> list:
     return items
 
 
-def _all(cur, sql: str, args=()) -> list:
-    cur.execute(sql, args)
-    return list(cur.fetchall())
-
-
 def _holes(n: int) -> str:
     return ", ".join(["%s"] * n)
 
 
-def build(cur, guilds: list, maps: dict) -> dict:
-    found = _all(cur, _GUILDS_SQL.format(holes=_holes(len(guilds))), tuple(guilds))
+def build(rd, guilds: list, maps: dict) -> dict:
+    found = rd.must(_GUILDS_SQL.format(holes=_holes(len(guilds))), tuple(guilds))
     guild_of = {int(r["guildid"]): r["name"] for r in found}
     names = [r["name"] for r in found]
     items: list = []
     if guild_of:
         ids = list(guild_of)
-        ih, nh = _holes(len(ids)), _holes(len(names))
-        went = _holes(len(guildrun.WENT_IN))
+        ih = _holes(len(ids))
         conts = ", ".join(str(c) for c in CONTINENTS)
         items += level_items(
-            _all(cur, _LEVELS_SQL.format(holes=ih), (*ids, DAYS, MAX_ROWS)), guild_of
+            rd.must(_LEVELS_SQL.format(holes=ih), (*ids, DAYS, MAX_ROWS)), guild_of
         )
-        items += run_items(
-            _all(
-                cur,
-                _RUNS_SQL.format(holes=nh, went=went),
-                (*names, DAYS, *guildrun.WENT_IN, MAX_ROWS),
-            )
-        )
+        came_back = guildrun.came_back(rd, names, DAYS, MAX_ROWS)
+        items += run_items([dict(r, at=r["ended_unix"]) for r in came_back])
         items += death_items(
-            _all(
-                cur,
+            rd.must(
                 _DEATHS_SQL.format(holes=ih, continents=conts),
                 (*ids, DAYS, MAX_ROWS),
             ),
@@ -216,17 +198,12 @@ def build(cur, guilds: list, maps: dict) -> dict:
 
 def chronicle(query: dict, ctx) -> tuple[int, dict]:
     asked = (query.get("guild") or [""])[0].strip()
-    # Only a managed guild, refused before any query (_allow).
-    if asked and _allow.guild(asked) is None:
-        return 404, {"error": "no such guild", "guilds": sorted(_allow.GUILDS)}
-    guilds = [_allow.guild(asked)] if asked else list(_allow.GUILDS.values())
+    # Only a family guild, refused before this read opens a connection.
+    if asked and _scope.guild(ctx, asked) is None:
+        return 404, _scope.no_such_guild(ctx)
+    guilds = [_scope.guild(ctx, asked)] if asked else list(_scope.guilds(ctx).values())
     maps = ctx.server.achievements.MAP_NAMES
-    conn = ctx.connect()
-    try:
-        with conn.cursor() as cur:
-            payload = build(cur, guilds, maps)
-    finally:
-        conn.close()
+    payload = build(ctx.read, guilds, maps)
     if asked and not payload["guilds"]:
         return 404, {"error": "no such guild", "guild": asked}
     return 200, payload

@@ -1,0 +1,123 @@
+/* The announcer's achievements: Chronicle rows, profile badges, the Now
+   toast (views/_achievements.js). Each tier is one colour, read at 4.5:1 or
+   better on the surface and neutral-900 in both themes; the medal carries
+   it, the words stay in the text colours. */
+
+:root {
+  --tier-bronze: #dba57a;
+  --tier-silver: #c9d0dd;
+  --tier-gold: #f2c94c;
+  --tier-dubious: #a9d06b;
+}
+:root[data-theme="light"] {
+  --tier-bronze: #8a4b1c;
+  --tier-silver: #4a5466;
+  --tier-gold: #7d5c00;
+  --tier-dubious: #47641a;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --tier-bronze: #8a4b1c;
+    --tier-silver: #4a5466;
+    --tier-gold: #7d5c00;
+    --tier-dubious: #47641a;
+  }
+}
+
+[data-tier="bronze"] { --tier: var(--tier-bronze); }
+[data-tier="silver"] { --tier: var(--tier-silver); }
+[data-tier="gold"] { --tier: var(--tier-gold); }
+[data-tier="dubious"] { --tier: var(--tier-dubious); }
+
+/* ---- the medal ------------------------------------------------------------- */
+.ach-medal {
+  display: inline-grid; place-items: center; flex-shrink: 0;
+  width: 28px; height: 28px; border-radius: 50%; color: var(--tier);
+  background: radial-gradient(circle at 32% 28%, color-mix(in srgb, var(--tier) 30%, transparent), color-mix(in srgb, var(--tier) 9%, transparent) 72%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tier) 48%, transparent);
+}
+.ach-medal i { font-size: 15px; }
+.ach-medal-lg { width: 40px; height: 40px; }
+.ach-medal-lg i { font-size: 21px; }
+/* The dubious ones sit slightly askew, as they should. */
+.ach-medal[data-tier="dubious"] i { transform: rotate(-9deg); }
+.ach-medal[data-tier="gold"] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tier) 60%, transparent), 0 2px 10px color-mix(in srgb, var(--tier) 22%, transparent);
+}
+
+.ach-tier {
+  display: inline-flex; align-items: center; padding: 0 7px; min-height: 18px; border-radius: 999px;
+  font-size: var(--fs-0); font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: var(--tier);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tier) 40%, transparent);
+}
+
+.ach-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ach-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.ach-title { font-weight: 500; color: var(--color-text); }
+.ach-line { color: var(--color-neutral-300); text-wrap: pretty; overflow-wrap: anywhere; }
+.ach-who { font-size: var(--fs-2); }
+.ach-guild { color: var(--color-neutral-300); }
+
+/* ---- the Chronicle row ------------------------------------------------------- */
+.g-row.ach-row { align-items: flex-start; }
+.ach-row > .ach-medal { margin-top: 1px; }
+.ach-row .ach-line { font-size: var(--fs-2); }
+.ach-row > .g-when, .ach-row > .tag { margin-top: 5px; }
+
+/* ---- the profile badges ------------------------------------------------------- */
+.ach-card { gap: 10px; }
+.ach-badges {
+  display: grid; gap: 8px; margin: 0; padding: 0; list-style: none;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 290px), 1fr));
+}
+.ach-badge {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: start;
+  padding: 12px 14px; border-radius: var(--radius-md);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--tier) 7%, var(--color-neutral-900)), var(--color-neutral-900) 55%);
+  box-shadow: inset 0 0 0 1px var(--color-neutral-800);
+}
+.ach-badge .ach-line { font-size: var(--fs-2); }
+.ach-meta { font-size: var(--fs-1); color: var(--color-neutral-400); }
+.ach-more { margin-top: 2px; }
+.ach-more > summary { font-size: var(--fs-2); }
+.ach-more[open] > summary { margin-bottom: 8px; }
+
+/* ---- the toast on Now ------------------------------------------------------------ */
+@keyframes ach-in { from { opacity: 0; transform: translateY(-10px) scale(0.98); filter: blur(3px); } }
+@keyframes ach-stamp { 0% { transform: scale(1.35) rotate(-12deg); opacity: 0; } 60% { opacity: 1; } }
+.ach-toast {
+  position: fixed; z-index: 46; left: 12px; right: 12px;
+  top: calc(var(--header-h) + env(safe-area-inset-top) + 8px);
+  animation: ach-in 380ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 160ms ease-out, transform 160ms ease-out;
+}
+.ach-toast.is-leaving { opacity: 0; transform: translateY(-6px); }
+@media (min-width: 760px) {
+  .ach-toast { left: auto; right: calc(24px + env(safe-area-inset-right)); top: 20px; width: min(420px, calc(100vw - var(--sidebar-w) - 48px)); }
+}
+.ach-toast-card {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 2px 12px;
+  padding: 12px 6px 12px 14px; border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--tier) 11%, var(--color-surface)), var(--color-surface) 70%);
+  box-shadow: var(--shadow-lg);
+}
+.ach-toast-card > .ach-medal { margin-top: 2px; animation: ach-stamp 520ms cubic-bezier(0.16, 1, 0.3, 1) 140ms backwards; }
+.ach-toast-main {
+  display: flex; flex-direction: column; gap: 2px; min-height: 44px; justify-content: center;
+  color: var(--color-text); text-decoration: none; border-radius: var(--radius-sm);
+}
+.ach-toast-main:hover .ach-toast-who b { text-decoration: underline; text-underline-offset: 3px; }
+.ach-toast-main:focus-visible, .ach-toast-more:focus-visible, .ach-toast-x:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.ach-toast-who { font-size: var(--fs-2); color: var(--color-neutral-300); }
+.ach-toast-who b { font-weight: 500; color: var(--color-text); }
+.ach-toast-main .ach-line { font-size: var(--fs-2); }
+.ach-toast-more {
+  grid-column: 2; display: inline-flex; align-items: center; min-height: 44px; width: max-content;
+  font-size: var(--fs-1); color: var(--color-accent-300); text-underline-offset: 3px;
+}
+.ach-toast-x {
+  grid-column: 3; grid-row: 1; display: inline-grid; place-items: center; width: 44px; height: 44px;
+  border: 0; border-radius: var(--radius-md); background: transparent; color: var(--color-neutral-400); cursor: pointer;
+}
+.ach-toast-x:hover { background: var(--color-neutral-900); color: var(--color-text); }
+.ach-toast-x i { font-size: 18px; }

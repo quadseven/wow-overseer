@@ -40,6 +40,21 @@ def cloth(guid, entry, count, price=10):
     )
 
 
+def meat_stack(guid, count, price):
+    """Meat a full member carries, read live 2026-10-10: Meaty Bat Wing (12223)
+    sells for 4c and Lynx Meat (27668) for 5c, item_template class 7 subclass 8."""
+    return guildjobs.Carried(
+        guid=guid,
+        entry=12223 + guid,
+        count=count,
+        item_class=guildjobs.TRADE_GOODS,
+        subclass=8,
+        quality=1,
+        sell_price=price,
+        name="Meaty Bat Wing",
+    )
+
+
 def full(name="Bigzug", carried=(), **over):
     return who(name, free_slots=0, carried=tuple(carried), **HUNTING, **over)
 
@@ -171,11 +186,43 @@ class TheLimits(unittest.TestCase):
         )
         self.assertEqual(len(room_steps(class_plan([full(carried=[old])]))), 1)
 
-    def test_with_nothing_to_sell_the_lowest_material_is_destroyed(self):
+    def test_with_nothing_grey_the_lowest_value_material_goes_to_a_vendor(self):
+        # The module refuses `destroy` on anything with a sell price ("item has
+        # a sell price", retry never), so a priced material is sold instead.
         bolts = [cloth(11, 2589, 20, price=30), cloth(12, 2592, 5, price=10)]
         step = room_steps(class_plan([full(carried=bolts, money=0)]))[0]
-        self.assertEqual([r.command for r in step.rows], ["destroy guid:12 count:5"])
+        self.assertEqual(
+            [(r.kind, r.command) for r in step.rows],
+            [("sell", "guid:12"), ("sell", "guid:11")],
+        )
+        self.assertTrue(step.walk.command.startswith("walk-to-vendor any"))
+
+    def test_a_priced_material_is_never_asked_to_be_destroyed(self):
+        bolts = [cloth(11, 2589, 20, price=30), cloth(12, 2592, 5, price=10)]
+        (step,) = room_steps(class_plan([full(carried=bolts, money=0)]))
+        self.assertFalse(any(r.command.startswith("destroy") for r in step.rows))
+
+    def test_only_as_many_material_stacks_as_the_quest_needs_are_sold(self):
+        # Bonkers owns no bank tab, so nothing is posted to its master
+        # (bank_masters, #395) and the meat stays in the bags.
+        meat = [meat_stack(20 + i, count=19, price=4 + i) for i in range(6)]
+        no_tab = {"Cave": "Grug", "Bonkers": ""}
+        (step,) = room_steps(class_plan([full(carried=meat, money=88)], masters=no_tab))
+        self.assertEqual(len(step.rows), guildjobs.ROOM_CAP)
+        self.assertEqual(
+            [r.command for r in step.rows], ["guid:20", "guid:21", "guid:22"]
+        )
+
+    def test_an_unpriced_material_is_still_destroyed(self):
+        dust = cloth(13, 2593, 5, price=0)
+        step = room_steps(class_plan([full(carried=[dust], money=0)]))[0]
+        self.assertEqual([r.command for r in step.rows], ["destroy guid:13 count:5"])
         self.assertIsNone(step.walk)
+
+    def test_grey_goes_before_any_material(self):
+        carried = [meat_stack(20, count=19, price=4), grey(1, price=2)]
+        (step,) = room_steps(class_plan([full(carried=carried)]))
+        self.assertEqual([r.command for r in step.rows], ["guid:1"])
 
     def test_with_nothing_at_all_it_is_not_held_and_says_why(self):
         plan = class_plan([full()])
