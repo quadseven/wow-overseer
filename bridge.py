@@ -23324,10 +23324,13 @@ def _fetch_guild_post(names: list) -> list:
     """Rows for guildpost.letter_from_row; no judgement here."""
     if not names:
         return []
+    # One binding of the names per `{names}` slot: the item half and the
+    # gold half each name the family's guild.
+    slots = _GUILD_POST_SQL.count("{names}")
     sql = _GUILD_POST_SQL.format(names=",".join(["%s"] * len(names)))
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(sql, list(names) * 2)  # noqa: S608 - placeholders from a COUNT
+            cur.execute(sql, list(names) * slots)  # noqa: S608 - placeholders from a COUNT
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("guild post: the mail tables cannot be read")
@@ -24280,7 +24283,7 @@ def _command_answer(row_id: int):
 # is in, with the guild master's name, because the pass picks the maintenance
 # members out of the same lineup the page draws and posts to the master.
 _DUES_MEMBERS_SQL = (
-    "SELECT g.name AS guild_name, c.name, c.class AS class_id, c.level, "
+    "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.level, "
     "c.money, c.online, lc.name AS master, " + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "

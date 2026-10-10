@@ -396,6 +396,59 @@ class GuildFund(unittest.TestCase):
         self.assertEqual([r["money"] for r in out], [120000, 50000])
 
 
+class TheRefundSurvivesARename(unittest.TestCase):
+    def test_the_ledger_keys_a_refund_by_guid(self):
+        eggrok = guildfund.Member("Eggrok", "Cave", 25, 0, 60100, guid=1184)
+        plan = guildfund.plan(
+            "Grug", [eggrok], 155 * GOLD, guildfund.Ledger(), {"Eggrok": 250 * GOLD}
+        )
+        self.assertEqual(plan.letters[0].source, "guildfund:refund:1184")
+        rows = [
+            {
+                "target_name": "Grug",
+                "source": plan.letters[0].source,
+                "status": "delivered",
+                "command": plan.letters[0].command,
+                "age": 10,
+            }
+        ]
+        renamed = guildfund.Member("Eggbert", "Cave", 25, 0, 60100, guid=1184)
+        again = guildfund.plan(
+            "Grug",
+            [renamed],
+            155 * GOLD,
+            guildfund.ledger(rows, "Grug"),
+            {"Eggbert": 250 * GOLD},
+        )
+        self.assertFalse([x for x in again.letters if x.kind == guildfund.REFUND])
+
+    def test_the_guild_rows_carry_the_guid(self):
+        members = guildfund.members_from_rows(
+            [{"name": "Eggrok", "level": 25, "money": 0, "guid": 1184}], "Cave", {}
+        )
+        self.assertEqual(members[0].key, "1184")
+        self.assertIn("c.guid, c.name", BRIDGE)
+
+    def test_a_spent_day_leaves_no_negative_budget(self):
+        rows = [
+            {
+                "target_name": "Grug",
+                "source": "guildfund:train:9",
+                "status": "delivered",
+                "command": "send money:900000 subject:For your training",
+                "age": 30,
+            }
+        ]
+        plan = guildfund.plan(
+            "Grug",
+            [member("A", 0, 5 * GOLD)],
+            100 * GOLD,
+            guildfund.ledger(rows, "Grug"),
+            {},
+        )
+        self.assertEqual(plan.letters, ())
+
+
 class GoldInTheGuildPost(unittest.TestCase):
     def test_a_letter_of_gold_is_taken_with_take_money(self):
         letter = guildpost.letter_from_row(
@@ -450,7 +503,9 @@ class BridgeWiring(unittest.TestCase):
 
     def test_the_post_reads_letters_of_gold(self):
         self.assertIn("m.money > 0", BRIDGE)
-        self.assertIn("list(names) * 2", function_source("_fetch_guild_post"))
+        body = function_source("_fetch_guild_post")
+        self.assertIn('_GUILD_POST_SQL.count("{names}")', body)
+        self.assertIn("list(names) * slots", body)
 
 
 if __name__ == "__main__":

@@ -287,7 +287,7 @@ def _not_due(member, taker, posted, eligible) -> str | None:
         return "%s is offline" % name
     if not member.dues:
         kept = keeps(member.level, member.tab_pending, member.reserve)
-        if member.reserve > float_for(member.level, member.tab_pending):
+        if member.reserve >= float_for(member.level, member.tab_pending):
             return (
                 "%s carries %s, not enough above its %s training and gear reserve to post"
                 % (

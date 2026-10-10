@@ -17,8 +17,9 @@ granted. Two kinds of letter:
                       (the command log's delivered `guilddues:` letters),
                       given back up to what it is short of its reserve, while
                       the bank holds it. The refunded members are the
-                      `guildfund:refund:<member>` letters in the command log,
-                      so a restart repeats nobody.
+                      `guildfund:refund:<guid>` letters in the command log,
+                      keyed by guid so neither a restart nor a rename repeats
+                      anybody.
   For your training   a member whose purse does not cover the class spells
                       its trainer would sell it now gets the difference, up to
                       MEMBER_DAILY_COPPER a day, the way a guild rank's daily
@@ -106,6 +107,13 @@ class Member:
     level: int
     money: int
     training: int = 0  # copper of the class spells trainable now
+    # characters.guid: what the ledger keys a member by, because a name can
+    # change (the approved lineup renamed most of the guild) and a guid cannot.
+    guid: int = 0
+
+    @property
+    def key(self) -> str:
+        return str(self.guid) if self.guid else self.name
 
     @property
     def reserve(self) -> int:
@@ -123,6 +131,8 @@ class Letter:
     dues_paid: int = 0
     money: int = 0
     reserve: int = 0
+    # The member's ledger key (Member.key): its guid when the bridge read one.
+    key: str = ""
 
     @property
     def command(self) -> str:
@@ -130,7 +140,7 @@ class Letter:
 
     @property
     def source(self) -> str:
-        return "%s:%s:%s" % (SOURCE, self.kind, self.member)
+        return "%s:%s:%s" % (SOURCE, self.kind, self.key or self.member)
 
     @property
     def said(self) -> str:
@@ -278,7 +288,7 @@ def _refunds(master, pool, book, paid, purse) -> tuple:
     letters, notes = [], []
     for m in sorted(pool, key=lambda m: (m.money - m.reserve, m.name)):
         dues = _int(paid.get(m.name))
-        if dues <= 0 or m.name in book.refunded:
+        if dues <= 0 or m.key in book.refunded or m.name in book.refunded:
             continue
         copper = min(dues, m.reserve - m.money, purse)
         if m.reserve <= m.money:
@@ -286,14 +296,19 @@ def _refunds(master, pool, book, paid, purse) -> tuple:
                 "%s paid %s of dues and holds its %s reserve; no refund"
                 % (m.name, gold(dues), gold(m.reserve))
             )
-        elif copper < MIN_LETTER_COPPER:
+        elif purse < MIN_LETTER_COPPER:
             notes.append(
                 "%s waits for a refund: the bank holds %s" % (m.name, gold(purse))
+            )
+        elif copper < MIN_LETTER_COPPER:
+            notes.append(
+                "%s is %s short of its reserve, under the %s a letter is worth"
+                % (m.name, gold(m.reserve - m.money), gold(MIN_LETTER_COPPER))
             )
         else:
             purse -= copper
             letters.append(
-                Letter(master, m.name, copper, REFUND, dues, m.money, m.reserve)
+                Letter(master, m.name, copper, REFUND, dues, m.money, m.reserve, m.key)
             )
     return letters, notes, purse
 
@@ -307,7 +322,7 @@ def _training(master, pool, book, skip, budget) -> tuple:
         short = m.training - m.money
         if m.name in skip or short <= 0:
             continue
-        room = MEMBER_DAILY_COPPER - given.get(m.name, 0)
+        room = MEMBER_DAILY_COPPER - given.get(m.key, given.get(m.name, 0))
         copper = min(short, room, budget)
         if room < MIN_LETTER_COPPER:
             notes.append(
@@ -317,7 +332,7 @@ def _training(master, pool, book, skip, budget) -> tuple:
         elif copper >= MIN_LETTER_COPPER:
             budget -= copper
             letters.append(
-                Letter(master, m.name, copper, TRAIN, 0, m.money, m.training)
+                Letter(master, m.name, copper, TRAIN, 0, m.money, m.training, m.key)
             )
     return letters, notes
 
@@ -336,7 +351,7 @@ def plan(master, members, bank, book, paid, roster=frozenset()) -> Plan:
     refunds, notes, purse = _refunds(
         master, pool, book, paid, max(0, _int(bank)) + book.carried
     )
-    budget = min(purse, daily_budget(purse) - book.spent_today)
+    budget = max(0, min(purse, daily_budget(purse) - book.spent_today))
     training, more = _training(master, pool, book, {x.member for x in refunds}, budget)
     letters = refunds + training
     total = sum(x.copper for x in letters)
@@ -395,6 +410,7 @@ def members_from_rows(rows, guild, dues) -> list:
                     _int(r.get("level")),
                     _int(r.get("money")),
                     _int(getattr(due, "copper", 0)),
+                    _int(r.get("guid")),
                 )
             )
     return out
