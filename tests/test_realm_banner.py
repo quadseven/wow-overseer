@@ -46,16 +46,14 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
 
     def test_the_handler_sits_outside_every_window_in_map_server(self):
         """The Family and Armory suites slice to `def _thoughts`, the
-        current-goal banner's from `def _agenda` to `def do_POST`, and the
-        Standing suite from `def _standing` to `def _questlog`. This handler is
-        above all of them, which is also where it belongs: it answers which
+        current-goal banner's from `def _agenda` to `def do_POST`. This handler
+        is above all of them, which is also where it belongs: it answers which
         world, and the rest only mean something inside that answer."""
         realm_at = self.server.index("    def _realm(")
         for later in (
             "def _map",
             "def _family",
             "def _armory",
-            "def _standing",
             "def _thoughts",
             "def _agenda",
             "def do_POST",

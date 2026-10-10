@@ -126,7 +126,7 @@ class TheArmoryLinksBackToTheChronicle(unittest.TestCase):
         overseer_event is not. A realm without it must still get a paper
         doll."""
         fetch = SERVER[SERVER.index("def _fetch_armory") :]
-        fetch = fetch[: fetch.index("def _fetch_standing")]
+        fetch = fetch[: fetch.index("_QUESTLOG_SQL = (")]
         self.assertIn("_wide_guarded(", fetch)
         self.assertIn("equip_event_rows", fetch)
 

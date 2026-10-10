@@ -113,7 +113,9 @@ class TheRequest(unittest.TestCase):
 
 
 class TheHandler(unittest.TestCase):
-    HANDLER = SERVER[SERVER.index("def _trade_crafts") : SERVER.index("def _dungeons")]
+    HANDLER = SERVER[
+        SERVER.index("def _trade_crafts") : SERVER.index("def _run_timeline")
+    ]
 
     def test_the_skill_is_validated_before_any_read(self):
         h = self.HANDLER
@@ -126,7 +128,9 @@ class TheHandler(unittest.TestCase):
             self.assertNotIn(banned, h, banned)
 
     def test_the_plain_form_still_takes_nothing(self):
-        plain = SERVER[SERVER.index("    def _trades") : SERVER.index("def _dungeons")]
+        plain = SERVER[
+            SERVER.index("    def _trades") : SERVER.index("def _run_timeline")
+        ]
         self.assertNotIn("query.get", plain)
         self.assertIn('if "skill" in query:', plain)
 

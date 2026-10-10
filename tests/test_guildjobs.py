@@ -19,7 +19,6 @@ import keep
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
-SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 H, M, S = guildjobs.HERBALISM, guildjobs.MINING, guildjobs.SKINNING
@@ -1266,12 +1265,6 @@ class TheBridgePass(unittest.TestCase):
 
 
 class ThePage(unittest.TestCase):
-    def test_the_lineup_endpoint_attaches_every_members_job(self):
-        lineup = SERVER[SERVER.index("    def _lineup(") :]
-        self.assertIn("guildjobs.attach_jobs(", lineup)
-        self.assertIn("guildjobs.contributions(", lineup)
-        self.assertIn("guildjobs.page_doing(", SERVER)
-
     def test_the_module_ships_in_the_image(self):
         self.assertIn("guildjobs.py", DOCKERFILE)
 
