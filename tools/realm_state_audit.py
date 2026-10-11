@@ -67,6 +67,13 @@ def _level_distribution(raidteam: dict) -> dict:
     }
 
 
+def _public_member(row: dict, member_ids: dict) -> dict:
+    return {
+        **{key: value for key, value in row.items() if key != "name"},
+        "member_id": member_ids[row["name"]],
+    }
+
+
 def build_report(
     roster: dict,
     raidteams: dict[str, dict],
@@ -87,19 +94,30 @@ def build_report(
             (row for row in all_members if row["guild"] == guild),
             key=lambda row: row["name"] or "",
         )
+        member_ids = {
+            row["name"]: f"{guild}-{index:03d}"
+            for index, row in enumerate(members, start=1)
+        }
+
         offline = [
-            {**row, "last_seen": None, "last_seen_status": "not exposed by API"}
+            {
+                **_public_member(row, member_ids),
+                "last_seen": None,
+                "last_seen_status": "not exposed by API",
+            }
             for row in members
             if not row["online"]
         ]
         guild_reports[guild] = {
             "member_count": len(members),
             "online_count": sum(row["online"] for row in members),
-            "online_members": [row for row in members if row["online"]],
+            "online_members": [
+                _public_member(row, member_ids) for row in members if row["online"]
+            ],
             "offline_members": offline,
             "dead_members": [
                 {
-                    "name": row["name"],
+                    "member_id": member_ids[row["name"]],
                     "location": row["location"],
                     "duration_seconds": None,
                 }
@@ -109,7 +127,7 @@ def build_report(
             "ghost_members": [],
             "stuck_members": [
                 {
-                    "name": row["name"],
+                    "member_id": member_ids[row["name"]],
                     "location": row["location"],
                     "duration_seconds": row["stuck_duration_seconds"],
                     "blocker": row["blocker"],
@@ -130,7 +148,7 @@ def build_report(
             at = death.get("at")
             guild_reports[guild]["ghost_members"].append(
                 {
-                    "name": row["name"],
+                    "member_id": member_ids[row["name"]],
                     "location": row["location"] or death.get("where"),
                     "death_at": _utc(at),
                     "duration_seconds": (
