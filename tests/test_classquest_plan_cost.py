@@ -14,15 +14,12 @@ import unittest
 from unittest import mock
 
 import classquest
-import guildjobs
-from test_classquest import KALIMDOR, book, qrow, who, givers, LIZARD, HIDE
+from test_classquest import KALIMDOR, book, who, LIZARD, HIDE
 
 
 def packs(n):
     """n spawns of one creature on Kalimdor, 100 yards apart (one pack each)."""
-    return [
-        dict(LIZARD, guid=9000 + i, x=500.0 + 100 * i, y=-4000.0) for i in range(n)
-    ]
+    return [dict(LIZARD, guid=9000 + i, x=500.0 + 100 * i, y=-4000.0) for i in range(n)]
 
 
 def spread_book(n=6):

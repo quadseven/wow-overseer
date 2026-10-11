@@ -1769,7 +1769,9 @@ def all_tried(member, quest: Quest, avoid) -> bool:
     # quadratic in the spawns of a creature (2026-10-11: the guild job plan
     # held the event loop for 40 seconds).
     here = int(member.map_id)
-    exact = {(int(m), float(x), float(y)) for m, x, y in avoid or ()}
+    if not avoid:
+        return not any(int(s.map_id) == here for s in fields)
+    exact = {(int(m), float(x), float(y)) for m, x, y in avoid}
     return not any(
         int(s.map_id) == here
         and (int(s.map_id), float(s.x), float(s.y)) not in exact
