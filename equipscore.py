@@ -308,6 +308,30 @@ def _template_refusal(row: dict) -> str:
     return ""
 
 
+HUNTER = 3
+# Weapon inventory types worn in a hand. A hunter's ranged weapon (bow, gun,
+# crossbow) is 15 or 26, and those are never refused here.
+MELEE_TYPES = frozenset({ONE_HAND, TWO_HAND, MAIN_HAND_ONLY, OFF_HAND_WEAPON})
+
+
+def _bot_refusal(row: dict, wearer: Wearer) -> str:
+    """What mod-playerbots' own equip will not do, whatever the numbers say.
+
+    Measured on the dev realm over two days: `e` put on 0 of 11 melee weapons
+    asked of hunters, though each held the skill line and the piece was a
+    clear upgrade; their bots keep the weapon they were made with. Asking
+    three times and holding the piece back cost the guild the same hour each
+    time, so the piece is not asked for at all.
+    """
+    if (
+        wearer.class_id == HUNTER
+        and _int(row.get("item_class")) == ITEM_CLASS_WEAPON
+        and _int(row.get("inventory_type")) in MELEE_TYPES
+    ):
+        return "a hunter's bot does not wear a melee weapon"
+    return ""
+
+
 def _mask_refuses(mask: int, bit_of: int) -> bool:
     return bit_of > 0 and mask not in (0, -1) and not mask & (1 << (bit_of - 1))
 
@@ -359,6 +383,7 @@ def refusal(row: dict, wearer: Wearer, off_hand: bool = False) -> str:
     """Why this member cannot put the piece on now, or "" when it can."""
     return (
         _template_refusal(row)
+        or _bot_refusal(row, wearer)
         or _wearer_refusal(row, wearer)
         or _skill_refusal(row, wearer)
         or _hand_refusal(row, wearer, off_hand)

@@ -434,3 +434,52 @@ class ThePageShowsItOnAPhone(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AHeldEquipIsNotWhatTheMemberIsDoing(unittest.TestCase):
+    """Ten members read 'Trying to wear Gladius: waiting for the game to accept
+    it (3 tries)' for over an hour while they walked, fought and ran dungeons.
+    The equip hold is a note on the side; it speaks only when nothing else does."""
+
+    def held(self):
+        return step(
+            "Zug",
+            "Trying to wear Gladius",
+            "the game to accept it (3 tries)",
+            kind="equip_held",
+            first=4560,
+            last=30,
+        )
+
+    def test_the_members_own_work_wins(self):
+        got = line_of("Zug", [self.held()])
+        self.assertNotIn("Trying to wear", got["line"])
+        self.assertIn("Walking", got["line"])
+
+    def test_a_follower_is_still_following(self):
+        got = line_of(
+            "Oz",
+            [
+                step(
+                    "Oz",
+                    "Trying to wear Gladius",
+                    "the game to accept it (3 tries)",
+                    kind="equip_held",
+                )
+            ],
+        )
+        self.assertIn("Following Zug", got["line"])
+        self.assertNotIn("the game to accept it", got["line"])
+
+    def test_the_job_wins_over_the_hold(self):
+        solo = nowstatus.build_facts(["Zug"], ROSTER, [], [self.held()], NOW)["Zug"]
+        got = nowstatus.compose({"name": "Zug", "present": True}, solo)
+        self.assertIn("dungeon job", got["doing"])
+        self.assertNotIn("the game to accept it", got["line"])
+
+    def test_alone_the_hold_still_speaks(self):
+        solo = nowstatus.build_facts(
+            ["Idler"], ROSTER, [], [self.held() | {"subject": "Idler"}], NOW
+        )["Idler"]
+        got = nowstatus.compose({"name": "Idler", "present": True}, solo)
+        self.assertIn("Trying to wear Gladius", got["line"])

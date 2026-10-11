@@ -549,3 +549,69 @@ class TheBridgeMakesItTheJudge(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AHuntersBotNeverWearsAMeleeWeapon(unittest.TestCase):
+    """Measured on the dev realm over two days: mod-playerbots' equip put on
+    0 of 11 melee weapons asked of hunters (and 8 of 10 asked of warriors).
+    Six hunters held a Gladius or a Stiletto, held the skill line for it, and
+    were told `e` three times each; the pieces stayed in the bags."""
+
+    HUNTER = 3
+
+    def dug(self):
+        return es.wearer_from_row(
+            member("Dug", self.HUNTER, 16, skills="43,44,45,172,173")
+        )
+
+    def gladius(self):
+        return piece(
+            "Gladius",
+            13,
+            2,
+            7,
+            level=9,
+            req=4,
+            dmg_min1=5,
+            dmg_max1=11,
+            delay=2100,
+        )
+
+    def battleaxe(self):
+        return piece(
+            "Worn Battleaxe",
+            17,
+            2,
+            1,
+            level=2,
+            req=0,
+            slot=15,
+            dmg_min1=3,
+            dmg_max1=5,
+            delay=2900,
+        )
+
+    def test_a_melee_upgrade_is_not_asked_for(self):
+        self.assertEqual(
+            es.choose(self.dug(), [self.battleaxe()], [self.gladius()]), ()
+        )
+
+    def test_the_refusal_names_the_reason(self):
+        self.assertIn("melee", es.refusal(self.gladius(), self.dug()))
+
+    def test_a_ranged_weapon_is_still_worn(self):
+        bow = piece(
+            "Short Bow", 15, 2, 2, level=9, req=4, dmg_min1=5, dmg_max1=11, delay=2100
+        )
+        got = es.choose(self.dug(), [], [bow])
+        self.assertEqual([e.name for e in got], ["Short Bow"])
+
+    def test_a_melee_weapon_is_not_a_skill_wait_either(self):
+        w = es.wearer_from_row(member("Dug", self.HUNTER, 16, skills="44,45,172"))
+        self.assertEqual(
+            es.waiting_on_skill(w, [self.battleaxe()], [self.gladius()]), ()
+        )
+
+    def test_a_warrior_still_wears_the_same_sword(self):
+        w = es.wearer_from_row(member("Durg", 1, 25, skills=WARRIOR_SKILLS))
+        self.assertEqual(es.refusal(self.gladius(), w), "")
