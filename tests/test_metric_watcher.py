@@ -3,7 +3,12 @@
 import json
 from datetime import datetime, timezone
 
-from tools.metric_watcher import build_metrics, estimate_level_60_date, append_jsonl
+from tools.metric_watcher import (
+    _previous,
+    append_jsonl,
+    build_metrics,
+    estimate_level_60_date,
+)
 
 
 def report(levels, checked_at=1800):
@@ -78,3 +83,11 @@ def test_jsonl_append_preserves_prior_records(tmp_path):
         "one",
         "two",
     ]
+
+
+def test_previous_reads_last_record_when_jsonl_ends_with_newline(tmp_path):
+    path = tmp_path / "metrics.jsonl"
+    append_jsonl(path, {"level_snapshot": {"id": "one"}})
+    append_jsonl(path, {"level_snapshot": {"id": "two"}})
+
+    assert _previous(path) == {"id": "two"}
