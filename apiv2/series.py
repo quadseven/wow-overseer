@@ -3,7 +3,9 @@
     /api/v2/series?name=Grug     -> {name, level, xp_per_hour,
                                      xp_per_hour_24h, xp_hours_measured, basis}
     /api/v2/series?guild=cave    -> {guild, members, measured, level,
-                                     xp_per_hour, by_member, basis}
+                                     xp_per_hour, by_member,
+                                     xp_to_level_60_by_member,
+                                     level_60_total_xp, basis}
 
 `level` is [[ts, level]] over the last 7 days and `xp_per_hour` is [[ts, n]],
 one point per hour over the last 24. Every ts is a Unix time in seconds, read
@@ -95,6 +97,15 @@ def total_xp(level: int, xp_into: int, table: dict) -> int | None:
             return None
         total += int(step)
     return total + max(0, int(xp_into or 0))
+
+
+def xp_to_level_60(level: int, xp_into: int, table: dict) -> int | None:
+    """Experience still needed to reach level 60, or None for an incomplete table."""
+    target = total_xp(60, 0, table)
+    current = total_xp(level, xp_into, table)
+    if target is None or current is None:
+        return None
+    return max(0, target - current)
 
 
 def anchors(events: list, level: int, xp_into: int, now: float, table: dict) -> list:
@@ -225,11 +236,13 @@ def guild_series(name: str, chars: list, events: list, table: dict, now: float) 
         by_guid.setdefault(int(ev["guid"]), []).append(ev)
     hours = []
     by_member = {}
+    remaining = {}
     for char in chars:
         mine = by_guid.get(int(char["guid"]), [])
         points = anchors(mine, char["level"], char["xp"], now, table)
         hours.append(hourly(points, now))
         by_member[char["name"]] = rate(hours[-1])
+        remaining[char["name"]] = xp_to_level_60(char["level"], char["xp"], table)
     measured = sum(1 for h in hours if any(v is not None for _, v in h))
     start = now - LEVEL_DAYS * DAY
     steps = int(LEVEL_DAYS * DAY // GUILD_LEVEL_STEP)
@@ -246,6 +259,10 @@ def guild_series(name: str, chars: list, events: list, table: dict, now: float) 
         "level": level,
         "xp_per_hour": measured_or_empty(_sum_hours(hours)),
         "by_member": by_member,
+        # These totals are derived from the current character XP, level-change
+        # history, and the core XP table read above; they do not write realm state.
+        "xp_to_level_60_by_member": remaining,
+        "level_60_total_xp": total_xp(60, 0, table),
         "basis": BASIS,
     }
 

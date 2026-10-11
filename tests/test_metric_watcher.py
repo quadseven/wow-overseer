@@ -7,8 +7,10 @@ from tools.metric_watcher import (
     _previous,
     append_jsonl,
     build_metrics,
+    collect,
     estimate_level_60_date,
 )
+from tools import metric_watcher
 
 
 def report(levels, checked_at=1800):
@@ -46,7 +48,9 @@ def guild_payload():
 
 
 def test_metrics_are_per_guild_and_use_counts_without_member_names():
-    records = build_metrics(report([20, 30]), guild_payload())
+    payloads = guild_payload()
+    payloads["Cave"]["series"] = {"xp_per_hour": [[100, 120], [200, None], [300, 180]]}
+    records = build_metrics(report([20, 30]), payloads)
 
     cave = records["guilds"]["Cave"]
     assert cave["level_gainers_24h"] == 1
@@ -54,10 +58,59 @@ def test_metrics_are_per_guild_and_use_counts_without_member_names():
     assert cave["class_quests"] == {"done": 7, "blocked": 2}
     assert cave["runs"] == {"started": 0, "entered": 4, "cleared": 2, "wiped": 1}
     assert cave["offline"] == 1
+    assert cave["xp_per_hour_24h"] == 150
+    assert cave["xp_hours_measured"] == 2
     assert "Sample" not in json.dumps(records)
-    assert (
-        records["xp_source"] == "unavailable: API exposes level changes, not experience"
-    )
+    assert records["xp_source"] == "measured by /api/v2/series"
+
+
+def test_collect_reads_the_read_only_guild_series_endpoint(monkeypatch):
+    requested = []
+
+    def fetch(url):
+        requested.append(url)
+        if url.endswith("/roster"):
+            return {"checked_at": 1800, "members": []}
+        if "/raidteams?" in url:
+            return {"members": {}}
+        if "/series?" in url:
+            return {"xp_per_hour": [[1800, 90]]}
+        return {}
+
+    monkeypatch.setattr(metric_watcher.realm_state_audit, "fetch_json", fetch)
+
+    record, _ = collect("https://example.com/api/v2")
+
+    assert "https://example.com/api/v2/series?guild=Cave" in requested
+    assert "https://example.com/api/v2/series?guild=Bonkers" in requested
+    assert record["guilds"]["Cave"]["xp_per_hour_24h"] == 90
+
+
+def test_xp_projection_uses_seated_remaining_experience_and_guild_rate():
+    payloads = {
+        "Cave": {
+            "seat_members": ["A"],
+            "series": {
+                "xp_per_hour": [[1800, 100]],
+                "xp_to_level_60_by_member": {"A": 100},
+                "level_60_total_xp": 1000,
+            },
+        },
+        "Bonkers": {
+            "seat_members": ["B"],
+            "series": {
+                "xp_per_hour": [[1800, 100]],
+                "xp_to_level_60_by_member": {"B": 200},
+                "level_60_total_xp": 1000,
+            },
+        },
+    }
+
+    projection = metric_watcher._xp_projection(payloads, 1800)
+
+    assert projection["remaining_xp"] == 38300
+    assert projection["xp_per_hour_24h"] == 200
+    assert projection["projected_at"] == "1970-01-09T00:00:00Z"
 
 
 def test_projection_uses_snapshot_level_rate_and_targets_40_level_60_seats():
