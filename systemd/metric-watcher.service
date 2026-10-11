@@ -1,0 +1,10 @@
+[Unit]
+Description=Append read-only realm metric snapshot
+
+[Service]
+Type=oneshot
+User=wow-overseer
+Group=wow-overseer
+EnvironmentFile=/etc/wow-overseer/metric-watcher.env
+WorkingDirectory=/opt/wow-overseer
+ExecStart=/usr/bin/python3 /opt/wow-overseer/tools/metric_watcher.py
