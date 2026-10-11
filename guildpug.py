@@ -164,7 +164,7 @@ class Join:
 @dataclass(frozen=True)
 class Silence:
     """A called ask whose seat no random bot answered this pass, and why:
-    how many random bots were read and the commonest reasons each could not."""
+    how many random bots were read and every reason each could not, commonest first."""
 
     ask_id: int
     asker: str
@@ -313,10 +313,6 @@ def worth(mate, door, entrances: dict) -> float:
     return guildsocial.worth(mate, door, guildsocial.XP_BAND, entrances)
 
 
-# How many reasons a Silence names.
-SILENCE_REASONS = 3
-
-
 def silence(
     ask,
     seat: str,
@@ -329,7 +325,8 @@ def silence(
     family=frozenset(),
 ) -> Silence:
     """Why no random bot of `pugs` answers this ask's seat: each one's
-    why_not_pug, counted, the commonest first."""
+    why_not_pug, counted, every reason, the commonest first (the reasons are
+    a short fixed set, so the line stays short)."""
     tally: dict = {}
     for m in pugs:
         why = why_not_pug(
@@ -344,7 +341,7 @@ def silence(
         seat,
         guildsocial.short_place(door.place),
         len(pugs),
-        tuple(reasons[:SILENCE_REASONS]),
+        tuple(reasons),
     )
 
 

@@ -475,6 +475,16 @@ class WhyNobodyAnswers(unittest.TestCase):
         self.assertIn("3 random bot(s) read, 2 the other side, 1 does not play", s.line)
         self.assertTrue(s.line.isascii())
 
+    def test_every_reason_is_counted_not_just_the_top_three(self):
+        whys = ["a"] * 5 + ["b"] * 4 + ["c"] * 3 + ["d"] * 2 + ["e"] + [""]
+        pugs = [pug("Bot%d" % i) for i in range(len(whys))]
+        ask = mock.Mock(id=7, asker="Auren", guild="G")
+        door = mock.Mock(place="Deadmines")
+        with mock.patch.object(gp, "why_not_pug", side_effect=whys):
+            s = gp.silence(ask, "healer", door, pugs, 20, "A", {})
+        self.assertEqual((("a", 5), ("b", 4), ("c", 3), ("d", 2), ("e", 1)), s.reasons)
+        self.assertIn("5 a, 4 b, 3 c, 2 d, 1 e", s.line)
+
     def test_an_answered_seat_is_not_silent(self):
         self.assertEqual((), self.silences([pug("Mercy")]))
 
