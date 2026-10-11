@@ -167,6 +167,7 @@ def build_report(
             "/api/v2/guild?guild=Bonkers",
         ],
         "limitations": {
+            "online_location": "The API omits a location when the member's zone is unknown.",
             "offline_last_seen": "The API does not expose a last-seen timestamp.",
             "dead_duration": "The API exposes current corpse state but not when it began.",
             "ghost_duration": "A duration is available only when the guild endpoint has a matching death record.",

@@ -178,3 +178,24 @@ def test_api_parse_error_names_the_endpoint():
             assert url in str(exc)
         else:
             raise AssertionError("invalid JSON must identify the endpoint")
+
+
+def test_report_documents_unavailable_location_and_death_duration():
+    report = build_report(
+        {
+            "checked_at": 1000,
+            "members": [
+                {
+                    "name": "SampleA",
+                    "guild": "Cave",
+                    "level": 10,
+                    "online": True,
+                    "life": "alive",
+                }
+            ],
+        },
+        {},
+    )
+
+    assert "online_location" in report["limitations"]
+    assert "dead_duration" in report["limitations"]
