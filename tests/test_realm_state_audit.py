@@ -68,6 +68,8 @@ def test_report_groups_roster_and_counts_only_seated_levels():
 
     cave = report["guilds"]["Cave"]
     assert cave["online_count"] == 2
+    assert cave["online_members"][0]["member_id"] == "Cave-001"
+    assert "name" not in cave["online_members"][0]
     assert cave["level_distribution"]["seat_count"] == 2
     assert cave["level_distribution"]["median"] == 15
     assert cave["level_distribution"]["lowest"] == 10
@@ -80,6 +82,8 @@ def test_report_groups_roster_and_counts_only_seated_levels():
     ghost = report["guilds"]["Cave"]["ghost_members"][0]
     assert ghost["location"] == "Duskwood"
     assert ghost["duration_seconds"] == 100
+    assert ghost["member_id"] == "Cave-002"
+    assert "name" not in ghost
 
 
 def test_missing_raidteam_is_reported_with_an_empty_distribution():
