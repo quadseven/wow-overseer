@@ -188,9 +188,7 @@ def collect(api_root: str) -> dict:
     raidteams = {
         guild: fetch_json(f"{root}/raidteams?guild={guild}") for guild in GUILDS
     }
-    guilds = {
-        guild: fetch_json(f"{root}/guild?guild={guild}") for guild in GUILDS
-    }
+    guilds = {guild: fetch_json(f"{root}/guild?guild={guild}") for guild in GUILDS}
     return build_report(roster, raidteams, guilds)
 
 

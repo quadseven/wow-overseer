@@ -59,11 +59,7 @@ def test_report_groups_roster_and_counts_only_seated_levels():
     }
     guilds = {
         "Cave": {
-            "deaths": {
-                "ghosts": [
-                    {"name": "SampleB", "where": "Duskwood", "at": 900}
-                ]
-            }
+            "deaths": {"ghosts": [{"name": "SampleB", "where": "Duskwood", "at": 900}]}
         },
         "Bonkers": {"deaths": {"ghosts": []}},
     }
