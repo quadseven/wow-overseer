@@ -113,6 +113,24 @@ def test_xp_projection_uses_seated_remaining_experience_and_guild_rate():
     assert projection["projected_at"] == "1970-01-09T00:00:00Z"
 
 
+def test_xp_projection_reports_now_when_all_40_seats_are_level_60():
+    names = [f"Member{index}" for index in range(40)]
+    payloads = {
+        "Cave": {
+            "seat_members": names,
+            "series": {
+                "xp_to_level_60_by_member": dict.fromkeys(names, 0),
+                "level_60_total_xp": 1000,
+            },
+        },
+    }
+
+    projection = metric_watcher._xp_projection(payloads, 1800)
+
+    assert projection["remaining_xp"] == 0
+    assert projection["projected_at"] == "1970-01-01T00:30:00Z"
+
+
 def test_projection_uses_snapshot_level_rate_and_targets_40_level_60_seats():
     previous = report([58] * 40, checked_at=0)
     current = report([59] * 40, checked_at=86400)

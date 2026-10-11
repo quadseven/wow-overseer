@@ -59,14 +59,12 @@ def _guild_xp_projection_inputs(source: dict) -> dict | None:
         for name in seat_members
     ):
         return None
-    per_hour, measured = _xp_rate(series)
-    if measured == 0:
-        return None
+    per_hour, _ = _xp_rate(series)
     return {
         "seats": len(seat_members),
         "remaining_xp": sum(int(remaining_by_member[name]) for name in seat_members),
         "level_60_total_xp": int(target_xp),
-        "xp_per_hour": int(per_hour),
+        "xp_per_hour": int(per_hour or 0),
     }
 
 
