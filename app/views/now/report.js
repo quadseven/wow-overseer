@@ -20,8 +20,9 @@ export function reportFacts({ guild, series, stuck, now = Date.now() / 1000 }) {
   const dungeons = (guild && guild.dungeons || []).map((d) => {
     const attempts = Number(d.runs || 0);
     const cleared = Number(d.cleared || 0);
-    return { ...d, attempts, cleared, clearRate: attempts ? cleared / attempts : null };
-  });
+    const clearsPerAttempt = attempts ? cleared / attempts : null;
+    return { ...d, attempts, cleared, clearsPerAttempt, clearRate: clearsPerAttempt };
+  }).sort((a, b) => Number(a.floor ?? Infinity) - Number(b.floor ?? Infinity));
   const blockers = new Map();
   const memberNames = new Set((guild && guild.members || []).map((member) => member.name));
   for (const member of (stuck && stuck.members) || []) {
@@ -56,7 +57,7 @@ function guildCard(ctx, guild) {
   if (!g || !s) return html`<article class="card nr-guild"><h3>${guild.name}</h3><p class="muted">Guild metrics are not measured yet.</p></article>`;
   const facts = reportFacts({ guild: g, series: s, stuck: ctx.get("/api/v2/stuck")?.data, now: g.now });
   const delta = facts.levelDelta === null ? notMeasured("level change not measured") : (facts.levelDelta > 0 ? "+" : "") + facts.levelDelta.toFixed(1) + " median levels / 7d";
-  const ladder = facts.dungeons.length ? html`<ol class="nr-ladder">${facts.dungeons.map((d) => html`<li><span class="nr-dungeon"><span>${d.place}</span><span class="dim">L${d.floor ?? "?"}${d.ceiling ? "-" + d.ceiling : ""}</span></span><span class="nr-clears">${d.cleared} clear${d.cleared === 1 ? "" : "s"}</span><span class="dim">${d.attempts} attempts${d.clearRate === null ? "" : " | " + Math.round(d.clearRate * 100) + "%"}</span></li>`)}</ol>` : html`<p class="muted">Dungeon ladder not measured.</p>`;
+  const ladder = facts.dungeons.length ? html`<ol class="nr-ladder">${facts.dungeons.map((d) => html`<li><span class="nr-dungeon"><span>${d.place}</span><span class="dim">L${d.floor ?? "?"}${d.ceiling ? "-" + d.ceiling : ""}</span></span><span class="nr-clears">${d.cleared} clear${d.cleared === 1 ? "" : "s"}</span><span class="dim">${d.attempts} attempts${d.clearsPerAttempt === null ? "" : " | " + Math.round(d.clearsPerAttempt * 100) + "% clears / attempt"}</span></li>`)}</ol>` : html`<p class="muted">Dungeon ladder not measured.</p>`;
   const blocker = facts.topBlocker ? `${facts.topBlocker.reason} | ${facts.topBlocker.memberHours.toFixed(1)} member-hours across ${plural(facts.topBlocker.members, "member")}` : "No current blocker recorded.";
   return html`<article class="card nr-guild"><div class="nr-head"><h3>${guild.name}</h3><span class="nr-delta">${delta}</span></div><div><span class="kicker">Cleared dungeons | level order</span>${ladder}</div><p class="nr-blocker"><span class="kicker">Top blocker</span><span>${blocker}</span></p><p class="nr-projection"><span class="kicker">Level 60 projection</span><span>${projectionLabel(facts.projectedAt)}${facts.measuredMembers ? " | estimate from each member's measured 24h XP rate" : " | complete member XP rates not measured"}</span></p></article>`;
 }
@@ -64,7 +65,7 @@ function guildCard(ctx, guild) {
 export function reportSection(ctx, guilds, agendas, roll) {
   const stuck = ctx.get("/api/v2/stuck");
   const shipped = roll && roll.data && roll.data.shipped;
-  const shippedText = shipped && shipped.length ? shipped.join(" | ") : "Release details and verification are not recorded by the realm.";
+  const shippedText = shipped && shipped.length ? shipped.join(" | ") : "Shipped changes and verification are not measured.";
   const next = agendas.flatMap((read) => {
     const queue = read && read.data && read.data.queue;
     if (!queue) return [];
