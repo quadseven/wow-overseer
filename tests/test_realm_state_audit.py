@@ -114,6 +114,28 @@ def test_public_member_records_use_ids_instead_of_names():
     assert "name" not in ghost
 
 
+def test_public_blockers_remove_character_names():
+    report = build_report(
+        {
+            "checked_at": 1000,
+            "members": [
+                {
+                    "name": "SampleA",
+                    "guild": "Bonkers",
+                    "online": True,
+                    "stuck": True,
+                    "blocker": "Waiting for ExampleNpc at the bag floor.",
+                }
+            ],
+        },
+        {},
+    )
+
+    blocker = report["guilds"]["Bonkers"]["stuck_members"][0]["blocker"]
+    assert blocker == "Waiting for the NPC at the bag floor."
+    assert "ExampleNpc" not in blocker
+
+
 def test_missing_raidteam_is_reported_with_an_empty_distribution():
     report = build_report(
         {"checked_at": 1000, "members": []}, {"Cave": {"members": {}}}
