@@ -10,7 +10,8 @@ export function reportFacts({ guild, series, stuck, now = Date.now() / 1000 }) {
   const byMember = series && series.by_member || {};
   const remaining = names.map((name) => xp[name]);
   const rates = names.map((name) => byMember[name] || {});
-  const complete = names.length > 0 && names.length === Number(guild && guild.count || names.length)
+  const memberCount = Number(guild && guild.count);
+  const complete = Number.isFinite(memberCount) && memberCount > 0 && names.length === memberCount
     && remaining.every(Number.isFinite)
     && rates.every((rate) => Number(rate.xp_hours_measured || 0) > 0 && Number.isFinite(Number(rate.xp_per_hour_24h)));
   const remainingXp = complete ? remaining.reduce((a, b) => a + b, 0) : null;
