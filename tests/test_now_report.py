@@ -51,9 +51,17 @@ console.log(JSON.stringify(html));
             self.assertEqual(result.returncode, 0, result.stderr)
         markup = json.loads(result.stdout)
         for content in (
-            "Cave", "Bonkers", "median levels / 7d", "clears / attempt",
-            "Deadmines", "Wailing Caverns", "member-hours", "Shipped changes",
-            "Verification", "Next actions", "Level 60 projection",
+            "Cave",
+            "Bonkers",
+            "median levels / 7d",
+            "clears / attempt",
+            "Deadmines",
+            "Wailing Caverns",
+            "member-hours",
+            "Shipped changes",
+            "Verification",
+            "Next actions",
+            "Level 60 projection",
             "measured 24h XP rate",
             "Refreshes every 30 seconds",
         ):
