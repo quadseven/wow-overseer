@@ -1,0 +1,211 @@
+"""Read the overseer API and build a machine-readable realm state report."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import statistics
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+GUILDS = ("Cave", "Bonkers")
+
+
+def _utc(timestamp: int | float | None) -> str | None:
+    if timestamp is None:
+        return None
+    return (
+        datetime.fromtimestamp(timestamp, timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _member(row: dict, checked_at: int) -> dict:
+    since = row.get("since")
+    stuck_duration = (
+        max(0, checked_at - int(since))
+        if row.get("stuck") and since is not None
+        else None
+    )
+    return {
+        "name": row.get("name"),
+        "guild": row.get("guild"),
+        "level": row.get("level"),
+        "location": row.get("zone") or None,
+        "online": bool(row.get("online")),
+        "life": row.get("life"),
+        "stuck": bool(row.get("stuck")),
+        "stuck_kind": row.get("stuck_kind") or None,
+        "blocker": row.get("blocker") or None,
+        "stuck_since": _utc(since) if row.get("stuck") else None,
+        "stuck_duration_seconds": stuck_duration,
+    }
+
+
+def _level_distribution(raidteam: dict) -> dict:
+    levels = sorted(
+        int(member["level"])
+        for member in raidteam.get("members", {}).values()
+        if member.get("level") is not None
+    )
+    histogram = {str(level): 0 for level in range(1, 61)}
+    for level in levels:
+        histogram[str(level)] += 1
+    return {
+        "seat_count": len(raidteam.get("members", {})),
+        "levels_with_data": len(levels),
+        "median": statistics.median(levels) if levels else None,
+        "lowest": min(levels) if levels else None,
+        "histogram": histogram,
+    }
+
+
+def build_report(roster: dict, raidteams: dict[str, dict]) -> dict:
+    """Build guild rosters and status summaries from read-only API payloads."""
+    if roster.get("checked_at") is None:
+        raise ValueError("roster response is missing checked_at")
+    checked_at = int(roster["checked_at"])
+    all_members = [_member(row, checked_at) for row in roster.get("members", [])]
+    guild_reports = {}
+    for guild in GUILDS:
+        members = sorted(
+            (row for row in all_members if row["guild"] == guild),
+            key=lambda row: row["name"] or "",
+        )
+        offline = [
+            {**row, "last_seen": None, "last_seen_status": "not exposed by API"}
+            for row in members
+            if not row["online"]
+        ]
+        guild_reports[guild] = {
+            "member_count": len(members),
+            "online_count": sum(row["online"] for row in members),
+            "online_members": [row for row in members if row["online"]],
+            "offline_members": offline,
+            "dead_members": [
+                {
+                    "name": row["name"],
+                    "location": row["location"],
+                    "duration_seconds": None,
+                }
+                for row in members
+                if row["life"] == "dead"
+            ],
+            "ghost_members": [
+                {
+                    "name": row["name"],
+                    "location": row["location"],
+                    "duration_seconds": None,
+                }
+                for row in members
+                if row["life"] == "ghost"
+            ],
+            "stuck_members": [
+                {
+                    "name": row["name"],
+                    "location": row["location"],
+                    "duration_seconds": row["stuck_duration_seconds"],
+                    "blocker": row["blocker"],
+                }
+                for row in members
+                if row["stuck"]
+            ],
+            "level_distribution": _level_distribution(raidteams.get(guild, {})),
+        }
+    return {
+        "snapshot_at": _utc(checked_at),
+        "snapshot_epoch": checked_at,
+        "sources": [
+            "/api/v2/roster",
+            "/api/v2/raidteams?guild=Cave",
+            "/api/v2/raidteams?guild=Bonkers",
+        ],
+        "limitations": {
+            "offline_last_seen": "The API does not expose a last-seen timestamp.",
+            "dead_or_ghost_duration": "The API exposes current life state but not when it began.",
+        },
+        "guilds": guild_reports,
+    }
+
+
+def fetch_json(url: str) -> dict:
+    parsed = urllib.parse.urlsplit(url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError("API URLs must use http or https and include a host")
+    request = urllib.request.Request(  # noqa: S310 - URL scheme is validated above.
+        url, headers={"Accept": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(  # noqa: S310 - URL scheme is validated above.
+            request, timeout=30
+        ) as response:
+            try:
+                return json.load(response)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"non-JSON response from {url}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        reason = getattr(exc, "reason", exc)
+        raise RuntimeError(f"request failed for {url}: {reason}") from exc
+
+
+def collect(api_root: str) -> dict:
+    root = api_root.rstrip("/")
+    roster = fetch_json(f"{root}/roster")
+    raidteams = {
+        guild: fetch_json(f"{root}/raidteams?guild={guild}") for guild in GUILDS
+    }
+    return build_report(roster, raidteams)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", type=Path, help="Path for the JSON report")
+    parser.add_argument("--api-root", required=True, help="Versioned API root URL")
+    args = parser.parse_args()
+    try:
+        report = collect(args.api_root)
+    except RuntimeError as exc:
+        parser.exit(1, f"{parser.prog}: error: {exc}\n")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(format_json(report) + "\n", encoding="utf-8")
+
+
+def format_json(value, depth: int = 0) -> str:
+    """Pretty-print JSON while keeping record arrays compact and reviewable."""
+    indent = " " * depth
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        entries = []
+        for key in sorted(value):
+            rendered = format_json(value[key], depth + 2)
+            entries.append(f"{indent}  {json.dumps(key)}: {rendered}")
+        return "{\n" + ",\n".join(entries) + f"\n{indent}" + "}"
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        if all(isinstance(item, dict) for item in value):
+            entries = [
+                f"{' ' * (depth + 2)}{json.dumps(item, separators=(',', ':'), sort_keys=True)}"
+                for item in value
+            ]
+        else:
+            entries = [
+                f"{' ' * (depth + 2)}{format_json(item, depth + 2)}" for item in value
+            ]
+        return "[\n" + ",\n".join(entries) + f"\n{indent}]"
+    return json.dumps(value, sort_keys=True)
+
+
+if __name__ == "__main__":
+    main()
