@@ -1695,7 +1695,27 @@ def refused_places(book: Book, refused) -> dict:
     return out
 
 
+_BOOK_MEMO: dict = {}
+
+
+def _per_book(name: str, book: Book, build):
+    """`build(book)`, kept for the newest book only: the plan asks the same
+    question of the same book once per member (142 times a pass), and the
+    answer depends on the book alone. Callers must not mutate the result."""
+    held = _BOOK_MEMO.get(name)
+    if held is not None and held[0] is book:
+        return held[1]
+    value = build(book)
+    _BOOK_MEMO[name] = (book, value)
+    return value
+
+
 def slow_respawns(book: Book) -> dict:
+    """See _slow_respawns; computed once per book, not once per member."""
+    return _per_book("slow_respawns", book, _slow_respawns)
+
+
+def _slow_respawns(book: Book) -> dict:
     """creature entry -> minutes to wait for it to respawn, for every objective
     creature with SLOW_SPAWNS or fewer spawns in the world: the soonest of its
     spawns' respawn times, rounded up, within RESPAWN_MIN_MINUTES and
@@ -1715,6 +1735,11 @@ def slow_respawns(book: Book) -> dict:
 
 
 def spawn_entries(book: Book) -> dict:
+    """See _spawn_entries; computed once per book, not once per member."""
+    return _per_book("spawn_entries", book, _spawn_entries)
+
+
+def _spawn_entries(book: Book) -> dict:
     """spawn guid -> creature entry, for every objective spawn of the book."""
     return {s.guid: s.entry for q in book.quests.values() for s in q.fields}
 
@@ -1737,7 +1762,20 @@ def marked_places(book: Book, marks) -> dict:
 def all_tried(member, quest: Quest, avoid) -> bool:
     """Whether every pack of the quest the member could hunt is in `avoid`."""
     fields = within_level(member, solo_fields(quest))
-    return bool(fields) and _densest(member, fields, avoid) is None
+    if not fields:
+        return False
+    # _densest(...) is None exactly when no spawn on the member's map is left
+    # outside `avoid`. Asking that directly skips the pack count, which is
+    # quadratic in the spawns of a creature (2026-10-11: the guild job plan
+    # held the event loop for 40 seconds).
+    here = int(member.map_id)
+    exact = {(int(m), float(x), float(y)) for m, x, y in avoid or ()}
+    return not any(
+        int(s.map_id) == here
+        and (int(s.map_id), float(s.x), float(s.y)) not in exact
+        and not _avoids(s, avoid)
+        for s in fields
+    )
 
 
 def roll_oldest(member, quest: Quest, avoid, marked) -> tuple:
@@ -1745,10 +1783,13 @@ def roll_oldest(member, quest: Quest, avoid, marked) -> tuple:
     and that pack's mark is SPAWN_RETRY_MINUTES old: the rolling, oldest first
     retry. `marked` is ((map, x, y, age), ...). Otherwise `avoid` as it was."""
     avoid = tuple(avoid)
-    if not marked or not all_tried(member, quest, avoid):
+    if not marked:
         return avoid
     old = max(marked, key=lambda p: p[3])
-    if old[3] < SPAWN_RETRY_MINUTES:
+    # The age test is cheap and all_tried scans the quest's spawns, so the age
+    # goes first: most marks are young, and the plan calls this per quest per
+    # member (2026-10-11: 40 seconds on the event loop).
+    if old[3] < SPAWN_RETRY_MINUTES or not all_tried(member, quest, avoid):
         return avoid
     return tuple(
         p
