@@ -34,9 +34,7 @@ def _run_totals(dungeons: list) -> dict:
 def _xp_rate(series: dict) -> tuple[int | None, int]:
     """Return the mean measured guild XP/hour and its measured hour count."""
     values = [
-        int(value)
-        for _, value in series.get("xp_per_hour") or []
-        if value is not None
+        int(value) for _, value in series.get("xp_per_hour") or [] if value is not None
     ]
     return (round(sum(values) / len(values)) if values else None, len(values))
 

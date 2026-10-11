@@ -49,9 +49,7 @@ def guild_payload():
 
 def test_metrics_are_per_guild_and_use_counts_without_member_names():
     payloads = guild_payload()
-    payloads["Cave"]["series"] = {
-        "xp_per_hour": [[100, 120], [200, None], [300, 180]]
-    }
+    payloads["Cave"]["series"] = {"xp_per_hour": [[100, 120], [200, None], [300, 180]]}
     records = build_metrics(report([20, 30]), payloads)
 
     cave = records["guilds"]["Cave"]
@@ -63,9 +61,7 @@ def test_metrics_are_per_guild_and_use_counts_without_member_names():
     assert cave["xp_per_hour_24h"] == 150
     assert cave["xp_hours_measured"] == 2
     assert "Sample" not in json.dumps(records)
-    assert (
-        records["xp_source"] == "measured by /api/v2/series"
-    )
+    assert records["xp_source"] == "measured by /api/v2/series"
 
 
 def test_collect_reads_the_read_only_guild_series_endpoint(monkeypatch):
