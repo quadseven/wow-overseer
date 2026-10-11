@@ -59,13 +59,13 @@ function guildCard(ctx, guild) {
   const delta = facts.levelDelta === null ? notMeasured("level change not measured") : (facts.levelDelta > 0 ? "+" : "") + facts.levelDelta.toFixed(1) + " median levels / 7d";
   const ladder = facts.dungeons.length ? html`<ol class="nr-ladder">${facts.dungeons.map((d) => html`<li><span class="nr-dungeon"><span>${d.place}</span><span class="dim">L${d.floor ?? "?"}${d.ceiling ? "-" + d.ceiling : ""}</span></span><span class="nr-clears">${d.cleared} clear${d.cleared === 1 ? "" : "s"}</span><span class="dim">${d.attempts} attempts${d.clearsPerAttempt === null ? "" : " | " + Math.round(d.clearsPerAttempt * 100) + "% clears / attempt"}</span></li>`)}</ol>` : html`<p class="muted">Dungeon ladder not measured.</p>`;
   const blocker = facts.topBlocker ? `${facts.topBlocker.reason} | ${facts.topBlocker.memberHours.toFixed(1)} member-hours across ${plural(facts.topBlocker.members, "member")}` : "No current blocker recorded.";
-  return html`<article class="card nr-guild"><div class="nr-head"><h3>${guild.name}</h3><span class="nr-delta">${delta}</span></div><div><span class="kicker">Cleared dungeons | level order</span>${ladder}</div><p class="nr-blocker"><span class="kicker">Top blocker</span><span>${blocker}</span></p><p class="nr-projection"><span class="kicker">Level 60 projection</span><span>${projectionLabel(facts.projectedAt)}${facts.measuredMembers ? " | estimate from each member's measured 24h XP rate" : " | complete member XP rates not measured"}</span></p></article>`;
+  return html`<article class="card nr-guild"><div class="nr-head"><h3>${guild.name}</h3><span class="nr-delta"><span class="kicker">Metric change</span> ${delta}</span></div><div><span class="kicker">Cleared dungeons | level order</span>${ladder}</div><p class="nr-blocker"><span class="kicker">Top blocker</span><span>${blocker}</span></p><p class="nr-projection"><span class="kicker">Level 60 projection</span><span>${projectionLabel(facts.projectedAt)}${facts.measuredMembers ? " | estimate from each member's measured 24h XP rate" : " | complete member XP rates not measured"}</span></p></article>`;
 }
 
 export function reportSection(ctx, guilds, agendas, roll) {
   const stuck = ctx.get("/api/v2/stuck");
   const shipped = roll && roll.data && roll.data.shipped;
-  const shippedText = shipped && shipped.length ? shipped.join(" | ") : "Shipped changes and verification are not measured.";
+  const shippedText = shipped && shipped.length ? shipped.join(" | ") : "Shipped changes are not measured.";
   const next = agendas.flatMap((read) => {
     const queue = read && read.data && read.data.queue;
     if (!queue) return [];
@@ -75,5 +75,7 @@ export function reportSection(ctx, guilds, agendas, roll) {
     return [following && (following.place || following.title || following.name), queue.line].filter(Boolean);
   }).slice(0, 3);
   const blocker = stuck && stuck.data && stuck.data.members && stuck.data.members.length ? plural(stuck.data.members.length, "member", "members") + " waiting; details are grouped in each guild report." : "No blocker currently recorded.";
-  return html`<section class="nr" aria-labelledby="nr-title"><div class="nr-title"><div><span class="kicker">Realm report</span><h2 id="nr-title">Progress at a glance</h2></div><span class="dim small">Refreshes every 30 seconds</span></div><div class="nr-grid">${guilds.map((guild) => guildCard(ctx, guild))}</div><div class="card nr-summary"><div><span class="kicker">Shipped and verified</span><p>${shippedText}</p></div><div><span class="kicker">Next actions</span><p>${next.length ? next.join(" | ") : "No next action recorded."}</p></div><div><span class="kicker">Current blockers</span><p>${blocker}</p></div></div></section>`;
+  const verified = roll && roll.data && roll.data.verified;
+  const verifiedText = Array.isArray(verified) && verified.length ? verified.join(" | ") : "Verification details are not reported by the realm.";
+  return html`<section class="nr" aria-labelledby="nr-title"><div class="nr-title"><div><span class="kicker">Realm report</span><h2 id="nr-title">Progress at a glance</h2></div><span class="dim small">Refreshes every 30 seconds</span></div><div class="nr-grid">${guilds.map((guild) => guildCard(ctx, guild))}</div><div class="card nr-summary"><div><span class="kicker">Shipped changes</span><p>${shippedText}</p><span class="kicker">Verification</span><p>${verifiedText}</p></div><div><span class="kicker">Next actions</span><p>${next.length ? next.join(" | ") : "No next action recorded."}</p></div><div><span class="kicker">Current blockers</span><p>${blocker}</p></div></div></section>`;
 }
