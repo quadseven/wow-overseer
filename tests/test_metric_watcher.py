@@ -17,7 +17,9 @@ def report(levels, checked_at=1800):
                     "levels_with_data": len(levels),
                     "median": 20,
                     "lowest": min(levels) if levels else None,
-                    "histogram": {str(level): levels.count(level) for level in set(levels)},
+                    "histogram": {
+                        str(level): levels.count(level) for level in set(levels)
+                    },
                 },
                 "offline_members": [{"member_id": "Cave-001"}],
                 "ghost_members": [],
@@ -48,7 +50,9 @@ def test_metrics_are_per_guild_and_use_counts_without_member_names():
     assert cave["runs"] == {"started": 0, "entered": 4, "cleared": 2, "wiped": 1}
     assert cave["offline"] == 1
     assert "Sample" not in json.dumps(records)
-    assert records["xp_source"] == "unavailable: API exposes level changes, not experience"
+    assert (
+        records["xp_source"] == "unavailable: API exposes level changes, not experience"
+    )
 
 
 def test_projection_uses_snapshot_level_rate_and_targets_40_level_60_seats():
@@ -68,7 +72,9 @@ def test_jsonl_append_preserves_prior_records(tmp_path):
     append_jsonl(path, {"snapshot_at": "one"})
     append_jsonl(path, {"snapshot_at": "two"})
 
-    assert [json.loads(line)["snapshot_at"] for line in path.read_text().splitlines()] == [
+    assert [
+        json.loads(line)["snapshot_at"] for line in path.read_text().splitlines()
+    ] == [
         "one",
         "two",
     ]

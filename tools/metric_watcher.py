@@ -158,7 +158,9 @@ def main() -> None:
     )
     args = parser.parse_args()
     if not args.api_root or not args.output:
-        parser.error("--api-root and --output (or their environment variables) are required")
+        parser.error(
+            "--api-root and --output (or their environment variables) are required"
+        )
     try:
         record, report = collect(args.api_root)
         record["level_projection"] = estimate_level_60_date(
