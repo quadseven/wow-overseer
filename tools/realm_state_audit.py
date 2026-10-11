@@ -54,7 +54,9 @@ def _public_blocker(blocker: str | None) -> str | None:
     """Remove character-specific identity from known blocker templates."""
     if blocker is None:
         return None
-    return re.sub(r"Waiting for [A-Z][A-Za-z0-9_-]* at", "Waiting for the NPC at", blocker)
+    return re.sub(
+        r"Waiting for [A-Z][A-Za-z0-9_-]* at", "Waiting for the NPC at", blocker
+    )
 
 
 def _level_distribution(raidteam: dict) -> dict:
