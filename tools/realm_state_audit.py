@@ -67,6 +67,13 @@ def _level_distribution(raidteam: dict) -> dict:
     }
 
 
+def _public_member(row: dict, member_ids: dict) -> dict:
+    return {
+        **{key: value for key, value in row.items() if key != "name"},
+        "member_id": member_ids[row["name"]],
+    }
+
+
 def build_report(
     roster: dict,
     raidteams: dict[str, dict],
@@ -92,15 +99,9 @@ def build_report(
             for index, row in enumerate(members, start=1)
         }
 
-        def public_member(row: dict) -> dict:
-            return {
-                **{key: value for key, value in row.items() if key != "name"},
-                "member_id": member_ids[row["name"]],
-            }
-
         offline = [
             {
-                **public_member(row),
+                **_public_member(row, member_ids),
                 "last_seen": None,
                 "last_seen_status": "not exposed by API",
             }
@@ -110,7 +111,9 @@ def build_report(
         guild_reports[guild] = {
             "member_count": len(members),
             "online_count": sum(row["online"] for row in members),
-            "online_members": [public_member(row) for row in members if row["online"]],
+            "online_members": [
+                _public_member(row, member_ids) for row in members if row["online"]
+            ],
             "offline_members": offline,
             "dead_members": [
                 {
