@@ -487,6 +487,16 @@ def build_facts(names, roster, intents, steps, now_at=None) -> dict:
     return facts
 
 
+# Steps that note a side hold and never say what the character is doing: the
+# equip pass holding a piece back rides along while the member walks, fights or
+# runs a dungeon, and read as its whole state it showed ten members "stuck".
+SIDE_KINDS = frozenset({"equip_held"})
+
+
+def _main(steps):
+    return [s for s in steps if s.get("kind") not in SIDE_KINDS]
+
+
 def _fresh(steps, now_at):
     return [s for s in steps if now_at - int(s.get("last_at") or 0) <= FRESH_SECONDS]
 
@@ -540,8 +550,12 @@ def compose(member: dict, facts: dict | None, now_at: int | None = None) -> dict
     if stopped:
         doing, waiting = stopped
     else:
-        doing, waiting, since = _live(member, f, fresh, now_at)
-        doing, waiting, since = _stored_reason(fresh, doing, waiting, since)
+        doing, waiting, since = _live(member, f, _main(fresh), now_at)
+        doing, waiting, since = _stored_reason(_main(fresh), doing, waiting, since)
+        if not doing:
+            side = [s for s in fresh if s.get("kind") in SIDE_KINDS]
+            if side:
+                doing, waiting, since = _from_step(side[0])
     if not doing:
         doing, waiting, since = "Idle", "no errand and no hold found", None
     elapsed = max(0, now_at - since) if (since is not None and now_at) else None
