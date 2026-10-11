@@ -13,8 +13,9 @@ import * as streams from "./now/streams.js";
 import { openPanel, pressed } from "./now/panel.js";
 import * as wm from "./now/worldmap.js";
 import { seatChips } from "./_runs.js";
-import { firstFamily, firstGuild } from "../families.js";
+import { firstFamily, firstGuild, guilds as allGuilds } from "../families.js";
 import { announce, CSS as ACH_CSS } from "./_achievements.js";
+import { reportSection } from "./now/report.js";
 
 const READS = ["/api/eye", "/api/v2/roll", "/api/wall", "/api/guildruns", "/api/v2/stuck", "/api/v2/roster", "/api/map", "/shapes.json", "/api/v2/achievements"];
 // The realm strip's two reads are the cheap ones, so they are asked for every
@@ -243,13 +244,14 @@ function fold(ctx, agendas) {
 export default {
   // The tile panels draw the profile's and the guild bank's frames, in their styles.
   css: ["views/now.css", "views/members.css", "views/economy.css", ACH_CSS],
-  reads: () => READS.concat(D.familyKeys().map(D.agendaPath)),
-  every: 15000,
+  reads: () => READS.concat(D.familyKeys().map(D.agendaPath), allGuilds().map((g) => "/api/v2/guild?guild=" + g.slug), allGuilds().map((g) => "/api/v2/series?guild=" + g.slug)),
+  every: 30000,
   quick: QUICK,
   title: () => "Now",
   render(ctx) {
     const agendas = D.familyKeys().map((f) => ctx.get(D.agendaPath(f)));
     return html`<header class="page-head"><h1>Now</h1></header>
+${reportSection(ctx, allGuilds(), agendas, ctx.get("/api/v2/roll"))}
 ${chips(ctx, agendas)}
 ${strip(ctx)}
 <div class="agendas">${D.familyKeys().map((f, i) => agendaCard(f, agendas[i]))}</div>
