@@ -6,20 +6,25 @@ export function reportFacts({ guild, series, stuck, now = Date.now() / 1000 }) {
   const first = levels.length ? Number(levels[0][1]) : null;
   const last = levels.length ? Number(levels[levels.length - 1][1]) : null;
   const xp = series && series.xp_to_level_60_by_member || {};
-  const remain = Object.values(xp).filter(Number.isFinite);
-  const rates = (series && series.xp_per_hour || []).map((row) => Number(row[1])).filter((v) => Number.isFinite(v) && v > 0);
-  const remainingXp = remain.length ? remain.reduce((a, b) => a + b, 0) : null;
-  const hourly = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
-  const projectedAt = remainingXp !== null && hourly ? now + remainingXp / hourly * 3600 : null;
+  const names = Object.keys(xp);
+  const byMember = series && series.by_member || {};
+  const remaining = names.map((name) => xp[name]);
+  const rates = names.map((name) => byMember[name] || {});
+  const complete = names.length > 0 && names.length === Number(guild && guild.count || names.length)
+    && remaining.every(Number.isFinite)
+    && rates.every((rate) => Number(rate.xp_hours_measured || 0) > 0 && Number.isFinite(Number(rate.xp_per_hour_24h)));
+  const remainingXp = complete ? remaining.reduce((a, b) => a + b, 0) : null;
+  const hourly = complete ? rates.reduce((sum, rate) => sum + Number(rate.xp_per_hour_24h), 0) : null;
+  const projectedAt = remainingXp !== null && hourly > 0 ? now + remainingXp / hourly * 3600 : null;
   const dungeons = (guild && guild.dungeons || []).map((d) => {
     const attempts = Number(d.runs || 0);
     const cleared = Number(d.cleared || 0);
     return { ...d, attempts, cleared, clearRate: attempts ? cleared / attempts : null };
   });
   const blockers = new Map();
-  const names = new Set((guild && guild.members || []).map((member) => member.name));
+  const memberNames = new Set((guild && guild.members || []).map((member) => member.name));
   for (const member of (stuck && stuck.members) || []) {
-    if (names.size && !names.has(member.name)) continue;
+    if (memberNames.size && !memberNames.has(member.name)) continue;
     const reason = String(member.blocker || member.step || "Reason not recorded");
     const age = ageOf(member.since, now);
     const row = blockers.get(reason) || { reason, members: 0, memberHours: 0 };
@@ -33,7 +38,7 @@ export function reportFacts({ guild, series, stuck, now = Date.now() / 1000 }) {
     dungeons,
     topBlocker,
     projectedAt,
-    measuredMembers: remain.length,
+    measuredMembers: complete ? names.length : 0,
   };
 }
 
@@ -52,7 +57,7 @@ function guildCard(ctx, guild) {
   const delta = facts.levelDelta === null ? notMeasured("level change not measured") : (facts.levelDelta > 0 ? "+" : "") + facts.levelDelta.toFixed(1) + " median levels / 7d";
   const ladder = facts.dungeons.length ? html`<ol class="nr-ladder">${facts.dungeons.map((d) => html`<li><span class="nr-dungeon"><span>${d.place}</span><span class="dim">L${d.floor ?? "?"}${d.ceiling ? "-" + d.ceiling : ""}</span></span><span class="nr-clears">${d.cleared} clear${d.cleared === 1 ? "" : "s"}</span><span class="dim">${d.attempts} attempts${d.clearRate === null ? "" : " | " + Math.round(d.clearRate * 100) + "%"}</span></li>`)}</ol>` : html`<p class="muted">Dungeon ladder not measured.</p>`;
   const blocker = facts.topBlocker ? `${facts.topBlocker.reason} | ${facts.topBlocker.memberHours.toFixed(1)} member-hours across ${plural(facts.topBlocker.members, "member")}` : "No current blocker recorded.";
-  return html`<article class="card nr-guild"><div class="nr-head"><h3>${guild.name}</h3><span class="nr-delta">${delta}</span></div><div><span class="kicker">Cleared dungeons | level order</span>${ladder}</div><p class="nr-blocker"><span class="kicker">Top blocker</span><span>${blocker}</span></p><p class="nr-projection"><span class="kicker">Level 60 projection</span><span>${projectionLabel(facts.projectedAt)}${facts.measuredMembers ? " | " + facts.measuredMembers + " members measured; estimate from current XP rate" : " | XP rate not measured"}</span></p></article>`;
+  return html`<article class="card nr-guild"><div class="nr-head"><h3>${guild.name}</h3><span class="nr-delta">${delta}</span></div><div><span class="kicker">Cleared dungeons | level order</span>${ladder}</div><p class="nr-blocker"><span class="kicker">Top blocker</span><span>${blocker}</span></p><p class="nr-projection"><span class="kicker">Level 60 projection</span><span>${projectionLabel(facts.projectedAt)}${facts.measuredMembers ? " | estimate from each member's measured 24h XP rate" : " | complete member XP rates not measured"}</span></p></article>`;
 }
 
 export function reportSection(ctx, guilds, agendas, roll) {

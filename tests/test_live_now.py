@@ -41,15 +41,33 @@ async function fire(ms) {
 """
 
 
-def run(module, script):
+def run(module, script, learn_realm=False):
     """Run `script` with app/<module> imported as M, the app copied to a
     module package first so its own imports resolve."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp) / "app"
         shutil.copytree(APP, root)
         (root / "package.json").write_text('{"type": "module"}', encoding="utf-8")
-        code = "%s\nconst M = await import(%s);\n%s" % (
+        prelude = ""
+        if learn_realm:
+            prelude = "(await import(%s)).learn(%s);" % (
+                json.dumps((root / "families.js").as_uri()),
+                json.dumps(
+                    {
+                        "families": [
+                            {"key": "Grug", "names": ["Grug"]},
+                            {"key": "Zug", "names": ["Zug"]},
+                        ],
+                        "guilds": [
+                            {"name": "Cave", "family": "Grug"},
+                            {"name": "Bonkers", "family": "Zug"},
+                        ],
+                    }
+                ),
+            )
+        code = "%s\n%s\nconst M = await import(%s);\n%s" % (
             BROWSER,
+            prelude,
             json.dumps((root / module).as_uri()),
             script,
         )
@@ -146,6 +164,18 @@ console.log(JSON.stringify({hidden, asked, paces: pending()}));""",
 
 @unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
 class TheNowView(unittest.TestCase):
+    def test_report_reads_each_guild_and_series_every_thirty_seconds(self):
+        got = run(
+            "views/now.js",
+            "const V = M.default; console.log(JSON.stringify({reads: V.reads({}), every: V.every}));",
+            learn_realm=True,
+        )
+        self.assertEqual(got["every"], 30000)
+        self.assertIn("/api/v2/guild?guild=cave", got["reads"])
+        self.assertIn("/api/v2/guild?guild=bonkers", got["reads"])
+        self.assertIn("/api/v2/series?guild=cave", got["reads"])
+        self.assertIn("/api/v2/series?guild=bonkers", got["reads"])
+
     def test_the_realm_strip_is_polled_faster_than_the_rest(self):
         got = run(
             "views/now.js",
