@@ -137,6 +137,24 @@
 .watcher > div { display: flex; flex-direction: column; gap: 1px; }
 .watcher-t { font-weight: 500; display: flex; gap: 8px; align-items: center; }
 
+/* The read-only report at the top of Now. */
+.nr { display: flex; flex-direction: column; gap: 10px; }
+.nr-title, .nr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.nr-title h2 { margin: 3px 0 0; font-size: var(--fs-4); font-weight: 500; }
+.nr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; }
+.nr-guild { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.nr-guild h3 { margin: 0; font-size: var(--fs-3); font-weight: 500; }
+.nr-delta { color: var(--color-accent-300); font-variant-numeric: tabular-nums; }
+.nr-ladder { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.nr-ladder li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: baseline; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--color-divider); font-size: var(--fs-1); }
+.nr-ladder li:last-child { border-bottom: 0; }
+.nr-dungeon { display: flex; flex-wrap: wrap; gap: 8px; }
+.nr-clears { color: var(--color-accent-300); font-variant-numeric: tabular-nums; }
+.nr-blocker, .nr-projection { display: flex; flex-direction: column; gap: 3px; margin: 0; color: var(--color-neutral-200); }
+.nr-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 16px; }
+.nr-summary p { margin: 5px 0 0; color: var(--color-neutral-200); overflow-wrap: anywhere; }
+@media (max-width: 460px) { .nr-ladder li { grid-template-columns: minmax(0, 1fr) auto; } .nr-ladder li > .dim { grid-column: 1 / -1; } }
+
 /* ---- tile panels (now/panel.js): a sheet on phone, a side panel on desktop ---- */
 :root:has(.np-scrim[data-open]) { overflow: hidden; }
 .np-scrim { z-index: 28; background: transparent; transition: background-color .36s; }
