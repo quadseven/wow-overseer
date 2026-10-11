@@ -91,6 +91,18 @@ def test_missing_checked_at_is_reported_clearly():
         raise AssertionError("a roster without checked_at must not be accepted")
 
 
+def test_non_object_roster_member_is_reported_clearly():
+    try:
+        build_report(
+            {"checked_at": 1000, "members": [None]},
+            {"Cave": {}, "Bonkers": {}},
+        )
+    except ValueError as exc:
+        assert "member" in str(exc)
+    else:
+        raise AssertionError("a non-object roster member must not be accepted")
+
+
 def test_api_network_error_names_the_endpoint():
     url = "https://example.com/api/roster"
     with patch.object(

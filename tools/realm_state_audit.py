@@ -26,6 +26,8 @@ def _utc(timestamp: int | float | None) -> str | None:
 
 
 def _member(row: dict, checked_at: int) -> dict:
+    if not isinstance(row, dict):
+        raise ValueError("roster member must be an object")
     since = row.get("since")
     stuck_duration = (
         max(0, checked_at - int(since))
@@ -70,7 +72,10 @@ def build_report(roster: dict, raidteams: dict[str, dict]) -> dict:
     if roster.get("checked_at") is None:
         raise ValueError("roster response is missing checked_at")
     checked_at = int(roster["checked_at"])
-    all_members = [_member(row, checked_at) for row in roster.get("members", [])]
+    roster_members = roster.get("members", [])
+    if not isinstance(roster_members, list):
+        raise ValueError("roster response members must be an array")
+    all_members = [_member(row, checked_at) for row in roster_members]
     guild_reports = {}
     for guild in GUILDS:
         members = sorted(
