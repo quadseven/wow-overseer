@@ -703,16 +703,15 @@ BLOCKED_DOORS: dict = {}
 # finder can queue them) but no run forms for them until the module can finish
 # them, and fitting_doors says so for every caller.
 #
-# Blackfathom Deeps: the four Fires of Aku'mai open the Portal of Aku'Mai to
-# Aku'mai, the finder's finish. The module's data for it is mod-dungeon-clear
-# PR 19; drop this line in the deploy that rolls the worldserver with it.
+# Blackfathom Deeps is no longer held: mod-dungeon-clear 19 and 21 (the
+# Blackfathom route, the four fires, surfacing for breath, followers swimming)
+# rolled onto the worldserver in roll 48 on 2026-10-10.
 # Gnomeregan: Grubbis comes only with Blastmaster Emi Shortfuse's escort, and
 # the Workshop Door (gameobject 90858) takes the Workshop Key or lockpicking
 # (#807).
 # Razorfen Kraul is not here: its derived boss order ends at Charlga
 # Razorflank, the finder's finish, with no scripted door on the way.
 NO_CLEAR_DATA = {
-    "blackfathom": "the dungeon clear cannot light the Fires of Aku'mai on this realm yet",
     "gnomeregan": "the dungeon clear has no data for Grubbis's escort or the Workshop Door",
 }
 # NO ITEM-LEVEL GATE BELOW 60, A COVERAGE GATE FOR THE TWO SEATS THAT CARRY A

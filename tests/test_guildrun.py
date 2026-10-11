@@ -668,10 +668,12 @@ class NoRunFormsForADoorTheClearCannotFinish(unittest.TestCase):
     """wow-overseer#782: Blackfathom Deeps took 9 guild runs and cleared none.
     Five sat out the two-hour ceiling at 1 to 4 of 7 bosses, about 10
     member-hours each, because mod-dungeon-clear had no data for it: nothing
-    lit the Fires of Aku'mai that open the door to its last bosses. Gnomeregan
-    has no data either. A run that cannot finish does not form."""
+    lit the Fires of Aku'mai that open the door to its last bosses. The hold
+    on Blackfathom lifted once mod-dungeon-clear 19 and 21 rolled onto the
+    worldserver (roll 48, 2026-10-10). Gnomeregan has no data yet (#807). A
+    run that cannot finish does not form."""
 
-    HELD = {"blackfathom", "gnomeregan"}
+    HELD = {"gnomeregan"}
 
     def offered(self, levels, faction):
         return {
@@ -692,11 +694,11 @@ class NoRunFormsForADoorTheClearCannotFinish(unittest.TestCase):
                 offered = self.offered([level] * 5, faction)
                 self.assertFalse(offered & self.HELD, (faction, level))
 
-    def test_the_band_that_fit_blackfathom_keeps_its_other_doors(self):
-        """Live: Bonkers' 24 to 26 band went to Blackfathom Deeps. Shadowfang
-        Keep still fits it."""
+    def test_blackfathom_is_offered_again_to_the_band_that_fits_it(self):
+        """The hold lifted with mod-dungeon-clear 19 and 21: Bonkers' 24 to 26
+        band is offered Blackfathom Deeps and still has Shadowfang Keep."""
         offered = self.offered([24, 25, 25, 25, 26], "Horde")
-        self.assertNotIn("blackfathom", offered)
+        self.assertIn("blackfathom", offered)
         self.assertIn("shadowfang", offered)
 
     def test_razorfen_kraul_stays_on_the_ladder(self):
@@ -707,8 +709,9 @@ class NoRunFormsForADoorTheClearCannotFinish(unittest.TestCase):
 
     def test_a_single_held_door_does_not_fit_a_member(self):
         """The pug and social paths ask fitting_doors about one door."""
-        door = next(d for d in guildrun.doors() if d.keyword == "blackfathom")
-        self.assertEqual(guildrun.fitting_doors([26], [door], "Horde"), [])
+        door = next(d for d in guildrun.doors() if d.keyword == "gnomeregan")
+        self.assertEqual(guildrun.fitting_doors([30] * 5, [door], "Alliance"), [])
+        self.assertEqual(guildrun.fitting_doors([30] * 5, [door], "Horde"), [])
 
 
 class TheDoorsThatFit(unittest.TestCase):
