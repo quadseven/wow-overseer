@@ -120,16 +120,17 @@ source infra clones and builds.
 
 `tools/metric_watcher.py` makes read-only requests to the versioned Overseer
 API and appends one aggregate JSON object per guild to a JSON Lines file. It
-records level gainers (the API reports level changes, not raw XP), level
-statistics, dungeon runs/clears/wipes, class quests done/blocked, deaths in the
-last 24 hours, ghosts, stuck members, and offline members. Member names are
-not written to the metrics log.
+records level gainers, measured XP per hour, level statistics, dungeon
+runs/clears/wipes, class quests done/blocked, deaths in the last 24 hours,
+ghosts, stuck members, and offline members. Member names are not written to
+the metrics log. XP rates come from the API's measured hourly series; the
+record includes how many hours were measured.
 
-The API does not expose character experience, so raw XP gain and an XP-based
-level-60 date cannot be calculated. After two snapshots show positive level
-progress, the watcher records an estimated date for 40 seats to reach level
-60 based on observed level steps per day. The record labels this as a
-level-based estimate.
+The API exposes measured XP rates but not total experience remaining for the
+target seats. After two snapshots show positive level progress, the watcher
+records an estimated date for 40 seats to reach level 60 based on observed
+level steps per day. The record labels this as a level-based estimate; the XP
+rate is logged separately and is not used to calculate that date.
 
 The optional systemd units under `systemd/` run the watcher every 30 minutes.
 They assume the application is installed at `/opt/wow-overseer` and runs as

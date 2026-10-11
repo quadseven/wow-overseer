@@ -31,6 +31,16 @@ def _run_totals(dungeons: list) -> dict:
     }
 
 
+def _xp_rate(series: dict) -> tuple[int | None, int]:
+    """Return the mean measured guild XP/hour and its measured hour count."""
+    values = [
+        int(value)
+        for _, value in series.get("xp_per_hour") or []
+        if value is not None
+    ]
+    return (round(sum(values) / len(values)) if values else None, len(values))
+
+
 def build_metrics(report: dict, guild_payloads: dict[str, dict]) -> dict:
     """Shape one aggregate, identity-reduced record per guild."""
     guild_records = {}
@@ -39,12 +49,15 @@ def build_metrics(report: dict, guild_payloads: dict[str, dict]) -> dict:
         levels = state["level_distribution"]
         quests = source.get("class_quests") or {}
         deaths = source.get("deaths") or {}
+        xp_per_hour, xp_hours_measured = _xp_rate(source.get("series") or {})
         guild_records[guild] = {
             "seats": levels["seat_count"],
             "median_level": levels["median"],
             "lowest_level": levels["lowest"],
             "level_histogram": levels["histogram"],
             "level_gainers_24h": len(source.get("gaining") or []),
+            "xp_per_hour_24h": xp_per_hour,
+            "xp_hours_measured": xp_hours_measured,
             "runs": _run_totals(source.get("dungeons") or []),
             "class_quests": {
                 "done": quests.get("done"),
@@ -58,7 +71,7 @@ def build_metrics(report: dict, guild_payloads: dict[str, dict]) -> dict:
     return {
         "snapshot_at": report["snapshot_at"],
         "snapshot_epoch": report["snapshot_epoch"],
-        "xp_source": "unavailable: API exposes level changes, not experience",
+        "xp_source": "measured by /api/v2/series",
         "guilds": guild_records,
     }
 
@@ -139,6 +152,10 @@ def collect(api_root: str) -> tuple[dict, dict]:
         guild: realm_state_audit.fetch_json(f"{root}/guild?guild={guild}")
         for guild in realm_state_audit.GUILDS
     }
+    for guild in realm_state_audit.GUILDS:
+        guilds[guild]["series"] = realm_state_audit.fetch_json(
+            f"{root}/series?guild={guild}"
+        )
     report = realm_state_audit.build_report(roster, raidteams, guilds)
     return build_metrics(report, guilds), report
 
