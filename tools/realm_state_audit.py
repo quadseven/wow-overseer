@@ -110,9 +110,7 @@ def build_report(
         guild_reports[guild] = {
             "member_count": len(members),
             "online_count": sum(row["online"] for row in members),
-            "online_members": [
-                public_member(row) for row in members if row["online"]
-            ],
+            "online_members": [public_member(row) for row in members if row["online"]],
             "offline_members": offline,
             "dead_members": [
                 {
