@@ -124,13 +124,14 @@ records level gainers, measured XP per hour, level statistics, dungeon
 runs/clears/wipes, class quests done/blocked, deaths in the last 24 hours,
 ghosts, stuck members, and offline members. Member names are not written to
 the metrics log. XP rates come from the API's measured hourly series; the
-record includes how many hours were measured.
+record includes how many hours were measured. The API also derives each
+seated member's remaining XP from the current character XP and the realm's
+level table, so the watcher can project all 40 seats at the summed measured
+guild XP rate. If rate or experience data is not measured, that projection is
+logged as unavailable.
 
-The API exposes measured XP rates but not total experience remaining for the
-target seats. After two snapshots show positive level progress, the watcher
-records an estimated date for 40 seats to reach level 60 based on observed
-level steps per day. The record labels this as a level-based estimate; the XP
-rate is logged separately and is not used to calculate that date.
+The watcher also records a level-step estimate after two snapshots show
+positive level progress. It labels this separately from the XP-based estimate.
 
 The optional systemd units under `systemd/` run the watcher every 30 minutes.
 They assume the application is installed at `/opt/wow-overseer` and runs as

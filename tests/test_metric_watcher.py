@@ -86,6 +86,33 @@ def test_collect_reads_the_read_only_guild_series_endpoint(monkeypatch):
     assert record["guilds"]["Cave"]["xp_per_hour_24h"] == 90
 
 
+def test_xp_projection_uses_seated_remaining_experience_and_guild_rate():
+    payloads = {
+        "Cave": {
+            "seat_members": ["A"],
+            "series": {
+                "xp_per_hour": [[1800, 100]],
+                "xp_to_level_60_by_member": {"A": 100},
+                "level_60_total_xp": 1000,
+            },
+        },
+        "Bonkers": {
+            "seat_members": ["B"],
+            "series": {
+                "xp_per_hour": [[1800, 100]],
+                "xp_to_level_60_by_member": {"B": 200},
+                "level_60_total_xp": 1000,
+            },
+        },
+    }
+
+    projection = metric_watcher._xp_projection(payloads, 1800)
+
+    assert projection["remaining_xp"] == 38300
+    assert projection["xp_per_hour_24h"] == 200
+    assert projection["projected_at"] == "1970-01-09T00:00:00Z"
+
+
 def test_projection_uses_snapshot_level_rate_and_targets_40_level_60_seats():
     previous = report([58] * 40, checked_at=0)
     current = report([59] * 40, checked_at=86400)

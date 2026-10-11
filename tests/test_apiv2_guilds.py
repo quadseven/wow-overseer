@@ -70,6 +70,21 @@ class TheRoutes(unittest.TestCase):
 class TheSeries(unittest.TestCase):
     TABLE = {lvl: 1000 for lvl in range(1, 60)}
 
+    def test_a_guild_reports_exact_experience_remaining_for_each_member(self):
+        out = series.guild_series(
+            "Cave",
+            [
+                {"guid": 1, "name": "A", "level": 59, "xp": 250},
+                {"guid": 2, "name": "B", "level": 60, "xp": 0},
+            ],
+            [],
+            self.TABLE,
+            NOW,
+        )
+
+        self.assertEqual(out["level_60_total_xp"], 59000)
+        self.assertEqual(out["xp_to_level_60_by_member"], {"A": 750, "B": 0})
+
     def test_total_experience_is_the_levels_below_plus_what_is_held(self):
         self.assertEqual(series.total_xp(3, 250, self.TABLE), 2250)
         self.assertIsNone(series.total_xp(3, 0, {1: 1000}))

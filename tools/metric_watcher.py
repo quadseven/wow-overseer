@@ -39,6 +39,60 @@ def _xp_rate(series: dict) -> tuple[int | None, int]:
     return (round(sum(values) / len(values)) if values else None, len(values))
 
 
+def _xp_projection(guild_payloads: dict[str, dict], snapshot_epoch: int) -> dict:
+    remaining = 0
+    rate = 0
+    seats = 0
+    target_xp = None
+    for source in guild_payloads.values():
+        seat_members = source.get("seat_members") or []
+        series = source.get("series") or {}
+        remaining_by_member = series.get("xp_to_level_60_by_member") or {}
+        level_60_total_xp = series.get("level_60_total_xp")
+        if level_60_total_xp is None or any(
+            name not in remaining_by_member or remaining_by_member[name] is None
+            for name in seat_members
+        ):
+            return {
+                "target_seats": TARGET_SEATS,
+                "remaining_xp": None,
+                "xp_per_hour_24h": None,
+                "projected_at": None,
+                "basis": "requires measured experience totals for all seated members",
+            }
+        target_xp = int(level_60_total_xp)
+        remaining += sum(int(remaining_by_member[name]) for name in seat_members)
+        seats += len(seat_members)
+        per_hour, measured = _xp_rate(series)
+        if measured == 0:
+            return {
+                "target_seats": TARGET_SEATS,
+                "remaining_xp": None,
+                "xp_per_hour_24h": None,
+                "projected_at": None,
+                "basis": "requires measured guild XP rates",
+            }
+        rate += int(per_hour)
+
+    if seats > TARGET_SEATS or target_xp is None:
+        remaining = None
+    elif seats < TARGET_SEATS:
+        remaining += (TARGET_SEATS - seats) * target_xp
+
+    projected = None
+    if remaining == 0:
+        projected = _iso(snapshot_epoch)
+    elif remaining is not None and rate > 0:
+        projected = _iso(snapshot_epoch + remaining / rate * 3600)
+    return {
+        "target_seats": TARGET_SEATS,
+        "remaining_xp": remaining,
+        "xp_per_hour_24h": rate if rate > 0 else None,
+        "projected_at": projected,
+        "basis": "remaining XP for seated members plus open seats; mean measured guild XP/hour",
+    }
+
+
 def build_metrics(report: dict, guild_payloads: dict[str, dict]) -> dict:
     """Shape one aggregate, identity-reduced record per guild."""
     guild_records = {}
@@ -70,6 +124,7 @@ def build_metrics(report: dict, guild_payloads: dict[str, dict]) -> dict:
         "snapshot_at": report["snapshot_at"],
         "snapshot_epoch": report["snapshot_epoch"],
         "xp_source": "measured by /api/v2/series",
+        "xp_projection": _xp_projection(guild_payloads, report["snapshot_epoch"]),
         "guilds": guild_records,
     }
 
@@ -153,6 +208,9 @@ def collect(api_root: str) -> tuple[dict, dict]:
     for guild in realm_state_audit.GUILDS:
         guilds[guild]["series"] = realm_state_audit.fetch_json(
             f"{root}/series?guild={guild}"
+        )
+        guilds[guild]["seat_members"] = list(
+            (raidteams[guild].get("members") or {}).keys()
         )
     report = realm_state_audit.build_report(roster, raidteams, guilds)
     return build_metrics(report, guilds), report
