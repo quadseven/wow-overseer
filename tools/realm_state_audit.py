@@ -67,7 +67,11 @@ def _level_distribution(raidteam: dict) -> dict:
     }
 
 
-def build_report(roster: dict, raidteams: dict[str, dict]) -> dict:
+def build_report(
+    roster: dict,
+    raidteams: dict[str, dict],
+    guilds: dict[str, dict] | None = None,
+) -> dict:
     """Build guild rosters and status summaries from read-only API payloads."""
     if roster.get("checked_at") is None:
         raise ValueError("roster response is missing checked_at")
@@ -76,6 +80,7 @@ def build_report(roster: dict, raidteams: dict[str, dict]) -> dict:
     if not isinstance(roster_members, list):
         raise ValueError("roster response members must be an array")
     all_members = [_member(row, checked_at) for row in roster_members]
+    guilds = guilds or {}
     guild_reports = {}
     for guild in GUILDS:
         members = sorted(
@@ -101,15 +106,7 @@ def build_report(roster: dict, raidteams: dict[str, dict]) -> dict:
                 for row in members
                 if row["life"] == "dead"
             ],
-            "ghost_members": [
-                {
-                    "name": row["name"],
-                    "location": row["location"],
-                    "duration_seconds": None,
-                }
-                for row in members
-                if row["life"] == "ghost"
-            ],
+            "ghost_members": [],
             "stuck_members": [
                 {
                     "name": row["name"],
@@ -122,6 +119,25 @@ def build_report(roster: dict, raidteams: dict[str, dict]) -> dict:
             ],
             "level_distribution": _level_distribution(raidteams.get(guild, {})),
         }
+        ghost_times = {
+            row.get("name"): row
+            for row in guilds.get(guild, {}).get("deaths", {}).get("ghosts", [])
+        }
+        for row in members:
+            if row["life"] != "ghost":
+                continue
+            death = ghost_times.get(row["name"], {})
+            at = death.get("at")
+            guild_reports[guild]["ghost_members"].append(
+                {
+                    "name": row["name"],
+                    "location": row["location"] or death.get("where"),
+                    "death_at": _utc(at),
+                    "duration_seconds": (
+                        max(0, checked_at - int(at)) if at is not None else None
+                    ),
+                }
+            )
     return {
         "snapshot_at": _utc(checked_at),
         "snapshot_epoch": checked_at,
@@ -129,10 +145,13 @@ def build_report(roster: dict, raidteams: dict[str, dict]) -> dict:
             "/api/v2/roster",
             "/api/v2/raidteams?guild=Cave",
             "/api/v2/raidteams?guild=Bonkers",
+            "/api/v2/guild?guild=Cave",
+            "/api/v2/guild?guild=Bonkers",
         ],
         "limitations": {
             "offline_last_seen": "The API does not expose a last-seen timestamp.",
-            "dead_or_ghost_duration": "The API exposes current life state but not when it began.",
+            "dead_duration": "The API exposes current corpse state but not when it began.",
+            "ghost_duration": "A duration is available only when the guild endpoint has a matching death record.",
         },
         "guilds": guild_reports,
     }
@@ -169,7 +188,10 @@ def collect(api_root: str) -> dict:
     raidteams = {
         guild: fetch_json(f"{root}/raidteams?guild={guild}") for guild in GUILDS
     }
-    return build_report(roster, raidteams)
+    guilds = {
+        guild: fetch_json(f"{root}/guild?guild={guild}") for guild in GUILDS
+    }
+    return build_report(roster, raidteams, guilds)
 
 
 def main() -> None:

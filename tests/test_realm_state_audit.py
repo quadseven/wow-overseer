@@ -57,8 +57,18 @@ def test_report_groups_roster_and_counts_only_seated_levels():
         },
         "Bonkers": {"seated": 40, "members": {"SampleD": {"level": 40}}},
     }
+    guilds = {
+        "Cave": {
+            "deaths": {
+                "ghosts": [
+                    {"name": "SampleB", "where": "Duskwood", "at": 900}
+                ]
+            }
+        },
+        "Bonkers": {"deaths": {"ghosts": []}},
+    }
 
-    report = build_report(roster, raidteams)
+    report = build_report(roster, raidteams, guilds)
 
     cave = report["guilds"]["Cave"]
     assert cave["online_count"] == 2
@@ -71,7 +81,9 @@ def test_report_groups_roster_and_counts_only_seated_levels():
     assert cave["offline_members"][0]["last_seen"] is None
     assert report["guilds"]["Bonkers"]["dead_members"][0]["duration_seconds"] is None
     assert report["guilds"]["Bonkers"]["stuck_members"][0]["duration_seconds"] == 300
-    assert report["guilds"]["Cave"]["ghost_members"][0]["location"] == "Duskwood"
+    ghost = report["guilds"]["Cave"]["ghost_members"][0]
+    assert ghost["location"] == "Duskwood"
+    assert ghost["duration_seconds"] == 100
 
 
 def test_missing_raidteam_is_reported_with_an_empty_distribution():
