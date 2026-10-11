@@ -39,50 +39,56 @@ def _xp_rate(series: dict) -> tuple[int | None, int]:
     return (round(sum(values) / len(values)) if values else None, len(values))
 
 
+def _unavailable_xp_projection(reason: str) -> dict:
+    return {
+        "target_seats": TARGET_SEATS,
+        "remaining_xp": None,
+        "xp_per_hour_24h": None,
+        "projected_at": None,
+        "basis": reason,
+    }
+
+
+def _guild_xp_projection_inputs(source: dict) -> dict | None:
+    seat_members = source.get("seat_members") or []
+    series = source.get("series") or {}
+    remaining_by_member = series.get("xp_to_level_60_by_member") or {}
+    target_xp = series.get("level_60_total_xp")
+    if target_xp is None or any(
+        name not in remaining_by_member or remaining_by_member[name] is None
+        for name in seat_members
+    ):
+        return None
+    per_hour, measured = _xp_rate(series)
+    if measured == 0:
+        return None
+    return {
+        "seats": len(seat_members),
+        "remaining_xp": sum(int(remaining_by_member[name]) for name in seat_members),
+        "level_60_total_xp": int(target_xp),
+        "xp_per_hour": int(per_hour),
+    }
+
+
 def _xp_projection(guild_payloads: dict[str, dict], snapshot_epoch: int) -> dict:
-    remaining = 0
-    rate = 0
-    seats = 0
-    target_xp = None
-    for source in guild_payloads.values():
-        seat_members = source.get("seat_members") or []
-        series = source.get("series") or {}
-        remaining_by_member = series.get("xp_to_level_60_by_member") or {}
-        level_60_total_xp = series.get("level_60_total_xp")
-        if level_60_total_xp is None or any(
-            name not in remaining_by_member or remaining_by_member[name] is None
-            for name in seat_members
-        ):
-            return {
-                "target_seats": TARGET_SEATS,
-                "remaining_xp": None,
-                "xp_per_hour_24h": None,
-                "projected_at": None,
-                "basis": "requires measured experience totals for all seated members",
-            }
-        target_xp = int(level_60_total_xp)
-        remaining += sum(int(remaining_by_member[name]) for name in seat_members)
-        seats += len(seat_members)
-        per_hour, measured = _xp_rate(series)
-        if measured == 0:
-            return {
-                "target_seats": TARGET_SEATS,
-                "remaining_xp": None,
-                "xp_per_hour_24h": None,
-                "projected_at": None,
-                "basis": "requires measured guild XP rates",
-            }
-        rate += int(per_hour)
+    inputs = [_guild_xp_projection_inputs(row) for row in guild_payloads.values()]
+    if not inputs or any(row is None for row in inputs):
+        return _unavailable_xp_projection(
+            "requires measured experience totals and guild XP rates"
+        )
 
-    if seats > TARGET_SEATS or target_xp is None:
-        remaining = None
-    elif seats < TARGET_SEATS:
-        remaining += (TARGET_SEATS - seats) * target_xp
+    seats = sum(row["seats"] for row in inputs)
+    target_xp = inputs[0]["level_60_total_xp"]
+    if seats > TARGET_SEATS or any(
+        row["level_60_total_xp"] != target_xp for row in inputs
+    ):
+        return _unavailable_xp_projection("seat count or XP tables do not match")
 
-    projected = None
-    if remaining == 0:
-        projected = _iso(snapshot_epoch)
-    elif remaining is not None and rate > 0:
+    remaining = sum(row["remaining_xp"] for row in inputs)
+    remaining += (TARGET_SEATS - seats) * target_xp
+    rate = sum(row["xp_per_hour"] for row in inputs)
+    projected = _iso(snapshot_epoch) if remaining == 0 else None
+    if remaining > 0 and rate > 0:
         projected = _iso(snapshot_epoch + remaining / rate * 3600)
     return {
         "target_seats": TARGET_SEATS,
