@@ -12,10 +12,9 @@ repos: the module delivers commands to bots and snapshots their state every
 five seconds; this bridge is the only thing that ever writes a command, and
 the only thing that renders what the module recorded.
 
-**Private on purpose.** See `AGENTS.md` before writing anything here - this
-directory carried real names, internal hostnames and a private IP for a long
-time as a private-only codebase, and that debt is not yet paid down. It is
-not ready to be made public the way `mod-overseer` was.
+This repository is public. See `AGENTS.md` before writing here: historical
+content may still include private details, so write all new content for a
+public audience.
 
 ## Where this came from
 
@@ -116,3 +115,39 @@ was retired outright rather than moved: its whole premise (infra's
 `UPSTREAM-PINS.env` clones a SHA that infra itself compiles) does not apply
 to a service that now ships as a prebuilt, digest-pinned image instead of
 source infra clones and builds.
+
+## Metric snapshots
+
+`tools/metric_watcher.py` makes read-only requests to the versioned Overseer
+API and appends one aggregate JSON object per guild to a JSON Lines file. It
+records level gainers (the API reports level changes, not raw XP), level
+statistics, dungeon runs/clears/wipes, class quests done/blocked, deaths in the
+last 24 hours, ghosts, stuck members, and offline members. Member names are
+not written to the metrics log.
+
+The API does not expose character experience, so raw XP gain and an XP-based
+level-60 date cannot be calculated. After two snapshots show positive level
+progress, the watcher records an estimated date for 40 seats to reach level
+60 based on observed level steps per day. The record labels this as a
+level-based estimate.
+
+The optional systemd units under `systemd/` run the watcher every 30 minutes.
+They assume the application is installed at `/opt/wow-overseer` and runs as
+the `wow-overseer` service account. Copy
+`systemd/metric-watcher.env.example` to
+`/etc/wow-overseer/metric-watcher.env`, set the versioned read-only API root
+and writable JSONL output path, then install and enable the units:
+
+```sh
+sudo install -d -o wow-overseer -g wow-overseer /var/lib/wow-overseer
+sudo install -D -m 0644 systemd/metric-watcher.env.example /etc/wow-overseer/metric-watcher.env
+sudoedit /etc/wow-overseer/metric-watcher.env
+sudo install -D -m 0644 systemd/metric-watcher.service /etc/systemd/system/metric-watcher.service
+sudo install -D -m 0644 systemd/metric-watcher.timer /etc/systemd/system/metric-watcher.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now metric-watcher.timer
+```
+
+The API root and output path can also be passed with `--api-root` and
+`--output` or provided through `METRIC_WATCHER_API_ROOT` and
+`METRIC_WATCHER_OUTPUT`. No API write endpoint is used.

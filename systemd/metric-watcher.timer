@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the realm metric watcher every 30 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+Unit=metric-watcher.service
+
+[Install]
+WantedBy=timers.target
