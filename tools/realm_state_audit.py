@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import statistics
 import urllib.error
 import urllib.parse
@@ -43,10 +44,17 @@ def _member(row: dict, checked_at: int) -> dict:
         "life": row.get("life"),
         "stuck": bool(row.get("stuck")),
         "stuck_kind": row.get("stuck_kind") or None,
-        "blocker": row.get("blocker") or None,
+        "blocker": _public_blocker(row.get("blocker")),
         "stuck_since": _utc(since) if row.get("stuck") else None,
         "stuck_duration_seconds": stuck_duration,
     }
+
+
+def _public_blocker(blocker: str | None) -> str | None:
+    """Remove character-specific identity from known blocker templates."""
+    if blocker is None:
+        return None
+    return re.sub(r"Waiting for [A-Z][A-Za-z0-9_-]* at", "Waiting for the NPC at", blocker)
 
 
 def _level_distribution(raidteam: dict) -> dict:
