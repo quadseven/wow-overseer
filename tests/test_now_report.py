@@ -18,13 +18,18 @@ class NowReport(unittest.TestCase):
             app = pathlib.Path(tmp) / "app"
             shutil.copytree(APP, app)
             (app / "package.json").write_text('{"type":"module"}', encoding="utf-8")
-            script = '''
+            script = """
 const M = await import(%s);
 const now = 200000;
 const got = M.reportFacts({guild: {dungeons: [{place: "Deadmines", runs: 4, cleared: 2, wiped: 2}], gaining: [{at: now - 3600}]}, series: {level: [[1, 20], [86401, 21]], xp_to_level_60_by_member: {A: 360000}, xp_per_hour: [[1, 10000]]}, stuck: {members: [{blocker: "bag room", since: now - 7200}]}, now});
 console.log(JSON.stringify(got));
-''' % json.dumps((app / "views/now/report.js").as_uri())
-            result = subprocess.run([shutil.which("node"), "--input-type=module", "-e", script], capture_output=True, text=True, timeout=30)
+""" % json.dumps((app / "views/now/report.js").as_uri())
+            result = subprocess.run(
+                [shutil.which("node"), "--input-type=module", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
         self.assertEqual(data["dungeons"][0]["attempts"], 4)
