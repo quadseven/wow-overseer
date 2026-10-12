@@ -36,6 +36,11 @@ class GuildBankKeepsPerFamilyTests(unittest.TestCase):
         bridge._set_guild_bank_keeps(FAMILY_A, {})
         self.assertEqual(set(bridge._GUILD_BANK_KEEPS), {202})
 
+    def test_member_order_does_not_split_a_familys_keeps(self):
+        bridge._set_guild_bank_keeps(["Atwo", "Aone"], {101: "old"})
+        bridge._set_guild_bank_keeps(["Aone", "Atwo"], {303: "new"})
+        self.assertEqual(set(bridge._GUILD_BANK_KEEPS), {303})
+
 
 if __name__ == "__main__":
     unittest.main()
