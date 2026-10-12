@@ -6046,6 +6046,8 @@ class Bridge(discord.Client):
         # Pieces held on the world's own refusal (#897), (holder, command) ->
         # gear.WorldHold. In memory: a restart asks each of them once more.
         self._equip_holds: dict = {}
+        # The last worn read per holder, which a failed read falls back on.
+        self._equip_worn: dict = {}
         # JEV, IN SHADOW (#95). One client for the process, so its cache and
         # its in-flight limit are shared by every family. With no
         # TYPESAFE_API_KEY it answers every question with `no_key` and the
@@ -11476,8 +11478,18 @@ class Bridge(discord.Client):
             key = (row["target_name"], row["command"])
             tries[key] = tries.get(key, 0) + 1
         answers = bag_pressure.latest_answers(current, item_plan.OPEN_STATUSES)
-        worn = bag_pressure.worn_pieces(await asyncio.to_thread(
-            _fetch_worn_pieces, sorted({e.holder for e in wanted})))
+        wearers = sorted({e.holder for e in wanted})
+        try:
+            read = bag_pressure.worn_pieces(await asyncio.to_thread(
+                _fetch_worn_pieces, wearers))
+        except pymysql.err.MySQLError as exc:
+            # A failed read keeps the last one, so a database fault neither
+            # stops the pass nor lifts a hold on a slot nobody saw change.
+            log.warning("equip: worn pieces unreadable (%s); holds keep the "
+                        "last read", exc)
+        else:
+            self._equip_worn.update({h: read.get(h, {}) for h in wearers})
+        worn = {h: self._equip_worn[h] for h in wearers if h in self._equip_worn}
         queue, notes = bag_pressure.equips_to_queue(
             wanted, recent, tries, answers=answers, worn=worn,
             holds=self._equip_holds, holders=set(holders) or None)

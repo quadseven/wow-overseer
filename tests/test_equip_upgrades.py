@@ -379,6 +379,17 @@ class TheBridgeWritesIt(unittest.TestCase):
         self.assertIn("await self._write_equips(wanted, current, holders=names)", body)
         self.assertIn('"equip: %s %r answered %s', body)
 
+    def test_a_failed_worn_read_keeps_the_pass_and_the_last_read(self):
+        """A database fault on the worn read neither stops the equip pass nor
+        lifts a hold: it falls back on the last read per holder."""
+        body = _block("    async def _write_equips(self")
+        read = body.index("_fetch_worn_pieces, wearers")
+        guard = body.index("except pymysql.err.MySQLError")
+        self.assertLess(read, guard)
+        self.assertIn("self._equip_worn.update(", body)
+        self.assertLess(guard, body.index("bag_pressure.equips_to_queue("))
+        self.assertIn("self._equip_worn: dict = {}", BRIDGE.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
