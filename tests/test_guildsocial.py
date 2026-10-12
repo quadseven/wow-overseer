@@ -186,6 +186,15 @@ class TheTablesKeepTheContract(unittest.TestCase):
             "run_id INT NULL",
         ):
             self.assertIn(column, gs.ASK_TABLE_SQL)
+        self.assertIn("KEY idx_created (created_at)", gs.ASK_TABLE_SQL)
+
+    def test_asks_read_uses_indexable_union_branches(self):
+        sql = " ".join(gs.ASKS_SQL.split())
+        self.assertIn("WHERE state IN ('open', 'filled') UNION SELECT", sql)
+        self.assertIn("WHERE created_at > NOW() - INTERVAL %s MINUTE ORDER BY id", sql)
+        self.assertNotIn(" OR ", sql)
+        self.assertNotIn("UNION ALL", sql)
+        self.assertEqual(sql.count("SELECT id, guild, asker, kind"), 2)
 
     def test_the_answer_table(self):
         for column in (
