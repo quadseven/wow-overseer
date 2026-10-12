@@ -455,6 +455,40 @@ def member_states(rows) -> dict:
     return out
 
 
+def _roster_families(roster):
+    by_name = {str(r.get("name")): r for r in roster or ()}
+    families = {}
+    for n, r in by_name.items():
+        families.setdefault(str(r.get("family") or n), []).append(n)
+    return by_name, families
+
+
+def _current_intents(intents, by_name, families):
+    current_leaders = {}
+    for family, family_names in families.items():
+        lead = next((n for n in family_names if by_name[n].get("lead")), None)
+        current_leaders[family] = lead or family_names[0]
+    return [
+        r
+        for r in intents or ()
+        if r.get("module_age") is not None
+        and int(r["module_age"]) <= jev_family_intent.FRESH_SECONDS
+        and current_leaders.get(str(r.get("family") or ""))
+        == str(r.get("leader_name") or "")
+    ]
+
+
+def _attach_steps(facts, families, steps):
+    for s in steps or ():
+        subject = str(s.get("subject"))
+        targets = (
+            [subject] if s.get("scope") == "character" else families.get(subject, [])
+        )
+        for n in targets:
+            if n in facts:
+                facts[n]["steps"].append(s)
+
+
 def build_facts(names, roster, intents, steps, now_at=None) -> dict:
     """name -> the facts `compose` reads, from the three table reads.
 
@@ -463,22 +497,8 @@ def build_facts(names, roster, intents, steps, now_at=None) -> dict:
     epoch seconds, the same clock the steps' times are read on. Each step is offered to the
     character it names and to every character of the family it names.
     """
-    by_name = {str(r.get("name")): r for r in roster or ()}
-    families = {}
-    for n, r in by_name.items():
-        families.setdefault(str(r.get("family") or n), []).append(n)
-    current_leaders = {}
-    for family, family_names in families.items():
-        lead = next((n for n in family_names if by_name[n].get("lead")), None)
-        current_leaders[family] = lead or family_names[0]
-    current_intents = [
-        r
-        for r in intents or ()
-        if r.get("module_age") is not None
-        and int(r["module_age"]) <= jev_family_intent.FRESH_SECONDS
-        and current_leaders.get(str(r.get("family") or ""))
-        == str(r.get("leader_name") or "")
-    ]
+    by_name, families = _roster_families(roster)
+    current_intents = _current_intents(intents, by_name, families)
     leaders = {str(r.get("leader_name")): r for r in current_intents}
     members = member_states(current_intents)
     facts = {}
@@ -490,14 +510,7 @@ def build_facts(names, roster, intents, steps, now_at=None) -> dict:
             "steps": [],
             "now_at": now_at,
         }
-    for s in steps or ():
-        subject = str(s.get("subject"))
-        targets = (
-            [subject] if s.get("scope") == "character" else families.get(subject, [])
-        )
-        for n in targets:
-            if n in facts:
-                facts[n]["steps"].append(s)
+    _attach_steps(facts, families, steps)
     return facts
 
 
