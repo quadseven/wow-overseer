@@ -117,19 +117,44 @@ class OneRun(unittest.TestCase):
         self.assertIn("recipient IN (%s, %s, %s)", council_sql)
         self.assertEqual(
             council_params,
-            ("Grug", "Ugga", "Og", "deadmines", "2026-10-08 10:00:00", "2026-10-08 11:00:00"),
+            (
+                "Grug",
+                "Ugga",
+                "Og",
+                "deadmines",
+                "2026-10-08 10:00:00",
+                "2026-10-08 11:00:00",
+            ),
         )
 
     def test_seated_items_are_shaped_newest_first_with_their_source(self):
         events = [
-            {"member": "Grug", "entry": 100, "name": "Old Blade", "quality": 3,
-             "kind": "item_loot", "at": "2026-10-08 10:10:00"},
-            {"member": "Ugga", "entry": 101, "name": "New Staff", "quality": 4,
-             "kind": "item_equip", "at": "2026-10-08 10:50:00"},
+            {
+                "member": "Grug",
+                "entry": 100,
+                "name": "Old Blade",
+                "quality": 3,
+                "kind": "item_loot",
+                "at": "2026-10-08 10:10:00",
+            },
+            {
+                "member": "Ugga",
+                "entry": 101,
+                "name": "New Staff",
+                "quality": 4,
+                "kind": "item_equip",
+                "at": "2026-10-08 10:50:00",
+            },
         ]
         awards = [
-            {"member": "Og", "entry": 102, "name": "Council Ring", "quality": 3,
-             "outcome": "given", "at": "2026-10-08 10:30:00"},
+            {
+                "member": "Og",
+                "entry": 102,
+                "name": "Council Ring",
+                "quality": 3,
+                "outcome": "given",
+                "at": "2026-10-08 10:30:00",
+            },
         ]
         _code, payload, _rd = ask("398", event_rows=events, council_rows=awards)
         self.assertEqual(

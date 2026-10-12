@@ -32,34 +32,51 @@ _COUNCIL_GEAR_SQL = (
 )
 
 
+def _gear_item(row: dict, source: str) -> dict:
+    return {
+        "member": row["member"],
+        "entry": int(row.get("entry") or 0),
+        "name": row.get("name") or "",
+        "quality": int(row.get("quality") or 0),
+        "source": source,
+        "at": str(row.get("at") or ""),
+    }
+
+
+def _event_gear(reader, members: list, holes: str, view: dict, map_id: int) -> list:
+    rows = reader.rows(
+        _EVENT_GEAR_SQL.format(names=holes),
+        tuple(members) + (map_id, view["created_at"], view["ended_at"] or None),
+        what="overseer_event",
+    )
+    return [
+        _gear_item(row, "equipped" if row["kind"] == "item_equip" else "looted")
+        for row in rows
+    ]
+
+
+def _council_gear(reader, members: list, holes: str, view: dict) -> list:
+    rows = reader.rows(
+        _COUNCIL_GEAR_SQL.format(names=holes),
+        tuple(members)
+        + (view["keyword"], view["created_at"], view["ended_at"] or None),
+        what="overseer_loot_council",
+    )
+    return [_gear_item(row, "won by loot council") for row in rows]
+
+
 def _gear(reader, view: dict) -> list:
-    members = [m["name"] for m in view["members"]]
+    members = [member["name"] for member in view["members"]]
     if not members:
         return []
-    start = view["created_at"]
-    end = view["ended_at"] or None
-    holes = ", ".join(["%s"] * len(members))
     map_id = dungeonpath.PORTAL_MAPS.get(str(view["keyword"] or "").lower())
     if map_id is None:
         return []
-    events = reader.rows(
-        _EVENT_GEAR_SQL.format(names=holes), tuple(members) + (map_id, start, end),
-        what="overseer_event",
-    )
-    council = reader.rows(
-        _COUNCIL_GEAR_SQL.format(names=holes), tuple(members) + (view["keyword"], start, end),
-        what="overseer_loot_council",
-    )
-    out = []
-    for row in events:
-        out.append({"member": row["member"], "entry": int(row.get("entry") or 0),
-                    "name": row.get("name") or "", "quality": int(row.get("quality") or 0),
-                    "source": "equipped" if row["kind"] == "item_equip" else "looted", "at": str(row.get("at") or "")})
-    for row in council:
-        out.append({"member": row["member"], "entry": int(row.get("entry") or 0),
-                    "name": row.get("name") or "", "quality": int(row.get("quality") or 0),
-                    "source": "won by loot council", "at": str(row.get("at") or "")})
-    return sorted(out, key=lambda item: item["at"], reverse=True)
+    holes = ", ".join(["%s"] * len(members))
+    items = _event_gear(reader, members, holes, view, map_id)
+    items.extend(_council_gear(reader, members, holes, view))
+    return sorted(items, key=lambda item: item["at"], reverse=True)
+
 
 _ID_MAX_DIGITS = 10
 
