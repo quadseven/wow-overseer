@@ -105,6 +105,8 @@ COLLATIONS = {
     # Bridge-owned (the Bags tab's week), named in
     # bridge._ensure_economy_store the same way overseer_jev_judgment is.
     "overseer_economy_sample": "utf8mb4_0900_ai_ci",
+    # Bridge-owned, named in bridge._MEMO_CREATE_SQL.
+    "overseer_bridge_memo": "utf8mb4_0900_ai_ci",
     # Module-owned (mod-overseer#616), named in its own CREATE TABLE
     # (COLLATE=utf8mb4_unicode_ci) exactly as overseer_build is above.
     "overseer_dungeon_run_event": "utf8mb4_unicode_ci",
@@ -154,6 +156,7 @@ BINARY = "utf8mb4_bin"
 # entry - it is utf8mb4_bin, which settles any comparison it is part of before
 # the column ever matters.
 STRING_COLUMNS = {
+    "overseer_bridge_memo": frozenset({"kind", "subject", "value"}),
     "overseer_chat": frozenset(
         {"channel", "channel_name", "heard_by", "sender_name", "text"}
     ),

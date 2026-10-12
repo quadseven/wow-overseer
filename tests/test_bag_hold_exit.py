@@ -298,6 +298,9 @@ class Clock:
     def monotonic(self):
         return self.now
 
+    def time(self):
+        return self.now
+
 
 class Log:
     def __init__(self):
@@ -351,6 +354,8 @@ def _drive(world, clock, log):
         "_insert_job": world.insert_job,
         "_campaign_waiting": lambda names: True,
         "_connect": lambda: contextlib.nullcontext(Conn()),
+        "_memo_upsert": lambda *args: None,
+        "_memo_delete": lambda *args: None,
         "pymysql": None,
     }
     exec(  # noqa: S102 - bridge.py's own source
