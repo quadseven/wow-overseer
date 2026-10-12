@@ -2461,6 +2461,10 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
 # THE HOLD AT THE FLOOR, PER FAMILY (bag_pressure.bag_hold_progress), keyed
 # like the clocks above. Its timestamps are persisted as wall time across restarts.
 _BAG_HOLD: dict = {}
+# Latest bag-floor result observed by a bag pass, keyed by family member. The
+# family key is its leader's name, so queue ownership reads its entry without
+# doing roster or inventory queries.
+_BAG_HOLD_STUCK: dict[str, tuple] = {}
 
 _MEMO_CREATE_SQL = ("CREATE TABLE IF NOT EXISTS overseer_bridge_memo ("
                     "kind VARCHAR(32) NOT NULL, subject VARCHAR(191) NOT NULL, "
@@ -2558,14 +2562,18 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
         _BAG_HOLD.pop(key, None)
         # The hold ended: clear the memo this function writes below.
         _memo_delete("bag_hold", ",".join(key))
-        return ()
-    _BAG_HOLD[key] = progress
-    wall = time.time()
-    value = {"best": progress.best, "since": wall - (now - progress.since),
-             "seen": wall - (now - progress.seen), "released": progress.released}
-    _memo_upsert("bag_hold", ",".join(key), value, value["since"],
-                 wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
-    return bag_pressure.bag_hold_stuck(progress)
+        result = ()
+    else:
+        _BAG_HOLD[key] = progress
+        wall = time.time()
+        value = {"best": progress.best, "since": wall - (now - progress.since),
+                 "seen": wall - (now - progress.seen), "released": progress.released}
+        _memo_upsert("bag_hold", ",".join(key), value, value["since"],
+                     wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
+        result = bag_pressure.bag_hold_stuck(progress)
+    for name in names:
+        _BAG_HOLD_STUCK[name] = result
+    return result
 
 
 def _restore_bag_holds() -> None:
@@ -3605,9 +3613,7 @@ def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
     """
     try:
         family = family or _cohort_of(bonds.head_of_family()) or ""
-        # Looked up through globals(), as the gear helpers are, because the
-        # campaign tests load this function without the pace pass.
-        if family in globals().get("_PACE_QUESTING", {}) and not dungeon:
+        if family in _PACE_QUESTING and not dungeon:
             # QUESTING WHILE THE DOOR WAITS (mod-overseer#767): the queue does
             # not own the job then, so the craft rhythm and the skill goal
             # get the family's time back.
@@ -3616,14 +3622,8 @@ def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
             # A released bag hold gives the family's own passes time to buy
             # reagents and craft. Keep the queue pending for the dungeon
             # caller, which still starts the run once everyone has room.
-            stuck = globals().get("_bag_hold_stuck")
-            fetch_names = globals().get("_fetch_enabled_names")
-            fetch_slots = globals().get("_fetch_free_slots")
-            if stuck and fetch_names and fetch_slots:
-                names = [name for name in fetch_names()
-                         if _cohort_of(name) == family]
-                if names and stuck(names, fetch_slots(names)):
-                    return False
+            if _BAG_HOLD_STUCK.get(family):
+                return False
         return bool(campaignqueue.pending_by_family(_fetch_queue_rows()).get(family))
     except Exception:
         log.exception("queue: could not read whether a queue owns the job")

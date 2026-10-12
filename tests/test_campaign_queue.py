@@ -617,6 +617,8 @@ class NothingElseStompsTheQueue(unittest.TestCase):
                 "log": _Log(),
                 "bonds": types.SimpleNamespace(head_of_family=lambda: "Grug"),
                 "_fetch_queue_rows": lambda: rows,
+                "_PACE_QUESTING": {},
+                "_BAG_HOLD_STUCK": {},
             },
         )
         ns["_cohort_of"] = lambda name: "Grug"
@@ -635,15 +637,15 @@ class NothingElseStompsTheQueue(unittest.TestCase):
                 "bonds": types.SimpleNamespace(head_of_family=lambda: "Zug"),
                 "_cohort_of": lambda name: "Zug",
                 "_fetch_queue_rows": lambda: rows,
-                "_fetch_enabled_names": lambda: ["Zug", "Uzza"],
-                "_fetch_free_slots": lambda names: {name: 0 for name in names},
-                "_bag_hold_stuck": lambda names, slots: tuple(stuck),
+                "_PACE_QUESTING": {},
+                "_BAG_HOLD_STUCK": {"Zug": tuple(stuck)},
             },
         )
 
         self.assertFalse(ns["_queue_owns_job"]("Zug"))
         self.assertTrue(ns["_queue_owns_job"]("Zug", dungeon=True))
         stuck.clear()
+        ns["_BAG_HOLD_STUCK"]["Zug"] = tuple(stuck)
         self.assertTrue(ns["_queue_owns_job"]("Zug"))
 
     def test_the_loop_runs_and_the_store_is_created_in_both_starts(self):
