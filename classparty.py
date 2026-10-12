@@ -383,6 +383,44 @@ def _taken_why(ask, board, taken) -> str:
     return ""
 
 
+def _asker_need(ask, ended, partied, free, by_member):
+    """The asker's classquest.Help when this ask is live, not ended, not yet
+    partied, its asker free and still on the ask's quest; None otherwise."""
+    if (
+        ask.state not in LIVE_ASKS
+        or ask.id in ended
+        or ask.id in partied
+        or ask.asker not in free
+    ):
+        return None
+    need = by_member.get(ask.asker)
+    if need is None or need.move.quest != classask.quest_of(ask):
+        return None
+    return need
+
+
+def _yes_by_ask(answers) -> dict:
+    """ask id -> its yes rows."""
+    out: dict = {}
+    for a in answers or ():
+        if a.state == YES:
+            out.setdefault(a.ask_id, []).append(a)
+    return out
+
+
+def _run(ask, need, standing, spot) -> PartyRun:
+    chosen = standing[:MAX_HELPERS]
+    return PartyRun(
+        ask.id,
+        ask.asker,
+        tuple(y.member for y in chosen),
+        need.move.quest,
+        need.move.title,
+        spot,
+        {y.member: y.id for y in chosen},
+    )
+
+
 def plan(asks, answers, quest_pass, helps, free, board, now, clock, book=None):
     """(plan_starts' parties, notes): each note names a filled ask that gets no
     party this pass and why (its asker is taken, its failures are used up, or
@@ -394,29 +432,18 @@ def plan(asks, answers, quest_pass, helps, free, board, now, clock, book=None):
     by_member = {}
     for h in helps:
         by_member.setdefault(h.member, h)
-    yes_by_ask: dict = {}
-    for a in answers or ():
-        if a.state == YES:
-            yes_by_ask.setdefault(a.ask_id, []).append(a)
+    yes_by_ask = _yes_by_ask(answers)
     taken = set(board.names())
     partied = board.partied_asks()
     filled = set(quest_pass.filled)
     starts, notes = [], []
     for ask in sorted(classask.quest_asks(asks), key=lambda a: a.id):
-        if (
-            ask.state not in LIVE_ASKS
-            or ask.id in ended
-            or ask.id in partied
-            or ask.asker not in free
-        ):
+        need = _asker_need(ask, ended, partied, free, by_member)
+        if need is None:
             continue
-        need = by_member.get(ask.asker)
-        if need is None or need.move.quest != classask.quest_of(ask):
-            continue
-        full = ask.state == FILLED or ask.id in filled
         why = _taken_why(ask, board, taken)
         if why:
-            if full:
+            if ask.state == FILLED or ask.id in filled:
                 notes.append(_skip_note(ask, need, why))
             continue
         standing = _standing(ask, yes_by_ask, gone, free, taken)
@@ -430,16 +457,7 @@ def plan(asks, answers, quest_pass, helps, free, board, now, clock, book=None):
                 )
             )
             continue
-        chosen = standing[:MAX_HELPERS]
-        run = PartyRun(
-            ask.id,
-            ask.asker,
-            tuple(y.member for y in chosen),
-            need.move.quest,
-            need.move.title,
-            spot,
-            {y.member: y.id for y in chosen},
-        )
+        run = _run(ask, need, standing, spot)
         taken.update(run.names())
         starts.append(run)
     return tuple(starts), tuple(notes)
