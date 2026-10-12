@@ -11423,6 +11423,15 @@ class Bridge(discord.Client):
         # is worn is left in the bags. No plan leaves `wanted` as it is.
         wanted = bag_pressure.jev_equips(
             wanted, gear_rows, worn, names, jev_plan, keep_names=OWNER_KEEPS)
+        roster_names = await asyncio.to_thread(_fetch_enabled_roster_names)
+        left_to_drive = [equip for equip in wanted
+                         if equip.holder in roster_names]
+        wanted = tuple(equip for equip in wanted
+                       if equip.holder not in roster_names)
+        log.info(
+            "equip: left %d piece(s) to the module's gear drive for %d roster member(s)",
+            len(left_to_drive), len(roster_names),
+        )
         await self._write_equips(wanted, current)
 
     async def _scored_equips(self, legacy, names, label: str, tanks=()) -> tuple:
@@ -21849,6 +21858,13 @@ _FAMILY_EQUIPPED_ROLES_SQL = (
     "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "WHERE c.name IN (%s)"
 )
+
+
+def _fetch_enabled_roster_names() -> set[str]:
+    """Names whose gear is owned by the module's enabled roster drive."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT name FROM overseer_roster WHERE enabled = 1")
+        return {str(row["name"]) for row in cur.fetchall()}
 
 
 def _fetch_shield_tanks(names: list) -> set:

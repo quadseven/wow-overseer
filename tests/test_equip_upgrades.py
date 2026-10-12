@@ -267,6 +267,23 @@ class TheBridgeWritesIt(unittest.TestCase):
         self.assertIn("await self._write_equips(wanted, current)", body)
         self.assertIn('"equip: %s %r answered %s', body)
 
+    def test_family_equip_leaves_roster_members_to_the_gear_drive(self):
+        body = _block("    async def _equip_upgrades(self")
+        read = body.index("_fetch_enabled_roster_names")
+        write = body.index("await self._write_equips(wanted, current)")
+        self.assertLess(read, write)
+        self.assertIn("equip.holder not in roster_names", body)
+        self.assertIn("len(left_to_drive), len(roster_names)", body)
+        self.assertIn(
+            "equip: left %d piece(s) to the module's gear drive for %d roster member(s)",
+            body,
+        )
+
+    def test_non_roster_family_pick_remains_wanted(self):
+        body = _block("    async def _equip_upgrades(self")
+        self.assertIn("wanted = tuple(equip for equip in wanted", body)
+        self.assertIn("if equip.holder not in roster_names", body)
+
 
 if __name__ == "__main__":
     unittest.main()
