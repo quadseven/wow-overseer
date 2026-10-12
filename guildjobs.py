@@ -2237,37 +2237,15 @@ def assign_doors(members, entrances, stones, campaign_door: str = "") -> dict:
     that fit: the stone with the fewest warlocks first (the Dire Maul wings
     and the Scarlet Monastery wings share one stone each), then the lower
     band, then the keyword."""
-    load = {}
-    out = {}
     casters = [
         m
         for m in members or ()
         if m.role == SUMMONER and RITUAL_OF_SUMMONING in m.known
     ]
     casters.sort(key=lambda m: (-int(m.level), m.name))
-    on_call = None
-    if campaign_door:
-        on_call = next(
-            (
-                m
-                for m in casters
-                if any(
-                    run.keyword == campaign_door
-                    and stone_for(run.keyword, entrances, stones) is not None
-                    for run in doors_for(m)
-                )
-            ),
-            None,
-        )
-        if on_call is not None:
-            run = next(
-                run for run in doors_for(on_call) if run.keyword == campaign_door
-            )
-            stone = stone_for(run.keyword, entrances, stones)
-            out[on_call.name] = Door(
-                campaign_door, run.place, run.floor, run.ceiling, stone, True
-            )
-            load[stone.spawn] = load.get(stone.spawn, 0) + 1
+    on_call, load, out = _assign_campaign_door(
+        casters, entrances, stones, campaign_door
+    )
     for m in casters:
         if on_call is not None and m.name == on_call.name:
             continue
@@ -2283,6 +2261,34 @@ def assign_doors(members, entrances, stones, campaign_door: str = "") -> dict:
         load[stone.spawn] = load.get(stone.spawn, 0) + 1
         out[m.name] = Door(keyword, run.place, run.floor, run.ceiling, stone)
     return out
+
+
+def _assign_campaign_door(casters, entrances, stones, campaign_door):
+    """Reserve the family's campaign door for its highest-level eligible caster."""
+    load, out = {}, {}
+    if not campaign_door:
+        return None, load, out
+    on_call = next(
+        (
+            member
+            for member in casters
+            if any(
+                run.keyword == campaign_door
+                and stone_for(run.keyword, entrances, stones) is not None
+                for run in doors_for(member)
+            )
+        ),
+        None,
+    )
+    if on_call is None:
+        return None, load, out
+    run = next(run for run in doors_for(on_call) if run.keyword == campaign_door)
+    stone = stone_for(run.keyword, entrances, stones)
+    out[on_call.name] = Door(
+        campaign_door, run.place, run.floor, run.ceiling, stone, True
+    )
+    load[stone.spawn] = 1
+    return on_call, load, out
 
 
 # ---------------------------------------------------------------------------
@@ -2552,18 +2558,7 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
     if m.x is None or m.y is None:
         return None, "serves %s; where it stands is not read this pass" % door.place, ""
     if door.on_call:
-        if door.stone is not None and not _near(m, door.stone, ON_CALL_REACH):
-            if not _cooling(m, "door", recent):
-                said = "%s waits on call at the meeting stone at %s" % (
-                    m.name,
-                    door.place,
-                )
-                return _spot_step(m, door.stone, "door", cap, said), said, ""
-        return (
-            None,
-            "waits on call at the meeting stone at %s%s" % (door.place, shards),
-            "",
-        )
+        return _on_call_step(m, door, recent, cap, shards)
     if door.stone is not None and not _near(m, door.stone, DOOR_REACH):
         if not _cooling(m, "door", recent):
             said = (
@@ -2577,6 +2572,22 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
     return (
         None,
         "farms near the meeting stone at %s between summons%s" % (door.place, shards),
+        "",
+    )
+
+
+def _on_call_step(m, door, recent, cap, shards):
+    """Return the stand or wait step for the summoner assigned to campaign duty."""
+    if door.stone is not None and not _near(m, door.stone, ON_CALL_REACH):
+        if not _cooling(m, "door", recent):
+            said = "%s waits on call at the meeting stone at %s" % (
+                m.name,
+                door.place,
+            )
+            return _spot_step(m, door.stone, "door", cap, said), said, ""
+    return (
+        None,
+        "waits on call at the meeting stone at %s%s" % (door.place, shards),
         "",
     )
 
