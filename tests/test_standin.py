@@ -49,6 +49,7 @@ def facts(**over):
         ordered="Og",
         roster=ROSTER,
         skills=dict(SKILLS),
+        known=frozenset({3757}),
         out_member=FAMILY["Og"],
         family_levels=tuple(m.level for n, m in sorted(FAMILY.items()) if n != "Og"),
         guild="Cave",
@@ -149,8 +150,20 @@ class ACraftThatCannotMoveIsNoReasonToSitOut(unittest.TestCase):
         why = standin.sits_out(facts(skills={"enchanting": 1}, known=frozenset()))
         self.assertIn("enchanting 1", why)
 
-    def test_an_unread_spellbook_is_not_judged(self):
-        self.assertEqual("", standin.sits_out(facts(skills=self.OG, known=None)))
+    def test_an_unread_spellbook_with_a_row_leaves_the_row(self):
+        row = seated(in_name="")
+        self.assertEqual(
+            "", standin.sits_out(facts(skills=self.OG, known=None, current=row))
+        )
+        step = standin.step(facts(skills=self.OG, known=None, current=row))
+        self.assertNotEqual(standin.CLEAR, step.action)
+
+    def test_an_unread_spellbook_with_no_row_writes_none(self):
+        f = facts(skills=self.OG, known=None)
+        self.assertIn("spellbook was not read", standin.sits_out(f))
+        step = standin.step(f)
+        self.assertEqual(standin.NONE, step.action)
+        self.assertIn("spellbook was not read", step.why)
 
 
 # --- who sits out and who stands in ----------------------------------------------
