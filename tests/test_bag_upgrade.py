@@ -412,15 +412,23 @@ class RowsBecomeMembers(unittest.TestCase):
         for r in rows:
             r["entry"] = 4497 if r["guid"] == 610 else 4496
         (move,) = self_equips(members_from_rows(rows, ["Uzza"]))
-        self.assertEqual((move.bag, move.replaces), ("Heavy Brown Bag", "Small Brown Pouch"))
+        self.assertEqual(
+            (move.bag, move.replaces), ("Heavy Brown Bag", "Small Brown Pouch")
+        )
 
     def test_zrog_chooses_an_eight_slot_spare(self):
-        rows = [_row("Zrog", 620 + i, "Small Brown Pouch", 6, 0, 19 + i) for i in range(4)]
-        rows.extend(_row("Zrog", 630 + i, "Brown Leather Bag", 8, 0, 23 + i) for i in range(3))
+        rows = [
+            _row("Zrog", 620 + i, "Small Brown Pouch", 6, 0, 19 + i) for i in range(4)
+        ]
+        rows.extend(
+            _row("Zrog", 630 + i, "Brown Leather Bag", 8, 0, 23 + i) for i in range(3)
+        )
         for r in rows:
             r["entry"] = 4498
         (move,) = self_equips(members_from_rows(rows, ["Zrog"]))
-        self.assertEqual((move.bag, move.replaces), ("Brown Leather Bag", "Small Brown Pouch"))
+        self.assertEqual(
+            (move.bag, move.replaces), ("Brown Leather Bag", "Small Brown Pouch")
+        )
 
     def test_a_member_with_no_rows_still_exists_with_every_position_empty(self):
         members = members_from_rows(self.ROWS, ["Grug", "Bork"])

@@ -231,9 +231,18 @@ class WhoIsOffered(unittest.TestCase):
 
     def test_a_spare_inside_the_replaced_bag_is_not_on_the_way(self):
         worn_bags = tuple(
-            Bag("Small Brown Pouch" if slots == 6 else "Brown Leather Bag", slots,
-                guid=guid, position=position)
-            for guid, position, slots in ((1, 19, 6), (2, 20, 6), (3, 21, 6), (4, 22, 8))
+            Bag(
+                "Small Brown Pouch" if slots == 6 else "Brown Leather Bag",
+                slots,
+                guid=guid,
+                position=position,
+            )
+            for guid, position, slots in (
+                (1, 19, 6),
+                (2, 20, 6),
+                (3, 21, 6),
+                (4, 22, 8),
+            )
         )
         spare = Bag("Heavy Brown Bag", 10, guid=5, entry=4497, inside=3)
         member = Member("Uzza", 4, worn=worn_bags, carried=(spare,))
