@@ -590,18 +590,17 @@ class TheSettlingIsReachedOnTheCyclesThatMatter(unittest.TestCase):
         """COUNTED, NOT EYEBALLED. The failure mode this exists for is a
         release that sits below three early returns and can never fire - it
         passes every unit test it has and does nothing at all on the realm.
-        The one gate allowed above each settling is the roster/mid-run guard
-        at the top, which is the same one `_settle_vendor_errand` sits below
-        for `not names` and above for `_mid_run`: a town errand issued while
-        the family is inside an instance pulls the leader out and the party
-        spreads, so the pass genuinely must not run at all there."""
+        The roster/mid-run guard remains above each settling. The bank pass
+        also has its first-guild-share readiness guard, which prevents any
+        deposit plan from using an empty keep snapshot after restart."""
         for body, settle in (
             (self._town(), "_settle_town_errand"),
             (self._bank(), "_settle_bank_errand"),
         ):
             with self.subTest(settle=settle):
                 above = body[: body.index(settle)]
-                self.assertEqual(above.count("return"), 1)
+                expected_returns = 2 if settle == "_settle_bank_errand" else 1
+                self.assertEqual(above.count("return"), expected_returns)
                 self.assertIn("if not names or await self._mid_run(names):", above)
 
     def test_each_pass_asks_the_question_once_and_reads_one_answer(self):

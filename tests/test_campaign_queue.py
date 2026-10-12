@@ -373,6 +373,9 @@ def _queue_pass(world, holds=None, **hooks):
             "_reset_campaign_done": world.reset,
             "_aim_family_quest": world.clear_family_quest,
             "_PACE_QUESTING": {},
+            # This fixture exercises queue advancement after dungeon pace has
+            # already produced its first snapshot.
+            "_pass_completed": lambda name: name == "dungeon_pace",
         },
     )
 
