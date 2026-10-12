@@ -11,11 +11,17 @@ SOURCE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
 
 def _function(name, namespace):
     tree = ast.parse(SOURCE)
-    cls = next(node for node in tree.body
-               if isinstance(node, ast.ClassDef) and node.name == "Bridge")
-    method = next(node for node in cls.body
-                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                  and node.name == name)
+    cls = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "Bridge"
+    )
+    method = next(
+        node
+        for node in cls.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == name
+    )
     module = ast.Module(body=[method], type_ignores=[])
     exec(compile(module, "bridge.py", "exec"), namespace)  # noqa: S102
     return namespace[name]
@@ -62,7 +68,9 @@ class RestartPassGates(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(log.lines, [line])
         completed.add(dependency)
         if method == "_guild_run_once":
-            ns["guildrun"] = types.SimpleNamespace(limits=lambda: (_ for _ in ()).throw(_Reached()))
+            ns["guildrun"] = types.SimpleNamespace(
+                limits=lambda: (_ for _ in ()).throw(_Reached())
+            )
         else:
             ns["_family_of"] = lambda cohort: (["member"], "member")
             obj._mid_run = lambda names: asyncio.sleep(0, result=False)
@@ -84,8 +92,10 @@ class RestartPassGates(unittest.IsolatedAsyncioTestCase):
 
     async def test_guild_run_waits_for_guild_jobs(self):
         await self._assert_entry_gate(
-            "_guild_run_once", "guild_jobs",
-            "guild run: waiting for the first guild jobs pass")
+            "_guild_run_once",
+            "guild_jobs",
+            "guild run: waiting for the first guild jobs pass",
+        )
 
     async def test_bank_and_guild_bank_wait_for_guild_share(self):
         for method, line in (
@@ -94,15 +104,33 @@ class RestartPassGates(unittest.IsolatedAsyncioTestCase):
         ):
             await self._assert_entry_gate(method, "guild_share", line)
 
+    async def test_guild_social_waits_for_guild_jobs(self):
+        completed = set()
+        obj, ns, log = self._bridge(completed)
+        fn = _function("_guild_social_once", ns)
+        await fn(obj)
+        await fn(obj)
+        self.assertEqual(
+            log.lines, ["guild social: waiting for the first guild jobs pass"]
+        )
+        completed.add("guild_jobs")
+        # Past the gate the pass reaches names this bare namespace lacks.
+        with self.assertRaises(Exception):
+            await fn(obj)
+
     async def test_auction_waits_for_guild_share(self):
         await self._assert_entry_gate(
-            "_auction_once", "guild_share",
-            "auction: waiting for the first guild share pass")
+            "_auction_once",
+            "guild_share",
+            "auction: waiting for the first guild share pass",
+        )
 
     async def test_town_errand_waits_for_queue_stall_read(self):
         await self._assert_entry_gate(
-            "_town_errand_once", "campaign_queue",
-            "town errand: waiting for the first queue pass")
+            "_town_errand_once",
+            "campaign_queue",
+            "town errand: waiting for the first queue pass",
+        )
 
     async def test_queue_preserves_quest_aims_until_dungeon_pace_runs(self):
         completed = set()
@@ -123,18 +151,52 @@ class RestartPassGates(unittest.IsolatedAsyncioTestCase):
         family = {"names": ["member"], "leader": {"name": "member"}}
         await fn(obj, "group", [], {"group": family}, set())
         self.assertEqual(aims, [])
-        self.assertEqual(log.lines, ["queue: waiting for the first dungeon pace pass"])
-        completed.add("dungeon_pace")
+        self.assertEqual(
+            log.lines, ["queue: group waits for its first dungeon pace pass"]
+        )
+        completed.add("dungeon_pace:other")  # another family's pace says nothing
+        await fn(obj, "group", [], {"group": family}, set())
+        self.assertEqual(aims, [])
+        completed.add("dungeon_pace:group")
         with self.assertRaises(_Reached):
             await fn(obj, "group", [], {"group": family}, set())
         self.assertEqual(len(aims), 1)
 
 
+class GateCeiling(unittest.TestCase):
+    def test_a_gate_opens_after_the_ceiling_even_without_its_producer(self):
+        tree = ast.parse(SOURCE)
+        wanted = {"_pass_completed"}
+        body = [
+            n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in wanted
+        ]
+        clock = [100.0]
+        warnings = []
+        ns = {
+            "_COMPLETED_PASSES": set(),
+            "_PASS_GATES_GIVEN_UP": set(),
+            "PASS_GATE_MAX_SECONDS": 1800.0,
+            "_PASSES_STARTED_AT": 100.0,
+            "time": types.SimpleNamespace(monotonic=lambda: clock[0]),
+            "log": types.SimpleNamespace(warning=lambda *a: warnings.append(a)),
+        }
+        exec(compile(ast.Module(body=body, type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102
+        self.assertFalse(ns["_pass_completed"]("guild_share"))
+        clock[0] = 100.0 + 1801
+        self.assertTrue(ns["_pass_completed"]("guild_share"))
+        self.assertTrue(ns["_pass_completed"]("guild_share"))
+        self.assertEqual(len(warnings), 1)
+
+
 class GuildRunRestartClock(unittest.TestCase):
     def test_latest_persisted_formation_becomes_monotonic_time(self):
         tree = ast.parse(SOURCE)
-        fn = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
-                  and node.name == "_guild_run_last_formed_at")
+        fn = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_guild_run_last_formed_at"
+        )
         queries = []
 
         class Cursor:
@@ -161,8 +223,10 @@ class GuildRunRestartClock(unittest.TestCase):
             def cursor(self):
                 return Cursor()
 
-        ns = {"_connect": Connection, "time": types.SimpleNamespace(
-            monotonic=lambda: 500.0, time=lambda: 1000.0)}
+        ns = {
+            "_connect": Connection,
+            "time": types.SimpleNamespace(monotonic=lambda: 500.0, time=lambda: 1000.0),
+        }
         exec(compile(ast.Module(body=[fn], type_ignores=[]), "bridge.py", "exec"), ns)  # noqa: S102
         self.assertEqual(ns["_guild_run_last_formed_at"](), 490.0)
         self.assertIn("MAX(created_at)", queries[0])

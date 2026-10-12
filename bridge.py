@@ -3511,10 +3511,25 @@ _PACE_QUESTING: dict = {}
 # Passes that have completed one cycle in this process. Dependents wait for
 # their producer before using its in-memory snapshot.
 _COMPLETED_PASSES: set[str] = set()
+# A gate never holds forever: a producer that fails every cycle (a database
+# fault, say) must not stop its dependents for the life of the process. After
+# this much uptime a missing producer is reported once and dependents go on.
+PASS_GATE_MAX_SECONDS = 30 * 60.0
+_PASSES_STARTED_AT = time.monotonic()
+_PASS_GATES_GIVEN_UP: set[str] = set()
 
 
 def _pass_completed(name: str) -> bool:
-    return name in _COMPLETED_PASSES
+    if name in _COMPLETED_PASSES:
+        return True
+    if time.monotonic() - _PASSES_STARTED_AT < PASS_GATE_MAX_SECONDS:
+        return False
+    if name not in _PASS_GATES_GIVEN_UP:
+        _PASS_GATES_GIVEN_UP.add(name)
+        log.warning("restart gate: %s has not completed a cycle in %d minutes; "
+                    "its dependents go ahead without it", name,
+                    PASS_GATE_MAX_SECONDS // 60)
+    return True
 
 
 def _mark_pass_completed(name: str) -> None:
@@ -17762,7 +17777,7 @@ class Bridge(discord.Client):
         realm-wide spacing are the old coordinator's; the finder row is too.
         """
         if not _pass_completed("guild_jobs"):
-            self._log_waiting_for_pass("guild run: waiting for the first guild jobs pass")
+            self._log_waiting_for_pass("guild social: waiting for the first guild jobs pass")
             return
         bounds = guildrun.limits()
         gate = await asyncio.to_thread(_guild_run_gate)
@@ -17954,8 +17969,11 @@ class Bridge(discord.Client):
         # drive_quest independently of `job`, so setting dungeon jobs alone can
         # leave a family travelling toward an unrelated quest. Keep the
         # deliberate no-dungeon fallback questing intact.
-        if not _pass_completed("dungeon_pace"):
-            self._log_waiting_for_pass("queue: waiting for the first dungeon pace pass")
+        # Per family: _PACE_QUESTING is filled family by family, so one
+        # family's first pace pass says nothing about another's.
+        if not _pass_completed("dungeon_pace:" + key):
+            self._log_waiting_for_pass(
+                "queue: %s waits for its first dungeon pace pass" % campaignqueue._family(key))
         elif key not in _PACE_QUESTING:
             cleared = await asyncio.to_thread(_aim_family_quest, key, 0, ())
             if cleared:
@@ -18270,7 +18288,7 @@ class Bridge(discord.Client):
             self._pace_said[key] = decision.why
             questing = opened is not None and str(opened.get("decision")) == dungeonpace.QUEST
             await self._pace_quest(key, names, questing)
-            _mark_pass_completed("dungeon_pace")
+            _mark_pass_completed("dungeon_pace:" + key)
             return questing
         by = dungeonpace.chooser(judgment)
         new_id = await asyncio.to_thread(_pace_write, key, rows, decision,
@@ -18279,7 +18297,7 @@ class Bridge(discord.Client):
         log.warning("pace: %s%s", dungeonpace.line(key, decision, by[0]),
                     "; queued as %d" % new_id if new_id else "")
         await self._pace_quest(key, names, decision.kind == dungeonpace.QUEST)
-        _mark_pass_completed("dungeon_pace")
+        _mark_pass_completed("dungeon_pace:" + key)
         return True
 
     async def _leave_town_when_done(self, fams: dict) -> None:

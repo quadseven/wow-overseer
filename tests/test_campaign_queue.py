@@ -375,7 +375,7 @@ def _queue_pass(world, holds=None, **hooks):
             "_PACE_QUESTING": {},
             # This fixture exercises queue advancement after dungeon pace has
             # already produced its first snapshot.
-            "_pass_completed": lambda name: name == "dungeon_pace",
+            "_pass_completed": lambda name: name.startswith("dungeon_pace:"),
         },
     )
 
