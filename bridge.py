@@ -2459,9 +2459,82 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
 
 
 # THE HOLD AT THE FLOOR, PER FAMILY (bag_pressure.bag_hold_progress), keyed
-# like the clocks above. In-process for their reason: a restart begins the hold
-# again, which costs one more window in town and never a run into full bags.
+# like the clocks above. Its timestamps are persisted as wall time across restarts.
 _BAG_HOLD: dict = {}
+
+_MEMO_CREATE_SQL = ("CREATE TABLE IF NOT EXISTS overseer_bridge_memo ("
+                    "kind VARCHAR(32) NOT NULL, subject VARCHAR(191) NOT NULL, "
+                    "value TEXT NOT NULL, since DOUBLE NOT NULL, expires DOUBLE NOT NULL, "
+                    "PRIMARY KEY (kind, subject)) DEFAULT CHARSET=utf8mb4 "
+                    "COLLATE=utf8mb4_0900_ai_ci")
+
+
+def _ensure_memo_store() -> None:
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_MEMO_CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("bridge memo: the persistent memo store is unavailable")
+
+
+def _memo_upsert(kind: str, subject: str, value, since: float, expires: float) -> None:
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM overseer_bridge_memo WHERE expires <= %s", (time.time(),))
+            cur.execute("INSERT INTO overseer_bridge_memo (kind, subject, value, since, expires) "
+                        "VALUES (%s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE "
+                        "value=VALUES(value), since=VALUES(since), expires=VALUES(expires)",
+                        (kind, subject, json.dumps(value), since, expires))
+    except pymysql.err.MySQLError:
+        log.exception("bridge memo: could not write %s memo for %s", kind, subject)
+
+
+def _memo_read(kind: str) -> dict:
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM overseer_bridge_memo WHERE expires <= %s", (time.time(),))
+            cur.execute("SELECT subject, value, since FROM overseer_bridge_memo "
+                        "WHERE kind=%s AND expires > %s", (kind, time.time()))
+            rows = cur.fetchall()
+        return {str(row["subject"]): (json.loads(row["value"]), float(row["since"]))
+                for row in rows}
+    except (pymysql.err.MySQLError, ValueError, TypeError, KeyError):
+        log.exception("bridge memo: could not read %s memos", kind)
+        return {}
+
+
+def _memo_delete(kind: str, subject: str) -> None:
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM overseer_bridge_memo WHERE kind=%s AND subject=%s",
+                        (kind, subject))
+    except pymysql.err.MySQLError:
+        log.exception("bridge memo: could not delete %s memo for %s", kind, subject)
+
+
+class _PersistentOwing(classquest.Owing):
+    def __init__(self):
+        super().__init__()
+
+    def restore(self):
+        self._by.update({name: (mark, since)
+                         for name, (mark, since) in _memo_read("class_owed").items()})
+
+    def idle(self, name, mark, now):
+        previous = self._by.get(name)
+        result = super().idle(name, mark, now)
+        current = self._by.get(name)
+        if current != previous:
+            _memo_upsert("class_owed", name, current[0], current[1],
+                         current[1] + 2 * classquest.OWED_HOURS * 3600)
+        return result
+
+    def forget_unowed(self, seen, owing) -> None:
+        owing = set(owing)
+        forgotten = [name for name in seen if name not in owing and name in self._by]
+        super().forget_unowed(seen, owing)
+        for name in forgotten:
+            _memo_delete("class_owed", name)
 
 
 def _bag_hold_stuck(names, free_slots: dict) -> tuple:
@@ -2476,9 +2549,31 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
     progress = bag_pressure.bag_hold_progress(_BAG_HOLD.get(key), free_slots, now)
     if progress is None:
         _BAG_HOLD.pop(key, None)
+        _memo_delete("bag_hold", ",".join(key))
         return ()
     _BAG_HOLD[key] = progress
+    wall = time.time()
+    value = {"best": progress.best, "since": wall - (now - progress.since),
+             "seen": wall - (now - progress.seen), "released": progress.released}
+    _memo_upsert("bag_hold", ",".join(key), value, value["since"],
+                 wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
     return bag_pressure.bag_hold_stuck(progress)
+
+
+def _restore_bag_holds() -> None:
+    now_wall, now_mono = time.time(), time.monotonic()
+    for subject, (value, _) in _memo_read("bag_hold").items():
+        try:
+            key = tuple(subject.split(","))
+            _BAG_HOLD[key] = bag_pressure.BagHoldProgress(
+                best=tuple((str(name), int(slots)) for name, slots in value["best"]),
+                since=now_mono - (now_wall - float(value["since"])),
+                # A bridge restart is not evidence that the hold ended. Make
+                # startup the last observation so BAG_HOLD_GAP does not reset it.
+                seen=now_mono,
+                released=bool(value["released"]))
+        except (KeyError, TypeError, ValueError):
+            log.exception("bridge memo: invalid bag hold memo for %s", subject)
 
 
 def _quest_while_stuck(names: list, mode: str, stuck) -> int:
@@ -5965,7 +6060,7 @@ class Bridge(discord.Client):
         # every dungeon formation, and the clock that releases one that makes
         # no progress for classquest.OWED_HOURS (_class_owed_names).
         self._class_owed_by: dict = {}
-        self._class_owing = classquest.Owing()
+        self._class_owing = _PersistentOwing()
         # The class quest book as the last job pass read it, and the class
         # quest parties up (classparty.py): their members are held out of the
         # dungeon passes and the guild jobs while they stand.
@@ -6111,9 +6206,14 @@ class Bridge(discord.Client):
             _ensure_guild_run_store,
             _ensure_standin_store,
             _ensure_queue_store,
+            _ensure_memo_store,
             _ensure_watch_store,
         ):
             await asyncio.to_thread(ensure)
+        owing = self.__dict__.get("_class_owing")
+        if owing is not None:
+            await asyncio.to_thread(owing.restore)
+        await asyncio.to_thread(_restore_bag_holds)
         try:
             self._guild_run_formed_at = await asyncio.to_thread(
                 _guild_run_last_formed_at)

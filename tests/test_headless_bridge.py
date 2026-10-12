@@ -169,6 +169,7 @@ def _start_harness():
         ),
         # _ensure_stores also rebuilds the last guild run time (#856).
         "_guild_run_last_formed_at": lambda: None,
+        "_restore_bag_holds": lambda: None,
     }
     for store in set(re.findall(r"_ensure_\w+_store", src)):
         ns[store] = lambda store=store: ensured.append(store)
