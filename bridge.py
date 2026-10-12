@@ -15566,8 +15566,7 @@ class Bridge(discord.Client):
         """Take one helper out of the meeting: its yes back, barred from this
         ask, free at once."""
         self._class_board.refuse(run.ask_id, name)
-        answer_id = run.answers.get(name)
-        run.drop(name)
+        answer_id = run.drop(name)
         log.info("class party: %s leaves %s's meeting for %s: %s", name, run.leader,
                  run.title, said)
         await asyncio.to_thread(_class_party_withdraw, answer_id)

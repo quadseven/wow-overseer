@@ -315,10 +315,12 @@ class PartyRun:
         """Seconds before the meeting's time runs out."""
         return MEET_SECONDS if self.met_by is None else self.met_by - now
 
-    def drop(self, name) -> None:
-        """Take one helper out of the party: it is free at once."""
-        self.helpers = tuple(h for h in self.helpers if h != name)
-        self.answers.pop(name, None)
+    def drop(self, name):
+        """Take one helper, named in any case, out of the party: it is free at
+        once. The id of its yes row, None when it had none."""
+        found = self.helper_named(name) or name
+        self.helpers = tuple(h for h in self.helpers if h != found)
+        return self.answers.pop(found, None)
 
     def seat(self) -> None:
         """The members have met: party-up is written next."""

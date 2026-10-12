@@ -77,8 +77,8 @@ LEVEL_BAND = 5
 # close to each other.
 SEAT_RANGE_YARDS = 90.0
 # How far from the asker an answerer may stand: it walks to the objective to
-# meet the asker there (classparty.py). A walk this long ends within
-# classparty.MEET_SECONDS on foot.
+# meet the asker there (classparty.py), within classparty.MEET_SECONDS; a
+# helper still walking when that runs out is withdrawn from the ask.
 HELPER_REACH_YARDS = 2000.0
 
 _NUMBERS = {1: "one", 2: "two", 3: "three", 4: "four"}

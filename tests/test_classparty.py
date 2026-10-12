@@ -221,6 +221,13 @@ class TheBoard(unittest.TestCase):
         self.assertEqual(self.run_().helper_named("CHILL"), "Chill")
         self.assertEqual(self.run_().helper_named("Nobody"), "")
 
+    def test_a_helper_named_in_another_case_is_dropped_with_its_yes(self):
+        run = self.run_()
+        run.answers = {"Chill": 7}
+        self.assertEqual(run.drop("CHILL"), 7)
+        self.assertEqual(run.helpers, ())
+        self.assertEqual(run.answers, {})
+
 
 def free_of(mates_, held=()):
     return {m.name: m for m in mates_ if m.name not in held}
