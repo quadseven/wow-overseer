@@ -608,18 +608,23 @@ def _from_job(roster: dict):
     return "", "", None
 
 
+def _intent_is_active(intent) -> bool:
+    """True when the intent row names a current kind of work."""
+    return bool(intent) and str(intent.get("current_kind") or "") not in ("", "none")
+
+
 def _live(member, f, fresh, now_at):
     """Doing, waiting, since for a character in the world and not fighting."""
     intent = f.get("intent")
     steps = f.get("steps") or ()
     restarts = _restarts(steps, now_at)
     if restarts >= 3:
-        if intent and str(intent.get("current_kind") or "") not in ("", "none"):
+        if _intent_is_active(intent):
             return _from_intent(intent, steps, now_at)
         doing = _walk_from_steps(steps) or "Walking"
         why = "a way there; the walk has ended and restarted %d times" % restarts
         return doing, why, _first_restart(steps, now_at)
-    if intent and str(intent.get("current_kind") or "") not in ("", "none"):
+    if _intent_is_active(intent):
         return _from_intent(intent, steps, now_at)
     for scope in ("character", None, "family"):
         if scope is None:
