@@ -64,6 +64,8 @@ class Bag:
     # The guid of the worn bag a carried bag sits in, 0 in the backpack. A
     # swap may not empty a worn bag into a spare that is inside it.
     inside: int = 0
+    # Inventory position for worn bags; EquipAction uses this to break ties.
+    position: int = 0
 
 
 @dataclass(frozen=True)
@@ -343,25 +345,75 @@ class SelfEquip:
     @property
     def command(self) -> str:
         """`e` with an item link. mod-playerbots' EquipAction puts a container
-        into the first empty bag position, else in place of the smallest worn
-        bag (EquipAction::GetSmallestBagSlot, the last of equal sizes)."""
+        into the first empty bag position, else replaces the last smallest bag.
+        EquipAction.cpp's GetSmallestBagSlot scans ascending positions and
+        replaces its candidate on ties:
+        https://github.com/mod-playerbots/mod-playerbots/blob/master/src/Ai/Base/Actions/EquipAction.cpp"""
         return "e Hitem:%d:0" % int(self.entry)
 
 
 def _smallest_worn(worn):
     """The worn bags the equip verb may pick, and their size.
 
-    GetSmallestBagSlot takes the last of several equal smallest bags, and
-    which one that is depends on bag positions this planner does not read.
-    So every worn bag of the smallest size is a candidate, and a swap must be
-    safe against each of them.
+    GetSmallestBagSlot takes the last of several equal smallest bags.
     """
     size = min(bag.slots for bag in worn)
-    return size, [bag for bag in worn if bag.slots == size]
+    target = max(
+        (bag for bag in worn if bag.slots == size),
+        key=lambda b: (b.position, b.guid),
+    )
+    return size, target
+
+
+def safe_self_equip_spares(member):
+    """Return (spare, displaced bag) pairs safe for the equip verb."""
+    spares = _biggest_first(
+        bag
+        for bag in member.carried
+        if bag.used == 0 and bag.general and bag.entry > 0 and bag.guid > 0
+    )
+    if member.positions - len(member.worn) > 0:
+        return [(bag, None) for bag in spares]
+    if not member.worn:
+        return []
+    size, target = _smallest_worn(member.worn)
+    return [
+        (bag, target)
+        for bag in spares
+        if bag.slots > size
+        and bag.slots >= target.used
+        and not (bag.inside and bag.inside == target.guid)
+    ]
+
+
+def self_equip_notes(members):
+    """One explanation per holder whose bigger carried bags cannot be worn."""
+    notes = []
+    for member in sorted(members, key=lambda m: m.name):
+        if member.positions - len(member.worn) > 0 or not member.worn:
+            continue
+        size, target = _smallest_worn(member.worn)
+        spares = [
+            b for b in member.carried if b.general and b.used == 0 and b.slots > size
+        ]
+        if spares and not safe_self_equip_spares(member):
+            bag = _biggest_first(spares)[0]
+            container = next(
+                (worn.name for worn in member.worn if worn.guid == bag.inside),
+                "the backpack",
+            )
+            notes.append(
+                "%s cannot put on %s from %s" % (member.name, bag.name, container)
+            )
+    return notes
 
 
 def self_equips(members):
     """The carried bags their own holders should put on, one per holder.
+
+    The replacement target follows mod-playerbots EquipAction.cpp's
+    GetSmallestBagSlot: its ascending scan chooses the last bag on equal sizes.
+    https://github.com/mod-playerbots/mod-playerbots/blob/master/src/Ai/Base/Actions/EquipAction.cpp
 
     AN EMPTY POSITION FIRST. The equip verb fills one before it swaps
     anything, and a bag there gains its own slots plus the slot it stops
@@ -370,22 +422,18 @@ def self_equips(members):
     OTHERWISE A SWAP, ONLY WHEN THE CORE CAN DO IT. With every position full
     the verb swaps the spare for the smallest worn bag. The core then moves
     that bag's items into the spare (Player::SwapItem's bag exchange), so the
-    swap needs a general spare that is strictly larger, empty, holds every
-    item of each smallest worn bag, and is not inside one of them. The free
-    slots elsewhere do not matter, which is why `_swap_is_safe` above is not
-    the test here. The displaced bag is carried afterwards, where
+        swap needs a general spare that is strictly larger, empty, holds every
+        item of the exact smallest bag the verb replaces, and is not inside it.
+        The free slots elsewhere do not matter, which is why `_swap_is_safe`
+        above is not the test here. The displaced bag is carried afterwards, where
     `plan_family_bags` hands it on or `bag_pressure.bag_candidates` sells it.
     """
     moves = []
     for member in sorted(members, key=lambda m: m.name):
-        spares = [
-            bag
-            for bag in member.carried
-            if bag.used == 0 and bag.general and bag.entry > 0 and bag.guid > 0
-        ]
+        spares = safe_self_equip_spares(member)
         if not spares:
             continue
-        best = _biggest_first(spares)[0]
+        best, target = spares[0]
         if member.positions - len(member.worn) > 0:
             moves.append(
                 SelfEquip(
@@ -402,20 +450,14 @@ def self_equips(members):
             continue
         if not member.worn:
             continue
-        size, smallest = _smallest_worn(member.worn)
-        if best.slots <= size:
-            continue
-        if any(bag.used > best.slots for bag in smallest):
-            continue
-        if best.inside and best.inside in {bag.guid for bag in smallest}:
-            continue
+        size = target.slots
         moves.append(
             SelfEquip(
                 holder=member.name,
                 bag=best.name,
                 entry=best.entry,
                 guid=best.guid,
-                replaces=smallest[-1].name,
+                replaces=target.name,
                 slots_gained=best.slots - size,
                 why="%s holds %d slots where the smallest worn bag holds %d"
                 % (best.name, best.slots, size),
@@ -501,6 +543,7 @@ def _bag_from_row(row) -> Bag:
         entry=int(row.get("entry", 0) or 0),
         general=int(row.get("subclass", 0) or 0) == 0,
         inside=int(row["bag"]),
+        position=int(row["slot"]),
     )
 
 
