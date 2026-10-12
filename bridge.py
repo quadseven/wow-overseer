@@ -22798,9 +22798,10 @@ def _fetch_guild_run_facts(bounds) -> dict:
         floors = {int(r["map_id"]): int(r["min_level"]) for r in cur.fetchall()}
         boss_levels = _door_boss_levels(cur)
         cur.execute(
-            "SELECT outcome, why FROM overseer_guild_run WHERE state = 'ended' "
+            "SELECT outcome, why, TIMESTAMPDIFF(MINUTE, ended_at, NOW()) AS age_minutes "
+            "FROM overseer_guild_run WHERE state = 'ended' "
             "AND ended_at > NOW() - INTERVAL %s MINUTE",
-            (guildrun.BENCH_MINUTES,),
+            (guildrun.QUEUE_BENCH_MINUTES,),
         )
         benched = guildrun.benched(list(cur.fetchall()))
     return {"rows": rows, "family": family, "busy": busy, "in_runs": in_runs,

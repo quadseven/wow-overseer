@@ -237,6 +237,27 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
             {"Eazoth"},
         )
 
+    def test_queue_refusal_has_longer_bench_but_combat_still_expires(self):
+        queue_why = "'Auren' is waiting in a battleground queue"
+        combat_why = "'Auren' is in combat"
+        self.assertEqual(
+            {"Auren"},
+            guildrun.benched(
+                [
+                    {"outcome": "refused", "why": queue_why, "age_minutes": 16},
+                    {"outcome": "refused", "why": combat_why, "age_minutes": 1},
+                ]
+            ),
+        )
+        self.assertEqual(
+            set(),
+            guildrun.benched(
+                [
+                    {"outcome": "refused", "why": queue_why, "age_minutes": 60},
+                ]
+            ),
+        )
+
     def test_a_refusal_over_one_member_is_formed_again_at_once(self):
         refused = {"state": "ended", "outcome": "refused", "why": "'Eazoth' is dead"}
         self.assertTrue(guildrun.swap_now([refused]))
