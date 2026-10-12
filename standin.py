@@ -383,7 +383,10 @@ def sits_out(facts: Facts) -> str:
             CAP,
         )
     if facts.known is None and facts.current is None:
-        return "%s's spellbook was not read this pass, so no new sit-out row is written" % name
+        return (
+            "%s's spellbook was not read this pass, so no new sit-out row is written"
+            % name
+        )
     wall = walled(facts.skills, facts.known)
     if wall:
         return (
