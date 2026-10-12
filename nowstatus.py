@@ -42,6 +42,8 @@ from __future__ import annotations
 
 import logging
 import re
+
+import jev_family_intent
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -465,8 +467,20 @@ def build_facts(names, roster, intents, steps, now_at=None) -> dict:
     families = {}
     for n, r in by_name.items():
         families.setdefault(str(r.get("family") or n), []).append(n)
-    leaders = {str(r.get("leader_name")): r for r in intents or ()}
-    members = member_states(intents)
+    current_leaders = {}
+    for family, family_names in families.items():
+        lead = next((n for n in family_names if by_name[n].get("lead")), None)
+        current_leaders[family] = lead or family_names[0]
+    current_intents = [
+        r
+        for r in intents or ()
+        if r.get("module_age") is not None
+        and int(r["module_age"]) <= jev_family_intent.FRESH_SECONDS
+        and current_leaders.get(str(r.get("family") or ""))
+        == str(r.get("leader_name") or "")
+    ]
+    leaders = {str(r.get("leader_name")): r for r in current_intents}
+    members = member_states(current_intents)
     facts = {}
     for n in names:
         facts[n] = {
@@ -490,7 +504,7 @@ def build_facts(names, roster, intents, steps, now_at=None) -> dict:
 # Steps that note a side hold and never say what the character is doing: the
 # equip pass holding a piece back rides along while the member walks, fights or
 # runs a dungeon, and read as its whole state it showed ten members "stuck".
-SIDE_KINDS = frozenset({"equip_held"})
+SIDE_KINDS = frozenset({"equip_held", "bank_wait"})
 
 
 def _main(steps):
@@ -553,7 +567,7 @@ def compose(member: dict, facts: dict | None, now_at: int | None = None) -> dict
         doing, waiting, since = _live(member, f, _main(fresh), now_at)
         doing, waiting, since = _stored_reason(_main(fresh), doing, waiting, since)
         if not doing:
-            side = [s for s in fresh if s.get("kind") in SIDE_KINDS]
+            side = [s for s in fresh if s.get("kind") == "equip_held"]
             if side:
                 doing, waiting, since = _from_step(side[0])
     if not doing:
