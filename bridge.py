@@ -8975,7 +8975,26 @@ class Bridge(discord.Client):
         A completed purchase can release the old aim before this pass
         discovers new work, so the same guarded keyword is reasserted whenever
         work was actually queued.
+
+        RE-ASSERTS ONLY AN AIM THIS PASS ALREADY HOLDS. Rows are queued per
+        holder, so a follower standing at an auctioneer can queue work while
+        the leader carries a mail, bank or vendor errand. When the column
+        already says the auctioneer aim, the guarded write and the `adopt`
+        below run as ever. Otherwise the column is not this pass's to write:
+        it asks `_claim_town_slot`, the one door, and the town slot decides
+        whether the leader walks now or waits its turn.
         """
+        column = await asyncio.to_thread(_current_travel_npc, leader)
+        if column != auction.AUCTIONEER_ROLE:
+            taken = await self._claim_town_slot(
+                "auction", leader, auction.AUCTIONEER_ROLE,
+                cohort=_cohort_key(cohort),
+            )
+            log.info("auction: %s holds %r, not the auctioneer aim; "
+                     "asked the town slot, aim %s%s", leader, column,
+                     "taken" if taken else "not taken",
+                     _family_label(cohort))
+            return
         await asyncio.to_thread(
             _write_trade_errand,
             professions.Errand(character=leader,
@@ -8985,8 +9004,9 @@ class Bridge(discord.Client):
         # `_claim_town_slot` (infra#4194). `_reconcile` rebuilds the holder
         # from the column on every `want()`, and a value it does not
         # recognise becomes `Holder(claimant="", since=now)` - an ORPHAN on
-        # the 1200s lease with the clock started again. This pass already
-        # owns the column and is only re-asserting its own keyword;
+        # the 1200s lease with the clock started again. Only reached when the
+        # column already carries the auctioneer aim (checked above), so this
+        # pass is re-asserting its own keyword and never another errand's;
         # staying silent would evict itself and hand a twenty-minute lease
         # to nobody, which is the unbounded stall infra#4194 measured.
         self._cohort_town_slot(cohort).adopt(
