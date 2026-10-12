@@ -228,6 +228,21 @@ LOOT_COUNCIL_POLL_SECONDS = 2.0
 # lower-level guild member (bag_pressure.guild_bank_keeps, #194). Written by
 # the guild gear share pass, read by the bank plan and the auction pass.
 _GUILD_BANK_KEEPS: dict = {}
+# The same keeps by the family whose pass set them: each family's share pass
+# replaces only its own entry, then _GUILD_BANK_KEEPS is rebuilt as the union.
+_GUILD_BANK_KEEPS_BY_FAMILY: dict = {}
+
+
+def _set_guild_bank_keeps(family_names, keeps: dict) -> None:
+    """Replace one family's guild bank keeps; every other family's stay."""
+    key = tuple(sorted(str(n) for n in family_names))
+    if keeps:
+        _GUILD_BANK_KEEPS_BY_FAMILY[key] = dict(keeps)
+    else:
+        _GUILD_BANK_KEEPS_BY_FAMILY.pop(key, None)
+    _GUILD_BANK_KEEPS.clear()
+    for family_keeps in _GUILD_BANK_KEEPS_BY_FAMILY.values():
+        _GUILD_BANK_KEEPS.update(family_keeps)
 # What gets said in game when NOBODY in the family could answer an order the operator
 # gave - the voice is down, or none of them are in the world. Said once, by the
 # most senior of them, and in the family's own register because it is one of
@@ -9789,7 +9804,7 @@ class Bridge(discord.Client):
             _fetch_surplus_gear, family_names,
         )
         if not gear_rows:
-            _GUILD_BANK_KEEPS.clear()
+            _set_guild_bank_keeps(family_names, {})
             return
         all_names = [str(member.name) for member in roster]
         equipped = await asyncio.to_thread(_fetch_family_equipped, all_names)
@@ -9806,8 +9821,7 @@ class Bridge(discord.Client):
         for guid, why in tidy.guild_class_keeps(
                 gear_rows, family_members, members).items():
             keeps.setdefault(guid, why)
-        _GUILD_BANK_KEEPS.clear()
-        _GUILD_BANK_KEEPS.update(keeps)
+        _set_guild_bank_keeps(family_names, keeps)
         _log_capped("guild bank keep", list(keeps.values()))
         positions = await asyncio.to_thread(_fetch_positions, all_names)
         free_slots = await asyncio.to_thread(_fetch_free_slots, all_names)
