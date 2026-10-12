@@ -13,6 +13,53 @@ query. An id the table does not hold is 404. Read-only, one bounded row.
 from __future__ import annotations
 
 import guildrun
+import dungeonpath
+
+_EVENT_GEAR_SQL = (
+    "SELECT character_name AS member, subject_id AS entry, subject_name AS name, "
+    "subject_quality AS quality, kind, last_seen AS at FROM overseer_event "
+    "WHERE character_name IN ({names}) AND map = %s AND kind IN "
+    "('item_loot', 'item_equip') AND last_seen >= %s "
+    "AND last_seen <= COALESCE(%s, NOW()) "
+    "ORDER BY last_seen DESC LIMIT 500"
+)
+_COUNCIL_GEAR_SQL = (
+    "SELECT recipient AS member, item_entry AS entry, item_name AS name, "
+    "item_quality AS quality, outcome, given_at AS at FROM overseer_loot_council "
+    "WHERE recipient IN ({names}) AND source = %s AND given_at >= %s "
+    "AND given_at <= COALESCE(%s, NOW()) "
+    "AND outcome IS NOT NULL ORDER BY given_at DESC LIMIT 200"
+)
+
+
+def _gear(reader, view: dict) -> list:
+    members = [m["name"] for m in view["members"]]
+    if not members:
+        return []
+    start = view["created_at"]
+    end = view["ended_at"] or None
+    holes = ", ".join(["%s"] * len(members))
+    map_id = dungeonpath.PORTAL_MAPS.get(str(view["keyword"] or "").lower())
+    if map_id is None:
+        return []
+    events = reader.rows(
+        _EVENT_GEAR_SQL.format(names=holes), tuple(members) + (map_id, start, end),
+        what="overseer_event",
+    )
+    council = reader.rows(
+        _COUNCIL_GEAR_SQL.format(names=holes), tuple(members) + (view["keyword"], start, end),
+        what="overseer_loot_council",
+    )
+    out = []
+    for row in events:
+        out.append({"member": row["member"], "entry": int(row.get("entry") or 0),
+                    "name": row.get("name") or "", "quality": int(row.get("quality") or 0),
+                    "source": "equipped" if row["kind"] == "item_equip" else "looted", "at": str(row.get("at") or "")})
+    for row in council:
+        out.append({"member": row["member"], "entry": int(row.get("entry") or 0),
+                    "name": row.get("name") or "", "quality": int(row.get("quality") or 0),
+                    "source": "won by loot council", "at": str(row.get("at") or "")})
+    return sorted(out, key=lambda item: item["at"], reverse=True)
 
 _ID_MAX_DIGITS = 10
 
@@ -38,6 +85,7 @@ def run(query: dict, ctx) -> tuple[int, dict]:
     view = guildrun.by_id(ctx.read, wanted)
     if view is None:
         return 404, {"error": "no such run", "id": wanted}
+    view["gear"] = _gear(ctx.read, view)
     return 200, {"run": view}
 
 
