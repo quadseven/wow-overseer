@@ -463,6 +463,7 @@ TRAIN_MIN_LEVEL = 5
 # stone it farms around.
 FIELD_REACH = 400.0
 DOOR_REACH = 500.0
+ON_CALL_REACH = 20.0
 
 # A door's meeting stone is the one nearest its entrance within this many
 # yards. Measured 2026-09-24: 25 yards at Ragefire Chasm, 846 at Dire Maul.
@@ -683,6 +684,7 @@ class Door:
     floor: int
     ceiling: int
     stone: Spot | None = None
+    on_call: bool = False
 
 
 @dataclass(frozen=True)
@@ -2230,7 +2232,7 @@ def doors_for(member: Member) -> list:
     return out
 
 
-def assign_doors(members, entrances, stones) -> dict:
+def assign_doors(members, entrances, stones, campaign_door: str = "") -> dict:
     """name -> Door for every warlock with the ritual, spread over the doors
     that fit: the stone with the fewest warlocks first (the Dire Maul wings
     and the Scarlet Monastery wings share one stone each), then the lower
@@ -2243,7 +2245,32 @@ def assign_doors(members, entrances, stones) -> dict:
         if m.role == SUMMONER and RITUAL_OF_SUMMONING in m.known
     ]
     casters.sort(key=lambda m: (-int(m.level), m.name))
+    on_call = None
+    if campaign_door:
+        on_call = next(
+            (
+                m
+                for m in casters
+                if any(
+                    run.keyword == campaign_door
+                    and stone_for(run.keyword, entrances, stones) is not None
+                    for run in doors_for(m)
+                )
+            ),
+            None,
+        )
+        if on_call is not None:
+            run = next(
+                run for run in doors_for(on_call) if run.keyword == campaign_door
+            )
+            stone = stone_for(run.keyword, entrances, stones)
+            out[on_call.name] = Door(
+                campaign_door, run.place, run.floor, run.ceiling, stone, True
+            )
+            load[stone.spawn] = load.get(stone.spawn, 0) + 1
     for m in casters:
+        if on_call is not None and m.name == on_call.name:
+            continue
         fits = []
         for run in doors_for(m):
             stone = stone_for(run.keyword, entrances, stones)
@@ -2524,6 +2551,19 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
         return None, "answers a summon at %s" % door.place, ""
     if m.x is None or m.y is None:
         return None, "serves %s; where it stands is not read this pass" % door.place, ""
+    if door.on_call:
+        if door.stone is not None and not _near(m, door.stone, ON_CALL_REACH):
+            if not _cooling(m, "door", recent):
+                said = "%s waits on call at the meeting stone at %s" % (
+                    m.name,
+                    door.place,
+                )
+                return _spot_step(m, door.stone, "door", cap, said), said, ""
+        return (
+            None,
+            "waits on call at the meeting stone at %s%s" % (door.place, shards),
+            "",
+        )
     if door.stone is not None and not _near(m, door.stone, DOOR_REACH):
         if not _cooling(m, "door", recent):
             said = (
