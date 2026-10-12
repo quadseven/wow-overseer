@@ -2512,6 +2512,13 @@ def _memo_delete(kind: str, subject: str) -> None:
         log.exception("bridge memo: could not delete %s memo for %s", kind, subject)
 
 
+# The owed clock restarts only when the member's mark changes, so a member can
+# owe with no progress for far longer than OWED_HOURS. A short memo expiry would
+# drop that member's clock and the next restart would hold it all over again;
+# a week covers it, and forget_unowed deletes the memo once nothing is owed.
+OWED_MEMO_SECONDS = 7 * 24 * 3600
+
+
 class _PersistentOwing(classquest.Owing):
     def __init__(self):
         super().__init__()
@@ -2526,7 +2533,7 @@ class _PersistentOwing(classquest.Owing):
         current = self._by.get(name)
         if current != previous:
             _memo_upsert("class_owed", name, current[0], current[1],
-                         current[1] + 2 * classquest.OWED_HOURS * 3600)
+                         current[1] + OWED_MEMO_SECONDS)
         return result
 
     def forget_unowed(self, seen, owing) -> None:
@@ -2549,6 +2556,7 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
     progress = bag_pressure.bag_hold_progress(_BAG_HOLD.get(key), free_slots, now)
     if progress is None:
         _BAG_HOLD.pop(key, None)
+        # The hold ended: clear the memo this function writes below.
         _memo_delete("bag_hold", ",".join(key))
         return ()
     _BAG_HOLD[key] = progress
