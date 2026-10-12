@@ -17895,7 +17895,8 @@ class Bridge(discord.Client):
         # The guild with the fewest runs in flight first, so both get turns.
         pools.sort(key=lambda p: (facts["in_flight_by_guild"].get(p.guild, 0),
                                   -max(p.levels)))
-        plan = guildrun.plan_for(pools[0], doors, guildrun.rates(facts["history"]))
+        plan = guildrun.plan_for(pools[0], doors, guildrun.rates(facts["history"]),
+                                 facts.get("recipes", {}).get(pools[0].guild))
         if plan is None:
             return
         decision = await guildrun.decide(self._jev, plan)
@@ -17909,6 +17910,10 @@ class Bridge(discord.Client):
                  run_id, plan.pool.guild, ", ".join(decision.chosen.names),
                  decision.door.place, plan.band, decision.chosen.key,
                  decision.prior.words(), "; " + key_said if key_said else "")
+        recipe = guildrun.door_recipe(decision.door, plan.recipes, decision.chosen.levels)
+        if recipe:
+            log.info("guild run %s: %s %s", plan.pool.guild, decision.door.place,
+                     guildrun.recipe_words(recipe))
 
     async def _guild_social_once(self) -> None:
         """One pass of the guild's asks and answers (guildsocial, #568, #569).
@@ -17974,7 +17979,8 @@ class Bridge(discord.Client):
             guildjobs.entrances(), facts["now"],
             room=max(0, bounds.max_groups - in_flight),
             can_form=spaced and in_flight < bounds.max_groups,
-            campaigns=facts["campaigns"], records=records, cleared=cleared, lent=lent)
+            campaigns=facts["campaigns"], records=records, cleared=cleared, lent=lent,
+            recipes=facts.get("recipes"))
         social = await _guild_social_doors(getattr(self, "_jev", None), social)
         pug_pass = (_guild_pug_plan(social, facts, mates, held, doors, pug_all, bounds)
                     if pugs_on else None)
@@ -17998,6 +18004,12 @@ class Bridge(discord.Client):
                      ", ".join(social.form.composition.names),
                      " (%s)" % key_said if key_said else "") if run_id else "",
                  "; " + "; ".join(social.notes) if social.notes else "")
+        recipe = (guildrun.door_recipe(
+            social.form.door, facts.get("recipes", {}).get(social.form.ask.guild),
+            social.form.composition.levels) if run_id else "")
+        if recipe:
+            log.info("guild run %s: %s %s", social.form.ask.guild, social.form.door.place,
+                     guildrun.recipe_words(recipe))
         # THE SEATS AN HOUR (seatmeter, #784). Looked up so a test driving
         # this pass on a bare object needs no reads for it.
         meter = getattr(self, "_log_seat_meter", None)
@@ -22803,10 +22815,41 @@ def _fetch_guild_run_facts(bounds) -> dict:
             (guildrun.BENCH_MINUTES,),
         )
         benched = guildrun.benched(list(cur.fetchall()))
+        recipes = _guild_raid_recipes(cur, guilds)
     return {"rows": rows, "family": family, "busy": busy, "in_runs": in_runs,
             "resting": resting,
             "benched": benched, "in_flight_by_guild": by_guild, "history": history,
-            "finder_floors": floors, "boss_levels": boss_levels}
+            "finder_floors": floors, "boss_levels": boss_levels, "recipes": recipes}
+
+
+# WHERE THE RAID RECIPES DROP (guildrun.RECIPE_DROPS_SQL, #893), read once per
+# process: the world's loot does not change under a running bridge.
+_RAID_RECIPE_DROPS: list | None = None
+
+
+def _guild_raid_recipes(cur, guilds: list) -> dict:
+    """guild -> map id -> the raid recipes that drop there and nobody in that
+    guild knows (guildrun.unknown_recipes); {} unread, which prefers nothing."""
+    global _RAID_RECIPE_DROPS
+    entries = list(raidsupply.DROP_RECIPES)
+    if not guilds or not entries:
+        return {}
+    try:
+        if _RAID_RECIPE_DROPS is None:
+            cur.execute(guildrun.RECIPE_DROPS_SQL.format(  # noqa: S608 - placeholders only
+                holes=",".join(["%s"] * len(entries))), entries)
+            _RAID_RECIPE_DROPS = list(cur.fetchall())
+        spells = sorted(set(raidsupply.DROP_RECIPES.values()))
+        cur.execute(guildrun.RECIPE_KNOWN_SQL.format(  # noqa: S608 - placeholders only
+            guilds=",".join(["%s"] * len(guilds)), spells=",".join(["%s"] * len(spells))),
+            list(guilds) + spells)
+        known = guildrun.known_by_guild(list(cur.fetchall()))
+    except pymysql.err.MySQLError:
+        log.exception("guild runs: the raid recipes nobody knows could not be read; "
+                      "no door is preferred for one")
+        return {}
+    return {g: guildrun.unknown_recipes(_RAID_RECIPE_DROPS, known.get(g, set()))
+            for g in guilds}
 
 
 # THE LEVEL OF EACH DUNGEON'S BOSSES, by map (guildrun.BOSS_LEVELS_SQL), for

@@ -55,7 +55,9 @@ for a material either; `materials.py` owns hand-offs inside the family.
 A RECIPE THE DESIGNATED-CRAFTERS REGISTER PLACES (#248) skips the by-name
 search: `crafters.choose` has already picked the family member or designated
 guild crafter who learns it, skipping anyone who already knows it. A recipe
-it places with nobody goes on to KEEP, AUCTION or VENDOR as before.
+it places with nobody goes on to KEEP, AUCTION or VENDOR as before, except a
+raid recipe no vendor sells (raidsupply.DROP_RECIPES, #893), which is KEEP:
+it is never listed or sold.
 
 "CAN LEARN NOW", NOT "COULD REACH AT THIS LEVEL". #145 asked for the second.
 The operator's direction was the first: a recipe whose holder's skill is below
@@ -71,6 +73,7 @@ from dataclasses import dataclass
 
 import disposition
 import guildshare
+import raidsupply
 
 GEM_CLASS = 3
 RECIPE_CLASS = disposition.RECIPE_CLASS
@@ -289,6 +292,17 @@ def route(
         handed = _handed(stack, people, busy) if pick is None else None
         if handed is not None:
             return handed
+    if stack.recipe and int(stack.entry) in raidsupply.DROP_RECIPES:
+        # A RAID RECIPE NO VENDOR SELLS IS NEVER SOLD (#893): it waits for the
+        # guild's alchemist, however long, because a looted copy is the only
+        # road to the craft.
+        return Route(
+            stack,
+            KEEP,
+            why="%s is a raid recipe no vendor sells; it waits for the guild's "
+            "alchemist and is never sold" % stack.name,
+        )
+    if not stack.bound:
         listed = _listed(stack, market, auction_open)
         if listed is not None:
             return listed

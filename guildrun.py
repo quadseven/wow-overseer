@@ -71,6 +71,7 @@ import dungeonpath
 import jev
 import places
 import raidroles
+import raidsupply
 
 # --- the switch and the limits ---------------------------------------------
 
@@ -767,7 +768,100 @@ def covered(member: Member) -> bool:
     return bool(member.has_weapon) and int(member.worn_slots) >= COVERED_SLOTS
 
 
-def fitting_doors(levels, all_doors: list, faction: str = "", members=None) -> list:
+# A RAID RECIPE NOBODY IN THE GUILD KNOWS BREAKS A TIE (#893). Nobody in
+# either guild holds Recipe: Greater Fire Protection Potion (it drops from the
+# Firebrand Invokers and Pyromancers in Blackrock Spire, about 4 percent) or a
+# flask recipe (Ras Frostwhisper's in Scholomance; Drakkisath's and
+# Balnazzar's stand behind no door here), and the level fit alone never sent a
+# group for one. From RAID_RECIPE_LEVEL up, a door that drops one is preferred
+# over every door that fits about as well.
+#
+# ABOUT AS WELL IS RECIPE_FIT_SLACK LEVELS. No two doors share a band's
+# middle, so an exact tie never happens: a group averaging 56 sits on
+# Blackrock Depths' middle and 1.5 from the Spire's, and the Spire would never
+# win one. Three levels takes the Spire over the Depths and the Sunken Temple
+# for a group of 55 to 57, and never over a door three levels closer.
+#
+# BY MAP. The recipes are read by the map their creatures spawn on
+# (RECIPE_DROPS_SQL), so the Upper Spire's Drakkisath counts for the Lower
+# Spire's door, which shares map 229; his flask recipe is named after the
+# fire potion's, which the Lower Spire does drop.
+RAID_RECIPE_LEVEL = 52
+RECIPE_FIT_SLACK = 3
+
+# The drops the trades page reads (map_server._TRADE_DROPS), narrowed to the
+# raid recipes: direct loot rows only, a creature placed by its lowest spawn.
+RECIPE_DROPS_SQL = (
+    "SELECT clt.Item AS item, it.name AS item_name, cr.map AS map_id "
+    "FROM acore_world.creature_loot_template clt "
+    "JOIN acore_world.item_template it ON it.entry = clt.Item "
+    "JOIN acore_world.creature_template ct ON ct.lootid = clt.Entry "
+    "JOIN acore_world.creature cr ON cr.guid = "
+    "(SELECT MIN(guid) FROM acore_world.creature WHERE id = ct.entry) "
+    "WHERE clt.Reference = 0 AND clt.Item IN ({holes})"
+)
+# Who in each guild knows a raid recipe's craft: its character_spell row, the
+# same proof the trades page takes for "knows it".
+RECIPE_KNOWN_SQL = (
+    "SELECT g.name AS guild, cs.spell FROM guild g "
+    "JOIN guild_member gm ON gm.guildid = g.guildid "
+    "JOIN character_spell cs ON cs.guid = gm.guid "
+    "WHERE g.name IN ({guilds}) AND cs.spell IN ({spells})"
+)
+
+
+def known_by_guild(rows) -> dict:
+    """guild -> the raid recipe craft spells some member knows."""
+    out: dict = {}
+    for row in rows:
+        guild, spell = str(row.get("guild") or ""), int(row.get("spell") or 0)
+        if guild and spell:
+            out.setdefault(guild, set()).add(spell)
+    return out
+
+
+def unknown_recipes(drop_rows, known=frozenset()) -> dict:
+    """map id -> the names of the raid recipes (raidsupply.DROP_RECIPES) that
+    drop inside that dungeon and whose craft no spell in `known` is, in the
+    night's order. A drop on a continent is left out: no door leads there."""
+    order = list(raidsupply.DROP_RECIPES)
+    found: dict = {}
+    for row in drop_rows:
+        entry = int(row.get("item") or 0)
+        map_id = row.get("map_id")
+        if entry not in raidsupply.DROP_RECIPES or map_id is None:
+            continue
+        if int(map_id) in OPEN_WORLD_MAPS:
+            continue
+        if raidsupply.DROP_RECIPES[entry] in known:
+            continue
+        name = str(row.get("item_name") or "") or "Recipe %d" % entry
+        found.setdefault(int(map_id), {})[entry] = name
+    return {
+        map_id: tuple(names[e] for e in sorted(names, key=order.index))
+        for map_id, names in found.items()
+    }
+
+
+def door_recipe(door, recipes, levels) -> str:
+    """The first raid recipe nobody in the guild knows that drops behind
+    `door` (`recipes`, unknown_recipes for the guild), for a group whose
+    average is RAID_RECIPE_LEVEL or more; "" otherwise."""
+    levels = [int(x) for x in levels]
+    if not recipes or not levels or sum(levels) / len(levels) < RAID_RECIPE_LEVEL:
+        return ""
+    names = recipes.get(door.map_id, ())
+    return names[0] if names else ""
+
+
+def recipe_words(name: str) -> str:
+    """ "for Recipe: Greater Fire Protection Potion (nobody knows it)"."""
+    return "for %s (nobody knows it)" % name
+
+
+def fitting_doors(
+    levels, all_doors: list, faction: str = "", members=None, recipes=None
+) -> list:
     """The doors this set of levels fits, best fit first.
 
     `members`, when given, is the group itself: a keyed wing none of them can
@@ -785,6 +879,10 @@ def fitting_doors(levels, all_doors: list, faction: str = "", members=None) -> l
     Fits: every member at or over the finder's minimum, the average at least
     the door's floor (plus LEVEL_MARGIN), and nobody past its ceiling.
     Best fit is the door whose band's middle is nearest the average.
+
+    `recipes`, when given, is unknown_recipes for the group's guild: from
+    RAID_RECIPE_LEVEL up, a door that drops one goes first when it fits
+    within RECIPE_FIT_SLACK levels of the best fit (door_recipe).
     """
     levels = [int(x) for x in levels]
     if not levels:
@@ -809,9 +907,18 @@ def fitting_doors(levels, all_doors: list, faction: str = "", members=None) -> l
         if members is not None and not opens_for(members, door):
             continue
         out.append(door)
-    out.sort(
-        key=lambda d: (abs((d.floor + d.ceiling) / 2.0 - mean), d.floor, d.keyword)
-    )
+
+    def fit(d) -> float:
+        return abs((d.floor + d.ceiling) / 2.0 - mean)
+
+    best = min((fit(d) for d in out), default=0.0)
+
+    def wanted(d) -> bool:
+        return fit(d) <= best + RECIPE_FIT_SLACK and bool(
+            door_recipe(d, recipes, levels)
+        )
+
+    out.sort(key=lambda d: (not wanted(d), fit(d), d.floor, d.keyword))
     return out[:MAX_DUNGEONS]
 
 
@@ -1218,6 +1325,8 @@ class Plan:
     doors: tuple  # Door
     band: str
     table: dict = field(default_factory=dict)
+    # map id -> raid recipes nobody in the pool's guild knows (unknown_recipes).
+    recipes: dict = field(default_factory=dict)
 
     @property
     def labels(self) -> tuple:
@@ -1227,14 +1336,21 @@ class Plan:
         return self.options[self.labels.index(label)]
 
 
-def plan_for(pool: Pool, all_doors: list, table: dict) -> Plan | None:
+def plan_for(
+    pool: Pool, all_doors: list, table: dict, recipes: dict | None = None
+) -> Plan | None:
+    """The plan for one pool. `recipes` is unknown_recipes for its guild."""
     comps = compositions(list(pool.members))
     if not comps:
         return None
     best = [
         door
         for door in fitting_doors(
-            comps[0].levels, all_doors, faction_of(pool.members), comps[0].members
+            comps[0].levels,
+            all_doors,
+            faction_of(pool.members),
+            comps[0].members,
+            recipes,
         )
         if carries(comps[0].tank, door) and carries(comps[0].healer, door)
     ]
@@ -1246,6 +1362,7 @@ def plan_for(pool: Pool, all_doors: list, table: dict) -> Plan | None:
         doors=tuple(best),
         band=band_of(comps[0].levels),
         table=dict(table),
+        recipes=dict(recipes or {}),
     )
 
 
@@ -1290,7 +1407,8 @@ def heuristic_door(plan: Plan, composition: Composition) -> tuple:
     """(keyword, why). The best score among the doors that fit (_door_score:
     the smoothed rate at this band, or the untried prior under MIN_SAMPLES
     runs), the closest level fit on a tie. A failing door (failing_doors) is
-    skipped while another door fits."""
+    skipped while another door fits. An untried door that drops a raid recipe
+    nobody in the guild knows says so (door_recipe)."""
     failing = failing_doors(plan)
     healthy = [d for d in plan.doors if d.keyword not in failing]
     # Only failing doors fit: still go (FAILING_RUNS says why).
@@ -1307,6 +1425,9 @@ def heuristic_door(plan: Plan, composition: Composition) -> tuple:
             plan.band,
             rate.words(),
         )
+    recipe = door_recipe(door, plan.recipes, composition.levels)
+    if recipe:
+        return door.keyword, recipe_words(recipe)
     if door.keyword != doors[0].keyword:
         return door.keyword, "untried at band %s, over records that lose" % plan.band
     return door.keyword, "the closest level fit (%s wants %d to %d)" % (
@@ -1399,6 +1520,11 @@ def questions(plan: Plan) -> dict:
                 door_rate(plan.table, door.keyword, plan.band).words(),
             )
         )
+        recipe = door_recipe(door, plan.recipes, plan.options[0].levels)
+        if recipe:
+            door_criteria[door.keyword] += (
+                "; it drops %s, a raid recipe nobody in the guild knows" % recipe
+            )
     return {
         "composition": jev.choice(
             "A World of Warcraft guild is sending five of its members into a "
