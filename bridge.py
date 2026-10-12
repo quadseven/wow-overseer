@@ -3612,6 +3612,18 @@ def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
             # not own the job then, so the craft rhythm and the skill goal
             # get the family's time back.
             return False
+        if not dungeon:
+            # A released bag hold gives the family's own passes time to buy
+            # reagents and craft. Keep the queue pending for the dungeon
+            # caller, which still starts the run once everyone has room.
+            stuck = globals().get("_bag_hold_stuck")
+            fetch_names = globals().get("_fetch_enabled_names")
+            fetch_slots = globals().get("_fetch_free_slots")
+            if stuck and fetch_names and fetch_slots:
+                names = [name for name in fetch_names()
+                         if _cohort_of(name) == family]
+                if names and stuck(names, fetch_slots(names)):
+                    return False
         return bool(campaignqueue.pending_by_family(_fetch_queue_rows()).get(family))
     except Exception:
         log.exception("queue: could not read whether a queue owns the job")
