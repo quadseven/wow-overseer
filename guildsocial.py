@@ -1321,6 +1321,26 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
     faction = board.factions.get(guild, "")
     band = guildrun.band_of([mate.member.level])
     shape = ask_shape(board, mate, guild)
+    options, done = _tiered_options(board, name, mate, guild, asked, band, shape)
+    recipe_option = _recipe_option(board, mate.member, guild, faction, options)
+    # LEVEL ORDER WITHIN A TIER: of the doors a guild has not cleared, only the
+    # lowest is offered, so Jev cannot skip ahead (it chose Shadowfang Keep for
+    # Cave over the Deadmines it had never cleared). Cleared doors keep them all.
+    if options and options is not done:
+        lowest = min(o.door.floor for o in options)
+        options = [o for o in options if o.door.floor == lowest]
+    options = _recipe_first(recipe_option, options)
+    if not options:
+        return None
+    return (options[0].need.rank, name, mate, tuple(options), band, shape)
+
+
+def _tiered_options(
+    board: _Board, name: str, mate: Mate, guild: str, asked: set, band, shape
+):
+    """(options, done): the first tier of DoorOptions that has any, and the
+    cleared tier, as _asker_choice describes them."""
+    faction = board.factions.get(guild, "")
     guildmates = _free_guildmates(board, guild)
     options, failing, done, seen = [], [], [], set()
     for need in board.needs.get(name, []):
@@ -1340,21 +1360,16 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
             failing.append(option)
         else:
             options.append(option)
-    options = options or failing or done
-    recipe_option = _recipe_option(board, mate.member, guild, faction, options)
-    # LEVEL ORDER WITHIN A TIER: of the doors a guild has not cleared, only the
-    # lowest is offered, so Jev cannot skip ahead (it chose Shadowfang Keep for
-    # Cave over the Deadmines it had never cleared). Cleared doors keep them all.
-    if options and options is not done:
-        lowest = min(o.door.floor for o in options)
-        options = [o for o in options if o.door.floor == lowest]
-    if recipe_option is not None:
-        options = [recipe_option] + [
-            o for o in options if o.door.keyword != recipe_option.door.keyword
-        ]
-    if not options:
-        return None
-    return (options[0].need.rank, name, mate, tuple(options), band, shape)
+    return options or failing or done, done
+
+
+def _recipe_first(recipe_option, options: list) -> list:
+    """`options` with the raid-recipe option, when there is one, put first."""
+    if recipe_option is None:
+        return options
+    return [recipe_option] + [
+        o for o in options if o.door.keyword != recipe_option.door.keyword
+    ]
 
 
 def _recipe_option(board: _Board, member, guild: str, faction: str, options: list):
@@ -1370,8 +1385,8 @@ def _recipe_option(board: _Board, member, guild: str, faction: str, options: lis
     recipe = guildrun.door_recipe(order[0], recipes, levels) if order else ""
     if not recipe:
         return None
-    option = next(o for o in options if o.door.keyword == order[0].keyword)
-    return replace(option, recipe=recipe)
+    option = next((o for o in options if o.door.keyword == order[0].keyword), None)
+    return replace(option, recipe=recipe) if option is not None else None
 
 
 def _post(
