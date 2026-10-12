@@ -9655,6 +9655,7 @@ class Bridge(discord.Client):
         guids so the family hand-over leaves them alone.
         """
         equips = bag_upgrade.self_equips(members)
+        _log_capped("bags", bag_upgrade.self_equip_notes(members))
         if not equips:
             return set()
         seen = await asyncio.to_thread(_recent_bag_equip_keys, GIVE_RETRY_MINUTES)
