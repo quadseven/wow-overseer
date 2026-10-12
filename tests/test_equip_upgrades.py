@@ -226,6 +226,116 @@ class TheQueueIsBounded(unittest.TestCase):
         self.assertEqual(queue, ())
         self.assertIn("Cabalist Chestpiece", notes[0])
 
+    def answer(self, status="unchanged", detail="the bot kept its own pick", id=7):
+        return {
+            self.key: dict(
+                id=id,
+                target_name="Grog",
+                command=self.key[1],
+                status=status,
+                detail=detail,
+            )
+        }
+
+    def test_equips_to_queue_holds_on_world_reason(self):
+        """A refusal with a reason holds the piece at one try, and says why."""
+        worn = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
+        for status in ("unchanged", "error"):
+            holds = {}
+            queue, notes = bag_pressure.equips_to_queue(
+                self.wanted,
+                set(),
+                {self.key: 1},
+                answers=self.answer(status),
+                worn=worn,
+                holds=holds,
+            )
+            self.assertEqual(queue, ())
+            self.assertEqual(
+                notes,
+                (
+                    "Grog keeps Sparkleshell Breastplate over Cabalist Chestpiece: "
+                    "the bot kept its own pick; held until its level or that slot "
+                    "changes",
+                ),
+            )
+            self.assertEqual(gear.world_held(self.wanted, holds), 1)
+
+    def test_a_delivered_or_bare_answer_keeps_the_three_try_rule(self):
+        for answers in (
+            self.answer("delivered"),
+            self.answer("applied"),
+            self.answer("unchanged", detail=""),
+        ):
+            queue, notes = bag_pressure.equips_to_queue(
+                self.wanted, set(), {self.key: 1}, answers=answers, holds={}
+            )
+            self.assertEqual((queue, notes), (self.wanted, ()))
+
+    def test_a_changed_worn_entry_in_that_slot_lifts_the_hold(self):
+        holds = {}
+        before = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
+        after = {"Grog": {4: (6001, "Other Breastplate")}}
+        args = (self.wanted, set(), {self.key: 1})
+        kw = dict(answers=self.answer(), holds=holds)
+        self.assertEqual(bag_pressure.equips_to_queue(*args, worn=before, **kw)[0], ())
+        # Another slot changing does not lift it.
+        other = {"Grog": {4: (6000, "Sparkleshell Breastplate"), 7: (1, "Boots")}}
+        self.assertEqual(bag_pressure.equips_to_queue(*args, worn=other, **kw)[0], ())
+        queue, notes = bag_pressure.equips_to_queue(*args, worn=after, **kw)
+        self.assertEqual((queue, notes), (self.wanted, ()))
+        # The same answer never holds it again, even with the old piece back.
+        queue, _ = bag_pressure.equips_to_queue(*args, worn=before, **kw)
+        self.assertEqual(queue, self.wanted)
+
+    def test_leaving_the_bags_lifts_the_hold(self):
+        holds = {}
+        kw = dict(answers=self.answer(), holds=holds, holders={"Grog"})
+        self.assertEqual(
+            bag_pressure.equips_to_queue(self.wanted, set(), {}, **kw)[0], ()
+        )
+        bag_pressure.equips_to_queue((), set(), {}, **kw)
+        queue, notes = bag_pressure.equips_to_queue(self.wanted, set(), {}, **kw)
+        self.assertEqual((queue, notes), (self.wanted, ()))
+
+    def test_another_pass_does_not_lift_the_hold(self):
+        holds = {}
+        kw = dict(answers=self.answer(), holds=holds)
+        bag_pressure.equips_to_queue(self.wanted, set(), {}, holders={"Grog"}, **kw)
+        bag_pressure.equips_to_queue((), set(), {}, holders={"Blammo"}, **kw)
+        self.assertEqual(
+            bag_pressure.equips_to_queue(self.wanted, set(), {}, **kw)[0], ()
+        )
+
+    def test_a_level_change_lifts_the_hold(self):
+        """`since_level_change` drops the refusal, so no answer remains."""
+        row = dict(self.answer()[self.key], created_at=1)
+        holds = {}
+        current = bag_pressure.since_level_change([row], {})
+        answers = bag_pressure.latest_answers(current, {"pending"})
+        self.assertEqual(
+            bag_pressure.equips_to_queue(
+                self.wanted, set(), {}, answers=answers, holds=holds
+            )[0],
+            (),
+        )
+        current = bag_pressure.since_level_change([row], {"Grog": 2})
+        answers = bag_pressure.latest_answers(current, {"pending"})
+        queue, notes = bag_pressure.equips_to_queue(
+            self.wanted, set(), {}, answers=answers, holds=holds
+        )
+        self.assertEqual((queue, notes), (self.wanted, ()))
+        self.assertEqual(holds, {})
+
+    def test_the_latest_answered_row_is_the_one_read(self):
+        rows = [
+            dict(id=1, target_name="Grog", command="c", status="unchanged", detail="x"),
+            dict(id=2, target_name="Grog", command="c", status="delivered", detail=""),
+            dict(id=3, target_name="Grog", command="c", status="pending", detail=""),
+        ]
+        got = bag_pressure.latest_answers(rows, {"pending"})
+        self.assertEqual(got[("Grog", "c")]["id"], 2)
+
     def test_equip_entry_ignores_other_commands(self):
         self.assertEqual(gear.equip_entry("nc +new rpg"), 0)
         self.assertEqual(gear.equip_entry(None), 0)
@@ -263,8 +373,10 @@ class TheBridgeWritesIt(unittest.TestCase):
     def test_each_equip_and_its_outcome_is_logged(self):
         body = _block("    async def _write_equips(self")
         self.assertIn('"equip: %s puts on %s', body)
+        self.assertIn("held on the world's answer", body)
+        self.assertIn("answers=answers", body)
         body = _block("    async def _equip_upgrades(self")
-        self.assertIn("await self._write_equips(wanted, current)", body)
+        self.assertIn("await self._write_equips(wanted, current, holders=names)", body)
         self.assertIn('"equip: %s %r answered %s', body)
 
 
