@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import armory  # noqa: E402
 import gearscore  # noqa: E402
+import raidgoals  # noqa: E402
 import raidready  # noqa: E402
 from raidlineup import (
     DRUID,
@@ -359,6 +360,29 @@ def _held(holder, name, count, slot=23):
         "bag": 0,
         "slot": slot,
     }
+
+
+class NoSourceRepairBotIsNotStillToGather(unittest.TestCase):
+    """A repair bot with no source on this realm is not a consumable goal the
+    guild can farm, so the still-to-gather count leaves it out."""
+
+    def test_the_still_to_gather_count_leaves_out_no_source_repair(self):
+        goals = {
+            "goals": [
+                {"name": "A flask each", "status": raidgoals.SHORT},
+                {"name": "A repair bot for the raid", "status": raidgoals.NO_SOURCE},
+            ]
+        }
+        rows = _guild("Cave", 23, FULL)
+        card = _card(rows, [rows[0]["name"]], goals=goals)
+        soft = [b["text"] for b in card["blockers"] if b["tone"] == raidready.SOFT]
+        gather_line = next((t for t in soft if "still to gather" in t), "")
+        self.assertIn("1 of 2 consumable goals", gather_line)
+        self.assertNotIn("repair bot", gather_line.lower())
+        self.assertTrue(
+            any("repairs happen at a vendor before the raid order" in t for t in soft),
+            soft,
+        )
 
 
 class SeatsAreChosenByPreRaidReadiness(unittest.TestCase):

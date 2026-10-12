@@ -385,7 +385,11 @@ def _support_blockers(lineup: dict, goals: dict) -> list:
             )
         )
     goal_list = goals.get("goals") or []
-    unmet = [g for g in goal_list if g.get("status") != raidgoals.MET]
+    unmet = [
+        g
+        for g in goal_list
+        if g.get("status") not in (raidgoals.MET, raidgoals.NO_SOURCE)
+    ]
     if unmet:
         out.append(
             "%d of %s still to gather (%s). Molten Core admits a raid "
@@ -395,6 +399,12 @@ def _support_blockers(lineup: dict, goals: dict) -> list:
                 _count(len(goal_list), "consumable goal", "consumable goals"),
                 ", ".join(g["name"].lower() for g in unmet),
             )
+        )
+    no_source = [g for g in goal_list if g.get("status") == raidgoals.NO_SOURCE]
+    if no_source:
+        out.append(
+            "Repair bots have no source on this realm; repairs happen at a "
+            "vendor before the raid order."
         )
     return out
 
