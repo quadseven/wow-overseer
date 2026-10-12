@@ -611,8 +611,16 @@ def _from_job(roster: dict):
 def _live(member, f, fresh, now_at):
     """Doing, waiting, since for a character in the world and not fighting."""
     intent = f.get("intent")
+    steps = f.get("steps") or ()
+    restarts = _restarts(steps, now_at)
+    if restarts >= 3:
+        if intent and str(intent.get("current_kind") or "") not in ("", "none"):
+            return _from_intent(intent, steps, now_at)
+        doing = _walk_from_steps(steps) or "Walking"
+        why = "a way there; the walk has ended and restarted %d times" % restarts
+        return doing, why, _first_restart(steps, now_at)
     if intent and str(intent.get("current_kind") or "") not in ("", "none"):
-        return _from_intent(intent, f.get("steps") or (), now_at)
+        return _from_intent(intent, steps, now_at)
     for scope in ("character", None, "family"):
         if scope is None:
             if f.get("member"):
@@ -622,6 +630,18 @@ def _live(member, f, fresh, now_at):
         if mine:
             return _from_step(mine[0])
     return _from_job(f.get("roster") or {})
+
+
+def _walk_from_steps(steps):
+    """The walk described by the newest 'took over' intent step, or ''."""
+    for s in steps:
+        if s.get("kind") == "intent":
+            doing = str(s.get("doing") or "")
+            if " took over: " in doing:
+                walk = doing.split(" took over: ", 1)[1]
+                out = reword(walk)
+                return out[:1].upper() + out[1:]
+    return ""
 
 
 def _detail_words(detail: str) -> str:

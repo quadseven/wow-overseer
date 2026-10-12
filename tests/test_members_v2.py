@@ -196,6 +196,16 @@ class StuckIsTheBridgesOwnRecord(unittest.TestCase):
         )
         self.assertIsNone(found["since"])
 
+    def test_walk_restarts_are_stuck_after_thirty_minutes_and_not_before(self):
+        now = {
+            "doing": "Walking out of Shadowfang Keep for the dungeon run",
+            "waiting": "a way there; the walk has ended and restarted 5 times",
+            "for_s": 1800,
+        }
+        found = members.hold_blocker(now, NOW)
+        self.assertEqual(found["kind"], "walk restarts")
+        self.assertIsNone(members.hold_blocker(dict(now, for_s=600), NOW))
+
 
 class PlacesInWords(unittest.TestCase):
     # Online and life are apiv2/presence.py's reading (tests/test_presence.py).

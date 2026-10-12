@@ -231,6 +231,20 @@ class TheSentenceNamesTheWork(unittest.TestCase):
         )
         self.assertTrue(got["known"])
 
+    def test_restarts_reported_between_restarts(self):
+        took = step(
+            "Zug",
+            "dungeon run took over: walking to trigger 194 for the dungeon run",
+            kind="intent",
+            times=424,
+            first=240,
+            last=20,
+        )
+        intents = [dict(INTENTS[0], current_kind="none", current_target="")]
+        fs = nowstatus.build_facts(["Zug"], ROSTER, intents, [took], NOW)
+        got = nowstatus.compose({"name": "Zug", "present": True}, fs["Zug"])
+        self.assertIn("restarted 424 times", got["waiting"])
+
     def test_a_bag_room_wait_reaches_the_leader_and_the_follower(self):
         held = step(
             "Grug",
