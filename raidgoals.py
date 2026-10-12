@@ -167,13 +167,21 @@ class Recipe:
     ONE on purpose. See MAKES_ONE below.
     """
 
-    __slots__ = ("spell", "product", "trade", "reagents")
+    __slots__ = ("spell", "product", "trade", "reagents", "schematic")
 
-    def __init__(self, spell: int, product: str, trade: str, reagents: tuple = ()):
+    def __init__(
+        self,
+        spell: int,
+        product: str,
+        trade: str,
+        reagents: tuple = (),
+        schematic: int = 0,
+    ):
         self.spell = spell
         self.product = product
         self.trade = trade
         self.reagents = reagents
+        self.schematic = schematic
 
 
 # HOW MUCH ONE CAST MAKES IS NOT KNOWN HERE, AND THE FLOOR IS WHAT IS USED.
@@ -328,6 +336,7 @@ RECIPES = (
             Reagent("Living Essence"),
             Reagent("Essence of Undeath"),
         ),
+        schematic=18235,
     ),
 )
 
@@ -1379,7 +1388,7 @@ def _repair_goal(
         status = NO_SOURCE
     line = _supply_line(recipe.product, need, have, status)
     if status == NO_SOURCE:
-        line = _no_source_line(recipe.product, 18235)
+        line = _no_source_line(recipe.product, recipe.schematic)
     return {
         "key": "repair",
         "name": "A repair bot for the raid",
