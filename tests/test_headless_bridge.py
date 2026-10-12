@@ -164,7 +164,11 @@ def _start_harness():
         "asyncio": types.SimpleNamespace(
             create_task=create_task, gather=gather, to_thread=to_thread
         ),
-        "log": types.SimpleNamespace(info=lambda *a: None, error=lambda *a: None),
+        "log": types.SimpleNamespace(
+            info=lambda *a: None, error=lambda *a: None, exception=lambda *a: None
+        ),
+        # _ensure_stores also rebuilds the last guild run time (#856).
+        "_guild_run_last_formed_at": lambda: None,
     }
     for store in set(re.findall(r"_ensure_\w+_store", src)):
         ns[store] = lambda store=store: ensured.append(store)
@@ -180,6 +184,8 @@ def _start_harness():
     class Harness(ns["Harness"]):
         user = "the bridge"
         guilds = ("a guild",)
+        _guild_run_formed_at = None
+        _guild_run_recovered = types.SimpleNamespace(set=lambda: None)
 
         def __getattr__(self, name):
             return fake_pass(name)

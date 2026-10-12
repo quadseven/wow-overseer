@@ -115,7 +115,7 @@ class RestartPassGates(unittest.IsolatedAsyncioTestCase):
         )
         completed.add("guild_jobs")
         # Past the gate the pass reaches names this bare namespace lacks.
-        with self.assertRaises(Exception):
+        with self.assertRaises(NameError):
             await fn(obj)
 
     async def test_auction_waits_for_guild_share(self):
