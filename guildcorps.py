@@ -339,6 +339,7 @@ class Member:
     mail: tuple = ()  # Letter
     worn_bags: tuple = ()  # ContainerSlots of each worn bag, family only
     talent_spells: str = ""  # raidroles.TALENTS_COLUMN, for the lineup
+    race: int = 0  # characters.race, so a vendor of the other side is not named
 
     def skill(self, skill_id) -> tuple:
         value, cap = self.skills.get(int(skill_id), (0, 0))
@@ -1668,6 +1669,7 @@ def members_from_rows(
                 mail=tuple(mail.get(guid, ())),
                 worn_bags=tuple(sorted(bags.get(guid, ()))),
                 talent_spells=str(row.get("talent_spells") or ""),
+                race=_int(row.get("race")),
             )
         )
     return out
