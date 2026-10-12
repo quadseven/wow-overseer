@@ -243,7 +243,8 @@ def friends():
         ("Bigzug", 20, CAVE, NEAR, 1),
         ("Chill", 19, CAVE, (-250.0, -4150.0), 1),
         ("Dread", 21, CAVE, (-300.0, -4100.0), 1),
-        ("Ghoul", 22, CAVE, (-100.0, -4000.0), 1),
+        # Out of HELPER_REACH_YARDS of the asker.
+        ("Ghoul", 22, CAVE, (2500.0, -4000.0), 1),
     )
 
 
@@ -371,11 +372,11 @@ class TheAnswer(unittest.TestCase):
         )
         self.assertEqual(out.notes, ())
 
-    def test_an_answerer_out_of_seating_range_does_not_answer(self):
+    def test_an_answerer_out_of_reach_does_not_answer(self):
         far = mates(
             ("Bigzug", 20, CAVE, NEAR, 1),
             ("Near", 20, CAVE, (-250.0, -4150.0), 1),
-            ("Far", 20, CAVE, (NEAR[0] + classask.SEAT_RANGE_YARDS + 5, NEAR[1]), 1),
+            ("Far", 20, CAVE, (NEAR[0] + classask.HELPER_REACH_YARDS + 5, NEAR[1]), 1),
         )
         out = pass_(helps_of("Bigzug"), far, asks=[qask(1)])
         self.assertEqual([r.member for r in out.replies], ["Near"])

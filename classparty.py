@@ -19,6 +19,16 @@ an ask has them:
 
 THE FLOW, one task per party (the bridge's _run_class_party):
 
+  meet      the answerers come from as far as classask.HELPER_REACH_YARDS, so
+            the leader and every helper first walk to the objective spawn
+            (`walk-to-spawn creature:<spawn id>`, kind job, followed as a guild
+            walk is), all at once and within MEET_SECONDS. A helper whose walk
+            does not arrive, or who then stands farther than
+            classask.SEAT_RANGE_YARDS from the leader, has its yes taken back
+            and is barred from this ask; the others go on. A leader that does
+            not arrive, or no helper left, is a failure of the ask. Measured
+            before it: 2 of 7 party-up rows refused with "a helper is more than
+            100 yards from the leader" (#888).
   form      write party-up, read its answer. FORMED goes on. A refusal that names
             a helper (HELPER) takes that helper's yes back, bars the helper from
             this ask and ends the attempt: the ask's next pass picks another.
@@ -38,8 +48,10 @@ THE FLOW, one task per party (the bridge's _run_class_party):
             moment the PartyRun leaves the Board.
 
 THE HOLD. A member is held out of the dungeon passes and the guild jobs only
-while a PartyRun with its name is on the Board: from the pass that decides to
-form the party to its disband, and not a moment after a refusal.
+while a PartyRun with its name is on the Board: from the pass that finds its
+ask answered, through the meeting (phase MEETING) and the party (phase PARTY),
+to its disband, and not a moment after a failed meeting or a refusal. A
+helper withdrawn from the meeting is free at once.
 
 FAMILY MEMBERS are never touched: classask answerers come from the guild
 members free of every campaign (guildrun.why_not holds a family member), and the
@@ -63,6 +75,7 @@ from guildsocial import LIVE_ASKS, PASSING, YES
 
 SOURCE = "classask"
 UP, WALK, DISBAND = "party-up", "party-walk", "party-disband"
+MEET_VERB = "walk-to-spawn"
 MAX_HELPERS = 4
 
 # Seconds the bridge reads a party-up row's answer before it counts as lost.
@@ -75,6 +88,9 @@ MAX_FAILURES = 3
 GIVE_UP_COOLDOWN_MINUTES = 30
 # After a party ends with its quest not done, the asker waits this long.
 ENDED_COOLDOWN_MINUTES = classask.ASK_COOLDOWN_MINUTES
+# The meeting at the objective takes this long at most: a walk of
+# classask.HELPER_REACH_YARDS on foot, its fights and the polls.
+MEET_SECONDS = 900.0
 # A party stands this long at most: the module's own ceiling is 1800 seconds.
 PARTY_SECONDS = 1680.0
 # Seconds between reads of the quest log while the party works.
@@ -95,6 +111,11 @@ LEADER = "leader"
 UNSUPPORTED = "unsupported"
 BAD = "bad"
 WAITING = "waiting"
+
+# A party's phases on the Board: its members walking to meet at the objective,
+# then the party itself (party-up written).
+MEETING = "meeting"
+PARTY = "party"
 
 # Where the asker's quest stands.
 COMPLETE = "complete"
@@ -202,6 +223,57 @@ def walk_command(spot, cap) -> str:
     return "%s creature:%d%s" % (WALK, int(spot.guid), guildroute.errand_cap_word(cap))
 
 
+def meet_command(spot, cap) -> str:
+    """The walk one member takes to the meeting at the objective spawn."""
+    return "%s creature:%d%s" % (
+        MEET_VERB,
+        int(spot.guid),
+        guildroute.errand_cap_word(cap),
+    )
+
+
+def meet_line(run) -> str:
+    return "class party: %s meet %s at %s for %s" % (
+        ", ".join(run.helpers),
+        run.leader,
+        run.spot.name or "the objective",
+        run.title,
+    )
+
+
+def _yards(a, b) -> float:
+    return ((float(a[0]) - float(b[0])) ** 2 + (float(a[1]) - float(b[1])) ** 2) ** 0.5
+
+
+def _place(row):
+    """(map, x, y) of one snapshot row, None when it cannot be read."""
+    if not row:
+        return None
+    try:
+        return int(row["map_id"]), float(row["pos_x"]), float(row["pos_y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def strays(run, positions):
+    """The helpers that do not stand within classask.SEAT_RANGE_YARDS of the
+    leader (or cannot be seen), from `positions` name -> snapshot row; None
+    when the leader cannot be seen."""
+    lead = _place(positions.get(run.leader))
+    if lead is None:
+        return None
+    out = []
+    for helper in run.helpers:
+        at = _place(positions.get(helper))
+        if (
+            at is None
+            or at[0] != lead[0]
+            or _yards(at[1:], lead[1:]) > classask.SEAT_RANGE_YARDS
+        ):
+            out.append(helper)
+    return tuple(out)
+
+
 # --- one party ------------------------------------------------------------------------
 
 
@@ -209,9 +281,10 @@ def walk_command(spot, cap) -> str:
 class PartyRun:
     """One class quest party from the pass that decided it to its disband.
 
-    `answers` is member name -> the id of its yes row. `formed_at` and
-    `deadline` are on the bridge's monotonic clock, set when the module said
-    formed."""
+    `answers` is member name -> the id of its yes row. `phase` is MEETING
+    until party-up is written, then PARTY. `met_by` (set when the meeting
+    starts), `formed_at` and `deadline` (set when the module said formed) are
+    on the bridge's monotonic clock."""
 
     ask_id: int
     leader: str
@@ -222,6 +295,8 @@ class PartyRun:
     answers: dict = field(default_factory=dict)
     formed_at: float | None = None
     deadline: float | None = None
+    phase: str = MEETING
+    met_by: float | None = None
 
     def names(self) -> tuple:
         return (self.leader,) + tuple(self.helpers)
@@ -232,7 +307,25 @@ class PartyRun:
         low = str(name).lower()
         return next((h for h in self.helpers if h.lower() == low), "")
 
+    def meet(self, now) -> None:
+        self.phase = MEETING
+        self.met_by = now + MEET_SECONDS
+
+    def meet_left(self, now) -> float:
+        """Seconds before the meeting's time runs out."""
+        return MEET_SECONDS if self.met_by is None else self.met_by - now
+
+    def drop(self, name) -> None:
+        """Take one helper out of the party: it is free at once."""
+        self.helpers = tuple(h for h in self.helpers if h != name)
+        self.answers.pop(name, None)
+
+    def seat(self) -> None:
+        """The members have met: party-up is written next."""
+        self.phase = PARTY
+
     def form(self, now) -> None:
+        self.phase = PARTY
         self.formed_at = now
         self.deadline = now + PARTY_SECONDS
 

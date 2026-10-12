@@ -24,9 +24,13 @@ pass, ASK_COOLDOWN_MINUTES before the same member asks again.
 
 WHO ANSWERS. A free member of the same guild, not already on an ask, within
 LEVEL_BAND levels of the asker, on its map (the open world's maps are
-continents) and within SEAT_RANGE_YARDS of it (the module seats nobody farther
-than 100 yards from the leader): the nearest first, ANSWERS_PER_PASS a pass, as
-many as the quest wants, and never one the module refused for this ask.
+continents) and within HELPER_REACH_YARDS of it: the nearest first,
+ANSWERS_PER_PASS a pass, as many as the quest wants, and never one the module
+refused for this ask. A player answers "on my way" and travels, and so does an
+answerer: classparty.py walks it and the asker to the objective and seats the
+party only once they stand within SEAT_RANGE_YARDS of each other (the module
+seats nobody farther than 100 yards from the leader). Kept to the asker's own
+90 yards, one guild's asks drew no yes at all in a day (#888).
 
 BOUNDED. An ask lives guildsocial.ASK_MINUTES and, filled, FILLED_GRACE_MINUTES
 more, unless a party is up for it: then the party's own clock (classparty.py)
@@ -34,8 +38,10 @@ bounds it. A quest nobody answers holds nobody.
 
 THE GROUP is classparty.py's: a filled ask has the module seat its answerers in
 one party (`party-up`), walk it to the objective (`party-walk`) and end it
-(`party-disband`). A member is held out of the dungeon passes (held_names) only
-while a party is up, and no longer from the moment it is refused or ended.
+(`party-disband`), after its members have met there. A member is held out of
+the dungeon passes (held_names) only while it travels to the meeting or its
+party is up, and no longer from the moment the meeting fails or the party is
+refused or ended.
 
 PURE: rows in, a guildsocial.Pass out.
 """
@@ -67,8 +73,13 @@ MAX_OPEN_PER_GUILD = 3
 NEW_PER_PASS = 2
 LEVEL_BAND = 5
 # The module forms a party only of members within 100 yards of the leader
-# (mod-overseer#866); an answerer beyond this could not be seated.
+# (mod-overseer#866): the party is seated only once its members stand this
+# close to each other.
 SEAT_RANGE_YARDS = 90.0
+# How far from the asker an answerer may stand: it walks to the objective to
+# meet the asker there (classparty.py). A walk this long ends within
+# classparty.MEET_SECONDS on foot.
+HELPER_REACH_YARDS = 2000.0
 
 _NUMBERS = {1: "one", 2: "two", 3: "three", 4: "four"}
 
@@ -185,7 +196,7 @@ def _helper_choices(
     asker, free: dict, taken: set, level: int, map_id: int, refused=frozenset()
 ) -> list:
     """Free mates of the asker's guild that may answer, nearest first, within
-    seating range, and not one the module refused for this ask."""
+    HELPER_REACH_YARDS, and not one the module refused for this ask."""
     out = []
     for name, mate in free.items():
         if (
@@ -200,7 +211,7 @@ def _helper_choices(
         if abs(int(mate.member.level) - int(level)) > LEVEL_BAND:
             continue
         away = _distance(asker, mate)
-        if away > SEAT_RANGE_YARDS:
+        if away > HELPER_REACH_YARDS:
             continue
         out.append((away, name))
     return [name for _d, name in sorted(out)]
@@ -289,6 +300,10 @@ def _answers(
         need = by_member[ask.asker]
         standing = [y for y in yes_by_ask.get(ask.id, []) if y.id not in gone]
         wanted = max(1, len(ask.roles_needed)) - len(standing)
+        if wanted > 0 and ask.id in partied:
+            # Its party is meeting or up with the helpers it has: a yes now
+            # would join nothing.
+            continue
         if wanted > 0:
             made = _replies(
                 ask, need, free, spoken, wanted, (refused or {}).get(ask.id, ())

@@ -15477,18 +15477,100 @@ class Bridge(discord.Client):
             task.add_done_callback(self._class_party_tasks.discard)
 
     async def _run_class_party(self, run) -> None:
-        """One class quest party from its party-up row to its party-disband: form
-        it, walk it to the objective, watch the quest, end it. The members are
-        free again when this returns, whatever happened."""
+        """One class quest party from the meeting at its objective to its
+        party-disband: meet, form it, walk it to the objective, watch the quest,
+        end it. The members are free again when this returns, whatever
+        happened."""
         formed = done = False
         try:
-            formed = await self._class_party_form(run)
+            formed = await self._class_party_meet(run) and await self._class_party_form(run)
             if formed:
                 done = await self._class_party_work(run)
         except Exception:
             log.exception("class party: %s's party for %s failed", run.leader, run.title)
         finally:
             await self._class_party_close(run, formed, done)
+
+    async def _class_party_meet(self, run) -> bool:
+        """Walk the leader and every helper to the objective spawn, all at once
+        and within classparty.MEET_SECONDS; True when the leader and at least
+        one helper stand within classask.SEAT_RANGE_YARDS of each other there.
+
+        A helper whose walk does not arrive, or who stands too far from the
+        leader after it, has its yes taken back and is barred from this ask,
+        and is free at once. A leader that does not arrive, or no helper left,
+        is a failure of the ask; its next pass forms the party again."""
+        board = self._class_board
+        cap = self._guild_walk_cap()
+        run.meet(time.monotonic())
+        log.info("%s", classparty.meet_line(run))
+        row = guildcorps.Row("job", classparty.meet_command(run.spot, cap), "",
+                             classparty.SOURCE)
+        goal = run.spot.name or "its objective"
+
+        async def walk(name):
+            def insert():
+                return _insert_corps_row(name, row)
+
+            row_id = await asyncio.to_thread(insert)
+            if not row_id:
+                return guildroute.WalkAnswer(
+                    guildroute.ENDED, "%s's walk row was not written" % name)
+            answer, _row_id = await self._follow_guild_walk(
+                "class party meeting", name, row_id, cap, insert, goal)
+            return answer
+
+        tasks = {name: asyncio.ensure_future(walk(name)) for name in run.names()}
+        await asyncio.wait(tasks.values(),
+                           timeout=max(0.0, run.meet_left(time.monotonic())))
+        missed = []
+        for name, task in tasks.items():
+            if not task.done():
+                task.cancel()
+                missed.append((name, "did not reach %s in %d seconds" % (
+                    goal, int(classparty.MEET_SECONDS))))
+            elif task.exception() is not None or task.result().state != guildroute.ARRIVED:
+                said = (task.result().said if task.exception() is None
+                        else "its walk failed")
+                missed.append((name, said or "did not reach %s" % goal))
+        await asyncio.gather(*tasks.values(), return_exceptions=True)
+        for name, said in missed:
+            if name == run.leader:
+                board.fail(run.ask_id)
+                log.info("class party: %s did not reach the meeting at %s for %s: %s",
+                         run.leader, goal, run.title, said)
+                return False
+            await self._class_party_unseat(run, name, said)
+        positions = await asyncio.to_thread(_fetch_positions, list(run.names()))
+        far = classparty.strays(run, positions)
+        if far is None:
+            board.fail(run.ask_id)
+            log.info("class party: %s cannot be seen at the meeting at %s",
+                     run.leader, goal)
+            return False
+        for name in far:
+            await self._class_party_unseat(
+                run, name, "stands more than %d yards from %s" % (
+                    int(classask.SEAT_RANGE_YARDS), run.leader))
+        if not run.helpers:
+            board.fail(run.ask_id)
+            log.info("class party: no helper met %s at %s for %s", run.leader, goal,
+                     run.title)
+            return False
+        run.seat()
+        log.info("class party: %s and %s stand together at %s", run.leader,
+                 ", ".join(run.helpers), goal)
+        return True
+
+    async def _class_party_unseat(self, run, name, said) -> None:
+        """Take one helper out of the meeting: its yes back, barred from this
+        ask, free at once."""
+        self._class_board.refuse(run.ask_id, name)
+        answer_id = run.answers.get(name)
+        run.drop(name)
+        log.info("class party: %s leaves %s's meeting for %s: %s", name, run.leader,
+                 run.title, said)
+        await asyncio.to_thread(_class_party_withdraw, answer_id)
 
     async def _class_party_form(self, run) -> bool:
         """Write party-up and follow its answer. True when the party formed.
