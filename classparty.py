@@ -59,7 +59,7 @@ import classask
 import classquest
 import guildroute
 import guildrun
-from guildsocial import LIVE_ASKS, PASSING, YES
+from guildsocial import FILLED, LIVE_ASKS, PASSING, YES
 
 SOURCE = "classask"
 UP, WALK, DISBAND = "party-up", "party-walk", "party-disband"
@@ -362,8 +362,33 @@ def plan_starts(asks, answers, quest_pass, helps, free, board, now, clock, book=
     helps        classquest.Help rows; free  name -> guildsocial.Mate
     board        the Board; clock  its monotonic now; now  the database's clock
     """
+    return plan(asks, answers, quest_pass, helps, free, board, now, clock, book)[0]
+
+
+def _skip_note(ask, need, why) -> str:
+    return "%s's %s ask is full and no party is formed for it: %s" % (
+        ask.asker,
+        need.move.title,
+        why,
+    )
+
+
+def _taken_why(ask, board, taken) -> str:
+    """Why the asker cannot lead a party for this ask now, "" when it can: it
+    is in another party, or this ask's failures are used up."""
+    if ask.asker in board.parties or ask.asker in taken:
+        return "%s is in another class quest party" % ask.asker
+    if board.exhausted(ask.id):
+        return "its party failed %d times and the ask is given up" % MAX_FAILURES
+    return ""
+
+
+def plan(asks, answers, quest_pass, helps, free, board, now, clock, book=None):
+    """(plan_starts' parties, notes): each note names a filled ask that gets no
+    party this pass and why (its asker is taken, its failures are used up, or
+    its objective has no spawn to walk to), so no full ask waits in silence."""
     if not board.seats(clock):
-        return ()
+        return (), ()
     ended = {a for a, _who, _line in quest_pass.expire} | set(quest_pass.cancel)
     gone = set(quest_pass.withdraw)
     by_member = {}
@@ -374,25 +399,36 @@ def plan_starts(asks, answers, quest_pass, helps, free, board, now, clock, book=
         if a.state == YES:
             yes_by_ask.setdefault(a.ask_id, []).append(a)
     taken = set(board.names())
-    starts = []
+    partied = board.partied_asks()
+    filled = set(quest_pass.filled)
+    starts, notes = [], []
     for ask in sorted(classask.quest_asks(asks), key=lambda a: a.id):
         if (
             ask.state not in LIVE_ASKS
             or ask.id in ended
-            or ask.asker in board.parties
-            or ask.asker in taken
+            or ask.id in partied
             or ask.asker not in free
-            or board.exhausted(ask.id)
         ):
             continue
         need = by_member.get(ask.asker)
         if need is None or need.move.quest != classask.quest_of(ask):
+            continue
+        full = ask.state == FILLED or ask.id in filled
+        why = _taken_why(ask, board, taken)
+        if why:
+            if full:
+                notes.append(_skip_note(ask, need, why))
             continue
         standing = _standing(ask, yes_by_ask, gone, free, taken)
         if not _ready(ask, standing, now):
             continue
         spot = classquest.objective_spot(book, need.move, _at(free[ask.asker]))
         if spot is None:
+            notes.append(
+                _skip_note(
+                    ask, need, "its objective has no spawn for a party to walk to"
+                )
+            )
             continue
         chosen = standing[:MAX_HELPERS]
         run = PartyRun(
@@ -406,7 +442,7 @@ def plan_starts(asks, answers, quest_pass, helps, free, board, now, clock, book=
         )
         taken.update(run.names())
         starts.append(run)
-    return tuple(starts)
+    return tuple(starts), tuple(notes)
 
 
 def ask_held(held, board) -> dict:

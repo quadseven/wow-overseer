@@ -156,7 +156,7 @@ class StuckIsTheBridgesOwnRecord(unittest.TestCase):
         self.assertEqual(found["since"], NOW - 3 * 3600)
         self.assertEqual(found["step"], "Class quest: Taming the Beast")
         self.assertIn("3 times", found["blocker"])
-        self.assertIn("nobody has come", found["blocker"])
+        self.assertIn("0 said yes, no party formed", found["blocker"])
 
     def test_a_long_silence_or_another_quest_starts_a_new_run(self):
         rows = [
@@ -296,7 +296,7 @@ class TheRosterAndStuckReads(unittest.TestCase):
                 {
                     "name": "Twinkle",
                     "step": "Class quest: Taming the Beast",
-                    "blocker": "Cannot finish Taming the Beast alone: asked the guild for help 2 times, and nobody has come.",
+                    "blocker": "Cannot finish Taming the Beast alone: asked the guild for help 2 times, 0 said yes, no party formed.",
                     "since": NOW - 7200,
                     "kind": "class quest",
                 }
