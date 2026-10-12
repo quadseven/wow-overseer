@@ -23,10 +23,10 @@ def _load(names, namespace):
         for n in ast.walk(ast.parse(BRIDGE))
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in names
     ]
-    exec(
+    exec(  # noqa: S102 - bridge.py's own source
         compile(ast.Module(body=wanted, type_ignores=[]), "bridge.py", "exec"),
         namespace,
-    )  # noqa: S102
+    )
     return namespace
 
 
