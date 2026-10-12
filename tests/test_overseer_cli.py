@@ -36,6 +36,7 @@ ANSWERS = {
     "/api/guildruns": [200, {"active": [], "recent": [{"id": 3, "state": "ended"}]}],
     "/api/v2/run": [404, {"error": "no such run", "id": 9}],
     "/api/realm": [200, {"build": "x"}],
+    "/api/bags": [200, [{"bag": 1, "free": 4}, {"bag": 2, "free": 0}]],
 }
 
 
@@ -103,6 +104,11 @@ class CliTests(unittest.TestCase):
     def test_table_on_stuck_members(self):
         _, out, _ = self.run_cli("--table", "stuck")
         self.assertEqual(out.splitlines()[0].split(), ["name", "step", "since"])
+
+    def test_table_on_top_level_list(self):
+        code, out, _ = self.run_cli("get", "/api/bags", "--table")
+        self.assertEqual((code, SEEN), (0, ["/api/bags"]))
+        self.assertEqual(out.split(), ["bag", "free", "1", "4", "2", "0"])
 
     def test_error_prints_status_and_body_and_exits_nonzero(self):
         code, out, err = self.run_cli("run", "9")
