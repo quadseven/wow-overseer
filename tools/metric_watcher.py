@@ -260,13 +260,21 @@ def collect(api_root: str) -> tuple[dict, dict]:
         guilds[guild]["seat_members"] = list(
             (raidteams[guild].get("members") or {}).keys()
         )
-        guilds[guild]["trainings"] = {
-            row["name"]: realm_state_audit.fetch_json(
-                f"{root}/training?name={urllib.parse.quote(row['name'])}"
-            )
-            for row in roster.get("members") or []
-            if row.get("guild") == guild and row.get("family") and row.get("name")
-        }
+        guilds[guild]["trainings"] = {}
+        for row in roster.get("members") or []:
+            if (
+                row.get("guild") != guild
+                or not row.get("family")
+                or not row.get("name")
+            ):
+                continue
+            # One member's failed read costs that crafter's row, not the snapshot.
+            try:
+                guilds[guild]["trainings"][row["name"]] = realm_state_audit.fetch_json(
+                    f"{root}/training?name={urllib.parse.quote(row['name'])}"
+                )
+            except RuntimeError:
+                continue
     report = realm_state_audit.build_report(roster, raidteams, guilds)
     return build_metrics(report, guilds), report
 

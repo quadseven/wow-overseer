@@ -211,3 +211,28 @@ def test_collect_reads_training_for_family_members_only(monkeypatch):
         "https://example.com/api/v2/training?name=Ugga"
     ]
     assert record["crafters"]["Cave"][0]["skills"]["alchemy"] == 39
+
+
+def test_collect_skips_a_crafter_whose_training_read_fails(monkeypatch):
+    def fetch(url):
+        if url.endswith("/roster"):
+            return {
+                "checked_at": 1800,
+                "members": [
+                    {"name": "Gone", "guild": "Cave", "family": "Gone"},
+                    {"name": "Ugga", "guild": "Cave", "family": "Ugga"},
+                ],
+            }
+        if "/raidteams?" in url:
+            return {"members": {}}
+        if "/training?name=Gone" in url:
+            raise RuntimeError("request failed: HTTP Error 404")
+        if "/training?" in url:
+            return {"trades": [{"name": "Alchemy", "value": 39}]}
+        return {}
+
+    monkeypatch.setattr(metric_watcher.realm_state_audit, "fetch_json", fetch)
+
+    record, _ = collect("https://example.com/api/v2")
+
+    assert [row["skills"]["alchemy"] for row in record["crafters"]["Cave"]] == [39]
