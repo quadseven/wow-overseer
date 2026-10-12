@@ -39,6 +39,7 @@ def _import_bridge():
 
 
 bridge = _import_bridge()
+bridge._COMPLETED_PASSES.add("guild_jobs")
 
 
 def row(name, level, class_id, **kw):

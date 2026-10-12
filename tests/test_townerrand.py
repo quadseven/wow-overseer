@@ -419,6 +419,7 @@ class TheAdapter(unittest.TestCase):
         ]
         ns = {
             "asyncio": asyncio,
+            "_pass_completed": lambda name: True,
             "log": types.SimpleNamespace(info=lambda *a, **k: None),
             "time": types.SimpleNamespace(monotonic=lambda: self.now),
             "townerrand": te,

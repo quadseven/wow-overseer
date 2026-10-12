@@ -3522,6 +3522,33 @@ def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
 # can hand their time back to the craft rhythm and the skill goal and the
 # activity choice can say why the run waits.
 _PACE_QUESTING: dict = {}
+
+# Passes that have completed one cycle in this process. Dependents wait for
+# their producer before using its in-memory snapshot.
+_COMPLETED_PASSES: set[str] = set()
+# A gate never holds forever: a producer that fails every cycle (a database
+# fault, say) must not stop its dependents for the life of the process. After
+# this much uptime a missing producer is reported once and dependents go on.
+PASS_GATE_MAX_SECONDS = 30 * 60.0
+_PASSES_STARTED_AT = time.monotonic()
+_PASS_GATES_GIVEN_UP: set[str] = set()
+
+
+def _pass_completed(name: str) -> bool:
+    if name in _COMPLETED_PASSES:
+        return True
+    if time.monotonic() - _PASSES_STARTED_AT < PASS_GATE_MAX_SECONDS:
+        return False
+    if name not in _PASS_GATES_GIVEN_UP:
+        _PASS_GATES_GIVEN_UP.add(name)
+        log.warning("restart gate: %s has not completed a cycle in %d minutes; "
+                    "its dependents go ahead without it", name,
+                    PASS_GATE_MAX_SECONDS // 60)
+    return True
+
+
+def _mark_pass_completed(name: str) -> None:
+    _COMPLETED_PASSES.add(name)
 # THE SAME FAMILIES BY MEMBER NAME, for the passes that are handed names and not
 # a family key. A family on the fallback is not waiting in town for bag room:
 # `_town_first_hold` reads "a campaign waits and nobody carries its job" as that,
@@ -5791,6 +5818,7 @@ class Bridge(discord.Client):
             intents=intents, allowed_mentions=discord.AllowedMentions.none()
         )
         self._allowed = allowed_ids
+        self._waiting_for_passes: set[str] = set()
         # Row id -> the channel its directive came from. Only rows this
         # process inserted are ever reported, which is core.py's restart
         # contract: history is never re-announced.
@@ -5924,6 +5952,7 @@ class Bridge(discord.Client):
         # while they are in a dungeon, and when the last group was formed.
         self._guild_run_names: set = set()
         self._guild_run_formed_at: float | None = None
+        self._guild_run_recovered = asyncio.Event()
         # Askers and yeses of the guild's live asks (guildsocial); folded into
         # _guild_run_names so no guild job or walk takes them meanwhile.
         self._guild_social_names: set = set()
@@ -6055,6 +6084,11 @@ class Bridge(discord.Client):
             for coro in self._pass_coroutines(headless=False)
         }
 
+    def _log_waiting_for_pass(self, message: str) -> None:
+        if message not in self._waiting_for_passes:
+            log.info("%s", message)
+            self._waiting_for_passes.add(message)
+
     async def on_ready(self) -> None:
         log.info("connected as %s", self.user)
         if not self.guilds:
@@ -6080,6 +6114,13 @@ class Bridge(discord.Client):
             _ensure_watch_store,
         ):
             await asyncio.to_thread(ensure)
+        try:
+            self._guild_run_formed_at = await asyncio.to_thread(
+                _guild_run_last_formed_at)
+        except Exception:
+            log.exception("guild runs: the last formation time could not be read")
+            self._guild_run_formed_at = None
+        self._guild_run_recovered.set()
 
     def _pass_coroutines(self, *, headless: bool) -> list:
         """The coroutine methods PASSES starts in this mode, in its order."""
@@ -8336,6 +8377,9 @@ class Bridge(discord.Client):
         before being blanked. The keyword survives the cycle AND takes the
         counter hold that keeps them there while the rows run.
         """
+        if not _pass_completed("guild_share"):
+            self._log_waiting_for_pass("auction: waiting for the first guild share pass")
+            return
         names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
@@ -10181,6 +10225,7 @@ class Bridge(discord.Client):
         while not self.is_closed():
             try:
                 await self._guild_share_once()
+                _mark_pass_completed("guild_share")
             except Exception:
                 log.exception("guildshare pass failed; retrying next cycle")
             try:
@@ -12741,6 +12786,9 @@ class Bridge(discord.Client):
         A bank trip is a town errand, and pulling the leader out of a run to
         make one is how the party spreads.
         """
+        if not _pass_completed("guild_share"):
+            self._log_waiting_for_pass("bank: waiting for the first guild share pass")
+            return
         names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
@@ -13030,6 +13078,9 @@ class Bridge(discord.Client):
         gold rows, and they count as a reason to walk on their own, because a
         family under the gold float can still have full bags.
         """
+        if not _pass_completed("guild_share"):
+            self._log_waiting_for_pass("guild bank: waiting for the first guild share pass")
+            return
         names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names:
             return
@@ -15491,6 +15542,7 @@ class Bridge(discord.Client):
         while not self.is_closed():
             try:
                 await self._guild_jobs_once()
+                _mark_pass_completed("guild_jobs")
             except Exception:
                 log.exception("guild jobs pass failed; retrying next cycle")
             await self._for_other_families("guild jobs", self._guild_jobs_once)
@@ -16067,6 +16119,9 @@ class Bridge(discord.Client):
 
     async def _town_errand_once(self, cohort=None, _locked=False) -> None:
         """One tick of one family's errand: start it, move it on, or end it."""
+        if not _pass_completed("campaign_queue"):
+            self._log_waiting_for_pass("town errand: waiting for the first queue pass")
+            return
         if not _locked and hasattr(self, "_town_errand_locks"):
             names, _leader = await asyncio.to_thread(_family_of, cohort)
             if not names:
@@ -17637,6 +17692,7 @@ class Bridge(discord.Client):
         composition and which dungeon, and send the row.
         """
         await self.wait_until_ready()
+        await self._guild_run_recovered.wait()
         cycle = float(os.environ.get("GUILD_RUN_CYCLE_SECONDS", "60"))
         said_off = False
         while not self.is_closed():
@@ -17665,6 +17721,9 @@ class Bridge(discord.Client):
             await asyncio.sleep(cycle)
 
     async def _guild_run_once(self) -> None:
+        if not _pass_completed("guild_jobs"):
+            self._log_waiting_for_pass("guild run: waiting for the first guild jobs pass")
+            return
         bounds = guildrun.limits()
         in_flight = await asyncio.to_thread(_guild_runs_in_flight)
         if in_flight >= bounds.max_groups:
@@ -17731,6 +17790,9 @@ class Bridge(discord.Client):
         from the member who says it. The cap, the restart settle and the
         realm-wide spacing are the old coordinator's; the finder row is too.
         """
+        if not _pass_completed("guild_jobs"):
+            self._log_waiting_for_pass("guild social: waiting for the first guild jobs pass")
+            return
         bounds = guildrun.limits()
         gate = await asyncio.to_thread(_guild_run_gate)
         if guildrun.settling(gate["uptime"]):
@@ -17849,6 +17911,7 @@ class Bridge(discord.Client):
         while not self.is_closed():
             try:
                 await self._campaign_queue_once()
+                _mark_pass_completed("campaign_queue")
             except Exception:
                 log.exception("queue: pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
@@ -17920,7 +17983,12 @@ class Bridge(discord.Client):
         # drive_quest independently of `job`, so setting dungeon jobs alone can
         # leave a family travelling toward an unrelated quest. Keep the
         # deliberate no-dungeon fallback questing intact.
-        if key not in _PACE_QUESTING:
+        # Per family: _PACE_QUESTING is filled family by family, so one
+        # family's first pace pass says nothing about another's.
+        if not _pass_completed("dungeon_pace:" + key):
+            self._log_waiting_for_pass(
+                "queue: %s waits for its first dungeon pace pass" % campaignqueue._family(key))
+        elif key not in _PACE_QUESTING:
             cleared = await asyncio.to_thread(_aim_family_quest, key, 0, ())
             if cleared:
                 log.info("queue: %s's dungeon campaign clears %d stale quest "
@@ -18234,6 +18302,7 @@ class Bridge(discord.Client):
             self._pace_said[key] = decision.why
             questing = opened is not None and str(opened.get("decision")) == dungeonpace.QUEST
             await self._pace_quest(key, names, questing)
+            _mark_pass_completed("dungeon_pace:" + key)
             return questing
         by = dungeonpace.chooser(judgment)
         new_id = await asyncio.to_thread(_pace_write, key, rows, decision,
@@ -18242,6 +18311,7 @@ class Bridge(discord.Client):
         log.warning("pace: %s%s", dungeonpace.line(key, decision, by[0]),
                     "; queued as %d" % new_id if new_id else "")
         await self._pace_quest(key, names, decision.kind == dungeonpace.QUEST)
+        _mark_pass_completed("dungeon_pace:" + key)
         return True
 
     async def _leave_town_when_done(self, fams: dict) -> None:
@@ -22661,6 +22731,17 @@ def _hearth_stranded_guild_members() -> int:
         log.info("guild runs: %d member(s) stranded on the other faction's ground or "
                  "left inside a dungeon hearth home (%s)", sent, ", ".join(n for n in due if n not in recent))
     return sent
+
+
+def _guild_run_last_formed_at() -> float | None:
+    """Return the latest persisted run time as a process monotonic timestamp."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT UNIX_TIMESTAMP(MAX(created_at)) AS formed "
+                    "FROM overseer_guild_run")
+        formed = (cur.fetchone() or {}).get("formed")
+    if formed is None:
+        return None
+    return time.monotonic() - max(0.0, time.time() - float(formed))
 
 
 def _guild_run_gate() -> dict:
