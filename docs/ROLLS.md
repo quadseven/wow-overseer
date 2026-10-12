@@ -36,7 +36,7 @@ the realm and its proof line was seen (section 3).
          digest: sha256:<new digest>
 
 5. Render it (`kubectl kustomize production/oke/manifests/wow-dev`), commit, open the infra PR in Chief format
-   (section 5 of the repo's PR rules below), wait for checks, answer every bot thread, then squash merge.
+   (see the appendix), wait for checks, answer every bot thread, then squash merge.
 6. Merging triggers `sync.k8s-manifests`, which applies the wow-dev directory. Wait for
    `kubectl -n wow-dev rollout status deploy/wow-overseer` and confirm the deployment image equals the new digest.
    `wow-map` runs the same image and rolls with it.
