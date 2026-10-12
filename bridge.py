@@ -358,6 +358,8 @@ def _insert_speak(cmd: relay.SpeakCommand) -> int:
 
 
 def _insert_gm(cmd: relay.GmCommand) -> int:
+    # natural-only: Discord GM surface; only operator messages reach this path,
+    # and relay.py's allowlist is the guard.
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO overseer_command (target_name, command, kind, source) "

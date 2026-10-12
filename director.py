@@ -66,6 +66,8 @@ FLY_SPEED = 3.0
 # `chat off` drops the staff badge; `whispers off` stops anyone talking to it;
 # `fly on` lets it hover over anything; `cheat god on` is the belt to GM mode's
 # braces. All names checked against the live `command` table.
+# natural-only: the Watcher is the operator's camera; these commands only
+# queue through bridge._insert_gm, which is operator-only.
 BOOT_COMMANDS = (
     ".gm on",
     ".gm visible off",
