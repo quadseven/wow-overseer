@@ -11,6 +11,7 @@ from tools.metric_watcher import (
     estimate_level_60_date,
 )
 from tools import metric_watcher
+import raidsupply
 
 
 def report(levels, checked_at=1800):
@@ -144,3 +145,69 @@ def test_previous_reads_last_record_when_jsonl_ends_with_newline(tmp_path):
     append_jsonl(path, {"level_snapshot": {"id": "two"}})
 
     assert _previous(path) == {"id": "two"}
+
+
+def test_snapshots_record_each_family_crafters_skills_without_names():
+    payloads = guild_payload()
+    payloads["Cave"]["trainings"] = {
+        "Ugga": {
+            "trades": [
+                {"name": "Alchemy", "value": 39},
+                {"name": "Herbalism", "value": 72},
+            ]
+        },
+        "Grug": {"trades": [{"name": "Mining", "value": 50}]},
+    }
+
+    records = build_metrics(report([20]), payloads)
+
+    assert records["crafters"] == {
+        "Cave": [
+            {
+                "crafter": metric_watcher.crafter_key("Ugga"),
+                "skills": {
+                    "alchemy": 39,
+                    "herbalism": 72,
+                    "tailoring": None,
+                    "leatherworking": None,
+                    "blacksmithing": None,
+                    "engineering": None,
+                    "enchanting": None,
+                },
+            }
+        ]
+    }
+    assert "Ugga" not in json.dumps(records)
+
+
+def test_crafter_key_matches_the_raid_tabs():
+    assert metric_watcher.crafter_key("Ugga") == raidsupply.crafter_key("Ugga")
+
+
+def test_collect_reads_training_for_family_members_only(monkeypatch):
+    requested = []
+
+    def fetch(url):
+        requested.append(url)
+        if url.endswith("/roster"):
+            return {
+                "checked_at": 1800,
+                "members": [
+                    {"name": "Ugga", "guild": "Cave", "family": "Ugga"},
+                    {"name": "Bot", "guild": "Cave", "family": ""},
+                ],
+            }
+        if "/raidteams?" in url:
+            return {"members": {}}
+        if "/training?" in url:
+            return {"trades": [{"name": "Alchemy", "value": 39}]}
+        return {}
+
+    monkeypatch.setattr(metric_watcher.realm_state_audit, "fetch_json", fetch)
+
+    record, _ = collect("https://example.com/api/v2")
+
+    assert [u for u in requested if "/training?" in u] == [
+        "https://example.com/api/v2/training?name=Ugga"
+    ]
+    assert record["crafters"]["Cave"][0]["skills"]["alchemy"] == 39
