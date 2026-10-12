@@ -184,6 +184,93 @@ class _Conn:
 
 
 class TheBridgeWrites(unittest.TestCase):
+    def test_ask_index_is_added_only_when_missing(self):
+        for present, expected in ((True, False), (False, True)):
+            statements = []
+
+            class Cursor:
+                # Defaults bind this iteration's list and flag (ruff B023).
+                def execute(self, sql, args=(), statements=statements):
+                    statements.append(sql)
+
+                def fetchone(self, statements=statements, present=present):
+                    # First lookup is idx_created; second is the proposer column.
+                    return (
+                        {"n": int(present)}
+                        if len(
+                            [
+                                s
+                                for s in statements
+                                if "information_schema.STATISTICS" in s
+                            ]
+                        )
+                        == 1
+                        else {"n": 1}
+                    )
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *exc):
+                    return False
+
+            class Conn:
+                def cursor(self):
+                    return Cursor()
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *exc):
+                    return False
+
+            with (
+                mock.patch.multiple(
+                    bridge,
+                    _connect=lambda: Conn(),
+                ),
+                mock.patch.object(bridge.guildpug, "enabled", return_value=False),
+            ):
+                bridge._ensure_guild_run_store()
+            alters = [s for s in statements if "ADD KEY idx_created" in s]
+            self.assertEqual(bool(alters), expected)
+
+    def test_ask_index_database_error_is_logged_and_swallowed(self):
+        class Cursor:
+            def execute(self, sql, args=()):
+                if "information_schema.STATISTICS" in sql:
+                    raise bridge.pymysql.err.MySQLError("db unavailable")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        class Conn:
+            def cursor(self):
+                return Cursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with (
+            mock.patch.object(
+                bridge.pymysql,
+                "err",
+                types.SimpleNamespace(MySQLError=Exception),
+                create=True,
+            ),
+            mock.patch.multiple(bridge, _connect=lambda: Conn()),
+            mock.patch.object(bridge.guildpug, "enabled", return_value=False),
+            mock.patch.object(bridge.log, "exception") as logged,
+        ):
+            bridge._ensure_guild_run_store()
+        logged.assert_called_once()
+
     def test_the_rows_then_the_lines_from_their_speakers(self):
         sql = []
         said = []

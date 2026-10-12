@@ -151,7 +151,8 @@ ASK_TABLE_SQL = (
     " state ENUM('open','filled','ran','expired','cancelled') NOT NULL"
     " DEFAULT 'open',"
     " run_id INT NULL DEFAULT NULL,"
-    " PRIMARY KEY (id), KEY idx_state (state), KEY idx_guild (guild, created_at),"
+    " PRIMARY KEY (id), KEY idx_state (state), KEY idx_created (created_at),"
+    " KEY idx_guild (guild, created_at),"
     " KEY idx_asker (asker, created_at)"
     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
 )
@@ -175,8 +176,10 @@ ANSWER_TABLE_SQL = (
 ASKS_SQL = (
     "SELECT id, guild, asker, kind, target, target_label, roles_needed, reason, "
     "said, created_at, expires_at, state, run_id FROM overseer_guild_ask "
-    "WHERE state IN ('open', 'filled') OR created_at > NOW() - INTERVAL %s MINUTE "
-    "ORDER BY id"
+    "WHERE state IN ('open', 'filled') UNION "
+    "SELECT id, guild, asker, kind, target, target_label, roles_needed, reason, "
+    "said, created_at, expires_at, state, run_id FROM overseer_guild_ask "
+    "WHERE created_at > NOW() - INTERVAL %s MINUTE ORDER BY id"
 )
 ANSWERS_SQL = (
     "SELECT id, ask_id, member, role, stance, said, state FROM overseer_guild_answer "

@@ -22513,6 +22513,17 @@ def _ensure_guild_run_store() -> None:
             cur.execute(guildsocial.ASK_TABLE_SQL)
             cur.execute(guildsocial.ANSWER_TABLE_SQL)
             cur.execute(
+                "SELECT COUNT(*) AS n FROM information_schema.STATISTICS "
+                "WHERE table_schema = DATABASE() "
+                "  AND table_name = 'overseer_guild_ask' "
+                "  AND index_name = 'idx_created'"
+            )
+            if not (cur.fetchone() or {}).get("n"):
+                cur.execute(
+                    "ALTER TABLE overseer_guild_ask ADD KEY idx_created (created_at)"
+                )
+                log.info("overseer_guild_ask: added idx_created")
+            cur.execute(
                 "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
                 "WHERE TABLE_SCHEMA = DATABASE() "
                 "  AND TABLE_NAME = 'overseer_guild_run' AND COLUMN_NAME = 'proposer'"
