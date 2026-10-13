@@ -2572,6 +2572,7 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
                      wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
         result = bag_pressure.bag_hold_stuck(progress)
     for name in names:
+        # Read by _queue_owns_job: the family key is its leader's name.
         _BAG_HOLD_STUCK[name] = result
     return result
 
