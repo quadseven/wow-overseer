@@ -279,11 +279,12 @@ def hold_blocker(now: dict, now_at: int) -> dict | None:
     held = now.get("for_s")
     if held is not None and held < HOLD_STUCK_SECONDS:
         return None
+    kind = "walk restarts" if nowstatus.RESTART_WAITING in waiting else "hold"
     return {
         "step": doing,
         "blocker": "Waiting for " + waiting + ".",
         "since": (now_at - int(held)) if held is not None and now_at else None,
-        "kind": "hold",
+        "kind": kind,
     }
 
 
@@ -489,10 +490,12 @@ def _build_roster(ctx) -> dict:
 
 
 def roster(_query: dict, ctx) -> tuple[int, dict]:
+    """GET /api/v2/roster: every family-guild member, what each is doing, and who is stuck."""
     return 200, _roster_payload(ctx)
 
 
 def stuck(_query: dict, ctx) -> tuple[int, dict]:
+    """GET /api/v2/stuck: the stuck members only, longest stuck first."""
     return 200, stuck_view(_roster_payload(ctx))
 
 
