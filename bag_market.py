@@ -53,7 +53,7 @@ from dataclasses import dataclass, replace
 import auction
 import bag_pressure
 import classic
-from bag_upgrade import Bag, Member
+from bag_upgrade import Bag, Member, safe_self_equip_spares
 
 AUCTION = "auction"
 VENDOR = "vendor"
@@ -158,11 +158,7 @@ def on_the_way(member: Member, mailed=()) -> int:
     size = smallest_worn(member)
     if size is None:
         return 0
-    sizes = [
-        bag.slots
-        for bag in member.carried
-        if bag.general and bag.used == 0 and bag.slots > size
-    ]
+    sizes = [bag.slots for bag, _target in safe_self_equip_spares(member)]
     sizes.extend(int(slots) for slots in mailed if int(slots) > size)
     return max(sizes, default=0)
 

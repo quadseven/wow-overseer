@@ -592,8 +592,8 @@ RAIDER_COLUMNS = (
 # share reaches GEAR_CONVENTION (raidgear), the worn fire resistance reaches raidsupply's target for the
 # role (200 for the main tank, 120 for another tank, 60 for a healer, none for
 # a damage dealer), and the bags hold the night's supplies raidsupply lists
-# for the role (four Greater Fire Protection Potions and five Major Healing
-# Potions for a tank, and so on). The attunement is shown and does not count:
+# for the role (four fire protection potions, Greater or not, and five Major
+# Healing Potions for a tank, and so on). The attunement is shown and does not count:
 # the Molten Core window admits a raid without it.
 READY = "yes"
 
@@ -644,14 +644,19 @@ def _where(member: dict) -> str:
 def _supplies(raider, held: dict) -> tuple:
     """(carried, wanted) of one night's supplies for one raider: each supply
     counted up to what the night wants of it, so a stack of twenty healing
-    potions does not stand in for a missing flask."""
+    potions does not stand in for a missing flask. A supply that stands in
+    for another (raidsupply #892) is not a want of its own: either fills the
+    one want, as FIRE_PROTECTION counts both fire potions."""
     carried_n = wanted = 0
     for supply in raidsupply.SUPPLIES:
-        want = supply.per_raider(raider) if raider else 0
+        want = supply.per_raider(raider) if raider and not supply.stands_in else 0
         if want <= 0:
             continue
         wanted += want
-        carried_n += min(want, int(held.get(supply.name, 0)))
+        names = [supply.name] + [
+            s.name for s in raidsupply.SUPPLIES if s.stands_in == supply.entry
+        ]
+        carried_n += min(want, sum(int(held.get(n, 0)) for n in names))
     return carried_n, wanted
 
 

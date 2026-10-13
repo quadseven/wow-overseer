@@ -31,6 +31,12 @@ flask. Reagents come from the running worldserver's Spell.dbc (md5
                                     Stratholme
     Smoked Desert Dumplings  24801  Sandworm Meat; most of the guild's cooks
                                     know it
+    Fire Protection Potion    7257  Small Flame Sac, Fadeleaf, Leaded Vial.
+                                    Recipe 6055, Alchemy 165, sold for 15
+                                    silver by Nandar Branson (Alliance,
+                                    Hillsbrad) and Jeeda (Horde, Kalimdor);
+                                    it stands in for the Greater potion
+                                    until a guild crafter knows it (#892)
     Nightfin Soup            13931  Raw Nightfin Snapper, Refreshing Spring
                                     Water. Recipe 13945, Cooking 250, sold by
                                     Gikkix in Tanaris for 2 gold (#778)
@@ -194,7 +200,9 @@ class Make:
     `recipe_item` is the item that teaches the craft, 0 for a trainer recipe;
     `recipe_price` is its vendor price, 0 when no vendor sells it;
     `recipe_skill` is the skill the recipe asks before it can be learned
-    (`item_template.RequiredSkillRank`), 0 when unread.
+    (`item_template.RequiredSkillRank`), 0 when unread. `recipe_vendors` are
+    the RecipeVendors that sell the recipe, one per side; when named, a
+    crafter buys only from its own side's, on the map it stands on.
     """
 
     spell: int
@@ -204,6 +212,21 @@ class Make:
     recipe_item: int = 0
     recipe_price: int = 0
     recipe_skill: int = 0
+    recipe_vendors: tuple = ()
+
+
+@dataclass(frozen=True)
+class RecipeVendor:
+    """A vendor that sells a recipe, and the side it serves (auction.team_of).
+
+    The module walks only to a vendor whose faction will deal with the
+    character, so a crafter of the other side would be refused at the counter.
+    """
+
+    team: str
+    name: str
+    map_id: int
+    where: str
 
 
 @dataclass(frozen=True)
@@ -251,6 +274,9 @@ class Supply:
     make: Make | None = None
     source: str = ""
     quest: QuestSource | None = None
+    # The supply whose want this one fills while no guild crafter knows that
+    # supply's craft and nobody carries its recipe (#892); 0 for none.
+    stands_in: int = 0
 
     def per_raider(self, raider: Raider) -> int:
         count = dict(zip(ROLE_ORDER, self.per_role)).get(raider.role, 0)
@@ -260,6 +286,8 @@ class Supply:
 
 
 CRYSTAL_VIAL = (8925, 1, 2500)
+LEADED_VIAL = (3372, 1, 200)
+SMALL_FLAME_SAC, FADELEAF = 4402, 3818
 SPRING_WATER = (159, 1, 25)
 RAW_NIGHTFIN_SNAPPER = 13759
 ELEMENTAL_FIRE, DREAMFOIL, GOLDEN_SANSAM = 7068, 13463, 13464
@@ -267,6 +295,11 @@ MOUNTAIN_SILVERSAGE, PLAGUEBLOOM, ICECAP = 13465, 13466, 13467
 BLACK_LOTUS, GROMSBLOOD, STONESCALE_OIL = 13468, 8846, 13423
 SANDWORM_MEAT, BOLT_OF_RUNECLOTH, DREAM_DUST, RUNE_THREAD = 20424, 14048, 11176, 14341
 GREATER_FIRE_PROTECTION, MAJOR_HEALING, MAJOR_MANA = 13457, 13446, 13444
+FIRE_PROTECTION = 6049
+FIRE_PROTECTION_RECIPE = 6055
+# Either fire potion is the night's fire protection (raidready.FIRE_PROTECTION).
+FIRE_PER_ROLE = (4, 2, 2, 2)
+EASTERN_KINGDOMS, KALIMDOR = 0, 1
 MANA_FOR_PHYSICAL = 2
 
 # THE NIGHT, per raider, in the order the heuristic works it: the fire potion
@@ -276,7 +309,7 @@ SUPPLIES = (
     Supply(
         GREATER_FIRE_PROTECTION,
         "Greater Fire Protection Potion",
-        (4, 2, 2, 2),
+        FIRE_PER_ROLE,
         Make(
             17574,
             ALCHEMY,
@@ -287,6 +320,38 @@ SUPPLIES = (
         "Recipe 13494: no trainer and no vendor; it drops from Firebrand "
         "Invokers and Pyromancers in Lower Blackrock Spire (about 4 percent) "
         "and from a world-drop table, else the auction house",
+    ),
+    # THE VENDOR RECIPE STANDS IN FOR THE DROP (#892). Neither guild has an
+    # alchemist at the Greater recipe's 290, and the recipe drops about 4
+    # percent of the time in Lower Blackrock Spire, so until a guild crafter
+    # knows spell 17574 the night's fire protection want is this potion's.
+    # Spell 7257's reagents are classic's Spell.dbc entry, not yet checked
+    # against the running worldserver's; the recipe, its 15 silver, its Alchemy
+    # 165 and its two vendors as #892 read them from `item_template` and
+    # `npc_vendor`; the Leaded Vial's price is the one craft_supply.py read.
+    Supply(
+        FIRE_PROTECTION,
+        "Fire Protection Potion",
+        FIRE_PER_ROLE,
+        Make(
+            7257,
+            ALCHEMY,
+            ((SMALL_FLAME_SAC, 1), (FADELEAF, 1)),
+            (LEADED_VIAL,),
+            FIRE_PROTECTION_RECIPE,
+            1500,
+            165,
+            (
+                RecipeVendor(
+                    "alliance", "Nandar Branson", EASTERN_KINGDOMS, "Hillsbrad"
+                ),
+                RecipeVendor("horde", "Jeeda", KALIMDOR, "Kalimdor"),
+            ),
+        ),
+        "Recipe 6055 is sold for 15 silver by Nandar Branson (Alliance, "
+        "Hillsbrad) and Jeeda (Horde, Kalimdor) and asks Alchemy 165; it "
+        "stands in for the Greater potion until a guild crafter knows that",
+        stands_in=GREATER_FIRE_PROTECTION,
     ),
     Supply(
         MAJOR_HEALING,
@@ -427,6 +492,8 @@ SUPPLIES = (
     ),
 )
 SUPPLY_BY_ENTRY = {s.entry: s for s in SUPPLIES}
+# The fire potion lines; the night wants one of them, and the fire gear after it.
+FIRE_POTIONS = frozenset({GREATER_FIRE_PROTECTION, FIRE_PROTECTION})
 
 # ---------------------------------------------------------------------------
 # FIRE RESISTANCE, PER ROLE. The Ragnaros tank first, as classic guilds asked
@@ -524,10 +591,37 @@ class FireLine:
         return max(0, self.target - self.raider.fire)
 
 
-def night_wants(raiders) -> dict:
-    """entry -> {raider name: count} for one night, only counts above zero."""
+def standing_in(knowers, carriers=None) -> frozenset:
+    """The stand-in supplies in force: those whose `stands_in` supply no guild
+    crafter knows and whose recipe nobody carries (#892)."""
+    out = set()
+    for supply in SUPPLIES:
+        if not supply.stands_in:
+            continue
+        make = SUPPLY_BY_ENTRY[supply.stands_in].make
+        if not (knowers or {}).get(make.spell) and not (carriers or {}).get(
+            make.recipe_item
+        ):
+            out.add(supply.entry)
+    return frozenset(out)
+
+
+def _wanted(supply, standing) -> bool:
+    if supply.stands_in:
+        return supply.entry in standing
+    return not any(SUPPLY_BY_ENTRY[e].stands_in == supply.entry for e in standing)
+
+
+def night_wants(raiders, standing=frozenset()) -> dict:
+    """entry -> {raider name: count} for one night, only counts above zero.
+
+    `standing` are the stand-in supplies in force (`standing_in`): each takes
+    the want of the supply it stands in for, which then wants nothing.
+    """
     out = {}
     for supply in SUPPLIES:
+        if not _wanted(supply, standing):
+            continue
         for raider in raiders or ():
             n = supply.per_raider(raider)
             if n > 0:
@@ -574,7 +668,7 @@ def supply_lines(raiders, have, knowers, carriers=None, vendor_recipes=()) -> li
     carrying one; `vendor_recipes` are recipe items a vendor on some crafter's
     map sells.
     """
-    wants = night_wants(raiders)
+    wants = night_wants(raiders, standing_in(knowers, carriers))
     lines = []
     for supply in SUPPLIES:
         want = sum((wants.get(supply.entry) or {}).values())
@@ -661,7 +755,7 @@ def options(lines, fire, gear_wanted) -> list:
                     % (verb, line.short, line.name, line.have, line.want),
                 )
             )
-        if line.entry == GREATER_FIRE_PROTECTION:
+        if line.entry in FIRE_POTIONS:
             for gear in gear_wanted:
                 short = [
                     f.raider.name
@@ -953,6 +1047,12 @@ def _buy_step(member, entry, count, price, what, cap):
     )
 
 
+def own_recipe_vendor(make, member):
+    """The RecipeVendor of the member's own side, or None (an unread race)."""
+    team = auction.team_of(member.race)
+    return next((v for v in make.recipe_vendors if team and v.team == team), None)
+
+
 def craft_step(crafter, make, name, want, vendors, cap):
     """The crafter's own step toward `want` more of this make, or None."""
     if make.spell not in crafter.known:
@@ -978,14 +1078,22 @@ def craft_step(crafter, make, name, want, vendors, cap):
             and make.recipe_item in vendors
             and crafter.skill(make.skill)[0] >= make.recipe_skill
         ):
-            return _buy_step(
-                crafter,
-                make.recipe_item,
-                1,
-                make.recipe_price,
-                "the %s recipe" % name,
-                cap,
-            )
+            if not make.recipe_vendors:
+                return _buy_step(
+                    crafter,
+                    make.recipe_item,
+                    1,
+                    make.recipe_price,
+                    "the %s recipe" % name,
+                    cap,
+                )
+            seller = own_recipe_vendor(make, crafter)
+            if seller is not None and seller.map_id == crafter.map_id:
+                return replace(
+                    _buy_step(crafter, make.recipe_item, 1, make.recipe_price, "", cap),
+                    said="raid supply: %s: %s buys Recipe: %s from %s in %s"
+                    % (crafter.guild, crafter.name, name, seller.name, seller.where),
+                )
         return None
     n = min(_can_make(crafter, make), CRAFT_BATCH, max(1, int(want)))
     if n > 0:
@@ -1211,10 +1319,10 @@ def _makes():
     return [s.make for s in SUPPLIES if s.make] + [g.make for g in FIRE_GEAR]
 
 
-def _recipients(entry, raiders, members_by_name) -> list:
+def _recipients(entry, raiders, members_by_name, standing=frozenset()) -> list:
     """(name, gap) for raiders still short of `entry`: the main tank, then
     tanks, healers and the rest, the biggest gap first inside each."""
-    wants = night_wants(raiders).get(entry) or {}
+    wants = night_wants(raiders, standing).get(entry) or {}
     order = {TANK: 0, HEALER: 1, PHYSICAL: 2, CASTER: 3}
     short = []
     for r in raiders:
@@ -1315,12 +1423,15 @@ REAGENT_NAMES = {
     SANDWORM_MEAT: "Sandworm Meat",
     BOLT_OF_RUNECLOTH: "Bolt of Runecloth",
     DREAM_DUST: "Dream Dust",
+    SMALL_FLAME_SAC: "Small Flame Sac",
+    FADELEAF: "Fadeleaf",
 }
 
 
 # What a vendor reagent is called in the step's sentence.
 VENDOR_NAMES = {
     CRYSTAL_VIAL[0]: "vials",
+    LEADED_VIAL[0]: "vials",
     RUNE_THREAD: "thread",
     SPRING_WATER[0]: "spring water",
 }
@@ -1337,6 +1448,20 @@ def _why_not(crafter, make, name, members) -> str:
             make.recipe_skill,
             name,
         )
+    if make.spell not in crafter.known and make.recipe_vendors:
+        seller = own_recipe_vendor(make, crafter)
+        if seller is None:
+            return "%s's side is not read, so no vendor of the %s recipe is named" % (
+                crafter.name,
+                name,
+            )
+        if seller.map_id != crafter.map_id:
+            return "%s buys the %s recipe from %s in %s, on another continent" % (
+                crafter.name,
+                name,
+                seller.name,
+                seller.where,
+            )
     if make.spell not in crafter.known:
         return "%s does not know %s and carries no recipe for it" % (crafter.name, name)
     missing = [
@@ -1359,7 +1484,9 @@ def _why_not(crafter, make, name, members) -> str:
     )
 
 
-def handout_steps(lines, facts, by_name, busy, recent, cap, room) -> list:
+def handout_steps(
+    lines, facts, by_name, busy, recent, cap, room, standing=frozenset()
+) -> list:
     """Stacks a guild member off the raid and off the family already carries,
     posted to the raider who needs them most: stock is routed before more is
     made. One step per supply, at most `room`."""
@@ -1374,7 +1501,7 @@ def handout_steps(lines, facts, by_name, busy, recent, cap, room) -> list:
         recipients = (
             _gear_recipients(gear, facts.raiders, by_name)
             if gear
-            else _recipients(entry, facts.raiders, by_name)
+            else _recipients(entry, facts.raiders, by_name, standing)
         )
         if not recipients:
             continue
@@ -1441,6 +1568,7 @@ def plan_guild(
         else frozenset()
     )
     lines = supply_lines(facts.raiders, have, knowers, carriers, vendor_recipes)
+    standing = standing_in(knowers, carriers)
     fire = fire_lines(facts.raiders)
     steps, notes = [], []
 
@@ -1464,7 +1592,14 @@ def plan_guild(
 
     steps.extend(
         handout_steps(
-            lines, facts, by_name, busy, recent, cap, STEPS_PER_GUILD - len(steps)
+            lines,
+            facts,
+            by_name,
+            busy,
+            recent,
+            cap,
+            STEPS_PER_GUILD - len(steps),
+            standing,
         )
     )
 
@@ -1473,7 +1608,7 @@ def plan_guild(
         supply = SUPPLY_BY_ENTRY[line.entry]
         if line.short and supply.make is not None and line.route != BUY:
             work.append((option_for(line), supply.make, supply.name, supply.entry))
-        if line.entry == GREATER_FIRE_PROTECTION:
+        if line.entry in FIRE_POTIONS:
             for gear in FIRE_GEAR:
                 work.append((option_for(gear), gear.make, gear.name, gear.entry))
     work = _focused(work, focus, key=lambda w: w[0])
@@ -1485,7 +1620,7 @@ def plan_guild(
         recipients = (
             _gear_recipients(gear, facts.raiders, by_name)
             if gear
-            else _recipients(entry, facts.raiders, by_name)
+            else _recipients(entry, facts.raiders, by_name, standing)
         )
         if not recipients:
             continue

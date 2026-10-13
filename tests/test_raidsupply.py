@@ -147,8 +147,8 @@ class TheNightsTargets(unittest.TestCase):
 class HowEachSupplyCloses(unittest.TestCase):
     def test_a_recipe_nobody_knows_and_no_vendor_sells_is_bought(self):
         lines = {line.entry: line for line in rs.supply_lines(RAIDERS, {}, {})}
-        self.assertEqual(lines[rs.GREATER_FIRE_PROTECTION].route, rs.BUY)
-        self.assertIn("Lower Blackrock Spire", lines[rs.GREATER_FIRE_PROTECTION].said)
+        self.assertEqual(lines[rs.FIRE_PROTECTION].route, rs.BUY)
+        self.assertIn("Nandar Branson", lines[rs.FIRE_PROTECTION].said)
         # Juju Power is a quest's reward (#778), never the auction house's.
         self.assertEqual(lines[12451].route, rs.QUEST)
 
@@ -447,11 +447,11 @@ class TheBudget(unittest.TestCase):
         plan = rs.plan_guild(facts([*raider_members()]), {}, set())
         needs = rs.market_needs(plan, "Grug")
         entries = [n.entry for n in needs]
-        self.assertEqual(entries[:2], [rs.GREATER_FIRE_PROTECTION, FIRE_RECIPE])
+        self.assertEqual(entries[:2], [rs.FIRE_PROTECTION, rs.FIRE_PROTECTION_RECIPE])
         self.assertTrue(all(n.shopper == "Grug" for n in needs))
         listings = [
-            auction.Listing(1, rs.GREATER_FIRE_PROTECTION, "GFPP", 5, 25_000, 2),
-            auction.Listing(2, rs.GREATER_FIRE_PROTECTION, "GFPP", 5, 20_000, 2),
+            auction.Listing(1, rs.FIRE_PROTECTION, "FPP", 5, 25_000, 2),
+            auction.Listing(2, rs.FIRE_PROTECTION, "FPP", 5, 20_000, 2),
             auction.Listing(3, 12451, "Juju Power", 1, 90_000, 2),
         ]
         # The Juju Power listing is not bought: it is a quest reward (#778).
@@ -630,6 +630,134 @@ class TheJujusAndTheSoupHaveNaturalRoads(unittest.TestCase):
         self.assertIn("spring water", step.said)
 
 
+GREATER_FIRE_SPELL = 17574
+HUMAN, ORC = 1, 2
+
+
+def test_fire_protection_potion_fills_the_want_until_the_greater_recipe_is_known():
+    """#892: neither guild is near the Greater recipe's drop, so the vendor
+    recipe's Fire Protection Potion takes the night's fire protection want
+    until a guild crafter knows Greater Fire Protection."""
+    fire_want = sum(rs.night_wants(RAIDERS)[rs.GREATER_FIRE_PROTECTION].values())
+    unknown = {line.entry: line for line in rs.supply_lines(RAIDERS, {}, {})}
+    assert rs.GREATER_FIRE_PROTECTION not in unknown
+    assert unknown[rs.FIRE_PROTECTION].want == fire_want
+    known = {
+        line.entry: line
+        for line in rs.supply_lines(RAIDERS, {}, {GREATER_FIRE_SPELL: ["Oden"]})
+    }
+    assert rs.FIRE_PROTECTION not in known
+    assert known[rs.GREATER_FIRE_PROTECTION].want == fire_want
+    assert known[rs.GREATER_FIRE_PROTECTION].route == rs.MAKE
+
+
+class TheFireProtectionPotionStandsIn(unittest.TestCase):
+    """#892: Recipe 6055 is sold by Nandar Branson to the Alliance and by
+    Jeeda to the Horde, and asks Alchemy 165."""
+
+    def plan(self, value, race, map_id, vendors):
+        oden = alchemist(
+            skills={gc.ALCHEMY: (value, 225)},
+            race=race,
+            map_id=map_id,
+            known=frozenset(),
+        )
+        return rs.plan_guild(
+            facts([oden, *raider_members()], vendors=vendors), {}, set()
+        )
+
+    def test_fire_protection_potion_fills_the_want_until_the_greater_recipe_is_known(
+        self,
+    ):
+        test_fire_protection_potion_fills_the_want_until_the_greater_recipe_is_known()
+
+    def test_the_potion_is_made_from_the_vendor_recipe(self):
+        make = rs.SUPPLY_BY_ENTRY[rs.FIRE_PROTECTION].make
+        self.assertEqual(7257, make.spell)
+        self.assertEqual(gc.ALCHEMY, make.skill)
+        self.assertEqual(((4402, 1), (3818, 1)), make.reagents)  # flame sac, Fadeleaf
+        self.assertEqual(((3372, 1, 200),), make.vendor)  # Leaded Vial
+        self.assertEqual(
+            (6055, 1500, 165),
+            (make.recipe_item, make.recipe_price, make.recipe_skill),
+        )
+        line = {
+            line.entry: line
+            for line in rs.supply_lines(RAIDERS, {}, {}, vendor_recipes={6055})
+        }[rs.FIRE_PROTECTION]
+        self.assertEqual(rs.VENDOR_RECIPE, line.route)
+
+    def test_a_carried_greater_recipe_ends_the_stand_in(self):
+        lines = {
+            line.entry: line
+            for line in rs.supply_lines(RAIDERS, {}, {}, {FIRE_RECIPE: ["Oden"]})
+        }
+        self.assertNotIn(rs.FIRE_PROTECTION, lines)
+        self.assertEqual(rs.LEARN, lines[rs.GREATER_FIRE_PROTECTION].route)
+
+    def test_an_alliance_alchemist_buys_it_from_nandar_branson(self):
+        plan = self.plan(165, HUMAN, 0, {0: frozenset({6055})})
+        step = next(s for s in plan.steps if s.holder == "Oden")
+        self.assertEqual("buy", step.action)
+        self.assertTrue(step.rows[0].command.startswith("entry:6055 count:1 max:1875"))
+        self.assertEqual(
+            "walk-to-vendor item:6055", step.walk.command.split(" cap:")[0]
+        )
+        self.assertTrue(
+            step.said.startswith(
+                "raid supply: Cave: Oden buys Recipe: Fire Protection Potion "
+                "from Nandar Branson"
+            ),
+            step.said,
+        )
+
+    def test_a_horde_alchemist_buys_it_from_jeeda(self):
+        plan = self.plan(200, ORC, 1, {1: frozenset({6055})})
+        step = next(s for s in plan.steps if s.holder == "Oden")
+        self.assertIn("from Jeeda", step.said)
+
+    def test_the_other_sides_vendor_is_never_named(self):
+        plan = self.plan(200, HUMAN, 1, {1: frozenset({6055})})
+        self.assertFalse([s for s in plan.steps if s.holder == "Oden"])
+        self.assertIn(
+            "Oden buys the Fire Protection Potion recipe from Nandar Branson in "
+            "Hillsbrad, on another continent",
+            plan.notes,
+        )
+
+    def test_an_unread_side_buys_nothing(self):
+        plan = self.plan(200, 0, 0, {0: frozenset({6055})})
+        self.assertFalse([s for s in plan.steps if s.holder == "Oden"])
+
+    def test_below_165_it_buys_no_recipe(self):
+        plan = self.plan(164, HUMAN, 0, {0: frozenset({6055})})
+        self.assertFalse([s for s in plan.steps if s.holder == "Oden"])
+        self.assertIn(
+            "Oden has alchemy 164 of the 165 the Fire Protection Potion recipe asks",
+            plan.notes,
+        )
+
+    def test_the_fire_gear_still_follows_the_fire_potion(self):
+        plan = rs.plan_guild(facts([*raider_members()]), {}, set())
+        opts = [o for o, _ in rs.options(plan.lines, plan.fire, rs.FIRE_GEAR)]
+        self.assertEqual(opts.index("fire:14132"), opts.index("buy:6049") + 1)
+
+    def test_either_fire_potion_fills_the_raiders_one_want(self):
+        grug = RAIDERS[0]
+        _, wanted = raidready._supplies(grug, {})
+        mixed = {"Greater Fire Protection Potion": 3, "Fire Protection Potion": 3}
+        self.assertEqual((4, wanted), raidready._supplies(grug, mixed))
+        lesser = {"Fire Protection Potion": 4}
+        self.assertEqual((4, wanted), raidready._supplies(grug, lesser))
+
+    def test_the_corps_reads_each_members_race(self):
+        self.assertIn("c.race", BRIDGE.split("_CORPS_MEMBERS_SQL = (", 1)[1][:200])
+        row = {"guild_name": "Cave", "guid": 1, "name": "Oden", "race": ORC}
+        self.assertEqual(
+            ORC, gc.members_from_rows([row], (), (), (), (), (), (), ())[0].race
+        )
+
+
 class FakeClient:
     def __init__(self, choice, confidence):
         self.choice, self.confidence = choice, confidence
@@ -657,9 +785,7 @@ class JevPicksWhatComesNext(unittest.TestCase):
         )
 
     def test_the_heuristic_puts_the_fire_potion_first(self):
-        self.assertEqual(
-            rs.heuristic_focus(self.opts), "buy:%d" % rs.GREATER_FIRE_PROTECTION
-        )
+        self.assertEqual(rs.heuristic_focus(self.opts), "buy:%d" % rs.FIRE_PROTECTION)
         self.assertIn("fire:14132", [o for o, _ in self.opts])
 
     def test_act_is_the_default_and_a_sure_answer_acts(self):
@@ -757,7 +883,7 @@ class TheRaidTab(unittest.TestCase):
         rows = {row["entry"]: row for row in card["supplies"]}
         self.assertEqual(rows[rs.MAJOR_HEALING]["cells"][2], "25")
         self.assertEqual(rows[rs.MAJOR_HEALING]["route"], rs.MAKE)
-        self.assertEqual(rows[rs.GREATER_FIRE_PROTECTION]["route"], rs.BUY)
+        self.assertEqual(rows[rs.FIRE_PROTECTION]["route"], rs.BUY)
         self.assertEqual(card["fire"][0]["cells"][:3], ["Grug", "main tank", "200"])
         self.assertIn("804 gold", card["budget_line"])
         self.assertIn("80 gold a day", card["budget_line"])
@@ -976,9 +1102,7 @@ class TheBridgePassRuns(unittest.TestCase):
         self.assertIn("Cave", me._raid_supply_said)
 
     def test_the_master_withdraws_at_the_vault_and_buys_at_the_counter(self):
-        listings = [
-            auction.Listing(11, rs.GREATER_FIRE_PROTECTION, "GFPP", 5, 20_000, 2)
-        ]
+        listings = [auction.Listing(11, rs.FIRE_PROTECTION, "FPP", 5, 20_000, 2)]
         world, log, _ = self.run_pass(listings=listings)
         self.assertEqual(
             world["rows"], [("Grug", "bank withdraw 20000", rs.WITHDRAW_SOURCE)]
@@ -988,9 +1112,7 @@ class TheBridgePassRuns(unittest.TestCase):
         self.assertTrue(any("no unspent raid budget" in line for line in log.lines))
 
     def test_away_from_the_vault_nothing_is_withdrawn(self):
-        listings = [
-            auction.Listing(11, rs.GREATER_FIRE_PROTECTION, "GFPP", 5, 20_000, 2)
-        ]
+        listings = [auction.Listing(11, rs.FIRE_PROTECTION, "FPP", 5, 20_000, 2)]
         world, log, _ = self.run_pass(at_vault=False, listings=listings)
         self.assertFalse(world["rows"])
         self.assertTrue(any("is not at a vault" in line for line in log.lines))
