@@ -43,6 +43,12 @@ class Pass:
             _guild_walk_cap=lambda: 0,
             _start_quester_step=self._start,
         )
+        for method in ("_quester_ledger", "_quester_start"):
+            setattr(
+                self.self,
+                method,
+                types.MethodType(getattr(bridge.Bridge, method), self.self),
+            )
 
     def _start(self, step, cap):
         # The step runs and ends before the next pass.

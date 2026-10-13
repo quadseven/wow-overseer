@@ -13792,42 +13792,52 @@ class Bridge(discord.Client):
                 q for (who, q), state in ledger.items() if who == m.name and state == "broken")
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
                                  self._quester_last.get(m.name, 0))
-            for b in plan.broken:
-                if b.quest not in held:
-                    log.info("questers: %s found %s (quest %d) broken: %s",
-                             m.name, b.title or b.quest, b.quest, b.reason)
-                held.setdefault(b.quest, b.ledger_reason)
-            for qid, reason in sorted(held.items()):
-                if ledger.get((m.name, qid)) == "broken" or mono < self._quester_unledgered:
-                    continue
-                found = next((b for b in plan.broken if b.quest == qid), None)
-                if not await asyncio.to_thread(_record_quest_broken, found or questers.Broken(
-                        m.name, qid, "", reason, held=qid in m.quest_log)):
-                    # No ledger yet (#923): asked again in an hour, not every pass.
-                    self._quester_unledgered = mono + 3600
-            if m.name in self._job_steps or plan.move is None:
-                log.info("questers: %s", plan.line if m.name not in self._job_steps
-                         else "%s is on a step" % m.name)
-                continue
-            self._quester_last[m.name] = int(plan.move.quest)
-            step = questers.step_for(
-                m, plan.move, cap, cat.quest(plan.move.quest),
-                hunt=hunt_verb and hunts_left > 0,
-                item_form=mono >= getattr(self, "_class_hunt_itemless_until", 0.0))
-            if step is not None and any(classhunt.is_hunt_row(r.command) for r in step.rows):
+            await self._quester_ledger(m, plan, held, ledger, mono)
+            if self._quester_start(m, plan, cat, cap, mono, hunt_verb and hunts_left > 0):
                 hunts_left -= 1
-            if step is None:
-                log.info("questers: %s", plan.line)
-                continue
-            self._job_steps[m.name] = mono
-            self._start_quester_step(step, cap)
-        for guild in raidteams.QUESTERS:
-            party = sorted(raidteams.quester_names(guild) & {m.name for m in members})
-            if len(party) > 1:
-                await asyncio.to_thread(_share_family_quests, party, 0,
-                                        "questers (%s): " % guild)
+        await asyncio.to_thread(_share_quester_quests, {m.name for m in members})
         await asyncio.to_thread(_quester_memos_write, self._quester_clock,
                                 self._quester_broken, now)
+
+    async def _quester_ledger(self, m, plan, held: dict, ledger: dict, mono: float) -> None:
+        """Hold what this pass found broken in `held` (the bridge memo's quest
+        id -> reason for this quester), and write each held quest the ledger
+        does not say is broken into the ledger."""
+        for b in plan.broken:
+            if b.quest not in held:
+                log.info("questers: %s found %s (quest %d) broken: %s",
+                         m.name, b.title or b.quest, b.quest, b.reason)
+            held.setdefault(b.quest, b.ledger_reason)
+        for qid, reason in sorted(held.items()):
+            if ledger.get((m.name, qid)) == "broken" or mono < self._quester_unledgered:
+                continue
+            found = next((b for b in plan.broken if b.quest == qid), None)
+            if not await asyncio.to_thread(_record_quest_broken, found or questers.Broken(
+                    m.name, qid, "", reason, held=qid in m.quest_log)):
+                # No ledger yet (#923): asked again in an hour, not every pass.
+                self._quester_unledgered = mono + 3600
+
+    def _quester_start(self, m, plan, cat, cap: float, mono: float, hunt: bool) -> bool:
+        """Start the quester's move as a step, unless it is on one already or
+        has none; True when the step holds a hunt row (one of QUESTER_HUNTS)."""
+        if m.name in self._job_steps or plan.move is None:
+            log.info("questers: %s", plan.line if m.name not in self._job_steps
+                     else "%s is on a step" % m.name)
+            return False
+        self._quester_last[m.name] = int(plan.move.quest)
+        step = questers.step_for(
+            m, plan.move, cap, cat.quest(plan.move.quest), hunt=hunt,
+            item_form=mono >= getattr(self, "_class_hunt_itemless_until", 0.0))
+        if step is None:
+            log.info("questers: %s", plan.line)
+            return False
+        # The marker first, as _start_guild_job_steps does. There is no race:
+        # nothing between here and create_task awaits, and the task does not
+        # run until this pass next awaits, so the step's own finally
+        # (_run_job_step) always clears a marker that is already there.
+        self._job_steps[m.name] = mono
+        self._start_quester_step(step, cap)
+        return any(classhunt.is_hunt_row(r.command) for r in step.rows)
 
     def _start_quester_step(self, step, cap: float) -> None:
         """Run a quester's step as a guild job step, held like the others."""
@@ -29461,6 +29471,15 @@ def _fetch_quester_facts(names: list) -> tuple:
     members = questers.members_from_rows(rows, log_rows, done_rows)
     states = {(str(r["name"]), int(r["quest"])): str(r.get("state") or "") for r in ledger}
     return members, questers.attempts(recent), states, hunts
+
+
+def _share_quester_quests(names: set) -> None:
+    """Share quests among each guild's questers on the realm, as the family's
+    are shared (questshare)."""
+    for guild in raidteams.QUESTERS:
+        party = sorted(raidteams.quester_names(guild) & set(names))
+        if len(party) > 1:
+            _share_family_quests(party, 0, "questers (%s): " % guild)
 
 
 def _record_quest_broken(broken) -> bool:

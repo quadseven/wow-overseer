@@ -164,9 +164,10 @@ _PROVIDED = "q.StartItem AS provided0, " + "".join(
 # Every quest with a zone, of the classic level range, that a five may reach.
 # The world's quests, the same columns classquest.QUESTS_SQL reads and the
 # quest's own level, zone and type. Built from this module's integer constants
-# only (S608 does not apply).
-QUESTS_SQL = (  # noqa: S608
-    "SELECT q.ID AS id, q.LogTitle AS title, q.QuestSortID AS sort, "
+# only, no outside value (S608 does not apply; ruff reports it on the first
+# string, so the noqa sits there).
+QUESTS_SQL = (
+    "SELECT q.ID AS id, q.LogTitle AS title, q.QuestSortID AS sort, "  # noqa: S608
     "q.QuestSortID AS zone, q.QuestLevel AS level, q.QuestInfoID AS info, "
     "q.MinLevel AS min_level, q.AllowableRaces AS races, "
     "COALESCE(a.AllowableClasses, 0) AS classes, "
@@ -190,9 +191,11 @@ QUESTS_SQL = (  # noqa: S608
 
 # What starts each quest besides a spawned creature (classquest.STARTERS_SQL),
 # and every creature named as a giver whether it is spawned or not, so a giver
-# that is named and not in the world is told from a quest nothing gives.
+# that is named and not in the world is told from a quest nothing gives. Two
+# constant strings joined; `{quests}` is filled with integer ids only
+# (bridge._quester_catalogue), so S608 does not apply.
 STARTERS_SQL = (
-    classquest.STARTERS_SQL + " UNION ALL "
+    classquest.STARTERS_SQL + " UNION ALL "  # noqa: S608
     "SELECT s.quest, 'creature', s.id FROM acore_world.creature_queststarter s "
     "WHERE s.quest IN ({quests})"
 )
@@ -246,6 +249,24 @@ def members_from_rows(rows, log_rows, rewarded_rows) -> list:
     """Member rows from MEMBERS_SQL's, LOG_SQL's and REWARDED_SQL's rows. The
     position and zone come from a fresh snapshot only, so a walk is never judged
     from an old one; with none the quester is offline or unplaced."""
+    log_by, progress_by, done_by = _logs_by_guid(log_rows, rewarded_rows)
+    out = []
+    for r in rows or ():
+        guid = _int(r.get("guid"))
+        out.append(
+            _member_from_row(
+                r,
+                log_by.get(guid, {}),
+                frozenset(done_by.get(guid, ())),
+                progress_by.get(guid, {}),
+            )
+        )
+    return out
+
+
+def _logs_by_guid(log_rows, rewarded_rows) -> tuple:
+    """(guid -> {quest: status}, guid -> {quest: progress}, guid -> {quests
+    rewarded}) from LOG_SQL's and REWARDED_SQL's rows."""
     log_by, progress_by, done_by = {}, {}, {}
     for r in log_rows or ():
         guid, qid = _int(r.get("guid")), _int(r.get("quest"))
@@ -253,34 +274,35 @@ def members_from_rows(rows, log_rows, rewarded_rows) -> list:
         progress_by.setdefault(guid, {})[qid] = _int(r.get("progress"))
     for r in rewarded_rows or ():
         done_by.setdefault(_int(r.get("guid")), set()).add(_int(r.get("quest")))
-    out = []
-    for r in rows or ():
-        guid = _int(r.get("guid"))
-        fresh = r.get("pos_x") is not None and r.get("pos_y") is not None
-        health = r.get("health")
-        alive = (
-            health is None
-            or _int(health) > 1
-            or (_int(health) == 1 and not r.get("has_corpse"))
-        )
-        out.append(
-            Member(
-                name=str(r.get("name") or ""),
-                level=_int(r.get("level")),
-                race=_int(r.get("race")),
-                class_id=_int(r.get("class_id")),
-                map_id=_int(r.get("map_id")) if r.get("map_id") is not None else None,
-                x=float(r["pos_x"]) if fresh else None,
-                y=float(r["pos_y"]) if fresh else None,
-                zone_id=_int(r.get("zone_id") if fresh else r.get("saved_zone")),
-                online=bool(_int(r.get("online"))) and fresh,
-                alive=alive,
-                quest_log=log_by.get(guid, {}),
-                quests_done=frozenset(done_by.get(guid, ())),
-                quest_progress=progress_by.get(guid, {}),
-            )
-        )
-    return out
+    return log_by, progress_by, done_by
+
+
+def _alive(row) -> bool:
+    """Alive with no health read, above 1, or at 1 with no corpse (a ghost has one)."""
+    health = row.get("health")
+    if health is None:
+        return True
+    return _int(health) > 1 or (_int(health) == 1 and not row.get("has_corpse"))
+
+
+def _member_from_row(r, quest_log, quests_done, quest_progress):
+    fresh = r.get("pos_x") is not None and r.get("pos_y") is not None
+    map_id = r.get("map_id")
+    return Member(
+        name=str(r.get("name") or ""),
+        level=_int(r.get("level")),
+        race=_int(r.get("race")),
+        class_id=_int(r.get("class_id")),
+        map_id=_int(map_id) if map_id is not None else None,
+        x=float(r["pos_x"]) if fresh else None,
+        y=float(r["pos_y"]) if fresh else None,
+        zone_id=_int(r.get("zone_id") if fresh else r.get("saved_zone")),
+        online=bool(_int(r.get("online"))) and fresh,
+        alive=_alive(r),
+        quest_log=quest_log,
+        quests_done=quests_done,
+        quest_progress=quest_progress,
+    )
 
 
 def zone_of(zone_id) -> int:
@@ -345,20 +367,9 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
     book = classquest.build(
         rows, giver_rows, spawn_rows, loot_rows, start_rows=start_rows, every=True
     )
-    named = {
-        _int(r.get("quest"))
-        for r in start_rows or ()
-        if str(r.get("kind") or "") == "creature"
-    }
-    npc_enders, object_enders = set(), set()
-    for r in ender_rows or ():
-        kind = str(r.get("kind") or "")
-        (npc_enders if kind == "creature" else object_enders).add(_int(r.get("quest")))
+    named, npc_enders, object_enders = _named(start_rows, ender_rows)
     zones = {_int(r.get("id")): zone_of(r.get("zone")) for r in rows}
-    classic_zones = set(classic.STARTING_LAND_ZONES)
-    for qid, quest in book.quests.items():
-        if any(int(s.map_id) in classic.CLASSIC_CONTINENTS for s in quest.starters):
-            classic_zones.add(zones.get(qid, 0))
+    classic_zones = _classic_zones(book, zones)
     facts = {}
     kept = {}
     band_rows = []
@@ -387,6 +398,32 @@ def catalogue(quest_rows, giver_rows, spawn_rows, loot_rows, start_rows, ender_r
         )
     bands = {side: levelroute.bands(band_rows, side) for side in levelroute.RACE_MASK}
     return Catalogue(classquest.Book(kept), facts, bands)
+
+
+def _named(start_rows, ender_rows) -> tuple:
+    """(quests a creature is named to give, quests a creature is named to take,
+    quests a gameobject is named to take) from STARTERS_SQL's and ENDERS_SQL's
+    rows."""
+    named = {
+        _int(r.get("quest"))
+        for r in start_rows or ()
+        if str(r.get("kind") or "") == "creature"
+    }
+    npc_enders, object_enders = set(), set()
+    for r in ender_rows or ():
+        kind = str(r.get("kind") or "")
+        (npc_enders if kind == "creature" else object_enders).add(_int(r.get("quest")))
+    return named, npc_enders, object_enders
+
+
+def _classic_zones(book, zones) -> set:
+    """The starting lands, and every zone holding a quest whose giver is
+    spawned on a classic continent."""
+    out = set(classic.STARTING_LAND_ZONES)
+    for qid, quest in book.quests.items():
+        if any(int(s.map_id) in classic.CLASSIC_CONTINENTS for s in quest.starters):
+            out.add(zones.get(qid, 0))
+    return out
 
 
 @dataclass(frozen=True)
@@ -671,26 +708,32 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
         quest, facts = cat.quest(qid), cat.facts.get(qid)
         if quest is None or facts is None:
             continue
-        reason = ""
-        if status == STATUS_FAILED:
-            reason = FAILED
-        elif _ender_missing(quest, facts, gone):
-            reason = ENDER_MISSING
-        elif status == STATUS_INCOMPLETE and _fields_gone(quest, gone):
-            reason = SOURCE_MISSING
-        elif refused.get(("turnin", qid), (0, ""))[0] >= FAILS_BEFORE_BROKEN:
-            reason = _refused_words(REFUSED_TURN_IN, refused[("turnin", qid)][1])
-        elif played >= STALL_SECONDS:
-            unsourced = (
-                status == STATUS_INCOMPLETE
-                and (quest.kills or quest.items)
-                and not quest.fields
-            )
-            reason = STALLED_UNSOURCED if unsourced else STALLED
+        reason = _broken_reason(quest, facts, status, played, gone, refused)
         if reason:
             out.append(Broken(member.name, qid, quest.title, reason, held=True))
     clock.forget(member.name, member.quest_log)
     return out
+
+
+def _broken_reason(quest, facts: Facts, status, played, gone, refused) -> str:
+    """Why a quest the quester holds is broken, "" when it is not (yet)."""
+    if status == STATUS_FAILED:
+        return FAILED
+    if _ender_missing(quest, facts, gone):
+        return ENDER_MISSING
+    if status == STATUS_INCOMPLETE and _fields_gone(quest, gone):
+        return SOURCE_MISSING
+    count, words = refused.get(("turnin", quest.id), (0, ""))
+    if count >= FAILS_BEFORE_BROKEN:
+        return _refused_words(REFUSED_TURN_IN, words)
+    if played < STALL_SECONDS:
+        return ""
+    unsourced = (
+        status == STATUS_INCOMPLETE
+        and (quest.kills or quest.items)
+        and not quest.fields
+    )
+    return STALLED_UNSOURCED if unsourced else STALLED
 
 
 def _refused_words(reason, words) -> str:
@@ -803,45 +846,102 @@ def next_move(cat: Catalogue, member, broken=frozenset(), found=(), tried=()):
 
     `broken` is the quest ids already found broken for this quester, `found`
     this pass's Broken rows for the quests it holds (`failures`)."""
-    gone = gone_spawns(member.name, tried)
     left = left_spawns(member.name, tried)
-    refused = refusals(member.name, tried)
+    # 1. A broken quest it holds is dropped.
+    move = _drop(cat, member, broken, found)
+    if move is not None:
+        return move, "", []
+    skip = set(broken) | {b.quest for b in found}
+    # 2. A complete quest, the nearest turn-in NPC first.
+    move = _hand_in(cat, member, skip, left)
+    if move is not None:
+        return move, "", []
+    # 3. A quest in reach in its zone, the nearest giver first, while the log
+    # has room.
+    takes, never_held = _takes(cat, member, skip, left, tried)
+    if takes and len(member.quest_log) < LOG_SLOTS:
+        _d, _q, quest, spot = min(takes, key=_by_yards)
+        said = "%s walks to %s and takes %s" % (
+            member.name,
+            spot.name or "its giver",
+            quest.title,
+        )
+        return _move(classquest.TAKE, member, quest, spot, said), "", never_held
+    # 4. A quest it holds: the nearest objective spawn within its level.
+    move = _hunt(cat, member, skip, left)
+    if move is not None:
+        return move, "", never_held
+    if takes:
+        return (
+            None,
+            "%s's quest log is full (%d of %d)"
+            % (member.name, len(member.quest_log), LOG_SLOTS),
+            never_held,
+        )
+    # 5. Nothing left in reach here: the next zone.
+    move, why = _travel(cat, member, skip, left)
+    return move, why, never_held
+
+
+def _by_yards(option):
+    """The sort key of a (yards, quest id, quest, spot) option: nearest first,
+    then the lowest quest id."""
+    return option[0], option[1]
+
+
+def _drop(cat: Catalogue, member, broken, found):
+    """The drop of the first broken quest the quester holds, or None."""
     held_broken = [b for b in found if b.held] + [
         Broken(member.name, q, cat.quest(q).title if cat.quest(q) else "", "", True)
         for q in sorted(member.quest_log)
         if q in broken
     ]
-    if held_broken:
-        b = held_broken[0]
-        quest = cat.quest(b.quest) or classquest.Quest(
-            b.quest, b.title, 0, 0, 0, 0, 0, 0, 0
-        )
-        said = "%s drops %s: %s" % (
-            member.name,
-            b.title or b.quest,
-            b.reason or "it is broken",
-        )
-        return _move(classquest.ABANDON, member, quest, None, said), "", []
-    skip = set(broken) | {b.quest for b in found}
-    # 2. A complete quest, the nearest turn-in NPC first.
-    ready = []
-    for qid, status in member.quest_log.items():
+    if not held_broken:
+        return None
+    b = held_broken[0]
+    quest = cat.quest(b.quest) or classquest.Quest(
+        b.quest, b.title, 0, 0, 0, 0, 0, 0, 0
+    )
+    said = "%s drops %s: %s" % (
+        member.name,
+        b.title or b.quest,
+        b.reason or "it is broken",
+    )
+    return _move(classquest.ABANDON, member, quest, None, said)
+
+
+def _held(cat: Catalogue, member, status, skip):
+    """(quest id, quest) of each quest in the log at `status`, not in `skip`."""
+    for qid, held in member.quest_log.items():
         quest = cat.quest(qid)
-        if quest is None or int(status) != STATUS_COMPLETE or qid in skip:
-            continue
+        if quest is not None and int(held) == status and qid not in skip:
+            yield qid, quest
+
+
+def _hand_in(cat: Catalogue, member, skip, left):
+    """The hand-in of the complete quest whose turn-in NPC is nearest, or None."""
+    ready = []
+    for qid, quest in _held(cat, member, STATUS_COMPLETE, skip):
         spot = _nearest(member, quest.enders, left)
         if spot is not None:
             ready.append((_yards(member, spot), qid, quest, spot))
-    if ready:
-        _d, _q, quest, spot = min(ready, key=lambda o: (o[0], o[1]))
-        said = "%s walks to %s and hands in %s" % (
-            member.name,
-            spot.name or "its ender",
-            quest.title,
-        )
-        return _move(classquest.TURN_IN, member, quest, spot, said), "", []
-    # 3. A quest in reach in its zone, the nearest giver first, while the log
-    # has room.
+    if not ready:
+        return None
+    _d, _q, quest, spot = min(ready, key=_by_yards)
+    said = "%s walks to %s and hands in %s" % (
+        member.name,
+        spot.name or "its ender",
+        quest.title,
+    )
+    return _move(classquest.TURN_IN, member, quest, spot, said)
+
+
+def _takes(cat: Catalogue, member, skip, left, tried) -> tuple:
+    """(the (yards, quest id, quest, giver) of each quest in reach in the
+    quester's zone with a giver it can walk to, Broken rows for those whose
+    giver fails). A quest found broken here is added to `skip`."""
+    gone = gone_spawns(member.name, tried)
+    refused = refusals(member.name, tried)
     never_held = []
     takes = []
     for qid in in_reach(cat, member, member.zone, skip):
@@ -853,43 +953,36 @@ def next_move(cat: Catalogue, member, broken=frozenset(), found=(), tried=()):
         spot = _nearest(member, cat.quest(qid).starters, left)
         if spot is not None:
             takes.append((_yards(member, spot), qid, cat.quest(qid), spot))
-    if takes and len(member.quest_log) < LOG_SLOTS:
-        _d, _q, quest, spot = min(takes, key=lambda o: (o[0], o[1]))
-        said = "%s walks to %s and takes %s" % (
-            member.name,
-            spot.name or "its giver",
-            quest.title,
-        )
-        return _move(classquest.TAKE, member, quest, spot, said), "", never_held
-    # 4. A quest it holds: the nearest objective spawn within its level.
+    return takes, never_held
+
+
+def _hunt(cat: Catalogue, member, skip, left):
+    """The hunt at the nearest objective spawn within the quester's level of
+    an incomplete quest it holds, or None."""
     hunts = []
-    for qid, status in member.quest_log.items():
-        quest = cat.quest(qid)
-        if quest is None or int(status) != STATUS_INCOMPLETE or qid in skip:
-            continue
+    for qid, quest in _held(cat, member, STATUS_INCOMPLETE, skip):
         spot = _nearest(
             member, classquest.within_level(member, classquest.solo_fields(quest)), left
         )
         if spot is not None:
             hunts.append((_yards(member, spot), qid, quest, spot))
-    if hunts:
-        _d, _q, quest, spot = min(hunts, key=lambda o: (o[0], o[1]))
-        said = "%s works %s at %s" % (
-            member.name,
-            quest.title,
-            spot.name or "its objective",
-        )
-        return _move(classquest.HUNT, member, quest, spot, said), "", never_held
-    if takes:
-        return (
-            None,
-            "%s's quest log is full (%d of %d)"
-            % (member.name, len(member.quest_log), LOG_SLOTS),
-            never_held,
-        )
-    # 5. Nothing left in reach here: the next zone.
-    move, why = _travel(cat, member, skip, left)
-    return move, why, never_held
+    if not hunts:
+        return None
+    _d, _q, quest, spot = min(hunts, key=_by_yards)
+    said = "%s works %s at %s" % (
+        member.name,
+        quest.title,
+        spot.name or "its objective",
+    )
+    return _move(classquest.HUNT, member, quest, spot, said)
+
+
+# The module's verb for each move that is one quest row.
+_QUEST_VERBS = {
+    classquest.TAKE: "take",
+    classquest.TURN_IN: "turnin",
+    classquest.ABANDON: "abandon",
+}
 
 
 def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
@@ -905,45 +998,21 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
     worldserver without the verb, bridge._class_hunt_row) the hunt is the walk
     alone, as it was, and nothing within classquest.HUNT_REACH."""
     source = guildjobs.source_for(ACTION, member.name)
-    walk = None
-    if move.spot is not None:
-        spot = guildjobs.Spot(
-            "creature",
-            int(move.spot.guid),
-            int(move.spot.map_id),
-            float(move.spot.x),
-            float(move.spot.y),
+    walk = _walk_row(member, move, cap)
+    if move.kind == classquest.HUNT:
+        row = (
+            classhunt.command(quest, move.spot.entry, None, item_form)
+            if (hunt and quest is not None)
+            else ""
         )
-        walk = guildcorps.Row(
-            "job",
-            spot.command + guildroute.errand_cap_word(cap),
-            "",
-            guildjobs.source_for(WALK_ACTION, member.name),
-        )
-    if move.kind == classquest.TAKE:
-        rows = (guildcorps.Row("quest", "take quest:%d" % move.quest, "", source),)
-    elif move.kind == classquest.TURN_IN:
-        rows = (guildcorps.Row("quest", "turnin quest:%d" % move.quest, "", source),)
-    elif move.kind == classquest.ABANDON:
-        rows = (guildcorps.Row("quest", "abandon quest:%d" % move.quest, "", source),)
-    elif move.kind == classquest.CROSS:
-        rows = (
-            guildcorps.Row("job", classquest.cross_command(move.to_map), "", source),
-        )
-    elif move.kind == classquest.HUNT:
-        row = ""
-        if hunt and quest is not None:
-            row = classhunt.command(quest, move.spot.entry, None, item_form)
-        if not row:
-            if _yards(member, move.spot) <= classquest.HUNT_REACH:
-                return None
-            rows = ()
-        else:
-            rows = (guildcorps.Row("job", row, "", source),)
-            if _yards(member, move.spot) <= classhunt.HUNT_NEAR:
-                walk = None
+        yards = _yards(member, move.spot)
+        if not row and yards <= classquest.HUNT_REACH:
+            return None
+        rows = (guildcorps.Row("job", row, "", source),) if row else ()
+        if row and yards <= classhunt.HUNT_NEAR:
+            walk = None
     else:
-        rows = ()
+        rows = _move_rows(move, source)
     goal = move.spot.name if move.spot is not None else member.name
     return guildcorps.Step(
         member.name,
@@ -955,6 +1024,39 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
         goal=goal,
         spot=move.spot if move.kind == classquest.HUNT else None,
     )
+
+
+def _walk_row(member, move, cap):
+    """The walk to the move's spawn, None for a move with no spot."""
+    if move.spot is None:
+        return None
+    spot = guildjobs.Spot(
+        "creature",
+        int(move.spot.guid),
+        int(move.spot.map_id),
+        float(move.spot.x),
+        float(move.spot.y),
+    )
+    return guildcorps.Row(
+        "job",
+        spot.command + guildroute.errand_cap_word(cap),
+        "",
+        guildjobs.source_for(WALK_ACTION, member.name),
+    )
+
+
+def _move_rows(move, source) -> tuple:
+    """The rows of a take, a hand-in, a drop or a crossing; () for any other."""
+    verb = _QUEST_VERBS.get(move.kind)
+    if verb:
+        return (
+            guildcorps.Row("quest", "%s quest:%d" % (verb, move.quest), "", source),
+        )
+    if move.kind == classquest.CROSS:
+        return (
+            guildcorps.Row("job", classquest.cross_command(move.to_map), "", source),
+        )
+    return ()
 
 
 def settled(member, tried):

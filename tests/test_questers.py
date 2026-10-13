@@ -121,12 +121,13 @@ def world(extra_quests=(), extra_givers=(), extra_starts=(), extra_ends=(), drop
         giver(31, "end", 1030, 130, 2000, 0),
     ] + list(extra_givers)
     spawns = [spawn(2001, 200, 150, 0), spawn(2002, 201, 250, 0, level=3)]
-    # What is named to give and take each quest, spawned or not; `drop` takes
-    # the spawn away and leaves the name.
+    # What is named to give and take each quest, spawned or not.
     named = {g["quest"]: g["entry"] for g in givers if g["role"] == "start"}
     starts = [started(q, e) for q, e in sorted(named.items())] + list(extra_starts)
     enders = {g["quest"]: g["entry"] for g in givers if g["role"] == "end"}
     ends = [ended(q, e) for q, e in sorted(enders.items())] + list(extra_ends)
+    # The spawned givers and enders catalogue() reads: `drop` takes the spawn
+    # out of these while `starts` and `ends` still name it.
     givers = [g for g in givers if g["guid"] not in drop]
     return questers.catalogue(quests, givers, spawns, [], starts, ends)
 
@@ -278,6 +279,18 @@ class Steps(unittest.TestCase):
         self.assertTrue(step.walk.command.startswith("walk-to-spawn creature:2001"))
         self.assertEqual(
             [r.command for r in step.rows], ["hunt-spawn creature:200 count:8 max:480"]
+        )
+
+    def test_with_no_hunt_verb_a_far_hunt_is_the_walk_to_the_spawn_alone(self):
+        member = mirra(x=-400.0, quest_log={1: 3}, quests_done=frozenset({2, 3}))
+        cat = world()
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        step = questers.step_for(member, p.move, 0, cat.quest(1), hunt=False)
+        self.assertTrue(step.walk.command.startswith("walk-to-spawn creature:2001"))
+        self.assertEqual(step.walk.source, "guildjobs:quester-walk:Mirra")
+        self.assertEqual(step.rows, ())
+        self.assertEqual(
+            (step.action, step.key, step.spot), (questers.ACTION, 1, p.move.spot)
         )
 
     def test_a_walk_only_hunt_the_quester_stands_at_writes_nothing(self):
