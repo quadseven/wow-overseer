@@ -408,8 +408,13 @@ def build_lineup(
     team = raidteams.guild_of(m.get("name") for m in members)
     if team:
         return _approved_lineup(members, team, guaranteed)
+    questers = raidteams.quester_names()
     pool = sorted(
-        (raidroles.with_spec(m) for m in members if m.get("name")),
+        (
+            raidroles.with_spec(m)
+            for m in members
+            if m.get("name") and m["name"] not in questers
+        ),
         key=lambda m: _sort_key(m, guaranteed),
     )
     count = raiders // group_size if group_size else 0
@@ -444,6 +449,9 @@ def build_lineup(
         "groups": groups,
         "maintenance": [dict(m, role="maintenance") for m in upkeep],
         "summoners": [dict(m, role="summoner") for m in summoner_corps],
+        "questers": [
+            dict(m, role="quester") for m in members if m.get("name") in questers
+        ],
         "surplus": list(pool),
         "wanted": wanted,
         "shortfall": {
@@ -556,6 +564,11 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
     groups, open_seats, used = _approved_groups(team, find)
     summoners = _approved_listed(raidteams.SUMMONERS[team], "summoner", find, used)
     upkeep = _approved_listed(raidteams.MAINTENANCE[team], "maintenance", find, used)
+    # The questers hold no raid seat and are not surplus either: nobody kicks
+    # them for a raider (raidteams.QUESTERS).
+    found = (find(q.name) for q in raidteams.QUESTERS.get(team, ()))
+    questers = [dict(m, role="quester") for m in found if m is not None]
+    used.update(m["name"] for m in questers)
     leaving = set(raidteams.LEAVING[team])
     surplus = sorted(
         (m for n, m in by_name.items() if n not in used),
@@ -577,6 +590,7 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
         "groups": groups,
         "maintenance": upkeep,
         "summoners": summoners,
+        "questers": questers,
         "surplus": surplus,
         "wanted": wanted,
         "shortfall": {
@@ -594,6 +608,7 @@ def _approved_lineup(members: list, team: str, guaranteed=frozenset()) -> dict:
             "raiders": len(placed),
             "maintenance": len(upkeep),
             "summoners": len(summoners),
+            "questers": len(questers),
             "surplus": len(surplus),
             "considered": len(members),
             "respec": 0,

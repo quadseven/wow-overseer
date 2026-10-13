@@ -126,6 +126,7 @@ import preraid
 import professions
 import protect
 import questbook
+import questers
 import questshare
 import quests
 import raidcraft
@@ -5884,6 +5885,7 @@ PASSES = (
     _Pass("_weapon_skill_loop"),
     _Pass("_recruit_loop"),
     _Pass("_team_sync_loop"),
+    _Pass("_quester_loop"),
     _Pass("_retire_loop"),
     _Pass("_raid_spec_loop"),
     _Pass("_craft_supply_loop"),
@@ -13680,18 +13682,21 @@ class Bridge(discord.Client):
 
         ACTS THROUGH THE GUILD'S FAMILY HEAD, who must be in the world: the
         guild verbs run on the acting character and resolve the guild from it.
+        A quester's reset is a `kind='naturalize'` row on the quester itself,
+        which the module runs offline.
         Renames wait for TEAM_RENAMES=on, because a `rename-to` row reaching a
         module without the verb (mod-overseer#852) would be read as a job.
         """
         renames_on = os.environ.get("TEAM_RENAMES", "off") == "on"
         pending = await asyncio.to_thread(_team_pending)
+        reset_done = await asyncio.to_thread(_team_reset_done)
         for guild in raidteams.GROUPS:
             actor = await asyncio.to_thread(_team_actor, guild)
             members = await asyncio.to_thread(_team_members, guild)
             if not members:
                 continue
             candidates = await asyncio.to_thread(_team_candidates, guild)
-            actions = teamsync.plan(guild, members, candidates, pending, renames_on)
+            actions = teamsync.plan(guild, members, candidates, pending, renames_on, reset_done)
             # Each target this pass names is in flight from here on, so a later
             # guild in the same pass never asks for the same character.
             pending |= {action.target for action in actions}
@@ -13707,6 +13712,9 @@ class Bridge(discord.Client):
                 if action.kind == "rename":
                     row = await asyncio.to_thread(
                         _insert_job, action.target, "rename-to " + action.new_name, TEAM_SYNC_SOURCE)
+                elif action.kind == "reset":
+                    row = await asyncio.to_thread(
+                        _insert_naturalize, action.target, teamsync.RESET_COMMAND, TEAM_SYNC_SOURCE)
                 elif not actor:
                     log.info("team sync: %s - %s %s waits: the family head is not in the world",
                              guild, action.kind, action.target)
@@ -13729,6 +13737,120 @@ class Bridge(discord.Client):
                 except Exception:
                     log.exception("team sync pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
+
+    async def _quester_loop(self) -> None:
+        """The questers' play (questers.py, #924), every QUESTER_CYCLE_SECONDS."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("QUESTER_CYCLE_SECONDS", "120"))
+        while not self.is_closed():
+            if os.environ.get("QUESTERS", "on") == "on":
+                try:
+                    await self._quester_once()
+                except Exception:
+                    log.exception("questers: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _quester_once(self) -> None:
+        """One pass over the questers (raidteams.QUESTERS).
+
+        questers.plan decides each quester's move and what it found broken;
+        this reads the facts, records each broken quest in the quest ledger
+        once (and again whenever the ledger no longer says broken: its own
+        pass reads only the log, #923), starts each move as a guild job step
+        (`_run_job_step`, the class quest runner), and shares quests among
+        each guild's five as the family's are shared (questshare). Nothing is
+        granted: every row is the module's take, hand-in, drop or walk.
+        """
+        if getattr(self, "_quester_clock", None) is None:
+            clock_data, broken = await asyncio.to_thread(_quester_memos)
+            self._quester_clock = questers.Clock()
+            self._quester_clock.load(clock_data)
+            self._quester_broken = broken
+            self._quester_last = {}
+            self._quester_unledgered = 0.0
+        cat = await asyncio.to_thread(_quester_catalogue)
+        if cat is None:
+            log.info("questers: the world's quests are unread; no quester moves")
+            return
+        names = sorted(raidteams.quester_names())
+        members, tried, ledger, hunts_open = await asyncio.to_thread(
+            _fetch_quester_facts, names)
+        if not members:
+            log.info("questers: no quester is on the realm yet")
+            return
+        now, mono = time.time(), time.monotonic()
+        self._job_steps = guildroute.live_runs(
+            self._job_steps, mono, guildroute.GUILD_STEP_SECONDS)
+        cap = self._guild_walk_cap()
+        hunt_verb = mono >= getattr(self, "_class_hunt_unsupported_until", 0.0)
+        # The hunt rows still open are the questers' own as much as anyone's: an
+        # unread count holds them to QUESTER_HUNTS from this pass alone.
+        hunts_left = max(0, QUESTER_HUNTS - min(int(hunts_open or 0), QUESTER_HUNTS))
+        for m in members:
+            held = self._quester_broken.setdefault(m.name, {})
+            known = frozenset(held) | frozenset(
+                q for (who, q), state in ledger.items() if who == m.name and state == "broken")
+            plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
+                                 self._quester_last.get(m.name, 0))
+            await self._quester_ledger(m, plan, held, ledger, mono)
+            if self._quester_start(m, plan, cat, cap, mono, hunt_verb and hunts_left > 0):
+                hunts_left -= 1
+        await asyncio.to_thread(_share_quester_quests, {m.name for m in members})
+        await asyncio.to_thread(_quester_memos_write, self._quester_clock,
+                                self._quester_broken, now)
+
+    async def _quester_ledger(self, m, plan, held: dict, ledger: dict, mono: float) -> None:
+        """Hold what this pass found broken in `held` (the bridge memo's quest
+        id -> reason for this quester), and write each held quest the ledger
+        does not say is broken into the ledger."""
+        for b in plan.broken:
+            if b.quest not in held:
+                log.info("questers: %s found %s (quest %d) broken: %s",
+                         m.name, b.title or b.quest, b.quest, b.reason)
+            held.setdefault(b.quest, b.ledger_reason)
+        for qid, reason in sorted(held.items()):
+            if ledger.get((m.name, qid)) == "broken" or mono < self._quester_unledgered:
+                continue
+            found = next((b for b in plan.broken if b.quest == qid), None)
+            if not await asyncio.to_thread(_record_quest_broken, found or questers.Broken(
+                    m.name, qid, "", reason, held=qid in m.quest_log)):
+                # No ledger yet (#923): asked again in an hour, not every pass.
+                self._quester_unledgered = mono + 3600
+
+    def _quester_start(self, m, plan, cat, cap: float, mono: float, hunt: bool) -> bool:
+        """Start the quester's move as a step, unless it is on one already or
+        has none; True when the step holds a hunt row (one of QUESTER_HUNTS)."""
+        if m.name in self._job_steps or plan.move is None:
+            log.info("questers: %s", plan.line if m.name not in self._job_steps
+                     else "%s is on a step" % m.name)
+            return False
+        self._quester_last[m.name] = int(plan.move.quest)
+        step = questers.step_for(
+            m, plan.move, cap, cat.quest(plan.move.quest), hunt=hunt,
+            item_form=mono >= getattr(self, "_class_hunt_itemless_until", 0.0))
+        if step is None:
+            log.info("questers: %s", plan.line)
+            return False
+        # The marker first, as _start_guild_job_steps does. There is no race:
+        # nothing between here and create_task awaits, and the task does not
+        # run until this pass next awaits, so the step's own finally
+        # (_run_job_step) always clears a marker that is already there. The
+        # marker must come first: set after, it would outlive a step that had
+        # already cleared it. Only a start that raises (no task ran, so no
+        # finally will) gives the marker back here.
+        self._job_steps[m.name] = mono
+        try:
+            self._start_quester_step(step, cap)
+        except Exception:
+            self._job_steps.pop(m.name, None)
+            raise
+        return any(classhunt.is_hunt_row(r.command) for r in step.rows)
+
+    def _start_quester_step(self, step, cap: float) -> None:
+        """Run a quester's step as a guild job step, held like the others."""
+        task = asyncio.create_task(self._run_job_step(step, cap))
+        self._mail_walk_tasks.add(task)
+        task.add_done_callback(self._mail_walk_task_done)
 
     async def _retire_once(self) -> None:
         """One retire pass (retire.py): a few `retire` rows for the factory
@@ -15363,6 +15485,9 @@ class Bridge(discord.Client):
         """
         quest = (self._class_book.quests.get(int(step.key))
                  if self._class_book is not None else None)
+        if step.action == questers.ACTION and _QUESTER_CATALOGUE is not None:
+            # A quester's hunt (questers.step_for) is of any quest, not a class one.
+            quest = _QUESTER_CATALOGUE.quest(step.key)
         began = time.monotonic()
         for attempt in range(1, classhunt.MAX_ATTEMPTS + 1):
             if time.monotonic() - began >= classhunt.FOLLOW_SECONDS:
@@ -29193,7 +29318,8 @@ def _team_candidates(guild: str) -> list:
     race one of `guild`'s open seats wants, each with its account's
     playerbot account type (None for an account that is not a bot's), so
     teamsync recruits only a character the realm logs in by itself."""
-    wanted = {(s.class_id, teamsync.RACE_IDS[s.race]) for s in raidteams.seats(guild) if not s.was}
+    seats = [s for s in raidteams.seats(guild) if not s.was] + list(raidteams.QUESTERS.get(guild, ()))
+    wanted = {(s.class_id, teamsync.RACE_IDS[s.race]) for s in seats}
     if not wanted:
         return []
     with _connect() as conn, conn.cursor() as cur:
@@ -29237,6 +29363,39 @@ def _team_pending() -> set:
         return {n for n in out if n}
 
 
+def _team_reset_done():
+    """Names the naturalize ledger holds `reset` for, under each character's
+    name now; None when the ledger cannot be read, which resets nobody."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_NATURALIZED_SQL)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        parts = natural.parts_by_name(_naturalized_rows(cur.fetchall()))
+    return {name for name, held in parts.items() if natural.RESET_PART in held}
+
+
+def _insert_naturalize(name: str, command: str, source: str) -> int:
+    """One `kind='naturalize'` row for mod-overseer's DoNaturalize. Guarded
+    like `_insert_guild`: a realm without the machinery drops the row."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command (target_name, command, kind, source) "
+                "VALUES (%s, %s, 'naturalize', %s)",
+                (name, command, source),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                log.warning("overseer_command has no 'naturalize' machinery yet - "
+                            "dropping %r for %s", command, name)
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
 def _team_actor(guild: str) -> str:
     """The guild's family head when it is in the world, else ""."""
     head = raidteams.GROUPS[guild][0][0].name
@@ -29247,6 +29406,122 @@ def _team_actor(guild: str) -> str:
             (head,),
         )
         return head if cur.fetchone() else ""
+
+
+# --- the questers' play (questers.py, #924) --------------------------------
+#
+# questers decides; these read the world's quests once, the questers' logs
+# every pass, and write what was found broken into the quest ledger (#923).
+
+_QUESTER_CATALOGUE = None
+# The source of every row the questers' steps write, walks included.
+QUESTER_SOURCE_LIKE = guildjobs.SOURCE + ":" + questers.ACTION + "%"
+# The stall clock and the quests found broken, kept across restarts in the
+# bridge memo store. A month: a quest is broken for good, and a clock left
+# that long belongs to a quest long gone from the log.
+QUESTER_CLOCK_MEMO = "quester_clock"
+QUESTER_BROKEN_MEMO = "quester_broken"
+QUESTER_MEMO_SECONDS = 30 * 24 * 3600
+# The realm's hunt rows the questers may hold at once, of its ceiling
+# (classhunt.HUNTS_AT_ONCE): the guild's class quests come first (classquest
+# OWED_*), so the questers leave them the rest. Past it a quester's hunt is the
+# walk alone.
+QUESTER_HUNTS = int(os.environ.get("QUESTER_HUNTS", "2"))
+
+
+def _quester_catalogue():
+    """questers.Catalogue of every quest a quester may take, read once per
+    process (quests do not change while a realm runs); None while unread."""
+    global _QUESTER_CATALOGUE
+    if _QUESTER_CATALOGUE is not None:
+        return _QUESTER_CATALOGUE
+    ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
+    with _connect() as conn, conn.cursor() as cur:
+        quests = _job_read(cur, "quester quests", questers.QUESTS_SQL)
+        if not quests:
+            return None
+        qids = ids(r["id"] for r in quests)
+        givers = _job_read(cur, "quester quest givers", classquest.GIVERS_SQL.format(quests=qids))
+        items = {int(r[f"item{i}"]) for r in quests for i in range(1, 7) if r.get(f"item{i}")}
+        loot = _class_rows(cur, "quester quest loot", classquest.LOOT_SQL, "items", items)
+        entries = {int(r[f"npc{i}"]) for r in quests for i in range(1, 5)
+                   if (r.get(f"npc{i}") or 0) > 0} | {int(r["entry"]) for r in loot}
+        spawns = _class_rows(cur, "quester quest spawns", classquest.SPAWNS_SQL, "entries",
+                             entries)
+        starts = _job_read(cur, "quester quest starters", questers.STARTERS_SQL.format(quests=qids))
+        ends = _job_read(cur, "quester quest enders", questers.ENDERS_SQL.format(quests=qids))
+    _QUESTER_CATALOGUE = questers.catalogue(quests, givers, spawns, loot, starts, ends)
+    log.info("questers: read %d quest(s) a quester may take from the world database",
+             len(_QUESTER_CATALOGUE.facts))
+    return _QUESTER_CATALOGUE
+
+
+def _fetch_quester_facts(names: list) -> tuple:
+    """(questers.Member rows, questers.Attempt rows, ledger state by (name,
+    quest), the realm's open hunt rows or None) for the questers on the realm.
+    A ledger the realm does not have yet (#923) reads as empty."""
+    if not names:
+        return [], (), {}, None
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _job_read(cur, "questers", questers.MEMBERS_SQL.format(names=marks), list(names))
+        if not rows:
+            return [], (), {}, None
+        guids = ",".join(str(int(r["guid"])) for r in rows)
+        log_rows = _job_read(cur, "quester quest logs", questers.LOG_SQL.format(guids=guids))
+        done_rows = _job_read(cur, "quester rewarded quests",
+                              questers.REWARDED_SQL.format(guids=guids))
+        recent = _job_read(cur, "quester rows", _JOB_RECENT_SQL, (QUESTER_SOURCE_LIKE,))
+        ledger = _job_read(cur, "quest ledger", questers.LEDGER_SQL.format(names=marks),
+                           list(names))
+        hunts = _hunts_open(cur)
+    members = questers.members_from_rows(rows, log_rows, done_rows)
+    states = {(str(r["name"]), int(r["quest"])): str(r.get("state") or "") for r in ledger}
+    return members, questers.attempts(recent), states, hunts
+
+
+def _share_quester_quests(names: set) -> None:
+    """Share quests among each guild's questers on the realm, as the family's
+    are shared (questshare)."""
+    for guild in raidteams.QUESTERS:
+        party = sorted(raidteams.quester_names(guild) & set(names))
+        if len(party) > 1:
+            _share_family_quests(party, 0, "questers (%s): " % guild)
+
+
+def _record_quest_broken(broken) -> bool:
+    """Write one broken quest into the quest ledger; False when the realm has
+    no ledger yet (#923), which the quester's own memory still holds."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(questers.BROKEN_SQL, (int(broken.quest), bool(broken.held),
+                                              broken.ledger_reason, broken.name))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("questers: no quest ledger on this realm yet (#923); %s's "
+                            "broken quest %d is held in the bridge memo only",
+                            broken.name, broken.quest)
+                return False
+            raise
+        return True
+
+
+def _quester_memos() -> tuple:
+    """(the stall clock's data, name -> {quest id: reason}) from the memo store."""
+    clock = _memo_read(QUESTER_CLOCK_MEMO).get("all", ({}, 0.0))[0]
+    broken = {
+        name: {int(q): str(reason) for q, reason in (value or {}).items()}
+        for name, (value, _since) in _memo_read(QUESTER_BROKEN_MEMO).items()
+    }
+    return clock, broken
+
+
+def _quester_memos_write(clock, broken: dict, now: float) -> None:
+    _memo_upsert(QUESTER_CLOCK_MEMO, "all", clock.dump(), now, now + QUESTER_MEMO_SECONDS)
+    for name, found in broken.items():
+        if found:
+            _memo_upsert(QUESTER_BROKEN_MEMO, name, {str(q): r for q, r in found.items()},
+                         now, now + QUESTER_MEMO_SECONDS)
 
 
 def _online_guild_members() -> list:
