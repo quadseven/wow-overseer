@@ -64,7 +64,9 @@ ASK_DAYS = 14
 # A hold that has stood this long is stuck rather than a pause.
 HOLD_STUCK_SECONDS = 30 * 60
 # Doings that are not a hold: out of play, or a walk that is still walking.
-NOT_HOLDS = frozenset({"Logged out", "Dead", "Fighting", "Idle"})
+NOT_HOLDS = frozenset(
+    {"Logged out", "Dead", "Fighting", "Idle", "Buying a bank bag slot"}
+)
 WALKING = "to get there"
 CHARS_SQL = (
     "SELECT name, race, gender, class AS class_id, level, zone, map "

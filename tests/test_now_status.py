@@ -87,13 +87,50 @@ NAMES = ["Zug", "Oz", "Grug", "Bork", "Idler", "Off"]
 
 
 def facts(steps=()):
-    return nowstatus.build_facts(NAMES, ROSTER, INTENTS, list(steps), NOW)
+    intents = [dict(row, module_age=0) for row in INTENTS]
+    return nowstatus.build_facts(NAMES, ROSTER, intents, list(steps), NOW)
 
 
 def line_of(name, steps=(), **member):
     m = {"name": name, "present": True, "condition": "ok"}
     m.update(member)
     return nowstatus.compose(m, facts(steps)[name])
+
+
+class IntentFreshness(unittest.TestCase):
+    def test_old_nonleader_intent_and_bank_slot_note_do_not_claim_a_hold(self):
+        old_intent = {
+            "leader_name": "Oz",
+            "family": "Zug",
+            "current_kind": "fetch",
+            "current_owner": "travel column",
+            "current_target": "Grug",
+            "current_for": 39 * 3600,
+            "module_age": 39 * 3600,
+            "members_state": "Oz|held too far to walk|another map",
+        }
+        note = step("Oz", "Buying a bank bag slot", "a banker", kind="bank_wait")
+        all_facts = nowstatus.build_facts(NAMES, ROSTER, [old_intent], [note], NOW)
+        result = nowstatus.compose(
+            {"name": "Oz", "present": True, "condition": "ok"},
+            all_facts["Oz"],
+            NOW,
+        )
+        self.assertNotIn("held far away", result["line"])
+        self.assertNotIn("a banker", result["line"])
+
+    def test_an_intent_row_with_a_bad_age_is_skipped_not_a_crash(self):
+        for age in ("soon", "", None, [1]):
+            row = dict(INTENTS[0], module_age=age)
+            all_facts = nowstatus.build_facts(NAMES, ROSTER, [row], [], NOW)
+            self.assertIsNone(all_facts[row["leader_name"]]["intent"])
+
+    def test_a_bank_slot_note_alone_does_not_speak(self):
+        note = step("Idler", "Buying a bank bag slot", "a banker", kind="bank_wait")
+        solo = nowstatus.build_facts(["Idler"], ROSTER, [], [note], NOW)["Idler"]
+        got = nowstatus.compose({"name": "Idler", "present": True}, solo)
+        self.assertNotIn("a banker", got["line"])
+        self.assertNotIn("bank bag slot", got["line"])
 
 
 class TheLogTapReadsTheBridgesOwnReasons(unittest.TestCase):

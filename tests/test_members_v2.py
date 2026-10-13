@@ -212,6 +212,18 @@ class StuckIsTheBridgesOwnRecord(unittest.TestCase):
         self.assertIn("restarted 424 times", now["waiting"])
         self.assertEqual(members.hold_blocker(now, NOW)["kind"], "walk restarts")
 
+    def test_bank_bag_slot_note_is_not_a_stuck_hold(self):
+        self.assertIsNone(
+            members.hold_blocker(
+                {
+                    "doing": "Buying a bank bag slot",
+                    "waiting": "a banker",
+                    "for_s": 7200,
+                },
+                NOW,
+            )
+        )
+
 
 class PlacesInWords(unittest.TestCase):
     # Online and life are apiv2/presence.py's reading (tests/test_presence.py).

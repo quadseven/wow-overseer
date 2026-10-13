@@ -42,6 +42,8 @@ from __future__ import annotations
 
 import logging
 import re
+
+import jev_family_intent
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -453,6 +455,52 @@ def member_states(rows) -> dict:
     return out
 
 
+def _roster_families(roster):
+    by_name = {str(r.get("name")): r for r in roster or ()}
+    families = {}
+    for n, r in by_name.items():
+        families.setdefault(str(r.get("family") or n), []).append(n)
+    return by_name, families
+
+
+def _intent_age(row):
+    """The row's module_age in seconds, or None when it is missing or not a number."""
+    try:
+        return int(row.get("module_age"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_fresh_intent(row):
+    age = _intent_age(row)
+    return age is not None and age <= jev_family_intent.FRESH_SECONDS
+
+
+def _current_intents(intents, by_name, families):
+    current_leaders = {}
+    for family, family_names in families.items():
+        lead = next((n for n in family_names if by_name[n].get("lead")), None)
+        current_leaders[family] = lead or family_names[0]
+    return [
+        r
+        for r in intents or ()
+        if _is_fresh_intent(r)
+        and current_leaders.get(str(r.get("family") or ""))
+        == str(r.get("leader_name") or "")
+    ]
+
+
+def _attach_steps(facts, families, steps):
+    for s in steps or ():
+        subject = str(s.get("subject"))
+        targets = (
+            [subject] if s.get("scope") == "character" else families.get(subject, [])
+        )
+        for n in targets:
+            if n in facts:
+                facts[n]["steps"].append(s)
+
+
 def build_facts(names, roster, intents, steps, now_at=None) -> dict:
     """name -> the facts `compose` reads, from the three table reads.
 
@@ -461,12 +509,10 @@ def build_facts(names, roster, intents, steps, now_at=None) -> dict:
     epoch seconds, the same clock the steps' times are read on. Each step is offered to the
     character it names and to every character of the family it names.
     """
-    by_name = {str(r.get("name")): r for r in roster or ()}
-    families = {}
-    for n, r in by_name.items():
-        families.setdefault(str(r.get("family") or n), []).append(n)
-    leaders = {str(r.get("leader_name")): r for r in intents or ()}
-    members = member_states(intents)
+    by_name, families = _roster_families(roster)
+    current_intents = _current_intents(intents, by_name, families)
+    leaders = {str(r.get("leader_name")): r for r in current_intents}
+    members = member_states(current_intents)
     facts = {}
     for n in names:
         facts[n] = {
@@ -476,21 +522,18 @@ def build_facts(names, roster, intents, steps, now_at=None) -> dict:
             "steps": [],
             "now_at": now_at,
         }
-    for s in steps or ():
-        subject = str(s.get("subject"))
-        targets = (
-            [subject] if s.get("scope") == "character" else families.get(subject, [])
-        )
-        for n in targets:
-            if n in facts:
-                facts[n]["steps"].append(s)
+    _attach_steps(facts, families, steps)
     return facts
 
 
 # Steps that note a side hold and never say what the character is doing: the
 # equip pass holding a piece back rides along while the member walks, fights or
 # runs a dungeon, and read as its whole state it showed ten members "stuck".
-SIDE_KINDS = frozenset({"equip_held"})
+SIDE_KINDS = frozenset({"equip_held", "bank_wait"})
+# The side notes that may still speak when nothing else does. The bank bag slot
+# note is left out on purpose: the slot is bought on any banker visit and holds
+# nothing, so "waiting for a banker" is never a true answer, even alone.
+SPEAKS_ALONE = frozenset({"equip_held"})
 
 
 def _main(steps):
@@ -553,7 +596,7 @@ def compose(member: dict, facts: dict | None, now_at: int | None = None) -> dict
         doing, waiting, since = _live(member, f, _main(fresh), now_at)
         doing, waiting, since = _stored_reason(_main(fresh), doing, waiting, since)
         if not doing:
-            side = [s for s in fresh if s.get("kind") in SIDE_KINDS]
+            side = [s for s in fresh if s.get("kind") in SPEAKS_ALONE]
             if side:
                 doing, waiting, since = _from_step(side[0])
     if not doing:
@@ -631,6 +674,11 @@ def _live(member, f, fresh, now_at):
         return restarting
     if _intent_is_active(intent):
         return _from_intent(intent, steps, now_at)
+    return _from_scopes(f, fresh)
+
+
+def _from_scopes(f, fresh):
+    """A fresh character step, the member state, a fresh family step, then the job."""
     for scope in ("character", None, "family"):
         if scope is None:
             if f.get("member"):
