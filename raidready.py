@@ -415,7 +415,7 @@ def _support_blockers(lineup: dict, goals: dict) -> list:
             "No source on this realm for %s, so the count of goals still to "
             "gather leaves %s out."
             % (
-                ", ".join(g["name"].lower() for g in others),
+                ", ".join(g.get("name", "").lower() for g in others),
                 "it" if len(others) == 1 else "them",
             )
         )
