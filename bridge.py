@@ -2477,6 +2477,12 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
 # THE HOLD AT THE FLOOR, PER FAMILY (bag_pressure.bag_hold_progress), keyed
 # like the clocks above. Its timestamps are persisted as wall time across restarts.
 _BAG_HOLD: dict = {}
+# Latest bag-floor result observed by a bag pass, keyed by family member. The
+# family key is its leader's name, so queue ownership reads its entry without
+# doing roster or inventory queries. Holds only live entries: a pass that finds
+# no released hold removes the members' keys, so a cleared or departed family
+# leaves nothing behind.
+_BAG_HOLD_STUCK: dict[str, tuple] = {}
 
 _MEMO_CREATE_SQL = ("CREATE TABLE IF NOT EXISTS overseer_bridge_memo ("
                     "kind VARCHAR(32) NOT NULL, subject VARCHAR(191) NOT NULL, "
@@ -2539,8 +2545,18 @@ class _PersistentOwing(classquest.Owing):
     def __init__(self):
         super().__init__()
 
+    @staticmethod
+    def _tuples(value):
+        """A mark as guildjobs.progress_mark built it. The memo is JSON, which
+        reads every tuple back as a list, and a list never equals the tuple the
+        next pass computes: each restored clock started over (#921)."""
+        # _memo_read decodes JSON, so only lists can represent saved tuples.
+        if isinstance(value, list):
+            return tuple(_PersistentOwing._tuples(v) for v in value)
+        return value
+
     def restore(self):
-        self._by.update({name: (mark, since)
+        self._by.update({name: (self._tuples(mark), since)
                          for name, (mark, since) in _memo_read("class_owed").items()})
 
     def idle(self, name, mark, now):
@@ -2574,14 +2590,23 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
         _BAG_HOLD.pop(key, None)
         # The hold ended: clear the memo this function writes below.
         _memo_delete("bag_hold", ",".join(key))
-        return ()
-    _BAG_HOLD[key] = progress
-    wall = time.time()
-    value = {"best": progress.best, "since": wall - (now - progress.since),
-             "seen": wall - (now - progress.seen), "released": progress.released}
-    _memo_upsert("bag_hold", ",".join(key), value, value["since"],
-                 wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
-    return bag_pressure.bag_hold_stuck(progress)
+        result = ()
+    else:
+        _BAG_HOLD[key] = progress
+        wall = time.time()
+        value = {"best": progress.best, "since": wall - (now - progress.since),
+                 "seen": wall - (now - progress.seen), "released": progress.released}
+        _memo_upsert("bag_hold", ",".join(key), value, value["since"],
+                     wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
+        result = bag_pressure.bag_hold_stuck(progress)
+    for name in names:
+        # The family key is its leader's name, one of these members, so
+        # _queue_owns_job reads that member's bag hold result.
+        if result:
+            _BAG_HOLD_STUCK[name] = result
+        else:
+            _BAG_HOLD_STUCK.pop(name, None)
+    return result
 
 
 def _restore_bag_holds() -> None:
@@ -3628,6 +3653,12 @@ def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
             # not own the job then, so the craft rhythm and the skill goal
             # get the family's time back.
             return False
+        if not dungeon:
+            # A released bag hold gives the family's own passes time to buy
+            # reagents and craft. Keep the queue pending for the dungeon
+            # caller, which still starts the run once everyone has room.
+            if _BAG_HOLD_STUCK.get(family):
+                return False
         return bool(campaignqueue.pending_by_family(_fetch_queue_rows()).get(family))
     except Exception:
         log.exception("queue: could not read whether a queue owns the job")
@@ -14958,10 +14989,31 @@ class Bridge(discord.Client):
         # A class quest that yields to levelling is named every pass, uncapped.
         for line in plan.yields:
             log.info("guild jobs: %s", line)
+        self._log_class_ask_yields(members, plan.ask_yields)
         sale_walks = now >= self._job_walks_unsupported.get("sale", 0.0)
         started = self._start_guild_job_steps(plan, now, cap, sale_walks)
         await self._say_pvp_lines(plan, facts["recent"])
         log.info("guild jobs: started %d step(s)%s", started, _family_label(cohort))
+
+    def _log_class_ask_yields(self, members, yields) -> None:
+        """One `class ask:` line per member whose class quest ask yields to
+        levelling (guildjobs.class_asking), when its reason changed since the
+        last pass. A member of this pass that no longer yields is forgotten, so
+        the next yield is named again."""
+        said = getattr(self, "_class_ask_said", None)
+        if said is None:
+            said = self._class_ask_said = {}
+        now = {}
+        for key, line in yields or ():
+            name = key[0]
+            now.setdefault(name, set()).add(key)
+            if key not in said.get(name, set()):
+                log.info("%s", line)
+        for m in members:
+            if m.name in now:
+                said[m.name] = now[m.name]
+            else:
+                said.pop(m.name, None)
 
     def _stranded_knights_freed(self, members) -> set:
         """The death knights standing in their starting zone that every other
@@ -15038,7 +15090,10 @@ class Bridge(discord.Client):
             far_slots=guildroute.far_slots_free(
                 facts.get("far_open"), FAR_WALKS_AT_ONCE),
             # How long each member has stood on one spot (stood_still_step).
-            still=standstill.all_minutes(self._guild_still, time.monotonic()))
+            still=standstill.all_minutes(self._guild_still, time.monotonic()),
+            # The class quest asks lately: a run of them with no party stops
+            # the next (guildjobs.class_ask_streak).
+            asks=facts.get("quest_asks", ()))
         # Members held on a class quest are kept out of every dungeon pass
         # (the guild's asks, its runs): _class_priority_names.
         self._classquest_held = guildjobs.class_held(plan.lines)
@@ -22972,9 +23027,10 @@ def _fetch_guild_run_facts(bounds) -> dict:
         floors = {int(r["map_id"]): int(r["min_level"]) for r in cur.fetchall()}
         boss_levels = _door_boss_levels(cur)
         cur.execute(
-            "SELECT outcome, why FROM overseer_guild_run WHERE state = 'ended' "
+            "SELECT outcome, why, TIMESTAMPDIFF(MINUTE, ended_at, NOW()) AS age_minutes "
+            "FROM overseer_guild_run WHERE state = 'ended' "
             "AND ended_at > NOW() - INTERVAL %s MINUTE",
-            (guildrun.BENCH_MINUTES,),
+            (guildrun.QUEUE_BENCH_MINUTES,),
         )
         benched = guildrun.benched(list(cur.fetchall()))
         cur.execute(
@@ -23282,8 +23338,10 @@ def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
         refused=board.refused(), cooling=board.cooling(clock),
         seats=board.seats(clock))
     free = {m.name: m for m in mates if m.name not in own}
-    parties = classparty.plan_starts(
+    parties, skipped = classparty.plan(
         asks, answers, quest_pass, helps, free, board, now, clock, book)
+    if skipped:
+        quest_pass = dataclasses.replace(quest_pass, notes=quest_pass.notes + skipped)
     quest_held = classask.held_names(board.runs() + list(parties))
     held = {**{n: _QUEST_ASK_WHY for n in quest_held}, **held}
     return (quest_pass, held, {n: v for n, v in needs.items() if n not in quest_held},
@@ -26339,6 +26397,17 @@ def _read_job_spawns_once(cur) -> None:
                                           guildlevel.QUEST_FACTS_SQL))
 
 
+# The class quest asks lately and how many said yes to each, for the run of
+# asks with no party that stops the next (guildjobs.class_ask_streak).
+_JOB_QUEST_ASKS_SQL = (
+    "SELECT a.asker, a.target, a.state, "
+    "TIMESTAMPDIFF(MINUTE, a.created_at, NOW()) AS age, "
+    "(SELECT COUNT(*) FROM overseer_guild_answer an WHERE an.ask_id = a.id) AS yeses "
+    "FROM overseer_guild_ask a WHERE a.kind = 'quest' "
+    "AND a.created_at > NOW() - INTERVAL %s MINUTE ORDER BY a.id"
+)
+
+
 def _fetch_job_facts(family_names: list) -> dict:
     """Everything guildjobs.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
@@ -26372,6 +26441,8 @@ def _fetch_job_facts(family_names: list) -> dict:
         bank_rows = _job_read(cur, "guild bank tabs", _JOB_BANK_TABS_SQL)
         _read_job_spawns_once(cur)
         roster_rows = _job_read(cur, "roster names", _JOB_ROSTER_SQL)
+        quest_ask_rows = _job_read(cur, "class quest asks", _JOB_QUEST_ASKS_SQL,
+                                   (guildjobs.CLASS_ASK_STREAK_WINDOW_MINUTES,))
         far_open = _far_walks_open(cur)
         hunt_open = _hunts_open(cur)
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
@@ -26386,6 +26457,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  bag_slots=_job_bag_slots(room),
                                  worn=_job_worn(worn_rows))
     facts["class_book"] = book
+    facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}

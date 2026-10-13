@@ -90,7 +90,9 @@ JOBS_SQL = (
 )
 JOB_MINUTES = 30
 ASKS_SQL = (
-    "SELECT asker, target, target_label, state, UNIX_TIMESTAMP(created_at) AS at "
+    "SELECT asker, target, target_label, state, UNIX_TIMESTAMP(created_at) AS at, "
+    "(SELECT COUNT(*) FROM overseer_guild_answer an "
+    "WHERE an.ask_id = overseer_guild_ask.id) AS yeses "
     "FROM overseer_guild_ask WHERE kind = 'quest' AND asker IN ({holes}) "
     "AND created_at > NOW() - INTERVAL %s DAY ORDER BY asker, created_at, id"
 )
@@ -259,7 +261,8 @@ def ask_blocker(run: list, now_at: int) -> dict | None:
             "" if ran == 1 else "s",
         )
     else:
-        tail = ", and nobody has come"
+        yeses = sum(int(r.get("yeses") or 0) for r in run)
+        tail = ", %d said yes, no party formed" % yeses
     return {
         "step": "Class quest: " + title,
         "blocker": "Cannot finish %s alone: %s%s." % (title, asked, tail),
@@ -276,11 +279,12 @@ def hold_blocker(now: dict, now_at: int) -> dict | None:
     held = now.get("for_s")
     if held is not None and held < HOLD_STUCK_SECONDS:
         return None
+    kind = "walk restarts" if nowstatus.RESTART_WAITING in waiting else "hold"
     return {
         "step": doing,
         "blocker": "Waiting for " + waiting + ".",
         "since": (now_at - int(held)) if held is not None and now_at else None,
-        "kind": "hold",
+        "kind": kind,
     }
 
 
@@ -486,10 +490,12 @@ def _build_roster(ctx) -> dict:
 
 
 def roster(_query: dict, ctx) -> tuple[int, dict]:
+    """GET /api/v2/roster: every family-guild member, what each is doing, and who is stuck."""
     return 200, _roster_payload(ctx)
 
 
 def stuck(_query: dict, ctx) -> tuple[int, dict]:
+    """GET /api/v2/stuck: the stuck members only, longest stuck first."""
     return 200, stuck_view(_roster_payload(ctx))
 
 
