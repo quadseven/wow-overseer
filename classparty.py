@@ -421,6 +421,24 @@ def _run(ask, need, standing, spot) -> PartyRun:
     )
 
 
+def _plan_ask(ask, need, board, taken, filled, yes_by_ask, gone, free, now, book):
+    """Return a party or a skip note for one live ask, if either is ready."""
+    why = _taken_why(ask, board, taken)
+    if why:
+        if ask.state == FILLED or ask.id in filled:
+            return None, _skip_note(ask, need, why)
+        return None, None
+    standing = _standing(ask, yes_by_ask, gone, free, taken)
+    if not _ready(ask, standing, now):
+        return None, None
+    spot = classquest.objective_spot(book, need.move, _at(free[ask.asker]))
+    if spot is None:
+        return None, _skip_note(
+            ask, need, "its objective has no spawn for a party to walk to"
+        )
+    return _run(ask, need, standing, spot), None
+
+
 def plan(asks, answers, quest_pass, helps, free, board, now, clock, book=None):
     """(plan_starts' parties, notes): each note names a filled ask that gets no
     party this pass and why (its asker is taken, its failures are used up, or
@@ -441,25 +459,14 @@ def plan(asks, answers, quest_pass, helps, free, board, now, clock, book=None):
         need = _asker_need(ask, ended, partied, free, by_member)
         if need is None:
             continue
-        why = _taken_why(ask, board, taken)
-        if why:
-            if ask.state == FILLED or ask.id in filled:
-                notes.append(_skip_note(ask, need, why))
-            continue
-        standing = _standing(ask, yes_by_ask, gone, free, taken)
-        if not _ready(ask, standing, now):
-            continue
-        spot = classquest.objective_spot(book, need.move, _at(free[ask.asker]))
-        if spot is None:
-            notes.append(
-                _skip_note(
-                    ask, need, "its objective has no spawn for a party to walk to"
-                )
-            )
-            continue
-        run = _run(ask, need, standing, spot)
-        taken.update(run.names())
-        starts.append(run)
+        run, note = _plan_ask(
+            ask, need, board, taken, filled, yes_by_ask, gone, free, now, book
+        )
+        if note:
+            notes.append(note)
+        if run:
+            taken.update(run.names())
+            starts.append(run)
     return tuple(starts), tuple(notes)
 
 
