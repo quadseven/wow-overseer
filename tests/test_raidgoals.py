@@ -310,6 +310,20 @@ class RepairBotHasNoSourceOnThisRealm(unittest.TestCase):
         self.assertNotEqual(repair["status"], raidgoals.UNREACHABLE)
         self.assertNotEqual(repair["status"], raidgoals.NO_SOURCE)
 
+    def test_a_schematic_that_teaches_the_craft_is_a_source(self):
+        """If the realm's item rows ever give the schematic a teach spell, the
+        goal is no longer no source: the status follows the reads, not 18235."""
+        teaching = [{"entry": 18235, "teaches": 22704, "skill_rank": 300}]
+        repair = goal(payload(recipes=teaching), "repair")
+        self.assertNotEqual(repair["status"], raidgoals.NO_SOURCE)
+        self.assertNotIn("no trainer, vendor or drop", repair["line"])
+
+    def test_the_line_names_the_schematic_the_recipe_carries(self):
+        recipe = raidgoals.RECIPE_BY_PRODUCT[raidgoals.FIELD_REPAIR_BOT]
+        self.assertEqual(recipe.schematic, 18235)
+        line = raidgoals._no_source_line(recipe.product, 99999)
+        self.assertIn("Schematic 99999", line)
+
     def test_a_no_source_goal_still_lists_what_it_would_take(self):
         """A goal that vanished because it was impossible would read exactly
         like a goal already met."""
