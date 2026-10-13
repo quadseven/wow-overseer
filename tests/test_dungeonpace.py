@@ -597,7 +597,9 @@ class TheBridgePass(unittest.TestCase):
 
     def test_a_dungeon_writer_never_passes_the_questing_family(self):
         self.assertIn("_queue_owns_job, None, True", BRIDGE)
-        self.assertIn("if family in _PACE_QUESTING and not dungeon:", BRIDGE)
+        self.assertIn(
+            'if family in globals().get("_PACE_QUESTING", {}) and not dungeon:', BRIDGE
+        )
 
 
 if __name__ == "__main__":

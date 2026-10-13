@@ -3631,6 +3631,8 @@ def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
     """
     try:
         family = family or _cohort_of(bonds.head_of_family()) or ""
+        # Looked up through globals(), as the gear helpers are, because the
+        # campaign tests load this function without the pace pass.
         if family in globals().get("_PACE_QUESTING", {}) and not dungeon:
             # QUESTING WHILE THE DOOR WAITS (mod-overseer#767): the queue does
             # not own the job then, so the craft rhythm and the skill goal
