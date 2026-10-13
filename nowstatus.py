@@ -569,6 +569,16 @@ def compose(member: dict, facts: dict | None, now_at: int | None = None) -> dict
     }
 
 
+# The waiting text for a walk that keeps ending and restarting. apiv2/members.py
+# matches on RESTART_WAITING, so both read the wording from here.
+RESTART_WAITING = "the walk has ended and restarted"
+
+
+def restart_words(restarts: int) -> str:
+    """The waiting reason for a walk that has restarted this many times."""
+    return "a way there; %s %d times" % (RESTART_WAITING, restarts)
+
+
 def _from_intent(intent: dict, steps, now_at):
     doing = _walk_words(intent)
     doing = doing[:1].upper() + doing[1:]
@@ -576,8 +586,7 @@ def _from_intent(intent: dict, steps, now_at):
     since = (now_at - int(age)) if (age is not None and now_at) else None
     restarts = _restarts(steps, now_at)
     if restarts >= 3:
-        why = "a way there; the walk has ended and restarted %d times" % restarts
-        return doing, why, _first_restart(steps, now_at) or since
+        return doing, restart_words(restarts), _first_restart(steps, now_at) or since
     return doing, "to get there", since
 
 
@@ -641,8 +650,7 @@ def _from_restarts(intent, steps, now_at):
     if _intent_is_active(intent):
         return _from_intent(intent, steps, now_at)
     doing = _walk_from_steps(steps) or "Walking"
-    why = "a way there; the walk has ended and restarted %d times" % restarts
-    return doing, why, _first_restart(steps, now_at)
+    return doing, restart_words(restarts), _first_restart(steps, now_at)
 
 
 def _walk_from_steps(steps):

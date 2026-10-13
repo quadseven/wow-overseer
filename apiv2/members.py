@@ -64,8 +64,6 @@ HOLD_STUCK_SECONDS = 30 * 60
 # Doings that are not a hold: out of play, or a walk that is still walking.
 NOT_HOLDS = frozenset({"Logged out", "Dead", "Fighting", "Idle"})
 WALKING = "to get there"
-# Waiting text produced by nowstatus for a walk that keeps ending and restarting.
-RESTART_WAITING = "the walk has ended and restarted"
 CHARS_SQL = (
     "SELECT name, race, gender, class AS class_id, level, zone, map "
     "FROM characters WHERE name IN ({holes})"
@@ -274,7 +272,7 @@ def hold_blocker(now: dict, now_at: int) -> dict | None:
     held = now.get("for_s")
     if held is not None and held < HOLD_STUCK_SECONDS:
         return None
-    kind = "walk restarts" if RESTART_WAITING in waiting else "hold"
+    kind = "walk restarts" if nowstatus.RESTART_WAITING in waiting else "hold"
     return {
         "step": doing,
         "blocker": "Waiting for " + waiting + ".",
