@@ -33,6 +33,8 @@ def run(module, script, hash_="#/quests"):
             "globalThis.window = {setTimeout: (f) => f(), addEventListener() {}};\n"
             "globalThis.location = {hash: %s};\n"
             "globalThis.history = {replaceState(_s, _t, h) { location.hash = h; }};\n"
+            # after() queries its main argument; the interaction test below
+            # supplies that element and its controls. This stub is only global.
             "globalThis.document = {querySelector: () => null, addEventListener() {}};\n"
             "(await import(%s)).learn(%s);\n"
             "const M = await import(%s);\n"
