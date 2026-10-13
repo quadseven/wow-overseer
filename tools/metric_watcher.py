@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import sys
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,6 +15,17 @@ from tools import realm_state_audit
 
 TARGET_SEATS = 40
 MAX_LEVEL = 60
+# The trades a family crafter's skill is recorded in, as /api/v2/training
+# names them, lower-cased for the log.
+CRAFTER_SKILLS = (
+    "alchemy",
+    "herbalism",
+    "tailoring",
+    "leatherworking",
+    "blacksmithing",
+    "engineering",
+    "enchanting",
+)
 
 
 def _iso(epoch: float) -> str:
@@ -99,6 +113,31 @@ def _xp_projection(guild_payloads: dict[str, dict], snapshot_epoch: int) -> dict
     }
 
 
+def crafter_key(name: str) -> str:
+    """A crafter's stand-in in the log; raidsupply.crafter_key is the same
+    function, so the Raid tab can find its own alchemists without a name here."""
+    return hashlib.sha256(str(name).encode("utf-8")).hexdigest()[:12]
+
+
+def crafter_skills(trainings: dict[str, dict]) -> list:
+    """One row per family crafter: its key and its skill in each of
+    CRAFTER_SKILLS, None for a trade it does not hold. A member holding none
+    of them is no crafter and is left out."""
+    rows = []
+    for name, training in sorted(trainings.items()):
+        held = {
+            str(trade.get("name") or "").lower(): trade.get("value")
+            for trade in training.get("trades") or []
+        }
+        skills = {
+            skill: int(held[skill]) if held.get(skill) is not None else None
+            for skill in CRAFTER_SKILLS
+        }
+        if any(value is not None for value in skills.values()):
+            rows.append({"crafter": crafter_key(name), "skills": skills})
+    return rows
+
+
 def build_metrics(report: dict, guild_payloads: dict[str, dict]) -> dict:
     """Shape one aggregate, identity-reduced record per guild."""
     guild_records = {}
@@ -132,6 +171,19 @@ def build_metrics(report: dict, guild_payloads: dict[str, dict]) -> dict:
         "xp_source": "measured by /api/v2/series",
         "xp_projection": _xp_projection(guild_payloads, report["snapshot_epoch"]),
         "guilds": guild_records,
+        "crafters": {
+            guild: crafter_skills(guild_payloads.get(guild, {}).get("trainings") or {})
+            for guild in report["guilds"]
+        },
+        # The crafters whose training read failed, so a missing row reads as a
+        # failed read rather than as a member with no trade.
+        "crafter_read_failures": {
+            guild: sorted(
+                crafter_key(name)
+                for name in guild_payloads.get(guild, {}).get("training_failures") or ()
+            )
+            for guild in report["guilds"]
+        },
     }
 
 
@@ -218,6 +270,31 @@ def collect(api_root: str) -> tuple[dict, dict]:
         guilds[guild]["seat_members"] = list(
             (raidteams[guild].get("members") or {}).keys()
         )
+        # /api/v2/training answers one name at a time and no batch read exists,
+        # so each family member is read once, in their own guild's pass; this
+        # periodic watcher is off the request path.
+        guilds[guild]["trainings"] = {}
+        guilds[guild]["training_failures"] = []
+        for row in roster.get("members") or []:
+            if (
+                row.get("guild") != guild
+                or not row.get("family")
+                or not row.get("name")
+            ):
+                continue
+            # One member's failed read costs that crafter's row, not the snapshot;
+            # the failure is logged and kept in the record as crafter_read_failures.
+            try:
+                guilds[guild]["trainings"][row["name"]] = realm_state_audit.fetch_json(
+                    f"{root}/training?name={urllib.parse.quote(row['name'])}"
+                )
+            except RuntimeError as exc:
+                guilds[guild]["training_failures"].append(row["name"])
+                print(
+                    f"metric_watcher: training read failed for crafter "
+                    f"{crafter_key(row['name'])} in {guild}: {exc}",
+                    file=sys.stderr,
+                )
     report = realm_state_audit.build_report(roster, raidteams, guilds)
     return build_metrics(report, guilds), report
 
