@@ -246,6 +246,26 @@ class WhenToStopAndBuy(unittest.TestCase):
             pvpgear.next_move(aim(), 0, False, recent(pvpgear.QUEUE_MINUTES)).kind,
         )
 
+    def test_the_module_outcome_in_a_delivered_row_decides_the_wait(self):
+        def read(result):
+            row = {
+                "target_name": "Auren", "source": "guildjobs:pvp:Auren",
+                "command": "bg-queue wsg", "status": "delivered", "age": 16,
+                "result": result,
+            }  # fmt: skip
+            return guildjobs.recent_from_rows([row])
+
+        for outcome in ("queued", "already"):
+            rows = read('{"outcome":"%s","queued_for_this":true}' % outcome)
+            self.assertEqual(
+                pvpgear.WAITING, pvpgear.next_move(aim(), 0, False, rows).kind
+            )
+        for outcome in ("error", "unchanged"):
+            rows = read('{"outcome":"%s","reason":"no"}' % outcome)
+            self.assertEqual(
+                pvpgear.QUEUE, pvpgear.next_move(aim(), 0, False, rows).kind
+            )
+
 
 def job_member(**kw):
     base = dict(

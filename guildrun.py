@@ -419,7 +419,7 @@ def benched(recent: list) -> set:
             continue
         queue_refusal = "waiting in a battleground queue" in str(row.get("why") or "")
         window = QUEUE_BENCH_MINUTES if queue_refusal else BENCH_MINUTES
-        if int(row.get("age_minutes", 0)) >= window:
+        if int(row.get("age_minutes") or 0) >= window:
             continue
         name = refused_member(row.get("why"))
         if name:

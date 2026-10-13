@@ -258,6 +258,13 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
             ),
         )
 
+    def test_a_refusal_with_no_age_reads_as_fresh(self):
+        why = "'Auren' is waiting in a battleground queue"
+        self.assertEqual(
+            {"Auren"},
+            guildrun.benched([{"outcome": "refused", "why": why, "age_minutes": None}]),
+        )
+
     def test_a_refusal_over_one_member_is_formed_again_at_once(self):
         refused = {"state": "ended", "outcome": "refused", "why": "'Eazoth' is dead"}
         self.assertTrue(guildrun.swap_now([refused]))

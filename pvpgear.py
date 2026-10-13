@@ -446,6 +446,21 @@ def last_pvp_age(name: str, recent) -> int | None:
     return min(int(r.age_minutes) for r in rows) if rows else None
 
 
+def _queue_accepted(row) -> bool:
+    """A `bg-queue` row the module answered "queued" or "already" (by status
+    or by the outcome in its result), and that did not fail."""
+    command = str(getattr(row, "command", "") or "")
+    status = str(row.status or "").lower()
+    result = str(getattr(row, "result", "") or "").lower()
+    accepted = status in {"queued", "already"} or any(
+        marker in result for marker in ('"outcome":"queued"', '"outcome":"already"')
+    )
+    failed = status in FAILED or any(
+        marker in result for marker in ('"outcome":"error"', '"outcome":"unchanged"')
+    )
+    return command.startswith("bg-queue ") and accepted and not failed
+
+
 def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
     """What the member does about its aim this pass (see the module notes).
     `recent` is guildjobs.Recent rows."""
@@ -465,17 +480,7 @@ def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
     rows = _pvp_rows(aim.name, recent)
     if rows:
         newest = min(rows, key=lambda r: int(r.age_minutes))
-        command = str(getattr(newest, "command", "") or "")
-        status = str(newest.status or "").lower()
-        result = str(getattr(newest, "result", "") or "").lower()
-        accepted = status in {"queued", "already"} or any(
-            marker in result for marker in ('"outcome":"queued"', '"outcome":"already"')
-        )
-        failed = status in FAILED or any(
-            marker in result
-            for marker in ('"outcome":"error"', '"outcome":"unchanged"')
-        )
-        if command.startswith("bg-queue ") and accepted and not failed:
+        if _queue_accepted(newest):
             return Move(
                 WAITING,
                 "%s waits in the %s queue, %d honor short of %s"
