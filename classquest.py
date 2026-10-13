@@ -1575,19 +1575,27 @@ class Owed:
     to_map: int = -1
 
 
-def owed(book: Book, member, avoid=None, held_off=frozenset()):
+def owed(book: Book, member, avoid=None, held_off=frozenset(), yielded=frozenset()):
     """The Owed row of the first class reward the member owes, or None.
 
     A reward group is owed when any of its variants can be worked now or is
     blocked for a reason that is not PERMANENT (a variant whose creature no spawn
     names does not clear a group whose other variant is across the sea). A
     member of a level or race no quest of its class admits owes nothing, and
-    nor does one whose every open variant is permanently blocked."""
+    nor does one whose every open variant is permanently blocked.
+
+    A quest that yields to levelling is not owed while it yields: one in
+    `yielded` (quest ids whose asks found no party, guildjobs.class_ask_streak),
+    or a helpable blocker no party can help with (no_party_spot)."""
     for _key, made in _groups(book, member, avoid, held_off):
         live = _live(made, member)
         if live is None:
             live = next((m for m in made if m.blocker not in PERMANENT), None)
         if live is None:
+            continue
+        if live.kind == BLOCKED and (
+            int(live.quest) in yielded or no_party_spot(book, live, member)
+        ):
             continue
         quest = book.quests.get(int(live.quest))
         title = live.title or (quest.title if quest else "")
@@ -1965,6 +1973,26 @@ def objective_spot(book, move: Move, member):
     return _densest(member, quest.fields)
 
 
+def no_party_spot(book, move: Move, member) -> bool:
+    """Whether `move` is a helpable blocker (HELPABLE, with helpers wanted)
+    that no party could help with: objective_spot finds it no spawn to walk
+    to. Such a quest is not asked for in guild chat and yields to levelling
+    until the member may try it alone again (guildjobs.class_helps)."""
+    return (
+        move.kind == BLOCKED
+        and move.blocker in HELPABLE
+        and bool(move.want)
+        and objective_spot(book, move, member) is None
+    )
+
+
+def no_party_why(move: Move) -> str:
+    """Why no party can help with a no_party_spot move, for the log."""
+    if move.blocker == USE_STALLED:
+        return "a party walk only gets the party there, and the use is the member's own"
+    return "no spawn of its objective is on the member's map for a party to walk to"
+
+
 def next_move(book: Book, member, avoid=None, held_off=frozenset()):
     """(the move to make or None, [blocker sentences]) for one member.
 
@@ -2087,8 +2115,8 @@ class Hunts:
 
 
 class Owing:
-    """How long each member has owed a class quest with no progress, kept in
-    memory by the bridge (a restart gives every member a fresh OWED_HOURS).
+    """How long each member has owed a class quest with no progress. In memory
+    here; the bridge's subclass keeps it across a restart (bridge.py).
 
     A member's progress is a mark (guildjobs.progress_mark): when it changes the
     clock starts over. Times are seconds from one clock for the life of the

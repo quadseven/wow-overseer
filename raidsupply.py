@@ -61,7 +61,9 @@ equip command. Never a give, never a GM command.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 
 import auction
 import classic
@@ -326,7 +328,9 @@ SUPPLIES = (
     # Spell 7257's reagents are classic's Spell.dbc entry, not yet checked
     # against the running worldserver's; the recipe, its 15 silver, its Alchemy
     # 165 and its two vendors as #892 read them from `item_template` and
-    # `npc_vendor`; the Leaded Vial's price is the one craft_supply.py read.
+    # `npc_vendor`; the Leaded Vial's 200 copper in LEADED_VIAL is the same
+    # price craft_supply.py's REAGENT table holds for item 3372, which its
+    # docstring records as the live world's item_template BuyPrice.
     Supply(
         FIRE_PROTECTION,
         "Fire Protection Potion",
@@ -590,8 +594,10 @@ class FireLine:
 
 
 def standing_in(knowers, carriers=None) -> frozenset:
-    """The stand-in supplies in force: those whose `stands_in` supply no guild
-    crafter knows and whose recipe nobody carries (#892)."""
+    """The stand-in supplies in force (#892): those whose `stands_in` supply,
+    the one stood in for, is a make whose spell no guild crafter knows and
+    whose recipe item nobody carries. The stand-in's own make is not read
+    here; `make` below is the supply it stands in for."""
     out = set()
     for supply in SUPPLIES:
         if not supply.stands_in:
@@ -1046,7 +1052,11 @@ def _buy_step(member, entry, count, price, what, cap):
 
 
 def own_recipe_vendor(make, member):
-    """The RecipeVendor of the member's own side, or None (an unread race)."""
+    """The RecipeVendor of the member's own side, or None (an unread race).
+
+    Matching the member's team is the point: RecipeVendor's note says a vendor
+    of the other side refuses the character, so only the same-team vendor is
+    one it can buy from."""
     team = auction.team_of(member.race)
     return next((v for v in make.recipe_vendors if team and v.team == team), None)
 
@@ -1085,6 +1095,7 @@ def craft_step(crafter, make, name, want, vendors, cap):
                     "the %s recipe" % name,
                     cap,
                 )
+            # Same side (own_recipe_vendor) and same continent, else a note.
             seller = own_recipe_vendor(make, crafter)
             if seller is not None and seller.map_id == crafter.map_id:
                 return replace(
@@ -1798,17 +1809,178 @@ def plan_market(
 
 
 # ---------------------------------------------------------------------------
+# HOW FAST EACH ALCHEMIST CLIMBS (#891).
+#
+# Every fire protection potion and flask a night eats is crafted, so the
+# alchemists' skill is raid prep's long pole. tools/metric_watcher.py records
+# each family crafter's trade skills in every snapshot, under crafter_key
+# rather than a name, and the server hands this module the last week of them.
+# The pace is the gain between the oldest and the newest snapshot inside the
+# window, per elapsed day; a date is that pace carried forward, nothing more.
+
+PACE_DAYS = 7
+# The alchemy ranks a Molten Core night needs, lowest first.
+ALCHEMY_RAID_RANKS = (
+    (165, "Fire Protection Potion"),
+    (275, "Major Healing Potion"),
+    (290, "Greater Fire Protection Potion"),
+    (300, "flasks"),
+)
+
+
+def crafter_key(name) -> str:
+    """The metric snapshots' stand-in for a crafter's name. The watcher
+    computes the same key, so the log never carries the name itself."""
+    return hashlib.sha256(str(name).encode("utf-8")).hexdigest()[:12]
+
+
+def _day(epoch) -> str:
+    return datetime.fromtimestamp(int(epoch), timezone.utc).strftime("%Y-%m-%d")
+
+
+def _skill_points(snapshots, key, skill) -> list:
+    """[(epoch, value)] for one crafter's skill, oldest first."""
+    points = []
+    for snap in snapshots or ():
+        epoch = snap.get("snapshot_epoch")
+        if epoch is None:
+            continue
+        for rows in (snap.get("crafters") or {}).values():
+            for row in rows or ():
+                value = (row.get("skills") or {}).get(skill)
+                if row.get("crafter") == key and value is not None:
+                    points.append((int(epoch), int(value)))
+    return sorted(points)
+
+
+def _read_failed_last(snapshots, key) -> bool:
+    """Whether the newest snapshot lists `key` among its failed training
+    reads, so a crafter missing from the log is not mistaken for no crafter."""
+    latest = max(
+        (s for s in snapshots or () if s.get("snapshot_epoch") is not None),
+        key=lambda s: int(s["snapshot_epoch"]),
+        default=None,
+    )
+    failures = (latest or {}).get("crafter_read_failures") or {}
+    return any(key in (keys or ()) for keys in failures.values())
+
+
+def alchemist_pace(name, snapshots) -> dict | None:
+    """One alchemist's pace line, or None when no snapshot shows them holding
+    alchemy."""
+    key = crafter_key(name)
+    points = _skill_points(snapshots, key, "alchemy")
+    if not points:
+        if _read_failed_last(snapshots, key):
+            return {
+                "name": name,
+                "skill": None,
+                "per_day": None,
+                "ranks": [],
+                "line": "%s's trade skills were not read in the newest metric "
+                "snapshot: the training read failed." % name,
+            }
+        return None
+    last_at, value = points[-1]
+    window = [p for p in points if p[0] >= last_at - PACE_DAYS * 86400]
+    first_at, first = window[0]
+    out = {"name": name, "skill": value, "per_day": None, "ranks": []}
+    if len(window) < 2 or last_at <= first_at:
+        out["line"] = (
+            "%s's alchemy is %d; the pace is not yet measured, since fewer "
+            "than two metric snapshots carry it." % (name, value)
+        )
+        return out
+    gained = value - first
+    if gained <= 0:
+        out["line"] = "%s's alchemy is %d: no gain in %d days." % (
+            name,
+            value,
+            PACE_DAYS,
+        )
+        return out
+    per_day = gained * 86400 / (last_at - first_at)
+    out["per_day"] = round(per_day, 2)
+    said = []
+    for rank, what in ALCHEMY_RAID_RANKS:
+        at = None if value >= rank else _day(last_at + (rank - value) / per_day * 86400)
+        out["ranks"].append({"rank": rank, "for": what, "at": at})
+        said.append(
+            "%d (%s) %s" % (rank, what, "reached" if at is None else "around " + at)
+        )
+    out["line"] = (
+        "%s's alchemy is %d, up %.1f points a day over the last %d days: %s."
+        % (
+            name,
+            value,
+            per_day,
+            PACE_DAYS,
+            "; ".join(said),
+        )
+    )
+    return out
+
+
+def level_60_line(snapshots) -> str:
+    """The newest snapshot's projected date for 40 seats at level 60."""
+    latest = max(
+        (s for s in snapshots or () if s.get("snapshot_epoch") is not None),
+        key=lambda s: int(s["snapshot_epoch"]),
+        default=None,
+    )
+    if latest is None:
+        return "No metric snapshot was read, so no level 60 date is projected."
+    for field in ("xp_projection", "level_projection"):
+        at = (latest.get(field) or {}).get("projected_at")
+        if at:
+            return (
+                "The metric snapshots project 40 seats at level 60 around %s."
+                % (str(at)[:10])
+            )
+    return "The metric snapshots do not yet project when 40 seats reach level 60."
+
+
+def pace_lines(crafters, snapshots) -> list:
+    """Every alchemist among `crafters` (the guild's family names) that the
+    snapshots show, or one line saying none is measured yet."""
+    lines = [alchemist_pace(name, snapshots) for name in crafters or ()]
+    lines = [line for line in lines if line is not None]
+    if lines:
+        return lines
+    return [
+        {
+            "name": "",
+            "skill": None,
+            "per_day": None,
+            "ranks": [],
+            "line": "The alchemists' pace is not yet measured: fewer than two "
+            "metric snapshots carry this guild's alchemy.",
+        }
+    ]
+
+
+# ---------------------------------------------------------------------------
 # THE RAID TAB'S CARD.
 
 SUPPLY_COLUMNS = ("supply", "wanted", "held", "short", "how it closes")
 FIRE_COLUMNS = ("raider", "role", "target", "worn", "short")
 
 
-def card(raiders, have, knowers, carriers=None, bank_copper=None) -> dict:
+def card(
+    raiders,
+    have,
+    knowers,
+    carriers=None,
+    bank_copper=None,
+    crafters=(),
+    snapshots=(),
+) -> dict:
     """The supply section of one guild's readiness card; the page decides nothing.
 
     `have` counts bags, bank and guild bank, which is what the guild holds;
     the corps pass counts bags and letters, which is what it can move.
+    `crafters` are the guild's family names and `snapshots` the metric
+    watcher's records of the last week, for the alchemists' pace.
     """
     lines = supply_lines(raiders, have, knowers, carriers)
     fire = fire_lines(raiders)
@@ -1830,6 +2002,8 @@ def card(raiders, have, knowers, carriers=None, bank_copper=None) -> dict:
     return {
         "line": head,
         "budget_line": budget,
+        "pace": pace_lines(crafters, snapshots),
+        "level_60_line": level_60_line(snapshots),
         "supply_columns": list(SUPPLY_COLUMNS),
         "supplies": [
             {

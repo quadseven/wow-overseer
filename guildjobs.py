@@ -463,6 +463,7 @@ TRAIN_MIN_LEVEL = 5
 # stone it farms around.
 FIELD_REACH = 400.0
 DOOR_REACH = 500.0
+ON_CALL_REACH = 20.0
 
 # A door's meeting stone is the one nearest its entrance within this many
 # yards. Measured 2026-09-24: 25 yards at Ragefire Chasm, 846 at Dire Maul.
@@ -683,6 +684,7 @@ class Door:
     floor: int
     ceiling: int
     stone: Spot | None = None
+    on_call: bool = False
 
 
 @dataclass(frozen=True)
@@ -717,6 +719,10 @@ class Recent:
     loot: int = 0
     # For a `cross-to-map map:<id>` row, the map id it asked for (0 otherwise).
     dest: int = 0
+    # Original command text, needed to distinguish an accepted battleground
+    # queue from other PvP work.
+    command: str = ""
+    result: str = ""
 
 
 @dataclass(frozen=True)
@@ -740,6 +746,10 @@ class JobsPlan:
     # One line per member whose class step yields to levelling this pass
     # (class_yield), logged uncapped by the bridge.
     yields: tuple = ()
+    # (key, line) per class quest a member does not ask guild chat for, as it
+    # yields to levelling (class_asking); the bridge logs a line when its key
+    # changes.
+    ask_yields: tuple = ()
 
 
 def _yards(ax, ay, bx, by) -> float:
@@ -2230,32 +2240,68 @@ def doors_for(member: Member) -> list:
     return out
 
 
-def assign_doors(members, entrances, stones) -> dict:
+def assign_doors(members, entrances, stones, campaign_door: str = "") -> dict:
     """name -> Door for every warlock with the ritual, spread over the doors
     that fit: the stone with the fewest warlocks first (the Dire Maul wings
     and the Scarlet Monastery wings share one stone each), then the lower
     band, then the keyword."""
-    load = {}
-    out = {}
     casters = [
         m
         for m in members or ()
         if m.role == SUMMONER and RITUAL_OF_SUMMONING in m.known
     ]
     casters.sort(key=lambda m: (-int(m.level), m.name))
+    on_call, load, out = _assign_campaign_door(
+        casters, entrances, stones, campaign_door
+    )
     for m in casters:
-        fits = []
-        for run in doors_for(m):
-            stone = stone_for(run.keyword, entrances, stones)
-            if stone is None:
-                continue
-            fits.append((load.get(stone.spawn, 0), run.floor, run.keyword, run, stone))
-        if not fits:
+        if on_call is not None and m.name == on_call.name:
             continue
-        _n, _floor, keyword, run, stone = min(fits, key=lambda f: f[:3])
-        load[stone.spawn] = load.get(stone.spawn, 0) + 1
-        out[m.name] = Door(keyword, run.place, run.floor, run.ceiling, stone)
+        door = _spread_door(m, entrances, stones, load)
+        if door is not None:
+            out[m.name] = door
     return out
+
+
+def _spread_door(m, entrances, stones, load):
+    """The fitting door whose stone has the fewest warlocks, counted into
+    `load`; None when no door with a stone fits."""
+    fits = []
+    for run in doors_for(m):
+        stone = stone_for(run.keyword, entrances, stones)
+        if stone is None:
+            continue
+        fits.append((load.get(stone.spawn, 0), run.floor, run.keyword, run, stone))
+    if not fits:
+        return None
+    _n, _floor, keyword, run, stone = min(fits, key=lambda f: f[:3])
+    load[stone.spawn] = load.get(stone.spawn, 0) + 1
+    return Door(keyword, run.place, run.floor, run.ceiling, stone)
+
+
+def _assign_campaign_door(casters, entrances, stones, campaign_door):
+    """Reserve the family's campaign door for its highest-level eligible caster."""
+    load, out = {}, {}
+    if not campaign_door:
+        return None, load, out
+    stone = run = on_call = None
+    for member in casters:
+        for candidate in doors_for(member):
+            if candidate.keyword != campaign_door:
+                continue
+            stone = stone_for(candidate.keyword, entrances, stones)
+            if stone is not None:
+                on_call, run = member, candidate
+                break
+        if on_call is not None:
+            break
+    if on_call is None or run is None or stone is None:
+        return None, load, out
+    out[on_call.name] = Door(
+        campaign_door, run.place, run.floor, run.ceiling, stone, True
+    )
+    load[stone.spawn] = 1
+    return on_call, load, out
 
 
 # ---------------------------------------------------------------------------
@@ -2508,14 +2554,9 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
     shared = _shared_step(m, crafters, master, kept, recent, cap)
     if shared[0]:
         return shared
-    if m.level < RITUAL_LEVEL:
-        return None, "levels toward Ritual of Summoning at %d" % RITUAL_LEVEL, shared[2]
-    if RITUAL_OF_SUMMONING not in m.known:
-        return (
-            None,
-            "has the level for Ritual of Summoning and has not learned it at a warlock trainer",
-            shared[2],
-        )
+    gap = _ritual_gap(m)
+    if gap:
+        return None, gap, shared[2]
     door = doors.get(m.name)
     if door is None:
         return None, "knows the ritual; no door fits its level yet", shared[2]
@@ -2524,6 +2565,13 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
         return None, "answers a summon at %s" % door.place, ""
     if m.x is None or m.y is None:
         return None, "serves %s; where it stands is not read this pass" % door.place, ""
+    if door.on_call:
+        return _on_call_step(m, door, recent, cap, shards)
+    return _farm_door_step(m, door, recent, cap, shards)
+
+
+def _farm_door_step(m, door, recent, cap, shards):
+    """Return the walk or farm step for a summoner spread over the doors."""
     if door.stone is not None and not _near(m, door.stone, DOOR_REACH):
         if not _cooling(m, "door", recent):
             said = (
@@ -2537,6 +2585,35 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
     return (
         None,
         "farms near the meeting stone at %s between summons%s" % (door.place, shards),
+        "",
+    )
+
+
+def _ritual_gap(m) -> str:
+    """What a summoner still lacks before it can cast the ritual; "" when ready."""
+    if m.level < RITUAL_LEVEL:
+        return "levels toward Ritual of Summoning at %d" % RITUAL_LEVEL
+    if RITUAL_OF_SUMMONING not in m.known:
+        return "has the level for Ritual of Summoning and has not learned it at a warlock trainer"
+    return ""
+
+
+def _on_call_step(m, door, recent, cap, shards):
+    """Return the stand or wait step for the summoner assigned to campaign duty."""
+    # assign_doors only puts a summoner on call at a door with a stone, but a
+    # Door's stone is optional: without one there is no stone to name.
+    if door.stone is None:
+        return None, "waits on call for %s%s" % (door.place, shards), ""
+    if not _near(m, door.stone, ON_CALL_REACH):
+        if not _cooling(m, "door", recent):
+            said = "%s waits on call at the meeting stone at %s" % (
+                m.name,
+                door.place,
+            )
+            return _spot_step(m, door.stone, "door", cap, said), said, ""
+    return (
+        None,
+        "waits on call at the meeting stone at %s%s" % (door.place, shards),
         "",
     )
 
@@ -2569,6 +2646,7 @@ def plan(
     still=None,
     supply=None,
     pets=None,
+    asks=(),
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -2596,7 +2674,8 @@ def plan(
     (standstill.py), None to read no stand (stood_still_step); `supply` name
     -> the food and drink sold in reach of a member short of them
     (restsupply.py, supply_step); `pets` name -> the tameable beasts around a
-    hunter that knows Tame Beast and has no pet (hunterpet.py, pet_step).
+    hunter that knows Tame Beast and has no pet (hunterpet.py, pet_step);
+    `asks` the QuestAsk rows of the class quest asks lately (class_ask_streak).
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -2611,7 +2690,7 @@ def plan(
     )
     trades.update(focus_trades(members, focus))
     tally = _focus_tally(members, focus)
-    steps, lines, notes, helps = [], {}, [], []
+    steps, lines, notes, helps, ask_yields = [], {}, [], [], []
     gear_holds = []
     # One counter per allowance, each keyed by guild (_allowance).
     counters = {
@@ -2657,7 +2736,9 @@ def plan(
             _offer_for(pets, m.name),
         )
         lines[m.name] = doing
-        helps += class_helps(m, classes, hunts, now, recent)
+        asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
+        helps += asked
+        ask_yields += yielded
         if note:
             notes.append(note)
         if gear_why:
@@ -2676,7 +2757,7 @@ def plan(
         steps.append(step)
         _count_focus(tally, m, step, fields)
     owed, released = owed_members(
-        members, classes, recent, hunts, now, owing or classquest.Owing()
+        members, classes, recent, hunts, now, owing or classquest.Owing(), asks=asks
     )
     notes += owed_notes(owed, released)
     return JobsPlan(
@@ -2691,6 +2772,7 @@ def plan(
         owed=owed,
         released=released,
         yields=class_yields(members, classes, recent),
+        ask_yields=tuple(ask_yields),
     )
 
 
@@ -3176,14 +3258,15 @@ def progress_mark(m) -> tuple:
     )
 
 
-def class_owed(m, book, recent=(), hunts=None, now=0.0):
+def class_owed(m, book, recent=(), hunts=None, now=0.0, asks=()):
     """The classquest.Owed row of the class quest this member owes, or None.
 
     Read from the book, not from the plan line: a member in backoff after a far
     walk wall, in combat, dead, offline or waiting for a far walk slot owes its
     quest as much as one on its hunt. A member whose position is unread is read
     from an unknown map, which only makes its quest a map blocker (not
-    permanent), never a permanent one."""
+    permanent), never a permanent one. A quest that yields to levelling
+    (class_asking) is not owed while it yields."""
     if book is None:
         return None
     probe = m
@@ -3196,10 +3279,12 @@ def class_owed(m, book, recent=(), hunts=None, now=0.0):
         )
     probe = with_walls(probe, recent)
     avoid, off = class_avoid(m, book, recent, hunts, now)
-    return classquest.owed(book, probe, avoid, off)
+    return classquest.owed(book, probe, avoid, off, class_ask_held(m.name, asks))
 
 
-def owed_members(members, book, recent, hunts, now, owing, hours=None) -> tuple:
+def owed_members(
+    members, book, recent, hunts, now, owing, hours=None, asks=()
+) -> tuple:
     """(held, released): name -> classquest.Owed for every member with a class
     quest owed, split by the Owing clock. A member that has made no progress in
     `hours` (classquest.OWED_HOURS) is released: out of `held`, so the dungeon
@@ -3207,7 +3292,7 @@ def owed_members(members, book, recent, hunts, now, owing, hours=None) -> tuple:
     hours = classquest.OWED_HOURS if hours is None else hours
     held, released = {}, {}
     for m in members:
-        row = class_owed(m, book, recent, hunts, now)
+        row = class_owed(m, book, recent, hunts, now, asks)
         if row is None:
             continue
         if owing.expired(m.name, progress_mark(m), now, hours):
@@ -3488,21 +3573,155 @@ def _leave_resting(m, book, resting, merged) -> None:
             merged[quest.id] = left
 
 
-def class_helps(m, book, hunts=None, now=0.0, recent=()) -> list:
+def class_helps(m, book, hunts=None, now=0.0, recent=(), asks=()) -> list:
     """The class quests this member cannot do alone and no other class move
     stands ahead of, as classquest.Help rows for classask: a group quest, or a
-    hunt given up after it stalled. Nothing for a member with a class move."""
+    hunt given up after it stalled. Nothing for a member with a class move,
+    and nothing for a quest that yields to levelling (class_asking)."""
+    return class_asking(m, book, hunts, now, recent, asks)[0]
+
+
+def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
+    """(helps, yields) for one member: the classquest.Help rows class_helps
+    returns, and one (key, line) per helpable quest that is not asked for
+    because it yields to levelling, `key` changing only when the reason does.
+
+    A QUEST NO PARTY CAN HELP WITH IS NOT ASKED FOR (2026-10-12). A level 29
+    warlock asked guild chat 140 times in five days for help with a use that
+    changed nothing (USE_STALLED); twelve guildmates said yes 51 times and no
+    party ever formed, since a party has no spawn to walk to for a use
+    (classquest.objective_spot). Realm-wide 1,721 such asks ran nowhere. A
+    helpable move with no spot (classquest.no_party_spot) is not asked for:
+    the member levels until its hunt's hold-off ends, then tries alone again.
+    A quest asked for CLASS_ASK_STREAK_MAX times in a row with no party is not
+    asked for either while its hold lasts (class_ask_streak)."""
     if not _class_ready(m, book):
-        return []
+        return [], []
     avoid, off = class_avoid(m, book, recent, hunts, now)
     m = with_walls(m, recent)
     move, _blocked = classquest.next_move(book, m, avoid, off)
     if move is not None:
-        return []
-    return [
-        classquest.Help(m.name, m.guild, int(m.level), int(m.map_id), h)
-        for h in classquest.helps(book, m, avoid, off)
-    ]
+        return [], []
+    helps, yields = [], []
+    for h in classquest.helps(book, m, avoid, off):
+        if classquest.no_party_spot(book, h, m):
+            yields.append(_no_party_yield(m, h, hunts, now))
+            continue
+        left, count, yeses = class_ask_streak(m.name, h.quest, asks)
+        if left:
+            yields.append(_streak_yield(m, h, left, count, yeses))
+            continue
+        helps.append(classquest.Help(m.name, m.guild, int(m.level), int(m.map_id), h))
+    return helps, yields
+
+
+def _no_party_yield(m, move, hunts, now) -> tuple:
+    """(key, line) for a helpable quest no party can help with. The member
+    tries alone again when its hunt's hold-off ends, else after
+    classquest.SPAWN_RETRY_MINUTES (the rolling retry of a tried target)."""
+    hunt = hunts.get(m.name) if hunts is not None else None
+    left = classquest.SPAWN_RETRY_MINUTES
+    if hunt is not None and hunt.quest == move.quest and hunt.until is not None:
+        left = max(1, math.ceil((hunt.until - now) / 60.0))
+    line = (
+        "class ask: %s does not ask for %s: %s; it levels for %d minute(s), then "
+        "tries alone again" % (m.name, move.title, classquest.no_party_why(move), left)
+    )
+    return (m.name, move.quest, "nospot", move.blocker), line
+
+
+def _streak_yield(m, move, left, count, yeses) -> tuple:
+    line = (
+        "class ask: %s stops asking for %s after %d asks with no party (%d yes); "
+        "it levels for %d minute(s)" % (m.name, move.title, count, yeses, left)
+    )
+    return (m.name, move.quest, "streak", count), line
+
+
+# A CLASS QUEST ASK THAT NEVER BECOMES A PARTY STOPS (2026-10-12). One member
+# posted 48 asks in a day that nobody was placed to answer. After
+# CLASS_ASK_STREAK_MAX asks in a row for one quest that ended with no party
+# (no `ran` row), the member does not ask for it again for
+# CLASS_STALL_HOLD_MINUTES counted from the newest of them, and the quest does
+# not hold it out of the dungeon groups meanwhile (class_owed). The count is
+# read from overseer_guild_ask, so a restart keeps it. A live ask is not counted
+# (it may yet fill), and an ask that ran ends the run. Asks older than
+# CLASS_ASK_STREAK_WINDOW_MINUTES are not read, so a hold that ran out and an
+# ask that failed once more yields again at once.
+CLASS_ASK_STREAK_MAX = 3
+CLASS_ASK_STREAK_WINDOW_MINUTES = 12 * 60
+_ASK_RAN = "ran"
+_ASK_LIVE = frozenset({"open", "filled"})
+
+
+@dataclass(frozen=True)
+class QuestAsk:
+    """One class quest ask (overseer_guild_ask, kind 'quest'): who asked for
+    which quest, where it stands, how long ago, and how many said yes."""
+
+    asker: str
+    quest: int
+    state: str
+    age_minutes: int
+    yeses: int = 0
+
+
+def quest_asks_from_rows(rows) -> tuple:
+    """QuestAsk rows from the job's ask read; a row whose target is not a
+    quest's is left out."""
+    out = []
+    for row in rows or ():
+        head, _, tail = str(row.get("target") or "").partition(":")
+        if head != "quest" or not tail.isdigit():
+            continue
+        out.append(
+            QuestAsk(
+                asker=str(row.get("asker") or ""),
+                quest=int(tail),
+                state=str(row.get("state") or ""),
+                age_minutes=_int(row.get("age"), 10**6),
+                yeses=_int(row.get("yeses"), 0),
+            )
+        )
+    return tuple(out)
+
+
+def class_ask_streak(name, quest, asks) -> tuple:
+    """(minutes left of the hold, asks in the run, yeses they drew) for one
+    member's quest: the closed asks for it since the newest that ran, newest
+    first, inside CLASS_ASK_STREAK_WINDOW_MINUTES. The hold is 0 while the run
+    is short of CLASS_ASK_STREAK_MAX or CLASS_STALL_HOLD_MINUTES have passed
+    since its newest ask."""
+    rows = sorted(
+        (
+            a
+            for a in asks or ()
+            if a.asker == name
+            and a.quest == int(quest)
+            and int(a.age_minutes) < CLASS_ASK_STREAK_WINDOW_MINUTES
+        ),
+        # age_minutes is minutes since the ask was posted, so ascending is
+        # newest first: the walk stops at the newest ask that ran, and run[0]
+        # is the newest closed ask the hold is counted from.
+        key=lambda a: int(a.age_minutes),
+    )
+    run = []
+    for a in rows:
+        if a.state == _ASK_RAN:
+            break
+        if a.state not in _ASK_LIVE:
+            run.append(a)
+    yeses = sum(int(a.yeses) for a in run)
+    if len(run) < CLASS_ASK_STREAK_MAX:
+        return 0, len(run), yeses
+    left = max(0, CLASS_STALL_HOLD_MINUTES - int(run[0].age_minutes))
+    return left, len(run), yeses
+
+
+def class_ask_held(name, asks) -> frozenset:
+    """The quest ids this member has stopped asking for (class_ask_streak)."""
+    quests = {a.quest for a in asks or () if a.asker == name}
+    return frozenset(q for q in quests if class_ask_streak(name, q, asks)[0])
 
 
 # A MEMBER MAKES ONE CROSSING AT A TIME, whichever step asked it: a class
@@ -5012,6 +5231,8 @@ def recent_from_rows(rows) -> tuple:
                 action=action.replace("-walk", ""),
                 age_minutes=_int(row.get("age"), 10**6),
                 status=str(row.get("status") or ""),
+                command=str(row.get("command") or ""),
+                result=str(row.get("result") or ""),
                 skill_id=(
                     _trainer_skill_id(row.get("command")) if action == "train" else None
                 ),
