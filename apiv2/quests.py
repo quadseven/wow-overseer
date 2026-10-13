@@ -42,12 +42,12 @@ import questcatalogue
 import questledger
 import questlog
 
-# Counts, not attempts: at most one row per quest and state, so the read is
-# bounded by the quests the questers have touched however long they walk,
-# and the answer by the ruleset catalogue, which is fixed while a realm runs.
+# Read only catalogue quest ids, in bounded batches. Each result has at most
+# one count per quest and state, regardless of how many questers attempted it.
+LEDGER_BATCH_SIZE = 500
 LEDGER_SQL = (
     "SELECT quest, state, COUNT(*) AS n FROM overseer_quest_ledger "
-    "GROUP BY quest, state"
+    "WHERE quest IN ({holes}) GROUP BY quest, state"
 )
 QUEST_LEDGER_SQL = (
     "SELECT quest, guid, character_name, state, first_taken, finished, reason "
@@ -151,9 +151,19 @@ def quests(query: dict, ctx) -> tuple[int, dict]:
         level_max = _number(query, "level_max")
     except ValueError:
         return 400, {"error": "zone, level_min and level_max are whole numbers"}
-    ledger = ctx.read.rows(LEDGER_SQL, what="overseer_quest_ledger")
+    catalogue = _catalogue(ctx)
+    ledger = []
+    for start in range(0, len(catalogue), LEDGER_BATCH_SIZE):
+        ids = tuple(q.id for q in catalogue[start : start + LEDGER_BATCH_SIZE])
+        ledger.extend(
+            ctx.read.rows(
+                LEDGER_SQL.format(holes=questledger.holes(len(ids))),
+                ids,
+                what="overseer_quest_ledger",
+            )
+        )
     return 200, build_quests(
-        _catalogue(ctx), ledger, faction, zone, level_min, level_max, status
+        catalogue, ledger, faction, zone, level_min, level_max, status
     )
 
 

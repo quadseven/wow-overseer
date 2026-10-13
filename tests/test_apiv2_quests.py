@@ -87,7 +87,9 @@ def answers(**extra):
     out = {
         qc.QUESTS_SQL: QUEST_ROWS,
         qc.GIVERS_SQL: GIVER_ROWS,
-        v2quests.LEDGER_SQL: LEDGER_COUNTS,
+        v2quests.LEDGER_SQL: lambda ids: [
+            row for row in LEDGER_COUNTS if row["quest"] in ids
+        ],
         v2quests.QUEST_LEDGER_SQL: lambda args: [
             r for r in LEDGER if r["quest"] == args[0]
         ],
@@ -111,6 +113,20 @@ class TheCatalogueEndpoint(Base):
         self.assertIn("GROUP BY quest, state", v2quests.LEDGER_SQL)
         _, body = self.get("/api/v2/quests")
         self.assertEqual(body["quests"][0]["attempts"], 2)
+
+    def test_ledger_reads_only_catalogue_ids_in_bounded_batches(self):
+        old_size = v2quests.LEDGER_BATCH_SIZE
+        v2quests.LEDGER_BATCH_SIZE = 2
+        self.addCleanup(setattr, v2quests, "LEDGER_BATCH_SIZE", old_size)
+        ctx = Ctx(answers())
+        code, body = apiv2.handle("/api/v2/quests", {}, ctx)
+        self.assertEqual(code, 200)
+        self.assertEqual(body["totals"]["quests"], 4)
+        reads = [
+            (sql, ids) for sql, ids in ctx.read.asked if "overseer_quest_ledger" in sql
+        ]
+        self.assertEqual([ids for _, ids in reads], [(1, 2), (3, 4)])
+        self.assertTrue(all("WHERE quest IN (%s, %s)" in sql for sql, _ in reads))
 
     def test_every_ruleset_quest_with_its_status(self):
         code, body = self.get("/api/v2/quests")
