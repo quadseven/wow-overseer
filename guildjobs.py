@@ -2280,22 +2280,19 @@ def _assign_campaign_door(casters, entrances, stones, campaign_door):
     load, out = {}, {}
     if not campaign_door:
         return None, load, out
-    on_call = next(
-        (
-            member
-            for member in casters
-            if any(
-                run.keyword == campaign_door
-                and stone_for(run.keyword, entrances, stones) is not None
-                for run in doors_for(member)
-            )
-        ),
-        None,
-    )
-    if on_call is None:
+    stone = run = on_call = None
+    for member in casters:
+        for candidate in doors_for(member):
+            if candidate.keyword != campaign_door:
+                continue
+            stone = stone_for(candidate.keyword, entrances, stones)
+            if stone is not None:
+                on_call, run = member, candidate
+                break
+        if on_call is not None:
+            break
+    if on_call is None or run is None or stone is None:
         return None, load, out
-    run = next(run for run in doors_for(on_call) if run.keyword == campaign_door)
-    stone = stone_for(run.keyword, entrances, stones)
     out[on_call.name] = Door(
         campaign_door, run.place, run.floor, run.ceiling, stone, True
     )
