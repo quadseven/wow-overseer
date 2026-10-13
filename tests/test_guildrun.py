@@ -288,6 +288,20 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
         ]
         self.assertIn("guildrun.WENT_IN", resting)
 
+    def test_short_zero_boss_abandon_does_not_rest_but_timeout_does(self):
+        short_abandon = {
+            "outcome": "abandoned",
+            "seconds_inside": 299,
+            "bosses_done": 0,
+        }
+        timeout = {
+            "outcome": "timed out",
+            "seconds_inside": 299,
+            "bosses_done": 0,
+        }
+        self.assertFalse(guildrun.rests_members(short_abandon))
+        self.assertTrue(guildrun.rests_members(timeout))
+
     def test_the_bridge_reads_online_and_the_corpse(self):
         sql = BRIDGE[BRIDGE.index("_GUILD_RUN_MEMBERS_SQL = (") :]
         sql = sql[: sql.index("\n)\n")]

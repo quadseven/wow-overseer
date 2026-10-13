@@ -229,6 +229,25 @@ class WhoIsOffered(unittest.TestCase):
         self.assertEqual(upgrades, ())
         self.assertIn("already has a 12-slot bag coming", notes[0])
 
+    def test_a_spare_inside_the_replaced_bag_is_not_on_the_way(self):
+        worn_bags = tuple(
+            Bag(
+                "Small Brown Pouch" if slots == 6 else "Brown Leather Bag",
+                slots,
+                guid=guid,
+                position=position,
+            )
+            for guid, position, slots in (
+                (1, 19, 6),
+                (2, 20, 6),
+                (3, 21, 6),
+                (4, 22, 8),
+            )
+        )
+        spare = Bag("Heavy Brown Bag", 10, guid=5, entry=4497, inside=3)
+        member = Member("Uzza", 4, worn=worn_bags, carried=(spare,))
+        self.assertEqual(bag_market.on_the_way(member), 0)
+
     def test_a_bigger_bag_in_the_mail_is_not_bought_again(self):
         upgrades, _ = bag_market.plan_upgrades(
             [ALLIANCE[4]], ALLIANCE_PURSES, ALLIANCE_HOUSE, mailed={"Ugga": [12]}
