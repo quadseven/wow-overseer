@@ -2479,8 +2479,9 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
 _BAG_HOLD: dict = {}
 # Latest bag-floor result observed by a bag pass, keyed by family member. The
 # family key is its leader's name, so queue ownership reads its entry without
-# doing roster or inventory queries. Bounded by the roster: each pass overwrites
-# the one entry per member name, so repeated passes never add keys.
+# doing roster or inventory queries. Holds only live entries: a pass that finds
+# no released hold removes the members' keys, so a cleared or departed family
+# leaves nothing behind.
 _BAG_HOLD_STUCK: dict[str, tuple] = {}
 
 _MEMO_CREATE_SQL = ("CREATE TABLE IF NOT EXISTS overseer_bridge_memo ("
@@ -2591,7 +2592,10 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
     for name in names:
         # The family key is its leader's name, one of these members, so
         # _queue_owns_job reads that member's bag hold result.
-        _BAG_HOLD_STUCK[name] = result
+        if result:
+            _BAG_HOLD_STUCK[name] = result
+        else:
+            _BAG_HOLD_STUCK.pop(name, None)
     return result
 
 
