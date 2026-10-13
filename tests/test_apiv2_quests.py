@@ -69,6 +69,9 @@ LEDGER = [
 ]
 
 
+TICKET_ROWS = [{"quest": 2, "issue": 951, "url": "https://example.com/issues/951"}]
+
+
 class Ctx:
     def __init__(self, answers):
         self.read = realmread.Memory(answers)
@@ -83,6 +86,7 @@ def answers(**extra):
         v2quests.QUEST_LEDGER_SQL: lambda args: [
             r for r in LEDGER if r["quest"] == args[0]
         ],
+        ql.TICKETS_SQL: [],
     }
     out.update(extra)
     return out
@@ -154,6 +158,14 @@ class TheCatalogueEndpoint(Base):
         ):
             self.assertEqual(self.get("/api/v2/quests", query)[0], 400, query)
 
+    def test_a_filed_quest_lists_with_its_ticket(self):
+        _, body = self.get("/api/v2/quests", **{ql.TICKETS_SQL: TICKET_ROWS})
+        tickets = {q["id"]: q["ticket"] for q in body["quests"]}
+        self.assertEqual(
+            tickets[2], {"number": 951, "url": "https://example.com/issues/951"}
+        )
+        self.assertIsNone(tickets[1])
+
     def test_a_realm_without_the_ledger_reads_not_reached(self):
         _, body = self.get(
             "/api/v2/quests", **{v2quests.LEDGER_SQL: realmread.MISSING_TABLE}
@@ -178,6 +190,7 @@ class TheQuestEndpoint(Base):
                     "first_taken": "2026-10-13 09:30:00",
                     "finished": "2026-10-13 09:30:00",
                     "reason": "",
+                    "ticket": None,
                 },
                 {
                     "character": "Mirra",
@@ -187,9 +200,33 @@ class TheQuestEndpoint(Base):
                     "first_taken": "2026-10-13 09:30:00",
                     "finished": "2026-10-13 09:30:00",
                     "reason": ql.FAILED_REASON,
+                    "ticket": None,
                 },
             ],
         )
+
+    def test_a_filed_quest_carries_its_ticket_on_its_broken_attempts(self):
+        _, body = self.get("/api/v2/quests/2", **{ql.TICKETS_SQL: TICKET_ROWS})
+        ticket = {"number": 951, "url": "https://example.com/issues/951"}
+        self.assertEqual(body["quest"]["ticket"], ticket)
+        self.assertEqual([a["ticket"] for a in body["attempts"]], [ticket])
+
+    def test_only_a_broken_attempt_carries_the_ticket(self):
+        rows = [{"quest": 1, "issue": 950, "url": "https://example.com/issues/950"}]
+        _, body = self.get("/api/v2/quests/1", **{ql.TICKETS_SQL: rows})
+        self.assertEqual(
+            [
+                (a["state"], a["ticket"] and a["ticket"]["number"])
+                for a in body["attempts"]
+            ],
+            [("completed", None), ("broken", 950)],
+        )
+
+    def test_a_realm_without_the_ticket_table_reads_no_ticket(self):
+        _, body = self.get(
+            "/api/v2/quests/2", **{ql.TICKETS_SQL: realmread.MISSING_TABLE}
+        )
+        self.assertIsNone(body["quest"]["ticket"])
 
     def test_a_quest_outside_the_catalogue_is_404(self):
         self.assertEqual(self.get("/api/v2/quests/5")[0], 404)

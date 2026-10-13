@@ -109,6 +109,9 @@ COLLATIONS = {
     "overseer_bridge_memo": "utf8mb4_0900_ai_ci",
     # Bridge-owned (#923), named in questledger.TABLE_SQL.
     "overseer_quest_ledger": "utf8mb4_0900_ai_ci",
+    # Owned by the quest tickets job (#926), named in
+    # questledger.TICKET_TABLE_SQL.
+    "overseer_quest_ticket": "utf8mb4_0900_ai_ci",
     # Module-owned (mod-overseer#616), named in its own CREATE TABLE
     # (COLLATE=utf8mb4_unicode_ci) exactly as overseer_build is above.
     "overseer_dungeon_run_event": "utf8mb4_unicode_ci",
@@ -308,6 +311,8 @@ STRING_COLUMNS = {
     # VARCHAR and ENUM column.
     # From its own DDL (questledger.TABLE_SQL): every VARCHAR column.
     "overseer_quest_ledger": frozenset({"character_name", "state", "reason"}),
+    # From its own DDL (questledger.TICKET_TABLE_SQL): every VARCHAR column.
+    "overseer_quest_ticket": frozenset({"url"}),
     # From its own DDL (dungeonpace.CREATE_SQL): every VARCHAR column.
     "overseer_dungeon_pace": frozenset(
         {

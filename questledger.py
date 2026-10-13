@@ -25,6 +25,11 @@ does not say when, and a made-up time would read as a measurement.
 WHO (`QUESTERS`): the ten questers of #922, five per guild. #927 recruits
 them; until a name is on the realm it simply has no rows.
 
+THE TICKETS (`TICKET_TABLE_SQL`): overseer_quest_ticket, one row per quest,
+the GitHub issue filed for it once it broke (#926, questtickets.py). Keyed by
+the quest alone, not by quest and character: a quest is filed once whichever
+quester broke it, and the key is what holds that.
+
 THE PASS (`changes`): the ledger rows, the quest log and the rewarded quests
 of the questers in; the rows to write out. bridge.py reads and writes.
 
@@ -102,6 +107,21 @@ WRITE_SQL = (
     "ON DUPLICATE KEY UPDATE character_name = VALUES(character_name), "
     "state = VALUES(state), first_taken = VALUES(first_taken), "
     "finished = VALUES(finished), reason = VALUES(reason)"
+)
+
+TICKET_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS overseer_quest_ticket ("
+    "quest INT UNSIGNED NOT NULL, "
+    "issue INT UNSIGNED NOT NULL, "
+    "url VARCHAR(255) NOT NULL DEFAULT '', "
+    "filed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+    "PRIMARY KEY (quest)"
+    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+)
+TICKETS_SQL = "SELECT quest, issue, url FROM overseer_quest_ticket"
+# IGNORE: a quest already filed keeps its first issue.
+TICKET_WRITE_SQL = (
+    "INSERT IGNORE INTO overseer_quest_ticket (quest, issue, url) VALUES (%s, %s, %s)"
 )
 
 

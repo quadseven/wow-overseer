@@ -119,7 +119,8 @@ class AppToken:
     """An installation token for one repository, minted from the app's private key.
 
     The key never leaves its file: `openssl dgst -sign` reads it there. The
-    token is asked for ONE repository and `TOKEN_PERMISSIONS`, whatever the
+    token is asked for ONE repository and `permissions` (the roller's
+    `TOKEN_PERMISSIONS` unless another job names its own), whatever the
     installation could grant, and is cached until five minutes before expiry.
     """
 
@@ -133,6 +134,7 @@ class AppToken:
         run=subprocess.run,
         clock=time.time,
         api: str = "https://api.github.com",
+        permissions: dict | None = None,
     ):
         self.app_id = app_id.strip()
         self.installation_id = installation_id.strip()
@@ -140,6 +142,7 @@ class AppToken:
         self.repo_name = repo.split("/", 1)[1]
         self.http, self.run, self.clock, self.api = http, run, clock, api
         self._token, self._expires = None, 0.0
+        self.permissions = permissions or TOKEN_PERMISSIONS
 
     def jwt(self) -> str:
         now = int(self.clock())
@@ -165,7 +168,7 @@ class AppToken:
             return self._token
         url = "%s/app/installations/%s/access_tokens" % (self.api, self.installation_id)
         body = json.dumps(
-            {"repositories": [self.repo_name], "permissions": TOKEN_PERMISSIONS}
+            {"repositories": [self.repo_name], "permissions": self.permissions}
         ).encode()
         resp = self.http(
             "POST",

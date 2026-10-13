@@ -3,7 +3,7 @@
 GET /api/v2/quests?faction=&zone=&level_min=&level_max=&status=
 
     {quests: [{id, title, level, min_level, zone, zone_name, faction, races,
-               classes, follows, status, attempts}],
+               classes, follows, status, attempts, ticket}],
      totals: {quests, completed, broken, taken, abandoned, not_reached},
      by_faction: {horde: totals, alliance: totals}, shown}
 
@@ -18,10 +18,13 @@ GET /api/v2/quests?faction=&zone=&level_min=&level_max=&status=
 GET /api/v2/quests/{id}
 
     {quest: {... as above}, attempts: [{character, guid, guild, state,
-             first_taken, finished, reason}]}
+             first_taken, finished, reason, ticket}]}
 
   One catalogue quest with every quester's attempt at it. A quest outside the
   catalogue is a 404.
+
+  `ticket` is {number, url}, the issue filed for a broken quest
+  (questtickets.py, #926), or null. An attempt carries it when it broke.
 
 GET /api/v2/questers
 
@@ -81,6 +84,15 @@ def _number(query: dict, key: str):
     return int(text) if text else None
 
 
+def _tickets(ctx) -> dict:
+    """quest -> {number, url} off overseer_quest_ticket; {} without it."""
+    rows = ctx.read.rows(questledger.TICKETS_SQL, what="overseer_quest_ticket")
+    return {
+        int(r["quest"]): {"number": int(r["issue"]), "url": str(r.get("url") or "")}
+        for r in rows
+    }
+
+
 def _states(ledger_rows) -> dict:
     """quest -> [state, ...] off ledger rows."""
     out: dict = {}
@@ -106,8 +118,11 @@ def build_quests(
     level_min=None,
     level_max=None,
     status="",
+    tickets=None,
 ) -> dict:
-    """Catalogue and ledger rows in, the /api/v2/quests payload out. Pure."""
+    """Catalogue and ledger rows in, the /api/v2/quests payload out. Pure.
+    `tickets` maps a quest id to its ticket."""
+    tickets = tickets or {}
     states = _states(ledger_rows)
     statuses = {q.id: questledger.quest_status(states.get(q.id)) for q in catalogue}
     kept = questcatalogue.select(catalogue, faction, zone, level_min, level_max)
@@ -118,6 +133,7 @@ def build_quests(
                 **q.view(),
                 "status": statuses[q.id],
                 "attempts": len(states.get(q.id, ())),
+                "ticket": tickets.get(q.id),
             }
             for q in shown
         ],
@@ -145,33 +161,44 @@ def quests(query: dict, ctx) -> tuple[int, dict]:
         return 400, {"error": "zone, level_min and level_max are whole numbers"}
     ledger = ctx.read.rows(LEDGER_SQL, what="overseer_quest_ledger")
     return 200, build_quests(
-        _catalogue(ctx), ledger, faction, zone, level_min, level_max, status
+        _catalogue(ctx),
+        ledger,
+        faction,
+        zone,
+        level_min,
+        level_max,
+        status,
+        _tickets(ctx),
     )
 
 
-def _attempt(row) -> dict:
+def _attempt(row, ticket=None) -> dict:
     name = str(row.get("character_name") or "")
+    state = str(row.get("state") or "")
     return {
         "character": name,
         "guid": int(row["guid"]),
         "guild": questledger.guild_of(name),
-        "state": str(row.get("state") or ""),
+        "state": state,
         "first_taken": _when(row.get("first_taken")),
         "finished": _when(row.get("finished")),
         "reason": str(row.get("reason") or ""),
+        "ticket": ticket if state == questledger.BROKEN else None,
     }
 
 
-def build_quest(quest, ledger_rows) -> dict:
-    """One catalogue quest and its ledger rows in, /api/v2/quests/{id} out."""
+def build_quest(quest, ledger_rows, ticket=None) -> dict:
+    """One catalogue quest, its ledger rows and its ticket in,
+    /api/v2/quests/{id} out."""
     states = [str(r.get("state") or "") for r in ledger_rows or ()]
     return {
         "quest": {
             **quest.view(),
             "status": questledger.quest_status(states),
             "attempts": len(states),
+            "ticket": ticket,
         },
-        "attempts": [_attempt(r) for r in ledger_rows or ()],
+        "attempts": [_attempt(r, ticket) for r in ledger_rows or ()],
     }
 
 
@@ -184,7 +211,7 @@ def quest(query: dict, ctx) -> tuple[int, dict]:
     if found is None:
         return 404, {"error": "quest %d is not in the classic catalogue" % quest_id}
     rows = ctx.read.rows(QUEST_LEDGER_SQL, (quest_id,), what="overseer_quest_ledger")
-    return 200, build_quest(found, rows)
+    return 200, build_quest(found, rows, _tickets(ctx).get(quest_id))
 
 
 def build_questers(characters, log_rows, count_rows, titles: dict) -> dict:

@@ -282,6 +282,24 @@ class TheQuestsView(unittest.TestCase):
         self.assertNotIn("javascript:", html)
         self.assertIn('href="#/quests?zone=Teldrassil"', html)
 
+    def test_a_filed_quest_links_its_ticket_in_its_header(self):
+        filed = dict(
+            ATTEMPTS,
+            quest=dict(
+                ATTEMPTS["quest"],
+                ticket={"number": 951, "url": "https://example.com/tickets/951"},
+            ),
+            attempts=[],
+        )
+        got = run(
+            "views/quests.js",
+            "const c = ctx({id: '457'}, {}, {'/api/v2/quests/457': %s});\n"
+            "console.log(JSON.stringify(V.render(c).s));" % json.dumps(filed),
+            "#/quests/457",
+        )
+        self.assertIn('href="https://example.com/tickets/951"', got)
+        self.assertIn("Ticket #951", got)
+
     def test_a_quest_the_server_does_not_know_says_so(self):
         got = run(
             "views/quests.js",

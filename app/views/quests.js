@@ -10,7 +10,8 @@
 //   Catalogue   every quest in /api/v2/quests, narrowed by faction, zone,
 //               level range, status and a search. A row opens the quest's
 //               attempts (/api/v2/quests/<id>): who tried, how it ended, why
-//               it broke and the ticket filed for it.
+//               it broke and the ticket filed for it (#926), which the
+//               quest's own header links too.
 //
 // The payloads, as this view reads them:
 //
@@ -21,7 +22,8 @@
 //                        not_reached, total}], zones: [{zone, faction, ...the
 //                        same counts}]}, quests: [{id, title, faction, zone,
 //                        level, status, attempts}]}
-//   /api/v2/quests/<id> {quest: {id, title, faction, zone, level, status},
+//   /api/v2/quests/<id> {quest: {id, title, faction, zone, level, status,
+//                        ticket: {number, url} | null},
 //                        attempts: [{quester, guild, level, started_at,
 //                        ended_at, outcome, reason, ticket: {number, url}}]}
 //
@@ -211,7 +213,7 @@ function questPage(ctx) {
   }
   const x = read.data.quest || {};
   const list = read.data.attempts || [];
-  const line = html`${statusTag(x.status)} <span class="dim">L${levelText(x)} | ${x.zone || "zone not measured"} | ${x.faction || "faction not measured"}</span>`;
+  const line = html`${statusTag(x.status)} <span class="dim">L${levelText(x)} | ${x.zone || "zone not measured"} | ${x.faction || "faction not measured"}</span> ${ticketLink(x.ticket)}`;
   return html`${back}${pageHead(x.title || "Quest " + ctx.params.id, line)}${sectionHead("", "Attempts", plural(list.length, "attempt"))}${list.length ? html`<ol class="qs-attempts">${list.map(attempt)}</ol>` : state("empty", "No attempts yet", "No quester has tried this quest.")}`;
 }
 
