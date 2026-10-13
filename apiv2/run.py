@@ -57,11 +57,10 @@ def _event_gear(reader, members: list, holes: str, view: dict, map_id: int) -> l
     ]
 
 
-def _council_gear(reader, members: list, holes: str, view: dict) -> list:
+def _council_gear(reader, members: list, holes: str, view: dict, keyword: str) -> list:
     rows = reader.rows(
         _COUNCIL_GEAR_SQL.format(names=holes),
-        tuple(members)
-        + (view["keyword"], view["created_at"], view["ended_at"] or None),
+        tuple(members) + (keyword, view["created_at"], view["ended_at"] or None),
         what="overseer_loot_council",
     )
     return [_gear_item(row, "won by loot council") for row in rows]
@@ -72,12 +71,16 @@ def _gear(reader, view: dict) -> list:
     members = [member["name"] for member in view["members"]]
     if not members:
         return []
-    map_id = dungeonpath.PORTAL_MAPS.get(str(view["keyword"] or "").lower())
+    # run_view always sets `keyword` (blank for NULL); `.get` keeps a bare
+    # view safe too. A blank or unknown keyword has no map and so no gear,
+    # which is why neither read below looks at view["keyword"] again.
+    keyword = str(view.get("keyword") or "")
+    map_id = dungeonpath.PORTAL_MAPS.get(keyword.lower())
     if map_id is None:
         return []
     holes = ", ".join(["%s"] * len(members))
     items = _event_gear(reader, members, holes, view, map_id)
-    items.extend(_council_gear(reader, members, holes, view))
+    items.extend(_council_gear(reader, members, holes, view, keyword))
     return sorted(items, key=lambda item: item["at"], reverse=True)
 
 

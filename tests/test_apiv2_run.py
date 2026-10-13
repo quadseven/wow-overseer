@@ -180,6 +180,17 @@ class OneRun(unittest.TestCase):
             [("Old Blade", "looted")],
         )
 
+    def test_a_run_without_a_keyword_answers_no_gear_and_reads_none(self):
+        for keyword in (None, ""):
+            _code, payload, rd = ask("398", rows=(dict(ROW, keyword=keyword),))
+            self.assertEqual(payload["run"]["gear"], [])
+            self.assertEqual(reads(rd, "overseer_event"), [])
+            self.assertEqual(reads(rd, "overseer_loot_council"), [])
+
+    def test_a_bare_view_without_a_keyword_answers_no_gear(self):
+        view = {"members": [{"name": "Grug"}], "created_at": "", "ended_at": ""}
+        self.assertEqual(run_api._gear(realmread.Memory({}), view), [])
+
     def test_a_realm_without_the_gear_tables_or_columns_answers_no_gear(self):
         for gap in (realmread.MISSING_TABLE, realmread.MISSING_COLUMN):
             with self.subTest(gap=gap):
