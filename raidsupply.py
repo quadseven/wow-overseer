@@ -326,7 +326,8 @@ SUPPLIES = (
     # Spell 7257's reagents are classic's Spell.dbc entry, not yet checked
     # against the running worldserver's; the recipe, its 15 silver, its Alchemy
     # 165 and its two vendors as #892 read them from `item_template` and
-    # `npc_vendor`; the Leaded Vial's price is the one craft_supply.py read.
+    # `npc_vendor`; the Leaded Vial's 200 copper in LEADED_VIAL is the same
+    # price craft_supply.py's REAGENT table holds for item 3372.
     Supply(
         FIRE_PROTECTION,
         "Fire Protection Potion",
@@ -590,8 +591,10 @@ class FireLine:
 
 
 def standing_in(knowers, carriers=None) -> frozenset:
-    """The stand-in supplies in force: those whose `stands_in` supply no guild
-    crafter knows and whose recipe nobody carries (#892)."""
+    """The stand-in supplies in force (#892): those whose `stands_in` supply,
+    the one stood in for, is a make whose spell no guild crafter knows and
+    whose recipe item nobody carries. The stand-in's own make is not read
+    here; `make` below is the supply it stands in for."""
     out = set()
     for supply in SUPPLIES:
         if not supply.stands_in:
@@ -1046,7 +1049,11 @@ def _buy_step(member, entry, count, price, what, cap):
 
 
 def own_recipe_vendor(make, member):
-    """The RecipeVendor of the member's own side, or None (an unread race)."""
+    """The RecipeVendor of the member's own side, or None (an unread race).
+
+    Matching the member's team is the point: RecipeVendor's note says a vendor
+    of the other side refuses the character, so only the same-team vendor is
+    one it can buy from."""
     team = auction.team_of(member.race)
     return next((v for v in make.recipe_vendors if team and v.team == team), None)
 
@@ -1085,6 +1092,7 @@ def craft_step(crafter, make, name, want, vendors, cap):
                     "the %s recipe" % name,
                     cap,
                 )
+            # Same side (own_recipe_vendor) and same continent, else a note.
             seller = own_recipe_vendor(make, crafter)
             if seller is not None and seller.map_id == crafter.map_id:
                 return replace(

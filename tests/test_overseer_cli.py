@@ -37,6 +37,7 @@ ANSWERS = {
     "/api/v2/run": [404, {"error": "no such run", "id": 9}],
     "/api/realm": [200, {"build": "x"}],
     "/api/bags": [200, [{"bag": 1, "free": 4}, {"bag": 2, "free": 0}]],
+    "/api/names": [200, ["Grug", "Oden"]],
 }
 
 
@@ -109,6 +110,13 @@ class CliTests(unittest.TestCase):
         code, out, _ = self.run_cli("get", "/api/bags", "--table")
         self.assertEqual((code, SEEN), (0, ["/api/bags"]))
         self.assertEqual(out.split(), ["bag", "free", "1", "4", "2", "0"])
+
+    def test_top_level_list_of_scalars_prints_json_but_no_table(self):
+        code, out, _ = self.run_cli("get", "/api/names")
+        self.assertEqual((code, json.loads(out)), (0, ["Grug", "Oden"]))
+        code, out, err = self.run_cli("get", "/api/names", "--table")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("no list of records", err)
 
     def test_error_prints_status_and_body_and_exits_nonzero(self):
         code, out, err = self.run_cli("run", "9")
