@@ -15625,13 +15625,81 @@ class Bridge(discord.Client):
         free again when this returns, whatever happened."""
         formed = done = False
         try:
-            formed = await self._class_party_form(run)
+            met = await self._class_party_meet(run) if run.meeting else True
+            formed = met and await self._class_party_form(run)
             if formed:
                 done = await self._class_party_work(run)
         except Exception:
             log.exception("class party: %s's party for %s failed", run.leader, run.title)
         finally:
             await self._class_party_close(run, formed, done)
+
+    async def _class_party_meet(self, run) -> bool:
+        """Walk the leader and every helper to the objective spawn and wait until
+        they stand within classask.SEAT_RANGE_YARDS of each other. True when the
+        party can be formed.
+
+        A helper whose walk fails, or who is not near the leader after it, has
+        its yes taken back and is barred from this ask (the ask's next pass
+        picks another). The leader's walk failing, MEET_SECONDS passing or no
+        helper left fails the meeting. The members are held on the board
+        throughout (run.meeting)."""
+        board = self._class_board
+        cap = self._guild_walk_cap()
+        row = guildcorps.Row("job", classparty.meet_command(run.spot, cap), "",
+                             classparty.SOURCE)
+        log.info(classparty.meet_line(run))
+        arrived: dict = {}
+
+        async def walk(name):
+            def insert():
+                return _insert_corps_row(name, row)
+
+            row_id = await asyncio.to_thread(insert)
+            if not row_id:
+                arrived[name] = False
+                return
+            answer, row_id = await self._follow_guild_walk(
+                "class party", name, row_id, cap, insert,
+                run.spot.name or "its objective")
+            arrived[name] = answer.state == guildroute.ARRIVED
+            if not arrived[name]:
+                if classparty.walk_unsupported(answer.said):
+                    board.mark_unsupported(time.monotonic())
+                log.info("class party: %s's walk row %d to %s ended without arriving: "
+                         "%s", name, row_id, run.spot.name or "the objective",
+                         answer.said)
+
+        tasks = [asyncio.ensure_future(walk(n)) for n in run.names()]
+        _done, pending = await asyncio.wait(tasks, timeout=classparty.MEET_SECONDS)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        for task in tasks:
+            if task.done() and not task.cancelled() and task.exception():
+                log.error("class party: a meeting walk for %s's party failed",
+                          run.leader, exc_info=task.exception())
+        if not arrived.get(run.leader):
+            board.fail(run.ask_id)
+            log.info("class party: %s did not reach %s; the meeting for %s fails",
+                     run.leader, run.spot.name or "the objective", run.title)
+            return False
+        lost = [h for h in run.helpers if not arrived.get(h)]
+        stands = await asyncio.to_thread(_class_party_stands, run.names())
+        lost += [h for h in classparty.too_far(run, stands) if h not in lost]
+        for name in lost:
+            board.refuse(run.ask_id, name)
+            await asyncio.to_thread(_class_party_withdraw, run.answers.pop(name, None))
+            run.drop(name)
+        if lost:
+            board.fail(run.ask_id)
+            log.info("class party: %s did not meet %s at %s; their yes is taken back",
+                     ", ".join(lost), run.leader, run.spot.name or "the objective")
+        if not run.helpers:
+            return False
+        run.meeting = False
+        return True
 
     async def _class_party_form(self, run) -> bool:
         """Write party-up and follow its answer. True when the party formed.
@@ -23397,6 +23465,28 @@ def _class_party_quest_state(name: str, quest: int) -> str:
         cur.execute(_CLASS_PARTY_QUEST_SQL, (name, int(quest)))
         row = cur.fetchone()
     return classparty.quest_state(None if row is None else row["status"])
+
+
+_CLASS_PARTY_STANDS_SQL = (
+    "SELECT name, map_id, pos_x, pos_y FROM overseer_snapshot "
+    "WHERE updated_at > NOW() - INTERVAL 60 SECOND AND name IN (%s)"
+)
+
+
+def _class_party_stands(names) -> dict:
+    """name -> (map, x, y) for the members the fresh snapshot shows; a member
+    it does not show is absent."""
+    names = list(names)
+    if not names:
+        return {}
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_CLASS_PARTY_STANDS_SQL % ", ".join(["%s"] * len(names)), names)
+        rows = cur.fetchall()
+    return {
+        str(r["name"]): (int(r["map_id"]), float(r["pos_x"]), float(r["pos_y"]))
+        for r in rows
+        if r.get("pos_x") is not None and r.get("pos_y") is not None
+    }
 
 
 def _class_party_ask_live(ask_id: int) -> bool:

@@ -371,14 +371,21 @@ class TheAnswer(unittest.TestCase):
         )
         self.assertEqual(out.notes, ())
 
-    def test_an_answerer_out_of_seating_range_does_not_answer(self):
+    def test_an_answerer_beyond_reach_does_not_answer_and_a_far_one_does(self):
         far = mates(
             ("Bigzug", 20, CAVE, NEAR, 1),
             ("Near", 20, CAVE, (-250.0, -4150.0), 1),
-            ("Far", 20, CAVE, (NEAR[0] + classask.SEAT_RANGE_YARDS + 5, NEAR[1]), 1),
+            ("Walker", 20, CAVE, (NEAR[0] + 800.0, NEAR[1]), 1),
+            (
+                "Far",
+                20,
+                CAVE,
+                (NEAR[0] + classask.HELPER_REACH_YARDS + 5, NEAR[1]),
+                1,
+            ),
         )
         out = pass_(helps_of("Bigzug"), far, asks=[qask(1)])
-        self.assertEqual([r.member for r in out.replies], ["Near"])
+        self.assertEqual([r.member for r in out.replies], ["Near", "Walker"])
 
     def test_a_member_the_module_refused_for_this_ask_does_not_answer_it_again(self):
         out = classask.plan_pass(
@@ -390,7 +397,7 @@ class TheAnswer(unittest.TestCase):
             NOW,
             refused={1: frozenset({"Chill"})},
         )
-        self.assertEqual([r.member for r in out.replies], ["Dread"])
+        self.assertEqual([r.member for r in out.replies], ["Dread", "Ghoul"])
         other = classask.plan_pass(
             helps_of("Bigzug"),
             friends(),

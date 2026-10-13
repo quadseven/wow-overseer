@@ -19,6 +19,13 @@ an ask has them:
 
 THE FLOW, one task per party (the bridge's _run_class_party):
 
+  meet      the leader and each helper walk to the objective spawn
+            (`walk-to-spawn creature:<spawn id>`, followed as a guild walk is),
+            for MEET_SECONDS at most. A helper whose walk fails, or who does not
+            stand within SEAT_RANGE_YARDS of the leader after it, is withdrawn
+            and barred from this ask. A leader whose walk fails, or no helper
+            left, ends the attempt. Log line: `class party: <helpers> meet
+            <leader> at <spawn> for <quest>`.
   form      write party-up, read its answer. FORMED goes on. A refusal that names
             a helper (HELPER) takes that helper's yes back, bars the helper from
             this ask and ends the attempt: the ask's next pass picks another.
@@ -39,7 +46,8 @@ THE FLOW, one task per party (the bridge's _run_class_party):
 
 THE HOLD. A member is held out of the dungeon passes and the guild jobs only
 while a PartyRun with its name is on the Board: from the pass that decides to
-form the party to its disband, and not a moment after a refusal.
+form the party (the run starts in its meeting phase, while the members travel)
+to its disband, and not a moment after a refusal or a failed meeting.
 
 FAMILY MEMBERS are never touched: classask answerers come from the guild
 members free of every campaign (guildrun.why_not holds a family member), and the
@@ -65,6 +73,8 @@ SOURCE = "classask"
 UP, WALK, DISBAND = "party-up", "party-walk", "party-disband"
 MAX_HELPERS = 4
 
+# Seconds the members have to reach the objective before the meeting fails.
+MEET_SECONDS = 900.0
 # Seconds the bridge reads a party-up row's answer before it counts as lost.
 UP_FOLLOW_SECONDS = 90.0
 # Seconds to wait before writing party-up again after the leader was refused.
@@ -198,6 +208,23 @@ def up_command(helpers) -> str:
     return "%s %s" % (UP, " ".join(helpers))
 
 
+def meet_command(spot, cap) -> str:
+    """The walk one member makes to the objective spawn before the party forms."""
+    return "walk-to-spawn creature:%d%s" % (
+        int(spot.guid),
+        guildroute.errand_cap_word(cap),
+    )
+
+
+def meet_line(run) -> str:
+    return "class party: %s meet %s at %s for %s" % (
+        ", ".join(run.helpers),
+        run.leader,
+        run.spot.name or "the objective",
+        run.title,
+    )
+
+
 def walk_command(spot, cap) -> str:
     return "%s creature:%d%s" % (WALK, int(spot.guid), guildroute.errand_cap_word(cap))
 
@@ -209,7 +236,8 @@ def walk_command(spot, cap) -> str:
 class PartyRun:
     """One class quest party from the pass that decided it to its disband.
 
-    `answers` is member name -> the id of its yes row. `formed_at` and
+    `answers` is member name -> the id of its yes row. `meeting` is True while
+    the members travel to the objective (before party-up). `formed_at` and
     `deadline` are on the bridge's monotonic clock, set when the module said
     formed."""
 
@@ -220,6 +248,7 @@ class PartyRun:
     title: str
     spot: object
     answers: dict = field(default_factory=dict)
+    meeting: bool = False
     formed_at: float | None = None
     deadline: float | None = None
 
@@ -232,7 +261,16 @@ class PartyRun:
         low = str(name).lower()
         return next((h for h in self.helpers if h.lower() == low), "")
 
+    def drop(self, name) -> str:
+        """Take a helper out of this party; the name as the run held it, "" when
+        it is none of the helpers."""
+        gone = self.helper_named(name)
+        if gone:
+            self.helpers = tuple(h for h in self.helpers if h != gone)
+        return gone
+
     def form(self, now) -> None:
+        self.meeting = False
         self.formed_at = now
         self.deadline = now + PARTY_SECONDS
 
@@ -403,10 +441,32 @@ def plan_starts(asks, answers, quest_pass, helps, free, board, now, clock, book=
             need.move.title,
             spot,
             {y.member: y.id for y in chosen},
+            meeting=True,
         )
         taken.update(run.names())
         starts.append(run)
     return tuple(starts)
+
+
+def too_far(run, stands) -> list:
+    """The helpers of `run` that do not stand within classask.SEAT_RANGE_YARDS of
+    its leader on the leader's map. `stands` is name -> (map, x, y); a member
+    with no position is too far, and so is every helper when the leader has
+    none."""
+    lead = stands.get(run.leader)
+    if lead is None:
+        return list(run.helpers)
+    out = []
+    for h in run.helpers:
+        at = stands.get(h)
+        if (
+            at is None
+            or int(at[0]) != int(lead[0])
+            or ((at[1] - lead[1]) ** 2 + (at[2] - lead[2]) ** 2) ** 0.5
+            > classask.SEAT_RANGE_YARDS
+        ):
+            out.append(h)
+    return out
 
 
 def ask_held(held, board) -> dict:
