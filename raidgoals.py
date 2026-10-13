@@ -1381,6 +1381,9 @@ def _repair_goal(
     # visible as "no source on this realm" rather than reading as short,
     # unreachable, or met. If somebody already knows the craft, the goal is
     # finishable regardless, so the no-source status does not apply.
+    # The status follows the realm reads (`ranks` holds every trainer rank and
+    # every item that teaches `recipe.spell`), and the line names the
+    # schematic the recipe carries; neither hard-codes 18235.
     known_by_anyone = any(
         recipe.spell in known.get(member["name"], ()) for member in members
     )
