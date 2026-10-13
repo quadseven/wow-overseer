@@ -8,7 +8,9 @@ missing module table answers zeros with a note instead of raising.
                  xp_per_hour_24h
   level          median, lowest and a 10-level histogram for the 40 seats
   gaining_xp     seats that earned XP in the last 24 hours
-  runs           formed, cleared, wiped and clears per attempt in the last 24h
+  runs           formed, refused, not_entered, in_flight, entered, cleared,
+                 wiped, abandoned, timed_out and clears per attempt over the
+                 entered runs in the last 24h
   class_quests   class quest asks done and blocked
   deaths_24h     total deaths and the top 5 repeated deaths by member, spot
                  and killer
@@ -154,13 +156,25 @@ def _deaths(rows):
 
 def _runs(rows):
     formed = len(rows)
+    refused = sum(1 for r in rows if r.get("outcome") == "refused")
+    not_entered = sum(1 for r in rows if r.get("outcome") == "not entered")
+    in_flight = sum(1 for r in rows if r.get("state") != "ended")
+    entered = sum(1 for r in rows if r.get("outcome") in guildrun.WENT_IN)
     cleared = sum(1 for r in rows if r.get("outcome") == "cleared")
     wiped = sum(1 for r in rows if r.get("outcome") == "wiped")
+    abandoned = sum(1 for r in rows if r.get("outcome") == "abandoned")
+    timed_out = sum(1 for r in rows if r.get("outcome") == "timed out")
     return {
         "formed": formed,
+        "refused": refused,
+        "not_entered": not_entered,
+        "in_flight": in_flight,
+        "entered": entered,
         "cleared": cleared,
         "wiped": wiped,
-        "clears_per_attempt": round(cleared / formed, 2) if formed else None,
+        "abandoned": abandoned,
+        "timed_out": timed_out,
+        "clears_per_attempt": round(cleared / entered, 2) if entered else None,
     }
 
 
