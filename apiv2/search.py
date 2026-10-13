@@ -36,7 +36,7 @@ _lock = threading.Lock()
 # Character names compare case-sensitively in this schema, so both sides are
 # lowered; the text searched for is lower case already (normalise).
 _MEMBERS_SQL = (
-    "SELECT c.name, c.level, c.class AS class_id, (presence.name IS NOT NULL) AS online, g.name AS guild "
+    "SELECT c.name, c.level, c.class AS class_id, (presence.name IS NOT NULL) AS online, g.name AS guild "  # noqa: S608 - join fragment from literal aliases, values still bound
     "FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
     + presence.snapshot_join("c", "presence")
     + "JOIN guild g ON g.guildid = gm.guildid "
