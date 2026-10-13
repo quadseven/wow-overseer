@@ -18,27 +18,34 @@ Read-only.
 
 from __future__ import annotations
 
+from . import presence
 import vclient
 
 from ._scope import NOT_A_MEMBER, holes, may_answer, wanted_name
 
-FAMILY_SQL = "SELECT name, level, class, race, online FROM characters WHERE name IN "
+FAMILY_SQL = (
+    "SELECT c.name, c.level, c.class, c.race, (presence.name IS NOT NULL) AS online "
+    "FROM characters c " + presence.snapshot_join("c", "presence") + "WHERE c.name IN "
+)
 GUILD_SQL = (
     "SELECT g.guildid AS guild_id, g.name AS guild_name "
     "FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
     "JOIN guild g ON g.guildid = gm.guildid WHERE c.name = %s"
 )
 ROSTER_SQL = (
-    "SELECT c.name, c.level, c.class, c.race, c.online, gm.rank, "
+    "SELECT c.name, c.level, c.class, c.race, (presence.name IS NOT NULL) AS online, gm.rank, "
     "gr.rname AS rank_name "
     "FROM guild_member gm JOIN characters c ON c.guid = gm.guid "
-    "LEFT JOIN guild_rank gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank "
+    + presence.snapshot_join("c", "presence")
+    + "LEFT JOIN guild_rank gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank "
     "WHERE gm.guildid = %s"
 )
 FRIENDS_SQL = (
-    "SELECT f.name, f.level, f.class, f.race, f.online, s.flags, s.note "
+    "SELECT f.name, f.level, f.class, f.race, (presence.name IS NOT NULL) AS online, s.flags, s.note "
     "FROM characters c JOIN character_social s ON s.guid = c.guid "
-    "JOIN characters f ON f.guid = s.friend WHERE c.name = %s"
+    "JOIN characters f ON f.guid = s.friend "
+    + presence.snapshot_join("f", "presence")
+    + "WHERE c.name = %s"
 )
 
 
