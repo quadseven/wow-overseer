@@ -36,8 +36,8 @@ ANSWERS = {
     "/api/guildruns": [200, {"active": [], "recent": [{"id": 3, "state": "ended"}]}],
     "/api/v2/run": [404, {"error": "no such run", "id": 9}],
     "/api/realm": [200, {"build": "x"}],
-    "/api/bags": [200, [{"bag": 1, "free": 4}, {"bag": 2, "free": 0}]],
-    "/api/names": [200, ["Grug", "Oden"]],
+    "/api/client/bags": [200, [{"bag": 1, "free": 4}, {"bag": 2, "free": 0}]],
+    "/api/auras": [200, ["Grug", "Oden"]],
 }
 
 
@@ -96,6 +96,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual((code, SEEN), (0, ["/api/guildruns"]))
         self.assertEqual(out.split(), ["id", "state", "3", "ended"])
 
+    def test_fake_routes_are_catalogued_routes(self):
+        text = (HERE / "docs" / "API.md").read_text()
+        for path in ANSWERS:
+            self.assertIn("## `GET %s`" % path, text)
+
     def test_get_with_pairs(self):
         code, out, _ = self.run_cli("get", "/api/realm", "a=1", "b=two words")
         self.assertEqual(code, 0)
@@ -107,14 +112,14 @@ class CliTests(unittest.TestCase):
         self.assertEqual(out.splitlines()[0].split(), ["name", "step", "since"])
 
     def test_table_on_top_level_list(self):
-        code, out, _ = self.run_cli("get", "/api/bags", "--table")
-        self.assertEqual((code, SEEN), (0, ["/api/bags"]))
+        code, out, _ = self.run_cli("get", "/api/client/bags", "--table")
+        self.assertEqual((code, SEEN), (0, ["/api/client/bags"]))
         self.assertEqual(out.split(), ["bag", "free", "1", "4", "2", "0"])
 
     def test_top_level_list_of_scalars_prints_json_but_no_table(self):
-        code, out, _ = self.run_cli("get", "/api/names")
+        code, out, _ = self.run_cli("get", "/api/auras")
         self.assertEqual((code, json.loads(out)), (0, ["Grug", "Oden"]))
-        code, out, err = self.run_cli("get", "/api/names", "--table")
+        code, out, err = self.run_cli("get", "/api/auras", "--table")
         self.assertEqual((code, out), (1, ""))
         self.assertIn("no list of records", err)
 
