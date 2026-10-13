@@ -184,6 +184,9 @@ a.g-row:hover { background: var(--color-neutral-900); color: var(--color-text); 
 .g-r-grid { display: grid; gap: 12px; align-items: start; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
 .g-r-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .g-r-timeline { gap: 0; }
+.g-r-gear { flex-wrap: wrap; }
+.g-r-gear .g-grow { flex: 1 1 140px; }
+.g-r-gear .item { max-width: 100%; }
 .g-seat-row {
   display: flex; justify-content: space-between; gap: 8px; padding: 9px 14px; min-height: 44px;
   align-items: center; text-decoration: none; color: var(--color-text); box-shadow: 0 -1px 0 var(--color-neutral-900);
