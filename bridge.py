@@ -13680,18 +13680,21 @@ class Bridge(discord.Client):
 
         ACTS THROUGH THE GUILD'S FAMILY HEAD, who must be in the world: the
         guild verbs run on the acting character and resolve the guild from it.
+        A quester's reset is a `kind='naturalize'` row on the quester itself,
+        which the module runs offline.
         Renames wait for TEAM_RENAMES=on, because a `rename-to` row reaching a
         module without the verb (mod-overseer#852) would be read as a job.
         """
         renames_on = os.environ.get("TEAM_RENAMES", "off") == "on"
         pending = await asyncio.to_thread(_team_pending)
+        reset_done = await asyncio.to_thread(_team_reset_done)
         for guild in raidteams.GROUPS:
             actor = await asyncio.to_thread(_team_actor, guild)
             members = await asyncio.to_thread(_team_members, guild)
             if not members:
                 continue
             candidates = await asyncio.to_thread(_team_candidates, guild)
-            actions = teamsync.plan(guild, members, candidates, pending, renames_on)
+            actions = teamsync.plan(guild, members, candidates, pending, renames_on, reset_done)
             # Each target this pass names is in flight from here on, so a later
             # guild in the same pass never asks for the same character.
             pending |= {action.target for action in actions}
@@ -13707,6 +13710,9 @@ class Bridge(discord.Client):
                 if action.kind == "rename":
                     row = await asyncio.to_thread(
                         _insert_job, action.target, "rename-to " + action.new_name, TEAM_SYNC_SOURCE)
+                elif action.kind == "reset":
+                    row = await asyncio.to_thread(
+                        _insert_naturalize, action.target, teamsync.RESET_COMMAND, TEAM_SYNC_SOURCE)
                 elif not actor:
                     log.info("team sync: %s - %s %s waits: the family head is not in the world",
                              guild, action.kind, action.target)
@@ -29193,7 +29199,8 @@ def _team_candidates(guild: str) -> list:
     race one of `guild`'s open seats wants, each with its account's
     playerbot account type (None for an account that is not a bot's), so
     teamsync recruits only a character the realm logs in by itself."""
-    wanted = {(s.class_id, teamsync.RACE_IDS[s.race]) for s in raidteams.seats(guild) if not s.was}
+    seats = [s for s in raidteams.seats(guild) if not s.was] + list(raidteams.QUESTERS.get(guild, ()))
+    wanted = {(s.class_id, teamsync.RACE_IDS[s.race]) for s in seats}
     if not wanted:
         return []
     with _connect() as conn, conn.cursor() as cur:
@@ -29235,6 +29242,39 @@ def _team_pending() -> set:
             arg = str(r["target_arg"] or "")
             out.add(arg if arg else str(r["target_name"] or ""))
         return {n for n in out if n}
+
+
+def _team_reset_done():
+    """Names the naturalize ledger holds `reset` for, under each character's
+    name now; None when the ledger cannot be read, which resets nobody."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_NATURALIZED_SQL)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        parts = natural.parts_by_name(_naturalized_rows(cur.fetchall()))
+    return {name for name, held in parts.items() if natural.RESET_PART in held}
+
+
+def _insert_naturalize(name: str, command: str, source: str) -> int:
+    """One `kind='naturalize'` row for mod-overseer's DoNaturalize. Guarded
+    like `_insert_guild`: a realm without the machinery drops the row."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command (target_name, command, kind, source) "
+                "VALUES (%s, %s, 'naturalize', %s)",
+                (name, command, source),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                log.warning("overseer_command has no 'naturalize' machinery yet - "
+                            "dropping %r for %s", command, name)
+                return 0
+            raise
+        return cur.lastrowid or 0
 
 
 def _team_actor(guild: str) -> str:
