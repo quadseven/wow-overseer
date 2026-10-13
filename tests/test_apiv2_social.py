@@ -140,7 +140,7 @@ class TheFrame(unittest.TestCase):
         self.assertEqual(p["friends"][0]["note"], "cousin")
         self.assertEqual(p["ignored"], ["Pest"])
         # The family's names are bound, one placeholder each.
-        fam = [x for x in log if "WHERE name IN" in x[0]][0]
+        fam = [x for x in log if "WHERE c.name IN" in x[0]][0]
         self.assertEqual(fam[1], ("Grug", "Ugga"))
         self.assertIn("(%s, %s)", fam[0])
 
