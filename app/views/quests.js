@@ -120,7 +120,7 @@ function parties(read) {
 function bar(t) {
   const total = num(t.total);
   if (!total) return notMeasured();
-  // Use the larger count if stale totals would make the segments overflow.
+  // Divide by at least the sum of the counts, so their widths stay within 100%.
   const scale = Math.max(total, STATUS_FILTER.reduce((sum, k) => sum + (num(t[k]) || 0), 0));
   const part = (k, cls) => {
     const n = num(t[k]) || 0;
