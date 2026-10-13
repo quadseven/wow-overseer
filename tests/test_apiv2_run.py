@@ -44,6 +44,11 @@ ROW = {
 }
 
 
+def _answer(rows):
+    """`rows` as a list, or a schema gap code (an int) as it is."""
+    return rows if isinstance(rows, int) else list(rows)
+
+
 def ask(value, rows=(ROW,), event_rows=(), council_rows=()):
     """The handler over a reader that knows the run read and the story's
     reads (deaths, bosses, their levels) and nothing else."""
@@ -53,8 +58,8 @@ def ask(value, rows=(ROW,), event_rows=(), council_rows=()):
             guildrun._DEATHS_SQL: [],
             guildrun.BOSSES_SQL: [],
             guildrun.BOSS_LEVELS_SQL: [],
-            run_api._EVENT_GEAR_SQL.format(names="%s, %s, %s"): list(event_rows),
-            run_api._COUNCIL_GEAR_SQL.format(names="%s, %s, %s"): list(council_rows),
+            run_api._EVENT_GEAR_SQL.format(names="%s, %s, %s"): _answer(event_rows),
+            run_api._COUNCIL_GEAR_SQL.format(names="%s, %s, %s"): _answer(council_rows),
         }
     )
     code, payload = apiv2.handle(
@@ -165,6 +170,13 @@ class OneRun(unittest.TestCase):
                 ("Grug", "Old Blade", "looted"),
             ],
         )
+
+    def test_a_realm_without_the_gear_tables_or_columns_answers_no_gear(self):
+        for gap in (realmread.MISSING_TABLE, realmread.MISSING_COLUMN):
+            with self.subTest(gap=gap):
+                code, payload, _rd = ask("398", event_rows=gap, council_rows=gap)
+                self.assertEqual(code, 200)
+                self.assertEqual(payload["run"]["gear"], [])
 
     def test_an_unknown_id_is_a_404(self):
         code, payload, rd = ask("12345", rows=())

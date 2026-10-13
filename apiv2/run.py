@@ -49,6 +49,8 @@ def _event_gear(reader, members: list, holes: str, view: dict, map_id: int) -> l
         tuple(members) + (map_id, view["created_at"], view["ended_at"] or None),
         what="overseer_event",
     )
+    # Every row carries `kind`: the SELECT names it, so a realm without the
+    # column fails the whole read with 1054 and rows() answers [] instead.
     return [
         _gear_item(row, "equipped" if row["kind"] == "item_equip" else "looted")
         for row in rows
