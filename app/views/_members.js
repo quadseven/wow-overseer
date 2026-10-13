@@ -3,7 +3,7 @@
 // and the upgrades panel. Every sentence the server writes is printed as it
 // comes; this file only lays it out.
 
-import { html, raw, status, statusColor, classVar, iconUrl, item, notMeasured, gold, plural, esc } from "../ui.js";
+import { html, raw, status, statusColor, classVar, iconUrl, item, notMeasured, gold, plural, esc, wowheadItemUrl } from "../ui.js";
 import { parse, build } from "../router.js";
 import { modelStage } from "./_model.js";
 import { stateOf, stuckFor } from "../models/roster.js";
@@ -76,13 +76,13 @@ export function head(title, aside, line) {
 // ---- items in cells ------------------------------------------------------------------
 
 // A square item cell (the paperdoll's 48px slot, the inventory's 44px bag
-// cell). It carries data-item, so the one tooltip opens on hover, focus and
-// tap, exactly as ui.item's links do.
+// cell). It links to the WotLK Wowhead page and carries data-item, so the one
+// tooltip opens on hover, focus and tap, exactly as ui.item's links do.
 export function cell(c) {
   const q = Number.isFinite(Number(c.quality)) ? Number(c.quality) : 1;
   const pic = c.icon ? html`<img src="${iconUrl(c.icon)}" alt="" loading="lazy" decoding="async">` : "";
   const label = c.title || c.name || "Item " + c.entry;
-  return html`<button type="button" class="${"icell q" + q + (c.size ? " " + c.size : "")}" data-item="${Number(c.entry) || 0}" data-name="${c.name || ""}" aria-label="${label}" title="${label}">${pic}${c.mark ? html`<span class="mk">${c.mark}</span>` : ""}${c.corner ? html`<span class="lv">${c.corner}</span>` : ""}</button>`;
+  return html`<a class="${"icell q" + q + (c.size ? " " + c.size : "")}" href="${wowheadItemUrl(c.entry)}" target="_blank" rel="noopener" data-item="${Number(c.entry) || 0}" data-name="${c.name || ""}" aria-label="${label}" title="${label}">${pic}${c.mark ? html`<span class="mk">${c.mark}</span>` : ""}${c.corner ? html`<span class="lv">${c.corner}</span>` : ""}</a>`;
 }
 
 export function emptyCell(label, kind, title, size) {

@@ -236,6 +236,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: what a dungeon drops that beats what a family wears.
 - Example: `overseer get /api/v2/dungeonups family=grug`
 
+## `GET /api/v2/goal`
+
+- Query: `guild`
+- Answers: one answer per guild for the goal page.
+- Example: `overseer get /api/v2/goal guild=cave`
+
 ## `GET /api/v2/guild`
 
 - Query: `guild`

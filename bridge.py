@@ -25590,8 +25590,8 @@ def _insert_fund_letter_row(letter) -> int:
 # family's worn bags; which tailoring spells a trainer teaches and which path
 # items a vendor sells on each map; and the corps' own recent rows.
 _CORPS_MEMBERS_SQL = (
-    "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.level, "
-    "c.money, c.online, c.map AS map_id, lc.name AS master, "
+    "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, "
+    "c.level, c.money, c.online, c.map AS map_id, lc.name AS master, "
     + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
