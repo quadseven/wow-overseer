@@ -860,11 +860,8 @@ class AGuildGoesForARaidRecipeNobodyKnows(unittest.TestCase):
         criteria = guildrun.questions(p)["dungeon"]
         self.assertIn(SPIRE_RECIPE, str(criteria))
 
-    def test_the_bridge_says_the_recipe_at_the_pick(self):
-        self.assertIn('log.info("guild run %s: %s %s"', BRIDGE)
-        self.assertIn("guildrun.RECIPE_DROPS_SQL", BRIDGE)
-        self.assertIn('"recipes": recipes', BRIDGE)
-        self.assertIn('recipes=facts.get("recipes")', BRIDGE)
+    # The bridge's read of these recipes and its hand-off to the social pass
+    # are driven for real in test_guildsocial_bridge.TheRaidRecipes.
 
 
 class TheCompositions(unittest.TestCase):
