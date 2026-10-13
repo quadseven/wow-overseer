@@ -120,9 +120,11 @@ function parties(read) {
 function bar(t) {
   const total = num(t.total);
   if (!total) return notMeasured();
+  // Use the larger count if stale totals would make the segments overflow.
+  const scale = Math.max(total, STATUS_FILTER.reduce((sum, k) => sum + (num(t[k]) || 0), 0));
   const part = (k, cls) => {
     const n = num(t[k]) || 0;
-    return n ? html`<span class="${cls}" style="width:${((n / total) * 100).toFixed(2)}%"></span>` : "";
+    return n ? html`<span class="${cls}" style="width:${(Math.floor((n / scale) * 10000) / 100).toFixed(2)}%"></span>` : "";
   };
   const word = (k) => (num(t[k]) === null ? "not measured" : num(t[k]).toLocaleString("en-US")) + " " + STATUS[k][0].toLowerCase();
   const label = STATUS_FILTER.map(word).join(", ");
@@ -148,6 +150,8 @@ function coverage(data) {
 // Rows drawn at once: a phone holding every quest in the game would crawl,
 // so the list grows by STEP on request. Changing a filter starts it over.
 const STEP = 100;
+// Clicks and timed renders run to completion on the same browser thread; they
+// cannot interleave the count update. The filter key resets it on a new list.
 let shown = { key: "", n: STEP };
 function limitFor(q) {
   const key = JSON.stringify(kept(q));

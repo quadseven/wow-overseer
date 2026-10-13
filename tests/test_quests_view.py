@@ -252,6 +252,21 @@ class TheQuestsView(unittest.TestCase):
         self.assertIn("2 zones", html)
         self.assertIn("7 quests completed and 1 found broken, of 200.", html)
 
+    def test_coverage_bar_stays_within_its_track_when_totals_disagree(self):
+        quests = json.loads(json.dumps(QUESTS))
+        quests["totals"]["factions"][0].update(
+            completed=8, broken=4, not_reached=8, total=10
+        )
+        reads = dict(READS, **{"/api/v2/quests": quests})
+        got = run(
+            "views/quests.js",
+            "console.log(JSON.stringify(V.render(ctx({}, {}, %s)).s));"
+            % json.dumps(reads),
+        )
+        self.assertIn('class="qs-bar-ok" style="width:40.00%"', got)
+        self.assertIn('class="qs-bar-bad" style="width:20.00%"', got)
+        self.assertIn('class="qs-bar-none" style="width:40.00%"', got)
+
     def test_the_catalogue_lists_every_quest(self):
         _, html = self.page()
         self.assertIn("5 of 5 quests", html)
