@@ -279,11 +279,12 @@ def hold_blocker(now: dict, now_at: int) -> dict | None:
     held = now.get("for_s")
     if held is not None and held < HOLD_STUCK_SECONDS:
         return None
+    kind = "walk restarts" if nowstatus.RESTART_WAITING in waiting else "hold"
     return {
         "step": doing,
         "blocker": "Waiting for " + waiting + ".",
         "since": (now_at - int(held)) if held is not None and now_at else None,
-        "kind": "hold",
+        "kind": kind,
     }
 
 

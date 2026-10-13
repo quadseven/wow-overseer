@@ -25,6 +25,7 @@ import apiv2  # noqa: E402
 import families as families_module  # noqa: E402
 import guildgear  # noqa: E402
 import guildjobs  # noqa: E402
+import nowstatus  # noqa: E402
 import realmread  # noqa: E402
 from apiv2 import activity, classchain, members, training, upgrades  # noqa: E402
 from apiv2._context import Context  # noqa: E402
@@ -195,6 +196,21 @@ class StuckIsTheBridgesOwnRecord(unittest.TestCase):
             {"doing": "Held", "waiting": "a door", "for_s": None}, NOW
         )
         self.assertIsNone(found["since"])
+
+    def test_walk_restarts_are_stuck_after_thirty_minutes_and_not_before(self):
+        now = {
+            "doing": "Walking out of Shadowfang Keep for the dungeon run",
+            "waiting": "a way there; the walk has ended and restarted 5 times",
+            "for_s": 1800,
+        }
+        found = members.hold_blocker(now, NOW)
+        self.assertEqual(found["kind"], "walk restarts")
+        self.assertIsNone(members.hold_blocker(dict(now, for_s=600), NOW))
+
+    def test_the_restart_reason_nowstatus_writes_is_read_as_walk_restarts(self):
+        now = {"doing": "Walking", "waiting": nowstatus.restart_words(424)}
+        self.assertIn("restarted 424 times", now["waiting"])
+        self.assertEqual(members.hold_blocker(now, NOW)["kind"], "walk restarts")
 
     def test_bank_bag_slot_note_is_not_a_stuck_hold(self):
         self.assertIsNone(
