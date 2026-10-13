@@ -173,7 +173,7 @@ main.main {
 @media (min-width: 1600px) { main.main { padding-inline: clamp(28px, 2.5vw, 64px); } }
 .tabbar {
   position: sticky; bottom: 0; z-index: 6; background: var(--color-surface); display: none;
-  grid-template-columns: repeat(5, 1fr); padding: 6px 4px calc(env(safe-area-inset-bottom) + 6px);
+  grid-template-columns: repeat(6, 1fr); padding: 6px 4px calc(env(safe-area-inset-bottom) + 6px);
   box-shadow: 0 -1px 0 var(--color-divider);
 }
 .tab {
