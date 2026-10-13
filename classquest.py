@@ -1094,6 +1094,7 @@ def build(
     object_rows=(),
     focus_rows=(),
     start_rows=None,
+    every=False,
 ) -> Book:
     """The Book from the world's rows.
 
@@ -1119,7 +1120,7 @@ def build(
     quests = {}
     for r in quest_rows or ():
         klass = klass_of(r)
-        if klass:
+        if klass or every:
             quest = _quest(r, klass, starts, ends, by_entry, droppers, aims, others)
             # With the other starters read (start_rows given), a quest nothing
             # starts is not a class quest anyone can have.

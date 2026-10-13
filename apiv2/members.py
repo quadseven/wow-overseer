@@ -2,7 +2,8 @@
 
 WHO. The families on the roster table and every member of the guilds they
 are in, as the database reports the guilds. Nothing from the request reaches
-the SQL: neither read takes a parameter.
+the SQL: neither read takes a parameter. A guild's questers (raidteams.QUESTERS)
+carry `group` "quester"; every other member an empty one.
 
 WHAT EACH MEMBER IS DOING is nowstatus.compose's sentence, the same one the
 Watch wall prints under a stream: the module's intent book, the steps the
@@ -42,6 +43,7 @@ from __future__ import annotations
 import re
 
 import nowstatus
+import raidteams
 import situation
 from panel import _CLASS_NAMES, _RACE_NAMES
 
@@ -308,12 +310,19 @@ def _either(char: dict, row: dict, key: str) -> int:
     return int(char.get(key) or row.get(key) or 0)
 
 
+def group_of(name: str, guild: str) -> str:
+    """'quester' for a guild's quester (raidteams.QUESTERS), else ''."""
+    return "quester" if guild and name in raidteams.quester_names(guild) else ""
+
+
 def _identity(name: str, row: dict, char: dict, family_of: dict) -> dict:
     family, lead = family_of.get(name, ("", False))
+    guild = row.get("guild_name") or ""
     return {
         "name": name,
-        "guild": row.get("guild_name") or "",
+        "guild": guild,
         "family": family,
+        "group": group_of(name, guild),
         "lead": lead,
         "level": _either(char, row, "level"),
         "class": _CLASS_NAMES.get(_either(char, row, "class_id"), ""),
