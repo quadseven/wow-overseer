@@ -126,6 +126,7 @@ import preraid
 import professions
 import protect
 import questbook
+import questledger
 import questshare
 import quests
 import raidcraft
@@ -3069,6 +3070,46 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
 # the way the Jev store is (#179), because the worldserver never reads it.
 
 
+# --- the quest ledger (questledger.py) -----------------------------------
+#
+# questledger decides what moved; these read the questers' logs and write it.
+
+
+def _ensure_quest_ledger_store() -> None:
+    """overseer_quest_ledger, created if missing. Logged and swallowed: without
+    it the questers' quests go unrecorded, and nothing else stops."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(questledger.TABLE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("quest ledger: overseer_quest_ledger unavailable; the "
+                      "questers' quests are not recorded")
+
+
+def _record_quests() -> int:
+    """One ledger pass over the questers: how many rows were written."""
+    names = questledger.quester_names()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(questledger.CHARACTERS_SQL.format(
+            holes=questledger.holes(len(names))), tuple(names))
+        characters = {int(r["guid"]): r["name"] for r in cur.fetchall()}
+        if not characters:
+            return 0
+        guids = tuple(sorted(characters))
+        marks = questledger.holes(len(guids))
+        reads = []
+        for sql in (questledger.LEDGER_SQL, questledger.LOG_SQL,
+                    questledger.REWARDED_SQL):
+            cur.execute(sql.format(holes=marks), guids)
+            reads.append(cur.fetchall())
+        cur.execute(questledger.NOW_SQL)
+        now = cur.fetchone()["now"]
+        written = questledger.changes(characters, *reads, now)
+        if written:
+            cur.executemany(questledger.WRITE_SQL, [e.args() for e in written])
+    return len(written)
+
+
 # --- the Watcher (director.py) -------------------------------------------
 
 
@@ -5905,6 +5946,7 @@ PASSES = (
     _Pass("_family_intent_loop"),
     _Pass("_now_loop"),
     _Pass("_watch_loop"),
+    _Pass("_quest_ledger_loop"),
 )
 
 
@@ -6216,6 +6258,7 @@ class Bridge(discord.Client):
             _ensure_queue_store,
             _ensure_memo_store,
             _ensure_watch_store,
+            _ensure_quest_ledger_store,
         ):
             await asyncio.to_thread(ensure)
         owing = self.__dict__.get("_class_owing")
@@ -20154,6 +20197,20 @@ class Bridge(discord.Client):
                 f"The Watcher will follow: {spec.text()}. The order lapses after "
                 f"{director.MANDATE_TTL // 60} minutes unless renewed."
             )
+
+    async def _quest_ledger_loop(self) -> None:
+        """Record what happened to the questers' quests (questledger.py)."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("QUEST_LEDGER_SECONDS", "120"))
+        await asyncio.sleep(min(cycle, 60.0))
+        while not self.is_closed():
+            try:
+                written = await asyncio.to_thread(_record_quests)
+                if written:
+                    log.info("quest ledger: %d quest row(s) moved", written)
+            except Exception:
+                log.exception("quest ledger: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
 
     async def _watch_loop(self) -> None:
         """Keep the Watcher beside whoever the operator's order names."""
