@@ -2212,6 +2212,17 @@ def ended_since(reader, guilds: list, days: int, n: int) -> list:
     return _runs(reader, where, (*guilds, days), n)
 
 
+def formed_since(reader, guilds: list, days: int, n: int) -> list:
+    """The guilds' runs formed in the last `days` days, in any state, as rows
+    newest first. The goal endpoint reads these (apiv2/goal.py)."""
+    if not guilds:
+        return []
+    where = "guild IN (%s) AND created_at >= NOW() - INTERVAL %%s DAY" % (
+        _holes(len(guilds)),
+    )
+    return _runs(reader, where, (*guilds, days), n)
+
+
 def matching(reader, keywords: list, members_like: str, n: int) -> list:
     """Runs at one of `keywords`, or with a member whose lowered seat list
     matches the LIKE pattern `members_like`, as rows newest first."""

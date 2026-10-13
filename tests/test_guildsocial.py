@@ -14,6 +14,7 @@ import types
 import pathlib
 import unittest
 from dataclasses import replace
+from unittest.mock import patch
 
 import guildrun
 import guildsocial as gs
@@ -927,6 +928,17 @@ class TheDoorsRecordGatesTheAsk(unittest.TestCase):
         # Another guild's gap does not move Cave's ask.
         other = self.recipe_ask({"Bonkers": {229: (recipe,)}})
         self.assertEqual(other.target, "sunken-temple")
+
+    def test_a_recipe_door_outside_the_options_is_ignored(self):
+        spire = next(d for d in DOORS if d.keyword == "lower-blackrock-spire")
+        temple = next(d for d in DOORS if d.keyword == "sunken-temple")
+        recipe = "Recipe: Greater Fire Protection Potion"
+        board = types.SimpleNamespace(recipes={"Cave": {temple.map_id: (recipe,)}})
+        member = types.SimpleNamespace(level=56)
+        need = gs.Need("Auren", spire.keyword, "Belt", entry=5, gain=3.0)
+        option = gs.DoorOption(need, spire, guildrun.NO_SHAPE_RECORD)
+        with patch.object(guildrun, "fitting_doors", return_value=[temple]):
+            self.assertIsNone(gs._recipe_option(board, member, "Cave", "", [option]))
 
     def test_a_healthy_door_still_wins_over_a_failing_better_need(self):
         rows = [ended("deadmines", "wiped")] * guildrun.FAILING_RUNS
