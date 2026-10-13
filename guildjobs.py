@@ -2249,18 +2249,26 @@ def assign_doors(members, entrances, stones, campaign_door: str = "") -> dict:
     for m in casters:
         if on_call is not None and m.name == on_call.name:
             continue
-        fits = []
-        for run in doors_for(m):
-            stone = stone_for(run.keyword, entrances, stones)
-            if stone is None:
-                continue
-            fits.append((load.get(stone.spawn, 0), run.floor, run.keyword, run, stone))
-        if not fits:
-            continue
-        _n, _floor, keyword, run, stone = min(fits, key=lambda f: f[:3])
-        load[stone.spawn] = load.get(stone.spawn, 0) + 1
-        out[m.name] = Door(keyword, run.place, run.floor, run.ceiling, stone)
+        door = _spread_door(m, entrances, stones, load)
+        if door is not None:
+            out[m.name] = door
     return out
+
+
+def _spread_door(m, entrances, stones, load):
+    """The fitting door whose stone has the fewest warlocks, counted into
+    `load`; None when no door with a stone fits."""
+    fits = []
+    for run in doors_for(m):
+        stone = stone_for(run.keyword, entrances, stones)
+        if stone is None:
+            continue
+        fits.append((load.get(stone.spawn, 0), run.floor, run.keyword, run, stone))
+    if not fits:
+        return None
+    _n, _floor, keyword, run, stone = min(fits, key=lambda f: f[:3])
+    load[stone.spawn] = load.get(stone.spawn, 0) + 1
+    return Door(keyword, run.place, run.floor, run.ceiling, stone)
 
 
 def _assign_campaign_door(casters, entrances, stones, campaign_door):
@@ -2541,14 +2549,9 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
     shared = _shared_step(m, crafters, master, kept, recent, cap)
     if shared[0]:
         return shared
-    if m.level < RITUAL_LEVEL:
-        return None, "levels toward Ritual of Summoning at %d" % RITUAL_LEVEL, shared[2]
-    if RITUAL_OF_SUMMONING not in m.known:
-        return (
-            None,
-            "has the level for Ritual of Summoning and has not learned it at a warlock trainer",
-            shared[2],
-        )
+    gap = _ritual_gap(m)
+    if gap:
+        return None, gap, shared[2]
     door = doors.get(m.name)
     if door is None:
         return None, "knows the ritual; no door fits its level yet", shared[2]
@@ -2559,6 +2562,11 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
         return None, "serves %s; where it stands is not read this pass" % door.place, ""
     if door.on_call:
         return _on_call_step(m, door, recent, cap, shards)
+    return _farm_door_step(m, door, recent, cap, shards)
+
+
+def _farm_door_step(m, door, recent, cap, shards):
+    """Return the walk or farm step for a summoner spread over the doors."""
     if door.stone is not None and not _near(m, door.stone, DOOR_REACH):
         if not _cooling(m, "door", recent):
             said = (
@@ -2574,6 +2582,15 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
         "farms near the meeting stone at %s between summons%s" % (door.place, shards),
         "",
     )
+
+
+def _ritual_gap(m) -> str:
+    """What a summoner still lacks before it can cast the ritual; "" when ready."""
+    if m.level < RITUAL_LEVEL:
+        return "levels toward Ritual of Summoning at %d" % RITUAL_LEVEL
+    if RITUAL_OF_SUMMONING not in m.known:
+        return "has the level for Ritual of Summoning and has not learned it at a warlock trainer"
+    return ""
 
 
 def _on_call_step(m, door, recent, cap, shards):
