@@ -410,7 +410,9 @@ PASSING_REFUSALS = ("in combat",)
 
 
 def benched(recent: list) -> set:
-    """Members named by recent refusals, with a longer battleground queue hold."""
+    """Members named by recent refusals: BENCH_MINUTES back, or QUEUE_BENCH_MINUTES
+    for a battleground-queue refusal, except one that passes (PASSING_REFUSALS).
+    A row whose age_minutes is missing or None counts as fresh (age 0)."""
     out = set()
     for row in recent:
         if str(row.get("outcome") or "") != "refused":
