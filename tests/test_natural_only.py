@@ -151,7 +151,9 @@ def _insert_command_values(src: str) -> list[tuple[int, str | None, str]]:
             )
         ]
 
-        for col, val in zip(columns, values):
+        # strict=False: the VALUES match stops at the first ')', so a call such
+        # as NOW() can leave fewer values than columns; pair what was read.
+        for col, val in zip(columns, values, strict=False):
             if val.startswith("'") and val.endswith("'"):
                 lit = val[1:-1].strip()
                 if lit:
