@@ -171,6 +171,15 @@ class OneRun(unittest.TestCase):
             ],
         )
 
+    def test_an_event_row_without_kind_reads_as_looted_not_a_crash(self):
+        bare = {"member": "Grug", "entry": 100, "name": "Old Blade", "quality": 3}
+        code, payload, _rd = ask("398", event_rows=[bare])
+        self.assertEqual(code, 200)
+        self.assertEqual(
+            [(g["name"], g["source"]) for g in payload["run"]["gear"]],
+            [("Old Blade", "looted")],
+        )
+
     def test_a_realm_without_the_gear_tables_or_columns_answers_no_gear(self):
         for gap in (realmread.MISSING_TABLE, realmread.MISSING_COLUMN):
             with self.subTest(gap=gap):
