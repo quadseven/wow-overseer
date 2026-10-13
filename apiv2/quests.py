@@ -139,6 +139,8 @@ def build_quests(
 
 
 def quests(query: dict, ctx) -> tuple[int, dict]:
+    """GET /api/v2/quests?faction=&zone=&level_min=&level_max=&status= -
+    the classic quest catalogue with ledger coverage totals."""
     faction = _one(query, "faction").lower()
     if faction and faction not in questcatalogue.FACTIONS:
         return 400, {"error": "faction is horde, alliance or both"}
@@ -194,6 +196,7 @@ def build_quest(quest, ledger_rows) -> dict:
 
 
 def quest(query: dict, ctx) -> tuple[int, dict]:
+    """GET /api/v2/quests/{id} - one classic quest and every quester attempt."""
     try:
         quest_id = int(_one(query, "id"))
     except ValueError:
@@ -274,6 +277,8 @@ def build_questers(characters, log_rows, count_rows, titles: dict) -> dict:
 
 
 def questers(_query: dict, ctx) -> tuple[int, dict]:
+    """GET /api/v2/questers - each quester's location, current quests and
+    ledger counts."""
     names = questledger.quester_names()
     characters = ctx.read.rows(
         questledger.CHARACTERS_SQL.format(holes=questledger.holes(len(names))),

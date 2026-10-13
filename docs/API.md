@@ -254,6 +254,24 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: whether operator actions are on for this deployment.
 - Example: `overseer get /api/v2/operator`
 
+## `GET /api/v2/questers`
+
+- Query: none
+- Answers: each quester's location, current quests and ledger counts.
+- Example: `overseer get /api/v2/questers`
+
+## `GET /api/v2/quests`
+
+- Query: `faction`, `zone`, `level_min`, `level_max`, `status`
+- Answers: the classic quest catalogue with ledger coverage totals.
+- Example: `overseer get /api/v2/quests faction=X`
+
+## `GET /api/v2/quests/{id}`
+
+- Query: none
+- Answers: one classic quest and every quester attempt.
+- Example: `overseer get /api/v2/quests/{id}`
+
 ## `GET /api/v2/raidteams`
 
 - Query: `guild`
