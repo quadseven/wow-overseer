@@ -152,6 +152,65 @@ class TheBridgePass(unittest.TestCase):
         self.assertIsNone(this._guild_run_formed_at)
 
 
+class _RecipeCursor:
+    """The two reads _guild_raid_recipes makes: the drops, then who knows."""
+
+    def __init__(self, drops, known):
+        self.reads = []
+        self.drops, self.known = drops, known
+
+    def execute(self, sql, args=()):
+        self.reads.append(sql)
+
+    def fetchall(self):
+        last = self.reads[-1]
+        return self.drops if "creature_loot_template" in last else self.known
+
+
+class TheRaidRecipes(unittest.TestCase):
+    """The bridge reads the raid recipes nobody knows and hands them on (#893)."""
+
+    SPIRE = "Recipe: Greater Fire Protection Potion"
+
+    def setUp(self):
+        bridge._RAID_RECIPE_DROPS = None
+        self.addCleanup(setattr, bridge, "_RAID_RECIPE_DROPS", None)
+
+    def test_each_guild_gets_the_recipes_its_members_do_not_know(self):
+        drops = [{"item": 13494, "item_name": self.SPIRE, "map_id": 229}]
+        known = [{"guild": "Den", "spell": 17574}]
+        cur = _RecipeCursor(drops, known)
+        found = bridge._guild_raid_recipes(cur, ["Cave", "Den"])
+        self.assertEqual(found, {"Cave": {229: (self.SPIRE,)}, "Den": {}})
+        # The drops are read once; who knows a recipe is read every pass.
+        bridge._guild_raid_recipes(cur, ["Cave"])
+        self.assertEqual(sum("creature_loot_template" in sql for sql in cur.reads), 1)
+        self.assertEqual(sum("character_spell" in sql for sql in cur.reads), 2)
+
+    def test_no_guild_reads_nothing(self):
+        cur = _RecipeCursor([], [])
+        self.assertEqual(bridge._guild_raid_recipes(cur, []), {})
+        self.assertEqual(cur.reads, [])
+
+    def test_the_social_pass_is_handed_the_recipes(self):
+        recipes = {"Cave": {229: (self.SPIRE,)}}
+
+        def with_recipes(bounds):
+            out = facts()
+            out["recipes"] = recipes
+            return out
+
+        handed, real = [], gs.plan_pass
+
+        def plan_pass(*args, **kwargs):
+            handed.append(kwargs.get("recipes"))
+            return real(*args, **kwargs)
+
+        with mock.patch.object(bridge.guildsocial, "plan_pass", plan_pass):
+            TheBridgePass().run_once(_Self(), _fetch_guild_social_facts=with_recipes)
+        self.assertEqual(handed, [recipes])
+
+
 class _Cursor:
     def __init__(self, log):
         self.log = log

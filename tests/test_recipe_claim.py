@@ -41,8 +41,11 @@ dry run producing nothing would have looked exactly like a quiet realm. See
 import unittest
 
 import bag_pressure
+import clearance
+import crafters
 import disposition
 import gear
+import raidsupply
 
 # The live skill line ids, from goals.SKILL_IDS, which is itself checked
 # against the core's own SharedDefines enum. Restated here as literals on
@@ -526,6 +529,111 @@ class RecipeGifts(unittest.TestCase):
         # "nobody wants any of it".
         rows = [_row("Og", 1507032, "Plans: Green Iron Boots", BLACKSMITHING)]
         self.assertEqual(bag_pressure.recipe_gifts(rows, {}).grants, ())
+
+
+# THE RAID RECIPES A GUILD RUN GOES FOR (#893): Recipe 13494 from Blackrock
+# Spire's Firebrands and the three flask recipes. Entries and taught spells off
+# item_template, restated as literals for the reason the skill ids above are.
+RAID_RECIPES = {
+    13494: ("Recipe: Greater Fire Protection Potion", 17574, 290),
+    13519: ("Recipe: Flask of the Titans", 17635, 300),
+    13520: ("Recipe: Flask of Distilled Wisdom", 17636, 300),
+    13521: ("Recipe: Flask of Supreme Power", 17637, 300),
+}
+
+
+def _raid_recipe(entry, holder="Looter", guid=None):
+    name, spell, rank = RAID_RECIPES[entry]
+    return crafters.Recipe(
+        holder=holder,
+        guid=guid or entry,
+        entry=entry,
+        name=name,
+        skill=ALCHEMY,
+        rank=rank,
+        spell=spell,
+    )
+
+
+def _raid_stack(entry, holder="Looter"):
+    name, _spell, rank = RAID_RECIPES[entry]
+    return clearance.Stack(
+        holder=holder,
+        guid=entry,
+        entry=entry,
+        name=name,
+        item_class=9,
+        quality=2,
+        sell_price=2500,
+        required_skill=ALCHEMY,
+        required_rank=rank,
+    )
+
+
+class ARaidRecipeGoesToTheGuildsAlchemist(unittest.TestCase):
+    """A looted raid recipe is kept and routed to the guild's alchemist
+    through the designated-crafters routing (#248); it is never vendored or
+    auctioned (#893)."""
+
+    def people(self):
+        return [
+            crafters.Person("Looter", {BLACKSMITHING: 300}, level=58, online=True),
+            crafters.Person("Brewer", {ALCHEMY: 300}, level=60, online=True),
+            crafters.Person("Smith", {BLACKSMITHING: 250}, level=55, online=True),
+        ]
+
+    def test_each_raid_recipe_routes_to_the_alchemist(self):
+        people = self.people()
+        reg = crafters.register(people)
+        for entry in RAID_RECIPES:
+            pick = crafters.choose(
+                _raid_recipe(entry), reg, people, crafters.Known(), 25
+            )
+            self.assertEqual(pick.taker, "Brewer", entry)
+            routed = clearance.route(
+                _raid_stack(entry),
+                None,
+                [],
+                picks={entry: pick},
+                market={entry: 100000},
+                auction_open=True,
+            )
+            self.assertEqual(
+                (routed.route, routed.taker), (clearance.GUILD, "Brewer"), entry
+            )
+
+    def test_each_is_a_raid_recipe_no_vendor_sells(self):
+        for entry, (_name, spell, _rank) in RAID_RECIPES.items():
+            self.assertEqual(raidsupply.DROP_RECIPES.get(entry), spell, entry)
+
+    def test_with_no_alchemist_it_is_kept_never_sold(self):
+        # Nobody to take it, the house paying well and a vendor price: kept.
+        people = [p for p in self.people() if p.name != "Brewer"]
+        reg = crafters.register(people)
+        for entry in RAID_RECIPES:
+            pick = crafters.choose(
+                _raid_recipe(entry), reg, people, crafters.Known(), 25
+            )
+            self.assertEqual(pick.taker, "", entry)
+            routed = clearance.route(
+                _raid_stack(entry),
+                None,
+                [],
+                picks={entry: pick},
+                market={entry: 100000},
+                auction_open=True,
+            )
+            self.assertEqual(routed.route, clearance.KEEP, entry)
+            self.assertIn("never sold", routed.why)
+
+    def test_the_family_alchemist_claims_one_in_another_bag(self):
+        rows = [
+            _row("Og", entry, name, ALCHEMY, entry=entry)
+            for entry, (name, _spell, _rank) in RAID_RECIPES.items()
+        ]
+        self.assertEqual(
+            disposition.learners(rows, HOLDERS), dict.fromkeys(RAID_RECIPES, "Ugga")
+        )
 
 
 if __name__ == "__main__":
