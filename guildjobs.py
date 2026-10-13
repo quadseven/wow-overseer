@@ -3627,6 +3627,9 @@ def class_ask_streak(name, quest, asks) -> tuple:
             and a.quest == int(quest)
             and int(a.age_minutes) < CLASS_ASK_STREAK_WINDOW_MINUTES
         ),
+        # age_minutes is minutes since the ask was posted, so ascending is
+        # newest first: the walk stops at the newest ask that ran, and run[0]
+        # is the newest closed ask the hold is counted from.
         key=lambda a: int(a.age_minutes),
     )
     run = []

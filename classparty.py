@@ -361,6 +361,9 @@ def plan_starts(asks, answers, quest_pass, helps, free, board, now, clock, book=
                  yeses it takes back are left alone
     helps        classquest.Help rows; free  name -> guildsocial.Mate
     board        the Board; clock  its monotonic now; now  the database's clock
+
+    It returns only the parties, as it always has; the bridge calls plan for
+    the skip notes as well.
     """
     return plan(asks, answers, quest_pass, helps, free, board, now, clock, book)[0]
 
