@@ -348,6 +348,37 @@ class TheRosterAndStuckReads(unittest.TestCase):
             members._first({"zone_id": None, "zone": 1519}, "zone_id", "zone"), 1519
         )
 
+    def test_a_quester_is_in_the_quester_group(self):
+        guild = [
+            {
+                "name": "Grakk",
+                "guild_name": "Bonkers",
+                "level": 1,
+                "class_id": 9,
+                "race": 2,
+            },
+            {
+                "name": "Zug",
+                "guild_name": "Bonkers",
+                "level": 30,
+                "class_id": 1,
+                "race": 2,
+            },
+            {
+                "name": "Grakk",
+                "guild_name": "Elsewhere",
+                "level": 1,
+                "class_id": 9,
+                "race": 2,
+            },
+        ]
+        out = members.build({"Zug": ["Zug"]}, guild[:2], [], [], [], {}, NOW)
+        by = {m["name"]: m for m in out["members"]}
+        self.assertEqual((by["Grakk"]["group"], by["Zug"]["group"]), ("quester", ""))
+        self.assertEqual(by["Grakk"]["level"], 1)
+        other = members.build({}, guild[2:], [], [], [], {}, NOW)
+        self.assertEqual(other["members"][0]["group"], "")
+
     def test_no_roster_reads_nothing(self):
         ctx, log = ctx_for([], server(families={}))
         code, payload = members.roster({}, ctx)
