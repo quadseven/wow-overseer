@@ -260,6 +260,9 @@ def collect(api_root: str) -> tuple[dict, dict]:
         guilds[guild]["seat_members"] = list(
             (raidteams[guild].get("members") or {}).keys()
         )
+        # /api/v2/training answers one name at a time and no batch read exists,
+        # so each family member is read once, in their own guild's pass; this
+        # periodic watcher is off the request path.
         guilds[guild]["trainings"] = {}
         for row in roster.get("members") or []:
             if (
