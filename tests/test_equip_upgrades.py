@@ -299,7 +299,8 @@ class TheBridgeWritesIt(unittest.TestCase):
             "pymysql": Mock(err=Mock(MySQLError=OSError)),
             "log": Mock(),
         }
-        exec(
+        # Compiles a slice of our own bridge.py source, never external input.
+        exec(  # noqa: S102
             "async def run(self, wanted, current):\n" + textwrap.indent(tail, "    "),
             namespace,
         )
