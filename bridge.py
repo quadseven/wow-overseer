@@ -6148,6 +6148,11 @@ class Bridge(discord.Client):
         # Equip rows whose outcome has already been logged, by row id, so each
         # answer is said once (#146).
         self._equip_reported: set = set()
+        # Pieces held on the world's own refusal (#897), (holder, command) ->
+        # gear.WorldHold. In memory: a restart asks each of them once more.
+        self._equip_holds: dict = {}
+        # The last worn read per holder, which a failed read falls back on.
+        self._equip_worn: dict = {}
         # JEV, IN SHADOW (#95). One client for the process, so its cache and
         # its in-flight limit are shared by every family. With no
         # TYPESAFE_API_KEY it answers every question with `no_key` and the
@@ -11545,7 +11550,7 @@ class Bridge(discord.Client):
             "equip: left %d piece(s) to the module's gear drive for %d roster member(s)",
             len(left_to_drive), len(roster_names),
         )
-        await self._write_equips(wanted, current)
+        await self._write_equips(wanted, current, holders=names)
 
     async def _scored_equips(self, legacy, names, label: str, tanks=()) -> tuple:
         """`legacy` with every member equipscore can judge judged by its spec's
@@ -11577,12 +11582,16 @@ class Bridge(discord.Client):
         )
         return plan.equips
 
-    async def _write_equips(self, wanted, current: list, label: str = "") -> None:
+    async def _write_equips(self, wanted, current: list, label: str = "",
+                            holders=()) -> None:
         """Queue and log the `e` rows for `wanted`, inside the retry window.
 
         Shared by the family's pass and the guild's, so both keep one retry
         window, one give-up and one row shape. `current` is the history since
-        each holder's last level change.
+        each holder's last level change. A piece whose latest row the world
+        refused with a reason is held on it (#897) until the holder's level,
+        what is worn in that slot, or the bags change; `holders` are the
+        members this pass read.
         """
         recent = {(row["target_name"], row["command"]) for row in current
                   if row["recent"]}
@@ -11590,9 +11599,42 @@ class Bridge(discord.Client):
         for row in current:
             key = (row["target_name"], row["command"])
             tries[key] = tries.get(key, 0) + 1
-        queue, notes = bag_pressure.equips_to_queue(wanted, recent, tries)
+        answers = bag_pressure.latest_answers(current, item_plan.OPEN_STATUSES)
+        wearers = sorted({e.holder for e in wanted})
+        # One bounded read per pass, only for holders with a piece to put on
+        # (none at all when `wanted` is empty), and every MySQLError it can
+        # raise, the connect included, is caught here.
+        try:
+            read = bag_pressure.worn_pieces(await asyncio.to_thread(
+                _fetch_worn_pieces, wearers))
+        except pymysql.err.MySQLError as exc:
+            # A failed read keeps the last one, so a database fault neither
+            # stops the pass nor lifts a hold on a slot nobody saw change.
+            log.warning("equip: worn pieces unreadable (%s); holds keep the "
+                        "last read", exc)
+            # A holder with no read yet has nothing to fall back on, so this
+            # pass leaves them out of both `wanted` and `holders`: no equip is
+            # judged against an empty slot, and their holds (keyed on a holder
+            # outside `holders`) stay as they were. `worn` below then covers
+            # every holder still in `wanted`.
+            missing = set(wearers) - self._equip_worn.keys()
+            if missing:
+                log.warning("equip: deferring %d holder(s) without a worn "
+                            "snapshot", len(missing))
+                wanted = tuple(e for e in wanted if e.holder not in missing)
+                holders = set(holders) - missing
+        else:
+            self._equip_worn.update({h: read.get(h, {}) for h in wearers})
+        worn = {h: self._equip_worn[h] for h in wearers if h in self._equip_worn}
+        # `holders` emptied by the deferral above falls back to the holders of
+        # the filtered `wanted`, never to a deferred one.
+        queue, notes = bag_pressure.equips_to_queue(
+            wanted, recent, tries, answers=answers, worn=worn,
+            holds=self._equip_holds, holders=set(holders) or None)
         for note in notes:
             log.info("equip: %s", note)
+        log.info("equip: %d %spiece(s) held on the world's answer",
+                 bag_pressure.world_held(wanted, self._equip_holds), label)
         written = 0
         for equip in queue:
             if await asyncio.to_thread(_insert_equip, equip):
@@ -11643,7 +11685,7 @@ class Bridge(discord.Client):
                                           EQUIP_RETRY_MINUTES)
         changed = await asyncio.to_thread(_level_changes, members)
         current = bag_pressure.since_level_change(history, changed)
-        await self._write_equips(wanted, current, label="guild ")
+        await self._write_equips(wanted, current, label="guild ", holders=members)
 
     async def _jev_items_plan(self, gear_rows: list, worn: list, names: list):
         """This family's Jev pass, and what it changes this cycle (#95).
@@ -22232,6 +22274,38 @@ def _fetch_family_equipped(names: list) -> list:
                 raise
             return [dict(row) for row in cur.fetchall()]
     return []
+
+
+# What each member wears, by slot, entry and name (#897): the slot a held
+# equip would go to, so the hold lifts when what is worn there changes.
+_WORN_PIECES_SQL = (
+    "SELECT c.name AS holder, ci.slot AS equipment_slot, "
+    "ii.itemEntry AS entry, it.name AS name "
+    "FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "AND ci.bag = 0 AND ci.slot < 19 "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s)"
+)
+
+
+def _fetch_worn_pieces(names: list) -> list:
+    """Rows for gear.worn_pieces; [] on a world without the columns, which
+    leaves only a level change or the bags to lift a hold."""
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_WORN_PIECES_SQL % marks, list(names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            # Any other fault reaches _write_equips, which catches MySQLError
+            # and keeps the last read, so the equip pass does not stop on it.
+            raise
+        return [dict(row) for row in cur.fetchall()]
 
 
 # JEV'S TWO EXTRA READS (#95). The shadow pass shows Jev what each member
