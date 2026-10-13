@@ -719,6 +719,10 @@ class Recent:
     loot: int = 0
     # For a `cross-to-map map:<id>` row, the map id it asked for (0 otherwise).
     dest: int = 0
+    # Original command text, needed to distinguish an accepted battleground
+    # queue from other PvP work.
+    command: str = ""
+    result: str = ""
 
 
 @dataclass(frozen=True)
@@ -5227,6 +5231,8 @@ def recent_from_rows(rows) -> tuple:
                 action=action.replace("-walk", ""),
                 age_minutes=_int(row.get("age"), 10**6),
                 status=str(row.get("status") or ""),
+                command=str(row.get("command") or ""),
+                result=str(row.get("result") or ""),
                 skill_id=(
                     _trainer_skill_id(row.get("command")) if action == "train" else None
                 ),
