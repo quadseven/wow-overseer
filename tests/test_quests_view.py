@@ -548,10 +548,10 @@ class TheQuestsView(unittest.TestCase):
         # line agrees with the rows drawn under it.
         got = run(
             "views/quests.js",
-            "let els = {}, made = 0;\n"
+            "let els = {}, regions = 0;\n"
             "function el() {\n"
             "  const ls = {};\n"
-            "  return {made: ++made, value: '', focus() {}, addEventListener(k, f) { (ls[k] = ls[k] || []).push(f); },\n"
+            "  return {value: '', focus() {}, addEventListener(k, f) { (ls[k] = ls[k] || []).push(f); },\n"
             "    fire(k, e) { (ls[k] || []).forEach((f) => f(e || {})); }, handlers(k) { return (ls[k] || []).length; }};\n"
             "}\n"
             "function fresh() {\n"
@@ -559,6 +559,7 @@ class TheQuestsView(unittest.TestCase):
             "  for (const id of ['qs-q', 'qs-faction', 'qs-zone', 'qs-status', 'qs-lo', 'qs-hi']) els['#' + id] = el();\n"
             "  const r = el(); let h = '';\n"
             "  Object.defineProperty(r, 'innerHTML', {get: () => h, set: (v) => { h = v; }});\n"
+            "  r.stamp = ++regions;\n"
             "  els['[data-region=catalogue]'] = r;\n"
             "}\n"
             "fresh();\n"
@@ -571,7 +572,7 @@ class TheQuestsView(unittest.TestCase):
             "const type = (v) => { els['#qs-q'].value = v; els['#qs-q'].fire('input'); };\n"
             "const step = () => {\n"
             "  const h = region().innerHTML, m = /the first (\\d+) shown/.exec(h);\n"
-            "  return [region().made, region().handlers('click'), (h.match(/qs-title/g) || []).length,\n"
+            "  return [region().stamp, region().handlers('click'), (h.match(/qs-title/g) || []).length,\n"
             "    m ? Number(m[1]) : 0, h.indexOf('data-more') !== -1];\n"
             "}\n"
             "const where = [];\n"
@@ -583,7 +584,8 @@ class TheQuestsView(unittest.TestCase):
             "region().fire('click', hit('[data-clear]')); type(''); where.push(step());\n"
             "region().fire('click', hit('[data-more]')); const first = step();\n"
             "region().fire('click', hit('[data-more]')); const second = step();\n"
-            "console.log(JSON.stringify({where, first, second}));" % json.dumps({"/api/v2/quests": many}),
+            "console.log(JSON.stringify({where, first, second}));"
+            % json.dumps({"/api/v2/quests": many}),
         )
         for _, handlers, rows, said, more in got["where"]:
             self.assertEqual(handlers, 1)
@@ -592,11 +594,15 @@ class TheQuestsView(unittest.TestCase):
             # can never disagree, whatever ran before this one.
             self.assertEqual(said, rows)
             self.assertTrue(more)
-        # Each controls redraw left the region on screen a new element.
-        drawn = [w[0] for w in got["where"]]
-        self.assertEqual(len(set(drawn)), len(drawn))
-        self.assertEqual(got["first"][1:], [1, 200, 200, True])
-        self.assertEqual(got["second"][1:], [1, 250, 0, False])
+        # A plain redraw (a keystroke) keeps the region it has; a controls
+        # redraw (a faction, a Clear) replaces it. A controls redraw that
+        # reused the region instead is the only way a second handler could
+        # land on it, so the stamp may only change on the second step.
+        self.assertEqual([w[0] for w in got["where"]], [1, 2, 3, 4])
+        # A Show more rewrites that region's contents in place: same region,
+        # one handler, and the list grown by one step and then by all of it.
+        self.assertEqual(got["first"], [4, 1, 200, 200, True])
+        self.assertEqual(got["second"], [4, 1, 250, 0, False])
 
     def test_a_quest_read_with_no_entry_yet_shows_skeletons(self):
         # The cache can answer a read it has never started with nothing at
