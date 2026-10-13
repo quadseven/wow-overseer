@@ -345,6 +345,7 @@ def _drive(world, clock, log):
         "TOWN_ERRAND_SOURCE": TOWN_ERRAND,
         "_TOWN_FIRST_SINCE": {},
         "_BAG_HOLD": {},
+        "_BAG_HOLD_STUCK": {},
         "_fetch_enabled_names": lambda: list(NAMES),
         "_fetch_free_slots": lambda names: {n: world.free[n] for n in names},
         "_jobs_of": lambda names: {n: world.jobs[n] for n in names},
