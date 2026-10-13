@@ -11,6 +11,12 @@ from unittest import mock
 HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
+if not hasattr(sys.modules["pymysql"], "err"):
+    # CI keeps this suite stdlib-only; provide the driver's caught base type.
+    class _MySQLError(Exception):
+        pass
+
+    sys.modules["pymysql"].err = types.SimpleNamespace(MySQLError=_MySQLError)
 
 import questledger as ql  # noqa: E402
 
@@ -229,8 +235,7 @@ class TheBridgePass(unittest.TestCase):
 
     def test_a_table_missing_at_start_up_is_created_by_the_next_pass(self):
         # Match PyMySQL's exception hierarchy for missing tables and sockets.
-        class MySQLError(Exception):
-            pass
+        MySQLError = self.bridge.pymysql.err.MySQLError
 
         class ProgrammingError(MySQLError):
             pass
