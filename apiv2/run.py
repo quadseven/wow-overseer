@@ -68,6 +68,7 @@ def _council_gear(reader, members: list, holes: str, view: dict) -> list:
 
 
 def _gear(reader, view: dict) -> list:
+    """Merge the two source-specific gear reads for this run's seated members."""
     members = [member["name"] for member in view["members"]]
     if not members:
         return []
