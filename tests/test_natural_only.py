@@ -264,12 +264,11 @@ class BridgeWritesOnlyNaturalCommands(unittest.TestCase):
                     )
 
     def test_command_verbs_are_collected_and_classified(self):
-        """Collect every literal command verb the bridge writes and assert that
-        any grant verb in the collection is marked.  New literal verbs force an
-        update to this test, which is the keep-it-that-way mechanism.
+        """Collect unmarked literal verbs and check their classification.
+
+        test_no_unmarked_grant_literal_queued checks grant verbs separately.
         """
         natural: set[str] = set()
-        grant: set[str] = set()
         for name in COMMAND_SOURCES:
             src = _read(name)
             for _line_no, col, lit in _insert_command_values(src):
@@ -278,15 +277,8 @@ class BridgeWritesOnlyNaturalCommands(unittest.TestCase):
                 verb = _command_verb(lit)
                 if verb is None:
                     continue
-                if _has_natural_only_marker(src, _line_no):
-                    grant.add(verb)
-                else:
+                if not _has_natural_only_marker(src, _line_no):
                     natural.add(verb)
-
-        self.assertTrue(
-            grant.issubset(GRANT_VERBS),
-            f"Unclassified grant verbs: {sorted(grant - GRANT_VERBS)}",
-        )
 
         # Every natural literal must be in the known set; an unknown literal
         # means the classification list in the module docstring needs updating.
