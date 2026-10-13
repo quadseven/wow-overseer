@@ -532,6 +532,72 @@ class TheQuestsView(unittest.TestCase):
         self.assertIn("250 of 250 quests, the first 200 shown", got)
         self.assertIn("Show 50 more", got)
 
+    def test_one_click_grows_the_list_once_however_the_two_redraws_alternate(self):
+        many = dict(
+            QUESTS,
+            quests=[
+                quest(i, "Quest %d" % i, "Horde", "Durotar", 1, "not_reached")
+                for i in range(1, 251)
+            ],
+        )
+        # A plain redraw (a keystroke) and a controls redraw (a faction, a Clear)
+        # alternate here, the way a user's hands alternate. The first writes the
+        # region it already has; the second replaces that region with a new one.
+        # However often they alternate, the region on screen carries one click
+        # handler and one Show more grows the list by one step, and the count
+        # line agrees with the rows drawn under it.
+        got = run(
+            "views/quests.js",
+            "let els = {}, made = 0;\n"
+            "function el() {\n"
+            "  const ls = {};\n"
+            "  return {made: ++made, value: '', focus() {}, addEventListener(k, f) { (ls[k] = ls[k] || []).push(f); },\n"
+            "    fire(k, e) { (ls[k] || []).forEach((f) => f(e || {})); }, handlers(k) { return (ls[k] || []).length; }};\n"
+            "}\n"
+            "function fresh() {\n"
+            "  els = {};\n"
+            "  for (const id of ['qs-q', 'qs-faction', 'qs-zone', 'qs-status', 'qs-lo', 'qs-hi']) els['#' + id] = el();\n"
+            "  const r = el(); let h = '';\n"
+            "  Object.defineProperty(r, 'innerHTML', {get: () => h, set: (v) => { h = v; }});\n"
+            "  els['[data-region=catalogue]'] = r;\n"
+            "}\n"
+            "fresh();\n"
+            "const cat = {set innerHTML(_v) { fresh(); }};\n"
+            "const main = {querySelector: (s) => (s === '.qs-catalogue' ? cat : els[s] || null)};\n"
+            "const c = ctx({}, {}, %s);\n"
+            "V.after(main, c);\n"
+            "const region = () => els['[data-region=catalogue]'];\n"
+            "const hit = (sel) => ({target: {closest: (s) => (s === sel ? {} : null)}});\n"
+            "const type = (v) => { els['#qs-q'].value = v; els['#qs-q'].fire('input'); };\n"
+            "const step = () => {\n"
+            "  const h = region().innerHTML, m = /the first (\\d+) shown/.exec(h);\n"
+            "  return [region().made, region().handlers('click'), (h.match(/qs-title/g) || []).length,\n"
+            "    m ? Number(m[1]) : 0, h.indexOf('data-more') !== -1];\n"
+            "}\n"
+            "const where = [];\n"
+            "type('Quest'); where.push(step());\n"
+            "els['#qs-faction'].value = 'Horde'; els['#qs-faction'].fire('change');\n"
+            "type(''); where.push(step());\n"
+            "els['#qs-faction'].value = ''; els['#qs-faction'].fire('change');\n"
+            "type(''); where.push(step());\n"
+            "region().fire('click', hit('[data-clear]')); type(''); where.push(step());\n"
+            "region().fire('click', hit('[data-more]')); const first = step();\n"
+            "region().fire('click', hit('[data-more]')); const second = step();\n"
+            "console.log(JSON.stringify({where, first, second}));" % json.dumps({"/api/v2/quests": many}),
+        )
+        for _, handlers, rows, said, more in got["where"]:
+            self.assertEqual(handlers, 1)
+            self.assertEqual(rows, 100)
+            # The count line is drawn by the same call as the rows, so the two
+            # can never disagree, whatever ran before this one.
+            self.assertEqual(said, rows)
+            self.assertTrue(more)
+        # Each controls redraw left the region on screen a new element.
+        drawn = [w[0] for w in got["where"]]
+        self.assertEqual(len(set(drawn)), len(drawn))
+        self.assertEqual(got["first"][1:], [1, 200, 200, True])
+        self.assertEqual(got["second"][1:], [1, 250, 0, False])
+
     def test_a_quest_read_with_no_entry_yet_shows_skeletons(self):
         # The cache can answer a read it has never started with nothing at
         # all; the quest page waits on it rather than reading into it.
