@@ -9,6 +9,7 @@ const NAV = [
   { key: "now", label: "Now", icon: "pulse", href: "#/now" },
   { key: "guilds", label: "Guilds", icon: "users-three", href: "#/guilds" },
   { key: "members", label: "Members", icon: "user-list", href: "#/members" },
+  { key: "quests", label: "Quests", icon: "scroll", href: "#/quests" },
   { key: "raid", label: "Raid", icon: "sword", href: "#/raid/mc" },
   { key: "economy", label: "Economy", icon: "coins", href: "#/economy" },
 ];

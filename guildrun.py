@@ -107,6 +107,7 @@ SETTLE_SECONDS = 600
 # FORM_EVERY_SECONDS. MAX_SWAPS refusals in a row fall back to the spacing, so
 # a refusal no swap can fix cannot turn into a run a minute.
 BENCH_MINUTES = 15
+QUEUE_BENCH_MINUTES = 60
 FAMILY_SEAT_BENCH_HOURS = 6
 SHORT_ABANDON_SECONDS = 10 * 60
 MAX_SWAPS = 3
@@ -412,13 +413,18 @@ PASSING_REFUSALS = ("in combat",)
 
 
 def benched(recent: list) -> set:
-    """Members named by refusals in `recent` (overseer_guild_run rows ended
-    within BENCH_MINUTES), except a refusal that passes (PASSING_REFUSALS)."""
+    """Members named by recent refusals: BENCH_MINUTES back, or QUEUE_BENCH_MINUTES
+    for a battleground-queue refusal, except one that passes (PASSING_REFUSALS).
+    A row whose age_minutes is missing or None counts as fresh (age 0)."""
     out = set()
     for row in recent:
         if str(row.get("outcome") or "") != "refused":
             continue
         if any(word in str(row.get("why") or "") for word in PASSING_REFUSALS):
+            continue
+        queue_refusal = "waiting in a battleground queue" in str(row.get("why") or "")
+        window = QUEUE_BENCH_MINUTES if queue_refusal else BENCH_MINUTES
+        if int(row.get("age_minutes") or 0) >= window:
             continue
         name = refused_member(row.get("why"))
         if name:

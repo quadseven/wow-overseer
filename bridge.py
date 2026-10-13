@@ -127,6 +127,7 @@ import preraid
 import professions
 import protect
 import questbook
+import questledger
 import questers
 import questshare
 import quests
@@ -360,6 +361,8 @@ def _insert_speak(cmd: relay.SpeakCommand) -> int:
 
 
 def _insert_gm(cmd: relay.GmCommand) -> int:
+    # natural-only: Discord GM surface; only operator messages reach this path,
+    # and relay.py's allowlist is the guard.
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO overseer_command (target_name, command, kind, source) "
@@ -2477,6 +2480,12 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
 # THE HOLD AT THE FLOOR, PER FAMILY (bag_pressure.bag_hold_progress), keyed
 # like the clocks above. Its timestamps are persisted as wall time across restarts.
 _BAG_HOLD: dict = {}
+# Latest bag-floor result observed by a bag pass, keyed by family member. The
+# family key is its leader's name, so queue ownership reads its entry without
+# doing roster or inventory queries. Holds only live entries: a pass that finds
+# no released hold removes the members' keys, so a cleared or departed family
+# leaves nothing behind.
+_BAG_HOLD_STUCK: dict[str, tuple] = {}
 
 _MEMO_CREATE_SQL = ("CREATE TABLE IF NOT EXISTS overseer_bridge_memo ("
                     "kind VARCHAR(32) NOT NULL, subject VARCHAR(191) NOT NULL, "
@@ -2539,8 +2548,18 @@ class _PersistentOwing(classquest.Owing):
     def __init__(self):
         super().__init__()
 
+    @staticmethod
+    def _tuples(value):
+        """A mark as guildjobs.progress_mark built it. The memo is JSON, which
+        reads every tuple back as a list, and a list never equals the tuple the
+        next pass computes: each restored clock started over (#921)."""
+        # _memo_read decodes JSON, so only lists can represent saved tuples.
+        if isinstance(value, list):
+            return tuple(_PersistentOwing._tuples(v) for v in value)
+        return value
+
     def restore(self):
-        self._by.update({name: (mark, since)
+        self._by.update({name: (self._tuples(mark), since)
                          for name, (mark, since) in _memo_read("class_owed").items()})
 
     def idle(self, name, mark, now):
@@ -2574,14 +2593,23 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
         _BAG_HOLD.pop(key, None)
         # The hold ended: clear the memo this function writes below.
         _memo_delete("bag_hold", ",".join(key))
-        return ()
-    _BAG_HOLD[key] = progress
-    wall = time.time()
-    value = {"best": progress.best, "since": wall - (now - progress.since),
-             "seen": wall - (now - progress.seen), "released": progress.released}
-    _memo_upsert("bag_hold", ",".join(key), value, value["since"],
-                 wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
-    return bag_pressure.bag_hold_stuck(progress)
+        result = ()
+    else:
+        _BAG_HOLD[key] = progress
+        wall = time.time()
+        value = {"best": progress.best, "since": wall - (now - progress.since),
+                 "seen": wall - (now - progress.seen), "released": progress.released}
+        _memo_upsert("bag_hold", ",".join(key), value, value["since"],
+                     wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
+        result = bag_pressure.bag_hold_stuck(progress)
+    for name in names:
+        # The family key is its leader's name, one of these members, so
+        # _queue_owns_job reads that member's bag hold result.
+        if result:
+            _BAG_HOLD_STUCK[name] = result
+        else:
+            _BAG_HOLD_STUCK.pop(name, None)
+    return result
 
 
 def _restore_bag_holds() -> None:
@@ -3083,6 +3111,59 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
 # campaignqueue.py decides; these read the rows it decides on and run the
 # statements it names. The queue is bridge-owned state, created at start-up
 # the way the Jev store is (#179), because the worldserver never reads it.
+
+
+# --- the quest ledger (questledger.py) -----------------------------------
+#
+# questledger decides what moved; these read the questers' logs and write it.
+
+
+# Whether overseer_quest_ledger is known to exist. Until it is, each ledger
+# pass creates it first, so a start-up that could not reach the table is not
+# taken as ready: the pass fails loudly each cycle until the table stands.
+_quest_ledger_ready = False
+
+
+def _ensure_quest_ledger_store() -> None:
+    """Create the ledger table. On failure, leave its ready flag false so
+    `_record_quests` retries while the other stores and loops still start."""
+    global _quest_ledger_ready
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(questledger.TABLE_SQL)
+        _quest_ledger_ready = True
+    except pymysql.err.MySQLError:
+        log.exception("quest ledger: overseer_quest_ledger unavailable; each "
+                      "ledger pass will try to create it again")
+
+
+def _record_quests() -> int:
+    """One ledger pass over the questers: how many rows were written. Raises
+    when the table is still missing and cannot be created."""
+    global _quest_ledger_ready
+    names = questledger.quester_names()
+    with _connect() as conn, conn.cursor() as cur:
+        if not _quest_ledger_ready:
+            cur.execute(questledger.TABLE_SQL)
+            _quest_ledger_ready = True
+        cur.execute(questledger.CHARACTERS_SQL.format(
+            holes=questledger.holes(len(names))), tuple(names))
+        characters = {int(r["guid"]): r["name"] for r in cur.fetchall()}
+        if not characters:
+            return 0
+        guids = tuple(sorted(characters))
+        marks = questledger.holes(len(guids))
+        reads = []
+        for sql in (questledger.LEDGER_SQL, questledger.LOG_SQL,
+                    questledger.REWARDED_SQL):
+            cur.execute(sql.format(holes=marks), guids)
+            reads.append(cur.fetchall())
+        cur.execute(questledger.NOW_SQL)
+        now = cur.fetchone()["now"]
+        written = questledger.changes(characters, *reads, now)
+        if written:
+            cur.executemany(questledger.WRITE_SQL, [e.args() for e in written])
+    return len(written)
 
 
 # --- the Watcher (director.py) -------------------------------------------
@@ -3628,6 +3709,12 @@ def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
             # not own the job then, so the craft rhythm and the skill goal
             # get the family's time back.
             return False
+        if not dungeon:
+            # A released bag hold gives the family's own passes time to buy
+            # reagents and craft. Keep the queue pending for the dungeon
+            # caller, which still starts the run once everyone has room.
+            if _BAG_HOLD_STUCK.get(family):
+                return False
         return bool(campaignqueue.pending_by_family(_fetch_queue_rows()).get(family))
     except Exception:
         log.exception("queue: could not read whether a queue owns the job")
@@ -5922,6 +6009,7 @@ PASSES = (
     _Pass("_family_intent_loop"),
     _Pass("_now_loop"),
     _Pass("_watch_loop"),
+    _Pass("_quest_ledger_loop"),
 )
 
 
@@ -6233,6 +6321,7 @@ class Bridge(discord.Client):
             _ensure_queue_store,
             _ensure_memo_store,
             _ensure_watch_store,
+            _ensure_quest_ledger_store,
         ):
             await asyncio.to_thread(ensure)
         owing = self.__dict__.get("_class_owing")
@@ -11441,6 +11530,21 @@ class Bridge(discord.Client):
         # is worn is left in the bags. No plan leaves `wanted` as it is.
         wanted = bag_pressure.jev_equips(
             wanted, gear_rows, worn, names, jev_plan, keep_names=OWNER_KEEPS)
+        # If the roster cannot be read, ownership is unknown, so skip this pass.
+        # Only database and socket failures are caught; code bugs still raise.
+        try:
+            roster_names = await asyncio.to_thread(_fetch_enabled_roster_names)
+        except (OSError, pymysql.err.MySQLError) as exc:
+            log.warning("equip: could not read the enabled roster: %s", exc)
+            return
+        left_to_drive = [equip for equip in wanted
+                         if equip.holder in roster_names]
+        wanted = tuple(equip for equip in wanted
+                       if equip.holder not in roster_names)
+        log.info(
+            "equip: left %d piece(s) to the module's gear drive for %d roster member(s)",
+            len(left_to_drive), len(roster_names),
+        )
         await self._write_equips(wanted, current)
 
     async def _scored_equips(self, legacy, names, label: str, tanks=()) -> tuple:
@@ -15014,8 +15118,20 @@ class Bridge(discord.Client):
         # (guildjobs.THE GUILD FOCUS); unset keeps every guild's jobs.
         focus = guildjobs.focus_from_env()
         fields = await self._job_fields(members, focus, busy) if spawn_walks else {}
-        doors = (guildjobs.assign_doors(members, guildjobs.entrances(), facts["stones"])
-                 if spawn_walks else {})
+        campaign_door = ""
+        if spawn_walks:
+            # An unread queue only costs the on-call stand: the pass keeps
+            # today's spread of doors rather than falling for every guild.
+            try:
+                campaign_door = await asyncio.to_thread(_guild_campaign_door, cohort)
+            except pymysql.err.MySQLError:
+                log.exception("guild jobs: the campaign door could not be read; "
+                              "no summoner goes on call this pass")
+        doors = (guildjobs.assign_doors(
+            members, guildjobs.entrances(), facts["stones"], campaign_door)
+            if spawn_walks else {})
+        if campaign_door and spawn_walks and not any(d.on_call for d in doors.values()):
+            self._log_missing_campaign_summoner(members, campaign_door)
         # No class quest uses while this worldserver does not carry the verbs.
         facts = dict(facts, class_book=self._class_book_for_plan(facts))
         plan = guildjobs.plan(
@@ -15063,6 +15179,19 @@ class Bridge(discord.Client):
                      "waiting unopened are collected; theirs go to the bank",
                      ", ".join(sorted(facts["unclaimed"])))
         return plan
+
+    @staticmethod
+    def _log_missing_campaign_summoner(members, campaign_door):
+        admits = any(
+            m.role == guildjobs.SUMMONER
+            and guildjobs.RITUAL_OF_SUMMONING in m.known
+            and any(r.keyword == campaign_door for r in guildjobs.doors_for(m))
+            for m in members
+        )
+        reason = ("no meeting stone is available" if admits
+                  else "no summoner's level band admits it")
+        log.info("guild jobs: campaign door %s; %s; keeping ordinary assignments",
+                 campaign_door, reason)
 
     def _log_purses(self, members) -> None:
         """One `purse:` line per member whose purchase order changed since the
@@ -20333,6 +20462,20 @@ class Bridge(discord.Client):
                 f"{director.MANDATE_TTL // 60} minutes unless renewed."
             )
 
+    async def _quest_ledger_loop(self) -> None:
+        """Record what happened to the questers' quests (questledger.py)."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("QUEST_LEDGER_SECONDS", "120"))
+        await asyncio.sleep(min(cycle, 60.0))
+        while not self.is_closed():
+            try:
+                written = await asyncio.to_thread(_record_quests)
+                if written:
+                    log.info("quest ledger: %d quest row(s) moved", written)
+            except Exception:
+                log.exception("quest ledger: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
     async def _watch_loop(self) -> None:
         """Keep the Watcher beside whoever the operator's order names."""
         await self.wait_until_ready()
@@ -22038,6 +22181,13 @@ _FAMILY_EQUIPPED_ROLES_SQL = (
 )
 
 
+def _fetch_enabled_roster_names() -> set[str]:
+    """Names whose gear is owned by the module's enabled roster drive."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT name FROM overseer_roster WHERE enabled = 1")
+        return {str(row["name"]) for row in cur.fetchall()}
+
+
 def _fetch_shield_tanks(names: list) -> set:
     """Which of `names` tank behind a shield (bag_pressure.shield_tanks): the
     roster's tree or a raid seat, else the raid plan's tree. Nobody on a world
@@ -22986,9 +23136,10 @@ def _fetch_guild_run_facts(bounds) -> dict:
         floors = {int(r["map_id"]): int(r["min_level"]) for r in cur.fetchall()}
         boss_levels = _door_boss_levels(cur)
         cur.execute(
-            "SELECT outcome, why FROM overseer_guild_run WHERE state = 'ended' "
+            "SELECT outcome, why, TIMESTAMPDIFF(MINUTE, ended_at, NOW()) AS age_minutes "
+            "FROM overseer_guild_run WHERE state = 'ended' "
             "AND ended_at > NOW() - INTERVAL %s MINUTE",
-            (guildrun.BENCH_MINUTES,),
+            (guildrun.QUEUE_BENCH_MINUTES,),
         )
         benched = guildrun.benched(list(cur.fetchall()))
         cur.execute(
@@ -26462,6 +26613,23 @@ def _fetch_job_facts(family_names: list) -> dict:
     facts["roster"] = ({str(r.get("name") or "") for r in roster_rows}
                        | set(family_names)) - {""}
     return facts
+
+
+def _guild_campaign_door(cohort=None) -> str:
+    """The family's active dungeon job, or its next queued run keyword."""
+    head = cohort.leader if cohort is not None else _head_now()
+    family = getattr(cohort, "key", None) or _cohort_of(head) or ""
+    roster = campaignqueue.families(_fetch_queue_roster())
+    fam = roster.get(family)
+    if not fam:
+        return ""
+    job = str(fam["leader"].get("job") or "")
+    if job.startswith("dungeon:"):
+        keyword = job.split(":", 1)[1].strip().lower()
+        if keyword in {run.keyword for run in campaignplan.RUNS}:
+            return keyword
+    queue = campaignqueue.pending_by_family(_fetch_queue_rows()).get(family, ())
+    return str(queue[0].get("keyword") or "").strip().lower() if queue else ""
 
 
 def _job_leveling(facts):
