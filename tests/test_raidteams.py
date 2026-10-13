@@ -7,6 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import guildwork  # noqa: E402
 import raidlineup  # noqa: E402
 import raidroles  # noqa: E402
 import raidteams  # noqa: E402
@@ -116,6 +117,78 @@ class TheLineupSeatsTheApprovedTeams(unittest.TestCase):
             {m["name"] for m in lineup["groups"][0]["members"]},
             {"Grug", "Ugga", "Grog", "Bork", "Og"},
         )
+
+
+def _questers(team):
+    return [
+        {"name": q.name, "level": 1, "class_id": q.class_id}
+        for q in raidteams.QUESTERS[team]
+    ]
+
+
+class TheQuestersHoldNoRaidSeat(unittest.TestCase):
+    """#927: the questers are guild members, and nothing the raid places."""
+
+    def test_no_quester_name_is_a_raid_summoner_maintenance_or_leaving_name(self):
+        for team in raidteams.QUESTERS:
+            others = set()
+            for s in raidteams.seats(team):
+                others.update((s.name, s.was))
+            for pairs in (raidteams.SUMMONERS[team], raidteams.MAINTENANCE[team]):
+                for old, new in pairs:
+                    others.update((old, new))
+            others.update(raidteams.LEAVING[team])
+            self.assertEqual(raidteams.quester_names(team) & others, set(), team)
+
+    def test_the_guild_is_still_known_with_its_questers(self):
+        names = [m["name"] for m in _guild("Cave", True, True) + _questers("Cave")]
+        self.assertEqual(raidteams.guild_of(names), "Cave")
+
+    def test_the_lineup_seats_40_and_lists_the_questers_apart(self):
+        for team in raidteams.QUESTERS:
+            lineup = raidlineup.build_lineup(
+                _guild(team, renamed=True, recruits_joined=True) + _questers(team)
+            )
+            questers = raidteams.quester_names(team)
+            placed = {m["name"] for g in lineup["groups"] for m in g["members"]}
+            self.assertEqual(lineup["counts"]["raiders"], 40, team)
+            self.assertEqual(placed & questers, set(), team)
+            self.assertEqual(
+                {m["name"] for m in lineup["summoners"] + lineup["maintenance"]}
+                & questers,
+                set(),
+            )
+            self.assertEqual({m["name"] for m in lineup["questers"]}, questers)
+            self.assertEqual({m["role"] for m in lineup["questers"]}, {"quester"})
+            self.assertEqual(lineup["counts"]["questers"], 5)
+
+    def test_a_quester_is_not_on_the_kick_list(self):
+        lineup = raidlineup.build_lineup(_guild("Cave") + _questers("Cave"))
+        self.assertEqual(
+            sorted(m["name"] for m in lineup["surplus"]),
+            sorted(raidteams.LEAVING["Cave"]),
+        )
+
+    def test_a_quester_warlock_is_no_summoner_in_any_lineup(self):
+        # A guild without an approved lineup takes its warlocks as summoners.
+        members = [{"name": "Grakk", "level": 1, "class_id": 9}] + [
+            {"name": "Lock%s" % c, "level": 20, "class_id": 9} for c in "abc"
+        ]
+        lineup = raidlineup.build_lineup(members)
+        self.assertNotIn("Grakk", [m["name"] for m in lineup["summoners"]])
+        self.assertNotIn("Grakk", [m["name"] for m in lineup["surplus"]])
+        self.assertEqual([m["name"] for m in lineup["questers"]], ["Grakk"])
+
+    def test_a_quester_gets_no_guild_job(self):
+        rows = [
+            dict(m, guild_name="Bonkers", money=0, online=0)
+            for m in _guild("Bonkers", renamed=True, recruits_joined=True)
+            + _questers("Bonkers")
+        ]
+        members, _masters = guildwork.members_from_rows(rows, ["Zug"])
+        roles = {m.name: m.role for m in members}
+        self.assertEqual(set(roles) & raidteams.quester_names("Bonkers"), set())
+        self.assertIn("Coom", roles)
 
 
 if __name__ == "__main__":
