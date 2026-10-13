@@ -25,7 +25,10 @@
 //   /api/v2/quests/<id> {quest: {id, title, faction, zone, level, status,
 //                        ticket: {number, url} | null},
 //                        attempts: [{quester, guild, level, started_at,
-//                        ended_at, outcome, reason, ticket: {number, url}}]}
+//                        ended_at, outcome, reason, ticket: {number, url} | null}]}
+//
+// Both tickets are the same quest's one ticket, null until it is filed; an
+// attempt carries it only when that attempt broke. ticketLink takes either.
 //
 // The filters live in the URL query (#/quests?faction=Horde&lvl=10-20&q=wolf),
 // written with replaceState so typing never loses the caret, and a row's link

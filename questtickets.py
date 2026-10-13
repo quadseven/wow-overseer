@@ -269,6 +269,35 @@ def _file(db, tracker, epic: int, quest_id: int, title_text: str, text: str) -> 
     return int(issue["number"])
 
 
+def _file_all(db, tracker, site_url: str, epic: int, ledger, waiting: list) -> list:
+    """File each waiting quest, which `run` has trimmed to the day's limit;
+    the notes to log."""
+    catalogue = {q.id: q for q in questcatalogue.load(lambda sql: db.rows(sql, ()))}
+    broken = [
+        r
+        for r in ledger
+        if int(r["quest"]) in waiting and r.get("state") == questledger.BROKEN
+    ]
+    counts = _counts(db, waiting, broken)
+    notes = []
+    for quest_id in waiting:
+        quest = catalogue.get(quest_id)
+        attempts = sorted(
+            (r for r in broken if int(r["quest"]) == quest_id),
+            key=lambda r: str(r.get("character_name") or ""),
+        )
+        number = _file(
+            db,
+            tracker,
+            epic,
+            quest_id,
+            title(quest_id, quest),
+            body(quest_id, quest, attempts, counts, site_url, epic),
+        )
+        notes.append("quest %d: filed #%d" % (quest_id, number))
+    return notes
+
+
 def run(db, tracker, site_url: str, epic: int, limit: int = LIMIT) -> list:
     """File what is due; the notes to log.
 
@@ -287,29 +316,7 @@ def run(db, tracker, site_url: str, epic: int, limit: int = LIMIT) -> list:
         waiting = waiting[:limit]
     if not waiting:
         return notes
-    catalogue = {q.id: q for q in questcatalogue.load(lambda sql: db.rows(sql, ()))}
-    broken = [
-        r
-        for r in ledger
-        if int(r["quest"]) in waiting and r.get("state") == questledger.BROKEN
-    ]
-    counts = _counts(db, waiting, broken)
-    for quest_id in waiting:
-        quest = catalogue.get(quest_id)
-        attempts = sorted(
-            (r for r in broken if int(r["quest"]) == quest_id),
-            key=lambda r: str(r.get("character_name") or ""),
-        )
-        number = _file(
-            db,
-            tracker,
-            epic,
-            quest_id,
-            title(quest_id, quest),
-            body(quest_id, quest, attempts, counts, site_url, epic),
-        )
-        notes.append("quest %d: filed #%d" % (quest_id, number))
-    return notes
+    return notes + _file_all(db, tracker, site_url, epic, ledger, waiting)
 
 
 # --- the adapters -------------------------------------------------------------
