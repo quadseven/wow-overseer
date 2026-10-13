@@ -663,7 +663,7 @@ def _fetch_now_facts(names):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT name, family, enabled, job, travel_npc, learn_skill, "  # noqa: S608
+                "SELECT name, family, `lead`, enabled, job, travel_npc, learn_skill, "  # noqa: S608
                 "dungeon_runs_wanted, dungeon_runs_done FROM overseer_roster "
                 f"WHERE name IN ({holes})",
                 tuple(names),
@@ -673,7 +673,9 @@ def _fetch_now_facts(names):
                 cur.execute(
                     "SELECT leader_name, family, current_kind, current_owner, "
                     "current_target, TIMESTAMPDIFF(SECOND, current_since, NOW()) "
-                    "AS current_for, members_state FROM overseer_family_intent"
+                    "AS current_for, members_state, "
+                    "TIMESTAMPDIFF(SECOND, module_at, NOW()) AS module_age "
+                    "FROM overseer_family_intent"
                 )
                 intents = list(cur.fetchall())
             except pymysql.err.MySQLError as exc:
