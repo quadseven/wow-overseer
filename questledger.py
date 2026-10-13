@@ -183,13 +183,8 @@ def _next(old: Entry | None, status, rewarded: bool, now) -> tuple | None:
     return None
 
 
-def changes(characters, ledger_rows, log_rows, rewarded_rows, now) -> list:
-    """The Entry rows to write for these questers.
-
-    `characters` maps guid -> name. A quester's quest is written when its
-    state moves, or when the character's name has changed since.
-    """
-    names = {int(g): str(n) for g, n in (characters or {}).items()}
+def _index(names: dict, ledger_rows, log_rows, rewarded_rows) -> tuple:
+    """(old, status, rewarded) keyed by (quest, guid), questers' rows only."""
     old = {}
     for row in ledger_rows or ():
         entry = _entry(row)
@@ -205,6 +200,17 @@ def changes(characters, ledger_rows, log_rows, rewarded_rows, now) -> list:
         for r in rewarded_rows or ()
         if int(r["guid"]) in names
     }
+    return old, status, rewarded
+
+
+def changes(characters, ledger_rows, log_rows, rewarded_rows, now) -> list:
+    """The Entry rows to write for these questers.
+
+    `characters` maps guid -> name. A quester's quest is written when its
+    state moves, or when the character's name has changed since.
+    """
+    names = {int(g): str(n) for g, n in (characters or {}).items()}
+    old, status, rewarded = _index(names, ledger_rows, log_rows, rewarded_rows)
     out = []
     for key in sorted(set(old) | set(status) | rewarded):
         quest, guid = key

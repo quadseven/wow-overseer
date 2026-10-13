@@ -42,6 +42,9 @@ import questcatalogue
 import questledger
 import questlog
 
+# Counts, not attempts: at most one row per quest and state, so the read is
+# bounded by the quests the questers have touched however long they walk,
+# and the answer by the ruleset catalogue, which is fixed while a realm runs.
 LEDGER_SQL = (
     "SELECT quest, state, COUNT(*) AS n FROM overseer_quest_ledger "
     "GROUP BY quest, state"
