@@ -279,6 +279,12 @@ class TheBridgeWritesIt(unittest.TestCase):
             body,
         )
 
+    def test_a_failed_roster_read_catches_only_database_errors(self):
+        body = _block("    async def _equip_upgrades(self")
+        self.assertIn("except (OSError, pymysql.err.MySQLError) as exc:", body)
+        self.assertNotIn("except Exception", body)
+        self.assertIn('"equip: could not read the enabled roster: %s"', body)
+
     def test_non_roster_family_pick_remains_wanted(self):
         body = _block("    async def _equip_upgrades(self")
         self.assertIn("wanted = tuple(equip for equip in wanted", body)

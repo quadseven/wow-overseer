@@ -11425,7 +11425,8 @@ class Bridge(discord.Client):
             wanted, gear_rows, worn, names, jev_plan, keep_names=OWNER_KEEPS)
         try:
             roster_names = await asyncio.to_thread(_fetch_enabled_roster_names)
-        except Exception:
+        except (OSError, pymysql.err.MySQLError) as exc:
+            log.warning("equip: could not read the enabled roster: %s", exc)
             roster_names = set()
         left_to_drive = [equip for equip in wanted
                          if equip.holder in roster_names]
