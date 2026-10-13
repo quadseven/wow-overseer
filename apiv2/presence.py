@@ -48,6 +48,16 @@ FRESH_SECONDS = 60
 # PLAYER_FLAGS_GHOST: the saved flag a released spirit carries.
 GHOST_FLAG = 0x10
 
+
+def snapshot_join(character_alias: str = "c", snapshot_alias: str = "presence") -> str:
+    """LEFT JOIN clause for the one shared presence freshness window."""
+    return (
+        f"LEFT JOIN overseer_snapshot {snapshot_alias} "
+        f"ON {snapshot_alias}.name = {character_alias}.name "
+        f"AND {snapshot_alias}.updated_at > NOW() - INTERVAL {FRESH_SECONDS} SECOND "
+    )
+
+
 _SNAP_SQL = (
     "SELECT name, health, max_health, UNIX_TIMESTAMP(updated_at) AS at "
     "FROM overseer_snapshot WHERE updated_at > NOW() - INTERVAL %s SECOND "
