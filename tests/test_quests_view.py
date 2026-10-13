@@ -81,7 +81,15 @@ QUESTERS = {
             "guild": "Cave",
             "faction": "Alliance",
             "questers": [
-                quester("Tharn", "Druid", 6, "Teldrassil", {"id": 456, "title": "The Balance of Nature"}, 4, 1),
+                quester(
+                    "Tharn",
+                    "Druid",
+                    6,
+                    "Teldrassil",
+                    {"id": 456, "title": "The Balance of Nature"},
+                    4,
+                    1,
+                ),
                 quester("Mirra", "Priest", 3, "Northshire Valley", None, 2, 0),
                 quester("Velo", "Shaman", 2, "Ammen Vale"),
                 quester("Durga", "Hunter", 2, "Coldridge Valley"),
@@ -95,7 +103,15 @@ QUESTERS = {
                 quester("Saelis", "Paladin", 4, "Sunstrider Isle"),
                 quester("Morwick", "Priest", 4, "Deathknell"),
                 quester("Hoofa", "Hunter", 3, "Camp Narache"),
-                quester("Grakk", "Warlock", 5, "Valley of Trials", {"id": 788, "title": "Cutting Teeth"}, 3, 0),
+                quester(
+                    "Grakk",
+                    "Warlock",
+                    5,
+                    "Valley of Trials",
+                    {"id": 788, "title": "Cutting Teeth"},
+                    3,
+                    0,
+                ),
                 quester("Zinja", "Mage", 5, "Valley of Trials"),
             ],
         },
@@ -118,16 +134,44 @@ def quest(id_, title, faction, zone, level, status, attempts=0):
 QUESTS = {
     "totals": {
         "factions": [
-            {"faction": "Alliance", "completed": 4, "broken": 1, "not_reached": 95, "total": 100},
-            {"faction": "Horde", "completed": 3, "broken": 0, "not_reached": 97, "total": 100},
+            {
+                "faction": "Alliance",
+                "completed": 4,
+                "broken": 1,
+                "not_reached": 95,
+                "total": 100,
+            },
+            {
+                "faction": "Horde",
+                "completed": 3,
+                "broken": 0,
+                "not_reached": 97,
+                "total": 100,
+            },
         ],
         "zones": [
-            {"zone": "Teldrassil", "faction": "Alliance", "completed": 4, "broken": 1, "not_reached": 20, "total": 25},
-            {"zone": "Durotar", "faction": "Horde", "completed": 3, "broken": 0, "not_reached": 22, "total": 25},
+            {
+                "zone": "Teldrassil",
+                "faction": "Alliance",
+                "completed": 4,
+                "broken": 1,
+                "not_reached": 20,
+                "total": 25,
+            },
+            {
+                "zone": "Durotar",
+                "faction": "Horde",
+                "completed": 3,
+                "broken": 0,
+                "not_reached": 22,
+                "total": 25,
+            },
         ],
     },
     "quests": [
-        quest(456, "The Balance of Nature", "Alliance", "Teldrassil", 1, "completed", 1),
+        quest(
+            456, "The Balance of Nature", "Alliance", "Teldrassil", 1, "completed", 1
+        ),
         quest(457, "Webwood Venom", "Alliance", "Teldrassil", 4, "broken", 2),
         quest(788, "Cutting Teeth", "Horde", "Durotar", 1, "completed", 1),
         quest(792, "Vile Familiars", "Horde", "Durotar", 3, "not_reached"),
@@ -224,17 +268,36 @@ class TheQuestsView(unittest.TestCase):
             ("lvl=3-5", {"lvl": "3-5"}, {457, 792}),
             ("lvl=5-", {"lvl": "5-"}, {835}),
             ("q=venom", {"q": "venom"}, {457}),
-            ("faction+status", {"faction": "Horde", "status": "not_reached", "lvl": "-4"}, {792}),
+            (
+                "faction+status",
+                {"faction": "Horde", "status": "not_reached", "lvl": "-4"},
+                {792},
+            ),
         ]
         for label, query, ids in cases:
             hash_ = "#/quests?" + "&".join(k + "=" + v for k, v in query.items())
             _, html = self.page(query, hash_)
-            got = {q["id"] for q in QUESTS["quests"] if 'href="#/quests/%d?' % q["id"] in html}
+            got = {
+                q["id"]
+                for q in QUESTS["quests"]
+                if 'href="#/quests/%d?' % q["id"] in html
+            }
             self.assertEqual(got, ids, label)
             self.assertIn("%d of 5 quests" % len(ids), html, label)
 
+    def test_search_skips_the_fields_the_server_did_not_send(self):
+        got = run(
+            "views/quests.js",
+            "const x = {id: 1, title: 'Lost Letter', zone: null};\n"
+            "const hit = (q) => M.keep(x, M.filters({q}));\n"
+            "console.log(JSON.stringify([hit('undefined'), hit('null'), hit('lost'), hit('1')]));",
+        )
+        self.assertEqual(got, [False, False, True, True])
+
     def test_a_filter_that_matches_nothing_says_so_and_offers_a_clear(self):
-        _, html = self.page({"q": "nothing like this"}, "#/quests?q=nothing%20like%20this")
+        _, html = self.page(
+            {"q": "nothing like this"}, "#/quests?q=nothing%20like%20this"
+        )
         self.assertIn("No quests match", html)
         self.assertIn("data-clear", html)
 
@@ -246,12 +309,19 @@ class TheQuestsView(unittest.TestCase):
         self.assertNotIn("Teldrassil", zone_select)
 
     def test_a_long_catalogue_grows_on_request(self):
-        many = dict(QUESTS, quests=[quest(i, "Quest %d" % i, "Horde", "Durotar", 1, "not_reached") for i in range(1, 251)])
+        many = dict(
+            QUESTS,
+            quests=[
+                quest(i, "Quest %d" % i, "Horde", "Durotar", 1, "not_reached")
+                for i in range(1, 251)
+            ],
+        )
         got = run(
             "views/quests.js",
             "const reads = %s;\n"
             "const first = M.catalogueBody(reads['/api/v2/quests'], {});\n"
-            "console.log(JSON.stringify(first.s));" % json.dumps({"/api/v2/quests": many}),
+            "console.log(JSON.stringify(first.s));"
+            % json.dumps({"/api/v2/quests": many}),
         )
         self.assertIn("250 of 250 quests, the first 100 shown", got)
         self.assertIn("Show 100 more", got)
@@ -291,6 +361,56 @@ class TheQuestsView(unittest.TestCase):
         self.assertIn("This quest was not found", got)
         self.assertIn("no such quest", got)
 
+    def test_the_controls_narrow_the_list_and_bind_once_after_a_redraw(self):
+        # The view's handlers look up their elements on `main`, not on the
+        # global document, so this `main` answers with stand-in elements. A
+        # write to .qs-catalogue makes new ones, as the browser's innerHTML does.
+        got = run(
+            "views/quests.js",
+            "let els = {}, writes = 0;\n"
+            "function el() {\n"
+            "  const ls = {};\n"
+            "  return {value: '', focus() {}, addEventListener(k, f) { (ls[k] = ls[k] || []).push(f); },\n"
+            "    fire(k, e) { (ls[k] || []).forEach((f) => f(e || {})); }};\n"
+            "}\n"
+            "function fresh() {\n"
+            "  els = {};\n"
+            "  for (const id of ['qs-q', 'qs-faction', 'qs-zone', 'qs-status', 'qs-lo', 'qs-hi']) els['#' + id] = el();\n"
+            "  const r = el(); let h = '';\n"
+            "  Object.defineProperty(r, 'innerHTML', {get: () => h, set: (v) => { h = v; writes++; }});\n"
+            "  els['[data-region=catalogue]'] = r;\n"
+            "}\n"
+            "fresh();\n"
+            "const cat = {set innerHTML(_v) { fresh(); }};\n"
+            "const main = {querySelector: (s) => (s === '.qs-catalogue' ? cat : els[s] || null)};\n"
+            "const c = ctx({}, {}, %s);\n"
+            "V.after(main, c);\n"
+            "const list = () => els['[data-region=catalogue]'].innerHTML;\n"
+            "els['#qs-q'].value = 'venom'; els['#qs-q'].fire('input');\n"
+            "const searched = [list(), location.hash];\n"
+            "els['#qs-faction'].value = 'Horde'; els['#qs-faction'].fire('change');\n"
+            "els['#qs-q'].value = ''; writes = 0; els['#qs-q'].fire('input');\n"
+            "const typed = writes, faction = [list(), location.hash];\n"
+            "els['#qs-faction'].value = ''; els['#qs-faction'].fire('change');\n"
+            "els['#qs-faction'].value = 'Horde'; els['#qs-faction'].fire('change');\n"
+            "writes = 0; els['#qs-status'].value = 'completed'; els['#qs-status'].fire('change');\n"
+            "console.log(JSON.stringify({searched, faction, typed, again: writes, status: list()}));"
+            % json.dumps(READS),
+        )
+        html, hash_ = got["searched"]
+        self.assertIn("1 of 5 quests", html)
+        self.assertIn("#/quests/457?", html)
+        self.assertIn("q=venom", hash_)
+        html, hash_ = got["faction"]
+        self.assertIn("3 of 5 quests", html)
+        self.assertIn("faction=Horde", hash_)
+        # One keystroke after a redraw writes the list once, however many
+        # times the controls were drawn again before it.
+        self.assertEqual(got["typed"], 1)
+        self.assertEqual(got["again"], 1)
+        self.assertIn("1 of 5 quests", got["status"])
+        self.assertIn("#/quests/788?", got["status"])
+
     def test_before_the_reads_answer_it_shows_skeletons(self):
         got = run(
             "views/quests.js",
@@ -302,7 +422,10 @@ class TheQuestsView(unittest.TestCase):
 @unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
 class TheQuestsRoute(unittest.TestCase):
     def test_the_nav_lists_quests(self):
-        got = run("shell.js", "console.log(JSON.stringify(M.NAV.map((n) => [n.key, n.href])));")
+        got = run(
+            "shell.js",
+            "console.log(JSON.stringify(M.NAV.map((n) => [n.key, n.href])));",
+        )
         self.assertIn(["quests", "#/quests"], got)
 
     def test_quests_and_one_quest_resolve(self):
@@ -313,7 +436,9 @@ class TheQuestsRoute(unittest.TestCase):
         )
         self.assertEqual(got[0], {"view": "quests", "section": "quests", "params": {}})
         self.assertEqual(got[1]["view"], "quests")
-        self.assertEqual(got[2], {"view": "quests", "section": "quests", "params": {"id": "457"}})
+        self.assertEqual(
+            got[2], {"view": "quests", "section": "quests", "params": {"id": "457"}}
+        )
         self.assertEqual(got[3], {"redirect": "#/quests/457"})
         self.assertIn("quests", got[4])
 

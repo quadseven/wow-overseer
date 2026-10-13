@@ -84,7 +84,8 @@ export function keep(x, f) {
     const l = num(x.level);
     if (l === null || (f.lo !== null && l < f.lo) || (f.hi !== null && l > f.hi)) return false;
   }
-  if (f.text && !(x.title + " " + x.zone + " " + x.id).toLowerCase().includes(f.text)) return false;
+  // Only the fields the server sent: a missing one must not search as the word "undefined".
+  if (f.text && ![x.title, x.zone, x.id].filter(known).join(" ").toLowerCase().includes(f.text)) return false;
   return true;
 }
 
@@ -254,7 +255,10 @@ export default {
     on("qs-lo", "input", () => redraw(setQuery({ lvl: levels() })));
     on("qs-hi", "input", () => redraw(setQuery({ lvl: levels() })));
     // The controls and the list together, when the controls change too: a new
-    // faction changes the zones offered, and Clear empties every field.
+    // faction changes the zones offered, and Clear empties every field. The
+    // rewrite replaces every control and the list region with new elements, so
+    // calling after() again binds each listener once on the new ones; the old
+    // listeners leave with the old elements and nothing stacks.
     const redrawAll = (q, focus) => {
       main.querySelector(".qs-catalogue").innerHTML = html`${controls(data, q)}<div data-region="catalogue">${catalogueBody(data, q)}</div>`.s;
       this.after(main, ctx);
