@@ -213,6 +213,8 @@ function questPage(ctx) {
   // render() calls this only for a route with an id; #/quests uses the catalogue.
   const back = html`<a class="qs-back" href="${build(["quests"], kept(ctx.query))}"><i class="ph ph-arrow-left" aria-hidden="true"></i>All quests</a>`;
   const read = ctx.get(questPath(ctx.params.id));
+  // A read with no entry yet (null) is "loading" to pendingRead, so it returns
+  // skeletons here and nothing below reads into a null `read`.
   const wait = pendingRead(read, 3);
   if (wait) return html`${back}${pageHead("Quest " + ctx.params.id)}${wait}`;
   if (!read.data || read.data.error) {
@@ -253,6 +255,8 @@ export default {
     const data = ctx.get(QUESTS).data;
     const region = main.querySelector("[data-region=catalogue]");
     if (!data || !region) return;
+    // Both redraws run whole on the browser's one thread, reading the URL that
+    // setQuery has just written; limitFor() keys `shown` to those filters.
     const redraw = (q) => { region.innerHTML = catalogueBody(data, q).s; };
     const val = (id) => { const el = main.querySelector("#" + id); return el ? el.value : ""; };
     const levels = () => { const lo = val("qs-lo"), hi = val("qs-hi"); return lo || hi ? lo + "-" + hi : ""; };
@@ -264,8 +268,9 @@ export default {
     on("qs-hi", "input", () => redraw(setQuery({ lvl: levels() })));
     // The controls and the list together, when the controls change too: a new
     // faction changes the zones offered, and Clear empties every field. The
-    // rewrite replaces every control and the list region with new elements, so
-    // calling after() again binds each listener once on the new ones; the old
+    // list region sits inside .qs-catalogue, so the rewrite replaces it and
+    // every control with new elements; calling after() again binds each
+    // listener, the region's click included, once on the new ones. The old
     // listeners leave with the old elements and nothing stacks.
     const redrawAll = (q, focus) => {
       main.querySelector(".qs-catalogue").innerHTML = html`${controls(data, q)}<div data-region="catalogue">${catalogueBody(data, q)}</div>`.s;

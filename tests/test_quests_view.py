@@ -489,6 +489,61 @@ class TheQuestsView(unittest.TestCase):
         self.assertIn("1 of 5 quests", got["status"])
         self.assertIn("#/quests/788?", got["status"])
 
+    def test_the_list_click_binds_once_on_the_new_region_after_a_redraw(self):
+        many = dict(
+            QUESTS,
+            quests=[
+                quest(i, "Quest %d" % i, "Horde", "Durotar", 1, "not_reached")
+                for i in range(1, 251)
+            ],
+        )
+        # Two faction changes and a Clear each rewrite the controls and the
+        # list region. One Show more click on the region drawn last must grow
+        # the list by one step, not by one step per redraw.
+        got = run(
+            "views/quests.js",
+            "let els = {};\n"
+            "function el() {\n"
+            "  const ls = {};\n"
+            "  return {value: '', focus() {}, addEventListener(k, f) { (ls[k] = ls[k] || []).push(f); },\n"
+            "    fire(k, e) { (ls[k] || []).forEach((f) => f(e || {})); }};\n"
+            "}\n"
+            "function fresh() {\n"
+            "  els = {};\n"
+            "  for (const id of ['qs-q', 'qs-faction', 'qs-zone', 'qs-status', 'qs-lo', 'qs-hi']) els['#' + id] = el();\n"
+            "  const r = el(); let h = '';\n"
+            "  Object.defineProperty(r, 'innerHTML', {get: () => h, set: (v) => { h = v; }});\n"
+            "  els['[data-region=catalogue]'] = r;\n"
+            "}\n"
+            "fresh();\n"
+            "const cat = {set innerHTML(_v) { fresh(); }};\n"
+            "const main = {querySelector: (s) => (s === '.qs-catalogue' ? cat : els[s] || null)};\n"
+            "const c = ctx({}, {}, %s);\n"
+            "V.after(main, c);\n"
+            "const region = () => els['[data-region=catalogue]'];\n"
+            "const hit = (sel) => ({target: {closest: (s) => (s === sel ? {} : null)}});\n"
+            "els['#qs-faction'].value = 'Horde'; els['#qs-faction'].fire('change');\n"
+            "els['#qs-faction'].value = ''; els['#qs-faction'].fire('change');\n"
+            "region().fire('click', hit('[data-clear]'));\n"
+            "region().fire('click', hit('[data-more]'));\n"
+            "console.log(JSON.stringify(region().innerHTML));"
+            % json.dumps({"/api/v2/quests": many}),
+        )
+        self.assertIn("250 of 250 quests, the first 200 shown", got)
+        self.assertIn("Show 50 more", got)
+
+    def test_a_quest_read_with_no_entry_yet_shows_skeletons(self):
+        # The cache can answer a read it has never started with nothing at
+        # all; the quest page waits on it rather than reading into it.
+        got = run(
+            "views/quests.js",
+            "const c = ctx({id: '9'}, {}, {});\n"
+            "c.get = () => null;\n"
+            "console.log(JSON.stringify(V.render(c).s));",
+        )
+        self.assertIn("skeleton", got)
+        self.assertNotIn("not found", got)
+
     def test_before_the_reads_answer_it_shows_skeletons(self):
         got = run(
             "views/quests.js",
