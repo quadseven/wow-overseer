@@ -2618,6 +2618,55 @@ def _fetch_preraid(rd, names: list) -> dict:
     }
 
 
+# THE METRIC WATCHER'S SNAPSHOTS (#891), for the alchemists' pace on the Raid
+# tab. tools/metric_watcher.py appends one JSON object per run to this file;
+# the server only reads its tail. Unset or unreadable is no snapshots, and the
+# card says the pace is not yet measured.
+METRIC_SNAPSHOTS = os.environ.get("METRIC_WATCHER_OUTPUT", "")
+# A week of half-hourly snapshots is a few hundred kilobytes; the read seeks to
+# this many bytes before the end, so a log that has grown for a year costs no
+# more to read than one that has not.
+METRIC_TAIL_BYTES = 4 * 1024 * 1024
+
+
+def _metric_snapshots(path: str = "", days: int = raidsupply.PACE_DAYS) -> list:
+    """The snapshots of the last `days` before the newest, oldest first.
+
+    Only the last METRIC_TAIL_BYTES of the file are read, so the window is the
+    last `days` OR whatever that tail holds, whichever is shorter. A week of
+    snapshots fits in the tail many times over (see METRIC_TAIL_BYTES), so in
+    practice it is the full `days`; a short tail only shortens the pace window.
+    """
+    path = path or METRIC_SNAPSHOTS
+    if not path:
+        return []
+    try:
+        with open(path, "rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - METRIC_TAIL_BYTES))
+            tail = stream.read()
+    except OSError:
+        log.warning("metric snapshots unreadable at the configured path")
+        return []
+    lines = tail.split(b"\n")
+    if size > METRIC_TAIL_BYTES:
+        lines = lines[1:]  # the first line was cut by the seek
+    out = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if isinstance(record, dict) and record.get("snapshot_epoch") is not None:
+            out.append(record)
+    out.sort(key=lambda r: int(r["snapshot_epoch"]))
+    if not out:
+        return []
+    since = int(out[-1]["snapshot_epoch"]) - days * 86400
+    return [r for r in out if int(r["snapshot_epoch"]) >= since]
+
+
 def _fetch_raidgoals() -> dict:
     """Everything the raid-readiness view counts, on one connection.
 
@@ -4795,6 +4844,7 @@ class Handler(BaseHTTPRequestHandler):
             min_level = fetched.pop("min_level")
             guild_rows = fetched.pop("guild_rows")
             supply = fetched.pop("supply")
+            snapshots = _metric_snapshots()
             prep = fetched.pop("preraid")
             list_items = fetched.pop("list_items")
             # ONE CARD PER GUILD. raidgoals counts one roster at a time, so it
@@ -4811,7 +4861,8 @@ class Handler(BaseHTTPRequestHandler):
                     attuned, min_level, goals, quest_rows=quest_rows,
                     holding_rows=fetched["holding_rows"],
                     item_rows=list_items,
-                    supply=supply.get(group["guildid"]),
+                    supply=dict(supply.get(group["guildid"]) or {},
+                                snapshots=snapshots),
                     preraid=preraid.family_view(
                         list(group["family_names"]), **prep)))
             payload = raidready.build_readiness(cards)
