@@ -1284,13 +1284,15 @@ def _fetch_armory(names: list[str] | None = None) -> dict:
         # none, and a character in no guild is a character with no
         # guild line, not a missing row.
         char_rows = rd.must(
-            "SELECT c.name, c.level, c.race, c.class, c.gender, c.online, "  # noqa: S608
+            "SELECT c.name, c.level, c.race, c.class, c.gender, "
+            "(presence.name IS NOT NULL) AS online, "  # noqa: S608
             "c.activeTalentGroup, c.totalKills, g.name AS guild, "
             # The face the character was made with, for the 3D model:
             # five indexes into the race's choice lists (armory.viewer_model).
             "c.skin, c.face, c.hairStyle, c.hairColor, c.facialStyle "
             "FROM characters c "
-            "LEFT JOIN guild_member gm ON gm.guid = c.guid "
+            + v2_presence.snapshot_join("c", "presence")
+            + "LEFT JOIN guild_member gm ON gm.guid = c.guid "
             "LEFT JOIN guild g ON g.guildid = gm.guildid "
             f"WHERE c.name IN ({holes})",
             tuple(names),
