@@ -7,10 +7,18 @@ few rows that move a guild toward it. It never judges who should raid: that is
 raidteams. It only says what is still to do, in order, a few rows at a time.
 
 THE ORDER. Leavers first, so the guild has room; then invites, one recruit per
-open seat that no member already fits; then renames. A recruit is matched to
-its seat by class and race, because the seat's name is a joke about its race
-(Coom is an orc shaman, Dairymoo a tauren one), and a member the teams do not
-name who matches an open seat is that seat's recruit and takes its name.
+open seat that no member already fits; then renames; then the questers'
+resets. A recruit is matched to its seat by class and race, because the seat's
+name is a joke about its race (Coom is an orc shaman, Dairymoo a tauren one),
+and a member the teams do not name who matches an open seat is that seat's
+recruit and takes its name.
+
+QUESTERS (raidteams.QUESTERS, #927). A quester's seat is recruited, matched
+and renamed like a raid seat, after the raid seats. Once a quester holds its
+name and its guild, a `naturalize reset-level-1` row starts it over at level 1
+with nothing at its race's start (natural.py), once: a name the ledger already
+holds `reset` for is never asked again. The reset waits for the name because
+the name is what says the character is a quester and not a raid recruit.
 
 PACE. A few rows per pass, and never a second row for something already in
 flight (`pending`), so a slow worldserver is not flooded and a refused row is
@@ -30,11 +38,16 @@ from dataclasses import dataclass
 
 import raidteams
 
-GUILD_SIZE = 71
+# 40 raiders, 21 summoners, 10 maintenance and 5 questers. The module's own
+# gate, Overseer.Recruit.TargetSize, refuses an invite past its number, so it
+# must say the same.
+GUILD_SIZE = 76
 REMOVES_PER_PASS = 2
 INVITES_PER_PASS = 2
 RENAMES_PER_PASS = 6
+RESETS_PER_PASS = 2
 RECRUIT_MAX_LEVEL = 10
+RESET_COMMAND = "reset-level-1"
 
 # playerbots_account_type.account_type of the accounts the playerbot manager
 # logs in and out on its own (RNDbot). The other bot type, 2, is the AddClass
@@ -64,7 +77,7 @@ RACE_IDS = {
 
 @dataclass(frozen=True)
 class Action:
-    kind: str  # "remove", "invite" or "rename"
+    kind: str  # "remove", "invite", "rename" or "reset"
     target: str  # the character the row is about
     new_name: str = ""  # for "rename"
     why: str = ""
@@ -72,13 +85,15 @@ class Action:
 
 def open_seats(guild: str, member_names) -> list:
     """The approved seats no member of the guild fills yet, by approved or
-    current name: the recruits still to come."""
+    current name: the recruits still to come. The raid seats first, then the
+    questers'."""
     names = set(member_names)
-    return [
+    raid = [
         s
         for s in raidteams.seats(guild)
         if s.name not in names and (not s.was or s.was not in names)
     ]
+    return raid + [q for q in raidteams.QUESTERS.get(guild, ()) if q.name not in names]
 
 
 def _fits(member: dict, seat) -> bool:
@@ -171,17 +186,42 @@ def _renames(guild: str, names: set, seated: dict, pending: set) -> list:
     ]
 
 
+def _resets(guild: str, names: set, pending: set, reset_done) -> list:
+    """A reset for each quester in the guild under its name that the ledger
+    has not reset. Nothing while the ledger is unread (`reset_done` None):
+    the reset cannot be undone, so not knowing is a no."""
+    if reset_done is None:
+        return []
+    wanted = [
+        q.name
+        for q in raidteams.QUESTERS.get(guild, ())
+        if q.name in names and q.name not in reset_done and q.name not in pending
+    ]
+    return [
+        Action("reset", name, why="a quester starts at level 1 with nothing")
+        for name in wanted[:RESETS_PER_PASS]
+    ]
+
+
 def plan(
-    guild: str, members: list, candidates: list, pending: set, renames_on: bool
+    guild: str,
+    members: list,
+    candidates: list,
+    pending: set,
+    renames_on: bool,
+    reset_done=None,
 ) -> list:
     """The actions for one pass over one approved guild: removals, then
-    invites, then (when the module's rename verb is live) renames.
+    invites, then (when the module's rename verb is live) renames, then the
+    questers' resets.
 
     members     the guild's members: name, class_id, race, level
     candidates  characters in no guild: name, class_id, race, level,
                 account_type (its account's playerbots_account_type, or None)
     pending     names a row is already in flight for (any of these actions)
     renames_on  whether the module's rename verb is live
+    reset_done  names the naturalize ledger holds `reset` for, or None when
+                the ledger cannot be read
     """
     names = {m["name"] for m in members}
     seated = recruits_in_guild(guild, members)
@@ -195,6 +235,7 @@ def plan(
         actions += _invites(guild, members, seated, candidates, pending)
     if renames_on:
         actions += _renames(guild, names, seated, pending)
+    actions += _resets(guild, names, pending, reset_done)
     return actions
 
 

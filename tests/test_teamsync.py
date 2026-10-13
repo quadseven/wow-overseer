@@ -248,9 +248,10 @@ def _cave_live():
 class StalledOnRenames(unittest.TestCase):
     def test_the_live_cave_numbers(self):
         members = _cave_live()
-        self.assertEqual(len(members), teamsync.GUILD_SIZE)
+        self.assertEqual(len(members), 71)
+        # The 6 raid seats and, since #927, the 5 questers'.
         self.assertEqual(
-            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 6
+            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 11
         )
         self.assertEqual(len(teamsync.recruits_in_guild("Cave", members)), 6)
 
@@ -283,11 +284,12 @@ class StalledOnRenames(unittest.TestCase):
         ]
         why = teamsync.stall_reason("Cave", members, cand, set(), True)
         self.assertIn(
-            "the guild is full (71) and the approved teams name no leaver", why
+            "the guild is full (76) and the approved teams name no leaver", why
         )
         self.assertIn(
             "no candidate at level 10 or under on a rotating random-bot account "
-            "fits Fizzog, Fuggo, Gorrk, Haggo, Hrunt",
+            "fits Fizzog, Fuggo, Gorrk, Haggo, Hrunt, Tharn, Mirra, Velo, Durga, "
+            "Fizzik",
             why,
         )
 
@@ -311,7 +313,160 @@ class StalledOnRenames(unittest.TestCase):
             dict(m, name=seat)
             for seat, m in teamsync.recruits_in_guild("Cave", members).items()
         ] + [m for m in members if m["level"] != 1]
+        members += [_quester(q) for q in raidteams.QUESTERS["Cave"]]
         self.assertEqual(teamsync.stall_reason("Cave", members, [], set()), "")
+
+
+def _quester(q, name="", level=1):
+    return {
+        "name": name or q.name,
+        "class_id": q.class_id,
+        "race": teamsync.RACE_IDS[q.race],
+        "level": level,
+    }
+
+
+def _bonkers_full_raid():
+    """Bonkers with every raid, summoner and maintenance seat filled under its
+    approved name, and no leaver: 71 members, only the questers to come."""
+    out = [
+        {
+            "name": s.name,
+            "class_id": s.class_id,
+            "race": teamsync.RACE_IDS[s.race],
+            "level": 20,
+        }
+        for s in raidteams.seats("Bonkers")
+    ]
+    for _old, new in raidteams.SUMMONERS["Bonkers"] + raidteams.MAINTENANCE["Bonkers"]:
+        out.append({"name": new, "class_id": 9, "race": 5, "level": 20})
+    return out
+
+
+ORC_WARLOCK = {
+    "name": "Randomlock",
+    "class_id": 9,
+    "race": 2,
+    "level": 4,
+    "account_type": RNDBOT,
+}
+TROLL_ROGUE = {
+    "name": "Randomrogue",
+    "class_id": 4,
+    "race": 8,
+    "level": 2,
+    "account_type": RNDBOT,
+}
+
+
+class Questers(unittest.TestCase):
+    """The questing group (#927): recruited, renamed and reset to level 1."""
+
+    def test_the_ten_seats_of_922_five_per_guild(self):
+        self.assertEqual(sorted(raidteams.QUESTERS), ["Bonkers", "Cave"])
+        for guild in raidteams.QUESTERS:
+            self.assertEqual(len(raidteams.QUESTERS[guild]), 5)
+        everyone = [q for g in raidteams.QUESTERS.values() for q in g]
+        self.assertEqual(len({q.name for q in everyone}), 10)
+        self.assertEqual({q.class_id for q in everyone}, {2, 3, 4, 5, 7, 9, 11})
+        self.assertEqual(
+            [(q.name, q.race, q.zone) for q in raidteams.QUESTERS["Bonkers"]],
+            [
+                ("Saelis", "Blood Elf", "Sunstrider Isle"),
+                ("Morwick", "Undead", "Deathknell"),
+                ("Hoofa", "Tauren", "Camp Narache"),
+                ("Grakk", "Orc", "Valley of Trials"),
+                ("Zinja", "Troll", "Valley of Trials"),
+            ],
+        )
+        self.assertEqual(
+            {q.zone for q in everyone},
+            {
+                "Shadowglen",
+                "Northshire Valley",
+                "Ammen Vale",
+                "Coldridge Valley",
+                "Sunstrider Isle",
+                "Deathknell",
+                "Camp Narache",
+                "Valley of Trials",
+            },
+        )
+
+    def test_the_guild_has_room_for_the_questers(self):
+        self.assertEqual(len(_bonkers_full_raid()), 71)
+        self.assertEqual(teamsync.GUILD_SIZE, 76)
+
+    def test_a_random_bot_of_the_seat_race_and_class_is_invited(self):
+        acts = teamsync.plan(
+            "Bonkers", _bonkers_full_raid(), [ORC_WARLOCK, TROLL_ROGUE], set(), True
+        )
+        self.assertEqual(
+            [(a.kind, a.target, a.why) for a in acts],
+            [
+                ("invite", "Randomlock", "recruit for Grakk's seat"),
+                ("invite", "Randomrogue", "recruit for Zinja's seat"),
+            ],
+        )
+
+    def test_a_raid_seat_is_recruited_before_a_quester_seat(self):
+        members = [m for m in _bonkers_full_raid() if m["name"] != "Hungrygrunt"]
+        acts = teamsync.plan("Bonkers", members, [ORC_WARLOCK], set(), False)
+        self.assertEqual(
+            [a.why for a in acts if a.kind == "invite"],
+            ["recruit for Hungrygrunt's seat"],
+        )
+
+    def test_a_joined_recruit_takes_the_quester_name(self):
+        members = _bonkers_full_raid() + [
+            _quester(raidteams.QUESTERS["Bonkers"][3], "Randomlock", 4)
+        ]
+        acts = teamsync.plan("Bonkers", members, [], set(), True)
+        self.assertIn(
+            ("rename", "Randomlock", "Grakk"),
+            [(a.kind, a.target, a.new_name) for a in acts],
+        )
+
+    def test_a_named_quester_is_reset_to_level_1_once(self):
+        members = _bonkers_full_raid() + [
+            _quester(raidteams.QUESTERS["Bonkers"][3], level=4)
+        ]
+        acts = teamsync.plan("Bonkers", members, [], set(), True, reset_done=set())
+        resets = [a for a in acts if a.kind == "reset"]
+        self.assertEqual([a.target for a in resets], ["Grakk"])
+        self.assertEqual(teamsync.RESET_COMMAND, "reset-level-1")
+        done = teamsync.plan("Bonkers", members, [], set(), True, reset_done={"Grakk"})
+        self.assertEqual([a for a in done if a.kind == "reset"], [])
+        flight = teamsync.plan(
+            "Bonkers", members, [], {"Grakk"}, True, reset_done=set()
+        )
+        self.assertEqual([a for a in flight if a.kind == "reset"], [])
+
+    def test_an_unread_ledger_resets_nobody(self):
+        members = _bonkers_full_raid() + [_quester(raidteams.QUESTERS["Bonkers"][3])]
+        acts = teamsync.plan("Bonkers", members, [], set(), True, reset_done=None)
+        self.assertEqual([a for a in acts if a.kind == "reset"], [])
+
+    def test_a_raid_recruit_and_a_member_not_yet_named_are_never_reset(self):
+        members = _bonkers_full_raid() + [
+            _quester(raidteams.QUESTERS["Bonkers"][3], "Randomlock")
+        ]
+        acts = teamsync.plan("Bonkers", members, [], set(), True, reset_done=set())
+        self.assertEqual([a for a in acts if a.kind == "reset"], [])
+
+    def test_resets_are_paced(self):
+        members = _bonkers_full_raid() + [
+            _quester(q) for q in raidteams.QUESTERS["Bonkers"]
+        ]
+        acts = teamsync.plan("Bonkers", members, [], set(), True, reset_done=set())
+        self.assertEqual(
+            [a.target for a in acts if a.kind == "reset"], ["Saelis", "Morwick"]
+        )
+
+    def test_a_named_quester_is_not_taken_for_a_raid_seat(self):
+        members = [m for m in _bonkers_full_raid() if m["name"] != "Hungrygrunt"]
+        members.append(_quester(raidteams.QUESTERS["Bonkers"][3]))
+        self.assertEqual(teamsync.recruits_in_guild("Bonkers", members), {})
 
 
 if __name__ == "__main__":
