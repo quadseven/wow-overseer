@@ -740,6 +740,10 @@ class JobsPlan:
     # One line per member whose class step yields to levelling this pass
     # (class_yield), logged uncapped by the bridge.
     yields: tuple = ()
+    # (key, line) per class quest a member does not ask guild chat for, as it
+    # yields to levelling (class_asking); the bridge logs a line when its key
+    # changes.
+    ask_yields: tuple = ()
 
 
 def _yards(ax, ay, bx, by) -> float:
@@ -2569,6 +2573,7 @@ def plan(
     still=None,
     supply=None,
     pets=None,
+    asks=(),
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -2596,7 +2601,8 @@ def plan(
     (standstill.py), None to read no stand (stood_still_step); `supply` name
     -> the food and drink sold in reach of a member short of them
     (restsupply.py, supply_step); `pets` name -> the tameable beasts around a
-    hunter that knows Tame Beast and has no pet (hunterpet.py, pet_step).
+    hunter that knows Tame Beast and has no pet (hunterpet.py, pet_step);
+    `asks` the QuestAsk rows of the class quest asks lately (class_ask_streak).
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -2611,7 +2617,7 @@ def plan(
     )
     trades.update(focus_trades(members, focus))
     tally = _focus_tally(members, focus)
-    steps, lines, notes, helps = [], {}, [], []
+    steps, lines, notes, helps, ask_yields = [], {}, [], [], []
     gear_holds = []
     # One counter per allowance, each keyed by guild (_allowance).
     counters = {
@@ -2657,7 +2663,9 @@ def plan(
             _offer_for(pets, m.name),
         )
         lines[m.name] = doing
-        helps += class_helps(m, classes, hunts, now, recent)
+        asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
+        helps += asked
+        ask_yields += yielded
         if note:
             notes.append(note)
         if gear_why:
@@ -2676,7 +2684,7 @@ def plan(
         steps.append(step)
         _count_focus(tally, m, step, fields)
     owed, released = owed_members(
-        members, classes, recent, hunts, now, owing or classquest.Owing()
+        members, classes, recent, hunts, now, owing or classquest.Owing(), asks=asks
     )
     notes += owed_notes(owed, released)
     return JobsPlan(
@@ -2691,6 +2699,7 @@ def plan(
         owed=owed,
         released=released,
         yields=class_yields(members, classes, recent),
+        ask_yields=tuple(ask_yields),
     )
 
 
@@ -3176,14 +3185,15 @@ def progress_mark(m) -> tuple:
     )
 
 
-def class_owed(m, book, recent=(), hunts=None, now=0.0):
+def class_owed(m, book, recent=(), hunts=None, now=0.0, asks=()):
     """The classquest.Owed row of the class quest this member owes, or None.
 
     Read from the book, not from the plan line: a member in backoff after a far
     walk wall, in combat, dead, offline or waiting for a far walk slot owes its
     quest as much as one on its hunt. A member whose position is unread is read
     from an unknown map, which only makes its quest a map blocker (not
-    permanent), never a permanent one."""
+    permanent), never a permanent one. A quest that yields to levelling
+    (class_asking) is not owed while it yields."""
     if book is None:
         return None
     probe = m
@@ -3196,10 +3206,12 @@ def class_owed(m, book, recent=(), hunts=None, now=0.0):
         )
     probe = with_walls(probe, recent)
     avoid, off = class_avoid(m, book, recent, hunts, now)
-    return classquest.owed(book, probe, avoid, off)
+    return classquest.owed(book, probe, avoid, off, class_ask_held(m.name, asks))
 
 
-def owed_members(members, book, recent, hunts, now, owing, hours=None) -> tuple:
+def owed_members(
+    members, book, recent, hunts, now, owing, hours=None, asks=()
+) -> tuple:
     """(held, released): name -> classquest.Owed for every member with a class
     quest owed, split by the Owing clock. A member that has made no progress in
     `hours` (classquest.OWED_HOURS) is released: out of `held`, so the dungeon
@@ -3207,7 +3219,7 @@ def owed_members(members, book, recent, hunts, now, owing, hours=None) -> tuple:
     hours = classquest.OWED_HOURS if hours is None else hours
     held, released = {}, {}
     for m in members:
-        row = class_owed(m, book, recent, hunts, now)
+        row = class_owed(m, book, recent, hunts, now, asks)
         if row is None:
             continue
         if owing.expired(m.name, progress_mark(m), now, hours):
@@ -3488,21 +3500,155 @@ def _leave_resting(m, book, resting, merged) -> None:
             merged[quest.id] = left
 
 
-def class_helps(m, book, hunts=None, now=0.0, recent=()) -> list:
+def class_helps(m, book, hunts=None, now=0.0, recent=(), asks=()) -> list:
     """The class quests this member cannot do alone and no other class move
     stands ahead of, as classquest.Help rows for classask: a group quest, or a
-    hunt given up after it stalled. Nothing for a member with a class move."""
+    hunt given up after it stalled. Nothing for a member with a class move,
+    and nothing for a quest that yields to levelling (class_asking)."""
+    return class_asking(m, book, hunts, now, recent, asks)[0]
+
+
+def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
+    """(helps, yields) for one member: the classquest.Help rows class_helps
+    returns, and one (key, line) per helpable quest that is not asked for
+    because it yields to levelling, `key` changing only when the reason does.
+
+    A QUEST NO PARTY CAN HELP WITH IS NOT ASKED FOR (2026-10-12). A level 29
+    warlock asked guild chat 140 times in five days for help with a use that
+    changed nothing (USE_STALLED); twelve guildmates said yes 51 times and no
+    party ever formed, since a party has no spawn to walk to for a use
+    (classquest.objective_spot). Realm-wide 1,721 such asks ran nowhere. A
+    helpable move with no spot (classquest.no_party_spot) is not asked for:
+    the member levels until its hunt's hold-off ends, then tries alone again.
+    A quest asked for CLASS_ASK_STREAK_MAX times in a row with no party is not
+    asked for either while its hold lasts (class_ask_streak)."""
     if not _class_ready(m, book):
-        return []
+        return [], []
     avoid, off = class_avoid(m, book, recent, hunts, now)
     m = with_walls(m, recent)
     move, _blocked = classquest.next_move(book, m, avoid, off)
     if move is not None:
-        return []
-    return [
-        classquest.Help(m.name, m.guild, int(m.level), int(m.map_id), h)
-        for h in classquest.helps(book, m, avoid, off)
-    ]
+        return [], []
+    helps, yields = [], []
+    for h in classquest.helps(book, m, avoid, off):
+        if classquest.no_party_spot(book, h, m):
+            yields.append(_no_party_yield(m, h, hunts, now))
+            continue
+        left, count, yeses = class_ask_streak(m.name, h.quest, asks)
+        if left:
+            yields.append(_streak_yield(m, h, left, count, yeses))
+            continue
+        helps.append(classquest.Help(m.name, m.guild, int(m.level), int(m.map_id), h))
+    return helps, yields
+
+
+def _no_party_yield(m, move, hunts, now) -> tuple:
+    """(key, line) for a helpable quest no party can help with. The member
+    tries alone again when its hunt's hold-off ends, else after
+    classquest.SPAWN_RETRY_MINUTES (the rolling retry of a tried target)."""
+    hunt = hunts.get(m.name) if hunts is not None else None
+    left = classquest.SPAWN_RETRY_MINUTES
+    if hunt is not None and hunt.quest == move.quest and hunt.until is not None:
+        left = max(1, math.ceil((hunt.until - now) / 60.0))
+    line = (
+        "class ask: %s does not ask for %s: %s; it levels for %d minute(s), then "
+        "tries alone again" % (m.name, move.title, classquest.no_party_why(move), left)
+    )
+    return (m.name, move.quest, "nospot", move.blocker), line
+
+
+def _streak_yield(m, move, left, count, yeses) -> tuple:
+    line = (
+        "class ask: %s stops asking for %s after %d asks with no party (%d yes); "
+        "it levels for %d minute(s)" % (m.name, move.title, count, yeses, left)
+    )
+    return (m.name, move.quest, "streak", count), line
+
+
+# A CLASS QUEST ASK THAT NEVER BECOMES A PARTY STOPS (2026-10-12). One member
+# posted 48 asks in a day that nobody was placed to answer. After
+# CLASS_ASK_STREAK_MAX asks in a row for one quest that ended with no party
+# (no `ran` row), the member does not ask for it again for
+# CLASS_STALL_HOLD_MINUTES counted from the newest of them, and the quest does
+# not hold it out of the dungeon groups meanwhile (class_owed). The count is
+# read from overseer_guild_ask, so a restart keeps it. A live ask is not counted
+# (it may yet fill), and an ask that ran ends the run. Asks older than
+# CLASS_ASK_STREAK_WINDOW_MINUTES are not read, so a hold that ran out and an
+# ask that failed once more yields again at once.
+CLASS_ASK_STREAK_MAX = 3
+CLASS_ASK_STREAK_WINDOW_MINUTES = 12 * 60
+_ASK_RAN = "ran"
+_ASK_LIVE = frozenset({"open", "filled"})
+
+
+@dataclass(frozen=True)
+class QuestAsk:
+    """One class quest ask (overseer_guild_ask, kind 'quest'): who asked for
+    which quest, where it stands, how long ago, and how many said yes."""
+
+    asker: str
+    quest: int
+    state: str
+    age_minutes: int
+    yeses: int = 0
+
+
+def quest_asks_from_rows(rows) -> tuple:
+    """QuestAsk rows from the job's ask read; a row whose target is not a
+    quest's is left out."""
+    out = []
+    for row in rows or ():
+        head, _, tail = str(row.get("target") or "").partition(":")
+        if head != "quest" or not tail.isdigit():
+            continue
+        out.append(
+            QuestAsk(
+                asker=str(row.get("asker") or ""),
+                quest=int(tail),
+                state=str(row.get("state") or ""),
+                age_minutes=_int(row.get("age"), 10**6),
+                yeses=_int(row.get("yeses"), 0),
+            )
+        )
+    return tuple(out)
+
+
+def class_ask_streak(name, quest, asks) -> tuple:
+    """(minutes left of the hold, asks in the run, yeses they drew) for one
+    member's quest: the closed asks for it since the newest that ran, newest
+    first, inside CLASS_ASK_STREAK_WINDOW_MINUTES. The hold is 0 while the run
+    is short of CLASS_ASK_STREAK_MAX or CLASS_STALL_HOLD_MINUTES have passed
+    since its newest ask."""
+    rows = sorted(
+        (
+            a
+            for a in asks or ()
+            if a.asker == name
+            and a.quest == int(quest)
+            and int(a.age_minutes) < CLASS_ASK_STREAK_WINDOW_MINUTES
+        ),
+        # age_minutes is minutes since the ask was posted, so ascending is
+        # newest first: the walk stops at the newest ask that ran, and run[0]
+        # is the newest closed ask the hold is counted from.
+        key=lambda a: int(a.age_minutes),
+    )
+    run = []
+    for a in rows:
+        if a.state == _ASK_RAN:
+            break
+        if a.state not in _ASK_LIVE:
+            run.append(a)
+    yeses = sum(int(a.yeses) for a in run)
+    if len(run) < CLASS_ASK_STREAK_MAX:
+        return 0, len(run), yeses
+    left = max(0, CLASS_STALL_HOLD_MINUTES - int(run[0].age_minutes))
+    return left, len(run), yeses
+
+
+def class_ask_held(name, asks) -> frozenset:
+    """The quest ids this member has stopped asking for (class_ask_streak)."""
+    quests = {a.quest for a in asks or () if a.asker == name}
+    return frozenset(q for q in quests if class_ask_streak(name, q, asks)[0])
 
 
 # A MEMBER MAKES ONE CROSSING AT A TIME, whichever step asked it: a class
