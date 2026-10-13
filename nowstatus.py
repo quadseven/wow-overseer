@@ -617,13 +617,9 @@ def _live(member, f, fresh, now_at):
     """Doing, waiting, since for a character in the world and not fighting."""
     intent = f.get("intent")
     steps = f.get("steps") or ()
-    restarts = _restarts(steps, now_at)
-    if restarts >= 3:
-        if _intent_is_active(intent):
-            return _from_intent(intent, steps, now_at)
-        doing = _walk_from_steps(steps) or "Walking"
-        why = "a way there; the walk has ended and restarted %d times" % restarts
-        return doing, why, _first_restart(steps, now_at)
+    restarting = _from_restarts(intent, steps, now_at)
+    if restarting:
+        return restarting
     if _intent_is_active(intent):
         return _from_intent(intent, steps, now_at)
     for scope in ("character", None, "family"):
@@ -635,6 +631,18 @@ def _live(member, f, fresh, now_at):
         if mine:
             return _from_step(mine[0])
     return _from_job(f.get("roster") or {})
+
+
+def _from_restarts(intent, steps, now_at):
+    """Doing, waiting, since for a walk that keeps restarting, or None."""
+    restarts = _restarts(steps, now_at)
+    if restarts < 3:
+        return None
+    if _intent_is_active(intent):
+        return _from_intent(intent, steps, now_at)
+    doing = _walk_from_steps(steps) or "Walking"
+    why = "a way there; the walk has ended and restarted %d times" % restarts
+    return doing, why, _first_restart(steps, now_at)
 
 
 def _walk_from_steps(steps):
