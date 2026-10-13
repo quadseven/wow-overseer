@@ -397,7 +397,7 @@ def _support_blockers(lineup: dict, goals: dict) -> list:
             % (
                 len(unmet),
                 _count(len(goal_list), "consumable goal", "consumable goals"),
-                ", ".join(g["name"].lower() for g in unmet),
+                ", ".join(g.get("name", "").lower() for g in unmet),
             )
         )
     no_source = [g for g in goal_list if g.get("status") == raidgoals.NO_SOURCE]
