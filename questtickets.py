@@ -222,6 +222,53 @@ def body(
 # --- the pass ----------------------------------------------------------------
 
 
+def _adopt(db, tracker, epic: int, waiting: list) -> list:
+    """Record each issue under the epic that already carries a waiting quest's
+    marker, and drop that quest from `waiting`; the notes to log."""
+    notes = []
+    for child in tracker.children(epic):
+        quest = marked(child.get("body"))
+        if quest in waiting:
+            db.write(
+                questledger.TICKET_WRITE_SQL,
+                (quest, int(child["number"]), str(child.get("html_url") or "")),
+            )
+            waiting.remove(quest)
+            notes.append("quest %d: already filed as #%d" % (quest, child["number"]))
+    return notes
+
+
+def _counts(db, waiting: list, broken: list) -> dict:
+    """(quest, guid) -> what the log last held, for the broken attempts.
+    Both lists are non-empty: every waiting quest has a broken row."""
+    guids = sorted({int(r["guid"]) for r in broken})
+    rows = db.rows(
+        OBJECTIVES_SQL.format(
+            quests=questledger.holes(len(waiting)),
+            guids=questledger.holes(len(guids)),
+        ),
+        tuple(waiting) + tuple(guids),
+    )
+    return {(int(r["quest"]), int(r["guid"])): r for r in rows}
+
+
+def _file(db, tracker, epic: int, quest_id: int, title_text: str, text: str) -> int:
+    """Open one quest's issue, record it and attach it; its number."""
+    issue = tracker.open(title_text, text, list(LABELS))
+    try:
+        db.write(
+            questledger.TICKET_WRITE_SQL,
+            (quest_id, int(issue["number"]), str(issue.get("html_url") or "")),
+        )
+    finally:
+        # Not a swallow: a failed record still raises once the attach is done
+        # (test_a_failed_record_still_attaches_so_the_next_run_does_not_refile).
+        # The attach runs anyway so the next run's _adopt finds the issue under
+        # the epic and records it instead of filing the quest again.
+        tracker.attach(epic, issue["id"])
+    return int(issue["number"])
+
+
 def run(db, tracker, site_url: str, epic: int, limit: int = LIMIT) -> list:
     """File what is due; the notes to log.
 
@@ -234,16 +281,7 @@ def run(db, tracker, site_url: str, epic: int, limit: int = LIMIT) -> list:
     waiting = due(ledger, filed)
     if not waiting:
         return ["no broken quest is waiting for a ticket"]
-    notes = []
-    for child in tracker.children(epic):
-        quest = marked(child.get("body"))
-        if quest in waiting:
-            db.write(
-                questledger.TICKET_WRITE_SQL,
-                (quest, int(child["number"]), str(child.get("html_url") or "")),
-            )
-            waiting.remove(quest)
-            notes.append("quest %d: already filed as #%d" % (quest, child["number"]))
+    notes = _adopt(db, tracker, epic, waiting)
     if len(waiting) > limit:
         notes.append("%d broken quest(s) wait for tomorrow" % (len(waiting) - limit))
         waiting = waiting[:limit]
@@ -255,36 +293,22 @@ def run(db, tracker, site_url: str, epic: int, limit: int = LIMIT) -> list:
         for r in ledger
         if int(r["quest"]) in waiting and r.get("state") == questledger.BROKEN
     ]
-    guids = sorted({int(r["guid"]) for r in broken})
-    counts = {
-        (int(r["quest"]), int(r["guid"])): r
-        for r in db.rows(
-            OBJECTIVES_SQL.format(
-                quests=questledger.holes(len(waiting)),
-                guids=questledger.holes(len(guids)),
-            ),
-            tuple(waiting) + tuple(guids),
-        )
-    }
+    counts = _counts(db, waiting, broken)
     for quest_id in waiting:
         quest = catalogue.get(quest_id)
         attempts = sorted(
             (r for r in broken if int(r["quest"]) == quest_id),
             key=lambda r: str(r.get("character_name") or ""),
         )
-        issue = tracker.open(
+        number = _file(
+            db,
+            tracker,
+            epic,
+            quest_id,
             title(quest_id, quest),
             body(quest_id, quest, attempts, counts, site_url, epic),
-            list(LABELS),
         )
-        try:
-            db.write(
-                questledger.TICKET_WRITE_SQL,
-                (quest_id, int(issue["number"]), str(issue.get("html_url") or "")),
-            )
-        finally:
-            tracker.attach(epic, issue["id"])
-        notes.append("quest %d: filed #%d" % (quest_id, issue["number"]))
+        notes.append("quest %d: filed #%d" % (quest_id, number))
     return notes
 
 

@@ -118,6 +118,16 @@ class TheStatusOfAQuest(unittest.TestCase):
         self.assertEqual(ql.quest_status(["broken", "completed"]), "completed")
 
 
+class TheHoles(unittest.TestCase):
+    def test_one_placeholder_per_value(self):
+        self.assertEqual(ql.holes(1), "%s")
+        self.assertEqual(ql.holes(3), "%s, %s, %s")
+
+    def test_an_empty_in_list_fails_here_not_in_mysql(self):
+        with self.assertRaises(ValueError):
+            ql.holes(0)
+
+
 class TheQuesters(unittest.TestCase):
     def test_ten_questers_five_per_guild(self):
         names = ql.quester_names()

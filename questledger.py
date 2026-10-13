@@ -126,6 +126,11 @@ TICKET_WRITE_SQL = (
 
 
 def holes(n: int) -> str:
+    """n `%s` placeholders for an `IN (...)`. n is at least 1: `IN ()` is a
+    MySQL syntax error, so every caller skips its read on an empty list (no
+    quester on the realm reads nothing), and one that forgets fails here."""
+    if n < 1:
+        raise ValueError("holes(%d): an IN list needs at least one value" % n)
     return ", ".join(["%s"] * n)
 
 
@@ -164,27 +169,39 @@ def _entry(row) -> Entry:
     )
 
 
+def _rewarded(old: Entry | None, first, now) -> tuple | None:
+    if old and old.state == COMPLETED:
+        return None
+    # Seen finishing only when the ledger was already watching it.
+    seen = old is not None and old.state == TAKEN
+    return COMPLETED, first, now if seen else None, ""
+
+
+def _failed(old: Entry | None, first, now) -> tuple | None:
+    if old and old.state == BROKEN:
+        return None
+    return BROKEN, first or now, now, FAILED_REASON
+
+
+def _in_log(old: Entry | None, first, now) -> tuple | None:
+    if old and old.state in (TAKEN, COMPLETED):
+        # A completed quest back in the log is a repeatable taken again:
+        # the ledger keeps that it was proven.
+        return None
+    return TAKEN, first or now, None, ""
+
+
 def _next(old: Entry | None, status, rewarded: bool, now) -> tuple | None:
     """(state, first_taken, finished, reason) for one quest and character,
     or None to leave it as it is. `status` is its log status, or None when
     the quest is not in the log."""
     first = old.first_taken if old else None
     if rewarded:
-        if old and old.state == COMPLETED:
-            return None
-        # Seen finishing only when the ledger was already watching it.
-        seen = old is not None and old.state == TAKEN
-        return COMPLETED, first, now if seen else None, ""
+        return _rewarded(old, first, now)
     if status is not None and int(status) == questlog.FAILED:
-        if old and old.state == BROKEN:
-            return None
-        return BROKEN, first or now, now, FAILED_REASON
+        return _failed(old, first, now)
     if status is not None and int(status) in questlog.IN_LOG:
-        if old and old.state in (TAKEN, COMPLETED):
-            # A completed quest back in the log is a repeatable taken again:
-            # the ledger keeps that it was proven.
-            return None
-        return TAKEN, first or now, None, ""
+        return _in_log(old, first, now)
     if old and old.state == TAKEN:
         return ABANDONED, first, now, ""
     return None
