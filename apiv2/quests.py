@@ -187,13 +187,8 @@ def quest(query: dict, ctx) -> tuple[int, dict]:
     return 200, build_quest(found, rows)
 
 
-def build_questers(characters, log_rows, count_rows, titles: dict) -> dict:
-    """Rows in, the /api/v2/questers payload out. Pure.
-
-    `characters` are questledger.CHARACTERS_SQL rows, `titles` quest id ->
-    title for the quests the log names.
-    """
-    by_name = {str(r["name"]): r for r in characters or ()}
+def _current_quests(log_rows, titles: dict) -> dict:
+    """guid -> the quests in that character's log, by quest id."""
     current: dict = {}
     for row in log_rows or ():
         status = int(row.get("status") or 0)
@@ -207,41 +202,57 @@ def build_questers(characters, log_rows, count_rows, titles: dict) -> dict:
                 "status": _LOG_WORDS[status],
             }
         )
+    return {guid: sorted(qs, key=lambda q: q["id"]) for guid, qs in current.items()}
+
+
+def _quester(name: str, row, current: dict, counts: dict) -> dict:
+    """One quester's entry; `row` is its CHARACTERS_SQL row, or None."""
+    entry = {
+        "name": name,
+        "guild": questledger.guild_of(name),
+        "present": row is not None,
+    }
+    if row is None:
+        entry.update(
+            level=None,
+            zone=None,
+            zone_name="",
+            online=False,
+            current=[],
+            **{s: 0 for s in questledger.STATES},
+        )
+        return entry
+    guid = int(row["guid"])
+    zone = int(row.get("zone") or 0) or None
+    mine = counts.get(guid, {})
+    entry.update(
+        level=int(row.get("level") or 0),
+        zone=zone,
+        zone_name=questcatalogue.zone_name(zone),
+        online=bool(row.get("online")),
+        current=current.get(guid, []),
+        **{state: mine.get(state, 0) for state in questledger.STATES},
+    )
+    return entry
+
+
+def build_questers(characters, log_rows, count_rows, titles: dict) -> dict:
+    """Rows in, the /api/v2/questers payload out. Pure.
+
+    `characters` are questledger.CHARACTERS_SQL rows, `titles` quest id ->
+    title for the quests the log names.
+    """
+    by_name = {str(r["name"]): r for r in characters or ()}
+    current = _current_quests(log_rows, titles)
     counts: dict = {}
     for row in count_rows or ():
         counts.setdefault(int(row["guid"]), {})[str(row["state"])] = int(row["n"])
-    out = []
-    for name in questledger.quester_names():
-        row = by_name.get(name)
-        entry = {
-            "name": name,
-            "guild": questledger.guild_of(name),
-            "present": row is not None,
-        }
-        if row is None:
-            entry.update(
-                level=None,
-                zone=None,
-                zone_name="",
-                online=False,
-                current=[],
-                **{s: 0 for s in questledger.STATES},
-            )
-            out.append(entry)
-            continue
-        guid = int(row["guid"])
-        zone = int(row.get("zone") or 0) or None
-        mine = counts.get(guid, {})
-        entry.update(
-            level=int(row.get("level") or 0),
-            zone=zone,
-            zone_name=questcatalogue.zone_name(zone),
-            online=bool(row.get("online")),
-            current=sorted(current.get(guid, []), key=lambda q: q["id"]),
-            **{state: mine.get(state, 0) for state in questledger.STATES},
-        )
-        out.append(entry)
-    return {"questers": out}
+    return {
+        "questers": [
+            _quester(name, by_name.get(name), current, counts)
+            for name in questledger.quester_names()
+        ]
+    }
 
 
 def questers(_query: dict, ctx) -> tuple[int, dict]:

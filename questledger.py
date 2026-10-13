@@ -144,29 +144,41 @@ def _entry(row) -> Entry:
     )
 
 
+def _rewarded(old: Entry | None, now) -> tuple | None:
+    """A quest the character was rewarded for."""
+    if old and old.state == COMPLETED:
+        return None
+    # Seen finishing only when the ledger was already watching it.
+    seen = old is not None and old.state == TAKEN
+    return COMPLETED, old.first_taken if old else None, now if seen else None, ""
+
+
+def _in_log(old: Entry | None, status: int, now) -> tuple | None:
+    """A quest in the log, failed or still under way."""
+    first = old.first_taken if old else None
+    if status == questlog.FAILED:
+        if old and old.state == BROKEN:
+            return None
+        return BROKEN, first or now, now, FAILED_REASON
+    if old and old.state in (TAKEN, COMPLETED):
+        # A completed quest back in the log is a repeatable taken again:
+        # the ledger keeps that it was proven.
+        return None
+    return TAKEN, first or now, None, ""
+
+
 def _next(old: Entry | None, status, rewarded: bool, now) -> tuple | None:
     """(state, first_taken, finished, reason) for one quest and character,
     or None to leave it as it is. `status` is its log status, or None when
     the quest is not in the log."""
-    first = old.first_taken if old else None
     if rewarded:
-        if old and old.state == COMPLETED:
-            return None
-        # Seen finishing only when the ledger was already watching it.
-        seen = old is not None and old.state == TAKEN
-        return COMPLETED, first, now if seen else None, ""
-    if status is not None and int(status) == questlog.FAILED:
-        if old and old.state == BROKEN:
-            return None
-        return BROKEN, first or now, now, FAILED_REASON
-    if status is not None and int(status) in questlog.IN_LOG:
-        if old and old.state in (TAKEN, COMPLETED):
-            # A completed quest back in the log is a repeatable taken again:
-            # the ledger keeps that it was proven.
-            return None
-        return TAKEN, first or now, None, ""
+        return _rewarded(old, now)
+    if status is not None and (
+        int(status) == questlog.FAILED or int(status) in questlog.IN_LOG
+    ):
+        return _in_log(old, int(status), now)
     if old and old.state == TAKEN:
-        return ABANDONED, first, now, ""
+        return ABANDONED, old.first_taken, now, ""
     return None
 
 
