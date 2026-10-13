@@ -12,9 +12,13 @@ ambiguous weapon-hand swap, and the bridge writes it as a kind='bot' `e` row
 with a retry window and a give-up.
 """
 
+import asyncio
 import pathlib
 import re
+import textwrap
+import types
 import unittest
+from unittest.mock import Mock
 
 import bag_pressure
 import gear
@@ -351,6 +355,84 @@ def _block(signature: str) -> str:
 
 
 class TheBridgeWritesIt(unittest.TestCase):
+    def test_a_first_worn_read_failure_waits_for_a_real_snapshot(self):
+        class MySQLError(Exception):
+            pass
+
+        namespace = {
+            "asyncio": asyncio,
+            "bag_pressure": bag_pressure,
+            "item_plan": types.SimpleNamespace(OPEN_STATUSES={"pending"}),
+            "pymysql": types.SimpleNamespace(
+                err=types.SimpleNamespace(MySQLError=MySQLError)
+            ),
+            "log": Mock(),
+            "EQUIP_RETRY_MINUTES": 15,
+        }
+        reads = iter(
+            [
+                MySQLError("read failed"),
+                [
+                    dict(
+                        holder="Grog",
+                        equipment_slot=4,
+                        entry=6000,
+                        name="Sparkleshell Breastplate",
+                    )
+                ],
+                [
+                    dict(
+                        holder="Grog",
+                        equipment_slot=4,
+                        entry=6000,
+                        name="Sparkleshell Breastplate",
+                    )
+                ],
+            ]
+        )
+
+        def fetch(_names):
+            read = next(reads)
+            if isinstance(read, Exception):
+                raise read
+            return read
+
+        inserts = []
+        namespace["_fetch_worn_pieces"] = fetch
+        namespace["_insert_equip"] = lambda equip: inserts.append(equip) or True
+        exec(textwrap.dedent(_block("    async def _write_equips(self")), namespace)
+        bridge = types.SimpleNamespace(_equip_worn={}, _equip_holds={})
+        wanted = equips([carried()], GROG)
+        history = [
+            dict(
+                id=7,
+                target_name="Grog",
+                command=wanted[0].command,
+                status="unchanged",
+                detail="the world kept its pick",
+                recent=False,
+            )
+        ]
+
+        asyncio.run(
+            namespace["_write_equips"](bridge, wanted, history, holders={"Grog"})
+        )
+        self.assertEqual(bridge._equip_holds, {})
+        self.assertEqual(inserts, [])
+
+        asyncio.run(
+            namespace["_write_equips"](bridge, wanted, history, holders={"Grog"})
+        )
+        self.assertEqual(
+            bridge._equip_holds[("Grog", wanted[0].command)].worn,
+            ((4, 6000, "Sparkleshell Breastplate"),),
+        )
+        asyncio.run(
+            namespace["_write_equips"](bridge, wanted, history, holders={"Grog"})
+        )
+        self.assertFalse(bridge._equip_holds[("Grog", wanted[0].command)].lifted)
+        self.assertEqual(inserts, [])
+
     def test_the_vendor_pass_equips_above_the_town_run_gate(self):
         body = _block("    async def _vendor_once(self")
         equip = body.index(

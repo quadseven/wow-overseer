@@ -11487,6 +11487,12 @@ class Bridge(discord.Client):
             # stops the pass nor lifts a hold on a slot nobody saw change.
             log.warning("equip: worn pieces unreadable (%s); holds keep the "
                         "last read", exc)
+            missing = set(wearers) - self._equip_worn.keys()
+            if missing:
+                log.warning("equip: deferring %d holder(s) without a worn "
+                            "snapshot", len(missing))
+                wanted = tuple(e for e in wanted if e.holder not in missing)
+                holders = set(holders) - missing
         else:
             self._equip_worn.update({h: read.get(h, {}) for h in wearers})
         worn = {h: self._equip_worn[h] for h in wearers if h in self._equip_worn}
