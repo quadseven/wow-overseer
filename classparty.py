@@ -446,10 +446,17 @@ def plan(asks, answers, quest_pass, helps, free, board, now, clock, book=None):
     if not board.seats(clock):
         return (), ()
     ended = {a for a, _who, _line in quest_pass.expire} | set(quest_pass.cancel)
-    gone = set(quest_pass.withdraw)
     by_member = {}
     for h in helps:
         by_member.setdefault(h.member, h)
+    return _plan_asks(
+        asks, answers, quest_pass, ended, by_member, free, board, now, book
+    )
+
+
+def _plan_asks(asks, answers, quest_pass, ended, by_member, free, board, now, book):
+    """plan's walk over the quest asks in id order: (parties, skip notes)."""
+    gone = set(quest_pass.withdraw)
     yes_by_ask = _yes_by_ask(answers)
     taken = set(board.names())
     partied = board.partied_asks()
