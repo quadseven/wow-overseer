@@ -15,6 +15,12 @@ rename lands, the name it has now (`was`), so the lineup holds before and
 after the renames. A seat with no `was` and no character of its name yet is a
 recruit still to come: the lineup reports it as an open seat.
 
+QUESTERS (#922). Five more per guild, a questing group that sets out to prove
+every quest can be done by playing it. They join like any recruit and start
+over at level 1 in their race's starting zone. They hold no raid seat: they
+are in none of GROUPS, SUMMONERS or MAINTENANCE, so the lineup, the 40 count,
+the summoners and the guild jobs never place them.
+
 PURE: data and lookups only.
 """
 
@@ -31,6 +37,14 @@ class Seat(NamedTuple):
     seat: str  # raidroles.SEAT_TANK, SEAT_HEALER or SEAT_DAMAGE
     race: str
     fire_resistance: bool  # this group's fire resistance aura or totem
+
+
+class Quester(NamedTuple):
+    name: str
+    class_id: int
+    race: str
+    role: str  # raidroles.SEAT_TANK, SEAT_HEALER or SEAT_DAMAGE, in the party
+    zone: str  # the race's starting zone, where it starts and stays
 
 
 GROUPS = {
@@ -230,6 +244,25 @@ MAINTENANCE = {
     ),
 }
 
+# The questing group per guild, as #922 chose it: a tank, a healer and three
+# damage each, and every starting zone between the two.
+QUESTERS = {
+    "Cave": (
+        Quester("Tharn", 11, "Night Elf", "tank", "Shadowglen"),
+        Quester("Mirra", 5, "Human", "healer", "Northshire Valley"),
+        Quester("Velo", 7, "Draenei", "dps", "Ammen Vale"),
+        Quester("Durga", 3, "Dwarf", "dps", "Coldridge Valley"),
+        Quester("Fizzik", 9, "Gnome", "dps", "Coldridge Valley"),
+    ),
+    "Bonkers": (
+        Quester("Saelis", 2, "Blood Elf", "tank", "Sunstrider Isle"),
+        Quester("Morwick", 5, "Undead", "healer", "Deathknell"),
+        Quester("Hoofa", 3, "Tauren", "dps", "Camp Narache"),
+        Quester("Grakk", 9, "Orc", "dps", "Valley of Trials"),
+        Quester("Zinja", 4, "Troll", "dps", "Valley of Trials"),
+    ),
+}
+
 # Members who leave the guild to make room for the recruits.
 LEAVING = {
     "Cave": (
@@ -271,7 +304,14 @@ def names_of(guild: str) -> set:
         for old, new in pairs:
             out.update((old, new))
     out.update(LEAVING.get(guild, ()))
+    out.update(quester_names(guild))
     return out
+
+
+def quester_names(guild: str = "") -> set:
+    """The questers' names in `guild`, or in every guild when none is named."""
+    guilds = (guild,) if guild else tuple(QUESTERS)
+    return {q.name for g in guilds for q in QUESTERS.get(g, ())}
 
 
 def renames(guild: str) -> list:
