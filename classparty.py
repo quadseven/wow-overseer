@@ -89,7 +89,8 @@ GIVE_UP_COOLDOWN_MINUTES = 30
 # After a party ends with its quest not done, the asker waits this long.
 ENDED_COOLDOWN_MINUTES = classask.ASK_COOLDOWN_MINUTES
 # The meeting at the objective takes this long at most: a walk of
-# classask.HELPER_REACH_YARDS on foot, its fights and the polls.
+# classask.HELPER_REACH_YARDS (about 5 minutes at running speed, 7 yards a
+# second), leaving room for fights on the way and the polls.
 MEET_SECONDS = 900.0
 # A party stands this long at most: the module's own ceiling is 1800 seconds.
 PARTY_SECONDS = 1680.0
