@@ -999,6 +999,42 @@ class Summoners(unittest.TestCase):
         self.assertEqual({d.keyword for d in doors.values()}, {"ragefire", "wailing"})
         self.assertEqual(doors["A"].stone.spawn, 6855)
 
+    def test_assign_doors_puts_a_summoner_on_call_at_the_family_door(self):
+        crew = [self.warlock("A", level=21), self.warlock("B", level=20)]
+        doors = guildjobs.assign_doors(
+            crew, guildjobs.entrances(), self.stones, "ragefire"
+        )
+        self.assertEqual(doors["A"].keyword, "ragefire")
+        self.assertTrue(doors["A"].on_call)
+        self.assertFalse(doors["B"].on_call)
+
+    def test_on_call_stands_close_and_is_released_when_campaign_door_changes(self):
+        w = self.warlock("A", level=21, x=1811.0, y=-4389.0)
+        doors = guildjobs.assign_doors(
+            [w], guildjobs.entrances(), self.stones, "ragefire"
+        )
+        step = only_step(plan([w], doors=doors), "A")
+        self.assertIn("waits on call", step.said)
+        self.assertEqual(step.rows[0].command, "walk-to-spawn gameobject:6855")
+        standing = self.warlock("A", level=21, x=1811.0, y=-4390.0)
+        self.assertIsNone(only_step(plan([standing], doors=doors), "A"))
+
+        changed = guildjobs.assign_doors(
+            [w], guildjobs.entrances(), self.stones, "zulfarrak"
+        )
+        self.assertFalse(changed["A"].on_call)
+        released = plan([w], doors=changed)
+        self.assertIsNone(only_step(released, "A"))
+        self.assertIn("farms near the meeting stone", released.lines["A"])
+
+    def test_on_call_without_a_stone_names_no_stone(self):
+        w = self.warlock("A", level=21)
+        doors = {"A": guildjobs.Door("ragefire", "Ragefire Chasm", 13, 21, None, True)}
+        result = plan([w], doors=doors)
+        self.assertIsNone(only_step(result, "A"))
+        self.assertTrue(result.lines["A"].startswith("waits on call for"))
+        self.assertNotIn("meeting stone", result.lines["A"])
+
     def test_a_warlock_with_the_ritual_walks_to_its_stone_to_farm(self):
         w = self.warlock("A")
         doors = guildjobs.assign_doors([w], guildjobs.entrances(), self.stones)

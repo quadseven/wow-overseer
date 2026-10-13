@@ -463,6 +463,7 @@ TRAIN_MIN_LEVEL = 5
 # stone it farms around.
 FIELD_REACH = 400.0
 DOOR_REACH = 500.0
+ON_CALL_REACH = 20.0
 
 # A door's meeting stone is the one nearest its entrance within this many
 # yards. Measured 2026-09-24: 25 yards at Ragefire Chasm, 846 at Dire Maul.
@@ -683,6 +684,7 @@ class Door:
     floor: int
     ceiling: int
     stone: Spot | None = None
+    on_call: bool = False
 
 
 @dataclass(frozen=True)
@@ -2238,32 +2240,68 @@ def doors_for(member: Member) -> list:
     return out
 
 
-def assign_doors(members, entrances, stones) -> dict:
+def assign_doors(members, entrances, stones, campaign_door: str = "") -> dict:
     """name -> Door for every warlock with the ritual, spread over the doors
     that fit: the stone with the fewest warlocks first (the Dire Maul wings
     and the Scarlet Monastery wings share one stone each), then the lower
     band, then the keyword."""
-    load = {}
-    out = {}
     casters = [
         m
         for m in members or ()
         if m.role == SUMMONER and RITUAL_OF_SUMMONING in m.known
     ]
     casters.sort(key=lambda m: (-int(m.level), m.name))
+    on_call, load, out = _assign_campaign_door(
+        casters, entrances, stones, campaign_door
+    )
     for m in casters:
-        fits = []
-        for run in doors_for(m):
-            stone = stone_for(run.keyword, entrances, stones)
-            if stone is None:
-                continue
-            fits.append((load.get(stone.spawn, 0), run.floor, run.keyword, run, stone))
-        if not fits:
+        if on_call is not None and m.name == on_call.name:
             continue
-        _n, _floor, keyword, run, stone = min(fits, key=lambda f: f[:3])
-        load[stone.spawn] = load.get(stone.spawn, 0) + 1
-        out[m.name] = Door(keyword, run.place, run.floor, run.ceiling, stone)
+        door = _spread_door(m, entrances, stones, load)
+        if door is not None:
+            out[m.name] = door
     return out
+
+
+def _spread_door(m, entrances, stones, load):
+    """The fitting door whose stone has the fewest warlocks, counted into
+    `load`; None when no door with a stone fits."""
+    fits = []
+    for run in doors_for(m):
+        stone = stone_for(run.keyword, entrances, stones)
+        if stone is None:
+            continue
+        fits.append((load.get(stone.spawn, 0), run.floor, run.keyword, run, stone))
+    if not fits:
+        return None
+    _n, _floor, keyword, run, stone = min(fits, key=lambda f: f[:3])
+    load[stone.spawn] = load.get(stone.spawn, 0) + 1
+    return Door(keyword, run.place, run.floor, run.ceiling, stone)
+
+
+def _assign_campaign_door(casters, entrances, stones, campaign_door):
+    """Reserve the family's campaign door for its highest-level eligible caster."""
+    load, out = {}, {}
+    if not campaign_door:
+        return None, load, out
+    stone = run = on_call = None
+    for member in casters:
+        for candidate in doors_for(member):
+            if candidate.keyword != campaign_door:
+                continue
+            stone = stone_for(candidate.keyword, entrances, stones)
+            if stone is not None:
+                on_call, run = member, candidate
+                break
+        if on_call is not None:
+            break
+    if on_call is None or run is None or stone is None:
+        return None, load, out
+    out[on_call.name] = Door(
+        campaign_door, run.place, run.floor, run.ceiling, stone, True
+    )
+    load[stone.spawn] = 1
+    return on_call, load, out
 
 
 # ---------------------------------------------------------------------------
@@ -2516,14 +2554,9 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
     shared = _shared_step(m, crafters, master, kept, recent, cap)
     if shared[0]:
         return shared
-    if m.level < RITUAL_LEVEL:
-        return None, "levels toward Ritual of Summoning at %d" % RITUAL_LEVEL, shared[2]
-    if RITUAL_OF_SUMMONING not in m.known:
-        return (
-            None,
-            "has the level for Ritual of Summoning and has not learned it at a warlock trainer",
-            shared[2],
-        )
+    gap = _ritual_gap(m)
+    if gap:
+        return None, gap, shared[2]
     door = doors.get(m.name)
     if door is None:
         return None, "knows the ritual; no door fits its level yet", shared[2]
@@ -2532,6 +2565,13 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
         return None, "answers a summon at %s" % door.place, ""
     if m.x is None or m.y is None:
         return None, "serves %s; where it stands is not read this pass" % door.place, ""
+    if door.on_call:
+        return _on_call_step(m, door, recent, cap, shards)
+    return _farm_door_step(m, door, recent, cap, shards)
+
+
+def _farm_door_step(m, door, recent, cap, shards):
+    """Return the walk or farm step for a summoner spread over the doors."""
     if door.stone is not None and not _near(m, door.stone, DOOR_REACH):
         if not _cooling(m, "door", recent):
             said = (
@@ -2545,6 +2585,35 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
     return (
         None,
         "farms near the meeting stone at %s between summons%s" % (door.place, shards),
+        "",
+    )
+
+
+def _ritual_gap(m) -> str:
+    """What a summoner still lacks before it can cast the ritual; "" when ready."""
+    if m.level < RITUAL_LEVEL:
+        return "levels toward Ritual of Summoning at %d" % RITUAL_LEVEL
+    if RITUAL_OF_SUMMONING not in m.known:
+        return "has the level for Ritual of Summoning and has not learned it at a warlock trainer"
+    return ""
+
+
+def _on_call_step(m, door, recent, cap, shards):
+    """Return the stand or wait step for the summoner assigned to campaign duty."""
+    # assign_doors only puts a summoner on call at a door with a stone, but a
+    # Door's stone is optional: without one there is no stone to name.
+    if door.stone is None:
+        return None, "waits on call for %s%s" % (door.place, shards), ""
+    if not _near(m, door.stone, ON_CALL_REACH):
+        if not _cooling(m, "door", recent):
+            said = "%s waits on call at the meeting stone at %s" % (
+                m.name,
+                door.place,
+            )
+            return _spot_step(m, door.stone, "door", cap, said), said, ""
+    return (
+        None,
+        "waits on call at the meeting stone at %s%s" % (door.place, shards),
         "",
     )
 
