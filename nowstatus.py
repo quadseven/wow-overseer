@@ -463,6 +463,19 @@ def _roster_families(roster):
     return by_name, families
 
 
+def _intent_age(row):
+    """The row's module_age in seconds, or None when it is missing or not a number."""
+    try:
+        return int(row.get("module_age"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_fresh_intent(row):
+    age = _intent_age(row)
+    return age is not None and age <= jev_family_intent.FRESH_SECONDS
+
+
 def _current_intents(intents, by_name, families):
     current_leaders = {}
     for family, family_names in families.items():
@@ -471,8 +484,7 @@ def _current_intents(intents, by_name, families):
     return [
         r
         for r in intents or ()
-        if r.get("module_age") is not None
-        and int(r["module_age"]) <= jev_family_intent.FRESH_SECONDS
+        if _is_fresh_intent(r)
         and current_leaders.get(str(r.get("family") or ""))
         == str(r.get("leader_name") or "")
     ]
@@ -518,6 +530,10 @@ def build_facts(names, roster, intents, steps, now_at=None) -> dict:
 # equip pass holding a piece back rides along while the member walks, fights or
 # runs a dungeon, and read as its whole state it showed ten members "stuck".
 SIDE_KINDS = frozenset({"equip_held", "bank_wait"})
+# The side notes that may still speak when nothing else does. The bank bag slot
+# note is left out on purpose: the slot is bought on any banker visit and holds
+# nothing, so "waiting for a banker" is never a true answer, even alone.
+SPEAKS_ALONE = frozenset({"equip_held"})
 
 
 def _main(steps):
@@ -580,7 +596,7 @@ def compose(member: dict, facts: dict | None, now_at: int | None = None) -> dict
         doing, waiting, since = _live(member, f, _main(fresh), now_at)
         doing, waiting, since = _stored_reason(_main(fresh), doing, waiting, since)
         if not doing:
-            side = [s for s in fresh if s.get("kind") == "equip_held"]
+            side = [s for s in fresh if s.get("kind") in SPEAKS_ALONE]
             if side:
                 doing, waiting, since = _from_step(side[0])
     if not doing:

@@ -119,6 +119,19 @@ class IntentFreshness(unittest.TestCase):
         self.assertNotIn("held far away", result["line"])
         self.assertNotIn("a banker", result["line"])
 
+    def test_an_intent_row_with_a_bad_age_is_skipped_not_a_crash(self):
+        for age in ("soon", "", None, [1]):
+            row = dict(INTENTS[0], module_age=age)
+            all_facts = nowstatus.build_facts(NAMES, ROSTER, [row], [], NOW)
+            self.assertIsNone(all_facts[row["leader_name"]]["intent"])
+
+    def test_a_bank_slot_note_alone_does_not_speak(self):
+        note = step("Idler", "Buying a bank bag slot", "a banker", kind="bank_wait")
+        solo = nowstatus.build_facts(["Idler"], ROSTER, [], [note], NOW)["Idler"]
+        got = nowstatus.compose({"name": "Idler", "present": True}, solo)
+        self.assertNotIn("a banker", got["line"])
+        self.assertNotIn("bank bag slot", got["line"])
+
 
 class TheLogTapReadsTheBridgesOwnReasons(unittest.TestCase):
     def one(self, message):
