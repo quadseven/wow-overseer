@@ -243,14 +243,16 @@ class TheBridgePass(unittest.TestCase):
             ProgrammingError=ProgrammingError,
             OperationalError=OperationalError,
         )
-        for failure in (
+        failures = (
             ProgrammingError(1146, "missing table"),
             OperationalError("down"),
-        ):
+        )
+        self.assertTrue(all(isinstance(failure, MySQLError) for failure in failures))
+        for failure in failures:
             with self.subTest(failure=type(failure).__name__):
                 self.bridge._quest_ledger_ready = False
 
-                def broken():
+                def broken(failure=failure):
                     raise failure
 
                 with (
@@ -262,11 +264,13 @@ class TheBridgePass(unittest.TestCase):
                 self.assertFalse(self.bridge._quest_ledger_ready)
                 executed = []
                 cursor = _Cursor({"SELECT guid, name": []}, [])
-                cursor.execute = lambda sql, args=(): (
+                cursor.execute = lambda sql, args=(), cursor=cursor, executed=executed: (
                     executed.append(sql),
                     setattr(cursor, "last", sql),
                 )
-                with mock.patch.object(self.bridge, "_connect", lambda: _Conn(cursor)):
+                with mock.patch.object(
+                    self.bridge, "_connect", lambda cursor=cursor: _Conn(cursor)
+                ):
                     self.bridge._record_quests()
                 self.assertEqual(executed[0], ql.TABLE_SQL)
                 self.assertTrue(self.bridge._quest_ledger_ready)
