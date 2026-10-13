@@ -133,6 +133,14 @@ logged as unavailable.
 The watcher also records a level-step estimate after two snapshots show
 positive level progress. It labels this separately from the XP-based estimate.
 
+Each snapshot also carries every family crafter's skill in alchemy,
+herbalism, tailoring, leatherworking, blacksmithing, engineering and
+enchanting, read from `/api/v2/training`. A crafter is keyed by a short hash
+of its name rather than the name. When the server's `METRIC_WATCHER_OUTPUT`
+points at the same file, the Raid tab reads the last week of snapshots and
+shows each alchemist's points per day and projected dates for alchemy 165,
+275, 290 and 300.
+
 The optional systemd units under `systemd/` run the watcher every 30 minutes.
 They assume the application is installed at `/opt/wow-overseer` and runs as
 the `wow-overseer` service account. Copy

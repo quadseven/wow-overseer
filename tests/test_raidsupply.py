@@ -1118,5 +1118,126 @@ class TheBridgePassRuns(unittest.TestCase):
         self.assertTrue(any("is not at a vault" in line for line in log.lines))
 
 
+DAY = 86400
+# 2026-10-05 00:00 UTC.
+WEEK_AGO = 1791158400
+
+
+def snapshot(epoch, alchemy, name="Ugga", projected=None):
+    return {
+        "snapshot_epoch": epoch,
+        "xp_projection": {"projected_at": projected},
+        "crafters": {
+            "Cave": [
+                {
+                    "crafter": rs.crafter_key(name),
+                    "skills": {"alchemy": alchemy, "herbalism": 70},
+                }
+            ]
+        },
+    }
+
+
+class TheAlchemistsPace(unittest.TestCase):
+    def test_alchemist_pace_projects_raid_rank_dates(self):
+        snaps = [
+            snapshot(WEEK_AGO, 30),
+            snapshot(WEEK_AGO + 3 * DAY, 33),
+            snapshot(WEEK_AGO + 7 * DAY, 37, projected="2027-02-10T06:00:00Z"),
+        ]
+        card = rs.card([], {}, {}, crafters=["Ugga", "Grug"], snapshots=snaps)
+        self.assertEqual(len(card["pace"]), 1)
+        pace = card["pace"][0]
+        self.assertEqual(pace["skill"], 37)
+        self.assertEqual(pace["per_day"], 1.0)
+        self.assertEqual(
+            [(r["rank"], r["at"]) for r in pace["ranks"]],
+            [
+                (165, "2027-02-17"),
+                (275, "2027-06-07"),
+                (290, "2027-06-22"),
+                (300, "2027-07-02"),
+            ],
+        )
+        self.assertIn("up 1.0 points a day over the last 7 days", pace["line"])
+        self.assertIn(
+            "290 (Greater Fire Protection Potion) around 2027-06-22", pace["line"]
+        )
+        self.assertIn("around 2027-02-10", card["level_60_line"])
+
+    def test_the_pace_reads_only_the_last_week(self):
+        snaps = [
+            snapshot(WEEK_AGO - 30 * DAY, 1),
+            snapshot(WEEK_AGO, 30),
+            snapshot(WEEK_AGO + 7 * DAY, 37),
+        ]
+        self.assertEqual(rs.alchemist_pace("Ugga", snaps)["per_day"], 1.0)
+
+    def test_a_reached_rank_says_reached(self):
+        snaps = [snapshot(WEEK_AGO, 160), snapshot(WEEK_AGO + DAY, 170)]
+        pace = rs.alchemist_pace("Ugga", snaps)
+        self.assertIsNone(pace["ranks"][0]["at"])
+        self.assertIn("165 (Fire Protection Potion) reached", pace["line"])
+
+    def test_no_gain_in_a_week_is_never_a_date(self):
+        snaps = [snapshot(WEEK_AGO, 39), snapshot(WEEK_AGO + 7 * DAY, 39)]
+        pace = rs.alchemist_pace("Ugga", snaps)
+        self.assertIn("no gain in 7 days", pace["line"])
+        self.assertIsNone(pace["per_day"])
+        self.assertEqual(pace["ranks"], [])
+        self.assertNotIn("202", pace["line"])
+
+    def test_one_snapshot_is_not_yet_a_pace(self):
+        pace = rs.alchemist_pace("Ugga", [snapshot(WEEK_AGO, 39)])
+        self.assertIn("not yet measured", pace["line"])
+        self.assertEqual(pace["ranks"], [])
+
+    def test_a_failed_training_read_says_so_rather_than_no_alchemist(self):
+        failed = {
+            "snapshot_epoch": WEEK_AGO + DAY,
+            "crafters": {"Cave": []},
+            "crafter_read_failures": {"Cave": [rs.crafter_key("Ugga")]},
+        }
+        card = rs.card([], {}, {}, crafters=["Ugga"], snapshots=[failed])
+        self.assertEqual(len(card["pace"]), 1)
+        self.assertIn("training read failed", card["pace"][0]["line"])
+        self.assertIsNone(rs.alchemist_pace("Grug", [failed]))
+
+    def test_no_snapshot_says_the_pace_is_not_yet_measured(self):
+        card = rs.card([], {}, {}, crafters=["Ugga"], snapshots=[])
+        self.assertEqual(len(card["pace"]), 1)
+        self.assertIn("not yet measured", card["pace"][0]["line"])
+        self.assertIn("no level 60 date", card["level_60_line"])
+
+    def test_the_readiness_card_passes_the_snapshots_through(self):
+        group = {
+            "guild": "Cave",
+            "family": "Ugga",
+            "family_names": ["Ugga"],
+            "rows": [{"name": "Ugga", "level": 30, "class_id": 5}],
+        }
+        snaps = [snapshot(WEEK_AGO, 30), snapshot(WEEK_AGO + 7 * DAY, 37)]
+        card = raidready.build_guild(
+            group,
+            [{"name": "Ugga", "level": 30, "class": 5}],
+            [],
+            [],
+            55,
+            {},
+            supply={"have": {}, "knowers": {}, "bank": 0, "snapshots": snaps},
+        )
+        self.assertEqual(card["supply"]["pace"][0]["name"], "Ugga")
+
+    def test_the_server_hands_the_snapshots_to_each_guild(self):
+        handler = SERVER[SERVER.index("def _raidgoals") : SERVER.index("def _loot")]
+        self.assertIn("snapshots = _metric_snapshots()", handler)
+        self.assertIn("snapshots=snapshots", handler)
+
+    def test_the_page_draws_the_pace_lines(self):
+        raid = (HERE / "app" / "views" / "raid.js").read_text(encoding="utf-8")
+        self.assertIn("s.pace", raid)
+        self.assertIn("s.level_60_line", raid)
+
+
 if __name__ == "__main__":
     unittest.main()
