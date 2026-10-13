@@ -442,7 +442,9 @@ def _plan_ask(ask, need, board, taken, filled, yes_by_ask, gone, free, now, book
 def plan(asks, answers, quest_pass, helps, free, board, now, clock, book=None):
     """(plan_starts' parties, notes): each note names a filled ask that gets no
     party this pass and why (its asker is taken, its failures are used up, or
-    its objective has no spawn to walk to), so no full ask waits in silence."""
+    its objective has no spawn to walk to), so no full ask waits in silence.
+    The per-ask checks live in _asker_need, _plan_ask and _plan_asks so each
+    piece stays small enough to read on its own."""
     if not board.seats(clock):
         return (), ()
     ended = {a for a, _who, _line in quest_pass.expire} | set(quest_pass.cancel)
