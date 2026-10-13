@@ -170,7 +170,8 @@ def _in_log(old: Entry | None, status: int, now) -> tuple | None:
 def _next(old: Entry | None, status, rewarded: bool, now) -> tuple | None:
     """(state, first_taken, finished, reason) for one quest and character,
     or None to leave it as it is. `status` is its log status, or None when
-    the quest is not in the log."""
+    the quest is not in the log. Reward and log transitions live in their
+    helpers so this function only selects which transition applies."""
     if rewarded:
         return _rewarded(old, now)
     if status is not None and (

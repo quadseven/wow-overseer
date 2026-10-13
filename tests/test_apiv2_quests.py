@@ -67,6 +67,14 @@ LEDGER = [
     entry(2, 8, "Mirra", "broken", ql.FAILED_REASON),
     entry(3, 21, "Grakk", "taken"),
 ]
+LEDGER_COUNTS = [
+    {
+        "quest": quest_id,
+        "state": state,
+        "n": sum(r["quest"] == quest_id and r["state"] == state for r in LEDGER),
+    }
+    for quest_id, state in sorted({(r["quest"], r["state"]) for r in LEDGER})
+]
 
 
 class Ctx:
@@ -79,7 +87,7 @@ def answers(**extra):
     out = {
         qc.QUESTS_SQL: QUEST_ROWS,
         qc.GIVERS_SQL: GIVER_ROWS,
-        v2quests.LEDGER_SQL: LEDGER,
+        v2quests.LEDGER_SQL: LEDGER_COUNTS,
         v2quests.QUEST_LEDGER_SQL: lambda args: [
             r for r in LEDGER if r["quest"] == args[0]
         ],
@@ -98,6 +106,12 @@ class Base(unittest.TestCase):
 
 
 class TheCatalogueEndpoint(Base):
+    def test_the_catalogue_reads_aggregated_attempts(self):
+        self.assertIn("COUNT(*)", v2quests.LEDGER_SQL)
+        self.assertIn("GROUP BY quest, state", v2quests.LEDGER_SQL)
+        _, body = self.get("/api/v2/quests")
+        self.assertEqual(body["quests"][0]["attempts"], 2)
+
     def test_every_ruleset_quest_with_its_status(self):
         code, body = self.get("/api/v2/quests")
         self.assertEqual(code, 200)
@@ -295,6 +309,21 @@ class TheQuestersEndpoint(Base):
         code, body = self.get("/api/v2/questers", **{ql.CHARACTERS_SQL: []})
         self.assertEqual(code, 200)
         self.assertFalse(any(q["present"] for q in body["questers"]))
+
+    def test_a_character_row_without_guid_does_not_break_the_listing(self):
+        for row in ({"name": "Mirra", "guid": None}, {"name": "Mirra"}):
+            with self.subTest(row=row):
+                code, body = self.get(
+                    "/api/v2/questers",
+                    **{
+                        ql.CHARACTERS_SQL: [row, *CHARACTER_ROWS],
+                        ql.LOG_SQL: LOG_ROWS,
+                        v2quests.COUNTS_SQL: COUNT_ROWS,
+                    },
+                )
+                self.assertEqual(code, 200)
+                self.assertFalse(body["questers"][1]["present"])
+                self.assertTrue(body["questers"][0]["present"])
 
 
 class TheRoutes(unittest.TestCase):

@@ -43,10 +43,13 @@ import questledger
 import questlog
 
 LEDGER_SQL = (
-    "SELECT quest, guid, character_name, state, first_taken, finished, reason "
-    "FROM overseer_quest_ledger"
+    "SELECT quest, state, COUNT(*) AS n FROM overseer_quest_ledger "
+    "GROUP BY quest, state"
 )
-QUEST_LEDGER_SQL = LEDGER_SQL + " WHERE quest = %s ORDER BY first_taken, guid"
+QUEST_LEDGER_SQL = (
+    "SELECT quest, guid, character_name, state, first_taken, finished, reason "
+    "FROM overseer_quest_ledger WHERE quest = %s ORDER BY first_taken, guid"
+)
 COUNTS_SQL = (
     "SELECT guid, state, COUNT(*) AS n FROM overseer_quest_ledger "
     "WHERE guid IN ({holes}) GROUP BY guid, state"
@@ -82,10 +85,12 @@ def _number(query: dict, key: str):
 
 
 def _states(ledger_rows) -> dict:
-    """quest -> [state, ...] off ledger rows."""
+    """quest -> {state: attempts} off grouped ledger rows."""
     out: dict = {}
     for row in ledger_rows or ():
-        out.setdefault(int(row["quest"]), []).append(str(row.get("state") or ""))
+        out.setdefault(int(row["quest"]), {})[str(row.get("state") or "")] = int(
+            row["n"]
+        )
     return out
 
 
@@ -117,7 +122,7 @@ def build_quests(
             {
                 **q.view(),
                 "status": statuses[q.id],
-                "attempts": len(states.get(q.id, ())),
+                "attempts": sum(states.get(q.id, {}).values()),
             }
             for q in shown
         ],
@@ -262,6 +267,8 @@ def questers(_query: dict, ctx) -> tuple[int, dict]:
         tuple(names),
         what="characters",
     )
+    # A malformed character row cannot identify a quester or join its quests.
+    characters = [r for r in characters if r.get("guid") is not None]
     guids = tuple(sorted(int(r["guid"]) for r in characters))
     log_rows, count_rows = [], []
     if guids:
