@@ -2588,9 +2588,9 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
                      wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
         result = bag_pressure.bag_hold_stuck(progress)
     for name in names:
-        # Not dead: _queue_owns_job reads _BAG_HOLD_STUCK.get(family), and a
-        # family's key is its leader's name, one of these members.
-        _BAG_HOLD_STUCK[name] = result  # read by _queue_owns_job via the family leader's name
+        # The family key is its leader's name, one of these members, so
+        # _queue_owns_job reads that member's bag hold result.
+        _BAG_HOLD_STUCK[name] = result
     return result
 
 
@@ -3631,7 +3631,7 @@ def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
     """
     try:
         family = family or _cohort_of(bonds.head_of_family()) or ""
-        if family in _PACE_QUESTING and not dungeon:
+        if family in globals().get("_PACE_QUESTING", {}) and not dungeon:
             # QUESTING WHILE THE DOOR WAITS (mod-overseer#767): the queue does
             # not own the job then, so the craft rhythm and the skill goal
             # get the family's time back.

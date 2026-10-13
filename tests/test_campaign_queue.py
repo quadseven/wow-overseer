@@ -648,6 +648,20 @@ class NothingElseStompsTheQueue(unittest.TestCase):
         ns["_BAG_HOLD_STUCK"]["Zug"] = tuple(stuck)
         self.assertTrue(ns["_queue_owns_job"]("Zug"))
 
+    def test_queue_ownership_without_a_dungeon_pace_snapshot(self):
+        rows = [_q(1, "ragefire", 50, "active", 0)]
+        ns = _load(
+            ["_queue_owns_job"],
+            {
+                "campaignqueue": campaignqueue,
+                "log": _Log(),
+                "_fetch_queue_rows": lambda: rows,
+                "_BAG_HOLD_STUCK": {},
+            },
+        )
+
+        self.assertTrue(ns["_queue_owns_job"]("Zug"))
+
     def test_the_loop_runs_and_the_store_is_created_in_both_starts(self):
         self.assertEqual(1, BRIDGE.count('_Pass("_campaign_queue_loop"),'))
         self.assertEqual(1, BRIDGE.count("            _ensure_queue_store,\n"))
