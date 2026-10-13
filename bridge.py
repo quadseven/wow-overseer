@@ -11487,6 +11487,11 @@ class Bridge(discord.Client):
             # stops the pass nor lifts a hold on a slot nobody saw change.
             log.warning("equip: worn pieces unreadable (%s); holds keep the "
                         "last read", exc)
+            # A holder with no read yet has nothing to fall back on, so this
+            # pass leaves them out of both `wanted` and `holders`: no equip is
+            # judged against an empty slot, and their holds (keyed on a holder
+            # outside `holders`) stay as they were. `worn` below then covers
+            # every holder still in `wanted`.
             missing = set(wearers) - self._equip_worn.keys()
             if missing:
                 log.warning("equip: deferring %d holder(s) without a worn "
@@ -11496,6 +11501,8 @@ class Bridge(discord.Client):
         else:
             self._equip_worn.update({h: read.get(h, {}) for h in wearers})
         worn = {h: self._equip_worn[h] for h in wearers if h in self._equip_worn}
+        # `holders` emptied by the deferral above falls back to the holders of
+        # the filtered `wanted`, never to a deferred one.
         queue, notes = bag_pressure.equips_to_queue(
             wanted, recent, tries, answers=answers, worn=worn,
             holds=self._equip_holds, holders=set(holders) or None)
@@ -21955,6 +21962,8 @@ def _fetch_worn_pieces(names: list) -> list:
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 return []
+            # Any other fault reaches _write_equips, which catches MySQLError
+            # and keeps the last read, so the equip pass does not stop on it.
             raise
         return [dict(row) for row in cur.fetchall()]
 

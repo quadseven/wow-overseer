@@ -400,7 +400,9 @@ class TheBridgeWritesIt(unittest.TestCase):
         inserts = []
         namespace["_fetch_worn_pieces"] = fetch
         namespace["_insert_equip"] = lambda equip: inserts.append(equip) or True
-        exec(textwrap.dedent(_block("    async def _write_equips(self")), namespace)
+        exec(  # noqa: S102 - bridge.py's own source
+            textwrap.dedent(_block("    async def _write_equips(self")), namespace
+        )
         bridge = types.SimpleNamespace(_equip_worn={}, _equip_holds={})
         wanted = equips([carried()], GROG)
         history = [
