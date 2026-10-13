@@ -1,0 +1,69 @@
+/* Quests: the quester parties, coverage, the catalogue and one quest's
+   attempts. Cards on a phone and a table from 1180px, as the roster does. */
+
+.qs { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.qs-s { font-size: var(--fs-1); }
+.qs-between { justify-content: space-between; flex-wrap: nowrap; align-items: baseline; }
+.qs-ok { color: var(--ok); }
+.qs-bad { color: var(--bad); }
+.qs-dim { color: var(--color-neutral-500); }
+.qs-accent { color: var(--color-accent-300); }
+.qs-ok i, .qs-bad i { margin-right: 3px; }
+
+/* ---- parties ---------------------------------------------------------------- */
+.qs-parties { display: flex; flex-direction: column; gap: 14px; }
+.qs-party-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: var(--fs-3); font-weight: 500; margin: 0 0 8px; }
+.qs-cards, .qs-qcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 8px; }
+.qs-quester { gap: 3px; }
+.qs-quester .mname { font-size: var(--fs-3); }
+.qs-quester .row { gap: 12px; }
+
+/* ---- coverage ---------------------------------------------------------------- */
+.qs-covers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 8px; }
+.qs-cover { gap: 8px; }
+.qs-cover-name, .qs-zone-name { font-weight: 500; color: var(--color-text); text-decoration: none; min-height: 44px; display: inline-flex; align-items: center; gap: 8px; }
+.qs-cover-name:hover, .qs-zone-name:hover { text-decoration: underline; }
+.qs-counts { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+/* Segments sit on the track with a 2px gap between them. */
+.qs-bar { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; background: var(--color-neutral-800); min-width: 60px; }
+.qs-bar > span { display: block; height: 100%; }
+.qs-bar-ok { background: var(--ok); }
+.qs-bar-bad { background: var(--bad); }
+.qs-bar-none { background: var(--color-neutral-700); }
+.qs-zones summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.qs-zone-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.qs-zone { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 6px 0; box-shadow: 0 -1px 0 var(--color-divider); }
+@media (min-width: 760px) {
+  .qs-zone { grid-template-columns: minmax(0, 1.2fr) minmax(80px, 1fr) minmax(0, 1.6fr); align-items: center; gap: 12px; }
+}
+
+/* ---- catalogue ---------------------------------------------------------------- */
+.qs-catalogue { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.qs-controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; }
+.qs-search { position: relative; flex: 1 1 100%; display: flex; max-width: 480px; }
+.qs-search i { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--color-neutral-500); pointer-events: none; }
+.qs-search .input { padding-left: 30px; min-height: 44px; }
+.qs-field { display: flex; flex-direction: column; gap: 2px; flex: 1 1 140px; min-width: 0; max-width: 240px; border: 0; padding: 0; margin: 0; }
+.qs-field .input { min-height: 44px; width: 100%; }
+.qs-levels .row { flex-wrap: nowrap; }
+.qs-levels .input { width: 5.5em; }
+.qs-qcard { gap: 3px; }
+.qs-qcard:hover { box-shadow: 0 0 0 1px var(--color-neutral-700); }
+.qs-title { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.qs-qcard .status { flex-shrink: 0; }
+.qs-table { padding: 0; gap: 0; overflow: hidden; display: none; }
+.qs-table .table th { color: var(--color-neutral-500); }
+.qs-table .table td { vertical-align: baseline; }
+.qs-more { align-self: flex-start; min-height: 44px; }
+@media (min-width: 1180px) {
+  .qs-qcards { display: none; }
+  .qs-table { display: block; }
+}
+
+/* ---- one quest ------------------------------------------------------------------ */
+.qs-back { display: inline-flex; gap: 6px; align-items: center; min-height: 44px; color: var(--color-neutral-400); text-decoration: none; align-self: flex-start; }
+.qs-back:hover { color: var(--color-text); }
+.qs-attempts { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 8px; }
+.qs-attempt { gap: 4px; }
+.qs-reason { margin: 0; font-size: var(--fs-2); color: var(--color-neutral-200); overflow-wrap: anywhere; }
+.qs-ticket { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; align-self: flex-start; }

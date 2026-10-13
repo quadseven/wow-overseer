@@ -7,7 +7,7 @@
 
 import { isFamily, isGuild, firstFamily, firstGuild } from "./families.js";
 
-export const SECTIONS = ["now", "guilds", "members", "raid", "economy"];
+export const SECTIONS = ["now", "guilds", "members", "quests", "raid", "economy"];
 
 // The default family's or guild's page under `prefix`, or the Now page while
 // the realm has not said which families and guilds there are.
@@ -121,6 +121,10 @@ export function resolve(route) {
     const tabs = ["overview", "gear", "upgrades", "quests", "bags", "bank", "activity"];
     const tab = tabs.includes(p[2]) ? p[2] : "overview";
     return { view: "member", section: "members", params: { name: p[1], tab } };
+  }
+  if (top === "quests") {
+    if (p.length > 2) return { redirect: "#/quests/" + encodeURIComponent(p[1]) };
+    return { view: "quests", section: "quests", params: p[1] ? { id: p[1] } : {} };
   }
   if (top === "raid") {
     const g = (p[2] || "").toLowerCase();
