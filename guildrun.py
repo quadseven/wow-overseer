@@ -106,6 +106,8 @@ SETTLE_SECONDS = 600
 # FORM_EVERY_SECONDS. MAX_SWAPS refusals in a row fall back to the spacing, so
 # a refusal no swap can fix cannot turn into a run a minute.
 BENCH_MINUTES = 15
+FAMILY_SEAT_BENCH_HOURS = 6
+SHORT_ABANDON_SECONDS = 10 * 60
 MAX_SWAPS = 3
 
 SOURCE = "overseer:guildrun"
@@ -421,6 +423,30 @@ def benched(recent: list) -> set:
         if name:
             out.add(name)
     return out
+
+
+def family_seat_benched(recent: list) -> set:
+    """Members in recent runs abandoned for missing live tank/healer roles."""
+    return {
+        member["name"]
+        for row in recent
+        if str(row.get("outcome") or "") == "abandoned"
+        and "not both alive inside" in str(row.get("why") or "")
+        and int(row.get("bosses_done") or 0) == 0
+        for member in _member_list(row.get("members"))
+        if member.get("name")
+    }
+
+
+def rests_members(row: dict) -> bool:
+    """Whether an ended run should put its members on cooldown."""
+    if str(row.get("outcome") or "") not in WENT_IN:
+        return False
+    return not (
+        str(row.get("outcome") or "") == "abandoned"
+        and int(row.get("bosses_done") or 0) == 0
+        and int(row.get("seconds_inside") or 0) < SHORT_ABANDON_SECONDS
+    )
 
 
 def swap_now(latest: list, max_swaps: int = MAX_SWAPS) -> bool:
@@ -2082,6 +2108,17 @@ def ended_since(reader, guilds: list, days: int, n: int) -> list:
     where = (
         "guild IN (%s) AND state = 'ended' AND created_at >= NOW() - INTERVAL %%s DAY"
         % (_holes(len(guilds)),)
+    )
+    return _runs(reader, where, (*guilds, days), n)
+
+
+def formed_since(reader, guilds: list, days: int, n: int) -> list:
+    """The guilds' runs formed in the last `days` days, in any state, as rows
+    newest first. The goal endpoint reads these (apiv2/goal.py)."""
+    if not guilds:
+        return []
+    where = "guild IN (%s) AND created_at >= NOW() - INTERVAL %%s DAY" % (
+        _holes(len(guilds)),
     )
     return _runs(reader, where, (*guilds, days), n)
 
