@@ -2482,10 +2482,14 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
 _BAG_HOLD: dict = {}
 # Latest bag-floor result observed by a bag pass, keyed by family member. The
 # family key is its leader's name, so queue ownership reads its entry without
-# doing roster or inventory queries. Holds only live entries: a pass that finds
-# no released hold removes the members' keys, so a cleared or departed family
-# leaves nothing behind.
+# doing roster or inventory queries. The queue pass removes departed members.
 _BAG_HOLD_STUCK: dict[str, tuple] = {}
+
+
+def _prune_bag_hold_stuck(families: dict) -> None:
+    active = {name for family in families.values() for name in family["names"]}
+    for name in _BAG_HOLD_STUCK.keys() - active:
+        del _BAG_HOLD_STUCK[name]
 
 _MEMO_CREATE_SQL = ("CREATE TABLE IF NOT EXISTS overseer_bridge_memo ("
                     "kind VARCHAR(32) NOT NULL, subject VARCHAR(191) NOT NULL, "
@@ -18624,6 +18628,7 @@ class Bridge(discord.Client):
         pending = campaignqueue.pending_by_family(
             await asyncio.to_thread(_fetch_queue_rows))
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        _prune_bag_hold_stuck(fams)
         # THE STAND-IN BEFORE ANYTHING DRIVES THE FAMILY (standin.py): a member
         # sitting out to craft leaves every family's names here, so no hold,
         # gate or job write below reaches it.

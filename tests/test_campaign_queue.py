@@ -346,14 +346,19 @@ class _Log:
     warning = exception = info
 
 
-def _queue_pass(world, holds=None, **hooks):
+def _queue_pass(world, holds=None, stuck=None, **hooks):
     """One queue pass against `world`; the lines it logged. `holds` maps a
     family key to the Jev interlude holding its job (#216); `hooks` are more
     of the bridge's optional hooks (`_family_lent_hold`, #784)."""
     holds = holds or {}
     log = _Log()
     ns = _load(
-        ["_campaign_queue_family_once", "_campaign_queue_once", "_apply_queue_move"],
+        [
+            "_campaign_queue_family_once",
+            "_campaign_queue_once",
+            "_apply_queue_move",
+            "_prune_bag_hold_stuck",
+        ],
         {
             "asyncio": asyncio,
             "campaignqueue": campaignqueue,
@@ -373,6 +378,7 @@ def _queue_pass(world, holds=None, **hooks):
             "_reset_campaign_done": world.reset,
             "_aim_family_quest": world.clear_family_quest,
             "_PACE_QUESTING": {},
+            "_BAG_HOLD_STUCK": stuck if stuck is not None else {},
             # This fixture exercises queue advancement after dungeon pace has
             # already produced its first snapshot.
             "_pass_completed": lambda name: name.startswith("dungeon_pace:"),
@@ -406,6 +412,17 @@ def _queue_pass(world, holds=None, **hooks):
     me._campaign_queue_family_once = family_once
     asyncio.run(ns["_campaign_queue_once"](me))
     return log.lines
+
+
+class BagHoldStuckRoster(unittest.TestCase):
+    def test_departed_member_is_pruned_without_clearing_other_family(self):
+        world = FakeWorld([])
+        world.roster = [row for row in world.roster if row["name"] != "Og"]
+        stuck = {"Grog": ("Grog",), "Og": ("Grog",), "Zug": ("Zug",)}
+
+        _queue_pass(world, stuck=stuck)
+
+        self.assertEqual({"Grog": ("Grog",), "Zug": ("Zug",)}, stuck)
 
 
 class TheQueueAdvancesByItself(unittest.TestCase):
