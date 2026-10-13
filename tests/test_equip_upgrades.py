@@ -435,6 +435,88 @@ class TheBridgeWritesIt(unittest.TestCase):
         self.assertFalse(bridge._equip_holds[("Grog", wanted[0].command)].lifted)
         self.assertEqual(inserts, [])
 
+    def test_a_failed_worn_read_defers_only_the_holder_never_read(self):
+        """A failed read holds Grog on his last snapshot and leaves Bork, who
+        has none, out of both `wanted` and `holders`: nothing is queued for
+        him against an empty slot, and he is asked for once a read lands."""
+
+        class MySQLError(Exception):
+            pass
+
+        reads = iter(
+            [
+                MySQLError("read failed"),
+                [
+                    dict(
+                        holder="Grog",
+                        equipment_slot=4,
+                        entry=6000,
+                        name="Sparkleshell Breastplate",
+                    ),
+                    dict(holder="Bork", equipment_slot=4, entry=6001, name="Old Mail"),
+                ],
+            ]
+        )
+
+        def fetch(_names):
+            read = next(reads)
+            if isinstance(read, Exception):
+                raise read
+            return read
+
+        inserts = []
+        namespace = {
+            "asyncio": asyncio,
+            "bag_pressure": bag_pressure,
+            "item_plan": types.SimpleNamespace(OPEN_STATUSES={"pending"}),
+            "pymysql": types.SimpleNamespace(
+                err=types.SimpleNamespace(MySQLError=MySQLError)
+            ),
+            "log": Mock(),
+            "EQUIP_RETRY_MINUTES": 15,
+            "_fetch_worn_pieces": fetch,
+            "_insert_equip": lambda equip: inserts.append(equip) or True,
+        }
+        exec(  # noqa: S102 - bridge.py's own source
+            textwrap.dedent(_block("    async def _write_equips(self")), namespace
+        )
+        bridge = types.SimpleNamespace(
+            _equip_worn={"Grog": {4: (6000, "Sparkleshell Breastplate")}},
+            _equip_holds={},
+        )
+        wanted = equips(
+            [carried(), carried(holder="Bork", item_guid=8002)],
+            GROG + worn("Bork", WARRIOR, 60, i5=41),
+        )
+        grog = next(e for e in wanted if e.holder == "Grog")
+        self.assertIn("Bork", {e.holder for e in wanted})
+        history = [
+            dict(
+                id=7,
+                target_name="Grog",
+                command=grog.command,
+                status="unchanged",
+                detail="the world kept its pick",
+                recent=False,
+            )
+        ]
+
+        asyncio.run(
+            namespace["_write_equips"](
+                bridge, wanted, history, holders={"Grog", "Bork"}
+            )
+        )
+        self.assertEqual(inserts, [])
+        self.assertNotIn("Bork", bridge._equip_worn)
+        self.assertFalse(bridge._equip_holds[("Grog", grog.command)].lifted)
+
+        asyncio.run(
+            namespace["_write_equips"](
+                bridge, wanted, history, holders={"Grog", "Bork"}
+            )
+        )
+        self.assertEqual([e.holder for e in inserts], ["Bork"])
+
     def test_the_vendor_pass_equips_above_the_town_run_gate(self):
         body = _block("    async def _vendor_once(self")
         equip = body.index(

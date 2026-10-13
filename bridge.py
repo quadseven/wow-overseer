@@ -11480,6 +11480,9 @@ class Bridge(discord.Client):
             tries[key] = tries.get(key, 0) + 1
         answers = bag_pressure.latest_answers(current, item_plan.OPEN_STATUSES)
         wearers = sorted({e.holder for e in wanted})
+        # One bounded read per pass, only for holders with a piece to put on
+        # (none at all when `wanted` is empty), and every MySQLError it can
+        # raise, the connect included, is caught here.
         try:
             read = bag_pressure.worn_pieces(await asyncio.to_thread(
                 _fetch_worn_pieces, wearers))
