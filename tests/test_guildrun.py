@@ -15,6 +15,7 @@ import datetime
 from dataclasses import replace
 import pathlib
 import unittest
+from unittest import mock
 
 import guildrun
 import jev
@@ -264,6 +265,68 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
             {"Auren"},
             guildrun.benched([{"outcome": "refused", "why": why, "age_minutes": None}]),
         )
+
+    def test_the_bridge_reads_each_refusals_age_over_the_queue_window(self):
+        from test_guildsocial_bridge import bridge
+
+        ran = []
+        refusals = [
+            {
+                "outcome": "refused",
+                "why": "'Auren' is waiting in a battleground queue",
+                "age": 30,
+            },
+            {"outcome": "refused", "why": "'Bo' is in combat", "age": 30},
+        ]
+
+        class Cursor:
+            rows = []
+
+            def execute(self, sql, args=()):
+                ran.append((sql, tuple(args)))
+                self.rows = []
+                if sql.startswith("SELECT outcome, why"):
+                    # Only a column the SELECT names comes back on the row.
+                    self.rows = [
+                        {
+                            "outcome": r["outcome"],
+                            "why": r["why"],
+                            **(
+                                {"age_minutes": r["age"]}
+                                if "AS age_minutes" in sql
+                                else {}
+                            ),
+                        }
+                        for r in refusals
+                    ]
+
+            def fetchall(self):
+                return self.rows
+
+            def fetchone(self):
+                return {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        class Conn:
+            def cursor(self):
+                return Cursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with mock.patch.object(bridge, "_connect", Conn):
+            facts = bridge._fetch_guild_run_facts(guildrun.limits({}))
+        self.assertEqual({"Auren"}, facts["benched"])
+        bench_args = [args for sql, args in ran if "AS age_minutes" in sql]
+        self.assertEqual([(guildrun.QUEUE_BENCH_MINUTES,)], bench_args)
 
     def test_a_refusal_over_one_member_is_formed_again_at_once(self):
         refused = {"state": "ended", "outcome": "refused", "why": "'Eazoth' is dead"}
