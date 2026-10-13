@@ -210,6 +210,7 @@ function attempt(a) {
 }
 
 function questPage(ctx) {
+  // render() calls this only for a route with an id; #/quests uses the catalogue.
   const back = html`<a class="qs-back" href="${build(["quests"], kept(ctx.query))}"><i class="ph ph-arrow-left" aria-hidden="true"></i>All quests</a>`;
   const read = ctx.get(questPath(ctx.params.id));
   const wait = pendingRead(read, 3);
