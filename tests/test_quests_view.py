@@ -1,0 +1,322 @@
+"""The Quests view (app/views/quests.js), rendered under node from canned
+reads: the quester parties, the coverage and the catalogue from the three
+quest reads, the filters and search that narrow the catalogue, and the page a
+row opens with that quest's attempts. The nav and the route too.
+"""
+
+import json
+import pathlib
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+HERE = pathlib.Path(__file__).resolve().parent.parent
+APP = HERE / "app"
+
+REALM = {
+    "families": [{"key": "Grug", "names": ["Grug"]}, {"key": "Zug", "names": ["Zug"]}],
+    "guilds": [
+        {"name": "Cave", "family": "Grug"},
+        {"name": "Bonkers", "family": "Zug"},
+    ],
+}
+
+
+def run(module, script, hash_="#/quests"):
+    """Run `script` with the app copied to a module package; M is `module`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp) / "app"
+        shutil.copytree(APP, root)
+        (root / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+        code = (
+            "globalThis.window = {setTimeout: (f) => f(), addEventListener() {}};\n"
+            "globalThis.location = {hash: %s};\n"
+            "globalThis.history = {replaceState(_s, _t, h) { location.hash = h; }};\n"
+            "globalThis.document = {querySelector: () => null, addEventListener() {}};\n"
+            "(await import(%s)).learn(%s);\n"
+            "const M = await import(%s);\n"
+            "const V = M.default;\n"
+            "function ctx(params, query, reads) {\n"
+            "  return {view: 'quests', section: 'quests', params: params || {}, query: query || {}, hash: '',\n"
+            "    isPhone: true, get: (p) => (p in reads ? {data: reads[p], at: 1, error: null}"
+            " : {data: undefined, at: 0, error: null, loading: true})};\n"
+            "}\n%s"
+        ) % (
+            json.dumps(hash_),
+            json.dumps((root / "families.js").as_uri()),
+            json.dumps(REALM),
+            json.dumps((root / module).as_uri()),
+            script,
+        )
+        out = subprocess.run(
+            [shutil.which("node"), "--input-type=module", "-e", code],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    if out.returncode != 0:
+        raise AssertionError(out.stderr)
+    return json.loads(out.stdout)
+
+
+def quester(name, cls, level, zone, quest=None, completed=0, broken=0):
+    return {
+        "name": name,
+        "class": cls,
+        "race": "Orc",
+        "role": "dps",
+        "level": level,
+        "zone": zone,
+        "quest": quest,
+        "completed": completed,
+        "broken": broken,
+    }
+
+
+QUESTERS = {
+    "parties": [
+        {
+            "guild": "Cave",
+            "faction": "Alliance",
+            "questers": [
+                quester("Tharn", "Druid", 6, "Teldrassil", {"id": 456, "title": "The Balance of Nature"}, 4, 1),
+                quester("Mirra", "Priest", 3, "Northshire Valley", None, 2, 0),
+                quester("Velo", "Shaman", 2, "Ammen Vale"),
+                quester("Durga", "Hunter", 2, "Coldridge Valley"),
+                quester("Fizzik", "Warlock", None, None),
+            ],
+        },
+        {
+            "guild": "Bonkers",
+            "faction": "Horde",
+            "questers": [
+                quester("Saelis", "Paladin", 4, "Sunstrider Isle"),
+                quester("Morwick", "Priest", 4, "Deathknell"),
+                quester("Hoofa", "Hunter", 3, "Camp Narache"),
+                quester("Grakk", "Warlock", 5, "Valley of Trials", {"id": 788, "title": "Cutting Teeth"}, 3, 0),
+                quester("Zinja", "Mage", 5, "Valley of Trials"),
+            ],
+        },
+    ]
+}
+
+
+def quest(id_, title, faction, zone, level, status, attempts=0):
+    return {
+        "id": id_,
+        "title": title,
+        "faction": faction,
+        "zone": zone,
+        "level": level,
+        "status": status,
+        "attempts": attempts,
+    }
+
+
+QUESTS = {
+    "totals": {
+        "factions": [
+            {"faction": "Alliance", "completed": 4, "broken": 1, "not_reached": 95, "total": 100},
+            {"faction": "Horde", "completed": 3, "broken": 0, "not_reached": 97, "total": 100},
+        ],
+        "zones": [
+            {"zone": "Teldrassil", "faction": "Alliance", "completed": 4, "broken": 1, "not_reached": 20, "total": 25},
+            {"zone": "Durotar", "faction": "Horde", "completed": 3, "broken": 0, "not_reached": 22, "total": 25},
+        ],
+    },
+    "quests": [
+        quest(456, "The Balance of Nature", "Alliance", "Teldrassil", 1, "completed", 1),
+        quest(457, "Webwood Venom", "Alliance", "Teldrassil", 4, "broken", 2),
+        quest(788, "Cutting Teeth", "Horde", "Durotar", 1, "completed", 1),
+        quest(792, "Vile Familiars", "Horde", "Durotar", 3, "not_reached"),
+        quest(835, "Securing the Lines", "Horde", "Durotar", 9, "not_reached"),
+    ],
+}
+
+ATTEMPTS = {
+    "quest": QUESTS["quests"][1],
+    "attempts": [
+        {
+            "quester": "Tharn",
+            "guild": "Cave",
+            "level": 4,
+            "started_at": 1760000000,
+            "ended_at": 1760000600,
+            "outcome": "broken",
+            "reason": "The spiders never drop the sac.",
+            "ticket": {"number": 940, "url": "https://example.com/tickets/940"},
+        },
+        {
+            "quester": "Mirra",
+            "guild": "Cave",
+            "level": 4,
+            "started_at": 1760001000,
+            "ended_at": None,
+            "outcome": "broken",
+            "reason": "",
+            "ticket": {"number": 1, "url": "javascript:alert(1)"},
+        },
+    ],
+}
+
+READS = {"/api/v2/questers": QUESTERS, "/api/v2/quests": QUESTS}
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class TheQuestsView(unittest.TestCase):
+    def page(self, query=None, hash_="#/quests"):
+        got = run(
+            "views/quests.js",
+            "const c = ctx({}, %s, %s);\nconsole.log(JSON.stringify({reads: V.reads(c), html: V.render(c).s}));"
+            % (json.dumps(query or {}), json.dumps(READS)),
+            hash_,
+        )
+        return got["reads"], got["html"]
+
+    def test_it_reads_the_questers_and_the_quests(self):
+        reads, _ = self.page()
+        self.assertEqual(reads, ["/api/v2/questers", "/api/v2/quests"])
+
+    def test_the_parties_draw_every_quester_with_level_zone_quest_and_counts(self):
+        _, html = self.page()
+        for p in QUESTERS["parties"]:
+            self.assertIn(p["guild"], html)
+            for m in p["questers"]:
+                self.assertIn("#/m/%s/quests" % m["name"], html)
+        self.assertEqual(html.count('class="card qs-quester"'), 10)
+        self.assertIn("L6", html)
+        self.assertIn("Teldrassil", html)
+        self.assertIn('href="#/quests/456"', html)
+        self.assertIn("The Balance of Nature", html)
+        self.assertIn("4 completed", html)
+        self.assertIn("1 broken", html)
+        # A level or zone the server does not report is not measured, never 0.
+        self.assertIn("level not measured", html)
+        self.assertIn("zone not measured", html)
+        self.assertIn("no quest on", html)
+
+    def test_coverage_counts_each_faction_and_zone(self):
+        _, html = self.page()
+        self.assertIn("95 not reached", html)
+        self.assertIn("97 not reached", html)
+        self.assertIn('aria-label="4 completed, 1 broken, 95 not reached of 100"', html)
+        self.assertIn('href="#/quests?faction=Horde&amp;zone=Durotar"', html)
+        self.assertIn("2 zones", html)
+        self.assertIn("7 quests completed and 1 found broken, of 200.", html)
+
+    def test_the_catalogue_lists_every_quest(self):
+        _, html = self.page()
+        self.assertIn("5 of 5 quests", html)
+        for q in QUESTS["quests"]:
+            self.assertIn(q["title"], html)
+            self.assertIn('href="#/quests/%d"' % q["id"], html)
+        self.assertIn("Not reached", html)
+        self.assertIn("qs-table", html)
+        self.assertIn("qs-qcards", html)
+
+    def test_filters_and_search_narrow_the_catalogue(self):
+        cases = [
+            ("faction=Horde", {"faction": "Horde"}, {788, 792, 835}),
+            ("zone=Teldrassil", {"zone": "Teldrassil"}, {456, 457}),
+            ("status=broken", {"status": "broken"}, {457}),
+            ("lvl=3-5", {"lvl": "3-5"}, {457, 792}),
+            ("lvl=5-", {"lvl": "5-"}, {835}),
+            ("q=venom", {"q": "venom"}, {457}),
+            ("faction+status", {"faction": "Horde", "status": "not_reached", "lvl": "-4"}, {792}),
+        ]
+        for label, query, ids in cases:
+            hash_ = "#/quests?" + "&".join(k + "=" + v for k, v in query.items())
+            _, html = self.page(query, hash_)
+            got = {q["id"] for q in QUESTS["quests"] if 'href="#/quests/%d?' % q["id"] in html}
+            self.assertEqual(got, ids, label)
+            self.assertIn("%d of 5 quests" % len(ids), html, label)
+
+    def test_a_filter_that_matches_nothing_says_so_and_offers_a_clear(self):
+        _, html = self.page({"q": "nothing like this"}, "#/quests?q=nothing%20like%20this")
+        self.assertIn("No quests match", html)
+        self.assertIn("data-clear", html)
+
+    def test_the_zones_offered_are_the_chosen_factions(self):
+        _, html = self.page({"faction": "Horde"}, "#/quests?faction=Horde")
+        zone_select = html[html.index('id="qs-zone"') :]
+        zone_select = zone_select[: zone_select.index("</select>")]
+        self.assertIn("Durotar", zone_select)
+        self.assertNotIn("Teldrassil", zone_select)
+
+    def test_a_long_catalogue_grows_on_request(self):
+        many = dict(QUESTS, quests=[quest(i, "Quest %d" % i, "Horde", "Durotar", 1, "not_reached") for i in range(1, 251)])
+        got = run(
+            "views/quests.js",
+            "const reads = %s;\n"
+            "const first = M.catalogueBody(reads['/api/v2/quests'], {});\n"
+            "console.log(JSON.stringify(first.s));" % json.dumps({"/api/v2/quests": many}),
+        )
+        self.assertIn("250 of 250 quests, the first 100 shown", got)
+        self.assertIn("Show 100 more", got)
+        self.assertIn('href="#/quests/100"', got)
+        self.assertNotIn('href="#/quests/101"', got)
+
+    def test_a_row_opens_that_quests_attempts_and_keeps_the_filters(self):
+        _, html = self.page({"zone": "Teldrassil"}, "#/quests?zone=Teldrassil")
+        self.assertIn('href="#/quests/457?zone=Teldrassil"', html)
+        got = run(
+            "views/quests.js",
+            "const c = ctx({id: '457'}, {zone: 'Teldrassil'}, {'/api/v2/quests/457': %s});\n"
+            "console.log(JSON.stringify({reads: V.reads(c), title: V.title(c), html: V.render(c).s}));"
+            % json.dumps(ATTEMPTS),
+            "#/quests/457?zone=Teldrassil",
+        )
+        self.assertEqual(got["reads"], ["/api/v2/quests/457"])
+        html = got["html"]
+        self.assertIn("Webwood Venom", html)
+        self.assertIn("2 attempts", html)
+        self.assertIn("#/m/Tharn/quests", html)
+        self.assertIn("The spiders never drop the sac.", html)
+        self.assertIn('href="https://example.com/tickets/940"', html)
+        self.assertIn("Ticket #940", html)
+        # A broken attempt with no reason says so; a ticket that is not a web
+        # link is not drawn as one.
+        self.assertIn("no reason recorded", html)
+        self.assertNotIn("javascript:", html)
+        self.assertIn('href="#/quests?zone=Teldrassil"', html)
+
+    def test_a_quest_the_server_does_not_know_says_so(self):
+        got = run(
+            "views/quests.js",
+            "const c = ctx({id: '9'}, {}, {'/api/v2/quests/9': {error: 'no such quest'}});\n"
+            "console.log(JSON.stringify(V.render(c).s));",
+        )
+        self.assertIn("This quest was not found", got)
+        self.assertIn("no such quest", got)
+
+    def test_before_the_reads_answer_it_shows_skeletons(self):
+        got = run(
+            "views/quests.js",
+            "console.log(JSON.stringify(V.render(ctx({}, {}, {})).s));",
+        )
+        self.assertIn("skeleton", got)
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class TheQuestsRoute(unittest.TestCase):
+    def test_the_nav_lists_quests(self):
+        got = run("shell.js", "console.log(JSON.stringify(M.NAV.map((n) => [n.key, n.href])));")
+        self.assertIn(["quests", "#/quests"], got)
+
+    def test_quests_and_one_quest_resolve(self):
+        got = run(
+            "router.js",
+            "const r = (h) => M.resolve(M.parse(h));\n"
+            'console.log(JSON.stringify([r("#/quests"), r("#/quests?status=broken"), r("#/quests/457"), r("#/quests/457/x"), M.SECTIONS]));',
+        )
+        self.assertEqual(got[0], {"view": "quests", "section": "quests", "params": {}})
+        self.assertEqual(got[1]["view"], "quests")
+        self.assertEqual(got[2], {"view": "quests", "section": "quests", "params": {"id": "457"}})
+        self.assertEqual(got[3], {"redirect": "#/quests/457"})
+        self.assertIn("quests", got[4])
+
+
+if __name__ == "__main__":
+    unittest.main()
