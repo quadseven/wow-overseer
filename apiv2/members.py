@@ -489,10 +489,12 @@ def _build_roster(ctx) -> dict:
 
 
 def roster(_query: dict, ctx) -> tuple[int, dict]:
+    """GET /api/v2/roster: every family-guild member, what each is doing, and who is stuck."""
     return 200, _roster_payload(ctx)
 
 
 def stuck(_query: dict, ctx) -> tuple[int, dict]:
+    """GET /api/v2/stuck: the stuck members only, longest stuck first."""
     return 200, stuck_view(_roster_payload(ctx))
 
 
