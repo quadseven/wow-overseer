@@ -78,3 +78,41 @@ class TestPresenceReads(unittest.TestCase):
             result = guildjobs._gear_first(member, ({}, []), [], 500)
         gear.assert_called_once()
         self.assertIs(result[0], step)
+
+
+def _bridge_function(name):
+    tree = ast.parse((ROOT / "bridge.py").read_text(encoding="utf-8"))
+    node = next(
+        n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name
+    )
+    ns = {}
+    module = ast.Module(body=[node], type_ignores=[])
+    exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+    return ns[name]
+
+
+class TestWorldCounts(unittest.TestCase):
+    def test_fresh_snapshot_members_count_in_the_world(self):
+        world_counts = _bridge_function("_world_counts")
+
+        def member(name, guild, online):
+            return guildjobs.Member(
+                name=name,
+                guild=guild,
+                role=guildjobs.MAINTENANCE,
+                online=online,
+                map_id=0,
+                x=1.0,
+                y=1.0,
+            )
+
+        members = [
+            member("Fresh", "Cave", True),
+            member("Stale", "Cave", False),
+            member("Other", "Bonkers", True),
+        ]
+        self.assertEqual(world_counts(members), {"Cave": [1, 2], "Bonkers": [1, 1]})
+        self.assertIn(
+            "sorted(_world_counts(members).items())",
+            (ROOT / "bridge.py").read_text(encoding="utf-8"),
+        )

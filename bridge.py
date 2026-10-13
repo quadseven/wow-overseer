@@ -1714,6 +1714,20 @@ def _cohort_key(cohort=None):
     return getattr(cohort, "key", None)
 
 
+def _world_counts(members) -> dict:
+    """Each guild's [members in the world, members] for the jobs pass log.
+
+    A member is in the world when its row's `online` says so, which
+    _JOB_MEMBERS_SQL derives from the fresh snapshot, not the saved flag.
+    """
+    counts = {}
+    for member in members:
+        tally = counts.setdefault(member.guild, [0, 0])
+        tally[0] += bool(member.online)
+        tally[1] += 1
+    return counts
+
+
 def _family_label(cohort=None) -> str:
     """"" for this bridge's own family, " for family <key>" for another."""
     key = _cohort_key(cohort)
@@ -14903,12 +14917,7 @@ class Bridge(discord.Client):
         await self._start_guild_job_pass(cohort, facts, members)
 
     async def _start_guild_job_pass(self, cohort, facts, members):
-        world_by_guild = {}
-        for member in members:
-            counts = world_by_guild.setdefault(member.guild, [0, 0])
-            counts[1] += 1
-            counts[0] += bool(member.online)
-        for guild, (online, total) in sorted(world_by_guild.items()):
+        for guild, (online, total) in sorted(_world_counts(members).items()):
             log.info("guild jobs: %s: %d of %d members in the world", guild, online, total)
         now = time.monotonic()
         self._job_steps = guildroute.live_runs(
