@@ -401,10 +401,23 @@ def _support_blockers(lineup: dict, goals: dict) -> list:
             )
         )
     no_source = [g for g in goal_list if g.get("status") == raidgoals.NO_SOURCE]
-    if no_source:
+    # The vendor sentence is about repairs, so only the repair goal earns it.
+    # Any other goal the realm gives no source is named as such, so leaving it
+    # out of the count above never makes it vanish from the blockers.
+    if any(g.get("key") == "repair" for g in no_source):
         out.append(
             "Repair bots have no source on this realm; repairs happen at a "
             "vendor before the raid order."
+        )
+    others = [g for g in no_source if g.get("key") != "repair"]
+    if others:
+        out.append(
+            "No source on this realm for %s, so the count of goals still to "
+            "gather leaves %s out."
+            % (
+                ", ".join(g["name"].lower() for g in others),
+                "it" if len(others) == 1 else "them",
+            )
         )
     return out
 

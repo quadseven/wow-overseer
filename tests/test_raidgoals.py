@@ -24,6 +24,7 @@ Ticket: infra#3508.
 """
 
 import unittest
+from unittest import mock
 
 import professions
 import raidgoals
@@ -323,11 +324,20 @@ class RepairBotHasNoSourceOnThisRealm(unittest.TestCase):
         18235, so a recipe that carried another schematic would name it."""
         recipe = raidgoals.RECIPE_BY_PRODUCT[raidgoals.FIELD_REPAIR_BOT]
         self.assertEqual(recipe.schematic, 18235)
-        recipe.schematic = 99999
-        try:
+        # A copy stands in for the shared recipe, so no other test ever reads
+        # a mutated module-level object.
+        other = raidgoals.Recipe(
+            recipe.spell,
+            recipe.product,
+            recipe.trade,
+            recipe.reagents,
+            schematic=99999,
+        )
+        swapped = dict(raidgoals.RECIPE_BY_PRODUCT)
+        swapped[raidgoals.FIELD_REPAIR_BOT] = other
+        with mock.patch.object(raidgoals, "RECIPE_BY_PRODUCT", swapped):
             repair = goal(payload(), "repair")
-        finally:
-            recipe.schematic = 18235
+        self.assertEqual(recipe.schematic, 18235)
         self.assertIn("Schematic 99999", repair["line"])
         self.assertNotIn("18235", repair["line"])
 

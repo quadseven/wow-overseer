@@ -370,7 +370,11 @@ class NoSourceRepairBotIsNotStillToGather(unittest.TestCase):
         goals = {
             "goals": [
                 {"name": "A flask each", "status": raidgoals.SHORT},
-                {"name": "A repair bot for the raid", "status": raidgoals.NO_SOURCE},
+                {
+                    "key": "repair",
+                    "name": "A repair bot for the raid",
+                    "status": raidgoals.NO_SOURCE,
+                },
             ]
         }
         rows = _guild("Cave", 23, FULL)
@@ -381,6 +385,28 @@ class NoSourceRepairBotIsNotStillToGather(unittest.TestCase):
         self.assertNotIn("repair bot", gather_line.lower())
         self.assertTrue(
             any("repairs happen at a vendor before the raid order" in t for t in soft),
+            soft,
+        )
+
+    def test_another_no_source_goal_is_named_not_called_a_repair_bot(self):
+        """The vendor sentence is about repairs. A goal without a source that
+        is not the repair bot must not earn it, and must still be named."""
+        goals = {
+            "goals": [
+                {"name": "A flask each", "status": raidgoals.SHORT},
+                {
+                    "key": "flask",
+                    "name": "A rare elixir",
+                    "status": raidgoals.NO_SOURCE,
+                },
+            ]
+        }
+        rows = _guild("Cave", 23, FULL)
+        card = _card(rows, [rows[0]["name"]], goals=goals)
+        soft = [b["text"] for b in card["blockers"] if b["tone"] == raidready.SOFT]
+        self.assertFalse(any("repair" in t.lower() for t in soft), soft)
+        self.assertTrue(
+            any("No source on this realm for a rare elixir" in t for t in soft),
             soft,
         )
 
