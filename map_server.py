@@ -2621,13 +2621,20 @@ def _fetch_preraid(rd, names: list) -> dict:
 # the server only reads its tail. Unset or unreadable is no snapshots, and the
 # card says the pace is not yet measured.
 METRIC_SNAPSHOTS = os.environ.get("METRIC_WATCHER_OUTPUT", "")
-# A week of half-hourly snapshots is a few hundred kilobytes; the tail read is
-# bounded so a log that has grown for a year costs no more than one that has not.
+# A week of half-hourly snapshots is a few hundred kilobytes; the read seeks to
+# this many bytes before the end, so a log that has grown for a year costs no
+# more to read than one that has not.
 METRIC_TAIL_BYTES = 4 * 1024 * 1024
 
 
 def _metric_snapshots(path: str = "", days: int = raidsupply.PACE_DAYS) -> list:
-    """The snapshots of the last `days` before the newest, oldest first."""
+    """The snapshots of the last `days` before the newest, oldest first.
+
+    Only the last METRIC_TAIL_BYTES of the file are read, so the window is the
+    last `days` OR whatever that tail holds, whichever is shorter. A week of
+    snapshots fits in the tail many times over (see METRIC_TAIL_BYTES), so in
+    practice it is the full `days`; a short tail only shortens the pace window.
+    """
     path = path or METRIC_SNAPSHOTS
     if not path:
         return []
