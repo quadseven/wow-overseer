@@ -130,6 +130,25 @@ def four_yeses():
 
 
 class TheSocialLayerSeatsALentMember(unittest.TestCase):
+    def test_a_missing_role_abandon_benches_the_lent_member_for_the_window(self):
+        run = {
+            "outcome": "abandoned",
+            "why": "the assigned tank and healer roles were not both alive inside for 300s",
+            "bosses_done": 0,
+            "members": "Ugga:healer:5:24,Auren:dps:4:20",
+        }
+        held = {"Ugga": guildrun.FAMILY_MEMBER}
+        mates = [ugga()]
+        for recent in ([run], []):
+            benched = guildrun.family_seat_benched(recent)
+            out, lent = fs.release(held, mates, {"Ugga"}, set(), set(), benched)
+            if recent:
+                self.assertEqual(out["Ugga"], "refused a run just now")
+                self.assertEqual(lent, set())
+            else:
+                self.assertNotIn("Ugga", out)
+                self.assertEqual(lent, {"Ugga"})
+
     def test_a_lent_healer_answers_for_the_healer_seat(self):
         out = plan(
             four() + [ugga()],
