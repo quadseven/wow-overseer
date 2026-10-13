@@ -12,9 +12,12 @@ ambiguous weapon-hand swap, and the bridge writes it as a kind='bot' `e` row
 with a retry window and a give-up.
 """
 
+import asyncio
 import pathlib
 import re
+import textwrap
 import unittest
+from unittest.mock import AsyncMock, Mock
 
 import bag_pressure
 import gear
@@ -266,6 +269,52 @@ class TheBridgeWritesIt(unittest.TestCase):
         body = _block("    async def _equip_upgrades(self")
         self.assertIn("await self._write_equips(wanted, current)", body)
         self.assertIn('"equip: %s %r answered %s', body)
+
+    def test_family_equip_leaves_roster_members_to_the_gear_drive(self):
+        body = _block("    async def _equip_upgrades(self")
+        read = body.index("_fetch_enabled_roster_names")
+        write = body.index("await self._write_equips(wanted, current)")
+        self.assertLess(read, write)
+        self.assertIn("equip.holder not in roster_names", body)
+        self.assertIn("len(left_to_drive), len(roster_names)", body)
+        self.assertIn(
+            "equip: left %d piece(s) to the module's gear drive for %d roster member(s)",
+            body,
+        )
+
+    def test_a_failed_roster_read_catches_only_database_errors(self):
+        body = _block("    async def _equip_upgrades(self")
+        self.assertIn("except (OSError, pymysql.err.MySQLError) as exc:", body)
+        self.assertNotIn("except Exception", body)
+        self.assertIn('"equip: could not read the enabled roster: %s"', body)
+
+    def test_a_failed_roster_read_does_not_queue_any_equips(self):
+        body = _block("    async def _equip_upgrades(self")
+        tail = textwrap.dedent(
+            body[body.index("        try:\n", body.index("jev_equips")) :]
+        )
+        namespace = {
+            "asyncio": asyncio,
+            "_fetch_enabled_roster_names": Mock(side_effect=OSError("read failed")),
+            "pymysql": Mock(err=Mock(MySQLError=OSError)),
+            "log": Mock(),
+        }
+        # Compiles a slice of our own bridge.py source, never external input.
+        exec(  # noqa: S102
+            "async def run(self, wanted, current):\n" + textwrap.indent(tail, "    "),
+            namespace,
+        )
+        bridge = Mock(_write_equips=AsyncMock())
+
+        asyncio.run(namespace["run"](bridge, equips([carried()], GROG), {}))
+
+        bridge._write_equips.assert_not_awaited()
+        namespace["log"].warning.assert_called_once()
+
+    def test_non_roster_family_pick_remains_wanted(self):
+        body = _block("    async def _equip_upgrades(self")
+        self.assertIn("wanted = tuple(equip for equip in wanted", body)
+        self.assertIn("if equip.holder not in roster_names", body)
 
 
 if __name__ == "__main__":
