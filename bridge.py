@@ -9668,6 +9668,7 @@ class Bridge(discord.Client):
         guids so the family hand-over leaves them alone.
         """
         equips = bag_upgrade.self_equips(members)
+        _log_capped("bags", bag_upgrade.self_equip_notes(members))
         if not equips:
             return set()
         seen = await asyncio.to_thread(_recent_bag_equip_keys, GIVE_RETRY_MINUTES)
@@ -17968,8 +17969,16 @@ class Bridge(discord.Client):
         facts = dict(facts, busy=set(facts["busy"]) | owed)
         # A FAMILY'S TANK AND HEALER WHILE THE FAMILY IS IDLE (familyseat,
         # #784): free to a tank or healer seat of a guild ask, never to ask.
-        held, lent = familyseat.release(held, mates, facts.get("lendable", ()),
-                                        facts["busy"], facts["resting"], facts["benched"])
+        held_lent = set(facts.get("lendable", ())) & set(
+            facts.get("family_benched", ())
+        )
+        if held_lent:
+            log.info("guild social: family seat held after missing-role abandon: %s",
+                     ", ".join(sorted(held_lent)))
+        held, lent = familyseat.release(
+            held, mates, facts.get("lendable", ()), facts["busy"],
+            facts["resting"],
+            facts["benched"] | facts.get("family_benched", set()))
         log.info("guild social: %s", guildsocial.census(mates, held))
         # PICK-UP GROUPS (guildpug, #591): a pug who said yes counts as free.
         pugs_on = guildpug.enabled()
@@ -22783,17 +22792,18 @@ def _fetch_guild_run_facts(bounds) -> dict:
         in_runs = set(_guild_run_state_names(cur, (guildrun.QUEUED, guildrun.INSIDE)))
         # A guest standing in for a family member is busy too (standin.py).
         busy = in_runs | _standin_guest_names(cur)
-        # Only a run that went in rests its members: a refused or lost run
-        # did nothing to them (guildrun.WENT_IN).
+        # A short abandon before any boss does not earn the member cooldown.
         cur.execute(
-            "SELECT members FROM overseer_guild_run WHERE state = 'ended' "
+            "SELECT members, outcome, bosses_done, seconds_inside "
+            "FROM overseer_guild_run WHERE state = 'ended' "
             "AND ended_at > NOW() - INTERVAL %s MINUTE AND outcome IN ("
             + ",".join(["%s"] * len(guildrun.WENT_IN)) + ")",
             (bounds.cooldown_minutes, *guildrun.WENT_IN),
         )
         resting = set()
         for row in cur.fetchall():
-            resting |= {m["name"] for m in guildrun._member_list(row["members"])}
+            if guildrun.rests_members(row):
+                resting |= {m["name"] for m in guildrun._member_list(row["members"])}
         cur.execute(
             "SELECT guild, COUNT(*) AS n FROM overseer_guild_run "
             "WHERE state IN ('queued', 'inside') GROUP BY guild"
@@ -22816,9 +22826,17 @@ def _fetch_guild_run_facts(bounds) -> dict:
             (guildrun.BENCH_MINUTES,),
         )
         benched = guildrun.benched(list(cur.fetchall()))
+        cur.execute(
+            "SELECT members, outcome, why, bosses_done "
+            "FROM overseer_guild_run WHERE state = 'ended' "
+            "AND ended_at > NOW() - INTERVAL %s HOUR",
+            (guildrun.FAMILY_SEAT_BENCH_HOURS,),
+        )
+        family_benched = guildrun.family_seat_benched(list(cur.fetchall()))
     return {"rows": rows, "family": family, "busy": busy, "in_runs": in_runs,
             "resting": resting,
-            "benched": benched, "in_flight_by_guild": by_guild, "history": history,
+            "benched": benched, "family_benched": family_benched,
+            "in_flight_by_guild": by_guild, "history": history,
             "finder_floors": floors, "boss_levels": boss_levels}
 
 
@@ -25603,8 +25621,8 @@ def _insert_fund_letter_row(letter) -> int:
 # family's worn bags; which tailoring spells a trainer teaches and which path
 # items a vendor sells on each map; and the corps' own recent rows.
 _CORPS_MEMBERS_SQL = (
-    "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.level, "
-    "c.money, c.online, c.map AS map_id, lc.name AS master, "
+    "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, "
+    "c.level, c.money, c.online, c.map AS map_id, lc.name AS master, "
     + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
