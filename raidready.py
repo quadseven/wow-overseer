@@ -772,7 +772,8 @@ def build_guild(
     {"name", "status"} rows for the attunement quest held in a log, and
     `holding_rows` the Raid tab's bag read, for fragments and potions.
     `supply` is this guild's raid supply read (#275): `have` by item entry,
-    `knowers` by craft spell and the guild bank's gold as `bank`.
+    `knowers` by craft spell and the guild bank's gold as `bank`, and the
+    metric snapshots of the last week as `snapshots` (#891).
     `preraid` is preraid.family_view's section for the family: each member's
     next upgrades and where they drop. `item_rows` maps item id to the
     item_template row of every item the gear lists name (raidgear.LIST_SQL);
@@ -887,6 +888,8 @@ def _supply_card(lineup, members, worn_rows, group, supply) -> dict:
         read.get("knowers") or {},
         None,
         read.get("bank"),
+        crafters=group["family_names"],
+        snapshots=read.get("snapshots") or (),
     )
 
 
