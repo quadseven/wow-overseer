@@ -15024,8 +15024,15 @@ class Bridge(discord.Client):
         # (guildjobs.THE GUILD FOCUS); unset keeps every guild's jobs.
         focus = guildjobs.focus_from_env()
         fields = await self._job_fields(members, focus, busy) if spawn_walks else {}
-        campaign_door = (await asyncio.to_thread(_guild_campaign_door, cohort)
-                         if spawn_walks else "")
+        campaign_door = ""
+        if spawn_walks:
+            # An unread queue only costs the on-call stand: the pass keeps
+            # today's spread of doors rather than falling for every guild.
+            try:
+                campaign_door = await asyncio.to_thread(_guild_campaign_door, cohort)
+            except Exception:
+                log.exception("guild jobs: the campaign door could not be read; "
+                              "no summoner goes on call this pass")
         doors = (guildjobs.assign_doors(
             members, guildjobs.entrances(), facts["stones"], campaign_door)
             if spawn_walks else {})

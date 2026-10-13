@@ -33,5 +33,16 @@ class TheFreedKnight(unittest.TestCase):
             self.assertIn(word, body)
 
 
+class TheCampaignDoorRead(unittest.TestCase):
+    def test_an_unread_campaign_door_does_not_fail_the_pass(self):
+        body = BRIDGE.split("async def _plan_guild_jobs", 1)[1].split(
+            "plan = guildjobs.plan(", 1
+        )[0]
+        guarded = body.split("_guild_campaign_door, cohort", 1)[0]
+        self.assertIn("try:", guarded.rsplit("\n", 2)[-2])
+        self.assertIn("except Exception:", body)
+        self.assertIn("no summoner goes on call this pass", body)
+
+
 if __name__ == "__main__":
     unittest.main()
