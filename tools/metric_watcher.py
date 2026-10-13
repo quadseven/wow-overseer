@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -174,6 +175,15 @@ def build_metrics(report: dict, guild_payloads: dict[str, dict]) -> dict:
             guild: crafter_skills(guild_payloads.get(guild, {}).get("trainings") or {})
             for guild in report["guilds"]
         },
+        # The crafters whose training read failed, so a missing row reads as a
+        # failed read rather than as a member with no trade.
+        "crafter_read_failures": {
+            guild: sorted(
+                crafter_key(name)
+                for name in guild_payloads.get(guild, {}).get("training_failures") or ()
+            )
+            for guild in report["guilds"]
+        },
     }
 
 
@@ -264,6 +274,7 @@ def collect(api_root: str) -> tuple[dict, dict]:
         # so each family member is read once, in their own guild's pass; this
         # periodic watcher is off the request path.
         guilds[guild]["trainings"] = {}
+        guilds[guild]["training_failures"] = []
         for row in roster.get("members") or []:
             if (
                 row.get("guild") != guild
@@ -271,13 +282,19 @@ def collect(api_root: str) -> tuple[dict, dict]:
                 or not row.get("name")
             ):
                 continue
-            # One member's failed read costs that crafter's row, not the snapshot.
+            # One member's failed read costs that crafter's row, not the snapshot;
+            # the failure is logged and kept in the record as crafter_read_failures.
             try:
                 guilds[guild]["trainings"][row["name"]] = realm_state_audit.fetch_json(
                     f"{root}/training?name={urllib.parse.quote(row['name'])}"
                 )
-            except RuntimeError:
-                continue
+            except RuntimeError as exc:
+                guilds[guild]["training_failures"].append(row["name"])
+                print(
+                    f"metric_watcher: training read failed for crafter "
+                    f"{crafter_key(row['name'])} in {guild}: {exc}",
+                    file=sys.stderr,
+                )
     report = realm_state_audit.build_report(roster, raidteams, guilds)
     return build_metrics(report, guilds), report
 

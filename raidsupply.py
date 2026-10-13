@@ -1844,11 +1844,33 @@ def _skill_points(snapshots, key, skill) -> list:
     return sorted(points)
 
 
+def _read_failed_last(snapshots, key) -> bool:
+    """Whether the newest snapshot lists `key` among its failed training
+    reads, so a crafter missing from the log is not mistaken for no crafter."""
+    latest = max(
+        (s for s in snapshots or () if s.get("snapshot_epoch") is not None),
+        key=lambda s: int(s["snapshot_epoch"]),
+        default=None,
+    )
+    failures = (latest or {}).get("crafter_read_failures") or {}
+    return any(key in (keys or ()) for keys in failures.values())
+
+
 def alchemist_pace(name, snapshots) -> dict | None:
     """One alchemist's pace line, or None when no snapshot shows them holding
     alchemy."""
-    points = _skill_points(snapshots, crafter_key(name), "alchemy")
+    key = crafter_key(name)
+    points = _skill_points(snapshots, key, "alchemy")
     if not points:
+        if _read_failed_last(snapshots, key):
+            return {
+                "name": name,
+                "skill": None,
+                "per_day": None,
+                "ranks": [],
+                "line": "%s's trade skills were not read in the newest metric "
+                "snapshot: the training read failed." % name,
+            }
         return None
     last_at, value = points[-1]
     window = [p for p in points if p[0] >= last_at - PACE_DAYS * 86400]

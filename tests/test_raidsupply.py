@@ -1192,6 +1192,17 @@ class TheAlchemistsPace(unittest.TestCase):
         self.assertIn("not yet measured", pace["line"])
         self.assertEqual(pace["ranks"], [])
 
+    def test_a_failed_training_read_says_so_rather_than_no_alchemist(self):
+        failed = {
+            "snapshot_epoch": WEEK_AGO + DAY,
+            "crafters": {"Cave": []},
+            "crafter_read_failures": {"Cave": [rs.crafter_key("Ugga")]},
+        }
+        card = rs.card([], {}, {}, crafters=["Ugga"], snapshots=[failed])
+        self.assertEqual(len(card["pace"]), 1)
+        self.assertIn("training read failed", card["pace"][0]["line"])
+        self.assertIsNone(rs.alchemist_pace("Grug", [failed]))
+
     def test_no_snapshot_says_the_pace_is_not_yet_measured(self):
         card = rs.card([], {}, {}, crafters=["Ugga"], snapshots=[])
         self.assertEqual(len(card["pace"]), 1)

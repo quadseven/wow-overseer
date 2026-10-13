@@ -213,7 +213,7 @@ def test_collect_reads_training_for_family_members_only(monkeypatch):
     assert record["crafters"]["Cave"][0]["skills"]["alchemy"] == 39
 
 
-def test_collect_skips_a_crafter_whose_training_read_fails(monkeypatch):
+def test_collect_records_a_crafter_whose_training_read_fails(monkeypatch, capsys):
     def fetch(url):
         if url.endswith("/roster"):
             return {
@@ -236,3 +236,8 @@ def test_collect_skips_a_crafter_whose_training_read_fails(monkeypatch):
     record, _ = collect("https://example.com/api/v2")
 
     assert [row["skills"]["alchemy"] for row in record["crafters"]["Cave"]] == [39]
+    assert record["crafter_read_failures"]["Cave"] == [
+        metric_watcher.crafter_key("Gone")
+    ]
+    assert "Gone" not in json.dumps(record)
+    assert "training read failed" in capsys.readouterr().err
