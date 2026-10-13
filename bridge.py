@@ -2523,8 +2523,17 @@ class _PersistentOwing(classquest.Owing):
     def __init__(self):
         super().__init__()
 
+    @staticmethod
+    def _tuples(value):
+        """A mark as guildjobs.progress_mark built it. The memo is JSON, which
+        reads every tuple back as a list, and a list never equals the tuple the
+        next pass computes: each restored clock started over (#921)."""
+        if isinstance(value, list):
+            return tuple(_PersistentOwing._tuples(v) for v in value)
+        return value
+
     def restore(self):
-        self._by.update({name: (mark, since)
+        self._by.update({name: (self._tuples(mark), since)
                          for name, (mark, since) in _memo_read("class_owed").items()})
 
     def idle(self, name, mark, now):

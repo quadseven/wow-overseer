@@ -10,6 +10,7 @@ import unittest
 
 import bag_pressure
 import classquest
+import guildjobs
 
 
 SOURCE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
@@ -29,7 +30,8 @@ def _persistent_owing():
         return {name: row for (row_kind, name), row in rows.items() if row_kind == kind}
 
     def write(kind, subject, value, since, expires):
-        rows[kind, subject] = (value, since)
+        # The real store keeps the value as JSON (_memo_upsert, _memo_read).
+        rows[kind, subject] = (json.loads(json.dumps(value)), since)
         writes.append((kind, subject, since, expires))
 
     def delete(kind, subject):
@@ -98,6 +100,60 @@ class OwedClockMemoTests(unittest.TestCase):
                 5000.0 + classquest.OWED_HOURS * 3600,
                 classquest.OWED_HOURS,
             )
+        )
+
+
+class OwedClockRestartTests(unittest.TestCase):
+    """Every member's owed clock after a restart equals the one before it, with
+    the real progress marks the job pass computes (#921)."""
+
+    MEMBERS = (
+        guildjobs.Member(
+            "MemberA",
+            "Guild",
+            "dps",
+            quests_done=frozenset({1, 2}),
+            quest_log={1598: 1},
+            quest_progress={1598: 3},
+            known=frozenset({133}),
+        ),
+        guildjobs.Member(
+            "MemberB",
+            "Guild",
+            "healer",
+            quest_log={5621: 3, 5622: 1},
+            quest_progress={5621: 0, 5622: 2},
+        ),
+        guildjobs.Member("MemberC", "Guild", "tank"),
+    )
+
+    def test_every_clock_equals_its_pre_restart_value(self):
+        owing_type, _ = _persistent_owing()
+        first = owing_type()
+        for second, m in enumerate(self.MEMBERS):
+            first.idle(m.name, guildjobs.progress_mark(m), 1000.0 + second)
+        before = dict(first._by)
+        restarted = owing_type()
+        restarted.restore()
+        self.assertEqual(before, restarted._by)
+        self.assertEqual(list(before), list(restarted._by))
+        later = 1000.0 + classquest.OWED_HOURS * 3600
+        for m in self.MEMBERS:
+            mark = guildjobs.progress_mark(m)
+            self.assertEqual(
+                first.idle(m.name, mark, later), restarted.idle(m.name, mark, later)
+            )
+
+    def test_a_member_owed_past_owed_hours_stays_released_after_restart(self):
+        owing_type, _ = _persistent_owing()
+        member = self.MEMBERS[0]
+        mark = guildjobs.progress_mark(member)
+        owing_type().idle(member.name, mark, 1000.0)
+        restarted = owing_type()
+        restarted.restore()
+        hours = classquest.OWED_HOURS
+        self.assertTrue(
+            restarted.expired(member.name, mark, 1000.0 + hours * 3600, hours)
         )
 
 
