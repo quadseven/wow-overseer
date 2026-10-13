@@ -11528,6 +11528,21 @@ class Bridge(discord.Client):
         # is worn is left in the bags. No plan leaves `wanted` as it is.
         wanted = bag_pressure.jev_equips(
             wanted, gear_rows, worn, names, jev_plan, keep_names=OWNER_KEEPS)
+        # If the roster cannot be read, ownership is unknown, so skip this pass.
+        # Only database and socket failures are caught; code bugs still raise.
+        try:
+            roster_names = await asyncio.to_thread(_fetch_enabled_roster_names)
+        except (OSError, pymysql.err.MySQLError) as exc:
+            log.warning("equip: could not read the enabled roster: %s", exc)
+            return
+        left_to_drive = [equip for equip in wanted
+                         if equip.holder in roster_names]
+        wanted = tuple(equip for equip in wanted
+                       if equip.holder not in roster_names)
+        log.info(
+            "equip: left %d piece(s) to the module's gear drive for %d roster member(s)",
+            len(left_to_drive), len(roster_names),
+        )
         await self._write_equips(wanted, current)
 
     async def _scored_equips(self, legacy, names, label: str, tanks=()) -> tuple:
@@ -15101,8 +15116,20 @@ class Bridge(discord.Client):
         # (guildjobs.THE GUILD FOCUS); unset keeps every guild's jobs.
         focus = guildjobs.focus_from_env()
         fields = await self._job_fields(members, focus, busy) if spawn_walks else {}
-        doors = (guildjobs.assign_doors(members, guildjobs.entrances(), facts["stones"])
-                 if spawn_walks else {})
+        campaign_door = ""
+        if spawn_walks:
+            # An unread queue only costs the on-call stand: the pass keeps
+            # today's spread of doors rather than falling for every guild.
+            try:
+                campaign_door = await asyncio.to_thread(_guild_campaign_door, cohort)
+            except pymysql.err.MySQLError:
+                log.exception("guild jobs: the campaign door could not be read; "
+                              "no summoner goes on call this pass")
+        doors = (guildjobs.assign_doors(
+            members, guildjobs.entrances(), facts["stones"], campaign_door)
+            if spawn_walks else {})
+        if campaign_door and spawn_walks and not any(d.on_call for d in doors.values()):
+            self._log_missing_campaign_summoner(members, campaign_door)
         # No class quest uses while this worldserver does not carry the verbs.
         facts = dict(facts, class_book=self._class_book_for_plan(facts))
         plan = guildjobs.plan(
@@ -15150,6 +15177,19 @@ class Bridge(discord.Client):
                      "waiting unopened are collected; theirs go to the bank",
                      ", ".join(sorted(facts["unclaimed"])))
         return plan
+
+    @staticmethod
+    def _log_missing_campaign_summoner(members, campaign_door):
+        admits = any(
+            m.role == guildjobs.SUMMONER
+            and guildjobs.RITUAL_OF_SUMMONING in m.known
+            and any(r.keyword == campaign_door for r in guildjobs.doors_for(m))
+            for m in members
+        )
+        reason = ("no meeting stone is available" if admits
+                  else "no summoner's level band admits it")
+        log.info("guild jobs: campaign door %s; %s; keeping ordinary assignments",
+                 campaign_door, reason)
 
     def _log_purses(self, members) -> None:
         """One `purse:` line per member whose purchase order changed since the
@@ -22127,6 +22167,13 @@ _FAMILY_EQUIPPED_ROLES_SQL = (
 )
 
 
+def _fetch_enabled_roster_names() -> set[str]:
+    """Names whose gear is owned by the module's enabled roster drive."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT name FROM overseer_roster WHERE enabled = 1")
+        return {str(row["name"]) for row in cur.fetchall()}
+
+
 def _fetch_shield_tanks(names: list) -> set:
     """Which of `names` tank behind a shield (bag_pressure.shield_tanks): the
     roster's tree or a raid seat, else the raid plan's tree. Nobody on a world
@@ -26521,6 +26568,23 @@ def _fetch_job_facts(family_names: list) -> dict:
     facts["roster"] = ({str(r.get("name") or "") for r in roster_rows}
                        | set(family_names)) - {""}
     return facts
+
+
+def _guild_campaign_door(cohort=None) -> str:
+    """The family's active dungeon job, or its next queued run keyword."""
+    head = cohort.leader if cohort is not None else _head_now()
+    family = getattr(cohort, "key", None) or _cohort_of(head) or ""
+    roster = campaignqueue.families(_fetch_queue_roster())
+    fam = roster.get(family)
+    if not fam:
+        return ""
+    job = str(fam["leader"].get("job") or "")
+    if job.startswith("dungeon:"):
+        keyword = job.split(":", 1)[1].strip().lower()
+        if keyword in {run.keyword for run in campaignplan.RUNS}:
+            return keyword
+    queue = campaignqueue.pending_by_family(_fetch_queue_rows()).get(family, ())
+    return str(queue[0].get("keyword") or "").strip().lower() if queue else ""
 
 
 def _job_leveling(facts):

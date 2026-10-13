@@ -385,7 +385,11 @@ def _support_blockers(lineup: dict, goals: dict) -> list:
             )
         )
     goal_list = goals.get("goals") or []
-    unmet = [g for g in goal_list if g.get("status") != raidgoals.MET]
+    unmet = [
+        g
+        for g in goal_list
+        if g.get("status") not in (raidgoals.MET, raidgoals.NO_SOURCE)
+    ]
     if unmet:
         out.append(
             "%d of %s still to gather (%s). Molten Core admits a raid "
@@ -394,6 +398,25 @@ def _support_blockers(lineup: dict, goals: dict) -> list:
                 len(unmet),
                 _count(len(goal_list), "consumable goal", "consumable goals"),
                 ", ".join(g["name"].lower() for g in unmet),
+            )
+        )
+    no_source = [g for g in goal_list if g.get("status") == raidgoals.NO_SOURCE]
+    # The vendor sentence is about repairs, so only the repair goal earns it.
+    # Any other goal the realm gives no source is named as such, so leaving it
+    # out of the count above never makes it vanish from the blockers.
+    if any(g.get("key") == "repair" for g in no_source):
+        out.append(
+            "Repair bots have no source on this realm; repairs happen at a "
+            "vendor before the raid order."
+        )
+    others = [g for g in no_source if g.get("key") != "repair"]
+    if others:
+        out.append(
+            "No source on this realm for %s, so the count of goals still to "
+            "gather leaves %s out."
+            % (
+                ", ".join(g.get("name", "").lower() for g in others),
+                "it" if len(others) == 1 else "them",
             )
         )
     return out
