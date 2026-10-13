@@ -319,10 +319,17 @@ class RepairBotHasNoSourceOnThisRealm(unittest.TestCase):
         self.assertNotIn("no trainer, vendor or drop", repair["line"])
 
     def test_the_line_names_the_schematic_the_recipe_carries(self):
+        """The goal's line reads the schematic off the recipe, not a literal
+        18235, so a recipe that carried another schematic would name it."""
         recipe = raidgoals.RECIPE_BY_PRODUCT[raidgoals.FIELD_REPAIR_BOT]
         self.assertEqual(recipe.schematic, 18235)
-        line = raidgoals._no_source_line(recipe.product, 99999)
-        self.assertIn("Schematic 99999", line)
+        recipe.schematic = 99999
+        try:
+            repair = goal(payload(), "repair")
+        finally:
+            recipe.schematic = 18235
+        self.assertIn("Schematic 99999", repair["line"])
+        self.assertNotIn("18235", repair["line"])
 
     def test_a_no_source_goal_still_lists_what_it_would_take(self):
         """A goal that vanished because it was impossible would read exactly
