@@ -59,6 +59,7 @@ GRANT verbs (operator-only/test-only, all flow through _insert_gm)
 
 from __future__ import annotations
 
+import ast
 import pathlib
 import re
 import unittest
@@ -171,6 +172,25 @@ def _command_verb(lit: str) -> str | None:
     return None
 
 
+def _has_natural_only_marker(src: str, line_no: int) -> bool:
+    """A marker applies only to its own function or the INSERT line."""
+    lines = src.splitlines()
+    if "natural-only:" in lines[line_no - 1]:
+        return True
+    functions = (
+        node
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.lineno <= line_no <= node.end_lineno
+    )
+    function = min(
+        functions, key=lambda node: node.end_lineno - node.lineno, default=None
+    )
+    return function is not None and "natural-only:" in "\n".join(
+        lines[function.lineno - 1 : function.end_lineno]
+    )
+
+
 class BridgeWritesOnlyNaturalCommands(unittest.TestCase):
     def test_deny_list_is_populated_from_relay(self):
         self.assertTrue(GRANT_VERBS)
@@ -188,6 +208,23 @@ class BridgeWritesOnlyNaturalCommands(unittest.TestCase):
             "_insert_gm must carry a natural-only marker explaining why no "
             "member reaches it",
         )
+        insert_at = src.index(
+            "INSERT INTO overseer_command", src.index("def _insert_gm(")
+        )
+        self.assertTrue(_has_natural_only_marker(src, src[:insert_at].count("\n") + 1))
+
+    def test_marker_in_neighboring_function_does_not_mark_grant(self):
+        src = (
+            "def operator_only():\n"
+            "    # natural-only: operator-only path\n"
+            "    pass\n\n"
+            "def member_path():\n"
+            '    sql = "INSERT INTO overseer_command (command) '
+            "VALUES ('additem')\"\n"
+        )
+        [(line_no, col, lit)] = _insert_command_values(src)
+        self.assertEqual((col, lit), ("command", "additem"))
+        self.assertFalse(_has_natural_only_marker(src, line_no))
 
     def test_no_unmarked_grant_literal_queued(self):
         """Any GM-style command literal written to overseer_command must be
@@ -201,16 +238,11 @@ class BridgeWritesOnlyNaturalCommands(unittest.TestCase):
                 verb = _command_verb(lit)
                 if verb not in GRANT_VERBS:
                     continue
-                # The marker may live on the INSERT line or in the surrounding
-                # function; either is acceptable.
-                window = "\n".join(
-                    src.splitlines()[max(0, line_no - 15) : line_no + 15]
-                )
-                self.assertIn(
-                    "natural-only:",
-                    window,
-                    f"{name}:{line_no}: unmarked grant command {lit!r}",
-                )
+                with self.subTest(source=name, line=line_no, command=lit):
+                    self.assertTrue(
+                        _has_natural_only_marker(src, line_no),
+                        f"{name}:{line_no}: unmarked grant command {lit!r}",
+                    )
 
     def test_command_verbs_are_collected_and_classified(self):
         """Collect every literal command verb the bridge writes and assert that
@@ -227,17 +259,10 @@ class BridgeWritesOnlyNaturalCommands(unittest.TestCase):
                 verb = _command_verb(lit)
                 if verb is None:
                     continue
-                window = "\n".join(
-                    src.splitlines()[max(0, _line_no - 15) : _line_no + 15]
-                )
-                if "natural-only:" in window:
+                if _has_natural_only_marker(src, _line_no):
                     grant.add(verb)
                 else:
                     natural.add(verb)
-
-        # The GM path is dynamic, so it does not surface as a literal; record
-        # every verb its allowlist admits as a marked grant.
-        grant.update(GRANT_VERBS)
 
         self.assertTrue(
             grant.issubset(GRANT_VERBS),
