@@ -13834,9 +13834,16 @@ class Bridge(discord.Client):
         # The marker first, as _start_guild_job_steps does. There is no race:
         # nothing between here and create_task awaits, and the task does not
         # run until this pass next awaits, so the step's own finally
-        # (_run_job_step) always clears a marker that is already there.
+        # (_run_job_step) always clears a marker that is already there. The
+        # marker must come first: set after, it would outlive a step that had
+        # already cleared it. Only a start that raises (no task ran, so no
+        # finally will) gives the marker back here.
         self._job_steps[m.name] = mono
-        self._start_quester_step(step, cap)
+        try:
+            self._start_quester_step(step, cap)
+        except Exception:
+            self._job_steps.pop(m.name, None)
+            raise
         return any(classhunt.is_hunt_row(r.command) for r in step.rows)
 
     def _start_quester_step(self, step, cap: float) -> None:

@@ -102,6 +102,17 @@ class TheQuesterPass(unittest.TestCase):
         run.run()
         self.assertEqual(run.started, [])
 
+    def test_a_step_that_fails_to_start_leaves_no_marker_holding_the_quester(self):
+        run = Pass([quester(x=0.0)])
+
+        def refuse(step, cap):
+            raise RuntimeError("no task")
+
+        run.self._start_quester_step = refuse
+        with self.assertRaises(RuntimeError):
+            run.run()
+        self.assertNotIn("Mirra", run.self._job_steps)
+
     def test_the_five_of_a_guild_share_their_quests(self):
         names = sorted(raidteams.quester_names("Cave"))
         run = Pass([quester(n) for n in names]).run()
