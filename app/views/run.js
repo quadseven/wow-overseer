@@ -5,7 +5,7 @@
 // it came back) with what each seat said while the run lasted, from
 // /api/thoughts, read once per visit after the run itself is known.
 
-import { html, raw, state, pendingRead, plural, member, readState } from "../ui.js";
+import { html, raw, state, pendingRead, plural, member, item, readState } from "../ui.js";
 import { load, peek } from "../api.js";
 import {
   findRun, stateTag, pips, seatRows, steps, inside,
@@ -63,7 +63,9 @@ export function seatLine(name, text, place) {
 function timeline(r) {
   const own = steps(r).filter((s) => s.t);
   const heard = said(r);
-  const rows = own.concat(heard ? heard.list : []).sort((a, b) => (a.t || 0) - (b.t || 0));
+  const gear = (r.gear || []).map((g) => ({ t: toSeconds(g.at), who: g.member,
+    text: g.source === "equipped" ? "equipped " + g.name + "." : "looted " + g.name + "." }));
+  const rows = own.concat(heard ? heard.list : [], gear).sort((a, b) => (a.t || 0) - (b.t || 0));
   const lines = rows.map((s) => {
     const l = s.who ? seatLine(s.who, s.text, r.place) : { text: s.text };
     const who = s.who ? html`${member({ name: s.who })}${l.lead ? " " : ": "}` : "";
@@ -74,6 +76,11 @@ function timeline(r) {
   else if (heard.failed.length) note = html`<span class="muted">Not measured for ${heard.failed.join(", ")}: their reads did not answer.</span>`;
   else if (!heard.list.length) note = html`<span class="muted">The seats said nothing on record while the run lasted.</span>`;
   return html`<div class="g-steps">${lines}</div>${note}`;
+}
+
+function gearRows(r) {
+  const rows = r.gear || [];
+  return html`<div class="card g-list"><div class="g-list-head"><span class="g-card-title">Gear</span></div>${rows.length ? rows.map((g) => html`<div class="g-row g-r-gear"><span>${member({ name: g.member })}</span><span class="g-grow">${item({ entry: g.entry, name: g.name, quality: g.quality })}</span><span class="muted">${g.source}</span></div>`) : html`<div class="g-row muted">No gear recorded for this run.</div>`}</div>`;
 }
 
 export default {
@@ -109,6 +116,7 @@ ${cause(r) ? html`<span>${cause(r)}</span>` : ""}
 ${r.story ? html`<span class="muted">${r.story}</span>` : ""}
 <span class="muted">${extra}${r.band_line ? " | " + r.band_line : ""}</span></div>
 <div class="card g-list"><div class="g-list-head"><span class="g-card-title">Seats</span><span class="muted">${plural((r.members || []).length, "seat")}</span></div>${seatRows(r)}</div>
+${gearRows(r)}
 </div>
 <div class="card g-r-timeline"><span class="g-card-title">Timeline</span><div id="g-r-timeline">${timeline(r)}</div></div>
 </div>`;
