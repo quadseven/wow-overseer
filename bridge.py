@@ -26,6 +26,7 @@ import urllib.request
 
 import discord
 import pymysql
+from apiv2 import presence as v2_presence
 
 import achievements
 import armory
@@ -1714,6 +1715,20 @@ def _cohort_key(cohort=None):
     return getattr(cohort, "key", None)
 
 
+def _world_counts(members) -> dict:
+    """Each guild's [members in the world, members] for the jobs pass log.
+
+    A member is in the world when its row's `online` says so, which
+    _JOB_MEMBERS_SQL derives from the fresh snapshot, not the saved flag.
+    """
+    counts = {}
+    for member in members:
+        tally = counts.setdefault(member.guild, [0, 0])
+        tally[0] += bool(member.online)
+        tally[1] += 1
+    return counts
+
+
 def _family_label(cohort=None) -> str:
     """"" for this bridge's own family, " for family <key>" for another."""
     key = _cohort_key(cohort)
@@ -2525,8 +2540,18 @@ class _PersistentOwing(classquest.Owing):
     def __init__(self):
         super().__init__()
 
+    @staticmethod
+    def _tuples(value):
+        """A mark as guildjobs.progress_mark built it. The memo is JSON, which
+        reads every tuple back as a list, and a list never equals the tuple the
+        next pass computes: each restored clock started over (#921)."""
+        # _memo_read decodes JSON, so only lists can represent saved tuples.
+        if isinstance(value, list):
+            return tuple(_PersistentOwing._tuples(v) for v in value)
+        return value
+
     def restore(self):
-        self._by.update({name: (mark, since)
+        self._by.update({name: (self._tuples(mark), since)
                          for name, (mark, since) in _memo_read("class_owed").items()})
 
     def idle(self, name, mark, now):
@@ -14958,6 +14983,8 @@ class Bridge(discord.Client):
         await self._start_guild_job_pass(cohort, facts, members)
 
     async def _start_guild_job_pass(self, cohort, facts, members):
+        for guild, (online, total) in sorted(_world_counts(members).items()):
+            log.info("guild jobs: %s: %d of %d members in the world", guild, online, total)
         now = time.monotonic()
         self._job_steps = guildroute.live_runs(
             self._job_steps, now, guildroute.GUILD_STEP_SECONDS)
@@ -14982,10 +15009,31 @@ class Bridge(discord.Client):
         # A class quest that yields to levelling is named every pass, uncapped.
         for line in plan.yields:
             log.info("guild jobs: %s", line)
+        self._log_class_ask_yields(members, plan.ask_yields)
         sale_walks = now >= self._job_walks_unsupported.get("sale", 0.0)
         started = self._start_guild_job_steps(plan, now, cap, sale_walks)
         await self._say_pvp_lines(plan, facts["recent"])
         log.info("guild jobs: started %d step(s)%s", started, _family_label(cohort))
+
+    def _log_class_ask_yields(self, members, yields) -> None:
+        """One `class ask:` line per member whose class quest ask yields to
+        levelling (guildjobs.class_asking), when its reason changed since the
+        last pass. A member of this pass that no longer yields is forgotten, so
+        the next yield is named again."""
+        said = getattr(self, "_class_ask_said", None)
+        if said is None:
+            said = self._class_ask_said = {}
+        now = {}
+        for key, line in yields or ():
+            name = key[0]
+            now.setdefault(name, set()).add(key)
+            if key not in said.get(name, set()):
+                log.info("%s", line)
+        for m in members:
+            if m.name in now:
+                said[m.name] = now[m.name]
+            else:
+                said.pop(m.name, None)
 
     def _stranded_knights_freed(self, members) -> set:
         """The death knights standing in their starting zone that every other
@@ -15062,7 +15110,10 @@ class Bridge(discord.Client):
             far_slots=guildroute.far_slots_free(
                 facts.get("far_open"), FAR_WALKS_AT_ONCE),
             # How long each member has stood on one spot (stood_still_step).
-            still=standstill.all_minutes(self._guild_still, time.monotonic()))
+            still=standstill.all_minutes(self._guild_still, time.monotonic()),
+            # The class quest asks lately: a run of them with no party stops
+            # the next (guildjobs.class_ask_streak).
+            asks=facts.get("quest_asks", ()))
         # Members held on a class quest are kept out of every dungeon pass
         # (the guild's asks, its runs): _class_priority_names.
         self._classquest_held = guildjobs.class_held(plan.lines)
@@ -23003,9 +23054,10 @@ def _fetch_guild_run_facts(bounds) -> dict:
         floors = {int(r["map_id"]): int(r["min_level"]) for r in cur.fetchall()}
         boss_levels = _door_boss_levels(cur)
         cur.execute(
-            "SELECT outcome, why FROM overseer_guild_run WHERE state = 'ended' "
+            "SELECT outcome, why, TIMESTAMPDIFF(MINUTE, ended_at, NOW()) AS age_minutes "
+            "FROM overseer_guild_run WHERE state = 'ended' "
             "AND ended_at > NOW() - INTERVAL %s MINUTE",
-            (guildrun.BENCH_MINUTES,),
+            (guildrun.QUEUE_BENCH_MINUTES,),
         )
         benched = guildrun.benched(list(cur.fetchall()))
         cur.execute(
@@ -23313,8 +23365,10 @@ def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
         refused=board.refused(), cooling=board.cooling(clock),
         seats=board.seats(clock))
     free = {m.name: m for m in mates if m.name not in own}
-    parties = classparty.plan_starts(
+    parties, skipped = classparty.plan(
         asks, answers, quest_pass, helps, free, board, now, clock, book)
+    if skipped:
+        quest_pass = dataclasses.replace(quest_pass, notes=quest_pass.notes + skipped)
     quest_held = classask.held_names(board.runs() + list(parties))
     held = {**{n: _QUEST_ASK_WHY for n in quest_held}, **held}
     return (quest_pass, held, {n: v for n, v in needs.items() if n not in quest_held},
@@ -24448,25 +24502,27 @@ def _fetch_crafter_letters(receivers: list, senders: list) -> list:
 # letter first. `delivered` is whether the delivery delay has passed; a letter
 # with cash on delivery is read and never taken from (guildpost).
 _GUILD_POST_SQL = (
-    "SELECT r.name AS receiver, r.online AS online, m.id AS mail_id, "
+    "SELECT r.name AS receiver, (presence.name IS NOT NULL) AS online, m.id AS mail_id, "
     "mi.item_guid AS item_guid, it.name AS name, "
     "(m.deliver_time <= UNIX_TIMESTAMP()) AS delivered, m.cod AS cod, 0 AS money "
     "FROM mail m "
     "JOIN mail_items mi ON mi.mail_id = m.id "
     "JOIN characters r ON r.guid = m.receiver "
-    "JOIN guild_member gm ON gm.guid = r.guid "
+    + v2_presence.snapshot_join("r", "presence")
+    + "JOIN guild_member gm ON gm.guid = r.guid "
     "JOIN item_instance ii ON ii.guid = mi.item_guid "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
     "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
     "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({names})) "
     # AND THE LETTERS OF GOLD (2026-10-10): the guild fund's training letters
     # and dues refunds, taken out with `take-money` (guildpost.letter_from_row).
-    "UNION ALL SELECT r.name AS receiver, r.online AS online, m.id AS mail_id, "
+    "UNION ALL SELECT r.name AS receiver, (presence.name IS NOT NULL) AS online, m.id AS mail_id, "
     "0 AS item_guid, NULL AS name, "
     "(m.deliver_time <= UNIX_TIMESTAMP()) AS delivered, m.cod AS cod, m.money AS money "
     "FROM mail m "
     "JOIN characters r ON r.guid = m.receiver "
-    "JOIN guild_member gm ON gm.guid = r.guid "
+    + v2_presence.snapshot_join("r", "presence")
+    + "JOIN guild_member gm ON gm.guid = r.guid "
     "WHERE m.money > 0 AND gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
     "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({names})) "
     "ORDER BY mail_id"
@@ -25437,12 +25493,13 @@ def _command_answer(row_id: int):
 # members out of the same lineup the page draws and posts to the master.
 _DUES_MEMBERS_SQL = (
     "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.level, "
-    "c.money, c.online, lc.name AS master, " + raidroles.TALENTS_COLUMN + " "
+    "c.money, (presence.name IS NOT NULL) AS online, lc.name AS master, " + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
     "JOIN guild g ON g.guildid = gm.guildid "
     "LEFT JOIN characters lc ON lc.guid = g.leaderguid "
-    "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    + v2_presence.snapshot_join("c", "presence")
+    + "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
     "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s))"
 )
 # A walk that ended without a letter may be tried again after this long, so a
@@ -25804,13 +25861,15 @@ def _insert_fund_letter_row(letter) -> int:
 # items a vendor sells on each map; and the corps' own recent rows.
 _CORPS_MEMBERS_SQL = (
     "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, "
-    "c.level, c.money, c.online, c.map AS map_id, lc.name AS master, "
+    "c.level, c.money, (presence.name IS NOT NULL) AS online, c.map AS map_id, "
+    "lc.name AS master, "
     + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
     "JOIN guild g ON g.guildid = gm.guildid "
     "LEFT JOIN characters lc ON lc.guid = g.leaderguid "
-    "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    + v2_presence.snapshot_join("c", "presence")
+    + "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
     "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s))"
 )
 _CORPS_SKILLS_SQL = (
@@ -26038,7 +26097,7 @@ def _insert_corps_row(holder: str, row) -> int:
 # reservations keep.py's (`_KEEP`).
 _JOB_MEMBERS_SQL = (
     "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.race, "
-    "c.level, c.money, c.online, c.map AS map_id, s.pos_x, s.pos_y, s.pos_z, "
+    "c.level, c.money, (s.name IS NOT NULL) AS online, c.map AS map_id, s.pos_x, s.pos_y, s.pos_z, "
     "s.in_combat, "
     "s.zone_id, s.health, "
     "EXISTS (SELECT 1 FROM corpse k WHERE k.guid = c.guid) AS has_corpse, "
@@ -26052,9 +26111,8 @@ _JOB_MEMBERS_SQL = (
     "LEFT JOIN characters lc ON lc.guid = g.leaderguid "
     # Where its hearthstone is bound (guildjobs.inn_step).
     "LEFT JOIN character_homebind hb ON hb.guid = c.guid "
-    "LEFT JOIN overseer_snapshot s ON s.name = c.name "
-    "AND s.updated_at > NOW() - INTERVAL 120 SECOND "
-    "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    + v2_presence.snapshot_join("c", "s")
+    + "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
     "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s))"
 )
 _JOB_SKILLS_SQL = (
@@ -26366,6 +26424,17 @@ def _read_job_spawns_once(cur) -> None:
                                           guildlevel.QUEST_FACTS_SQL))
 
 
+# The class quest asks lately and how many said yes to each, for the run of
+# asks with no party that stops the next (guildjobs.class_ask_streak).
+_JOB_QUEST_ASKS_SQL = (
+    "SELECT a.asker, a.target, a.state, "
+    "TIMESTAMPDIFF(MINUTE, a.created_at, NOW()) AS age, "
+    "(SELECT COUNT(*) FROM overseer_guild_answer an WHERE an.ask_id = a.id) AS yeses "
+    "FROM overseer_guild_ask a WHERE a.kind = 'quest' "
+    "AND a.created_at > NOW() - INTERVAL %s MINUTE ORDER BY a.id"
+)
+
+
 def _fetch_job_facts(family_names: list) -> dict:
     """Everything guildjobs.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
@@ -26399,6 +26468,8 @@ def _fetch_job_facts(family_names: list) -> dict:
         bank_rows = _job_read(cur, "guild bank tabs", _JOB_BANK_TABS_SQL)
         _read_job_spawns_once(cur)
         roster_rows = _job_read(cur, "roster names", _JOB_ROSTER_SQL)
+        quest_ask_rows = _job_read(cur, "class quest asks", _JOB_QUEST_ASKS_SQL,
+                                   (guildjobs.CLASS_ASK_STREAK_WINDOW_MINUTES,))
         far_open = _far_walks_open(cur)
         hunt_open = _hunts_open(cur)
     # THE ONE NATURAL GATE (natural.py, #331): who may act on a guild job and
@@ -26413,6 +26484,7 @@ def _fetch_job_facts(family_names: list) -> dict:
                                  bag_slots=_job_bag_slots(room),
                                  worn=_job_worn(worn_rows))
     facts["class_book"] = book
+    facts["quest_asks"] = guildjobs.quest_asks_from_rows(quest_ask_rows)
     facts["far_open"] = far_open
     facts["hunt_open"] = hunt_open
     facts["unclaimed"] = {str(r.get("name") or "") for r in unclaimed_rows} - {""}
@@ -31736,7 +31808,7 @@ def _family_names() -> list:
 # bank rows live at other (bag, slot) pairs, so a plain COUNT(*) over
 # character_inventory would count a full backpack as gear.
 _STANDING_SQL = (
-    "SELECT c.name, c.guid, c.money, c.leveltime, c.online, "
+    "SELECT c.name, c.guid, c.money, c.leveltime, (s.name IS NOT NULL) AS online, "
     "       COALESCE(s.level, c.level) AS level, "
     "       s.map_id, s.pos_x, s.pos_y, "
     "       (SELECT COUNT(*) FROM character_queststatus_rewarded r "
@@ -31746,9 +31818,8 @@ _STANDING_SQL = (
     "       (SELECT COUNT(*) FROM character_inventory i "
     "          WHERE i.guid = c.guid AND i.bag = 0 AND i.slot < 19) AS equipped "
     "FROM characters c "
-    "LEFT JOIN overseer_snapshot s "
-    "       ON s.name = c.name AND s.updated_at > NOW() - INTERVAL 60 SECOND "
-    "WHERE c.name IN (%s) "
+    + v2_presence.snapshot_join("c", "s")
+    + "WHERE c.name IN (%s) "
     "ORDER BY c.name"
 )
 

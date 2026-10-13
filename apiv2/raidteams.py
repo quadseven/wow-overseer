@@ -33,6 +33,7 @@ import raidroles
 import raidsupply
 import raidteams
 import realmread
+from . import presence
 
 GROUPS = 8
 GROUP_SIZE = 5
@@ -50,9 +51,10 @@ _GAP_KEY = {
 # Characters of the seat names and the guild each is in. The guild is decided
 # from the answer (the guild holding most of them), not from its name.
 MEMBERS_SQL = (
-    "SELECT c.name, c.level, c.class AS class_id, c.online, gm.guildid "
+    "SELECT c.name, c.level, c.class AS class_id, (presence.name IS NOT NULL) AS online, gm.guildid "
     "FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
-    "WHERE c.name IN ({holes})"
+    + presence.snapshot_join("c", "presence")
+    + "WHERE c.name IN ({holes})"
 )
 ATTUNED_SQL = (
     "SELECT DISTINCT c.name FROM characters c "
