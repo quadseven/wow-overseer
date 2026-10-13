@@ -327,7 +327,8 @@ SUPPLIES = (
     # against the running worldserver's; the recipe, its 15 silver, its Alchemy
     # 165 and its two vendors as #892 read them from `item_template` and
     # `npc_vendor`; the Leaded Vial's 200 copper in LEADED_VIAL is the same
-    # price craft_supply.py's REAGENT table holds for item 3372.
+    # price craft_supply.py's REAGENT table holds for item 3372, which its
+    # docstring records as the live world's item_template BuyPrice.
     Supply(
         FIRE_PROTECTION,
         "Fire Protection Potion",
