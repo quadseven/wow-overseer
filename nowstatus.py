@@ -612,6 +612,16 @@ def compose(member: dict, facts: dict | None, now_at: int | None = None) -> dict
     }
 
 
+# The waiting text for a walk that keeps ending and restarting. apiv2/members.py
+# matches on RESTART_WAITING, so both read the wording from here.
+RESTART_WAITING = "the walk has ended and restarted"
+
+
+def restart_words(restarts: int) -> str:
+    """The waiting reason for a walk that has restarted this many times."""
+    return "a way there; %s %d times" % (RESTART_WAITING, restarts)
+
+
 def _from_intent(intent: dict, steps, now_at):
     doing = _walk_words(intent)
     doing = doing[:1].upper() + doing[1:]
@@ -619,8 +629,7 @@ def _from_intent(intent: dict, steps, now_at):
     since = (now_at - int(age)) if (age is not None and now_at) else None
     restarts = _restarts(steps, now_at)
     if restarts >= 3:
-        why = "a way there; the walk has ended and restarted %d times" % restarts
-        return doing, why, _first_restart(steps, now_at) or since
+        return doing, restart_words(restarts), _first_restart(steps, now_at) or since
     return doing, "to get there", since
 
 
@@ -651,11 +660,25 @@ def _from_job(roster: dict):
     return "", "", None
 
 
+def _intent_is_active(intent) -> bool:
+    """True when the intent row names a current kind of work."""
+    return bool(intent) and str(intent.get("current_kind") or "") not in ("", "none")
+
+
 def _live(member, f, fresh, now_at):
     """Doing, waiting, since for a character in the world and not fighting."""
     intent = f.get("intent")
-    if intent and str(intent.get("current_kind") or "") not in ("", "none"):
-        return _from_intent(intent, f.get("steps") or (), now_at)
+    steps = f.get("steps") or ()
+    restarting = _from_restarts(intent, steps, now_at)
+    if restarting:
+        return restarting
+    if _intent_is_active(intent):
+        return _from_intent(intent, steps, now_at)
+    return _from_scopes(f, fresh)
+
+
+def _from_scopes(f, fresh):
+    """A fresh character step, the member state, a fresh family step, then the job."""
     for scope in ("character", None, "family"):
         if scope is None:
             if f.get("member"):
@@ -665,6 +688,29 @@ def _live(member, f, fresh, now_at):
         if mine:
             return _from_step(mine[0])
     return _from_job(f.get("roster") or {})
+
+
+def _from_restarts(intent, steps, now_at):
+    """Doing, waiting, since for a walk that keeps restarting, or None."""
+    restarts = _restarts(steps, now_at)
+    if restarts < 3:
+        return None
+    if _intent_is_active(intent):
+        return _from_intent(intent, steps, now_at)
+    doing = _walk_from_steps(steps) or "Walking"
+    return doing, restart_words(restarts), _first_restart(steps, now_at)
+
+
+def _walk_from_steps(steps):
+    """The walk described by the newest 'took over' intent step, or ''."""
+    for s in steps:
+        if s.get("kind") == "intent":
+            doing = str(s.get("doing") or "")
+            if " took over: " in doing:
+                walk = doing.split(" took over: ", 1)[1]
+                out = reword(walk)
+                return out[:1].upper() + out[1:]
+    return ""
 
 
 def _detail_words(detail: str) -> str:
