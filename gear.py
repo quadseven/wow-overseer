@@ -1556,7 +1556,152 @@ def since_level_change(history, changed) -> list:
     return out
 
 
-def equips_to_queue(wanted, recent, tries, give_up=3) -> tuple:
+# WHAT THE WORLD SAYS WHEN IT WILL NOT PUT A PIECE ON. mod-overseer writes
+# `error` or `unchanged` with a `detail` saying why; `delivered` and `applied`
+# say nothing about a reason, so they keep the three-try rule.
+WORLD_REFUSALS = frozenset({"error", "unchanged"})
+
+# Equip.slot -> the bag 0 equipment slots a piece put on there would displace.
+# Both the item-level buckets and equipscore's groups, so a hold can see when
+# what is worn there has changed. A slot not here has no worn signature, and
+# only a level change or the piece leaving the bags lifts its hold.
+_EQUIPMENT_SLOTS = {
+    "head": (0,),
+    "neck": (1,),
+    "shoulder": (2,),
+    "chest": (4,),
+    "waist": (5,),
+    "legs": (6,),
+    "feet": (7,),
+    "wrist": (8,),
+    "hands": (9,),
+    "finger": (10, 11),
+    "trinket": (12, 13),
+    "back": (14,),
+    _MAIN_HAND: (15,),
+    _TWO_HAND: (15, 16),
+    _OFF_HAND: (16,),
+    _RANGED: (17,),
+}
+
+
+@dataclass
+class WorldHold:
+    """One answered equip row the queue is holding a piece on.
+
+    `worn` is what sat in the piece's slot when the hold began; `lifted` says
+    the hold is over for this row (that slot changed, or the piece left the
+    bags), so the same answer never holds the piece a second time.
+    """
+
+    row_id: int
+    worn: tuple
+    lifted: bool = False
+
+
+def latest_answers(history, open_statuses) -> dict:
+    """(holder, command) -> the newest row the world has answered.
+
+    `history` is oldest first, as `_equip_history` reads it; a row whose
+    status is still in `open_statuses` has not been answered yet.
+    """
+    out = {}
+    for row in history or ():
+        if str(row.get("status", "")) in open_statuses:
+            continue
+        out[(str(row.get("target_name", "")), str(row.get("command", "")))] = row
+    return out
+
+
+def worn_pieces(rows) -> dict:
+    """holder -> {equipment slot: (entry, name)} from worn rows carrying
+    holder, equipment_slot, entry and name. A row this cannot read is dropped."""
+    out: dict = {}
+    for row in rows or ():
+        try:
+            holder = str(row["holder"])
+            slot = int(row["equipment_slot"])
+            entry = int(row["entry"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.setdefault(holder, {})[slot] = (entry, str(row.get("name") or ""))
+    return out
+
+
+def _worn_for(equip, worn) -> tuple:
+    """What is worn where `equip` would go: ((slot, entry, name), ...)."""
+    pieces = (worn or {}).get(equip.holder, {})
+    return tuple(
+        (slot,) + tuple(pieces[slot])
+        for slot in _EQUIPMENT_SLOTS.get(equip.slot, ())
+        if slot in pieces
+    )
+
+
+def _refused(row) -> bool:
+    return (
+        row is not None
+        and str(row.get("status", "")) in WORLD_REFUSALS
+        and bool(str(row.get("detail") or "").strip())
+    )
+
+
+def _world_holds(wanted, answers, worn, holds, holders) -> dict:
+    """(holder, command) -> note, for each piece held on the world's answer.
+
+    `holds` is updated in place. A hold begins at the first pass that sees a
+    refusal row, with what is worn in that slot then, and lifts when that
+    changes or when the piece is no longer wanted from one of `holders` (it
+    left the bags). A level change lifts it before this is reached, because
+    `since_level_change` has already dropped the rows it answered.
+    """
+    keys = {(e.holder, e.command) for e in wanted}
+    for key in list(holds):
+        row = answers.get(key)
+        if row is None or int(row.get("id", 0)) != holds[key].row_id:
+            del holds[key]
+        elif key not in keys and key[0] in holders:
+            holds[key].lifted = True
+    out = {}
+    for equip in wanted:
+        key = (equip.holder, equip.command)
+        row = answers.get(key)
+        if not _refused(row):
+            holds.pop(key, None)
+            continue
+        now = _worn_for(equip, worn)
+        hold = holds.get(key)
+        if hold is None:
+            hold = holds[key] = WorldHold(row_id=int(row.get("id", 0)), worn=now)
+        elif hold.worn != now:
+            hold.lifted = True
+        if hold.lifted:
+            continue
+        out[key] = (
+            "%s keeps %s over %s: %s; held until its level or that slot changes"
+            % (
+                equip.holder,
+                " and ".join(name for _slot, _entry, name in now) or "nothing",
+                equip.name,
+                str(row.get("detail")).strip(),
+            )
+        )
+    return out
+
+
+def world_held(wanted, holds) -> int:
+    """How many of `wanted` are held on the world's answer this pass."""
+    return sum(
+        1
+        for e in wanted
+        if (e.holder, e.command) in (holds or {})
+        and not holds[(e.holder, e.command)].lifted
+    )
+
+
+def equips_to_queue(
+    wanted, recent, tries, give_up=3, answers=None, worn=None, holds=None, holders=None
+) -> tuple:
     """Which equips to write now, and a note for each one held back.
 
     `recent` is the (holder, command) pairs already written inside the retry
@@ -1569,11 +1714,27 @@ def equips_to_queue(wanted, recent, tries, give_up=3) -> tuple:
     on for a reason this side cannot see - combat, a proficiency the numbers
     do not show - so it is held and said, rather than asked for every window
     for ever.
+
+    A PIECE THE WORLD REFUSED WITH A REASON IS HELD ON THAT REASON (#897).
+    `answers` is the newest answered row per (holder, command), from
+    `latest_answers`; one that ended `error` or `unchanged` with a `detail`
+    holds the piece whatever the try count, until the holder's level, what
+    is worn in that slot (`worn`, from `worn_pieces`) or the bags change.
+    `holds` is the caller's dict of WorldHold, kept between passes and
+    updated in place; `holders` are the members this pass read, by default
+    the holders of `wanted`.
     """
+    holds = {} if holds is None else holds
+    if holders is None:
+        holders = {e.holder for e in wanted}
+    held = _world_holds(wanted, answers or {}, worn, holds, set(holders))
     queue, notes = [], []
     least = max(1, int(give_up))
     for equip in wanted:
         key = (equip.holder, equip.command)
+        if key in held:
+            notes.append(held[key])
+            continue
         if key in recent:
             continue
         if int(tries.get(key, 0)) >= least:

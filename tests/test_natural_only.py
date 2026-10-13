@@ -114,10 +114,11 @@ GRANT_VERBS = _grant_verbs()
 def _function_block(src: str, signature: str) -> str:
     """Return one def's body, stopping at the next def at the same indent."""
     start = src.index(signature)
-    # The text before the def on its own line, so indent is the def's column;
-    # a body line is deeper than that, which startswith(indent + 1) accepts.
-    indent = len(src[:start].rsplit("\n", 1)[-1])
     lines = src[start:].split("\n")
+    # Measure the leading spaces on the matched def line.  The body must be
+    # deeper than the def's actual indentation.
+    line_start = src.rfind("\n", 0, start) + 1
+    indent = len(src[line_start:start])
     out = [lines[0]]
     for line in lines[1:]:
         if line.strip() and not line.startswith(" " * (indent + 1)):
@@ -241,7 +242,11 @@ class BridgeWritesOnlyNaturalCommands(unittest.TestCase):
             '    sql = "INSERT INTO overseer_command (command) '
             "VALUES ('additem')\"\n"
         )
-        [(line_no, col, lit)] = _insert_command_values(src)
+        values = _insert_command_values(src)
+        self.assertEqual(
+            len(values), 1, f"expected one command literal, got {values!r}"
+        )
+        line_no, col, lit = values[0]
         self.assertEqual((col, lit), ("command", "additem"))
         self.assertFalse(_has_natural_only_marker(src, line_no))
 
