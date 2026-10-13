@@ -388,6 +388,13 @@ class NoSourceRepairBotIsNotStillToGather(unittest.TestCase):
             soft,
         )
 
+    def test_a_goal_row_without_a_name_does_not_kill_the_blockers(self):
+        goals = {"goals": [{"status": raidgoals.SHORT}]}
+        rows = _guild("Cave", 23, FULL)
+        card = _card(rows, [rows[0]["name"]], goals=goals)
+        soft = [b["text"] for b in card["blockers"] if b["tone"] == raidready.SOFT]
+        self.assertTrue(any("still to gather" in t for t in soft), soft)
+
     def test_another_no_source_goal_is_named_not_called_a_repair_bot(self):
         """The vendor sentence is about repairs. A goal without a source that
         is not the repair bot must not earn it, and must still be named."""
