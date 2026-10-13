@@ -717,15 +717,17 @@ class TheStep(unittest.TestCase):
         self.assertEqual(len(later), 1)
         self.assertNotIn("creature:3432", later[0].walk.command)
 
-    def test_a_use_given_up_is_a_help_in_the_plan(self):
+    def test_a_use_given_up_is_not_asked_for_and_yields(self):
+        # A party has no spawn to walk to for a use (classquest.objective_spot),
+        # so the plan asks guild chat for nothing and names the yield.
         b = taming()
         hunts = classquest.Hunts()
         hunts.give_up("Pokka", 6062, 10.0)
         result = class_plan([self.member()], b, hunts=hunts, now=20.0)
         self.assertEqual(class_steps(result), [])
-        self.assertEqual(
-            [h.move.blocker for h in result.helps], [classquest.USE_STALLED]
-        )
+        self.assertEqual(result.helps, ())
+        (line,) = [line for _key, line in result.ask_yields]
+        self.assertIn("does not ask for Taming the Beast", line)
 
 
 # --- what the world answered ------------------------------------------------------
