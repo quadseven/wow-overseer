@@ -20,7 +20,11 @@ the dungeon kind, so the two never touch each other's rows.
 WHO ASKS. A member whose class quests are all blocked on help (guildjobs.
 class_helps: a member with a quest it can do goes and does that first) and who
 is free. One open ask per member, MAX_OPEN_PER_GUILD in a guild, NEW_PER_PASS a
-pass, ASK_COOLDOWN_MINUTES before the same member asks again.
+pass, ASK_COOLDOWN_MINUTES before the same member asks again. A quest no party
+could walk to (a use that changed nothing) is never asked for, and one asked
+for guildjobs.CLASS_ASK_STREAK_MAX times in a row with no party is not asked
+for again until its hold runs out: both yield to levelling meanwhile
+(guildjobs.class_asking).
 
 WHO ANSWERS. A free member of the same guild, not already on an ask, within
 LEVEL_BAND levels of the asker, on its map (the open world's maps are
@@ -256,11 +260,10 @@ def _close(live, by_member, yes_by_ask, free, held, now, partied=frozenset()) ->
 
 
 def _full_note(ask, need, seats) -> str:
+    """The note on a full ask. Whether its party forms is classparty's to say:
+    it names every full ask it skips, and why (classparty.plan)."""
     if seats:
-        return "%s's %s ask is full; its party is formed next" % (
-            ask.asker,
-            need.move.title,
-        )
+        return "%s's %s ask is full" % (ask.asker, need.move.title)
     return (
         "%s's %s ask is full; this worldserver does not seat a party yet, so "
         "the group is not formed" % (ask.asker, need.move.title)

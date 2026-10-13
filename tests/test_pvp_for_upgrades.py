@@ -198,8 +198,9 @@ def aim(held=0, honor=5000):
     )
 
 
-def recent(age, status="delivered", action="pvp"):
-    return (guildjobs.Recent("Auren", action, age, status),)
+def recent(age, status="queued", action="pvp"):
+    command = "bg-queue av" if action == "pvp" else ""
+    return (guildjobs.Recent("Auren", action, age, status, command=command),)
 
 
 class WhenToStopAndBuy(unittest.TestCase):
@@ -228,14 +229,42 @@ class WhenToStopAndBuy(unittest.TestCase):
             pvpgear.WAITING, pvpgear.next_move(aim(), 0, False, recent(5)).kind
         )
 
-    def test_a_queue_that_failed_or_went_stale_is_asked_again(self):
+    def test_an_accepted_old_queue_stays_waiting_and_socially_held(self):
+        move = pvpgear.next_move(aim(), 0, False, recent(16, "already"))
+        self.assertEqual(pvpgear.WAITING, move.kind)
+        self.assertIn("move.kind in (pvpgear.INSIDE, pvpgear.WAITING)", BRIDGE)
+        self.assertIn(
+            '{n for n, held in getattr(self, "_pvp_held", {}).items() if held}', BRIDGE
+        )
+
+    def test_a_failed_queue_is_asked_again_but_an_old_accepted_queue_waits(self):
         self.assertEqual(
             pvpgear.QUEUE, pvpgear.next_move(aim(), 0, False, recent(5, "error")).kind
         )
         self.assertEqual(
-            pvpgear.QUEUE,
+            pvpgear.WAITING,
             pvpgear.next_move(aim(), 0, False, recent(pvpgear.QUEUE_MINUTES)).kind,
         )
+
+    def test_the_module_outcome_in_a_delivered_row_decides_the_wait(self):
+        def read(result):
+            row = {
+                "target_name": "Auren", "source": "guildjobs:pvp:Auren",
+                "command": "bg-queue wsg", "status": "delivered", "age": 16,
+                "result": result,
+            }  # fmt: skip
+            return guildjobs.recent_from_rows([row])
+
+        for outcome in ("queued", "already"):
+            rows = read('{"outcome":"%s","queued_for_this":true}' % outcome)
+            self.assertEqual(
+                pvpgear.WAITING, pvpgear.next_move(aim(), 0, False, rows).kind
+            )
+        for outcome in ("error", "unchanged"):
+            rows = read('{"outcome":"%s","reason":"no"}' % outcome)
+            self.assertEqual(
+                pvpgear.QUEUE, pvpgear.next_move(aim(), 0, False, rows).kind
+            )
 
 
 def job_member(**kw):

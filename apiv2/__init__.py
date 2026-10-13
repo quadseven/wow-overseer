@@ -12,6 +12,10 @@ file: no shared table to edit, and two endpoints written side by side never
 touch the same line. Two modules claiming one path is an error at import,
 not a silent override.
 
+A path may end in one `{id}` segment, `/api/v2/quests/{id}`: it answers a
+GET for any one segment there, handed to the handler as `query["id"]` (in
+place of any `?id=`). An exact path always wins over a template.
+
 Read-only, all of it: nothing under /api/v2 writes to the realm.
 """
 
@@ -40,10 +44,24 @@ def _collect() -> dict:
 
 ROUTES = _collect()
 
+ID_SEGMENT = "/{id}"
+
+
+def _templated(path: str):
+    """(handler, id) for a path a `{id}` route answers, or (None, "")."""
+    parent, _, tail = path.rpartition("/")
+    if not tail:
+        return None, ""
+    handler = ROUTES.get(parent + ID_SEGMENT)
+    return (handler, tail) if handler else (None, "")
+
 
 def handle(path: str, query: dict, ctx) -> tuple[int, dict]:
     """(status, payload) for one GET under /api/v2/."""
     handler = ROUTES.get(path)
     if handler is None:
-        return 404, {"error": "no such endpoint", "endpoints": sorted(ROUTES)}
+        handler, ident = _templated(path)
+        if handler is None:
+            return 404, {"error": "no such endpoint", "endpoints": sorted(ROUTES)}
+        query = {**query, "id": [ident]}
     return handler(query, ctx)

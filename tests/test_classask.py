@@ -8,6 +8,7 @@ creature, handed to the pass as a quest row.
 """
 
 import asyncio
+import dataclasses
 import datetime
 import pathlib
 import sys
@@ -33,6 +34,8 @@ from test_classquest import (  # noqa: E402
     qrow,
     who,
 )
+from test_classquest_use import WARLOCK, tome_book  # noqa: E402
+from test_classquest_use import who as use_who  # noqa: E402
 from test_guildsocial import NOW, ask, mate, yes  # noqa: E402
 from test_guildsocial_bridge import _Self, bridge, facts  # noqa: E402
 
@@ -350,12 +353,12 @@ class TheAnswer(unittest.TestCase):
         out = pass_(helps_of("Bigzug"), friends(), asks=[qask(1)], answers=said)
         self.assertEqual([r.member for r in out.replies], ["Dread"])
 
-    def test_a_full_ask_is_marked_filled_and_its_party_is_formed_next(self):
+    def test_a_full_ask_is_marked_filled_and_said_full(self):
         answers = [yes(1, 1, "Chill", "dps", "help"), yes(2, 1, "Dread", "dps", "help")]
         out = pass_(helps_of("Bigzug"), friends(), asks=[qask(1)], answers=answers)
         self.assertEqual(out.filled, (1,))
         self.assertEqual(out.replies, ())
-        self.assertTrue(any("party is formed" in n for n in out.notes))
+        self.assertIn("Bigzug's Group Job ask is full", out.notes)
 
     def test_a_full_ask_on_a_worldserver_with_no_party_verbs_says_so(self):
         answers = [yes(1, 1, "Chill", "dps", "help"), yes(2, 1, "Dread", "dps", "help")]
@@ -442,6 +445,158 @@ class TheEnd(unittest.TestCase):
             helps_of("Bigzug"), friends(), {"Bigzug": "offline"}, asks=[qask(1)]
         )
         self.assertEqual(out.cancel, (1,))
+
+
+def tome_warlock():
+    """A level 5 warlock beside the chest that holds The Stolen Tome."""
+    return use_who(
+        "Workwork",
+        class_id=WARLOCK,
+        race=1,
+        level=5,
+        map_id=0,
+        x=-8900.0,
+        y=-400.0,
+        quest_log={1598: 3},
+    )
+
+
+def done_ask(age, state=gs.EXPIRED, quest=2000, yeses=0, asker_="Bigzug"):
+    return guildjobs.QuestAsk(asker_, quest, state, age, yeses)
+
+
+class TheYield(unittest.TestCase):
+    def test_use_stalled_quest_is_not_asked_and_yields(self):
+        # A use that changed nothing at the chest has no spawn a party could
+        # walk to, so no ask is posted and the quest holds nobody back.
+        b = tome_book()
+        m = tome_warlock()
+        hunts = classquest.Hunts()
+        hunts.give_up(m.name, 1598, 100.0)
+        avoid, off = hunts.state(m.name, 160.0)
+        (move,) = classquest.helps(b, m, avoid, off)
+        self.assertEqual(move.blocker, classquest.USE_STALLED)
+        self.assertEqual(guildjobs.class_helps(m, b, hunts, 160.0), [])
+        result = class_plan([m], b=b, hunts=hunts, now=160.0)
+        self.assertEqual(result.helps, ())
+        self.assertNotIn(m.name, result.owed)
+        self.assertNotIn(m.name, result.released)
+        (line,) = [line for _key, line in result.ask_yields]
+        self.assertTrue(
+            line.startswith("class ask: Workwork does not ask for The Stolen Tome: ")
+        )
+        left = classquest.GIVE_UP_MINUTES - 1
+        self.assertIn("it levels for %d minute(s), then tries alone" % left, line)
+        mates_ = [mate(m.name, 5, 0, guild=m.guild, at=(m.x, m.y))]
+        self.assertEqual(pass_(result.helps, mates_).posts, ())
+
+    def test_three_asks_with_no_party_stop_the_next_for_the_hold(self):
+        b = group_book()
+        m = asker()
+        (h,) = guildjobs.class_helps(m, b)
+        self.assertEqual(h.move.quest, 2000)
+        asks = guildjobs.quest_asks_from_rows(
+            [
+                {
+                    "asker": "Bigzug",
+                    "target": "quest:2000",
+                    "state": st,
+                    "age": age,
+                    "yeses": n,
+                }
+                for st, age, n in (
+                    ("expired", 80, 1),
+                    ("cancelled", 55, 0),
+                    ("expired", 30, 2),
+                    ("open", 2, 0),
+                )
+            ]
+        )
+        self.assertEqual(guildjobs.class_helps(m, b, asks=asks), [])
+        result = class_plan([m], b=b, asks=asks)
+        self.assertEqual(result.helps, ())
+        self.assertNotIn("Bigzug", result.owed)
+        (line,) = [line for _key, line in result.ask_yields]
+        left = guildjobs.CLASS_STALL_HOLD_MINUTES - 30
+        self.assertEqual(
+            line,
+            "class ask: Bigzug stops asking for Group Job after 3 asks with no "
+            "party (3 yes); it levels for %d minute(s)" % left,
+        )
+        # Without the streak the quest is owed as before.
+        self.assertIn("Bigzug", class_plan([m], b=b).owed)
+
+    def test_the_hold_runs_out_from_the_newest_ask(self):
+        b = group_book()
+        hold = guildjobs.CLASS_STALL_HOLD_MINUTES
+        asks = [done_ask(hold + 60), done_ask(hold + 30), done_ask(hold)]
+        self.assertEqual(len(guildjobs.class_helps(asker(), b, asks=asks)), 1)
+
+    def test_an_ask_that_ran_resets_the_count(self):
+        b = group_book()
+        asks = [done_ask(90), done_ask(60), done_ask(40, gs.RAN), done_ask(20)]
+        self.assertEqual(len(guildjobs.class_helps(asker(), b, asks=asks)), 1)
+        self.assertEqual(guildjobs.class_ask_streak("Bigzug", 2000, asks)[:2], (0, 1))
+        asks.append(done_ask(10))
+        asks.append(done_ask(5))
+        self.assertEqual(guildjobs.class_helps(asker(), b, asks=asks), [])
+
+    def test_another_members_or_quests_asks_do_not_count(self):
+        b = group_book()
+        asks = [done_ask(60, quest=1), done_ask(50, asker_="Chill"), done_ask(40)]
+        self.assertEqual(len(guildjobs.class_helps(asker(), b, asks=asks)), 1)
+
+
+class TheSkippedParty(unittest.TestCase):
+    def test_a_full_ask_with_no_spot_is_named_not_formed_next(self):
+        b = group_book()
+        helps = helps_of("Bigzug", b=b)
+        filled = qask(1, state=gs.FILLED)
+        answers = [
+            yes(10, 1, "Chill", "dps", "help"),
+            yes(11, 1, "Dread", "dps", "help"),
+        ]
+        out = pass_(helps, friends(), asks=[filled], answers=answers)
+        self.assertTrue(any(n.endswith("Group Job ask is full") for n in out.notes))
+        self.assertFalse(any("formed next" in n for n in out.notes))
+        nowhere = [
+            dataclasses.replace(h, move=dataclasses.replace(h.move, spot=None))
+            for h in helps
+        ]
+        free = {mt.name: mt for mt in friends()}
+        starts, notes = classparty.plan(
+            [filled],
+            answers,
+            out,
+            nowhere,
+            free,
+            classparty.Board(),
+            NOW,
+            0.0,
+            classquest.build(quest_rows=[], giver_rows=[], spawn_rows=[], loot_rows=[]),
+        )
+        self.assertEqual(starts, ())
+        (note,) = notes
+        self.assertIn("Bigzug's Group Job ask is full and no party is formed", note)
+        self.assertIn("no spawn", note)
+
+    def test_a_full_ask_whose_failures_are_used_up_is_named(self):
+        helps = helps_of("Bigzug")
+        filled = qask(1, state=gs.FILLED)
+        answers = [
+            yes(10, 1, "Chill", "dps", "help"),
+            yes(11, 1, "Dread", "dps", "help"),
+        ]
+        out = pass_(helps, friends(), asks=[filled], answers=answers)
+        board = classparty.Board()
+        for _ in range(classparty.MAX_FAILURES):
+            board.fail(1)
+        free = {mt.name: mt for mt in friends()}
+        starts, notes = classparty.plan(
+            [filled], answers, out, helps, free, board, NOW, 0.0, group_book()
+        )
+        self.assertEqual(starts, ())
+        self.assertIn("failed %d times" % classparty.MAX_FAILURES, notes[0])
 
 
 class TheHold(unittest.TestCase):

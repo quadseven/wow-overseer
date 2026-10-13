@@ -67,7 +67,7 @@ import classask
 import classquest
 import guildroute
 import guildrun
-from guildsocial import LIVE_ASKS, PASSING, YES
+from guildsocial import FILLED, LIVE_ASKS, PASSING, YES
 
 SOURCE = "classask"
 UP, WALK, DISBAND = "party-up", "party-walk", "party-disband"
@@ -399,53 +399,126 @@ def plan_starts(asks, answers, quest_pass, helps, free, board, now, clock, book=
                  yeses it takes back are left alone
     helps        classquest.Help rows; free  name -> guildsocial.Mate
     board        the Board; clock  its monotonic now; now  the database's clock
+
+    It returns only the parties, as it always has; the bridge calls plan for
+    the skip notes as well.
     """
+    return plan(asks, answers, quest_pass, helps, free, board, now, clock, book)[0]
+
+
+def _skip_note(ask, need, why) -> str:
+    return "%s's %s ask is full and no party is formed for it: %s" % (
+        ask.asker,
+        need.move.title,
+        why,
+    )
+
+
+def _taken_why(ask, board, taken) -> str:
+    """Why the asker cannot lead a party for this ask now, "" when it can: it
+    is in another party, or this ask's failures are used up."""
+    if ask.asker in board.parties or ask.asker in taken:
+        return "%s is in another class quest party" % ask.asker
+    if board.exhausted(ask.id):
+        return "its party failed %d times and the ask is given up" % MAX_FAILURES
+    return ""
+
+
+def _asker_need(ask, ended, partied, free, by_member):
+    """The asker's classquest.Help when this ask is live, not ended, not yet
+    partied, its asker free and still on the ask's quest; None otherwise."""
+    if (
+        ask.state not in LIVE_ASKS
+        or ask.id in ended
+        or ask.id in partied
+        or ask.asker not in free
+    ):
+        return None
+    need = by_member.get(ask.asker)
+    if need is None or need.move.quest != classask.quest_of(ask):
+        return None
+    return need
+
+
+def _yes_by_ask(answers) -> dict:
+    """ask id -> its yes rows."""
+    out: dict = {}
+    for a in answers or ():
+        if a.state == YES:
+            out.setdefault(a.ask_id, []).append(a)
+    return out
+
+
+def _run(ask, need, standing, spot) -> PartyRun:
+    chosen = standing[:MAX_HELPERS]
+    return PartyRun(
+        ask.id,
+        ask.asker,
+        tuple(y.member for y in chosen),
+        need.move.quest,
+        need.move.title,
+        spot,
+        {y.member: y.id for y in chosen},
+        meeting=True,
+    )
+
+
+def _plan_ask(ask, need, board, taken, filled, yes_by_ask, gone, free, now, book):
+    """Return a party or a skip note for one live ask, if either is ready."""
+    why = _taken_why(ask, board, taken)
+    if why:
+        if ask.state == FILLED or ask.id in filled:
+            return None, _skip_note(ask, need, why)
+        return None, None
+    standing = _standing(ask, yes_by_ask, gone, free, taken)
+    if not _ready(ask, standing, now):
+        return None, None
+    spot = classquest.objective_spot(book, need.move, _at(free[ask.asker]))
+    if spot is None:
+        return None, _skip_note(
+            ask, need, "its objective has no spawn for a party to walk to"
+        )
+    return _run(ask, need, standing, spot), None
+
+
+def plan(asks, answers, quest_pass, helps, free, board, now, clock, book=None):
+    """(plan_starts' parties, notes): each note names a filled ask that gets no
+    party this pass and why (its asker is taken, its failures are used up, or
+    its objective has no spawn to walk to), so no full ask waits in silence.
+    The per-ask checks live in _asker_need, _plan_ask and _plan_asks so each
+    piece stays small enough to read on its own."""
     if not board.seats(clock):
-        return ()
+        return (), ()
     ended = {a for a, _who, _line in quest_pass.expire} | set(quest_pass.cancel)
-    gone = set(quest_pass.withdraw)
     by_member = {}
     for h in helps:
         by_member.setdefault(h.member, h)
-    yes_by_ask: dict = {}
-    for a in answers or ():
-        if a.state == YES:
-            yes_by_ask.setdefault(a.ask_id, []).append(a)
+    return _plan_asks(
+        asks, answers, quest_pass, ended, by_member, free, board, now, book
+    )
+
+
+def _plan_asks(asks, answers, quest_pass, ended, by_member, free, board, now, book):
+    """plan's walk over the quest asks in id order: (parties, skip notes)."""
+    gone = set(quest_pass.withdraw)
+    yes_by_ask = _yes_by_ask(answers)
     taken = set(board.names())
-    starts = []
+    partied = board.partied_asks()
+    filled = set(quest_pass.filled)
+    starts, notes = [], []
     for ask in sorted(classask.quest_asks(asks), key=lambda a: a.id):
-        if (
-            ask.state not in LIVE_ASKS
-            or ask.id in ended
-            or ask.asker in board.parties
-            or ask.asker in taken
-            or ask.asker not in free
-            or board.exhausted(ask.id)
-        ):
+        need = _asker_need(ask, ended, partied, free, by_member)
+        if need is None:
             continue
-        need = by_member.get(ask.asker)
-        if need is None or need.move.quest != classask.quest_of(ask):
-            continue
-        standing = _standing(ask, yes_by_ask, gone, free, taken)
-        if not _ready(ask, standing, now):
-            continue
-        spot = classquest.objective_spot(book, need.move, _at(free[ask.asker]))
-        if spot is None:
-            continue
-        chosen = standing[:MAX_HELPERS]
-        run = PartyRun(
-            ask.id,
-            ask.asker,
-            tuple(y.member for y in chosen),
-            need.move.quest,
-            need.move.title,
-            spot,
-            {y.member: y.id for y in chosen},
-            meeting=True,
+        run, note = _plan_ask(
+            ask, need, board, taken, filled, yes_by_ask, gone, free, now, book
         )
-        taken.update(run.names())
-        starts.append(run)
-    return tuple(starts)
+        if note:
+            notes.append(note)
+        if run:
+            taken.update(run.names())
+            starts.append(run)
+    return tuple(starts), tuple(notes)
 
 
 def too_far(run, stands) -> list:

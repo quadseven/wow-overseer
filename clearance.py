@@ -55,7 +55,9 @@ for a material either; `materials.py` owns hand-offs inside the family.
 A RECIPE THE DESIGNATED-CRAFTERS REGISTER PLACES (#248) skips the by-name
 search: `crafters.choose` has already picked the family member or designated
 guild crafter who learns it, skipping anyone who already knows it. A recipe
-it places with nobody goes on to KEEP, AUCTION or VENDOR as before.
+it places with nobody goes on to KEEP, AUCTION or VENDOR as before, except a
+raid recipe no vendor sells (raidsupply.DROP_RECIPES, #893), which is KEEP:
+it is never listed or sold.
 
 "CAN LEARN NOW", NOT "COULD REACH AT THIS LEVEL". #145 asked for the second.
 The operator's direction was the first: a recipe whose holder's skill is below
@@ -71,6 +73,7 @@ from dataclasses import dataclass
 
 import disposition
 import guildshare
+import raidsupply
 
 GEM_CLASS = 3
 RECIPE_CLASS = disposition.RECIPE_CLASS
@@ -277,6 +280,14 @@ def route(
                 frozenset((short or {}).get(stack.entry, ())),
             )
         return _material_route(stack, people, kept, market, auction_open, busy, vault)
+    return _item_route(stack, people, holder, kept, market, auction_open, busy, picks)
+
+
+def _item_route(
+    stack, people, holder, kept, market, auction_open, busy, picks
+) -> Route:
+    """A stack that is not a material: the register's pick, the holder, a
+    taker by name, then _unhanded_route."""
     pick = (picks or {}).get(stack.guid) if stack.recipe else None
     if pick is not None and pick.taker:
         return _picked(stack, pick, busy)
@@ -289,6 +300,22 @@ def route(
         handed = _handed(stack, people, busy) if pick is None else None
         if handed is not None:
             return handed
+    return _unhanded_route(stack, market, auction_open)
+
+
+def _unhanded_route(stack: Stack, market, auction_open: bool) -> Route:
+    """KEEP a raid recipe, else AUCTION, VENDOR or KEEP a stack nobody takes."""
+    if stack.recipe and int(stack.entry) in raidsupply.DROP_RECIPES:
+        # A RAID RECIPE NO VENDOR SELLS IS NEVER SOLD (#893): it waits for the
+        # guild's alchemist, however long, because a looted copy is the only
+        # road to the craft.
+        return Route(
+            stack,
+            KEEP,
+            why="%s is a raid recipe no vendor sells; it waits for the guild's "
+            "alchemist and is never sold" % stack.name,
+        )
+    if not stack.bound:
         listed = _listed(stack, market, auction_open)
         if listed is not None:
             return listed

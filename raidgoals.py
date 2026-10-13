@@ -119,16 +119,18 @@ OUT_OF_TIER = (
 
 # --- the statuses a goal can be in -----------------------------------------
 #
-# FOUR, AND THE FOURTH IS THE WHOLE POINT. "short" is an evening of farming.
+# FIVE, AND THE FIFTH IS THE WHOLE POINT. "short" is an evening of farming.
 # "unreachable" is nobody on the roster having the profession, which no amount
-# of farming changes, and a page that drew the two the same way would put a
-# repair bot on a shopping list forever. They are ordered worst first because
-# that is the order a reader wants them in.
+# of farming changes. "no source on this realm" is a recipe this realm does
+# not teach at all, so nobody on this realm can finish it. A page that drew
+# the three the same way would put a repair bot on a shopping list forever.
+# They are ordered worst first because that is the order a reader wants them in.
 UNREACHABLE = "unreachable"
+NO_SOURCE = "no source on this realm"
 BLOCKED = "blocked"
 SHORT = "short"
 MET = "met"
-STATUS_ORDER = (UNREACHABLE, BLOCKED, SHORT, MET)
+STATUS_ORDER = (UNREACHABLE, NO_SOURCE, BLOCKED, SHORT, MET)
 
 # --- where a reagent comes from, as this realm answers it -------------------
 VENDOR = "vendor"
@@ -165,13 +167,21 @@ class Recipe:
     ONE on purpose. See MAKES_ONE below.
     """
 
-    __slots__ = ("spell", "product", "trade", "reagents")
+    __slots__ = ("spell", "product", "trade", "reagents", "schematic")
 
-    def __init__(self, spell: int, product: str, trade: str, reagents: tuple = ()):
+    def __init__(
+        self,
+        spell: int,
+        product: str,
+        trade: str,
+        reagents: tuple = (),
+        schematic: int = 0,
+    ):
         self.spell = spell
         self.product = product
         self.trade = trade
         self.reagents = reagents
+        self.schematic = schematic
 
 
 # HOW MUCH ONE CAST MAKES IS NOT KNOWN HERE, AND THE FLOOR IS WHAT IS USED.
@@ -326,6 +336,7 @@ RECIPES = (
             Reagent("Living Essence"),
             Reagent("Essence of Undeath"),
         ),
+        schematic=18235,
     ),
 )
 
@@ -1135,6 +1146,18 @@ def _product_line(product: str, total: int, known_here: bool) -> str:
     return "%s: %d held" % (product, total)
 
 
+def _no_source_line(product: str, schematic: int) -> str:
+    """A recipe this realm does not teach, said by the source that is missing.
+
+    THE NUMBER ON THE GOAL IS KEPT, because a reader still wants to know how
+    many are held, but the headline is about the realm rather than the count.
+    """
+    return (
+        "%s: Schematic %d has no trainer, vendor or drop that teaches it "
+        "on this realm" % (product, schematic)
+    )
+
+
 def _supply_line(name: str, need: int, have: int, status: str) -> str:
     """The headline on a supply goal: the count first, then what it means.
 
@@ -1209,6 +1232,8 @@ def _chips(status: str, need: int, have: int, blockers: int) -> list:
     out = []
     if status == UNREACHABLE:
         out.append({"text": "no one can make it", "tone": "no"})
+    elif status == NO_SOURCE:
+        out.append({"text": "no source on this realm", "tone": "no"})
     elif status == MET:
         out.append({"text": "enough", "tone": "up"})
     elif status == BLOCKED:
@@ -1351,6 +1376,22 @@ def _repair_goal(
         skills_read,
     )
     status = _goal_status([card], short)
+    # THIS REALM DOES NOT TEACH THE REPAIR BOT. Schematic 18235 has no teach
+    # spell here and craft spell 22704 has no trainer row, so the goal is kept
+    # visible as "no source on this realm" rather than reading as short,
+    # unreachable, or met. If somebody already knows the craft, the goal is
+    # finishable regardless, so the no-source status does not apply.
+    # The status follows the realm reads (`ranks` holds every trainer rank and
+    # every item that teaches `recipe.spell`), and the line names the
+    # schematic the recipe carries; neither hard-codes 18235.
+    known_by_anyone = any(
+        recipe.spell in known.get(member["name"], ()) for member in members
+    )
+    if ranks.get(recipe.spell) is None and not known_by_anyone:
+        status = NO_SOURCE
+    line = _supply_line(recipe.product, need, have, status)
+    if status == NO_SOURCE:
+        line = _no_source_line(recipe.product, recipe.schematic)
     return {
         "key": "repair",
         "name": "A repair bot for the raid",
@@ -1360,7 +1401,7 @@ def _repair_goal(
         "held": have,
         "short": short,
         "per_member": 0,
-        "line": _supply_line(recipe.product, need, have, status),
+        "line": line,
         "need_line": (
             "one per raid night rather than one each: a bot serves "
             "whoever stands near it. That it is one and not one "
@@ -1426,15 +1467,17 @@ def _headline(goals: list, members: list) -> str:
             "to count consumables against"
         )
     unreachable = len([g for g in goals if g["status"] == UNREACHABLE])
+    no_source = len([g for g in goals if g["status"] == NO_SOURCE])
+    cannot_finish = unreachable + no_source
     met = len([g for g in goals if g["status"] == MET])
     line = "%d of %s met toward Molten Core" % (
         met,
         _count(len(goals), "goal", "goals"),
     )
-    if unreachable:
+    if cannot_finish:
         return "%s, and %s cannot be finished by this roster at all" % (
             line,
-            "one of them" if unreachable == 1 else "%d of them" % unreachable,
+            "one of them" if cannot_finish == 1 else "%d of them" % cannot_finish,
         )
     return line
 
@@ -1448,13 +1491,14 @@ def _strip(goals: list, members: list) -> list:
     """
 
     def many(status):
-        return str(len([g for g in goals if g["status"] == status]))
+        return len([g for g in goals if g["status"] == status])
 
+    cannot_finish = many(UNREACHABLE) + many(NO_SOURCE)
     return [
         {"label": "members counted", "value": str(len(members)), "tone": ""},
-        {"label": "goals met", "value": many(MET), "tone": "up"},
-        {"label": "goals short", "value": many(SHORT), "tone": "unsure"},
-        {"label": "cannot be finished", "value": many(UNREACHABLE), "tone": "no"},
+        {"label": "goals met", "value": str(many(MET)), "tone": "up"},
+        {"label": "goals short", "value": str(many(SHORT)), "tone": "unsure"},
+        {"label": "cannot be finished", "value": str(cannot_finish), "tone": "no"},
     ]
 
 
