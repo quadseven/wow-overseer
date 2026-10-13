@@ -155,6 +155,23 @@ class CatalogTests(unittest.TestCase):
         missing = sorted(p for p in served if f"## `GET {p}`" not in text)
         self.assertEqual(missing, [], "run python3 tools/gen_api_doc.py")
 
+    def test_a_wrapped_first_sentence_is_read_whole(self):
+        doc = """GET /api/x?name=X - the bank and its seven bag slots, a
+        kept set saying why it is kept (#320). More after.
+
+        Body."""
+        self.assertEqual(
+            gen_api_doc._split(doc),
+            (
+                ["name"],
+                "the bank and its seven bag slots, a kept set saying why it is kept.",
+            ),
+        )
+
+    def test_roster_and_stuck_answer_different_questions(self):
+        summary = {e["path"]: e["summary"] for e in gen_api_doc.entries()}
+        self.assertNotEqual(summary["/api/v2/roster"], summary["/api/v2/stuck"])
+
     def test_doc_is_current(self):
         self.assertEqual(
             gen_api_doc.main(["--check"]), 0, "run python3 tools/gen_api_doc.py"

@@ -41,13 +41,13 @@ Each entry: path, query parameters, what it answers, one example.
 ## `GET /api/client/bags`
 
 - Query: `name`
-- Answers: the backpack and the four bags, each
+- Answers: the backpack and the four bags, each stack the bank policy files carrying where it goes and why.
 - Example: `overseer get /api/client/bags name=Grug`
 
 ## `GET /api/client/bank`
 
 - Query: `name`
-- Answers: the bank and its seven bag slots, a
+- Answers: the bank and its seven bag slots, a kept set saying why it is kept.
 - Example: `overseer get /api/client/bank name=Grug`
 
 ## `GET /api/client/guildbank`
@@ -59,7 +59,7 @@ Each entry: path, query parameters, what it answers, one example.
 ## `GET /api/client/quests`
 
 - Query: `name`
-- Answers: one character's quest log, for the
+- Answers: one character's quest log, for the frame.
 - Example: `overseer get /api/client/quests name=Grug`
 
 ## `GET /api/council`
@@ -179,7 +179,7 @@ Each entry: path, query parameters, what it answers, one example.
 ## `GET /api/recap`
 
 - Query: `map`
-- Answers: what is happening in there right now, and
+- Answers: what is happening in there right now, and what can drop where.
 - Example: `overseer get /api/recap map=1`
 
 ## `GET /api/runtimeline`
@@ -269,7 +269,7 @@ Each entry: path, query parameters, what it answers, one example.
 ## `GET /api/v2/roster`
 
 - Query: none
-- Answers: every family-guild member, and who is stuck.
+- Answers: every family-guild member, what each is doing, and who is stuck.
 - Example: `overseer get /api/v2/roster`
 
 ## `GET /api/v2/run`
@@ -299,7 +299,7 @@ Each entry: path, query parameters, what it answers, one example.
 ## `GET /api/v2/stuck`
 
 - Query: none
-- Answers: every family-guild member, and who is stuck.
+- Answers: the stuck members only, longest stuck first.
 - Example: `overseer get /api/v2/stuck`
 
 ## `GET /api/v2/training`

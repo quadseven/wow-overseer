@@ -53,8 +53,13 @@ PLACEHOLDER = {
 
 
 def _split(doc: str) -> tuple[list[str], str]:
-    """(parameter names, summary) from a docstring's first line."""
-    first = (doc or "").strip().split("\n", 1)[0]
+    """(parameter names, summary) from a docstring's first sentence. A
+    sentence that wraps onto the next line is read whole, not cut at the
+    line end; issue references like "(#320)" are dropped."""
+    para = (doc or "").strip().split("\n\n", 1)[0]
+    first = " ".join(line.strip() for line in para.splitlines())
+    first = re.split(r"(?<=\.)\s", first, maxsplit=1)[0]
+    first = re.sub(r"\s*\(#\d+\)", "", first)
     first = re.sub(r"^GET\s+", "", first)
     head, summary = first, ""
     m = re.search(r"(?::\s|\s-\s)", first)
@@ -82,7 +87,12 @@ def entries() -> list[dict]:
             {"path": path, "params": params, "summary": summary or STATIC.get(path, "")}
         )
     for path, handler in apiv2.ROUTES.items():
-        params, summary = _split(_module_doc(handler))
+        # A handler that says what it answers is read over its module's
+        # docstring: one module may serve two routes (roster and stuck).
+        own = (handler.__doc__ or "").strip()
+        params, summary = _split(
+            own if own.startswith("GET ") else _module_doc(handler)
+        )
         params = list(dict.fromkeys(params + EXTRA_PARAMS.get(path, [])))
         out.append({"path": path, "params": params, "summary": summary})
     return sorted(out, key=lambda e: e["path"])
