@@ -15,6 +15,7 @@ import datetime
 from dataclasses import replace
 import pathlib
 import unittest
+from unittest import mock
 
 import guildrun
 import jev
@@ -236,6 +237,96 @@ class OnlyAMemberWhoCanGoIsPicked(unittest.TestCase):
             ),
             {"Eazoth"},
         )
+
+    def test_queue_refusal_has_longer_bench_but_combat_still_expires(self):
+        queue_why = "'Auren' is waiting in a battleground queue"
+        combat_why = "'Auren' is in combat"
+        self.assertEqual(
+            {"Auren"},
+            guildrun.benched(
+                [
+                    {"outcome": "refused", "why": queue_why, "age_minutes": 16},
+                    {"outcome": "refused", "why": combat_why, "age_minutes": 1},
+                ]
+            ),
+        )
+        self.assertEqual(
+            set(),
+            guildrun.benched(
+                [
+                    {"outcome": "refused", "why": queue_why, "age_minutes": 60},
+                ]
+            ),
+        )
+
+    def test_a_refusal_with_no_age_reads_as_fresh(self):
+        why = "'Auren' is waiting in a battleground queue"
+        self.assertEqual(
+            {"Auren"},
+            guildrun.benched([{"outcome": "refused", "why": why, "age_minutes": None}]),
+        )
+
+    def test_the_bridge_reads_each_refusals_age_over_the_queue_window(self):
+        from test_guildsocial_bridge import bridge
+
+        ran = []
+        refusals = [
+            {
+                "outcome": "refused",
+                "why": "'Auren' is waiting in a battleground queue",
+                "age": 30,
+            },
+            {"outcome": "refused", "why": "'Bo' is in combat", "age": 30},
+        ]
+
+        class Cursor:
+            rows = []
+
+            def execute(self, sql, args=()):
+                ran.append((sql, tuple(args)))
+                self.rows = []
+                if sql.startswith("SELECT outcome, why"):
+                    # Only a column the SELECT names comes back on the row.
+                    self.rows = [
+                        {
+                            "outcome": r["outcome"],
+                            "why": r["why"],
+                            **(
+                                {"age_minutes": r["age"]}
+                                if "AS age_minutes" in sql
+                                else {}
+                            ),
+                        }
+                        for r in refusals
+                    ]
+
+            def fetchall(self):
+                return self.rows
+
+            def fetchone(self):
+                return {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        class Conn:
+            def cursor(self):
+                return Cursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with mock.patch.object(bridge, "_connect", Conn):
+            facts = bridge._fetch_guild_run_facts(guildrun.limits({}))
+        self.assertEqual({"Auren"}, facts["benched"])
+        bench_args = [args for sql, args in ran if "AS age_minutes" in sql]
+        self.assertEqual([(guildrun.QUEUE_BENCH_MINUTES,)], bench_args)
 
     def test_a_refusal_over_one_member_is_formed_again_at_once(self):
         refused = {"state": "ended", "outcome": "refused", "why": "'Eazoth' is dead"}
@@ -778,6 +869,90 @@ class TheDoorsThatFit(unittest.TestCase):
     def test_the_band_is_the_average_level(self):
         self.assertEqual(guildrun.band_of([13, 14, 15, 15, 16]), "10-14")
         self.assertEqual(guildrun.band_of([15, 15, 16, 16, 16]), "15-19")
+
+
+SPIRE_RECIPE = "Recipe: Greater Fire Protection Potion"
+FLASK_RECIPE = "Recipe: Flask of Supreme Power"
+# Blackrock Spire's map and Scholomance's (#893).
+SPIRE_MAP, SCHOLOMANCE_MAP = 229, 289
+
+
+class AGuildGoesForARaidRecipeNobodyKnows(unittest.TestCase):
+    """#893: nobody in either guild holds Recipe 13494 (Blackrock Spire) or a
+    flask recipe, and the level fit alone never sent a group for one."""
+
+    def first(self, levels, recipes=None):
+        doors = guildrun.fitting_doors(levels, DOORS, "Alliance", recipes=recipes)
+        return doors[0].keyword
+
+    def test_fitting_doors_prefers_a_door_dropping_a_raid_recipe_nobody_knows(self):
+        # A group averaging 56 sits on Blackrock Depths' middle and 1.5 levels
+        # from the Spire's.
+        self.assertEqual(self.first([56] * 5), "blackrock-depths")
+        recipes = {SPIRE_MAP: (SPIRE_RECIPE,)}
+        self.assertEqual(self.first([56] * 5, recipes), "lower-blackrock-spire")
+
+    def test_below_fifty_two_the_level_fit_stands(self):
+        # Sunken Temple (50 to 60) fits a group of 51; a recipe behind it
+        # does not move a group under RAID_RECIPE_LEVEL.
+        recipes = {109: (SPIRE_RECIPE,)}
+        self.assertEqual(self.first([51] * 5), self.first([51] * 5, recipes))
+
+    def test_a_door_past_the_slack_does_not_win(self):
+        # At 53 the Sunken Temple is 2 levels from its middle, Blackrock
+        # Depths 3 and Zul'Farrak 8: the Depths is within RECIPE_FIT_SLACK of
+        # the best fit and goes first for a recipe, Zul'Farrak is not.
+        self.assertEqual(self.first([53] * 5), "sunken-temple")
+        self.assertEqual(
+            self.first([53] * 5, {230: (SPIRE_RECIPE,)}), "blackrock-depths"
+        )
+        self.assertEqual(self.first([53] * 5, {209: (SPIRE_RECIPE,)}), "sunken-temple")
+
+    def test_the_recipes_nobody_knows_are_read_off_the_drops(self):
+        rows = [
+            {"item": 13494, "item_name": SPIRE_RECIPE, "map_id": SPIRE_MAP},
+            {"item": 13519, "item_name": "Recipe: Flask of the Titans", "map_id": 229},
+            {"item": 13521, "item_name": FLASK_RECIPE, "map_id": SCHOLOMANCE_MAP},
+            # A world drop, and a vendor recipe: neither is a door's.
+            {"item": 13491, "item_name": "Recipe: Elixir", "map_id": 1},
+            {"item": 13501, "item_name": "Recipe: Major Mana", "map_id": 289},
+        ]
+        found = guildrun.unknown_recipes(rows)
+        self.assertEqual(
+            found,
+            {
+                SPIRE_MAP: (SPIRE_RECIPE, "Recipe: Flask of the Titans"),
+                SCHOLOMANCE_MAP: (FLASK_RECIPE,),
+            },
+        )
+        # A guild with an alchemist who knows the fire potion is sent for the
+        # flask that drops on the same map instead.
+        known = guildrun.known_by_guild([{"guild": "Cave", "spell": 17574}])
+        self.assertEqual(known, {"Cave": {17574}})
+        found = guildrun.unknown_recipes(rows, known["Cave"])
+        self.assertEqual(found[SPIRE_MAP], ("Recipe: Flask of the Titans",))
+
+    def test_the_pick_names_the_recipe(self):
+        def high(name, class_id, **kw):
+            return member(name, 56, class_id, race=1, **kw)
+
+        band = [
+            high("Tanky", WARRIOR, talent_spells=PROTECTION_TALENT),
+            high("Healy", PRIEST, talent_spells=HOLY_TALENT),
+            high("Rogue", ROGUE),
+            high("Mage", MAGE),
+            high("Lock", WARLOCK),
+        ]
+        pool = guildrun.Pool("Cave", tuple(band))
+        p = guildrun.plan_for(pool, DOORS, {}, {SPIRE_MAP: (SPIRE_RECIPE,)})
+        keyword, why = guildrun.heuristic_door(p, p.options[0])
+        self.assertEqual(keyword, "lower-blackrock-spire")
+        self.assertEqual(why, "for %s (nobody knows it)" % SPIRE_RECIPE)
+        criteria = guildrun.questions(p)["dungeon"]
+        self.assertIn(SPIRE_RECIPE, str(criteria))
+
+    # The bridge's read of these recipes and its hand-off to the social pass
+    # are driven for real in test_guildsocial_bridge.TheRaidRecipes.
 
 
 class TheCompositions(unittest.TestCase):

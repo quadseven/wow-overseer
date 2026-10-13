@@ -14,6 +14,7 @@ import types
 import pathlib
 import unittest
 from dataclasses import replace
+from unittest.mock import patch
 
 import guildrun
 import guildsocial as gs
@@ -898,6 +899,46 @@ class TheDoorsRecordGatesTheAsk(unittest.TestCase):
         )
         post = [p for p in out.posts if p.asker == "Auren"][0]
         self.assertEqual([o.door.keyword for o in post.options], ["shadowfang"])
+
+    def recipe_ask(self, recipes=None):
+        temple = gs.Need("Auren", "sunken-temple", "Ring", entry=4, gain=9.0)
+        spire = gs.Need("Auren", "lower-blackrock-spire", "Belt", entry=5, gain=3.0)
+        out = plan(
+            [mate("Auren", 56, ROGUE)],
+            needs={"Auren": [temple, spire]},
+            records=guildrun.shape_records([], NOW),
+            recipes=recipes,
+        )
+        return [p for p in out.posts if p.asker == "Auren"][0]
+
+    def test_a_raid_recipe_nobody_knows_is_asked_for_first(self):
+        # #893: level order asks for the Sunken Temple; a door dropping a raid
+        # recipe nobody in the guild knows, within the slack, goes first and
+        # the ask's reason names it. The Temple is still offered beside it.
+        self.assertEqual(self.recipe_ask().target, "sunken-temple")
+        recipe = "Recipe: Greater Fire Protection Potion"
+        post = self.recipe_ask({"Cave": {229: (recipe,)}})
+        self.assertEqual(post.target, "lower-blackrock-spire")
+        self.assertEqual(post.reason, "for %s (nobody knows it)" % recipe)
+        self.assertEqual(
+            [o.door.keyword for o in post.options],
+            ["lower-blackrock-spire", "sunken-temple"],
+        )
+        self.assertIn(recipe, gs.door_criteria(post)["lower-blackrock-spire"])
+        # Another guild's gap does not move Cave's ask.
+        other = self.recipe_ask({"Bonkers": {229: (recipe,)}})
+        self.assertEqual(other.target, "sunken-temple")
+
+    def test_a_recipe_door_outside_the_options_is_ignored(self):
+        spire = next(d for d in DOORS if d.keyword == "lower-blackrock-spire")
+        temple = next(d for d in DOORS if d.keyword == "sunken-temple")
+        recipe = "Recipe: Greater Fire Protection Potion"
+        board = types.SimpleNamespace(recipes={"Cave": {temple.map_id: (recipe,)}})
+        member = types.SimpleNamespace(level=56)
+        need = gs.Need("Auren", spire.keyword, "Belt", entry=5, gain=3.0)
+        option = gs.DoorOption(need, spire, guildrun.NO_SHAPE_RECORD)
+        with patch.object(guildrun, "fitting_doors", return_value=[temple]):
+            self.assertIsNone(gs._recipe_option(board, member, "Cave", "", [option]))
 
     def test_a_healthy_door_still_wins_over_a_failing_better_need(self):
         rows = [ended("deadmines", "wiped")] * guildrun.FAILING_RUNS

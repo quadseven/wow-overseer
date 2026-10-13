@@ -497,6 +497,16 @@ SUPPLY_BY_ENTRY = {s.entry: s for s in SUPPLIES}
 # The fire potion lines; the night wants one of them, and the fire gear after it.
 FIRE_POTIONS = frozenset({GREATER_FIRE_PROTECTION, FIRE_PROTECTION})
 
+# THE RAID RECIPES NO VENDOR SELLS (#893): recipe item -> the craft spell it
+# teaches, in the night's order (the fire potion first). A looted copy is the
+# only road to each craft, so guildrun sends a 52-and-up group toward a door
+# that drops one nobody in its guild knows, and clearance never sells one.
+DROP_RECIPES = {
+    s.make.recipe_item: s.make.spell
+    for s in SUPPLIES
+    if s.make and s.make.recipe_item and not s.make.recipe_price
+}
+
 # ---------------------------------------------------------------------------
 # FIRE RESISTANCE, PER ROLE. The Ragnaros tank first, as classic guilds asked
 # (raidgoals' own range tops out at the same 200); other tanks next, because

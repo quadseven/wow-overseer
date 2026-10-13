@@ -832,6 +832,9 @@ class DoorOption:
     need: Need
     door: object  # guildrun.Door
     record: guildrun.ShapeRecord = guildrun.NO_SHAPE_RECORD
+    # A raid recipe nobody in the guild knows that drops here, the reason the
+    # ask names when it is (guildrun.door_recipe, #893); "" otherwise.
+    recipe: str = ""
 
 
 @dataclass(frozen=True)
@@ -1062,6 +1065,8 @@ class _Board:
     # Family members lent while their family is idle (familyseat.py, #784):
     # they answer for a tank or healer seat only and never ask.
     lent: set = field(default_factory=set)
+    # guild -> guildrun.unknown_recipes: the raid recipes nobody knows (#893).
+    recipes: dict = field(default_factory=dict)
 
     @property
     def free(self) -> dict:
@@ -1086,6 +1091,7 @@ def _board(
     records=None,
     cleared=None,
     lent=None,
+    recipes=None,
 ) -> _Board:
     by_ask: dict = {}
     for answer in answers:
@@ -1106,6 +1112,7 @@ def _board(
         records=dict(records or {}),
         cleared=set(cleared or ()),
         lent=set(lent or ()),
+        recipes=dict(recipes or {}),
     )
 
 
@@ -1305,10 +1312,35 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
     stopped Cave asking for anything at levels 15 to 19. Cleared ranks last
     because guilds clear dungeons in level order: Jev, offered Ragefire beside
     Wailing Caverns, kept sending Bonkers back to the Ragefire it had cleared.
+
+    A RAID RECIPE NOBODY IN THE GUILD KNOWS GOES FIRST (#893). From
+    guildrun.RAID_RECIPE_LEVEL up, a door in the tier that drops one and fits
+    the asker within guildrun.RECIPE_FIT_SLACK levels of the best fit is asked
+    for ahead of the level order, which is still offered beside it.
     """
     faction = board.factions.get(guild, "")
     band = guildrun.band_of([mate.member.level])
     shape = ask_shape(board, mate, guild)
+    options, done = _tiered_options(board, name, mate, guild, asked, band, shape)
+    recipe_option = _recipe_option(board, mate.member, guild, faction, options)
+    # LEVEL ORDER WITHIN A TIER: of the doors a guild has not cleared, only the
+    # lowest is offered, so Jev cannot skip ahead (it chose Shadowfang Keep for
+    # Cave over the Deadmines it had never cleared). Cleared doors keep them all.
+    if options and options is not done:
+        lowest = min(o.door.floor for o in options)
+        options = [o for o in options if o.door.floor == lowest]
+    options = _recipe_first(recipe_option, options)
+    if not options:
+        return None
+    return (options[0].need.rank, name, mate, tuple(options), band, shape)
+
+
+def _tiered_options(
+    board: _Board, name: str, mate: Mate, guild: str, asked: set, band, shape
+):
+    """(options, done): the first tier of DoorOptions that has any, and the
+    cleared tier, as _asker_choice describes them."""
+    faction = board.factions.get(guild, "")
     guildmates = _free_guildmates(board, guild)
     options, failing, done, seen = [], [], [], set()
     for need in board.needs.get(name, []):
@@ -1328,16 +1360,33 @@ def _asker_choice(board: _Board, name: str, mate: Mate, guild: str, asked: set):
             failing.append(option)
         else:
             options.append(option)
-    options = options or failing or done
-    # LEVEL ORDER WITHIN A TIER: of the doors a guild has not cleared, only the
-    # lowest is offered, so Jev cannot skip ahead (it chose Shadowfang Keep for
-    # Cave over the Deadmines it had never cleared). Cleared doors keep them all.
-    if options and options is not done:
-        lowest = min(o.door.floor for o in options)
-        options = [o for o in options if o.door.floor == lowest]
-    if not options:
+    return options or failing or done, done
+
+
+def _recipe_first(recipe_option, options: list) -> list:
+    """`options` with the raid-recipe option, when there is one, put first."""
+    if recipe_option is None:
+        return options
+    return [recipe_option] + [
+        o for o in options if o.door.keyword != recipe_option.door.keyword
+    ]
+
+
+def _recipe_option(board: _Board, member, guild: str, faction: str, options: list):
+    """The option whose door guildrun.fitting_doors puts first for a raid
+    recipe nobody in the guild knows, with that recipe named; else None."""
+    recipes = board.recipes.get(guild)
+    if not recipes or not options:
         return None
-    return (options[0].need.rank, name, mate, tuple(options), band, shape)
+    levels = [member.level]
+    order = guildrun.fitting_doors(
+        levels, [o.door for o in options], faction, recipes=recipes
+    )
+    recipe = guildrun.door_recipe(order[0], recipes, levels) if order else ""
+    if not recipe:
+        return None
+    option = next((o for o in options if o.door.keyword == order[0].keyword), None)
+    return replace(option, recipe=recipe) if option is not None else None
 
 
 def _post(
@@ -1368,7 +1417,9 @@ def asking_for(post: Post, option: DoorOption) -> Post:
         post,
         target=door.keyword,
         target_label=door.place[:96],
-        reason=ask_reason(need),
+        reason=(
+            guildrun.recipe_words(option.recipe) if option.recipe else ask_reason(need)
+        ),
         said=ask_line(post.asker, door, list(roles_of(post.roles_needed)), need),
     )
 
@@ -1391,6 +1442,10 @@ def door_criteria(post: Post) -> dict:
     for option in post.options:
         door, need = option.door, option.need
         gain = ask_reason(need) or "experience at this level"
+        if option.recipe:
+            gain += "; it drops %s, a raid recipe nobody in the guild knows" % (
+                option.recipe
+            )
         out[door.keyword] = (
             "%s, for levels %d to %d; the asker would gain %s; record for groups "
             "of shape %s at band %s: %s"
@@ -1584,6 +1639,7 @@ def plan_pass(
     records=None,
     cleared=None,
     lent=(),
+    recipes=None,
 ) -> Pass:
     """One pass of the social layer.
 
@@ -1602,12 +1658,24 @@ def plan_pass(
     lent      family members free to a tank or healer seat while their
               family is idle (familyseat.lendable): they answer for those
               seats only and never ask
+    recipes   guild -> guildrun.unknown_recipes: from guildrun.RAID_RECIPE_LEVEL
+              up, an asker asks first for a door dropping one (#893)
 
     In order: asks that end now close, a full ask forms, the asks still short
     draw yeses, and members with a need ask.
     """
     board = _board(
-        mates, held, answers, needs, all_doors, entrances, now, records, cleared, lent
+        mates,
+        held,
+        answers,
+        needs,
+        all_doors,
+        entrances,
+        now,
+        records,
+        cleared,
+        lent,
+        recipes,
     )
     live = [a for a in asks if a.state in LIVE_ASKS and a.kind == KIND_DUNGEON]
     expire, cancel, withdraw, still = _close(board, live)
