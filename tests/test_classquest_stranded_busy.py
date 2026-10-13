@@ -40,7 +40,7 @@ class TheCampaignDoorRead(unittest.TestCase):
         )[0]
         guarded = body.split("_guild_campaign_door, cohort", 1)[0]
         self.assertIn("try:", guarded.rsplit("\n", 2)[-2])
-        self.assertIn("except Exception:", body)
+        self.assertIn("except pymysql.err.MySQLError:", body)
         self.assertIn("no summoner goes on call this pass", body)
 
 

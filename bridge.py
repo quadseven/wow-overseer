@@ -15030,7 +15030,7 @@ class Bridge(discord.Client):
             # today's spread of doors rather than falling for every guild.
             try:
                 campaign_door = await asyncio.to_thread(_guild_campaign_door, cohort)
-            except Exception:
+            except pymysql.err.MySQLError:
                 log.exception("guild jobs: the campaign door could not be read; "
                               "no summoner goes on call this pass")
         doors = (guildjobs.assign_doors(
