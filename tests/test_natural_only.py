@@ -117,7 +117,8 @@ def _function_block(src: str, signature: str) -> str:
     lines = src[start:].split("\n")
     # Measure the leading spaces on the matched def line.  The body must be
     # deeper than the def's actual indentation.
-    indent = len(lines[0]) - len(lines[0].lstrip(" "))
+    line_start = src.rfind("\n", 0, start) + 1
+    indent = len(src[line_start:start])
     out = [lines[0]]
     for line in lines[1:]:
         if line.strip() and not line.startswith(" " * (indent + 1)):
@@ -242,7 +243,9 @@ class BridgeWritesOnlyNaturalCommands(unittest.TestCase):
             "VALUES ('additem')\"\n"
         )
         values = _insert_command_values(src)
-        self.assertEqual(len(values), 1, f"expected one command literal, got {values!r}")
+        self.assertEqual(
+            len(values), 1, f"expected one command literal, got {values!r}"
+        )
         line_no, col, lit = values[0]
         self.assertEqual((col, lit), ("command", "additem"))
         self.assertFalse(_has_natural_only_marker(src, line_no))
