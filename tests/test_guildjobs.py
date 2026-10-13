@@ -1027,6 +1027,14 @@ class Summoners(unittest.TestCase):
         self.assertIsNone(only_step(released, "A"))
         self.assertIn("farms near the meeting stone", released.lines["A"])
 
+    def test_on_call_without_a_stone_names_no_stone(self):
+        w = self.warlock("A", level=21)
+        doors = {"A": guildjobs.Door("ragefire", "Ragefire Chasm", 13, 21, None, True)}
+        result = plan([w], doors=doors)
+        self.assertIsNone(only_step(result, "A"))
+        self.assertTrue(result.lines["A"].startswith("waits on call for"))
+        self.assertNotIn("meeting stone", result.lines["A"])
+
     def test_a_warlock_with_the_ritual_walks_to_its_stone_to_farm(self):
         w = self.warlock("A")
         doors = guildjobs.assign_doors([w], guildjobs.entrances(), self.stones)

@@ -2578,7 +2578,11 @@ def _summoner_step(m, doors, pending, crafters, master, kept, recent, cap):
 
 def _on_call_step(m, door, recent, cap, shards):
     """Return the stand or wait step for the summoner assigned to campaign duty."""
-    if door.stone is not None and not _near(m, door.stone, ON_CALL_REACH):
+    # assign_doors only puts a summoner on call at a door with a stone, but a
+    # Door's stone is optional: without one there is no stone to name.
+    if door.stone is None:
+        return None, "waits on call for %s%s" % (door.place, shards), ""
+    if not _near(m, door.stone, ON_CALL_REACH):
         if not _cooling(m, "door", recent):
             said = "%s waits on call at the meeting stone at %s" % (
                 m.name,
