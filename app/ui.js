@@ -123,6 +123,12 @@ export function iconUrl(icon) {
   return ICON_HOST + String(icon).toLowerCase().replace(/[^a-z0-9_-]/g, "") + ".jpg";
 }
 
+// The WotLK item page on Wowhead. Every item name links here; the tooltip
+// draws its own lines from our tables and never loads Wowhead's script.
+export function wowheadItemUrl(entry) {
+  return "https://www.wowhead.com/wotlk/item=" + Number(entry || 0);
+}
+
 // An item: icon with a quality ring and the quality-coloured name. Hover or
 // focus shows the tooltip on desktop, a tap opens the sheet on phone
 // (tooltip.js listens for [data-item]). `mark` is the slot mark shown when the
@@ -133,7 +139,7 @@ export function item(it) {
   const pic = it.icon
     ? html`<img src="${iconUrl(it.icon)}" alt="" width="18" height="18" loading="lazy" decoding="async">`
     : html`<span class="noicon" aria-hidden="true">${it.mark || ""}</span>`;
-  return html`<button type="button" class="item q${q}" data-item="${entry}"${it.name ? raw(' data-name="' + esc(it.name) + '"') : ""}>${pic}<span class="nm">${it.name || "Item " + entry}</span></button>`;
+  return html`<a class="item q${q}" href="${wowheadItemUrl(entry)}" target="_blank" rel="noopener" data-item="${entry}"${it.name ? raw(' data-name="' + esc(it.name) + '"') : ""}>${pic}<span class="nm">${it.name || "Item " + entry}</span></a>`;
 }
 
 // ---- states --------------------------------------------------------------

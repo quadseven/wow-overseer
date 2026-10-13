@@ -5,7 +5,7 @@
 // The card is drawn from /api/item, read once per item and kept.
 
 import { load, peek } from "./api.js";
-import { html } from "./ui.js";
+import { html, wowheadItemUrl } from "./ui.js";
 
 const QNAME = ["Poor", "Common", "Uncommon", "Rare", "Epic", "Legendary", "Artifact", "Heirloom"];
 const SOURCE_KIND = {
@@ -110,9 +110,15 @@ function nameRow(q, name, art) {
   return html`<div class="ln ln-name tq${q}">${pic}<span class="ln-l">${name}</span></div>`;
 }
 
+// The foot of every card: a plain link to the WotLK page on Wowhead.
+function wowheadRow(entry) {
+  return html`<div class="ln ln-sep"><a class="ln-l" href="${wowheadItemUrl(entry)}" target="_blank" rel="noopener">Open on Wowhead</a></div>`;
+}
+
 // The card's lines, in the game's order: white stats, green Equip and Use
-// lines, dim requirements, the item level and quality, then the sources.
-export function lines(payload, fallbackName, art) {
+// lines, dim requirements, the item level and quality, then the sources and
+// the Wowhead link.
+export function lines(payload, fallbackName, art, entry) {
   if (!payload) return [nameRow(1, fallbackName || "Item", art), row("ln-dim", "Reading the item...")];
   const t = payload.tooltip || {};
   const q = Number(t.quality ?? payload.quality ?? 1);
@@ -136,7 +142,7 @@ export function lines(payload, fallbackName, art) {
   if (t.set) L.push(row("ln-dim", typeof t.set === "string" ? t.set : t.set.name || ""));
   if (t.flavor) L.push(row("ln-flavor", '"' + t.flavor + '"'));
   if (t.item_level) L.push(row("ln-dim ln-gap", "Item level " + t.item_level, QNAME[q] || ""));
-  return L.concat(sourceLines(payload.sources));
+  return L.concat(sourceLines(payload.sources)).concat(wowheadRow(payload.entry || entry || 0));
 }
 
 function ensure() {
@@ -157,7 +163,7 @@ function ensure() {
 }
 
 function fill(target, entry, name, art) {
-  target.innerHTML = lines(peek(path(entry)).data, name, art).join("");
+  target.innerHTML = lines(peek(path(entry)).data, name, art, entry).join("");
 }
 
 // The tapped link's icon (or slot mark), for the sheet's name row.
