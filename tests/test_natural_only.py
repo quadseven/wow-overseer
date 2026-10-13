@@ -114,6 +114,8 @@ GRANT_VERBS = _grant_verbs()
 def _function_block(src: str, signature: str) -> str:
     """Return one def's body, stopping at the next def at the same indent."""
     start = src.index(signature)
+    # The text before the def on its own line, so indent is the def's column;
+    # a body line is deeper than that, which startswith(indent + 1) accepts.
     indent = len(src[:start].rsplit("\n", 1)[-1])
     lines = src[start:].split("\n")
     out = [lines[0]]
@@ -211,7 +213,17 @@ class BridgeWritesOnlyNaturalCommands(unittest.TestCase):
         insert_at = src.index(
             "INSERT INTO overseer_command", src.index("def _insert_gm(")
         )
-        self.assertTrue(_has_natural_only_marker(src, src[:insert_at].count("\n") + 1))
+        # Newlines before the offset, plus one, is the 1-based number of the
+        # line that holds the offset: the INSERT's own line.
+        insert_line = src[:insert_at].count("\n") + 1
+        self.assertIn("INSERT INTO overseer_command", src.splitlines()[insert_line - 1])
+        self.assertTrue(_has_natural_only_marker(src, insert_line))
+
+    def test_function_block_keeps_a_top_level_body(self):
+        src = "x = 1\ndef f():\n    a = 1\n\n    return a\ndef g():\n    pass\n"
+        self.assertEqual(
+            _function_block(src, "def f("), "def f():\n    a = 1\n\n    return a"
+        )
 
     def test_marker_in_neighboring_function_does_not_mark_grant(self):
         src = (
