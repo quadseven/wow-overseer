@@ -61,8 +61,8 @@ WHAT IT DOES NEXT (`next_move`):
             item, named in the line, and buy it with an `honor:` ceiling at
             the price. A walk to it that failed is not asked again at once
             (guildjobs.pvp_walk_cooldown).
-  waiting   its newest `bg-queue` row was accepted (queued/already) and it
-            has not since failed or been seen inside a battleground.
+  waiting   its newest `bg-queue` row was accepted (queued/already), did
+            not fail, and is under WAITING_MINUTES old.
   queue     otherwise: `bg-queue <key>` (quadseven/mod-overseer, kind
             'guild'). A member that leads a group queues the group.
 
@@ -90,9 +90,14 @@ ENV_SWITCH = "PVP_FOR_UPGRADES"
 LEVEL_CAP = 60
 # Below the cap, a PvP upgrade must add this share of the worn piece's score.
 STRONG_BELOW_CAP = 0.3
-# Retained for compatibility with callers that display the previous freshness
-# window. Confirmed queues remain waiting regardless of row age.
+# The PvP cooldown: a queue row this fresh is not asked again (guildjobs).
 QUEUE_MINUTES = 15
+# An accepted queue row holds the member WAITING this long. Nothing writes a
+# PvP row while a member is inside, after a game ends or after a queue drops,
+# so an unbounded wait held a member up to a day (#913). The bound spans two
+# guild jobs passes (about 15m20s apart): a member still queued is asked again
+# after it, the module answers "already", and the fresh row holds it again.
+WAITING_MINUTES = 45
 # A member with no PvP row this long starts a new session, and says so.
 CHAT_QUIET_MINUTES = 60
 ACTION = "pvp"
@@ -480,7 +485,7 @@ def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
     rows = _pvp_rows(aim.name, recent)
     if rows:
         newest = min(rows, key=lambda r: int(r.age_minutes))
-        if _queue_accepted(newest):
+        if _queue_accepted(newest) and int(newest.age_minutes) < WAITING_MINUTES:
             return Move(
                 WAITING,
                 "%s waits in the %s queue, %d honor short of %s"
