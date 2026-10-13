@@ -242,7 +242,7 @@ function supplyCard(card) {
     }
     return html`<span class="num ${i === 3 && r.short ? "warn" : ""}">${text}</span>`;
   };
-  return html`<div class="card raid-block"><span class="card-title">Supply for a night in the Core</span>${s.line ? html`<span class="muted">${s.line}</span>` : ""}${s.budget_line ? html`<span class="small dim">${s.budget_line}</span>` : ""}${table(cols, s.supplies || [], cell)}</div>`;
+  return html`<div class="card raid-block"><span class="card-title">Supply for a night in the Core</span>${s.line ? html`<span class="muted">${s.line}</span>` : ""}${s.budget_line ? html`<span class="small dim">${s.budget_line}</span>` : ""}${(s.pace || []).map((p) => html`<span class="small dim">${p.line}</span>`)}${s.level_60_line ? html`<span class="small dim">${s.level_60_line}</span>` : ""}${table(cols, s.supplies || [], cell)}</div>`;
 }
 
 function fireCard(card, teams) {
