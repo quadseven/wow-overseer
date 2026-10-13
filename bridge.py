@@ -3108,8 +3108,8 @@ _quest_ledger_ready = False
 
 
 def _ensure_quest_ledger_store() -> None:
-    """overseer_quest_ledger, created if missing. Logged and not raised, so the
-    other stores and loops still start; `_record_quests` tries again."""
+    """Create the ledger table. On failure, leave its ready flag false so
+    `_record_quests` retries while the other stores and loops still start."""
     global _quest_ledger_ready
     try:
         with _connect() as conn, conn.cursor() as cur:

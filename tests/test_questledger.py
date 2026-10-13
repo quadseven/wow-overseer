@@ -228,26 +228,48 @@ class TheBridgePass(unittest.TestCase):
         self.assertEqual((count, written), (0, []))
 
     def test_a_table_missing_at_start_up_is_created_by_the_next_pass(self):
+        # Match PyMySQL's exception hierarchy for missing tables and sockets.
         class MySQLError(Exception):
-            """Stands in for pymysql.err.MySQLError, which a stub may lack."""
+            pass
 
-        def broken():
-            raise MySQLError("down")
+        class ProgrammingError(MySQLError):
+            pass
 
-        err = types.SimpleNamespace(MySQLError=MySQLError)
-        with mock.patch.object(self.bridge, "_connect", broken), \
-                mock.patch.object(self.bridge.pymysql, "err", err, create=True), \
-                self.assertLogs(self.bridge.log, "ERROR"):
-            self.bridge._ensure_quest_ledger_store()
-        self.assertFalse(self.bridge._quest_ledger_ready)
-        executed = []
-        cursor = _Cursor({"SELECT guid, name": []}, [])
-        cursor.execute = lambda sql, args=(): (
-            executed.append(sql), setattr(cursor, "last", sql))
-        with mock.patch.object(self.bridge, "_connect", lambda: _Conn(cursor)):
-            self.bridge._record_quests()
-        self.assertEqual(executed[0], ql.TABLE_SQL)
-        self.assertTrue(self.bridge._quest_ledger_ready)
+        class OperationalError(MySQLError):
+            pass
+
+        err = types.SimpleNamespace(
+            MySQLError=MySQLError,
+            ProgrammingError=ProgrammingError,
+            OperationalError=OperationalError,
+        )
+        for failure in (
+            ProgrammingError(1146, "missing table"),
+            OperationalError("down"),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+                self.bridge._quest_ledger_ready = False
+
+                def broken():
+                    raise failure
+
+                with (
+                    mock.patch.object(self.bridge, "_connect", broken),
+                    mock.patch.object(self.bridge.pymysql, "err", err, create=True),
+                    self.assertLogs(self.bridge.log, "ERROR"),
+                ):
+                    self.bridge._ensure_quest_ledger_store()
+                self.assertFalse(self.bridge._quest_ledger_ready)
+                executed = []
+                cursor = _Cursor({"SELECT guid, name": []}, [])
+                cursor.execute = lambda sql, args=(): (
+                    executed.append(sql),
+                    setattr(cursor, "last", sql),
+                )
+                with mock.patch.object(self.bridge, "_connect", lambda: _Conn(cursor)):
+                    self.bridge._record_quests()
+                self.assertEqual(executed[0], ql.TABLE_SQL)
+                self.assertTrue(self.bridge._quest_ledger_ready)
 
     def test_a_pass_that_cannot_create_the_table_fails_loudly(self):
         class Refuses(_Cursor):

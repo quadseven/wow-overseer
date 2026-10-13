@@ -171,7 +171,8 @@ def _next(old: Entry | None, status, rewarded: bool, now) -> tuple | None:
     """(state, first_taken, finished, reason) for one quest and character,
     or None to leave it as it is. `status` is its log status, or None when
     the quest is not in the log. Reward and log transitions live in their
-    helpers so this function only selects which transition applies."""
+    helpers so this function only selects which transition applies. It has
+    four branches: rewarded, in log, abandoned, and unchanged."""
     if rewarded:
         return _rewarded(old, now)
     if status is not None and (
@@ -184,7 +185,7 @@ def _next(old: Entry | None, status, rewarded: bool, now) -> tuple | None:
 
 
 def _index(names: dict, ledger_rows, log_rows, rewarded_rows) -> tuple:
-    """(old, status, rewarded) keyed by (quest, guid), questers' rows only."""
+    """(old, status, rewarded) keyed by (quest, guid), known guids only."""
     old = {}
     for row in ledger_rows or ():
         entry = _entry(row)

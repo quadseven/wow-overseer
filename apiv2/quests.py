@@ -280,7 +280,7 @@ def questers(_query: dict, ctx) -> tuple[int, dict]:
         tuple(names),
         what="characters",
     )
-    # A malformed character row cannot identify a quester or join its quests.
+    # Filter missing guids before int conversion or joining quest rows.
     characters = [r for r in characters if r.get("guid") is not None]
     guids = tuple(sorted(int(r["guid"]) for r in characters))
     log_rows, count_rows = [], []
