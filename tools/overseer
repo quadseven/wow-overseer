@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""overseer: read the overseer's GET routes from a terminal.
+
+Standard library only. The server is OVERSEER_URL (its base URL).
+
+    overseer routes                       the catalog (docs/API.md)
+    overseer get <path> [key=value ...]   one route, JSON out
+    overseer stuck [--guild cave|bonkers] the stuck list
+    overseer member <name>                one armory member
+    overseer runs                         guild runs
+    overseer run <id>                     one guild run
+
+--table prints a plain table when the answer holds a list of records.
+An HTTP error prints the status and the error body and exits 1.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pathlib
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+CATALOG = pathlib.Path(__file__).resolve().parent.parent / "docs" / "API.md"
+TIMEOUT = 30
+
+
+class Failure(Exception):
+    """A request that did not get a 200: shown as is, exit 1."""
+
+
+def fetch(path: str, query: dict | None = None):
+    base = os.environ.get("OVERSEER_URL", "").rstrip("/")
+    if not base:
+        raise Failure("OVERSEER_URL is not set")
+    if not path.startswith("/"):
+        path = "/" + path
+    url = base + path
+    if query:
+        url += ("&" if "?" in path else "?") + urllib.parse.urlencode(query)
+    try:
+        with urllib.request.urlopen(url, timeout=TIMEOUT) as resp:
+            body = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as err:
+        body = err.read().decode("utf-8", "replace")
+        raise Failure(f"HTTP {err.code}\n{body.strip()}") from None
+    except (urllib.error.URLError, OSError) as err:
+        raise Failure(f"request failed: {getattr(err, 'reason', err)}") from None
+    try:
+        return json.loads(body)
+    except ValueError:
+        return body
+
+
+def records(data):
+    """The list of records an answer holds, or None: a top-level list, else
+    the first value that is a non-empty list of objects."""
+    if isinstance(data, list):
+        return data if data and all(isinstance(r, dict) for r in data) else None
+    if isinstance(data, dict):
+        for value in data.values():
+            if (
+                isinstance(value, list)
+                and value
+                and all(isinstance(r, dict) for r in value)
+            ):
+                return value
+    return None
+
+
+def table(rows: list) -> str:
+    cols: list = []
+    for row in rows:
+        for key, value in row.items():
+            if not isinstance(value, (dict, list)) and key not in cols:
+                cols.append(key)
+    cells = [["" if r.get(c) is None else str(r.get(c)) for c in cols] for r in rows]
+    widths = [max(len(c), *(len(row[i]) for row in cells)) for i, c in enumerate(cols)]
+    lines = ["  ".join(c.ljust(w) for c, w in zip(cols, widths)).rstrip()]
+    for row in cells:
+        lines.append("  ".join(v.ljust(w) for v, w in zip(row, widths)).rstrip())
+    return "\n".join(lines)
+
+
+def show(data, as_table: bool) -> str:
+    if as_table:
+        rows = records(data)
+        if rows is None:
+            raise Failure("--table: the answer holds no list of records")
+        return table(rows)
+    if isinstance(data, str):
+        return data
+    return json.dumps(data, indent=2, sort_keys=True)
+
+
+def catalog() -> str:
+    try:
+        text = CATALOG.read_text()
+    except OSError:
+        raise Failure(f"catalog not found: {CATALOG}") from None
+    rows = []
+    for block in text.split("\n## ")[1:]:
+        head = re.match(r"`GET (\S+)`", block)
+        params = re.search(r"- Query: (.*)", block)
+        answers = re.search(r"- Answers: (.*)", block)
+        if head:
+            rows.append(
+                {
+                    "path": head.group(1),
+                    "query": (params.group(1) if params else "").replace("`", ""),
+                    "answers": answers.group(1) if answers else "",
+                }
+            )
+    return table(rows)
+
+
+def parse_pairs(pairs: list) -> dict:
+    out = {}
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if not sep or not key:
+            raise Failure(f"expected key=value, got {pair!r}")
+        out[key] = value
+    return out
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="overseer", description=__doc__.split("\n")[0])
+    p.add_argument("--table", action="store_true", help="plain table for list answers")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("routes", help="list the catalog")
+    g = sub.add_parser("get", help="GET a path")
+    g.add_argument("path")
+    g.add_argument("pairs", nargs="*", metavar="key=value")
+    s = sub.add_parser("stuck", help="the stuck list")
+    s.add_argument("--guild", choices=["cave", "bonkers"])
+    m = sub.add_parser("member", help="one armory member")
+    m.add_argument("name")
+    sub.add_parser("runs", help="guild runs")
+    r = sub.add_parser("run", help="one guild run")
+    r.add_argument("id")
+    return p
+
+
+def dispatch(args) -> tuple:
+    """(path, query) for a subcommand that reads the server."""
+    if args.cmd == "get":
+        return args.path, parse_pairs(args.pairs)
+    if args.cmd == "stuck":
+        return "/api/v2/stuck", ({"guild": args.guild} if args.guild else {})
+    if args.cmd == "member":
+        return "/api/armory/member", {"name": args.name}
+    if args.cmd == "runs":
+        return "/api/guildruns", {}
+    return "/api/v2/run", {"id": args.id}
+
+
+def main(argv: list | None = None) -> int:
+    # --table may come before or after the subcommand.
+    argv = list(sys.argv[1:] if argv is None else argv)
+    flagged = "--table" in argv
+    args = build_parser().parse_args([a for a in argv if a != "--table"])
+    args.table = args.table or flagged
+    try:
+        if args.cmd == "routes":
+            print(catalog())
+            return 0
+        path, query = dispatch(args)
+        print(show(fetch(path, query), args.table))
+        return 0
+    except Failure as err:
+        print(f"overseer: {err}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
