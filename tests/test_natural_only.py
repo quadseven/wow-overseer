@@ -225,6 +225,13 @@ class BridgeWritesOnlyNaturalCommands(unittest.TestCase):
             _function_block(src, "def f("), "def f():\n    a = 1\n\n    return a"
         )
 
+    def test_function_block_keeps_a_method_body(self):
+        src = "class C:\n    def f(self):\n        a = 1\n        return a\n    def g(self):\n        pass\n"
+        self.assertEqual(
+            _function_block(src, "def f("),
+            "def f(self):\n        a = 1\n        return a",
+        )
+
     def test_marker_in_neighboring_function_does_not_mark_grant(self):
         src = (
             "def operator_only():\n"
