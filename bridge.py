@@ -2529,6 +2529,7 @@ class _PersistentOwing(classquest.Owing):
         """A mark as guildjobs.progress_mark built it. The memo is JSON, which
         reads every tuple back as a list, and a list never equals the tuple the
         next pass computes: each restored clock started over (#921)."""
+        # _memo_read decodes JSON, so only lists can represent saved tuples.
         if isinstance(value, list):
             return tuple(_PersistentOwing._tuples(v) for v in value)
         return value

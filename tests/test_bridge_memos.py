@@ -27,7 +27,11 @@ def _persistent_owing():
     writes = []
 
     def read(kind):
-        return {name: row for (row_kind, name), row in rows.items() if row_kind == kind}
+        return {
+            name: (json.loads(json.dumps(value)), since)
+            for (row_kind, name), (value, since) in rows.items()
+            if row_kind == kind
+        }
 
     def write(kind, subject, value, since, expires):
         # The real store keeps the value as JSON (_memo_upsert, _memo_read).
