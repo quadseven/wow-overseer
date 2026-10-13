@@ -3076,21 +3076,34 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
 # questledger decides what moved; these read the questers' logs and write it.
 
 
+# Whether overseer_quest_ledger is known to exist. Until it is, each ledger
+# pass creates it first, so a start-up that could not reach the table is not
+# taken as ready: the pass fails loudly each cycle until the table stands.
+_quest_ledger_ready = False
+
+
 def _ensure_quest_ledger_store() -> None:
-    """overseer_quest_ledger, created if missing. Logged and swallowed: without
-    it the questers' quests go unrecorded, and nothing else stops."""
+    """overseer_quest_ledger, created if missing. Logged and not raised, so the
+    other stores and loops still start; `_record_quests` tries again."""
+    global _quest_ledger_ready
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(questledger.TABLE_SQL)
+        _quest_ledger_ready = True
     except pymysql.err.MySQLError:
-        log.exception("quest ledger: overseer_quest_ledger unavailable; the "
-                      "questers' quests are not recorded")
+        log.exception("quest ledger: overseer_quest_ledger unavailable; each "
+                      "ledger pass will try to create it again")
 
 
 def _record_quests() -> int:
-    """One ledger pass over the questers: how many rows were written."""
+    """One ledger pass over the questers: how many rows were written. Raises
+    when the table is still missing and cannot be created."""
+    global _quest_ledger_ready
     names = questledger.quester_names()
     with _connect() as conn, conn.cursor() as cur:
+        if not _quest_ledger_ready:
+            cur.execute(questledger.TABLE_SQL)
+            _quest_ledger_ready = True
         cur.execute(questledger.CHARACTERS_SQL.format(
             holes=questledger.holes(len(names))), tuple(names))
         characters = {int(r["guid"]): r["name"] for r in cur.fetchall()}

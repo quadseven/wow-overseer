@@ -108,6 +108,10 @@ class TheLedgerMoves(unittest.TestCase):
     def test_characters_that_are_not_questers_are_ignored(self):
         self.assertEqual(moved((), [log(10, 99)], [rewarded(11, 99)]), {})
 
+    def test_a_ledger_row_for_a_character_gone_from_the_realm_is_left(self):
+        # Its guid is not among the questers, so no name is looked up for it.
+        self.assertEqual(moved([ledger(10, 7, "taken") | {"guid": 99}]), {})
+
 
 class TheStatusOfAQuest(unittest.TestCase):
     def test_the_best_news_wins(self):
@@ -222,6 +226,38 @@ class TheBridgePass(unittest.TestCase):
     def test_no_quester_on_the_realm_writes_nothing(self):
         count, written = self.run_pass({"SELECT guid, name": []})
         self.assertEqual((count, written), (0, []))
+
+    def test_a_table_missing_at_start_up_is_created_by_the_next_pass(self):
+        class MySQLError(Exception):
+            """Stands in for pymysql.err.MySQLError, which a stub may lack."""
+
+        def broken():
+            raise MySQLError("down")
+
+        err = types.SimpleNamespace(MySQLError=MySQLError)
+        with mock.patch.object(self.bridge, "_connect", broken), \
+                mock.patch.object(self.bridge.pymysql, "err", err, create=True), \
+                self.assertLogs(self.bridge.log, "ERROR"):
+            self.bridge._ensure_quest_ledger_store()
+        self.assertFalse(self.bridge._quest_ledger_ready)
+        executed = []
+        cursor = _Cursor({"SELECT guid, name": []}, [])
+        cursor.execute = lambda sql, args=(): (
+            executed.append(sql), setattr(cursor, "last", sql))
+        with mock.patch.object(self.bridge, "_connect", lambda: _Conn(cursor)):
+            self.bridge._record_quests()
+        self.assertEqual(executed[0], ql.TABLE_SQL)
+        self.assertTrue(self.bridge._quest_ledger_ready)
+
+    def test_a_pass_that_cannot_create_the_table_fails_loudly(self):
+        class Refuses(_Cursor):
+            def execute(self, sql, args=()):
+                raise RuntimeError("no table")
+
+        cursor = Refuses({}, [])
+        with mock.patch.object(self.bridge, "_connect", lambda: _Conn(cursor)):
+            with self.assertRaises(RuntimeError):
+                self.bridge._record_quests()
 
     def test_the_table_is_ensured_and_the_pass_runs(self):
         import inspect

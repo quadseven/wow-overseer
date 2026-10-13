@@ -217,6 +217,7 @@ def changes(characters, ledger_rows, log_rows, rewarded_rows, now) -> list:
         was = old.get(key)
         moved = _next(was, status.get(key), key in rewarded, now)
         if moved is None:
+            # names[guid] cannot miss: _index keeps only the questers' rows.
             if was is not None and was.character_name != names[guid]:
                 out.append(replace(was, character_name=names[guid]))
             continue
