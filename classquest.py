@@ -2115,8 +2115,8 @@ class Hunts:
 
 
 class Owing:
-    """How long each member has owed a class quest with no progress, kept in
-    memory by the bridge (a restart gives every member a fresh OWED_HOURS).
+    """How long each member has owed a class quest with no progress. In memory
+    here; the bridge's subclass keeps it across a restart (bridge.py).
 
     A member's progress is a mark (guildjobs.progress_mark): when it changes the
     clock starts over. Times are seconds from one clock for the life of the
