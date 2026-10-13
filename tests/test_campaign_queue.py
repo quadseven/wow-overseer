@@ -617,12 +617,50 @@ class NothingElseStompsTheQueue(unittest.TestCase):
                 "log": _Log(),
                 "bonds": types.SimpleNamespace(head_of_family=lambda: "Grug"),
                 "_fetch_queue_rows": lambda: rows,
+                "_PACE_QUESTING": {},
+                "_BAG_HOLD_STUCK": {},
             },
         )
         ns["_cohort_of"] = lambda name: "Grug"
         self.assertFalse(ns["_queue_owns_job"]())
         ns["_cohort_of"] = lambda name: "Zug"
         self.assertTrue(ns["_queue_owns_job"]())
+
+    def test_released_bag_hold_gives_the_family_its_time_back(self):
+        rows = [_q(1, "ragefire", 50, "active", 0)]
+        stuck = ["Uzza"]
+        ns = _load(
+            ["_queue_owns_job"],
+            {
+                "campaignqueue": campaignqueue,
+                "log": _Log(),
+                "bonds": types.SimpleNamespace(head_of_family=lambda: "Zug"),
+                "_cohort_of": lambda name: "Zug",
+                "_fetch_queue_rows": lambda: rows,
+                "_PACE_QUESTING": {},
+                "_BAG_HOLD_STUCK": {"Zug": tuple(stuck)},
+            },
+        )
+
+        self.assertFalse(ns["_queue_owns_job"]("Zug"))
+        self.assertTrue(ns["_queue_owns_job"]("Zug", dungeon=True))
+        stuck.clear()
+        ns["_BAG_HOLD_STUCK"]["Zug"] = tuple(stuck)
+        self.assertTrue(ns["_queue_owns_job"]("Zug"))
+
+    def test_queue_ownership_without_a_dungeon_pace_snapshot(self):
+        rows = [_q(1, "ragefire", 50, "active", 0)]
+        ns = _load(
+            ["_queue_owns_job"],
+            {
+                "campaignqueue": campaignqueue,
+                "log": _Log(),
+                "_fetch_queue_rows": lambda: rows,
+                "_BAG_HOLD_STUCK": {},
+            },
+        )
+
+        self.assertTrue(ns["_queue_owns_job"]("Zug"))
 
     def test_the_loop_runs_and_the_store_is_created_in_both_starts(self):
         self.assertEqual(1, BRIDGE.count('_Pass("_campaign_queue_loop"),'))

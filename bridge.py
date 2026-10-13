@@ -2477,6 +2477,12 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
 # THE HOLD AT THE FLOOR, PER FAMILY (bag_pressure.bag_hold_progress), keyed
 # like the clocks above. Its timestamps are persisted as wall time across restarts.
 _BAG_HOLD: dict = {}
+# Latest bag-floor result observed by a bag pass, keyed by family member. The
+# family key is its leader's name, so queue ownership reads its entry without
+# doing roster or inventory queries. Holds only live entries: a pass that finds
+# no released hold removes the members' keys, so a cleared or departed family
+# leaves nothing behind.
+_BAG_HOLD_STUCK: dict[str, tuple] = {}
 
 _MEMO_CREATE_SQL = ("CREATE TABLE IF NOT EXISTS overseer_bridge_memo ("
                     "kind VARCHAR(32) NOT NULL, subject VARCHAR(191) NOT NULL, "
@@ -2539,8 +2545,18 @@ class _PersistentOwing(classquest.Owing):
     def __init__(self):
         super().__init__()
 
+    @staticmethod
+    def _tuples(value):
+        """A mark as guildjobs.progress_mark built it. The memo is JSON, which
+        reads every tuple back as a list, and a list never equals the tuple the
+        next pass computes: each restored clock started over (#921)."""
+        # _memo_read decodes JSON, so only lists can represent saved tuples.
+        if isinstance(value, list):
+            return tuple(_PersistentOwing._tuples(v) for v in value)
+        return value
+
     def restore(self):
-        self._by.update({name: (mark, since)
+        self._by.update({name: (self._tuples(mark), since)
                          for name, (mark, since) in _memo_read("class_owed").items()})
 
     def idle(self, name, mark, now):
@@ -2574,14 +2590,23 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
         _BAG_HOLD.pop(key, None)
         # The hold ended: clear the memo this function writes below.
         _memo_delete("bag_hold", ",".join(key))
-        return ()
-    _BAG_HOLD[key] = progress
-    wall = time.time()
-    value = {"best": progress.best, "since": wall - (now - progress.since),
-             "seen": wall - (now - progress.seen), "released": progress.released}
-    _memo_upsert("bag_hold", ",".join(key), value, value["since"],
-                 wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
-    return bag_pressure.bag_hold_stuck(progress)
+        result = ()
+    else:
+        _BAG_HOLD[key] = progress
+        wall = time.time()
+        value = {"best": progress.best, "since": wall - (now - progress.since),
+                 "seen": wall - (now - progress.seen), "released": progress.released}
+        _memo_upsert("bag_hold", ",".join(key), value, value["since"],
+                     wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
+        result = bag_pressure.bag_hold_stuck(progress)
+    for name in names:
+        # The family key is its leader's name, one of these members, so
+        # _queue_owns_job reads that member's bag hold result.
+        if result:
+            _BAG_HOLD_STUCK[name] = result
+        else:
+            _BAG_HOLD_STUCK.pop(name, None)
+    return result
 
 
 def _restore_bag_holds() -> None:
@@ -3628,6 +3653,12 @@ def _queue_owns_job(family: str | None = None, dungeon: bool = False) -> bool:
             # not own the job then, so the craft rhythm and the skill goal
             # get the family's time back.
             return False
+        if not dungeon:
+            # A released bag hold gives the family's own passes time to buy
+            # reagents and craft. Keep the queue pending for the dungeon
+            # caller, which still starts the run once everyone has room.
+            if _BAG_HOLD_STUCK.get(family):
+                return False
         return bool(campaignqueue.pending_by_family(_fetch_queue_rows()).get(family))
     except Exception:
         log.exception("queue: could not read whether a queue owns the job")
@@ -15014,8 +15045,20 @@ class Bridge(discord.Client):
         # (guildjobs.THE GUILD FOCUS); unset keeps every guild's jobs.
         focus = guildjobs.focus_from_env()
         fields = await self._job_fields(members, focus, busy) if spawn_walks else {}
-        doors = (guildjobs.assign_doors(members, guildjobs.entrances(), facts["stones"])
-                 if spawn_walks else {})
+        campaign_door = ""
+        if spawn_walks:
+            # An unread queue only costs the on-call stand: the pass keeps
+            # today's spread of doors rather than falling for every guild.
+            try:
+                campaign_door = await asyncio.to_thread(_guild_campaign_door, cohort)
+            except pymysql.err.MySQLError:
+                log.exception("guild jobs: the campaign door could not be read; "
+                              "no summoner goes on call this pass")
+        doors = (guildjobs.assign_doors(
+            members, guildjobs.entrances(), facts["stones"], campaign_door)
+            if spawn_walks else {})
+        if campaign_door and spawn_walks and not any(d.on_call for d in doors.values()):
+            self._log_missing_campaign_summoner(members, campaign_door)
         # No class quest uses while this worldserver does not carry the verbs.
         facts = dict(facts, class_book=self._class_book_for_plan(facts))
         plan = guildjobs.plan(
@@ -15063,6 +15106,19 @@ class Bridge(discord.Client):
                      "waiting unopened are collected; theirs go to the bank",
                      ", ".join(sorted(facts["unclaimed"])))
         return plan
+
+    @staticmethod
+    def _log_missing_campaign_summoner(members, campaign_door):
+        admits = any(
+            m.role == guildjobs.SUMMONER
+            and guildjobs.RITUAL_OF_SUMMONING in m.known
+            and any(r.keyword == campaign_door for r in guildjobs.doors_for(m))
+            for m in members
+        )
+        reason = ("no meeting stone is available" if admits
+                  else "no summoner's level band admits it")
+        log.info("guild jobs: campaign door %s; %s; keeping ordinary assignments",
+                 campaign_door, reason)
 
     def _log_purses(self, members) -> None:
         """One `purse:` line per member whose purchase order changed since the
@@ -22974,9 +23030,10 @@ def _fetch_guild_run_facts(bounds) -> dict:
         floors = {int(r["map_id"]): int(r["min_level"]) for r in cur.fetchall()}
         boss_levels = _door_boss_levels(cur)
         cur.execute(
-            "SELECT outcome, why FROM overseer_guild_run WHERE state = 'ended' "
+            "SELECT outcome, why, TIMESTAMPDIFF(MINUTE, ended_at, NOW()) AS age_minutes "
+            "FROM overseer_guild_run WHERE state = 'ended' "
             "AND ended_at > NOW() - INTERVAL %s MINUTE",
-            (guildrun.BENCH_MINUTES,),
+            (guildrun.QUEUE_BENCH_MINUTES,),
         )
         benched = guildrun.benched(list(cur.fetchall()))
         cur.execute(
@@ -26419,6 +26476,23 @@ def _fetch_job_facts(family_names: list) -> dict:
     facts["roster"] = ({str(r.get("name") or "") for r in roster_rows}
                        | set(family_names)) - {""}
     return facts
+
+
+def _guild_campaign_door(cohort=None) -> str:
+    """The family's active dungeon job, or its next queued run keyword."""
+    head = cohort.leader if cohort is not None else _head_now()
+    family = getattr(cohort, "key", None) or _cohort_of(head) or ""
+    roster = campaignqueue.families(_fetch_queue_roster())
+    fam = roster.get(family)
+    if not fam:
+        return ""
+    job = str(fam["leader"].get("job") or "")
+    if job.startswith("dungeon:"):
+        keyword = job.split(":", 1)[1].strip().lower()
+        if keyword in {run.keyword for run in campaignplan.RUNS}:
+            return keyword
+    queue = campaignqueue.pending_by_family(_fetch_queue_rows()).get(family, ())
+    return str(queue[0].get("keyword") or "").strip().lower() if queue else ""
 
 
 def _job_leveling(facts):

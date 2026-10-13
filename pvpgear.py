@@ -61,8 +61,8 @@ WHAT IT DOES NEXT (`next_move`):
             item, named in the line, and buy it with an `honor:` ceiling at
             the price. A walk to it that failed is not asked again at once
             (guildjobs.pvp_walk_cooldown).
-  waiting   it queued less than QUEUE_MINUTES ago and the row did not fail:
-            it waits in the queue, the way a player waits for the call.
+  waiting   its newest `bg-queue` row was accepted (queued/already) and it
+            has not since failed or been seen inside a battleground.
   queue     otherwise: `bg-queue <key>` (quadseven/mod-overseer, kind
             'guild'). A member that leads a group queues the group.
 
@@ -90,8 +90,8 @@ ENV_SWITCH = "PVP_FOR_UPGRADES"
 LEVEL_CAP = 60
 # Below the cap, a PvP upgrade must add this share of the worn piece's score.
 STRONG_BELOW_CAP = 0.3
-# A queue row younger than this, that did not fail, is a member still waiting
-# for its battleground; it is not queued again and given no other job.
+# Retained for compatibility with callers that display the previous freshness
+# window. Confirmed queues remain waiting regardless of row age.
 QUEUE_MINUTES = 15
 # A member with no PvP row this long starts a new session, and says so.
 CHAT_QUIET_MINUTES = 60
@@ -446,6 +446,21 @@ def last_pvp_age(name: str, recent) -> int | None:
     return min(int(r.age_minutes) for r in rows) if rows else None
 
 
+def _queue_accepted(row) -> bool:
+    """A `bg-queue` row the module answered "queued" or "already" (by status
+    or by the outcome in its result), and that did not fail."""
+    command = str(getattr(row, "command", "") or "")
+    status = str(row.status or "").lower()
+    result = str(getattr(row, "result", "") or "").lower()
+    accepted = status in {"queued", "already"} or any(
+        marker in result for marker in ('"outcome":"queued"', '"outcome":"already"')
+    )
+    failed = status in FAILED or any(
+        marker in result for marker in ('"outcome":"error"', '"outcome":"unchanged"')
+    )
+    return command.startswith("bg-queue ") and accepted and not failed
+
+
 def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
     """What the member does about its aim this pass (see the module notes).
     `recent` is guildjobs.Recent rows."""
@@ -465,7 +480,7 @@ def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
     rows = _pvp_rows(aim.name, recent)
     if rows:
         newest = min(rows, key=lambda r: int(r.age_minutes))
-        if int(newest.age_minutes) < QUEUE_MINUTES and newest.status not in FAILED:
+        if _queue_accepted(newest):
             return Move(
                 WAITING,
                 "%s waits in the %s queue, %d honor short of %s"
