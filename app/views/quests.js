@@ -181,6 +181,9 @@ export function catalogueBody(data, q) {
   return html`<p class="dim qs-s" data-region="count">${match.length.toLocaleString("en-US")} of ${all.length.toLocaleString("en-US")} quests${match.length > n ? ", the first " + n + " shown" : ""}</p>${rows(match.slice(0, n), q)}${more}`;
 }
 
+// A faction or zone is server text. `html` escapes every interpolated value,
+// quotes included, so one holding `"` or `<` stays inside value="..." and the
+// option's text; the only markup passed through unescaped is raw(" selected").
 function select(id, label, value, options) {
   return html`<label class="qs-field"><span class="qs-s dim">${label}</span><select class="input" id="${id}" aria-label="${label}"><option value="">All</option>${options.map(([v, text]) => html`<option value="${v}"${v === value ? raw(" selected") : ""}>${text}</option>`)}</select></label>`;
 }

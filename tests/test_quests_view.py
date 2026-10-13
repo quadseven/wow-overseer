@@ -345,6 +345,67 @@ class TheQuestsView(unittest.TestCase):
         self.assertIn('href="#/quests/100"', got)
         self.assertNotIn('href="#/quests/101"', got)
 
+    def test_show_more_grows_the_list_by_a_step_until_it_is_all_drawn(self):
+        many = dict(
+            QUESTS,
+            quests=[
+                quest(i, "Quest %d" % i, "Horde", "Durotar", 1, "not_reached")
+                for i in range(1, 251)
+            ],
+        )
+        # Rendered first, as the browser does before after(). The click lands
+        # on the list region; its target answers closest() the way a click on
+        # the Show more button does.
+        got = run(
+            "views/quests.js",
+            "const ls = [];\n"
+            "let h = '';\n"
+            "const region = {addEventListener(k, f) { if (k === 'click') ls.push(f); },\n"
+            "  get innerHTML() { return h; }, set innerHTML(v) { h = v; }};\n"
+            "const main = {querySelector: (s) => (s === '[data-region=catalogue]' ? region : null)};\n"
+            "const c = ctx({}, {}, %s);\n"
+            "V.render(c);\n"
+            "V.after(main, c);\n"
+            "const more = {target: {closest: (s) => (s === '[data-more]' ? {} : null)}};\n"
+            "const after = [];\n"
+            "for (let i = 0; i < 2; i++) { ls.forEach((f) => f(more)); after.push(h); }\n"
+            "console.log(JSON.stringify(after));"
+            % json.dumps({"/api/v2/quests": many}),
+        )
+        second, third = got
+        self.assertIn("250 of 250 quests, the first 200 shown", second)
+        self.assertIn("Show 50 more", second)
+        self.assertIn('href="#/quests/200"', second)
+        self.assertNotIn('href="#/quests/201"', second)
+        self.assertIn("250 of 250 quests</p>", third)
+        self.assertIn('href="#/quests/250"', third)
+        self.assertNotIn("data-more", third)
+
+    def test_a_faction_or_zone_with_markup_stays_text_in_the_filters(self):
+        hostile = dict(
+            QUESTS,
+            quests=[
+                quest(
+                    1,
+                    "Odd",
+                    'Horde"><b>',
+                    "<img src=x onerror=alert(1)>",
+                    1,
+                    "not_reached",
+                )
+            ],
+        )
+        reads = dict(READS, **{"/api/v2/quests": hostile})
+        got = run(
+            "views/quests.js",
+            "console.log(JSON.stringify(V.render(ctx({}, {}, %s)).s));"
+            % json.dumps(reads),
+        )
+        self.assertIn('<option value="Horde&quot;&gt;&lt;b&gt;">', got)
+        self.assertIn('<option value="&lt;img src=x onerror=alert(1)&gt;">', got)
+        self.assertNotIn("<img", got)
+        self.assertNotIn('"><b>', got)
+
     def test_a_row_opens_that_quests_attempts_and_keeps_the_filters(self):
         _, html = self.page({"zone": "Teldrassil"}, "#/quests?zone=Teldrassil")
         self.assertIn('href="#/quests/457?zone=Teldrassil"', html)
