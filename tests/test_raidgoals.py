@@ -24,6 +24,7 @@ Ticket: infra#3508.
 """
 
 import unittest
+from unittest import mock
 
 import professions
 import raidgoals
@@ -276,33 +277,71 @@ class WhoIsCountedFor(unittest.TestCase):
         self.assertEqual(goal(p, "fireprot")["need"], 0)
 
 
-class UnreachableIsNotShort(unittest.TestCase):
-    """The distinction the operator's repair bot exists to prove."""
+class RepairBotHasNoSourceOnThisRealm(unittest.TestCase):
+    """The repair bot is a goal this realm does not teach, and that is
+    different from short or unreachable."""
 
-    def test_a_trade_nobody_holds_is_unreachable_and_names_the_trade(self):
+    def test_repair_bot_reads_no_source_on_this_realm(self):
+        """Schematic 18235 has no teach spell here and craft spell 22704 has
+        no trainer row, so the goal is shown as impossible to source rather
+        than as short or unreachable."""
         p = payload()
         repair = goal(p, "repair")
-        self.assertEqual(repair["status"], raidgoals.UNREACHABLE)
-        self.assertIn(
-            "nobody on this roster has engineering",
-            " ".join(repair["recipes"][0]["blocked"]),
-        )
+        self.assertEqual(repair["status"], raidgoals.NO_SOURCE)
+        self.assertIn("Schematic 18235", repair["line"])
+        self.assertIn("no trainer, vendor or drop", repair["line"])
+        self.assertNotIn("short", repair["line"].lower())
+        self.assertNotIn("unreachable", repair["line"].lower())
 
-    def test_an_unreachable_goal_says_it_is_not_a_farming_problem(self):
-        """ "40 short" and "nobody can make it" are the same arithmetic and
-        completely different evenings."""
-        self.assertIn("not a farming problem", goal(payload(), "repair")["line"])
+    def test_a_no_source_goal_does_not_read_as_short_or_unreachable(self):
+        """ "40 short", "nobody can make it" and "no source on this realm"
+        are three different evenings."""
+        repair = goal(payload(), "repair")
+        self.assertNotEqual(repair["status"], raidgoals.SHORT)
+        self.assertNotEqual(repair["status"], raidgoals.UNREACHABLE)
 
     def test_the_headline_counts_what_cannot_be_finished_separately(self):
         self.assertIn("cannot be finished by this roster at all", payload()["line"])
 
-    def test_giving_somebody_engineering_makes_it_reachable_again(self):
-        """The guard on the guard: if this were unreachable whatever the data
+    def test_giving_somebody_the_spell_makes_it_reachable_again(self):
+        """The guard on the guard: if this were no source whatever the data
         said, the sentence above would be decoration."""
         p = payload(engineering=300, known=FLASK_SPELLS + (22704,))
-        self.assertNotEqual(goal(p, "repair")["status"], raidgoals.UNREACHABLE)
+        repair = goal(p, "repair")
+        self.assertNotEqual(repair["status"], raidgoals.UNREACHABLE)
+        self.assertNotEqual(repair["status"], raidgoals.NO_SOURCE)
 
-    def test_an_unreachable_goal_still_lists_what_it_would_take(self):
+    def test_a_schematic_that_teaches_the_craft_is_a_source(self):
+        """If the realm's item rows ever give the schematic a teach spell, the
+        goal is no longer no source: the status follows the reads, not 18235."""
+        teaching = [{"entry": 18235, "teaches": 22704, "skill_rank": 300}]
+        repair = goal(payload(recipes=teaching), "repair")
+        self.assertNotEqual(repair["status"], raidgoals.NO_SOURCE)
+        self.assertNotIn("no trainer, vendor or drop", repair["line"])
+
+    def test_the_line_names_the_schematic_the_recipe_carries(self):
+        """The goal's line reads the schematic off the recipe, not a literal
+        18235, so a recipe that carried another schematic would name it."""
+        recipe = raidgoals.RECIPE_BY_PRODUCT[raidgoals.FIELD_REPAIR_BOT]
+        self.assertEqual(recipe.schematic, 18235)
+        # A copy stands in for the shared recipe, so no other test ever reads
+        # a mutated module-level object.
+        other = raidgoals.Recipe(
+            recipe.spell,
+            recipe.product,
+            recipe.trade,
+            recipe.reagents,
+            schematic=99999,
+        )
+        swapped = dict(raidgoals.RECIPE_BY_PRODUCT)
+        swapped[raidgoals.FIELD_REPAIR_BOT] = other
+        with mock.patch.object(raidgoals, "RECIPE_BY_PRODUCT", swapped):
+            repair = goal(payload(), "repair")
+        self.assertEqual(recipe.schematic, 18235)
+        self.assertIn("Schematic 99999", repair["line"])
+        self.assertNotIn("18235", repair["line"])
+
+    def test_a_no_source_goal_still_lists_what_it_would_take(self):
         """A goal that vanished because it was impossible would read exactly
         like a goal already met."""
         card = goal(payload(), "repair")["recipes"][0]
@@ -338,29 +377,25 @@ class TheStatusLadder(unittest.TestCase):
         p = payload(holdings=held, known=())
         self.assertEqual(goal(p, "fireprot")["status"], raidgoals.MET)
 
-    def test_enough_held_beats_unreachable_too(self):
-        """Every rung below "met" is about MAKING the thing, and nobody has to
-        make one when the roster already holds what the goal asks for. Asked
-        the other way round, a guild that had bought a repair bot was told
-        "nobody on this roster can make it, so the 1 it asks for is not a
-        farming problem" over a goal that was finished, and would have gone
-        looking for an Engineer it did not need."""
+    def test_enough_held_does_not_hide_a_no_source_goal(self):
+        """A repair bot held is not a repair bot that can be made here, so the
+        goal stays visible as no source rather than reading as met."""
         held = [holding("Grug", raidgoals.FIELD_REPAIR_BOT, 1)]
         p = payload(holdings=held)
         repair = goal(p, "repair")
-        self.assertEqual(repair["status"], raidgoals.MET)
+        self.assertEqual(repair["status"], raidgoals.NO_SOURCE)
         self.assertNotIn("not a farming problem", repair["line"])
-        # The reason is still on the card: met is a fact about the count, and
-        # "nobody here can make another" is a fact a reader still wants.
+        # The reason is still on the card: no source is a fact about the
+        # realm, and "nobody here can make another" is a fact a reader still wants.
         self.assertIn(
             "nobody on this roster has engineering",
             " ".join(repair["recipes"][0]["blocked"]),
         )
 
-    def test_unreachable_outranks_blocked(self):
-        """A trade nobody holds is not something more farming fixes, so it is
-        the stronger answer of the two."""
-        self.assertEqual(goal(payload(), "repair")["status"], raidgoals.UNREACHABLE)
+    def test_no_source_outranks_blocked(self):
+        """A recipe this realm does not teach is not something more farming
+        fixes, so it is the stronger answer of the two."""
+        self.assertEqual(goal(payload(), "repair")["status"], raidgoals.NO_SOURCE)
 
     def test_short_with_one_clear_recipe_is_short_and_not_blocked(self):
         p = payload(known=FLASK_SPELLS, alchemy=300)
