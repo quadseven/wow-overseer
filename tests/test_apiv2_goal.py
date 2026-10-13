@@ -189,9 +189,102 @@ class TheGoal(unittest.TestCase):
         ]
         body = goal.build(Ctx(answers).read, "Cave")
         self.assertEqual(body["runs"]["formed"], 4)
+        self.assertEqual(body["runs"]["refused"], 0)
+        self.assertEqual(body["runs"]["not_entered"], 1)
+        self.assertEqual(body["runs"]["in_flight"], 0)
+        self.assertEqual(body["runs"]["entered"], 3)
         self.assertEqual(body["runs"]["cleared"], 2)
         self.assertEqual(body["runs"]["wiped"], 1)
-        self.assertEqual(body["runs"]["clears_per_attempt"], 0.5)
+        self.assertEqual(body["runs"]["abandoned"], 0)
+        self.assertEqual(body["runs"]["timed_out"], 0)
+        self.assertEqual(body["runs"]["clears_per_attempt"], 0.67)
+
+    def test_runs_counts_every_end_state_and_clears_per_attempt_over_entered(self):
+        answers = _base_answers("Cave")
+        base = NOW - HOUR
+        answers[guildrun._RUN_SQL] = [
+            {
+                "id": 1,
+                "guild": "Cave",
+                "state": "queued",
+                "outcome": "",
+                "created_at": "2026-10-12 00:00:00",
+                "created_unix": base,
+                "ended_at": None,
+                "ended_unix": None,
+            },
+            {
+                "id": 2,
+                "guild": "Cave",
+                "state": "ended",
+                "outcome": "refused",
+                "created_at": "2026-10-12 01:00:00",
+                "created_unix": base - HOUR,
+                "ended_at": "2026-10-12 01:01:00",
+                "ended_unix": base - HOUR + 60,
+            },
+            {
+                "id": 3,
+                "guild": "Cave",
+                "state": "ended",
+                "outcome": "not entered",
+                "created_at": "2026-10-12 02:00:00",
+                "created_unix": base - 2 * HOUR,
+                "ended_at": "2026-10-12 02:05:00",
+                "ended_unix": base - 2 * HOUR + 300,
+            },
+            {
+                "id": 4,
+                "guild": "Cave",
+                "state": "ended",
+                "outcome": "cleared",
+                "created_at": "2026-10-12 03:00:00",
+                "created_unix": base - 3 * HOUR,
+                "ended_at": "2026-10-12 03:30:00",
+                "ended_unix": base - 3 * HOUR + 1800,
+            },
+            {
+                "id": 5,
+                "guild": "Cave",
+                "state": "ended",
+                "outcome": "wiped",
+                "created_at": "2026-10-12 04:00:00",
+                "created_unix": base - 4 * HOUR,
+                "ended_at": "2026-10-12 04:20:00",
+                "ended_unix": base - 4 * HOUR + 1200,
+            },
+            {
+                "id": 6,
+                "guild": "Cave",
+                "state": "ended",
+                "outcome": "abandoned",
+                "created_at": "2026-10-12 05:00:00",
+                "created_unix": base - 5 * HOUR,
+                "ended_at": "2026-10-12 05:10:00",
+                "ended_unix": base - 5 * HOUR + 600,
+            },
+            {
+                "id": 7,
+                "guild": "Cave",
+                "state": "ended",
+                "outcome": "timed out",
+                "created_at": "2026-10-12 06:00:00",
+                "created_unix": base - 6 * HOUR,
+                "ended_at": "2026-10-12 08:00:00",
+                "ended_unix": base - 6 * HOUR + 2 * HOUR,
+            },
+        ]
+        body = goal.build(Ctx(answers).read, "Cave")
+        self.assertEqual(body["runs"]["formed"], 7)
+        self.assertEqual(body["runs"]["refused"], 1)
+        self.assertEqual(body["runs"]["not_entered"], 1)
+        self.assertEqual(body["runs"]["in_flight"], 1)
+        self.assertEqual(body["runs"]["entered"], 4)
+        self.assertEqual(body["runs"]["cleared"], 1)
+        self.assertEqual(body["runs"]["wiped"], 1)
+        self.assertEqual(body["runs"]["abandoned"], 1)
+        self.assertEqual(body["runs"]["timed_out"], 1)
+        self.assertEqual(body["runs"]["clears_per_attempt"], 0.25)
 
     def test_repeated_deaths_are_grouped_by_member_spot_and_killer(self):
         answers = _base_answers("Cave")
