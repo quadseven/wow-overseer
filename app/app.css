@@ -21,7 +21,7 @@ button { font: inherit; }
 img { display: block; max-width: 100%; }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 2px; }
-/* Route changes focus main for screen readers; script focus needs no page-wide ring. */
+/* Keep keyboard focus rings, but suppress outlines on route focus targets. */
 main:focus-visible, [tabindex="-1"]:focus-visible { outline: none; }
 ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
 .sr-only {
