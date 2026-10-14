@@ -4499,18 +4499,6 @@ def pvp_step(m, aim, move, cap, kept=None):
                 ),
             ),
         )
-    if move.kind == pvpgear.LEAVE:
-        return guildcorps.Step(
-            m.name,
-            pvpgear.ACTION,
-            aim.entry,
-            move.said,
-            rows=(
-                guildcorps.Row(
-                    "guild", pvpgear.leave_command(aim), "", source_for("pvp", m.name)
-                ),
-            ),
-        )
     if move.kind == pvpgear.BUY:
         return guildcorps.Step(
             m.name,
@@ -4549,7 +4537,7 @@ def _pvp_first(m, pvp, recent, cap, kept=None):
     aim, move = pvp
     if move.kind in (pvpgear.INSIDE, pvpgear.WAITING):
         return None, aim.line + ": " + move.said, True
-    if move.kind not in (pvpgear.QUEUE, pvpgear.BUY, pvpgear.LEAVE) or m.in_combat:
+    if move.kind not in (pvpgear.QUEUE, pvpgear.BUY) or m.in_combat:
         return None, "", False
     if _cooling(m, pvpgear.ACTION, recent):
         return None, "", False
