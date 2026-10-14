@@ -49,7 +49,9 @@ def _answer(rows):
     return rows if isinstance(rows, int) else list(rows)
 
 
-def ask(value, rows=(ROW,), event_rows=(), council_rows=(), boss_kill_rows=(), death_rows=()):
+def ask(
+    value, rows=(ROW,), event_rows=(), council_rows=(), boss_kill_rows=(), death_rows=()
+):
     """The handler over a reader that knows the run read and the story's
     reads (deaths, bosses, their levels) and nothing else."""
     rd = realmread.Memory(
@@ -241,14 +243,37 @@ class TheBosses(unittest.TestCase):
         code, payload, _rd = ask("398", boss_kill_rows=kills)
         self.assertEqual(code, 200)
         bosses = payload["run"]["bosses"]
-        self.assertEqual([b["name"] for b in bosses], ["Rhahk'Zor", "Sneed's Shredder", "Sneed", "Gilnid", "Mr. Smite", "Cookie", "Captain Greenskin", "Edwin VanCleef"])
+        self.assertEqual(
+            [b["name"] for b in bosses],
+            [
+                "Rhahk'Zor",
+                "Sneed's Shredder",
+                "Sneed",
+                "Gilnid",
+                "Mr. Smite",
+                "Cookie",
+                "Captain Greenskin",
+                "Edwin VanCleef",
+            ],
+        )
         self.assertEqual(
             [(b["killed"], b["at"], b["by"]) for b in bosses[:3]],
-            [(True, "2026-10-08 10:12:00", "Grug"), (True, "2026-10-08 10:28:00", "Ugga"), (False, None, None)],
+            [
+                (True, "2026-10-08 10:12:00", "Grug"),
+                (True, "2026-10-08 10:28:00", "Ugga"),
+                (False, None, None),
+            ],
         )
 
     def test_a_kill_without_a_killer_name_is_still_a_kill(self):
-        kills = [{"member": "", "entry": 644, "name": "Rhahk'Zor", "at": "2026-10-08 10:12:00"}]
+        kills = [
+            {
+                "member": "",
+                "entry": 644,
+                "name": "Rhahk'Zor",
+                "at": "2026-10-08 10:12:00",
+            }
+        ]
         code, payload, _rd = ask("398", boss_kill_rows=kills)
         self.assertTrue(payload["run"]["bosses"][0]["killed"])
         self.assertEqual(payload["run"]["bosses"][0]["by"], "")
@@ -267,23 +292,65 @@ class TheBosses(unittest.TestCase):
 class TheWipes(unittest.TestCase):
     def test_a_cluster_of_deaths_to_a_boss_is_a_wipe(self):
         deaths = [
-            {"character_name": "Grug", "killer_name": "Sneed's Shredder", "killer_entry": 642, "created_at": "2026-10-08 10:30:00"},
-            {"character_name": "Ugga", "killer_name": "Sneed's Shredder", "killer_entry": 642, "created_at": "2026-10-08 10:30:05"},
-            {"character_name": "Og", "killer_name": "Sneed's Shredder", "killer_entry": 642, "created_at": "2026-10-08 10:30:10"},
+            {
+                "character_name": "Grug",
+                "killer_name": "Sneed's Shredder",
+                "killer_entry": 642,
+                "created_at": "2026-10-08 10:30:00",
+            },
+            {
+                "character_name": "Ugga",
+                "killer_name": "Sneed's Shredder",
+                "killer_entry": 642,
+                "created_at": "2026-10-08 10:30:05",
+            },
+            {
+                "character_name": "Og",
+                "killer_name": "Sneed's Shredder",
+                "killer_entry": 642,
+                "created_at": "2026-10-08 10:30:10",
+            },
         ]
         code, payload, _rd = ask("398", death_rows=deaths)
         self.assertEqual(code, 200)
         self.assertEqual(
             payload["run"]["wipes"],
-            [{"entry": 642, "name": "Sneed's Shredder", "at": "2026-10-08 10:30:00", "deaths": 3}],
+            [
+                {
+                    "entry": 642,
+                    "name": "Sneed's Shredder",
+                    "at": "2026-10-08 10:30:00",
+                    "deaths": 3,
+                }
+            ],
         )
 
     def test_deaths_spread_out_are_separate_wipes(self):
         deaths = [
-            {"character_name": "Grug", "killer_name": "Rhahk'Zor", "killer_entry": 644, "created_at": "2026-10-08 10:15:00"},
-            {"character_name": "Ugga", "killer_name": "Rhahk'Zor", "killer_entry": 644, "created_at": "2026-10-08 10:15:05"},
-            {"character_name": "Grug", "killer_name": "Sneed's Shredder", "killer_entry": 642, "created_at": "2026-10-08 10:35:00"},
-            {"character_name": "Ugga", "killer_name": "Sneed's Shredder", "killer_entry": 642, "created_at": "2026-10-08 10:35:05"},
+            {
+                "character_name": "Grug",
+                "killer_name": "Rhahk'Zor",
+                "killer_entry": 644,
+                "created_at": "2026-10-08 10:15:00",
+            },
+            {
+                "character_name": "Ugga",
+                "killer_name": "Rhahk'Zor",
+                "killer_entry": 644,
+                "created_at": "2026-10-08 10:15:05",
+            },
+            {
+                "character_name": "Grug",
+                "killer_name": "Sneed's Shredder",
+                "killer_entry": 642,
+                "created_at": "2026-10-08 10:35:00",
+            },
+            {
+                "character_name": "Ugga",
+                "killer_name": "Sneed's Shredder",
+                "killer_entry": 642,
+                "created_at": "2026-10-08 10:35:05",
+            },
         ]
         code, payload, _rd = ask("398", death_rows=deaths)
         self.assertEqual(
@@ -293,22 +360,48 @@ class TheWipes(unittest.TestCase):
 
     def test_a_single_death_to_a_boss_is_not_a_wipe(self):
         deaths = [
-            {"character_name": "Grug", "killer_name": "Rhahk'Zor", "killer_entry": 644, "created_at": "2026-10-08 10:15:00"},
+            {
+                "character_name": "Grug",
+                "killer_name": "Rhahk'Zor",
+                "killer_entry": 644,
+                "created_at": "2026-10-08 10:15:00",
+            },
         ]
         code, payload, _rd = ask("398", death_rows=deaths)
         self.assertEqual(payload["run"]["wipes"], [])
 
     def test_deaths_to_trash_are_not_wipes(self):
         deaths = [
-            {"character_name": "Grug", "killer_name": "Defias Miner", "killer_entry": 598, "created_at": "2026-10-08 10:15:00"},
-            {"character_name": "Ugga", "killer_name": "Defias Miner", "killer_entry": 598, "created_at": "2026-10-08 10:15:05"},
+            {
+                "character_name": "Grug",
+                "killer_name": "Defias Miner",
+                "killer_entry": 598,
+                "created_at": "2026-10-08 10:15:00",
+            },
+            {
+                "character_name": "Ugga",
+                "killer_name": "Defias Miner",
+                "killer_entry": 598,
+                "created_at": "2026-10-08 10:15:05",
+            },
         ]
         code, payload, _rd = ask("398", death_rows=deaths)
         self.assertEqual(payload["run"]["wipes"], [])
 
     def test_a_run_still_inside_has_no_wipe_read(self):
         inside = dict(ROW, state="inside", outcome="")
-        code, payload, rd = ask("398", rows=(inside,), death_rows=[{"character_name": "Grug", "killer_name": "Rhahk'Zor", "killer_entry": 644, "created_at": "2026-10-08 10:15:00"}])
+        code, payload, rd = ask(
+            "398",
+            rows=(inside,),
+            death_rows=[
+                {
+                    "character_name": "Grug",
+                    "killer_name": "Rhahk'Zor",
+                    "killer_entry": 644,
+                    "created_at": "2026-10-08 10:15:00",
+                }
+            ],
+        )
         self.assertEqual(code, 200)
         self.assertEqual(payload["run"]["wipes"], [])
         self.assertEqual(reads(rd, "overseer_death"), [])

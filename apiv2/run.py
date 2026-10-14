@@ -177,7 +177,10 @@ def _wipe_clusters(deaths: list, boss_entries: set) -> list:
     for d in deaths:
         if d["entry"] not in boss_entries:
             continue
-        if current and (d["at"] - current[-1]["at"]).total_seconds() > _WIPE_GAP_SECONDS:
+        if (
+            current
+            and (d["at"] - current[-1]["at"]).total_seconds() > _WIPE_GAP_SECONDS
+        ):
             if len(current) >= _WIPE_MIN_DEATHS:
                 clusters.append(current)
             current = []
@@ -187,7 +190,9 @@ def _wipe_clusters(deaths: list, boss_entries: set) -> list:
     return clusters
 
 
-def _wipes(reader, members: list, holes: str, view: dict, map_id: int, bosses: list) -> list:
+def _wipes(
+    reader, members: list, holes: str, view: dict, map_id: int, bosses: list
+) -> list:
     """One entry per cluster where the group wiped on a boss."""
     boss_entries = {entry for entry, _ in bosses}
     deaths = _death_rows(reader, members, holes, view, map_id)
@@ -234,7 +239,9 @@ def _bosses(reader, view: dict) -> tuple[list, list]:
                 "entry": entry,
                 "name": name,
                 "killed": kill is not None,
-                "at": kill["at"].isoformat(sep=" ", timespec="seconds") if kill else None,
+                "at": kill["at"].isoformat(sep=" ", timespec="seconds")
+                if kill
+                else None,
                 "by": kill["by"] if kill else None,
             }
         )

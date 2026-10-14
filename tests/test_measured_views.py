@@ -258,12 +258,29 @@ RUN = {
     "created_at": "2026-10-13 10:00:00",
     "ended_at": "2026-10-13 10:40:00",
     "bosses": [
-        {"entry": 644, "name": "Rhahk'Zor", "killed": True, "at": "2026-10-13 10:12:00", "by": "Grug"},
-        {"entry": 642, "name": "Sneed's Shredder", "killed": True, "at": "2026-10-13 10:28:00", "by": "Ugga"},
+        {
+            "entry": 644,
+            "name": "Rhahk'Zor",
+            "killed": True,
+            "at": "2026-10-13 10:12:00",
+            "by": "Grug",
+        },
+        {
+            "entry": 642,
+            "name": "Sneed's Shredder",
+            "killed": True,
+            "at": "2026-10-13 10:28:00",
+            "by": "Ugga",
+        },
         {"entry": 643, "name": "Sneed", "killed": False, "at": None, "by": None},
     ],
     "wipes": [
-        {"entry": 642, "name": "Sneed's Shredder", "at": "2026-10-13 10:30:00", "deaths": 3},
+        {
+            "entry": 642,
+            "name": "Sneed's Shredder",
+            "at": "2026-10-13 10:30:00",
+            "deaths": 3,
+        },
     ],
     "gear": [],
 }
