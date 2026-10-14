@@ -21,6 +21,9 @@ button { font: inherit; }
 img { display: block; max-width: 100%; }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 2px; }
+/* A route change focuses main for screen readers; that script focus must not
+   paint the general ring around the whole content area. */
+main:focus-visible, [tabindex="-1"]:focus-visible { outline: none; }
 ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
