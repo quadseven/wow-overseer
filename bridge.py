@@ -11537,7 +11537,7 @@ class Bridge(discord.Client):
         the piece still sat in the holder's bags at the last save.
         """
         history = await asyncio.to_thread(_equip_history, EQUIP_MEMORY_HOURS,
-                                          EQUIP_RETRY_MINUTES)
+                                          EQUIP_TRY_WINDOW_HOURS * 60)
         trained = await asyncio.to_thread(_weapon_skill_changes, list(names))
         history, reopened = weaponskill.reopen_equip_attempts(
             history, trained, gear_rows)
@@ -11672,7 +11672,8 @@ class Bridge(discord.Client):
         # the filtered `wanted`, never to a deferred one.
         queue, notes = bag_pressure.equips_to_queue(
             wanted, recent, tries, answers=answers, worn=worn,
-            holds=self._equip_holds, holders=set(holders) or None)
+            holds=self._equip_holds, holders=set(holders) or None,
+            memory_hours=EQUIP_MEMORY_HOURS)
         for note in notes:
             log.info("equip: %s", note)
         log.info("equip: %d %spiece(s) held on the world's answer",
@@ -11690,7 +11691,7 @@ class Bridge(discord.Client):
             "equip: %d %scarried piece(s) the holder would wear, queued %d, "
             "%d already asked inside %d minutes, %d held back",
             len(wanted), label, written, len(wanted) - len(queue) - len(notes),
-            EQUIP_RETRY_MINUTES, len(notes),
+            EQUIP_TRY_WINDOW_HOURS * 60, len(notes),
         )
 
     async def _guild_equip_once(self, cohort=None) -> None:
@@ -11724,7 +11725,7 @@ class Bridge(discord.Client):
         if not wanted:
             return
         history = await asyncio.to_thread(_equip_history, EQUIP_MEMORY_HOURS,
-                                          EQUIP_RETRY_MINUTES)
+                                          EQUIP_TRY_WINDOW_HOURS * 60)
         changed = await asyncio.to_thread(_level_changes, members)
         current = bag_pressure.since_level_change(history, changed)
         await self._write_equips(wanted, current, label="guild ", holders=members)
@@ -17347,7 +17348,7 @@ class Bridge(discord.Client):
                 log.info("tidy: %s tries on %s", tryon.holder, tryon.name)
         declined = tidy.declined_equips(
             await asyncio.to_thread(_equip_history, EQUIP_MEMORY_HOURS,
-                                    EQUIP_RETRY_MINUTES))
+                                    EQUIP_TRY_WINDOW_HOURS * 60))
         grants = tidy.hand_ons(gear_rows, members, claims, TIDY_FUTURE_LEVELS,
                                declined)
         asked = {tidy.guid_of(command) for _h, _t, command in seen}
@@ -21996,7 +21997,7 @@ SELL_MEMORY_HOURS = int(os.environ.get("SELL_MEMORY_HOURS", "24"))
 # How long an equip command is left to land before it is asked again (#146).
 # Longer than the world's fifteen minute save interval, because a piece put on
 # a minute ago still reads as carried until the next save.
-EQUIP_RETRY_MINUTES = int(os.environ.get("EQUIP_RETRY_MINUTES", "30"))
+EQUIP_TRY_WINDOW_HOURS = int(os.environ.get("EQUIP_TRY_WINDOW_HOURS", "2"))
 # How far back equip attempts are counted towards gear.equips_to_queue's
 # give-up, and how far back their outcomes are read for the log.
 EQUIP_MEMORY_HOURS = int(os.environ.get("EQUIP_MEMORY_HOURS", "24"))
@@ -27574,7 +27575,7 @@ def _tidy_routes(names: list) -> dict:
         members = tidy.members_from_rows(worn_rows)
         claims = bag_pressure.family_claimants(rows, worn_rows, names)
         declined = tidy.declined_equips(
-            _equip_history(EQUIP_MEMORY_HOURS, EQUIP_RETRY_MINUTES))
+            _equip_history(EQUIP_MEMORY_HOURS, EQUIP_TRY_WINDOW_HOURS * 60))
         return tidy.routes(tidy.hand_ons(
             rows, members, claims, TIDY_FUTURE_LEVELS, declined))
     except pymysql.err.MySQLError:

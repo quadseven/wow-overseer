@@ -257,6 +257,7 @@ def _run_pass(world, standing_together=True):
             "_fetch_family_equipped": lambda names: worn_rows,
             "_fetch_worn_entries": lambda names: {"Grug": {10: 1076, 11: 4998}},
             "_equip_history": lambda hours, minutes: [],
+            "EQUIP_TRY_WINDOW_HOURS": 2,
             "EQUIP_MEMORY_HOURS": 24,
             "EQUIP_RETRY_MINUTES": 30,
             "_recent_tidy_keys": lambda hours: world.get("seen", set()),

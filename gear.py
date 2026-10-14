@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 
 # The two verbs the world executor understands for moving one item from one
 # character's bags into another's, and the single fact that decides between
@@ -1535,9 +1536,8 @@ def merge_equips(wanted, withheld, chosen) -> tuple:
 def since_level_change(history, changed) -> list:
     """The equip attempts made at each character's CURRENT level.
 
-    A LEVEL CHANGE RE-OPENS EVERY SLOT. `equips_to_queue` holds a piece back
-    after `give_up` attempts, on the grounds that the world refuses it for a
-    reason this side cannot see; a level is the commonest such reason and a
+    A LEVEL CHANGE RE-OPENS EVERY SLOT. Repeated world refusals hold a piece
+    back for staged retry windows; a level is the commonest reason and a
     level change retires it. The natural lowering of 2026-09-26 changed every
     family member's level at once, and every slot's question with it, so the
     attempts before the change say nothing about the answer after it.
@@ -1597,6 +1597,7 @@ class WorldHold:
     row_id: int
     worn: tuple
     lifted: bool = False
+    retry_at: object = None
 
 
 def latest_answers(history, open_statuses) -> dict:
@@ -1646,7 +1647,9 @@ def _refused(row) -> bool:
     )
 
 
-def _world_holds(wanted, answers, worn, holds, holders) -> dict:
+def _world_holds(
+    wanted, answers, worn, holds, holders, tries, now, memory_hours
+) -> dict:
     """(holder, command) -> note, for each piece held on the world's answer.
 
     `holds` is updated in place. A hold begins at the first pass that sees a
@@ -1669,22 +1672,31 @@ def _world_holds(wanted, answers, worn, holds, holders) -> dict:
         if not _refused(row):
             holds.pop(key, None)
             continue
-        now = _worn_for(equip, worn)
+        worn_now = _worn_for(equip, worn)
         hold = holds.get(key)
         if hold is None:
-            hold = holds[key] = WorldHold(row_id=int(row.get("id", 0)), worn=now)
-        elif hold.worn != now:
+            hold = holds[key] = WorldHold(row_id=int(row.get("id", 0)), worn=worn_now)
+        elif hold.worn != worn_now:
             hold.lifted = True
         if hold.lifted:
             continue
-        out[key] = (
-            "%s keeps %s over %s: %s; held until its level or that slot changes"
-            % (
-                equip.holder,
-                " and ".join(name for _slot, _entry, name in now) or "nothing",
-                equip.name,
-                str(row.get("detail")).strip(),
-            )
+        attempts = max(1, int((tries or {}).get(key, 1)))
+        wait_hours = (2, 4, max(1, int(memory_hours)))[min(attempts, 3) - 1]
+        created = row.get("created_at")
+        if isinstance(created, datetime):
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            hold.retry_at = created + timedelta(hours=wait_hours)
+            if hold.retry_at <= now:
+                hold.lifted = True
+                continue
+        due = hold.retry_at.strftime("%H:%M") if hold.retry_at else "later"
+        out[key] = "%s keeps %s over %s: %s; tries again at %s" % (
+            equip.holder,
+            " and ".join(name for _slot, _entry, name in worn_now) or "nothing",
+            equip.name,
+            str(row.get("detail")).strip(),
+            due,
         )
     return out
 
@@ -1700,7 +1712,16 @@ def world_held(wanted, holds) -> int:
 
 
 def equips_to_queue(
-    wanted, recent, tries, give_up=3, answers=None, worn=None, holds=None, holders=None
+    wanted,
+    recent,
+    tries,
+    give_up=3,
+    answers=None,
+    worn=None,
+    holds=None,
+    holders=None,
+    now=None,
+    memory_hours=24,
 ) -> tuple:
     """Which equips to write now, and a note for each one held back.
 
@@ -1709,11 +1730,9 @@ def equips_to_queue(
     (PlayerSaveInterval), so a piece put on a minute ago still reads as
     carried, and asking again inside the window would be the duplicate.
 
-    `tries` counts (holder, command) over the longer memory window. A piece
-    asked for `give_up` times and still carried is one the world will not put
-    on for a reason this side cannot see - combat, a proficiency the numbers
-    do not show - so it is held and said, rather than asked for every window
-    for ever.
+    `tries` counts (holder, command) over the longer memory window. Repeated
+    world refusals wait two hours, four hours, then the full memory window.
+    Other attempts are eligible again as soon as the short retry window ends.
 
     An `applied` answer ends this attempt. If another gear pass later puts
     the old piece back, the bag read alone cannot turn that success into a
@@ -1722,8 +1741,8 @@ def equips_to_queue(
     A PIECE THE WORLD REFUSED WITH A REASON IS HELD ON THAT REASON (#897).
     `answers` is the newest answered row per (holder, command), from
     `latest_answers`; one that ended `error` or `unchanged` with a `detail`
-    holds the piece whatever the try count, until the holder's level, what
-    is worn in that slot (`worn`, from `worn_pieces`) or the bags change.
+    holds the piece until its staged retry time, or until the holder's level,
+    what is worn in that slot (`worn`, from `worn_pieces`) or the bags change.
     `holds` is the caller's dict of WorldHold, kept between passes and
     updated in place; `holders` are the members this pass read, by default
     the holders of `wanted`.
@@ -1731,9 +1750,11 @@ def equips_to_queue(
     holds = {} if holds is None else holds
     if holders is None:
         holders = {e.holder for e in wanted}
-    held = _world_holds(wanted, answers or {}, worn, holds, set(holders))
+    now = now or datetime.now(timezone.utc)
+    held = _world_holds(
+        wanted, answers or {}, worn, holds, set(holders), tries, now, memory_hours
+    )
     queue, notes = [], []
-    least = max(1, int(give_up))
     for equip in wanted:
         key = (equip.holder, equip.command)
         if key in held:
@@ -1745,12 +1766,6 @@ def equips_to_queue(
         if (answers or {}).get(key, {}).get("status") == "applied":
             continue
         if key in recent:
-            continue
-        if int(tries.get(key, 0)) >= least:
-            notes.append(
-                "%s still carries %s after %d equip command(s); held until the "
-                "memory window passes" % (equip.holder, equip.name, int(tries[key]))
-            )
             continue
         queue.append(equip)
     return tuple(queue), tuple(notes)

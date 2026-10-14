@@ -207,6 +207,17 @@ _RULES = (
     ),
     (
         re.compile(
+            r"^equip: (?P<s>\w+) keeps .+? over (?P<item>.+?): .+; tries again at (?P<due>\d{2}:\d{2})"
+        ),
+        "character",
+        "equip_held",
+        lambda m: (
+            "Trying to wear " + m["item"],
+            "the game to accept it (tries again at " + m["due"] + ")",
+        ),
+    ),
+    (
+        re.compile(
             r"^equip: (?P<s>\w+) still carries (?P<item>.+?) after (?P<n>\d+) "
             r"equip command\(s\); held until"
         ),
