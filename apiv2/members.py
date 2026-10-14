@@ -90,7 +90,7 @@ JOBS_SQL = (
 )
 JOB_MINUTES = 30
 ASKS_SQL = (
-    "SELECT asker, target, target_label, state, UNIX_TIMESTAMP(created_at) AS at, "
+    "SELECT asker, target, target_label, reason, state, UNIX_TIMESTAMP(created_at) AS at, "
     "(SELECT COUNT(*) FROM overseer_guild_answer an "
     "WHERE an.ask_id = overseer_guild_ask.id) AS yeses "
     "FROM overseer_guild_ask WHERE kind = 'quest' AND asker IN ({holes}) "
@@ -245,27 +245,46 @@ def ask_streaks(asks: list) -> dict:
     return out
 
 
+def _ask_blocker_tail(run: list) -> str:
+    """The latest reason a class quest ask remains stuck."""
+    ran = sum(1 for r in run if r.get("state") == "ran")
+    latest_failure = next(
+        (
+            str(r.get("reason") or "")[8:]
+            for r in reversed(run)
+            if r.get("state") == "ran"
+            and str(r.get("reason") or "").startswith("failed: ")
+        ),
+        "",
+    )
+    if latest_failure:
+        return ", the last party %s" % latest_failure
+    elif ran:
+        return ", a party went %d time%s and it is still not done" % (
+            ran,
+            "" if ran == 1 else "s",
+        )
+    yeses = sum(int(r.get("yeses") or 0) for r in run)
+    return ", %d said yes, no party formed" % yeses
+
+
 def ask_blocker(run: list, now_at: int) -> dict | None:
     """The stuck entry for a run of class quest asks, or None when it is over."""
     if not run or now_at - int(run[-1].get("at") or 0) > ASK_LIVE_SECONDS:
         return None
     title = run[-1].get("target_label") or "a class quest"
-    ran = sum(1 for r in run if r.get("state") == "ran")
     asked = "asked the guild for help %d time%s" % (
         len(run),
         "" if len(run) == 1 else "s",
     )
-    if ran:
-        tail = ", a party went %d time%s and it is still not done" % (
-            ran,
-            "" if ran == 1 else "s",
-        )
-    else:
-        yeses = sum(int(r.get("yeses") or 0) for r in run)
-        tail = ", %d said yes, no party formed" % yeses
     return {
         "step": "Class quest: " + title,
-        "blocker": "Cannot finish %s alone: %s%s." % (title, asked, tail),
+        "blocker": "Cannot finish %s alone: %s%s."
+        % (
+            title,
+            asked,
+            _ask_blocker_tail(run),
+        ),
         "since": int(run[0].get("at") or 0) or None,
         "kind": "class quest",
     }
