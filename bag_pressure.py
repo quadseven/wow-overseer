@@ -128,32 +128,111 @@ def vendor_candidates(rows: Iterable[dict], keep_names=()) -> tuple[SellCandidat
     """
     out = []
     for row in rows:
-        try:
-            if int(row.get("entry", 0)) == GUILD_TABARD_ENTRY:
-                continue
-        except (TypeError, ValueError):
-            continue
-        if owner_keeps(row.get("name", ""), keep_names):
-            continue
-        try:
-            item = ItemForSale(
-                quality=int(row["quality"]),
-                quest_item=bool(row.get("quest_item", True)),
-                reagent=bool(row.get("reagent", True)),
-                profession_needed=bool(row.get("profession_needed", True)),
-                sell_price=int(row["sell_price"]),
-            )
-            candidate = SellCandidate(
-                holder=str(row["holder"]),
-                item_guid=int(row["item_guid"]),
-                count=int(row.get("count", 0)),
-                item=item,
-            )
-        except (KeyError, TypeError, ValueError):
-            continue
-        if candidate.item_guid > 0 and candidate.count > 0 and sellable(item):
+        candidate, _why = _vendor_reading(row, keep_names)
+        if candidate is not None:
             out.append(candidate)
     return tuple(out)
+
+
+# Why a carried row is not offered to a vendor, in the words the bag hold
+# names it by (#986). One reading decides both the sale and the reason, so the
+# reason a hold gives cannot disagree with the sale the pass would write.
+KEPT_TABARD = "the guild tabard"
+KEPT_BY_OWNER = "kept by the owner"
+KEPT_UNREAD = "sale facts unread"
+KEPT_QUEST = "a quest item"
+KEPT_REAGENT = "a reagent"
+KEPT_PROFESSION = "profession stock"
+KEPT_QUALITY = "uncommon or better"
+KEPT_NO_PRICE = "no vendor price"
+_SALE_FLAGS = ("quest_item", "reagent", "profession_needed")
+
+
+def _vendor_reading(row: dict, keep_names=()) -> tuple:
+    """(SellCandidate, '') for a row a vendor may be offered, else (None, why)."""
+    try:
+        if int(row.get("entry", 0)) == GUILD_TABARD_ENTRY:
+            return None, KEPT_TABARD
+    except (TypeError, ValueError):
+        return None, KEPT_UNREAD
+    if owner_keeps(row.get("name", ""), keep_names):
+        return None, KEPT_BY_OWNER
+    try:
+        item = ItemForSale(
+            quality=int(row["quality"]),
+            quest_item=bool(row.get("quest_item", True)),
+            reagent=bool(row.get("reagent", True)),
+            profession_needed=bool(row.get("profession_needed", True)),
+            sell_price=int(row["sell_price"]),
+        )
+        candidate = SellCandidate(
+            holder=str(row["holder"]),
+            item_guid=int(row["item_guid"]),
+            count=int(row.get("count", 0)),
+            item=item,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None, KEPT_UNREAD
+    if candidate.item_guid <= 0 or candidate.count <= 0:
+        return None, KEPT_UNREAD
+    if sellable(item):
+        return candidate, ""
+    if any(flag not in row for flag in _SALE_FLAGS):
+        return None, KEPT_UNREAD
+    if item.quest_item:
+        return None, KEPT_QUEST
+    if item.reagent:
+        return None, KEPT_REAGENT
+    if item.profession_needed:
+        return None, KEPT_PROFESSION
+    if item.quality > 1:
+        return None, KEPT_QUALITY
+    return None, KEPT_NO_PRICE
+
+
+def vendor_refusal(row: dict, keep_names=()) -> str:
+    """Why `vendor_candidates` leaves this carried row out; '' when it sells."""
+    return _vendor_reading(row, keep_names)[1]
+
+
+# How many kept items a floor reason names by name.
+FLOOR_REASON_EXAMPLES = 3
+
+
+def floor_reason(name: str, sellable: int, rows: Iterable[dict], keep_names=()) -> str:
+    """One sentence on what a vendor can do for `name`, a member at the floor.
+
+    `sellable` is the vendor pass's own count for the member (bridge
+    `_sellable_per_holder` plus lockbox and clearance sales), `rows` its
+    carried rows as `vendor_candidates` reads them. A member with something
+    to sell is told how much; one with nothing is told exactly what it
+    carries instead, by reason and by the first items' names, because "no
+    town pass has made room" alone held a family five hours with nobody able
+    to say why (#986).
+    """
+    if sellable > 0:
+        return "%s carries %d stack(s) a vendor will buy" % (name, sellable)
+    kept: dict[str, int] = {}
+    examples = []
+    for row in rows or ():
+        if str(row.get("holder", "")) != str(name):
+            continue
+        why = vendor_refusal(row, keep_names) or KEPT_UNREAD
+        kept[why] = kept.get(why, 0) + 1
+        if len(examples) < FLOOR_REASON_EXAMPLES:
+            examples.append("%s (%s)" % (row.get("name") or "an unnamed item", why))
+    if not kept:
+        return "%s carries nothing a vendor will buy, and no carried item was read" % name
+    counts = ", ".join(
+        "%d %s" % (count, why)
+        for why, count in sorted(kept.items(), key=lambda kv: (-kv[1], kv[0]))
+    )
+    return "%s carries nothing a vendor will buy: %d stack(s) kept (%s), e.g. %s" % (
+        name,
+        sum(kept.values()),
+        counts,
+        ", ".join(examples),
+    )
 
 
 # ITEM_CLASS_QUEST in item_template.class.
@@ -431,6 +510,12 @@ def town_first_trip_worth(
 # campaign stays queued and goes in the moment every member has room.
 BAG_HOLD_STUCK_SECONDS = CAMPAIGN_RESUME_CEILING_SECONDS
 
+# How long a hold may stand with no gain before it says, in the log and in the
+# campaign's withheld reason, exactly why no town pass is making room (#986):
+# what each member at the floor carries that a vendor will not buy, and how
+# the last town pass ended. The stuck list calls a hold stuck at 30 minutes.
+BAG_HOLD_REASON_SECONDS = 30 * 60
+
 # A reading this much older than the last one starts the hold again: the
 # queue reads the bags every minute while it holds, so a gap this long is a
 # hold that ended (a run, a restart of the queue) and not one still going.
@@ -455,6 +540,7 @@ def bag_hold_progress(
     now: float,
     floor: int = TOWN_RUN_FREE_SLOTS,
     window: float = BAG_HOLD_STUCK_SECONDS,
+    running: bool = False,
 ) -> BagHoldProgress | None:
     """The hold after this reading, or None when nobody is at the floor.
 
@@ -464,6 +550,13 @@ def bag_hold_progress(
     the best each has had is what a gain is measured against, so a slot won
     and lost again does not keep restarting the clock. `window` seconds with
     no gain releases the hold, and a released hold stays released.
+
+    NOT WHILE A TOWN PASS IS RUNNING (#986). `running` is whether the family
+    is on its town errand. A pass still under way has not failed to make
+    room: releasing the hold under it ended the errand (its campaign ceiling
+    no longer saw bag pressure) on its walk to the vendor, before it sold or
+    banked anything. The window keeps counting; the hold is released on the
+    first reading after the pass ends, if no slot came of it.
     """
     held = {
         str(name): free
@@ -482,7 +575,7 @@ def bag_hold_progress(
         best=tuple(sorted(best.items())),
         since=since,
         seen=now,
-        released=previous.released or now - since >= window,
+        released=previous.released or (not running and now - since >= window),
     )
 
 

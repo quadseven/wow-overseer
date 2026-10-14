@@ -2487,10 +2487,111 @@ _BAG_HOLD: dict = {}
 _BAG_HOLD_STUCK: dict[str, tuple] = {}
 
 
+# WHY NO TOWN PASS IS MAKING ROOM (#986). "No town pass has made room" held
+# two families for 2.4 and 5 hours with nobody able to say why. The vendor
+# pass writes, per member at the floor, what a vendor can do for it
+# (bag_pressure.floor_reason); the town errand writes, per family, how its
+# vendor step ended. `_bag_hold_why` puts the two together for the log and for
+# the campaign's withheld reason.
+_BAG_FLOOR_WHY: dict[str, str] = {}
+_TOWN_PASS_NOTE: dict[tuple, str] = {}
+# The hold (its `since`) the reason was last logged for, per family key.
+_BAG_HOLD_SAID: dict[tuple, float] = {}
+
+
 def _prune_bag_hold_stuck(families: dict) -> None:
     active = {name for family in families.values() for name in family["names"]}
     for name in _BAG_HOLD_STUCK.keys() - active:
         del _BAG_HOLD_STUCK[name]
+    # Looked up: the queue tests load this function in isolation.
+    floor_why = globals().get("_BAG_FLOOR_WHY", {})
+    for name in floor_why.keys() - active:
+        del floor_why[name]
+
+
+def _note_bag_floor(names, free_slots: dict, rows: list, sellable: dict) -> None:
+    """Record what a vendor can do for each member at the bag floor."""
+    for name in names:
+        free = (free_slots or {}).get(name)
+        if isinstance(free, int) and 0 <= free <= bag_pressure.TOWN_RUN_FREE_SLOTS:
+            _BAG_FLOOR_WHY[name] = bag_pressure.floor_reason(
+                name, int((sellable or {}).get(name, 0)), rows,
+                keep_names=OWNER_KEEPS)
+        else:
+            _BAG_FLOOR_WHY.pop(name, None)
+
+
+def _note_town_pass(key: tuple, state, new, line: str, marks: dict) -> None:
+    """Record how the town errand's vendor step ended, for the bag hold.
+
+    Called on a step or phase change. The vendor step ran the sell pass at a
+    counter when its mark is set (`_town_errand_vendor`); a step left without
+    it, or an errand ended before reaching it, is the vendor reason a hold at
+    the floor names.
+    """
+    if state.current_step == townerrand.VENDOR:
+        if townerrand.VENDOR in marks:
+            _TOWN_PASS_NOTE[key] = ("the town errand's vendor step ran the "
+                                    "sell pass at a vendor")
+        else:
+            _TOWN_PASS_NOTE[key] = ("the town errand's vendor step ended "
+                                    "before the leader stood at a vendor (%s)"
+                                    % line)
+        return
+    if new.phase != townerrand.DONE:
+        return
+    steps = state.steps
+    vendor_ahead = (state.phase != townerrand.STEPS
+                    or state.step < steps.index(townerrand.VENDOR))
+    if vendor_ahead:
+        _TOWN_PASS_NOTE[key] = ("the town errand ended before its vendor "
+                                "step (%s)" % line)
+
+
+def _bag_hold_why(names, at_least: float = 0.0) -> str:
+    """Why no town pass is making room for this family's members at the
+    floor, or '' when there is no hold or it is younger than `at_least`
+    seconds without a gain."""
+    key = tuple(sorted(names))
+    progress = _BAG_HOLD.get(key)
+    if progress is None or time.monotonic() - progress.since < at_least:
+        return ""
+    held = [name for name, _free in progress.best]
+    parts = [_BAG_FLOOR_WHY.get(name)
+             or "%s's bags have not been read by a vendor pass" % name
+             for name in held]
+    note = _TOWN_PASS_NOTE.get(key)
+    if not note:
+        state = _TOWN_ERRANDS.get(key)
+        if state is not None and state.active:
+            note = "the town errand is under way (%s)" % (
+                state.current_step or state.phase)
+        elif state is not None and state.ended:
+            note = ("no town errand has reached a vendor; the last ended "
+                    "%d min ago and errands are %d min apart" % (
+                        (time.monotonic() - state.ended) // 60,
+                        townerrand.COOLDOWN_SECONDS // 60))
+        else:
+            note = "no town errand has reached a vendor"
+    return "; ".join(parts + [note])
+
+
+def _say_bag_hold(key: tuple, names, progress, now: float) -> None:
+    """Forget a hold's notes once it ends; log once per hold why it stands
+    once it has gone bag_pressure.BAG_HOLD_REASON_SECONDS with no gain."""
+    if progress is None:
+        _BAG_HOLD_SAID.pop(key, None)
+        _TOWN_PASS_NOTE.pop(key, None)
+        return
+    if (now - progress.since < bag_pressure.BAG_HOLD_REASON_SECONDS
+            or _BAG_HOLD_SAID.get(key) == progress.since):
+        return
+    _BAG_HOLD_SAID[key] = progress.since
+    log.warning("bag hold: %s at %d or fewer free slots for %d minutes with "
+                "no slot gained: %s",
+                ", ".join(name for name, _free in progress.best),
+                bag_pressure.TOWN_RUN_FREE_SLOTS,
+                int((now - progress.since) // 60), _bag_hold_why(names))
 
 _MEMO_CREATE_SQL = ("CREATE TABLE IF NOT EXISTS overseer_bridge_memo ("
                     "kind VARCHAR(32) NOT NULL, subject VARCHAR(191) NOT NULL, "
@@ -2593,7 +2694,12 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
     """
     key = tuple(sorted(names))
     now = time.monotonic()
-    progress = bag_pressure.bag_hold_progress(_BAG_HOLD.get(key), free_slots, now)
+    # Looked up, not called by name: the campaign tests load this function in
+    # isolation. A town errand under way is a pass not yet failed (#986).
+    errand = globals().get("_town_errand_active")
+    progress = bag_pressure.bag_hold_progress(
+        _BAG_HOLD.get(key), free_slots, now,
+        running=bool(errand and errand(names)))
     if progress is None:
         _BAG_HOLD.pop(key, None)
         # The hold ended: clear the memo this function writes below.
@@ -2607,6 +2713,9 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
         _memo_upsert("bag_hold", ",".join(key), value, value["since"],
                      wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
         result = bag_pressure.bag_hold_stuck(progress)
+    say = globals().get("_say_bag_hold")
+    if say is not None:
+        say(key, names, progress, now)
     for name in names:
         # The family key is its leader's name, one of these members, so
         # _queue_owns_job reads that member's bag hold result.
@@ -2657,14 +2766,16 @@ def _quest_while_stuck(names: list, mode: str, stuck) -> int:
         except Exception:
             log.exception("town first: quest job insert failed for %s", name)
     if written:
+        why = globals().get("_bag_hold_why")
         log.warning(
             "town first: %s %s at %d or fewer free slots and no town pass has "
-            "made room in %d minutes, so %s go back to job=%s; the campaign "
-            "stays queued and goes in when every member has room",
+            "made room in %d minutes (%s), so %s go back to job=%s; the "
+            "campaign stays queued and goes in when every member has room",
             ", ".join(stuck), "is" if len(stuck) == 1 else "are",
             bag_pressure.TOWN_RUN_FREE_SLOTS,
-            int(bag_pressure.BAG_HOLD_STUCK_SECONDS // 60), ", ".join(moved),
-            jobs.DEFAULT,
+            int(bag_pressure.BAG_HOLD_STUCK_SECONDS // 60),
+            (why(names) if why else "") or "no reason recorded",
+            ", ".join(moved), jobs.DEFAULT,
         )
     return written
 
@@ -2921,11 +3032,17 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
     # this function in isolation.
     hold_stuck = globals().get("_bag_hold_stuck")
     stuck = hold_stuck(names, free_slots) if hold_stuck else ()
+    # WHY THE HOLD STANDS, once it has stood long enough to be called stuck
+    # (#986): what each member at the floor carries, and how the last town
+    # pass ended. Looked up like the gates above.
+    hold_why = globals().get("_bag_hold_why")
     if stuck:
         globals()["_quest_while_stuck"](names, mode, stuck)
+        why = hold_why(names) if hold_why else ""
         return _withheld(withheld, "%s at the bag floor and no town pass has "
-                         "made room, so the family quests until there is "
-                         "room" % ", ".join(stuck))
+                         "made room%s, so the family quests until there is "
+                         "room" % (", ".join(stuck),
+                                   " (%s)" % why if why else ""))
     if bag_pressure.family_town_run_needed(free_slots):
         log.info(
             "goal: withholding dungeon:%s for %d enabled character(s) - bags "
@@ -2935,8 +3052,10 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
         )
         _hand_to_town(keyword, mode, names)
         _keep_in_town(names)
+        why = hold_why(names, bag_pressure.BAG_HOLD_REASON_SECONDS) if hold_why else ""
         return _withheld(withheld, "bags are near full, and a run started now "
-                         "would be evacuated before it could progress")
+                         "would be evacuated before it could progress%s"
+                         % (" (%s)" % why if why else ""))
     waits = _town_first(mode, names, free_slots)
     if waits:
         log.info("goal: withholding dungeon:%s for %d enabled character(s) - %s "
@@ -11010,6 +11129,12 @@ class Bridge(discord.Client):
                               auction_open=True)
         for sale in lock_sales + clear_sales:
             sellable_counts[sale.holder] = sellable_counts.get(sale.holder, 0) + 1
+        # WHAT A VENDOR CAN DO FOR EACH MEMBER AT THE FLOOR (#986), read the
+        # way the sale itself is decided, for the bag hold to name. Looked up:
+        # the economy tests load this pass in isolation.
+        note_floor = globals().get("_note_bag_floor")
+        if note_floor is not None:
+            note_floor(names, free_slots, rows, sellable_counts)
 
         # A stale positional aim on the leader can block the vendor pass just
         # as surely as one on a follower. Full bags are the urgent case: when
@@ -16817,6 +16942,10 @@ class Bridge(discord.Client):
             log.info("town errand: %s%s (not standing at the mailbox: %s)",
                      line, label, ", ".join(away) or "nobody")
         if new.phase != state.phase or new.step != state.step:
+            # Looked up: the adapter tests load this method in isolation.
+            note = globals().get("_note_town_pass")
+            if note is not None:
+                note(key, state, new, line, _TOWN_ERRAND_MARKS.get(key, {}))
             # A NEW PHASE OR STEP GETS A FRESH RESERVATION, so a long errand is
             # not cut by the reservation's own ceiling; the errand's ceiling
             # (townerrand.TOTAL_SECONDS) is what bounds it.
