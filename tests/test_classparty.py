@@ -471,9 +471,17 @@ class TheFreedomOfAPartyToItsAsk(unittest.TestCase):
 class _Bridge:
     """The Bridge methods that follow a party, with the writes and reads stubbed."""
 
-    def __init__(self, answers, walk=None, states=(), ask_live=True):
+    def __init__(
+        self, answers, walk=None, states=(), ask_live=True, meet=None, stands=None
+    ):
         self._class_board = classparty.Board()
         self.rows = []
+        self.commands = {}
+        self.stand_reads = []
+        self.held_meeting = []
+        self.held_up = []
+        self.meet = dict(meet or {})
+        self.stands = list(stands or ())
         self.settled = []
         self.withdrawn = []
         self.slept = []
@@ -486,14 +494,26 @@ class _Bridge:
         return 20000.0
 
     async def _await_corps_answer(self, row_id, seconds):
+        if self.commands.get(row_id, "").startswith(classparty.UP):
+            self.held_up.append(self._class_board.names())
         return self.queue.pop(0) if self.queue else None
 
     async def _follow_guild_walk(self, label, holder, row_id, cap, insert, goal):
-        return self.walk_answer, row_id
+        if not self.commands.get(row_id, "").startswith(classparty.MEET):
+            return self.walk_answer, row_id
+        self.held_meeting.append(self._class_board.names())
+        got = self.meet.get(holder, guildroute.WalkAnswer(guildroute.ARRIVED, "here"))
+        if got == HANG:
+            await asyncio.Event().wait()
+        return got, row_id
 
 
 for _name in (
     "_run_class_party",
+    "_class_party_meet",
+    "_class_party_meet_walks",
+    "_class_party_meet_walk",
+    "_class_party_meet_seen",
     "_class_party_form",
     "_class_party_work",
     "_class_party_watch",
@@ -504,12 +524,27 @@ for _name in (
     setattr(_Bridge, _name, getattr(bridge.Bridge, _name))
 
 
+HANG = "hang"
+# Where the snapshot shows a member standing at the objective (SPOT's map).
+THERE = (1, -240.0, -4100.0)
+
+
 def drive(this, run, **patches):
     ids = iter(range(100, 200))
+    lock = __import__("threading").Lock()
 
     def insert(holder, row):
-        this.rows.append((holder, row.kind, row.command, row.source))
-        return next(ids)
+        with lock:
+            this.rows.append((holder, row.kind, row.command, row.source))
+            row_id = next(ids)
+            this.commands[row_id] = row.command
+            return row_id
+
+    def stands(names):
+        this.stand_reads.append(len(this.rows))
+        if this.stands:
+            return this.stands.pop(0) if len(this.stands) > 1 else this.stands[0]
+        return {n: THERE for n in names}
 
     async def nap(seconds):
         this.slept.append(seconds)
@@ -525,6 +560,7 @@ def drive(this, run, **patches):
         _class_party_settle=lambda r, formed, gave_up: this.settled.append(
             (r.ask_id, formed, gave_up)
         ),
+        _class_party_stands=stands,
         CORPS_ROW_FOLLOW_SECONDS=1.0,
     )
     stubs.update(patches)
@@ -536,8 +572,10 @@ def drive(this, run, **patches):
         asyncio.run(this._run_class_party(run))
 
 
-def a_run(**kw):
-    run = classparty.PartyRun(
+def a_run(meeting=False):
+    """A run of Bigzug's ask 1 with Chill and Dread; by default one whose
+    members have already met at the objective."""
+    return classparty.PartyRun(
         1,
         "Bigzug",
         ("Chill", "Dread"),
@@ -545,8 +583,8 @@ def a_run(**kw):
         "Group Job",
         SPOT,
         {"Chill": 11, "Dread": 12},
+        meeting=meeting,
     )
-    return run
 
 
 class TheBridgeFollowsTheParty(unittest.TestCase):
@@ -610,7 +648,7 @@ class TheBridgeFollowsTheParty(unittest.TestCase):
             NOW,
             refused=this._class_board.refused(),
         )
-        self.assertEqual(out.replies, ())
+        self.assertEqual([r.member for r in out.replies], ["Ghoul"])
         wider = mates(
             ("Bigzug", 20, CAVE, NEAR, 1),
             ("Chill", 19, CAVE, (-250.0, -4150.0), 1),
@@ -753,6 +791,246 @@ class TheBridgeFollowsTheParty(unittest.TestCase):
         self.assertEqual(this._class_party_tasks, set())
 
 
+LOST = guildroute.WalkAnswer(guildroute.ENDED, "cannot walk to Lizard: no path")
+
+
+def cut_off():
+    """A meeting clock short enough to cut off a walk that never ends. Patched on
+    the classparty the bridge reads: importing the bridge under a patched
+    sys.modules can leave the tests holding another copy of the module."""
+    return mock.patch.object(bridge.classparty, "MEET_SECONDS", 0.05)
+
+
+def at(yards, map_id=1):
+    """A snapshot position `yards` east of THERE."""
+    return (map_id, THERE[1] + yards, THERE[2])
+
+
+class TheMeeting(unittest.TestCase):
+    """classparty.judge_meeting: who met the leader at the objective."""
+
+    def judge(self, arrived, stands):
+        return classparty.judge_meeting(a_run(meeting=True), arrived, stands)
+
+    ALL = {"Bigzug", "Chill", "Dread"}
+
+    def test_everyone_beside_the_leader_meets(self):
+        got = self.judge(self.ALL, {"Bigzug": THERE, "Chill": at(40), "Dread": at(89)})
+        self.assertEqual((got.met, got.lost, got.unseen), (True, (), ()))
+
+    def test_a_helper_beyond_seating_range_or_on_another_map_is_lost(self):
+        got = self.judge(
+            self.ALL, {"Bigzug": THERE, "Chill": at(120), "Dread": at(0, map_id=0)}
+        )
+        self.assertFalse(got.met)
+        self.assertEqual(got.lost, ("Chill", "Dread"))
+        self.assertIn("no helper met Bigzug", got.why)
+
+    def test_a_helper_whose_walk_did_not_arrive_is_lost_wherever_it_stands(self):
+        got = self.judge({"Bigzug", "Dread"}, {n: THERE for n in self.ALL})
+        self.assertEqual((got.met, got.lost, got.unseen), (True, ("Chill",), ()))
+
+    def test_a_helper_the_snapshot_does_not_show_is_unseen(self):
+        got = self.judge(self.ALL, {"Bigzug": THERE, "Dread": THERE})
+        self.assertEqual(
+            (got.met, got.lost, got.unseen), (True, ("Chill",), ("Chill",))
+        )
+
+    def test_a_leader_that_did_not_arrive_fails_the_meeting_and_bars_nobody_more(self):
+        got = self.judge({"Chill", "Dread"}, {n: THERE for n in self.ALL})
+        self.assertEqual((got.met, got.lost), (False, ()))
+        self.assertIn("Bigzug did not reach Lizard", got.why)
+
+    def test_a_leader_the_snapshot_does_not_show_fails_the_meeting(self):
+        got = self.judge(self.ALL, {"Chill": THERE, "Dread": THERE})
+        self.assertEqual((got.met, got.lost, got.unseen), (False, (), ("Bigzug",)))
+
+    def test_the_walk_and_the_line(self):
+        self.assertEqual(
+            classparty.meet_command(SPOT, 20000.0), "walk-to-spawn creature:9 max:20000"
+        )
+        self.assertEqual(
+            classparty.meet_command(SPOT, guildroute.TRAINER_WALK_YARDS),
+            "walk-to-spawn creature:9",
+        )
+        self.assertEqual(
+            classparty.meet_line(a_run()),
+            "class party: Chill, Dread meet Bigzug at Lizard for Group Job",
+        )
+
+    def test_a_planned_party_starts_by_meeting(self):
+        self.assertTrue(classparty.PartyRun(1, "B", ("C",), 2000, "x", SPOT).meeting)
+        run = a_run(meeting=True)
+        run.drop(("Chill",))
+        run.met()
+        self.assertEqual((run.helpers, run.answers), (("Dread",), {"Dread": 12}))
+        self.assertFalse(run.meeting)
+
+
+def meet_rows(this, names):
+    """The meeting walks `this` wrote, by name (they are written at once)."""
+    meet = classparty.meet_command(SPOT, 20000.0)
+    got = sorted(r[:3] for r in this.rows if r[2].startswith(classparty.MEET))
+    return got == sorted((n, "job", meet) for n in names)
+
+
+class TheBridgeMeetsAtTheObjective(unittest.TestCase):
+    def test_far_helpers_meet_at_the_objective_before_party_up(self):
+        across = mates(
+            ("Bigzug", 20, CAVE, NEAR, 1),
+            ("Far", 20, CAVE, (NEAR[0] + 800.0, NEAR[1]), 1),
+        )
+        one = qask(1, roles_needed="dps")
+        asked = classask.plan_pass(helps_of("Bigzug"), across, {}, [one], [], NOW)
+        self.assertEqual([r.member for r in asked.replies], ["Far"])
+        answers = [yes(5, 1, "Far", "dps", "help")]
+        quest_pass = classask.plan_pass(
+            helps_of("Bigzug"), across, {}, [one], answers, NOW
+        )
+        (run,) = classparty.plan_starts(
+            [one],
+            answers,
+            quest_pass,
+            helps_of("Bigzug"),
+            free_of(across),
+            classparty.Board(),
+            NOW,
+            0.0,
+        )
+        self.assertTrue(run.meeting)
+        walking = {"Bigzug": THERE, "Far": at(800)}
+        beside = {"Bigzug": THERE, "Far": at(40)}
+        this = _Bridge(
+            [FORMED, answer("applied", phase="ended")], stands=[walking, beside]
+        )
+        drive(this, run)
+        meet = classparty.meet_command(run.spot, 20000.0)
+        self.assertEqual(
+            sorted(r[:3] for r in this.rows[:2]),
+            [("Bigzug", "job", meet), ("Far", "job", meet)],
+        )
+        self.assertEqual(
+            [r[2] for r in this.rows[2:]],
+            [
+                "party-up Far",
+                classparty.walk_command(run.spot, 20000.0),
+                "party-disband",
+            ],
+        )
+        # Two reads of the snapshot, both after the walks and before party-up.
+        self.assertEqual(this.stand_reads, [2, 2])
+        self.assertIn(classparty.MEET_READ_SECONDS, this.slept)
+        self.assertEqual(this.withdrawn, [])
+        self.assertEqual(this.settled, [(1, True, False)])
+
+    def test_no_party_up_while_a_helper_never_stands_beside_the_leader(self):
+        this = _Bridge(
+            [FORMED], stands=[{"Bigzug": THERE, "Chill": at(800), "Dread": at(500)}]
+        )
+        drive(this, a_run(meeting=True))
+        self.assertTrue(meet_rows(this, ("Bigzug", "Chill", "Dread")))
+        self.assertFalse([r for r in this.rows if r[2].startswith("party-")])
+        self.assertEqual(len(this.stand_reads), classparty.MEET_READS)
+        self.assertEqual(sorted(this.withdrawn), [11, 12])
+        self.assertEqual(this._class_board.failures(1), 1)
+        self.assertEqual(this.settled, [(1, False, False)])
+
+    def test_a_helper_whose_walk_fails_is_withdrawn_and_barred(self):
+        this = _Bridge([FORMED, answer("applied", phase="ended")], meet={"Chill": LOST})
+        run = a_run(meeting=True)
+        drive(this, run)
+        self.assertTrue(meet_rows(this, ("Bigzug", "Chill", "Dread")))
+        self.assertEqual(
+            [r[2] for r in this.rows[3:]],
+            ["party-up Dread", "party-walk creature:9 max:20000", "party-disband"],
+        )
+        self.assertEqual(this.withdrawn, [11])
+        self.assertEqual(this._class_board.refused(), {1: frozenset({"Chill"})})
+        self.assertEqual((run.helpers, run.answers), (("Dread",), {"Dread": 12}))
+        self.assertEqual(this._class_board.failures(1), 0)
+        self.assertEqual(this.settled, [(1, True, False)])
+        again = classask.plan_pass(
+            helps_of("Bigzug"),
+            friends(),
+            {},
+            [qask(1)],
+            [yes(12, 1, "Dread", "dps", "help")],
+            NOW,
+            refused=this._class_board.refused(),
+        )
+        self.assertNotIn("Chill", [r.member for r in again.replies])
+
+    def test_a_helper_the_clock_cuts_off_is_withdrawn_like_one_whose_walk_failed(self):
+        this = _Bridge([FORMED, answer("applied", phase="ended")], meet={"Dread": HANG})
+        with cut_off():
+            drive(this, a_run(meeting=True))
+        self.assertEqual(this.withdrawn, [12])
+        self.assertEqual(this._class_board.refused(), {1: frozenset({"Dread"})})
+        self.assertIn("party-up Chill", [r[2] for r in this.rows])
+
+    def test_a_leader_that_does_not_arrive_fails_the_meeting(self):
+        for how in (LOST, HANG):
+            with self.subTest(how=how):
+                this = _Bridge([FORMED], meet={"Bigzug": how})
+                with cut_off():
+                    drive(this, a_run(meeting=True))
+                self.assertTrue(meet_rows(this, ("Bigzug", "Chill", "Dread")))
+                self.assertFalse([r for r in this.rows if r[2].startswith("party-")])
+                self.assertEqual(this.stand_reads, [])
+                self.assertEqual(this.withdrawn, [])
+                self.assertEqual(this._class_board.refused(), {})
+                self.assertEqual(this._class_board.failures(1), 1)
+                self.assertEqual(this._class_board.cooling(0.0), set())
+                self.assertEqual(this.settled, [(1, False, False)])
+
+    def test_every_helper_lost_fails_the_meeting(self):
+        this = _Bridge([FORMED], meet={"Chill": LOST, "Dread": LOST})
+        drive(this, a_run(meeting=True))
+        self.assertFalse([r for r in this.rows if r[2].startswith("party-")])
+        self.assertEqual(sorted(this.withdrawn), [11, 12])
+        self.assertEqual(this._class_board.failures(1), 1)
+
+    def test_a_meeting_walk_that_raises_loses_only_its_member(self):
+        this = _Bridge([FORMED, answer("applied", phase="ended")])
+        ids = iter(range(100, 200))
+
+        def insert(holder, row):
+            if holder == "Chill":
+                raise RuntimeError("database gone")
+            row_id = next(ids)
+            this.rows.append((holder, row.kind, row.command, row.source))
+            this.commands[row_id] = row.command
+            return row_id
+
+        with self.assertLogs(bridge.log, "ERROR"):
+            drive(this, a_run(meeting=True), _insert_corps_row=insert)
+        self.assertEqual(this.withdrawn, [11])
+        self.assertIn("party-up Dread", [r[2] for r in this.rows])
+
+    def test_a_meeting_walk_the_old_worldserver_does_not_know_marks_it_unsupported(
+        self,
+    ):
+        old = guildroute.WalkAnswer(guildroute.ENDED, "x: malformed request: y")
+        this = _Bridge([FORMED], meet={"Bigzug": old})
+        drive(this, a_run(meeting=True))
+        self.assertFalse(this._class_board.seats(1.0))
+
+    def test_answerers_are_held_only_while_travelling_or_in_the_party(self):
+        this = _Bridge([FORMED, answer("applied", phase="ended")], meet={"Chill": LOST})
+        drive(this, a_run(meeting=True))
+        everyone = {"Bigzug", "Chill", "Dread"}
+        self.assertEqual(this.held_meeting, [everyone] * 3)
+        # Chill's meeting failed: it is free while the party goes on without it.
+        self.assertEqual(this.held_up, [{"Bigzug", "Dread"}])
+        self.assertEqual(bridge._class_party_names(this), set())
+
+        failed = _Bridge([FORMED], meet={"Bigzug": LOST})
+        drive(failed, a_run(meeting=True))
+        self.assertEqual(failed.held_meeting, [everyone] * 3)
+        self.assertEqual(failed.held_up, [])
+        self.assertEqual(classask.held_names(failed._class_board.runs()), set())
+
+
 class TheWiring(unittest.TestCase):
     def test_the_image_carries_the_module(self):
         dockerfile = (
@@ -767,6 +1045,8 @@ class TheWiring(unittest.TestCase):
         self.assertIn('guildcorps.Row("guild", classparty.up_command', source)
         self.assertIn('guildcorps.Row("job", classparty.walk_command', source)
         self.assertIn('guildcorps.Row("guild", classparty.DISBAND', source)
+        self.assertIn('guildcorps.Row("job", classparty.meet_command', source)
+        self.assertIn("asyncio.to_thread(_class_party_stands", source)
 
     def test_the_old_twenty_minute_hold_is_gone(self):
         self.assertFalse(hasattr(bridge, "_quest_ask_holders"))
