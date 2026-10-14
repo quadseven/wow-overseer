@@ -36,6 +36,7 @@ import jev_activity
 import lockbox
 import towntrip
 import townslot
+import vendor_stall
 
 BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
     encoding="utf-8"
@@ -513,6 +514,9 @@ class _FakeEconomySelf:
     async def _settle_vendor_errand(self, names, leader):
         return bag_pressure.VENDOR_ERRAND_AIM
 
+    async def _settle_vendor_errand_and_should_yield(self, names, leader):
+        return await self._settle_vendor_errand(names, leader)
+
     async def _claim_town_slot(self, claimant, character, aim, **kw):
         self.claims.append((claimant, aim))
         return True
@@ -584,6 +588,7 @@ def _run_vendor_once(queued, at_vendor=True):
             "log": log,
             "townslot": townslot,
             "bag_pressure": bag_pressure,
+            "vendor_stall": vendor_stall,
             "jev_activity": jev_activity,
             "item_plan": item_plan,
             "lockbox": lockbox,

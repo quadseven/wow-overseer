@@ -13,9 +13,11 @@ from collections.abc import Mapping
 
 
 STALL_AFTER_SECONDS = 1200.0
+MAX_BAG_WAIT_SECONDS = 2 * 60 * 60.0
 
 HOLD = "hold"
 RELEASE = "release"
+YIELD = "yield"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -188,6 +190,8 @@ def decide(
     family_progressed: bool = True,
     family_split_seconds: float = 0.0,
     stall_after_seconds: float = STALL_AFTER_SECONDS,
+    bag_wait_seconds: float = 0.0,
+    max_bag_wait_seconds: float = MAX_BAG_WAIT_SECONDS,
 ) -> Decision:
     """Decide whether a stalled vendor aim may be handed back.
 
@@ -199,6 +203,10 @@ def decide(
     """
     if not pressure:
         return Decision(HOLD, "no bag pressure")
+    if not at_counter and bag_wait_seconds >= max(0.0, float(max_bag_wait_seconds)):
+        return Decision(
+            YIELD, "bag room not freed within the bounded wait; yielding the walk"
+        )
     if at_counter:
         return Decision(HOLD, "leader is at the vendor counter")
     if sales_outstanding != 0:

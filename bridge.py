@@ -10519,6 +10519,8 @@ class Bridge(discord.Client):
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
         stall = None
         if current_aim == "vendor":
+            intent = (await asyncio.to_thread(_fetch_family_intents)).get(leader, {})
+            bag_wait_seconds = max(0.0, float(intent.get("current_for") or 0))
             observed = await asyncio.to_thread(_fetch_vendor_position, leader)
             stall = vendor_stall.progress(
                 self._vendor_movement.get(leader), observed, time.monotonic(),
@@ -10544,23 +10546,13 @@ class Bridge(discord.Client):
                 family_split=family_stall.split,
                 family_progressed=family_stall.progressed,
                 family_split_seconds=family_stall.split_seconds,
+                bag_wait_seconds=bag_wait_seconds,
             )
-            if decision.action == vendor_stall.RELEASE:
-                released = await asyncio.to_thread(
-                    _release_trade_errand, leader, "vendor",
-                )
-                if released:
-                    log.warning(
-                        "economy: vendor aim recovered after stalled movement; "
-                        "leader=%s stall_seconds=%d free_slots=%s reason=%s",
-                        leader, int(stall.stalled_seconds),
-                        sorted((str(name), int(slots))
-                               for name, slots in free_slots.items()),
-                        decision.reason,
-                    )
-                    self._vendor_movement.pop(leader, None)
-                    self._vendor_family_movement.pop(leader, None)
-                    return bag_pressure.VENDOR_ERRAND_RELEASE
+            recovered = await self._apply_vendor_stall_decision(
+                leader, decision, stall, bag_wait_seconds, free_slots,
+            )
+            if recovered:
+                return recovered
         step = bag_pressure.vendor_errand_step(
             bool(leader_town.vendor), outstanding,
             pressure=pressure,
@@ -10617,6 +10609,39 @@ class Bridge(discord.Client):
                     "there was nothing to hand back", leader,
                 )
         return step
+
+    async def _apply_vendor_stall_decision(
+        self, leader: str, decision, stall, bag_wait_seconds: float,
+        free_slots: dict,
+    ) -> str | None:
+        """Release a recoverable vendor aim and record why it was released."""
+        if decision.action not in (vendor_stall.RELEASE, vendor_stall.YIELD):
+            return None
+        released = await asyncio.to_thread(
+            _release_trade_errand, leader, "vendor",
+        )
+        if not released:
+            return None
+        slots = sorted((str(name), int(count)) for name, count in free_slots.items())
+        if decision.action == vendor_stall.YIELD:
+            log.warning(
+                "economy: vendor aim yielded; bag room could not be freed within "
+                "the bounded wait; leader=%s stall_seconds=%d bag_wait_seconds=%d "
+                "free_slots=%s reason=%s",
+                leader, int(stall.stalled_seconds), int(bag_wait_seconds),
+                slots, decision.reason,
+            )
+            result = vendor_stall.YIELD
+        else:
+            log.warning(
+                "economy: vendor aim recovered after stalled movement; "
+                "leader=%s stall_seconds=%d free_slots=%s reason=%s",
+                leader, int(stall.stalled_seconds), slots, decision.reason,
+            )
+            result = bag_pressure.VENDOR_ERRAND_RELEASE
+        self._vendor_movement.pop(leader, None)
+        self._vendor_family_movement.pop(leader, None)
+        return result
 
     async def _release_stranded_vendor_errands(self, names: list,
                                                leader: str) -> int:
@@ -10844,6 +10869,12 @@ class Bridge(discord.Client):
                      sellable_counts, why)
         return mode
 
+    async def _settle_vendor_errand_and_should_yield(
+        self, names: list, leader: str,
+    ) -> str:
+        """Settle the current trip before deciding whether the pass can continue."""
+        return await self._settle_vendor_errand(names, leader)
+
     async def _vendor_once(self, cohort=None) -> None:
         """Queue carried junk and outgrown gear for the world sell executor.
 
@@ -10895,7 +10926,9 @@ class Bridge(discord.Client):
         # `_drive_train` gives: it names the character that can actually walk.
         # Read once and used for both halves, because releasing an errand from
         # one leader and aiming another would be two leaders.
-        step = await self._settle_vendor_errand(names, leader)
+        step = await self._settle_vendor_errand_and_should_yield(names, leader)
+        if step == vendor_stall.YIELD:
+            return
         # AND THE SAME SETTLING FOR EVERY OTHER ROW CARRYING THIS PASS'S OWN
         # KEYWORD (infra#3746). The line above hands back the errand the LEADER
         # is walking; this one hands back a `vendor` aim that ended up on
