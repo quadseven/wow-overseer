@@ -240,5 +240,84 @@ console.log(JSON.stringify([
         )
 
 
+RUN = {
+    "id": 930,
+    "place": "The Deadmines",
+    "state": "ended",
+    "outcome": "wiped",
+    "bosses_done": 2,
+    "bosses_total": 7,
+    "deaths": 5,
+    "seconds_inside": 2400,
+    "loot_items": 0,
+    "members": [
+        {"name": "Grug", "seat": "tank", "class": "warrior", "level": 24},
+        {"name": "Ugga", "seat": "healer", "class": "priest", "level": 23},
+        {"name": "Og", "seat": "dps", "class": "mage", "level": 23},
+    ],
+    "created_at": "2026-10-13 10:00:00",
+    "ended_at": "2026-10-13 10:40:00",
+    "bosses": [
+        {"entry": 644, "name": "Rhahk'Zor", "killed": True, "at": "2026-10-13 10:12:00", "by": "Grug"},
+        {"entry": 642, "name": "Sneed's Shredder", "killed": True, "at": "2026-10-13 10:28:00", "by": "Ugga"},
+        {"entry": 643, "name": "Sneed", "killed": False, "at": None, "by": None},
+    ],
+    "wipes": [
+        {"entry": 642, "name": "Sneed's Shredder", "at": "2026-10-13 10:30:00", "deaths": 3},
+    ],
+    "gear": [],
+}
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class TheRunPageBosses(unittest.TestCase):
+    def test_the_progress_bar_names_every_boss(self):
+        got = render(
+            "views/run.js",
+            "console.log(JSON.stringify(String(M.bossPips(%s))));" % json.dumps(RUN),
+        )
+        self.assertIn("Rhahk&#39;Zor", got)
+        self.assertIn("Sneed&#39;s Shredder", got)
+        self.assertIn("Sneed", got)
+        self.assertIn('aria-label="2 of 3 bosses down"', got)
+
+    def test_killed_bosses_are_marked_done(self):
+        got = render(
+            "views/run.js",
+            "console.log(JSON.stringify(String(M.bossPips(%s))));" % json.dumps(RUN),
+        )
+        self.assertIn('class="g-r-pip done"', got)
+
+    def test_the_boss_list_shows_kill_times_and_killers(self):
+        got = render(
+            "views/run.js",
+            "console.log(JSON.stringify(String(M.bossRows(%s))));" % json.dumps(RUN),
+        )
+        self.assertIn("Rhahk&#39;Zor", got)
+        # The time is rendered in the browser's local timezone; just check one
+        # appears for the first kill.
+        self.assertRegex(got, r"\d{1,2}:\d{2}\s*(AM|PM)")
+        self.assertIn('class="g-r-boss killed"', got)
+        self.assertIn("not killed", got)
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class TheRunPageTimeline(unittest.TestCase):
+    def test_the_timeline_includes_kill_lines(self):
+        got = render(
+            "views/run.js",
+            "console.log(JSON.stringify(String(M.timeline(%s))));" % json.dumps(RUN),
+        )
+        self.assertIn("The group killed Rhahk&#39;Zor.", got)
+        self.assertIn("The group killed Sneed&#39;s Shredder.", got)
+
+    def test_the_timeline_includes_wipe_lines(self):
+        got = render(
+            "views/run.js",
+            "console.log(JSON.stringify(String(M.timeline(%s))));" % json.dumps(RUN),
+        )
+        self.assertIn("The group wiped on Sneed&#39;s Shredder; 3 deaths.", got)
+
+
 if __name__ == "__main__":
     unittest.main()
