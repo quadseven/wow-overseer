@@ -494,6 +494,21 @@ class TheReducedMotion(unittest.TestCase):
                     self.assertIn("prefers-reduced-motion: reduce", text)
                     self.assertNotIn('behavior: "smooth"', text)
 
+    def test_script_focus_targets_draw_no_outline(self):
+        # main is focused by script on each route change; Chrome treats that
+        # as :focus-visible and the ring showed as a bar down the right edge.
+        css = (APP / "app.css").read_text(encoding="utf-8")
+        self.assertRegex(
+            css,
+            r'main:focus-visible,\s*\[tabindex="-1"\]:focus-visible\s*'
+            r"\{\s*outline:\s*none;\s*\}",
+        )
+        self.assertIn(
+            ":focus-visible { outline: 2px solid var(--color-accent);"
+            " outline-offset: 2px; border-radius: 2px; }",
+            css,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
