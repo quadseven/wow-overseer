@@ -1,5 +1,10 @@
 # ruff config for the standard lint (infra#995).
 
+# mod-overseer is a submodule that lints in its own repo. CI's lint job checks
+# out without submodules; the lane check checks them out, so it skips the
+# submodule here to see the same tree CI does.
+extend-exclude = ["mod-overseer"]
+
 [format]
 # bridge.py and map_server.py are read as TEXT by ~110 source-shape tests
 # (tests/ grep them for the order and wording of statements). Reformatting

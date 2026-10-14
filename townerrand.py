@@ -22,8 +22,9 @@ THE STATES, with a clear entry and exit:
     GATHER  -> STEPS    every member is read standing within GATHER_YARDS of
                         the hub, or the gather window runs out (the steps then
                         run for whoever is there, and say who is not).
-    STEPS               STEP_ORDER, one at a time; each ends when the bridge
-                        reports it done or when its own window runs out.
+    STEPS               STEP_ORDER (ROOM_STEP_ORDER for bag room), one at a
+                        time; each ends when the bridge reports it done or
+                        when its own window runs out.
     STEPS   -> DONE     after the last step.
     any     -> DONE     the whole errand's ceiling, a dungeon run, or a walk
                         that never landed (GO_SECONDS). A campaign hold past
@@ -61,6 +62,14 @@ BANK = "bank"
 HANDDOWN = "handdown"
 TIDY = "tidy"
 STEP_ORDER = (FUND, MAIL, EQUIP, VENDOR, BANK, HANDDOWN, TIDY)
+# AN ERRAND FOR BAG ROOM MAKES ROOM FIRST (#986). In STEP_ORDER the counters
+# that free a slot come after a mail step of up to fifteen minutes, so a
+# family sent to town because a member sat at the bag floor reached its vendor
+# about forty minutes in, and the hold at the floor had a forty-five minute
+# window. Measured 2026-10-14: the errand ended walking to the vendor and the
+# family was held 2.4 hours. Selling, banking and the tidy go first; the mail,
+# which only adds to the bags, goes last.
+ROOM_STEP_ORDER = (VENDOR, BANK, TIDY, EQUIP, HANDDOWN, FUND, MAIL)
 
 # How long each step may take before the errand moves on without it. The mail
 # step is the longest: eight takes per visit, a few seconds apart, and a
@@ -90,6 +99,12 @@ COOLDOWN_SECONDS = 7200.0
 # constant so this pure module imports nothing, and pinned equal by a test.
 HOLD_CEILING_SECONDS = 45 * 60.0
 BAG_PRESSURE_WHY = "campaign held at the dungeon door for bag room"
+
+
+def steps_for(why: str) -> tuple:
+    """The step order for an errand started for `why`."""
+    return ROOM_STEP_ORDER if why == BAG_PRESSURE_WHY else STEP_ORDER
+
 
 # THE WAY THERE (wow-dev 2026-09-27). The Alliance family is bound in Ratchet,
 # which has a mailbox, armorers, a weaponsmith and two bankers beside the inn,
@@ -128,7 +143,7 @@ START_FAMILY_PURSE = 100000
 
 @dataclass(frozen=True)
 class State:
-    """One family's errand. `step` indexes STEP_ORDER while in STEPS."""
+    """One family's errand. `step` indexes `steps` while in STEPS."""
 
     phase: str = IDLE
     started: float = 0.0
@@ -144,10 +159,14 @@ class State:
         return self.phase in (GO, GATHER, STEPS)
 
     @property
+    def steps(self) -> tuple:
+        return steps_for(self.why)
+
+    @property
     def current_step(self) -> str:
-        if self.phase != STEPS or self.step >= len(STEP_ORDER):
+        if self.phase != STEPS or self.step >= len(self.steps):
             return ""
-        return STEP_ORDER[self.step]
+        return self.steps[self.step]
 
 
 def should_start(
@@ -412,12 +431,12 @@ def advance(
         return state, ""
     said = "%s %s" % (step, "done" if step_done else "ran out of time")
     nxt = state.step + 1
-    if nxt >= len(STEP_ORDER):
+    if nxt >= len(state.steps):
         new, line = end(state, now, "every step ran")
         return new, "%s; %s" % (said, line)
     return (
         replace(state, step=nxt, phase_since=now),
-        "%s; next: %s" % (said, STEP_ORDER[nxt]),
+        "%s; next: %s" % (said, state.steps[nxt]),
     )
 
 
