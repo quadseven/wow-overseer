@@ -506,7 +506,9 @@ class TheWiring(unittest.TestCase):
         self.assertTrue(pvpgear.enabled({"PVP_FOR_UPGRADES": "1"}))
 
     def test_the_bridge_plans_says_and_holds(self):
-        self.assertIn('pvp=await self._job_pvp_moves(members, facts["recent"])', BRIDGE)
+        self.assertIn(
+            'pvp=await self._job_pvp_moves(members, facts["recent"], busy)', BRIDGE
+        )
         self.assertIn('await self._say_pvp_lines(plan, facts["recent"])', BRIDGE)
         self.assertIn("guildsocial.SOURCE))", BRIDGE)
         self.assertIn('getattr(self, "_pvp_held", {}).items() if held}', BRIDGE)
