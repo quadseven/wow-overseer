@@ -2863,6 +2863,14 @@ def _collect_first(m, commands, recent, cap):
     return collect_step(m, commands, cap)
 
 
+def _cohort_note(note: str, pvp) -> str:
+    """`note` with a cohort still short naming its count; the member goes about
+    its job."""
+    if pvp and pvp[1].kind in (pvpgear.GATHERING, pvpgear.COOLING):
+        return "; ".join(n for n in (note, pvp[1].said) if n)
+    return note
+
+
 def _member_step(
     m,
     offer,
@@ -2956,9 +2964,7 @@ def _member_step(
     step, doing, held = _pvp_first(m, pvp, recent, cap, kept)
     if step is not None or held:
         return step, doing, supply_note, gear_note
-    # A cohort still short names its count; the member goes about its job.
-    if pvp and pvp[1].kind in (pvpgear.GATHERING, pvpgear.COOLING):
-        supply_note = "; ".join(n for n in (supply_note, pvp[1].said) if n)
+    supply_note = _cohort_note(supply_note, pvp)
     step = _collect_first(m, mail, recent, cap)
     if step is not None:
         return step, step.said, supply_note, gear_note

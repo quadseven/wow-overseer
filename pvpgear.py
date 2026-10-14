@@ -651,27 +651,17 @@ def _filler(s, bg: Battleground, cohort: str = "") -> Aim:
     return Aim(s.name, s.guild, s.level, 0, "", 0, 0, bg, "", s.faction, True, cohort)
 
 
-def gate(aims: dict, moves: dict, seekers, minimums: dict, recent, maps=None):
-    """(aims, moves, cohorts) once a battleground needs its cohort.
-
-    `aims` and `moves` are plan_aims and next_move's; `seekers` every member
-    read (the fillers come from those that want no PvP); `minimums` is
-    minimums_from_rows. A member about to queue (QUEUE) queues only when
-    every side the members fill reaches its minimum, fillers included; else
-    it is GATHERING. A member that left lately is COOLING. A queue older than
-    QUEUE_WAIT_MINUTES makes the whole battleground bracket LEAVE together.
-    """
-    maps = maps or {}
-    by_name = {s.name: s for s in seekers or ()}
-    aims, moves = dict(aims), dict(moves)
-    cooling = {n for n in by_name if left_lately(n, recent)}
-    # A filler already in a queue is held there like any member.
+def _hold_fillers(by_name: dict, aims: dict, moves: dict, recent, maps) -> None:
+    """A filler already in a queue is held there like any member (in place)."""
     for name, s in by_name.items():
         queued = _queued_key(name, recent) if name not in aims else None
         if queued is not None:
             aims[name] = _filler(s, BATTLEGROUNDS[queued[0]])
             moves[name] = next_move(aims[name], maps.get(name), False, recent)
-    # The queue that did not pop: the whole bracket leaves together.
+
+
+def _expire_queues(aims: dict, moves: dict, recent) -> None:
+    """The queue that did not pop: the whole bracket leaves together (in place)."""
     expired = set()
     for name, move in moves.items():
         queued = _queued_key(name, recent)
@@ -688,7 +678,11 @@ def gate(aims: dict, moves: dict, seekers, minimums: dict, recent, maps=None):
                 "%s leaves the %s queue with the cohort after %d minutes, "
                 "no match started" % (name, a.battleground.name, QUEUE_WAIT_MINUTES),
             )
-    # The cohorts of those about to queue.
+
+
+def _group_members(aims: dict, moves: dict, by_name: dict, cooling: set) -> dict:
+    """(battleground, bracket, faction) -> (joined, fresh) names; a member that
+    cannot be counted gets its COOLING or GATHERING move (moves, in place)."""
     groups: dict = {}
     for name, a in aims.items():
         move = moves[name]
@@ -705,27 +699,64 @@ def gate(aims: dict, moves: dict, seekers, minimums: dict, recent, maps=None):
                 moves[name] = Move(GATHERING, "%s is busy and is not counted" % name)
             else:
                 groups.setdefault(key, ([], []))[1].append(name)
+    return groups
+
+
+def _fillers_for(bg, bracket, faction, gap, by_name, aims, cooling) -> tuple:
+    """The idle members outside `aims` that close a gap of `gap`, else none."""
+    pool = sorted(
+        n for n, s in by_name.items()
+        if n not in aims and n not in cooling and s.idle
+        and s.faction == faction and bracket_of(s.level) == bracket
+        and int(s.level) >= bg.min_level
+    )  # fmt: skip
+    return tuple(pool[:gap]) if len(pool) >= gap else ()
+
+
+def _cohorts_of(groups, minimums, by_name, aims, cooling) -> dict:
     cohorts = {}
     for (bg_key, bracket, faction), (joined, fresh) in groups.items():
         bg, minimum = BATTLEGROUNDS[bg_key], int(minimums.get(bg_key) or 0)
-        fillers = ()
         count = len(joined) + len(fresh)
+        fillers = ()
         if fresh and minimum > count:
-            pool = sorted(
-                n for n, s in by_name.items()
-                if n not in aims and n not in cooling and s.idle
-                and s.faction == faction and bracket_of(s.level) == bracket
-                and int(s.level) >= bg.min_level
-            )  # fmt: skip
-            if len(pool) >= minimum - count:
-                fillers = tuple(pool[: minimum - count])
+            fillers = _fillers_for(
+                bg, bracket, faction, minimum - count, by_name, aims, cooling
+            )
         cohorts[(bg_key, bracket, faction)] = Cohort(
             bg, bracket, faction, minimum, tuple(joined), tuple(fresh), fillers
         )
+    return cohorts
+
+
+def _ready_sides(cohorts: dict) -> dict:
+    """(battleground, bracket) -> whether every side the members fill is full."""
     ready: dict = {}
     for (bg_key, bracket, _), c in cohorts.items():
         ok = c.minimum > 0 and c.count >= c.minimum
         ready[(bg_key, bracket)] = ready.get((bg_key, bracket), True) and ok
+    return ready
+
+
+def gate(aims: dict, moves: dict, seekers, minimums: dict, recent, maps=None):
+    """(aims, moves, cohorts) once a battleground needs its cohort.
+
+    `aims` and `moves` are plan_aims and next_move's; `seekers` every member
+    read (the fillers come from those that want no PvP); `minimums` is
+    minimums_from_rows. A member about to queue (QUEUE) queues only when
+    every side the members fill reaches its minimum, fillers included; else
+    it is GATHERING. A member that left lately is COOLING. A queue older than
+    QUEUE_WAIT_MINUTES makes the whole battleground bracket LEAVE together.
+    """
+    maps = maps or {}
+    by_name = {s.name: s for s in seekers or ()}
+    aims, moves = dict(aims), dict(moves)
+    cooling = {n for n in by_name if left_lately(n, recent)}
+    _hold_fillers(by_name, aims, moves, recent, maps)
+    _expire_queues(aims, moves, recent)
+    groups = _group_members(aims, moves, by_name, cooling)
+    cohorts = _cohorts_of(groups, minimums, by_name, aims, cooling)
+    ready = _ready_sides(cohorts)
     out = []
     for key, c in cohorts.items():
         c = replace(c, go=ready[(key[0], key[1])])
