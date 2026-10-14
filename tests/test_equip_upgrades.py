@@ -18,6 +18,7 @@ import re
 import textwrap
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, Mock
 
 import bag_pressure
@@ -225,10 +226,44 @@ class TheQueueIsBounded(unittest.TestCase):
         )
         self.assertEqual((queue, notes), ((), ()))
 
-    def test_after_three_tries_it_is_held_and_said(self):
-        queue, notes = bag_pressure.equips_to_queue(self.wanted, set(), {self.key: 3})
+    def test_three_tries_expire_after_the_two_hour_try_window(self):
+        recent = {self.key}
+        queue, _ = bag_pressure.equips_to_queue(self.wanted, recent, {self.key: 3})
         self.assertEqual(queue, ())
-        self.assertIn("Cabalist Chestpiece", notes[0])
+        queue, _ = bag_pressure.equips_to_queue(self.wanted, set(), {self.key: 3})
+        self.assertEqual(queue, self.wanted)
+
+    def test_refusal_holds_escalate_from_two_to_four_to_memory_hours(self):
+        now = datetime(2026, 10, 14, 20, tzinfo=timezone.utc)
+        worn = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
+        for attempts, wait in ((1, 2), (2, 4), (3, 24)):
+            answer = self.answer()
+            answer[self.key]["created_at"] = now - timedelta(hours=1)
+            queue, notes = bag_pressure.equips_to_queue(
+                self.wanted,
+                set(),
+                {self.key: attempts},
+                answers=answer,
+                worn=worn,
+                holds={},
+                now=now,
+            )
+            if wait > 1:
+                self.assertEqual(queue, ())
+                self.assertIn("tries again at", notes[0])
+            else:
+                self.assertEqual(queue, self.wanted)
+            answer[self.key]["created_at"] = now - timedelta(hours=wait)
+            queue, _ = bag_pressure.equips_to_queue(
+                self.wanted,
+                set(),
+                {self.key: attempts},
+                answers=answer,
+                worn=worn,
+                holds={},
+                now=now,
+            )
+            self.assertEqual(queue, self.wanted)
 
     def answer(self, status="unchanged", detail="the bot kept its own pick", id=7):
         return {
@@ -259,8 +294,7 @@ class TheQueueIsBounded(unittest.TestCase):
                 notes,
                 (
                     "Grog keeps Sparkleshell Breastplate over Cabalist Chestpiece: "
-                    "the bot kept its own pick; held until its level or that slot "
-                    "changes",
+                    "the bot kept its own pick; tries again at later",
                 ),
             )
             self.assertEqual(gear.world_held(self.wanted, holds), 1)
@@ -374,7 +408,8 @@ class TheBridgeWritesIt(unittest.TestCase):
                 err=types.SimpleNamespace(MySQLError=MySQLError)
             ),
             "log": Mock(),
-            "EQUIP_RETRY_MINUTES": 15,
+            "EQUIP_TRY_WINDOW_HOURS": 2,
+            "EQUIP_MEMORY_HOURS": 24,
         }
         reads = iter(
             [
@@ -480,7 +515,8 @@ class TheBridgeWritesIt(unittest.TestCase):
                 err=types.SimpleNamespace(MySQLError=MySQLError)
             ),
             "log": Mock(),
-            "EQUIP_RETRY_MINUTES": 15,
+            "EQUIP_TRY_WINDOW_HOURS": 2,
+            "EQUIP_MEMORY_HOURS": 24,
             "_fetch_worn_pieces": fetch,
             "_insert_equip": lambda equip: inserts.append(equip) or True,
         }

@@ -189,6 +189,11 @@ class TheLogTapReadsTheBridgesOwnReasons(unittest.TestCase):
         self.assertEqual((s.subject, s.scope), ("Grug", "character"))
         self.assertIn("3 tries", s.waiting)
         s = self.one(
+            "equip: Grog keeps Old Mail over Imperial Leather Bracers: "
+            "bags are full; tries again at 21:15"
+        )
+        self.assertEqual(s.waiting, "the game to accept it (tries again at 21:15)")
+        s = self.one(
             "economy: 2 carried candidate(s) for Bork but no vendor within reach - leader=Grug aim taken=False"
         )
         self.assertEqual((s.subject, s.waiting), ("Bork", "a vendor within reach"))
