@@ -309,7 +309,10 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         control-flow bug in a function that had grown past holding in a head.
         `_vendor_once` asks the question once and reads one answer."""
         body = self._pass()
-        self.assertIn("step = await self._settle_vendor_errand(names, leader)", body)
+        self.assertIn(
+            "step = await self._settle_vendor_errand_and_should_yield(names, leader)",
+            body,
+        )
         self.assertEqual(body.count("_settle_vendor_errand"), 1)
 
     def test_the_settling_releases_nothing_but_this_pass_s_own_errand(self):
@@ -320,6 +323,8 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         after the column was cleared by hand, so the other three are latched
         exactly as this one was and are filed separately."""
         settle = self._settle()
+        recovery = _statements("    async def _apply_vendor_stall_decision(")
+        self.assertIn('_release_trade_errand, leader, "vendor"', recovery)
         self.assertIn('_release_trade_errand, leader, "vendor"', settle)
         for other in ('"repair"', '"banker"', '"guild banker"'):
             self.assertNotIn(other, settle)
@@ -365,7 +370,13 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         still onto `leader`."""
         body = _statements("    async def _vendor_once(")
         self.assertEqual(body.count("_claim_town_slot"), 1)
-        self.assertEqual(self._settle().count("_release_trade_errand"), 2)
+        self.assertEqual(self._settle().count("_release_trade_errand"), 1)
+        self.assertEqual(
+            _statements("    async def _apply_vendor_stall_decision(").count(
+                "_release_trade_errand"
+            ),
+            1,
+        )
         self.assertIn(
             'self._claim_town_slot(\n                "economy", leader, "vendor", urgent=True,',
             body,

@@ -44,6 +44,21 @@ class VendorStallDecisionTests(unittest.TestCase):
         self.assertEqual(decision.action, vendor_stall.RELEASE)
         self.assertIn("bounded", decision.reason)
 
+    def test_two_hour_bag_wait_yields_a_progressing_trip(self):
+        decision = self.decide(
+            movement_progressed=True,
+            bag_wait_seconds=vendor_stall.MAX_BAG_WAIT_SECONDS,
+        )
+        self.assertEqual(decision.action, vendor_stall.YIELD)
+        self.assertIn("bag room not freed", decision.reason)
+
+    def test_bag_wait_yield_waits_until_two_hours(self):
+        decision = self.decide(
+            movement_progressed=True,
+            bag_wait_seconds=vendor_stall.MAX_BAG_WAIT_SECONDS - 1,
+        )
+        self.assertEqual(decision.action, vendor_stall.HOLD)
+
     def test_no_pressure_is_held(self):
         self.assertEqual(self.decide(pressure=False).action, vendor_stall.HOLD)
 

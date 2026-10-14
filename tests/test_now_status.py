@@ -134,6 +134,16 @@ class IntentFreshness(unittest.TestCase):
 
 
 class TheLogTapReadsTheBridgesOwnReasons(unittest.TestCase):
+    def test_vendor_bag_room_yield_is_a_visible_waiting_reason(self):
+        got = nowstatus.classify(
+            "economy: vendor aim yielded; bag room could not be freed within "
+            "the bounded wait; leader=MemberA stall_seconds=1200 "
+            "bag_wait_seconds=7200 free_slots=[] reason=yield"
+        )
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0].subject, "MemberA")
+        self.assertIn("within two hours", got[0].waiting)
+
     def one(self, message):
         got = nowstatus.classify(message)
         self.assertEqual(len(got), 1, message)
