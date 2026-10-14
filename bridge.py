@@ -13901,15 +13901,15 @@ class Bridge(discord.Client):
                 continue
             candidates = await asyncio.to_thread(_team_candidates, guild)
             actions = teamsync.plan(guild, members, candidates, pending, renames_on, reset_done)
+            refusals = await asyncio.to_thread(_team_refusals)
+            why = teamsync.stall_reason(guild, members, candidates, pending, bool(actor), refusals)
+            if why:
+                log.info("team sync: %s", why)
             # Each target this pass names is in flight from here on, so a later
             # guild in the same pass never asks for the same character.
             pending |= {action.target for action in actions}
             if not actions:
-                refusals = await asyncio.to_thread(_team_refusals)
-                why = teamsync.stall_reason(guild, members, candidates, pending, bool(actor), refusals)
-                if why:
-                    log.info("team sync: %s", why)
-                else:
+                if not why:
                     log.info("team sync: %s matches its approved teams as far as this pass can move it", guild)
                 continue
             for action in actions:
