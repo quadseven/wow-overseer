@@ -268,13 +268,20 @@ class TheQueueIsBounded(unittest.TestCase):
     def test_a_delivered_or_bare_answer_keeps_the_three_try_rule(self):
         for answers in (
             self.answer("delivered"),
-            self.answer("applied"),
             self.answer("unchanged", detail=""),
         ):
             queue, notes = bag_pressure.equips_to_queue(
                 self.wanted, set(), {self.key: 1}, answers=answers, holds={}
             )
             self.assertEqual((queue, notes), (self.wanted, ()))
+
+    def test_an_applied_answer_is_not_counted_as_a_failed_equip(self):
+        answers = self.answer("applied", detail="")
+        for tries in (1, 3):
+            queue, notes = bag_pressure.equips_to_queue(
+                self.wanted, set(), {self.key: tries}, answers=answers, holds={}
+            )
+            self.assertEqual((queue, notes), ((), ()))
 
     def test_a_changed_worn_entry_in_that_slot_lifts_the_hold(self):
         holds = {}
