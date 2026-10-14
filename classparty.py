@@ -21,10 +21,12 @@ THE FLOW, one task per party (the bridge's _run_class_party):
 
   meet      the leader and each helper walk to the objective spawn
             (`walk-to-spawn creature:<spawn id>`, followed as a guild walk is),
-            for MEET_SECONDS at most. A helper whose walk fails, or who does not
-            stand within SEAT_RANGE_YARDS of the leader after it, is withdrawn
-            and barred from this ask. A leader whose walk fails, or no helper
-            left, ends the attempt. Log line: `class party: <helpers> meet
+            for MEET_SECONDS at most. A helper whose walk fails, who is cut off
+            by MEET_SECONDS before arriving, or who does not stand within
+            SEAT_RANGE_YARDS of the leader after it, is withdrawn and barred
+            from this ask. A leader whose walk fails or is cut off by
+            MEET_SECONDS, or no helper left, ends the attempt; the clock alone
+            does not. Log line: `class party: <helpers> meet
             <leader> at <spawn> for <quest>`.
   form      write party-up, read its answer. FORMED goes on. A refusal that names
             a helper (HELPER) takes that helper's yes back, bars the helper from

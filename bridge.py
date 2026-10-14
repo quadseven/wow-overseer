@@ -15860,11 +15860,13 @@ class Bridge(discord.Client):
         they stand within classask.SEAT_RANGE_YARDS of each other. True when the
         party can be formed.
 
-        A helper whose walk fails, or who is not near the leader after it, has
-        its yes taken back and is barred from this ask (the ask's next pass
-        picks another). The leader's walk failing, MEET_SECONDS passing or no
-        helper left fails the meeting. The members are held on the board
-        throughout (run.meeting)."""
+        A helper whose walk fails, who is cut off by MEET_SECONDS before it
+        arrives, or who is not near the leader after it, has its yes taken back
+        and is barred from this ask (the ask's next pass picks another). The
+        leader's walk failing, MEET_SECONDS cutting off the leader, or no helper
+        left fails the meeting; the clock alone does not fail it when the
+        leader has arrived. The members are held on the board throughout
+        (run.meeting)."""
         board = self._class_board
         cap = self._guild_walk_cap()
         row = guildcorps.Row("job", classparty.meet_command(run.spot, cap), "",
