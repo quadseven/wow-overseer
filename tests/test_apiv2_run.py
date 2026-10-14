@@ -49,7 +49,9 @@ def _answer(rows):
     return rows if isinstance(rows, int) else list(rows)
 
 
-def ask(value, rows=(ROW,), event_rows=(), council_rows=()):
+def ask(
+    value, rows=(ROW,), event_rows=(), council_rows=(), boss_kill_rows=(), death_rows=()
+):
     """The handler over a reader that knows the run read and the story's
     reads (deaths, bosses, their levels) and nothing else."""
     rd = realmread.Memory(
@@ -60,6 +62,8 @@ def ask(value, rows=(ROW,), event_rows=(), council_rows=()):
             guildrun.BOSS_LEVELS_SQL: [],
             run_api._EVENT_GEAR_SQL.format(names="%s, %s, %s"): _answer(event_rows),
             run_api._COUNCIL_GEAR_SQL.format(names="%s, %s, %s"): _answer(council_rows),
+            run_api._BOSS_KILLS_SQL.format(names="%s, %s, %s"): _answer(boss_kill_rows),
+            run_api._BOSS_DEATHS_SQL.format(names="%s, %s, %s"): _answer(death_rows),
         }
     )
     code, payload = apiv2.handle(
@@ -218,6 +222,189 @@ class OneRun(unittest.TestCase):
             code, _payload, rd = ask(bad)
             self.assertEqual(code, 400, bad)
             self.assertEqual(rd.asked, [], bad)
+
+
+class TheBosses(unittest.TestCase):
+    def test_the_run_lists_bosses_in_order_with_kill_state_and_time(self):
+        kills = [
+            {
+                "member": "Grug",
+                "entry": 644,
+                "name": "Rhahk'Zor",
+                "at": "2026-10-08 10:12:00",
+            },
+            {
+                "member": "Ugga",
+                "entry": 642,
+                "name": "Sneed's Shredder",
+                "at": "2026-10-08 10:28:00",
+            },
+        ]
+        code, payload, _rd = ask("398", boss_kill_rows=kills)
+        self.assertEqual(code, 200)
+        bosses = payload["run"]["bosses"]
+        self.assertEqual(
+            [b["name"] for b in bosses],
+            [
+                "Rhahk'Zor",
+                "Sneed's Shredder",
+                "Sneed",
+                "Gilnid",
+                "Mr. Smite",
+                "Cookie",
+                "Captain Greenskin",
+                "Edwin VanCleef",
+            ],
+        )
+        self.assertEqual(
+            [(b["killed"], b["at"], b["by"]) for b in bosses[:3]],
+            [
+                (True, "2026-10-08 10:12:00", "Grug"),
+                (True, "2026-10-08 10:28:00", "Ugga"),
+                (False, None, None),
+            ],
+        )
+
+    def test_a_kill_without_a_killer_name_is_still_a_kill(self):
+        kills = [
+            {
+                "member": "",
+                "entry": 644,
+                "name": "Rhahk'Zor",
+                "at": "2026-10-08 10:12:00",
+            }
+        ]
+        code, payload, _rd = ask("398", boss_kill_rows=kills)
+        self.assertTrue(payload["run"]["bosses"][0]["killed"])
+        self.assertEqual(payload["run"]["bosses"][0]["by"], "")
+
+    def test_an_unknown_dungeon_has_no_boss_list(self):
+        code, payload, _rd = ask("398", rows=(dict(ROW, keyword="unknown"),))
+        self.assertEqual(payload["run"]["bosses"], [])
+        self.assertEqual(payload["run"]["wipes"], [])
+
+    def test_a_run_without_seats_has_no_bosses(self):
+        code, payload, _rd = ask("398", rows=(dict(ROW, members=""),))
+        self.assertEqual(payload["run"]["bosses"], [])
+        self.assertEqual(payload["run"]["wipes"], [])
+
+
+class TheWipes(unittest.TestCase):
+    def test_a_cluster_of_deaths_to_a_boss_is_a_wipe(self):
+        deaths = [
+            {
+                "character_name": "Grug",
+                "killer_name": "Sneed's Shredder",
+                "killer_entry": 642,
+                "created_at": "2026-10-08 10:30:00",
+            },
+            {
+                "character_name": "Ugga",
+                "killer_name": "Sneed's Shredder",
+                "killer_entry": 642,
+                "created_at": "2026-10-08 10:30:05",
+            },
+            {
+                "character_name": "Og",
+                "killer_name": "Sneed's Shredder",
+                "killer_entry": 642,
+                "created_at": "2026-10-08 10:30:10",
+            },
+        ]
+        code, payload, _rd = ask("398", death_rows=deaths)
+        self.assertEqual(code, 200)
+        self.assertEqual(
+            payload["run"]["wipes"],
+            [
+                {
+                    "entry": 642,
+                    "name": "Sneed's Shredder",
+                    "at": "2026-10-08 10:30:00",
+                    "deaths": 3,
+                }
+            ],
+        )
+
+    def test_deaths_spread_out_are_separate_wipes(self):
+        deaths = [
+            {
+                "character_name": "Grug",
+                "killer_name": "Rhahk'Zor",
+                "killer_entry": 644,
+                "created_at": "2026-10-08 10:15:00",
+            },
+            {
+                "character_name": "Ugga",
+                "killer_name": "Rhahk'Zor",
+                "killer_entry": 644,
+                "created_at": "2026-10-08 10:15:05",
+            },
+            {
+                "character_name": "Grug",
+                "killer_name": "Sneed's Shredder",
+                "killer_entry": 642,
+                "created_at": "2026-10-08 10:35:00",
+            },
+            {
+                "character_name": "Ugga",
+                "killer_name": "Sneed's Shredder",
+                "killer_entry": 642,
+                "created_at": "2026-10-08 10:35:05",
+            },
+        ]
+        code, payload, _rd = ask("398", death_rows=deaths)
+        self.assertEqual(
+            [(w["name"], w["deaths"]) for w in payload["run"]["wipes"]],
+            [("Rhahk'Zor", 2), ("Sneed's Shredder", 2)],
+        )
+
+    def test_a_single_death_to_a_boss_is_not_a_wipe(self):
+        deaths = [
+            {
+                "character_name": "Grug",
+                "killer_name": "Rhahk'Zor",
+                "killer_entry": 644,
+                "created_at": "2026-10-08 10:15:00",
+            },
+        ]
+        code, payload, _rd = ask("398", death_rows=deaths)
+        self.assertEqual(payload["run"]["wipes"], [])
+
+    def test_deaths_to_trash_are_not_wipes(self):
+        deaths = [
+            {
+                "character_name": "Grug",
+                "killer_name": "Defias Miner",
+                "killer_entry": 598,
+                "created_at": "2026-10-08 10:15:00",
+            },
+            {
+                "character_name": "Ugga",
+                "killer_name": "Defias Miner",
+                "killer_entry": 598,
+                "created_at": "2026-10-08 10:15:05",
+            },
+        ]
+        code, payload, _rd = ask("398", death_rows=deaths)
+        self.assertEqual(payload["run"]["wipes"], [])
+
+    def test_a_run_still_inside_has_no_wipe_read(self):
+        inside = dict(ROW, state="inside", outcome="")
+        code, payload, rd = ask(
+            "398",
+            rows=(inside,),
+            death_rows=[
+                {
+                    "character_name": "Grug",
+                    "killer_name": "Rhahk'Zor",
+                    "killer_entry": 644,
+                    "created_at": "2026-10-08 10:15:00",
+                }
+            ],
+        )
+        self.assertEqual(code, 200)
+        self.assertEqual(payload["run"]["wipes"], [])
+        self.assertEqual(reads(rd, "overseer_death"), [])
 
 
 class TheRunPageAsksForIt(unittest.TestCase):

@@ -347,7 +347,10 @@ def encounter_order(encounter_rows: list[dict]) -> list[dict]:
         {
             "entry": int(row["entry"]),
             "creature": int(row["creditEntry"]),
-            "name": (row.get("name") or ("creature %d" % int(row["creditEntry"]))),
+            "name": (
+                row.get("name")
+                or ("an unnamed creature (%d)" % int(row["creditEntry"]))
+            ),
         }
         for row in sorted(encounter_rows, key=lambda r: int(r["entry"]))
     ]

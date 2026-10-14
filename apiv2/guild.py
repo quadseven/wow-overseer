@@ -42,6 +42,7 @@ import statistics
 import classquest
 import council
 import guildrun
+import places
 from apiv2 import _scope, presence
 
 BLOCKED_HOURS = 2
@@ -132,8 +133,11 @@ def walk_target(command: str, creatures: dict) -> str:
     entry = int(found.group(1))
     name = creatures.get(entry)
     if name:
-        return "walking to " + name
-    return "walking to creature %d, which the world database does not hold" % entry
+        return "walking to " + places.creature_words(entry, name)
+    return (
+        "walking to an unnamed creature (%d), which the world database does not hold"
+        % entry
+    )
 
 
 # ---- pure shaping --------------------------------------------------------------

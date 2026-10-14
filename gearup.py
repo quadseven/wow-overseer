@@ -138,6 +138,7 @@ class Buy:
     item_level: int
     item_class: int = 0
     item_subclass: int = 0
+    label: str = ""
 
 
 def _get(row, *keys, default=None):
@@ -710,6 +711,7 @@ class _Plan:
                     item_level,
                     int(_get(item, "class", "item_class", default=0) or 0),
                     int(_get(item, "subclass", "item_subclass", default=0) or 0),
+                    str(_get(item, "name", "label", default="") or ""),
                 )
             )
             self.chosen.add(slot)

@@ -147,6 +147,7 @@ import retire
 import situation
 import skillgoal
 import standin
+import places
 import standstill
 import tabard
 import teamsync
@@ -2482,10 +2483,14 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
 _BAG_HOLD: dict = {}
 # Latest bag-floor result observed by a bag pass, keyed by family member. The
 # family key is its leader's name, so queue ownership reads its entry without
-# doing roster or inventory queries. Holds only live entries: a pass that finds
-# no released hold removes the members' keys, so a cleared or departed family
-# leaves nothing behind.
+# doing roster or inventory queries. The queue pass removes departed members.
 _BAG_HOLD_STUCK: dict[str, tuple] = {}
+
+
+def _prune_bag_hold_stuck(families: dict) -> None:
+    active = {name for family in families.values() for name in family["names"]}
+    for name in _BAG_HOLD_STUCK.keys() - active:
+        del _BAG_HOLD_STUCK[name]
 
 _MEMO_CREATE_SQL = ("CREATE TABLE IF NOT EXISTS overseer_bridge_memo ("
                     "kind VARCHAR(32) NOT NULL, subject VARCHAR(191) NOT NULL, "
@@ -6148,6 +6153,11 @@ class Bridge(discord.Client):
         # Equip rows whose outcome has already been logged, by row id, so each
         # answer is said once (#146).
         self._equip_reported: set = set()
+        # Pieces held on the world's own refusal (#897), (holder, command) ->
+        # gear.WorldHold. In memory: a restart asks each of them once more.
+        self._equip_holds: dict = {}
+        # The last worn read per holder, which a failed read falls back on.
+        self._equip_worn: dict = {}
         # JEV, IN SHADOW (#95). One client for the process, so its cache and
         # its in-flight limit are shared by every family. With no
         # TYPESAFE_API_KEY it answers every question with `no_key` and the
@@ -8168,8 +8178,11 @@ class Bridge(discord.Client):
         if not aimed:
             log.info(
                 "craft_supply: leader=%s is on an errand that a reagent trip "
-                "may not retask, so the walk to creature %s waits for the "
-                "next pass", trip.traveller, trip.target,
+                "may not retask, so the walk to %s waits for the "
+                "next pass", trip.traveller,
+                places.creature_words(trip.target, trip.vendor.name or "")
+                if str(trip.target or "").strip().isdigit()
+                else trip.target,
             )
 
     async def _craft_supply_loop(self) -> None:
@@ -8789,7 +8802,8 @@ class Bridge(discord.Client):
                 continue
             if await asyncio.to_thread(_insert_auction, buy.character, command):
                 bought.setdefault(buy.character, []).append(
-                    "entry %d for %s" % (buy.entry, buy.slot)
+                    "%s for %s"
+                    % (buy.label or "an unnamed item (%d)" % buy.entry, buy.slot)
                 )
         return buys, recent, bought
 
@@ -8837,8 +8851,8 @@ class Bridge(discord.Client):
             log.info("gearup: no vendor walk - %s", trip.why_not)
             return False
         if trip.here:
-            log.info("gearup: %s stands at %s (creature %d); %s buy once in reach",
-                     leader, trip.name, trip.vendor, ", ".join(trip.buyers))
+            log.info("gearup: %s stands at %s; %s buy once in reach",
+                     leader, trip.name, ", ".join(trip.buyers))
             return True
         target = travel.resolve(str(trip.vendor))
         if not target or len(target) > travel.COLUMN_WIDTH:
@@ -8846,9 +8860,9 @@ class Bridge(discord.Client):
         aimed = await self._claim_town_slot(
             GEAR_VENDOR_CLAIMANT, leader, target, urgent=True,
             cohort=_cohort_key(cohort))
-        log.info("gearup: %s is aimed at %s (creature %d, %d yards) so %s can "
+        log.info("gearup: %s is aimed at %s (%d yards) so %s can "
                  "buy gear for empty slots (aim taken=%s)", leader, trip.name,
-                 trip.vendor, int(trip.yards), ", ".join(trip.buyers), aimed)
+                 int(trip.yards), ", ".join(trip.buyers), aimed)
         return aimed
 
     async def _gearup_vendor_once(self, facts: dict,
@@ -11545,7 +11559,7 @@ class Bridge(discord.Client):
             "equip: left %d piece(s) to the module's gear drive for %d roster member(s)",
             len(left_to_drive), len(roster_names),
         )
-        await self._write_equips(wanted, current)
+        await self._write_equips(wanted, current, holders=names)
 
     async def _scored_equips(self, legacy, names, label: str, tanks=()) -> tuple:
         """`legacy` with every member equipscore can judge judged by its spec's
@@ -11577,12 +11591,16 @@ class Bridge(discord.Client):
         )
         return plan.equips
 
-    async def _write_equips(self, wanted, current: list, label: str = "") -> None:
+    async def _write_equips(self, wanted, current: list, label: str = "",
+                            holders=()) -> None:
         """Queue and log the `e` rows for `wanted`, inside the retry window.
 
         Shared by the family's pass and the guild's, so both keep one retry
         window, one give-up and one row shape. `current` is the history since
-        each holder's last level change.
+        each holder's last level change. A piece whose latest row the world
+        refused with a reason is held on it (#897) until the holder's level,
+        what is worn in that slot, or the bags change; `holders` are the
+        members this pass read.
         """
         recent = {(row["target_name"], row["command"]) for row in current
                   if row["recent"]}
@@ -11590,9 +11608,42 @@ class Bridge(discord.Client):
         for row in current:
             key = (row["target_name"], row["command"])
             tries[key] = tries.get(key, 0) + 1
-        queue, notes = bag_pressure.equips_to_queue(wanted, recent, tries)
+        answers = bag_pressure.latest_answers(current, item_plan.OPEN_STATUSES)
+        wearers = sorted({e.holder for e in wanted})
+        # One bounded read per pass, only for holders with a piece to put on
+        # (none at all when `wanted` is empty), and every MySQLError it can
+        # raise, the connect included, is caught here.
+        try:
+            read = bag_pressure.worn_pieces(await asyncio.to_thread(
+                _fetch_worn_pieces, wearers))
+        except pymysql.err.MySQLError as exc:
+            # A failed read keeps the last one, so a database fault neither
+            # stops the pass nor lifts a hold on a slot nobody saw change.
+            log.warning("equip: worn pieces unreadable (%s); holds keep the "
+                        "last read", exc)
+            # A holder with no read yet has nothing to fall back on, so this
+            # pass leaves them out of both `wanted` and `holders`: no equip is
+            # judged against an empty slot, and their holds (keyed on a holder
+            # outside `holders`) stay as they were. `worn` below then covers
+            # every holder still in `wanted`.
+            missing = set(wearers) - self._equip_worn.keys()
+            if missing:
+                log.warning("equip: deferring %d holder(s) without a worn "
+                            "snapshot", len(missing))
+                wanted = tuple(e for e in wanted if e.holder not in missing)
+                holders = set(holders) - missing
+        else:
+            self._equip_worn.update({h: read.get(h, {}) for h in wearers})
+        worn = {h: self._equip_worn[h] for h in wearers if h in self._equip_worn}
+        # `holders` emptied by the deferral above falls back to the holders of
+        # the filtered `wanted`, never to a deferred one.
+        queue, notes = bag_pressure.equips_to_queue(
+            wanted, recent, tries, answers=answers, worn=worn,
+            holds=self._equip_holds, holders=set(holders) or None)
         for note in notes:
             log.info("equip: %s", note)
+        log.info("equip: %d %spiece(s) held on the world's answer",
+                 bag_pressure.world_held(wanted, self._equip_holds), label)
         written = 0
         for equip in queue:
             if await asyncio.to_thread(_insert_equip, equip):
@@ -11643,7 +11694,7 @@ class Bridge(discord.Client):
                                           EQUIP_RETRY_MINUTES)
         changed = await asyncio.to_thread(_level_changes, members)
         current = bag_pressure.since_level_change(history, changed)
-        await self._write_equips(wanted, current, label="guild ")
+        await self._write_equips(wanted, current, label="guild ", holders=members)
 
     async def _jev_items_plan(self, gear_rows: list, worn: list, names: list):
         """This family's Jev pass, and what it changes this cycle (#95).
@@ -15147,7 +15198,7 @@ class Bridge(discord.Client):
             # that knows Tame Beast and has none.
             pets=await self._job_pet_offers(members, facts["recent"]),
             mail=await asyncio.to_thread(_job_mail_commands, members),
-            pvp=await self._job_pvp_moves(members, facts["recent"]),
+            pvp=await self._job_pvp_moves(members, facts["recent"], busy),
             # The level step is a spawn walk too (guildlevel.py).
             leveling=(await asyncio.to_thread(_job_leveling, facts)
                       if spawn_walks else None),
@@ -15217,7 +15268,7 @@ class Bridge(discord.Client):
             return book.plain()
         return book
 
-    async def _job_pvp_moves(self, members, recent) -> dict:
+    async def _job_pvp_moves(self, members, recent, busy=()) -> dict:
         """name -> (pvpgear.Aim, pvpgear.Move) for members playing PvP for an
         upgrade (#589). pvpgear decides; this reads.
 
@@ -15225,6 +15276,11 @@ class Bridge(discord.Client):
         level 60 battlegrounds a queue opens and never fills. Members held in
         a battleground or its queue are remembered for the guild social pass,
         which then does not ask them to a dungeon.
+
+        A battleground needs its cohort (#959): pvpgear.gate lets members queue
+        only when each side reaches the world's minimum per team, together,
+        and has a queue that did not pop leave together; `busy` are the names
+        a dungeon, raid run or campaign holds, who are not idle.
         """
         held = getattr(self, "_pvp_held", None)
         if held is None:
@@ -15232,18 +15288,26 @@ class Bridge(discord.Client):
         for m in members:
             held.pop(m.name, None)
         self._pvp_pass = ({}, {})
+        self._pvp_cohorts = []
         if not pvpgear.enabled():
             return {}
         wanted = [m for m in members if m.eligible and m.online]
         if not wanted:
             return {}
-        facts = await asyncio.to_thread(_fetch_pvp_facts, [m.name for m in wanted])
+        facts = await asyncio.to_thread(
+            _fetch_pvp_facts, [m.name for m in wanted], set(busy or ()))
         aims = pvpgear.plan_aims(facts["seekers"])
         moves = {
             name: pvpgear.next_move(aim, facts["maps"].get(name),
                                     aim.entry in facts["carried"].get(name, ()), recent)
             for name, aim in aims.items()
         }
+        aims, moves, cohorts = pvpgear.gate(
+            aims, moves, facts["seekers"], facts["minimums"], recent, facts["maps"])
+        self._pvp_cohorts = cohorts
+        for cohort in cohorts:
+            log.info("pvp: cohort %s %s: %s", cohort.faction or "?", cohort.bracket,
+                     cohort.line)
         for name, move in moves.items():
             if move.kind in (pvpgear.INSIDE, pvpgear.WAITING):
                 held[name] = True
@@ -15261,6 +15325,10 @@ class Bridge(discord.Client):
         started = {s.holder for s in plan.steps if s.action == pvpgear.ACTION}
         lines = pvpgear.chat_lines(
             {n: moves[n] for n in started if n in moves}, aims, recent)
+        said = getattr(self, "_pvp_cohort_said", None)
+        if said is None:
+            said = self._pvp_cohort_said = {}
+        lines += pvpgear.gathering_lines(getattr(self, "_pvp_cohorts", ()), said)
         for name, text in lines:
             await asyncio.to_thread(
                 _insert_speak, relay.SpeakCommand(name, "guild", text, "", guildsocial.SOURCE))
@@ -16562,9 +16630,9 @@ class Bridge(discord.Client):
         aimed = await self._claim_town_slot(
             WEAPON_SKILL_CLAIMANT, leader, target, urgent=True,
             cohort=_cohort_key(cohort))
-        log.info("weapon skill: %s; %s is aimed at %s (creature %d, %d yards) "
+        log.info("weapon skill: %s; %s is aimed at %s (%d yards) "
                  "(aim taken=%s)%s", said, leader, master["name"],
-                 int(master["entry"]), int(float(master["yards"])), aimed, label)
+                 int(float(master["yards"])), aimed, label)
 
     async def _weapon_skill_train(self, needs, master, positions, label) -> int:
         """Write a train row for each member standing at the master; how many."""
@@ -16592,8 +16660,10 @@ class Bridge(discord.Client):
         """Put on each weapon whose skill row reads applied and not yet worn."""
         for row in await asyncio.to_thread(_weapon_trains_applied, names):
             if await asyncio.to_thread(_insert_weapon_equip, row):
-                log.info("weapon skill: %s learned skill %s; puts on item %s%s",
-                         row["name"], row["skill"], row["entry"], label)
+                log.info("weapon skill: %s learned skill %s; puts on %s%s",
+                         row["name"], row["skill"],
+                         row.get("item_name")
+                         or "an unnamed item (%s)" % row["entry"], label)
 
     async def _town_errand_loop(self) -> None:
         """Run each family's town errand, every TOWN_ERRAND_CYCLE_SECONDS."""
@@ -17083,6 +17153,7 @@ class Bridge(discord.Client):
         marks["written"] = await self._town_errand_vendor_buy(
             names, leader, positions, facts, trip, cohort)
         marks["at"] = trip.vendor
+        marks["at_name"] = trip.name if trip.vendor else ""
         tries = marks.setdefault("tries", {})
         tries[trip.vendor] = tries.get(trip.vendor, 0) + 1
         if step not in marks:
@@ -17113,13 +17184,20 @@ class Bridge(discord.Client):
             log.info("town errand vendor: %s bought for %s%s", name,
                      ", ".join(sorted(slots)), _family_label(cohort))
         vendor = marks.pop("at", 0)
+        vendor_name = marks.pop("at_name", "")
         marks["written"] = []
         tries = marks.get("tries", {}).get(vendor, 0)
         if vendor and (not out_of_reach or tries >= gearup.VENDOR_TRIES):
             visited.add(vendor)
         elif vendor:
-            log.info("town errand vendor: a buy at creature %d was refused "
-                     "for range; trying it again%s", vendor,
+            # Local import: tests exec this function in isolation
+            # (test_gear_weapons_first), so module globals beyond the
+            # injected namespace are not available here.
+            from places import creature_words
+
+            log.info("town errand vendor: a buy at %s was refused "
+                     "for range; trying it again%s",
+                     creature_words(vendor, vendor_name or ""),
                      _family_label(cohort))
         return True
 
@@ -18650,6 +18728,7 @@ class Bridge(discord.Client):
         pending = campaignqueue.pending_by_family(
             await asyncio.to_thread(_fetch_queue_rows))
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        _prune_bag_hold_stuck(fams)
         # THE STAND-IN BEFORE ANYTHING DRIVES THE FAMILY (standin.py): a member
         # sitting out to craft leaves every family's names here, so no hold,
         # gate or job write below reaches it.
@@ -22300,6 +22379,38 @@ def _fetch_family_equipped(names: list) -> list:
                 raise
             return [dict(row) for row in cur.fetchall()]
     return []
+
+
+# What each member wears, by slot, entry and name (#897): the slot a held
+# equip would go to, so the hold lifts when what is worn there changes.
+_WORN_PIECES_SQL = (
+    "SELECT c.name AS holder, ci.slot AS equipment_slot, "
+    "ii.itemEntry AS entry, it.name AS name "
+    "FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "AND ci.bag = 0 AND ci.slot < 19 "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s)"
+)
+
+
+def _fetch_worn_pieces(names: list) -> list:
+    """Rows for gear.worn_pieces; [] on a world without the columns, which
+    leaves only a level change or the bags to lift a hold."""
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_WORN_PIECES_SQL % marks, list(names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            # Any other fault reaches _write_equips, which catches MySQLError
+            # and keeps the last read, so the equip pass does not stop on it.
+            raise
+        return [dict(row) for row in cur.fetchall()]
 
 
 # JEV'S TWO EXTRA READS (#95). The shadow pass shows Jev what each member
@@ -27864,6 +27975,18 @@ _PVP_LIST_ROWS_SQL = (
 # running bridge, so each is read once per process.
 _PVP_OFFERS: list = []
 _PVP_LIST_ROWS: dict = {}
+_PVP_MINIMUMS: dict = {}
+
+
+def _pvp_minimums(cur) -> dict:
+    """The players a team needs per battleground (battleground_template's
+    MinPlayersPerTeam, the server's override over it), read once."""
+    if not _PVP_MINIMUMS:
+        ids = [bg.template_id for bg in pvpgear.BATTLEGROUNDS.values()]
+        cur.execute(pvpgear.MINIMUMS_SQL.format(holes=",".join(["%s"] * len(ids))),  # noqa: S608 - placeholders only
+                    ids)
+        _PVP_MINIMUMS.update(pvpgear.minimums_from_rows(list(cur.fetchall())))
+    return _PVP_MINIMUMS
 
 
 def _pvp_offers(cur) -> list:
@@ -27886,7 +28009,7 @@ def _pvp_list_rows(cur, ids) -> dict:
     return {i: _PVP_LIST_ROWS[i] for i in ids if i in _PVP_LIST_ROWS}
 
 
-def _fetch_pvp_facts(names: list) -> dict:
+def _fetch_pvp_facts(names: list, busy=()) -> dict:
     """pvpgear's facts for these members: a Seeker each (pvpgear.
     seekers_from_rows), where each stands (the snapshot's map) and the PvP
     items each holds off its body."""
@@ -27899,6 +28022,7 @@ def _fetch_pvp_facts(names: list) -> dict:
         cur.execute(guildsocial.SKILLS_SQL.format(holes=holes), names)  # noqa: S608 - placeholders only
         skills = list(cur.fetchall())
         offers = _pvp_offers(cur)
+        minimums = dict(_pvp_minimums(cur))
         list_rows = _pvp_list_rows(
             cur, pvpgear.specs_list_ids(pvpgear.spec_of_row(r) for r in rows))
         carried: dict = {}
@@ -27910,7 +28034,8 @@ def _fetch_pvp_facts(names: list) -> dict:
                 carried.setdefault(str(row["name"]), set()).add(int(row["entry"]))
     gear = guildsocial.gear_by_name(rows, worn, skills)
     return {
-        "seekers": pvpgear.seekers_from_rows(rows, gear, list_rows, offers),
+        "seekers": pvpgear.seekers_from_rows(rows, gear, list_rows, offers, busy),
+        "minimums": minimums,
         "maps": {str(r["name"]): r.get("snapshot_map") for r in rows},
         "carried": carried,
     }
@@ -30269,8 +30394,10 @@ def _weapon_trains_applied(names: list) -> list:
     marks = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT t.target_name AS name, t.command, t.target_arg AS entry "
-            "FROM overseer_command t WHERE t.kind = 'cast' AND t.source = %s "
+            "SELECT t.target_name AS name, t.command, t.target_arg AS entry, "
+            "it.name AS item_name FROM overseer_command t "
+            "LEFT JOIN acore_world.item_template it ON it.entry = t.target_arg "
+            "WHERE t.kind = 'cast' AND t.source = %s "
             "AND t.status = 'applied' AND t.target_name IN (" + marks + ") "
             "AND t.created_at > NOW() - INTERVAL 1 DAY "
             "AND NOT EXISTS (SELECT 1 FROM overseer_command e WHERE e.kind = 'bot' "
@@ -30944,7 +31071,7 @@ def _fetch_gearup_listings(house: int) -> list:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT a.id AS listing_id, a.buyoutprice AS buyout, ii.itemEntry AS entry, "
-            "it.InventoryType, it.class, it.subclass, it.RequiredLevel, "
+            "it.name, it.InventoryType, it.class, it.subclass, it.RequiredLevel, "
             "it.AllowableClass, it.ItemLevel, it.Quality FROM auctionhouse a "
             "JOIN item_instance ii ON ii.guid=a.itemguid "
             "JOIN acore_world.item_template it ON it.entry=ii.itemEntry "

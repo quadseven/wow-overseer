@@ -795,7 +795,7 @@ class SupplyTripTests(unittest.TestCase):
         )
         self.assertLessEqual(len(trip.target), travel.COLUMN_WIDTH)
         self.assertTrue(travel.is_target(trip.target))
-        self.assertEqual(travel.describe(trip.target), "creature 5594")
+        self.assertEqual(travel.describe(trip.target), "an unnamed creature (5594)")
 
     def test_a_need_with_no_shopper_or_no_entry_is_dropped(self):
         trip = craft_supply.supply_trip(
@@ -933,11 +933,12 @@ class SupplyTripTests(unittest.TestCase):
 class SupplyReportTests(unittest.TestCase):
     """craft_supply.report - the line that replaced 'vendor aim taken=True'."""
 
-    def test_it_names_the_entry_the_faction_and_the_runners_up(self):
+    def test_it_names_the_vendor_the_faction_and_the_runners_up(self):
         # The faction is said because the gate that can refuse this aim lives
         # in the C++ and reads exactly that column (mod-overseer#234); the
         # runners-up are said so "it went to the wrong one" and "it was
-        # refused and there was no other" are different sentences.
+        # refused and there was no other" are different sentences. The vendor
+        # is said by name, never a bare entry.
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
             {EMPTY_VIAL: [PESTLEZUGG, JANDIA, HELENIA]},
@@ -945,15 +946,15 @@ class SupplyReportTests(unittest.TestCase):
             map_id=GADGETZAN_MAP,
         )
         said = craft_supply.report(trip)
-        self.assertIn("5594", said)
+        self.assertNotIn("creature 5594", said)
         self.assertIn("Alchemist Pestlezugg", said)
         self.assertIn("474", said)
         self.assertIn("Ugga", said)
         self.assertIn("Grog", said)
         self.assertIn("Empty Vial", said)
         self.assertIn("3371", said)
-        self.assertIn("4877", said)
-        self.assertIn("4897", said)
+        self.assertIn("Jandia", said)
+        self.assertIn("Helenia Olden", said)
 
     def test_only_shortlist_runners_up_are_named(self):
         many = [PESTLEZUGG] + [

@@ -198,3 +198,15 @@ a.g-row:hover { background: var(--color-neutral-900); color: var(--color-text); 
 .g-run-sheet { max-height: 78vh; }
 .g-sheet-title { font-size: var(--fs-3); font-weight: 500; }
 .g-sheet-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-top: 4px; }
+
+/* ---- run page boss progress -------------------------------------------------- */
+.g-r-pips { display: flex; gap: 4px; margin: 8px 0 6px; }
+.g-r-pip { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.g-r-pip-bar { height: 7px; border-radius: 3px; background: var(--color-neutral-800); }
+.g-r-pip.done .g-r-pip-bar { background: var(--color-accent); }
+.g-r-pip-name { font-size: var(--fs-1); color: var(--color-neutral-400); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.g-r-pip.done .g-r-pip-name { color: var(--color-text); }
+.g-r-bosses { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; }
+.g-r-boss { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; font-size: var(--fs-2); }
+.g-r-boss.killed { color: var(--color-text); }
+.g-r-boss:not(.killed) .g-r-boss-name { color: var(--color-neutral-400); }

@@ -221,6 +221,7 @@ from dataclasses import dataclass
 
 import towntrip
 import travel
+from places import creature_words
 
 # spell_id -> (item entry, display name, BuyPrice in copper). Verified
 # against acore_world.item_template directly; see module docstring. Built
@@ -759,7 +760,7 @@ def supply_trip(
         return SupplyTrip(
             traveller=leader,
             unreachable=unreachable,
-            why_not="creature %r is not something overseer_roster.travel_npc "
+            why_not="vendor entry %r is not something overseer_roster.travel_npc "
             "can hold, so no aim was written" % (chosen.entry,),
         )
 
@@ -796,8 +797,8 @@ def report(trip) -> str:
     The line this replaces was "X is not near a vendor stocking Y; vendor aim
     taken=True", which named neither where anybody was sent nor why there,
     and was followed by silence for as long as the errand went nowhere. This
-    names the creature entry, so the aim can be checked against npc_vendor by
-    hand; its faction, because the gate that can refuse it lives in the C++
+    names the vendor, so the aim can be checked against npc_vendor by hand;
+    its faction, because the gate that can refuse it lives in the C++
     and reads exactly that column; and the runners-up, so that "it went to
     the wrong one" and "it was refused and there was no other" are different
     sentences rather than the same silence.
@@ -806,13 +807,12 @@ def report(trip) -> str:
         return trip.why_not
     vendor = trip.vendor
     said = (
-        "%s is aimed at creature %s (%s, faction %s, %d yards) so %s can buy "
+        "%s is aimed at %s (faction %s, %d yards) so %s can buy "
         "%s (%d) - the family follows the leader, and each shopper's own buy "
         "fires where they end up standing"
         % (
             trip.traveller,
-            trip.target,
-            vendor.name or "unnamed",
+            creature_words(vendor.entry, name=vendor.name or ""),
             vendor.faction,
             round(float(vendor.yards)),
             trip.shopper,
@@ -822,8 +822,12 @@ def report(trip) -> str:
     )
     if trip.passed_over:
         said += ". Also stocking it, further off: " + ", ".join(
-            "%d %s (faction %s, %d yards)"
-            % (s.entry, s.name or "unnamed", s.faction, round(float(s.yards)))
+            "%s (faction %s, %d yards)"
+            % (
+                creature_words(s.entry, name=s.name or ""),
+                s.faction,
+                round(float(s.yards)),
+            )
             for s in trip.passed_over
         )
     if trip.also_served:

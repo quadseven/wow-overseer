@@ -95,7 +95,10 @@ def _name(names: dict, table: str, key: int, what: str) -> str:
     found = (names.get(table) or {}).get(int(key))
     if found:
         return found
-    return "%s %d, which the world database does not hold" % (what, key)
+    return "an unnamed %s (%d), which the world database does not hold" % (
+        what,
+        key,
+    )
 
 
 @lru_cache(maxsize=1)

@@ -246,6 +246,21 @@ class WhenToStopAndBuy(unittest.TestCase):
             pvpgear.next_move(aim(), 0, False, recent(pvpgear.QUEUE_MINUTES)).kind,
         )
 
+    def test_an_accepted_queue_past_the_wait_bound_is_asked_again(self):
+        # Nothing writes a row after a game ends or a queue drops, so the
+        # newest accepted row must not hold the member for a day (#913).
+        self.assertEqual(
+            pvpgear.WAITING,
+            pvpgear.next_move(
+                aim(), 0, False, recent(pvpgear.WAITING_MINUTES - 1, "already")
+            ).kind,
+        )
+        for age in (pvpgear.WAITING_MINUTES, 600):
+            self.assertEqual(
+                pvpgear.QUEUE,
+                pvpgear.next_move(aim(), 0, False, recent(age, "already")).kind,
+            )
+
     def test_the_module_outcome_in_a_delivered_row_decides_the_wait(self):
         def read(result):
             row = {
@@ -506,7 +521,9 @@ class TheWiring(unittest.TestCase):
         self.assertTrue(pvpgear.enabled({"PVP_FOR_UPGRADES": "1"}))
 
     def test_the_bridge_plans_says_and_holds(self):
-        self.assertIn('pvp=await self._job_pvp_moves(members, facts["recent"])', BRIDGE)
+        self.assertIn(
+            'pvp=await self._job_pvp_moves(members, facts["recent"], busy)', BRIDGE
+        )
         self.assertIn('await self._say_pvp_lines(plan, facts["recent"])', BRIDGE)
         self.assertIn("guildsocial.SOURCE))", BRIDGE)
         self.assertIn('getattr(self, "_pvp_held", {}).items() if held}', BRIDGE)
