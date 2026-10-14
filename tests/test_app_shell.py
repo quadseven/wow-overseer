@@ -233,6 +233,16 @@ class TheTokens(unittest.TestCase):
         )
         self.assertIn("min-height: 48px", self.CSS[self.CSS.index(".tab {") :])
 
+    def test_script_focus_targets_have_no_outline(self):
+        self.assertIn(
+            ":focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 2px; }",
+            self.CSS,
+        )
+        self.assertIn(
+            'main:focus-visible, [tabindex="-1"]:focus-visible { outline: none; }',
+            self.CSS,
+        )
+
     def test_headings_never_go_above_500(self):
         for weight in re.findall(r"font-weight:\s*(\d+)", self.TOKENS + self.CSS):
             self.assertLessEqual(int(weight), 500)
