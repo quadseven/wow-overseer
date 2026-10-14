@@ -64,7 +64,14 @@ seats it, withdraws it when the pug is no longer free, and forms the run as
 it forms any other: the tank leads, and the finder row names the pug
 (`pug <name>`), which mod-overseer's finder-run takes outside the guild.
 
-Off (GUILD_PUGS off): nothing here runs and the social layer is unchanged.
+CLASS QUEST ASKS SHARE THE CALL (#871). A class quest ask nobody in the guild
+answered classask.ESCALATE_AFTER_ASKS times is called through the same table, channel
+and writer, and its random bot answers with the same pug yes
+(classask.plan_escalation). Every read here is of dungeon asks only, so the
+two never pick each other's asks.
+
+Off (GUILD_PUGS off): nothing here runs and the social layer is unchanged, and
+no class quest ask goes to the server either.
 
 PURE: rows in, a PugPass out. The bridge reads, writes and says the lines.
 """

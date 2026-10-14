@@ -495,7 +495,7 @@ class TheYield(unittest.TestCase):
         mates_ = [mate(m.name, 5, 0, guild=m.guild, at=(m.x, m.y))]
         self.assertEqual(pass_(result.helps, mates_).posts, ())
 
-    def test_three_asks_with_no_party_stop_the_next_for_the_hold(self):
+    def test_four_asks_with_no_party_stop_the_next_for_the_hold(self):
         b = group_book()
         m = asker()
         (h,) = guildjobs.class_helps(m, b)
@@ -510,6 +510,7 @@ class TheYield(unittest.TestCase):
                     "yeses": n,
                 }
                 for st, age, n in (
+                    ("expired", 105, 0),
                     ("expired", 80, 1),
                     ("cancelled", 55, 0),
                     ("expired", 30, 2),
@@ -525,7 +526,7 @@ class TheYield(unittest.TestCase):
         left = guildjobs.CLASS_STALL_HOLD_MINUTES - 30
         self.assertEqual(
             line,
-            "class ask: Bigzug stops asking for Group Job after 3 asks with no "
+            "class ask: Bigzug stops asking for Group Job after 4 asks with no "
             "party (3 yes); it levels for %d minute(s)" % left,
         )
         # Without the streak the quest is owed as before.
@@ -534,14 +535,22 @@ class TheYield(unittest.TestCase):
     def test_the_hold_runs_out_from_the_newest_ask(self):
         b = group_book()
         hold = guildjobs.CLASS_STALL_HOLD_MINUTES
-        asks = [done_ask(hold + 60), done_ask(hold + 30), done_ask(hold)]
+        asks = [
+            done_ask(hold + 90),
+            done_ask(hold + 60),
+            done_ask(hold + 30),
+            done_ask(hold),
+        ]
         self.assertEqual(len(guildjobs.class_helps(asker(), b, asks=asks)), 1)
+        held = [done_ask(age - 1) for age in (hold + 90, hold + 60, hold + 30, hold)]
+        self.assertEqual(guildjobs.class_helps(asker(), b, asks=held), [])
 
     def test_an_ask_that_ran_resets_the_count(self):
         b = group_book()
         asks = [done_ask(90), done_ask(60), done_ask(40, gs.RAN), done_ask(20)]
         self.assertEqual(len(guildjobs.class_helps(asker(), b, asks=asks)), 1)
         self.assertEqual(guildjobs.class_ask_streak("Bigzug", 2000, asks)[:2], (0, 1))
+        asks.append(done_ask(15))
         asks.append(done_ask(10))
         asks.append(done_ask(5))
         self.assertEqual(guildjobs.class_helps(asker(), b, asks=asks), [])

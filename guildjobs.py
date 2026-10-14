@@ -3620,7 +3620,9 @@ def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
         if left:
             yields.append(_streak_yield(m, h, left, count, yeses))
             continue
-        helps.append(classquest.Help(m.name, m.guild, int(m.level), int(m.map_id), h))
+        helps.append(
+            classquest.Help(m.name, m.guild, int(m.level), int(m.map_id), h, count)
+        )
     return helps, yields
 
 
@@ -3657,7 +3659,13 @@ def _streak_yield(m, move, left, count, yeses) -> tuple:
 # (it may yet fill), and an ask that ran ends the run. Asks older than
 # CLASS_ASK_STREAK_WINDOW_MINUTES are not read, so a hold that ran out and an
 # ask that failed once more yields again at once.
-CLASS_ASK_STREAK_MAX = 3
+#
+# THE LAST ASKS OF A RUN GO TO THE SERVER (#871). From
+# classask.ESCALATE_AFTER_ASKS asks with no party the ask is called in the
+# faction's public channel too and a random bot of the side may answer it, so
+# the run is one longer than it was (3) to leave the server two tries. Four
+# asks a quarter of an hour apart end inside the first hour and a half.
+CLASS_ASK_STREAK_MAX = 4
 CLASS_ASK_STREAK_WINDOW_MINUTES = 12 * 60
 _ASK_RAN = "ran"
 _ASK_LIVE = frozenset({"open", "filled"})
