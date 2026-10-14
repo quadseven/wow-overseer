@@ -448,19 +448,28 @@ class Questers(unittest.TestCase):
         invite = teamsync.plan(
             guild, _bonkers_full_raid(), [recruit], set(), True, reset_done=set()
         )
-        self.assertEqual([(a.kind, a.target) for a in invite], [("invite", "Randomlock")])
+        self.assertEqual(
+            [(a.kind, a.target) for a in invite], [("invite", "Randomlock")]
+        )
 
         joined = _bonkers_full_raid() + [
             _quester(raidteams.QUESTERS[guild][3], "Randomlock", 1)
         ]
         rename = teamsync.plan(guild, joined, [], set(), True, reset_done=set())
-        self.assertIn(("rename", "Randomlock", "Grakk"),
-                      [(a.kind, a.target, a.new_name) for a in rename])
+        rename_action = next(a for a in rename if a.kind == "rename")
+        self.assertEqual(
+            (rename_action.target, rename_action.new_name), ("Randomlock", "Grakk")
+        )
 
-        renamed = _bonkers_full_raid() + [_quester(raidteams.QUESTERS[guild][3], level=4)]
+        renamed = _bonkers_full_raid() + [
+            _quester(raidteams.QUESTERS[guild][3], name=rename_action.new_name, level=4)
+        ]
+        self.assertEqual(renamed[-1]["name"], "Grakk")
         reset = teamsync.plan(guild, renamed, [], set(), True, reset_done=set())
-        self.assertEqual([(a.kind, a.target) for a in reset if a.kind == "reset"],
-                         [("reset", "Grakk")])
+        self.assertEqual(
+            [(a.kind, a.target) for a in reset if a.kind == "reset"],
+            [("reset", "Grakk")],
+        )
 
     def test_an_unread_ledger_resets_nobody(self):
         members = _bonkers_full_raid() + [_quester(raidteams.QUESTERS["Bonkers"][3])]
