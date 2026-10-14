@@ -222,7 +222,9 @@ def floor_reason(name: str, sellable: int, rows: Iterable[dict], keep_names=()) 
         if len(examples) < FLOOR_REASON_EXAMPLES:
             examples.append("%s (%s)" % (row.get("name") or "an unnamed item", why))
     if not kept:
-        return "%s carries nothing a vendor will buy, and no carried item was read" % name
+        return (
+            "%s carries nothing a vendor will buy, and no carried item was read" % name
+        )
     counts = ", ".join(
         "%d %s" % (count, why)
         for why, count in sorted(kept.items(), key=lambda kv: (-kv[1], kv[0]))

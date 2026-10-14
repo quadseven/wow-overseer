@@ -185,9 +185,7 @@ def kept(**kw):
     return base
 
 
-GROG_ROWS = [
-    kept(item_guid=100 + i) for i in range(12)
-] + [
+GROG_ROWS = [kept(item_guid=100 + i) for i in range(12)] + [
     kept(item_guid=200, name="Tome of Valor", quest_item=True, profession_needed=False),
     kept(item_guid=201, name="Fire Oil", reagent=True, profession_needed=False),
 ]
@@ -316,15 +314,14 @@ class TheHoldIsJudgedAfterThePass(unittest.TestCase):
         self.assertIn("Grog carries nothing a vendor will buy", why)
         self.assertIn("Linen Cloth (profession stock)", why)
         self.assertIn("1 a quest item", why)
-        self.assertIn(
-            "vendor step ended before the leader stood at a vendor", why
-        )
+        self.assertIn("vendor step ended before the leader stood at a vendor", why)
 
     def test_the_release_is_logged_with_the_reason(self):
         self.errand.until_done()
         self.errand.minute()
         released = [
-            line for line in self.errand.log.lines
+            line
+            for line in self.errand.log.lines
             if "no town pass has made room" in line
         ]
         self.assertTrue(released)
@@ -393,10 +390,16 @@ class TheVendorStepSaysHowItEnded(unittest.TestCase):
 
     def test_a_vendor_step_that_stood_at_a_vendor(self):
         self.ns["_note_town_pass"](
-            KEY, self.at_vendor, self.next, "vendor done; next: bank",
+            KEY,
+            self.at_vendor,
+            self.next,
+            "vendor done; next: bank",
             {townerrand.VENDOR: 1.0},
         )
-        self.assertEqual("the town errand's vendor step ran the sell pass at a vendor", self.note[KEY])
+        self.assertEqual(
+            "the town errand's vendor step ran the sell pass at a vendor",
+            self.note[KEY],
+        )
 
     def test_a_vendor_step_that_never_stood_at_a_vendor(self):
         self.ns["_note_town_pass"](
@@ -407,7 +410,9 @@ class TheVendorStepSaysHowItEnded(unittest.TestCase):
 
     def test_an_errand_ended_on_the_walk(self):
         walking = townerrand.State(phase=townerrand.GO, why=townerrand.BAG_PRESSURE_WHY)
-        done, line = townerrand.end(walking, 1.0, "the walk to the capital did not land")
+        done, line = townerrand.end(
+            walking, 1.0, "the walk to the capital did not land"
+        )
         self.ns["_note_town_pass"](KEY, walking, done, line, {})
         self.assertIn("ended before its vendor step", self.note[KEY])
         self.assertIn("did not land", self.note[KEY])
@@ -485,8 +490,11 @@ ROWS = [
     kept(item_guid=8, name="Dervish Buckler", profession_needed=False),
     kept(item_guid=0, profession_needed=False),
     kept(item_guid=9, count=0, profession_needed=False),
-    {k: v for k, v in kept(item_guid=10, profession_needed=False).items()
-     if k != "reagent"},
+    {
+        k: v
+        for k, v in kept(item_guid=10, profession_needed=False).items()
+        if k != "reagent"
+    },
     {k: v for k, v in kept(item_guid=11).items() if k != "sell_price"},
     kept(item_guid=12, entry="x", profession_needed=False),
 ]

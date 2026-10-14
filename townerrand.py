@@ -105,6 +105,7 @@ def steps_for(why: str) -> tuple:
     """The step order for an errand started for `why`."""
     return ROOM_STEP_ORDER if why == BAG_PRESSURE_WHY else STEP_ORDER
 
+
 # THE WAY THERE (wow-dev 2026-09-27). The Alliance family is bound in Ratchet,
 # which has a mailbox, armorers, a weaponsmith and two bankers beside the inn,
 # and it was sent to Stormwind instead: 3,223 yards from a head fighting alone
