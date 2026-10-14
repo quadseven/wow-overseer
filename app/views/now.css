@@ -72,6 +72,7 @@
 .st-badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .st-pic[data-state="live"] .st-badge { color: oklch(0.72 0.15 25); }
 .st-pic[data-state="connecting"] .st-badge { color: oklch(0.82 0.11 80); }
+.st-pic[data-state="dark"] .st-badge { color: var(--warn); }
 .st-cap { padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 6px; }
 .st-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .st-name { font-weight: 500; font-size: 17px; text-decoration: none; }

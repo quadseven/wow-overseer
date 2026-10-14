@@ -16,6 +16,7 @@
 
 import { html, memberHref, duration, classVar } from "../../ui.js";
 import { makePlayer, hasSound } from "./whep.js";
+import { darkSampler, darkReason } from "./dark.js";
 
 const tiles = new Map(); // name -> tile
 let heard = null;        // the one tile heard; off on every load (autoplay policy)
@@ -30,9 +31,19 @@ function el(tag, cls) {
 function setState(t, state, text) {
   t.state = state;
   t.pic.dataset.state = state;
-  t.badge.lastChild.textContent = state === "live" ? "LIVE" : state === "connecting" ? "CONNECTING" : "OFF";
-  t.offT.textContent = state === "connecting" ? "Connecting to the stream" : "No picture";
+  t.badge.lastChild.textContent =
+    state === "live" ? "LIVE" :
+    state === "connecting" ? "CONNECTING" :
+    state === "dark" ? "DARK" : "OFF";
+  t.offT.textContent =
+    state === "connecting" ? "Connecting to the stream" :
+    state === "dark" ? "Picture is dark" : "No picture";
   t.offB.textContent = text || "";
+  if (state === "live") {
+    t.sampler.start();
+  } else if (state !== "dark") {
+    t.sampler.stop();
+  }
 }
 
 // requestVideoFrameCallback says when a frame was actually painted, which is
@@ -69,7 +80,11 @@ function tile(name) {
   full.id = "st-full-" + name;
   full.append(el("i"));
   pic.append(video, off, badge, full);
-  t = { name, pic, video, off, offT, offB, badge, full, isFull: false, state: "off", started: false, lastAttempt: 0, lastFrame: 0, url: "" };
+  const sampler = darkSampler(video, (dark) => {
+    if (dark && (t.state === "live" || t.state === "dark")) setState(t, "dark", darkReason());
+    else if (!dark && t.state === "dark") setState(t, "live", "");
+  });
+  t = { name, pic, video, off, offT, offB, badge, full, sampler, isFull: false, state: "off", started: false, lastAttempt: 0, lastFrame: 0, url: "" };
   full.addEventListener("click", () => toggleFullscreen(t));
   video.addEventListener("webkitendfullscreen", () => leftFullscreen(t));
   fullLabel(t);
@@ -224,7 +239,9 @@ export function toggleHear(name) {
 
 // ---- frame age ------------------------------------------------------------
 function ageText(t) {
-  if (!t || t.state !== "live") return "no frame";
+  if (!t) return "no frame";
+  if (t.state === "dark") return "picture is dark";
+  if (t.state !== "live") return "no frame";
   if (!t.lastFrame) return "frame age not measured";
   const s = Math.max(0, Math.round((Date.now() - t.lastFrame) / 1000));
   return "frame " + s + "s old";
