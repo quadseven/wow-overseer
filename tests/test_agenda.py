@@ -395,7 +395,8 @@ class TravelTargetsTheModuleAccepts(unittest.TestCase):
         )
 
     def test_a_bare_creature_entry_still_goes_through_travel(self):
-        self.assertEqual(agenda.describe_aim("5511"), "creature 5511")
+        self.assertEqual(agenda.describe_aim("5511"), "an unnamed creature (5511)")
+        self.assertEqual(agenda.describe_aim("5511", {5511: "Kor'geld"}), "Kor'geld")
 
     def test_an_empty_aim_is_nowhere(self):
         self.assertEqual(agenda.describe_aim(""), "nowhere")

@@ -406,7 +406,7 @@ def dungeon_headline(progress: dict) -> str:
 # --- errands -----------------------------------------------------------------
 
 
-def describe_aim(value: str) -> str:
+def describe_aim(value: str, creatures: dict | None = None) -> str:
     """How to say an overseer_roster.travel_npc value out loud.
 
     WHY THIS IS NOT JUST travel.describe. That function resolves through
@@ -429,11 +429,13 @@ def describe_aim(value: str) -> str:
         return "nowhere"
     if text.startswith(("at:", "trigger:")):
         # Named, not "a spot in the world" or "a doorway" (places.aim_place).
-        return places.aim_place(text)
-    return travel.describe(text)
+        return places.aim_place(text, creatures)
+    return travel.describe(text, creatures)
 
 
-def errand(rows: list[dict], trade_rows: list[dict]) -> dict | None:
+def errand(
+    rows: list[dict], trade_rows: list[dict], creatures: dict | None = None
+) -> dict | None:
     """Who is walking somewhere, where, and what for.
 
     An aim in `travel_npc` is the one job state that is per-character by
@@ -471,7 +473,7 @@ def errand(rows: list[dict], trade_rows: list[dict]) -> dict | None:
         "name": str(row["name"]),
         "leads": bool(int(row.get("lead") or 0)),
         "target": target,
-        "target_text": describe_aim(target),
+        "target_text": describe_aim(target, creatures),
         "skill": skill,
         "reason": shorten(reason),
         "decided_at": _iso(decided_at),
@@ -725,6 +727,7 @@ def build_agenda(
     quest_titles: dict,
     now: datetime | None = None,
     members: list[str] | None = None,
+    creatures: dict | None = None,
 ) -> dict:
     """Rows in, the current-goal banner's JSON out.
 
@@ -736,6 +739,8 @@ def build_agenda(
     event_rows    overseer_event, any kind (deaths are filtered here, not in SQL)
     quest_titles  quest id -> LogTitle, from acore_world.quest_template
     now           the clock, injectable so the suite can stand still
+    creatures     creature entry -> a name or naming row, from
+                  acore_world.creature_template, for numeric travel aims
 
     EVERY ONE OF THOSE MAY BE EMPTY. A realm whose worldserver predates a table
     hands in [] for it and gets a thinner sentence, never an exception. The
@@ -763,7 +768,7 @@ def build_agenda(
     names = [str(r["name"]) for r in rows]
     counter = campaign(rows)
     run = active_run(run_rows)
-    err = errand(rows, trade_rows)
+    err = errand(rows, trade_rows, creatures)
     order = orders(goal_rows, quest_titles, err)
     moved_at = last_movement(event_rows)
     jsplit = job_split(rows)

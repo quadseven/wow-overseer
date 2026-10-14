@@ -274,7 +274,9 @@ class NowTap(logging.Handler):
         return out
 
 
-def intent_steps(prev: dict | None, row: dict) -> list[Step]:
+def intent_steps(
+    prev: dict | None, row: dict, creatures: dict | None = None
+) -> list[Step]:
     """The steps a change in the module's intent book represents.
 
     `prev` and `row` are rows of `overseer_family_intent` as the bridge reads
@@ -290,7 +292,7 @@ def intent_steps(prev: dict | None, row: dict) -> list[Step]:
     key = _intent_key(row)
     held = key[0] not in ("", "none")
     if prev is None:
-        return [_took(who, row)] if held else []
+        return [_took(who, row, creatures)] if held else []
     # The same walk begun again shows as a shorter age than the last look.
     restarted = key == _intent_key(prev) and _age(row) + 2 < _age(prev)
     if key == _intent_key(prev) and not restarted:
@@ -302,17 +304,20 @@ def intent_steps(prev: dict | None, row: dict) -> list[Step]:
                 who,
                 "character",
                 "intent",
-                "%s ended %s" % (_owner(prev), _walk_words(prev)),
+                "%s ended %s" % (_owner(prev), _walk_words(prev, creatures)),
             )
         )
     if held:
-        out.append(_took(who, row))
+        out.append(_took(who, row, creatures))
     return out
 
 
-def _took(who: str, row: dict) -> Step:
+def _took(who: str, row: dict, creatures: dict | None = None) -> Step:
     return Step(
-        who, "character", "intent", "%s took over: %s" % (_owner(row), _walk_words(row))
+        who,
+        "character",
+        "intent",
+        "%s took over: %s" % (_owner(row), _walk_words(row, creatures)),
     )
 
 
@@ -339,11 +344,11 @@ def _owner(row: dict) -> str:
 # --------------------------------------------------------------------- wording --
 
 
-def aim_words(target: str) -> str:
+def aim_words(target: str, creatures: dict | None = None) -> str:
     """A module aim in words: `trigger:194` is "the way out of Shadowfang
-    Keep", `at:0:-3898,-597,5` "the Menethil Harbor docks (Wetlands)"
-    (places.aim_place)."""
-    return places.aim_place(target)
+    Keep", `at:0:-3898,-597,5` "the Menethil Harbor docks (Wetlands)", a
+    creature entry its name (places.aim_place)."""
+    return places.aim_place(target, creatures)
 
 
 # Words the module and the bridge use for their own parts, as a reader says
@@ -358,6 +363,14 @@ _REWORD = (
     (
         re.compile(r"walking to trigger (\d+)", re.I),
         lambda m: _cap(m[0], "walking " + places.walk_words("trigger:" + m[1])),
+    ),
+    # Stored steps were written by older bridges as "walking to creature
+    # 8122": said honestly as it is read, with the number, never a bare id.
+    # ("an unnamed creature (8122)" carries parens, so this never matches a
+    # line already said right.)
+    (
+        re.compile(r"(?<!unnamed )creature (\d+)"),
+        lambda m: "an unnamed creature (%s)" % m[1],
     ),
     (
         re.compile(r"the vendor trip keeps the travel column"),
@@ -412,12 +425,12 @@ _KIND_WORDS = {
 }
 
 
-def _walk_words(row: dict) -> str:
+def _walk_words(row: dict, creatures: dict | None = None) -> str:
     kind = str(row.get("current_kind") or "")
     pattern = _KIND_WORDS.get(kind, kind or "nothing")
-    walk = places.walk_words(row.get("current_target"))
+    walk = places.walk_words(row.get("current_target"), creatures)
     return pattern.replace("walking to {aim}", "walking " + walk).format(
-        aim=aim_words(row.get("current_target"))
+        aim=aim_words(row.get("current_target"), creatures)
     )
 
 
@@ -501,13 +514,15 @@ def _attach_steps(facts, families, steps):
                 facts[n]["steps"].append(s)
 
 
-def build_facts(names, roster, intents, steps, now_at=None) -> dict:
+def build_facts(names, roster, intents, steps, now_at=None, creatures=None) -> dict:
     """name -> the facts `compose` reads, from the three table reads.
 
     `roster` is a list of overseer_roster rows, `intents` the intent-book rows,
     `steps` the stored steps (READ_SQL rows) and `now_at` the database clock in
     epoch seconds, the same clock the steps' times are read on. Each step is offered to the
     character it names and to every character of the family it names.
+    `creatures` names numeric aims the way places.aim_place reads them:
+    entry -> a name or a naming row.
     """
     by_name, families = _roster_families(roster)
     current_intents = _current_intents(intents, by_name, families)
@@ -521,6 +536,7 @@ def build_facts(names, roster, intents, steps, now_at=None) -> dict:
             "member": members.get(n),
             "steps": [],
             "now_at": now_at,
+            "creatures": creatures,
         }
     _attach_steps(facts, families, steps)
     return facts
@@ -622,8 +638,8 @@ def restart_words(restarts: int) -> str:
     return "a way there; %s %d times" % (RESTART_WAITING, restarts)
 
 
-def _from_intent(intent: dict, steps, now_at):
-    doing = _walk_words(intent)
+def _from_intent(intent: dict, steps, now_at, creatures: dict | None = None):
+    doing = _walk_words(intent, creatures)
     doing = doing[:1].upper() + doing[1:]
     age = intent.get("current_for")
     since = (now_at - int(age)) if (age is not None and now_at) else None
@@ -669,11 +685,12 @@ def _live(member, f, fresh, now_at):
     """Doing, waiting, since for a character in the world and not fighting."""
     intent = f.get("intent")
     steps = f.get("steps") or ()
-    restarting = _from_restarts(intent, steps, now_at)
+    creatures = f.get("creatures")
+    restarting = _from_restarts(intent, steps, now_at, creatures)
     if restarting:
         return restarting
     if _intent_is_active(intent):
-        return _from_intent(intent, steps, now_at)
+        return _from_intent(intent, steps, now_at, creatures)
     return _from_scopes(f, fresh)
 
 
@@ -690,13 +707,13 @@ def _from_scopes(f, fresh):
     return _from_job(f.get("roster") or {})
 
 
-def _from_restarts(intent, steps, now_at):
+def _from_restarts(intent, steps, now_at, creatures: dict | None = None):
     """Doing, waiting, since for a walk that keeps restarting, or None."""
     restarts = _restarts(steps, now_at)
     if restarts < 3:
         return None
     if _intent_is_active(intent):
-        return _from_intent(intent, steps, now_at)
+        return _from_intent(intent, steps, now_at, creatures)
     doing = _walk_from_steps(steps) or "Walking"
     return doing, restart_words(restarts), _first_restart(steps, now_at)
 

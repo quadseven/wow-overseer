@@ -123,7 +123,11 @@ class TheRatchetCase(unittest.TestCase):
         got = trip()
         self.assertEqual(got.vendor.offers[0].entry, 4496)
         self.assertIn("Small Brown Pouch", bag_pressure.bag_trip_report(got, "Zug"))
-        self.assertIn("creature 3498", bag_pressure.bag_trip_report(got, "Zug"))
+        self.assertIn(
+            "Zug is aimed at Jazzik (faction 69",
+            bag_pressure.bag_trip_report(got, "Zug"),
+        )
+        self.assertNotIn("creature 3498", bag_pressure.bag_trip_report(got, "Zug"))
 
     def test_the_nearest_stocking_vendor_wins(self):
         got = trip(rows=CROSSROADS_ROWS + JAZZIK_ROWS)

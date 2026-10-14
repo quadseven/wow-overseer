@@ -347,7 +347,7 @@ def build_fates(
             (key, who), {"key": key, "who": who, "stacks": 0, "items": []}
         )
         pile["stacks"] += 1
-        name = row.get("item_name") or "item %s" % row.get("entry")
+        name = row.get("item_name") or "an unnamed item (%s)" % row.get("entry")
         if name not in pile["items"]:
             pile["items"].append(name)
     out = []
