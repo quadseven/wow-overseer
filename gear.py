@@ -1647,7 +1647,9 @@ def _refused(row) -> bool:
     )
 
 
-def _world_holds(wanted, answers, worn, holds, holders, tries, now, memory_hours) -> dict:
+def _world_holds(
+    wanted, answers, worn, holds, holders, tries, now, memory_hours
+) -> dict:
     """(holder, command) -> note, for each piece held on the world's answer.
 
     `holds` is updated in place. A hold begins at the first pass that sees a
@@ -1689,15 +1691,12 @@ def _world_holds(wanted, answers, worn, holds, holders, tries, now, memory_hours
                 hold.lifted = True
                 continue
         due = hold.retry_at.strftime("%H:%M") if hold.retry_at else "later"
-        out[key] = (
-            "%s keeps %s over %s: %s; tries again at %s"
-            % (
-                equip.holder,
-                " and ".join(name for _slot, _entry, name in worn_now) or "nothing",
-                equip.name,
-                str(row.get("detail")).strip(),
-                due,
-            )
+        out[key] = "%s keeps %s over %s: %s; tries again at %s" % (
+            equip.holder,
+            " and ".join(name for _slot, _entry, name in worn_now) or "nothing",
+            equip.name,
+            str(row.get("detail")).strip(),
+            due,
         )
     return out
 
@@ -1713,8 +1712,16 @@ def world_held(wanted, holds) -> int:
 
 
 def equips_to_queue(
-    wanted, recent, tries, give_up=3, answers=None, worn=None, holds=None, holders=None,
-    now=None, memory_hours=24
+    wanted,
+    recent,
+    tries,
+    give_up=3,
+    answers=None,
+    worn=None,
+    holds=None,
+    holders=None,
+    now=None,
+    memory_hours=24,
 ) -> tuple:
     """Which equips to write now, and a note for each one held back.
 
@@ -1744,8 +1751,9 @@ def equips_to_queue(
     if holders is None:
         holders = {e.holder for e in wanted}
     now = now or datetime.now(timezone.utc)
-    held = _world_holds(wanted, answers or {}, worn, holds, set(holders),
-                        tries, now, memory_hours)
+    held = _world_holds(
+        wanted, answers or {}, worn, holds, set(holders), tries, now, memory_hours
+    )
     queue, notes = [], []
     for equip in wanted:
         key = (equip.holder, equip.command)

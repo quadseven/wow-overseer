@@ -240,8 +240,13 @@ class TheQueueIsBounded(unittest.TestCase):
             answer = self.answer()
             answer[self.key]["created_at"] = now - timedelta(hours=1)
             queue, notes = bag_pressure.equips_to_queue(
-                self.wanted, set(), {self.key: attempts}, answers=answer,
-                worn=worn, holds={}, now=now,
+                self.wanted,
+                set(),
+                {self.key: attempts},
+                answers=answer,
+                worn=worn,
+                holds={},
+                now=now,
             )
             if wait > 1:
                 self.assertEqual(queue, ())
@@ -250,8 +255,13 @@ class TheQueueIsBounded(unittest.TestCase):
                 self.assertEqual(queue, self.wanted)
             answer[self.key]["created_at"] = now - timedelta(hours=wait)
             queue, _ = bag_pressure.equips_to_queue(
-                self.wanted, set(), {self.key: attempts}, answers=answer,
-                worn=worn, holds={}, now=now,
+                self.wanted,
+                set(),
+                {self.key: attempts},
+                answers=answer,
+                worn=worn,
+                holds={},
+                now=now,
             )
             self.assertEqual(queue, self.wanted)
 
@@ -284,7 +294,7 @@ class TheQueueIsBounded(unittest.TestCase):
                 notes,
                 (
                     "Grog keeps Sparkleshell Breastplate over Cabalist Chestpiece: "
-                "the bot kept its own pick; tries again at later",
+                    "the bot kept its own pick; tries again at later",
                 ),
             )
             self.assertEqual(gear.world_held(self.wanted, holds), 1)
