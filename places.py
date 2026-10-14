@@ -424,9 +424,17 @@ def trigger_place(trigger_id) -> tuple[str, str]:
     return "through the portal to", place_at(there, row["to_x"], row["to_y"])
 
 
-def aim_place(aim: str) -> str:
+def aim_place(aim: str, creatures: dict | None = None) -> str:
     """Where a module aim points, named: a doorway by its instance, a ground
-    point by its town and zone, `banker` as "the banker"."""
+    point by its town and zone, `banker` as "the banker".
+
+    `creatures` names numeric (creature entry) aims: entry -> the creature's
+    name, or {"name", "subname", "place"} for the full player-like form. A
+    numeric aim no entry names is said as an unnamed creature with its number,
+    never a bare id. WHAT THE WALK IS FOR is not this function's: the caller
+    holds that row (a vendor's stock, an errand's kind) and says it beside
+    this.
+    """
     text = str(aim or "").strip()
     if not text:
         return "nowhere"
@@ -448,11 +456,11 @@ def aim_place(aim: str) -> str:
     if text.startswith("at:"):
         return "a ground point the row does not spell whole (%s)" % text
     if text.isdigit():
-        return "creature %s" % text
+        return creature_words(int(text), _creature_info(creatures, int(text)))
     return "the " + text
 
 
-def walk_words(aim: str) -> str:
+def walk_words(aim: str, creatures: dict | None = None) -> str:
     """ "out of Shadowfang Keep", "into The Deadmines", "to Menethil Harbor
     (Wetlands)": the walk an aim asks for, after the verb."""
     text = str(aim or "").strip()
@@ -460,4 +468,84 @@ def walk_words(aim: str) -> str:
         how, place = trigger_place(text.split(":", 1)[1])
         if place:
             return "%s %s" % (how, place)
-    return "to " + aim_place(text)
+    return "to " + aim_place(text, creatures)
+
+
+# One naming helper for a creature aim: the template row (name and subname)
+# and the spawn's place, said the way a player would. The lookups live with
+# the callers that already read the world (map_server reads them beside the
+# intent book; the economy passes already hold the vendor's name), cached
+# once per process like levelroute's quest rows: no template row changes
+# while a realm runs, so an entry read once is read for good.
+
+
+# The reads, beside the callers rather than joined: acore_world is a second
+# schema and the ids on any one page are a handful (map_server._fetch_agenda
+# states the same rule for quest titles). `{holes}` is sized by the caller;
+# every value is bound.
+CREATURE_NAMES_SQL = (
+    "SELECT entry AS id, name, subname FROM acore_world.creature_template "
+    "WHERE entry IN ({holes})"
+)
+# One spawn per entry, for the place: the first per entry wins, so the answer
+# is stable while the realm runs. A vendor's spawns stand in one town.
+CREATURE_SPAWN_SQL = (
+    "SELECT id AS entry, map AS map_id, position_x AS x, position_y AS y "
+    "FROM acore_world.creature WHERE id IN ({holes}) ORDER BY id, guid"
+)
+
+
+def creature_entries(aims) -> list:
+    """The numeric (creature entry) aims among `aims`, sorted."""
+    out = set()
+    for aim in aims or ():
+        text = str(aim or "").strip()
+        if text.isdigit() and int(text) > 0:
+            out.add(int(text))
+    return sorted(out)
+
+
+def _creature_info(creatures: dict | None, entry: int):
+    """The naming row for `entry`: a name string or a {"name", "subname",
+    "place"} dict, or None."""
+    if not creatures:
+        return None
+    found = creatures.get(int(entry))
+    if isinstance(found, str):
+        return {"name": found}
+    if isinstance(found, dict):
+        return found
+    return None
+
+
+def creature_words(entry, info=None, name=None, subname=None, place=None) -> str:
+    """A creature entry as a player says it: "Kor'geld, the alchemy supplies
+    in Orgrimmar".
+
+    `info` is the row the caller read for the entry - {"name", "subname",
+    "place"} - or a bare name string; `name`/`subname`/`place` say the same
+    without one. Whatever is missing is left out rather than guessed: a name
+    with no role or town is still the name. An entry nothing names is said
+    with its number, as an unnamed creature, never a bare id.
+    """
+    if isinstance(info, str):
+        info = {"name": info}
+    info = dict(info or {})
+    if name is not None:
+        info["name"] = name
+    if subname is not None:
+        info["subname"] = subname
+    if place is not None:
+        info["place"] = place
+    said = str(info.get("name") or "").strip()
+    if not said:
+        return "an unnamed creature (%s)" % entry
+    role = str(info.get("subname") or "").strip()
+    if role:
+        # The template writes roles title-cased ("Alchemy Supplies", "Weapon
+        # Master"); said mid-sentence they read lower-cased.
+        said += ", the %s" % role.lower()
+    town = str(info.get("place") or "").strip()
+    if town:
+        said += " in " + town
+    return said

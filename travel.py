@@ -383,8 +383,15 @@ def is_target(value):
     return bool(value) and resolve(value) == value
 
 
-def describe(value):
-    """How to say the target out loud, for a log line or party chat."""
+def describe(value, creatures: dict | None = None):
+    """How to say the target out loud, for a log line or party chat.
+
+    `creatures` names numeric (creature entry) targets the way
+    places.creature_words does: entry -> a name or a naming row. Without one
+    a numeric target is an unnamed creature with its number, never a bare id.
+    """
+    from places import creature_words  # local: places imports transform, not travel
+
     target = resolve(value)
     if target is None:
         return "nowhere"
@@ -395,7 +402,9 @@ def describe(value):
         # whole point of the prefixed form.
         return "the flight master who teaches taxi node %d" % node
     if target.isdigit():
-        return "creature %s" % target
+        entry = int(target)
+        info = (creatures or {}).get(entry)
+        return creature_words(entry, info)
     return "the nearest %s" % target
 
 

@@ -456,7 +456,13 @@ class TheTargetVocabulary(unittest.TestCase):
         self.assertEqual(
             "the nearest profession trainer", travel.describe("professions")
         )
-        self.assertEqual("creature 5511", travel.describe("5511"))
+        self.assertEqual("an unnamed creature (5511)", travel.describe("5511"))
+        self.assertEqual(
+            "Kor'geld, the alchemy supplies",
+            travel.describe(
+                "8122", {8122: {"name": "Kor'geld", "subname": "Alchemy Supplies"}}
+            ),
+        )
         self.assertEqual("nowhere", travel.describe(""))
 
 

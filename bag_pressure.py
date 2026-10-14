@@ -8,6 +8,7 @@ from typing import Iterable
 import disposition
 import gear
 import jobs
+import places
 import raidlineup
 import raidroles
 import travel
@@ -1284,14 +1285,15 @@ def bag_vendor_trip(
             return BagTrip(
                 vendor=vendor,
                 buyers=served,
-                why_not="%s already stands at %s (creature %d); the purchase "
+                why_not="%s already stands at %s; the purchase "
                 "waits for the buyers to reach the counter"
-                % (leader, vendor.name, vendor.entry),
+                % (leader, vendor.name or "an unnamed creature (%d)" % vendor.entry),
             )
         target = travel.resolve(str(int(vendor.entry)))
         if not target or len(target) > travel.COLUMN_WIDTH:
             return BagTrip(
-                why_not="creature %r cannot be named in travel_npc" % (vendor.entry,)
+                why_not="vendor entry %r cannot be named in travel_npc"
+                % (vendor.entry,)
             )
         return BagTrip(target=target, vendor=vendor, buyers=served)
     return BagTrip(
@@ -1305,10 +1307,9 @@ def bag_trip_report(trip: BagTrip, leader: str) -> str:
     if not trip.target:
         return trip.why_not
     vendor = trip.vendor
-    return "%s is aimed at creature %s (%s, faction %d, %d yards) so %s can buy %s" % (
+    return "%s is aimed at %s (faction %d, %d yards) so %s can buy %s" % (
         leader,
-        trip.target,
-        vendor.name,
+        places.creature_words(vendor.entry, name=vendor.name or ""),
         vendor.faction,
         int(vendor.yards),
         ", ".join(trip.buyers),

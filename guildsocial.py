@@ -550,7 +550,7 @@ def needs_for(
                 need = Need(
                     member=member.name,
                     keyword=door.keyword,
-                    item=str(drop.get("item_name") or "item %d" % entry),
+                    item=str(drop.get("item_name") or "an unnamed item (%d)" % entry),
                     entry=entry,
                     gain=round(gain, 1),
                     preraid=entry in preraid,

@@ -745,8 +745,8 @@ def choose(
         yards=yards,
         master=master.entry,
         why="nearest %s flight point %s has not discovered, %d "
-        "yards off, with creature %d standing at it."
-        % (team, who, int(yards), master.entry),
+        "yards off, with %s standing at it."
+        % (team, who, int(yards), master.name or "a flight master"),
     )
 
 
