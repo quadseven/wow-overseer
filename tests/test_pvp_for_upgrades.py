@@ -246,6 +246,21 @@ class WhenToStopAndBuy(unittest.TestCase):
             pvpgear.next_move(aim(), 0, False, recent(pvpgear.QUEUE_MINUTES)).kind,
         )
 
+    def test_an_accepted_queue_past_the_wait_bound_is_asked_again(self):
+        # Nothing writes a row after a game ends or a queue drops, so the
+        # newest accepted row must not hold the member for a day (#913).
+        self.assertEqual(
+            pvpgear.WAITING,
+            pvpgear.next_move(
+                aim(), 0, False, recent(pvpgear.WAITING_MINUTES - 1, "already")
+            ).kind,
+        )
+        for age in (pvpgear.WAITING_MINUTES, 600):
+            self.assertEqual(
+                pvpgear.QUEUE,
+                pvpgear.next_move(aim(), 0, False, recent(age, "already")).kind,
+            )
+
     def test_the_module_outcome_in_a_delivered_row_decides_the_wait(self):
         def read(result):
             row = {
