@@ -115,7 +115,10 @@ _RULES = (
         ),
         "character",
         "bag_room_yield",
-        lambda m: ("Yielding a vendor trip", "bag room could not be freed within two hours"),
+        lambda m: (
+            "Yielding a vendor trip",
+            "bag room could not be freed within two hours",
+        ),
     ),
     (
         re.compile(

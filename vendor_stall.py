@@ -203,9 +203,10 @@ def decide(
     """
     if not pressure:
         return Decision(HOLD, "no bag pressure")
-    if (not at_counter
-            and bag_wait_seconds >= max(0.0, float(max_bag_wait_seconds))):
-        return Decision(YIELD, "bag room not freed within the bounded wait; yielding the walk")
+    if not at_counter and bag_wait_seconds >= max(0.0, float(max_bag_wait_seconds)):
+        return Decision(
+            YIELD, "bag room not freed within the bounded wait; yielding the walk"
+        )
     if at_counter:
         return Decision(HOLD, "leader is at the vendor counter")
     if sales_outstanding != 0:
