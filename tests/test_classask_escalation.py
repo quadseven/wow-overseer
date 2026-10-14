@@ -114,6 +114,27 @@ class TheCall(unittest.TestCase):
         _q, again = escalate([help_after(2)], [member("Bigzug")], calls={1: call()})
         self.assertEqual(again.calls, ())
 
+    def test_the_call_asks_for_the_seats_the_guild_left_empty(self):
+        """The quest wants two and a guildmate already said yes: the public
+        channel is asked for the one seat still empty, as guildpug's dungeon
+        call names only its short seats, so no random bot answers a seat the
+        guild has filled."""
+        mates = [member("Bigzug"), member("Chill")]
+        answers = [yes(1, 1, "Chill", "dps", "help")]
+        _q, out = escalate([help_after(2)], mates, answers=answers)
+        (made,) = out.calls
+        self.assertEqual(made.seats, (gs.DPS,))
+        self.assertEqual(out.silences[0].short, 1)
+        _q, later = escalate(
+            [help_after(2)],
+            mates,
+            pugs=[pug("Near", where=(400.0,)), pug("Far", where=(3000.0,))],
+            answers=answers,
+            calls={1: call()},
+        )
+        self.assertEqual([j.member for j in later.joins], ["Near"])
+        self.assertEqual(later.silences, ())
+
     def test_an_ask_short_of_its_tries_is_not_called(self):
         _q, out = escalate([help_after(1)], [member("Bigzug")], pugs=[pug("Rando")])
         self.assertEqual((out.calls, out.joins), ((), ()))
@@ -371,9 +392,11 @@ class TwoHours(unittest.TestCase):
         pugs = [pug("Horde", race=ORC), pug("Rando", where=(3200.0,))]
         minute, run, first, realm = self.run_realm(mates, pugs)
         assert minute is not None and run is not None, "no party in four hours"
+        assert first is not None, "never asked"
         self.assertEqual((run.leader, run.helpers), ("Bigzug", ("Rando",)))
         self.assertEqual(first, 0)
-        self.assertLessEqual(minute, 120)
+        # Two hours is a strict bound on the party, counted from the first ask.
+        self.assertLess(minute - first, 120)
         # ESCALATE_AFTER_ASKS asks to the guild alone, then the next try is
         # called to the server and the random bot fills it.
         tries = [a for a in realm.asks if a.asker == "Bigzug"]
@@ -381,6 +404,13 @@ class TwoHours(unittest.TestCase):
         self.assertEqual(len(tries), classask.ESCALATE_AFTER_ASKS + 1)
         self.assertEqual([a.id for a in guild_only if a.id in realm.calls], [])
         self.assertIn(tries[-1].id, realm.calls)
+        # The party forms while that first server try is still open, not on a
+        # later try that would eat into the two hours.
+        formed = NOW + datetime.timedelta(minutes=minute)
+        self.assertLess(
+            formed - tries[-1].created_at,
+            datetime.timedelta(minutes=classask.ASK_MINUTES),
+        )
 
     def test_every_try_of_a_run_nobody_answers_is_made_inside_two_hours(self):
         """The worst case: no random bot of the side is in reach either. The

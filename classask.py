@@ -591,7 +591,11 @@ def why_not_pug(asker, pug, need, faction, spoken, refused, busy, family) -> str
 
 
 def _server(ask, need, asker, ctx, short) -> tuple:
-    """(call or None, joins, the server's words) for one escalated ask."""
+    """(call or None, joins, the server's words) for one escalated ask.
+
+    `short` is the seats still empty once the guild has answered, and the call
+    names only those, as guildpug's dungeon call names its short_seats: a seat
+    a guildmate holds is not offered to the server."""
     call = ctx["calls"].get(ask.id)
     if call is None:
         said = call_line(need, short)
@@ -635,17 +639,61 @@ def _server(ask, need, asker, ctx, short) -> tuple:
     return None, joins, words
 
 
-def _server_words(need, pugs_on) -> str:
-    """What the server part says of an ask it does not reach."""
+def _reach_server(ask, need, asker, ctx, short) -> tuple:
+    """(call or None, joins, the server's words) for one short ask. Only an
+    escalated ask goes to the server, and only with pick-up groups on; any
+    other ask gets no call and no joins, and the words say why."""
     if not escalated(need):
-        return "not asked before try %d" % (ESCALATE_AFTER_ASKS + 1)
-    return "" if pugs_on else "pick-up groups are off (guildpug.ENV_SWITCH)"
+        return None, (), "not asked before try %d" % (ESCALATE_AFTER_ASKS + 1)
+    if not ctx["pugs_on"]:
+        return None, (), "pick-up groups are off (guildpug.ENV_SWITCH)"
+    return _server(ask, need, asker, ctx, short)
 
 
 def _live_after(asks, quest_pass) -> list:
     """The quest asks still live once the quest pass has closed its own."""
     ended = {a for a, _who, _line in quest_pass.expire} | set(quest_pass.cancel)
     return [a for a in quest_asks(asks) if a.state in LIVE_ASKS and a.id not in ended]
+
+
+def _taken(asks, answers, quest_pass) -> tuple:
+    """(live quest asks, live yeses, on_quest, spoken) as the pass leaves them.
+    A guildmate is on another ask as plan_pass reads it (a quest ask); a
+    random bot on any live ask's yes, a dungeon's pug too."""
+    current = guildpug._answers_now(list(answers or ()), quest_pass)
+    live = _live_after(asks, quest_pass)
+    live_ids = {a.id for a in live} | {
+        a.id for a in asks if a.kind != KIND and a.state in LIVE_ASKS
+    }
+    yeses = [a for a in current if a.state == YES and a.ask_id in live_ids]
+    quest_ids = {a.id for a in live}
+    on_quest = {a.asker for a in live} | {
+        a.member for a in yeses if a.ask_id in quest_ids
+    }
+    return live, yeses, on_quest, on_quest | {a.member for a in yeses}
+
+
+def _escalate(ask, need, asker, ctx, yeses, mates, held) -> tuple:
+    """(call or None, joins, Silence or None) for one live quest ask: what the
+    server does for it, then why it is still short, if it is."""
+    coming = {a.member for a in yeses if a.ask_id == ask.id}
+    short = max(1, len(ask.roles_needed)) - len(coming)
+    if short <= 0:
+        return None, (), None
+    call, made, words = _reach_server(ask, need, asker, ctx, short)
+    ctx["spoken"].update(j.member for j in made)
+    ctx["on_quest"].update(j.member for j in made)
+    short -= len(made)
+    if short <= 0:
+        return call, made, None
+    refused = ctx["refused"].get(ask.id, frozenset())
+    mates_why = _guild_reasons(
+        ask, need, asker, mates, held, coming, ctx["on_quest"], refused
+    )
+    silence = Silence(
+        ask.id, ask.asker, need.move.title, int(need.tries), short, mates_why, words
+    )
+    return call, made, silence
 
 
 def plan_escalation(
@@ -678,19 +726,7 @@ def plan_escalation(
     busy     names in a guild run; family the roster's names
     pugs_on  False with guildpug's switch off: nothing goes to the server
     """
-    current = guildpug._answers_now(list(answers or ()), quest_pass)
-    live = _live_after(asks, quest_pass)
-    live_ids = {a.id for a in live} | {
-        a.id for a in asks if a.kind != KIND and a.state in LIVE_ASKS
-    }
-    yeses = [a for a in current if a.state == YES and a.ask_id in live_ids]
-    # A guildmate is on another ask as plan_pass reads it (a quest ask); a
-    # random bot on any live ask's yes, a dungeon's pug too.
-    quest_ids = {a.id for a in live}
-    on_quest = {a.asker for a in live} | {
-        a.member for a in yeses if a.ask_id in quest_ids
-    }
-    spoken = on_quest | {a.member for a in yeses}
+    live, yeses, on_quest, spoken = _taken(asks, answers, quest_pass)
     by_member = {}
     for h in helps:
         by_member.setdefault(h.member, h)
@@ -702,47 +738,20 @@ def plan_escalation(
         "factions": dict(factions or {}),
         "refused": dict(refused or {}),
         "spoken": spoken,
+        "on_quest": on_quest,
         "busy": set(busy),
         "family": set(family),
+        "pugs_on": pugs_on,
     }
     new_calls, joins, silences = [], [], []
     for ask in sorted(live, key=lambda a: a.id):
         need, asker = by_member.get(ask.asker), by_name.get(ask.asker)
         if need is None or asker is None or need.move.quest != quest_of(ask):
             continue
-        coming = {a.member for a in yeses if a.ask_id == ask.id}
-        short = max(1, len(ask.roles_needed)) - len(coming)
-        if short <= 0:
-            continue
-        words = _server_words(need, pugs_on)
-        if not words:
-            call, made, words = _server(ask, need, asker, ctx, short)
-            if call is not None:
-                new_calls.append(call)
-            joins += made
-            spoken.update(j.member for j in made)
-            on_quest.update(j.member for j in made)
-            short -= len(made)
-        if short <= 0:
-            continue
-        silences.append(
-            Silence(
-                ask.id,
-                ask.asker,
-                need.move.title,
-                int(need.tries),
-                short,
-                _guild_reasons(
-                    ask,
-                    need,
-                    asker,
-                    mates,
-                    held,
-                    coming,
-                    on_quest,
-                    ctx["refused"].get(ask.id, frozenset()),
-                ),
-                words,
-            )
-        )
+        call, made, silence = _escalate(ask, need, asker, ctx, yeses, mates, held)
+        if call is not None:
+            new_calls.append(call)
+        joins += made
+        if silence is not None:
+            silences.append(silence)
     return Escalation(tuple(new_calls), tuple(joins), tuple(silences))
