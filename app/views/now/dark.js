@@ -56,7 +56,15 @@ export function darkSampler(video, onChange, options = {}) {
   let darkCount = 0;
   let wasDark = false;
   const canvas = document.createElement("canvas");
+  if (typeof canvas.getContext !== "function") {
+    // No canvas context in this environment (e.g. the node test harness).
+    // The panel falls back to ordinary live/off states.
+    return { start: () => {}, stop: () => {} };
+  }
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) {
+    return { start: () => {}, stop: () => {} };
+  }
 
   function sample() {
     if (!running) return;
