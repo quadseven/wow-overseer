@@ -440,7 +440,10 @@ def plan_pass(
     replies, filled, notes = _answers(
         still, by_member, yes_by_ask, withdraw, free, spoken, partied, refused, seats
     )
-    posts = _new_posts(by_member, free, asks, still, spoken | set(cooling), now)
+    closing = {e[0] for e in expire} | set(cancel)
+    posts = _new_posts(
+        by_member, free, asks, still, spoken | set(cooling), now, closing
+    )
     return guildsocial.Pass(
         expire=tuple(expire),
         cancel=tuple(cancel),
@@ -452,17 +455,23 @@ def plan_pass(
     )
 
 
-def _recent_askers(asks, now) -> set:
+def _recent_askers(asks, now, closing=frozenset()) -> set:
+    """Members whose last ask came to nothing within ASK_COOLDOWN_MINUTES. An
+    ask this pass closes (`closing`) counts as closed already: read as live,
+    its asker posted again in the same pass, a try every ASK_MINUTES rather
+    than a quarter of an hour apart, and the ask after a run of
+    guildjobs.CLASS_ASK_STREAK_MAX was posted before the run was counted, then
+    cancelled on the next pass (#871)."""
     return {
         a.asker
         for a in quest_asks(asks)
-        if a.state not in LIVE_ASKS
+        if (a.state not in LIVE_ASKS or a.id in closing)
         and _minutes_since(a.created_at, now) < ASK_COOLDOWN_MINUTES
     }
 
 
-def _new_posts(by_member, free, asks, still, spoken, now) -> list:
-    barred = spoken | _recent_askers(asks, now)
+def _new_posts(by_member, free, asks, still, spoken, now, closing=frozenset()) -> list:
+    barred = spoken | _recent_askers(asks, now, closing)
     open_in: dict = {}
     for a in still:
         open_in[a.guild] = open_in.get(a.guild, 0) + 1

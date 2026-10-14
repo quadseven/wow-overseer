@@ -316,14 +316,18 @@ class TwoHours(unittest.TestCase):
     """No class quest help ask waits longer than two hours for its party: a
     member nobody in its guild can reach asks, is not answered, asks again,
     then calls the server, and the one random bot of its side in reach makes
-    its party, all well inside two hours of the first ask."""
+    its party, all well inside two hours of the first ask. The realm runs for
+    SIMULATED_MINUTES, longer than two hours, so the bound is the test's to
+    fail and not the loop's."""
 
-    def test_a_lone_asker_has_a_party_with_a_random_bot_inside_two_hours(self):
+    SIMULATED_MINUTES = 4 * 60
+
+    def run_realm(self, mates, pugs):
+        """(minute the party formed or None, its run, first ask's minute, realm)
+        for Bigzug asking for Group Job each minute of SIMULATED_MINUTES."""
         realm, board, book = _Realm(), classparty.Board(), group_book()
-        mates = [member("Bigzug"), member("Away", map_id=0)]
-        pugs = [pug("Horde", race=ORC), pug("Rando", where=(3200.0,))]
-        formed, first = None, None
-        for minute in range(0, 121):
+        first = None
+        for minute in range(self.SIMULATED_MINUTES + 1):
             now = NOW + datetime.timedelta(minutes=minute)
             helps = guildjobs.class_helps(
                 asker(), book, asks=realm.closed_for_streak(now)
@@ -356,18 +360,47 @@ class TwoHours(unittest.TestCase):
                 book,
             )
             if starts:
-                formed = (minute, starts[0])
-                break
+                return minute, starts[0], first, realm
             realm.write(quest_pass, esc, now)
             if first is None and realm.asks:
                 first = minute
-        self.assertIsNotNone(formed, "no party formed inside two hours")
-        minute, run = formed
+        return None, None, first, realm
+
+    def test_a_lone_asker_has_a_party_with_a_random_bot_inside_two_hours(self):
+        mates = [member("Bigzug"), member("Away", map_id=0)]
+        pugs = [pug("Horde", race=ORC), pug("Rando", where=(3200.0,))]
+        minute, run, first, realm = self.run_realm(mates, pugs)
+        assert minute is not None and run is not None, "no party in four hours"
         self.assertEqual((run.leader, run.helpers), ("Bigzug", ("Rando",)))
-        self.assertLessEqual(minute - first, 120)
+        self.assertEqual(first, 0)
+        self.assertLessEqual(minute, 120)
+        # ESCALATE_AFTER_ASKS asks to the guild alone, then the next try is
+        # called to the server and the random bot fills it.
         tries = [a for a in realm.asks if a.asker == "Bigzug"]
+        guild_only = tries[: classask.ESCALATE_AFTER_ASKS]
         self.assertEqual(len(tries), classask.ESCALATE_AFTER_ASKS + 1)
+        self.assertEqual([a.id for a in guild_only if a.id in realm.calls], [])
         self.assertIn(tries[-1].id, realm.calls)
+
+    def test_every_try_of_a_run_nobody_answers_is_made_inside_two_hours(self):
+        """The worst case: no random bot of the side is in reach either. The
+        run's CLASS_ASK_STREAK_MAX asks, the server's tries among them, are all
+        posted and called inside two hours of the first, and then the member
+        yields to levelling for guildjobs.CLASS_STALL_HOLD_MINUTES rather than
+        posting a fifth that the next pass cancels."""
+        mates = [member("Bigzug"), member("Away", map_id=0)]
+        pugs = [pug("Horde", race=ORC), pug("Far", where=(9000.0,))]
+        minute, _run, first, realm = self.run_realm(mates, pugs)
+        self.assertIsNone(minute)
+        self.assertEqual(first, 0)
+        tries = [a for a in realm.asks if a.asker == "Bigzug"]
+        run = tries[: guildjobs.CLASS_ASK_STREAK_MAX]
+        called = [a.id for a in run if a.id in realm.calls]
+        self.assertEqual(called, [a.id for a in run[classask.ESCALATE_AFTER_ASKS :]])
+        self.assertLessEqual(run[-1].created_at - NOW, datetime.timedelta(hours=2))
+        hold = datetime.timedelta(minutes=guildjobs.CLASS_STALL_HOLD_MINUTES)
+        for later in tries[guildjobs.CLASS_ASK_STREAK_MAX :]:
+            self.assertGreaterEqual(later.created_at - run[-1].created_at, hold)
 
 
 class TheBridge(unittest.TestCase):
