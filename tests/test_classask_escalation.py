@@ -53,10 +53,20 @@ def pug(name, level=20, where=(0.0, 0.0), map_id=KALIMDOR, race=HUMAN, **kw):
     return mate(name, level, 1, guild="", at=at(*where), map_id=map_id, race=race, **kw)
 
 
+# Minutes between Bigzug's asks that came to nothing. done_ask takes an ask's
+# age, not an index: the newest closed ask was posted ASK_GAP minutes ago.
+ASK_GAP = 20
+
+
+def failed_asks(tries):
+    """Bigzug's last `tries` asks for Group Job, all expired with no party,
+    newest first: ASK_GAP, 2 * ASK_GAP, ... minutes old."""
+    return [done_ask(ASK_GAP * (n + 1)) for n in range(tries)]
+
+
 def help_after(tries):
     """Bigzug's help for Group Job once `tries` asks for it came to nothing."""
-    asks = [done_ask(20 * (n + 1)) for n in range(tries)]
-    (h,) = guildjobs.class_helps(asker(), group_book(), asks=asks)
+    (h,) = guildjobs.class_helps(asker(), group_book(), asks=failed_asks(tries))
     return h
 
 
@@ -92,12 +102,15 @@ class TheTries(unittest.TestCase):
         self.assertTrue(classask.escalated(help_after(classask.ESCALATE_AFTER_ASKS)))
 
     def test_the_server_gets_two_tries_before_the_member_yields(self):
-        last = guildjobs.CLASS_ASK_STREAK_MAX - 1
-        self.assertTrue(classask.escalated(help_after(last)))
-        self.assertEqual(
-            guildjobs.CLASS_ASK_STREAK_MAX - classask.ESCALATE_AFTER_ASKS, 2
+        """Every ask from ESCALATE_AFTER_ASKS up to the one before
+        CLASS_ASK_STREAK_MAX (4) goes to the server, and there are two."""
+        server_tries = range(
+            classask.ESCALATE_AFTER_ASKS, guildjobs.CLASS_ASK_STREAK_MAX
         )
-        asks = [done_ask(10 * (n + 1)) for n in range(guildjobs.CLASS_ASK_STREAK_MAX)]
+        self.assertEqual(len(server_tries), 2)
+        for tries in server_tries:
+            self.assertTrue(classask.escalated(help_after(tries)))
+        asks = failed_asks(guildjobs.CLASS_ASK_STREAK_MAX)
         self.assertEqual(guildjobs.class_helps(asker(), group_book(), asks=asks), [])
 
 
