@@ -1557,8 +1557,8 @@ def since_level_change(history, changed) -> list:
 
 
 # WHAT THE WORLD SAYS WHEN IT WILL NOT PUT A PIECE ON. mod-overseer writes
-# `error` or `unchanged` with a `detail` saying why; `delivered` and `applied`
-# say nothing about a reason, so they keep the three-try rule.
+# `error` or `unchanged` with a `detail` saying why. `delivered` says only
+# that the command was handed over; `applied` says the world put the item on.
 WORLD_REFUSALS = frozenset({"error", "unchanged"})
 
 # Equip.slot -> the bag 0 equipment slots a piece put on there would displace.
@@ -1715,6 +1715,10 @@ def equips_to_queue(
     do not show - so it is held and said, rather than asked for every window
     for ever.
 
+    An `applied` answer ends this attempt. If another gear pass later puts
+    the old piece back, the bag read alone cannot turn that success into a
+    refusal. A level change or the memory window can reopen the question.
+
     A PIECE THE WORLD REFUSED WITH A REASON IS HELD ON THAT REASON (#897).
     `answers` is the newest answered row per (holder, command), from
     `latest_answers`; one that ended `error` or `unchanged` with a `detail`
@@ -1734,6 +1738,11 @@ def equips_to_queue(
         key = (equip.holder, equip.command)
         if key in held:
             notes.append(held[key])
+            continue
+        # The world already put this entry on. A later bag snapshot can show
+        # it carried again after another gear pass replaces it; repeating the
+        # same command is not an equip refusal and must not become a hold.
+        if (answers or {}).get(key, {}).get("status") == "applied":
             continue
         if key in recent:
             continue
