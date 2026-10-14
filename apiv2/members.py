@@ -252,8 +252,12 @@ def ask_blocker(run: list, now_at: int) -> dict | None:
     title = run[-1].get("target_label") or "a class quest"
     ran = sum(1 for r in run if r.get("state") == "ran")
     latest_failure = next(
-        (str(r.get("reason") or "")[8:] for r in reversed(run)
-         if r.get("state") == "ran" and str(r.get("reason") or "").startswith("failed: ")),
+        (
+            str(r.get("reason") or "")[8:]
+            for r in reversed(run)
+            if r.get("state") == "ran"
+            and str(r.get("reason") or "").startswith("failed: ")
+        ),
         "",
     )
     asked = "asked the guild for help %d time%s" % (

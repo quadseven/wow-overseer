@@ -557,7 +557,7 @@ def drive(this, run, **patches):
         _class_party_quest_state=state,
         _class_party_ask_live=lambda ask_id: this.ask_live,
         _class_party_withdraw=this.withdrawn.append,
-        _class_party_settle=lambda r, formed, gave_up: this.settled.append(
+        _class_party_settle=lambda r, formed, gave_up, done=False: this.settled.append(
             (r.ask_id, formed, gave_up)
         ),
         _class_party_stands=stands,
@@ -783,7 +783,7 @@ class TheBridgeFollowsTheParty(unittest.TestCase):
             _class_party_quest_state=lambda n, q: classparty.COMPLETE,
             _class_party_ask_live=lambda i: True,
             _class_party_withdraw=lambda i: None,
-            _class_party_settle=lambda r, f, g: None,
+            _class_party_settle=lambda r, f, g, done=False: None,
         )
         with mock.patch.multiple(bridge, **stubs):
             asyncio.run(go())
