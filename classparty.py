@@ -315,6 +315,7 @@ class PartyRun:
     meeting: bool = True
     formed_at: float | None = None
     deadline: float | None = None
+    outcome: str = ""
 
     def names(self) -> tuple:
         return (self.leader,) + tuple(self.helpers)
