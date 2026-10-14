@@ -18413,10 +18413,14 @@ class Bridge(discord.Client):
         # party that is up, or about to be formed from a filled ask, is not
         # asked to a dungeon either (classask.held_names, only while the party
         # row is live).
-        quest_pass, held, needs, parties = _class_ask_pass(
-            facts, mates, held, needs, getattr(self, "_class_helps", ()),
+        # AN ASK NOBODY ANSWERS GOES TO THE SERVER (#871): the random bots an
+        # escalated ask may reach are read first.
+        class_helps = getattr(self, "_class_helps", ())
+        class_pugs = await _class_pug_rows(facts, class_helps, bounds)
+        quest_pass, held, needs, parties, escalation = _class_ask_pass(
+            facts, mates, held, needs, class_helps,
             getattr(self, "_class_board", None), getattr(self, "_class_book", None),
-            time.monotonic())
+            time.monotonic(), class_pugs)
         # THE CLASS QUEST IS OWED BEFORE ANY DUNGEON: a member that owes one is
         # not free to any dungeon ask, run or pick-up group, hunting or not.
         owed = _class_owed_names(self)
@@ -18460,6 +18464,7 @@ class Bridge(discord.Client):
         run_id = await asyncio.to_thread(_write_guild_social, social)
         if parties:
             self._begin_class_parties(parties)
+        await _say_class_escalation(escalation)
         await _say_guild_pugs(pug_pass)
         if run_id:
             self._guild_run_formed_at = now
@@ -23657,28 +23662,47 @@ def _fetch_guild_social_facts(bounds) -> dict:
 
 
 def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
-                    helps, board=None, book=None, clock: float = 0.0) -> tuple:
-    """(the class quest ask pass, held, needs, the parties to form) for one
-    social pass.
+                    helps, board=None, book=None, clock: float = 0.0,
+                    pug_rows=()) -> tuple:
+    """(the class quest ask pass, held, needs, the parties to form, the
+    server's part) for one social pass.
 
     The class quest asks (classask.py) see the members free of every job but
     the quest asks themselves, so an asker and its answerers are free to it, and
     so are the members of a class quest party that is up though the core now
     reads them as grouped (classparty.ask_held). `held` is the dungeon's: the
     members of a party that is up, or about to be formed from a filled ask, are
-    added, and cost no need. Only a live party row holds anybody."""
+    added, and cost no need. Only a live party row holds anybody.
+
+    THE SERVER (#871): `pug_rows` are the random bots read for the escalated
+    asks (_class_pug_rows). One holding a yes on a quest ask is a mate of the
+    quest pass, held for its own reason when not free, so its yes stands and
+    its party forms; classask.plan_escalation calls the escalated asks in the
+    public channel and picks the random bots that answer them."""
     if not classask.enabled():
-        return guildsocial.Pass(), held, needs, ()
+        return guildsocial.Pass(), held, needs, (), classask.Escalation()
     board = board if board is not None else classparty.Board()
     asks, answers, now = facts["asks"], facts["answers"], facts["now"]
     board.prune([a.id for a in classask.quest_asks(asks)
                  if a.state in guildsocial.LIVE_ASKS])
-    own = classparty.ask_held(held, board)
+    quest_ids = {a.id for a in classask.quest_asks(asks)}
+    pugs, answered, pug_held = guildpug.pug_mates(
+        list(pug_rows), [a for a in answers if a.ask_id in quest_ids],
+        facts["busy"], facts["family"])
+    known = {m.name for m in mates}
+    quest_mates = list(mates) + [m for m in answered if m.name not in known]
+    own = classparty.ask_held({**pug_held, **held}, board)
     quest_pass = classask.plan_pass(
-        helps, mates, own, asks, answers, now, partied=board.partied_asks(),
+        helps, quest_mates, own, asks, answers, now, partied=board.partied_asks(),
         refused=board.refused(), cooling=board.cooling(clock),
         seats=board.seats(clock))
-    free = {m.name: m for m in mates if m.name not in own}
+    escalation = classask.plan_escalation(
+        quest_pass, helps, quest_mates, own, asks, answers, now,
+        calls=facts.get("pug_calls", {}), pugs=pugs,
+        factions=guildpug.factions(mates, {m.member.guild for m in mates}),
+        refused=board.refused(), busy=facts["busy"], family=facts["family"],
+        pugs_on=guildpug.enabled())
+    free = {m.name: m for m in quest_mates if m.name not in own}
     parties, skipped = classparty.plan(
         asks, answers, quest_pass, helps, free, board, now, clock, book)
     if skipped:
@@ -23686,7 +23710,58 @@ def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
     quest_held = classask.held_names(board.runs() + list(parties))
     held = {**{n: _QUEST_ASK_WHY for n in quest_held}, **held}
     return (quest_pass, held, {n: v for n, v in needs.items() if n not in quest_held},
-            parties)
+            parties, escalation)
+
+
+async def _class_pug_rows(facts: dict, helps, bounds) -> list:
+    """The random bots the class quest asks may reach (classask.plan_escalation):
+    read only while a help is escalated or a live quest ask holds a pug's yes,
+    in the level band of those askers, and only with pick-up groups on."""
+    if not (classask.enabled() and guildpug.enabled()):
+        return []
+    pugged = {a.ask_id for a in facts["answers"]
+              if a.stance == guildsocial.PUG and a.state == guildsocial.YES}
+    askers = {a.asker for a in classask.quest_asks(facts["asks"])
+              if a.state in guildsocial.LIVE_ASKS and a.id in pugged}
+    levels = [int(h.level) for h in helps or ()
+              if classask.escalated(h) or h.member in askers]
+    if not levels:
+        return []
+    span = (min(levels) - classask.LEVEL_BAND, max(levels) + classask.LEVEL_BAND)
+    return await asyncio.to_thread(_fetch_guild_pugs, span, bounds)
+
+
+# ask id -> the last classask.Silence line logged for it, so an ask still short
+# is explained once and again only when who is not coming, or why, changes.
+_CLASS_SILENCES: dict = {}
+
+
+def _log_class_silences(silences) -> None:
+    """Log who did not come to each class quest ask still short and why
+    (classask.Silence), once per change; asks no longer short are forgotten."""
+    current = {s.ask_id: s.line for s in silences}
+    for ask_id in [a for a in _CLASS_SILENCES if a not in current]:
+        del _CLASS_SILENCES[ask_id]
+    for ask_id, line in sorted(current.items()):
+        if _CLASS_SILENCES.get(ask_id) != line:
+            _CLASS_SILENCES[ask_id] = line
+            log.info("%s", line)
+
+
+async def _say_class_escalation(escalation) -> None:
+    """Write and say the server's part of the class quest asks: each call in
+    the public channel, each random bot's yes (guildpug's writer: the pug
+    whispers the asker, the asker tells the guild), and why each ask still
+    short is."""
+    _log_class_silences(escalation.silences)
+    if not (escalation.calls or escalation.joins):
+        return
+    await asyncio.to_thread(
+        _write_guild_pugs, guildpug.PugPass(calls=escalation.calls, joins=escalation.joins))
+    log.info("class ask: %d call(s) to the server, %d random bot(s) answered%s",
+             len(escalation.calls), len(escalation.joins),
+             "".join("; %s for %s's ask %d" % (j.member, j.asker, j.ask_id)
+                     for j in escalation.joins))
 
 
 _QUEST_ASK_WHY = "in a class quest party"

@@ -2150,10 +2150,13 @@ class Owing:
 
 @dataclass(frozen=True)
 class Help:
-    """A member's class quest that a guildmate could help with."""
+    """A member's class quest that a guildmate could help with. `tries` is how
+    many asks for it in a row came to no party (guildjobs.class_ask_streak):
+    from classask.ESCALATE_AFTER_ASKS the ask goes to the server too."""
 
     member: str
     guild: str
     level: int
     map_id: int
     move: Move
+    tries: int = 0
