@@ -110,6 +110,15 @@ class Step:
 _RULES = (
     (
         re.compile(
+            r"^economy: vendor aim yielded; bag room could not be freed "
+            r"within the bounded wait; leader=(?P<s>\w+)"
+        ),
+        "character",
+        "bag_room_yield",
+        lambda m: ("Yielding a vendor trip", "bag room could not be freed within two hours"),
+    ),
+    (
+        re.compile(
             r"^dungeon quests: (?P<s>\w+)'s family waits for bag room; (?P<why>.+)$"
         ),
         "family",
