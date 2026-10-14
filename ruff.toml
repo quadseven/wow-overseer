@@ -7,4 +7,6 @@
 # behavior change. The linter still covers both files; only the formatter
 # stays out. The pre-commit ruff-format hook runs with --force-exclude, so it
 # honors this too.
-exclude = ["bridge.py", "map_server.py"]
+# The replay tool belongs to the mod-overseer submodule; its formatting is
+# maintained in that repository and cannot be committed from this one.
+exclude = ["bridge.py", "map_server.py", "mod-overseer/tools/groundedstep-replay/replay_step.py"]

@@ -444,7 +444,7 @@ class Questers(unittest.TestCase):
 
     def test_a_quester_recruit_is_invited_seated_renamed_then_reset_across_passes(self):
         guild = "Bonkers"
-        recruit = dict(ORC_WARLOCK, level=1)
+        recruit = dict(ORC_WARLOCK)
         invite = teamsync.plan(
             guild, _bonkers_full_raid(), [recruit], set(), True, reset_done=set()
         )
@@ -453,18 +453,20 @@ class Questers(unittest.TestCase):
         )
 
         joined = _bonkers_full_raid() + [
-            _quester(raidteams.QUESTERS[guild][3], "Randomlock", 1)
+            _quester(raidteams.QUESTERS[guild][3], "Randomlock", recruit["level"])
         ]
+        self.assertEqual(joined[-1]["level"], recruit["level"])
+        # The recruit holds Grakk's seat by class and race before taking its name.
+        self.assertEqual(teamsync.recruits_in_guild(guild, joined)["Grakk"], joined[-1])
         rename = teamsync.plan(guild, joined, [], set(), True, reset_done=set())
         rename_action = next(a for a in rename if a.kind == "rename")
         self.assertEqual(
             (rename_action.target, rename_action.new_name), ("Randomlock", "Grakk")
         )
 
-        renamed = _bonkers_full_raid() + [
-            _quester(raidteams.QUESTERS[guild][3], name=rename_action.new_name, level=4)
-        ]
+        renamed = joined[:-1] + [dict(joined[-1], name=rename_action.new_name)]
         self.assertEqual(renamed[-1]["name"], "Grakk")
+        self.assertEqual(renamed[-1]["level"], recruit["level"])
         reset = teamsync.plan(guild, renamed, [], set(), True, reset_done=set())
         self.assertEqual(
             [(a.kind, a.target) for a in reset if a.kind == "reset"],
