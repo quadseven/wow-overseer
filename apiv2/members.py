@@ -90,7 +90,7 @@ JOBS_SQL = (
 )
 JOB_MINUTES = 30
 ASKS_SQL = (
-    "SELECT asker, target, target_label, state, UNIX_TIMESTAMP(created_at) AS at, "
+    "SELECT asker, target, target_label, reason, state, UNIX_TIMESTAMP(created_at) AS at, "
     "(SELECT COUNT(*) FROM overseer_guild_answer an "
     "WHERE an.ask_id = overseer_guild_ask.id) AS yeses "
     "FROM overseer_guild_ask WHERE kind = 'quest' AND asker IN ({holes}) "
@@ -251,11 +251,18 @@ def ask_blocker(run: list, now_at: int) -> dict | None:
         return None
     title = run[-1].get("target_label") or "a class quest"
     ran = sum(1 for r in run if r.get("state") == "ran")
+    latest_failure = next(
+        (str(r.get("reason") or "")[8:] for r in reversed(run)
+         if r.get("state") == "ran" and str(r.get("reason") or "").startswith("failed: ")),
+        "",
+    )
     asked = "asked the guild for help %d time%s" % (
         len(run),
         "" if len(run) == 1 else "s",
     )
-    if ran:
+    if latest_failure:
+        tail = ", the last party %s" % latest_failure
+    elif ran:
         tail = ", a party went %d time%s and it is still not done" % (
             ran,
             "" if ran == 1 else "s",

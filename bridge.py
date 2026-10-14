@@ -15909,6 +15909,7 @@ class Bridge(discord.Client):
                      run.spot.name or "the objective")
         run.drop(meeting.lost)
         if not meeting.met:
+            run.outcome = "party did not reach the objective"
             board.fail(run.ask_id)
             log.info("class party: the meeting for %s's %s fails: %s", run.leader,
                      run.title, meeting.why)
@@ -16036,6 +16037,7 @@ class Bridge(discord.Client):
 
         walk_id = await asyncio.to_thread(insert)
         if not walk_id:
+            run.outcome = "party walk did not start"
             return False
         try:
             answer, walk_id = await asyncio.wait_for(
@@ -16044,10 +16046,12 @@ class Bridge(discord.Client):
                     run.spot.name or "its objective"),
                 timeout=max(1.0, run.left(time.monotonic())))
         except asyncio.TimeoutError:
+            run.outcome = "party timed out before reaching the objective"
             log.info("class party: %s's party did not reach %s in its time",
                      run.leader, run.spot.name or "the objective")
             return False
         if answer.state != guildroute.ARRIVED:
+            run.outcome = "party did not reach the objective"
             if classparty.walk_unsupported(answer.said):
                 self._class_board.mark_unsupported(time.monotonic())
             self._class_board.fail(run.ask_id)
@@ -16076,6 +16080,7 @@ class Bridge(discord.Client):
             if left <= 0:
                 log.info("class party: %s's party for %s ran out of time", run.leader,
                          run.title)
+                run.outcome = "party timed out before quest credit"
                 return False
             await asyncio.sleep(min(classparty.WATCH_SECONDS, max(1.0, left)))
 
@@ -16097,7 +16102,7 @@ class Bridge(discord.Client):
         try:
             if formed:
                 await self._class_party_disband_row(run)
-            await asyncio.to_thread(_class_party_settle, run, formed, gave_up)
+            await asyncio.to_thread(_class_party_settle, run, formed, gave_up, done)
         except Exception:
             log.exception("class party: closing %s's party failed", run.leader)
         finally:
@@ -23893,7 +23898,7 @@ def _class_party_withdraw(answer_id) -> None:
         cur.execute(guildsocial.ANSWER_STATE_SQL, (guildsocial.WITHDRAWN, int(answer_id)))
 
 
-def _class_party_settle(run, formed: bool, gave_up: bool) -> None:
+def _class_party_settle(run, formed: bool, gave_up: bool, done: bool = False) -> None:
     """The rows when a party is over. One that formed marks its answerers seated
     and its ask ran (a quest still not done is asked for again after the
     cooldown); an ask given up after its failures is cancelled and its yeses
@@ -23905,7 +23910,12 @@ def _class_party_settle(run, formed: bool, gave_up: bool) -> None:
         for answer_id in run.answers.values():
             cur.execute(guildsocial.ANSWER_STATE_SQL, (state, int(answer_id)))
         if formed:
-            cur.execute(guildsocial.ASK_RAN_SQL, (None, int(run.ask_id)))
+            reason = "" if done else ("failed: " + (run.outcome or "quest credit did not arrive"))[:160]
+            cur.execute(
+                "UPDATE overseer_guild_ask SET state = 'ran', run_id = %s, reason = %s "
+                "WHERE id = %s AND state IN ('open', 'filled')",
+                (None, reason, int(run.ask_id)),
+            )
         else:
             cur.execute(guildsocial.ASK_STATE_SQL,
                         (guildsocial.CANCELLED, int(run.ask_id)))
