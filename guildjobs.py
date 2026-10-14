@@ -4499,18 +4499,6 @@ def pvp_step(m, aim, move, cap, kept=None):
                 ),
             ),
         )
-    if move.kind == pvpgear.LEAVE:
-        return guildcorps.Step(
-            m.name,
-            pvpgear.ACTION,
-            aim.entry,
-            move.said,
-            rows=(
-                guildcorps.Row(
-                    "guild", pvpgear.leave_command(aim), "", source_for("pvp", m.name)
-                ),
-            ),
-        )
     if move.kind == pvpgear.BUY:
         return guildcorps.Step(
             m.name,
@@ -4538,18 +4526,20 @@ def _pvp_first(m, pvp, recent, cap, kept=None):
     """(step, doing, held): a member playing PvP for an upgrade.
 
     Inside a battleground or waiting in its queue the member is HELD: it does
-    nothing else this pass. A cohort still short (GATHERING) or cooling after
-    a leave queues nobody and the member goes about its ordinary job. A queue or a buy whose last row failed inside the
-    PvP cooldown waits it out doing its ordinary job, and so does a buy whose
-    walks to the vendor failed, for pvp_walk_cooldown. A bought item still in
-    the bags is the equip drive's, and the member goes about its job.
+    nothing else this pass, and a queue that did not pop is waited in, never
+    left: the module has no `bg-leave` handler (#967). A cohort still short
+    (GATHERING) or cooling after an accepted leave queues nobody and the member
+    goes about its ordinary job. A queue or a buy whose last row failed inside
+    the PvP cooldown waits it out doing its ordinary job, and so does a buy
+    whose walks to the vendor failed, for pvp_walk_cooldown. A bought item
+    still in the bags is the equip drive's, and the member goes about its job.
     """
     if not pvp or not m.eligible or not m.online:
         return None, "", False
     aim, move = pvp
     if move.kind in (pvpgear.INSIDE, pvpgear.WAITING):
         return None, aim.line + ": " + move.said, True
-    if move.kind not in (pvpgear.QUEUE, pvpgear.BUY, pvpgear.LEAVE) or m.in_combat:
+    if move.kind not in (pvpgear.QUEUE, pvpgear.BUY) or m.in_combat:
         return None, "", False
     if _cooling(m, pvpgear.ACTION, recent):
         return None, "", False

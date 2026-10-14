@@ -1,7 +1,8 @@
 """A battleground is queued as a full cohort (#959): members who want PvP for
 an upgrade queue only when each side reaches the world's minimum per team,
 together, in one pass; idle fillers close a small gap; a queue that did not pop
-leaves together and cools down."""
+is waited in, never left, and only a leave the module accepted cools down
+(#967)."""
 
 import unittest
 
@@ -55,8 +56,19 @@ def queuing(moves):
     return sorted(n for n, m in moves.items() if m.kind == pvpgear.QUEUE)
 
 
-def recent_row(name, command, age, status="queued"):
-    return guildjobs.Recent(name, "pvp", age, status, command=command)
+def recent_row(name, command, age, status="queued", result=""):
+    return guildjobs.Recent(name, "pvp", age, status, command=command, result=result)
+
+
+def member(name):
+    return guildjobs.Member(
+        name=name, guild="Cave", role=guildjobs.RAIDER, level=60,
+        online=True, map_id=0, x=0.0, y=0.0, eligible=True,
+    )  # fmt: skip
+
+
+# The module's answer to a leave it accepted, the reading a `bg-queue` gets.
+ACCEPTED = '{"outcome":"queued"}'
 
 
 class TheMinimumComesFromTheWorld(unittest.TestCase):
@@ -151,50 +163,83 @@ class TheWait(unittest.TestCase):
         _, moves, _ = run(seekers, recent=recent)
         self.assertEqual({pvpgear.WAITING}, {m.kind for m in moves.values()})
 
-    def test_a_queue_past_the_wait_leaves_together(self):
-        seekers, recent = self.queued(pvpgear.QUEUE_WAIT_MINUTES)
-        _, moves, _ = run(seekers, recent=recent)
-        self.assertEqual({pvpgear.LEAVE}, {m.kind for m in moves.values()})
-        self.assertEqual(10, len(moves))
+    def test_a_queue_that_did_not_pop_is_held_not_left(self):
+        # mod-overseer has no `bg-leave` handler (#967): the cohort stays
+        # WAITING past the old 15 minute wait, up to the WAITING_MINUTES bound.
+        for age in (15, 20, pvpgear.WAITING_MINUTES - 1):
+            seekers, recent = self.queued(age)
+            _, moves, _ = run(seekers, recent=recent)
+            self.assertEqual({pvpgear.WAITING}, {m.kind for m in moves.values()})
+            self.assertEqual(10, len(moves))
 
-    def test_a_filler_in_the_queue_leaves_with_them(self):
+    def test_a_filler_in_a_queue_that_did_not_pop_waits_with_them(self):
         seekers = rows("A", 8) + rows("F", 2, filler)
         recent = [recent_row(s.name, "bg-queue wsg", 20) for s in seekers]
         _, moves, _ = run(seekers, recent=recent)
-        self.assertEqual({pvpgear.LEAVE}, {m.kind for m in moves.values()})
+        self.assertEqual({pvpgear.WAITING}, {m.kind for m in moves.values()})
         self.assertEqual(10, len(moves))
 
-    def test_the_leave_step_is_a_guild_row(self):
+    def test_the_bounded_wait_still_releases_a_dropped_queue(self):
+        seekers, recent = self.queued(pvpgear.WAITING_MINUTES)
+        _, moves, _ = run(seekers, recent=recent)
+        self.assertEqual(10, len(queuing(moves)))
+
+    def test_no_guild_job_writes_a_leave_for_a_queue_that_did_not_pop(self):
         seekers, recent = self.queued(20)
         aims, moves, _ = run(seekers, recent=recent)
-        member = guildjobs.Member(
-            name="A00", guild="Cave", role=guildjobs.RAIDER, level=60,
-            online=True, map_id=0, x=0.0, y=0.0, eligible=True,
-        )  # fmt: skip
+        members = [member(s.name) for s in seekers]
         plan = guildjobs.plan(
-            [member], pvp={"A00": (aims["A00"], moves["A00"])}, recent=recent
+            members, pvp={n: (aims[n], moves[n]) for n in aims}, recent=recent
         )
-        (step,) = plan.steps
-        self.assertEqual(
-            [("guild", "bg-leave wsg")], [(r.kind, r.command) for r in step.rows]
-        )
+        commands = [r.command for step in plan.steps for r in step.rows]
+        self.assertFalse([c for c in commands if c.startswith("bg-leave")])
+        self.assertIn("waits in the Warsong Gulch queue", plan.lines["A00"])
 
-    def test_a_cohort_that_left_cools_down_then_may_queue_again(self):
+    def test_an_accepted_leave_cools_down_then_may_queue_again(self):
         seekers = rows("A", 10)
-        left = [recent_row(s.name, "bg-leave wsg", 5, "delivered") for s in seekers]
+        left = [
+            recent_row(s.name, "bg-leave wsg", 5, "delivered", ACCEPTED)
+            for s in seekers
+        ]  # fmt: skip
         _, moves, _ = run(seekers, recent=left)
         self.assertEqual({pvpgear.COOLING}, {m.kind for m in moves.values()})
         old = [
             recent_row(s.name, "bg-leave wsg", pvpgear.LEAVE_COOLDOWN_MINUTES + 1,
-                       "delivered")
+                       "delivered", ACCEPTED)
             for s in seekers
         ]  # fmt: skip
         _, moves, _ = run(seekers, recent=old)
         self.assertEqual(10, len(queuing(moves)))
 
+    def test_a_refused_or_undelivered_leave_is_no_leave(self):
+        # On wow-dev every `bg-leave` was refused while the members stayed
+        # queued, and each refused row still cooled them down (#967).
+        for status, result in (
+            ("error", ""),
+            ("delivered", '{"outcome":"error","reason":"unknown guild verb"}'),
+            ("delivered", '{"outcome":"unchanged"}'),
+            ("delivered", ""),
+            ("pending", ""),
+        ):
+            row = recent_row("A00", "bg-leave wsg", 5, status, result)
+            self.assertFalse(pvpgear.left_lately("A00", [row]), (status, result))
+        accepted = recent_row("A00", "bg-leave wsg", 5, "delivered", ACCEPTED)
+        self.assertTrue(pvpgear.left_lately("A00", [accepted]))
+        for status in ("queued", "already"):
+            row = recent_row("A00", "bg-leave wsg", 5, status)
+            self.assertTrue(pvpgear.left_lately("A00", [row]))
+        queue = recent_row("A00", "bg-queue wsg", 5, "delivered", ACCEPTED)
+        self.assertFalse(pvpgear.left_lately("A00", [queue]))
+
+    def test_a_refused_leave_does_not_hold_a_cohort_off_its_queue(self):
+        seekers = rows("A", 10)
+        left = [recent_row(s.name, "bg-leave wsg", 5, "error") for s in seekers]
+        _, moves, _ = run(seekers, recent=left)
+        self.assertEqual(10, len(queuing(moves)))
+
     def test_a_member_that_left_does_not_fill_a_gap(self):
         seekers = rows("A", 9) + rows("F", 1, filler)
-        left = [recent_row("F00", "bg-leave wsg", 5, "delivered")]
+        left = [recent_row("F00", "bg-leave wsg", 5, "delivered", ACCEPTED)]
         _, moves, _ = run(seekers, recent=left)
         self.assertEqual([], queuing(moves))
 
@@ -217,11 +262,7 @@ class TheChat(unittest.TestCase):
 
     def test_a_gathering_member_keeps_its_ordinary_job_and_names_the_count(self):
         aims, moves, _ = run(rows("A", 6))
-        member = guildjobs.Member(
-            name="A00", guild="Cave", role=guildjobs.RAIDER, level=60,
-            online=True, map_id=0, x=0.0, y=0.0, eligible=True,
-        )  # fmt: skip
-        plan = guildjobs.plan([member], pvp={"A00": (aims["A00"], moves["A00"])})
+        plan = guildjobs.plan([member("A00")], pvp={"A00": (aims["A00"], moves["A00"])})
         self.assertFalse(any(s.action == "pvp" for s in plan.steps))
         self.assertIn("6/10, waiting for 4 more", " ".join(plan.notes))
 
