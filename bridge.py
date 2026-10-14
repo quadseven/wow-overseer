@@ -15855,23 +15855,14 @@ class Bridge(discord.Client):
         finally:
             await self._class_party_close(run, formed, done)
 
-    async def _class_party_meet(self, run) -> bool:
-        """Walk the leader and every helper to the objective spawn and wait until
-        they stand within classask.SEAT_RANGE_YARDS of each other. True when the
-        party can be formed.
-
-        A helper whose walk fails, who is cut off by MEET_SECONDS before it
-        arrives, or who is not near the leader after it, has its yes taken back
-        and is barred from this ask (the ask's next pass picks another). The
-        leader's walk failing, MEET_SECONDS cutting off the leader, or no helper
-        left fails the meeting; the clock alone does not fail it when the
-        leader has arrived. The members are held on the board throughout
-        (run.meeting)."""
+    async def _class_party_meet_walks(self, run) -> dict:
+        """Walk the leader and every helper to the objective spawn at once, bounded
+        by classparty.MEET_SECONDS. Returns {name: arrived}; a name still walking
+        when the clock ends is absent."""
         board = self._class_board
         cap = self._guild_walk_cap()
         row = guildcorps.Row("job", classparty.meet_command(run.spot, cap), "",
                              classparty.SOURCE)
-        log.info(classparty.meet_line(run))
         arrived: dict = {}
 
         async def walk(name):
@@ -15903,6 +15894,23 @@ class Bridge(discord.Client):
             if task.done() and not task.cancelled() and task.exception():
                 log.error("class party: a meeting walk for %s's party failed",
                           run.leader, exc_info=task.exception())
+        return arrived
+
+    async def _class_party_meet(self, run) -> bool:
+        """Walk the leader and every helper to the objective spawn and wait until
+        they stand within classask.SEAT_RANGE_YARDS of each other. True when the
+        party can be formed.
+
+        A helper whose walk fails, who is cut off by MEET_SECONDS before it
+        arrives, or who is not near the leader after it, has its yes taken back
+        and is barred from this ask (the ask's next pass picks another). The
+        leader's walk failing, MEET_SECONDS cutting off the leader, or no helper
+        left fails the meeting; the clock alone does not fail it when the
+        leader has arrived. The members are held on the board throughout
+        (run.meeting)."""
+        board = self._class_board
+        log.info(classparty.meet_line(run))
+        arrived = await self._class_party_meet_walks(run)
         if not arrived.get(run.leader):
             board.fail(run.ask_id)
             log.info("class party: %s did not reach %s; the meeting for %s fails",

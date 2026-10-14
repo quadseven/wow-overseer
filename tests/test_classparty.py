@@ -468,6 +468,9 @@ class TheFreedomOfAPartyToItsAsk(unittest.TestCase):
 # --- the bridge follows the rows ------------------------------------------------------
 
 
+HANGS = object()
+
+
 class _Bridge:
     """The Bridge methods that follow a party, with the writes and reads stubbed."""
 
@@ -494,12 +497,16 @@ class _Bridge:
         return self.queue.pop(0) if self.queue else None
 
     async def _follow_guild_walk(self, label, holder, row_id, cap, insert, goal):
-        return self.walks.get(holder, self.walk_answer), row_id
+        found = self.walks.get(holder, self.walk_answer)
+        if found is HANGS:
+            await asyncio.Event().wait()
+        return found, row_id
 
 
 for _name in (
     "_run_class_party",
     "_class_party_meet",
+    "_class_party_meet_walks",
     "_class_party_form",
     "_class_party_work",
     "_class_party_watch",
@@ -826,6 +833,19 @@ class TheMeeting(unittest.TestCase):
             refused=this._class_board.refused(),
         )
         self.assertNotIn("Chill", [r.member for r in out.replies])
+
+    def test_a_helper_still_walking_when_meet_seconds_ends_is_withdrawn_and_barred(
+        self,
+    ):
+        this = _Bridge(
+            [FORMED, answer("applied", phase="ended")], walks={"Chill": HANGS}
+        )
+        with mock.patch.object(classparty, "MEET_SECONDS", 0.05):
+            drive(this, meeting_run())
+        ups = [r[2] for r in this.rows if r[2].startswith("party-up")]
+        self.assertEqual(ups, ["party-up Dread"])
+        self.assertEqual(this.withdrawn, [11])
+        self.assertEqual(this._class_board.refused(), {1: frozenset({"Chill"})})
 
     def test_a_failed_leader_walk_fails_the_meeting_and_frees_everyone(self):
         lost = guildroute.WalkAnswer(guildroute.ENDED, "Bigzug cannot walk: no path")
