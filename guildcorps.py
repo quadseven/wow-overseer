@@ -435,6 +435,34 @@ def plan_corps(members) -> dict:
 # A TAILOR'S NEXT STEP.
 
 
+# THE kind='guild' VERBS MOD-OVERSEER HANDLES (#967): the first word of every
+# guild row the bridge may write. A row whose verb is not here reaches the
+# module's DoGuild, which refuses it: #961 wrote `bg-leave` rows that way and
+# counted every refusal as a leave.
+# Read from quadseven/mod-overseer's src/overseer_decisions.cpp (BG_QUEUE_VERB)
+# and the *_VERB constants beside it in src/overseer_decisions.h (PARTY_UP_VERB,
+# PARTY_DISBAND_VERB, GUILD_FINDER_VERB), which mod_overseer.cpp routes before
+# DoGuild, and DoGuild's own words in ParseGuildRequest (overseer_decisions.cpp).
+# A builder that writes a new verb lands here once the module handles it;
+# tests/test_guild_verbs.py fails on any guild row built from a verb not listed.
+MODULE_GUILD_VERBS = frozenset(
+    {
+        "bg-queue",
+        "party-up",
+        "party-disband",
+        "finder-run",
+        "view",
+        "invite",
+        "remove",
+        "raid",
+        "form",
+        "shortlist",
+        "tabard",
+        "bank",
+    }
+)
+
+
 @dataclass(frozen=True)
 class Row:
     """One overseer_command row: kind, command, target_arg and source."""
