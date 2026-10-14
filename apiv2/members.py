@@ -279,7 +279,8 @@ def ask_blocker(run: list, now_at: int) -> dict | None:
     )
     return {
         "step": "Class quest: " + title,
-        "blocker": "Cannot finish %s alone: %s%s." % (
+        "blocker": "Cannot finish %s alone: %s%s."
+        % (
             title,
             asked,
             _ask_blocker_tail(run),
