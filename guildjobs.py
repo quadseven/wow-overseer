@@ -2863,6 +2863,14 @@ def _collect_first(m, commands, recent, cap):
     return collect_step(m, commands, cap)
 
 
+def _cohort_note(note: str, pvp) -> str:
+    """`note` with a cohort still short naming its count; the member goes about
+    its job."""
+    if pvp and pvp[1].kind in (pvpgear.GATHERING, pvpgear.COOLING):
+        return "; ".join(n for n in (note, pvp[1].said) if n)
+    return note
+
+
 def _member_step(
     m,
     offer,
@@ -2956,6 +2964,7 @@ def _member_step(
     step, doing, held = _pvp_first(m, pvp, recent, cap, kept)
     if step is not None or held:
         return step, doing, supply_note, gear_note
+    supply_note = _cohort_note(supply_note, pvp)
     step = _collect_first(m, mail, recent, cap)
     if step is not None:
         return step, step.said, supply_note, gear_note
@@ -4490,6 +4499,18 @@ def pvp_step(m, aim, move, cap, kept=None):
                 ),
             ),
         )
+    if move.kind == pvpgear.LEAVE:
+        return guildcorps.Step(
+            m.name,
+            pvpgear.ACTION,
+            aim.entry,
+            move.said,
+            rows=(
+                guildcorps.Row(
+                    "guild", pvpgear.leave_command(aim), "", source_for("pvp", m.name)
+                ),
+            ),
+        )
     if move.kind == pvpgear.BUY:
         return guildcorps.Step(
             m.name,
@@ -4517,7 +4538,8 @@ def _pvp_first(m, pvp, recent, cap, kept=None):
     """(step, doing, held): a member playing PvP for an upgrade.
 
     Inside a battleground or waiting in its queue the member is HELD: it does
-    nothing else this pass. A queue or a buy whose last row failed inside the
+    nothing else this pass. A cohort still short (GATHERING) or cooling after
+    a leave queues nobody and the member goes about its ordinary job. A queue or a buy whose last row failed inside the
     PvP cooldown waits it out doing its ordinary job, and so does a buy whose
     walks to the vendor failed, for pvp_walk_cooldown. A bought item still in
     the bags is the equip drive's, and the member goes about its job.
@@ -4527,7 +4549,7 @@ def _pvp_first(m, pvp, recent, cap, kept=None):
     aim, move = pvp
     if move.kind in (pvpgear.INSIDE, pvpgear.WAITING):
         return None, aim.line + ": " + move.said, True
-    if move.kind not in (pvpgear.QUEUE, pvpgear.BUY) or m.in_combat:
+    if move.kind not in (pvpgear.QUEUE, pvpgear.BUY, pvpgear.LEAVE) or m.in_combat:
         return None, "", False
     if _cooling(m, pvpgear.ACTION, recent):
         return None, "", False

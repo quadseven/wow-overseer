@@ -52,6 +52,20 @@ on 2026-10-05: none of the 739 honor lines of these vendors asks for either
 `conditions` row gates the two Warsong Gulch officers), so this leaves out
 nothing today.
 
+A BATTLEGROUND NEEDS A COHORT (`gate`, #959). A battleground does not start
+until each team holds its minimum (`battleground_template.MinPlayersPerTeam`
+of the world database, or the PVP_BG_MIN_PER_TEAM override), so two members
+queueing alone sit in a queue that never pops while they skip their dungeon and
+quest work. Per battleground, level bracket and faction, the gate counts the
+members who want PvP, are online and idle, plus those already in the queue.
+Only when every side that members must fill reaches its minimum does the whole
+cohort queue, in the same pass; below it nobody queues and each member does
+its ordinary job (GATHERING). Idle members of the bracket who need no upgrade
+may fill the gap, and only when they close it. A queue not popped within
+QUEUE_WAIT_MINUTES is left by the whole cohort at once (LEAVE) and none of it
+queues again for LEAVE_COOLDOWN_MINUTES. The counts are said in the cohort's
+line and in guild chat. Natural play only: nothing is granted or teleported.
+
 WHAT IT DOES NEXT (`next_move`):
   inside    standing in a battleground (the snapshot's map): it plays; nothing
             else is asked of it.
@@ -80,7 +94,7 @@ from __future__ import annotations
 import math
 import os
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import gearscore
 import guildrun
@@ -96,6 +110,13 @@ QUEUE_MINUTES = 15
 # A member with no PvP row this long starts a new session, and says so.
 CHAT_QUIET_MINUTES = 60
 ACTION = "pvp"
+# A cohort whose queue has not popped in this many minutes leaves together.
+QUEUE_WAIT_MINUTES = 15
+# After leaving, none of the cohort queues again for this long.
+LEAVE_COOLDOWN_MINUTES = 60
+# The realm's override of the minimum per team: "wsg=5,ab=8" (battleground key
+# = players a team). Unset, the world database's own minimum rules.
+ENV_MIN_PER_TEAM = "PVP_BG_MIN_PER_TEAM"
 
 
 @dataclass(frozen=True)
@@ -105,11 +126,13 @@ class Battleground:
     short: str
     map_id: int
     min_level: int
+    # The battleground_template.ID row that holds its team sizes.
+    template_id: int = 0
 
 
-AV = Battleground("av", "Alterac Valley", "AV", 30, 51)
-WSG = Battleground("wsg", "Warsong Gulch", "WSG", 489, 10)
-AB = Battleground("ab", "Arathi Basin", "AB", 529, 20)
+AV = Battleground("av", "Alterac Valley", "AV", 30, 51, 1)
+WSG = Battleground("wsg", "Warsong Gulch", "WSG", 489, 10, 2)
+AB = Battleground("ab", "Arathi Basin", "AB", 529, 20, 3)
 BATTLEGROUNDS = {bg.key: bg for bg in (AV, WSG, AB)}
 BATTLEGROUND_MAPS = frozenset(bg.map_id for bg in BATTLEGROUNDS.values())
 # Where honor comes from when any battleground pays it: Alterac Valley first,
@@ -157,6 +180,48 @@ STOCK_SQL = (
     "WHERE nv.entry IN ({holes}) AND nv.ExtendedCost > 0 AND it.class IN (2, 4) "
     "AND it.RequiredLevel <= %s"
 )
+
+
+# The team sizes the world database holds for the battlegrounds above.
+MINIMUMS_SQL = (
+    "SELECT ID AS id, MinPlayersPerTeam AS minimum "
+    "FROM acore_world.battleground_template WHERE ID IN ({holes})"
+)
+
+
+def parse_override(text) -> dict:
+    """PVP_BG_MIN_PER_TEAM ("wsg=5,ab=8") as {key: players}; a part that
+    names no battleground or no positive number is ignored."""
+    out = {}
+    for part in str(text or "").split(","):
+        key, _, number = part.partition("=")
+        key, number = key.strip().lower(), number.strip()
+        if key in BATTLEGROUNDS and number.isdecimal() and int(number) > 0:
+            out[key] = int(number)
+    return out
+
+
+def minimums_from_rows(rows, environ=None) -> dict:
+    """battleground key -> players a team needs, from MINIMUMS_SQL rows with
+    the server's override laid over them. A battleground with neither is left
+    out, and `gate` queues nobody for it."""
+    ids = {bg.template_id: bg.key for bg in BATTLEGROUNDS.values()}
+    out = {}
+    for row in rows or ():
+        try:
+            key, minimum = ids.get(int(row["id"])), int(row["minimum"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if key and minimum > 0:
+            out[key] = minimum
+    env = os.environ if environ is None else environ
+    out.update(parse_override(env.get(ENV_MIN_PER_TEAM, "")))
+    return out
+
+
+def bracket_of(level) -> int:
+    """The level bracket a battleground groups by: the decade, 60 alone."""
+    return min(int(level), LEVEL_CAP) // 10 * 10
 
 
 def enabled(environ=None) -> bool:
@@ -371,6 +436,11 @@ class Aim:
     held: int
     battleground: Battleground
     vendor_name: str = ""
+    faction: str = ""
+    # A filler needs no upgrade: it joins a cohort to close its gap.
+    filler: bool = False
+    # The cohort's count line, said with the queue (#959).
+    cohort: str = ""
 
     @property
     def vendor(self) -> str:
@@ -383,6 +453,8 @@ class Aim:
 
     @property
     def line(self) -> str:
+        if self.filler:
+            return "PvP to fill %s for honor" % self.battleground.short
         return "PvP for %s: %s for honor, %d of %d" % (
             self.item,
             self.battleground.short,
@@ -400,6 +472,9 @@ class Seeker:
     level: int
     honor: int
     upgrade: Upgrade | None
+    faction: str = ""
+    # Not in a dungeon, raid run, campaign or another queue.
+    idle: bool = True
 
 
 def plan_aims(seekers) -> dict:
@@ -421,12 +496,15 @@ def plan_aims(seekers) -> dict:
         chosen.setdefault(s.guild, bg.key)
         out[s.name] = Aim(
             s.name, s.guild, s.level, offer.entry, offer.name, offer.honor,
-            int(s.honor), bg, offer.vendor_name,
+            int(s.honor), bg, offer.vendor_name, s.faction,
         )  # fmt: skip
     return out
 
 
 INSIDE, CARRIED, BUY, WAITING, QUEUE = "inside", "carried", "buy", "waiting", "queue"
+# GATHERING: the cohort is short, nobody queues (#959). COOLING: it left a
+# queue lately. LEAVE: its queue did not pop in time and the cohort leaves.
+GATHERING, COOLING, LEAVE = "gathering", "cooling", "leave"
 FAILED = frozenset({"error", "unchanged"})
 
 
@@ -471,7 +549,7 @@ def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
         )
     if carried:
         return Move(CARRIED, "%s carries %s and puts it on" % (aim.name, aim.item))
-    if aim.held >= aim.honor:
+    if not aim.filler and aim.held >= aim.honor:
         return Move(
             BUY,
             "%s has the %d honor for %s and walks to %s"
@@ -486,6 +564,8 @@ def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
                 "%s waits in the %s queue, %d honor short of %s"
                 % (aim.name, bg.name, aim.short, aim.item),
             )
+    if aim.filler:
+        return Move(QUEUE, "%s queues %s to fill the cohort" % (aim.name, bg.name))
     return Move(
         QUEUE,
         "%s queues %s for honor toward %s (%d of %d)"
@@ -497,9 +577,218 @@ def queue_command(aim: Aim) -> str:
     return "bg-queue %s" % aim.battleground.key
 
 
+def leave_command(aim: Aim) -> str:
+    return "bg-leave %s" % aim.battleground.key
+
+
 def buy_command(aim: Aim) -> str:
     """The kind='buy' row: one piece, capped at its honor price."""
     return "entry:%d count:1 honor:%d" % (int(aim.entry), int(aim.honor))
+
+
+# --- the cohort gate (#959) ---------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Cohort:
+    """One battleground, bracket and faction: who is counted against its
+    minimum per team."""
+
+    battleground: Battleground
+    bracket: int
+    faction: str
+    minimum: int
+    # Members already in the queue or inside, those about to queue, fillers.
+    joined: tuple = ()
+    fresh: tuple = ()
+    fillers: tuple = ()
+    # Whether the whole battleground and bracket queues this pass.
+    go: bool = False
+
+    @property
+    def count(self) -> int:
+        return len(self.joined) + len(self.fresh) + len(self.fillers)
+
+    @property
+    def line(self) -> str:
+        name = self.battleground.name
+        if self.minimum <= 0:
+            return "%s: the minimum per team is not known, nobody queues" % name
+        head = "%s %d/%d" % (name, self.count, self.minimum)
+        if self.count < self.minimum:
+            return "%s, waiting for %d more" % (head, self.minimum - self.count)
+        if not self.go:
+            return head + ", waiting on the other side"
+        return head + ", queueing together"
+
+
+def _newest_pvp(name: str, recent):
+    rows = _pvp_rows(name, recent)
+    return min(rows, key=lambda r: int(r.age_minutes)) if rows else None
+
+
+def left_lately(name: str, recent) -> bool:
+    """Whether this member left a battleground queue inside the cooldown."""
+    return any(
+        str(getattr(r, "command", "") or "").startswith("bg-leave ")
+        and int(r.age_minutes) < LEAVE_COOLDOWN_MINUTES
+        for r in _pvp_rows(name, recent)
+    )
+
+
+def _queued_key(name: str, recent):
+    """(battleground key, minutes in the queue) of a member whose newest PvP
+    row is an accepted `bg-queue`, else None."""
+    row = _newest_pvp(name, recent)
+    if row is None or not _queue_accepted(row):
+        return None
+    words = str(row.command).split()
+    key = words[1] if len(words) > 1 else ""
+    return (key, int(row.age_minutes)) if key in BATTLEGROUNDS else None
+
+
+def _filler(s, bg: Battleground, cohort: str = "") -> Aim:
+    return Aim(s.name, s.guild, s.level, 0, "", 0, 0, bg, "", s.faction, True, cohort)
+
+
+def _hold_fillers(by_name: dict, aims: dict, moves: dict, recent, maps) -> None:
+    """A filler already in a queue is held there like any member (in place)."""
+    for name, s in by_name.items():
+        queued = _queued_key(name, recent) if name not in aims else None
+        if queued is not None:
+            aims[name] = _filler(s, BATTLEGROUNDS[queued[0]])
+            moves[name] = next_move(aims[name], maps.get(name), False, recent)
+
+
+def _expire_queues(aims: dict, moves: dict, recent) -> None:
+    """The queue that did not pop: the whole bracket leaves together (in place)."""
+    expired = set()
+    for name, move in moves.items():
+        queued = _queued_key(name, recent)
+        if move.kind == WAITING and queued and queued[1] >= QUEUE_WAIT_MINUTES:
+            expired.add((aims[name].battleground.key, bracket_of(aims[name].level)))
+    for name, move in list(moves.items()):
+        a = aims[name]
+        if (
+            move.kind == WAITING
+            and (a.battleground.key, bracket_of(a.level)) in expired
+        ):
+            moves[name] = Move(
+                LEAVE,
+                "%s leaves the %s queue with the cohort after %d minutes, "
+                "no match started" % (name, a.battleground.name, QUEUE_WAIT_MINUTES),
+            )
+
+
+def _group_members(aims: dict, moves: dict, by_name: dict, cooling: set) -> dict:
+    """(battleground, bracket, faction) -> (joined, fresh) names; a member that
+    cannot be counted gets its COOLING or GATHERING move (moves, in place)."""
+    groups: dict = {}
+    for name, a in aims.items():
+        move = moves[name]
+        key = (a.battleground.key, bracket_of(a.level), a.faction)
+        if move.kind in (INSIDE, WAITING):
+            groups.setdefault(key, ([], []))[0].append(name)
+        elif move.kind == QUEUE and not a.filler:
+            s = by_name.get(name)
+            if name in cooling:
+                moves[name] = Move(
+                    COOLING, "%s cools down after leaving a queue" % name
+                )
+            elif s is not None and not s.idle:
+                moves[name] = Move(GATHERING, "%s is busy and is not counted" % name)
+            else:
+                groups.setdefault(key, ([], []))[1].append(name)
+    return groups
+
+
+def _fillers_for(bg, bracket, faction, gap, by_name, aims, cooling) -> tuple:
+    """The idle members outside `aims` that close a gap of `gap`, else none."""
+    pool = sorted(
+        n for n, s in by_name.items()
+        if n not in aims and n not in cooling and s.idle
+        and s.faction == faction and bracket_of(s.level) == bracket
+        and int(s.level) >= bg.min_level
+    )  # fmt: skip
+    return tuple(pool[:gap]) if len(pool) >= gap else ()
+
+
+def _cohorts_of(groups, minimums, by_name, aims, cooling) -> dict:
+    cohorts = {}
+    for (bg_key, bracket, faction), (joined, fresh) in groups.items():
+        bg, minimum = BATTLEGROUNDS[bg_key], int(minimums.get(bg_key) or 0)
+        count = len(joined) + len(fresh)
+        fillers = ()
+        if fresh and minimum > count:
+            fillers = _fillers_for(
+                bg, bracket, faction, minimum - count, by_name, aims, cooling
+            )
+        cohorts[(bg_key, bracket, faction)] = Cohort(
+            bg, bracket, faction, minimum, tuple(joined), tuple(fresh), fillers
+        )
+    return cohorts
+
+
+def _ready_sides(cohorts: dict) -> dict:
+    """(battleground, bracket) -> whether every side the members fill is full."""
+    ready: dict = {}
+    for (bg_key, bracket, _), c in cohorts.items():
+        ok = c.minimum > 0 and c.count >= c.minimum
+        ready[(bg_key, bracket)] = ready.get((bg_key, bracket), True) and ok
+    return ready
+
+
+def gate(aims: dict, moves: dict, seekers, minimums: dict, recent, maps=None):
+    """(aims, moves, cohorts) once a battleground needs its cohort.
+
+    `aims` and `moves` are plan_aims and next_move's; `seekers` every member
+    read (the fillers come from those that want no PvP); `minimums` is
+    minimums_from_rows. A member about to queue (QUEUE) queues only when
+    every side the members fill reaches its minimum, fillers included; else
+    it is GATHERING. A member that left lately is COOLING. A queue older than
+    QUEUE_WAIT_MINUTES makes the whole battleground bracket LEAVE together.
+    """
+    maps = maps or {}
+    by_name = {s.name: s for s in seekers or ()}
+    aims, moves = dict(aims), dict(moves)
+    cooling = {n for n in by_name if left_lately(n, recent)}
+    _hold_fillers(by_name, aims, moves, recent, maps)
+    _expire_queues(aims, moves, recent)
+    groups = _group_members(aims, moves, by_name, cooling)
+    cohorts = _cohorts_of(groups, minimums, by_name, aims, cooling)
+    ready = _ready_sides(cohorts)
+    out = []
+    for key, c in cohorts.items():
+        c = replace(c, go=ready[(key[0], key[1])])
+        out.append(c)
+        for name in c.fresh:
+            if c.go:
+                aims[name] = replace(aims[name], cohort=c.line)
+            else:
+                moves[name] = Move(GATHERING, "%s: %s" % (name, c.line))
+        for name in c.fillers if c.go else ():
+            aims[name] = _filler(by_name[name], c.battleground, c.line)
+            moves[name] = next_move(aims[name], maps.get(name), False, recent)
+    return aims, moves, out
+
+
+def gathering_lines(cohorts, said: dict) -> list:
+    """[(speaker, line)] for cohorts still short, said once per count: `said`
+    (key -> count last said) is updated in place."""
+    out = []
+    live = set()
+    for c in cohorts:
+        key = (c.battleground.key, c.bracket, c.faction)
+        if c.go or not c.fresh or c.minimum <= 0:
+            continue
+        live.add(key)
+        if said.get(key) == c.count:
+            continue
+        said[key] = c.count
+        out.append((c.fresh[0], "%s. Anyone else for it?" % c.line))
+    for key in [k for k in said if k not in live]:
+        del said[key]
+    return out
 
 
 _ASK = (
@@ -511,6 +800,10 @@ _JOIN = (
     "I'm in, queueing {bg} too. Need honor for {item}.",
     "Same here, {bg} it is. Still short on honor for {item}.",
     "Count me in for {bg}, I'm after {item}.",
+)
+_FILL = (
+    "Short of a team in {bg}, I'll fill a spot for honor.",
+    "I'll make up the numbers in {bg}, honor is honor.",
 )
 _BOUGHT = (
     "Finally have the honor for {item}, off to the quartermaster.",
@@ -542,16 +835,16 @@ def chat_lines(moves: dict, aims: dict, recent) -> list:
         bg = aim.battleground
         if move.kind == BUY:
             out.append((name, _pick(_BOUGHT, name, aim.entry).format(item=aim.item)))
+        elif move.kind == QUEUE and aim.filler and fresh:
+            out.append((name, _pick(_FILL, name, bg.key).format(bg=bg.short)))
         elif move.kind == QUEUE and fresh:
             key = (aim.guild, bg.key)
             options = _JOIN if key in asked else _ASK
             asked.add(key)
-            out.append(
-                (
-                    name,
-                    _pick(options, name, aim.entry).format(bg=bg.short, item=aim.item),
-                )
-            )
+            text = _pick(options, name, aim.entry).format(bg=bg.short, item=aim.item)
+            if aim.cohort:
+                text += " (%s)" % aim.cohort
+            out.append((name, text))
     return out
 
 
@@ -573,7 +866,9 @@ def spec_of_row(row: dict) -> str | None:
     return guildsocial.spec_of(member) if member is not None else None
 
 
-def seekers_from_rows(member_rows, gear_by_name: dict, list_rows: dict, offers) -> list:
+def seekers_from_rows(
+    member_rows, gear_by_name: dict, list_rows: dict, offers, busy=()
+) -> list:
     """A Seeker per member row whose level could use any offer.
 
     `member_rows` carry name, guild_name, level, class_id, race, honor,
@@ -581,7 +876,8 @@ def seekers_from_rows(member_rows, gear_by_name: dict, list_rows: dict, offers) 
     `gear_by_name` is guildsocial.gear_by_name over them; `list_rows` item id
     -> item_template row for every list id their specs name; `offers` every
     Offer, both sides (each member sees its own side's, on its own map:
-    offers_on).
+    offers_on); `busy` the names in a dungeon, raid run, campaign or other
+    queue, who are not idle for a cohort.
     """
     floor = min((o.required_level for o in offers or ()), default=LEVEL_CAP + 1)
     out = []
@@ -593,10 +889,14 @@ def seekers_from_rows(member_rows, gear_by_name: dict, list_rows: dict, offers) 
         spec = guildsocial.spec_of(member)
         if not gear or not spec:
             continue
-        mine = offers_on(
-            row.get("snapshot_map"), offers_for(guildrun.faction_of([member]), offers)
-        )
+        faction = guildrun.faction_of([member])
+        mine = offers_on(row.get("snapshot_map"), offers_for(faction, offers))
         upgrade = next_upgrade(gear, spec, member.level, list_rows, mine)
         honor = int(row.get("honor") or 0)
-        out.append(Seeker(member.name, member.guild, member.level, honor, upgrade))
+        out.append(
+            Seeker(
+                member.name, member.guild, member.level, honor, upgrade, faction,
+                member.name not in busy,
+            )
+        )  # fmt: skip
     return out

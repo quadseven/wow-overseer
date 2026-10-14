@@ -15193,7 +15193,7 @@ class Bridge(discord.Client):
             # that knows Tame Beast and has none.
             pets=await self._job_pet_offers(members, facts["recent"]),
             mail=await asyncio.to_thread(_job_mail_commands, members),
-            pvp=await self._job_pvp_moves(members, facts["recent"]),
+            pvp=await self._job_pvp_moves(members, facts["recent"], busy),
             # The level step is a spawn walk too (guildlevel.py).
             leveling=(await asyncio.to_thread(_job_leveling, facts)
                       if spawn_walks else None),
@@ -15263,7 +15263,7 @@ class Bridge(discord.Client):
             return book.plain()
         return book
 
-    async def _job_pvp_moves(self, members, recent) -> dict:
+    async def _job_pvp_moves(self, members, recent, busy=()) -> dict:
         """name -> (pvpgear.Aim, pvpgear.Move) for members playing PvP for an
         upgrade (#589). pvpgear decides; this reads.
 
@@ -15271,6 +15271,11 @@ class Bridge(discord.Client):
         level 60 battlegrounds a queue opens and never fills. Members held in
         a battleground or its queue are remembered for the guild social pass,
         which then does not ask them to a dungeon.
+
+        A battleground needs its cohort (#959): pvpgear.gate lets members queue
+        only when each side reaches the world's minimum per team, together,
+        and has a queue that did not pop leave together; `busy` are the names
+        a dungeon, raid run or campaign holds, who are not idle.
         """
         held = getattr(self, "_pvp_held", None)
         if held is None:
@@ -15278,18 +15283,26 @@ class Bridge(discord.Client):
         for m in members:
             held.pop(m.name, None)
         self._pvp_pass = ({}, {})
+        self._pvp_cohorts = []
         if not pvpgear.enabled():
             return {}
         wanted = [m for m in members if m.eligible and m.online]
         if not wanted:
             return {}
-        facts = await asyncio.to_thread(_fetch_pvp_facts, [m.name for m in wanted])
+        facts = await asyncio.to_thread(
+            _fetch_pvp_facts, [m.name for m in wanted], set(busy or ()))
         aims = pvpgear.plan_aims(facts["seekers"])
         moves = {
             name: pvpgear.next_move(aim, facts["maps"].get(name),
                                     aim.entry in facts["carried"].get(name, ()), recent)
             for name, aim in aims.items()
         }
+        aims, moves, cohorts = pvpgear.gate(
+            aims, moves, facts["seekers"], facts["minimums"], recent, facts["maps"])
+        self._pvp_cohorts = cohorts
+        for cohort in cohorts:
+            log.info("pvp: cohort %s %s: %s", cohort.faction or "?", cohort.bracket,
+                     cohort.line)
         for name, move in moves.items():
             if move.kind in (pvpgear.INSIDE, pvpgear.WAITING):
                 held[name] = True
@@ -15307,6 +15320,10 @@ class Bridge(discord.Client):
         started = {s.holder for s in plan.steps if s.action == pvpgear.ACTION}
         lines = pvpgear.chat_lines(
             {n: moves[n] for n in started if n in moves}, aims, recent)
+        said = getattr(self, "_pvp_cohort_said", None)
+        if said is None:
+            said = self._pvp_cohort_said = {}
+        lines += pvpgear.gathering_lines(getattr(self, "_pvp_cohorts", ()), said)
         for name, text in lines:
             await asyncio.to_thread(
                 _insert_speak, relay.SpeakCommand(name, "guild", text, "", guildsocial.SOURCE))
@@ -27853,6 +27870,18 @@ _PVP_LIST_ROWS_SQL = (
 # running bridge, so each is read once per process.
 _PVP_OFFERS: list = []
 _PVP_LIST_ROWS: dict = {}
+_PVP_MINIMUMS: dict = {}
+
+
+def _pvp_minimums(cur) -> dict:
+    """The players a team needs per battleground (battleground_template's
+    MinPlayersPerTeam, the server's override over it), read once."""
+    if not _PVP_MINIMUMS:
+        ids = [bg.template_id for bg in pvpgear.BATTLEGROUNDS.values()]
+        cur.execute(pvpgear.MINIMUMS_SQL.format(holes=",".join(["%s"] * len(ids))),  # noqa: S608 - placeholders only
+                    ids)
+        _PVP_MINIMUMS.update(pvpgear.minimums_from_rows(list(cur.fetchall())))
+    return _PVP_MINIMUMS
 
 
 def _pvp_offers(cur) -> list:
@@ -27875,7 +27904,7 @@ def _pvp_list_rows(cur, ids) -> dict:
     return {i: _PVP_LIST_ROWS[i] for i in ids if i in _PVP_LIST_ROWS}
 
 
-def _fetch_pvp_facts(names: list) -> dict:
+def _fetch_pvp_facts(names: list, busy=()) -> dict:
     """pvpgear's facts for these members: a Seeker each (pvpgear.
     seekers_from_rows), where each stands (the snapshot's map) and the PvP
     items each holds off its body."""
@@ -27888,6 +27917,7 @@ def _fetch_pvp_facts(names: list) -> dict:
         cur.execute(guildsocial.SKILLS_SQL.format(holes=holes), names)  # noqa: S608 - placeholders only
         skills = list(cur.fetchall())
         offers = _pvp_offers(cur)
+        minimums = dict(_pvp_minimums(cur))
         list_rows = _pvp_list_rows(
             cur, pvpgear.specs_list_ids(pvpgear.spec_of_row(r) for r in rows))
         carried: dict = {}
@@ -27899,7 +27929,8 @@ def _fetch_pvp_facts(names: list) -> dict:
                 carried.setdefault(str(row["name"]), set()).add(int(row["entry"]))
     gear = guildsocial.gear_by_name(rows, worn, skills)
     return {
-        "seekers": pvpgear.seekers_from_rows(rows, gear, list_rows, offers),
+        "seekers": pvpgear.seekers_from_rows(rows, gear, list_rows, offers, busy),
+        "minimums": minimums,
         "maps": {str(r["name"]): r.get("snapshot_map") for r in rows},
         "carried": carried,
     }
