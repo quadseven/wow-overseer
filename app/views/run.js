@@ -60,12 +60,23 @@ export function seatLine(name, text, place) {
   return { lead: !!own, text: own ? t.slice(name.length + 1) : t };
 }
 
-function timeline(r) {
+export function bossEvents(r) {
+  const out = [];
+  (r.bosses || []).forEach((b) => {
+    if (b.killed) out.push({ t: toSeconds(b.at), text: "The group killed " + b.name + "." });
+  });
+  (r.wipes || []).forEach((w) => {
+    out.push({ t: toSeconds(w.at), text: "The group wiped on " + w.name + "; " + w.deaths + " death" + (w.deaths === 1 ? "" : "s") + "." });
+  });
+  return out;
+}
+
+export function timeline(r) {
   const own = steps(r).filter((s) => s.t);
   const heard = said(r);
   const gear = (r.gear || []).map((g) => ({ t: toSeconds(g.at), who: g.member,
     text: g.source === "equipped" ? "equipped " + g.name + "." : "looted " + g.name + "." }));
-  const rows = own.concat(heard ? heard.list : [], gear).sort((a, b) => (a.t || 0) - (b.t || 0));
+  const rows = own.concat(heard ? heard.list : [], gear, bossEvents(r)).sort((a, b) => (a.t || 0) - (b.t || 0));
   const lines = rows.map((s) => {
     const l = s.who ? seatLine(s.who, s.text, r.place) : { text: s.text };
     const who = s.who ? html`${member({ name: s.who })}${l.lead ? " " : ": "}` : "";
@@ -81,6 +92,24 @@ function timeline(r) {
 function gearRows(r) {
   const rows = r.gear || [];
   return html`<div class="card g-list"><div class="g-list-head"><span class="g-card-title">Gear</span></div>${rows.length ? rows.map((g) => html`<div class="g-row g-r-gear"><span>${member({ name: g.member })}</span><span class="g-grow">${item({ entry: g.entry, name: g.name, quality: g.quality })}</span><span class="muted">${g.source}</span></div>`) : html`<div class="g-row muted">No gear recorded for this run.</div>`}</div>`;
+}
+
+// The dungeon's bosses as named segments: killed bosses in color, the rest
+// dim, each name readable on a phone.
+export function bossPips(r) {
+  const bosses = r.bosses || [];
+  if (!bosses.length) return pips(r, "g-pips-lg");
+  const cells = bosses.map((b) => html`<div class="g-r-pip ${b.killed ? "done" : ""}"><span class="g-r-pip-bar"></span><span class="g-r-pip-name">${b.name}</span></div>`);
+  const done = bosses.filter((b) => b.killed).length;
+  return html`<div class="g-r-pips" role="img" aria-label="${done + " of " + bosses.length + " bosses down"}">${cells}</div>`;
+}
+
+// The bosses listed under the progress bar, with kill times and who landed
+// the killing blow.
+export function bossRows(r) {
+  const bosses = r.bosses || [];
+  if (!bosses.length) return "";
+  return html`<div class="g-r-bosses">${bosses.map((b) => html`<div class="g-r-boss ${b.killed ? "killed" : ""}"><span class="g-r-boss-name">${b.name}</span>${b.killed ? html`<span class="muted">${clock(toSeconds(b.at))}${b.by ? " - " + member({ name: b.by }) : ""}</span>` : html`<span class="muted">not killed</span>`}</div>`)}</div>`;
 }
 
 export default {
@@ -110,7 +139,7 @@ ${state("empty", "No run #" + ctx.params.id + " in the guild runs the realm has 
 <header class="g-r-head"><h1>${r.place || "A dungeon"}</h1><span class="muted">run #${r.id} | ${r.guild} | ${when}</span>${stateTag(r)}</header>
 <div class="g-r-grid">
 <div class="g-r-col">
-<div class="card"><span class="muted">${bossText(r)}</span>${pips(r, "g-pips-lg")}
+<div class="card"><span class="muted">${bossText(r)}</span>${bossPips(r)}${bossRows(r)}
 ${chose(r) ? html`<span class="muted">${chose(r)}</span>` : ""}
 ${cause(r) ? html`<span>${cause(r)}</span>` : ""}
 ${r.story ? html`<span class="muted">${r.story}</span>` : ""}
