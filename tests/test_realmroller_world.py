@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import realm_roller  # noqa: E402
 import realmroller_world as world  # noqa: E402
+from tests import sandbox_caps  # noqa: E402
 
 EXAMPLE = ROOT / "tools" / "realm_roller_example"
 T0 = datetime(2026, 10, 5, 3, 0, tzinfo=timezone.utc)
@@ -284,6 +285,7 @@ class _Site(BaseHTTPRequestHandler):
         pass
 
 
+@unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
 class DryRun(unittest.TestCase):
     """The command line end to end: a real HTTP site, a real git repo, no writes."""
 

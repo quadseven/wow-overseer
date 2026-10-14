@@ -21,6 +21,7 @@ sys.path.insert(0, str(HERE / "tools"))
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import gen_api_doc  # noqa: E402
+from tests import sandbox_caps  # noqa: E402
 
 _loader = importlib.machinery.SourceFileLoader(
     "overseer_cli", str(HERE / "tools" / "overseer")
@@ -79,6 +80,7 @@ class CliTests(unittest.TestCase):
             code = overseer.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_stuck_path_and_guild(self):
         code, out, _ = self.run_cli("stuck")
         self.assertEqual((code, SEEN), (0, ["/api/v2/stuck"]))
@@ -86,11 +88,13 @@ class CliTests(unittest.TestCase):
         self.run_cli("stuck", "--guild", "cave")
         self.assertEqual(SEEN, ["/api/v2/stuck?guild=cave"])
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_member_path(self):
         code, out, _ = self.run_cli("member", "Grug")
         self.assertEqual((code, SEEN), (0, ["/api/armory/member?name=Grug"]))
         self.assertEqual(json.loads(out)["level"], 12)
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_runs_path_and_table(self):
         code, out, _ = self.run_cli("runs", "--table")
         self.assertEqual((code, SEEN), (0, ["/api/guildruns"]))
@@ -101,21 +105,25 @@ class CliTests(unittest.TestCase):
         for path in ANSWERS:
             self.assertIn("## `GET %s`" % path, text)
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_get_with_pairs(self):
         code, out, _ = self.run_cli("get", "/api/realm", "a=1", "b=two words")
         self.assertEqual(code, 0)
         self.assertEqual(SEEN, ["/api/realm?a=1&b=two+words"])
         self.assertEqual(json.loads(out), {"build": "x"})
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_table_on_stuck_members(self):
         _, out, _ = self.run_cli("--table", "stuck")
         self.assertEqual(out.splitlines()[0].split(), ["name", "step", "since"])
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_table_on_top_level_list(self):
         code, out, _ = self.run_cli("get", "/api/client/bags", "--table")
         self.assertEqual((code, SEEN), (0, ["/api/client/bags"]))
         self.assertEqual(out.split(), ["bag", "free", "1", "4", "2", "0"])
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_top_level_list_of_scalars_prints_json_but_no_table(self):
         code, out, _ = self.run_cli("get", "/api/auras")
         self.assertEqual((code, json.loads(out)), (0, ["Grug", "Oden"]))
@@ -123,6 +131,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("no list of records", err)
 
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
     def test_error_prints_status_and_body_and_exits_nonzero(self):
         code, out, err = self.run_cli("run", "9")
         self.assertEqual(SEEN, ["/api/v2/run?id=9"])
