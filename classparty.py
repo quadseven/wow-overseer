@@ -19,6 +19,17 @@ an ask has them:
 
 THE FLOW, one task per party (the bridge's _run_class_party):
 
+  meet      the leader and every helper walk to the objective spawn
+            (`walk-to-spawn creature:<spawn id>`), each walk followed as a
+            guild walk is, all of them within MEET_SECONDS. Then the snapshot
+            must show each helper within classask.SEAT_RANGE_YARDS of the
+            leader on its map (judge_meeting). A helper whose walk fails, is
+            cut off by MEET_SECONDS or ends too far from the leader has its yes
+            taken back and is barred from this ask; the party forms with the
+            helpers who met the leader. The leader not arriving (its walk
+            failed or was cut off) or no helper meeting it fails the meeting,
+            which counts as one failure of the ask. Log line:
+            `class party: <helpers> meet <leader> at <spawn> for <quest>`.
   form      write party-up, read its answer. FORMED goes on. A refusal that names
             a helper (HELPER) takes that helper's yes back, bars the helper from
             this ask and ends the attempt: the ask's next pass picks another.
@@ -39,7 +50,9 @@ THE FLOW, one task per party (the bridge's _run_class_party):
 
 THE HOLD. A member is held out of the dungeon passes and the guild jobs only
 while a PartyRun with its name is on the Board: from the pass that decides to
-form the party to its disband, and not a moment after a refusal.
+form the party, through the meeting (PartyRun.meeting, at most MEET_SECONDS of
+walking), to its disband, and not a moment after a failed meeting or a
+refusal.
 
 FAMILY MEMBERS are never touched: classask answerers come from the guild
 members free of every campaign (guildrun.why_not holds a family member), and the
@@ -51,6 +64,7 @@ PURE: rows in, decisions out. No MySQL, no clock of its own, no sleeping.
 from __future__ import annotations
 
 import json
+import math
 import re
 import types
 from dataclasses import dataclass, field
@@ -63,7 +77,18 @@ from guildsocial import FILLED, LIVE_ASKS, PASSING, YES
 
 SOURCE = "classask"
 UP, WALK, DISBAND = "party-up", "party-walk", "party-disband"
+MEET = "walk-to-spawn"
 MAX_HELPERS = 4
+
+# Seconds the leader and the helpers have to reach the objective. An answerer
+# stands at most classask.HELPER_REACH_YARDS from the asker: a walk of about
+# six minutes in a straight line, and roads and fights make it longer.
+MEET_SECONDS = 900.0
+# Reads of the snapshot after the walks, and the seconds between them, before a
+# member that arrived and is not seen beside the leader counts as far: the
+# module refreshes the snapshot every few seconds.
+MEET_READS = 3
+MEET_READ_SECONDS = 10.0
 
 # Seconds the bridge reads a party-up row's answer before it counts as lost.
 UP_FOLLOW_SECONDS = 90.0
@@ -191,6 +216,58 @@ def objective_done(state) -> bool:
     return state in (COMPLETE, GONE)
 
 
+@dataclass(frozen=True)
+class Meeting:
+    """What one meeting at the objective came to. `met` when the party may be
+    formed; `lost` the helpers whose yes is taken back; `unseen` the members
+    whose walk arrived and whom the snapshot does not show beside the leader
+    (yet: it may lag the walk); `why` the sentence when the meeting fails."""
+
+    met: bool
+    lost: tuple = ()
+    unseen: tuple = ()
+    why: str = ""
+
+
+def _beside(at, lead) -> bool:
+    """Whether a (map, x, y) stands within seat range of the leader's."""
+    return (
+        at is not None
+        and int(at[0]) == int(lead[0])
+        and math.hypot(at[1] - lead[1], at[2] - lead[2]) <= classask.SEAT_RANGE_YARDS
+    )
+
+
+def judge_meeting(run, arrived, stands) -> Meeting:
+    """Whether the leader and the helpers of `run` met at the objective.
+
+    arrived  the names whose meeting walk arrived
+    stands   name -> (map, x, y) from the live snapshot
+
+    A helper whose walk did not arrive, or that is not seen within
+    classask.SEAT_RANGE_YARDS of the leader, is lost. The meeting fails when
+    the leader did not arrive or is not seen, or when every helper is lost."""
+    walked = tuple(h for h in run.helpers if h not in arrived)
+    where = run.spot.name or "the objective"
+    if run.leader not in arrived:
+        return Meeting(False, walked, why="%s did not reach %s" % (run.leader, where))
+    lead = stands.get(run.leader)
+    if lead is None:
+        return Meeting(
+            False,
+            walked,
+            (run.leader,),
+            "the snapshot does not show where %s stands" % run.leader,
+        )
+    far = tuple(
+        h for h in run.helpers if h in arrived and not _beside(stands.get(h), lead)
+    )
+    lost = walked + far
+    if len(lost) == len(run.helpers):
+        return Meeting(False, lost, far, "no helper met %s at %s" % (run.leader, where))
+    return Meeting(True, lost, far)
+
+
 # --- the commands -------------------------------------------------------------------
 
 
@@ -202,6 +279,20 @@ def walk_command(spot, cap) -> str:
     return "%s creature:%d%s" % (WALK, int(spot.guid), guildroute.errand_cap_word(cap))
 
 
+def meet_command(spot, cap) -> str:
+    """The walk one member makes alone to the objective spawn to meet the rest."""
+    return "%s creature:%d%s" % (MEET, int(spot.guid), guildroute.errand_cap_word(cap))
+
+
+def meet_line(run) -> str:
+    return "class party: %s meet %s at %s for %s" % (
+        ", ".join(run.helpers),
+        run.leader,
+        run.spot.name or "the objective",
+        run.title,
+    )
+
+
 # --- one party ------------------------------------------------------------------------
 
 
@@ -209,9 +300,10 @@ def walk_command(spot, cap) -> str:
 class PartyRun:
     """One class quest party from the pass that decided it to its disband.
 
-    `answers` is member name -> the id of its yes row. `formed_at` and
-    `deadline` are on the bridge's monotonic clock, set when the module said
-    formed."""
+    `answers` is member name -> the id of its yes row. `meeting` is True from
+    the pass that decides the party until its members have met at the
+    objective. `formed_at` and `deadline` are on the bridge's monotonic clock,
+    set when the module said formed."""
 
     ask_id: int
     leader: str
@@ -220,6 +312,7 @@ class PartyRun:
     title: str
     spot: object
     answers: dict = field(default_factory=dict)
+    meeting: bool = True
     formed_at: float | None = None
     deadline: float | None = None
 
@@ -232,7 +325,17 @@ class PartyRun:
         low = str(name).lower()
         return next((h for h in self.helpers if h.lower() == low), "")
 
+    def drop(self, names) -> None:
+        """Take these helpers out of the party, and their yes rows with them."""
+        gone = set(names)
+        self.helpers = tuple(h for h in self.helpers if h not in gone)
+        self.answers = {n: i for n, i in self.answers.items() if n not in gone}
+
+    def met(self) -> None:
+        self.meeting = False
+
     def form(self, now) -> None:
+        self.meeting = False
         self.formed_at = now
         self.deadline = now + PARTY_SECONDS
 
@@ -484,7 +587,8 @@ def _plan_asks(asks, answers, quest_pass, ended, by_member, free, board, now, bo
 
 def ask_held(held, board) -> dict:
     """`held` as classask.plan_pass should read it: a member of a party that is
-    up is free to its ask though the core now reads it as grouped (or fighting).
+    meeting or up is free to its ask though the core now reads it as grouped
+    (or fighting on its way).
     Any other reason (offline, dead, in an instance) still holds it, and the ask
     is then cancelled, which ends the party."""
     mine = board.names()
