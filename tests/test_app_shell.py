@@ -233,6 +233,24 @@ class TheTokens(unittest.TestCase):
         )
         self.assertIn("min-height: 48px", self.CSS[self.CSS.index(".tab {") :])
 
+    def test_a_focus_target_the_script_focuses_draws_no_ring(self):
+        # Each route change focuses <main tabindex="-1"> for screen readers,
+        # and Chrome counts that as :focus-visible. Outlined, the main area's
+        # right edge showed as a thin accent bar down every page.
+        css = re.sub(r"/\*.*?\*/", "", self.CSS, flags=re.S)
+        rules = {
+            sel.strip(): body.strip()
+            for sels, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+            for sel in sels.split(",")
+        }
+        for target in ("main:focus-visible", '[tabindex="-1"]:focus-visible'):
+            self.assertEqual(rules.get(target), "outline: none;", target)
+        # Links, buttons and inputs keep the general ring.
+        self.assertEqual(
+            rules[":focus-visible"],
+            "outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 2px;",
+        )
+
     def test_headings_never_go_above_500(self):
         for weight in re.findall(r"font-weight:\s*(\d+)", self.TOKENS + self.CSS):
             self.assertLessEqual(int(weight), 500)
