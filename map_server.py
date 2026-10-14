@@ -646,6 +646,52 @@ def _faction_sides() -> list[dict]:
     return sides
 
 
+# Creature names for numeric aims, read once per entry per process: no
+# template row changes while a realm runs, so an entry read once is read for
+# good (levelroute._level_world keeps its quest rows on the same rule). An
+# entry the world database does not hold is NOT remembered, so a realm that
+# grows the row answers on the next render rather than never.
+_CREATURE_NAMES: dict = {}
+
+
+def _creature_names(fetch, entries) -> dict:
+    """entry -> {"name", "subname", "place"} for the numeric aims in `entries`.
+
+    `fetch(sql, params)` runs one statement and returns its rows as dicts, or
+    [] when this world image cannot answer. Looked up after the rows are in
+    hand rather than joined, because acore_world is a second schema and the
+    ids on any one page are a handful (map_server._fetch_agenda states the
+    same rule for quest titles). The place is the spawn's, via places, so a
+    walk reads the way a player says it.
+    """
+    wanted = places.creature_entries(entries)
+    missing = [e for e in wanted if e not in _CREATURE_NAMES]
+    if missing:
+        holes = ", ".join(["%s"] * len(missing))
+        for row in fetch(
+            places.CREATURE_NAMES_SQL.format(holes=holes), tuple(missing)
+        ):
+            try:
+                entry = int(row["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            _CREATURE_NAMES[entry] = {
+                "name": row.get("name") or "",
+                "subname": row.get("subname") or "",
+            }
+        for row in fetch(
+            places.CREATURE_SPAWN_SQL.format(holes=holes), tuple(missing)
+        ):
+            try:
+                entry = int(row["entry"])
+                where = places.place_at(row["map_id"], row["x"], row["y"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if entry in _CREATURE_NAMES and "place" not in _CREATURE_NAMES[entry]:
+                _CREATURE_NAMES[entry]["place"] = where
+    return {e: dict(_CREATURE_NAMES[e]) for e in wanted if e in _CREATURE_NAMES}
+
+
 def _fetch_now_facts(names):
     """name -> the facts nowstatus composes a tile's sentence from.
 
@@ -653,7 +699,7 @@ def _fetch_now_facts(names):
     (who holds each leader's walk, and each member's state) and the steps the
     bridge stored from its own log. The step table is created by the bridge, so
     a realm that has not made it yet answers with no steps rather than failing
-    the wall. Returns False when the roster or the intent book cannot be read.
+    the     wall. Returns False when the roster or the intent book cannot be read.
     """
     names = list(names)
     if not names:
@@ -691,7 +737,23 @@ def _fetch_now_facts(names):
                 steps = []
             cur.execute("SELECT UNIX_TIMESTAMP() AS now_at")
             now_at = int(cur.fetchone()["now_at"])
-        return nowstatus.build_facts(names, roster, intents, steps, now_at)
+
+            def _read(sql, params):
+                try:
+                    cur.execute(sql, params)
+                    return [dict(row) for row in cur.fetchall()]
+                except pymysql.err.MySQLError as exc:
+                    if exc.args and exc.args[0] in (1054, 1146):
+                        return []
+                    raise
+
+            # The creatures numeric aims walk to, named: a walk to entry 8122
+            # reads the way a player says it, never a bare id.
+            creatures = _creature_names(
+                _read,
+                [r.get("current_target") for r in intents],
+            )
+        return nowstatus.build_facts(names, roster, intents, steps, now_at, creatures)
     finally:
         conn.close()
 
@@ -3773,10 +3835,16 @@ def _fetch_agenda(names=None) -> dict:
             )
             quest_titles = {int(r["ID"]): r["LogTitle"]
                             for r in title_rows}
+        # The creatures numeric travel aims walk to, named the same way: an
+        # aim at entry 8122 reads as the creature, never a bare id.
+        creatures = _creature_names(
+            lambda sql, params: rd.rows(sql, params, what="creature names"),
+            [r.get("travel_npc") for r in roster_rows],
+        )
     return {"roster_rows": roster_rows, "run_rows": run_rows,
             "instance_rows": instance_rows, "goal_rows": goal_rows,
             "trade_rows": trade_rows, "event_rows": event_rows,
-            "quest_titles": quest_titles}
+            "quest_titles": quest_titles, "creatures": creatures}
 
 
 def _fetch_streams() -> list:

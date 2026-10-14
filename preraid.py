@@ -327,7 +327,6 @@ MEMBERS_SQL = (
 
 ATTUNEMENT_QUESTS = (7487, 7848)  # raidready.ATTUNEMENT_QUESTS
 CORE_FRAGMENT = 18412
-LOTHOS = 14387
 
 KEY_QUESTS = (4742, 4743)  # Vaelan's two "Seal of Ascension" quests
 SEAL_OF_ASCENSION = 12344  # the key itself
@@ -1384,9 +1383,9 @@ def _attunement(names, rewarded, in_log, held) -> Progress:
         return Progress("blackrock-depths", ATTUNEMENT, True, False, line)
     line = (
         "Attunement to the Core: %d of %d are not attuned and none holds the quest; "
-        "each takes it from Lothos Riftwaker (creature %d) on Blackrock Mountain "
+        "each takes it from Lothos Riftwaker on Blackrock Mountain "
         "first, because the Core Fragment drops only for a holder"
-        % (len(unattuned), len(names), LOTHOS)
+        % (len(unattuned), len(names))
     )
     return Progress("blackrock-depths", ATTUNEMENT, True, False, line)
 

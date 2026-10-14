@@ -147,6 +147,7 @@ import retire
 import situation
 import skillgoal
 import standin
+import places
 import standstill
 import tabard
 import teamsync
@@ -8177,8 +8178,11 @@ class Bridge(discord.Client):
         if not aimed:
             log.info(
                 "craft_supply: leader=%s is on an errand that a reagent trip "
-                "may not retask, so the walk to creature %s waits for the "
-                "next pass", trip.traveller, trip.target,
+                "may not retask, so the walk to %s waits for the "
+                "next pass", trip.traveller,
+                places.creature_words(trip.target, trip.vendor.name or "")
+                if str(trip.target or "").strip().isdigit()
+                else trip.target,
             )
 
     async def _craft_supply_loop(self) -> None:
@@ -8798,7 +8802,8 @@ class Bridge(discord.Client):
                 continue
             if await asyncio.to_thread(_insert_auction, buy.character, command):
                 bought.setdefault(buy.character, []).append(
-                    "entry %d for %s" % (buy.entry, buy.slot)
+                    "%s for %s"
+                    % (buy.label or "an unnamed item (%d)" % buy.entry, buy.slot)
                 )
         return buys, recent, bought
 
@@ -8846,8 +8851,8 @@ class Bridge(discord.Client):
             log.info("gearup: no vendor walk - %s", trip.why_not)
             return False
         if trip.here:
-            log.info("gearup: %s stands at %s (creature %d); %s buy once in reach",
-                     leader, trip.name, trip.vendor, ", ".join(trip.buyers))
+            log.info("gearup: %s stands at %s; %s buy once in reach",
+                     leader, trip.name, ", ".join(trip.buyers))
             return True
         target = travel.resolve(str(trip.vendor))
         if not target or len(target) > travel.COLUMN_WIDTH:
@@ -8855,9 +8860,9 @@ class Bridge(discord.Client):
         aimed = await self._claim_town_slot(
             GEAR_VENDOR_CLAIMANT, leader, target, urgent=True,
             cohort=_cohort_key(cohort))
-        log.info("gearup: %s is aimed at %s (creature %d, %d yards) so %s can "
+        log.info("gearup: %s is aimed at %s (%d yards) so %s can "
                  "buy gear for empty slots (aim taken=%s)", leader, trip.name,
-                 trip.vendor, int(trip.yards), ", ".join(trip.buyers), aimed)
+                 int(trip.yards), ", ".join(trip.buyers), aimed)
         return aimed
 
     async def _gearup_vendor_once(self, facts: dict,
@@ -16557,9 +16562,9 @@ class Bridge(discord.Client):
         aimed = await self._claim_town_slot(
             WEAPON_SKILL_CLAIMANT, leader, target, urgent=True,
             cohort=_cohort_key(cohort))
-        log.info("weapon skill: %s; %s is aimed at %s (creature %d, %d yards) "
+        log.info("weapon skill: %s; %s is aimed at %s (%d yards) "
                  "(aim taken=%s)%s", said, leader, master["name"],
-                 int(master["entry"]), int(float(master["yards"])), aimed, label)
+                 int(float(master["yards"])), aimed, label)
 
     async def _weapon_skill_train(self, needs, master, positions, label) -> int:
         """Write a train row for each member standing at the master; how many."""
@@ -16587,8 +16592,10 @@ class Bridge(discord.Client):
         """Put on each weapon whose skill row reads applied and not yet worn."""
         for row in await asyncio.to_thread(_weapon_trains_applied, names):
             if await asyncio.to_thread(_insert_weapon_equip, row):
-                log.info("weapon skill: %s learned skill %s; puts on item %s%s",
-                         row["name"], row["skill"], row["entry"], label)
+                log.info("weapon skill: %s learned skill %s; puts on %s%s",
+                         row["name"], row["skill"],
+                         row.get("item_name")
+                         or "an unnamed item (%s)" % row["entry"], label)
 
     async def _town_errand_loop(self) -> None:
         """Run each family's town errand, every TOWN_ERRAND_CYCLE_SECONDS."""
@@ -17078,6 +17085,7 @@ class Bridge(discord.Client):
         marks["written"] = await self._town_errand_vendor_buy(
             names, leader, positions, facts, trip, cohort)
         marks["at"] = trip.vendor
+        marks["at_name"] = trip.name if trip.vendor else ""
         tries = marks.setdefault("tries", {})
         tries[trip.vendor] = tries.get(trip.vendor, 0) + 1
         if step not in marks:
@@ -17108,13 +17116,20 @@ class Bridge(discord.Client):
             log.info("town errand vendor: %s bought for %s%s", name,
                      ", ".join(sorted(slots)), _family_label(cohort))
         vendor = marks.pop("at", 0)
+        vendor_name = marks.pop("at_name", "")
         marks["written"] = []
         tries = marks.get("tries", {}).get(vendor, 0)
         if vendor and (not out_of_reach or tries >= gearup.VENDOR_TRIES):
             visited.add(vendor)
         elif vendor:
-            log.info("town errand vendor: a buy at creature %d was refused "
-                     "for range; trying it again%s", vendor,
+            # Local import: tests exec this function in isolation
+            # (test_gear_weapons_first), so module globals beyond the
+            # injected namespace are not available here.
+            from places import creature_words
+
+            log.info("town errand vendor: a buy at %s was refused "
+                     "for range; trying it again%s",
+                     creature_words(vendor, vendor_name or ""),
                      _family_label(cohort))
         return True
 
@@ -30289,8 +30304,10 @@ def _weapon_trains_applied(names: list) -> list:
     marks = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT t.target_name AS name, t.command, t.target_arg AS entry "
-            "FROM overseer_command t WHERE t.kind = 'cast' AND t.source = %s "
+            "SELECT t.target_name AS name, t.command, t.target_arg AS entry, "
+            "it.name AS item_name FROM overseer_command t "
+            "LEFT JOIN acore_world.item_template it ON it.entry = t.target_arg "
+            "WHERE t.kind = 'cast' AND t.source = %s "
             "AND t.status = 'applied' AND t.target_name IN (" + marks + ") "
             "AND t.created_at > NOW() - INTERVAL 1 DAY "
             "AND NOT EXISTS (SELECT 1 FROM overseer_command e WHERE e.kind = 'bot' "
@@ -30964,7 +30981,7 @@ def _fetch_gearup_listings(house: int) -> list:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT a.id AS listing_id, a.buyoutprice AS buyout, ii.itemEntry AS entry, "
-            "it.InventoryType, it.class, it.subclass, it.RequiredLevel, "
+            "it.name, it.InventoryType, it.class, it.subclass, it.RequiredLevel, "
             "it.AllowableClass, it.ItemLevel, it.Quality FROM auctionhouse a "
             "JOIN item_instance ii ON ii.guid=a.itemguid "
             "JOIN acore_world.item_template it ON it.entry=ii.itemEntry "
