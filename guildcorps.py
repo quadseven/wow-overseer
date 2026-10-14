@@ -436,9 +436,9 @@ def plan_corps(members) -> dict:
 
 
 # THE kind='guild' VERBS MOD-OVERSEER HANDLES (#967): the first word of every
-# guild row the bridge may write. `bg-leave` is deliberately absent: guild jobs
-# must never write it for a queue that did not pop, because the module refuses
-# that verb. A refused leave cannot count toward the leave cooldown.
+# guild row the bridge may write. A cohort whose queue did not pop stays queued;
+# guild jobs write no `bg-leave` row because the module does not handle that verb.
+# Only a leave the module accepted can count toward the leave cooldown.
 # Read from quadseven/mod-overseer's src/overseer_decisions.cpp (BG_QUEUE_VERB)
 # and the *_VERB constants beside it in src/overseer_decisions.h (PARTY_UP_VERB,
 # PARTY_DISBAND_VERB, GUILD_FINDER_VERB), which mod_overseer.cpp routes before
