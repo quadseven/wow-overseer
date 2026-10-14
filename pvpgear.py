@@ -61,9 +61,11 @@ members who want PvP, are online and idle, plus those already in the queue.
 Only when every side that members must fill reaches its minimum does the whole
 cohort queue, in the same pass; below it nobody queues and each member does
 its ordinary job (GATHERING). Idle members of the bracket who need no upgrade
-may fill the gap, and only when they close it. A queue not popped within
-QUEUE_WAIT_MINUTES is left by the whole cohort at once (LEAVE) and none of it
-queues again for LEAVE_COOLDOWN_MINUTES. The counts are said in the cohort's
+may fill the gap, and only when they close it. A queue that does not pop is
+not left: the module has no `bg-leave` verb (#967), so the cohort stays held
+as queued until WAITING_MINUTES releases it. A member whose accepted
+`bg-leave` row is newer than LEAVE_COOLDOWN_MINUTES does not queue again
+(COOLING). The counts are said in the cohort's
 line and in guild chat. Natural play only: nothing is granted or teleported.
 
 WHAT IT DOES NEXT (`next_move`):
@@ -115,8 +117,6 @@ WAITING_MINUTES = 45
 # A member with no PvP row this long starts a new session, and says so.
 CHAT_QUIET_MINUTES = 60
 ACTION = "pvp"
-# A cohort whose queue has not popped in this many minutes leaves together.
-QUEUE_WAIT_MINUTES = 15
 # After leaving, none of the cohort queues again for this long.
 LEAVE_COOLDOWN_MINUTES = 60
 # The realm's override of the minimum per team: "wsg=5,ab=8" (battleground key
@@ -508,8 +508,8 @@ def plan_aims(seekers) -> dict:
 
 INSIDE, CARRIED, BUY, WAITING, QUEUE = "inside", "carried", "buy", "waiting", "queue"
 # GATHERING: the cohort is short, nobody queues (#959). COOLING: it left a
-# queue lately. LEAVE: its queue did not pop in time and the cohort leaves.
-GATHERING, COOLING, LEAVE = "gathering", "cooling", "leave"
+# queue lately.
+GATHERING, COOLING = "gathering", "cooling"
 FAILED = frozenset({"error", "unchanged"})
 
 
@@ -529,9 +529,9 @@ def last_pvp_age(name: str, recent) -> int | None:
     return min(int(r.age_minutes) for r in rows) if rows else None
 
 
-def _queue_accepted(row) -> bool:
-    """A `bg-queue` row the module answered "queued" or "already" (by status
-    or by the outcome in its result), and that did not fail."""
+def _accepted(row, verb: str) -> bool:
+    """A `<verb>` row the module answered "queued" or "already" (by status or
+    by the outcome in its result), and that did not fail."""
     command = str(getattr(row, "command", "") or "")
     status = str(row.status or "").lower()
     result = str(getattr(row, "result", "") or "").lower()
@@ -541,7 +541,12 @@ def _queue_accepted(row) -> bool:
     failed = status in FAILED or any(
         marker in result for marker in ('"outcome":"error"', '"outcome":"unchanged"')
     )
-    return command.startswith("bg-queue ") and accepted and not failed
+    return command.startswith(verb + " ") and accepted and not failed
+
+
+def _queue_accepted(row) -> bool:
+    """A `bg-queue` row the module accepted."""
+    return _accepted(row, "bg-queue")
 
 
 def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
@@ -578,11 +583,23 @@ def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
     )
 
 
+# The `kind='guild'` verbs mod-overseer handles, read from the verb parsers in
+# its src/overseer_decisions.cpp (ParseGuildRequest's verbs, GUILD_FINDER_VERB,
+# BG_QUEUE_VERB, PARTY_UP_VERB and PARTY_DISBAND_VERB). Every guild row the
+# bridge writes must start with one: the module refuses the rest. `bg-leave` is
+# deliberately absent (#967).
+MODULE_GUILD_VERBS = frozenset({
+    "view", "invite", "remove", "raid", "form", "shortlist", "tabard", "bank",
+    "finder-run", "bg-queue", "party-up", "party-disband",
+})  # fmt: skip
+
+
 def queue_command(aim: Aim) -> str:
     return "bg-queue %s" % aim.battleground.key
 
 
 def leave_command(aim: Aim) -> str:
+    """Not written: mod-overseer has no `bg-leave` verb (see MODULE_GUILD_VERBS)."""
     return "bg-leave %s" % aim.battleground.key
 
 
@@ -633,9 +650,11 @@ def _newest_pvp(name: str, recent):
 
 
 def left_lately(name: str, recent) -> bool:
-    """Whether this member left a battleground queue inside the cooldown."""
+    """Whether this member left a battleground queue inside the cooldown: a
+    `bg-leave` row counts only when the module accepted it, as `bg-queue` does
+    (a refused or undelivered leave leaves the member queued in the game)."""
     return any(
-        str(getattr(r, "command", "") or "").startswith("bg-leave ")
+        _accepted(r, "bg-leave")
         and int(r.age_minutes) < LEAVE_COOLDOWN_MINUTES
         for r in _pvp_rows(name, recent)
     )
@@ -663,26 +682,6 @@ def _hold_fillers(by_name: dict, aims: dict, moves: dict, recent, maps) -> None:
         if queued is not None:
             aims[name] = _filler(s, BATTLEGROUNDS[queued[0]])
             moves[name] = next_move(aims[name], maps.get(name), False, recent)
-
-
-def _expire_queues(aims: dict, moves: dict, recent) -> None:
-    """The queue that did not pop: the whole bracket leaves together (in place)."""
-    expired = set()
-    for name, move in moves.items():
-        queued = _queued_key(name, recent)
-        if move.kind == WAITING and queued and queued[1] >= QUEUE_WAIT_MINUTES:
-            expired.add((aims[name].battleground.key, bracket_of(aims[name].level)))
-    for name, move in list(moves.items()):
-        a = aims[name]
-        if (
-            move.kind == WAITING
-            and (a.battleground.key, bracket_of(a.level)) in expired
-        ):
-            moves[name] = Move(
-                LEAVE,
-                "%s leaves the %s queue with the cohort after %d minutes, "
-                "no match started" % (name, a.battleground.name, QUEUE_WAIT_MINUTES),
-            )
 
 
 def _group_members(aims: dict, moves: dict, by_name: dict, cooling: set) -> dict:
@@ -750,15 +749,13 @@ def gate(aims: dict, moves: dict, seekers, minimums: dict, recent, maps=None):
     read (the fillers come from those that want no PvP); `minimums` is
     minimums_from_rows. A member about to queue (QUEUE) queues only when
     every side the members fill reaches its minimum, fillers included; else
-    it is GATHERING. A member that left lately is COOLING. A queue older than
-    QUEUE_WAIT_MINUTES makes the whole battleground bracket LEAVE together.
+    it is GATHERING. A member that left lately is COOLING.
     """
     maps = maps or {}
     by_name = {s.name: s for s in seekers or ()}
     aims, moves = dict(aims), dict(moves)
     cooling = {n for n in by_name if left_lately(n, recent)}
     _hold_fillers(by_name, aims, moves, recent, maps)
-    _expire_queues(aims, moves, recent)
     groups = _group_members(aims, moves, by_name, cooling)
     cohorts = _cohorts_of(groups, minimums, by_name, aims, cooling)
     ready = _ready_sides(cohorts)
