@@ -61,6 +61,33 @@ import math
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
+# The stuck text names times the way the reader reads them: the operator's
+# clock, not UTC. Same convention as runtimeline's operator clock.
+try:
+    from zoneinfo import ZoneInfo
+
+    _READER_ZONE = ZoneInfo("America/New_York")
+except Exception:  # noqa: BLE001 - no tz database in the image: name UTC as UTC
+    _READER_ZONE = timezone.utc
+
+
+def _reader_due(retry_at) -> str:
+    """The retry time as the reader reads it ("03:00"), or "later".
+
+    `retry_at` is the staged retry instant in UTC; the note names it on the
+    reader's clock so "tries again at 03:00" means 03:00 where the reader is.
+    A hold with no readable refusal time has no retry to name: "later".
+    """
+    if not isinstance(retry_at, datetime):
+        return "later"
+    at = (
+        retry_at
+        if retry_at.tzinfo is not None
+        else retry_at.replace(tzinfo=timezone.utc)
+    )
+    return at.astimezone(_READER_ZONE).strftime("%H:%M")
+
+
 # The two verbs the world executor understands for moving one item from one
 # character's bags into another's, and the single fact that decides between
 # them. See `deliverable` for the measurement; in short, DoTrade tests that
@@ -1790,7 +1817,7 @@ def _world_holds(
             if hold.retry_at <= now:
                 hold.lifted = True
                 continue
-        due = hold.retry_at.strftime("%H:%M") if hold.retry_at else "later"
+        due = _reader_due(hold.retry_at)
         out[key] = "%s keeps %s over %s: %s; tries again at %s" % (
             equip.holder,
             " and ".join(name for _slot, _entry, name in worn_now) or "nothing",

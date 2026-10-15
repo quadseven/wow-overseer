@@ -265,6 +265,63 @@ class TheQueueIsBounded(unittest.TestCase):
             )
             self.assertEqual(queue, self.wanted)
 
+    def test_hold_note_names_the_retry_time_in_the_readers_clock(self):
+        """The stuck text names refusal + wait in the reader's time (#1005).
+
+        A refusal answered at 01:00 ET waits 2 h on the first attempt, so the
+        note says "tries again at 03:00": the retry instant on the reader's
+        clock, not the UTC "07:00" the old note named.
+        """
+        worn = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
+        answer = self.answer()
+        # Naive, as the database returns it; read as UTC, like production.
+        answer[self.key]["created_at"] = datetime(2026, 10, 15, 5, 0)
+        now = datetime(2026, 10, 15, 6, 0, tzinfo=timezone.utc)
+        queue, notes = bag_pressure.equips_to_queue(
+            self.wanted,
+            set(),
+            {self.key: 1},
+            answers=answer,
+            worn=worn,
+            holds={},
+            now=now,
+        )
+        self.assertEqual(queue, ())
+        self.assertIn("tries again at 03:00", notes[0])
+
+    def test_hold_past_its_retry_time_is_lifted_and_retried(self):
+        """A hold past its named retry lifts on the next pass (#1005).
+
+        The equip is queued again and the note is gone, so the stuck list
+        drops it. The holds dict is the bridge's, kept between passes.
+        """
+        worn = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
+        answer = self.answer()
+        answer[self.key]["created_at"] = datetime(2026, 10, 15, 1, 0)
+        holds = {}
+        queue, notes = bag_pressure.equips_to_queue(
+            self.wanted,
+            set(),
+            {self.key: 1},
+            answers=answer,
+            worn=worn,
+            holds=holds,
+            now=datetime(2026, 10, 15, 2, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(queue, ())
+        self.assertEqual(len(notes), 1)
+        queue, notes = bag_pressure.equips_to_queue(
+            self.wanted,
+            set(),
+            {self.key: 1},
+            answers=answer,
+            worn=worn,
+            holds=holds,
+            now=datetime(2026, 10, 15, 3, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(queue, self.wanted)
+        self.assertEqual(notes, ())
+
     def answer(self, status="unchanged", detail="the bot kept its own pick", id=7):
         return {
             self.key: dict(
