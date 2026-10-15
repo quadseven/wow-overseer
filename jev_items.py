@@ -41,6 +41,7 @@ client the caller hands in, so the whole pass is testable with a fake one.
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 from dataclasses import dataclass, replace
 
@@ -589,6 +590,8 @@ class Judgment:
     probabilities: dict | None = None
     latency_ms: int = 0
     model: str = ""
+    # Why the question went unanswered (the client's failure detail), if it did.
+    detail: str = ""
     # jev.JEV, jev.BOTH or jev.HEURISTIC once the act plan has run; "" until
     # then. Recorded, so the record says which answer the world got.
     acted: str = ""
@@ -648,9 +651,46 @@ class Judgment:
         )
 
 
+def unanswered_reason(judgments) -> str:
+    """Why questions went unanswered: "status xN (detail)" for each cause,
+    most common first; "" when every question was answered."""
+    causes = collections.Counter(
+        (j.status or "unasked", j.detail) for j in judgments if not j.jev
+    )
+    return ", ".join(
+        "%s x%d%s" % (status, count, " (%s)" % detail if detail else "")
+        for (status, detail), count in causes.most_common()
+    )
+
+
+def shadow_summary(judgments, who: str, fresh: int) -> str:
+    """The one line a pass says: the totals, and the reason when any
+    question got no answer."""
+    answered = [j for j in judgments if j.jev]
+    line = (
+        "jev-shadow: %d question(s) for %s, %d answered, %d agree, "
+        "%d carried out as Jev's, %d new record(s)"
+        % (
+            len(judgments),
+            who,
+            len(answered),
+            sum(1 for j in answered if j.agree),
+            sum(1 for j in judgments if j.acted == jev.JEV),
+            fresh,
+        )
+    )
+    reason = unanswered_reason(judgments)
+    return line + ("; unanswered: " + reason if reason else "")
+
+
 def _judged(base: Judgment, outcome: jev.Outcome, qid: str) -> Judgment:
     if outcome.answers is None:
-        return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
+        return replace(
+            base,
+            status=outcome.status,
+            latency_ms=outcome.latency_ms,
+            detail=outcome.detail,
+        )
     answer = outcome.answers[qid]
     return replace(
         base,

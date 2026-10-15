@@ -12252,14 +12252,7 @@ class Bridge(discord.Client):
             log.info("%s", judgment.line())
             await asyncio.to_thread(_insert_jev_judgment, judgment)
             self._jev_recorded[judgment.key] = judgment.signature
-        answered = [j for j in judgments if j.jev]
-        log.info(
-            "jev-shadow: %d question(s) for %s, %d answered, %d agree, "
-            "%d carried out as Jev's, %d new record(s)",
-            len(judgments), who, len(answered),
-            sum(1 for j in answered if j.agree),
-            sum(1 for j in judgments if j.acted == jev.JEV), len(fresh),
-        )
+        log.info("%s", jev_items.shadow_summary(judgments, who, len(fresh)))
 
     async def _hand_recipes(self, names: list, free_slots: dict) -> None:
         """Move every carried recipe into the bag of whoever works its trade.
