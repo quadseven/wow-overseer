@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 
 CHANGES_SQL = (
-    "SELECT e.character_name AS character, COALESCE(g.name, '') AS guild, "
+    "SELECT e.character_name AS member_name, COALESCE(g.name, '') AS guild, "
     "e.kind, e.subject_name AS item, e.subject_quality AS quality, "
     "e.subject_item_level AS item_level, e.prior_state, "
     "e.prior_name AS prior_item, e.prior_quality, e.prior_item_level, "
@@ -39,7 +39,7 @@ def _change(row: dict) -> dict:
     level = int(row.get("item_level") or 0)
     prior = int(row.get("prior_item_level") or 0) if state == "item" else None
     return {
-        "character": str(row.get("character") or ""),
+        "character": str(row.get("member_name") or ""),
         "guild": str(row.get("guild") or ""),
         "kind": kind,
         "item": str(row.get("item") or ""),

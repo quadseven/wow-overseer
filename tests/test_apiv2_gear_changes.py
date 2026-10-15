@@ -17,7 +17,7 @@ from apiv2 import gear_changes  # noqa: E402
 SINCE = datetime.datetime(2026, 10, 15, 12)
 EVENTS = [
     {
-        "character": "Durga",
+        "member_name": "Durga",
         "guild": "Bonkers",
         "kind": "item_equip",
         "item": "Worn Boots",
@@ -27,7 +27,7 @@ EVENTS = [
         "at": SINCE + datetime.timedelta(hours=4),
     },
     {
-        "character": "Velo",
+        "member_name": "Velo",
         "guild": "Bonkers",
         "kind": "item_equip",
         "item": "Wool Gloves",
@@ -37,7 +37,7 @@ EVENTS = [
         "at": SINCE + datetime.timedelta(hours=3),
     },
     {
-        "character": "Mirra",
+        "member_name": "Mirra",
         "guild": "Cave",
         "kind": "item_equip",
         "item": "Brightwood Staff",
@@ -50,7 +50,7 @@ EVENTS = [
         "at": SINCE + datetime.timedelta(hours=2),
     },
     {
-        "character": "Tharn",
+        "member_name": "Tharn",
         "guild": "Cave",
         "kind": "item_loot",
         "item": "Ashwood Bow",
@@ -108,3 +108,16 @@ class TestGearChanges(unittest.TestCase):
     def test_since_is_required_and_route_is_registered(self):
         self.assertIn("/api/v2/gear/changes", apiv2.ROUTES)
         self.assertEqual(self.get({})[0], 400)
+
+
+class TheSqlParsesOnMySql8(unittest.TestCase):
+    """2026-10-15: the deployed read answered 503 because the query aliased a
+    column as `character`, a MySQL 8 reserved word; the memory reader in the
+    tests never parses SQL."""
+
+    def test_no_reserved_word_is_used_as_a_bare_alias(self):
+        import re
+
+        aliases = re.findall(r"\bAS\s+([A-Za-z_]+)", gear_changes.CHANGES_SQL, re.I)
+        reserved = {"character", "key", "order", "group", "rank", "range"}
+        self.assertEqual(sorted(set(a.lower() for a in aliases) & reserved), [])
