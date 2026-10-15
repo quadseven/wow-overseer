@@ -387,3 +387,33 @@ class AToolIsKeptForTheHolderWhoUsesIt(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ARefusedSwapSaysWhyOnce(unittest.TestCase):
+    """#1014: the bridge logged one bare line per pass for an hour."""
+
+    def test_a_spare_inside_the_bag_it_replaces_names_that_bag(self):
+        inner = bag_upgrade.Member(
+            "Grog",
+            4,
+            worn=GROG.worn,
+            carried=(bag("Large Sack", 10, 7, entry=2657, inside=368082),),
+        )
+        (note,) = bag_upgrade.self_equip_notes([inner])
+        self.assertIn("Grog cannot put on Large Sack from Small Green Pouch", note)
+        self.assertIn("inside the bag it would replace", note)
+
+    def test_a_spare_with_no_item_id_says_so(self):
+        member = bag_upgrade.Member(
+            "Og", 4, worn=GROG.worn, carried=(bag("Satchel", 12, 3),)
+        )
+        (note,) = bag_upgrade.self_equip_notes([member])
+        self.assertIn("Og cannot put on Satchel from the backpack", note)
+        self.assertIn("item id was not read", note)
+
+    def test_a_note_is_logged_once_until_it_changes(self):
+        first = ["Grog cannot put on A from B: x"]
+        self.assertEqual(bag_upgrade.unseen_notes(set(), first), first)
+        self.assertEqual(bag_upgrade.unseen_notes(set(first), first), [])
+        other = ["Grog cannot put on A from B: y"]
+        self.assertEqual(bag_upgrade.unseen_notes(set(first), other), other)

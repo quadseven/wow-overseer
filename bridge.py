@@ -6156,6 +6156,8 @@ class Bridge(discord.Client):
         # contract: history is never re-announced.
         self._pending: dict[int, discord.abc.Messageable] = {}
         self._seen: set[int] = set()
+        # The bag refusals already logged, so a standing one is said once.
+        self._equip_notes_seen: set[str] = set()
         # (oldest row id, consecutive send failures) for the chat relay.
         self._stuck: tuple[int, int] = (0, 0)
         # Monotonic clock of the last kin muster, so a fight that produces
@@ -9894,7 +9896,9 @@ class Bridge(discord.Client):
         guids so the family hand-over leaves them alone.
         """
         equips = bag_upgrade.self_equips(members)
-        _log_capped("bags", bag_upgrade.self_equip_notes(members))
+        notes = bag_upgrade.self_equip_notes(members)
+        _log_capped("bags", bag_upgrade.unseen_notes(self._equip_notes_seen, notes))
+        self._equip_notes_seen = set(notes)
         if not equips:
             return set()
         seen = await asyncio.to_thread(_recent_bag_equip_keys, GIVE_RETRY_MINUTES)
