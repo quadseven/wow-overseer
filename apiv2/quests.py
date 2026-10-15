@@ -29,7 +29,7 @@ GET /api/v2/questers
                  current: [{id, title, status}], completed, broken, taken,
                  abandoned}]}
 
-  The ten questers in questledger.QUESTERS order. One that is not on the
+  The questers in questledger.QUESTERS order (ten per guild). One that is not on the
   realm yet reads present: false with no level and no counts.
 
 A realm without the ledger table answers every quest as not_reached and
