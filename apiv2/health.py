@@ -40,6 +40,7 @@ import datetime as dt
 import json
 
 import council
+import guildrun
 from apiv2 import _scope, members, quests
 
 STUCK_HOURS = 2.0
@@ -52,9 +53,6 @@ COPPER_PER_GOLD = 10_000
 TITLE_MAX = 90
 EVIDENCE_MAX = 400
 
-# The outcomes of a run that went in (guildrun.WENT_IN), the only ones that say
-# anything about the dungeon.
-WENT_IN = ("cleared", "wiped", "abandoned", "timed out")
 
 # The marks the game's and the bridge's text use that ASCII has a plain twin for.
 NON_ASCII = {
@@ -69,12 +67,6 @@ NON_ASCII = {
 STUCK_AREAS = {"class quest": "quests", "hold": "gear", "ghost": "deaths"}
 
 NOW_SQL = "SELECT UNIX_TIMESTAMP() AS now_at"
-RUNS_SQL = (
-    "SELECT keyword, outcome, members, seconds_inside, "
-    "UNIX_TIMESTAMP(created_at) AS created_unix "
-    "FROM overseer_guild_run WHERE guild IN ({holes}) AND state = 'ended' "
-    "AND created_at >= NOW() - INTERVAL %s DAY ORDER BY id DESC LIMIT %s"
-)
 # The team sync's guild invites (bridge TEAM_SYNC_SOURCE), with the module's
 # answer in `result` and `detail`.
 INVITES_SQL = (
@@ -197,16 +189,16 @@ def dungeon_findings(runs: list, now_at: int, place=lambda k: k) -> list:
     the runs that failed."""
     by_keyword: dict = {}
     for r in runs or ():
-        if r.get("outcome") in WENT_IN:
+        if r.get("outcome") in guildrun.WENT_IN:
             by_keyword.setdefault(str(r.get("keyword") or ""), []).append(r)
     out = []
     for keyword, went in sorted(by_keyword.items()):
         if not keyword or len(went) < MIN_RUNS:
             continue
-        cleared = sum(1 for r in went if r["outcome"] == "cleared")
+        cleared = sum(1 for r in went if r["outcome"] == guildrun.CLEARED)
         if cleared / len(went) >= CLEAR_FLOOR:
             continue
-        failed = [r for r in went if r["outcome"] != "cleared"]
+        failed = [r for r in went if r["outcome"] != guildrun.CLEARED]
         lost = (
             sum(
                 int(r.get("seconds_inside") or 0) * max(1, _seats(r.get("members")))
@@ -345,11 +337,7 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
     runs = banks = []
     moved: dict = {}
     if guilds:
-        runs = rd.rows(
-            RUNS_SQL.format(holes=marks),
-            (*guilds, RUN_DAYS, RUNS_READ),
-            what="overseer_guild_run",
-        )
+        runs = guildrun.ended_since(rd, guilds, RUN_DAYS, RUNS_READ)
         banks = rd.rows(
             BANK_SQL.format(holes=marks), (COPPER_PER_GOLD, *guilds), what="guild"
         )

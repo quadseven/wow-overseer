@@ -19,6 +19,7 @@ sys.path.insert(0, str(HERE))
 
 import apiv2  # noqa: E402
 import families as families_module  # noqa: E402
+import guildrun  # noqa: E402
 import realmread  # noqa: E402
 from apiv2 import health  # noqa: E402
 from apiv2._context import Context  # noqa: E402
@@ -189,7 +190,7 @@ class Handler(unittest.TestCase):
     def test_the_handler_reads_and_ranks_highest_impact_first(self):
         answers = {
             health.NOW_SQL: [{"now_at": NOW}],
-            health.RUNS_SQL: [run("blackfathom", "timed out", ago=5 * HOUR)] * 10,
+            guildrun._RUN_SQL: [run("blackfathom", "timed out", ago=5 * HOUR)] * 10,
             health.BANK_SQL: [
                 {"guild": "Bonkers", "bank": 0, "broke": 63, "members": 71}
             ],
@@ -238,7 +239,8 @@ class Handler(unittest.TestCase):
         gap = realmread.MISSING_TABLE
         answers = {
             health.NOW_SQL: [{"now_at": NOW}],
-            health.RUNS_SQL: gap,
+            guildrun._RUN_SQL: gap,
+            guildrun._RUN_SQL_THIN: gap,
             health.BANK_SQL: gap,
             health.BANK_MOVED_SQL: gap,
             health.INVITES_SQL: gap,
