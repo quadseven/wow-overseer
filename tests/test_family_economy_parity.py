@@ -490,10 +490,18 @@ class TheOtherGuildPaysItsDues(unittest.TestCase):
 
 class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
     def run_bank(
-        self, cohort, purse, master="Zug", tabs=0, natural_names=None, others=20_000
+        self,
+        cohort,
+        purse,
+        master="Zug",
+        tabs=0,
+        natural_names=None,
+        others=20_000,
+        fund_shortfall=0,
     ):
         world, log = {}, _Log()
         me = TheSelf(world)
+        me._fund_shortfall = {master: fund_shortfall}
         names = sorted(HORDE.names) if cohort else ALLIANCE
         ns = _base(world)
         ns.update(
@@ -623,6 +631,17 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
             any("under the 10g a trip is made for" in ln for ln in log.lines),
             log.lines,
         )
+
+    def test_a_few_gold_is_banked_when_members_are_waiting_for_funding(self):
+        world, me, _ = self.run_bank(
+            None,
+            purse=guildbank.FLOAT_COPPER + 50_000,
+            master="Grug",
+            tabs=1,
+            fund_shortfall=65 * 10_000,
+        )
+        self.assertEqual([("guild bank", "Grug", "at:1:3,3,3", None)], me.claims)
+        self.assertEqual([("Grug", "bank deposit 50000")], world["guild_rows"])
 
     def test_the_other_members_keep_their_gold(self):
         world, _me, _log = self.run_bank(

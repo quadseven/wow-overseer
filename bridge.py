@@ -6235,8 +6235,10 @@ class Bridge(discord.Client):
         # start. The cooldown is read from the command log.
         self._train_walks: dict = {}
         # WHAT EACH GUILD MASTER WOULD WITHDRAW FOR THE GUILD FUND
-        # (guildfund.py), so the guild bank pass walks it to a vault.
+        # (guildfund.py), and what its members still need, so the bank pass
+        # walks for small deposits when the fund is short.
         self._fund_wants: dict = {}
+        self._fund_shortfall: dict = {}
         # GUILD CRAFTING CORPS STEPS UNDER WAY: holder -> monotonic start. In
         # memory like the dues walks; every cooldown is read from the command
         # log, which a restart does not forget.
@@ -13630,6 +13632,8 @@ class Bridge(discord.Client):
         # THE GUILD FUND NEEDS THE VAULT TOO (guildfund.py): the master walks
         # there to withdraw what it posts to the members.
         fund = sum(getattr(self, "_fund_wants", {}).get(n, 0) for n in names)
+        # Waiting refunds and training make even a small deposit worth a walk.
+        shortfall = sum(getattr(self, "_fund_shortfall", {}).get(n, 0) for n in names)
         if not any((actions, deposits, items, withdrawals)):
             if not fund:
                 log.info("guild bank: nobody is carrying more than the float")
@@ -13637,7 +13641,7 @@ class Bridge(discord.Client):
             log.info("guild bank: the guild fund needs the vault: %s to withdraw "
                      "for the members", guildfund.gold(fund))
         if (not fund and not withdrawals
-                and _gold_waits_for_a_vault(actions, items, deposits, cohort)):
+                and _gold_waits_for_a_vault(actions, items, deposits, shortfall, cohort)):
             return
         # ONE POSITION READ, FOR TWO QUESTIONS (infra#3804): which map the
         # LEADER aims from, and whether each DEPOSITOR is at the vault now.
@@ -14820,6 +14824,7 @@ class Bridge(discord.Client):
         paid = guildfund.dues_paid(facts["dues"], facts["renames"])
         plan = guildfund.plan(master, facts["members"], facts["bank"], book, paid, roster)
         self._fund_wants[master] = plan.withdraw
+        self._fund_shortfall[master] = plan.shortfall
         _log_capped("guild fund", plan.notes)
         carried = min(book.carried, int(facts.get("purse") or 0))
         log.info("%s%s", guildfund.pass_line(facts.get("guild"), facts["bank"], carried,
@@ -29001,12 +29006,11 @@ def _guild_master(setup: dict | None) -> str:
     return str((setup or {}).get("master") or "")
 
 
-def _gold_waits_for_a_vault(actions, items, deposits, cohort=None) -> bool:
+def _gold_waits_for_a_vault(actions, items, deposits, shortfall, cohort=None) -> bool:
     """True, and said, when gold alone is all the guild bank pass would walk
-    for and it is under the walk's worth (#775). A few gold is not a trip to a
-    capital: the passing pass banks it the next time the master stands at a
-    vault."""
-    if actions or items or not deposits or guildbank.worth_a_walk(deposits):
+    for and it is under the walk's worth (#775). A few gold waits for the
+    next vault only while the fund has no waiting refunds or training."""
+    if actions or items or not deposits or shortfall or guildbank.worth_a_walk(deposits):
         return False
     log.info(
         "guild bank: %s carries %s above what it keeps, under the %dg "
