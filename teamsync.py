@@ -47,7 +47,16 @@ REMOVES_PER_PASS = 2
 INVITES_PER_PASS = 2
 RENAMES_PER_PASS = 6
 RESETS_PER_PASS = 2
-RECRUIT_MAX_LEVEL = 10
+# THE LEVEL A RECRUIT MAY HAVE, by seat (#1015). A raid seat keeps what it
+# earns, so it takes only a level-1 character, the band the realm's natural
+# reset set (Overseer.Recruit.LevelMin/LevelMax). A quester is reset to level
+# 1 with nothing once it holds its name, so its seat may take a rotating bot up
+# to level 10: no rotating bot of a quester's class and race is still level 1
+# (2026-10-15: the lowest is level 5). RECRUIT_MAX_LEVEL is the higher of the
+# two, what the bridge reads candidates up to, and the realm's LevelMax.
+RAID_RECRUIT_MAX_LEVEL = 1
+QUESTER_RECRUIT_MAX_LEVEL = 10
+RECRUIT_MAX_LEVEL = max(RAID_RECRUIT_MAX_LEVEL, QUESTER_RECRUIT_MAX_LEVEL)
 RESET_COMMAND = "reset-level-1"
 
 # HOW LONG A REFUSED CANDIDATE IS LEFT ALONE. The module answers a refused
@@ -198,13 +207,20 @@ def logs_in_by_itself(candidate: dict) -> bool:
     return int(candidate.get("account_type") or 0) == ROTATING_ACCOUNT_TYPE
 
 
+def max_level(seat) -> int:
+    """The highest level a recruit for `seat` may have (see the constants)."""
+    if isinstance(seat, raidteams.Quester):
+        return QUESTER_RECRUIT_MAX_LEVEL
+    return RAID_RECRUIT_MAX_LEVEL
+
+
 def _best_candidate(seat, candidates: list, taken: set):
     fit = sorted(
         (
             c
             for c in candidates
             if _fits(c, seat)
-            and int(c.get("level") or 0) <= RECRUIT_MAX_LEVEL
+            and int(c.get("level") or 0) <= max_level(seat)
             and logs_in_by_itself(c)
             and c["name"] not in taken
         ),
@@ -330,14 +346,13 @@ def _unfilled_lines(
     for seat in unfilled:
         pick = _best_candidate(seat, candidates, taken)
         if pick is None:
-            missing.append(seat.name)
+            missing.append("%s (level %d or under)" % (seat.name, max_level(seat)))
         else:
             taken.add(pick["name"])
     out = []
     if missing:
         out.append(
-            "no candidate at level %d or under on a rotating random-bot "
-            "account fits %s" % (RECRUIT_MAX_LEVEL, ", ".join(missing))
+            "no candidate on a rotating random-bot account fits %s" % ", ".join(missing)
         )
     if len(missing) == len(unfilled):
         return out
