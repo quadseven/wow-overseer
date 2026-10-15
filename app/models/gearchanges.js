@@ -6,8 +6,11 @@ export function pageKey(member = "") { return member ? "member:" + member.toLowe
 export function since(key, storage, now = Date.now()) {
   try {
     storage = storage || window.localStorage;
-    const value = Number(storage.getItem(PREFIX + key));
-    if (value > 0) return new Date(value).toISOString();
+    const stored = storage.getItem(PREFIX + key);
+    const value = stored === null ? NaN : Number(stored);
+    if (Number.isSafeInteger(value) && value > 0 && value <= 8640000000000000) {
+      return new Date(value).toISOString();
+    }
     if (!initial.has(key)) initial.set(key, new Date(now - 86400000).toISOString());
     return initial.get(key);
   } catch (error) {

@@ -12,6 +12,31 @@ APP = HERE / "app"
 
 
 class TestGearChangesView(unittest.TestCase):
+    def test_invalid_stored_times_fall_back_to_the_first_visit_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / "app"
+            shutil.copytree(APP, root)
+            (root / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+            module = (root / "models/gearchanges.js").as_uri()
+            code = (
+                "const M = await import(%s); const now = 200000000;\n"
+                "const values = ['-1', '', '1.5', '9007199254740992', '8640000000000001'];\n"
+                "const got = values.map(value => M.since('key-' + value, {getItem: () => value}, now));\n"
+                "process.stdout.write(JSON.stringify(got));\n"
+            ) % json.dumps(module)
+            result = subprocess.run(
+                [shutil.which("node"), "--input-type=module", "-e", code],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            ["1970-01-02T07:33:20.000Z"] * 5,
+        )
+
     def test_storage_is_read_and_written_per_page_key(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp) / "app"
