@@ -13641,7 +13641,8 @@ class Bridge(discord.Client):
             log.info("guild bank: the guild fund needs the vault: %s to withdraw "
                      "for the members", guildfund.gold(fund))
         if (not fund and not withdrawals
-                and _gold_waits_for_a_vault(actions, items, deposits, shortfall, cohort)):
+                and _gold_waits_for_a_vault(
+                    actions, items, deposits, shortfall=shortfall, cohort=cohort)):
             return
         # ONE POSITION READ, FOR TWO QUESTIONS (infra#3804): which map the
         # LEADER aims from, and whether each DEPOSITOR is at the vault now.
