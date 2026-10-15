@@ -79,7 +79,8 @@ WHAT IT DOES NEXT (`next_move`):
             the price. A walk to it that failed is not asked again at once
             (guildjobs.pvp_walk_cooldown).
   waiting   its newest `bg-queue` row was accepted (queued/already), did
-            not fail, and is under WAITING_MINUTES old.
+            not fail, and is under WAITING_MINUTES old. Older, it is asked
+            again (queue) and the member stays held meanwhile (Move.holds).
   queue     otherwise: `bg-queue <key>` (quadseven/mod-overseer, kind
             'guild'). A member that leads a group queues the group.
 
@@ -518,6 +519,14 @@ FAILED = frozenset({"error", "unchanged"})
 class Move:
     kind: str
     said: str
+    # A queue accepted past WAITING_MINUTES: asked again (kind QUEUE), but the
+    # member is still in the game's queue and stays held until the answer.
+    queued: bool = False
+
+    @property
+    def holds(self) -> bool:
+        """Whether the member is held from other jobs: inside, or queued."""
+        return self.kind in (INSIDE, WAITING) or self.queued
 
 
 def _pvp_rows(name: str, recent):
@@ -581,12 +590,18 @@ def next_move(aim: Aim, map_id, carried: bool, recent) -> Move:
                 "%s waits in the %s queue, %d honor short of %s"
                 % (aim.name, bg.name, aim.short, aim.item),
             )
+        stale = _queue_accepted(newest)
+    else:
+        stale = False
     if aim.filler:
-        return Move(QUEUE, "%s queues %s to fill the cohort" % (aim.name, bg.name))
+        return Move(
+            QUEUE, "%s queues %s to fill the cohort" % (aim.name, bg.name), stale
+        )
     return Move(
         QUEUE,
         "%s queues %s for honor toward %s (%d of %d)"
         % (aim.name, bg.name, aim.item, min(aim.held, aim.honor), aim.honor),
+        stale,
     )
 
 
@@ -688,7 +703,7 @@ def _group_members(aims: dict, moves: dict, by_name: dict, cooling: set) -> dict
     for name, a in aims.items():
         move = moves[name]
         key = (a.battleground.key, bracket_of(a.level), a.faction)
-        if move.kind in (INSIDE, WAITING):
+        if move.holds:
             groups.setdefault(key, ([], []))[0].append(name)
         elif move.kind == QUEUE and not a.filler:
             s = by_name.get(name)
