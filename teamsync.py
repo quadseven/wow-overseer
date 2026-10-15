@@ -16,7 +16,8 @@ recruit and takes its name.
 QUESTERS (raidteams.QUESTERS, #927). A quester's seat is recruited, matched
 and renamed like a raid seat, after the raid seats. Once a quester holds its
 name and its guild, a `naturalize reset-level-1` row starts it over at level 1
-with nothing at its race's start (natural.py), once: a name the ledger already
+with nothing at its race's start (natural.py), and a death knight's
+`reset-level-55` starts it over at 55 in its own start, once: a name the ledger already
 holds `reset` for is never asked again. The reset waits for the name because
 the name is what says the character is a quester and not a raid recruit.
 
