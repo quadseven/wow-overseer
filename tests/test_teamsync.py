@@ -409,6 +409,35 @@ class Questers(unittest.TestCase):
             ],
         )
 
+    def test_an_in_flight_quester_invite_does_not_hold_other_seats(self):
+        acts = teamsync.plan(
+            "Bonkers",
+            _bonkers_full_raid(),
+            [ORC_WARLOCK, TROLL_ROGUE],
+            {"Randomlock"},
+            True,
+        )
+        self.assertEqual(
+            [(a.kind, a.target) for a in acts if a.kind == "invite"],
+            [("invite", "Randomrogue")],
+        )
+
+    def test_expired_invite_candidate_can_be_retried(self):
+        # Once the bridge's bounded pending window expires, the old target is
+        # no longer reserved and the next fitting candidate can be invited.
+        second = dict(ORC_WARLOCK, name="Secondlock")
+        acts = teamsync.plan(
+            "Bonkers",
+            _bonkers_full_raid(),
+            [ORC_WARLOCK, second],
+            {ORC_WARLOCK["name"]},
+            True,
+        )
+        self.assertEqual(
+            [(a.kind, a.target) for a in acts if a.kind == "invite"],
+            [("invite", "Secondlock")],
+        )
+
     def test_a_raid_seat_is_recruited_before_a_quester_seat(self):
         members = [m for m in _bonkers_full_raid() if m["name"] != "Hungrygrunt"]
         acts = teamsync.plan("Bonkers", members, [ORC_WARLOCK], set(), False)
