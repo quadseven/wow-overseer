@@ -674,7 +674,12 @@ def judged(
     route's floor (`route_rule`); anything else is recorded as the heuristic's.
     """
     if outcome.answers is None:
-        return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
+        status = (
+            f"{outcome.status}: {outcome.detail}"
+            if outcome.detail
+            else outcome.status
+        )
+        return replace(base, status=status, latency_ms=outcome.latency_ms)
     answer = outcome.answers["route"]
     return replace(
         base,

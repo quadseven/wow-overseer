@@ -15,6 +15,7 @@ Jev is the real client over a fake transport.
 """
 
 import asyncio
+import collections
 from dataclasses import replace
 import json
 import pathlib
@@ -450,6 +451,18 @@ class ShadowPassTest(unittest.TestCase):
         second = run([chest()])
         self.assertEqual([j.signature for j in first], [j.signature for j in second])
 
+    def test_unanswered_question_preserves_error_detail(self):
+        class FailingTransport:
+            def __call__(self, url, body, headers, timeout):
+                return 401, b"Unauthorized"
+
+        judgments = run([chest()], fake=FailingTransport())
+        self.assertTrue(judgments)
+        for j in judgments:
+            self.assertEqual(j.status, "error: http 401")
+            self.assertEqual(j.jev, "")
+
+
 
 class DescriptionTest(unittest.TestCase):
     def test_the_card_drops_what_the_judgment_does_not_need(self):
@@ -638,6 +651,86 @@ class BridgeWiringTest(unittest.TestCase):
         marked = replace(jev_items.heuristic_acted([_JUDGED])[0])
         scope["_insert_jev_judgment"](marked)
         self.assertEqual(executed[0][-2], jev.HEURISTIC)
+
+
+class JevRecordTest(unittest.TestCase):
+    def _make_recorder(self):
+        start = BRIDGE.index("    async def _jev_record(")
+        end = BRIDGE.index("\n    async def ", start + 10)
+        lines = BRIDGE[start:end].splitlines()
+        dedented = "\n".join(
+            line[4:] if line.startswith("    ") else line for line in lines
+        )
+        logs = []
+
+        class FakeLog:
+            def info(self, msg, *args):
+                logs.append(msg % args if args else msg)
+
+        recorded = []
+
+        def fake_insert(judgment):
+            recorded.append(judgment)
+
+        scope = {
+            "asyncio": asyncio,
+            "collections": collections,
+            "jev": jev,
+            "log": FakeLog(),
+            "_insert_jev_judgment": fake_insert,
+        }
+        exec(dedented, scope)  # noqa: S102 - bridge.py's own source
+
+        class Recorder:
+            def __init__(self):
+                self._jev_recorded = {}
+
+            record = scope["_jev_record"]
+
+        return Recorder(), logs, recorded
+
+    def test_a_question_with_a_well_formed_answer_is_counted_as_answered_and_recorded(
+        self,
+    ):
+        recorder, logs, recorded = self._make_recorder()
+        j = _JUDGED
+        asyncio.run(recorder.record(recorder, [j], "Grog"))
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0].key, j.key)
+        self.assertEqual(recorder._jev_recorded.get(j.key), j.signature)
+        self.assertTrue(
+            any("1 question(s) for Grog, 1 answered" in line for line in logs)
+        )
+        self.assertFalse(any("unanswered:" in line for line in logs))
+
+    def test_an_unanswered_question_logs_its_reason(self):
+        recorder, logs, recorded = self._make_recorder()
+        unanswered = replace(_JUDGED, jev="", status="error: http 401")
+        asyncio.run(recorder.record(recorder, [unanswered], "Oz,Zug"))
+        self.assertEqual(len(recorded), 1)
+        self.assertTrue(
+            any(
+                "1 question(s) for Oz,Zug, 0 answered, 0 agree, "
+                "0 carried out as Jev's, 1 new record(s), "
+                "unanswered: error: http 401" in line
+                for line in logs
+            )
+        )
+
+    def test_multiple_unanswered_questions_group_reasons(self):
+        recorder, logs, _recorded = self._make_recorder()
+        q1 = replace(_JUDGED, item_guid=1, jev="", status="timeout")
+        q2 = replace(_JUDGED, item_guid=2, jev="", status="error: http 401")
+        q3 = replace(_JUDGED, item_guid=3, jev="", status="error: http 401")
+        asyncio.run(recorder.record(recorder, [q1, q2, q3], "Oz,Zug"))
+        self.assertTrue(
+            any(
+                "3 question(s) for Oz,Zug, 0 answered, 0 agree, "
+                "0 carried out as Jev's, 3 new record(s), "
+                "unanswered: error: http 401 (2), timeout" in line
+                for line in logs
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -650,7 +650,12 @@ class Judgment:
 
 def _judged(base: Judgment, outcome: jev.Outcome, qid: str) -> Judgment:
     if outcome.answers is None:
-        return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
+        status = (
+            f"{outcome.status}: {outcome.detail}"
+            if outcome.detail
+            else outcome.status
+        )
+        return replace(base, status=status, latency_ms=outcome.latency_ms)
     answer = outcome.answers[qid]
     return replace(
         base,
@@ -1105,6 +1110,11 @@ def recipient_judgment(ask: RecipientAsk, outcome: jev.Outcome, mode: str) -> Ju
     `confidence` and `probabilities` are the Choice's own.
     """
     h = ask.holding
+    status = (
+        f"{outcome.status}: {outcome.detail}"
+        if outcome.detail and outcome.answers is None
+        else outcome.status
+    )
     base = Judgment(
         kind=KIND_GUILD,
         subject=h.holder,
@@ -1115,7 +1125,7 @@ def recipient_judgment(ask: RecipientAsk, outcome: jev.Outcome, mode: str) -> Ju
         heuristic=ask.heuristic,
         heuristic_why=ask.why,
         mode=mode,
-        status=outcome.status,
+        status=status,
         latency_ms=outcome.latency_ms,
     )
     if outcome.answers is None:

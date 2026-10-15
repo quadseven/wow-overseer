@@ -14,6 +14,7 @@ nothing in this file may call the database directly from an async handler.
 from __future__ import annotations
 
 import asyncio
+import collections
 import dataclasses
 import json
 import logging
@@ -12315,12 +12316,22 @@ class Bridge(discord.Client):
             await asyncio.to_thread(_insert_jev_judgment, judgment)
             self._jev_recorded[judgment.key] = judgment.signature
         answered = [j for j in judgments if j.jev]
+        unanswered = [j for j in judgments if not j.jev]
+        reason_suffix = ""
+        if unanswered:
+            counts = collections.Counter(j.status or "unanswered" for j in unanswered)
+            reasons = [
+                f"{k} ({v})" if v > 1 else k
+                for k, v in sorted(counts.items())
+            ]
+            reason_suffix = ", unanswered: " + ", ".join(reasons)
         log.info(
             "jev-shadow: %d question(s) for %s, %d answered, %d agree, "
-            "%d carried out as Jev's, %d new record(s)",
+            "%d carried out as Jev's, %d new record(s)%s",
             len(judgments), who, len(answered),
             sum(1 for j in answered if j.agree),
             sum(1 for j in judgments if j.acted == jev.JEV), len(fresh),
+            reason_suffix,
         )
 
     async def _hand_recipes(self, names: list, free_slots: dict) -> None:

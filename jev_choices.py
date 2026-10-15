@@ -75,7 +75,12 @@ def policy(kind: str, environ=None) -> jev.Policy:
 
 def _judged(base: Judgment, outcome: jev.Outcome, qid: str) -> Judgment:
     if outcome.answers is None:
-        return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
+        status = (
+            f"{outcome.status}: {outcome.detail}"
+            if outcome.detail
+            else outcome.status
+        )
+        return replace(base, status=status, latency_ms=outcome.latency_ms)
     answer = outcome.answers[qid]
     return replace(
         base,
