@@ -2519,6 +2519,18 @@ _BAG_FLOOR_WHY: dict[str, str] = {}
 _TOWN_PASS_NOTE: dict[tuple, str] = {}
 # The hold (its `since`) the reason was last logged for, per family key.
 _BAG_HOLD_SAID: dict[tuple, float] = {}
+# THE FLOOR'S LAST RESORT (#1000). Members at the bag floor whose latest
+# vendor pass found nothing to sell. The vendor pass writes them here with
+# what it could do (`_note_bag_floor`); the bank pass reads them when it
+# plans, so the floor's last resort - banking what the member does not use -
+# runs for exactly the members the hold is waiting on. A name leaves the set
+# the moment it is no longer at the floor or a vendor pass finds something
+# to sell.
+_BAG_FLOOR_DRY: set[str] = set()
+# What the bank pass did for a floor member, for the hold reason to name
+# (#1000). The bank's turn comes after the vendor's, so while it stands it
+# is the hold's latest news: what was banked, or that the bank is full.
+_BAG_BANKED_WHY: dict[str, str] = {}
 
 
 def _prune_bag_hold_stuck(families: dict) -> None:
@@ -2529,18 +2541,38 @@ def _prune_bag_hold_stuck(families: dict) -> None:
     floor_why = globals().get("_BAG_FLOOR_WHY", {})
     for name in floor_why.keys() - active:
         del floor_why[name]
+    floor_dry = globals().get("_BAG_FLOOR_DRY", set())
+    for name in set(floor_dry) - active:
+        floor_dry.discard(name)
+    banked_why = globals().get("_BAG_BANKED_WHY", {})
+    for name in banked_why.keys() - active:
+        del banked_why[name]
 
 
 def _note_bag_floor(names, free_slots: dict, rows: list, sellable: dict) -> None:
-    """Record what a vendor can do for each member at the bag floor."""
+    """Record what a vendor can do for each member at the bag floor.
+
+    Members at the floor whose vendor pass found nothing to sell are the
+    bank pass's floor list (#1000): the bank's last resort runs for exactly
+    them. A member that leaves the floor, or that the vendor pass can sell
+    for, leaves the list with it.
+    """
+    dry = globals().get("_BAG_FLOOR_DRY", set())
+    banked = globals().get("_BAG_BANKED_WHY", {})
     for name in names:
         free = (free_slots or {}).get(name)
         if isinstance(free, int) and 0 <= free <= bag_pressure.TOWN_RUN_FREE_SLOTS:
             _BAG_FLOOR_WHY[name] = bag_pressure.floor_reason(
                 name, int((sellable or {}).get(name, 0)), rows,
                 keep_names=OWNER_KEEPS)
+            if int((sellable or {}).get(name, 0)) == 0:
+                dry.add(name)
+            else:
+                dry.discard(name)
         else:
             _BAG_FLOOR_WHY.pop(name, None)
+            dry.discard(name)
+            banked.pop(name, None)
 
 
 def _note_town_pass(key: tuple, state, new, line: str, marks: dict) -> None:
@@ -2579,9 +2611,17 @@ def _bag_hold_why(names, at_least: float = 0.0) -> str:
     if progress is None or time.monotonic() - progress.since < at_least:
         return ""
     held = [name for name, _free in progress.best]
-    parts = [_BAG_FLOOR_WHY.get(name)
-             or "%s's bags have not been read by a vendor pass" % name
-             for name in held]
+    # The bank's turn comes after the vendor's: while its outcome stands it
+    # is the hold's latest news, so a floor member the bank acted on names
+    # what was banked, or that the bank is full (#1000).
+    banked = globals().get("_BAG_BANKED_WHY", {})
+    parts = []
+    for name in held:
+        if name in banked:
+            parts.append(banked[name])
+        else:
+            parts.append(_BAG_FLOOR_WHY.get(name)
+                         or "%s's bags have not been read by a vendor pass" % name)
     note = _TOWN_PASS_NOTE.get(key)
     if not note:
         state = _TOWN_ERRANDS.get(key)
@@ -28626,10 +28666,58 @@ def _plan_bank(names: list) -> "bank.Plan":
     # exactly the room the hold is waiting for.
     room_floor = (bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS
                   if _campaign_waiting(names) else 0)
-    return bank.plan(
+    # THE FLOOR'S LAST RESORT (#1000). Members the vendor pass left at the
+    # floor with nothing to sell bank what they do not use now. Read from the
+    # vendor pass's own list (`_BAG_FLOOR_DRY`), not recomputed: a count the
+    # bank derived from its own rules would eventually disagree with the
+    # sale it is standing in for, and the disagreement would be invisible.
+    dry = globals().get("_BAG_FLOOR_DRY") or set()
+    floor_bank = {str(name) for name in names if str(name) in dry}
+    planned = bank.plan(
         bank.members_from_rows(rows, names), bank.family_from_skills(held),
-        storage=storage, room_floor=room_floor,
+        storage=storage, room_floor=room_floor, floor_bank=floor_bank,
     )
+    _note_banked_why(names, planned, floor_bank)
+    return planned
+
+
+def _note_banked_why(names: list, plan, floor_bank: set) -> None:
+    """Record what the bank pass did for each floor member, for the hold.
+
+    The hold reason names the bank's outcome while it stands (#1000): what
+    was banked, or that the bank is full. A member the plan banked nothing
+    for - its bank had room and there was nothing worth the trip - has no
+    news, so a stale sentence never outlives the pass that wrote it.
+    """
+    banked = globals().get("_BAG_BANKED_WHY")
+    if banked is None:
+        return
+    for name in names:
+        if str(name) not in floor_bank:
+            continue
+        deposits = [
+            move for move in plan.moves
+            if str(getattr(move, "character", "")) == str(name)
+            and getattr(move, "verb", "") == bank.DEPOSIT
+            and getattr(move, "to", "") == bank.PERSONAL
+        ]
+        if deposits:
+            counts: dict[str, int] = {}
+            for move in deposits:
+                item = str(getattr(move, "item", "") or "an unnamed item")
+                counts[item] = counts.get(item, 0) + 1
+            named = ", ".join(
+                "%d %s" % (count, item) if count > 1 else item
+                for item, count in counts.items()
+            )
+            banked[str(name)] = "%s banked %d stack(s): %s" % (
+                name, len(deposits), named)
+        elif any("%s's bank is full" % name in str(note)
+                 for note in plan.notes):
+            banked[str(name)] = ("%s's bank is full, so its town pass cannot "
+                                 "make room" % name)
+        else:
+            banked.pop(str(name), None)
 
 
 # THE GUILD'S BANK FORECAST, READ ONCE PER GUILD BANK CYCLE PER FAMILY
