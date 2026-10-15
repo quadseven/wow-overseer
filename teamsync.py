@@ -34,6 +34,7 @@ PURE: plain values in, actions out.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 import raidteams
@@ -46,8 +47,28 @@ REMOVES_PER_PASS = 2
 INVITES_PER_PASS = 2
 RENAMES_PER_PASS = 6
 RESETS_PER_PASS = 2
-RECRUIT_MAX_LEVEL = 10
+# THE LEVEL A RECRUIT MAY HAVE, by seat (#1015). A raid seat keeps what it
+# earns, so it takes only a level-1 character, the band the realm's natural
+# reset set (Overseer.Recruit.LevelMin/LevelMax). A quester is reset to level
+# 1 with nothing once it holds its name, so its seat may take a rotating bot up
+# to level 10: no rotating bot of a quester's class and race is still level 1
+# (2026-10-15: the lowest is level 5). RECRUIT_MAX_LEVEL is the higher of the
+# two, what the bridge reads candidates up to, and the realm's LevelMax.
+RAID_RECRUIT_MAX_LEVEL = 1
+QUESTER_RECRUIT_MAX_LEVEL = 10
+RECRUIT_MAX_LEVEL = max(RAID_RECRUIT_MAX_LEVEL, QUESTER_RECRUIT_MAX_LEVEL)
 RESET_COMMAND = "reset-level-1"
+
+# HOW LONG A REFUSED CANDIDATE IS LEFT ALONE. The module answers a refused
+# invite with status `unchanged` and its reason in `result` (wow-overseer#1015:
+# 1,442 refusals in a day, every candidate re-asked every ten minutes, because
+# the pass read only `error` rows). A reason a later pass cannot change (the
+# candidate joined another guild, is of the other faction, or is flagged for
+# deletion) holds for six hours. Any other reason (the level band, the roster
+# size) is the realm's configuration, which can change, so it holds an hour.
+LASTING_REFUSALS = ("already in a guild", "the other faction", "flagged for deletion")
+REFUSAL_HOLD_MINUTES = 60
+LASTING_HOLD_MINUTES = 360
 
 # playerbots_account_type.account_type of the accounts the playerbot manager
 # logs in and out on its own (RNDbot). The other bot type, 2, is the AddClass
@@ -96,6 +117,59 @@ def open_seats(guild: str, member_names) -> list:
     return raid + [q for q in raidteams.QUESTERS.get(guild, ()) if q.name not in names]
 
 
+def refusal_reason(status: str, detail, result) -> str:
+    """The module's reason for refusing a row, or "" when it did not refuse.
+    An `error` row says it in `detail`; a refused guild verb comes back
+    `unchanged` with `{"outcome": "refused", "reason": ...}` in `result`."""
+    if detail:
+        return str(detail)
+    if isinstance(result, (str, bytes)):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            result = None
+    if isinstance(result, dict) and result.get("outcome") == "refused":
+        return str(result.get("reason") or "refused, no reason given")
+    return "no detail" if status == "error" else ""
+
+
+def refused_candidates(rows: list) -> dict:
+    """candidate -> reason for the invites the module refused recently enough
+    to hold. `rows` are invite rows: target_arg, status, detail, result and
+    age (minutes since written). The newest refusal per candidate decides:
+    the rows are walked oldest first (largest age first), so a newer row for
+    the same candidate always writes or clears its entry last."""
+    out = {}
+    for row in sorted(rows, key=lambda r: int(r.get("age") or 0), reverse=True):
+        reason = refusal_reason(
+            row.get("status") or "", row.get("detail"), row.get("result")
+        )
+        name = str(row.get("target_arg") or "")
+        if not reason or not name:
+            continue
+        lasting = any(word in reason for word in LASTING_REFUSALS)
+        hold = LASTING_HOLD_MINUTES if lasting else REFUSAL_HOLD_MINUTES
+        if int(row.get("age") or 0) < hold:
+            out[name] = reason
+        else:
+            out.pop(name, None)
+    return out
+
+
+def refusal_counts(rows: list, minutes: int = 30) -> dict:
+    """reason -> count of the rows refused in the last `minutes`."""
+    out = {}
+    for row in rows:
+        if int(row.get("age") or 0) >= minutes:
+            continue
+        reason = refusal_reason(
+            row.get("status") or "", row.get("detail"), row.get("result")
+        )
+        if reason:
+            out[reason] = out.get(reason, 0) + 1
+    return out
+
+
 def _fits(member: dict, seat) -> bool:
     return int(member.get("class_id") or 0) == seat.class_id and int(
         member.get("race") or 0
@@ -135,13 +209,20 @@ def logs_in_by_itself(candidate: dict) -> bool:
     return int(candidate.get("account_type") or 0) == ROTATING_ACCOUNT_TYPE
 
 
+def max_level(seat) -> int:
+    """The highest level a recruit for `seat` may have (see the constants)."""
+    if isinstance(seat, raidteams.Quester):
+        return QUESTER_RECRUIT_MAX_LEVEL
+    return RAID_RECRUIT_MAX_LEVEL
+
+
 def _best_candidate(seat, candidates: list, taken: set):
     fit = sorted(
         (
             c
             for c in candidates
             if _fits(c, seat)
-            and int(c.get("level") or 0) <= RECRUIT_MAX_LEVEL
+            and int(c.get("level") or 0) <= max_level(seat)
             and logs_in_by_itself(c)
             and c["name"] not in taken
         ),
@@ -210,6 +291,7 @@ def plan(
     pending: set,
     renames_on: bool,
     reset_done=None,
+    refused=None,
 ) -> list:
     """The actions for one pass over one approved guild: removals, then
     invites, then (when the module's rename verb is live) renames, then the
@@ -222,7 +304,10 @@ def plan(
     renames_on  whether the module's rename verb is live
     reset_done  names the naturalize ledger holds `reset` for, or None when
                 the ledger cannot be read
+    refused     candidate -> reason for invites the module refused within
+                their hold (refused_candidates); those are not asked again
     """
+    candidates = [c for c in candidates if c["name"] not in (refused or {})]
     names = {m["name"] for m in members}
     seated = recruits_in_guild(guild, members)
     actions = _removals(guild, names, pending)
@@ -263,14 +348,13 @@ def _unfilled_lines(
     for seat in unfilled:
         pick = _best_candidate(seat, candidates, taken)
         if pick is None:
-            missing.append(seat.name)
+            missing.append("%s (level %d or under)" % (seat.name, max_level(seat)))
         else:
             taken.add(pick["name"])
     out = []
     if missing:
         out.append(
-            "no candidate at level %d or under on a rotating random-bot "
-            "account fits %s" % (RECRUIT_MAX_LEVEL, ", ".join(missing))
+            "no candidate on a rotating random-bot account fits %s" % ", ".join(missing)
         )
     if len(missing) == len(unfilled):
         return out
@@ -293,14 +377,17 @@ def stall_reason(
     pending: set,
     actor_online: bool = True,
     refusals: dict | None = None,
+    refused: dict | None = None,
 ) -> str:
     """Why a pass with open seats moved nothing, or "" when no seat is open.
 
     A seat counts as open by name, so a recruit already in the guild that fits
     it (not yet renamed) still leaves the seat open. That case is the usual
     stall: the invites are done and the rename is what waits. `refusals` is
-    detail -> count for the recently refused rows.
+    reason -> count for the recently refused rows; `refused` the candidates
+    held after a refusal (refused_candidates).
     """
+    candidates = [c for c in candidates if c["name"] not in (refused or {})]
     opens = open_seats(guild, {m["name"] for m in members})
     if not opens:
         return ""
@@ -309,4 +396,9 @@ def stall_reason(
     unfilled = [s for s in opens if s.name not in seated]
     if unfilled:
         parts += _unfilled_lines(unfilled, members, candidates, pending, actor_online)
+        if refusals and not seated:
+            parts.append(
+                "the module refused: "
+                + ", ".join("%s x%d" % (r, n) for r, n in sorted(refusals.items()))
+            )
     return "%s has %d open seats: %s" % (guild, len(opens), "; ".join(parts))

@@ -39,7 +39,7 @@ class TheResetRow(unittest.TestCase):
                 _team_actor=lambda guild: "",
                 _team_members=lambda guild: members[guild],
                 _team_candidates=lambda guild: [],
-                _team_refusals=lambda: {},
+                _team_refusal_rows=lambda: [],
                 _insert_naturalize=lambda *a: written.append(("naturalize", *a)) or 1,
                 _insert_job=lambda *a: written.append(("job", *a)) or 1,
                 _insert_guild=lambda *a: written.append(("guild", *a)) or 1,
@@ -101,3 +101,43 @@ class ThePendingInviteWindow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheRefusedInvite(unittest.TestCase):
+    """#1015: the pass reads the module's refusal and does not re-invite."""
+
+    def test_a_candidate_refused_ten_minutes_ago_is_not_invited(self):
+        written = []
+        members = {"Bonkers": _bonkers_with_grakk()[:-1], "Cave": []}
+        lock = {
+            "name": "Randomlock",
+            "class_id": 9,
+            "race": 2,
+            "level": 4,
+            "account_type": teamsync.ROTATING_ACCOUNT_TYPE,
+        }
+        refused = [
+            {
+                "target_arg": "Randomlock",
+                "status": "unchanged",
+                "detail": "",
+                "age": 10,
+                "result": '{"outcome":"refused","reason":"too far above the guild"}',
+            }
+        ]
+        with (
+            mock.patch.multiple(
+                bridge,
+                _team_pending=lambda: set(),
+                _team_reset_done=lambda: set(),
+                _team_actor=lambda guild: "Zug",
+                _team_members=lambda guild: members[guild],
+                _team_candidates=lambda guild: [lock] if guild == "Bonkers" else [],
+                _team_refusal_rows=lambda: refused,
+                _insert_naturalize=lambda *a: written.append(("naturalize", *a)) or 1,
+                _insert_job=lambda *a: written.append(("job", *a)) or 1,
+                _insert_guild=lambda *a: written.append(("guild", *a)) or 1,
+            ),
+        ):
+            asyncio.run(bridge.Bridge._team_sync_once(types.SimpleNamespace()))
+        self.assertEqual([w for w in written if w[0] == "guild"], [])
