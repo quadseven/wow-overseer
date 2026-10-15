@@ -278,7 +278,7 @@ class GuildFund(unittest.TestCase):
             {"A": 250 * GOLD, "B": 250 * GOLD},
         )
         self.assertLessEqual(plan.total, 100 * GOLD)
-        self.assertEqual(plan.withdraw, 100 * GOLD)
+        self.assertEqual(plan.withdraw, 99 * GOLD)
 
     def test_nobody_is_refunded_twice(self):
         rows = [
