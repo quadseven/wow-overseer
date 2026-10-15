@@ -900,65 +900,6 @@ def _deposit_candidates(member, family, totals, storage):
 ROOM_CLASSES = frozenset({ITEM_CLASS_TRADE_GOODS, ITEM_CLASS_GEM})
 
 
-# THE BAG FLOOR'S LAST RESORT (#1000). The floor is the free slots
-# bag_pressure.TOWN_RUN_FREE_SLOTS, pinned equal below. A member at it whose
-# town pass found nothing to sell is the hold the bridge names "carries
-# nothing a vendor will buy": the vendor cannot help and the family waits.
-# The bank can, in this order:
-#
-#   1. profession stock the member's own professions do not need - the keeper
-#      rule's surplus, past the cap the holder's trade keeps;
-#   2. uncommon or better gear the member cannot wear now (a required level
-#      above the member's own);
-#
-# until the member is above the floor or the bank is full. Personal bank only
-# (`keeper` False): the guild bank's own rules do not know this errand. Quest
-# items, bags, routed stacks and the hearthstone never go down.
-BAG_FLOOR_FREE_SLOTS = 3
-
-
-def _floor_candidates(member, chosen, storage):
-    """(holding, why, keeper) for a member at the bag floor with nothing sold.
-
-    Surplus own stock first, unwearable uncommon-or-better gear second,
-    biggest piles first; no more than the slots short of above the floor,
-    and deposits already chosen count, because each of those hands a slot
-    back too.
-    """
-    need = BAG_FLOOR_FREE_SLOTS + 1 - member.bag_free - len(chosen)
-    if need <= 0 or storage is None:
-        return []
-    surplus = stock_surplus(member.carried, storage)
-    first, second = [], []
-    for holding in member.carried:
-        if len(first) + len(second) >= need:
-            break
-        if (
-            holding.guid in chosen
-            or holding.container_slots > 0
-            or holding.start_quest > 0
-            or holding.item.quest_item
-            or holding.guid in storage.routed
-        ):
-            continue
-        item = holding.item
-        if holding.guid in surplus:
-            first.append((holding, storage_reason(holding, storage, surplus), False))
-        elif (
-            item.equipment and item.quality >= 2 and item.required_level > member.level
-        ):
-            second.append(
-                (
-                    holding,
-                    "%s needs level %d and %s is level %d, so it waits in "
-                    "the bank until worn"
-                    % (item.name, item.required_level, member.name, member.level),
-                    False,
-                )
-            )
-    return first + second
-
-
 def _room_candidates(member, chosen, storage, room_floor):
     """(holding, why, keeper) for a member under `room_floor` free slots.
 
@@ -1218,15 +1159,7 @@ def _room_by_tab(storage):
     return room
 
 
-def plan(
-    members,
-    family,
-    *,
-    visit_limit=VISIT_LIMIT,
-    storage=None,
-    room_floor=0,
-    floor_bank=(),
-):
+def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None, room_floor=0):
     """Every bank move worth making, in the order it should be sent.
 
     DEPOSITS BEFORE WITHDRAWALS, per character, and the withdrawal budget is
@@ -1252,17 +1185,10 @@ def plan(
     plan as it was. A member under it also deposits its trade goods and gems
     (`_room_candidates`) up to the floor, and no withdrawal takes anybody below
     it, so a stack put down for room is not fetched straight back.
-
-    `floor_bank` (#1000) is the names at the bag floor whose town pass found
-    nothing to sell. After the ordinary and room candidates they also bank
-    what they do not use now (`_floor_candidates`): the profession stock
-    their own professions do not need, then the uncommon-or-better gear they
-    cannot wear, until they are above the floor or the bank is full.
     """
     totals = reagent_totals(members)
     moves, notes, guild = [], [], []
     guild_room = _room_by_tab(storage)
-    floor_names = set(floor_bank or ())
     for member in sorted(members, key=lambda m: m.name):
         candidates = _deposit_candidates(member, family, totals, storage)
         candidates += _room_candidates(
@@ -1271,16 +1197,6 @@ def plan(
             storage,
             room_floor,
         )
-        if (
-            storage is not None
-            and member.name in floor_names
-            and member.bag_free <= BAG_FLOOR_FREE_SLOTS
-        ):
-            candidates += _floor_candidates(
-                member,
-                {holding.guid for holding, _why, _keeper in candidates},
-                storage,
-            )
         deposits, sent, guild_room = _plan_deposits(
             member, candidates, storage, guild_room, visit_limit, notes
         )
