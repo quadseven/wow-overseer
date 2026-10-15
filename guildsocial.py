@@ -207,6 +207,8 @@ ASK_RAN_SQL = (
 ANSWER_STATE_SQL = (
     "UPDATE overseer_guild_answer SET state = %s WHERE id = %s AND state = 'yes'"
 )
+# The step that stopped a class quest ask's party (classask.stopped).
+ASK_REASON_SQL = "UPDATE overseer_guild_ask SET reason = %s WHERE id = %s"
 
 # What each member wears, with the stats gearscore reads and the columns
 # recap.verdict reads.
@@ -920,6 +922,7 @@ class Pass:
     replies: tuple = ()
     form: Formation | None = None
     notes: tuple = ()
+    reasons: tuple = ()  # (ask id, reason) the reason column to write
 
 
 def _past(when, now) -> bool:

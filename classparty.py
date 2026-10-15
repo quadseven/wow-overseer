@@ -48,6 +48,13 @@ THE FLOW, one task per party (the bridge's _run_class_party):
             withdrawn when no party formed). The members are free again the
             moment the PartyRun leaves the Board.
 
+WHERE IT STOPPED (#1001). A party that does not form keeps the step that
+stopped it in PartyRun.outcome: the meeting (each helper that did not reach
+the objective or stood too far from the leader, judge_meeting) or the invite
+(refused, with the module's reason, or not answered, invite_stopped). The
+bridge writes it on the ask's reason column (classask.stopped), and the
+members page names that step in place of "no party formed".
+
 THE HOLD. A member is held out of the dungeon passes and the guild jobs only
 while a PartyRun with its name is on the Board: from the pass that decides to
 form the party, through the meeting (PartyRun.meeting, at most MEET_SECONDS of
@@ -141,12 +148,14 @@ _LEADER_REFUSALS = (
 
 @dataclass(frozen=True)
 class UpAnswer:
-    """One reading of a party-up row: `state`, the sentence for the log and,
-    for a refusal that names a helper, the helper."""
+    """One reading of a party-up row: `state`, the sentence for the log, for a
+    refusal that names a helper the helper, and for any refusal the module's
+    reason (`why`)."""
 
     state: str
     said: str = ""
     name: str = ""
+    why: str = ""
 
 
 def _body(result) -> dict:
@@ -189,14 +198,23 @@ def judge_up(leader, status, detail, result) -> UpAnswer:
             "quest party yet" % (why or detail),
         )
     reason = why or detail or "the world refused the party and said nothing about why"
+    said = "%s's party was refused: %s" % (leader, reason)
     named = _HELPER_REFUSAL.match(reason)
     if named:
-        return UpAnswer(
-            HELPER, "%s's party was refused: %s" % (leader, reason), named.group(1)
-        )
+        return UpAnswer(HELPER, said, named.group(1), reason)
     if reason.startswith(_LEADER_REFUSALS):
-        return UpAnswer(LEADER, "%s's party was refused: %s" % (leader, reason))
-    return UpAnswer(BAD, "%s's party was refused: %s" % (leader, reason))
+        return UpAnswer(LEADER, said, why=reason)
+    return UpAnswer(BAD, said, why=reason)
+
+
+def invite_stopped(verdict) -> str:
+    """The step a party-up answer that formed no party stopped the party at,
+    as the ask's reason column keeps it (classask.stopped)."""
+    if verdict.state == WAITING:
+        return "the invite was not answered"
+    if verdict.state == UNSUPPORTED:
+        return "this worldserver does not seat a quest party"
+    return "the invite was refused: %s" % (verdict.why or verdict.said)
 
 
 def walk_unsupported(said) -> bool:
@@ -238,6 +256,18 @@ def _beside(at, lead) -> bool:
     )
 
 
+def _lost_words(run, walked, far, stands) -> str:
+    """Why each lost helper did not meet the leader, as the ask keeps it."""
+    where = run.spot.name or "the objective"
+    words = ["%s did not reach %s" % (h, where) for h in walked]
+    words += [
+        ("%s stood too far from %s" if h in stands else "%s was not seen beside %s")
+        % (h, run.leader)
+        for h in far
+    ]
+    return "; ".join(words)
+
+
 def judge_meeting(run, arrived, stands) -> Meeting:
     """Whether the leader and the helpers of `run` met at the objective.
 
@@ -246,7 +276,8 @@ def judge_meeting(run, arrived, stands) -> Meeting:
 
     A helper whose walk did not arrive, or that is not seen within
     classask.SEAT_RANGE_YARDS of the leader, is lost. The meeting fails when
-    the leader did not arrive or is not seen, or when every helper is lost."""
+    the leader did not arrive or is not seen, or when every helper is lost;
+    then `why` names each helper and what kept it away."""
     walked = tuple(h for h in run.helpers if h not in arrived)
     where = run.spot.name or "the objective"
     if run.leader not in arrived:
@@ -264,7 +295,12 @@ def judge_meeting(run, arrived, stands) -> Meeting:
     )
     lost = walked + far
     if len(lost) == len(run.helpers):
-        return Meeting(False, lost, far, "no helper met %s at %s" % (run.leader, where))
+        why = "no helper met %s at %s: %s" % (
+            run.leader,
+            where,
+            _lost_words(run, walked, far, stands),
+        )
+        return Meeting(False, lost, far, why)
     return Meeting(True, lost, far)
 
 
@@ -336,6 +372,9 @@ class PartyRun:
         self.meeting = False
 
     def form(self, now) -> None:
+        """The party is formed: no step stopped it, whatever an earlier
+        refusal of the leader said."""
+        self.outcome = ""
         self.meeting = False
         self.formed_at = now
         self.deadline = now + PARTY_SECONDS

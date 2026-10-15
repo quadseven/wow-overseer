@@ -51,6 +51,12 @@ refuses a roster member. Every ask still short after a pass names each
 guildmate that did not come and why, and counts the random bots by reason
 (Silence), so the operator reads who saw it and why each said no.
 
+WHERE A PARTY STOPPED IS KEPT (#1001). A yes taken back because its helper
+was called away (held for anything but a fight) writes the step on the ask's
+reason column (stopped, STOPPED), as classparty's flow does for an invite
+refused or a meeting missed, and the members page says that step in place of
+"no party formed".
+
 BOUNDED. An ask lives guildsocial.ASK_MINUTES and, filled, FILLED_GRACE_MINUTES
 more, unless a party is up for it: then the party's own clock (classparty.py)
 bounds it. A quest nobody answers holds nobody.
@@ -119,8 +125,15 @@ REFUSED = "refused by the world for this ask"
 OTHER_SIDE = "the other side"
 GUILDMATE = "a guildmate, who answers in guild chat"
 UNPICKED = "free, not picked this pass"
+NOT_READ = "no longer read in the world"
 
 _NUMBERS = {1: "one", 2: "two", 3: "three", 4: "four"}
+
+# The reason column of an ask whose party a step stopped starts with this
+# (stopped), as one whose party went and failed starts with "failed: ".
+STOPPED = "stopped: "
+# overseer_guild_ask.reason is 160 characters wide.
+REASON_CHARS = 160
 
 
 def enabled(environ=None) -> bool:
@@ -304,15 +317,19 @@ def _helper_choices(asker, free: dict, taken: set, need, refused=frozenset()) ->
 
 def _ended(ask, need, free, held, now, partied=frozenset()) -> str:
     """ "expire", "cancel" or "" for one live ask. An ask with a party up does
-    not run out by its own clock: the party's clock ends it."""
-    if ask.id not in partied and (
+    not run out by its own clock, nor end with its asker's help unread or
+    changed: the party's clock and its read of the quest log end it (#1001).
+    Its asker gone still ends it."""
+    up = ask.id in partied
+    if not up and (
         (ask.state == OPEN and _past(ask.expires_at, now))
         or (ask.state == FILLED and not _running(ask, now))
     ):
         return "expire"
     passing = held.get(ask.asker) in guildsocial.PASSING
-    gone = ask.asker not in free and not passing
-    if gone or need is None or need.move.quest != quest_of(ask):
+    if ask.asker not in free and not passing:
+        return "cancel"
+    if not up and (need is None or need.move.quest != quest_of(ask)):
         return "cancel"
     return ""
 
@@ -320,16 +337,31 @@ def _ended(ask, need, free, held, now, partied=frozenset()) -> str:
 def _leaving(yeses, free, held) -> list:
     """The yes rows of members no longer free, who are not just in combat."""
     return [
-        y.id
+        y
         for y in yeses
         if y.member not in free and held.get(y.member) not in guildsocial.PASSING
     ]
 
 
+def stopped(words) -> str:
+    """The reason column of an ask whose party a step stopped: STOPPED and the
+    step, which the members page says in place of "no party formed"."""
+    return (STOPPED + str(words))[:REASON_CHARS]
+
+
+def _busy_reason(ask, left, held) -> tuple:
+    """(ask id, reason) naming the helpers called away from this ask."""
+    words = "; ".join(
+        "%s was busy: %s" % (y.member, held.get(y.member) or NOT_READ) for y in left
+    )
+    return ask.id, stopped(words)
+
+
 def _close(live, by_member, yes_by_ask, free, held, now, partied=frozenset()) -> tuple:
-    """(expire, cancel, withdraw, still): the asks that end now, the yeses
-    taken back, and the asks still running."""
-    expire, cancel, withdraw, still = [], [], [], []
+    """(expire, cancel, withdraw, still, reasons): the asks that end now, the
+    yeses taken back, the asks still running, and the step that stopped each
+    still running ask a helper was called away from."""
+    expire, cancel, withdraw, still, reasons = [], [], [], [], []
     for ask in live:
         yeses = yes_by_ask.get(ask.id, [])
         how = _ended(ask, by_member.get(ask.asker), free, held, now, partied)
@@ -339,10 +371,13 @@ def _close(live, by_member, yes_by_ask, free, held, now, partied=frozenset()) ->
             cancel.append(ask.id)
         else:
             still.append(ask)
-            withdraw += _leaving(yeses, free, held)
+            left = _leaving(yeses, free, held)
+            withdraw += [y.id for y in left]
+            if left:
+                reasons.append(_busy_reason(ask, left, held))
             continue
         withdraw += [y.id for y in yeses]
-    return expire, cancel, withdraw, still
+    return expire, cancel, withdraw, still, reasons
 
 
 def _full_note(ask, need, seats) -> str:
@@ -381,7 +416,11 @@ def _answers(
     gone = set(withdraw)
     replies, filled, notes = [], [], []
     for ask in sorted(still, key=lambda a: a.id):
-        need = by_member[ask.asker]
+        need = by_member.get(ask.asker)
+        if need is None:
+            # Its party is up and the help went unread (_ended): the party
+            # works on, and draws no new yes meanwhile.
+            continue
         standing = [y for y in yes_by_ask.get(ask.id, []) if y.id not in gone]
         wanted = max(1, len(ask.roles_needed)) - len(standing)
         if wanted > 0:
@@ -430,7 +469,7 @@ def plan_pass(
     for a in answers or ():
         if a.state == YES:
             yes_by_ask.setdefault(a.ask_id, []).append(a)
-    expire, cancel, withdraw, still = _close(
+    expire, cancel, withdraw, still, reasons = _close(
         live, by_member, yes_by_ask, free, held, now, partied
     )
     gone = set(withdraw)
@@ -452,6 +491,7 @@ def plan_pass(
         posts=tuple(posts),
         replies=tuple(replies),
         notes=tuple(notes),
+        reasons=tuple(reasons),
     )
 
 
@@ -495,7 +535,7 @@ def _new_posts(by_member, free, asks, still, spoken, now, closing=frozenset()) -
                 target=target_of(move.quest),
                 target_label=move.title[:96],
                 roles_needed=guildsocial.roles_text((DPS,) * move.want),
-                reason=_fit("the class quest %s" % move.title, 160),
+                reason=_fit("the class quest %s" % move.title, REASON_CHARS),
                 said=ask_line(h),
                 minutes=ASK_MINUTES,
             )
