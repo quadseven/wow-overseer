@@ -30140,7 +30140,13 @@ def _team_candidates(guild: str) -> list:
             "t.account_type AS account_type "
             "FROM characters c LEFT JOIN guild_member gm ON gm.guid = c.guid "
             "LEFT JOIN acore_playerbots.playerbots_account_type t ON t.account_id = c.account "
-            "WHERE gm.guid IS NULL AND c.level <= %s AND c.deleteInfos_Account IS NULL",
+            "WHERE gm.guid IS NULL AND c.level <= %s AND c.deleteInfos_Account IS NULL "
+            # The quester reset refuses a character with an open auction or
+            # bid or a COD mail waiting (mod-overseer NaturalizeRefusal), and a
+            # recruit it refuses keeps its levels in the guild (#1015).
+            "AND NOT EXISTS (SELECT 1 FROM auctionhouse a "
+            "WHERE a.itemowner = c.guid OR a.buyguid = c.guid) "
+            "AND NOT EXISTS (SELECT 1 FROM mail m WHERE m.receiver = c.guid AND m.cod > 0)",
             (teamsync.RECRUIT_MAX_LEVEL,),
         )
         return [dict(r) for r in cur.fetchall()
