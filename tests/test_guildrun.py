@@ -1243,6 +1243,34 @@ class JevChoosesWithAConfidence(unittest.TestCase):
 
 
 class TheOutcomeIsReadOffTheRow(unittest.TestCase):
+    def test_blackfathom_room_uses_the_nearest_encounter_spawn(self):
+        position = {"pos_x": 12, "pos_y": 34, "pos_z": -40}
+        bosses = [
+            {"name": "Gelihast", "x": 500, "y": 500, "z": -40},
+            {"name": "Twilight Lord Kelris", "x": 13, "y": 35, "z": -40},
+        ]
+        self.assertEqual(
+            guildrun.blackfathom_room(position, bosses),
+            "near Twilight Lord Kelris (x 12, y 34, z -40)",
+        )
+
+    def test_blackfathom_timeout_keeps_the_last_room_and_reason(self):
+        seen = guildrun.outcome_from_row(
+            {
+                "status": "applied",
+                "keyword": "blackfathom",
+                "last_room": "near Twilight Lord Kelris (x 12, y 34, z -40)",
+                "detail": "the run ran out of time",
+                "result": '{"outcome":"timed out","why":"the run ran out of time",'
+                '"bosses_done":4,"bosses_total":7}',
+            }
+        )
+        self.assertEqual(
+            seen["why"],
+            "Last room: near Twilight Lord Kelris (x 12, y 34, z -40); "
+            "the run ran out of time",
+        )
+
     def test_a_cleared_run(self):
         seen = guildrun.outcome_from_row(
             {

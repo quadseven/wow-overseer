@@ -248,6 +248,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: one guild's progress, as the Guilds view draws it.
 - Example: `overseer get /api/v2/guild guild=cave`
 
+## `GET /api/v2/health`
+
+- Query: none
+- Answers: the open problems, highest impact first.
+- Example: `overseer get /api/v2/health`
+
 ## `GET /api/v2/operator`
 
 - Query: none

@@ -42,6 +42,70 @@ bridge = _import_bridge()
 bridge._COMPLETED_PASSES.add("guild_jobs")
 
 
+class BlackfathomRunLocation(unittest.TestCase):
+    def test_active_run_saves_its_room_before_the_party_leaves(self):
+        writes = []
+
+        class Cursor:
+            def execute(self, sql, args=()):
+                if sql.startswith("SELECT r.id, r.state"):
+                    self.rows = [
+                        {
+                            "id": 7,
+                            "state": "inside",
+                            "keyword": "blackfathom",
+                            "tank": "Tank",
+                            "members": "Tank:tank:warrior:25",
+                            "last_room": "",
+                            "status": "verifying",
+                            "stale": 0,
+                            "result": '{"phase":"inside","bosses_done":4}',
+                        }
+                    ]
+                elif "FROM overseer_snapshot" in sql:
+                    self.rows = [{"pos_x": 12, "pos_y": 34, "pos_z": -40}]
+                elif "FROM acore_world.instance_encounters" in sql:
+                    self.rows = [
+                        {
+                            "name": "Twilight Lord Kelris",
+                            "x": 13,
+                            "y": 35,
+                            "z": -40,
+                        }
+                    ]
+                else:
+                    writes.append((sql, args))
+                    self.rows = []
+
+            def fetchall(self):
+                return self.rows
+
+            def fetchone(self):
+                return self.rows[0] if self.rows else None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        with mock.patch.object(bridge, "_connect", Connection):
+            self.assertEqual(bridge._follow_guild_runs(), 1)
+        self.assertEqual(
+            writes[0][1][-2], "near Twilight Lord Kelris (x 12, y 34, z -40)"
+        )
+
+
 def row(name, level, class_id, **kw):
     out = {
         "name": name,
