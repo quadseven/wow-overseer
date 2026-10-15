@@ -386,6 +386,13 @@ def safe_self_equip_spares(member):
     ]
 
 
+def _refusal_reason(bag, target):
+    """Why the equip verb cannot put `bag` on in place of `target`."""
+    if bag.inside and bag.inside == target.guid:
+        return "it is inside the bag it would replace"
+    return "its item id was not read"
+
+
 def self_equip_notes(members):
     """One explanation per holder whose bigger carried bags cannot be worn."""
     notes = []
@@ -403,9 +410,19 @@ def self_equip_notes(members):
                 "the backpack",
             )
             notes.append(
-                "%s cannot put on %s from %s" % (member.name, bag.name, container)
+                "%s cannot put on %s from %s: %s"
+                % (member.name, bag.name, container, _refusal_reason(bag, target))
             )
     return notes
+
+
+def unseen_notes(seen, notes):
+    """The notes not already logged on an earlier pass, in order.
+
+    A refusal that stands for an hour is one fact, not one line per pass; it
+    is said again only when its text changes.
+    """
+    return [note for note in notes if note not in seen]
 
 
 def self_equips(members):
