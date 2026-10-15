@@ -1810,14 +1810,35 @@ def _progress(result: dict) -> dict:
     }
 
 
+def blackfathom_room(position: dict, bosses: list) -> str:
+    """The last known position, labelled by its closest encounter spawn."""
+    x, y, z = (float(position["pos_" + axis]) for axis in "xyz")
+    location = "x %.0f, y %.0f, z %.0f" % (x, y, z)
+    if not bosses:
+        return "map 48 (%s)" % location
+    boss = min(
+        bosses,
+        key=lambda b: (
+            (x - float(b["x"])) ** 2
+            + (y - float(b["y"])) ** 2
+            + (z - float(b["z"])) ** 2
+        ),
+    )
+    return "near %s (%s)" % (boss["name"], location)
+
+
 def _ended(row: dict, result: dict) -> dict:
     outcome = str(result.get("outcome") or "")
     notable = result.get("loot_notable") or []
     ilvl_start, ilvl_end = _num(result, "ilvl_start"), _num(result, "ilvl_end")
+    why = str(result.get("why") or row.get("detail") or "")
+    room = str(row.get("last_room") or "")
+    if outcome == "timed out" and row.get("keyword") == "blackfathom" and room:
+        why = "Last room: %s; %s" % (room, why or "the run ran out of time")
     out = {
         "state": ENDED,
         "outcome": outcome if outcome in OUTCOMES else "lost",
-        "why": str(result.get("why") or row.get("detail") or "")[:255],
+        "why": why[:255],
         "loot_items": _num(result, "loot_items"),
         "loot_notable": ",".join(str(x) for x in notable if str(x).isdigit())[:200],
         "ilvl_gained": (ilvl_end - ilvl_start) if (ilvl_start and ilvl_end) else 0,
