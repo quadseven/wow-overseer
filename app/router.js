@@ -126,6 +126,7 @@ export function resolve(route) {
     if (p.length > 2) return { redirect: "#/quests/" + encodeURIComponent(p[1]) };
     return { view: "quests", section: "quests", params: p[1] ? { id: p[1] } : {} };
   }
+  if (top === "gear-changes") return { view: "gearchanges", section: "members", params: {} };
   if (top === "raid") {
     const g = (p[2] || "").toLowerCase();
     if (p[1] !== "mc" || !isGuild(g)) return { redirect: guildHome("#/raid/mc/") };

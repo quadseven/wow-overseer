@@ -24,6 +24,8 @@ import { byName, stuckFor } from "../models/roster.js";
 import { nowSeconds } from "../models/time.js";
 import { guildSlug } from "../families.js";
 import { badgesCard, CSS as ACH_CSS } from "./_achievements.js";
+import { pageKey, since, markSeen } from "../models/gearchanges.js";
+import { renderFeed } from "./gearchanges.js";
 
 const TABS = [["overview", "Overview"], ["gear", "Gear"], ["quests", "Quests"], ["bags", "Inventory"], ["activity", "Activity"]];
 const TAB_OF = { upgrades: "gear", bank: "bags" };
@@ -34,7 +36,7 @@ function q(name) { return "?name=" + encodeURIComponent(name); }
 export function readsFor(name, tab) {
   const n = q(name);
   switch (tab) {
-    case "gear": return ["/api/armory/member" + n, "/api/v2/training" + n];
+    case "gear": return ["/api/armory/member" + n, "/api/v2/training" + n, "/api/v2/gear/changes?since=" + encodeURIComponent(since(pageKey(name))) + "&member=" + encodeURIComponent(name)];
     case "upgrades": return ["/api/v2/upgrades" + n];
     case "quests": return ["/api/v2/classchain" + n, "/api/client/quests" + n];
     case "bags": return ["/api/client/bags" + n];
@@ -172,10 +174,12 @@ export function gearTab(ctx, m) {
   const n = q(m.name);
   const arm = read(ctx, "/api/armory/member" + n);
   const tr = read(ctx, "/api/v2/training" + n);
+  const key = pageKey(m.name);
+  const changes = read(ctx, "/api/v2/gear/changes?since=" + encodeURIComponent(since(key)) + "&member=" + encodeURIComponent(m.name));
   const wait = pendingRead(arm, 3);
   const data = arm.data || {};
   const card = wait || paperdoll(data.member, data.doll, { bare: true });
-  return html`${seg("Gear views", [{ label: "Paperdoll", href: href(m.name, "gear"), current: true }, { label: "Upgrades", href: href(m.name, "upgrades") }])}<div class="pf-gear">${card}</div><div class="pf-gear">${tr.data ? standing(tr.data, m.name) : pendingRead(tr, 1)}</div>`;
+  return html`${seg("Gear views", [{ label: "Paperdoll", href: href(m.name, "gear"), current: true }, { label: "Upgrades", href: href(m.name, "upgrades") }])}<div class="pf-gear">${card}</div><div class="pf-gear">${tr.data ? standing(tr.data, m.name) : pendingRead(tr, 1)}</div><section><h2>Gear since your last visit</h2>${changes.data ? renderFeed(changes.data, key, m.name) : pendingRead(changes, 1)}</section>`;
 }
 
 function upgradesTab(ctx, m) {
@@ -274,7 +278,7 @@ function body(ctx, m, roster) {
 }
 
 export default {
-  css: ["views/members.css", ACH_CSS],
+  css: ["views/members.css", "views/gearchanges.css", ACH_CSS],
   // The roster first: a name it does not hold is not a guild member, and that
   // member's own reads would only be refused. Once the roster is in and holds
   // the name, main.js widens the reads to the tab's.
@@ -296,6 +300,10 @@ export default {
   after(main, ctx) {
     bindTrees(main);
     mountModels(main);
+    main.querySelectorAll("[data-mark-seen]").forEach((button) => button.addEventListener("click", () => {
+      markSeen(button.getAttribute("data-mark-seen"));
+      window.location.reload();
+    }));
     if (ctx.params.tab === "upgrades") {
       const up = ctx.get("/api/v2/upgrades" + q(ctx.params.name)).data;
       if (up) bindUpgrades(main, up);

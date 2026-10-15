@@ -236,6 +236,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: what a dungeon drops that beats what a family wears.
 - Example: `overseer get /api/v2/dungeonups family=grug`
 
+## `GET /api/v2/gear/changes`
+
+- Query: `since`, `member`, `guild`
+- Answers: recent loot and equips.
+- Example: `overseer get /api/v2/gear/changes since=X`
+
 ## `GET /api/v2/goal`
 
 - Query: `guild`
