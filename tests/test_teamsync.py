@@ -531,3 +531,86 @@ class Questers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+REFUSED_BAND = (
+    '{"outcome":"refused","reason":"too far above the guild to be doing what it does",'
+    '"character":"Zug","request":"invite","guild":"Bonkers","candidate":"Randomlock"}'
+)
+
+
+def _refused(name, age, result=REFUSED_BAND, status="unchanged", detail=""):
+    return {
+        "target_arg": name,
+        "status": status,
+        "detail": detail,
+        "result": result,
+        "age": age,
+    }
+
+
+class Refusals(unittest.TestCase):
+    """#1015: a refused invite comes back `unchanged` with its reason in
+    `result`; the pass reads it and does not ask the same candidate again."""
+
+    def test_the_reason_is_read_from_result_on_an_unchanged_row(self):
+        self.assertEqual(
+            teamsync.refusal_reason("unchanged", "", REFUSED_BAND),
+            "too far above the guild to be doing what it does",
+        )
+
+    def test_an_error_row_says_it_in_detail(self):
+        self.assertEqual(teamsync.refusal_reason("error", "boom", None), "boom")
+        self.assertEqual(teamsync.refusal_reason("error", "", None), "no detail")
+
+    def test_an_answer_that_is_not_a_refusal_is_not_one(self):
+        self.assertEqual(
+            teamsync.refusal_reason("unchanged", "", '{"outcome":"invited"}'), ""
+        )
+        self.assertEqual(teamsync.refusal_reason("unchanged", "", "not json"), "")
+
+    def test_a_config_refusal_holds_an_hour(self):
+        self.assertEqual(
+            teamsync.refused_candidates([_refused("Randomlock", 59)]),
+            {"Randomlock": "too far above the guild to be doing what it does"},
+        )
+        self.assertEqual(teamsync.refused_candidates([_refused("Randomlock", 60)]), {})
+
+    def test_a_lasting_refusal_holds_six_hours(self):
+        lasting = (
+            '{"outcome":"refused","reason":"already in a guild, and this one '
+            'does not take other guilds members"}'
+        )
+        rows = [_refused("Randomlock", 300, result=lasting)]
+        self.assertIn("Randomlock", teamsync.refused_candidates(rows))
+        rows = [_refused("Randomlock", 360, result=lasting)]
+        self.assertEqual(teamsync.refused_candidates(rows), {})
+
+    def test_a_refused_candidate_is_not_invited_again_and_the_next_one_is(self):
+        second = dict(ORC_WARLOCK, name="Secondlock")
+        refused = teamsync.refused_candidates([_refused("Randomlock", 10)])
+        acts = teamsync.plan(
+            "Bonkers",
+            _bonkers_full_raid(),
+            [ORC_WARLOCK, second],
+            set(),
+            True,
+            refused=refused,
+        )
+        self.assertEqual([a.target for a in acts if a.kind == "invite"], ["Secondlock"])
+
+    def test_the_stall_line_names_the_module_reason(self):
+        rows = [_refused("Randomlock", 5), _refused("Randomrogue", 7)]
+        why = teamsync.stall_reason(
+            "Bonkers",
+            _bonkers_full_raid(),
+            [ORC_WARLOCK, TROLL_ROGUE],
+            set(),
+            True,
+            teamsync.refusal_counts(rows),
+            teamsync.refused_candidates(rows),
+        )
+        self.assertIn(
+            "the module refused: too far above the guild to be doing what it does x2",
+            why,
+        )
