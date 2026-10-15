@@ -19,6 +19,7 @@ sys.path.insert(0, str(HERE))
 
 import apiv2  # noqa: E402
 import families as families_module  # noqa: E402
+import guildfund  # noqa: E402
 import guildrun  # noqa: E402
 import realmread  # noqa: E402
 from apiv2 import health  # noqa: E402
@@ -156,6 +157,60 @@ class Bank(unittest.TestCase):
             health.bank_findings([{"guild": "Cave", "bank": 0, "broke": 0}], {}, NOW),
         )
 
+    def test_gold_the_master_withdrew_for_letters_is_not_an_empty_bank(self):
+        """The fund withdraws the whole bank to post it: 0 copper in the vault
+        with the gold in the master's purse is gold in transit, not absent."""
+        rows = [
+            {
+                "target_name": "Zug",
+                "source": guildfund.WITHDRAW_SOURCE,
+                "command": "bank withdraw 990000",
+                "status": "applied",
+                "result": None,
+                "age": 3,
+            },
+            {
+                "target_name": "Zug",
+                "source": "guildfund:refund:7",
+                "command": "send money:250000 subject:Dues refund",
+                "status": "delivered",
+                "result": None,
+                "age": 1,
+            },
+        ]
+        banks = [
+            {
+                "guild": "Bonkers",
+                "bank": 0,
+                "broke": 65,
+                "members": 76,
+                "master": "Zug",
+                "purse": 1_000_000,
+            }
+        ]
+        carried = health.with_carried(banks, rows)
+        self.assertEqual(740_000, carried[0]["carried"])
+        self.assertEqual([], health.bank_findings(carried, {}, NOW))
+
+    def test_carried_gold_is_capped_by_the_masters_purse(self):
+        rows = [
+            {
+                "target_name": "Zug",
+                "source": guildfund.WITHDRAW_SOURCE,
+                "command": "bank withdraw 990000",
+                "status": "applied",
+                "result": None,
+                "age": 3,
+            }
+        ]
+        banks = [{"guild": "B", "bank": 0, "broke": 1, "master": "Zug", "purse": 5}]
+        self.assertEqual(5, health.with_carried(banks, rows)[0]["carried"])
+
+    def test_a_drained_bank_with_nothing_carried_is_still_a_finding(self):
+        banks = [{"guild": "B", "bank": 0, "broke": 1, "master": "Zug", "purse": 9}]
+        (f,) = health.bank_findings(health.with_carried(banks, []), {}, NOW)
+        self.assertEqual("guild-bank-empty:B", f["key"])
+
 
 class Text(unittest.TestCase):
     def test_strings_are_one_line_of_ascii_within_their_limits(self):
@@ -195,6 +250,7 @@ class Handler(unittest.TestCase):
                 {"guild": "Bonkers", "bank": 0, "broke": 63, "members": 71}
             ],
             health.BANK_MOVED_SQL: [{"guild": "Bonkers", "at": NOW - 100 * HOUR}],
+            health.FUND_SQL: [],
             health.INVITES_SQL: [],
         }
         ctx, asked = ctx_for(answers)
@@ -243,6 +299,7 @@ class Handler(unittest.TestCase):
             guildrun._RUN_SQL_THIN: gap,
             health.BANK_SQL: gap,
             health.BANK_MOVED_SQL: gap,
+            health.FUND_SQL: gap,
             health.INVITES_SQL: gap,
         }
         ctx, _ = ctx_for(answers)

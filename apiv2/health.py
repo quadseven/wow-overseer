@@ -27,7 +27,11 @@ THE KINDS:
   questers    a guild with questers missing from the realm, with the team
               sync's invites and the module's latest refusal reason
   bank        a family guild whose bank holds under a gold while members hold
-              under a gold each
+              under a gold each. Gold the guild master withdrew for the fund's
+              letters and has not posted yet (guildfund.Ledger.carried) counts
+              as the bank's: the fund withdraws the whole bank to post it, so
+              0 copper in the vault with the gold in the master's purse is
+              gold in transit, not a bank that has run dry.
 
 Read-only, like everything under /api/v2. An empty list means "looked and
 found nothing"; a read that fails is a 503 from the map server, never an empty
@@ -40,6 +44,7 @@ import datetime as dt
 import json
 
 import council
+import guildfund
 import guildrun
 from apiv2 import _scope, members, quests
 
@@ -76,11 +81,19 @@ INVITES_SQL = (
     "ORDER BY id"
 )
 BANK_SQL = (
-    "SELECT g.name AS guild, g.BankMoney AS bank, "
-    "SUM(c.money < %s) AS broke, COUNT(c.guid) AS members "
+    "SELECT g.name AS guild, g.BankMoney AS bank, lc.name AS master, "
+    "lc.money AS purse, SUM(c.money < %s) AS broke, COUNT(c.guid) AS members "
     "FROM guild g LEFT JOIN guild_member gm ON gm.guildid = g.guildid "
     "LEFT JOIN characters c ON c.guid = gm.guid "
-    "WHERE g.name IN ({holes}) GROUP BY g.guildid, g.name, g.BankMoney"
+    "LEFT JOIN characters lc ON lc.guid = g.leaderguid "
+    "WHERE g.name IN ({holes}) "
+    "GROUP BY g.guildid, g.name, g.BankMoney, lc.name, lc.money"
+)
+# The guild fund's rows in the command log (what guildfund.ledger reads).
+FUND_SQL = (
+    "SELECT target_name, target_arg, command, source, status, result, "
+    "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
+    "WHERE source LIKE 'guildfund:%'"
 )
 # The bank's money log (tab 100 holds the money events): when the gold last
 # moved, the nearest record of when the bank ran dry.
@@ -272,12 +285,25 @@ def quester_findings(questers: dict, invites: list, now_at: int) -> list:
     return out
 
 
-def bank_findings(banks: list, moved: dict, now_at: int) -> list:
-    """One finding per guild whose bank holds under a gold while members hold
-    under a gold each. Hours count from the bank's last money movement."""
+def with_carried(banks: list, fund_rows: list) -> list:
+    """The bank rows with `carried`: the fund gold each guild master withdrew
+    and has not posted, no more than its purse holds (as the bridge reads it)."""
     out = []
     for b in banks or ():
-        bank, broke = int(b.get("bank") or 0), int(b.get("broke") or 0)
+        master = str(b.get("master") or "")
+        held = guildfund.ledger(fund_rows, master).carried if master else 0
+        out.append({**b, "carried": min(held, max(0, int(b.get("purse") or 0)))})
+    return out
+
+
+def bank_findings(banks: list, moved: dict, now_at: int) -> list:
+    """One finding per guild whose bank, with the fund gold its master carries,
+    holds under a gold while members hold under a gold each. Hours count from
+    the bank's last money movement."""
+    out = []
+    for b in banks or ():
+        bank = int(b.get("bank") or 0) + int(b.get("carried") or 0)
+        broke = int(b.get("broke") or 0)
         if bank >= COPPER_PER_GOLD or broke <= 0:
             continue
         guild = str(b["guild"])
@@ -334,13 +360,14 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
     now_at = int(rd.must(NOW_SQL)[0]["now_at"])
     guilds = sorted(_scope.guilds(ctx).values())
     marks = _scope.holes(len(guilds))
-    runs = banks = []
+    runs = banks = fund = []
     moved: dict = {}
     if guilds:
         runs = guildrun.ended_since(rd, guilds, RUN_DAYS, RUNS_READ)
         banks = rd.rows(
             BANK_SQL.format(holes=marks), (COPPER_PER_GOLD, *guilds), what="guild"
         )
+        fund = rd.rows(FUND_SQL, what="overseer_command")
         moved = {
             str(r["guild"]): int(r["at"] or 0)
             for r in rd.rows(
@@ -358,7 +385,7 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
         [dict(r) for r in runs],
         questers,
         [dict(r) for r in invites],
-        [dict(r) for r in banks],
+        with_carried([dict(r) for r in banks], [dict(r) for r in fund]),
         moved,
         place,
     )
