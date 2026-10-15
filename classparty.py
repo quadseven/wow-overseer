@@ -87,10 +87,10 @@ UP, WALK, DISBAND = "party-up", "party-walk", "party-disband"
 MEET = "walk-to-spawn"
 MAX_HELPERS = 4
 
-# Seconds the leader and the helpers have to reach the objective. An answerer
-# stands at most classask.HELPER_REACH_YARDS from the asker: a walk of about
-# six minutes in a straight line, and roads and fights make it longer.
-MEET_SECONDS = 900.0
+# Seconds the leader and the helpers have to reach the objective. Their far
+# walk is followed for 2,100 seconds; one poll interval lets its final read
+# return before this outer meeting deadline cuts it off.
+MEET_SECONDS = guildroute.follow_seconds(guildroute.FAR_WALK_YARDS) + 10.0
 # Reads of the snapshot after the walks, and the seconds between them, before a
 # member that arrived and is not seen beside the leader counts as far: the
 # module refreshes the snapshot every few seconds.

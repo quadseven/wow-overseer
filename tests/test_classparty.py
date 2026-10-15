@@ -809,6 +809,9 @@ def at(yards, map_id=1):
 class TheMeeting(unittest.TestCase):
     """classparty.judge_meeting: who met the leader at the objective."""
 
+    def test_far_meeting_walk_gets_the_far_walk_follow_window(self):
+        self.assertEqual(classparty.MEET_SECONDS, 2110.0)
+
     def judge(self, arrived, stands):
         return classparty.judge_meeting(a_run(meeting=True), arrived, stands)
 
