@@ -1600,6 +1600,76 @@ class WorldHold:
     retry_at: object = None
 
 
+@dataclass
+class BotKeep:
+    """An equip the bot answered with its own scoring verdict, not a refusal.
+
+    The world answers an equip `unchanged` with a `detail` like "the bot
+    keeps Lavishly Jeweled Ring: Viridian Band scores 2.25 against 5.40"
+    when its own scorer prefers what is worn. That is the bot's choice, so
+    it is never a world hold and never a stuck reason: the piece stays
+    unwantable until what is worn in its slot (`worn`) or the wanted piece
+    (`wanted`) changes. `note` is the reader-worded line for the member's
+    gear notes.
+    """
+
+    row_id: int
+    worn: tuple
+    wanted: str
+    note: str
+    lifted: bool = False
+
+
+def _bot_keep(row):
+    """(kept, challenger, challenger_score, kept_score) for a bot-keeps answer.
+
+    The detail shape is "the bot keeps <kept>: <challenger> scores <a>
+    against <b>", where <a> is the challenger's score and <b> the kept
+    piece's. Scores are returned as written, for the reader-worded note.
+    Anything else - a real refusal, a bare `unchanged`, another status -
+    is not a keep, and a row this cannot read returns None.
+    """
+    try:
+        status = str(row.get("status", ""))
+        detail = str(row.get("detail", "")).strip()
+    except (AttributeError, TypeError):
+        return None
+    if status != "unchanged" or not detail.lower().startswith("the bot keeps "):
+        return None
+    kept, colon, rest = detail[len("the bot keeps ") :].partition(":")
+    challenger, sep, scores = rest.strip().partition(" scores ")
+    challenger_score, against, kept_score = scores.partition(" against ")
+    try:
+        float(challenger_score)
+        float(kept_score)
+    except ValueError:
+        return None
+    if not colon or not sep or not against:
+        return None
+    kept, challenger = kept.strip(), challenger.strip()
+    if not kept or not challenger:
+        return None
+    return kept, challenger, challenger_score.strip(), kept_score.strip()
+
+
+def member_gear_notes(holds) -> dict:
+    """holder -> the reader-worded kept-choice lines for their gear notes.
+
+    A member whose bot keeps its own better-scored piece is choosing, not
+    stuck: the kept piece and both scores read here, never on the stuck
+    list. A record this cannot read is dropped.
+    """
+    out = {}
+    for key, rec in (holds or {}).items():
+        try:
+            holder = str(key[0])
+        except (TypeError, IndexError):
+            continue
+        if isinstance(rec, BotKeep) and not rec.lifted:
+            out.setdefault(holder, []).append(rec.note)
+    return {holder: tuple(lines) for holder, lines in out.items()}
+
+
 def latest_answers(history, open_statuses) -> dict:
     """(holder, command) -> the newest row the world has answered.
 
@@ -1656,7 +1726,9 @@ def _world_holds(
     refusal row, with what is worn in that slot then, and lifts when that
     changes or when the piece is no longer wanted from one of `holders` (it
     left the bags). A level change lifts it before this is reached, because
-    `since_level_change` has already dropped the rows it answered.
+    `since_level_change` has already dropped the rows it answered. A
+    bot-keeps answer is never a refusal: it is recorded as a BotKeep (a
+    choice, not a stuck member) and stays out of the notes this returns.
     """
     keys = {(e.holder, e.command) for e in wanted}
     for key in list(holds):
@@ -1664,11 +1736,39 @@ def _world_holds(
         if row is None or int(row.get("id", 0)) != holds[key].row_id:
             del holds[key]
         elif key not in keys and key[0] in holders:
-            holds[key].lifted = True
+            if isinstance(holds[key], BotKeep):
+                # A kept piece that is no longer wanted is forgotten outright:
+                # nothing is held back, so there is nothing to keep lifting.
+                del holds[key]
+            else:
+                holds[key].lifted = True
     out = {}
     for equip in wanted:
         key = (equip.holder, equip.command)
         row = answers.get(key)
+        info = _bot_keep(row)
+        if info is not None:
+            # The bot's own choice, not a refusal: record it, never hold on
+            # it, and never give it a stuck reason. The piece is not wanted
+            # again until what is worn in its slot or the wanted piece
+            # changes; a lifted keep on the same answer does not re-record.
+            worn_now = _worn_for(equip, worn)
+            rec = holds.get(key)
+            if isinstance(rec, BotKeep) and rec.row_id == int(row.get("id", 0)):
+                if rec.worn != worn_now or rec.wanted != equip.name:
+                    del holds[key]
+                continue
+            if rec is not None:
+                del holds[key]
+            kept, challenger, challenger_score, kept_score = info
+            holds[key] = BotKeep(
+                row_id=int(row.get("id", 0)),
+                worn=worn_now,
+                wanted=equip.name,
+                note=f"keeps {kept}: it scores {kept_score} "
+                f"to {challenger}'s {challenger_score}",
+            )
+            continue
         if not _refused(row):
             holds.pop(key, None)
             continue
@@ -1702,11 +1802,16 @@ def _world_holds(
 
 
 def world_held(wanted, holds) -> int:
-    """How many of `wanted` are held on the world's answer this pass."""
+    """How many of `wanted` are held on the world's answer this pass.
+
+    A bot-keeps answer is the bot's own choice, not a refusal, so a BotKeep
+    record never counts, even while the piece stays unwanted.
+    """
     return sum(
         1
         for e in wanted
         if (e.holder, e.command) in (holds or {})
+        and isinstance(holds[(e.holder, e.command)], WorldHold)
         and not holds[(e.holder, e.command)].lifted
     )
 
@@ -1743,6 +1848,9 @@ def equips_to_queue(
     `latest_answers`; one that ended `error` or `unchanged` with a `detail`
     holds the piece until its staged retry time, or until the holder's level,
     what is worn in that slot (`worn`, from `worn_pieces`) or the bags change.
+    An `unchanged` answer whose detail is the bot's own scoring verdict ("the
+    bot keeps ...") is the bot's choice, not a refusal: it is recorded as a
+    BotKeep instead (#994), never held on and never given a stuck reason.
     `holds` is the caller's dict of WorldHold, kept between passes and
     updated in place; `holders` are the members this pass read, by default
     the holders of `wanted`.
@@ -1759,6 +1867,12 @@ def equips_to_queue(
         key = (equip.holder, equip.command)
         if key in held:
             notes.append(held[key])
+            continue
+        # The bot keeps its own better-scored piece by choice: it is not a
+        # refusal, it never earns a stuck reason, and it is not wanted again
+        # until its slot's gear or the wanted piece changes. The reader-worded
+        # line for the member's gear notes comes from `member_gear_notes`.
+        if isinstance((holds or {}).get(key), BotKeep):
             continue
         # The world already put this entry on. A later bag snapshot can show
         # it carried again after another gear pass replaces it; repeating the

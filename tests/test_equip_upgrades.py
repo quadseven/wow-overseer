@@ -299,6 +299,82 @@ class TheQueueIsBounded(unittest.TestCase):
             )
             self.assertEqual(gear.world_held(self.wanted, holds), 1)
 
+    def test_a_bot_keep_is_a_choice_not_a_hold(self):
+        """A "the bot keeps" answer holds nothing and earns no stuck reason."""
+        worn = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
+        answers = self.answer(
+            "unchanged",
+            "the bot keeps Lavishly Jeweled Ring: "
+            "Viridian Band scores 2.25 against 5.40",
+        )
+        holds = {}
+        queue, notes = bag_pressure.equips_to_queue(
+            self.wanted, set(), {self.key: 1}, answers=answers, worn=worn, holds=holds
+        )
+        self.assertEqual((queue, notes), ((), ()))
+        self.assertEqual(gear.world_held(self.wanted, holds), 0)
+        self.assertEqual(
+            gear.member_gear_notes(holds),
+            {
+                "Grog": (
+                    "keeps Lavishly Jeweled Ring: "
+                    "it scores 5.40 to Viridian Band's 2.25",
+                )
+            },
+        )
+
+    def test_a_real_refusal_still_holds_and_retries(self):
+        """Any other refused detail holds and retries at 2 then 4 hours."""
+        now = datetime(2026, 10, 14, 20, tzinfo=timezone.utc)
+        worn = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
+        for attempts, wait in ((1, 2), (2, 4)):
+            answer = self.answer("unchanged", "the world said the piece is cursed")
+            answer[self.key]["created_at"] = now - timedelta(hours=1)
+            holds = {}
+            queue, notes = bag_pressure.equips_to_queue(
+                self.wanted,
+                set(),
+                {self.key: attempts},
+                answers=answer,
+                worn=worn,
+                holds=holds,
+                now=now,
+            )
+            self.assertEqual(queue, ())
+            self.assertIn("tries again at", notes[0])
+            self.assertEqual(gear.world_held(self.wanted, holds), 1)
+            answer[self.key]["created_at"] = now - timedelta(hours=wait)
+            queue, _ = bag_pressure.equips_to_queue(
+                self.wanted,
+                set(),
+                {self.key: attempts},
+                answers=answer,
+                worn=worn,
+                holds=holds,
+                now=now,
+            )
+            self.assertEqual(queue, self.wanted)
+
+    def test_a_kept_choice_is_not_wanted_until_gear_or_piece_changes(self):
+        """A bot-kept piece stays unwantable, then frees when gear changes."""
+        worn = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
+        answers = self.answer(
+            "unchanged",
+            "the bot keeps Lavishly Jeweled Ring: "
+            "Viridian Band scores 2.25 against 5.40",
+        )
+        holds = {}
+        kw = dict(answers=answers, holds=holds)
+        args = (self.wanted, set(), {})
+        self.assertEqual(bag_pressure.equips_to_queue(*args, worn=worn, **kw)[0], ())
+        # A later pass with the same gear does not want it either.
+        self.assertEqual(bag_pressure.equips_to_queue(*args, worn=worn, **kw)[0], ())
+        # New gear in the slot ends the choice: the piece is wanted again.
+        changed = {"Grog": {4: (6001, "Other Breastplate")}}
+        queue, notes = bag_pressure.equips_to_queue(*args, worn=changed, **kw)
+        self.assertEqual((queue, notes), (self.wanted, ()))
+        self.assertEqual(gear.member_gear_notes(holds), {})
+
     def test_a_delivered_or_bare_answer_keeps_the_three_try_rule(self):
         for answers in (
             self.answer("delivered"),
