@@ -64,5 +64,40 @@ class TheResetRow(unittest.TestCase):
         self.assertEqual(self._run(None), [])
 
 
+class ThePendingInviteWindow(unittest.TestCase):
+    def test_unanswered_rows_expire_after_a_bounded_window(self):
+        calls = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, params):
+                calls.append((sql, params))
+
+            def fetchall(self):
+                return [{"target_name": "GuildHead", "target_arg": "Firstlock"}]
+
+        class Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return Cursor()
+
+        with mock.patch.object(bridge, "_connect", return_value=Connection()):
+            self.assertEqual(bridge._team_pending(), {"Firstlock"})
+        sql, params = calls[0]
+        self.assertIn("status IN ('pending', 'claimed')", sql)
+        self.assertIn("created_at > NOW() - INTERVAL %s MINUTE", sql)
+        self.assertEqual(params, (bridge.TEAM_SYNC_SOURCE, 30))
+
+
 if __name__ == "__main__":
     unittest.main()
