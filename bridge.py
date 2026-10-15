@@ -30059,6 +30059,7 @@ def _recruit_prefer(actor: str) -> tuple:
 
 
 TEAM_SYNC_SOURCE = "teams"
+TEAM_INVITE_TIMEOUT_MINUTES = 30
 
 
 def _team_sync_on() -> bool:
@@ -30130,13 +30131,14 @@ def _team_refusals() -> dict:
 
 
 def _team_pending() -> set:
-    """Names a team-sync row is still in flight for, or was written for in
-    the last ten minutes: never asked twice while the first is running."""
+    """Names recent team-sync targets and rows running within their bounded
+    30-minute window."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT target_name, target_arg FROM overseer_command WHERE source = %s "
-            "AND (status IN ('pending', 'claimed') OR created_at > NOW() - INTERVAL 10 MINUTE)",
-            (TEAM_SYNC_SOURCE,),
+            "AND ((status IN ('pending', 'claimed') AND created_at > "
+            "NOW() - INTERVAL %s MINUTE) OR created_at > NOW() - INTERVAL 10 MINUTE)",
+            (TEAM_SYNC_SOURCE, TEAM_INVITE_TIMEOUT_MINUTES),
         )
         out = set()
         for r in cur.fetchall():
