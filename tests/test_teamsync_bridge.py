@@ -99,8 +99,42 @@ class ThePendingInviteWindow(unittest.TestCase):
         self.assertEqual(params, (bridge.TEAM_SYNC_SOURCE, 30))
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TheCandidateRead(unittest.TestCase):
+    """#1015: the quester reset refuses a character with an open auction or
+    bid or a COD mail, so such a character is never a candidate."""
+
+    def test_open_auctions_bids_and_cod_mail_are_left_out(self):
+        calls = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, params):
+                calls.append((sql, params))
+
+            def fetchall(self):
+                return []
+
+        class Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return Cursor()
+
+        with mock.patch.object(bridge, "_connect", return_value=Connection()):
+            self.assertEqual(bridge._team_candidates("Bonkers"), [])
+        sql, params = calls[0]
+        self.assertIn("a.itemowner = c.guid OR a.buyguid = c.guid", sql)
+        self.assertIn("m.receiver = c.guid AND m.cod > 0", sql)
+        self.assertEqual(params, (teamsync.RECRUIT_MAX_LEVEL,))
 
 
 class TheRefusedInvite(unittest.TestCase):
@@ -141,3 +175,7 @@ class TheRefusedInvite(unittest.TestCase):
         ):
             asyncio.run(bridge.Bridge._team_sync_once(types.SimpleNamespace()))
         self.assertEqual([w for w in written if w[0] == "guild"], [])
+
+
+if __name__ == "__main__":
+    unittest.main()
