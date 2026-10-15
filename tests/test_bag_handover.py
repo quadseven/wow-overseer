@@ -45,7 +45,7 @@ class TheBridgeDecidesNothingAboutBags(unittest.TestCase):
     def test_the_plan_comes_from_the_pure_module(self):
         body = _block("    async def _hand_bags_once(")
         self.assertIn("bag_upgrade.plan_family_bags(", body)
-        self.assertIn("bag_upgrade.members_from_rows(rows, names)", body)
+        self.assertIn("bag_upgrade.members_from_rows(\n            rows, names,", body)
         self.assertIn("bag_upgrade.give_command(move)", body)
 
     def test_no_slot_arithmetic_in_the_bridge(self):

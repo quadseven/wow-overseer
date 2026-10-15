@@ -6156,8 +6156,9 @@ class Bridge(discord.Client):
         # contract: history is never re-announced.
         self._pending: dict[int, discord.abc.Messageable] = {}
         self._seen: set[int] = set()
-        # The bag refusals already logged, so a standing one is said once.
-        self._equip_notes_seen: set[str] = set()
+        # The bag refusals already logged, per family, so a standing one is
+        # said once (bag_upgrade.note_once).
+        self._equip_notes_seen: dict[tuple, frozenset] = {}
         # (oldest row id, consecutive send failures) for the chat relay.
         self._stuck: tuple[int, int] = (0, 0)
         # Monotonic clock of the last kin muster, so a fight that produces
@@ -9854,7 +9855,9 @@ class Bridge(discord.Client):
         here.
         """
         rows = await asyncio.to_thread(_fetch_bag_state, names)
-        members = bag_upgrade.members_from_rows(rows, names)
+        members = bag_upgrade.members_from_rows(
+            rows, names,
+            backpack_used=await asyncio.to_thread(_fetch_backpack_used, names))
         # A BAG ITS OWN HOLDER CAN PUT ON GOES ON FIRST (#88), and it is not
         # also handed to a sibling in the same pass. The bag it displaces is
         # carried from the next save on, where the hand-over below or the
@@ -9891,14 +9894,16 @@ class Bridge(discord.Client):
     async def _equip_own_bags(self, members) -> set:
         """Put on the carried bags their own holders should wear (#88).
 
-        `bag_upgrade.self_equips` decides; this writes one kind='bot' `e` row
-        per holder, the verb the bag purchase already uses, and returns the
-        guids so the family hand-over leaves them alone.
+        `bag_upgrade.self_equips` decides; this writes one kind='bot' row per
+        holder, `e` as the bag purchase already uses or `ue` to move a bag out
+        of the one it would replace (#1014), and returns the guids so the
+        family hand-over leaves them alone.
         """
         equips = bag_upgrade.self_equips(members)
         notes = bag_upgrade.self_equip_notes(members)
-        _log_capped("bags", bag_upgrade.unseen_notes(self._equip_notes_seen, notes))
-        self._equip_notes_seen = set(notes)
+        fresh, self._equip_notes_seen = bag_upgrade.note_once(
+            self._equip_notes_seen, members, notes)
+        _log_capped("bags", fresh)
         if not equips:
             return set()
         seen = await asyncio.to_thread(_recent_bag_equip_keys, GIVE_RETRY_MINUTES)
@@ -9906,10 +9911,7 @@ class Bridge(discord.Client):
             if (move.holder, move.command) in seen:
                 continue
             if await asyncio.to_thread(_insert_bag_self_equip, move):
-                log.info("bags: %s puts on %s%s (%s, +%d slots) - %s",
-                         move.holder, move.bag,
-                         " in place of %s" % move.replaces if move.replaces else "",
-                         move.command, move.slots_gained, move.why)
+                log.info("bags: %s", move.said)
         return {move.guid for move in equips}
 
     async def _mid_run(self, names: list) -> bool:
@@ -27944,6 +27946,28 @@ def _insert_tidy_event(row: dict, outcome: str, sentence: str) -> int:
         return cur.rowcount or 0
 
 
+# Items in each holder's backpack, the room a bag moved out of the bag it
+# would replace lands in first (bag_upgrade.move_out_spare, #1014). The slot
+# range is bag_upgrade's, so the bridge keeps no second copy of it.
+_BACKPACK_USED_SQL = (
+    "SELECT c.name AS holder, COUNT(*) AS used "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "WHERE c.name IN (%%s) AND ci.bag = 0 AND ci.slot BETWEEN %d AND %d "
+    "GROUP BY c.name"
+) % (bag_upgrade.BACKPACK_POSITIONS[0], bag_upgrade.BACKPACK_POSITIONS[-1])
+
+
+def _fetch_backpack_used(names: list) -> dict:
+    """holder -> items in the backpack, for bag_upgrade.members_from_rows."""
+    if not names:
+        return {}
+    sql = _BACKPACK_USED_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        return {row["holder"]: int(row["used"]) for row in cur.fetchall()}
+
+
 # Every container the family owns and where it sits. `used` is how many items
 # are inside it, for the worn bags. ITEM_CLASS_CONTAINER is 1; quivers and
 # ammo pouches are a different class and would not take ordinary loot, so
@@ -28496,7 +28520,8 @@ def _recent_bag_equip_keys(minutes: int) -> set:
 
 
 def _insert_bag_self_equip(move) -> int:
-    """One kind='bot' row putting a carried bag on its own holder (#88)."""
+    """One kind='bot' row putting a carried bag on its own holder (#88), or
+    moving it out of the bag it would replace first (#1014)."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO overseer_command (target_name, command, kind, source) "
