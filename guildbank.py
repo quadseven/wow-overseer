@@ -578,17 +578,16 @@ def plan_deposits(
 def master_reserve(purse, purchased_tabs) -> int:
     """Copper the guild master keeps when it banks the guild's gold (#775).
 
-    Its float, and the next tab's price when that tab is tab 0 (a guild
-    without one cannot store an item, and the tab is paid from this purse) or
-    when the purse already pays for it (`can_buy_tab`), so a tab the setup
-    plan is about to buy is never banked away first. A later tab the purse
-    cannot pay for holds nothing back: on the dev realm Grug's purse read 41g
-    to 48g from 2026-10-05 to 2026-10-10 against tab 1's 250g, and holding it
-    back left the guild's gold where no member's training could reach it.
+    Its float, and the next tab's price when the purse already pays for it
+    (`can_buy_tab`), so a tab the setup plan is about to buy is never banked
+    away first. A tab the purse cannot pay for holds nothing back: on the dev
+    realm Grug's purse read 41g to 48g from 2026-10-05 to 2026-10-10 against
+    tab 1's 250g, and Zug's purse read 96.3g against tab 0's 100g, and holding
+    it back left the guild's gold where no member's training could reach it.
     """
     tab = next_tab(purchased_tabs)
     keep = FLOAT_COPPER
-    if tab is not None and (tab == 0 or can_buy_tab(purse, tab)):
+    if tab is not None and can_buy_tab(purse, tab):
         keep += tab_cost(tab)
     return keep
 
