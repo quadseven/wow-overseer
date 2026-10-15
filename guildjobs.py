@@ -4548,7 +4548,8 @@ def _pvp_first(m, pvp, recent, cap, kept=None):
     """(step, doing, held): a member playing PvP for an upgrade.
 
     Inside a battleground or waiting in its queue the member is HELD: it does
-    nothing else this pass. A cohort still short (GATHERING) or cooling after
+    nothing else this pass. A queue accepted past WAITING_MINUTES is asked
+    again and the member stays held (Move.holds). A cohort still short (GATHERING) or cooling after
     a leave queues nobody and the member goes about its ordinary job. A queue or a buy whose last row failed inside the
     PvP cooldown waits it out doing its ordinary job, and so does a buy whose
     walks to the vendor failed, for pvp_walk_cooldown. A bought item still in
@@ -4566,7 +4567,7 @@ def _pvp_first(m, pvp, recent, cap, kept=None):
     if move.kind == pvpgear.BUY and _pvp_walk_cooling(m.name, recent):
         return None, "", False
     step = pvp_step(m, aim, move, cap, kept)
-    return step, (aim.line + ": " + move.said) if step else "", False
+    return step, (aim.line + ": " + move.said) if step else "", move.holds
 
 
 def last_gear_failed(name, recent) -> bool:

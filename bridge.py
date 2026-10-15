@@ -15530,7 +15530,7 @@ class Bridge(discord.Client):
             log.info("pvp: cohort %s %s: %s", cohort.faction or "?", cohort.bracket,
                      cohort.line)
         for name, move in moves.items():
-            if move.kind in (pvpgear.INSIDE, pvpgear.WAITING):
+            if move.holds:
                 held[name] = True
         self._pvp_pass = (aims, moves)
         if aims:

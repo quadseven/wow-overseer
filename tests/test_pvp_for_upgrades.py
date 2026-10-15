@@ -232,7 +232,7 @@ class WhenToStopAndBuy(unittest.TestCase):
     def test_an_accepted_old_queue_stays_waiting_and_socially_held(self):
         move = pvpgear.next_move(aim(), 0, False, recent(16, "already"))
         self.assertEqual(pvpgear.WAITING, move.kind)
-        self.assertIn("move.kind in (pvpgear.INSIDE, pvpgear.WAITING)", BRIDGE)
+        self.assertIn("if move.holds:", BRIDGE)
         self.assertIn(
             '{n for n, held in getattr(self, "_pvp_held", {}).items() if held}', BRIDGE
         )
@@ -260,6 +260,14 @@ class WhenToStopAndBuy(unittest.TestCase):
                 pvpgear.QUEUE,
                 pvpgear.next_move(aim(), 0, False, recent(age, "already")).kind,
             )
+
+    def test_a_queue_past_the_wait_bound_is_asked_again_and_still_held(self):
+        # The hold must not lapse on the pass that asks again (#913).
+        for age in (pvpgear.WAITING_MINUTES, 600):
+            move = pvpgear.next_move(aim(), 0, False, recent(age, "already"))
+            self.assertTrue(move.holds)
+        failed = pvpgear.next_move(aim(), 0, False, recent(600, "error"))
+        self.assertFalse(failed.holds)
 
     def test_the_module_outcome_in_a_delivered_row_decides_the_wait(self):
         def read(result):
