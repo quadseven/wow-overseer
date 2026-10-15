@@ -14046,7 +14046,8 @@ class Bridge(discord.Client):
                         _insert_job, action.target, "rename-to " + action.new_name, TEAM_SYNC_SOURCE)
                 elif action.kind == "reset":
                     row = await asyncio.to_thread(
-                        _insert_naturalize, action.target, teamsync.RESET_COMMAND, TEAM_SYNC_SOURCE)
+                        _insert_naturalize, action.target, action.command or teamsync.RESET_COMMAND,
+                        TEAM_SYNC_SOURCE)
                 elif not actor:
                     log.info("team sync: %s - %s %s waits: the family head is not in the world",
                              guild, action.kind, action.target)

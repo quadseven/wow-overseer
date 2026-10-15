@@ -129,11 +129,15 @@ class TheStatusOfAQuest(unittest.TestCase):
 
 
 class TheQuesters(unittest.TestCase):
-    def test_ten_questers_five_per_guild(self):
+    def test_the_ledger_follows_the_approved_questers(self):
+        # Twenty, ten per guild, read from raidteams so the second ten are
+        # tracked like the first.
         names = ql.quester_names()
-        self.assertEqual(len(names), 10)
-        self.assertEqual(len(set(names)), 10)
-        self.assertEqual({len(v) for v in ql.QUESTERS.values()}, {5})
+        self.assertEqual(len(names), 20)
+        self.assertEqual(len(set(names)), 20)
+        self.assertEqual({len(v) for v in ql.QUESTERS.values()}, {10})
+        self.assertEqual(ql.guild_of("Saevor"), "Bonkers")
+        self.assertEqual(ql.guild_of("Kellan"), "Cave")
         self.assertEqual(ql.guild_of("Tharn"), "Cave")
         self.assertEqual(ql.guild_of("Zinja"), "Bonkers")
         self.assertEqual(ql.guild_of("Grug"), "")

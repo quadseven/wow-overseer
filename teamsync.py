@@ -16,7 +16,8 @@ recruit and takes its name.
 QUESTERS (raidteams.QUESTERS, #927). A quester's seat is recruited, matched
 and renamed like a raid seat, after the raid seats. Once a quester holds its
 name and its guild, a `naturalize reset-level-1` row starts it over at level 1
-with nothing at its race's start (natural.py), once: a name the ledger already
+with nothing at its race's start (natural.py), and a death knight's
+`reset-level-55` starts it over at 55 in its own start, once: a name the ledger already
 holds `reset` for is never asked again. The reset waits for the name because
 the name is what says the character is a quester and not a raid recruit.
 
@@ -39,10 +40,11 @@ from dataclasses import dataclass
 
 import raidteams
 
-# 40 raiders, 21 summoners, 10 maintenance and 5 questers. The module's own
-# gate, Overseer.Recruit.TargetSize, refuses an invite past its number, so it
-# must say the same.
-GUILD_SIZE = 76
+# 40 raiders, 21 summoners, 10 maintenance and 10 questers (one of each race
+# and each class of the faction). The module's own gate,
+# Overseer.Recruit.TargetSize, refuses an invite past its number, so it must
+# say the same.
+GUILD_SIZE = 81
 REMOVES_PER_PASS = 2
 INVITES_PER_PASS = 2
 RENAMES_PER_PASS = 6
@@ -60,6 +62,11 @@ RAID_RECRUIT_MAX_LEVEL = 1
 QUESTER_RECRUIT_MAX_LEVEL = 60
 RECRUIT_MAX_LEVEL = max(RAID_RECRUIT_MAX_LEVEL, QUESTER_RECRUIT_MAX_LEVEL)
 RESET_COMMAND = "reset-level-1"
+# A death knight starts at level 55 in its own zone; the module refuses
+# reset-level-1 for one ("a death knight starts at 55") and reset-level-55
+# for anyone else.
+DEATH_KNIGHT = 6
+DEATH_KNIGHT_RESET = "reset-level-55"
 
 # HOW LONG A REFUSED CANDIDATE IS LEFT ALONE. The module answers a refused
 # invite with status `unchanged` and its reason in `result` (wow-overseer#1015:
@@ -104,6 +111,7 @@ class Action:
     target: str  # the character the row is about
     new_name: str = ""  # for "rename"
     why: str = ""
+    command: str = ""  # for "reset": the naturalize mode
 
 
 def open_seats(guild: str, member_names) -> list:
@@ -276,14 +284,27 @@ def _resets(guild: str, names: set, pending: set, reset_done) -> list:
     if reset_done is None:
         return []
     wanted = [
-        q.name
+        q
         for q in raidteams.QUESTERS.get(guild, ())
         if q.name in names and q.name not in reset_done and q.name not in pending
     ]
-    return [
-        Action("reset", name, why="a quester starts at level 1 with nothing")
-        for name in wanted[:RESETS_PER_PASS]
-    ]
+    return [_reset(q) for q in wanted[:RESETS_PER_PASS]]
+
+
+def _reset(q) -> Action:
+    if q.class_id == DEATH_KNIGHT:
+        return Action(
+            "reset",
+            q.name,
+            why="a death knight quester starts at level 55 with nothing",
+            command=DEATH_KNIGHT_RESET,
+        )
+    return Action(
+        "reset",
+        q.name,
+        why="a quester starts at level 1 with nothing",
+        command=RESET_COMMAND,
+    )
 
 
 def plan(
