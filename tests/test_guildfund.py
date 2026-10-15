@@ -97,23 +97,6 @@ class TheGuildFundPass(unittest.TestCase):
         )
         self.assertNotIn("shortfall", line)
 
-    def test_refunds_leave_one_gold_in_the_bank_for_waiting_members(self):
-        members = [
-            guildfund.Member(
-                "Funkymon", self.guild, level=60, money=0, training=250 * G, guid=1
-            ),
-        ]
-        plan = guildfund.plan(
-            self.master,
-            members,
-            bank=100 * G,
-            book=guildfund.Ledger(),
-            paid={"Funkymon": 250 * G},
-        )
-
-        self.assertEqual([letter.copper for letter in plan.letters], [99 * G])
-        self.assertEqual(plan.withdraw, 99 * G)
-
     def test_partial_shortfall_when_bank_covers_only_some_letters(self):
         """When the bank can only partially cover letters, the unpayable portion is the shortfall."""
         members = [
@@ -125,8 +108,8 @@ class TheGuildFundPass(unittest.TestCase):
         reserve = guildfund.gear_budget(25)
         paid = {"Yamon": 10 * G}
         book = guildfund.Ledger()
-        # Bank holds 2g: Yamon needs 15_625c, while 1g stays in reserve.
-        plan = guildfund.plan(self.master, members, bank=2 * G, book=book, paid=paid)
+        # Bank holds 1g: Yamon needs reserve (15_625c), but bank only has 10_000c.
+        plan = guildfund.plan(self.master, members, bank=1 * G, book=book, paid=paid)
         self.assertEqual(1, len(plan.letters))
         self.assertEqual(1 * G, plan.letters[0].copper)
         self.assertEqual(reserve - 1 * G, plan.shortfall)

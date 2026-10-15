@@ -65,9 +65,6 @@ DAILY_SHARE = (1, 2)
 MIN_LETTER_COPPER = 50 * 100
 # A withdrawal under a gold waits for more letters.
 MIN_WITHDRAW_COPPER = COPPER_PER_GOLD
-# Keep one gold in the vault so a refund pass cannot leave the guild bank
-# empty while training and later refunds still wait.
-BANK_FLOOR_COPPER = COPPER_PER_GOLD
 # Letters the master posts in one pass.
 LETTERS_PER_PASS = 12
 # THE GEAR BUDGET: level cubed in copper, mod-playerbots' own measure of what a
@@ -401,9 +398,8 @@ def plan(master, members, bank, book, paid, roster=frozenset()) -> Plan:
     """
     roster = {str(n) for n in roster or ()}
     pool = [m for m in members or () if m.name != master and m.name not in roster]
-    available = max(0, _int(bank) - BANK_FLOOR_COPPER) + book.carried
     refunds, notes, purse, refund_shortfall = _refunds(
-        master, pool, book, paid, available
+        master, pool, book, paid, max(0, _int(bank)) + book.carried
     )
     budget = max(0, min(purse, daily_budget(purse) - book.spent_today))
     training, more, train_shortfall = _training(
