@@ -22,7 +22,8 @@ when the ledger never saw that moment: a quest already rewarded the first
 time the ledger looks is completed with no `finished`, because the realm
 does not say when, and a made-up time would read as a measurement.
 
-WHO (`QUESTERS`): the ten questers of #922, five per guild. #927 recruits
+WHO (`QUESTERS`): the questers of raidteams.QUESTERS, ten per guild (#922's
+five and five more so every class has one). #927 recruits
 them; until a name is on the realm it simply has no rows.
 
 THE PASS (`changes`): the ledger rows, the quest log and the rewarded quests
@@ -36,6 +37,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 import questlog
+import raidteams
 
 TAKEN = "taken"
 COMPLETED = "completed"
@@ -47,9 +49,10 @@ FAILED_REASON = "the quest failed in the log"
 
 # The questers of #922, by guild: Cave is the Alliance guild, Bonkers the
 # Horde one. #927 recruits each at level 1 in its race's starting zone.
+# Read from the approved teams, never copied: a copy kept the first ten and
+# would have hidden the second ten from the ledger and the site.
 QUESTERS = {
-    "Cave": ("Tharn", "Mirra", "Velo", "Durga", "Fizzik"),
-    "Bonkers": ("Saelis", "Morwick", "Hoofa", "Grakk", "Zinja"),
+    guild: tuple(q.name for q in seats) for guild, seats in raidteams.QUESTERS.items()
 }
 
 

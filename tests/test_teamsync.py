@@ -249,9 +249,10 @@ class StalledOnRenames(unittest.TestCase):
     def test_the_live_cave_numbers(self):
         members = _cave_live()
         self.assertEqual(len(members), 71)
-        # The 6 raid seats and, since #927, the 5 questers'.
+        # The 6 raid seats and the 10 questers' (5 since #927, 5 more since
+        # every class got one).
         self.assertEqual(
-            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 11
+            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 16
         )
         self.assertEqual(len(teamsync.recruits_in_guild("Cave", members)), 6)
 
@@ -270,7 +271,7 @@ class StalledOnRenames(unittest.TestCase):
     def test_a_full_guild_with_a_candidate_and_no_leaver_says_so(self):
         members = [m for m in _cave_live() if m["level"] != 1]
         members += [
-            {"name": "Filler%d" % i, "class_id": 1, "race": 1, "level": 5}
+            {"name": "Filler%d" % i, "class_id": 1, "race": 4, "level": 5}
             for i in range(teamsync.GUILD_SIZE - len(members))
         ]
         cand = [
@@ -284,14 +285,16 @@ class StalledOnRenames(unittest.TestCase):
         ]
         why = teamsync.stall_reason("Cave", members, cand, set(), True)
         self.assertIn(
-            "the guild is full (76) and the approved teams name no leaver", why
+            "the guild is full (81) and the approved teams name no leaver", why
         )
         self.assertIn(
             "no candidate on a rotating random-bot account fits Fizzog (level 1 "
             "or under), Fuggo (level 1 or under), Gorrk (level 1 or under), "
             "Haggo (level 1 or under), Hrunt (level 1 or under), Tharn (level 60 "
             "or under), Mirra (level 60 or under), Velo (level 60 or under), "
-            "Durga (level 60 or under), Fizzik (level 60 or under)",
+            "Durga (level 60 or under), Fizzik (level 60 or under), Kellan (level "
+            "60 or under), Bromli (level 60 or under), Sylvi (level 60 or under), "
+            "Pindle (level 60 or under), Corvane (level 60 or under)",
             why,
         )
 
@@ -364,40 +367,44 @@ TROLL_ROGUE = {
 class Questers(unittest.TestCase):
     """The questing group (#927): recruited, renamed and reset to level 1."""
 
-    def test_the_ten_seats_of_922_five_per_guild(self):
+    def test_twenty_seats_every_race_and_class_of_each_faction(self):
+        # #922's five per guild, then five more so each class has one
+        # (operator, 2026-10-15): every race and every class of the faction.
         self.assertEqual(sorted(raidteams.QUESTERS), ["Bonkers", "Cave"])
-        for guild in raidteams.QUESTERS:
-            self.assertEqual(len(raidteams.QUESTERS[guild]), 5)
         everyone = [q for g in raidteams.QUESTERS.values() for q in g]
-        self.assertEqual(len({q.name for q in everyone}), 10)
-        self.assertEqual({q.class_id for q in everyone}, {2, 3, 4, 5, 7, 9, 11})
+        self.assertEqual(len({q.name for q in everyone}), 20)
+        alliance = raidteams.QUESTERS["Cave"]
+        horde = raidteams.QUESTERS["Bonkers"]
+        self.assertEqual(len(alliance), 10)
+        self.assertEqual(len(horde), 10)
         self.assertEqual(
-            [(q.name, q.race, q.zone) for q in raidteams.QUESTERS["Bonkers"]],
-            [
-                ("Saelis", "Blood Elf", "Sunstrider Isle"),
-                ("Morwick", "Undead", "Deathknell"),
-                ("Hoofa", "Tauren", "Camp Narache"),
-                ("Grakk", "Orc", "Valley of Trials"),
-                ("Zinja", "Troll", "Valley of Trials"),
-            ],
+            {q.race for q in alliance},
+            {"Human", "Dwarf", "Night Elf", "Gnome", "Draenei"},
         )
         self.assertEqual(
-            {q.zone for q in everyone},
-            {
-                "Shadowglen",
-                "Northshire Valley",
-                "Ammen Vale",
-                "Coldridge Valley",
-                "Sunstrider Isle",
-                "Deathknell",
-                "Camp Narache",
-                "Valley of Trials",
-            },
+            {q.race for q in horde},
+            {"Orc", "Undead", "Tauren", "Troll", "Blood Elf"},
         )
+        self.assertEqual(
+            {q.class_id for q in alliance}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 11}
+        )
+        self.assertEqual({q.class_id for q in horde}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 11})
+        self.assertEqual(
+            [(q.name, q.zone) for q in everyone if q.class_id == teamsync.DEATH_KNIGHT],
+            [("Corvane", "Acherus"), ("Saevor", "Acherus")],
+        )
+
+    def test_a_death_knight_quester_is_reset_to_55(self):
+        saevor = next(q for q in raidteams.QUESTERS["Bonkers"] if q.name == "Saevor")
+        grakk = next(q for q in raidteams.QUESTERS["Bonkers"] if q.name == "Grakk")
+        members = _bonkers_full_raid() + [_quester(saevor, level=58), _quester(grakk)]
+        acts = teamsync.plan("Bonkers", members, [], set(), True, reset_done=set())
+        resets = {a.target: a.command for a in acts if a.kind == "reset"}
+        self.assertEqual(resets, {"Grakk": "reset-level-1", "Saevor": "reset-level-55"})
 
     def test_the_guild_has_room_for_the_questers(self):
         self.assertEqual(len(_bonkers_full_raid()), 71)
-        self.assertEqual(teamsync.GUILD_SIZE, 76)
+        self.assertEqual(teamsync.GUILD_SIZE, 81)
 
     def test_a_random_bot_of_the_seat_race_and_class_is_invited(self):
         acts = teamsync.plan(

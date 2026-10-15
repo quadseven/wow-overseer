@@ -160,7 +160,7 @@ class TheQuestersHoldNoRaidSeat(unittest.TestCase):
             )
             self.assertEqual({m["name"] for m in lineup["questers"]}, questers)
             self.assertEqual({m["role"] for m in lineup["questers"]}, {"quester"})
-            self.assertEqual(lineup["counts"]["questers"], 5)
+            self.assertEqual(lineup["counts"]["questers"], 10)
 
     def test_a_quester_is_not_on_the_kick_list(self):
         lineup = raidlineup.build_lineup(_guild("Cave") + _questers("Cave"))
