@@ -58,6 +58,9 @@ ASK_LIVE_SECONDS = 2 * 3600
 # blocker; a longer silence starts a new one (the bridge was down, or the
 # member did something else in between).
 STREAK_GAP_SECONDS = 6 * 3600
+# An ask whose party a step stopped before it formed keeps that step in its
+# reason column after this (the bridge's classask.STOPPED, #1001).
+STOPPED = "stopped: "
 # How far back the ask history is read. A run that reaches the edge reports
 # the oldest ask it can see, and the basis says so.
 ASK_DAYS = 14
@@ -265,7 +268,22 @@ def _ask_blocker_tail(run: list) -> str:
             "" if ran == 1 else "s",
         )
     yeses = sum(int(r.get("yeses") or 0) for r in run)
+    stopped = _latest_reason(run, STOPPED)
+    if stopped:
+        return ", %d said yes, the party stopped: %s" % (yeses, stopped)
     return ", %d said yes, no party formed" % yeses
+
+
+def _latest_reason(run: list, prefix: str) -> str:
+    """The newest reason in the run that starts with `prefix`, without it."""
+    return next(
+        (
+            str(r.get("reason") or "")[len(prefix) :]
+            for r in reversed(run)
+            if str(r.get("reason") or "").startswith(prefix)
+        ),
+        "",
+    )
 
 
 def ask_blocker(run: list, now_at: int) -> dict | None:

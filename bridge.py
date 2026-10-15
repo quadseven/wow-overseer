@@ -16057,7 +16057,7 @@ class Bridge(discord.Client):
                      run.spot.name or "the objective")
         run.drop(meeting.lost)
         if not meeting.met:
-            run.outcome = "party did not reach the objective"
+            run.outcome = "the meeting failed: " + meeting.why
             board.fail(run.ask_id)
             log.info("class party: the meeting for %s's %s fails: %s", run.leader,
                      run.title, meeting.why)
@@ -16140,6 +16140,7 @@ class Bridge(discord.Client):
         while True:
             row_id = await asyncio.to_thread(_insert_corps_row, run.leader, row)
             if not row_id:
+                run.outcome = "the invite (party-up) row was not written"
                 board.fail(run.ask_id)
                 return False
             answer = await self._await_corps_answer(
@@ -16152,6 +16153,7 @@ class Bridge(discord.Client):
             if verdict.state == classparty.FORMED:
                 run.form(time.monotonic())
                 return True
+            run.outcome = classparty.invite_stopped(verdict)
             if verdict.state == classparty.UNSUPPORTED:
                 board.mark_unsupported(time.monotonic())
                 log.warning("class party: this worldserver does not seat a quest party; "
@@ -23992,6 +23994,7 @@ def _with_class_asks(social, quest_pass):
         posts=social.posts + quest_pass.posts,
         replies=social.replies + quest_pass.replies,
         notes=social.notes + quest_pass.notes,
+        reasons=social.reasons + quest_pass.reasons,
     )
 
 
@@ -24129,23 +24132,37 @@ def _class_party_settle(run, formed: bool, gave_up: bool, done: bool = False) ->
     """The rows when a party is over. One that formed marks its answerers seated
     and its ask ran (a quest still not done is asked for again after the
     cooldown); an ask given up after its failures is cancelled and its yeses
-    taken back. Anything else is left for the next pass to answer again."""
-    if not (formed or gave_up):
+    taken back. One that did not form keeps the step that stopped it on its
+    ask (classask.stopped, #1001); anything else about it is left for the
+    next pass to answer again."""
+    if not (formed or gave_up or run.outcome):
         return
     with _connect() as conn, conn.cursor() as cur:
-        state = guildsocial.SEATED if formed else guildsocial.WITHDRAWN
-        for answer_id in run.answers.values():
-            cur.execute(guildsocial.ANSWER_STATE_SQL, (state, int(answer_id)))
         if formed:
-            reason = "" if done else ("failed: " + (run.outcome or "quest credit did not arrive"))[:160]
-            cur.execute(
-                "UPDATE overseer_guild_ask SET state = 'ran', run_id = %s, reason = %s "
-                "WHERE id = %s AND state IN ('open', 'filled')",
-                (None, reason, int(run.ask_id)),
-            )
-        else:
+            _class_party_settle_ran(cur, run, done)
+            return
+        if gave_up:
+            for answer_id in run.answers.values():
+                cur.execute(guildsocial.ANSWER_STATE_SQL,
+                            (guildsocial.WITHDRAWN, int(answer_id)))
             cur.execute(guildsocial.ASK_STATE_SQL,
                         (guildsocial.CANCELLED, int(run.ask_id)))
+        if run.outcome:
+            cur.execute(guildsocial.ASK_REASON_SQL,
+                        (classask.stopped(run.outcome), int(run.ask_id)))
+
+
+def _class_party_settle_ran(cur, run, done: bool) -> None:
+    """A party that formed: its answerers seated and its ask ran, with why it
+    failed when its quest is not done."""
+    for answer_id in run.answers.values():
+        cur.execute(guildsocial.ANSWER_STATE_SQL, (guildsocial.SEATED, int(answer_id)))
+    reason = "" if done else ("failed: " + (run.outcome or "quest credit did not arrive"))[:160]
+    cur.execute(
+        "UPDATE overseer_guild_ask SET state = 'ran', run_id = %s, reason = %s "
+        "WHERE id = %s AND state IN ('open', 'filled')",
+        (None, reason, int(run.ask_id)),
+    )
 
 
 def _write_guild_social(social) -> int:
@@ -24162,6 +24179,8 @@ def _write_guild_social(social) -> int:
             cur.execute(guildsocial.ASK_STATE_SQL, (guildsocial.CANCELLED, ask_id))
         for answer_id in social.withdraw:
             cur.execute(guildsocial.ANSWER_STATE_SQL, (guildsocial.WITHDRAWN, answer_id))
+        for ask_id, reason in social.reasons:
+            cur.execute(guildsocial.ASK_REASON_SQL, (reason, ask_id))
         for ask_id in social.filled:
             cur.execute(guildsocial.ASK_STATE_SQL, (guildsocial.FILLED, ask_id))
         for post in social.posts:
