@@ -1834,6 +1834,17 @@ def _ended(row: dict, result: dict) -> dict:
     why = str(result.get("why") or row.get("detail") or "")
     room = str(row.get("last_room") or "")
     if outcome == "timed out" and row.get("keyword") == "blackfathom" and room:
+        age = row.get("seconds_since_boss")
+        if age is not None and _num(result, "bosses_done"):
+            why = (
+                "the 2-hour limit ended the run at %d of %d bosses, "
+                "%d minutes after the last boss"
+                % (
+                    _num(result, "bosses_done"),
+                    _num(result, "bosses_total"),
+                    round(_num(row, "seconds_since_boss") / 60),
+                )
+            )
         why = "Last room: %s; %s" % (room, why or "the run ran out of time")
     out = {
         "state": ENDED,

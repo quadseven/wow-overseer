@@ -23207,6 +23207,7 @@ def _ensure_guild_run_store() -> None:
                 " seconds_inside INT UNSIGNED NOT NULL DEFAULT 0,"
                 " bosses_done TINYINT UNSIGNED NOT NULL DEFAULT 0,"
                 " bosses_total TINYINT UNSIGNED NOT NULL DEFAULT 0,"
+                " last_boss_at TIMESTAMP NULL DEFAULT NULL,"
                 " loot_items INT UNSIGNED NOT NULL DEFAULT 0,"
                 " loot_notable VARCHAR(200) NOT NULL DEFAULT '',"
                 " ilvl_gained INT NOT NULL DEFAULT 0,"
@@ -23220,6 +23221,18 @@ def _ensure_guild_run_store() -> None:
     except pymysql.err.MySQLError:
         log.exception("guild runs: overseer_guild_run unavailable; no guild group "
                       "will be formed")
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() "
+            "AND TABLE_NAME = 'overseer_guild_run' AND COLUMN_NAME = 'last_boss_at'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute(
+                "ALTER TABLE overseer_guild_run "
+                "ADD COLUMN last_boss_at TIMESTAMP NULL DEFAULT NULL"
+            )
+            log.info("overseer_guild_run: added last_boss_at")
     # The social layer's asks and answers (guildsocial), and who proposed a
     # run, added to overseer_guild_run the way the Jev store adds a column.
     try:
@@ -23734,6 +23747,7 @@ def _follow_guild_runs() -> int:
         try:
             cur.execute(
                 "SELECT r.id, r.state, r.keyword, r.tank, r.members, r.why AS last_room, "
+                "TIMESTAMPDIFF(SECOND, r.last_boss_at, NOW()) AS seconds_since_boss, "
                 "r.created_at < NOW() - INTERVAL %s MINUTE AS stale, "
                 "c.status, c.detail, c.result FROM overseer_guild_run r "
                 "LEFT JOIN overseer_command c ON c.id = r.command_id "
@@ -23759,10 +23773,12 @@ def _follow_guild_runs() -> int:
                 continue
             if seen["state"] == guildrun.INSIDE:
                 cur.execute(
-                    "UPDATE overseer_guild_run SET state = 'inside', deaths = %s, "
+                    "UPDATE overseer_guild_run SET state = 'inside', "
+                    "last_boss_at = CASE WHEN keyword = 'blackfathom' "
+                    "AND %s > bosses_done THEN NOW() ELSE last_boss_at END, deaths = %s, "
                     "seconds_inside = %s, bosses_done = %s, bosses_total = %s, "
                     "why = %s WHERE id = %s",
-                    (seen["deaths"], seen["seconds_inside"], seen["bosses_done"],
+                    (seen["bosses_done"], seen["deaths"], seen["seconds_inside"], seen["bosses_done"],
                      seen["bosses_total"], row.get("last_room") or "", row["id"]),
                 )
                 changed += 1

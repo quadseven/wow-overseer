@@ -1271,6 +1271,24 @@ class TheOutcomeIsReadOffTheRow(unittest.TestCase):
             "the run ran out of time",
         )
 
+    def test_blackfathom_timeout_says_when_the_last_boss_fell(self):
+        seen = guildrun.outcome_from_row(
+            {
+                "status": "applied",
+                "keyword": "blackfathom",
+                "last_room": "near Twilight Lord Kelris (x 12, y 34, z -40)",
+                "seconds_since_boss": 4 * 60,
+                "result": '{"outcome":"timed out","why":"inside for 7200s",'
+                '"bosses_done":4,"bosses_total":7}',
+            }
+        )
+        self.assertEqual(
+            seen["why"],
+            "Last room: near Twilight Lord Kelris (x 12, y 34, z -40); "
+            "the 2-hour limit ended the run at 4 of 7 bosses, "
+            "4 minutes after the last boss",
+        )
+
     def test_a_cleared_run(self):
         seen = guildrun.outcome_from_row(
             {
