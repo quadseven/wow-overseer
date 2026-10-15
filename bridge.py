@@ -14018,9 +14018,13 @@ class Bridge(discord.Client):
             if not members:
                 continue
             candidates = await asyncio.to_thread(_team_candidates, guild)
-            actions = teamsync.plan(guild, members, candidates, pending, renames_on, reset_done)
-            refusals = await asyncio.to_thread(_team_refusals)
-            why = teamsync.stall_reason(guild, members, candidates, pending, bool(actor), refusals)
+            rows = await asyncio.to_thread(_team_refusal_rows)
+            refused = teamsync.refused_candidates(rows)
+            actions = teamsync.plan(
+                guild, members, candidates, pending, renames_on, reset_done, refused)
+            why = teamsync.stall_reason(
+                guild, members, candidates, pending, bool(actor),
+                teamsync.refusal_counts(rows), refused)
             if why:
                 log.info("team sync: %s", why)
             # Each target this pass names is in flight from here on, so a later
@@ -30139,16 +30143,21 @@ def _team_candidates(guild: str) -> list:
                 if (int(r["class_id"]), int(r["race"])) in wanted]
 
 
-def _team_refusals() -> dict:
-    """detail -> count of the team-sync rows refused in the last thirty
-    minutes, so a stalled pass can say what the world answered."""
+def _team_refusal_rows() -> list:
+    """The team-sync rows the world answered in the hold window, oldest
+    first: target_arg, status, detail, result and age in minutes. A refused
+    invite comes back `unchanged` with its reason in `result` (#1015), so
+    both `error` and `unchanged` rows are read; teamsync decides which of
+    them are refusals."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT detail, COUNT(*) AS n FROM overseer_command WHERE source = %s "
-            "AND status = 'error' AND created_at > NOW() - INTERVAL 30 MINUTE GROUP BY detail",
-            (TEAM_SYNC_SOURCE,),
+            "SELECT target_arg, status, detail, result, "
+            "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
+            "WHERE source = %s AND status IN ('error', 'unchanged') "
+            "AND created_at > NOW() - INTERVAL %s MINUTE ORDER BY created_at",
+            (TEAM_SYNC_SOURCE, teamsync.LASTING_HOLD_MINUTES),
         )
-        return {str(r["detail"] or "no detail"): int(r["n"]) for r in cur.fetchall()}
+        return [dict(r) for r in cur.fetchall()]
 
 
 def _team_pending() -> set:
