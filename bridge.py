@@ -346,6 +346,24 @@ def _insert_command(cmd: core.InsertCommand) -> int:
         return cur.lastrowid
 
 
+def _hold_grouped_follower_errand(name: str) -> bool:
+    """Hold a personal errand while a fresh world snapshot shows a follower."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT s.group_leader, c.guid AS own_guid, leader.name AS leader_name "
+            "FROM overseer_snapshot s JOIN characters c ON c.guid = s.guid "
+            "LEFT JOIN characters leader ON leader.guid = s.group_leader "
+            "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 60 SECOND",
+            (name,),
+        )
+        row = cur.fetchone()
+    if not row or not row.get("group_leader") or int(row["group_leader"]) == int(row["own_guid"]):
+        return False
+    leader = str(row.get("leader_name") or "unknown leader")
+    log.info("errand: %s held until ungrouped; grouped as follower of %s", name, leader)
+    return True
+
+
 def _insert_speak(cmd: relay.SpeakCommand) -> int:
     # Fitted here, the one writer every spoken row passes through, so no
     # caller can hand the column a line it refuses (#217). The council keeps
@@ -545,6 +563,8 @@ def _insert_job(name: str, mode: str, source: str) -> int:
     way kind='give' and kind='share' get their own handlers rather than
     going through the bot's own chat parser (mod_overseer.cpp:4018).
     """
+    if _hold_grouped_follower_errand(name):
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO overseer_command (target_name, command, kind, source) "
@@ -1992,6 +2012,8 @@ def _activate_training() -> bool:
             if not trainjob.should_activate(jobs, True):
                 return False
             for name in jobs:
+                if _hold_grouped_follower_errand(name):
+                    continue
                 cur.execute(
                     "INSERT INTO overseer_command "
                     "(target_name, command, kind, source) VALUES (%s, %s, 'job', %s)",
@@ -26037,6 +26059,8 @@ def _insert_mail_walk(run) -> int:
     reading the queue sees who the walk is for (the module ignores it).
     Guarded on 1265 like every other kind written here.
     """
+    if _hold_grouped_follower_errand(run.holder):
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -30651,6 +30675,8 @@ def _weapon_train_asked(need) -> bool:
 
 def _insert_weapon_train(need) -> int:
     """One kind='cast' `train-weapon` row for a member at a weapon master."""
+    if _hold_grouped_follower_errand(need.name):
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO overseer_command (target_name, command, kind, target_arg, source) "
@@ -30770,6 +30796,8 @@ def _insert_mail(take, command: str) -> int:
     a worldserver whose image predates the mail migration must warn rather than
     take the whole pass down.
     """
+    if _hold_grouped_follower_errand(take.character):
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -31500,6 +31528,8 @@ def _insert_auction(member: str, command: str, source: str = "auction") -> int:
     if _KEEP.blocks(member, command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, member)
         return 0
+    if _hold_grouped_follower_errand(member):
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -31865,6 +31895,8 @@ def _insert_learn(member: str, command: str) -> int:
 
     `target_arg` is empty: the learn executor does not read it.
     """
+    if _hold_grouped_follower_errand(member):
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -31921,6 +31953,8 @@ def _insert_recipe_buy(member: str, command: str) -> int:
     bought at the same counter in the same minute - which is also what
     `_recent_recipe_keys` needs to dedupe against.
     """
+    if _hold_grouped_follower_errand(member):
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
@@ -32119,6 +32153,8 @@ def _insert_town_errand(errand) -> int:
     everything else, which is the role that column already holds for
     kind='give' in the materials and bag passes.
     """
+    if _hold_grouped_follower_errand(errand.member):
+        return 0
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
