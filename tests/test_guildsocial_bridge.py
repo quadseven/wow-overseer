@@ -9,6 +9,7 @@ targeted at the tank), and says every line in guild chat from its speaker.
 import asyncio
 import contextlib
 import datetime
+import pathlib
 import sys
 import types
 import unittest
@@ -43,6 +44,11 @@ bridge._COMPLETED_PASSES.add("guild_jobs")
 
 
 class BlackfathomRunLocation(unittest.TestCase):
+    def test_run_store_migrates_the_last_boss_clock(self):
+        source = pathlib.Path(bridge.__file__).read_text(encoding="utf-8")
+        self.assertIn("last_boss_at TIMESTAMP NULL DEFAULT NULL", source)
+        self.assertIn("ADD COLUMN last_boss_at TIMESTAMP NULL DEFAULT NULL", source)
+
     def test_active_run_saves_its_room_before_the_party_leaves(self):
         writes = []
 
@@ -104,6 +110,8 @@ class BlackfathomRunLocation(unittest.TestCase):
         self.assertEqual(
             writes[0][1][-2], "near Twilight Lord Kelris (x 12, y 34, z -40)"
         )
+        self.assertIn("last_boss_at = CASE", writes[0][0])
+        self.assertEqual(writes[0][1][0], 4)
 
 
 def row(name, level, class_id, **kw):
@@ -363,6 +371,9 @@ class TheBridgeWrites(unittest.TestCase):
             def execute(self, sql, args=()):
                 if "information_schema.STATISTICS" in sql:
                     raise bridge.pymysql.err.MySQLError("db unavailable")
+
+            def fetchone(self):
+                return {"n": 1}
 
             def __enter__(self):
                 return self

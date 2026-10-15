@@ -59,6 +59,8 @@ class Fake(BaseHTTPRequestHandler):
 class CliTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if not sandbox_caps.LOCALHOST:
+            return
         cls.server = HTTPServer(("127.0.0.1", 0), Fake)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.env = mock.patch.dict(
@@ -69,6 +71,8 @@ class CliTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        if not sandbox_caps.LOCALHOST:
+            return
         cls.env.stop()
         cls.server.shutdown()
         cls.server.server_close()
