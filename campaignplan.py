@@ -29,6 +29,9 @@ holds that to jobs.PORTAL_KEYWORDS. A run is offered when:
   * its door does not need a key nobody in the family holds (DOOR_KEYS): the
     Scarlet Armory and Cathedral wait for the Scarlet Key from the Library,
     Dire Maul West and North for the Crescent Key from the East wing.
+  * the family's two latest runs there did not both stall, the later no
+    further in than the earlier (`Facts.stalled`, dungeonstall.py): a third
+    run would stall at the same wall.
   * it has not been run to its target count (`target`).
 
 HOW MANY RUNS (`target`). Not a fixed fifty:
@@ -150,6 +153,9 @@ KEY_ITEMS = tuple(sorted({key for key, _name, _where in DOOR_KEYS.values()}))
 # Why a run is not offered, beyond council's door refusals.
 REFUSED_OUTGROWN = "outgrown"
 REFUSED_LOCKED = "locked"
+# The family's two latest runs there stalled, the later no further in
+# (dungeonstall.py, #1041): a third would stall the same way.
+REFUSED_STALLED = "stalled"
 
 LEVEL_CAP = 60
 
@@ -528,6 +534,8 @@ class Facts:
     won         map id -> pieces the loot council gave a member, or None
     bosses      map id -> (lowest, highest) boss level, or None
     keys        door key entries somebody carries (DOOR_KEYS), or None
+    stalled     Run keyword -> why it stalled twice running
+                (dungeonstall.barred), or None when unread
     """
 
     family: str
@@ -544,6 +552,7 @@ class Facts:
     won: dict | None = None
     bosses: dict | None = None
     keys: frozenset | None = None
+    stalled: dict | None = None
 
     @property
     def weakest(self) -> tuple:
@@ -723,19 +732,33 @@ def _locked(facts: Facts, run: Run) -> str:
     )
 
 
+def _stalled(facts: Facts, run: Run) -> str:
+    """Why the family's last two runs of `run` say a third would stall, or ""."""
+    return str((facts.stalled or {}).get(run.keyword) or "")
+
+
+def _refusal_kind(facts: Facts, run: Run, level: int) -> tuple:
+    """(kind, why) `run` is not offered, ("", "") when it is."""
+    kind, why = council.door_refusal_kind(run.keyword, list(facts.level_rows))
+    if why:
+        return kind, why
+    for kind, why in (
+        (REFUSED_OUTGROWN, _outgrown_run(facts, run, level)),
+        (REFUSED_LOCKED, _locked(facts, run)),
+        (REFUSED_STALLED, _stalled(facts, run)),
+    ):
+        if why:
+            return kind, why
+    return "", ""
+
+
 def refusal_kinds(facts: Facts) -> dict:
     """Run keyword -> (kind, why) it is not offered, for every run that is
     not. The kinds are council's REFUSED_* and this module's."""
     _who, level = facts.weakest
     out = {}
     for run in RUNS:
-        kind, why = council.door_refusal_kind(run.keyword, list(facts.level_rows))
-        if not why:
-            why = _outgrown_run(facts, run, level)
-            kind = REFUSED_OUTGROWN if why else ""
-        if not why:
-            why = _locked(facts, run)
-            kind = REFUSED_LOCKED if why else ""
+        kind, why = _refusal_kind(facts, run, level)
         if why:
             out[run.keyword] = (kind, why)
     return out

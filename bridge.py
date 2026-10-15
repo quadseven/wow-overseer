@@ -97,6 +97,7 @@ import gatherband
 import craft_supply
 import dungeonpace
 import dungeonprogression
+import dungeonstall
 import equipscore
 import item_plan
 import jev
@@ -3723,6 +3724,9 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
                                  "the bosses' levels")
             if rows is not None:
                 _PLANNER_BOSSES = campaignplan.bosses(rows)
+        # A DOOR THE FAMILY STALLED AT TWICE RUNNING is not chosen again
+        # (dungeonstall.py, #1041): the stall breaker just left it.
+        stalled = dungeonstall.barred(_stuck_doors(cur, names))
     done, failed = campaignplan.ledger(runs, names)
     quests = (None if quest_rows is None or rewarded is None
               else campaignplan.open_quests(quest_rows, rewarded, level_rows))
@@ -3735,7 +3739,8 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
         deaths=_read_or_none(campaignplan.per_map, died),
         won=_read_or_none(campaignplan.per_map, won),
         bosses=_PLANNER_BOSSES,
-        keys=_read_or_none(campaignplan.keys_held, keys))
+        keys=_read_or_none(campaignplan.keys_held, keys),
+        stalled=stalled)
 
 
 def _planner_catalog(cur) -> dict | None:
@@ -3907,6 +3912,7 @@ def _pace_reads(key: str, fam: dict, level_rows: list, ids: list) -> dict:
         back = _planner_rows(cur, dungeonpace.LAST_BACK_SQL, (key,), "the last step back")
         unscored = _planner_rows(cur, dungeonpace.UNSCORED_SQL, (key,),
                                  "the unscored pace rows") or []
+        stuck = _stuck_doors(cur, names)
     return {
         "members": dungeonpace.members_from_rows(level_rows, gear, armed),
         "runs": runs or [],
@@ -3915,6 +3921,7 @@ def _pace_reads(key: str, fam: dict, level_rows: list, ids: list) -> dict:
         "open": (opened or [None])[0],
         "back": {str(r["door"]): r.get("at") for r in back or []},
         "unscored": unscored,
+        "stuck": frozenset(stuck),
     }
 
 
@@ -4031,6 +4038,50 @@ def _pace_score(unscored: list, runs: list) -> list:
                 cur.execute(dungeonpace.SCORE_SQL, (outcome, int(row["id"])))
                 said.append("%s: %s" % (row.get("door"), outcome))
     return said
+
+
+# --- the stall breaker (dungeonstall.py, #1041) --------------------------------
+#
+# dungeonstall.py decides; these read the run ledger and the run timeline it
+# judges from, and carry out its leave. A realm that cannot answer a read
+# (1054 or 1146) judges nothing, so no door is left on a missing column.
+
+
+def _stuck_doors(cur, names: list) -> dict:
+    """dungeonstall.stuck_doors for the family's runs in the window, on `cur`."""
+    runs = _planner_rows(
+        cur, dungeonstall.RUNS_SQL.format(holes=dungeonstall.holes(len(names))),
+        tuple(names) + (dungeonstall.WINDOW_HOURS,), "the run ledger by door")
+    ids = dungeonstall.event_ids(runs or [])
+    if not ids:
+        return {}
+    events = _planner_rows(
+        cur, dungeonstall.EVENTS_SQL.format(holes=dungeonstall.holes(len(ids))),
+        tuple(ids), "the run timeline")
+    return dungeonstall.stuck_doors(runs, events or [])
+
+
+def _stall_reads(names: list) -> dict:
+    """The family's stuck doors. Reads only."""
+    with _connect() as conn, conn.cursor() as cur:
+        return _stuck_doors(cur, names)
+
+
+def _stall_write(key: str, leave) -> None:
+    """Cancel the stuck door's entries and record why, in one transaction."""
+    with _connect() as conn, conn.cursor() as cur:
+        conn.begin()
+        try:
+            for qid in leave.drop:
+                cur.execute(dungeonstall.CANCEL_SQL, (qid,))
+            cur.execute(dungeonpace.INSERT_SQL, (
+                key, dungeonstall.DECISION, leave.door, "", leave.drop[0], "rule",
+                None, leave.why[:255], ""))
+            cur.execute(dungeonpace.CLOSE_SQL, ("left", int(cur.lastrowid or 0)))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 
 # --- the leveling zone (levelroute.py) -----------------------------------------
@@ -18981,12 +19032,24 @@ class Bridge(discord.Client):
         return True
 
     async def _queue_holds(self, key: str, rows: list, fam: dict) -> bool:
-        """Whether the queue's step waits this pass: the ladder took it
-        (mod-overseer#767), or the gear hold keeps the family in town (#146).
+        """Whether the queue's step waits this pass: the stall breaker left
+        the door (#1041), the ladder took it (mod-overseer#767), or the gear
+        hold keeps the family in town (#146).
 
-        THE LADDER FIRST: a door the family keeps wiping in is stepped down
-        from before the gear hold or the step can send it back in.
+        THE STALL BREAKER FIRST, and even mid-run: mod-overseer opens the next
+        run of a door half a minute after the last one ends, so a breaker
+        that waited for the family to be outside would miss the gap. Then
+        THE LADDER: a door the family keeps wiping in is stepped down from
+        before the gear hold or the step can send it back in.
         """
+        breaker = getattr(self, "_stall_breaker", None)
+        if breaker is not None:
+            try:
+                if await breaker(key, rows, fam):
+                    return True
+            except Exception:
+                log.exception("stall: the pass for %s failed; the queue steps as "
+                              "before", campaignqueue._family(key))
         pace = getattr(self, "_dungeon_pace", None)
         if pace is not None:
             try:
@@ -18997,6 +19060,30 @@ class Bridge(discord.Client):
                               "before", campaignqueue._family(key))
         gear_hold = getattr(self, "_queue_gear_hold", None)
         return gear_hold is not None and await gear_hold(rows[0], fam)
+
+    async def _stall_breaker(self, key: str, rows: list, fam: dict) -> bool:
+        """Leave the head door when the family stalled at it twice running.
+
+        True when it did: every pending entry for the door is cancelled and
+        recorded, and the family goes on the default job at once, which
+        stands the module's run coordinator down (or walks the party out).
+        The next pass starts the next entry, or the planner picks a door,
+        refusing this one. dungeonstall.py decides.
+        """
+        if raidrun.is_raid(str(rows[0].get("keyword") or "")):
+            return False
+        names = list(fam["names"])
+        stuck = await asyncio.to_thread(_stall_reads, names)
+        leave = dungeonstall.leave(rows, stuck)
+        if leave is None:
+            return False
+        # THE JOB FIRST: a cancel that landed without it would leave the family
+        # on the door's job with no entry to take it off again.
+        said = await asyncio.to_thread(_apply_queue_move, campaignqueue.Move(
+            quest=True, why=leave.why), names, key)
+        await asyncio.to_thread(_stall_write, key, leave)
+        log.warning("stall: %s: %s", campaignqueue._family(key), said)
+        return True
 
     async def _pace_facts(self, key: str, rows: list, fam: dict):
         """(dungeonpace.Facts, the reads) for one family, or (None, reads)
@@ -19033,10 +19120,13 @@ class Bridge(discord.Client):
             record=dungeonpace.viability(reads["runs"], _pace_map(head_kw), since),
             members=members, gates=gates, notes=notes, open=opened, changed=changed,
             done=fam["leader"].get("dungeon_runs_done"),
+            # A door the family stalled at twice running is no rung to step to.
             cands=tuple(dungeonpace.candidates(head_kw, level_rows, reads["keys"],
-                                               reads["runs"], avoid={head_kw})),
+                                               reads["runs"],
+                                               avoid={head_kw} | reads["stuck"])),
             ahead=tuple(dungeonpace.ascend(head_kw, level_rows, reads["keys"],
-                                           reads["runs"], members, avoid={door})),
+                                           reads["runs"], members,
+                                           avoid={door} | reads["stuck"])),
             returned=dungeonpace.returned(reads["started"].get(int(head["id"])),
                                           reads["back"].get(head_kw))), reads
 
