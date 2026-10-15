@@ -3342,7 +3342,14 @@ def class_held(lines) -> set:
 def _class_ready(m, book) -> bool:
     """Whether the member may be given a class quest move now: a book, online,
     out of combat and with a position read."""
-    if book is None or not m.online or m.in_combat:
+    return _class_readable(m, book) and not m.in_combat
+
+
+def _class_readable(m, book) -> bool:
+    """Whether the member's class quests can be read now: a book, online and
+    with a position read. A fight changes no quest, so it is no reason not to
+    read one (class_asking)."""
+    if book is None or not m.online:
         return False
     return not (m.map_id is None or m.x is None or m.y is None)
 
@@ -3603,8 +3610,15 @@ def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
     helpable move with no spot (classquest.no_party_spot) is not asked for:
     the member levels until its hunt's hold-off ends, then tries alone again.
     A quest asked for CLASS_ASK_STREAK_MAX times in a row with no party is not
-    asked for either while its hold lasts (class_ask_streak)."""
-    if not _class_ready(m, book):
+    asked for either while its hold lasts (class_ask_streak).
+
+    A MEMBER IN COMBAT STILL NEEDS ITS HELP (#1001). Read in a fight, the help
+    was dropped for the whole of this pass, and the social pass cancelled its
+    live ask and every yes on it, under a party meeting or up as well: two
+    guildmates said yes to a member's Call of Fire and no party formed. A
+    fight changes no quest, so the help is read as it is out of one
+    (_class_readable); only a move waits the fight out (_class_ready)."""
+    if not _class_readable(m, book):
         return [], []
     avoid, off = class_avoid(m, book, recent, hunts, now)
     m = with_walls(m, recent)
