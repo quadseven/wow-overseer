@@ -49,13 +49,15 @@ RENAMES_PER_PASS = 6
 RESETS_PER_PASS = 2
 # THE LEVEL A RECRUIT MAY HAVE, by seat (#1015). A raid seat keeps what it
 # earns, so it takes only a level-1 character, the band the realm's natural
-# reset set (Overseer.Recruit.LevelMin/LevelMax). A quester is reset to level
-# 1 with nothing once it holds its name, so its seat may take a rotating bot up
-# to level 10: no rotating bot of a quester's class and race is still level 1
-# (2026-10-15: the lowest is level 5). RECRUIT_MAX_LEVEL is the higher of the
-# two, what the bridge reads candidates up to, and the realm's LevelMax.
+# reset set. A quester is reset to level 1 with nothing once it holds its name,
+# so the level it joins at does not matter and its seat takes a rotating bot at
+# any level up to the realm's MaxPlayerLevel (60): on 2026-10-15 the lowest
+# rotating bot of a quester's class and race was level 5 to 22, so a ceiling
+# of 10 left 8 of the 10 seats with no candidate. RECRUIT_MAX_LEVEL is the
+# higher of the two, what the bridge reads candidates up to, and the realm's
+# Overseer.Recruit.LevelMax.
 RAID_RECRUIT_MAX_LEVEL = 1
-QUESTER_RECRUIT_MAX_LEVEL = 10
+QUESTER_RECRUIT_MAX_LEVEL = 60
 RECRUIT_MAX_LEVEL = max(RAID_RECRUIT_MAX_LEVEL, QUESTER_RECRUIT_MAX_LEVEL)
 RESET_COMMAND = "reset-level-1"
 

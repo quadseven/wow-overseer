@@ -289,9 +289,9 @@ class StalledOnRenames(unittest.TestCase):
         self.assertIn(
             "no candidate on a rotating random-bot account fits Fizzog (level 1 "
             "or under), Fuggo (level 1 or under), Gorrk (level 1 or under), "
-            "Haggo (level 1 or under), Hrunt (level 1 or under), Tharn (level 10 "
-            "or under), Mirra (level 10 or under), Velo (level 10 or under), "
-            "Durga (level 10 or under), Fizzik (level 10 or under)",
+            "Haggo (level 1 or under), Hrunt (level 1 or under), Tharn (level 60 "
+            "or under), Mirra (level 60 or under), Velo (level 60 or under), "
+            "Durga (level 60 or under), Fizzik (level 60 or under)",
             why,
         )
 
@@ -449,17 +449,19 @@ class Questers(unittest.TestCase):
             ["recruit for Hungrygrunt's seat"],
         )
 
-    def test_a_raid_seat_takes_level_1_and_a_quester_seat_up_to_10(self):
+    def test_a_raid_seat_takes_level_1_and_a_quester_seat_any_level(self):
         # #1015: a raid recruit keeps its levels, so its seat takes level 1
-        # only; a quester is reset to level 1, so a level-4 bot may fill one.
+        # only; a quester is reset to level 1, so a bot of any level may fill
+        # one (a level-22 one here).
         members = [m for m in _bonkers_full_raid() if m["name"] != "Hungrygrunt"]
-        acts = teamsync.plan("Bonkers", members, [ORC_WARLOCK], set(), False)
+        lock = dict(ORC_WARLOCK, level=22)
+        acts = teamsync.plan("Bonkers", members, [lock], set(), False)
         self.assertEqual(
             [a.why for a in acts if a.kind == "invite"],
             ["recruit for Grakk's seat"],
         )
         self.assertEqual(teamsync.RAID_RECRUIT_MAX_LEVEL, 1)
-        self.assertEqual(teamsync.QUESTER_RECRUIT_MAX_LEVEL, 10)
+        self.assertEqual(teamsync.QUESTER_RECRUIT_MAX_LEVEL, 60)
 
     def test_a_joined_recruit_takes_the_quester_name(self):
         members = _bonkers_full_raid() + [
