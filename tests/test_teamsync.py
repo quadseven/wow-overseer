@@ -601,6 +601,18 @@ class Refusals(unittest.TestCase):
         rows = [_refused("Randomlock", 360, result=lasting)]
         self.assertEqual(teamsync.refused_candidates(rows), {})
 
+    def test_the_newest_refusal_decides_whatever_the_row_order(self):
+        lasting = '{"outcome":"refused","reason":"already in a guild"}'
+        # An older six-hour refusal, then a newer one-hour refusal that has
+        # expired: the newer one decides, so the candidate is free again.
+        rows = [_refused("Randomlock", 300, result=lasting), _refused("Randomlock", 70)]
+        self.assertEqual(teamsync.refused_candidates(rows), {})
+        self.assertEqual(teamsync.refused_candidates(rows[::-1]), {})
+        # An older expired refusal, then a newer one in its hold: held.
+        rows = [_refused("Randomlock", 90), _refused("Randomlock", 20)]
+        self.assertIn("Randomlock", teamsync.refused_candidates(rows))
+        self.assertIn("Randomlock", teamsync.refused_candidates(rows[::-1]))
+
     def test_a_refused_candidate_is_not_invited_again_and_the_next_one_is(self):
         second = dict(ORC_WARLOCK, name="Secondlock")
         refused = teamsync.refused_candidates([_refused("Randomlock", 10)])

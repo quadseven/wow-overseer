@@ -136,7 +136,9 @@ def refusal_reason(status: str, detail, result) -> str:
 def refused_candidates(rows: list) -> dict:
     """candidate -> reason for the invites the module refused recently enough
     to hold. `rows` are invite rows: target_arg, status, detail, result and
-    age (minutes since written). The newest refusal per candidate decides."""
+    age (minutes since written). The newest refusal per candidate decides:
+    the rows are walked oldest first (largest age first), so a newer row for
+    the same candidate always writes or clears its entry last."""
     out = {}
     for row in sorted(rows, key=lambda r: int(r.get("age") or 0), reverse=True):
         reason = refusal_reason(
