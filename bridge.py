@@ -23691,6 +23691,33 @@ def _start_guild_run(decision) -> int:
     return run_id
 
 
+_BLACKFATHOM_BOSSES_SQL = (
+    "SELECT ct.name, cr.position_x AS x, cr.position_y AS y, cr.position_z AS z "
+    "FROM acore_world.instance_encounters ie "
+    "JOIN acore_world.creature cr ON cr.id = ie.creditEntry "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE ie.creditType = 0 AND cr.map = 48"
+)
+
+
+def _blackfathom_last_room(cur, row: dict) -> str:
+    """Locate a run before its members leave the instance after a timeout."""
+    names = [m["name"] for m in guildrun._member_list(row.get("members"))]
+    if not names:
+        return ""
+    cur.execute(
+        "SELECT name, pos_x, pos_y, pos_z FROM overseer_snapshot "
+        "WHERE map_id = 48 AND name IN (" + ",".join(["%s"] * len(names)) + ") "
+        "ORDER BY name = %s DESC, updated_at DESC LIMIT 1",  # noqa: S608 - placeholders only
+        (*names, row.get("tank") or ""),
+    )
+    position = cur.fetchone()
+    if not position:
+        return ""
+    cur.execute(_BLACKFATHOM_BOSSES_SQL)
+    return guildrun.blackfathom_room(position, list(cur.fetchall()))
+
+
 def _follow_guild_runs() -> int:
     """Read each run in flight off its overseer_command row and record what
     it says. A run with no answer by guildrun.LOST_AFTER_MINUTES is lost."""
@@ -23698,7 +23725,8 @@ def _follow_guild_runs() -> int:
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
-                "SELECT r.id, r.state, r.created_at < NOW() - INTERVAL %s MINUTE AS stale, "
+                "SELECT r.id, r.state, r.keyword, r.tank, r.members, r.why AS last_room, "
+                "r.created_at < NOW() - INTERVAL %s MINUTE AS stale, "
                 "c.status, c.detail, c.result FROM overseer_guild_run r "
                 "LEFT JOIN overseer_command c ON c.id = r.command_id "
                 "WHERE r.state IN ('queued', 'inside')",
@@ -23710,6 +23738,10 @@ def _follow_guild_runs() -> int:
             raise
         rows = list(cur.fetchall())
         for row in rows:
+            if row["keyword"] == "blackfathom" and row.get("status"):
+                room = _blackfathom_last_room(cur, row)
+                if room:
+                    row["last_room"] = room
             seen = guildrun.outcome_from_row(row) if row.get("status") else None
             if seen is None and row.get("stale"):
                 seen = {"state": guildrun.ENDED, "outcome": "lost",
@@ -23720,9 +23752,10 @@ def _follow_guild_runs() -> int:
             if seen["state"] == guildrun.INSIDE:
                 cur.execute(
                     "UPDATE overseer_guild_run SET state = 'inside', deaths = %s, "
-                    "seconds_inside = %s, bosses_done = %s, bosses_total = %s WHERE id = %s",
+                    "seconds_inside = %s, bosses_done = %s, bosses_total = %s, "
+                    "why = %s WHERE id = %s",
                     (seen["deaths"], seen["seconds_inside"], seen["bosses_done"],
-                     seen["bosses_total"], row["id"]),
+                     seen["bosses_total"], row.get("last_room") or "", row["id"]),
                 )
                 changed += 1
                 continue
