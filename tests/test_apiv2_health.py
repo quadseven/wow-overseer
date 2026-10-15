@@ -159,7 +159,13 @@ class Bank(unittest.TestCase):
 class Text(unittest.TestCase):
     def test_strings_are_one_line_of_ascii_within_their_limits(self):
         f = health.finding(
-            "k", "Odo’s Ley Staff — " + "x" * 200, "gear", 1, 1.0, "a\nb é", None
+            "k",
+            "Odo\u2019s Ley Staff \u2014 " + "x" * 200,
+            "gear",
+            1,
+            1.0,
+            "a\nb \u00e9",
+            None,
         )
         self.assertTrue(f["title"].isascii() and f["evidence"].isascii())
         self.assertTrue(f["title"].startswith("Odo's Ley Staff - "))
