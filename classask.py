@@ -25,7 +25,10 @@ could walk to (a use that changed nothing) is never asked for, and one asked
 for guildjobs.CLASS_ASK_STREAK_MAX times in a row that did not get it done
 (no party, or a party that went and failed, #1028) is not asked for again
 until its hold runs out: both yield to levelling meanwhile
-(guildjobs.class_asking).
+(guildjobs.class_asking). While a member asks, the guild jobs give it no other
+step (guildjobs.asking_line, #1072): a step in hand holds it "on a guild job",
+which cancelled its live ask and kept it from asking again, so its run never
+reached the server's tries.
 
 WHO ANSWERS. A free member of the same guild, not already on an ask, within
 LEVEL_BAND levels of the asker, on its map (the open world's maps are
