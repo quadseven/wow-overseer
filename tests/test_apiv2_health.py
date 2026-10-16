@@ -18,6 +18,7 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
 import apiv2  # noqa: E402
+import dungeonstall  # noqa: E402
 import families as families_module  # noqa: E402
 import guildfund  # noqa: E402
 import guildrun  # noqa: E402
@@ -83,6 +84,84 @@ class Dungeons(unittest.TestCase):
         runs = [run("rfc", "wiped")] * 7
         runs += [run("wc", "cleared")] * 3 + [run("wc", "wiped")] * 5
         self.assertEqual([], health.dungeon_findings(runs, NOW))
+
+
+def family_run(rid, map_id=33, outcome="stalled", leader="Zug", ago=HOUR):
+    return {
+        "id": rid,
+        "leader_name": leader,
+        "map_id": map_id,
+        "state": "ended",
+        "outcome": outcome,
+        "ended_reason": "dungeon module switched itself off",
+        "started_unix": NOW - ago,
+        "ended_unix": NOW - ago + 1800,
+    }
+
+
+def boss(rid, mask):
+    return {"run_id": rid, "kind": "boss", "detail": "x (mask 0 -> %d)" % mask}
+
+
+ZUG = {"Zug": ["Zug", "Ugga"]}
+
+
+class FamilyLoops(unittest.TestCase):
+    def test_eleven_stalled_shadowfang_runs_are_one_finding(self):
+        """2026-10-15: one family ran map 33 eleven times, stalling each time."""
+        runs = [family_run(i, ago=(12 - i) * HOUR) for i in range(1, 12)]
+        streaks = health.family_streaks(runs, ZUG)
+        events = [boss(1, 15), boss(2, 63), boss(2, 63), boss(3, 15)]
+        (f,) = health.family_loop_findings(streaks, events, NOW)
+        self.assertEqual("family-run-loop:Zug:33", f["key"])
+        self.assertEqual(
+            "Zug's family ran Shadowfang Keep 11 times without a clear", f["title"]
+        )
+        # 11 failed runs, the first 11 hours ago, 11 x half an hour lost.
+        self.assertEqual((11, 11.0, 60.5), (f["affected"], f["hours"], f["impact"]))
+        self.assertIn("11 stalled", f["evidence"])
+        self.assertIn('"dungeon module switched itself off"', f["evidence"])
+        self.assertIn("encounter mask 63 (6 encounters)", f["evidence"])
+        self.assertEqual("dungeons", f["area"])
+
+    def test_every_ending_but_a_clear_counts(self):
+        runs = [
+            family_run(1, outcome="split_failed"),
+            family_run(2, outcome="client_lost"),
+            family_run(3, outcome="stalled"),
+        ]
+        (f,) = health.family_loop_findings(health.family_streaks(runs, ZUG), [], NOW)
+        self.assertIn("1 client_lost, 1 split_failed, 1 stalled", f["evidence"])
+        self.assertIn("no encounter credited", f["evidence"])
+
+    def test_a_member_leading_counts_for_the_family(self):
+        runs = [family_run(i, leader="Ugga") for i in (1, 2, 3)]
+        self.assertEqual([(("Zug", 33))], list(health.family_streaks(runs, ZUG)))
+
+    def test_a_clear_of_the_map_ends_the_loop(self):
+        runs = [family_run(i) for i in (1, 2, 3, 4)] + [
+            family_run(5, outcome="complete")
+        ]
+        self.assertEqual({}, health.family_streaks(runs, ZUG))
+
+    def test_moving_to_another_map_ends_the_loop(self):
+        runs = [family_run(i) for i in (1, 2, 3, 4)] + [family_run(5, map_id=48)]
+        self.assertEqual({}, health.family_streaks(runs, ZUG))
+
+    def test_two_failed_runs_are_not_a_loop(self):
+        runs = [family_run(1, outcome="complete"), family_run(2), family_run(3)]
+        self.assertEqual({}, health.family_streaks(runs, ZUG))
+
+    def test_a_run_still_open_on_the_map_does_not_break_the_loop(self):
+        runs = [family_run(i) for i in (1, 2, 3)] + [
+            dict(family_run(4), state="active", outcome="")
+        ]
+        (rows,) = health.family_streaks(runs, ZUG).values()
+        self.assertEqual([1, 2, 3], [r["id"] for r in rows])
+
+    def test_a_stranger_leading_is_no_familys_loop(self):
+        runs = [family_run(i, leader="Nobody") for i in (1, 2, 3)]
+        self.assertEqual({}, health.family_streaks(runs, ZUG))
 
 
 class Questers(unittest.TestCase):
@@ -252,6 +331,8 @@ class Handler(unittest.TestCase):
             health.BANK_MOVED_SQL: [{"guild": "Bonkers", "at": NOW - 100 * HOUR}],
             health.FUND_SQL: [],
             health.INVITES_SQL: [],
+            health.FAMILY_RUNS_SQL: [family_run(i, leader="Grug") for i in (7, 6, 5)],
+            dungeonstall.EVENTS_SQL: [boss(6, 3)],
         }
         ctx, asked = ctx_for(answers)
         stuck = {
@@ -278,9 +359,13 @@ class Handler(unittest.TestCase):
             [
                 "guild-bank-empty:Bonkers",
                 "dungeon-clear-rate:blackfathom",
+                "family-run-loop:Grug:33",
                 "stuck:Grug:s",
             ],
             keys,
+        )
+        self.assertIn(
+            "encounter mask 3 (2 encounters)", payload["findings"][2]["evidence"]
         )
         self.assertEqual(
             "Blackfathom Deeps runs clear 0 of 10 in a day",
@@ -290,6 +375,11 @@ class Handler(unittest.TestCase):
         # The guild list is bound, never formatted into the statement.
         runs_params = [p for sql, p in asked if "overseer_guild_run" in sql][0]
         self.assertEqual(("Bonkers", "Cave", 1, 500), runs_params)
+        # The family names are bound too, and only the loop's runs' timeline is read.
+        family_params = [p for sql, p in asked if "FROM overseer_dungeon_run " in sql]
+        self.assertEqual([("Grug", "Ugga", 24, 500)], family_params)
+        event_params = [p for sql, p in asked if "overseer_dungeon_run_event" in sql]
+        self.assertEqual([(5, 6, 7)], event_params)
 
     def test_a_realm_without_the_tables_reads_as_no_findings(self):
         gap = realmread.MISSING_TABLE
@@ -301,6 +391,7 @@ class Handler(unittest.TestCase):
             health.BANK_MOVED_SQL: gap,
             health.FUND_SQL: gap,
             health.INVITES_SQL: gap,
+            health.FAMILY_RUNS_SQL: gap,
         }
         ctx, _ = ctx_for(answers)
         with (
