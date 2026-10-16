@@ -475,6 +475,7 @@ class _Bridge:
         self, answers, walk=None, states=(), ask_live=True, meet=None, stands=None
     ):
         self._class_board = classparty.Board()
+        self._guild_run_names = set()
         self.rows = []
         self.commands = {}
         self.stand_reads = []

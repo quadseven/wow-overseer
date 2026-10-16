@@ -59,14 +59,23 @@ refused or a meeting missed, and the members page says that step in place of
 
 BOUNDED. An ask lives guildsocial.ASK_MINUTES and, filled, FILLED_GRACE_MINUTES
 more, unless a party is up for it: then the party's own clock (classparty.py)
-bounds it. A quest nobody answers holds nobody.
+bounds it, and so the hold of its members. A quest nobody answers holds nobody.
 
 THE GROUP is classparty.py's: a filled ask has the asker and its answerers walk
 to the objective and meet there, then the module seats them in one party
 (`party-up`), walks it to the objective (`party-walk`) and ends it
 (`party-disband`). A member is held out of the dungeon passes (held_names)
-while it travels to the meeting and while the party is up, and no longer from
-the moment the meeting fails, the party is refused or it ends.
+while it travels to the meeting and while the party is up; before that, from
+its ask's first yes (below).
+
+A HELP PARTY HOLDS ITS MEMBERS FROM ITS FIRST YES (#1001). On 2026-10-15 an
+asker whose Call of Fire had drawn yes answers 20 times asked the guild for
+Ragefire Chasm 24 times in 12 hours, and its walks to the objective ended
+"character is held by another verb": the ask held nobody until its party was
+on the board, so the dungeon asks and the guild jobs took the asker and its
+helpers in between. From the pass a yes stands, the asker and its helpers are
+held out of the dungeon passes and the guild jobs (gathering), until the ask
+ends or the yes is taken back.
 
 PURE: rows in, a guildsocial.Pass out.
 """
@@ -187,6 +196,32 @@ def held_names(parties) -> set:
     held = set()
     for party in parties or ():
         held.update(party.names())
+    return held
+
+
+def gathering(quest_pass, asks, answers) -> set:
+    """The members of each help party still gathering: the asker of every live
+    quest ask this pass keeps that has a yes standing after it, the yeses it
+    says now among them, and those helpers. The dungeon passes and the guild
+    jobs leave them alone, so no other verb holds one when its party walks to
+    the objective (#1001). An ask nobody has answered holds nobody."""
+    ended = {e[0] for e in quest_pass.expire} | set(quest_pass.cancel)
+    live = {
+        a.id: a.asker
+        for a in quest_asks(asks)
+        if a.state in LIVE_ASKS and a.id not in ended
+    }
+    gone = set(quest_pass.withdraw)
+    standing = [
+        (y.ask_id, y.member)
+        for y in answers or ()
+        if y.state == YES and y.id not in gone
+    ]
+    standing += [(r.ask_id, r.member) for r in quest_pass.replies]
+    held = set()
+    for ask_id, member in standing:
+        if ask_id in live:
+            held.update((live[ask_id], member))
     return held
 
 
