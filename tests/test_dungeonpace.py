@@ -115,7 +115,7 @@ class TheRecordOfADoor(unittest.TestCase):
         runs = [
             run("wipe", 0),
             run("wipe", 10),
-            run("left", 20),
+            run("complete", 20),
             run("wipe", 30),
             run("left", 40),
         ]
@@ -169,6 +169,21 @@ class TheEasierDoors(unittest.TestCase):
 class TheDecision(unittest.TestCase):
     WIPES = [run("wipe", 0), run("wipe", 10)]
 
+    def test_three_different_failed_blackfathom_runs_step_down_to_a_clear(self):
+        rows = [dict(r, level=26) for r in HORDE]
+        runs = [
+            run("complete", -10, map_id=43),
+            run("emptied", 0, map_id=48),
+            run("stalled", 10, map_id=48),
+            run("wipe", 20, map_id=48),
+        ]
+        decision = pace.decide(
+            facts(head("blackfathom"), members(rows), runs, level_rows=rows)
+        )
+        self.assertEqual(pace.STEP_DOWN, decision.kind)
+        self.assertEqual("wailing", decision.target)
+        self.assertNotIn(pace.STAY, decision.offer)
+
     def test_two_wipes_step_down_and_jev_may_not_keep_the_door(self):
         d = pace.decide(facts(head("scarlet-library"), members(ALLIANCE), self.WIPES))
         self.assertEqual(pace.STEP_DOWN, d.kind)
@@ -177,7 +192,7 @@ class TheDecision(unittest.TestCase):
         self.assertIn("gnomeregan", d.offer)
 
     def test_a_high_rate_alone_lets_jev_keep_the_door(self):
-        runs = [run("wipe", 0), run("left", 5), run("wipe", 10), run("left", 20)]
+        runs = [run("wipe", 0), run("complete", 5), run("wipe", 10), run("left", 20)]
         d = pace.decide(facts(head("scarlet-library"), members(ALLIANCE), runs))
         self.assertEqual(pace.STEP_DOWN, d.kind)
         self.assertIn(pace.STAY, d.offer)
@@ -203,6 +218,16 @@ class TheDecision(unittest.TestCase):
 
     def test_a_clearable_door_holds(self):
         runs = [run("wipe", 0), run("complete", 10)]
+        d = pace.decide(facts(head("scarlet-library"), members(ALLIANCE), runs))
+        self.assertFalse(d.acts)
+
+    def test_a_clear_breaks_the_mixed_failure_streak(self):
+        runs = [
+            run("emptied", 0),
+            run("stalled", 10),
+            run("complete", 20),
+            run("wipe", 30),
+        ]
         d = pace.decide(facts(head("scarlet-library"), members(ALLIANCE), runs))
         self.assertFalse(d.acts)
 
