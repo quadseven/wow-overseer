@@ -1808,12 +1808,12 @@ def _world_holds(
         if hold.lifted:
             continue
         attempts = max(1, int((tries or {}).get(key, 1)))
-        wait_hours = (2, 4, max(1, int(memory_hours)))[min(attempts, 3) - 1]
+        wait = (15, 30, max(1, int(memory_hours)) * 60)[min(attempts, 3) - 1]
         created = row.get("created_at")
         if isinstance(created, datetime):
             if created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)
-            hold.retry_at = created + timedelta(hours=wait_hours)
+            hold.retry_at = created + timedelta(minutes=wait)
             if hold.retry_at <= now:
                 hold.lifted = True
                 continue
@@ -1863,7 +1863,8 @@ def equips_to_queue(
     carried, and asking again inside the window would be the duplicate.
 
     `tries` counts (holder, command) over the longer memory window. Repeated
-    world refusals wait two hours, four hours, then the full memory window.
+    world refusals wait fifteen minutes, thirty minutes, then the full memory
+    window.
     Other attempts are eligible again as soon as the short retry window ends.
 
     An `applied` answer ends this attempt. If another gear pass later puts
