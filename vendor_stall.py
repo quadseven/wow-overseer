@@ -77,7 +77,13 @@ FAMILY_COHESION_YARDS = 100.0
 # in the leader's column, so the member is fetched after the sale either way;
 # counted as a split, it called the trip off every STALL_AFTER_SECONDS and the
 # leader turned between the two walks for hours with neither finished.
-HELD_FOR_THE_LEADER = frozenset({"held too far to walk", "held off a deadly walk"})
+HELD_FOR_THE_LEADER = frozenset(
+    {
+        "held too far to walk",
+        "held off a deadly walk",
+        "walking back to the leader",
+    }
+)
 
 
 def following(names, states: Mapping[str, str]) -> tuple[str, ...]:
