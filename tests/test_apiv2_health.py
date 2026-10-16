@@ -85,6 +85,100 @@ class Dungeons(unittest.TestCase):
         self.assertEqual([], health.dungeon_findings(runs, NOW))
 
 
+def family_run(
+    run_id,
+    outcome="stalled",
+    map_id=33,
+    family="Zug",
+    portal="shadowfang",
+    ago=HOUR,
+):
+    return {
+        "id": run_id,
+        "map_id": map_id,
+        "portal_keyword": portal,
+        "outcome": outcome,
+        "family": family,
+        "leader_name": family,
+        "started_unix": NOW - ago,
+    }
+
+
+def boss_event(run_id, before, after):
+    gained = bin(after & ~before).count("1")
+    return {
+        "run_id": run_id,
+        "kind": "boss",
+        "detail": "%d encounter%s credited, %d in all (mask %d -> %d)"
+        % (gained, "" if gained == 1 else "s", bin(after).count("1"), before, after),
+    }
+
+
+def stalled_event(run_id, reason):
+    return {"run_id": run_id, "kind": "stalled", "detail": reason}
+
+
+class FamilyRunLoop(unittest.TestCase):
+    def test_eleven_stalled_runs_of_a_map_produces_family_run_loop_finding(self):
+        runs = [
+            family_run(
+                590550 + i,
+                "stalled",
+                map_id=33,
+                family="Zug",
+                ago=int((9 - i * 0.5) * HOUR),
+            )
+            for i in range(11)
+        ]
+        events = [
+            boss_event(590560, 31, 63),
+            stalled_event(590560, "switched itself off"),
+        ]
+        (f,) = health.family_run_loop_findings(runs, NOW, events=events)
+        self.assertEqual("family-run-loop:Zug:33", f["key"])
+        self.assertEqual(
+            "Zug's family ran Shadowfang Keep 11 times with no clear", f["title"]
+        )
+        self.assertEqual("dungeons", f["area"])
+        self.assertEqual(11, f["affected"])
+        self.assertEqual(9.0, f["hours"])
+        self.assertEqual(99.0, f["impact"])
+        self.assertIn("Shadowfang Keep", f["evidence"])
+        self.assertIn("11 times", f["evidence"])
+        self.assertIn("stalled", f["evidence"])
+        self.assertIn("mask reached: 63", f["evidence"])
+        self.assertTrue(f["since"].endswith("Z"))
+
+    def test_a_family_whose_latest_run_cleared_produces_no_finding(self):
+        runs = [
+            family_run(
+                590550 + i, "stalled", map_id=33, family="Zug", ago=(12 - i) * HOUR
+            )
+            for i in range(11)
+        ]
+        runs.append(family_run(590562, "cleared", map_id=33, family="Zug", ago=HOUR))
+        self.assertEqual([], health.family_run_loop_findings(runs, NOW))
+
+    def test_a_family_that_moved_to_another_map_produces_no_finding(self):
+        runs = [
+            family_run(
+                590550 + i, "stalled", map_id=33, family="Zug", ago=(12 - i) * HOUR
+            )
+            for i in range(11)
+        ]
+        runs.append(
+            family_run(
+                590562,
+                "stalled",
+                map_id=34,
+                family="Zug",
+                portal="deadmines",
+                ago=HOUR,
+            )
+        )
+        self.assertEqual([], health.family_run_loop_findings(runs, NOW))
+
+
 class Questers(unittest.TestCase):
     QUESTERS = {
         "questers": [
@@ -252,6 +346,8 @@ class Handler(unittest.TestCase):
             health.BANK_MOVED_SQL: [{"guild": "Bonkers", "at": NOW - 100 * HOUR}],
             health.FUND_SQL: [],
             health.INVITES_SQL: [],
+            health.FAMILY_RUNS_SQL: [],
+            health.FAMILY_EVENTS_SQL: [],
         }
         ctx, asked = ctx_for(answers)
         stuck = {
@@ -291,6 +387,43 @@ class Handler(unittest.TestCase):
         runs_params = [p for sql, p in asked if "overseer_guild_run" in sql][0]
         self.assertEqual(("Bonkers", "Cave", 1, 500), runs_params)
 
+    def test_the_handler_includes_family_run_loop_findings(self):
+        family_runs = [
+            family_run(
+                590550 + i,
+                "stalled",
+                map_id=33,
+                family="Grug",
+                ago=int((9 - i * 0.5) * HOUR),
+            )
+            for i in range(11)
+        ]
+        events = [boss_event(590560, 31, 63)]
+        answers = {
+            health.NOW_SQL: [{"now_at": NOW}],
+            guildrun._RUN_SQL: [],
+            health.BANK_SQL: [],
+            health.BANK_MOVED_SQL: [],
+            health.FUND_SQL: [],
+            health.INVITES_SQL: [],
+            health.FAMILY_RUNS_SQL: family_runs,
+            health.FAMILY_EVENTS_SQL: events,
+        }
+        ctx, _ = ctx_for(answers)
+        with (
+            mock.patch.object(
+                health.members, "stuck", return_value=(200, {"members": []})
+            ),
+            mock.patch.object(
+                health.quests, "questers", return_value=(200, {"questers": []})
+            ),
+        ):
+            status, payload = health.health({}, ctx)
+        self.assertEqual(200, status)
+        self.assertEqual(
+            ["family-run-loop:Grug:33"], [f["key"] for f in payload["findings"]]
+        )
+
     def test_a_realm_without_the_tables_reads_as_no_findings(self):
         gap = realmread.MISSING_TABLE
         answers = {
@@ -301,6 +434,8 @@ class Handler(unittest.TestCase):
             health.BANK_MOVED_SQL: gap,
             health.FUND_SQL: gap,
             health.INVITES_SQL: gap,
+            health.FAMILY_RUNS_SQL: gap,
+            health.FAMILY_EVENTS_SQL: gap,
         }
         ctx, _ = ctx_for(answers)
         with (

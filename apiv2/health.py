@@ -24,6 +24,9 @@ THE KINDS:
               STUCK_HOURS or more
   dungeon     a dungeon whose runs that went in cleared under CLEAR_FLOOR of
               at least MIN_RUNS in the last day
+  family-run-loop
+              a family repeating a dungeon three or more times in 24 hours
+              ending without a clear
   questers    a guild with questers missing from the realm, with the team
               sync's invites and the module's latest refusal reason
   bank        a family guild whose bank holds under a gold while members hold
@@ -40,12 +43,17 @@ list.
 
 from __future__ import annotations
 
+import collections
 import datetime as dt
 import json
+import re
 
+import campaignplan
 import council
+import decree
 import guildfund
 import guildrun
+import places
 from apiv2 import _scope, members, quests
 
 STUCK_HOURS = 2.0
@@ -57,6 +65,9 @@ REFUSAL_HOURS = 48
 COPPER_PER_GOLD = 10_000
 TITLE_MAX = 90
 EVIDENCE_MAX = 400
+FAMILY_LOOP_MIN_RUNS = 3
+FAMILY_LOOP_HOURS = 24
+CLEARED_OUTCOMES = frozenset({"cleared", "complete"})
 
 
 # The marks the game's and the bridge's text use that ASCII has a plain twin for.
@@ -101,6 +112,17 @@ BANK_MOVED_SQL = (
     "SELECT g.name AS guild, MAX(e.TimeStamp) AS at FROM guild_bank_eventlog e "
     "JOIN guild g ON g.guildid = e.guildid WHERE e.TabId = 100 "
     "AND g.name IN ({holes}) GROUP BY g.name"
+)
+FAMILY_RUNS_SQL = (
+    "SELECT id, map_id, portal_keyword, outcome, leader_name, "
+    "UNIX_TIMESTAMP(started_at) AS started_unix "
+    "FROM overseer_dungeon_run WHERE state = 'ended' "
+    "AND leader_name IN ({holes}) AND started_at >= NOW() - INTERVAL %s HOUR "
+    "ORDER BY id"
+)
+FAMILY_EVENTS_SQL = (
+    "SELECT run_id, kind, detail FROM overseer_dungeon_run_event "
+    "WHERE run_id IN ({holes}) AND kind IN ('boss', 'stalled') ORDER BY id"
 )
 
 
@@ -242,6 +264,151 @@ def dungeon_findings(runs: list, now_at: int, place=lambda k: k) -> list:
     return out
 
 
+_MASK = re.compile(r"\(mask \d+ -> (\d+)\)")
+
+
+def _mask_of(detail: str) -> int | None:
+    found = _MASK.search(str(detail or ""))
+    return int(found.group(1)) if found else None
+
+
+def _run_ts(r: dict) -> int | None:
+    val = r.get("started_unix") or r.get("created_unix") or r.get("started_at")
+    if isinstance(val, (int, float)):
+        return int(val)
+    if isinstance(val, dt.datetime):
+        return int(val.replace(tzinfo=dt.timezone.utc).timestamp())
+    return None
+
+
+def _map_id_of(r: dict) -> int | None:
+    try:
+        mid = int(r.get("map_id") or 0)
+        if mid > 0:
+            return mid
+    except (TypeError, ValueError):
+        pass
+    kw = str(r.get("portal_keyword") or "")
+    if kw:
+        for run_info in campaignplan.RUNS:
+            if run_info.keyword == kw:
+                return run_info.map_id
+    return None
+
+
+def _map_name(map_id, place=None) -> str:
+    if place is not None:
+        try:
+            res = place(map_id)
+            if res and res != map_id and not (
+                isinstance(map_id, int) and res == str(map_id)
+            ):
+                return str(res)
+        except Exception:
+            pass
+    return places.map_name(map_id)
+
+
+def _family_label(family: str) -> str:
+    if not family:
+        return "the family"
+    if family.endswith("'s family") or family.endswith(" family"):
+        return family
+    return decree.family_label(family)
+
+
+def _highest_mask(streak: list, events: list | None) -> int:
+    masks = []
+    for r in streak:
+        if "mask" in r:
+            try:
+                masks.append(int(r["mask"]))
+            except (ValueError, TypeError):
+                pass
+        rid = int(r.get("id") or 0)
+        if rid and events:
+            for e in events:
+                if int(e.get("run_id") or 0) == rid and e.get("kind") == "boss":
+                    m = _mask_of(e.get("detail"))
+                    if m is not None:
+                        masks.append(m)
+    return max(masks, default=0)
+
+
+def _streak_on_latest_map(fam_runs: list) -> list:
+    """The trailing contiguous run streak on the latest map ending without clear."""
+    if not fam_runs:
+        return []
+    latest = fam_runs[-1]
+    if str(latest.get("outcome") or "") in CLEARED_OUTCOMES:
+        return []
+    latest_map = _map_id_of(latest)
+    if latest_map is None:
+        return []
+    streak = []
+    for r in reversed(fam_runs):
+        if _map_id_of(r) != latest_map:
+            break
+        if str(r.get("outcome") or "") in CLEARED_OUTCOMES:
+            break
+        streak.append(r)
+    streak.reverse()
+    return streak
+
+
+def family_run_loop_findings(
+    runs: list | None,
+    now_at: int,
+    events: list | None = None,
+    place=None,
+) -> list:
+    """One finding per family whose last 3 or more runs in 24 hours on the
+    same map ended without a clear (any outcome other than cleared).
+    Absent once a run of that map clears or the family moves to another map."""
+    by_family: dict[str, list] = {}
+    for r in runs or ():
+        ts = _run_ts(r)
+        if ts is not None and (now_at - ts) > FAMILY_LOOP_HOURS * 3600:
+            continue
+        fam = str(r.get("family") or r.get("leader_name") or "family")
+        by_family.setdefault(fam, []).append(r)
+
+    out = []
+    for family, fam_runs in sorted(by_family.items()):
+        fam_runs.sort(key=lambda r: (_run_ts(r) or 0, int(r.get("id") or 0)))
+        streak = _streak_on_latest_map(fam_runs)
+        if len(streak) < FAMILY_LOOP_MIN_RUNS:
+            continue
+
+        latest_map = _map_id_of(streak[-1])
+        count = len(streak)
+        first_ts = _run_ts(streak[0])
+        hours = hours_since(first_ts, now_at)
+
+        reasons = [
+            str(r.get("outcome") or r.get("reason") or "failed") for r in streak
+        ]
+        common_reason = collections.Counter(reasons).most_common(1)[0][0]
+        highest_mask = _highest_mask(streak, events)
+
+        map_title = _map_name(latest_map, place)
+        label = _family_label(family)
+        out.append(
+            finding(
+                "family-run-loop:%s:%s" % (family, latest_map),
+                "%s ran %s %d times with no clear" % (label, map_title, count),
+                "dungeons",
+                count,
+                hours,
+                "%s ran %s %d times in 24 hours with no clear "
+                "(common ended reason: %s, highest encounter mask reached: %d)."
+                % (label, map_title, count, common_reason, highest_mask),
+                first_ts,
+            )
+        )
+    return out
+
+
 def quester_findings(questers: dict, invites: list, now_at: int) -> list:
     """One finding per guild with questers missing from the realm, with what
     the team sync's invites got back over the last REFUSAL_HOURS."""
@@ -331,11 +498,23 @@ def bank_findings(banks: list, moved: dict, now_at: int) -> list:
     return out
 
 
-def build(now_at, stuck, runs, questers, invites, banks, moved, place=lambda k: k):
+def build(
+    now_at,
+    stuck,
+    runs,
+    questers,
+    invites,
+    banks,
+    moved,
+    place=lambda k: k,
+    family_runs=None,
+    family_events=None,
+):
     """Everything read, the payload out. Pure. Highest impact first."""
     found = (
         stuck_findings(stuck, now_at)
         + dungeon_findings(runs, now_at, place)
+        + family_run_loop_findings(family_runs, now_at, family_events, place)
         + quester_findings(questers, invites, now_at)
         + bank_findings(banks, moved, now_at)
     )
@@ -376,6 +555,35 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
                 what="guild_bank_eventlog",
             )
         }
+    fams = ctx.server.FAMILIES.families() if hasattr(ctx.server, "FAMILIES") else {}
+    family_of = {
+        name: fam_key for fam_key, members in fams.items() for name in members
+    }
+    leaders = sorted(family_of)
+    family_runs = []
+    family_events = []
+    if leaders:
+        family_runs = [
+            dict(r)
+            for r in rd.rows(
+                FAMILY_RUNS_SQL.format(holes=_scope.holes(len(leaders))),
+                (*leaders, FAMILY_LOOP_HOURS),
+                what="overseer_dungeon_run",
+            )
+        ]
+        for r in family_runs:
+            if not r.get("family") and r.get("leader_name") in family_of:
+                r["family"] = family_of[r["leader_name"]]
+        run_ids = [int(r["id"]) for r in family_runs if r.get("id")]
+        if run_ids:
+            family_events = [
+                dict(e)
+                for e in rd.rows(
+                    FAMILY_EVENTS_SQL.format(holes=_scope.holes(len(run_ids))),
+                    tuple(run_ids),
+                    what="overseer_dungeon_run_event",
+                )
+            ]
     invites = rd.rows(INVITES_SQL, (REFUSAL_HOURS,), what="overseer_command")
     _, stuck = members.stuck(_query, ctx)
     _, questers = quests.questers(_query, ctx)
@@ -388,6 +596,8 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
         with_carried([dict(r) for r in banks], [dict(r) for r in fund]),
         moved,
         place,
+        family_runs,
+        family_events,
     )
     return 200, payload
 
