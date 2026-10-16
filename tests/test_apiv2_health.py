@@ -104,6 +104,42 @@ class Stuck(unittest.TestCase):
         )
         self.assertEqual(2, found["stuck:Following Zug"]["affected"])
 
+    def test_a_follower_held_by_its_leader_is_on_the_leaders_finding(self):
+        # #1059: Grog waits on Grug, who waits on a vendor. One hold, one
+        # finding that counts both, said in the leader's own words.
+        def m(name, step, blocker, follows=""):
+            return {
+                "name": name,
+                "step": step,
+                "blocker": blocker,
+                "since": NOW - 3 * HOUR,
+                "kind": "hold",
+                "follows": follows,
+            }
+
+        stuck = {
+            "members": [
+                m(
+                    "Grog",
+                    "Following Grug (0 yards behind)",
+                    "Waiting for Grug to move on. Grug's own hold: Waiting "
+                    "for a vendor within reach.",
+                    follows="Grug",
+                ),
+                m(
+                    "Grug",
+                    "Carrying things to sell",
+                    "Waiting for a vendor within reach.",
+                ),
+            ]
+        }
+        (f,) = health.stuck_findings(stuck, NOW)
+        self.assertEqual("stuck:Carrying things to sell", f["key"])
+        self.assertEqual((2, 6.0), (f["affected"], f["impact"]))
+        self.assertEqual(
+            "Grug, Grog; Waiting for a vendor within reach.", f["evidence"]
+        )
+
 
 class Dungeons(unittest.TestCase):
     def test_a_dungeon_clearing_under_thirty_percent_of_eight_runs_is_a_finding(self):

@@ -205,17 +205,23 @@ def stuck_findings(stuck: dict, now_at: int) -> list:
     """One finding per step that members are stuck on STUCK_HOURS or more
     (members.stuck_view), not one per member: five members held on the same
     step are one problem, and one finding per member filed five tickets for
-    one bug (2026-10-15)."""
+    one bug (2026-10-15). A follower held by its leader's hold (`follows`,
+    members.follower_blocker) counts on the leader's step: one hold that keeps
+    a family is one finding, not one for the leader and one for the family."""
     groups: dict = {}
-    for m in stuck.get("members") or ():
+    listed = list(stuck.get("members") or ())
+    steps = {m.get("name"): m.get("step") for m in listed}
+    for m in listed:
         hours = hours_since(m.get("since"), now_at)
         if not m.get("since") or hours < STUCK_HOURS:
             continue
-        step = _step_key(m.get("step") or "what it is doing")
+        step = steps.get(m.get("follows")) or m.get("step")
+        step = _step_key(step or "what it is doing")
         groups.setdefault((step, m.get("kind")), []).append((m, hours))
     out = []
     for (step, kind), rows in sorted(groups.items(), key=lambda kv: kv[0][0]):
-        rows.sort(key=lambda r: (-r[1], r[0]["name"]))
+        # The member whose own hold it is speaks for the group, before a follower.
+        rows.sort(key=lambda r: (-r[1], bool(r[0].get("follows")), r[0]["name"]))
         names = [m["name"] for m, _ in rows]
         first, longest = rows[0]
         title = (
