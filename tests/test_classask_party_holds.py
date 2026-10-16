@@ -65,6 +65,15 @@ class TheDungeonPassLeavesAHelpPartyAlone(unittest.TestCase):
         self.assertEqual(held["Ghoul"], bridge._QUEST_GATHER_WHY)
         self.assertEqual(held["Dread"], "on a guild job")
 
+    def test_fighting_members_stay_reserved_for_the_quest_ask(self):
+        _q, held, _n, parties, _e = class_pass(
+            [yes(11, 1, "Chill", "dps", "help")],
+            held={"Bigzug": "in combat", "Chill": "in combat"},
+        )
+        self.assertEqual(parties, ())
+        self.assertEqual(held["Bigzug"], bridge._QUEST_GATHER_WHY)
+        self.assertEqual(held["Chill"], bridge._QUEST_GATHER_WHY)
+
     def test_two_yeses_hold_the_party_as_it_forms(self):
         _q, held, needs, parties, _e = class_pass(TWO_YES)
         self.assertEqual(len(parties), 1)
