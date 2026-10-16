@@ -14,7 +14,8 @@ runs counted are the ones since the queue entry last started, so a door the
 family comes back to starts with a clean record.
 
   * a door is UNCLEARABLE after `STREAK_WIPES` wipes in a row, after three
-    fought runs in a row without a clear, or when at least `RATE_MIN_RUNS`
+    attempts in a row without a clear (`ATTEMPTED`: a fought run or a bag
+    evacuation — anything that got inside), or when at least `RATE_MIN_RUNS`
     fought runs hold a wipe rate of `RATE_LIMIT` or more
     (`viability`);
   * a door is NOT READY when the weakest member is below the level it wants
@@ -88,6 +89,14 @@ JOB_SOURCE = "overseer:pace"
 # Outcomes of a run that met the dungeon. Staging, reset, split and bag
 # evacuation failures never fought anything.
 FOUGHT = frozenset({"wipe", "complete", "left", "emptied", "stalled"})
+# Outcomes of a run that got inside and counts as an attempt at the door for
+# the uncleared streak: every fought outcome, plus a bag evacuation (the
+# family was walked out of the dungeon with no bag room left — it was inside
+# and it did not clear). Staging, reset and split failures never got in and
+# count for nothing here (#1071: two emptied, one evacuated and two
+# staging_failed in a day read as "2 fought, 2 without a clear", held a door
+# the family could not clear, and filed a family-run-loop finding).
+ATTEMPTED = FOUGHT | {"evacuated"}
 WIPE = "wipe"
 COMPLETE = "complete"
 
@@ -325,8 +334,15 @@ def viability(runs, map_id: int, since=None) -> Viability:
             break
         streak += 1
     window = fought[-RATE_WINDOW:]
+    attempted = [
+        str(r.get("outcome") or "")
+        for r in runs or ()
+        if int(r.get("map_id") or 0) == int(map_id)
+        and str(r.get("outcome") or "") in ATTEMPTED
+        and (since is None or r.get("started_at") is None or r["started_at"] >= since)
+    ]
     uncleared_streak = 0
-    for outcome in reversed(window):
+    for outcome in reversed(attempted):
         if outcome == COMPLETE:
             break
         uncleared_streak += 1
