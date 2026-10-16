@@ -278,7 +278,7 @@ SPENT_SECONDS = 1800.0
 # family's campaign owned the traveller, and every town pass waited for it.
 #
 # A player does not queue for the post. Passing a mailbox, or standing in a
-# town after the vendor, they walk the few yards and check it. These three
+# town after the vendor, they walk the few yards and check it. These
 # claimants are that errand, and they are ORDERED rather than competing:
 #
 #   * a stop is only a stop while its counter is within TOWN_STOP_YARDS of
@@ -294,7 +294,15 @@ SPENT_SECONDS = 1800.0
 #     coordinator defers staging while an errand stands in the column
 #     (mod-overseer#632 orders a head's travel column, and the town stop sits
 #     under the campaign's approach there too).
-STOP_CLAIMANTS = frozenset({"mail", "bank", "guild bank"})
+#
+# THE VENDOR IS ONE TOO, and it was the one a campaign starved. Health on
+# 2026-10-15: the first family's leader and two of the family read "waiting
+# for a vendor within reach" from 20:30:17Z, the leader for 3.3 hours. The
+# family was on its campaign, so the slot answered `economy` with a wait on
+# every pass, including the trip the vendor pass takes after a 30 minute wait
+# (#1057). Being a stop adds no preemption of its own: the vendor pass's
+# urgency still preempts on a full bag exactly as it did before.
+STOP_CLAIMANTS = frozenset({"mail", "bank", "guild bank", "economy"})
 # A counter in the same town. The vendor and the vault the first lease was
 # measured between are 121 yards apart; 150 covers that and a little more,
 # and it is the family's own town rather than the next zone.
@@ -328,6 +336,17 @@ def is_town_stop(claimant: str, distance: float | None) -> bool:
     except (TypeError, ValueError):
         return False
     return 0.0 <= yards <= TOWN_STOP_YARDS
+
+
+def stop_yards(claimant: str, distance: float | None) -> float | None:
+    """`distance` when it makes this ask a town stop, else None.
+
+    For a pass whose far trips have their own give-up (the vendor pass's is
+    vendor_stall): a distance handed to `Slot.want` also arms `_measure`, and
+    a far walk is measured against the NEAREST counter, which need not be the
+    one the module walks it to.
+    """
+    return distance if is_town_stop(claimant, distance) else None
 
 
 # The verdicts. Strings rather than an enum for the reason every other decision
