@@ -4109,11 +4109,28 @@ def _stall_reads(names: list) -> dict:
         return _stuck_doors(cur, names)
 
 
+def _stall_held(key: str, door: str) -> bool:
+    """Whether this door was already left during its recent stall window."""
+    sql = (
+        "SELECT id FROM overseer_dungeon_pace WHERE family = %s "
+        "AND decision = %s AND door = %s "
+        "AND created_at >= NOW() - INTERVAL %s HOUR LIMIT 1"
+    )
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (key, dungeonstall.DECISION, door,
+                          dungeonpace.WINDOW_HOURS))
+        return bool(cur.fetchall())
+
+
 def _stall_write(key: str, leave) -> None:
     """Cancel the stuck door's entries and record why, in one transaction."""
     with _connect() as conn, conn.cursor() as cur:
         conn.begin()
         try:
+            cur.execute(dungeonpace.OPEN_SQL, (key,))
+            opened = (cur.fetchall() or [None])[0]
+            if opened is not None:
+                cur.execute(dungeonpace.CLOSE_SQL, ("left", int(opened["id"])))
             for qid in leave.drop:
                 cur.execute(dungeonstall.CANCEL_SQL, (qid,))
             cur.execute(dungeonpace.INSERT_SQL, (
@@ -11576,9 +11593,15 @@ class Bridge(discord.Client):
             # AND IT GOES THROUGH THE TOWN SLOT (infra#3703), which is where
             # "somebody else's errand" stopped being the end of the sentence:
             # the slot says whose, for how long, and what ends it.
+            #
+            # A VENDOR IN THE SAME TOWN MAKES IT A SHORT STOP (townslot.
+            # STOP_CLAIMANTS), the one ask a staging campaign lets through. A
+            # far vendor passes no distance and stays an ordinary trip.
             aimed = await self._claim_town_slot(
                 "economy", leader, "vendor", urgent=True,
                 cohort=getattr(cohort, "key", None),
+                distance=townslot.stop_yards("economy", await asyncio.to_thread(
+                    _nearest_vendor_yards, leader)),
             )
             if not aimed:
                 log.info(
@@ -19161,11 +19184,13 @@ class Bridge(discord.Client):
         leave = dungeonstall.leave(rows, stuck)
         if leave is None:
             return False
-        # THE JOB FIRST: a cancel that landed without it would leave the family
-        # on the door's job with no entry to take it off again.
+        if await asyncio.to_thread(_stall_held, key, leave.door):
+            return True
+        await asyncio.to_thread(_stall_write, key, leave)
+        # The cancellation and its pace record are durable before the job
+        # changes, so a failed write cannot leave the family on quest.
         said = await asyncio.to_thread(_apply_queue_move, campaignqueue.Move(
             quest=True, why=leave.why), names, key)
-        await asyncio.to_thread(_stall_write, key, leave)
         log.warning("stall: %s: %s", campaignqueue._family(key), said)
         return True
 
@@ -29465,12 +29490,13 @@ def _spawn_yards(spawn) -> float | None:
 # The same read, for a caller that skips the mailboxes it has given up on.
 _MAILBOXES_SQL = _MAILBOX_SQL.replace("LIMIT 1", "LIMIT 8")
 
-# THE NEAREST BANKER ON THE CHARACTER'S MAP, for the town stop's distance
-# only. The bank errand itself stays the `banker` keyword, which mod-overseer
-# resolves to a banker that will deal with the leader; this answers "is there
-# one in this town", so a banker of the other side a few yards off can make a
-# stop look short. The stop's own window bounds what that costs.
-_NEAREST_BANKER_SQL = (
+# THE NEAREST BANKER OR VENDOR ON THE CHARACTER'S MAP, for the town stop's
+# distance only. The errand itself stays the `banker` or `vendor` keyword,
+# which mod-overseer resolves to a counter that will deal with the leader;
+# this answers "is there one in this town", so a counter of the other side a
+# few yards off can make a stop look short. The stop's own window bounds what
+# that costs.
+_NEAREST_COUNTER_SQL = (
     "SELECT (POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2)) "
     "AS d2 "
     "FROM overseer_snapshot s "
@@ -29482,18 +29508,28 @@ _NEAREST_BANKER_SQL = (
 )
 
 
-def _nearest_banker_yards(name: str) -> float | None:
-    """Yards from `name` to the nearest banker on its map, or None."""
+def _nearest_counter_yards(name: str, flag: int, what: str) -> float | None:
+    """Yards from `name` to the nearest NPC carrying `flag` on its map, or None."""
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(_NEAREST_BANKER_SQL, (name, towntrip.NPC_FLAG_BANKER))
+            cur.execute(_NEAREST_COUNTER_SQL, (name, flag))
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
-                log.warning("bank: cannot see where %s is standing", name)
+                log.warning("%s: cannot see where %s is standing", what, name)
                 return None
             raise
         row = cur.fetchone()
     return _spawn_yards(dict(row)) if row else None
+
+
+def _nearest_banker_yards(name: str) -> float | None:
+    """Yards from `name` to the nearest banker on its map, or None."""
+    return _nearest_counter_yards(name, towntrip.NPC_FLAG_BANKER, "bank")
+
+
+def _nearest_vendor_yards(name: str) -> float | None:
+    """Yards from `name` to the nearest vendor on its map, or None."""
+    return _nearest_counter_yards(name, towntrip.NPC_FLAG_VENDOR, "economy")
 
 
 def _nearest_mailbox(name: str, skip=None):
