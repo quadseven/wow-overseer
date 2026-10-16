@@ -16089,9 +16089,11 @@ class Bridge(discord.Client):
 
     def _begin_class_parties(self, runs) -> None:
         """Put each party on the board, which holds its members at once, and
-        start its task."""
+        start its task. The guild jobs read the board's names only on the guild
+        loop's next cycle, so they are held from the jobs at once too (#1001)."""
         for run in runs:
             self._class_board.begin(run)
+            self._guild_run_names |= set(run.names())
             task = asyncio.ensure_future(self._run_class_party(run))
             self._class_party_tasks.add(task)
             task.add_done_callback(self._class_party_tasks.discard)
@@ -16176,9 +16178,11 @@ class Bridge(discord.Client):
         except asyncio.TimeoutError:
             log.info("class party: %s did not reach %s within %d seconds", name,
                      run.spot.name or "the objective", int(classparty.MEET_SECONDS))
+            run.walks[name] = "cut off after %d seconds" % int(classparty.MEET_SECONDS)
             return False
         if answer.state == guildroute.ARRIVED:
             return True
+        run.walks[name] = classparty.walk_why(name, answer.said)
         if classparty.walk_unsupported(answer.said):
             self._class_board.mark_unsupported(time.monotonic())
         log.info("class party: meeting walk row %d for %s ended without arriving: %s",
@@ -16276,7 +16280,8 @@ class Bridge(discord.Client):
                      run.leader, run.spot.name or "the objective")
             return False
         if answer.state != guildroute.ARRIVED:
-            run.outcome = "party did not reach the objective"
+            run.outcome = "party did not reach the objective: %s" % classparty.walk_why(
+                run.leader, answer.said)
             if classparty.walk_unsupported(answer.said):
                 self._class_board.mark_unsupported(time.monotonic())
             self._class_board.fail(run.ask_id)
@@ -24027,7 +24032,9 @@ def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
     so are the members of a class quest party that is up though the core now
     reads them as grouped (classparty.ask_held). `held` is the dungeon's: the
     members of a party that is up, or about to be formed from a filled ask, are
-    added, and cost no need. Only a live party row holds anybody.
+    added, and so are the asker and the helpers of an ask a yes stands on
+    (classask.gathering, #1001); all of them cost no need. An ask nobody has
+    answered holds nobody.
 
     THE SERVER (#871): `pug_rows` are the random bots read for the escalated
     asks (_class_pug_rows). One holding a yes on a quest ask is a mate of the
@@ -24063,7 +24070,10 @@ def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
     if skipped:
         quest_pass = dataclasses.replace(quest_pass, notes=quest_pass.notes + skipped)
     quest_held = classask.held_names(board.runs() + list(parties))
-    held = {**{n: _QUEST_ASK_WHY for n in quest_held}, **held}
+    gathering = classask.gathering(quest_pass, asks, answers) - quest_held
+    held = {**{n: _QUEST_ASK_WHY for n in quest_held},
+            **{n: _QUEST_GATHER_WHY for n in gathering}, **held}
+    quest_held |= gathering
     return (quest_pass, held, {n: v for n, v in needs.items() if n not in quest_held},
             parties, escalation)
 
@@ -24120,6 +24130,7 @@ async def _say_class_escalation(escalation) -> None:
 
 
 _QUEST_ASK_WHY = "in a class quest party"
+_QUEST_GATHER_WHY = "on a class quest ask with a yes"
 
 
 def _class_owed_names(owner) -> set:
@@ -24213,26 +24224,41 @@ async def _guild_social_doors(client, social):
     return dataclasses.replace(social, posts=tuple(posts))
 
 
+_GUILD_SOCIAL_NAMES_SQL = (
+    "SELECT a.kind AS kind, a.asker AS asker, w.member AS member "
+    "FROM overseer_guild_ask a LEFT JOIN overseer_guild_answer w "
+    "ON w.ask_id = a.id AND w.state = 'yes' "
+    "WHERE a.state IN ('open', 'filled') AND a.kind IN ('dungeon', 'quest')"
+)
+
+
 def _guild_social_names() -> set:
-    """Askers of live dungeon asks and their yeses: members spoken for, whom no
-    guild job or walk should take meanwhile. A class quest ask holds nobody
-    from a job; the members of its party do, while the party is up
-    (_class_party_names)."""
+    """Members spoken for, whom no guild job or walk should take meanwhile: the
+    askers of live dungeon asks and their yeses, and the asker of a live class
+    quest ask a yes stands on and its helpers (classask.gathering, #1001). A
+    class quest ask nobody has answered holds nobody from a job; the members
+    of its party are held while the party is up (_class_party_names)."""
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(
-                "SELECT asker AS name FROM overseer_guild_ask "
-                "WHERE state IN ('open', 'filled') AND kind = 'dungeon' UNION "
-                "SELECT w.member AS name FROM overseer_guild_answer w "
-                "JOIN overseer_guild_ask a ON a.id = w.ask_id "
-                "WHERE a.state IN ('open', 'filled') AND a.kind = 'dungeon' "
-                "AND w.state = 'yes'"
-            )
+            cur.execute(_GUILD_SOCIAL_NAMES_SQL)
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1146:
                 return set()
             raise
-        return {str(r["name"]) for r in cur.fetchall()}
+        return _spoken_for(cur.fetchall())
+
+
+def _spoken_for(rows) -> set:
+    """The names _GUILD_SOCIAL_NAMES_SQL's rows hold: a dungeon asker always,
+    a class quest asker only beside a yes, and every yes."""
+    names = set()
+    for r in rows:
+        member = r.get("member")
+        if member:
+            names.update((str(r["asker"]), str(member)))
+        elif r.get("kind") == guildsocial.KIND_DUNGEON:
+            names.add(str(r["asker"]))
+    return names
 
 
 _CLASS_PARTY_QUEST_SQL = (

@@ -28,7 +28,10 @@ THE FLOW, one task per party (the bridge's _run_class_party):
             taken back and is barred from this ask; the party forms with the
             helpers who met the leader. The leader not arriving (its walk
             failed or was cut off) or no helper meeting it fails the meeting,
-            which counts as one failure of the ask. Log line:
+            which counts as one failure of the ask. Each member that did not
+            arrive is named with why its walk ended (walk_why), so a walk the
+            module refused because another verb holds the walker says so.
+            Log line:
             `class party: <helpers> meet <leader> at <spawn> for <quest>`.
   form      write party-up, read its answer. FORMED goes on. A refusal that names
             a helper (HELPER) takes that helper's yes back, bars the helper from
@@ -41,6 +44,7 @@ THE FLOW, one task per party (the bridge's _run_class_party):
             one ask the ask is given up and its asker does not ask again for
             GIVE_UP_COOLDOWN_MINUTES.
   walk      write party-walk to the objective spawn (classquest.objective_spot).
+            A walk that ends without arriving keeps why on PartyRun.outcome.
   watch     read the asker's quest log every WATCH_SECONDS: complete (or handed
             in, or gone) ends it, so does its ask no longer being live or
             PARTY_SECONDS passing.
@@ -55,11 +59,14 @@ the objective or stood too far from the leader, judge_meeting) or the invite
 bridge writes it on the ask's reason column (classask.stopped), and the
 members page names that step in place of "no party formed".
 
-THE HOLD. A member is held out of the dungeon passes and the guild jobs only
-while a PartyRun with its name is on the Board: from the pass that decides to
-form the party, through the meeting (PartyRun.meeting, at most MEET_SECONDS of
-walking), to its disband, and not a moment after a failed meeting or a
-refusal.
+THE HOLD. A member is held out of the dungeon passes and the guild jobs while a
+PartyRun with its name is on the Board: from the pass that decides to form the
+party, through the meeting (PartyRun.meeting, at most MEET_SECONDS of
+walking), to its disband. Before that the ask holds its asker and its helpers
+from the pass a yes stands on it (classask.gathering, #1001), so no dungeon ask
+or guild job holds one when the party walks. That hold ends with the ask, or
+for a helper with its yes taken back (lost at the meeting, refused at the
+invite).
 
 FAMILY MEMBERS are never touched: classask answerers come from the guild
 members free of every campaign (guildrun.why_not holds a family member), and the
@@ -256,10 +263,30 @@ def _beside(at, lead) -> bool:
     )
 
 
+def walk_why(holder, said) -> str:
+    """Why a walk ended without arriving, without the walker's own name: the
+    module's reason after guildroute's "<holder> cannot walk to <goal>: ", or
+    the sentence with its leading holder dropped."""
+    said = str(said or "").strip()
+    head, sep, tail = said.partition(": ")
+    if sep and "cannot walk to " in head:
+        return tail
+    prefix = "%s " % holder
+    return said[len(prefix) :] if said.startswith(prefix) else said
+
+
+def _missed(run, name, where) -> str:
+    """One member that did not reach the objective, and why when its walk said
+    (PartyRun.walks): "character is held by another verb" names the verb
+    contest that kept it away (#1001)."""
+    why = run.walks.get(name)
+    return "%s did not reach %s%s" % (name, where, " (%s)" % why if why else "")
+
+
 def _lost_words(run, walked, far, stands) -> str:
     """Why each lost helper did not meet the leader, as the ask keeps it."""
     where = run.spot.name or "the objective"
-    words = ["%s did not reach %s" % (h, where) for h in walked]
+    words = [_missed(run, h, where) for h in walked]
     words += [
         ("%s stood too far from %s" if h in stands else "%s was not seen beside %s")
         % (h, run.leader)
@@ -281,7 +308,7 @@ def judge_meeting(run, arrived, stands) -> Meeting:
     walked = tuple(h for h in run.helpers if h not in arrived)
     where = run.spot.name or "the objective"
     if run.leader not in arrived:
-        return Meeting(False, walked, why="%s did not reach %s" % (run.leader, where))
+        return Meeting(False, walked, why=_missed(run, run.leader, where))
     lead = stands.get(run.leader)
     if lead is None:
         return Meeting(
@@ -339,7 +366,8 @@ class PartyRun:
     `answers` is member name -> the id of its yes row. `meeting` is True from
     the pass that decides the party until its members have met at the
     objective. `formed_at` and `deadline` are on the bridge's monotonic clock,
-    set when the module said formed."""
+    set when the module said formed. `walks` is member name -> why its meeting
+    walk ended without arriving (walk_why), for the meeting's words."""
 
     ask_id: int
     leader: str
@@ -352,6 +380,7 @@ class PartyRun:
     formed_at: float | None = None
     deadline: float | None = None
     outcome: str = ""
+    walks: dict = field(default_factory=dict)
 
     def names(self) -> tuple:
         return (self.leader,) + tuple(self.helpers)
