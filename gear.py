@@ -299,6 +299,7 @@ _WEAPON_SKILLS = {
             WEAPON_AXE2,
             WEAPON_MACE,
             WEAPON_MACE2,
+            WEAPON_STAFF,
             WEAPON_FIST,
             WEAPON_DAGGER,
         }
