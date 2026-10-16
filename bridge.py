@@ -4109,11 +4109,28 @@ def _stall_reads(names: list) -> dict:
         return _stuck_doors(cur, names)
 
 
+def _stall_held(key: str, door: str) -> bool:
+    """Whether this door was already left during its recent stall window."""
+    sql = (
+        "SELECT id FROM overseer_dungeon_pace WHERE family = %s "
+        "AND decision = %s AND door = %s "
+        "AND created_at >= NOW() - INTERVAL %s HOUR LIMIT 1"
+    )
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (key, dungeonstall.DECISION, door,
+                          dungeonpace.WINDOW_HOURS))
+        return bool(cur.fetchall())
+
+
 def _stall_write(key: str, leave) -> None:
     """Cancel the stuck door's entries and record why, in one transaction."""
     with _connect() as conn, conn.cursor() as cur:
         conn.begin()
         try:
+            cur.execute(dungeonpace.OPEN_SQL, (key,))
+            opened = (cur.fetchall() or [None])[0]
+            if opened is not None:
+                cur.execute(dungeonpace.CLOSE_SQL, ("left", int(opened["id"])))
             for qid in leave.drop:
                 cur.execute(dungeonstall.CANCEL_SQL, (qid,))
             cur.execute(dungeonpace.INSERT_SQL, (
@@ -19167,11 +19184,13 @@ class Bridge(discord.Client):
         leave = dungeonstall.leave(rows, stuck)
         if leave is None:
             return False
-        # THE JOB FIRST: a cancel that landed without it would leave the family
-        # on the door's job with no entry to take it off again.
+        if await asyncio.to_thread(_stall_held, key, leave.door):
+            return True
+        await asyncio.to_thread(_stall_write, key, leave)
+        # The cancellation and its pace record are durable before the job
+        # changes, so a failed write cannot leave the family on quest.
         said = await asyncio.to_thread(_apply_queue_move, campaignqueue.Move(
             quest=True, why=leave.why), names, key)
-        await asyncio.to_thread(_stall_write, key, leave)
         log.warning("stall: %s: %s", campaignqueue._family(key), said)
         return True
 
