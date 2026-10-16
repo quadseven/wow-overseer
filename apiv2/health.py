@@ -32,6 +32,12 @@ THE KINDS:
               as the bank's: the fund withdraws the whole bank to post it, so
               0 copper in the vault with the gold in the master's purse is
               gold in transit, not a bank that has run dry.
+  family-run-loop
+              a family whose last LOOP_RUNS or more dungeon runs in the last
+              LOOP_HOURS, all on the map it ran last, ended without a clear
+              (any outcome but dungeonpace.COMPLETE). Keyed by family and map.
+              Impact is the failed runs x the run-hours they took. It is gone
+              once a run of that map clears or the family runs another map.
 
 Read-only, like everything under /api/v2. An empty list means "looked and
 found nothing"; a read that fails is a 503 from the map server, never an empty
@@ -43,7 +49,10 @@ from __future__ import annotations
 import datetime as dt
 import json
 
+import achievements
 import council
+import dungeonpace
+import dungeonstall
 import guildfund
 import guildrun
 from apiv2 import _scope, members, quests
@@ -57,6 +66,8 @@ REFUSAL_HOURS = 48
 COPPER_PER_GOLD = 10_000
 TITLE_MAX = 90
 EVIDENCE_MAX = 400
+LOOP_RUNS = 3
+LOOP_HOURS = 24
 
 
 # The marks the game's and the bridge's text use that ASCII has a plain twin for.
@@ -101,6 +112,16 @@ BANK_MOVED_SQL = (
     "SELECT g.name AS guild, MAX(e.TimeStamp) AS at FROM guild_bank_eventlog e "
     "JOIN guild g ON g.guildid = e.guildid WHERE e.TabId = 100 "
     "AND g.name IN ({holes}) GROUP BY g.name"
+)
+
+# The family campaigns' own runs (overseer_dungeon_run has no family column:
+# a run is the family's whose leader is one of its names), newest first.
+FAMILY_RUNS_SQL = (
+    "SELECT id, leader_name, map_id, state, outcome, ended_reason, "
+    "UNIX_TIMESTAMP(started_at) AS started_unix, "
+    "UNIX_TIMESTAMP(ended_at) AS ended_unix FROM overseer_dungeon_run "
+    "WHERE leader_name IN ({holes}) AND started_at >= NOW() - INTERVAL %s HOUR "
+    "ORDER BY id DESC LIMIT %s"
 )
 
 
@@ -331,11 +352,130 @@ def bank_findings(banks: list, moved: dict, now_at: int) -> list:
     return out
 
 
-def build(now_at, stuck, runs, questers, invites, banks, moved, place=lambda k: k):
+def streak(rows: list) -> list:
+    """The ended runs of `rows` (one family's, oldest first) from the newest
+    back to the first that cleared or ran another map, oldest first. A run
+    still open on that map is passed over: it has not ended either way."""
+    if not rows:
+        return []
+    map_id = int(rows[-1].get("map_id") or 0)
+    out = []
+    for r in reversed(rows):
+        if int(r.get("map_id") or 0) != map_id:
+            break
+        if str(r.get("outcome") or "") == dungeonpace.COMPLETE:
+            break
+        if r.get("state") == "ended":
+            out.append(r)
+    return out[::-1]
+
+
+def family_streaks(runs: list, families: dict) -> dict:
+    """(family, map id) -> its run rows, for every family whose streak is
+    LOOP_RUNS or more. A run led by nobody in `families` is no family's."""
+    family_of = {n: key for key, names in families.items() for n in names}
+    by_family: dict = {}
+    for r in sorted(runs or (), key=lambda r: int(r.get("id") or 0)):
+        key = family_of.get(str(r.get("leader_name") or ""))
+        if key:
+            by_family.setdefault(key, []).append(r)
+    out = {}
+    for key, rows in sorted(by_family.items()):
+        failed = streak(rows)
+        if len(failed) >= LOOP_RUNS:
+            out[(key, int(failed[0]["map_id"]))] = failed
+    return out
+
+
+def furthest_mask(ids: set, events: list) -> int:
+    """The encounter mask with the most encounters any of the runs `ids` was
+    credited (the timeline's `boss` rows, dungeonstall.mask_of), 0 for none."""
+    masks = [
+        dungeonstall.mask_of(e.get("detail"))
+        for e in events or ()
+        if e.get("kind") == "boss" and int(e.get("run_id") or 0) in ids
+    ]
+    return max(
+        (m for m in masks if m is not None),
+        key=lambda m: (bin(m).count("1"), m),
+        default=0,
+    )
+
+
+def _loop_evidence(family, name, rows, mask, lost) -> str:
+    counts: dict = {}
+    reasons: dict = {}
+    for r in rows:
+        outcome = str(r.get("outcome") or "") or "closed unseen"
+        counts[outcome] = counts.get(outcome, 0) + 1
+        reason = str(r.get("ended_reason") or "").strip()
+        if reason:
+            reasons[reason] = reasons.get(reason, 0) + 1
+    how = ", ".join("%d %s" % (n, o) for o, n in sorted(counts.items()))
+    said = "Ended: %s." % how
+    if reasons:
+        common = max(sorted(reasons), key=lambda k: reasons[k])
+        said += ' Most often because "%s".' % common
+    furthest = (
+        "encounter mask %d (%d encounters)" % (mask, bin(mask).count("1"))
+        if mask
+        else "no encounter credited"
+    )
+    return (
+        "%s's family ran %s %d times running in %d hours with no clear. %s "
+        "The furthest any run got: %s. %.1f run-hours went into them."
+        % (family, name, len(rows), LOOP_HOURS, said, furthest, lost)
+    )
+
+
+def family_loop_findings(streaks: dict, events: list, now_at: int) -> list:
+    """One finding per family repeating a map with no clear (family_streaks).
+    Impact is the failed runs x the run-hours they took."""
+    out = []
+    for (family, map_id), rows in sorted(streaks.items()):
+        lost = (
+            sum(
+                max(0, int(r.get("ended_unix") or 0) - int(r.get("started_unix") or 0))
+                for r in rows
+            )
+            / 3600.0
+        )
+        mask = furthest_mask({int(r["id"]) for r in rows}, events)
+        name = achievements.dungeon_name(map_id)
+        first = int(rows[0].get("started_unix") or now_at)
+        out.append(
+            finding(
+                "family-run-loop:%s:%d" % (family, map_id),
+                "%s's family ran %s %d times without a clear"
+                % (family, name, len(rows)),
+                "dungeons",
+                len(rows),
+                hours_since(first, now_at),
+                _loop_evidence(family, name, rows, mask, lost),
+                first,
+                impact=len(rows) * lost,
+            )
+        )
+    return out
+
+
+def build(
+    now_at,
+    stuck,
+    runs,
+    questers,
+    invites,
+    banks,
+    moved,
+    place=lambda k: k,
+    streaks=None,
+    events=(),
+):
     """Everything read, the payload out. Pure. Highest impact first."""
     found = (
         stuck_findings(stuck, now_at)
         + dungeon_findings(runs, now_at, place)
+        + family_loop_findings(streaks or {}, events, now_at)
         + quester_findings(questers, invites, now_at)
         + bank_findings(banks, moved, now_at)
     )
@@ -352,6 +492,28 @@ def place(keyword: str) -> str:
         return council.keyword_place(keyword)
     except Exception:  # noqa: BLE001 - an unknown keyword reads as itself
         return keyword
+
+
+def family_reads(rd, families: dict) -> tuple[dict, list]:
+    """The family streaks (family_streaks) and the timeline rows of their runs."""
+    names = [n for group in families.values() for n in group]
+    if not names:
+        return {}, []
+    runs = rd.rows(
+        FAMILY_RUNS_SQL.format(holes=_scope.holes(len(names))),
+        (*names, LOOP_HOURS, RUNS_READ),
+        what="overseer_dungeon_run",
+    )
+    streaks = family_streaks([dict(r) for r in runs], families)
+    ids = sorted(int(r["id"]) for rows in streaks.values() for r in rows)
+    if not ids:
+        return streaks, []
+    events = rd.rows(
+        dungeonstall.EVENTS_SQL.format(holes=_scope.holes(len(ids))),
+        tuple(ids),
+        what="overseer_dungeon_run_event",
+    )
+    return streaks, [dict(e) for e in events]
 
 
 def health(_query: dict, ctx) -> tuple[int, dict]:
@@ -377,6 +539,7 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
             )
         }
     invites = rd.rows(INVITES_SQL, (REFUSAL_HOURS,), what="overseer_command")
+    streaks, events = family_reads(rd, ctx.server.FAMILIES.families())
     _, stuck = members.stuck(_query, ctx)
     _, questers = quests.questers(_query, ctx)
     payload = build(
@@ -388,6 +551,8 @@ def health(_query: dict, ctx) -> tuple[int, dict]:
         with_carried([dict(r) for r in banks], [dict(r) for r in fund]),
         moved,
         place,
+        streaks,
+        events,
     )
     return 200, payload
 
