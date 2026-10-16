@@ -327,6 +327,7 @@ class TheRosterAndStuckReads(unittest.TestCase):
                     "blocker": "Cannot finish Taming the Beast alone: asked the guild for help 2 times, 0 said yes, no party formed.",
                     "since": NOW - 7200,
                     "kind": "class quest",
+                    "follows": "",
                 }
             ],
         )
@@ -399,6 +400,106 @@ class TheRosterAndStuckReads(unittest.TestCase):
 
 
 # ---- upgrades now --------------------------------------------------------------------
+
+
+def family_roster(asks=()):
+    """Two families as the stuck read of 2026-10-16 02:59Z saw them (#1059):
+    Zug's four followers by a leader holding nothing, three at 0 yards and one
+    on another map, and Grug held on a vendor with Grog at his side and Og
+    left 4585 yards behind, all four read by the module as plain following."""
+    fams = {
+        "Zug": ["Zug", "Oz", "Uzza", "Zork", "Zrog"],
+        "Grug": ["Grug", "Grog", "Og"],
+    }
+    roster = [
+        {"name": n, "family": fam, "lead": i == 0}
+        for fam, names in fams.items()
+        for i, n in enumerate(names)
+    ]
+    intents = [
+        {
+            "leader_name": "Zug",
+            "family": "Zug",
+            "current_kind": "none",
+            "module_age": 10,
+            "members_state": "Oz|following|0\nUzza|following|0\n"
+            "Zork|following|0\nZrog|following|another map",
+        },
+        {
+            "leader_name": "Grug",
+            "family": "Grug",
+            "current_kind": "none",
+            "module_age": 10,
+            "members_state": "Grog|following|0\nOg|following|4585",
+        },
+    ]
+    steps = [
+        {
+            "subject": "Grug",
+            "scope": "character",
+            "kind": "no_vendor",
+            "doing": "Carrying things to sell",
+            "waiting": "a vendor within reach",
+            "occurrences": 40,
+            "first_at": NOW - 3 * 3600,
+            "last_at": NOW - 60,
+        }
+    ]
+    names = [n for group in fams.values() for n in group]
+    facts = nowstatus.build_facts(names, roster, intents, steps, NOW)
+    chars = [{"name": n, "level": 30, "class_id": 1, "race": 2} for n in names]
+    readings = {n: {"online": True, "life": "alive", "fresh_at": NOW} for n in names}
+    return members.build(fams, [], chars, [], asks, facts, NOW, readings=readings)
+
+
+class AFollowerIsHeldByItsLeader(unittest.TestCase):
+    # #1059: a plain follower has no clock and no hold of its own. Read alone it
+    # was stuck the moment it was read, beside a leader the list did not name.
+
+    def setUp(self):
+        self.stuck = members.stuck_view(family_roster())
+        self.by = {m["name"]: m for m in self.stuck["members"]}
+
+    def test_followers_by_a_leader_holding_nothing_are_not_stuck(self):
+        for name in ("Zug", "Oz", "Uzza", "Zork"):
+            self.assertNotIn(name, self.by, name)
+
+    def test_a_follower_by_a_held_leader_names_his_hold_and_its_age(self):
+        grog = self.by["Grog"]
+        self.assertEqual(grog["step"], "Following Grug (0 yards behind)")
+        self.assertEqual(
+            grog["blocker"],
+            "Waiting for Grug to move on. "
+            "Grug's own hold: Waiting for a vendor within reach.",
+        )
+        self.assertEqual(
+            (grog["since"], grog["kind"], grog["follows"]),
+            (self.by["Grug"]["since"], "hold", "Grug"),
+        )
+        self.assertEqual(grog["since"], NOW - 3 * 3600)
+
+    def test_a_follower_left_behind_is_stuck_on_being_left(self):
+        self.assertEqual(
+            self.by["Og"]["blocker"],
+            "Left 4585 yards behind Grug, read as following, not walking back. "
+            "Grug's own hold: Waiting for a vendor within reach.",
+        )
+        self.assertEqual(
+            self.by["Zrog"]["blocker"],
+            "On another map than Zug, read as following, not walking back.",
+        )
+        self.assertIsNone(self.by["Og"]["since"])
+        self.assertIsNone(self.by["Zrog"]["since"])
+
+    def test_the_stuck_list_falls_from_seven_to_four(self):
+        # Without the follower reading: Grug, Grog, Og, Oz, Uzza, Zork, Zrog.
+        self.assertEqual(sorted(self.by), ["Grog", "Grug", "Og", "Zrog"])
+
+    def test_a_followers_own_class_quest_ask_is_still_its_own(self):
+        asks = [ask(NOW - 7200, asker="Oz"), ask(NOW - 300, asker="Oz")]
+        oz = {m["name"]: m for m in family_roster(asks)["members"]}["Oz"]
+        self.assertEqual((oz["stuck"], oz["stuck_kind"]), (True, "class quest"))
+        self.assertEqual((oz["since"], oz["follows"]), (NOW - 7200, ""))
 
 
 def gain(slot, delta, entry, ilvl=30, boss="Boss"):
