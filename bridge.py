@@ -11224,10 +11224,10 @@ class Bridge(discord.Client):
         # what it did before. A cycle that does not now pays two extra reads
         # to avoid a trip that could not have helped anybody.
         #
-        # GEAR IS DELIBERATELY NOT COUNTED. `_fetch_surplus_gear` feeds the
-        # hand-off path first and only reaches a vendor when all five have
-        # refused a piece; counting it here would let an upgrade that is about
-        # to be handed to somebody justify a town trip on its holder's behalf.
+        # GEAR IS COUNTED ONLY AFTER HAND-OFF AND EQUIP HAVE RUN below. At that
+        # point `gear_candidates` contains only pieces nobody can use, and
+        # which the bank policy does not keep. Counting earlier would let an
+        # upgrade on its way to a sibling justify a vendor trip.
         rows = await asyncio.to_thread(_fetch_vendor_items, names)
         await self._destroy_released(rows)
         bag_rows = await asyncio.to_thread(_fetch_surplus_bags, names)
@@ -11363,6 +11363,17 @@ class Bridge(discord.Client):
         # meets the ordinary disposition on a later cycle.
         await self._equip_upgrades(equip_rows, worn, names, jev_plan)
 
+        fits = bag_pressure.family_fits(gear_rows, worn, names)
+        gear_sales = bag_pressure.gear_candidates(
+            gear_rows, disposition.Family(vendor_reachable=True),
+            available=SELL_ROUTES, fits=fits, keep_names=OWNER_KEEPS,
+            spare=await asyncio.to_thread(_bank_spare, names, True),
+        )
+        bank_keeps = await asyncio.to_thread(_bank_policy, names, True)
+        gear_sales = _without_bank_keeps(gear_sales, bank_keeps, "economy")
+        for sale in gear_sales:
+            sellable_counts[sale.holder] = sellable_counts.get(sale.holder, 0) + 1
+
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
         mode = await self._vendor_pass_mode(
@@ -11402,7 +11413,6 @@ class Bridge(discord.Client):
         # `worn` (older world image, missing columns) yields no fits at all,
         # every piece is UNASKED, and the gear half of this pass offers
         # nothing - which is the safe way to not know.
-        fits = bag_pressure.family_fits(gear_rows, worn, names)
         # THE HAND-OFF WAS TRIED FIRST, ABOVE THE TOWN-RUN GATE, and it is not
         # repeated here (infra#4198). The two answers still come from one gate
         # over one read of the world - `gear_rows` and `worn` are the same two
@@ -11413,11 +11423,7 @@ class Bridge(discord.Client):
         candidates = bag_pressure.vendor_candidates(
             rows, keep_names=OWNER_KEEPS,
         ) + (
-            bag_pressure.gear_candidates(
-                gear_rows, disposition.Family(vendor_reachable=True),
-                available=SELL_ROUTES, fits=fits, keep_names=OWNER_KEEPS,
-                spare=await asyncio.to_thread(_bank_spare, names, True),
-            )
+            tuple(gear_sales)
         ) + (
             # Redundant spare bags nobody has equipped (infra#4163): dead
             # weight in the exact shape `it.class <> 1` in `_VENDOR_ITEMS_SQL`
@@ -11431,7 +11437,7 @@ class Bridge(discord.Client):
         # raid supply, gear kept for a guildmate. The bank passes carry it to
         # a bank; a sale here would race them to the counter.
         candidates = _without_bank_keeps(
-            candidates, await asyncio.to_thread(_bank_policy, names, True), "economy")
+            candidates, bank_keeps, "economy")
         if not candidates:
             log.info("economy: no safe carried vendor goods")
             return
