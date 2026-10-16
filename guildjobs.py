@@ -2736,10 +2736,12 @@ def plan(
             _offer_for(supply, m.name),
             _offer_for(pets, m.name),
         )
-        lines[m.name] = doing
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
         helps += asked
         ask_yields += yielded
+        if asked:
+            step, doing = None, asking_line(m, asked)
+        lines[m.name] = doing
         if note:
             notes.append(note)
         if gear_why:
@@ -3640,6 +3642,26 @@ def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
             classquest.Help(m.name, m.guild, int(m.level), int(m.map_id), h, count)
         )
     return helps, yields
+
+
+# A MEMBER ASKING FOR HELP IS GIVEN NO OTHER STEP (#1072). On 2026-10-16 a
+# warlock asked the guild for help with Surena Caledon 2 times in 2.6 hours
+# and drew no yes. The pass that listed its help for the social pass to ask for
+# also started an ordinary step for it (a mailbox walk, a sale, a farm), and the
+# bridge holds a member with a step in hand "on a guild job" until the step
+# ends, up to guildroute.GUILD_STEP_SECONDS: the social pass cancelled its live
+# ask and posted none while the hold lasted (classask._ended). The asks came 45
+# minutes or more apart, never reached classask.ESCALATE_AFTER_ASKS, so never
+# went to the server, and the hunt's hold-off ran out first. While the member
+# asks it does nothing else; the run of asks is bounded (class_ask_streak), and
+# a quest that yields to levelling is no longer asked for, so the member's other
+# steps come back with it.
+def asking_line(m, asked) -> str:
+    """What a member asking guild chat for help does this pass. It never names
+    classquest.MARK: class_held would read it as on a class quest, and the
+    social pass would hold it out of its own ask."""
+    titles = ", ".join(h.move.title for h in asked)
+    return "%s waits for help with %s" % (m.name, titles)
 
 
 def _no_party_yield(m, move, hunts, now) -> tuple:
