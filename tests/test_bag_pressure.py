@@ -488,6 +488,21 @@ class TheVendorPassAsksBothHalvesTests(unittest.TestCase):
                 "vendor could help - which is infra#4190",
             )
 
+    def test_gear_that_survives_handoff_is_counted_before_trip_gate(self):
+        body = self._vendor_once().body
+        mode_at = next(
+            i
+            for i, node in enumerate(body)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "mode"
+                for target in node.targets
+            )
+        )
+        before_mode = ast.dump(ast.Module(body=body[:mode_at], type_ignores=[]))
+        self.assertIn("gear_candidates", before_mode)
+        self.assertIn("sellable_counts", before_mode)
+
 
 class AVendorTripMustBeAbleToHelpTests(unittest.TestCase):
     """infra#4190: pressure nobody can answer starved the travel column.
