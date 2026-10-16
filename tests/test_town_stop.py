@@ -1,4 +1,4 @@
-"""A short town stop at a mailbox, a banker or a vault is ordered, not raced (#276).
+"""A short town stop at a mailbox, a banker, a vault or a vendor is ordered, not raced (#276).
 
 Measured on the dev realm on 2026-09-24. The Alliance family's travel column
 changed hands every three to four minutes for a whole day: the mail pass took
@@ -45,8 +45,8 @@ def ask(s, claimant, aim, now, *, column="", distance=None, urgent=False):
 
 
 class WhatCountsAsAStop(unittest.TestCase):
-    def test_the_three_counters_in_the_same_town(self):
-        for claimant in ("mail", "bank", "guild bank"):
+    def test_the_counters_in_the_same_town(self):
+        for claimant in ("mail", "bank", "guild bank", "economy"):
             self.assertTrue(townslot.is_town_stop(claimant, 40.0), claimant)
             self.assertTrue(
                 townslot.is_town_stop(claimant, townslot.TOWN_STOP_YARDS), claimant
@@ -63,7 +63,7 @@ class WhatCountsAsAStop(unittest.TestCase):
         self.assertFalse(townslot.is_town_stop("mail", -1.0))
 
     def test_no_other_claimant_is_a_stop(self):
-        for claimant in ("auction", "economy", "clearance", "towntrip", "gather"):
+        for claimant in ("auction", "clearance", "towntrip", "gather"):
             self.assertFalse(townslot.is_town_stop(claimant, 10.0), claimant)
 
 
