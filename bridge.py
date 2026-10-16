@@ -10761,10 +10761,16 @@ class Bridge(discord.Client):
             )
             if stall.current is not None:
                 self._vendor_movement[leader] = stall.current
+            # A member the module holds for the leader to fetch is not the
+            # family failing to follow: see vendor_stall.HELD_FOR_THE_LEADER.
+            states = {
+                m.name: m.state
+                for m in jev_family_intent.parse_members(intent.get("members_state"))
+            }
             family_stall = vendor_stall.family_progress(
                 self._vendor_family_movement.get(leader),
                 await asyncio.to_thread(_fetch_positions, names),
-                tuple(names),
+                vendor_stall.following(names, states),
                 time.monotonic(),
             )
             if family_stall.current is not None:
