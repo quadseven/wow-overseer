@@ -364,6 +364,7 @@ def _pass(world):
             "_queue_holds",
             "_stall_breaker",
             "_stall_reads",
+            "_stall_held",
             "_stall_write",
             "_stuck_doors",
             "_planner_rows",
@@ -494,9 +495,9 @@ class TheBridgeOrder(unittest.TestCase):
         body = body[: body.index("\n    async def ", 10)]
         self.assertNotIn("_mid_run", body)
 
-    def test_the_job_leaves_the_door_before_the_entry_is_cancelled(self):
+    def test_the_cancel_is_durable_before_the_job_moves(self):
         body = BRIDGE[BRIDGE.index("    async def _stall_breaker(") :]
-        self.assertLess(body.index("_apply_queue_move"), body.index("_stall_write"))
+        self.assertLess(body.index("_stall_write"), body.index("_apply_queue_move"))
 
     def test_the_ladder_never_steps_to_a_stuck_door(self):
         facts = BRIDGE[BRIDGE.index("    async def _pace_facts(") :]
