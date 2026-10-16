@@ -673,7 +673,7 @@ class TheHold(unittest.TestCase):
 class TheDungeonPasses(unittest.TestCase):
     """The class quest comes before the dungeon in every pass that forms one."""
 
-    def social(self, helps=(), asks=(), answers=()):
+    def social(self, helps=(), asks=(), answers=(), on_write=None):
         this = _Self()
         this._class_helps = tuple(helps)
         this._class_board = classparty.Board()
@@ -686,6 +686,8 @@ class TheDungeonPasses(unittest.TestCase):
         written = []
 
         def write(social):
+            if on_write is not None:
+                on_write(this, social)
             written.append(social)
             return 41 if social.form else 0
 
@@ -734,6 +736,20 @@ class TheDungeonPasses(unittest.TestCase):
         self.assertIsNone(out.form)
         self.assertIn(3, out.withdraw)
         self.assertEqual([r.names() for r in this.started], [("Auren", "Zappy")])
+
+    def test_party_members_are_reserved_while_the_social_rows_are_written(self):
+        quest_ask = qask(50, "Auren", guild="Cave", roles_needed="dps")
+        answered = yes(60, 50, "Zappy", "dps", "help")
+
+        def during_write(this, _social):
+            self.assertTrue({"Auren", "Zappy"} <= this._guild_run_names)
+
+        self.social(
+            helps=[self.group_help()],
+            asks=[quest_ask],
+            answers=[answered],
+            on_write=during_write,
+        )
 
     def test_an_answered_ask_with_no_objective_to_walk_to_holds_nobody(self):
         quest_ask = qask(50, "Auren", guild="Cave", roles_needed="dps")

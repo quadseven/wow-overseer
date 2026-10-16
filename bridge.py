@@ -15752,6 +15752,8 @@ class Bridge(discord.Client):
     def _start_guild_job_steps(self, plan, now, cap, sale_walks):
         started = 0
         for step in plan.steps:
+            if step.holder in self._guild_run_names:
+                continue
             # A sale walk, whichever step asks it (a sale or a class quest's
             # make-room step), waits while the world refuses the walk.
             vendor_walk = step.walk is not None and step.walk.command.startswith(
@@ -18733,14 +18735,7 @@ class Bridge(discord.Client):
         spaced = (self._guild_run_formed_at is None
                   or now - self._guild_run_formed_at >= bounds.form_every_seconds)
         facts = await asyncio.to_thread(_fetch_guild_social_facts, bounds)
-        mid_job = (set(getattr(self, "_job_steps", ())) | set(getattr(self, "_corps_steps", ()))
-                   | set(getattr(self, "_dues_walks", ())) | set(getattr(self, "_guild_mail_runs", ()))
-                   | set(getattr(self, "_crafter_walks", ()))
-                   | set(getattr(self, "_train_walks", ()))
-                   | {n for n, held in getattr(self, "_pvp_held", {}).items() if held}
-                   | set(getattr(self, "_classquest_held", ())))
         doors = guildrun.doors(facts["finder_floors"], facts.get("boss_levels"))
-        mates, held, needs = _guild_social_mates(facts, mid_job, doors)
         # THE CLASS QUEST COMES BEFORE THE DUNGEON: a member in a class quest
         # party that is up, or about to be formed from a filled ask, is not
         # asked to a dungeon either (classask.held_names, only while the party
@@ -18749,10 +18744,21 @@ class Bridge(discord.Client):
         # escalated ask may reach are read first.
         class_helps = getattr(self, "_class_helps", ())
         class_pugs = await _class_pug_rows(facts, class_helps, bounds)
+        mid_job = (set(getattr(self, "_job_steps", ())) | set(getattr(self, "_corps_steps", ()))
+                   | set(getattr(self, "_dues_walks", ())) | set(getattr(self, "_guild_mail_runs", ()))
+                   | set(getattr(self, "_crafter_walks", ()))
+                   | set(getattr(self, "_train_walks", ()))
+                   | {n for n, held in getattr(self, "_pvp_held", {}).items() if held}
+                   | set(getattr(self, "_classquest_held", ())))
+        mates, held, needs = _guild_social_mates(facts, mid_job, doors)
         quest_pass, held, needs, parties, escalation = _class_ask_pass(
             facts, mates, held, needs, class_helps,
             getattr(self, "_class_board", None), getattr(self, "_class_book", None),
             time.monotonic(), class_pugs)
+        reserved = {n for n, why in held.items()
+                    if why in (_QUEST_ASK_WHY, _QUEST_GATHER_WHY)}
+        newly_reserved = reserved - self._guild_run_names
+        self._guild_run_names.update(reserved)
         # THE CLASS QUEST IS OWED BEFORE ANY DUNGEON: a member that owes one is
         # not free to any dungeon ask, run or pick-up group, hunting or not.
         owed = _class_owed_names(self)
@@ -18789,11 +18795,15 @@ class Bridge(discord.Client):
             can_form=spaced and in_flight < bounds.max_groups,
             campaigns=facts["campaigns"], records=records, cleared=cleared, lent=lent,
             recipes=facts.get("recipes"))
-        social = await _guild_social_doors(getattr(self, "_jev", None), social)
-        pug_pass = (_guild_pug_plan(social, facts, mates, held, doors, pug_all, bounds)
-                    if pugs_on else None)
-        social = _with_class_asks(social, quest_pass)
-        run_id = await asyncio.to_thread(_write_guild_social, social)
+        try:
+            social = await _guild_social_doors(getattr(self, "_jev", None), social)
+            pug_pass = (_guild_pug_plan(social, facts, mates, held, doors, pug_all, bounds)
+                        if pugs_on else None)
+            social = _with_class_asks(social, quest_pass)
+            run_id = await asyncio.to_thread(_write_guild_social, social)
+        except BaseException:
+            self._guild_run_names.difference_update(newly_reserved)
+            raise
         if parties:
             self._begin_class_parties(parties)
         await _say_class_escalation(escalation)
