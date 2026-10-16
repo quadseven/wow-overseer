@@ -12,7 +12,6 @@ against a fake queue, roster and store.
 """
 
 import asyncio
-import datetime
 import pathlib
 import types
 import unittest
@@ -36,7 +35,6 @@ NO_MOVEMENT = (
     "the run stopped progressing inside map 33: no boss credit and no movement "
     "for 20 minutes, and 3 'dc skip's did not restart it"
 )
-TEST_STALL_HOLD_SAID = {}
 
 
 def ledger_row(run_id, outcome="stalled", map_id=SFK, portal="shadowfang"):
@@ -296,9 +294,6 @@ class StoreCursor:
             self.rows = [dict(r) for r in self.store.runs]
         elif "FROM overseer_dungeon_run_event" in flat:
             self.rows = [dict(e) for e in self.store.events if e["run_id"] in params]
-        elif flat.startswith("SELECT created_at FROM overseer_dungeon_pace"):
-            if self.store.held_at is not None:
-                self.rows = [{"created_at": self.store.held_at}]
         elif "SET status = 'cancelled'" in flat:
             self.store.world.cancel(params[0])
         elif flat.startswith("INSERT INTO overseer_dungeon_pace"):
@@ -349,7 +344,6 @@ class StallWorld(FakeWorld):
         self.records = []
         self.closed = []
         self.commits = 0
-        self.held_at = None
         self.world = self
 
     def cancel(self, qid):
@@ -377,7 +371,6 @@ def _pass(world):
         ],
         {
             "asyncio": asyncio,
-            "datetime": datetime,
             "campaignqueue": campaignqueue,
             "campaignplan": campaignplan,
             "dungeonpace": dungeonpace,
@@ -399,7 +392,6 @@ def _pass(world):
             "_aim_family_quest": world.clear_family_quest,
             "_PACE_QUESTING": {},
             "_BAG_HOLD_STUCK": {},
-            "_STALL_HOLD_SAID": TEST_STALL_HOLD_SAID,
             "_pass_completed": lambda name: True,
         },
     )
@@ -480,33 +472,6 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
         self.assertEqual("active", w.queue[0]["status"])
         self.assertEqual({"dungeon:shadowfang"}, self.zug_jobs(w))
         self.assertEqual([], w.records)
-
-    def test_a_held_head_is_skipped_for_the_next_pending_entry(self):
-        w = self.world(
-            [_q(7, "shadowfang", 30, "active", 0), _q(8, "deadmines", 10, "queued", 1)]
-        )
-        w.held_at = datetime.datetime.now(datetime.timezone.utc).replace(
-            tzinfo=None
-        ) - datetime.timedelta(hours=2)
-        lines = _pass(w)
-        self.assertEqual(["active", "active"], [r["status"] for r in w.queue])
-        self.assertEqual({"dungeon:deadmines"}, self.zug_jobs(w))
-        held_lines = [line for line in lines if "skips held door shadowfang" in line]
-        self.assertEqual(1, len(held_lines), lines)
-        self.assertIn("Zug", held_lines[0])
-        end = w.held_at + datetime.timedelta(hours=stall.WINDOW_HOURS)
-        self.assertIn(end.strftime("%Y-%m-%d %H:%M:%S UTC"), held_lines[0])
-
-    def test_held_door_is_logged_at_most_once_per_window(self):
-        w = self.world([_q(7, "shadowfang", 30, "active", 0)])
-        w.held_at = datetime.datetime.now(datetime.timezone.utc).replace(
-            tzinfo=None
-        ) - datetime.timedelta(hours=2)
-        first = _pass(w)
-        second = _pass(w)
-        self.assertEqual(
-            1, sum("skips held door shadowfang" in line for line in first + second)
-        )
 
     def test_the_other_family_is_never_written(self):
         w = self.world([_q(7, "shadowfang", 30, "active", 0)])
