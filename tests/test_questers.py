@@ -430,6 +430,39 @@ class Broken(unittest.TestCase):
             [questers.REFUSED_TURN_IN + ": quest is not complete"],
         )
 
+    def test_a_complete_quest_is_handed_in_not_stalled(self):
+        # A complete quest's objectives cannot move; stillness is not a stall
+        # (#1085): it is due a turn-in, never an abandon.
+        p, _ = self._play(mirra(quest_log={1: 1}), 240)
+        self.assertEqual(p.broken, ())
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 1))
+
+    def test_an_abandon_the_world_refused_as_complete_hands_the_quest_in(self):
+        # The module refused the drop with its complete words (#1085): the
+        # quest goes to turn-in at once and is never abandoned again.
+        tried = [
+            questers.Attempt(
+                "Mirra",
+                "turnin quest:1",
+                "error",
+                reason="not ready",
+                age_minutes=m,
+            )
+            for m in (30, 20, 10)
+        ] + [
+            questers.Attempt(
+                "Mirra",
+                "abandon quest:1",
+                "error",
+                reason="it is complete; hand it in",
+                age_minutes=5,
+            )
+        ]
+        p = questers.plan(
+            world(), mirra(quest_log={1: 1}), questers.Clock(), 0.0, tried=tried
+        )
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 1))
+
     def test_a_quest_already_broken_is_dropped_and_never_taken_again(self):
         p = questers.plan(
             world(),

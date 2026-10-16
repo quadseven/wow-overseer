@@ -138,6 +138,9 @@ REFUSED_TURN_IN = "the turn-in NPC would not take it"
 
 # The world's own words for a spawn that is not there (classquest.SPAWN_REFUSALS).
 GONE = "no such spawn in the world"
+# The world's own words when an abandon is refused for a quest that is
+# complete: hand it in instead of dropping it (#1085).
+COMPLETE_HAND_IN = "it is complete; hand it in"
 # A take or a hand-in the world refused this many times in a day is broken.
 FAILS_BEFORE_BROKEN = 3
 # The quest ledger's reason column.
@@ -145,7 +148,7 @@ REASON_WIDTH = 255
 
 _FAILED = ("error", "failed", "refused", "expired")
 _WENT = ("applied", "delivered")
-_CHAIN_ROW = re.compile(r"^(take|turnin) quest:(\d+)")
+_CHAIN_ROW = re.compile(r"^(take|turnin|abandon) quest:(\d+)")
 
 _NPCS = "".join(
     "q.RequiredNpcOrGo%d AS npc%d, q.RequiredNpcOrGoCount%d AS npc_count%d, "
@@ -554,6 +557,17 @@ def refusals(name, tried) -> dict:
     return out
 
 
+def _module_complete(name, tried) -> frozenset:
+    """The quest ids the module told this quester are complete, by refusing
+    their abandon with its complete words: they are due a turn-in, never a
+    drop (#1085)."""
+    return frozenset(
+        qid
+        for (verb, qid), (_count, words) in refusals(name, tried).items()
+        if verb == "abandon" and COMPLETE_HAND_IN in (words or "")
+    )
+
+
 class Clock:
     """Play time with no objective moving, per quester and quest.
 
@@ -716,7 +730,9 @@ def failures(cat: Catalogue, member, clock, now, tried=(), last_quest=0) -> list
 
 
 def _broken_reason(quest, facts: Facts, status, played, gone, refused) -> str:
-    """Why a quest the quester holds is broken, "" when it is not (yet)."""
+    """Why a quest the quester holds is broken, "" when it is not (yet). A
+    complete quest's objectives cannot move, so stillness never stalls it:
+    it is due a turn-in, not a drop (#1085)."""
     if status == STATUS_FAILED:
         return FAILED
     if _ender_missing(quest, facts, gone):
@@ -726,13 +742,9 @@ def _broken_reason(quest, facts: Facts, status, played, gone, refused) -> str:
     count, words = refused.get(("turnin", quest.id), (0, ""))
     if count >= FAILS_BEFORE_BROKEN:
         return _refused_words(REFUSED_TURN_IN, words)
-    if played < STALL_SECONDS:
+    if played < STALL_SECONDS or status == STATUS_COMPLETE:
         return ""
-    unsourced = (
-        status == STATUS_INCOMPLETE
-        and (quest.kills or quest.items)
-        and not quest.fields
-    )
+    unsourced = (quest.kills or quest.items) and not quest.fields
     return STALLED_UNSOURCED if unsourced else STALLED
 
 
@@ -847,13 +859,16 @@ def next_move(cat: Catalogue, member, broken=frozenset(), found=(), tried=()):
     `broken` is the quest ids already found broken for this quester, `found`
     this pass's Broken rows for the quests it holds (`failures`)."""
     left = left_spawns(member.name, tried)
+    # Quests the module told this quester are complete: due a turn-in, never
+    # a drop, even when their log row still says otherwise (#1085).
+    complete = _module_complete(member.name, tried)
     # 1. A broken quest it holds is dropped.
-    move = _drop(cat, member, broken, found)
+    move = _drop(cat, member, broken, found, complete)
     if move is not None:
         return move, "", []
     skip = set(broken) | {b.quest for b in found}
     # 2. A complete quest, the nearest turn-in NPC first.
-    move = _hand_in(cat, member, skip, left)
+    move = _hand_in(cat, member, skip, left, complete)
     if move is not None:
         return move, "", []
     # 3. A quest in reach in its zone, the nearest giver first, while the log
@@ -889,12 +904,13 @@ def _by_yards(option):
     return option[0], option[1]
 
 
-def _drop(cat: Catalogue, member, broken, found):
-    """The drop of the first broken quest the quester holds, or None."""
-    held_broken = [b for b in found if b.held] + [
+def _drop(cat: Catalogue, member, broken, found, complete=frozenset()):
+    """The drop of the first broken quest the quester holds, or None. A quest
+    the module called complete is never dropped (#1085)."""
+    held_broken = [b for b in found if b.held and b.quest not in complete] + [
         Broken(member.name, q, cat.quest(q).title if cat.quest(q) else "", "", True)
         for q in sorted(member.quest_log)
-        if q in broken
+        if q in broken and q not in complete
     ]
     if not held_broken:
         return None
@@ -918,11 +934,16 @@ def _held(cat: Catalogue, member, status, skip):
             yield qid, quest
 
 
-def _hand_in(cat: Catalogue, member, skip, left):
-    """The hand-in of the complete quest whose turn-in NPC is nearest, or None."""
+def _hand_in(cat: Catalogue, member, skip, left, complete=frozenset()):
+    """The hand-in of the complete quest whose turn-in NPC is nearest, or
+    None. A quest the module called complete is handed in even when its log
+    row still says otherwise (#1085)."""
+    due = {qid for qid, _quest in _held(cat, member, STATUS_COMPLETE, skip)}
+    due |= {qid for qid in complete if qid in member.quest_log}
     ready = []
-    for qid, quest in _held(cat, member, STATUS_COMPLETE, skip):
-        spot = _nearest(member, quest.enders, left)
+    for qid in due:
+        quest = cat.quest(qid)
+        spot = _nearest(member, quest.enders, left) if quest is not None else None
         if spot is not None:
             ready.append((_yards(member, spot), qid, quest, spot))
     if not ready:
