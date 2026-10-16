@@ -15,8 +15,9 @@ import gear
 WARRIOR = 1
 PALADIN = 2
 ROGUE = 4
-MAGE = 8
 PRIEST = 5
+SHAMAN = 7
+MAGE = 8
 
 # AllowableClass bitmasks: bit (class_id - 1).
 ALL_CLASSES = (1 << 11) - 1  # every class can use it (e.g. a trinket)
@@ -113,6 +114,17 @@ class ClassEligibility(unittest.TestCase):
         holding = sword("Ugga", 1, item_level=26, allowable_class=WARRIOR_ONLY)
         self.assertTrue(gear.usable_by_class(holding, WARRIOR))
         self.assertFalse(gear.usable_by_class(holding, MAGE))
+
+    def test_shaman_cannot_wield_a_staff(self):
+        magestaff = staff("Ezzo", 1, item_level=23)
+        ezzo = character("Ezzo", SHAMAN)
+        upgrade, reason = gear.is_upgrade_for(magestaff, ezzo)
+        self.assertFalse(upgrade)
+        self.assertIn("cannot wield that weapon type", reason)
+
+        wearable, reason_wear = gear.would_wear(magestaff, ezzo)
+        self.assertFalse(wearable)
+        self.assertIn("cannot wield that weapon type", reason_wear)
 
 
 class TheSeveringAxeTest(unittest.TestCase):
