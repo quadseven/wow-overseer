@@ -15528,8 +15528,8 @@ class Bridge(discord.Client):
                 facts.get("far_open"), FAR_WALKS_AT_ONCE),
             # How long each member has stood on one spot (stood_still_step).
             still=standstill.all_minutes(self._guild_still, time.monotonic()),
-            # The class quest asks lately: a run of them with no party stops
-            # the next (guildjobs.class_ask_streak).
+            # The class quest asks lately: a run of them that did not get the
+            # quest done stops the next (guildjobs.class_ask_streak).
             asks=facts.get("quest_asks", ()))
         # Members held on a class quest are kept out of every dungeon pass
         # (the guild's asks, its runs): _class_priority_names.
@@ -24408,7 +24408,7 @@ def _class_party_settle_ran(cur, run, done: bool) -> None:
     failed when its quest is not done."""
     for answer_id in run.answers.values():
         cur.execute(guildsocial.ANSWER_STATE_SQL, (guildsocial.SEATED, int(answer_id)))
-    reason = "" if done else ("failed: " + (run.outcome or "quest credit did not arrive"))[:160]
+    reason = "" if done else (classask.FAILED + (run.outcome or "quest credit did not arrive"))[:160]
     cur.execute(
         "UPDATE overseer_guild_ask SET state = 'ran', run_id = %s, reason = %s "
         "WHERE id = %s AND state IN ('open', 'filled')",
@@ -27319,10 +27319,11 @@ def _read_job_spawns_once(cur) -> None:
                                           guildlevel.QUEST_FACTS_SQL))
 
 
-# The class quest asks lately and how many said yes to each, for the run of
-# asks with no party that stops the next (guildjobs.class_ask_streak).
+# The class quest asks lately, how many said yes to each and why a party that
+# went failed, for the run of asks that did not get the quest done that stops
+# the next (guildjobs.class_ask_streak).
 _JOB_QUEST_ASKS_SQL = (
-    "SELECT a.asker, a.target, a.state, "
+    "SELECT a.asker, a.target, a.state, a.reason, "
     "TIMESTAMPDIFF(MINUTE, a.created_at, NOW()) AS age, "
     "(SELECT COUNT(*) FROM overseer_guild_answer an WHERE an.ask_id = a.id) AS yeses "
     "FROM overseer_guild_ask a WHERE a.kind = 'quest' "
