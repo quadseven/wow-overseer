@@ -627,6 +627,20 @@ def vendor_pass_mode(trip_worth: bool, withheld: bool, in_run: bool) -> str:
     return VENDOR_MODE_NONE
 
 
+VENDOR_WAIT_TRIP_SECONDS = 30 * 60
+
+
+def vendor_wait_trip(
+    wait_seconds: int, sellable_counts: dict[str, int], in_run: bool
+) -> bool:
+    """Take an ordinary vendor turn after a repeated, actionable range wait."""
+    return (
+        not in_run
+        and wait_seconds >= VENDOR_WAIT_TRIP_SECONDS
+        and any(count > 0 for count in sellable_counts.values())
+    )
+
+
 def aim_step_in_mode(step: str, mode: str) -> str:
     """The vendor errand step once the pass mode is known (#225).
 

@@ -4472,6 +4472,22 @@ def _fetch_family_intents() -> dict:
     return {str(r["leader_name"]): r for r in rows or ()}
 
 
+def _fetch_vendor_wait_seconds(names: list) -> int:
+    """Age of a fresh, repeated no-vendor step for this family's sellers."""
+    if not names:
+        return 0
+    holes = campaignplan.holes(len(names))
+    sql = (
+        "SELECT MAX(TIMESTAMPDIFF(SECOND, first_seen, NOW())) AS seconds "
+        "FROM overseer_now_step WHERE kind = 'no_vendor' "
+        "AND scope = 'character' AND last_seen > NOW() - INTERVAL 10 MINUTE "
+        "AND subject IN (%s)" % holes
+    )
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _situation_try(cur, "vendor wait", sql, tuple(names))
+    return int(rows[0].get("seconds") or 0) if rows else 0
+
+
 # --- what each character is doing, and waiting for (nowstatus.py) ------------
 # The bridge's own INFO lines carry the reasons nothing else records ("waits
 # for bag room", "withheld: bags are near full"). NOW_TAP collects them from
@@ -11052,6 +11068,15 @@ class Bridge(discord.Client):
         """
         trip_worth = bag_pressure.family_town_run_needed(
             free_slots, sellable=sellable_counts)
+        if not trip_worth and not in_run and any(sellable_counts.values()):
+            waited = await asyncio.to_thread(_fetch_vendor_wait_seconds, names)
+            if bag_pressure.vendor_wait_trip(waited, sellable_counts, in_run):
+                trip_worth = True
+                log.info(
+                    "economy: a seller has waited %ds for a vendor; the "
+                    "family takes an ordinary sale trip with sellable %s",
+                    waited, sellable_counts,
+                )
         # A CAMPAIGN HELD IN TOWN SELLS UP TO ITS RESUME FLOOR. Without this a
         # member between the trigger and the floor waited out the whole
         # resume ceiling with a full bag of junk; see town_first_trip_worth.
