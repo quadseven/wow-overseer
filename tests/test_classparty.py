@@ -521,6 +521,7 @@ for _name in (
     "_class_party_disband_row",
     "_class_party_close",
     "_begin_class_parties",
+    "_guild_busy_run_names",
 ):
     setattr(_Bridge, _name, getattr(bridge.Bridge, _name))
 
@@ -1027,12 +1028,22 @@ class TheBridgeMeetsAtTheObjective(unittest.TestCase):
         # Chill's meeting failed: it is free while the party goes on without it.
         self.assertEqual(this.held_up, [{"Bigzug", "Dread"}])
         self.assertEqual(bridge._class_party_names(this), set())
+        self.assertEqual(this._guild_busy_run_names(), set())
 
         failed = _Bridge([FORMED], meet={"Bigzug": LOST})
         drive(failed, a_run(meeting=True))
         self.assertEqual(failed.held_meeting, [everyone] * 3)
         self.assertEqual(failed.held_up, [])
         self.assertEqual(classask.held_names(failed._class_board.runs()), set())
+        self.assertEqual(failed._guild_busy_run_names(), set())
+
+    def test_class_party_on_board_is_busy_for_guild_jobs(self):
+        this = _Bridge([FORMED, answer("applied", phase="ended")])
+        run = a_run(meeting=True)
+        this._class_board.begin(run)
+        self.assertEqual(
+            this._guild_busy_run_names(), {"Bigzug", "Chill", "Dread"}
+        )
 
 
 class TheWiring(unittest.TestCase):

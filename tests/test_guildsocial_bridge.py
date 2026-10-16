@@ -568,3 +568,45 @@ class AFightDoesNotCostTheGroup(unittest.TestCase):
             {"outcome": "refused", "why": "'Daidanden' is dead"},
         ]
         self.assertEqual(guildrun.benched(rows), {"Daidanden"})
+
+
+class GatheringClassAsksAndPartiesAreBusy(unittest.TestCase):
+    """#1073: When a class quest ask has yeses gathering or a party on the
+    board, the asker and helpers are held out of guild jobs and walks so no
+    competing guild walk gives 'character is held by another verb'."""
+
+    def test_guild_busy_run_names_holds_social_names_and_class_parties(self):
+        this = _Self()
+        this._guild_run_names = {"Tanky"}
+        this._guild_social_names = {"Fabulosa", "HelperA"}
+        this._class_board = bridge.classparty.Board()
+        spot = bridge.classquest.Spawn(9, 3130, 1, -240.0, -4100.0, "Dalin")
+        run = bridge.classparty.PartyRun(
+            1,
+            "LeaderB",
+            ("HelperB",),
+            2000,
+            "Hearts of the Pure",
+            spot,
+            {"HelperB": 10},
+        )
+        this._class_board.begin(run)
+        busy = bridge._guild_busy_run_names(this)
+        self.assertEqual(
+            busy, {"Tanky", "Fabulosa", "HelperA", "LeaderB", "HelperB"}
+        )
+
+    def test_social_pass_without_formed_run_folds_social_names_into_run_names(self):
+        this = _Self()
+        this._guild_run_names = set()
+        stubs = {
+            "_guild_run_gate": lambda: {"uptime": 99999, "latest": []},
+            "_guild_runs_in_flight": lambda: 0,
+            "_fetch_guild_social_facts": lambda bounds: facts(),
+            "_write_guild_social": lambda social: 0,
+            "_guild_social_names": lambda: {"Fabulosa", "HelperA"},
+        }
+        with mock.patch.multiple(bridge, **stubs):
+            asyncio.run(bridge.Bridge._guild_social_once(this))
+        self.assertIn("Fabulosa", this._guild_run_names)
+        self.assertIn("HelperA", this._guild_run_names)

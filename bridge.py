@@ -14480,7 +14480,7 @@ class Bridge(discord.Client):
         self._dues_walks = guildroute.live_runs(
             self._dues_walks, now, guildroute.GUILD_STEP_SECONDS)
         posted = await asyncio.to_thread(_dues_recent_holders)
-        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._dues_walks)
+        busy = _guild_busy_run_names(self) | (set(self._dues_walks)
                 | set(self._guild_mail_runs) | set(getattr(self, "_train_walks", ())))
         # NATURALLY EARNED ONLY (the operator, 2026-09-24): a member posts dues
         # only once it has been reset to level 1; natural.py has the rule.
@@ -14619,7 +14619,7 @@ class Bridge(discord.Client):
         )
         receivers = sorted({x.receiver for x in letters})
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
-        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._crafter_walks) | set(self._guild_mail_runs)
+        busy = _guild_busy_run_names(self) | (set(self._crafter_walks) | set(self._guild_mail_runs)
                 | set(self._dues_walks) | set(getattr(self, "_train_walks", ())))
         plan, notes = crafters.visits(letters, designated, known,
                                       frozenset(busy), free_slots)
@@ -14762,7 +14762,7 @@ class Bridge(discord.Client):
         online = {str(r["receiver"]) for r in rows if int(r.get("online") or 0)}
         receivers = sorted({x.receiver for x in letters} & online)
         free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
-        busy = (set(getattr(self, "_guild_run_names", ())) | set(self._post_walks)
+        busy = (_guild_busy_run_names(self) | set(self._post_walks)
                 | set(self._crafter_walks) | set(self._guild_mail_runs)
                 | set(self._dues_walks) | set(self._corps_steps)
                 | set(getattr(self, "_train_walks", ())))
@@ -14919,6 +14919,12 @@ class Bridge(discord.Client):
             started += await self._start_train_walk(walk, now)
         log.info("%s%s", classtrain.pass_line(trainees, started), _family_label(cohort))
 
+    def _guild_busy_run_names(self) -> set:
+        """The names held out of every guild job and walk: active dungeon runs,
+        gathering asks and their yeses (_guild_social_names), and the class
+        quest parties that are up on the board (_class_party_names)."""
+        return _guild_busy_run_names(self)
+
     def _guild_walkers_busy(self, now: float) -> set:
         """Every member another guild pass has on a walk, after the class
         trainer walks past their step window are let go. The other walking
@@ -14926,7 +14932,7 @@ class Bridge(discord.Client):
         walk, and the refusal spends the step's cooldown."""
         self._train_walks = guildroute.live_runs(
             self._train_walks, now, guildroute.GUILD_STEP_SECONDS)
-        return (set(getattr(self, "_guild_run_names", ())) | set(self._train_walks)
+        return (_guild_busy_run_names(self) | set(self._train_walks)
                 | set(self._dues_walks) | set(self._guild_mail_runs)
                 | set(self._corps_steps) | set(getattr(self, "_post_walks", ()))
                 | set(getattr(self, "_job_steps", ())))
@@ -15045,7 +15051,7 @@ class Bridge(discord.Client):
         # Any bot another guild pass has on a walk is left alone: the module
         # would refuse a second walk anyway, and the refusal would spend the
         # step's cooldown.
-        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._corps_steps) | set(self._dues_walks)
+        busy = _guild_busy_run_names(self) | (set(self._corps_steps) | set(self._dues_walks)
                 | set(self._guild_mail_runs) | set(self._crafter_walks)
                 | set(getattr(self, "_train_walks", ())))
         cap = self._guild_walk_cap()
@@ -15393,7 +15399,7 @@ class Bridge(discord.Client):
         now = time.monotonic()
         self._job_steps = guildroute.live_runs(
             self._job_steps, now, guildroute.GUILD_STEP_SECONDS)
-        busy = set(getattr(self, "_guild_run_names", ())) | (set(self._job_steps) | set(self._corps_steps) | set(self._dues_walks)
+        busy = _guild_busy_run_names(self) | (set(self._job_steps) | set(self._corps_steps) | set(self._dues_walks)
                 | set(self._guild_mail_runs) | set(self._crafter_walks)
                 | set(getattr(self, "_train_walks", ())))
         busy -= self._stranded_knights_freed(members)
@@ -16402,6 +16408,12 @@ class Bridge(discord.Client):
                 log.info("class party: %s's ask for %s is given up after %d failures",
                          run.leader, run.title, board.failures(run.ask_id))
             board.end(run, now, done)
+            if hasattr(self, "_guild_run_names"):
+                self._guild_run_names = (
+                    (set(self._guild_run_names) - set(run.names()))
+                    | set(getattr(self, "_guild_social_names", ()))
+                    | _class_party_names(self)
+                )
 
     async def _job_row(self, step, row, cap: float) -> bool:
         """Write one row and wait for its answer; True when it worked."""
@@ -18802,6 +18814,7 @@ class Bridge(discord.Client):
             self._guild_run_formed_at = now
             self._guild_run_names |= set(social.form.composition.names)
         self._guild_social_names = await asyncio.to_thread(_guild_social_names)
+        self._guild_run_names = _guild_busy_run_names(self)
         # A keyed wing's run names the member who carries the key (#785).
         key_said = (guildrun.key_words(social.form.composition.members, social.form.door)
                     if run_id else "")
@@ -24216,6 +24229,17 @@ def _class_party_names(owner) -> set:
     leave them alone (a bridge with no board holds nobody)."""
     board = getattr(owner, "_class_board", None)
     return board.names() if board is not None else set()
+
+
+def _guild_busy_run_names(owner) -> set:
+    """The names held out of every guild job and walk: active dungeon runs,
+    gathering asks and their yeses (_guild_social_names), and the class
+    quest parties that are up on the board (_class_party_names)."""
+    return (
+        set(getattr(owner, "_guild_run_names", ()))
+        | set(getattr(owner, "_guild_social_names", ()))
+        | _class_party_names(owner)
+    )
 
 
 def _with_class_asks(social, quest_pass):
