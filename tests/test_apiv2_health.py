@@ -60,13 +60,49 @@ class Stuck(unittest.TestCase):
             ]
         }
         (f,) = health.stuck_findings(stuck, NOW)
-        self.assertEqual("stuck:Grassfed:Class quest: Call of Fire", f["key"])
+        self.assertEqual("stuck:Class quest: Call of Fire", f["key"])
+        self.assertEqual("Grassfed is stuck: Class quest: Call of Fire", f["title"])
         self.assertEqual(
             ("quests", 1, 27.8, 27.8),
             (f["area"], f["affected"], f["hours"], f["impact"]),
         )
         self.assertEqual("asked the guild for help 16 times", f["evidence"])
         self.assertTrue(f["since"].endswith("Z"))
+
+    def test_members_stuck_on_one_step_are_one_finding(self):
+        # 2026-10-15: five members held "Carrying things to sell" filed five
+        # tickets for one bug.
+        def m(name, hours, step="Carrying things to sell"):
+            return {
+                "name": name,
+                "step": step,
+                "blocker": "waiting for a vendor",
+                "since": NOW - int(hours * HOUR),
+                "kind": "hold",
+            }
+
+        stuck = {
+            "members": [
+                m("Og", 5.1),
+                m("Ugga", 5.0),
+                m("Bork", 3.2),
+                m("Grog", 2.5, "Following Zug (0 yards behind)"),
+                m("Oz", 2.2, "Following Zug (4 yards behind)"),
+            ]
+        }
+        found = {f["key"]: f for f in health.stuck_findings(stuck, NOW)}
+        self.assertEqual(
+            sorted(found), ["stuck:Carrying things to sell", "stuck:Following Zug"]
+        )
+        sell = found["stuck:Carrying things to sell"]
+        self.assertEqual("3 members are stuck: Carrying things to sell", sell["title"])
+        self.assertEqual(
+            (3, 5.1, 13.3), (sell["affected"], sell["hours"], sell["impact"])
+        )
+        self.assertTrue(
+            sell["evidence"].startswith("Og, Ugga, Bork; waiting for a vendor")
+        )
+        self.assertEqual(2, found["stuck:Following Zug"]["affected"])
 
 
 class Dungeons(unittest.TestCase):
@@ -360,7 +396,7 @@ class Handler(unittest.TestCase):
                 "guild-bank-empty:Bonkers",
                 "dungeon-clear-rate:blackfathom",
                 "family-run-loop:Grug:33",
-                "stuck:Grug:s",
+                "stuck:s",
             ],
             keys,
         )
