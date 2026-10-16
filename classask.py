@@ -22,8 +22,9 @@ class_helps: a member with a quest it can do goes and does that first) and who
 is free. One open ask per member, MAX_OPEN_PER_GUILD in a guild, NEW_PER_PASS a
 pass, ASK_COOLDOWN_MINUTES before the same member asks again. A quest no party
 could walk to (a use that changed nothing) is never asked for, and one asked
-for guildjobs.CLASS_ASK_STREAK_MAX times in a row with no party is not asked
-for again until its hold runs out: both yield to levelling meanwhile
+for guildjobs.CLASS_ASK_STREAK_MAX times in a row that did not get it done
+(no party, or a party that went and failed, #1028) is not asked for again
+until its hold runs out: both yield to levelling meanwhile
 (guildjobs.class_asking).
 
 WHO ANSWERS. A free member of the same guild, not already on an ask, within
@@ -38,9 +39,9 @@ the leader.
 AN ASK NOBODY ANSWERS GOES TO THE SERVER (#871). On 2026-10-14 four members
 had asked the guild 2 to 7 times for Call of Fire or Redemption over 5 to 14
 hours and drawn no yes at all: no guildmate stood free in the band and in
-reach. From ESCALATE_AFTER_ASKS asks in a row with no party (Help.tries), the
-ask reaches farther (ESCALATED_REACH_YARDS) and the asker calls it in the
-faction's public channel as well (guildpug's call row and channel), and a
+reach. From ESCALATE_AFTER_ASKS asks in a row that did not get the quest done
+(no party, or a party that failed: Help.tries), the ask reaches farther
+(ESCALATED_REACH_YARDS) and the asker calls it in the faction's public channel as well (guildpug's call row and channel), and a
 random bot of its side, free, in the band, on its map and in that reach
 answers by a whisper, nearest first; the asker tells the guild
 (plan_escalation). Its yes is a guildpug answer (stance pug), and its party
@@ -118,8 +119,9 @@ SEAT_RANGE_YARDS = 90.0
 # an asker stood within 1,700 yards of it, so answerers held to the seat
 # range drew no yes at all.
 HELPER_REACH_YARDS = 2500.0
-# Asks in a row with no party before the next is called to the server too
-# (guildjobs.CLASS_ASK_STREAK_MAX leaves it two tries before the member yields).
+# Asks in a row that did not get the quest done before the next is called to
+# the server too (guildjobs.CLASS_ASK_STREAK_MAX leaves it two tries before the
+# member yields).
 ESCALATE_AFTER_ASKS = 2
 # How far a helper of an escalated ask may stand: about nine minutes of a
 # straight walk, inside classparty.MEET_SECONDS.
@@ -139,8 +141,9 @@ NOT_READ = "no longer read in the world"
 _NUMBERS = {1: "one", 2: "two", 3: "three", 4: "four"}
 
 # The reason column of an ask whose party a step stopped starts with this
-# (stopped), as one whose party went and failed starts with "failed: ".
+# (stopped), as one whose party went and failed starts with FAILED.
 STOPPED = "stopped: "
+FAILED = "failed: "
 # overseer_guild_ask.reason is 160 characters wide.
 REASON_CHARS = 160
 
@@ -313,7 +316,7 @@ def _distance(a, b) -> float:
 
 def escalated(help_) -> bool:
     """Whether this help's ask goes to the server too: ESCALATE_AFTER_ASKS asks
-    for it in a row came to no party."""
+    for it in a row did not get it done."""
     return int(getattr(help_, "tries", 0) or 0) >= ESCALATE_AFTER_ASKS
 
 
