@@ -51,6 +51,7 @@ import dungeonpath
 import events
 import fanout
 import flightlearn
+import followhold
 import goals
 import leadcmd
 import attunestep
@@ -312,6 +313,47 @@ def _fetch_keep():
 
 
 _KEEP = keep.Keep(_fetch_keep)
+
+# THE FOLLOWER GATE (#995). The members the world last refused a walk as
+# grouped followers; followhold.py says why a follower's walk is held.
+_FOLLOWERS = followhold.Holds()
+
+_FOLLOWER_GROUP_SQL = (
+    "SELECT s.guid, s.group_leader, l.name AS leader_name, "
+    "TIMESTAMPDIFF(SECOND, s.updated_at, NOW()) AS age "
+    "FROM overseer_snapshot s LEFT JOIN characters l ON l.guid = s.group_leader "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND"
+)
+
+
+def _follower_group_row(cur, holder: str):
+    """`holder`'s fresh snapshot row for followhold.group_from_row, or None.
+
+    A world without the snapshot table or its group column has none (1146,
+    1054), and the walk is then judged on the world's own refusals alone.
+    """
+    try:
+        cur.execute(_FOLLOWER_GROUP_SQL, (holder,))
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return None
+        raise
+    return cur.fetchone()
+
+
+def _held_as_follower(cur, holder: str, command: str) -> bool:
+    """Is `command` a walk the world would refuse `holder` as a follower? (#995)
+
+    Asked over the writer's own cursor before it inserts, so no walk row is
+    written for a member somebody else leads. Logs the hold when there is one.
+    """
+    if not followhold.is_walk(command):
+        return False
+    group = followhold.group_from_row(_follower_group_row(cur, holder))
+    why = _FOLLOWERS.held(holder, command, group, time.monotonic())
+    if why:
+        log.info("follower errand: %s", why)
+    return bool(why)
 
 
 def _keep_reservations(cur, names) -> tuple:
@@ -25364,6 +25406,8 @@ def _insert_crafter_row(holder: str, command: str, kind: str, source: str) -> in
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", command, holder)
         return 0
     with _connect() as conn, conn.cursor() as cur:
+        if _held_as_follower(cur, holder, command):
+            return 0
         try:
             cur.execute(
                 "INSERT INTO overseer_command "
@@ -26223,9 +26267,12 @@ def _insert_mail_walk(run) -> int:
 
     The bot in target_name; the receiver in target_arg only so an operator
     reading the queue sees who the walk is for (the module ignores it).
-    Guarded on 1265 like every other kind written here.
+    Guarded on 1265 like every other kind written here, and held for a grouped
+    follower (#995).
     """
     with _connect() as conn, conn.cursor() as cur:
+        if _held_as_follower(cur, run.holder, run.walk_command):
+            return 0
         try:
             cur.execute(
                 "INSERT INTO overseer_command "
@@ -26246,11 +26293,15 @@ def _insert_mail_walk(run) -> int:
 
 
 def _command_answer(row_id: int):
-    """One command row's status, detail and result, or None if unreadable."""
+    """One command row's status, detail and result, or None if unreadable.
+
+    Every guild walk is followed through here, so a follower refusal is noted
+    for the follower gate on the way past (#995).
+    """
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
-                "SELECT status, detail, result FROM overseer_command WHERE id = %s",
+                "SELECT target_name, status, detail, result FROM overseer_command WHERE id = %s",
                 (int(row_id),),
             )
         except pymysql.err.MySQLError as exc:
@@ -26258,7 +26309,10 @@ def _command_answer(row_id: int):
                 return None
             raise
         row = cur.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        _FOLLOWERS.note_answer(row.get("target_name"), row.get("detail"), time.monotonic())
+        return dict(row)
 
 
 # THE GUILD DUES READS AND ROW (#234). Every member of every guild the family
@@ -26402,9 +26456,12 @@ def _insert_dues_row(holder: str, command: str, taker: str, source: str) -> int:
 
     The guild master in target_arg: a `send` needs it, and on a walk row it
     tells an operator reading the queue who the walk is for (the module
-    ignores it there). Guarded on 1146 and 1265 like `_insert_mail_walk`.
+    ignores it there). Guarded on 1146 and 1265 like `_insert_mail_walk`, and
+    a walk is held for a grouped follower the same way (#995).
     """
     with _connect() as conn, conn.cursor() as cur:
+        if _held_as_follower(cur, holder, command):
+            return 0
         try:
             cur.execute(
                 "INSERT INTO overseer_command "
@@ -26839,12 +26896,15 @@ def _insert_corps_row(holder: str, row) -> int:
     """One overseer_command row for the corps, as the step named it.
 
     Guarded on 1146 and 1265 like `_insert_dues_row`: a world whose queue has
-    no such table, or no such `kind`, gets a warning and no row.
+    no such table, or no such `kind`, gets a warning and no row. A walk for a
+    grouped follower is held, not written (#995).
     """
     if row.kind in _DISPOSAL_KINDS and _KEEP.blocks(holder, row.command):
         log.info("not writing %r for %s: the item is reserved to be kept (overseer_keep)", row.command, holder)
         return 0
     with _connect() as conn, conn.cursor() as cur:
+        if _held_as_follower(cur, holder, row.command):
+            return 0
         try:
             cur.execute(
                 "INSERT INTO overseer_command "
