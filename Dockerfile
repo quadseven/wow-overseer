@@ -27,6 +27,7 @@ COPY core.py bridge.py voice.py transform.py \
      craft_rhythm.py \
      skillgoal.py gatheraim.py gatherband.py \
      flightlearn.py \
+     followhold.py \
      learnaim.py recipebook.py \
      craftpleas.py materials.py \
      gear.py gearorigin.py itemsource.py handover.py \
