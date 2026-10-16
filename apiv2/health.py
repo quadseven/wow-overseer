@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 
 import achievements
 import council
@@ -191,23 +192,48 @@ def refusal_reason(row) -> str:
 # --------------------------------------------------------------- the kinds --
 
 
+_PAREN = re.compile(r"\s*\([^)]*\)")
+
+
+def _step_key(step: str) -> str:
+    """The step without its per-member detail in parentheses ("Following Zug
+    (0 yards behind)" is the step "Following Zug")."""
+    return " ".join(_PAREN.sub("", step).split()) or step
+
+
 def stuck_findings(stuck: dict, now_at: int) -> list:
-    """One finding per member stuck STUCK_HOURS or more (members.stuck_view)."""
-    out = []
+    """One finding per step that members are stuck on STUCK_HOURS or more
+    (members.stuck_view), not one per member: five members held on the same
+    step are one problem, and one finding per member filed five tickets for
+    one bug (2026-10-15)."""
+    groups: dict = {}
     for m in stuck.get("members") or ():
         hours = hours_since(m.get("since"), now_at)
         if not m.get("since") or hours < STUCK_HOURS:
             continue
-        name, step = m["name"], m.get("step") or "what it is doing"
+        step = _step_key(m.get("step") or "what it is doing")
+        groups.setdefault((step, m.get("kind")), []).append((m, hours))
+    out = []
+    for (step, kind), rows in sorted(groups.items(), key=lambda kv: kv[0][0]):
+        rows.sort(key=lambda r: (-r[1], r[0]["name"]))
+        names = [m["name"] for m, _ in rows]
+        first, longest = rows[0]
+        title = (
+            "%s is stuck: %s" % (names[0], step)
+            if len(names) == 1
+            else "%d members are stuck: %s" % (len(names), step)
+        )
+        who = "" if len(names) == 1 else "%s; " % ", ".join(names)
         out.append(
             finding(
-                "stuck:%s:%s" % (name, step),
-                "%s is stuck: %s" % (name, step),
-                STUCK_AREAS.get(m.get("kind"), "members"),
-                1,
-                hours,
-                m.get("blocker") or "stuck with no reason on record",
-                m.get("since"),
+                "stuck:%s" % step,
+                title,
+                STUCK_AREAS.get(kind, "members"),
+                len(names),
+                longest,
+                who + (first.get("blocker") or "stuck with no reason on record"),
+                min(m.get("since") for m, _ in rows),
+                impact=sum(h for _, h in rows),
             )
         )
     return out
