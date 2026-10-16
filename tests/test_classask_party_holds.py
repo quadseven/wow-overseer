@@ -116,6 +116,26 @@ class TheGatheringNames(unittest.TestCase):
 
 
 class TheGuildJobsLeaveAHelpPartyAlone(unittest.TestCase):
+    def test_a_step_planned_before_the_party_was_reserved_does_not_start(self):
+        async def run_step(_step, _cap):
+            return None
+
+        owner = types.SimpleNamespace(
+            _guild_run_names={"Bigzug"},
+            _job_steps={},
+            _mail_walk_tasks=set(),
+            _run_job_step=run_step,
+            _mail_walk_task_done=lambda task: None,
+        )
+        step = types.SimpleNamespace(holder="Bigzug", walk=None, action="farm")
+        plan = types.SimpleNamespace(steps=(step,))
+
+        async def start():
+            return bridge.Bridge._start_guild_job_steps(owner, plan, 1.0, 100.0, True)
+
+        self.assertEqual(asyncio.run(start()), 0)
+        self.assertEqual(owner._job_steps, {})
+
     def names(self, rows):
         cur = mock.MagicMock()
         cur.fetchall.return_value = rows
