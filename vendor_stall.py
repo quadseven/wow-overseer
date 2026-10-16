@@ -71,6 +71,23 @@ class FamilyProgress:
 
 FAMILY_COHESION_YARDS = 100.0
 
+# The member states mod-overseer's intent book writes (members_state) for a
+# member it holds where it stands until the leader comes back for it (#1046).
+# The module will not start that walk back while the bridge's vendor errand is
+# in the leader's column, so the member is fetched after the sale either way;
+# counted as a split, it called the trip off every STALL_AFTER_SECONDS and the
+# leader turned between the two walks for hours with neither finished.
+HELD_FOR_THE_LEADER = frozenset({"held too far to walk", "held off a deadly walk"})
+
+
+def following(names, states: Mapping[str, str]) -> tuple[str, ...]:
+    """The members whose distance says whether the family follows the trip.
+
+    `states` is member name -> its intent book state; a member with none, or
+    with any state but a hold for the leader, is watched.
+    """
+    return tuple(n for n in names if states.get(n) not in HELD_FOR_THE_LEADER)
+
 
 def progress(
     previous: Movement | None,
