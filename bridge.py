@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import datetime
 import json
 import logging
 import math
@@ -4109,17 +4110,18 @@ def _stall_reads(names: list) -> dict:
         return _stuck_doors(cur, names)
 
 
-def _stall_held(key: str, door: str) -> bool:
-    """Whether this door was already left during its recent stall window."""
+def _stall_held(key: str, door: str):
+    """When this door was already left during its recent stall window."""
     sql = (
-        "SELECT id FROM overseer_dungeon_pace WHERE family = %s "
+        "SELECT created_at FROM overseer_dungeon_pace WHERE family = %s "
         "AND decision = %s AND door = %s "
         "AND created_at >= NOW() - INTERVAL %s HOUR LIMIT 1"
     )
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, (key, dungeonstall.DECISION, door,
                           dungeonpace.WINDOW_HOURS))
-        return bool(cur.fetchall())
+        rows = cur.fetchall()
+        return rows[0]["created_at"] if rows else None
 
 
 def _stall_write(key: str, leave) -> None:
@@ -4141,6 +4143,9 @@ def _stall_write(key: str, leave) -> None:
         except Exception:
             conn.rollback()
             raise
+
+
+_STALL_HOLD_SAID: dict[tuple[str, str], datetime.datetime] = {}
 
 
 # --- the leveling zone (levelroute.py) -----------------------------------------
@@ -19184,8 +19189,22 @@ class Bridge(discord.Client):
         leave = dungeonstall.leave(rows, stuck)
         if leave is None:
             return False
-        if await asyncio.to_thread(_stall_held, key, leave.door):
-            return True
+        held_at = await asyncio.to_thread(_stall_held, key, leave.door)
+        if held_at is not None:
+            hold_end = held_at + datetime.timedelta(hours=dungeonpace.WINDOW_HOURS)
+            if hold_end.tzinfo is None:
+                hold_end = hold_end.replace(tzinfo=datetime.timezone.utc)
+            else:
+                hold_end = hold_end.astimezone(datetime.timezone.utc)
+            marker = (key, leave.door)
+            if _STALL_HOLD_SAID.get(marker) != hold_end:
+                _STALL_HOLD_SAID[marker] = hold_end
+                log.info("stall: %s skips held door %s until %s UTC",
+                         campaignqueue._family(key), leave.door,
+                         hold_end.strftime("%Y-%m-%d %H:%M:%S"))
+            rows[:] = [row for row in rows
+                       if str(row.get("keyword") or "") != leave.door]
+            return False
         await asyncio.to_thread(_stall_write, key, leave)
         # The cancellation and its pace record are durable before the job
         # changes, so a failed write cannot leave the family on quest.
