@@ -526,8 +526,8 @@ class TheYield(unittest.TestCase):
         left = guildjobs.CLASS_STALL_HOLD_MINUTES - 30
         self.assertEqual(
             line,
-            "class ask: Bigzug stops asking for Group Job after 4 asks with no "
-            "party (3 yes); it levels for %d minute(s)" % left,
+            "class ask: Bigzug stops asking for Group Job after 4 asks that did "
+            "not get it done (3 yes); it levels for %d minute(s)" % left,
         )
         # Without the streak the quest is owed as before.
         self.assertIn("Bigzug", class_plan([m], b=b).owed)
@@ -554,6 +554,35 @@ class TheYield(unittest.TestCase):
         asks.append(done_ask(10))
         asks.append(done_ask(5))
         self.assertEqual(guildjobs.class_helps(asker(), b, asks=asks), [])
+
+    def test_a_party_that_went_and_failed_does_not_reset_the_count(self):
+        # #1028: an asker asked the guild 22 times in 44 hours for Call of
+        # Fire, each party going and not reaching the objective: a party that
+        # ran and failed reset the run, so the ask was never called to the
+        # server and the member never yielded.
+        b = group_book()
+        rows = [
+            {
+                "asker": "Bigzug",
+                "target": "quest:2000",
+                "state": "ran",
+                "reason": "failed: party did not reach the objective: ",
+                "age": age,
+                "yeses": 1,
+            }
+            for age in (20, 40)
+        ]
+        asks = guildjobs.quest_asks_from_rows(rows)
+        (h,) = guildjobs.class_helps(asker(), b, asks=asks)
+        self.assertEqual(h.tries, 2)
+        self.assertTrue(classask.escalated(h))
+        rows += [dict(rows[0], age=age) for age in (60, 80)]
+        asks = guildjobs.quest_asks_from_rows(rows)
+        self.assertEqual(guildjobs.class_helps(asker(), b, asks=asks), [])
+        (line,) = [
+            line for _key, line in class_plan([asker()], b=b, asks=asks).ask_yields
+        ]
+        self.assertIn("after 4 asks that did not get it done (4 yes)", line)
 
     def test_another_members_or_quests_asks_do_not_count(self):
         b = group_book()
