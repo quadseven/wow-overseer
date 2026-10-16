@@ -1,0 +1,16 @@
+{
+  "test-hook": {
+    "PreToolUse": [
+      {
+        "matcher": "view_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh test_hook.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

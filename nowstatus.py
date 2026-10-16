@@ -568,10 +568,11 @@ def build_facts(names, roster, intents, steps, now_at=None, creatures=None) -> d
 # Steps that note a side hold and never say what the character is doing: the
 # equip pass holding a piece back rides along while the member walks, fights or
 # runs a dungeon, and read as its whole state it showed ten members "stuck".
-SIDE_KINDS = frozenset({"equip_held", "bank_wait"})
+SIDE_KINDS = frozenset({"equip_held", "bank_wait", "no_vendor"})
 # The side notes that may still speak when nothing else does. The bank bag slot
-# note is left out on purpose: the slot is bought on any banker visit and holds
-# nothing, so "waiting for a banker" is never a true answer, even alone.
+# and no-vendor notes are left out on purpose: the slot is bought on any banker
+# visit and carried goods are sold on any vendor visit and neither holds anything,
+# so waiting for a banker or vendor is never a true answer, even alone (#1046).
 SPEAKS_ALONE = frozenset({"equip_held"})
 
 

@@ -68,7 +68,14 @@ ASK_DAYS = 14
 HOLD_STUCK_SECONDS = 30 * 60
 # Doings that are not a hold: out of play, or a walk that is still walking.
 NOT_HOLDS = frozenset(
-    {"Logged out", "Dead", "Fighting", "Idle", "Buying a bank bag slot"}
+    {
+        "Logged out",
+        "Dead",
+        "Fighting",
+        "Idle",
+        "Buying a bank bag slot",
+        "Carrying things to sell",
+    }
 )
 WALKING = "to get there"
 CHARS_SQL = (

@@ -498,10 +498,6 @@ class ThePageShowsItOnAPhone(unittest.TestCase):
             read(name).encode("ascii")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class AHeldEquipIsNotWhatTheMemberIsDoing(unittest.TestCase):
     """Ten members read 'Trying to wear Gladius: waiting for the game to accept
     it (3 tries)' for over an hour while they walked, fought and ran dungeons.
@@ -549,3 +545,57 @@ class AHeldEquipIsNotWhatTheMemberIsDoing(unittest.TestCase):
         )["Idler"]
         got = nowstatus.compose({"name": "Idler", "present": True}, solo)
         self.assertIn("Trying to wear Gladius", got["line"])
+
+
+class ACarriedVendorCandidateIsNotWhatTheMemberIsDoing(unittest.TestCase):
+    """A member carrying items to sell while walking, fighting or fetching
+    read 'Walking back for a member held far away: waiting for a vendor within reach'
+    and was reported stuck for hours. The no-vendor note is on the side and does not
+    turn an active walk into a hold (#1046)."""
+
+    def no_vendor(self, name="Grug"):
+        return step(
+            name,
+            "Carrying things to sell",
+            "a vendor within reach",
+            kind="no_vendor",
+            first=9720,
+            last=30,
+        )
+
+    def test_fetch_intent_walk_is_not_overridden_by_no_vendor(self):
+        intent = {
+            "leader_name": "Grug",
+            "family": "Grug",
+            "current_kind": "fetch",
+            "current_owner": "travel column",
+            "current_target": "Bork",
+            "current_for": 20,
+            "members_state": "Bork|held too far to walk|another map",
+            "module_age": 0,
+        }
+        all_facts = nowstatus.build_facts(
+            NAMES, ROSTER, [intent], [self.no_vendor("Grug")], NOW
+        )
+        result = nowstatus.compose(
+            {"name": "Grug", "present": True, "condition": "ok"},
+            all_facts["Grug"],
+            NOW,
+        )
+        self.assertEqual(
+            result["doing"], "Walking back for a member held far away"
+        )
+        self.assertEqual(result["waiting"], "to get there")
+        self.assertNotIn("a vendor within reach", result["line"])
+
+    def test_alone_the_no_vendor_note_does_not_claim_a_hold(self):
+        solo = nowstatus.build_facts(
+            ["Idler"], ROSTER, [], [self.no_vendor("Idler")], NOW
+        )["Idler"]
+        got = nowstatus.compose({"name": "Idler", "present": True}, solo)
+        self.assertEqual(got["line"], "Idle: no errand and no hold found.")
+        self.assertNotIn("a vendor within reach", got["line"])
+
+
+if __name__ == "__main__":
+    unittest.main()

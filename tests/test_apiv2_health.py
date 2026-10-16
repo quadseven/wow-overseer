@@ -68,6 +68,21 @@ class Stuck(unittest.TestCase):
         self.assertEqual("asked the guild for help 16 times", f["evidence"])
         self.assertTrue(f["since"].endswith("Z"))
 
+    def test_carrying_things_to_sell_is_not_a_hold(self):
+        from apiv2 import members
+
+        self.assertIn("Carrying things to sell", members.NOT_HOLDS)
+        self.assertIsNone(
+            members.hold_blocker(
+                {
+                    "doing": "Carrying things to sell",
+                    "waiting": "a vendor within reach",
+                    "for_s": 9720,
+                },
+                NOW,
+            )
+        )
+
 
 class Dungeons(unittest.TestCase):
     def test_a_dungeon_clearing_under_thirty_percent_of_eight_runs_is_a_finding(self):
