@@ -488,6 +488,40 @@ class TheVendorPassAsksBothHalvesTests(unittest.TestCase):
                 "vendor could help - which is infra#4190",
             )
 
+    def test_gear_candidates_evaluated_before_vendor_pass_mode(self):
+        """#1045: surplus gear must be counted in sellable before vendor pass mode.
+
+        Ugga was stuck in the field carrying surplus gear candidates for 2.4+
+        hours because `sellable_counts` passed to `_vendor_pass_mode` only
+        counted junk and bags. Gear candidates were evaluated below the mode
+        check, so `family_town_run_needed` evaluated False (1 + 0 <= 3), mode
+        became VENDOR_MODE_COUNTER, and no vendor trip was ever taken.
+        """
+        gear_cand_line = None
+        pass_mode_line = None
+        for node in ast.walk(self._vendor_once()):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute):
+                if func.attr == "gear_candidates":
+                    gear_cand_line = node.lineno
+                elif func.attr == "_vendor_pass_mode":
+                    pass_mode_line = node.lineno
+        self.assertIsNotNone(
+            gear_cand_line, "gear_candidates not called in _vendor_once"
+        )
+        self.assertIsNotNone(
+            pass_mode_line, "_vendor_pass_mode not called in _vendor_once"
+        )
+        self.assertLess(
+            gear_cand_line,
+            pass_mode_line,
+            f"gear_candidates at line {gear_cand_line} must run before "
+            f"_vendor_pass_mode at line {pass_mode_line} so surplus gear "
+            "counts toward relieving bag pressure (#1045)",
+        )
+
 
 class AVendorTripMustBeAbleToHelpTests(unittest.TestCase):
     """infra#4190: pressure nobody can answer starved the travel column.
@@ -537,3 +571,14 @@ class AVendorTripMustBeAbleToHelpTests(unittest.TestCase):
         # Every caller that only wants "is anyone low" is unchanged.
         self.assertTrue(family_town_run_needed({"Og": 0}))
         self.assertTrue(family_town_run_needed({"Og": 0}, sellable=None))
+
+    def test_surplus_gear_relieves_bag_pressure_past_trigger(self):
+        """#1045: a member with low free slots and surplus gear triggers a trip.
+
+        Ugga with 1 free slot (under trigger of 3) and 0 junk rows has
+        4 surplus gear pieces refused by all five members. With gear counted,
+        1 + 4 = 5 > 3, clearing the trigger and making the trip worth taking.
+        """
+        free_slots = {"Ugga": 1}
+        self.assertFalse(family_town_run_needed(free_slots, sellable={"Ugga": 0}))
+        self.assertTrue(family_town_run_needed(free_slots, sellable={"Ugga": 4}))

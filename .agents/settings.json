@@ -1,0 +1,12 @@
+{
+  "enableTerminalSandbox": false,
+  "toolPermission": "always-proceed",
+  "permissions": {
+    "allow": [
+      "command(*)",
+      "unsandboxed(*)",
+      "read_file(*)",
+      "write_file(*)"
+    ]
+  }
+}

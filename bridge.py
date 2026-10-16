@@ -11338,6 +11338,33 @@ class Bridge(discord.Client):
         # meets the ordinary disposition on a later cycle.
         await self._equip_upgrades(equip_rows, worn, names, jev_plan)
 
+        # THE SAME OPINION THAT DECIDES HAND-OFFS DECIDES WHAT MAY BE SOLD.
+        # gear.py judges who would wear a carried piece; only the answer
+        # "nobody, and we asked all five" lets it reach a vendor. An empty
+        # `worn` (older world image, missing columns) yields no fits at all,
+        # every piece is UNASKED, and the gear half of this pass offers
+        # nothing - which is the safe way to not know.
+        fits = bag_pressure.family_fits(gear_rows, worn, names)
+        # THE HAND-OFF WAS TRIED FIRST, ABOVE THE TOWN-RUN GATE, and it is not
+        # repeated here (infra#4198). Once all members have claimed what they
+        # would wear, surplus gear that all five have refused is genuinely
+        # sellable at a vendor and counts toward what a vendor can relieve
+        # (#1045). Counting it before hand-offs would let an upgrade justify a
+        # trip (the guard above); counting it now, after upgrades are placed,
+        # reflects what a vendor trip can actually free up.
+        gear_candidates = bag_pressure.gear_candidates(
+            gear_rows, disposition.Family(vendor_reachable=True),
+            available=SELL_ROUTES, fits=fits, keep_names=OWNER_KEEPS,
+            spare=await asyncio.to_thread(_bank_spare, names, True),
+        )
+        gear_sales = _without_bank_keeps(
+            gear_candidates,
+            await asyncio.to_thread(_bank_policy, names, True),
+            "economy",
+        )
+        for sale in gear_sales:
+            sellable_counts[sale.holder] = sellable_counts.get(sale.holder, 0) + 1
+
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
         mode = await self._vendor_pass_mode(
@@ -11371,29 +11398,9 @@ class Bridge(discord.Client):
         # pressure judgement (infra#4190), and `gear_rows` and `worn` above the
         # gear hand-off (infra#4198). All five are reused here rather than
         # fetched a second time.
-        # THE SAME OPINION THAT DECIDES HAND-OFFS DECIDES WHAT MAY BE SOLD.
-        # gear.py judges who would wear a carried piece; only the answer
-        # "nobody, and we asked all five" lets it reach a vendor. An empty
-        # `worn` (older world image, missing columns) yields no fits at all,
-        # every piece is UNASKED, and the gear half of this pass offers
-        # nothing - which is the safe way to not know.
-        fits = bag_pressure.family_fits(gear_rows, worn, names)
-        # THE HAND-OFF WAS TRIED FIRST, ABOVE THE TOWN-RUN GATE, and it is not
-        # repeated here (infra#4198). The two answers still come from one gate
-        # over one read of the world - `gear_rows` and `worn` are the same two
-        # lists `_hand_gear` was handed - which is what stops a sale and a
-        # hand-off ever being proposed for the same item. Calling it twice on a
-        # cycle that reaches this far would double every log line and hand the
-        # room budget out twice.
         candidates = bag_pressure.vendor_candidates(
             rows, keep_names=OWNER_KEEPS,
-        ) + (
-            bag_pressure.gear_candidates(
-                gear_rows, disposition.Family(vendor_reachable=True),
-                available=SELL_ROUTES, fits=fits, keep_names=OWNER_KEEPS,
-                spare=await asyncio.to_thread(_bank_spare, names, True),
-            )
-        ) + (
+        ) + gear_sales + (
             # Redundant spare bags nobody has equipped (infra#4163): dead
             # weight in the exact shape `it.class <> 1` in `_VENDOR_ITEMS_SQL`
             # was written to never see, so they never reached this pass at
