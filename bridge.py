@@ -24133,8 +24133,8 @@ def _class_ask_pass(facts: dict, mates: list, held: dict, needs: dict,
         quest_pass = dataclasses.replace(quest_pass, notes=quest_pass.notes + skipped)
     quest_held = classask.held_names(board.runs() + list(parties))
     gathering = classask.gathering(quest_pass, asks, answers) - quest_held
-    held = {**{n: _QUEST_ASK_WHY for n in quest_held},
-            **{n: _QUEST_GATHER_WHY for n in gathering}, **held}
+    held = {**held, **{n: _QUEST_ASK_WHY for n in quest_held},
+            **{n: _QUEST_GATHER_WHY for n in gathering}}
     quest_held |= gathering
     return (quest_pass, held, {n: v for n, v in needs.items() if n not in quest_held},
             parties, escalation)
