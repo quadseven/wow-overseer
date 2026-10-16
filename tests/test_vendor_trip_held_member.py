@@ -111,6 +111,10 @@ class AHeldMemberDoesNotCallOffTheVendorTrip(unittest.TestCase):
         decision = _settle("Bork|following|5\nZork|held off a deadly walk|900")
         self.assertEqual(vendor_stall.HOLD, decision.action)
 
+    def test_a_member_walking_back_does_not_call_off_the_vendor_trip(self):
+        decision = _settle("Bork|following|5\nZork|walking back to the leader|900")
+        self.assertEqual(vendor_stall.HOLD, decision.action)
+
     def test_a_member_left_behind_while_following_still_releases_it(self):
         decision = _settle("Bork|following|5\nZork|following|900")
         self.assertEqual(vendor_stall.RELEASE, decision.action)
