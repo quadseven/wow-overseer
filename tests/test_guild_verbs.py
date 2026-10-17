@@ -248,5 +248,25 @@ class TheScanFindsAGuildRow(unittest.TestCase):
         self.assertEqual(set(), self.scan('guildcorps.Row("buy", "entry:1", "", s)'))
 
 
+class GuildCharterDesign(unittest.TestCase):
+    """Keep the charter alternative grounded in module behavior and a test plan."""
+
+    def test_charter_document_records_blocker_and_verification_steps(self):
+        from pathlib import Path
+
+        document = Path("mod-overseer/docs/design/guild-charter-founding.md")
+        text = document.read_text()
+        for required in (
+            "UNIT_NPC_FLAG_PETITIONER",
+            "CONFIG_MIN_PETITION_SIGNS",
+            "CMSG_PETITION_SIGN",
+            "5863",
+            "guild_member",
+            "charter route remains a documented alternative",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
+
 if __name__ == "__main__":
     unittest.main()
