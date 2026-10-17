@@ -369,25 +369,22 @@ def _seats_by_name(reg: dict, skill: int) -> dict:
     return {s.name: (i, s.seat) for i, s in enumerate(reg.get(int(skill), ()))}
 
 
-# The route's preference, best first. The FAMILY comes before anyone else
-# whether they can learn the recipe now or soon; a backup ("designated") only
-# takes what the family cannot. Within the family there is no master-first
-# tier: the member who benefits most wins, so crafting XP fans out across the
-# family instead of funneling to one assigned master (#1095). "Now" still
-# beats "soon" across the family/designated boundary: a recipe nobody in the
-# family can use yet goes to someone who can learn it now rather than sitting
-# in a bag waiting.
+# The route's preference, best first. The master comes before anyone else
+# whether it can learn the recipe now or soon; a backup ("designated") only
+# takes what the master cannot. For DUPLICATE copies of the same recipe,
+# the first taker is excluded so the second copy fans out to someone else
+# (#1095: master gets first priority, duplicates go to guild).
 SEAT_TIERS = {
     (MASTER, True): 0,
-    (MASTER, False): 3,
-    (FAMILY, True): 0,
-    (DESIGNATED, True): 1,
-    (FAMILY, False): 3,
-    (DESIGNATED, False): 4,
-    (GUILD, True): 2,
+    (MASTER, False): 1,
+    (FAMILY, True): 2,
+    (DESIGNATED, True): 3,
+    (FAMILY, False): 4,
+    (DESIGNATED, False): 5,
+    (GUILD, True): 6,
 }
 # Tier 6 of the docstring, after every tier above, in the same seat order.
-LATER_TIERS = {MASTER: 5, FAMILY: 5, DESIGNATED: 6, GUILD: 7}
+LATER_TIERS = {MASTER: 7, FAMILY: 8, DESIGNATED: 9, GUILD: 10}
 
 
 def _why(recipe: Recipe, name: str, have: int, seat: str) -> str:
@@ -406,17 +403,22 @@ def _why(recipe: Recipe, name: str, have: int, seat: str) -> str:
     return why + (", %s crafter" % seat if seat != GUILD else "")
 
 
-def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> list:
+def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int,
+               exclude: set = frozenset()) -> list:
     """Every person who could take this recipe, best first, as Pick values.
 
     See the module docstring for the tiers. A person who has learned it, or
     who is further than `gap` below its rank, is not a candidate. Only the
     register's own members are considered for the "soon" tiers; any
-    guildmate who can learn it now is the last tier.
+    guildmate who can learn it now is the last tier. Names in `exclude`
+    (already assigned a copy of this recipe) are skipped so duplicates fan
+    out (#1095).
     """
     seats = _seats_by_name(reg, recipe.skill)
     ranked = []
     for person in people:
+        if person.name in exclude:
+            continue
         if known.has(person.name, recipe):
             continue
         have = person.rank(recipe.skill)
@@ -446,8 +448,13 @@ def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> lis
     return [pick for _, pick in ranked]
 
 
-def choose(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> Pick:
-    """The one route for this recipe; a Pick with no taker when nobody fits."""
+def choose(recipe: Recipe, reg: dict, people, known: Known, gap: int,
+           exclude: set = frozenset()) -> Pick:
+    """The one route for this recipe; a Pick with no taker when nobody fits.
+
+    `exclude` holds taker names already assigned a copy of this recipe;
+    duplicates fan out to someone else (#1095).
+    """
     if not classic.skill_ok(recipe.rank):
         return Pick(
             recipe,
@@ -459,7 +466,7 @@ def choose(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> Pick:
                 classic.MAX_PROFESSION_SKILL,
             ),
         )
-    found = candidates(recipe, reg, people, known, gap)
+    found = candidates(recipe, reg, people, known, gap, exclude)
     if found:
         return found[0]
     return Pick(
@@ -475,9 +482,27 @@ def choose(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> Pick:
 
 
 def route(recipes, reg: dict, people, known: Known, gap: int) -> dict:
-    """item guid -> Pick for every recipe."""
+    """item guid -> Pick for every recipe.
+
+    Duplicate copies of the same recipe (same spell/entry) go to different
+    takers: the first copy goes to the best candidate (master first), the
+    second copy excludes the first taker so it fans out (#1095). But if the
+    first copy went to 'later' (nobody can learn it now), the duplicate
+    stays with the same holder — there's no one to fan out to.
+    """
     people = list(people)
-    return {int(r.guid): choose(r, reg, people, known, gap) for r in recipes}
+    picks = {}
+    taken = {}  # (spell, entry) -> set of taker names already assigned
+    for r in recipes:
+        key = (int(r.spell), int(r.entry))
+        exclude = taken.get(key, set())
+        pick = choose(r, reg, people, known, gap, exclude)
+        picks[int(r.guid)] = pick
+        # Only fan out duplicates that someone can actually learn now.
+        # If the first copy went to 'later', keep duplicates with the holder.
+        if pick.taker and pick.when == "now":
+            taken.setdefault(key, set()).add(pick.taker)
+    return picks
 
 
 def summary(picks: dict) -> str:

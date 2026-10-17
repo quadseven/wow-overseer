@@ -1,11 +1,9 @@
-"""Crafting work fans out across the family instead of funneling to the master.
+"""Master crafters get first priority; duplicates fan out to others.
 
-Ticket #1095: Og has been the sole crafter all week while the rest of the
-family does town runs. The old policy (test_crafter_master_first.py) gave the
-assigned master priority over every other family member. The new policy keeps
-the family ahead of non-family, but WITHIN the family the member who benefits
-most (lowest skill that can still do the recipe) wins, so crafting XP spreads
-instead of concentrating on one master.
+Ticket #1095 (refined): Og (and other family masters) get first priority for
+recipes in their profession. The SECOND copy of the same recipe goes to
+someone else in the guild so it doesn't go to waste. This is master-first
+for the first copy, fan-out for duplicates.
 """
 
 import unittest
@@ -27,34 +25,36 @@ SMITHY = person("Smithy", {BLACKSMITHING: 60})
 PEOPLE = [GRUG, BORK, SMITHY]
 
 
-def recipe(rank):
+def recipe(guid, rank=50):
     return crafters.Recipe(
-        "Ugga", 1, 2851, "Plans: Runed Copper Belt", BLACKSMITHING, rank, 2666
+        "Ugga", guid, 2851, "Plans: Runed Copper Belt", BLACKSMITHING, rank, 2666
     )
 
 
-class FanOutWithinFamily(unittest.TestCase):
-    def test_lower_skilled_family_member_beats_the_master(self):
-        # Both Grug (master, 90) and Bork (family, 55) can learn a rank-50
-        # recipe now. Bork benefits more (55 is closer to 50 than 90 is), so
-        # Bork gets it. Under the old master-first policy Grug always won.
+class MasterFirstDuplicateFansOut(unittest.TestCase):
+    def test_master_gets_first_copy(self):
+        # Grug is the master. First copy goes to Grug (master-first).
         reg = crafters.register(PEOPLE, n=2)
-        picks = crafters.candidates(recipe(50), reg, PEOPLE, crafters.Known(), 25)
-        self.assertEqual("Bork", picks[0].taker)
+        picks = crafters.route([recipe(1)], reg, PEOPLE, crafters.Known(), 25)
+        self.assertEqual("Grug", picks[1].taker)
 
-    def test_choose_gives_recipe_to_lower_skilled_family_member(self):
+    def test_duplicate_goes_to_someone_else(self):
+        # Two copies of the same recipe. First goes to Grug (master).
+        # Second excludes Grug, goes to Bork (next best).
         reg = crafters.register(PEOPLE, n=2)
-        pick = crafters.choose(recipe(50), reg, PEOPLE, crafters.Known(), 25)
-        self.assertEqual("Bork", pick.taker)
+        picks = crafters.route([recipe(1), recipe(2)], reg, PEOPLE, crafters.Known(), 25)
+        self.assertEqual("Grug", picks[1].taker)
+        self.assertEqual("Bork", picks[2].taker)
+        self.assertNotEqual(picks[1].taker, picks[2].taker)
 
-    def test_family_still_beats_designated_guildmate(self):
-        # The fan-out is WITHIN the family. A family member still beats a
-        # non-family guildmate: the family keeps priority as a group.
+    def test_triplicate_fans_out_further(self):
+        # Three copies: Grug, then Bork, then Smithy (designated).
         reg = crafters.register(PEOPLE, n=2)
-        picks = crafters.candidates(recipe(50), reg, PEOPLE, crafters.Known(), 25)
-        takers = [p.taker for p in picks]
-        self.assertLess(takers.index("Bork"), takers.index("Smithy"))
-        self.assertLess(takers.index("Grug"), takers.index("Smithy"))
+        picks = crafters.route(
+            [recipe(1), recipe(2), recipe(3)], reg, PEOPLE, crafters.Known(), 25
+        )
+        takers = [picks[i].taker for i in (1, 2, 3)]
+        self.assertEqual(len(set(takers)), 3, "each copy should go to someone different")
 
 
 if __name__ == "__main__":

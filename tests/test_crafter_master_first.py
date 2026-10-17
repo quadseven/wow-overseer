@@ -44,19 +44,19 @@ class TheMasterIsFirst(unittest.TestCase):
         self.assertEqual(crafters.FAMILY, {s.name: s.seat for s in seats}["Bork"])
         self.assertEqual(crafters.DESIGNATED, {s.name: s.seat for s in seats}["Smithy"])
 
-    def test_a_family_member_who_can_learn_now_beats_a_short_master(self):
-        # #1095: the master no longer funnels every recipe. Bork (family, 60)
-        # can learn a rank-55 recipe now; Grug (master, 40) is 15 short.
-        # Learning now beats waiting, and within the family the member who
-        # benefits most wins.
+    def test_a_short_master_still_beats_family_who_can_learn_now(self):
+        # #1095 (refined): master-first is restored. Grug (master, 40) is 15
+        # short of a rank-55 recipe; Bork (family, 60) can learn it now.
+        # The master still wins (tier 1 beats tier 2) — first copy goes to
+        # the master, duplicates fan out via route().
         reg = crafters.register(PEOPLE, n=2)
         picks = crafters.candidates(recipe(55), reg, PEOPLE, crafters.Known(), 25)
-        self.assertEqual("Bork", picks[0].taker)
+        self.assertEqual("Grug", picks[0].taker)
 
-    def test_the_closest_family_member_wins_when_both_can_learn_now(self):
+    def test_the_master_wins_when_both_can_learn_now(self):
         # Both Grug (master, 40) and Bork (family, 60) can learn a rank-35
-        # recipe now. Grug is closer to the rank (benefit 5 vs 25), so Grug
-        # wins on benefit, not on master status.
+        # recipe now. Grug wins on master status (tier 0 beats tier 2),
+        # not on benefit.
         reg = crafters.register(PEOPLE, n=2)
         picks = crafters.candidates(recipe(35), reg, PEOPLE, crafters.Known(), 25)
         self.assertEqual("Grug", picks[0].taker)
