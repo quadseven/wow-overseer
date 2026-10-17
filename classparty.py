@@ -45,9 +45,16 @@ THE FLOW, one task per party (the bridge's _run_class_party):
             GIVE_UP_COOLDOWN_MINUTES.
   walk      write party-walk to the objective spawn (classquest.objective_spot).
             A walk that ends without arriving keeps why on PartyRun.outcome.
+  hunt      the leader hunts the objective creature at the spawn
+            (`hunt-spawn`, classhunt.command) and the helpers fight what it
+            fights. The party-walk holds the leader on the spawn, and a held
+            bot only fights what comes to it, so a party that only stood there
+            ran out of time with no quest credit (#871). A hunt row that ends is
+            followed by another (PartyHunt); a refusal for good, or a
+            worldserver that does not hunt, leaves the party standing.
   watch     read the asker's quest log every WATCH_SECONDS: complete (or handed
-            in, or gone) ends it, so does its ask no longer being live or
-            PARTY_SECONDS passing.
+            in, or gone) ends it and its hunt row, so does its ask no longer
+            being live or PARTY_SECONDS passing.
   disband   write party-disband and mark the answerers' yes rows seated (or
             withdrawn when no party formed). The members are free again the
             moment the PartyRun leaves the Board.
@@ -84,6 +91,7 @@ import types
 from dataclasses import dataclass, field
 
 import classask
+import classhunt
 import classquest
 import guildroute
 import guildrun
@@ -118,6 +126,17 @@ ENDED_COOLDOWN_MINUTES = classask.ASK_COOLDOWN_MINUTES
 PARTY_SECONDS = 1680.0
 # Seconds between reads of the quest log while the party works.
 WATCH_SECONDS = 30.0
+# Seconds before the leader's next hunt row after one that killed nothing or
+# was refused for now (PartyHunt).
+HUNT_WAIT_SECONDS = classhunt.LATER_WAIT_SECONDS
+# Hunt answers that end the party's hunting (not the party): the module will
+# not hunt here, or this worldserver does not hunt at all.
+HUNT_STOPS = (
+    classhunt.NEVER,
+    classhunt.ELSEWHERE,
+    classhunt.UNSUPPORTED,
+    classhunt.UNREADABLE,
+)
 # An ask with some yes but not all waits this long from its post for the rest.
 PARTIAL_WAIT_MINUTES = 3.0
 
@@ -345,6 +364,47 @@ def walk_command(spot, cap) -> str:
 def meet_command(spot, cap) -> str:
     """The walk one member makes alone to the objective spawn to meet the rest."""
     return "%s creature:%d%s" % (MEET, int(spot.guid), guildroute.errand_cap_word(cap))
+
+
+def hunt_command(quest, spot, item_form=True) -> str:
+    """The leader's `hunt-spawn` row for the creature at the party's objective
+    spawn (classhunt.command), "" when there is no quest or no creature."""
+    if quest is None or spot is None:
+        return ""
+    return classhunt.command(quest, getattr(spot, "entry", 0), None, item_form)
+
+
+@dataclass
+class PartyHunt:
+    """The leader's hunt rows while the party stands at its objective (#871).
+
+    `command` is the row to write, "" once the party stops hunting. `row_id`
+    is the running row, 0 between rows. `next_at` is when the next row is due,
+    on the bridge's monotonic clock."""
+
+    command: str
+    row_id: int = 0
+    next_at: float = 0.0
+
+    def due(self, now) -> bool:
+        """True when a hunt row should be written now."""
+        return bool(self.command) and not self.row_id and now >= self.next_at
+
+    def ended(self, verdict, now) -> None:
+        """Take a hunt row that is no longer running (classhunt.judge): a row
+        that ran is followed by the next at once, one that killed nothing or
+        was refused for now after HUNT_WAIT_SECONDS, an old worldserver's
+        item key gives way to the plain row, and HUNT_STOPS stop the hunting."""
+        self.row_id = 0
+        if verdict.state in HUNT_STOPS:
+            self.command = ""
+        elif verdict.state == classhunt.ITEMLESS:
+            self.command = classhunt.plain_form(self.command)
+            self.next_at = now
+        elif verdict.state == classhunt.DONE:
+            self.next_at = now
+        else:
+            self.next_at = now + (verdict.wait or HUNT_WAIT_SECONDS)
 
 
 def meet_line(run) -> str:
