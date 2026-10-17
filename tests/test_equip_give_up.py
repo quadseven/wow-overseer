@@ -12,7 +12,6 @@ What is pinned here:
 """
 
 import unittest
-from datetime import datetime, timezone
 
 import bag_pressure
 import gear
