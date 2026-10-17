@@ -252,10 +252,21 @@ function missingRecipe(r) {
   return html`<div class="eco-recipe">${itemOf(r)}<span class="eco-meta">${sentence(r.reach_line)}${src ? " " + sentence(src.line) : ""}</span></div>`;
 }
 
+function crafterHierarchy(t) {
+  const holders = (t.holders || []).slice().sort((a, b) => (b.value || 0) - (a.value || 0));
+  if (!holders.length) return "";
+  const assigned = new Set(t.assigned || []);
+  const masters = holders.filter((h) => assigned.has(h.who));
+  const others = holders.filter((h) => !assigned.has(h.who));
+  const ordered = masters.concat(others);
+  const chip = (h, isMaster) => html`<span class="eco-hier-chip">${member({ name: h.who })}${isMaster ? html` <span class="tag tag-accent">Master</span>` : ""}<span class="muted num">${h.value || 0}</span></span>`;
+  return html`<div class="eco-hierarchy"><span class="eco-meta">New recipes go to:</span> ${ordered.map((h) => chip(h, assigned.has(h.who)))}<span class="eco-meta muted">— first copy to the master, duplicates fan out.</span></div>`;
+}
+
 function needs(fam) {
   const rows = (fam.trades || []).filter((t) => t.held);
   return html`<section class="section">${sectionHead("05", "What each trade still needs")}
-<div class="card eco-list">${rows.map((t) => html`<div class="eco-pair"><span class="eco-trade-s">${cap(t.name)}</span><div class="eco-pair-body"><span>${t.missing_count ? sentence(t.missing_head) : "Everything the recipe items list is known."}</span><span class="eco-meta">${sentence(t.trainer_line)}</span>${(t.missing || []).length ? fold("need|" + fam.family + "|" + t.skill, plural(t.missing.length, "recipe") + " to find", html`${t.missing.map(missingRecipe)}`) : ""}</div></div>`)}</div></section>`;
+<div class="card eco-list">${rows.map((t) => html`<div class="eco-pair"><span class="eco-trade-s">${cap(t.name)}</span><div class="eco-pair-body">${crafterHierarchy(t)}<span>${t.missing_count ? sentence(t.missing_head) : "Everything the recipe items list is known."}</span><span class="eco-meta">${sentence(t.trainer_line)}</span>${(t.missing || []).length ? fold("need|" + fam.family + "|" + t.skill, plural(t.missing.length, "recipe") + " to find", html`${t.missing.map(missingRecipe)}`) : ""}</div></div>`)}</div></section>`;
 }
 
 function dungeonCard(d) {
