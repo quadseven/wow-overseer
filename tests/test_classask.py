@@ -849,6 +849,57 @@ class TheDungeonPasses(unittest.TestCase):
         self.assertGreaterEqual(seen["busy"], {"Zappy", "Locky", "Idle"})
 
 
+class TheSkippedCohort(unittest.TestCase):
+    """A cohort whose job pass returns before planning keeps no class quest
+    plan of its own (bridge._drop_class_plan)."""
+
+    OTHER = types.SimpleNamespace(key="other", names=("Hulk",))
+
+    def planned(self):
+        this = _Self()
+        this._class_owed_by = {}
+        for cohort, member in ((None, "Zappy"), (self.OTHER, "Hulk")):
+            plan = types.SimpleNamespace(
+                helps=(TheDungeonPasses().group_help(member),),
+                lines={member: "%s hunts for its %s" % (member, classquest.MARK)},
+            )
+            bridge._keep_class_plan(this, cohort, plan)
+            this._class_owed_by[bridge._cohort_key(cohort)] = {member: object()}
+        return this
+
+    def jobs_once(self, this, cohort, names, members=()):
+        with mock.patch.multiple(
+            bridge,
+            _names_of=lambda c: list(names),
+            _fetch_job_facts=lambda n: {"members": list(members)},
+        ):
+            asyncio.run(bridge.Bridge._guild_jobs_once(this, cohort))
+
+    def assert_only_zappy_left(self, this):
+        self.assertEqual([h.member for h in this._class_helps], ["Zappy"])
+        self.assertEqual(this._classquest_held, {"Zappy"})
+        self.assertEqual(bridge._class_owed_names(this), {"Zappy"})
+        self.assertNotIn("other", this._class_helps_by)
+        self.assertNotIn("other", this._classquest_held_by)
+        self.assertNotIn("other", this._class_owed_by)
+
+    def test_a_cohort_with_no_names_leaves_no_class_plan_behind(self):
+        this = self.planned()
+        self.jobs_once(this, self.OTHER, names=())
+        self.assert_only_zappy_left(this)
+
+    def test_a_cohort_with_no_placed_member_leaves_no_class_plan_behind(self):
+        this = self.planned()
+        self.jobs_once(this, self.OTHER, names=("Hulk",))
+        self.assert_only_zappy_left(this)
+
+    def test_a_bridge_with_no_plan_yet_drops_nothing(self):
+        this = _Self()
+        self.jobs_once(this, None, names=())
+        self.assertEqual(tuple(this._class_helps), ())
+        self.assertEqual(this._classquest_held, set())
+
+
 class TheWiring(unittest.TestCase):
     def test_the_image_carries_the_module(self):
         self.assertIn("classask.py", DOCKERFILE)
