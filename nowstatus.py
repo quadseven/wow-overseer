@@ -601,6 +601,8 @@ def _out_of_play(member: dict, f: dict):
         on = (f.get("roster") or {}).get("enabled", 1)
         return "Logged out", "a login" if on else "being switched on in the roster"
     if member.get("condition") == "dead":
+        if member.get("life") == "ghost":
+            return "Ghost", "a resurrection"
         return "Dead", "a release or a resurrection"
     if member.get("combat"):
         return "Fighting", "the fight to end"

@@ -549,3 +549,19 @@ class AHeldEquipIsNotWhatTheMemberIsDoing(unittest.TestCase):
         )["Idler"]
         got = nowstatus.compose({"name": "Idler", "present": True}, solo)
         self.assertIn("Trying to wear Gladius", got["line"])
+
+
+class GhostRecovery(unittest.TestCase):
+    """A released ghost is out of play, not idle. #1093"""
+
+    def test_a_ghost_is_not_idle(self):
+        m = {"name": "Grumbles", "present": True, "condition": "dead", "life": "ghost"}
+        got = nowstatus.compose(m, None)
+        self.assertEqual("Ghost", got["doing"])
+        self.assertNotEqual("Idle", got["doing"])
+
+    def test_a_corpse_is_not_idle(self):
+        m = {"name": "Vugg", "present": True, "condition": "dead", "life": "dead"}
+        got = nowstatus.compose(m, None)
+        self.assertEqual("Dead", got["doing"])
+        self.assertNotEqual("Idle", got["doing"])
