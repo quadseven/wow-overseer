@@ -1214,6 +1214,12 @@ RECIPES: dict = {
     #   18629  Runecloth Bandage       1x Runecloth         14529  260  320 260 y
     #   18630  Heavy Runecloth Bandage 2x Runecloth         14530  290  350 290 t
     #
+    # Independently checked against Wowhead WotLK spell pages 3277, 3278,
+    # 7928 and 7929: their reagent counts and 80/115/150/180 floors agree
+    # with these DBC rows. On this WotLK realm Heavy Silk is trainer-taught;
+    # the older Manual: Heavy Silk Bandage route is not required here.
+    # https://www.wowhead.com/wotlk/spell=3277/wool-bandage
+    # https://www.wowhead.com/wotlk/spell=7929/heavy-silk-bandage
     # Every one is RequiresSpellFocus 0, EquippedItemClass -1, and
     # AcquireMethod 0 for every class this realm's families play. FLOOR "t" is
     # `trainer_spell.ReqSkillRank` as this repo already records it (3276 in
@@ -1335,7 +1341,8 @@ RECIPES: dict = {
     # reasoning as First Aid above: every one of the five holds it at 1/75
     # already (character_skills skill 185, verified live 2026-09-12).
     #
-    # COOKING HAS NO ENTRY AT ALL, AND THE ONE IT HAD WAS INERT (infra#3614).
+    # COOKING HAS NO CASTABLE ENTRY YET; the purchased Smoked Bear Meat book
+    # below records the next recipe but still needs a Cooking Fire drive.
     # Charred Wolf Meat (2538) shipped here reading "taught with Apprentice
     # Cooking", which is true - AcquireMethod 1, ClassMask 0, req 1. What it
     # did not say, because nothing checked, is that `Spell.dbc` gives it
@@ -1386,7 +1393,25 @@ RECIPES: dict = {
     # are both ordinary beast drops at the family's level, both AcquireMethod 1
     # ClassMask 0, both yellow 45 / grey 85. The moment a fire can be lit,
     # Cooking is a 44-point ladder with no trainer and no purchase.
-    SKILL_IDS["cooking"]: (),
+    # Smoked Bear Meat is a purchased recipe: item 6892 from vendor creature
+    # 1465 teaches spell 8607. Wowhead WotLK and Warcraft Wiki agree on its
+    # skill 40, Bear Meat reagent, and Cooking Fire requirement:
+    # https://www.wowhead.com/wotlk/spell=8607/smoked-bear-meat
+    # https://warcraft.wiki.gg/wiki/Smoked_Bear_Meat
+    # The purchase
+    # errand supplies the book; a future fire drive must make casting possible.
+    SKILL_IDS["cooking"]: (
+        Recipe(
+            8607,
+            "Smoked Bear Meat",
+            min_skill=40,
+            max_skill=119,
+            note="1x Bear Meat (3173) -> Smoked Bear Meat (6890); item 6892 "
+            "sold by vendor 1465 teaches the spell. Requires Cooking Fire "
+            "(focus 4); the craft drive cannot cast this until it makes one",
+            focus=4,
+        ),
+    ),
     # ELEVEN OF THESE EIGHTEEN NEED AN ANVIL, AND UNTIL NOW EVERY ONE OF THEM
     # SAID IT DID NOT (infra#3760, corrected here as part of infra#3748).
     #
@@ -2241,6 +2266,18 @@ RECIPES: dict = {
         ),
     ),
 }
+
+
+# spell -> (item, vendor creature entry). The exact vendor entry is part of
+# the errand: a generic vendor may not stock the book. This vendor is on map 0.
+RECIPE_PURCHASES = {8607: (6892, 1465)}
+
+
+def recipe_purchase(cooking: int, known: set[int]) -> tuple[int, int] | None:
+    """Return (item, vendor) for the next affordable-skill Cooking book."""
+    if cooking < 40 or 8607 in known:
+        return None
+    return RECIPE_PURCHASES[8607]
 
 
 # THE FAMILY'S OWN BAGS (#215), kept apart from RECIPES because a bag is not a

@@ -70,50 +70,11 @@ import travel
 # to nothing six hours later.
 TRAINER_ROLE = next(role for role in travel.ROLES if role == "profession trainer")
 
-# THESE IDS ARE A REFUSAL, AND THEY USED TO BE AN EXEMPTION. The change is the
-# fix for infra#3701 and it is worth reading, because the exemption was written
-# deliberately and the reasoning behind it was sound except for one fact nobody
-# had checked against the deployed image.
-#
-# WHAT THE EXEMPTION SAID. A secondary errand is not asking a trainer to START
-# First Aid - every character already holds it - it is asking for the NEXT
-# RANK, "which trainers do sell". Treating it as stale would delete the errand
-# on the protect cycle immediately after it was written. That is exactly right
-# for a PRIMARY rank-up (mod-overseer#74) and it is why the exemption looked
-# like the same lesson applied one skill wider.
-#
-# WHAT IT MISSED. Trainers do sell those ranks; mod-overseer cannot buy one.
-# `SkillStartedBySpell` hard-gates on `IsPrimaryProfessionSkill`
-# (mod_overseer.cpp:10314), which is false for First Aid (129), Cooking (185)
-# and Fishing (356) - SkillLine category 9, not 11 - so the trainer resolve
-# matches no spawn (:10058) and `TrainerSpellForSkill` matches no spell
-# (:10369). professions.SECONDARY_RANK_REFUSAL carries the full trace.
-#
-# WHY THAT MAKES THE EXEMPTION AN OUTAGE RATHER THAN A KINDNESS. `learn_skill`
-# non-zero makes `TravelAimBook::Claim` refuse EVERY travel aim for that
-# character - this module's whole reason for existing - and the only thing that
-# clears it inside the world is `ClearLearnAim`, reached only from
-# `TrainOnArrival`, which the character can never reach because the resolve
-# gives it nowhere to walk. So the world cannot end a secondary errand, and the
-# exemption stopped THIS module ending it either. Between them they guaranteed
-# that any secondary ever written to the column fences that character out of
-# all travel - dungeons, vendors, trainers - permanently, with no route back
-# but a hand-written UPDATE. Nothing writes one today (infra#3701 removed the
-# function that would have), and this is the guard for the day something does.
-#
-# A CLEAR HERE IS SAFE IN THE WAY THE EXEMPTION WAS TRYING TO BE. It discards
-# no work: there is no transaction to lose, because there is no trainer that
-# would have completed one. When the module learns to sell secondary ranks,
-# this constant is the single place that has to change back, and
-# professions.SECONDARY_RANK_REFUSAL is the thing to re-read first.
-#
-# THE MODULE HAS LEARNED (read at the pinned mod-overseer, 2ed4da9). The
-# trainer index and TrainerSpellForSkill now call SkillStartedBySpell with
-# includeSecondary, and TrainOnArrival skips both the permission check and the
-# free-slot wait for a SKILL_CATEGORY_SECONDARY skill. So a First Aid rank is
-# bought like a primary's. The clear below still stands for a secondary
-# errand nobody decided; a RANK ERRAND (`Row.ranks`, see `rank_errand`) is
-# the one exception, and it is live while its rank is due.
+# A secondary learn request is live only while its rank is due. The trainer
+# resolver now accepts secondary skill lines, and TrainOnArrival exempts them
+# from the primary slot gate. A stale request at any other cap is cleared so it
+# cannot fence the character out of unrelated travel. `rank_errand` below is
+# the one writer for due ranks and the bridge lends its traveller the lead.
 SECONDARY_IDS = tuple(sorted(trainjob.SECONDARY.values()))
 
 # Why an errand is over. Constants rather than inline strings because they are
@@ -121,7 +82,7 @@ SECONDARY_IDS = tuple(sorted(trainjob.SECONDARY.values()))
 # drifts between the two is a reason nobody can grep for.
 SETTLED = "the trade it named has already settled"
 UNASSIGNED = "the roster does not ask for it"
-SECONDARY = "no trainer in this world can sell a secondary rank"
+SECONDARY = "the requested secondary rank is not due at the observed cap"
 
 
 @dataclass(frozen=True)
@@ -208,11 +169,7 @@ def finished(row) -> str:
     if skill in tuple(getattr(row, "ranks", ()) or ()):
         return ""
 
-    # BEFORE THE SETTLED TEST, because it is unconditional. A secondary errand
-    # is over the moment it exists - the world has no path that completes it -
-    # and the character is fenced out of all travel until this clear runs.
-    # See SECONDARY_IDS above for the full trace and for why this used to be an
-    # exemption pointing the other way.
+    # A secondary request with no due rank is stale. Due ranks returned above.
     if skill in SECONDARY_IDS:
         return SECONDARY
 

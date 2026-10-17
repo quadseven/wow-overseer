@@ -162,23 +162,9 @@ class FinishedAnswersFromWhatWasDecided(unittest.TestCase):
 
 
 class ASecondaryErrandIsLiftedNotPreserved(unittest.TestCase):
-    """infra#3701, and the reversal of this module's original exemption.
+    """A secondary request without a due rank must release its travel fence."""
 
-    A secondary learn errand used to be EXEMPT from the staleness test, on the
-    reasoning that it asks for a rank rather than a start and trainers do sell
-    ranks. Trainers do; mod-overseer cannot buy one. `SkillStartedBySpell`
-    gates on `IsPrimaryProfessionSkill` (mod_overseer.cpp:10314), false for
-    First Aid, Cooking and Fishing, so the trainer resolve matches no spawn
-    (:10058) and `TrainerSpellForSkill` matches no spell (:10369).
-
-    That makes the exemption an outage rather than a kindness: the world can
-    only clear `learn_skill` from `TrainOnArrival`, which the character can
-    never reach, and a non-zero `learn_skill` makes `TravelAimBook::Claim`
-    refuse EVERY travel aim for that character. Exempting it meant nothing
-    could lift the fence, ever.
-    """
-
-    def test_a_secondary_errand_is_over_the_moment_it_exists(self):
+    def test_a_secondary_errand_without_a_due_rank_is_over(self):
         r = row("Ugga", learn_skill=FIRST_AID, wanted=(ALCHEMY, HERBALISM))
         self.assertEqual(learnaim.SECONDARY, learnaim.finished(r))
         self.assertEqual(0, learnaim.outstanding(r))
@@ -191,8 +177,7 @@ class ASecondaryErrandIsLiftedNotPreserved(unittest.TestCase):
     def test_it_is_lifted_even_when_the_column_is_empty(self):
         """An empty `professions` column exempts a PRIMARY, because absence
         means the write failed rather than that nothing is wanted. A secondary
-        is refused by the worldserver either way, so that exemption must not
-        rescue it."""
+        without a due rank is stale either way."""
         r = row("Ugga", learn_skill=FIRST_AID, wanted=())
         self.assertEqual(learnaim.SECONDARY, learnaim.finished(r))
 
@@ -207,7 +192,7 @@ class ASecondaryErrandIsLiftedNotPreserved(unittest.TestCase):
         r = row("Ugga", learn_skill=FIRST_AID, wanted=(ALCHEMY,), leads=True)
         plan = learnaim.plan([r])
         self.assertEqual(("Ugga",), tuple(s.character for s in plan.clear))
-        self.assertEqual("", plan.aim, "a secondary must never be walked")
+        self.assertEqual("", plan.aim, "a secondary without a due rank must not walk")
         sql = learnaim.statements(plan)
         self.assertEqual(1, len(sql))
         self.assertIn("learn_skill = 0", sql[0][0])
@@ -538,6 +523,7 @@ class TheBridgeReallyRunsIt(unittest.TestCase):
         self.assertIn("learnaim.traveller(_learn_aim_rows())", self.source)
         self.assertIn(
             "return (_train_traveller() or _errand_traveller()\n"
+            "            or _recipe_purchase_traveller()\n"
             "            or _derived_errand_traveller()\n"
             "            or bonds.head_of_family())",
             self.source,

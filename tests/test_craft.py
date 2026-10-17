@@ -54,6 +54,8 @@ import travel
 # `focus = 0` and only eleven spells in the whole file carry any value at all.
 # The tell is the total: the real field is non-zero for 647 Anvil spells alone.
 MEASURED_FOCUS = {
+    # COOKING - Wowhead WotLK and Warcraft Wiki both name Cooking Fire.
+    8607: 4,
     # TAILORING
     2963: 0,
     8776: 0,
@@ -165,6 +167,8 @@ MEASURED_FOCUS = {
 # TEN of the sixty-one entries disagreed with the realm. See craft.py's COLOUR
 # BANDS block for the list and for why a wrong edge is invisible from outside.
 MEASURED_BANDS = {
+    # COOKING - the independent classic databases agree on 40/80/100/120.
+    8607: (40, 80, 120),
     # TAILORING
     2963: (1, 25, 50),
     8776: (1, 50, 85),
@@ -261,6 +265,7 @@ MEASURED_BANDS = {
 # the table, infra#3617 for the anvil walk). They are Engineering's whole
 # ladder above Rough Blasting Powder.
 FOCUS_WITHOUT_A_WALK = {
+    8607,  # Cooking Fire: purchase works; casting still needs a campfire drive.
     3922,
     7430,
     3923,
@@ -1092,20 +1097,12 @@ class FirstAidAndCookingTests(unittest.TestCase):
             craft.craft_errand("Grug", {"first aid": 59}, primaries=()), 3275
         )
 
-    def test_cooking_has_no_reachable_bracket_at_all(self):
-        """Every Cooking recipe below the 75 cap needs a Cooking Fire.
-
-        Read off `SkillLineAbility.dbc` joined to `Spell.dbc` from the running
-        worldserver: all 181 abilities on skill 185, and every one that
-        creates an item and is reachable below 75 carries
-        `RequiresSpellFocus = 4`. DriveCraft casts in place, so an entry here
-        would sit refused for ever. The table carries none rather than one
-        that looks right and produces nothing.
-        """
-        self.assertEqual(craft.RECIPES[goals.SKILL_IDS["cooking"]], ())
-        for value in (1, 50, 51, 75):
-            with self.subTest(value=value):
-                self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["cooking"], value))
+    def test_smoked_bear_meat_book_is_named_but_fire_is_still_missing(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["cooking"], 40)
+        self.assertEqual((recipe.spell_id, recipe.focus), (8607, 4))
+        self.assertEqual(craft.recipe_purchase(40, set()), (6892, 1465))
+        self.assertIsNone(craft.recipe_purchase(40, {8607}))
+        self.assertEqual(craft.craft_errand("Grug", {"cooking": 40}, primaries=()), 0)
 
     def test_craft_errand_finds_first_aid_for_a_character_assigned_no_primary_with_recipe(
         self,
@@ -1364,11 +1361,11 @@ class SpellFocusTests(unittest.TestCase):
             for recipe in recipes
             if recipe.focus and recipe.focus not in craft.FOCUS_AIMS
         }
-        self.assertEqual(set(stranded.values()), {1})  # Anvil, and only Anvil
+        self.assertEqual(set(stranded.values()), {1, 4})
         engineering = {
             r.spell_id for r in craft.RECIPES[goals.SKILL_IDS["engineering"]]
         }
-        self.assertLessEqual(set(stranded), engineering)
+        self.assertLessEqual(set(stranded) - {8607}, engineering)
 
     def test_an_anvil_gated_recipe_is_still_refused(self):
         """infra#3617's half stays fenced. Anvil is focus 1 and there is no
@@ -1503,6 +1500,7 @@ class SpellFocusTests(unittest.TestCase):
         this test is what says no to it.
         """
         fire_spells = {
+            8607: "Smoked Bear Meat",
             2538: "Charred Wolf Meat",
             2540: "Roasted Boar Meat",
             3370: "Crocolisk Steak",
@@ -1527,8 +1525,9 @@ class SpellFocusTests(unittest.TestCase):
             recipe.spell_id for recipes in craft.RECIPES.values() for recipe in recipes
         }
         clash = named & set(fire_spells)
-        self.assertFalse(
+        self.assertEqual(
             clash,
+            {8607},
             "RECIPES names %s, which require a Cooking Fire "
             "(RequiresSpellFocus = 4, SpellFocusObject.dbc id 4). Nothing in "
             "this system lights one. See craft.py's COOKING comment for the "

@@ -1678,6 +1678,28 @@ def _fetch_trade_skills(names: list) -> dict:
     return out
 
 
+def _recipe_purchase_due(names: list[str]) -> dict[str, tuple[int, int]]:
+    """Find characters ready for the Cooking book on the vendor's map."""
+    if not names:
+        return {}
+    marks = ",".join(["%s"] * len(names))
+    sql = (  # noqa: S608 - only the placeholder count is interpolated
+        "SELECT c.name, k.value, s.spell FROM characters c "
+        "JOIN character_skills k ON k.guid = c.guid AND k.skill = %%s "
+        "LEFT JOIN character_spell s ON s.guid = c.guid AND s.spell = %%s "
+        "WHERE c.name IN (%s) AND c.map = 0" % marks
+    )
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (goals.SKILL_IDS["cooking"], 8607, *names))
+        return {
+            r["name"]: book
+            for r in cur.fetchall()
+            if (book := craft.recipe_purchase(
+                int(r["value"]), {int(r["spell"])} if r["spell"] else set()
+            ))
+        }
+
+
 def _pending_trades() -> dict:
     """name -> the trade they still owe the family, for the council to raise.
 
@@ -5115,15 +5137,29 @@ def _write_trade_errand(errand) -> bool:
             else:
                 cur.execute(
                     "UPDATE overseer_roster SET learn_skill = %s, unlearn_skill = %s, "
-                    "unlearn_max = %s, travel_npc = %s WHERE name = %s",
+                    "unlearn_max = %s, travel_npc = %s WHERE name = %s "
+                    "AND (learn_skill = 0 OR learn_skill = %s) "
+                    "AND buy_recipe_item = 0",
                     (
                         errand.learn_skill,
                         errand.unlearn_skill,
                         errand.unlearn_max,
                         errand.travel_npc,
                         errand.character,
+                        errand.learn_skill,
                     ),
                 )
+                if cur.rowcount:
+                    return True
+                cur.execute(
+                    "SELECT learn_skill, unlearn_skill, travel_npc "
+                    "FROM overseer_roster WHERE name = %s",
+                    (errand.character,),
+                )
+                row = cur.fetchone()
+                return bool(row and row["learn_skill"] == errand.learn_skill
+                            and row["unlearn_skill"] == errand.unlearn_skill
+                            and row["travel_npc"] == errand.travel_npc)
         except pymysql.err.OperationalError as exc:
             if exc.args and exc.args[0] == 1054:
                 log.warning(
@@ -5135,6 +5171,27 @@ def _write_trade_errand(errand) -> bool:
                 return False
             raise
     return True
+
+
+def _write_recipe_purchase(character: str, item: int, vendor: int) -> bool:
+    """Claim an idle row for an exact vendor and book, without losing a trade."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_roster SET buy_recipe_item = %s, travel_npc = %s "
+            "WHERE name = %s AND (buy_recipe_item = 0 OR buy_recipe_item = %s) "
+            "AND learn_skill = 0 AND unlearn_skill = 0 "
+            "AND (travel_npc = '' OR travel_npc = %s)",
+            (item, str(vendor), character, item, str(vendor)),
+        )
+        if cur.rowcount:
+            return True
+        cur.execute(
+            "SELECT buy_recipe_item, travel_npc FROM overseer_roster WHERE name = %s",
+            (character,),
+        )
+        row = cur.fetchone()
+        return bool(row and row["buy_recipe_item"] == item
+                    and row["travel_npc"] == str(vendor))
 
 
 def _is_weapon_training_route(travel_npc: str) -> bool:
@@ -5840,6 +5897,11 @@ def _ranks_due(cur, roster) -> dict:
     due: dict = {}
     for name, (level, money, skills) in facts.items():
         ranks = guildjobs.ranks_due(level, money, skills, wanted.get(name, ()))
+        first_aid = goals.SKILL_IDS["first aid"]
+        if first_aid in ranks and not professions.secondary_rank_errand(
+            name, {"first aid": skills.get(first_aid, (0, 0))}
+        ):
+            ranks = tuple(skill for skill in ranks if skill != first_aid)
         recipes = guildjobs.recipes_due(
             level, money, skills, known.get(name, ()), wanted.get(name, ()))
         due[name] = ranks + tuple(s for s in recipes if s not in ranks)
@@ -5981,6 +6043,28 @@ def _derived_errand_traveller() -> str:
         return ""
 
 
+def _recipe_purchase_traveller() -> str:
+    """Give the vendor-bound book buyer the lead until its request clears."""
+    try:
+        cohort = _cohort_of(bonds.head_of_family())
+        scope = " AND family = %s" if cohort else ""
+        args = (cohort,) if cohort else ()
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT name FROM overseer_roster WHERE enabled = 1 "  # noqa: S608 - scope is a fixed clause; value is bound
+                "AND buy_recipe_item <> 0 AND travel_npc <> ''" + scope
+                + " ORDER BY name LIMIT 1",
+                args,
+            )
+            row = cur.fetchone()
+            return str(row["name"]) if row else ""
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] == 1054:
+            return ""
+        log.exception("recipe purchase traveller lookup failed")
+        return ""
+
+
 def _run_learn_aim_plan(statements) -> int:
     """Run learnaim's writes, in order, on one cursor. Returns rows changed.
 
@@ -6021,10 +6105,9 @@ def _head_now() -> str:
     the leader is the family's one traveller and an errand is somewhere to
     travel to. A standing `job = train` borrows it FIRST - see
     _train_traveller for why an order a person just gave outranks a plan the
-    family drifted into. The third borrower is _derived_errand_traveller, and
-    it is asked last of the three: an errand mod-overseer wrote for itself is
-    real, and it is still the weakest claim on the lead of the three, because
-    nobody outside the worldserver asked for it (infra#3686).
+    family drifted into. A vendor book purchase comes next, followed by a
+    derived trainer errand. Both stand behind an explicit primary trade plan;
+    a follower must borrow the lead before either journey can proceed.
 
     EVERY CALLER ASKS THIS FUNCTION AND NOT ITS PARTS, which is the whole
     point of it existing. Two of those callers must agree or the family
@@ -6055,6 +6138,7 @@ def _head_now() -> str:
     demonstrate the shape.
     """
     return (_train_traveller() or _errand_traveller()
+            or _recipe_purchase_traveller()
             or _derived_errand_traveller()
             or bonds.head_of_family())
 
@@ -7672,7 +7756,9 @@ class Bridge(discord.Client):
                      "the traveller (%s)", errand.character,
                      self._town_slot.learn_waits)
             return
-        await asyncio.to_thread(_write_trade_errand, errand)
+        if not await asyncio.to_thread(_write_trade_errand, errand):
+            log.info("trades: %s already has a different roster errand", errand.character)
+            return
         # AND TELL THE LEDGER WHEN THIS ONE MOVES SOMEBODY (infra#4194). A
         # trade errand is written every cycle and usually names no traveller at
         # all, but when it does it writes `travel_npc` outside
@@ -7694,6 +7780,20 @@ class Bridge(discord.Client):
             errand.unlearn_max, errand.travel_npc,
             professions.traveller(errand) or "nobody has to move",
         )
+
+    async def _send_recipe_purchases(self, family, plan) -> None:
+        """Queue the named vendor's book after trade errands have priority."""
+        if plan.assignments or self._town_slot.learn_waits:
+            return
+        due = await asyncio.to_thread(_recipe_purchase_due, [m.name for m in family])
+        for character in sorted(due):
+            item, vendor = due[character]
+            if await asyncio.to_thread(_write_recipe_purchase, character, item, vendor):
+                self._town_slot.adopt(
+                    claimant="trades", character=character,
+                    aim=str(vendor), now=time.monotonic(),
+                )
+                return
 
     async def _speak_trade_plan(self, plan, fresh: list) -> None:
         """The family saying it, in party chat, in its own voice.
@@ -7728,6 +7828,7 @@ class Bridge(discord.Client):
         for note in plan.notes:
             log.info("trades: %s", note)
         if not plan.assignments:
+            await self._send_recipe_purchases(family, plan)
             log.info("trades: nothing to decide")
             return
 
@@ -7736,6 +7837,7 @@ class Bridge(discord.Client):
         # Before the `fresh` check below, which returns early on the common
         # case of a plan that is unchanged and still outstanding.
         await self._send_trade_errand(plan, skills)
+        await self._send_recipe_purchases(family, plan)
 
         fresh = await asyncio.to_thread(_record_trade_plan, plan)
         if not fresh:

@@ -544,6 +544,40 @@ class ErrandTest(unittest.TestCase):
         for assignment in steps:
             self.assertIn("trainer", professions.errand(assignment).lower())
 
+    def test_first_aid_at_apprentice_ceiling_needs_a_trainer(self):
+        errand = professions.secondary_rank_errand("Grug", {"first aid": (75, 75)})
+        self.assertEqual(errand.learn_skill, goals.SKILL_IDS["first aid"])
+        self.assertEqual(errand.travel_npc, professions.TRAINER_ROLE)
+        self.assertIsNone(
+            professions.secondary_rank_errand("Grug", {"first aid": (75, 150)})
+        )
+
+    def test_recipe_purchase_has_a_roster_request_and_core_purchase(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        module = (root / "mod-overseer/src/mod_overseer.cpp").read_text()
+        self.assertIn("buy_recipe_item", module)
+        self.assertIn("bool BuyRecipeOnArrival(", module)
+        self.assertIn("HandleBuyItemOpcode", module)
+        self.assertIn("HandleUseItemOpcode", module)
+        purchase = module.split("bool BuyRecipeOnArrival(", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("bot->HasSpell(taught)", purchase)
+        self.assertIn("ClearRecipePurchase(name, itemEntry)", purchase)
+        self.assertIn("GetNPCIfCanInteractWith", purchase)
+        self.assertIn("vendor->GetVendorItems()", purchase)
+        self.assertIn("GetItemByEntry(itemEntry)", purchase)
+
+    def test_recipe_purchase_waits_for_a_clear_roster_row(self):
+        bridge = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
+        self.assertIn("def _write_recipe_purchase(", bridge)
+        self.assertIn("buy_recipe_item = 0 OR buy_recipe_item = %s", bridge)
+        self.assertIn("AND learn_skill = 0 AND unlearn_skill = 0", bridge)
+        self.assertIn("travel_npc = '' OR travel_npc = %s", bridge)
+
+    def test_recipe_buyer_borrows_the_family_lead(self):
+        bridge = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
+        head = bridge.split("def _head_now()", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("_recipe_purchase_traveller()", head)
+
     def test_the_errand_names_the_character_and_the_skill(self):
         assignment = next(
             a for a in professions.plan(_family()).assignments if a.verb == "learn"
@@ -1038,32 +1072,33 @@ class BridgeContractTest(unittest.TestCase):
 
 
 class SecondaryRankRefusalTest(unittest.TestCase):
-    """infra#3701. There is no secondary rank errand and there must not be one.
+    """A secondary rank claim must preserve primary profession ownership."""
 
-    `secondary_rank_errand` and `SECONDARY_RANK_CEILING` were removed rather
-    than wired: the deployed worldserver refuses a secondary training errand in
-    two places Python cannot reach, and a `learn_skill` nothing can clear
-    fences a character out of ALL travel (infra#3686). These tests pin the
-    removal, so that a future pass reintroducing the errand has to delete a
-    test that says why first.
-    """
+    def test_the_secondary_errand_keeps_primary_slots_separate(self):
+        self.assertNotIn("129", professions.wanted_ids("Grug"))
+        self.assertEqual(
+            professions.secondary_rank_errand(
+                "Grug", {"first aid": (75, 75)}
+            ).learn_skill,
+            129,
+        )
 
-    def test_the_errand_is_gone_and_stays_gone(self):
-        self.assertFalse(hasattr(professions, "secondary_rank_errand"))
-        self.assertFalse(hasattr(professions, "SECONDARY_RANK_CEILING"))
+    def test_the_secondary_rank_uses_the_single_rank_writer(self):
+        bridge = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
+        ranks = bridge.split("def _ranks_due(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("professions.secondary_rank_errand(", ranks)
+        self.assertNotIn("def _write_secondary_rank_errand(", bridge)
+        self.assertIn("learnaim.plan(rows)", bridge)
 
     def test_the_refusal_is_never_empty_and_names_the_real_blocker(self):
-        """A caller must get a reason, not None. An empty answer is what let
-        the removed function read as a feature merely waiting for a caller."""
+        """The goal reporter points to the rank path without adding a slot."""
         said = professions.secondary_rank_refusal({"first aid": 1})
         self.assertTrue(said)
         self.assertIn("SkillStartedBySpell", said)
-        self.assertIn("IsPrimaryProfessionSkill", said)
+        self.assertIn("primary professions column", said)
 
     def test_the_refusal_does_not_depend_on_how_close_to_the_ceiling(self):
-        """A character at 1/75 and one at 75/75 are refused by the same two
-        lines of C++. A message that varied would suggest some state could
-        make it succeed."""
+        """The goal explanation is stable; the rank planner reads the cap."""
         for value in (1, 74, 75, 76):
             self.assertIn(
                 professions.SECONDARY_RANK_REFUSAL,

@@ -888,103 +888,29 @@ def to_errand(trade_plan: TradePlan, skills: Mapping[str, Mapping[str, int]]):
     return errand
 
 
-# SECONDARY SKILL RANK-UPS: WHY THERE IS NO ERRAND HERE, AND WHY THE ONE THAT
-# USED TO BE HERE WAS REMOVED RATHER THAN WIRED UP (infra#3701, infra#3731).
-#
-# There was a `secondary_rank_errand` here, and a `SECONDARY_RANK_CEILING`
-# table with First Aid at 75 in it. It built the LEARN half of the Errand
-# shape above - `learn_skill = 129`, `travel_npc = 'profession trainer'` - to
-# send a character who had run out of Apprentice bandages to buy Journeyman.
-# It never had a live caller, and its own comment said so.
-#
-# IT COULD NEVER HAVE WORKED. infra#3701 diagnosed one refusal, the roster
-# permission column, and proposed widening it. That diagnosis is right about
-# the refusal and wrong about it being the blocker: there are THREE, the
-# permission is the only one Python can reach, and the other two are
-# unconditional. Verified by reading the DEPLOYED image, not a wiki and not a
-# branch - AC_OVERSEER_SHA 9dbbd1a, which is what the realm is running:
-#
-#   1. THE FAMILY NEVER LEAVES. `ResolveTravelTarget` narrows a trainer aim to
-#      spawns that can START the wanted skill (mod_overseer.cpp:10058), and
-#      `TrainerStartedSkills` (:10344) is built entirely from
-#      `SkillStartedBySpell`, which returns 0 for anything
-#      `IsPrimaryProfessionSkill` rejects (:10314). First Aid, Cooking and
-#      Fishing are SkillLine category 9 (SKILL_CATEGORY_SECONDARY) against the
-#      11 that test demands, so no trainer entry in the world index ever
-#      contains 129, 185 or 356. Every candidate spawn is skipped, the resolve
-#      returns false, and nobody walks anywhere.
-#   2. ARRIVING WOULD NOT HELP EITHER. If a character were aimed by some other
-#      route - a bare creature entry skips the narrowing at :10027 -
-#      `TrainOnArrival` reaches `TrainerSpellForSkill` (:10789), which compares
-#      `SkillStartedBySpell(spell) != skill` for every spell the trainer sells
-#      (:10369). That is `0 != 129` on every iteration, so it returns 0 and the
-#      errand is DROPPED at :10790. `Trainer::CanTeachSpell` is never reached.
-#      This holds for rank-ups as much as for first learns: Journeyman First
-#      Aid does carry SPELL_EFFECT_SKILL and `GetSpellLearnSkill` does find its
-#      node, and then the category test at :10314 discards it anyway.
-#   3. THE PERMISSION COLUMN, which is infra#3701's own finding and the only
-#      one of the three a change in this file could clear. `wanted_ids` above
-#      says why clearing it is worse than leaving it: the same column drives
-#      the primary slot arithmetic, and a secondary in it stops the primary
-#      trade drive for all five characters on the next poll.
-#
-# WHAT THAT MADE THE FUNCTION. Not a feature waiting for a caller - a loaded
-# gun pointed at the family. `learn_skill` non-zero makes `TravelAimBook::Claim`
-# refuse EVERY travel aim for that character, and the ONLY thing in the world
-# that clears it is `ClearLearnAim`, reached only from `TrainOnArrival`, which
-# refusal 1 guarantees is never called. learnaim.py made this permanent rather
-# than transient by exempting secondaries from its own staleness test, so the
-# reconcile that exists to lift exactly this fence would have declined to lift
-# this one. Wiring the function would have fenced a character out of all travel
-# - dungeons, vendors, trainers, everything - with no route back but a manual
-# UPDATE. That is infra#3686 again, self-inflicted and undiagnosable.
-#
-# So the mechanism is gone and the measurement it was built on is kept. The
-# ceiling is real: `character_skills.value` cannot exceed `.max` in the running
-# engine, and all five sit at 1/75 on all three secondaries (live, 2026-09-13).
-# What is NOT true is that the ceiling is what blocks them today - 75 is 74
-# points away and every one of those points is reachable with no trainer at
-# all. See SECONDARY_HEADROOM.
-#
-# THE REMOVED TABLE ALSO HAD THE WRONG NUMBER IN IT, which is worth recording
-# because it is the second time a guessed threshold has shipped here. It said
-# First Aid 75, reasoning from Apprentice's own cap. The trainers disagree:
-# `acore_world.trainer_spell` sells spell 3280 (Journeyman First Aid, confirmed
-# by name out of Spell.dbc pulled from the running worldserver, not a wiki) at
-# `ReqSkillRank = 50` for 500 copper, and Journeyman Cook (3412) and Journeyman
-# Fishing (7734) are both 50 as well. So the trainer threshold was never 75 for
-# any of the three, and a character at 50 was already eligible. Do not
-# reintroduce a ceiling table without reading `trainer_spell.ReqSkillRank`.
-#
-# AND THE FAMILY COULD NOT REACH ONE ANYWAY, TODAY. They are on map 1 in
-# Dustwallow Marsh (live, 2026-09-13), and `ResolveTravelTarget` refuses a
-# spawn on another map - there is no navmesh across an ocean. They are also
-# ALLIANCE (Gnome, Dwarf and three Humans) despite the names, so the Tauren
-# trainers 4,100 yards away in Thunder Bluff are faction-refused by
-# `MayInteractAt`. The nearest Alliance-usable seller of Journeyman First Aid
-# on their own map is 15,513 yards away in Teldrassil. This does not change the
-# refusal above - it would still refuse in Stormwind - but it does mean that
-# "fix the C++ and the family trains" is a third assumption that would have
-# failed after the other two were cleared.
-#
-# THE FIX IS C++ AND IT IS FILED THERE, not bodged here. Three coordinated
-# changes are needed: a secondary-aware variant of `SkillStartedBySpell` and
-# `TrainerStartedSkills` accepting SKILL_CATEGORY_SECONDARY; an exemption from
-# the free-primary-slot gate at :10754, which a secondary must never wait on
-# because it never consumes one; and a permission that is not the primary slot
-# budget. Until that ships, this module refuses, and says why in one sentence.
+def secondary_rank_errand(
+    character: str, skills: Mapping[str, tuple[int, int]]
+) -> Errand | None:
+    """Ask a trainer to raise First Aid when its observed cap is exhausted."""
+    value, maximum = skills.get("first aid", (0, 0))
+    if value != 75 or maximum != 75:
+        return None
+    return Errand(character, learn_skill=skill_id("first aid"), travel_npc=TRAINER_ROLE)
+
+
+# The trainer resolver and TrainOnArrival now accept secondary skill lines and
+# exempt them from the primary-slot gate. Keep `professions` primary-only: it
+# is also the input to the primary-slot planner. The rank request instead uses
+# `learn_skill` when the observed First Aid value and cap are both 75. The
+# bridge and worldserver writers claim that column only while it is empty.
+# The training spell is chosen by TrainerSpellForSkill at the destination.
+# A trainer may already offer Journeyman at skill 50, but 75 is the first
+# point at which the current rank prevents further progress.
 SECONDARY_RANK_REFUSAL = (
-    "No secondary profession rank can be bought on the deployed worldserver, "
-    "and no roster column can change that. mod-overseer resolves and completes "
-    "every training errand through SkillStartedBySpell, which returns 0 for "
-    "any skill IsPrimaryProfessionSkill rejects - First Aid, Cooking and "
-    "Fishing are SkillLine category 9, not 11. So the trainer resolve finds no "
-    "spawn (mod_overseer.cpp:10058) and TrainerSpellForSkill finds no spell "
-    "(:10369), and a learn_skill nothing can clear fences that character out "
-    "of ALL travel (infra#3686). Widening the professions column clears the "
-    "third refusal only, and stops the primary trade drive for the whole "
-    "family as it does it - see wanted_ids. The fix is in the module, not in "
-    "this repo."
+    "A secondary rank is requested only when its observed skill cap is "
+    "exhausted. First Aid at 75/75 gets a trainer errand; below that, "
+    "SkillStartedBySpell can now find secondary trainers without adding "
+    "secondary ids to the primary professions column."
 )
 
 # HOW MUCH EACH SECONDARY CAN ACTUALLY GAIN TODAY, WHICH IS NONE OF IT, AND
@@ -1106,8 +1032,8 @@ SECONDARY_BLOCKED = {
         "nothing below 60, which is Linen Bandage's (3275) grey value and the "
         "58 points SECONDARY_HEADROOM now offers; above it every bandage is a "
         "trainer purchase for every class but Death Knight, starting with "
-        "Heavy Linen Bandage (3276) at ReqSkillRank 40 for 100 copper, and no "
-        "First Aid trainer is reachable (infra#3614, mod-overseer#454)"
+        "Heavy Linen Bandage (3276) at ReqSkillRank 40 for 100 copper. "
+        "The rank errand begins at the observed 75/75 ceiling"
     ),
     "cooking": (
         "every Cooking recipe reachable below 75 requires RequiresSpellFocus 4 "
@@ -1124,27 +1050,10 @@ SECONDARY_BLOCKED = {
 
 
 def secondary_rank_refusal(skills: Mapping[str, int]) -> str:
-    """Why no secondary rank errand is produced for this character, ever.
+    """Explain secondary progression walls to the goal reporter.
 
-    Takes the observed skills for the same reason `settled` does - so that the
-    sentence can name what this character could still earn instead - and
-    returns a refusal that is never empty. A caller asking "should this
-    character go and train First Aid" must get a reason, not None: an empty
-    answer is what let the removed `secondary_rank_errand` read as a feature
-    merely waiting to be wired.
-
-    The refusal is CONSTANT because the blocker is constant. It does not depend
-    on the character, on the skill or on how close to the ceiling anybody is -
-    a character at 1/75 and a character at 75/75 are refused by the same two
-    lines of C++ - and a message that varied would suggest some state could
-    make it succeed.
-
-    WHAT DOES VARY is the second half: which secondary this character is short
-    on, and which wall each one is actually behind. That matters because all
-    three walls are different and none of them is the rank ceiling this function
-    is named for - see SECONDARY_BLOCKED. Reporting only the ceiling refusal
-    would reproduce the mistake that made "capped at Apprentice" the accepted
-    story for three skills, not one of which is capped.
+    This legacy interface reports why a craft goal may still be blocked. It
+    is not the rank planner: `secondary_rank_errand` uses both value and cap.
     """
     stuck = [
         "%s is at %d/75 and earns nothing today because %s"

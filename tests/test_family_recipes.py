@@ -132,7 +132,10 @@ class AFamilyCrafterIsDueATrainerRecipe(unittest.TestCase):
     def test_every_ladder_rung_has_its_trainer_row(self):
         for skill, recipes in craft.RECIPES.items():
             for recipe in recipes:
-                if recipe.spell_id in craft.AUTO_LEARNED:
+                if (
+                    recipe.spell_id in craft.AUTO_LEARNED
+                    or recipe.spell_id in craft.RECIPE_PURCHASES
+                ):
                     continue
                 with self.subTest(skill=skill, recipe=recipe.name):
                     self.assertIn(recipe.spell_id, craft.TRAINER_RECIPES)
