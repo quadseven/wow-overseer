@@ -180,7 +180,8 @@ _OFF_HAND_SLOTS = (_OFF_HAND,)
 # hoarding mail counts as having a claim on it and the piece never moves at
 # all - the refusal and the misdelivery are the same missing fact.
 #
-# item_template.subclass for class 4 (ARMOR). 5 is an unused buckler slot and
+# item_template.subclass for class 4 (ARMOR). 5 is the buckler, gated as a
+# shield by its InventoryType (see `wearable_armor`), and
 # 7-10 are librams, idols, totems and sigils, which AllowableClass really
 # does gate - so only 1-4 and 6 are decided here.
 ARMOR_MISC, ARMOR_CLOTH, ARMOR_LEATHER, ARMOR_MAIL, ARMOR_PLATE = 0, 1, 2, 3, 4
@@ -471,7 +472,9 @@ def wearable_armor(holding: Holding, character: CharacterState) -> bool:
     if int(holding.item_class) != ITEM_CLASS_ARMOR:
         return True
     subclass = int(holding.item_subclass)
-    if subclass == ARMOR_SHIELD:
+    # A buckler (subclass 5) is held in the shield slot and the world refuses
+    # it to a class with no shield skill, so the slot decides, not the subclass.
+    if subclass == ARMOR_SHIELD or is_shield(holding):
         return int(character.class_id) in _SHIELD_CLASSES
     if subclass not in (ARMOR_CLOTH, ARMOR_LEATHER, ARMOR_MAIL, ARMOR_PLATE):
         return True
