@@ -87,7 +87,7 @@ def tome_book(spawns, loot):
 
 
 def paladin(**over):
-    return member(
+    args = dict(
         name="Hokk",
         class_id=PALADIN,
         race=HUMAN,
@@ -97,8 +97,9 @@ def paladin(**over):
         y=-420.0,
         zone_id=12,
         quest_log={1644: 3},
-        **over,
     )
+    args.update(over)
+    return member(**args)
 
 
 LINEN_LOOT = [{"item": LINEN, "entry": 285}, {"item": LINEN, "entry": 99}]
@@ -119,6 +120,21 @@ class TheLinen(unittest.TestCase):
     def test_linen_only_an_elite_drops_is_still_a_group(self):
         quest = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}]).quests[1644]
         self.assertEqual(classquest.blocker_of(quest, paladin())[0], classquest.GROUP)
+
+    def test_overleveled_paladin_solos_instead_of_waiting_for_help(self):
+        # #1094: a member 10+ levels over the quest attempts it solo instead of
+        # waiting for guild help. The quest is min_level 12, the paladin is 22.
+        book = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}])
+        move, blocked = classquest.next_move(book, paladin(level=22))
+        self.assertEqual(move.kind, classquest.HUNT)
+        self.assertEqual(move.spot.entry, 99)
+
+    def test_nine_over_still_asks_for_help(self):
+        # The solo bypass needs 10+ levels over; 9 over keeps the GROUP block.
+        book = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}])
+        move, blocked = classquest.next_move(book, paladin(level=21))
+        self.assertIsNone(move)
+        self.assertTrue(any("group" in b.lower() for b in blocked))
 
     def test_an_elite_kill_is_still_a_group(self):
         row = qrow(9, "Kill the boss", npc1=99, npc_count1=1)

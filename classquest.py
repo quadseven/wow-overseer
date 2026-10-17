@@ -354,6 +354,13 @@ FAILED_WALKS = 2
 # out of combat on ground reaching three levels over it.
 OVERLEVEL_MAX = 3
 
+# A MEMBER THIS MANY LEVELS OVER A QUEST'S MIN LEVEL SOLOS IT INSTEAD OF
+# ASKING FOR HELP (#1094). A level 28 paladin on Redemption (min level 12)
+# waited 1h 22m for guild help that never came; at 16 over, the member should
+# attempt the quest alone. The solo attempt still goes through the normal
+# hunt: if it stalls, the STALLED blocker (in HELPABLE) asks for help.
+OVERLEVEL_SOLO_GAP = 10
+
 # A SPAWN THE MODULE REFUSED, OR THAT A WALK DID NOT REACH, IS NOT ASKED OF THE
 # SAME MEMBER AGAIN FOR THIS LONG: the member is sent to the next pack of the
 # objective instead (guildjobs.class_avoid). These are the module's refusals
@@ -1677,6 +1684,13 @@ def within_level(member, spawns) -> tuple:
     return tuple(s for s in spawns if int(s.level) <= top)
 
 
+def _outlevels_for_solo(member, quest) -> bool:
+    """True when the member is at least OVERLEVEL_SOLO_GAP levels over the
+    quest's minimum level (#1094): the member hunts the quest solo instead of
+    waiting for guild help."""
+    return int(member.level) - int(quest.min_level) >= OVERLEVEL_SOLO_GAP
+
+
 def _level_said(member, quest: Quest) -> str:
     lowest = min(int(s.level) for s in quest.fields)
     return (
@@ -1864,6 +1878,11 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
     lost = _lost_item_move(member, quest, using, block, why)
     if lost is not None:
         return lost
+    if block == GROUP and _outlevels_for_solo(member, quest):
+        # #1094: the member so far outlevels the quest that the group blocker
+        # is ignored and the quest is hunted solo. If the solo hunt stalls,
+        # the STALLED blocker below (in HELPABLE) asks for help.
+        block, said = "", ""
     if block:
         want = helpers_for(quest) if block == GROUP else 0
         spot = _densest(member, quest.fields) if block == GROUP else None
