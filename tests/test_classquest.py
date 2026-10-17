@@ -283,6 +283,7 @@ class TheBlockers(unittest.TestCase):
             [qrow(2000, "Group Job", reward=8121, grp=3, npc1=3130, npc_count1=1)],
             spawns=[LIZARD],
             quest_log={2000: 3},
+            level=15,  # 5 over the quest's min_level 10: under the #1094 solo gap
         )
         self.assertIsNone(move)
         self.assertIn("group of 3", blocked[0])
@@ -293,6 +294,7 @@ class TheBlockers(unittest.TestCase):
             [qrow(2001, "Elite Job", reward=8121, npc1=3130, npc_count1=1)],
             spawns=[elite],
             quest_log={2001: 3},
+            level=15,  # 5 over the quest's min_level 10: under the #1094 solo gap
         )
         self.assertIsNone(move)
         self.assertIn("elite", blocked[0])
