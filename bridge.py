@@ -6426,6 +6426,10 @@ class Bridge(discord.Client):
         # class quests it asks guild chat for help with (classask.py).
         self._class_hunts = classquest.Hunts()
         self._class_helps: tuple = ()
+        # cohort key -> its last job pass's helps and class quest holds, which
+        # _keep_class_plan folds into _class_helps and _classquest_held.
+        self._class_helps_by: dict = {}
+        self._classquest_held_by: dict = {}
         # THE CLASS QUEST IS OWED BEFORE ANY DUNGEON (the operator, 2026-10-06):
         # cohort key -> {name: classquest.Owed} for the members held out of
         # every dungeon formation, and the clock that releases one that makes
@@ -15532,14 +15536,14 @@ class Bridge(discord.Client):
             # quest done stops the next (guildjobs.class_ask_streak).
             asks=facts.get("quest_asks", ()))
         # Members held on a class quest are kept out of every dungeon pass
-        # (the guild's asks, its runs): _class_priority_names.
-        self._classquest_held = guildjobs.class_held(plan.lines)
+        # (the guild's asks, its runs): _class_priority_names. The class
+        # quests a guildmate could help with are asked in guild chat by the
+        # social pass (classask.py). Both are kept per cohort, so the next
+        # cohort's pass does not drop this one's (_keep_class_plan, #871).
+        _keep_class_plan(self, cohort, plan)
         # A member that OWES a class quest is held out of every dungeon
         # formation, hunting or not (guildjobs.owed_members).
         self._class_owed_by[_cohort_key(cohort)] = dict(plan.owed)
-        # The class quests a guildmate could help with, asked in guild chat
-        # by the social pass (classask.py).
-        self._class_helps = plan.helps
         self._class_book = facts.get("class_book")
         if facts.get("unclaimed"):
             log.info("guild jobs: no new materials post for %s until the posts "
@@ -24203,6 +24207,33 @@ async def _say_class_escalation(escalation) -> None:
 
 _QUEST_ASK_WHY = "in a class quest party"
 _QUEST_GATHER_WHY = "on a class quest ask with a yes"
+
+
+# EVERY COHORT'S CLASS QUEST HELPS REACH THE SOCIAL PASS (#871). The guild
+# jobs pass runs once per cohort, this process's own and then each other
+# family's (_for_other_families), and each run set the helps and the class
+# quest holds outright, so the last cohort's plan replaced the others'. On
+# 2026-10-16 all 51 class quest asks one guild posted in four days had been
+# cancelled with no yes, while the other guild's drew yes answers on 93 of
+# 265: the first cohort's pass listed its member's help, the social pass
+# posted the ask in the seconds before the second cohort's pass, and the
+# next social pass read no help for the asker (classask._ended) and
+# cancelled it. No guildmate, and no random bot, was ever offered one.
+def _keep_class_plan(owner, cohort, plan) -> None:
+    """Keep one cohort's class quest helps and holds from its job pass, and
+    set the bridge's _class_helps and _classquest_held to those of every
+    cohort's last pass."""
+    key = _cohort_key(cohort)
+    helps_by = getattr(owner, "_class_helps_by", None)
+    if helps_by is None:
+        helps_by = owner._class_helps_by = {}
+    held_by = getattr(owner, "_classquest_held_by", None)
+    if held_by is None:
+        held_by = owner._classquest_held_by = {}
+    helps_by[key] = tuple(plan.helps)
+    held_by[key] = set(guildjobs.class_held(plan.lines))
+    owner._class_helps = tuple(h for helps in helps_by.values() for h in helps)
+    owner._classquest_held = {n for held in held_by.values() for n in held}
 
 
 def _class_owed_names(owner) -> set:

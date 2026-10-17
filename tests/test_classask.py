@@ -673,9 +673,13 @@ class TheHold(unittest.TestCase):
 class TheDungeonPasses(unittest.TestCase):
     """The class quest comes before the dungeon in every pass that forms one."""
 
-    def social(self, helps=(), asks=(), answers=(), on_write=None):
+    def social(self, helps=(), asks=(), answers=(), on_write=None, plans=()):
         this = _Self()
         this._class_helps = tuple(helps)
+        # (cohort, plan) for each job pass run before this social pass, in
+        # order: their helps replace `helps` (bridge._keep_class_plan).
+        for cohort, plan in plans:
+            bridge._keep_class_plan(this, cohort, plan)
         this._class_board = classparty.Board()
         this._class_book = None
         this.started = []
@@ -758,6 +762,35 @@ class TheDungeonPasses(unittest.TestCase):
         self.assertEqual(this.started, [])
         self.assertIsNotNone(out.form)
 
+    def job_plan(self, helps=(), lines=None):
+        return types.SimpleNamespace(helps=tuple(helps), lines=dict(lines or {}))
+
+    def test_an_ask_survives_the_next_cohorts_job_pass(self):
+        # #871: the guild jobs pass runs once per cohort. One guild's asker
+        # had its help listed by its own cohort's pass, the ask was posted,
+        # then the other cohort's pass replaced the helps and the next
+        # social pass cancelled the ask before anybody could answer it.
+        cave = self.job_plan(
+            [self.group_help("Zappy")], {"Zappy": "Zappy waits for help"}
+        )
+        other = self.job_plan(lines={"Hulk": "Hulk hunts for its " + classquest.MARK})
+        live = qask(50, "Zappy", guild="Cave", roles_needed="dps")
+        out, this = self.social_with(
+            asks=[live],
+            plans=[(None, cave), (types.SimpleNamespace(key="other"), other)],
+        )
+        self.assertNotIn(50, out.cancel)
+        self.assertEqual([h.member for h in this._class_helps], ["Zappy"])
+        self.assertEqual(this._classquest_held, {"Hulk"})
+
+    def test_a_cohorts_next_job_pass_replaces_only_its_own_helps(self):
+        this = _Self()
+        other = types.SimpleNamespace(key="other")
+        bridge._keep_class_plan(this, None, self.job_plan([self.group_help("Zappy")]))
+        bridge._keep_class_plan(this, other, self.job_plan([self.group_help("Hulk")]))
+        bridge._keep_class_plan(this, None, self.job_plan())
+        self.assertEqual([h.member for h in this._class_helps], ["Hulk"])
+
     def test_the_dungeon_ask_still_forms_with_no_quest_ask(self):
         self.assertIsNotNone(self.social().form)
 
@@ -822,7 +855,7 @@ class TheWiring(unittest.TestCase):
 
     def test_the_bridge_keeps_the_hunt_clock_and_hands_it_to_the_plan(self):
         self.assertIn("hunts=self._class_hunts, now=time.time()", BRIDGE)
-        self.assertIn("self._class_helps = plan.helps", BRIDGE)
+        self.assertIn("_keep_class_plan(self, cohort, plan)", BRIDGE)
 
     def test_the_dungeon_ask_pass_reads_only_dungeon_asks(self):
         self.assertIn("a.kind == guildsocial.KIND_DUNGEON", BRIDGE)
