@@ -791,6 +791,37 @@ class TheDungeonPasses(unittest.TestCase):
         bridge._keep_class_plan(this, None, self.job_plan())
         self.assertEqual([h.member for h in this._class_helps], ["Hulk"])
 
+    def skipped_pass(self, names, members=()):
+        """The bridge after a cohort's plan was kept and the cohort's next job
+        pass found no names, or no placed member: its plan must not linger."""
+        this = _Self()
+        other = types.SimpleNamespace(key="other")
+        held = {"Zappy": "Zappy hunts for its " + classquest.MARK}
+        bridge._keep_class_plan(
+            this, other, self.job_plan([self.group_help("Zappy")], held)
+        )
+        bridge._keep_class_plan(this, None, self.job_plan([self.group_help("Hulk")]))
+        this._class_owed_by = {"other": {"Zappy": "owed"}, None: {"Hulk": "owed"}}
+        with mock.patch.multiple(
+            bridge,
+            _names_of=lambda cohort: list(names),
+            _fetch_job_facts=lambda got: {"members": list(members)},
+        ):
+            asyncio.run(bridge.Bridge._guild_jobs_once(this, other))
+        return this
+
+    def test_a_cohort_with_no_names_leaves_no_class_plan_behind(self):
+        this = self.skipped_pass(names=())
+        self.assertEqual([h.member for h in this._class_helps], ["Hulk"])
+        self.assertEqual(this._classquest_held, set())
+        self.assertEqual(bridge._class_owed_names(this), {"Hulk"})
+
+    def test_a_cohort_with_no_placed_member_leaves_no_class_plan_behind(self):
+        this = self.skipped_pass(names=["Zappy"])
+        self.assertEqual([h.member for h in this._class_helps], ["Hulk"])
+        self.assertEqual(this._classquest_held, set())
+        self.assertEqual(bridge._class_owed_names(this), {"Hulk"})
+
     def test_the_dungeon_ask_still_forms_with_no_quest_ask(self):
         self.assertIsNotNone(self.social().form)
 

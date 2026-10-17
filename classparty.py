@@ -45,9 +45,16 @@ THE FLOW, one task per party (the bridge's _run_class_party):
             GIVE_UP_COOLDOWN_MINUTES.
   walk      write party-walk to the objective spawn (classquest.objective_spot).
             A walk that ends without arriving keeps why on PartyRun.outcome.
+  hunt      write the leader's `hunt-spawn` row for the creature of the spawn
+            the party stands at (classhunt.command, arm_hunt), its party
+            following it into the fight, and write it again each time it
+            ends, after the wait of a refusal for now (PartyRun.hunt_ended).
+            A refusal that holds here, or a worldserver that does not hunt,
+            ends the hunting and not the party.
   watch     read the asker's quest log every WATCH_SECONDS: complete (or handed
             in, or gone) ends it, so does its ask no longer being live or
-            PARTY_SECONDS passing.
+            PARTY_SECONDS passing. A party that runs out of time names its
+            last hunt's answer (PartyRun.timed_out).
   disband   write party-disband and mark the answerers' yes rows seated (or
             withdrawn when no party formed). The members are free again the
             moment the PartyRun leaves the Board.
@@ -58,6 +65,12 @@ the objective or stood too far from the leader, judge_meeting) or the invite
 (refused, with the module's reason, or not answered, invite_stopped). The
 bridge writes it on the ask's reason column (classask.stopped), and the
 members page names that step in place of "no party formed".
+
+A PARTY THAT STANDS DOES NOT FIGHT (#871). On 2026-10-17 two askers' parties
+formed, walked to the objective and timed out before quest credit: the flow
+ended at the party walk, the leader stood at the objective, and nothing
+fought. The lone member's hunt had long since written `hunt-spawn` after its
+walk (classhunt.py); the party now does the same.
 
 THE HOLD. A member is held out of the dungeon passes and the guild jobs while a
 PartyRun with its name is on the Board: from the pass that decides to form the
@@ -84,6 +97,7 @@ import types
 from dataclasses import dataclass, field
 
 import classask
+import classhunt
 import classquest
 import guildroute
 import guildrun
@@ -120,6 +134,16 @@ PARTY_SECONDS = 1680.0
 WATCH_SECONDS = 30.0
 # An ask with some yes but not all waits this long from its post for the rest.
 PARTIAL_WAIT_MINUTES = 3.0
+# The party's hunt answers that end its hunting (the party stands on): the
+# world will not run it here, or this worldserver does not hunt.
+HUNT_STOPS = (
+    classhunt.NEVER,
+    classhunt.ELSEWHERE,
+    classhunt.UNSUPPORTED,
+    classhunt.UNREADABLE,
+)
+TIMED_OUT = "party timed out before quest credit"
+NO_HUNT = "no creature of its objective to hunt at %s"
 
 # What an older worldserver says to a row it cannot parse, and what the module
 # says with the switch off.
@@ -367,7 +391,11 @@ class PartyRun:
     the pass that decides the party until its members have met at the
     objective. `formed_at` and `deadline` are on the bridge's monotonic clock,
     set when the module said formed. `walks` is member name -> why its meeting
-    walk ended without arriving (walk_why), for the meeting's words."""
+    walk ended without arriving (walk_why), for the meeting's words. `hunt` is
+    the leader's `hunt-spawn` row at the objective ("" when it hunts nothing),
+    `hunt_row` the id of the one running (0 when none is), `hunt_at` the
+    monotonic time the next may be written and `hunted` what the last one
+    said (arm_hunt, hunt_ended)."""
 
     ask_id: int
     leader: str
@@ -381,6 +409,10 @@ class PartyRun:
     deadline: float | None = None
     outcome: str = ""
     walks: dict = field(default_factory=dict)
+    hunt: str = ""
+    hunt_row: int = 0
+    hunt_at: float = 0.0
+    hunted: str = ""
 
     def names(self) -> tuple:
         return (self.leader,) + tuple(self.helpers)
@@ -411,6 +443,35 @@ class PartyRun:
     def left(self, now) -> float:
         """Seconds before the party's clock runs out."""
         return PARTY_SECONDS if self.deadline is None else self.deadline - now
+
+    def hunt_ended(self, verdict, now) -> None:
+        """The leader's hunt row ended with `verdict` (classhunt.judge): write
+        it again after the verdict's wait, in the plain form after an item key
+        the world rejects, or no more for an answer in HUNT_STOPS."""
+        self.hunt_row = 0
+        self.hunted = verdict.said
+        if verdict.state in HUNT_STOPS:
+            self.hunt = ""
+        elif verdict.state == classhunt.ITEMLESS:
+            self.hunt = classhunt.plain_form(self.hunt)
+        self.hunt_at = now + verdict.wait
+
+    def timed_out(self) -> str:
+        """The outcome of a party whose time ran out before quest credit, with
+        what its last hunt said."""
+        return "%s (%s)" % (TIMED_OUT, self.hunted) if self.hunted else TIMED_OUT
+
+
+def arm_hunt(run, book, item_form=True) -> None:
+    """Set the `hunt-spawn` row the leader writes once its party stands at the
+    objective: for the creature of the spawn it walked to, as a lone member's
+    hunt is written (classhunt.command). A quest with no creature to hunt there
+    gets none, and says so for the party's outcome."""
+    quest = book.quests.get(int(run.quest)) if book is not None else None
+    run.hunt = (
+        classhunt.command(quest, run.spot.entry, item_form=item_form) if quest else ""
+    )
+    run.hunted = "" if run.hunt else NO_HUNT % (run.spot.name or "the objective")
 
 
 class Board:

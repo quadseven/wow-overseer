@@ -67,7 +67,8 @@ bounds it, and so the hold of its members. A quest nobody answers holds nobody.
 
 THE GROUP is classparty.py's: a filled ask has the asker and its answerers walk
 to the objective and meet there, then the module seats them in one party
-(`party-up`), walks it to the objective (`party-walk`) and ends it
+(`party-up`), walks it to the objective (`party-walk`), its leader hunts the
+objective's creature there (`hunt-spawn`) and the module ends it
 (`party-disband`). A member is held out of the dungeon passes (held_names)
 while it travels to the meeting and while the party is up; before that, from
 its ask's first yes (below).

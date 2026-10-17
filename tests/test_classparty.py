@@ -17,6 +17,7 @@ from unittest import mock
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import classask  # noqa: E402
+import classhunt  # noqa: E402
 import classparty  # noqa: E402
 import classquest  # noqa: E402
 import guildroute  # noqa: E402
@@ -472,9 +473,22 @@ class _Bridge:
     """The Bridge methods that follow a party, with the writes and reads stubbed."""
 
     def __init__(
-        self, answers, walk=None, states=(), ask_live=True, meet=None, stands=None
+        self,
+        answers,
+        walk=None,
+        states=(),
+        ask_live=True,
+        meet=None,
+        stands=None,
+        book=None,
+        hunts=(),
     ):
         self._class_board = classparty.Board()
+        self._class_book = book
+        self._class_hunt_unsupported_until = 0.0
+        self._class_hunt_itemless_until = 0.0
+        self.hunts = list(hunts)
+        self.ended = []
         self._guild_run_names = set()
         self.rows = []
         self.commands = {}
@@ -518,6 +532,10 @@ for _name in (
     "_class_party_form",
     "_class_party_work",
     "_class_party_watch",
+    "_class_party_watch_quest",
+    "_class_party_hunt",
+    "_class_party_hunt_read",
+    "_note_party_hunt",
     "_class_party_disband_row",
     "_class_party_close",
     "_begin_class_parties",
@@ -553,6 +571,11 @@ def drive(this, run, **patches):
     def state(name, quest):
         return this.states.pop(0) if len(this.states) > 1 else this.states[0]
 
+    def hunt_answer(row_id):
+        if not this.hunts:
+            return {"status": "verifying", "detail": "", "result": "{}"}
+        return this.hunts.pop(0) if len(this.hunts) > 1 else this.hunts[0]
+
     stubs = dict(
         _insert_corps_row=insert,
         _class_party_quest_state=state,
@@ -562,6 +585,8 @@ def drive(this, run, **patches):
             (r.ask_id, formed, gave_up)
         ),
         _class_party_stands=stands,
+        _command_answer=hunt_answer,
+        _end_hunt_row=lambda row_id, detail="": this.ended.append(row_id),
         CORPS_ROW_FOLLOW_SECONDS=1.0,
     )
     stubs.update(patches)
@@ -1033,6 +1058,123 @@ class TheBridgeMeetsAtTheObjective(unittest.TestCase):
         self.assertEqual(failed.held_meeting, [everyone] * 3)
         self.assertEqual(failed.held_up, [])
         self.assertEqual(classask.held_names(failed._class_board.runs()), set())
+
+
+def hunt_book(count=3):
+    """Quest 2000 wants `count` kills of the Lizard (3130) the party stands at."""
+    rows = [qrow(2000, "Group Job", reward=8121, npc1=3130, npc_count1=count)]
+    return classquest.build(
+        quest_rows=rows, giver_rows=givers(), spawn_rows=[LIZARD], loot_rows=[]
+    )
+
+
+def hunt_answer(status, retry="", reason="", detail=""):
+    body = {"retry": retry, "reason": reason} if retry or reason else {}
+    return {"status": status, "detail": detail, "result": json.dumps(body)}
+
+
+HUNT = "hunt-spawn creature:3130 count:3 max:%d" % classhunt.MAX_SECONDS
+
+
+class ThePartyHunts(unittest.TestCase):
+    """#871: a party that stood at the objective and never fought timed out
+    before quest credit. Its leader now hunts the objective's creature."""
+
+    def test_the_hunt_is_for_the_creature_of_the_spawn_the_party_stands_at(self):
+        run = a_run()
+        classparty.arm_hunt(run, hunt_book())
+        self.assertEqual(run.hunt, HUNT)
+        self.assertEqual(run.hunted, "")
+
+    def test_a_quest_with_no_creature_there_is_not_hunted_and_says_so(self):
+        run = a_run()
+        classparty.arm_hunt(run, None)
+        self.assertEqual(run.hunt, "")
+        self.assertEqual(
+            run.timed_out(),
+            "party timed out before quest credit "
+            "(no creature of its objective to hunt at Lizard)",
+        )
+
+    def test_a_hunt_that_ran_is_written_again_and_a_refusal_waits(self):
+        run = a_run()
+        classparty.arm_hunt(run, hunt_book())
+        run.hunt_row = 7
+        run.hunt_ended(classhunt.Answer(classhunt.NOTHING, "no kill"), 100.0)
+        self.assertEqual((run.hunt, run.hunt_row, run.hunt_at), (HUNT, 0, 100.0))
+        later = classhunt.Answer(classhunt.LATER, "refused for now", 60.0)
+        run.hunt_ended(later, 100.0)
+        self.assertEqual((run.hunt, run.hunt_at), (HUNT, 160.0))
+        self.assertEqual(run.hunted, "refused for now")
+
+    def test_a_hunt_the_world_will_not_run_here_is_not_written_again(self):
+        for state in (classhunt.NEVER, classhunt.ELSEWHERE, classhunt.UNSUPPORTED):
+            run = a_run()
+            classparty.arm_hunt(run, hunt_book())
+            run.hunt_ended(classhunt.Answer(state, "no"), 0.0)
+            self.assertEqual(run.hunt, "", state)
+
+    def test_an_item_key_the_world_rejects_is_dropped(self):
+        run = a_run()
+        run.hunt = "hunt-spawn creature:3130 item:5 count:2 max:480"
+        run.hunt_ended(classhunt.Answer(classhunt.ITEMLESS, "no item key"), 0.0)
+        self.assertEqual(run.hunt, "hunt-spawn creature:3130 max:480")
+
+    def test_a_formed_party_hunts_at_the_objective_until_the_quest_is_done(self):
+        this = _Bridge(
+            [FORMED, answer("applied", phase="ended")],
+            states=[classparty.INCOMPLETE, classparty.INCOMPLETE, classparty.COMPLETE],
+            book=hunt_book(),
+        )
+        drive(this, a_run())
+        self.assertEqual(
+            [r[2] for r in this.rows],
+            [
+                "party-up Chill Dread",
+                "party-walk creature:9 max:20000",
+                HUNT,
+                "party-disband",
+            ],
+        )
+        self.assertEqual(this.rows[2][:2], ("Bigzug", "job"))
+        self.assertEqual(this.ended, [102])
+        self.assertEqual(this.settled, [(1, True, False)])
+
+    def test_a_refused_hunt_is_named_when_the_party_runs_out_of_time(self):
+        refused = hunt_answer("error", "never", "the leader is in a party")
+        this = _Bridge(
+            [FORMED, answer("applied", phase="ended")],
+            states=[classparty.INCOMPLETE],
+            book=hunt_book(),
+            hunts=[refused],
+        )
+        clock = iter([100.0] * 3 + [-1.0] * 9)
+        outcomes = []
+        with mock.patch.object(classparty.PartyRun, "left", lambda s, now: next(clock)):
+            drive(
+                this,
+                a_run(),
+                _class_party_settle=lambda r, *a, **k: outcomes.append(r.outcome),
+            )
+        self.assertEqual([r[2] for r in this.rows].count(HUNT), 1)
+        self.assertEqual(
+            outcomes,
+            [
+                "party timed out before quest credit "
+                "(Bigzug cannot hunt: the leader is in a party)"
+            ],
+        )
+        self.assertEqual(this.ended, [])
+
+    def test_no_hunt_is_written_while_the_worldserver_does_not_hunt(self):
+        this = _Bridge(
+            [FORMED, answer("applied", phase="ended")],
+            states=[classparty.INCOMPLETE, classparty.COMPLETE],
+            book=hunt_book(),
+        )
+        this._class_hunt_unsupported_until = float("inf")
+        drive(this, a_run())
+        self.assertNotIn(HUNT, [r[2] for r in this.rows])
 
 
 class TheWiring(unittest.TestCase):

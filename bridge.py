@@ -15382,12 +15382,14 @@ class Bridge(discord.Client):
         """
         names = await asyncio.to_thread(_names_of, cohort)
         if not names:
+            _drop_class_plan(self, cohort)
             return
         facts = await asyncio.to_thread(_fetch_job_facts, names)
         members = facts["members"]
         if not members:
             log.info("guild jobs: no family guild has a placed member yet%s",
                      _family_label(cohort))
+            _drop_class_plan(self, cohort)
             return
         await self._start_guild_job_pass(cohort, facts, members)
 
@@ -16167,7 +16169,7 @@ class Bridge(discord.Client):
     async def _run_class_party(self, run) -> None:
         """One class quest party from its meeting to its party-disband: walk its
         members to the objective to meet, form it, walk it to the objective,
-        watch the quest, end it. The members are free again when this returns,
+        hunt there and watch the quest, end it. The members are free again when this returns,
         whatever happened."""
         formed = done = False
         try:
@@ -16359,8 +16361,25 @@ class Bridge(discord.Client):
         return await self._class_party_watch(run)
 
     async def _class_party_watch(self, run) -> bool:
+        """Hunt the objective's creature with the party (classparty.arm_hunt)
+        and watch the quest until it is done, its ask is over or the party's
+        time is up; the leader's hunt row still running is ended on the way
+        out, so the module stops it."""
+        classparty.arm_hunt(
+            run, self._class_book,
+            item_form=time.monotonic() >= self._class_hunt_itemless_until)
+        try:
+            return await self._class_party_watch_quest(run)
+        finally:
+            if run.hunt_row:
+                await asyncio.to_thread(
+                    _end_hunt_row, run.hunt_row,
+                    "the class quest party ended; the bridge ended the hunt")
+
+    async def _class_party_watch_quest(self, run) -> bool:
         """Read the asker's quest log until the objective is done, its ask is no
-        longer live or the party's time is up."""
+        longer live or the party's time is up, keeping the leader's hunt row
+        going between reads (_class_party_hunt)."""
         while True:
             state = await asyncio.to_thread(
                 _class_party_quest_state, run.leader, run.quest)
@@ -16376,9 +16395,54 @@ class Bridge(discord.Client):
             if left <= 0:
                 log.info("class party: %s's party for %s ran out of time", run.leader,
                          run.title)
-                run.outcome = "party timed out before quest credit"
+                run.outcome = run.timed_out()
                 return False
+            await self._class_party_hunt(run)
             await asyncio.sleep(min(classparty.WATCH_SECONDS, max(1.0, left)))
+
+    async def _class_party_hunt(self, run) -> None:
+        """Keep the party leader's `hunt-spawn` row at the objective running:
+        read the one that runs, and write the next when none does and its wait
+        is over (classparty.PartyRun.hunt_ended), never while this worldserver
+        is known not to hunt."""
+        if run.hunt_row:
+            await self._class_party_hunt_read(run)
+        now = time.monotonic()
+        if (run.hunt_row or not run.hunt or now < run.hunt_at
+                or now < self._class_hunt_unsupported_until):
+            return
+        row = guildcorps.Row("job", run.hunt, "", classparty.SOURCE)
+        run.hunt_row = await asyncio.to_thread(_insert_corps_row, run.leader, row) or 0
+        log.info("class party: %s's party hunts at %s for %s (row %d): %s",
+                 run.leader, run.spot.name or "the objective", run.title,
+                 run.hunt_row, run.hunt)
+
+    async def _class_party_hunt_read(self, run) -> None:
+        """Read the leader's running hunt row; once it ended, log its answer
+        and settle what the party hunts next."""
+        answer = await asyncio.to_thread(_command_answer, run.hunt_row)
+        if answer is None:
+            verdict = classhunt.Answer(
+                classhunt.UNREADABLE, "hunt row %d is unreadable" % run.hunt_row)
+        else:
+            verdict = classhunt.judge(
+                run.leader, answer.get("status"), answer.get("detail"),
+                answer.get("result"), run.hunt)
+        if verdict.state == classhunt.RUNNING:
+            return
+        log.info("class party: hunt row %d for %s's party: %s", run.hunt_row,
+                 run.leader, verdict.said)
+        self._note_party_hunt(verdict)
+        run.hunt_ended(verdict, time.monotonic())
+
+    def _note_party_hunt(self, verdict) -> None:
+        """A party hunt's answer that says this worldserver does not hunt, or
+        rejects the item key, holds every hunt off as a lone member's does."""
+        until = time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS
+        if verdict.state == classhunt.UNSUPPORTED:
+            self._class_hunt_unsupported_until = until
+        elif verdict.state == classhunt.ITEMLESS:
+            self._class_hunt_itemless_until = until
 
     async def _class_party_disband_row(self, run) -> None:
         row = guildcorps.Row("guild", classparty.DISBAND, "", classparty.SOURCE)
@@ -24232,8 +24296,30 @@ def _keep_class_plan(owner, cohort, plan) -> None:
         held_by = owner._classquest_held_by = {}
     helps_by[key] = tuple(plan.helps)
     held_by[key] = set(guildjobs.class_held(plan.lines))
+    _fold_class_plan(owner, helps_by, held_by)
+
+
+def _fold_class_plan(owner, helps_by, held_by) -> None:
+    """Set the bridge's _class_helps and _classquest_held to every kept
+    cohort's helps and holds."""
     owner._class_helps = tuple(h for helps in helps_by.values() for h in helps)
     owner._classquest_held = {n for held in held_by.values() for n in held}
+
+
+# A COHORT WHOSE JOB PASS IS SKIPPED LEAVES NO CLASS PLAN BEHIND (#871). The
+# guild jobs pass returns before it plans when a cohort has no names or no
+# placed member, and the helps, holds and owed members _keep_class_plan kept
+# for it from an earlier pass would hold its members out of every dungeon ask
+# on a class quest plan nobody refreshes.
+def _drop_class_plan(owner, cohort) -> None:
+    """Forget one cohort's class quest helps, holds and owed members, and fold
+    the rest again."""
+    key = _cohort_key(cohort)
+    helps_by = getattr(owner, "_class_helps_by", None) or {}
+    held_by = getattr(owner, "_classquest_held_by", None) or {}
+    for by in (helps_by, held_by, getattr(owner, "_class_owed_by", None) or {}):
+        by.pop(key, None)
+    _fold_class_plan(owner, helps_by, held_by)
 
 
 def _class_owed_names(owner) -> set:
@@ -26983,15 +27069,17 @@ def _class_hunt_state(name: str, quest_id: int, items=()):
         return row["status"], row["progress"], held
 
 
-def _end_hunt_row(row_id: int) -> None:
+def _end_hunt_row(
+    row_id: int,
+    detail: str = "the quest objective is complete; the bridge ended the hunt",
+) -> None:
     """End a running hunt row: it leaves verifying, which the module reads as
-    the bridge's word to stop (there is no cancel verb)."""
+    the bridge's word to stop (there is no cancel verb). `detail` says why."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE overseer_command SET status = 'applied', "
-            "detail = 'the quest objective is complete; the bridge ended the hunt' "
+            "UPDATE overseer_command SET status = 'applied', detail = %s "
             "WHERE id = %s AND status = 'verifying'",
-            (int(row_id),),
+            (detail, int(row_id)),
         )
 
 
