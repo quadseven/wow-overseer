@@ -810,6 +810,18 @@ def at(yards, map_id=1):
 class TheMeeting(unittest.TestCase):
     """classparty.judge_meeting: who met the leader at the objective."""
 
+    def test_a_walk_failure_keeps_the_module_reason_without_the_holder(self):
+        self.assertEqual(
+            classparty.walk_why(
+                "Bigzug", "Bigzug cannot walk to creature:9: another verb holds it"
+            ),
+            "another verb holds it",
+        )
+        self.assertEqual(
+            classparty.walk_why("Chill", "Chill is in combat"), "is in combat"
+        )
+        self.assertEqual(classparty.walk_why("Dread", ""), "")
+
     def test_far_meeting_walk_gets_the_far_walk_follow_window(self):
         self.assertEqual(classparty.MEET_SECONDS, 2110.0)
 
