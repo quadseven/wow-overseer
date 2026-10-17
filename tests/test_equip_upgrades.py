@@ -226,12 +226,15 @@ class TheQueueIsBounded(unittest.TestCase):
         )
         self.assertEqual((queue, notes), ((), ()))
 
-    def test_three_tries_expire_after_the_two_hour_try_window(self):
+    def test_three_tries_give_up_even_after_the_try_window(self):
+        # #869: after give_up tries the equip is not queued again, even
+        # outside the retry window. The old behavior retried forever.
         recent = {self.key}
         queue, _ = bag_pressure.equips_to_queue(self.wanted, recent, {self.key: 3})
         self.assertEqual(queue, ())
-        queue, _ = bag_pressure.equips_to_queue(self.wanted, set(), {self.key: 3})
-        self.assertEqual(queue, self.wanted)
+        queue, notes = bag_pressure.equips_to_queue(self.wanted, set(), {self.key: 3})
+        self.assertEqual(queue, ())
+        self.assertEqual(len(notes), 1)
 
     def test_second_refusal_is_retried_after_thirty_minutes(self):
         now = datetime(2026, 10, 16, 7, 0, tzinfo=timezone.utc)
