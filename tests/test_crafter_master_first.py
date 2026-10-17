@@ -1,10 +1,15 @@
-"""The family member assigned a trade is its master and is served first.
+"""The family member assigned a trade is its master and is seated first.
 
 Operator, 2026-10-04: "the family should be the master crafters and have
 priority for recipes and crafting ... and then there can be others designated
 the backup crafters". Before this, any family member with skill counted, and a
 designated guildmate who could learn a recipe now beat a family member a few
 points short.
+
+Operator, 2026-10-17 (#1095): within the family, crafting fans out instead of
+funneling to the master. The register still seats the master first, but the
+route gives the recipe to the family member who benefits most (lowest skill
+that can still do it), so crafting XP spreads across the family.
 """
 
 import unittest
@@ -39,12 +44,19 @@ class TheMasterIsFirst(unittest.TestCase):
         self.assertEqual(crafters.FAMILY, {s.name: s.seat for s in seats}["Bork"])
         self.assertEqual(crafters.DESIGNATED, {s.name: s.seat for s in seats}["Smithy"])
 
-    def test_a_master_a_little_short_beats_a_backup_who_has_it(self):
+    def test_a_family_member_who_can_learn_now_beats_a_short_master(self):
+        # #1095: the master no longer funnels every recipe. Bork (family, 60)
+        # can learn a rank-55 recipe now; Grug (master, 40) is 15 short.
+        # Learning now beats waiting, and within the family the member who
+        # benefits most wins.
         reg = crafters.register(PEOPLE, n=2)
         picks = crafters.candidates(recipe(55), reg, PEOPLE, crafters.Known(), 25)
-        self.assertEqual("Grug", picks[0].taker)
+        self.assertEqual("Bork", picks[0].taker)
 
-    def test_the_master_beats_other_family_too(self):
+    def test_the_closest_family_member_wins_when_both_can_learn_now(self):
+        # Both Grug (master, 40) and Bork (family, 60) can learn a rank-35
+        # recipe now. Grug is closer to the rank (benefit 5 vs 25), so Grug
+        # wins on benefit, not on master status.
         reg = crafters.register(PEOPLE, n=2)
         picks = crafters.candidates(recipe(35), reg, PEOPLE, crafters.Known(), 25)
         self.assertEqual("Grug", picks[0].taker)

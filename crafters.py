@@ -369,20 +369,25 @@ def _seats_by_name(reg: dict, skill: int) -> dict:
     return {s.name: (i, s.seat) for i, s in enumerate(reg.get(int(skill), ()))}
 
 
-# The route's preference, best first. The master comes before anyone else
-# whether it can learn the recipe now or soon; a backup ("designated") only
-# takes what the master cannot.
+# The route's preference, best first. The FAMILY comes before anyone else
+# whether they can learn the recipe now or soon; a backup ("designated") only
+# takes what the family cannot. Within the family there is no master-first
+# tier: the member who benefits most wins, so crafting XP fans out across the
+# family instead of funneling to one assigned master (#1095). "Now" still
+# beats "soon" across the family/designated boundary: a recipe nobody in the
+# family can use yet goes to someone who can learn it now rather than sitting
+# in a bag waiting.
 SEAT_TIERS = {
     (MASTER, True): 0,
-    (MASTER, False): 1,
-    (FAMILY, True): 2,
-    (DESIGNATED, True): 3,
-    (FAMILY, False): 4,
-    (DESIGNATED, False): 5,
-    (GUILD, True): 6,
+    (MASTER, False): 3,
+    (FAMILY, True): 0,
+    (DESIGNATED, True): 1,
+    (FAMILY, False): 3,
+    (DESIGNATED, False): 4,
+    (GUILD, True): 2,
 }
 # Tier 6 of the docstring, after every tier above, in the same seat order.
-LATER_TIERS = {MASTER: 7, FAMILY: 8, DESIGNATED: 9, GUILD: 10}
+LATER_TIERS = {MASTER: 5, FAMILY: 5, DESIGNATED: 6, GUILD: 7}
 
 
 def _why(recipe: Recipe, name: str, have: int, seat: str) -> str:
