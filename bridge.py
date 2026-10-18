@@ -2984,6 +2984,39 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
     return result
 
 
+def _bag_hold_read(names) -> tuple:
+    """Read the bags of a family whose campaign a Jev interlude holds, so an
+    interlude does not end its bag hold (#872).
+
+    The campaign gate (`_drive_dungeon`) is the only reader of the hold it
+    judges, and the queue does not call it while an interlude holds the
+    order. A sell interlude runs eight to twelve minutes, longer than
+    bag_pressure.BAG_HOLD_GAP_SECONDS, so the first reading after it started
+    a new hold. Measured on the dev realm 2026-10-18: Grug's family was
+    withheld on "bags are near full" for over five hours while Jev chose a
+    sell interlude about every half hour, and every interlude of ten minutes
+    or more restarted the hold's clock. The hold never reached
+    BAG_HOLD_STUCK_SECONDS, so the family was never sent back to questing.
+
+    Only a hold the gate already started is read, under the gate's own key
+    (the members it sends, without anyone sitting out). A slot the interlude
+    sells for still restarts the clock, as any town pass does. Returns what
+    `_bag_hold_stuck` returns, or () when there is no hold to keep or the
+    read failed (logged; the next cycle reads again).
+    """
+    # Looked up: the queue tests load this function in isolation.
+    running = globals().get("_standin_running")
+    names = list(running(names) if running is not None else names)
+    if not names or tuple(sorted(names)) not in _BAG_HOLD:
+        return ()
+    try:
+        return _bag_hold_stuck(names, _fetch_free_slots(names))
+    except Exception:
+        log.exception("bag hold: the read for %s during an interlude failed; "
+                      "retrying next cycle", ", ".join(names))
+        return ()
+
+
 def _restore_bag_holds() -> None:
     now_wall, now_mono = time.time(), time.monotonic()
     for subject, (value, _) in _memo_read("bag_hold").items():
@@ -19306,6 +19339,11 @@ class Bridge(discord.Client):
             log.info("queue: %s holds %s while the family's %s interlude runs; "
                      "the order stands", campaignqueue._family(key),
                      move.keyword, activity)
+            # The interlude does not end the family's bag hold (#872).
+            # Looked up: the queue tests load this method in isolation.
+            hold_read = globals().get("_bag_hold_read")
+            if hold_read is not None:
+                await asyncio.to_thread(hold_read, fam["names"])
             return
         try:
             said = await asyncio.to_thread(_apply_queue_move, move,
