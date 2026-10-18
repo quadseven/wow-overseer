@@ -361,6 +361,64 @@ class ThePartiesToForm(unittest.TestCase):
         self.assertEqual(self.plan([qask(1, kind="dungeon")], self.FULL), ())
 
 
+class ThePlanCorners(unittest.TestCase):
+    """The plan's less common paths (#1118). classparty.plan is called with an
+    empty Pass, so no classask pass can end or fill an ask first."""
+
+    FULL = ThePartiesToForm.FULL
+
+    def plan(self, asks, answers, helps=None, board=None, quest_pass=None):
+        helps = helps if helps is not None else helps_of("Bigzug")
+        return classparty.plan(
+            asks,
+            answers,
+            quest_pass or gs.Pass(),
+            helps,
+            free_of(friends()),
+            board or classparty.Board(),
+            NOW,
+            0.0,
+        )
+
+    def test_a_result_already_read_as_a_dict_is_used_as_it_is(self):
+        got = classparty.judge_up("Bigzug", "applied", "", {"phase": "formed"})
+        self.assertEqual(got.state, classparty.FORMED)
+
+    def test_an_ask_with_no_creation_time_does_not_wait_for_the_rest(self):
+        one = [yes(1, 1, "Chill", "dps", "help")]
+        young = qask(1, created_at=NOW - datetime.timedelta(minutes=1))
+        self.assertEqual(self.plan([young], one), ((), ()))
+        (run,), notes = self.plan([qask(1, created_at=None)], one)
+        self.assertEqual((run.helpers, notes), (("Chill",), ()))
+
+    def test_an_asker_leading_another_asks_party_forms_no_second(self):
+        board = classparty.Board()
+        board.begin(classparty.PartyRun(7, "Bigzug", ("Ghoul",), 7, "x", SPOT))
+        self.assertEqual(self.plan([qask(1)], self.FULL, board=board), ((), ()))
+        starts, (note,) = self.plan([qask(1, state=gs.FILLED)], self.FULL, board=board)
+        self.assertEqual(starts, ())
+        self.assertIn("Bigzug is in another class quest party", note)
+
+    def test_an_open_ask_given_up_forms_nothing_and_leaves_no_note(self):
+        board = classparty.Board()
+        for _ in range(classparty.MAX_FAILURES):
+            board.fail(1)
+        self.assertEqual(self.plan([qask(1)], self.FULL, board=board), ((), ()))
+
+    def test_an_asker_with_no_help_or_another_quest_forms_nothing(self):
+        self.assertEqual(self.plan([qask(1)], self.FULL, helps=[]), ((), ()))
+        self.assertEqual(self.plan([qask(1, target="quest:77")], self.FULL), ((), ()))
+
+    def test_an_answer_that_is_not_a_yes_seats_nobody(self):
+        answers = [
+            yes(1, 1, "Chill", "dps", "help"),
+            yes(2, 1, "Dread", "dps", "help", state=gs.DECLINED),
+        ]
+        aged = qask(1, created_at=NOW - datetime.timedelta(minutes=5))
+        (run,), _notes = self.plan([aged], answers)
+        self.assertEqual(run.helpers, ("Chill",))
+
+
 class TheObjective(unittest.TestCase):
     def stalled_book(self):
         rows = [qrow(2000, "Hunt Job", reward=8121, npc1=3130, npc_count1=3)]
