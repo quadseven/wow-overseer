@@ -25,6 +25,7 @@ import unittest
 import classquest
 import guildjobs
 import guildlevel
+import member_rungs
 from test_classquest import class_plan, who
 from test_guildlevel import member as level_member
 from test_guildlevel import plan as level_plan
@@ -284,7 +285,7 @@ class TheLevelWalkFirst(unittest.TestCase):
         self.assertEqual(actions.count(classquest.ACTION), 0, actions)
 
     def test_nothing_else_comes_before_the_class_step(self):
-        source = guildjobs._member_step.__code__.co_names
+        source = member_rungs.names()
         self.assertLess(source.index("stalled_level_first"), source.index("class_step"))
         self.assertNotIn("level_step", source[: source.index("class_step")])
 
