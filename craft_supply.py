@@ -219,6 +219,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import jobs
 import towntrip
 import travel
 from places import creature_words
@@ -470,6 +471,81 @@ def craft_reagent_errands(
             )
         )
     return errands, notes
+
+
+# THE FISHING POLE, A TOOL AND NOT A REAGENT (mod-overseer#530). job='fish'
+# turns on mod-playerbots' own fishing AI (mod-overseer#448), and its
+# EquipFishingPoleAction equips a pole from the bot's own bags - but buys one
+# only for a random bot, which nobody on this roster is. So the family held
+# Fishing at 1/75 with no pole between them and nothing could change that.
+#
+# It does not fit REAGENT, which is keyed by craft spell (fishing has none),
+# and it is not restocked: it is bought ONCE and kept. Any pole counts as held,
+# equipped or in the bags (item_template class 2, subclass 20), so a character
+# who already owns a Strong Fishing Pole is never sold the 23-copper one.
+# Entry, name and price read from acore_world.item_template:
+#
+#     entry  name          class  subclass  RequiredSkill  BuyPrice
+#     6256   Fishing Pole      2        20              0        23
+#
+# Nothing sells it back: guildjobs.TOOL_WEAPON_SUBCLASSES keeps subclass 20 out
+# of the outgrown whites, and RequiredLevel 0 means disposition.outgrown never
+# retires it either.
+FISHING_POLE: tuple[int, str, int] = (6256, "Fishing Pole", 23)
+
+# The mode in which a pole is worth buying. Read from jobs.IMPLEMENTED rather
+# than spelled here, the same way craft_rhythm reads MODE_CRAFT/MODE_GATHER:
+# outside job='fish' nothing casts, and a pole would be an inert purchase.
+FISH_MODE = next(mode for mode in jobs.IMPLEMENTED if mode == "fish")
+
+
+def pole_errand(
+    name: str,
+    holds_pole: bool,
+    money: int,
+    free_slots: int,
+    town: "towntrip.Town",
+) -> tuple["towntrip.Errand | None", "str | None"]:
+    """The buy errand for this character's Fishing Pole, or why not.
+
+    The same two-outcome shape as `reagent_errand`: (errand, None) when a row
+    should be written, (None, note) when something stopped it, and (None,
+    None) when nothing is owed - a character who holds any pole already.
+    """
+    if holds_pole:
+        return None, None
+    entry, label, price = FISHING_POLE
+    if entry not in town.stocks:
+        return None, f"no reachable vendor stocks a {label} ({entry}) for {name}"
+    if free_slots < 1:
+        return None, f"{name} has no free bag slot for a {label}"
+    if money < price:
+        return None, f"{name} cannot afford a {label} ({price} copper against {money})"
+    return (
+        towntrip.Errand(
+            name,
+            "buy",
+            f"entry:{entry} count:1 max:{price}",
+            f"holds no fishing pole and the family is on job={FISH_MODE}",
+            price,
+        ),
+        None,
+    )
+
+
+def pole_need(name: str, holds_pole: bool, town: "towntrip.Town"):
+    """The trip this character's Fishing Pole needs, or None.
+
+    `pole_errand`'s sibling, the way `reagent_need` is `reagent_errand`'s: a
+    pole holder needs no walk, and neither does a character already standing
+    in front of a counter that stocks one.
+    """
+    if holds_pole:
+        return None
+    entry, label, _price = FISHING_POLE
+    if entry in town.stocks:
+        return None
+    return Need(name, entry, label)
 
 
 # The vendor role keyword, READ FROM travel.ROLES rather than spelled here -

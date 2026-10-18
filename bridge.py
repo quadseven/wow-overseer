@@ -8282,6 +8282,17 @@ class Bridge(discord.Client):
             await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None)),
             exempt=_standin_out(),
         )
+        # ON job='fish' THE ONE THING TO BUY IS A POLE (mod-overseer#530). The
+        # fishing drive casts only with a pole in the bags, and upstream buys
+        # one for random bots alone, so nobody on the roster ever owned one.
+        if mode == craft_supply.FISH_MODE:
+            queued, trips = await self._buy_fishing_poles(names, cohort)
+            log.info(
+                "craft_supply: the family is on job=%s, so the only thing "
+                "bought is a Fishing Pole - queued %d buy errand(s), %d "
+                "member(s) still need a trip", mode, queued, trips,
+            )
+            return
         if mode not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER):
             log.info(
                 "craft_supply: the family is on job=%s rather than %s or %s, "
@@ -8629,6 +8640,41 @@ class Bridge(discord.Client):
             decision.release.character, decision.release.aim, claimant,
         )
         return False
+
+    async def _buy_fishing_poles(self, names: list, cohort=None) -> tuple:
+        """Queue a Fishing Pole for every member holding none (mod-overseer#530).
+
+        The same two halves `_craft_supply_once` runs for a reagent: a buy
+        row for whoever stands at a counter that stocks the pole, and a
+        `craft_supply.Need` for whoever does not, which `_walk_for_reagents`
+        turns into one walk on the leader. The decisions are
+        `craft_supply.pole_errand` / `pole_need`; this only reads the world
+        and writes their answers. Returns (rows queued, needs walked for).
+        """
+        holders = await asyncio.to_thread(_fetch_pole_holders, names)
+        purses = await asyncio.to_thread(_fetch_purses, names)
+        free_slots = await asyncio.to_thread(_fetch_free_slots, names)
+        queued = 0
+        needs: list = []
+        for name in sorted(names):
+            held = name in holders
+            town = await asyncio.to_thread(_fetch_town, name)
+            need = craft_supply.pole_need(name, held, town)
+            if need:
+                needs.append(need)
+            _level, money = purses.get(name, (0, 0))
+            errand, note = craft_supply.pole_errand(
+                name, held, money, free_slots.get(name, 0), town,
+            )
+            if note:
+                log.info("craft_supply: %s", note)
+                continue
+            if errand and await asyncio.to_thread(_insert_town_errand, errand):
+                queued += 1
+                log.info("craft_supply: %s %s - %s", name, errand.command, errand.why)
+        if needs:
+            await self._walk_for_reagents(needs, cohort)
+        return queued, len(needs)
 
     async def _walk_for_reagents(self, needs: list, cohort=None) -> None:
         """Walk to a reagent vendor, unless another family's queue owns its job.
@@ -32081,6 +32127,35 @@ def _fetch_standing_crafts(names: list) -> dict:
             row["name"]: (row["craft_spell"], row["money"])
             for row in cur.fetchall()
         }
+
+
+def _fetch_pole_holders(names: list) -> set:
+    """The names among `names` that own any fishing pole, worn or in the bags.
+
+    Any pole, not entry 6256 alone: item_template files every one of them as
+    class 2 (weapon), subclass 20, so a character with a Strong Fishing Pole is
+    not sold the basic one (mod-overseer#530). The bank does not count - a
+    pole there is one the fishing AI cannot equip - so a row must sit in an
+    equipment, worn-bag or backpack slot (bag 0, slot below 39), or inside a
+    bag that is itself worn (bag 0, slots 19-22).
+    """
+    if not names:
+        return set()
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT c.name AS name "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "FROM characters c "
+            "JOIN character_inventory ci ON ci.guid = c.guid "
+            "JOIN item_instance ii ON ii.guid = ci.item "
+            "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+            f"WHERE c.name IN ({marks}) AND it.class = 2 AND it.subclass = 20 "
+            "AND ((ci.bag = 0 AND ci.slot < 39) OR ci.bag IN ("
+            "SELECT wb.item FROM character_inventory wb "
+            "WHERE wb.guid = c.guid AND wb.bag = 0 AND wb.slot BETWEEN 19 AND 22))",
+            names,
+        )
+        return {row["name"] for row in cur.fetchall()}
 
 
 def _fetch_item_counts(pairs: list) -> dict:
