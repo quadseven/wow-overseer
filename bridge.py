@@ -87,6 +87,7 @@ import seatmeter
 import guildsocial
 import holdings
 import hunterpet
+import interview
 import itemsource
 import purse
 import pvpgear
@@ -971,6 +972,71 @@ def _fetch_grounding(name: str) -> dict | None:
             (name,),
         )
         return cur.fetchone()
+
+
+def _interview_candidate(name: str) -> interview.InterviewExchange | None:
+    """One interview exchange with a shortlisted candidate, as data.
+
+    The bridge-side half of the interview step: a fresh `overseer_snapshot`
+    row proves the candidate is online - the same 60s freshness rule
+    `_fetch_grounding` enforces, widened with the vitals the chat prompt is
+    grounded in - the question goes out through the existing
+    inner-voice/chat machinery, and the exchange comes back as data for the
+    caller to record. None when the candidate is offline: the caller tries
+    the next shortlisted name rather than blocking.
+
+    NOT wired into any loop yet. The automatic loop that calls this is a
+    separate piece of work, and where the transcript is stored long-term is
+    another - so this writes nothing, it only returns the exchange.
+
+    Neither the LLM nor this function judges the candidate: the question is
+    deterministic, the model only answers it in character, and
+    `RecruitVerdictFor` stays the sole pass/fail gate.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT s.name, s.level, s.race, s.class, s.map_id, s.pos_x, s.pos_y, "
+            "       s.health, s.max_health, s.in_combat, p.personality "
+            "FROM overseer_snapshot s "
+            "LEFT JOIN characters c ON c.name = s.name "
+            "LEFT JOIN mod_ollama_chat_personality p ON p.guid = c.guid "
+            "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 60 SECOND",
+            (name,),
+        )
+        row = cur.fetchone()
+    plan = interview.plan(
+        name=name,
+        snapshot=None
+        if row is None
+        else {
+            "level": row["level"],
+            "race_name": RACE_NAMES.get(row["race"], "creature"),
+            "class_name": CLASS_NAMES.get(row["class"], "adventurer"),
+            "zone": GEO.zone_name(row["map_id"], row["pos_x"], row["pos_y"]),
+        },
+    )
+    if plan is None:
+        return None
+    prompt = chat.build_chat_prompt(
+        name=row["name"],
+        level=row["level"],
+        race_name=RACE_NAMES.get(row["race"], "creature"),
+        class_name=CLASS_NAMES.get(row["class"], "adventurer"),
+        zone=GEO.zone_name(row["map_id"], row["pos_x"], row["pos_y"]),
+        personality=_persona_for(row),
+        health=row["health"],
+        max_health=row["max_health"],
+        in_combat=bool(row["in_combat"]),
+        recent=[],
+        text=plan.question,
+    )
+    reply = chat.parse_reply(_ask_llm(prompt)).say
+    return interview.InterviewExchange(
+        candidate=plan.candidate,
+        question=plan.question,
+        reply=reply,
+        reason=plan.reason,
+    )
 
 
 def _ask_llm(prompt: str, system: str = "") -> str:
