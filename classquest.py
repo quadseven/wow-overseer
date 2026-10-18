@@ -1227,7 +1227,7 @@ def _pack_sizes(here) -> list:
         keys.append(key)
         cells.setdefault(key, []).append(i)
     out = []
-    for s, (cx, cy) in zip(here, keys):
+    for s, (cx, cy) in zip(here, keys, strict=True):
         n = 0
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
