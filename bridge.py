@@ -795,6 +795,16 @@ FLIGHT_LEARN_CYCLE_SECONDS = float(
 FLIGHT_LEARN_ATTEMPTS = int(os.environ.get("FLIGHT_LEARN_ATTEMPTS", "3"))
 
 
+STALE_CLAIMED_DETAIL = (
+    core.RESTART_DETAIL_PREFIX
+    + "no result from the worldserver; it MAY still have run, check before repeating it"
+)
+STALE_VERIFYING_DETAIL = (
+    core.RESTART_DETAIL_PREFIX
+    + "handed to the bot, but the worldserver never reported whether anything changed"
+)
+
+
 def _expire_stale_claims(seconds: int) -> int:
     """Move abandoned claims to a terminal state.
 
@@ -805,7 +815,10 @@ def _expire_stale_claims(seconds: int) -> int:
     as the bridge lives. Ending the row does two jobs: it bounds the poll, and
     it finally tells whoever gave the order that nothing came of it.
 
-    Never re-runs anything: the row goes straight to 'error'.
+    Never re-runs anything: the row goes straight to 'error'. Both details
+    start with core.RESTART_DETAIL_PREFIX (#789): only a worldserver that is
+    gone leaves a row here, so a pass reading the row asks again rather than
+    backing off it as a refusal.
 
     'verifying' (infra#2819) is swept the same way and for the same reason,
     with its own wording. That row HAS been handed to the bot - what was lost
@@ -827,19 +840,17 @@ def _expire_stale_claims(seconds: int) -> int:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE overseer_command SET status = 'error', "
-            "detail = 'no result from the worldserver; it MAY still have run, "
-            "check before repeating it' "
+            "detail = %s "
             "WHERE status = 'claimed' AND updated_at < NOW() - INTERVAL %s SECOND",
-            (seconds,),
+            (STALE_CLAIMED_DETAIL, seconds),
         )
         swept = cur.rowcount
         cur.execute(
             "UPDATE overseer_command SET status = 'error', "
-            "detail = 'handed to the bot, but the worldserver never reported "
-            "whether anything changed' "
+            "detail = %s "
             "WHERE status = 'verifying' AND updated_at < NOW() - INTERVAL %s SECOND "
             "AND NOT (kind = 'guild' AND command LIKE 'finder-run %%')",
-            (seconds,),
+            (STALE_VERIFYING_DETAIL, seconds),
         )
         return swept + cur.rowcount
 

@@ -45,7 +45,35 @@ class TheSweepSparesGuildRuns(unittest.TestCase):
         self.assertNotIn("finder-run", claimed[0])
 
     def test_both_sweeps_still_take_the_window(self):
-        self.assertEqual([a for _s, a in _sweep()], [(300,), (300,)])
+        self.assertEqual([a[-1] for _s, a in _sweep()], [300, 300])
+
+
+class TheSweepSaysItWasARestart(unittest.TestCase):
+    """#789: only a worldserver that is gone leaves a row claimed or verifying
+    this long, so both details start with the restart word and a pass that
+    backs off a refusal asks again instead."""
+
+    def test_both_details_start_with_restart(self):
+        details = [a[0] for _s, a in _sweep()]
+        self.assertEqual(len(details), 2)
+        for detail in details:
+            with self.subTest(detail=detail):
+                self.assertTrue(detail.startswith("restart: "))
+                self.assertTrue(bridge.core.ended_by_restart("error", detail))
+                self.assertLessEqual(len(detail), 255)
+
+    def test_the_details_are_bound_not_inlined(self):
+        for sql, _a in _sweep():
+            with self.subTest(sql=sql):
+                self.assertIn("detail = %s ", sql)
+
+    def test_a_refusal_is_not_a_restart(self):
+        import core
+
+        self.assertFalse(core.ended_by_restart("error", "not a retirable bot"))
+        self.assertFalse(core.ended_by_restart("error", None))
+        self.assertFalse(core.ended_by_restart("applied", "restart: claim expired"))
+        self.assertTrue(core.ended_by_restart("error", "restart: claim expired"))
 
 
 if __name__ == "__main__":
