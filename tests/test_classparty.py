@@ -8,6 +8,7 @@ words them.
 
 import asyncio
 import datetime
+import importlib.util
 import json
 import sys
 import types
@@ -955,7 +956,27 @@ class TheMeeting(unittest.TestCase):
         self.assertEqual(classparty.walk_why("Dread", ""), "")
 
     def test_far_meeting_walk_gets_the_far_walk_follow_window(self):
-        self.assertEqual(classparty.MEET_SECONDS, 2110.0)
+        self.assertEqual(
+            classparty.MEET_SECONDS,
+            guildroute.follow_seconds(guildroute.FAR_WALK_YARDS) + 10.0,
+        )
+
+    def test_the_meeting_clock_follows_a_changed_far_walk_window(self):
+        # A fresh copy of classparty, loaded under its own name so the module
+        # the bridge and the other tests hold is left alone, reads the far
+        # walk window it is loaded under: a literal clock would not move.
+        spec = importlib.util.spec_from_file_location(
+            "_classparty_meet_clock", classparty.__file__
+        )
+        fresh = importlib.util.module_from_spec(spec)
+        # dataclass reads its own module from sys.modules while it is built.
+        sys.modules[spec.name] = fresh
+        try:
+            with mock.patch.object(guildroute, "FAR_WALK_FOLLOW_SECONDS", 900.0):
+                spec.loader.exec_module(fresh)
+        finally:
+            sys.modules.pop(spec.name, None)
+        self.assertEqual(fresh.MEET_SECONDS, 910.0)
 
     def judge(self, arrived, stands):
         return classparty.judge_meeting(a_run(meeting=True), arrived, stands)
