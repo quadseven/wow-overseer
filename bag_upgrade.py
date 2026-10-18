@@ -34,7 +34,7 @@ here is arithmetic over what the caller measured.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -249,6 +249,9 @@ class Member:
     positions: int
     worn: tuple = ()
     carried: tuple = ()
+    # Free backpack slots, 0 when the caller did not read them. Only the move
+    # of a spare out of the bag it would replace (`move_out_spare`) reads it.
+    backpack_free: int = 0
 
 
 @dataclass(frozen=True)
@@ -331,7 +334,8 @@ class SelfEquip:
     """One carried bag its own holder puts on (#88).
 
     `replaces` names the worn bag it displaces on a swap, None when it goes
-    into an empty position. `command` is the playerbot equip verb.
+    into an empty position. `command` is the playerbot verb: `e` puts the bag
+    on, MOVE_OUT_VERB moves it out of the bag it would replace first.
     """
 
     holder: str
@@ -341,15 +345,45 @@ class SelfEquip:
     replaces: str | None
     slots_gained: int
     why: str
+    verb: str = "e"
 
     @property
     def command(self) -> str:
-        """`e` with an item link. mod-playerbots' EquipAction puts a container
-        into the first empty bag position, else replaces the last smallest bag.
-        EquipAction.cpp's GetSmallestBagSlot scans ascending positions and
-        replaces its candidate on ties:
+        """The verb with an item link. mod-playerbots' EquipAction puts a
+        container into the first empty bag position, else replaces the last
+        smallest bag. EquipAction.cpp's GetSmallestBagSlot scans ascending
+        positions and replaces its candidate on ties:
         https://github.com/mod-playerbots/mod-playerbots/blob/master/src/Ai/Base/Actions/EquipAction.cpp"""
-        return "e Hitem:%d:0" % int(self.entry)
+        return "%s Hitem:%d:0" % (self.verb, int(self.entry))
+
+    @property
+    def said(self) -> str:
+        """The log line for this move, without the `bags:` prefix."""
+        if self.verb == MOVE_OUT_VERB:
+            return "%s moves %s out of %s (%s) - %s" % (
+                self.holder,
+                self.bag,
+                self.replaces,
+                self.command,
+                self.why,
+            )
+        return "%s puts on %s%s (%s, +%d slots) - %s" % (
+            self.holder,
+            self.bag,
+            " in place of %s" % self.replaces if self.replaces else "",
+            self.command,
+            self.slots_gained,
+            self.why,
+        )
+
+
+# THE CORE REFUSES A BAG SWAPPED IN FROM ITS OWN INSIDE (Player::SwapItem), so
+# a spare that sits in the bag it would replace is first moved out, the way a
+# player drags it to a free slot. `ue` is mod-playerbots' UnequipAction: it
+# finds the item in any bag and hands it to the core's auto-store with no bag
+# named, which puts it in the first free slot.
+# https://github.com/mod-playerbots/mod-playerbots/blob/master/src/Ai/Base/Actions/UnequipAction.cpp
+MOVE_OUT_VERB = "ue"
 
 
 def _smallest_worn(worn):
@@ -365,13 +399,19 @@ def _smallest_worn(worn):
     return size, target
 
 
-def safe_self_equip_spares(member):
-    """Return (spare, displaced bag) pairs safe for the equip verb."""
-    spares = _biggest_first(
+def _nameable_spares(member):
+    """The carried bags the equip verb can name and the core can wear, largest
+    first."""
+    return _biggest_first(
         bag
         for bag in member.carried
         if bag.used == 0 and bag.general and bag.entry > 0 and bag.guid > 0
     )
+
+
+def safe_self_equip_spares(member):
+    """Return (spare, displaced bag) pairs safe for the equip verb."""
+    spares = _nameable_spares(member)
     if member.positions - len(member.worn) > 0:
         return [(bag, None) for bag in spares]
     if not member.worn:
@@ -386,6 +426,66 @@ def safe_self_equip_spares(member):
     ]
 
 
+def _room_ahead_of(member, target):
+    """Does the auto-store find a free slot before it reaches `target`?
+
+    Player::_CanStoreItem with no bag named takes the backpack first, then the
+    worn general bags in position order, and counts the slot of the item being
+    moved as free. A spare inside `target` therefore leaves it only for a
+    free slot in the backpack or in a general bag worn at an earlier position;
+    room after it is never reached.
+    """
+    return member.backpack_free > 0 or any(
+        bag.general and bag.used < bag.slots and bag.position < target.position
+        for bag in member.worn
+    )
+
+
+def move_out_spare(member):
+    """(spare, bag it sits in) for a bigger spare to move out first, or None.
+
+    Only when every position is worn, the bigger spare sits inside the bag
+    the equip verb would replace, and the move-out verb has a free slot to
+    put it in. Once out, `self_equips` swaps it in on the next pass.
+
+    NOT WHEN A WORN BAG IS THE SAME ITEM. The verb names an entry, and
+    UnequipAction takes an equipped match before a carried one, so it would
+    take that worn bag off instead.
+    """
+    if member.positions - len(member.worn) > 0 or not member.worn:
+        return None
+    size, target = _smallest_worn(member.worn)
+    if not _room_ahead_of(member, target):
+        return None
+    worn_entries = {bag.entry for bag in member.worn}
+    spare = next(
+        (
+            bag
+            for bag in _nameable_spares(member)
+            if bag.slots > size
+            and bag.inside == target.guid
+            and bag.entry not in worn_entries
+        ),
+        None,
+    )
+    return (spare, target) if spare else None
+
+
+def _refusal_reason(member, bag, target):
+    """Why the equip verb cannot put `bag` on in place of `target`."""
+    if not (bag.inside and bag.inside == target.guid):
+        return "its item id was not read"
+    if any(worn.entry == bag.entry for worn in member.worn):
+        return (
+            "it is inside the bag it would replace, and a worn bag is the same "
+            "item, so moving it out would take that one off"
+        )
+    return (
+        "it is inside the bag it would replace, and no free slot comes "
+        "before that bag to move it to"
+    )
+
+
 def self_equip_notes(members):
     """One explanation per holder whose bigger carried bags cannot be worn."""
     notes = []
@@ -396,16 +496,63 @@ def self_equip_notes(members):
         spares = [
             b for b in member.carried if b.general and b.used == 0 and b.slots > size
         ]
-        if spares and not safe_self_equip_spares(member):
+        if spares and not safe_self_equip_spares(member) and not move_out_spare(member):
             bag = _biggest_first(spares)[0]
             container = next(
                 (worn.name for worn in member.worn if worn.guid == bag.inside),
                 "the backpack",
             )
             notes.append(
-                "%s cannot put on %s from %s" % (member.name, bag.name, container)
+                "%s cannot put on %s from %s: %s"
+                % (
+                    member.name,
+                    bag.name,
+                    container,
+                    _refusal_reason(member, bag, target),
+                )
             )
     return notes
+
+
+def unseen_notes(seen, notes):
+    """The notes not already logged on an earlier pass, in order.
+
+    A refusal that stands for an hour is one fact, not one line per pass; it
+    is said again only when its text changes.
+    """
+    return [note for note in notes if note not in seen]
+
+
+def note_once(ledger, members, notes):
+    """(the notes to log now, the ledger after this pass).
+
+    The ledger is kept per family because the bridge runs this pass once per
+    family. One set replaced on every call let each family's pass forget the
+    notes of the family before it, so a standing refusal was logged on every
+    pass (#1014).
+    """
+    family = tuple(sorted(m.name for m in members))
+    fresh = unseen_notes(ledger.get(family, frozenset()), notes)
+    return fresh, {**ledger, family: frozenset(notes)}
+
+
+def _move_out(member):
+    """The move-out row for `member`, or None when there is none to make."""
+    found = move_out_spare(member)
+    if found is None:
+        return None
+    spare, target = found
+    return SelfEquip(
+        holder=member.name,
+        bag=spare.name,
+        entry=spare.entry,
+        guid=spare.guid,
+        replaces=target.name,
+        slots_gained=0,
+        why="%s sits inside %s, the bag it would replace, so it goes to a "
+        "free slot first and is put on next pass" % (spare.name, target.name),
+        verb=MOVE_OUT_VERB,
+    )
 
 
 def self_equips(members):
@@ -422,16 +569,22 @@ def self_equips(members):
     OTHERWISE A SWAP, ONLY WHEN THE CORE CAN DO IT. With every position full
     the verb swaps the spare for the smallest worn bag. The core then moves
     that bag's items into the spare (Player::SwapItem's bag exchange), so the
-        swap needs a general spare that is strictly larger, empty, holds every
-        item of the exact smallest bag the verb replaces, and is not inside it.
-        The free slots elsewhere do not matter, which is why `_swap_is_safe`
-        above is not the test here. The displaced bag is carried afterwards, where
+    swap needs a general spare that is strictly larger, empty, holds every
+    item of the exact smallest bag the verb replaces, and is not inside it.
+    The free slots elsewhere do not matter, which is why `_swap_is_safe`
+    above is not the test here. The displaced bag is carried afterwards, where
     `plan_family_bags` hands it on or `bag_pressure.bag_candidates` sells it.
+
+    A BIGGER SPARE INSIDE THAT BAG IS MOVED OUT FIRST (#1014), when no other
+    swap is possible and a free slot comes before that bag: `move_out_spare`.
     """
     moves = []
     for member in sorted(members, key=lambda m: m.name):
         spares = safe_self_equip_spares(member)
         if not spares:
+            moved = _move_out(member)
+            if moved:
+                moves.append(moved)
             continue
         best, target = spares[0]
         if member.positions - len(member.worn) > 0:
@@ -474,12 +627,7 @@ def without_bags(members, guids):
     """
     gone = set(guids)
     return [
-        Member(
-            m.name,
-            m.positions,
-            worn=m.worn,
-            carried=tuple(b for b in m.carried if b.guid not in gone),
-        )
+        replace(m, carried=tuple(b for b in m.carried if b.guid not in gone))
         for m in members
     ]
 
@@ -547,13 +695,15 @@ def _bag_from_row(row) -> Bag:
     )
 
 
-def members_from_rows(rows, names, positions=len(BAG_POSITIONS)):
+def members_from_rows(rows, names, positions=len(BAG_POSITIONS), backpack_used=None):
     """One Member per name, whether or not any row mentions them.
 
     A character with no container rows at all still has `positions` empty
     bag positions, and a name missing from the result would make the planner
     forget the one member who most needs a bag. `rows` carry holder, guid,
     name, slots, bag, slot and used, as the bridge's SQL names them.
+    `backpack_used` maps holder to items in the backpack, a holder missing
+    from it having none; without it every backpack counts as full.
     """
     by_name = {name: {"worn": [], "carried": []} for name in names}
     worn_guids = _worn_guids(rows, by_name)
@@ -575,9 +725,17 @@ def members_from_rows(rows, names, positions=len(BAG_POSITIONS)):
             positions,
             worn=tuple(sorted(by_name[name]["worn"], key=lambda b: b.guid)),
             carried=tuple(sorted(by_name[name]["carried"], key=lambda b: b.guid)),
+            backpack_free=_backpack_free(backpack_used, name),
         )
         for name in sorted(by_name)
     ]
+
+
+def _backpack_free(backpack_used, name) -> int:
+    """Free backpack slots for `name`, 0 when the backpack was not read."""
+    if backpack_used is None:
+        return 0
+    return max(0, len(BACKPACK_POSITIONS) - int(backpack_used.get(name, 0)))
 
 
 def guild_floor(rows, positions=len(BAG_POSITIONS)):

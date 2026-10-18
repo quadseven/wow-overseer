@@ -111,11 +111,30 @@ class TheRecordOfADoor(unittest.TestCase):
         self.assertEqual((1, 1, 1), (v.fought, v.wipes, v.streak))
         self.assertTrue(v.clearable)
 
+    def test_an_evacuation_is_an_attempt_without_a_clear(self):
+        # #1071: five Razorfen Kraul runs in a day with no clear — two
+        # emptied, one evacuated, two staging_failed — and the ladder held
+        # the door, because only the emptied runs counted as fought. The
+        # evacuated run got inside (the family was walked out of the dungeon
+        # with no bag room left); staging failures never got in and still
+        # count for nothing.
+        runs = [
+            run("staging_failed", 0, 47),
+            run("emptied", 10, 47),
+            run("evacuated", 20, 47),
+            run("staging_failed", 30, 47),
+            run("emptied", 40, 47),
+        ]
+        v = pace.viability(runs, 47)
+        self.assertEqual(3, v.uncleared_streak)
+        self.assertTrue(v.hard)
+        self.assertFalse(v.clearable)
+
     def test_a_high_rate_without_a_streak_is_unclearable_but_not_hard(self):
         runs = [
             run("wipe", 0),
             run("wipe", 10),
-            run("left", 20),
+            run("complete", 20),
             run("wipe", 30),
             run("left", 40),
         ]
@@ -169,6 +188,21 @@ class TheEasierDoors(unittest.TestCase):
 class TheDecision(unittest.TestCase):
     WIPES = [run("wipe", 0), run("wipe", 10)]
 
+    def test_three_different_failed_blackfathom_runs_step_down_to_a_clear(self):
+        rows = [dict(r, level=26) for r in HORDE]
+        runs = [
+            run("complete", -10, map_id=43),
+            run("emptied", 0, map_id=48),
+            run("stalled", 10, map_id=48),
+            run("wipe", 20, map_id=48),
+        ]
+        decision = pace.decide(
+            facts(head("blackfathom"), members(rows), runs, level_rows=rows)
+        )
+        self.assertEqual(pace.STEP_DOWN, decision.kind)
+        self.assertEqual("wailing", decision.target)
+        self.assertNotIn(pace.STAY, decision.offer)
+
     def test_two_wipes_step_down_and_jev_may_not_keep_the_door(self):
         d = pace.decide(facts(head("scarlet-library"), members(ALLIANCE), self.WIPES))
         self.assertEqual(pace.STEP_DOWN, d.kind)
@@ -177,7 +211,7 @@ class TheDecision(unittest.TestCase):
         self.assertIn("gnomeregan", d.offer)
 
     def test_a_high_rate_alone_lets_jev_keep_the_door(self):
-        runs = [run("wipe", 0), run("left", 5), run("wipe", 10), run("left", 20)]
+        runs = [run("wipe", 0), run("complete", 5), run("wipe", 10), run("left", 20)]
         d = pace.decide(facts(head("scarlet-library"), members(ALLIANCE), runs))
         self.assertEqual(pace.STEP_DOWN, d.kind)
         self.assertIn(pace.STAY, d.offer)
@@ -205,6 +239,32 @@ class TheDecision(unittest.TestCase):
         runs = [run("wipe", 0), run("complete", 10)]
         d = pace.decide(facts(head("scarlet-library"), members(ALLIANCE), runs))
         self.assertFalse(d.acts)
+
+    def test_a_clear_breaks_the_mixed_failure_streak(self):
+        runs = [
+            run("emptied", 0),
+            run("stalled", 10),
+            run("complete", 20),
+            run("wipe", 30),
+        ]
+        d = pace.decide(facts(head("scarlet-library"), members(ALLIANCE), runs))
+        self.assertFalse(d.acts)
+
+    def test_three_inside_attempts_without_a_clear_steps_down(self):
+        # #1071: five Razorfen Kraul runs in a day with no clear (two
+        # emptied, one evacuated, two staging_failed) and the ladder held
+        # the door. With the evacuation counting as an attempt, the third
+        # inside attempt without a clear steps the family down.
+        runs = [
+            run("staging_failed", 0, 47),
+            run("emptied", 10, 47),
+            run("evacuated", 20, 47),
+            run("staging_failed", 30, 47),
+            run("emptied", 40, 47),
+        ]
+        d = pace.decide(facts(head("razorfen-kraul"), members(ALLIANCE), runs))
+        self.assertEqual(pace.STEP_DOWN, d.kind)
+        self.assertIn("3 without a clear", d.why)
 
     def test_below_the_floor_with_no_easier_door_quests(self):
         f = facts(

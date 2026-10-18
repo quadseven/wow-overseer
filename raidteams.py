@@ -15,8 +15,9 @@ rename lands, the name it has now (`was`), so the lineup holds before and
 after the renames. A seat with no `was` and no character of its name yet is a
 recruit still to come: the lineup reports it as an open seat.
 
-QUESTERS (#922). Five more per guild, a questing group that sets out to prove
-every quest can be done by playing it. They join like any recruit and start
+QUESTERS (#922). Ten more per guild, a questing group that sets out to prove
+every quest can be done by playing it: every race of the faction and every
+class (the second five from 2026-10-15, so each class quest has its class). They join like any recruit and start
 over at level 1 in their race's starting zone. They hold no raid seat: they
 are in none of GROUPS, SUMMONERS or MAINTENANCE, so the lineup, the 40 count,
 the summoners and the guild jobs never place them.
@@ -253,6 +254,13 @@ QUESTERS = {
         Quester("Velo", 7, "Draenei", "dps", "Ammen Vale"),
         Quester("Durga", 3, "Dwarf", "dps", "Coldridge Valley"),
         Quester("Fizzik", 9, "Gnome", "dps", "Coldridge Valley"),
+        # Every class (operator, 2026-10-15): the classes the first five left
+        # out, so each class's quests are played by one of its own.
+        Quester("Kellan", 1, "Human", "tank", "Northshire Valley"),
+        Quester("Bromli", 2, "Dwarf", "healer", "Coldridge Valley"),
+        Quester("Sylvi", 4, "Night Elf", "dps", "Shadowglen"),
+        Quester("Pindle", 8, "Gnome", "dps", "Coldridge Valley"),
+        Quester("Corvane", 6, "Human", "tank", "Acherus"),
     ),
     "Bonkers": (
         Quester("Saelis", 2, "Blood Elf", "tank", "Sunstrider Isle"),
@@ -260,6 +268,11 @@ QUESTERS = {
         Quester("Hoofa", 3, "Tauren", "dps", "Camp Narache"),
         Quester("Grakk", 9, "Orc", "dps", "Valley of Trials"),
         Quester("Zinja", 4, "Troll", "dps", "Valley of Trials"),
+        Quester("Gorvash", 1, "Orc", "tank", "Valley of Trials"),
+        Quester("Tahomi", 7, "Tauren", "healer", "Camp Narache"),
+        Quester("Mortane", 8, "Undead", "dps", "Deathknell"),
+        Quester("Hulani", 11, "Tauren", "dps", "Camp Narache"),
+        Quester("Saevor", 6, "Blood Elf", "tank", "Acherus"),
     ),
 }
 

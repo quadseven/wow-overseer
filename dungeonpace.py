@@ -13,8 +13,10 @@ reset or split failure never met a mob and says nothing about the door. The
 runs counted are the ones since the queue entry last started, so a door the
 family comes back to starts with a clean record.
 
-  * a door is UNCLEARABLE after `STREAK_WIPES` wipes in a row, or when at
-    least `RATE_MIN_RUNS` fought runs hold a wipe rate of `RATE_LIMIT` or more
+  * a door is UNCLEARABLE after `STREAK_WIPES` wipes in a row, after three
+    attempts in a row without a clear (`ATTEMPTED`: a fought run or a bag
+    evacuation — anything that got inside), or when at least `RATE_MIN_RUNS`
+    fought runs hold a wipe rate of `RATE_LIMIT` or more
     (`viability`);
   * a door is NOT READY when the weakest member is below the level it wants
     (`readiness`). Empty slots and a missing weapon are reported alongside,
@@ -87,10 +89,19 @@ JOB_SOURCE = "overseer:pace"
 # Outcomes of a run that met the dungeon. Staging, reset, split and bag
 # evacuation failures never fought anything.
 FOUGHT = frozenset({"wipe", "complete", "left", "emptied", "stalled"})
+# Outcomes of a run that got inside and counts as an attempt at the door for
+# the uncleared streak: every fought outcome, plus a bag evacuation (the
+# family was walked out of the dungeon with no bag room left — it was inside
+# and it did not clear). Staging, reset and split failures never got in and
+# count for nothing here (#1071: two emptied, one evacuated and two
+# staging_failed in a day read as "2 fought, 2 without a clear", held a door
+# the family could not clear, and filed a family-run-loop finding).
+ATTEMPTED = FOUGHT | {"evacuated"}
 WIPE = "wipe"
 COMPLETE = "complete"
 
 STREAK_WIPES = 2
+STREAK_UNCLEARED = 3
 RATE_MIN_RUNS = 3
 RATE_LIMIT = 0.5
 # How many of the latest fought runs the rate is taken over.
@@ -243,6 +254,7 @@ class Viability:
     wipes: int
     complete: int
     streak: int
+    uncleared_streak: int
 
     @property
     def rate(self) -> float:
@@ -250,8 +262,8 @@ class Viability:
 
     @property
     def hard(self) -> bool:
-        """Two wipes in a row: the next attempt waits for a named change."""
-        return self.streak >= STREAK_WIPES
+        """Repeated wipes or no clears require an easier door."""
+        return self.streak >= STREAK_WIPES or self.uncleared_streak >= STREAK_UNCLEARED
 
     @property
     def mastered(self) -> bool:
@@ -268,13 +280,17 @@ class Viability:
     def line(self) -> str:
         if not self.fought:
             return "no fought run yet"
-        return "%d fought, %d wiped (%d%%), %d cleared, %d wipe%s in a row" % (
-            self.fought,
-            self.wipes,
-            round(100 * self.rate),
-            self.complete,
-            self.streak,
-            "" if self.streak == 1 else "s",
+        return (
+            "%d fought, %d wiped (%d%%), %d cleared, %d wipe%s in a row, %d without a clear"
+            % (
+                self.fought,
+                self.wipes,
+                round(100 * self.rate),
+                self.complete,
+                self.streak,
+                "" if self.streak == 1 else "s",
+                self.uncleared_streak,
+            )
         )
 
 
@@ -318,11 +334,24 @@ def viability(runs, map_id: int, since=None) -> Viability:
             break
         streak += 1
     window = fought[-RATE_WINDOW:]
+    attempted = [
+        str(r.get("outcome") or "")
+        for r in runs or ()
+        if int(r.get("map_id") or 0) == int(map_id)
+        and str(r.get("outcome") or "") in ATTEMPTED
+        and (since is None or r.get("started_at") is None or r["started_at"] >= since)
+    ]
+    uncleared_streak = 0
+    for outcome in reversed(attempted):
+        if outcome == COMPLETE:
+            break
+        uncleared_streak += 1
     return Viability(
         fought=len(window),
         wipes=sum(1 for o in window if o == WIPE),
         complete=sum(1 for o in window if o == COMPLETE),
         streak=streak,
+        uncleared_streak=uncleared_streak,
     )
 
 
@@ -781,8 +810,8 @@ def _at_the_door(f: Facts, place: str) -> Decision:
     if not f.cands:
         return Decision(QUEST, "", why + "; no easier door can be cleared", (LEVEL,))
     d = _down_to(STEP_DOWN, f.cands, why)
-    # A high rate with no two-wipe streak and no gate is a judgment call: Jev
-    # may keep the door. Two wipes in a row or a gate never may.
+    # A high wipe rate without a hard streak or a gate is a judgment call:
+    # Jev may keep the door. Repeated failure without a clear is not.
     if not f.record.hard and not f.gates:
         d = replace(d, offer=d.offer + (STAY,))
     return d
@@ -929,7 +958,7 @@ def question(f: Facts, d: Decision):
     }
     instructions = (
         "`family` is a group of World of Warcraft (3.3.5a) adventurers who "
-        "play the way real players do. They keep wiping in "
+        "play the way real players do. They keep failing to clear "
         "`dungeon_they_are_failing`. Choose the dungeon they run next, as a "
         "sensible group would: the hardest one they can actually clear with "
         "their levels and gear, so each run still gives experience and gear, "

@@ -61,6 +61,33 @@ import math
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
+# The stuck text names times the way the reader reads them: the operator's
+# clock, not UTC. Same convention as runtimeline's operator clock.
+try:
+    from zoneinfo import ZoneInfo
+
+    _READER_ZONE = ZoneInfo("America/New_York")
+except Exception:  # noqa: BLE001 - no tz database in the image: name UTC as UTC
+    _READER_ZONE = timezone.utc
+
+
+def _reader_due(retry_at) -> str:
+    """The retry time as the reader reads it ("03:00"), or "later".
+
+    `retry_at` is the staged retry instant in UTC; the note names it on the
+    reader's clock so "tries again at 03:00" means 03:00 where the reader is.
+    A hold with no readable refusal time has no retry to name: "later".
+    """
+    if not isinstance(retry_at, datetime):
+        return "later"
+    at = (
+        retry_at
+        if retry_at.tzinfo is not None
+        else retry_at.replace(tzinfo=timezone.utc)
+    )
+    return at.astimezone(_READER_ZONE).strftime("%H:%M")
+
+
 # The two verbs the world executor understands for moving one item from one
 # character's bags into another's, and the single fact that decides between
 # them. See `deliverable` for the measurement; in short, DoTrade tests that
@@ -153,7 +180,8 @@ _OFF_HAND_SLOTS = (_OFF_HAND,)
 # hoarding mail counts as having a claim on it and the piece never moves at
 # all - the refusal and the misdelivery are the same missing fact.
 #
-# item_template.subclass for class 4 (ARMOR). 5 is an unused buckler slot and
+# item_template.subclass for class 4 (ARMOR). 5 is the buckler, gated as a
+# shield by its InventoryType (see `wearable_armor`), and
 # 7-10 are librams, idols, totems and sigils, which AllowableClass really
 # does gate - so only 1-4 and 6 are decided here.
 ARMOR_MISC, ARMOR_CLOTH, ARMOR_LEATHER, ARMOR_MAIL, ARMOR_PLATE = 0, 1, 2, 3, 4
@@ -444,7 +472,9 @@ def wearable_armor(holding: Holding, character: CharacterState) -> bool:
     if int(holding.item_class) != ITEM_CLASS_ARMOR:
         return True
     subclass = int(holding.item_subclass)
-    if subclass == ARMOR_SHIELD:
+    # A buckler (subclass 5) is held in the shield slot and the world refuses
+    # it to a class with no shield skill, so the slot decides, not the subclass.
+    if subclass == ARMOR_SHIELD or is_shield(holding):
         return int(character.class_id) in _SHIELD_CLASSES
     if subclass not in (ARMOR_CLOTH, ARMOR_LEATHER, ARMOR_MAIL, ARMOR_PLATE):
         return True
@@ -1781,16 +1811,16 @@ def _world_holds(
         if hold.lifted:
             continue
         attempts = max(1, int((tries or {}).get(key, 1)))
-        wait_hours = (2, 4, max(1, int(memory_hours)))[min(attempts, 3) - 1]
+        wait = (15, 30, max(1, int(memory_hours)) * 60)[min(attempts, 3) - 1]
         created = row.get("created_at")
         if isinstance(created, datetime):
             if created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)
-            hold.retry_at = created + timedelta(hours=wait_hours)
+            hold.retry_at = created + timedelta(minutes=wait)
             if hold.retry_at <= now:
                 hold.lifted = True
                 continue
-        due = hold.retry_at.strftime("%H:%M") if hold.retry_at else "later"
+        due = _reader_due(hold.retry_at)
         out[key] = "%s keeps %s over %s: %s; tries again at %s" % (
             equip.holder,
             " and ".join(name for _slot, _entry, name in worn_now) or "nothing",
@@ -1836,7 +1866,8 @@ def equips_to_queue(
     carried, and asking again inside the window would be the duplicate.
 
     `tries` counts (holder, command) over the longer memory window. Repeated
-    world refusals wait two hours, four hours, then the full memory window.
+    world refusals wait fifteen minutes, thirty minutes, then the full memory
+    window.
     Other attempts are eligible again as soon as the short retry window ends.
 
     An `applied` answer ends this attempt. If another gear pass later puts

@@ -28,7 +28,10 @@ THE FLOW, one task per party (the bridge's _run_class_party):
             taken back and is barred from this ask; the party forms with the
             helpers who met the leader. The leader not arriving (its walk
             failed or was cut off) or no helper meeting it fails the meeting,
-            which counts as one failure of the ask. Log line:
+            which counts as one failure of the ask. Each member that did not
+            arrive is named with why its walk ended (walk_why), so a walk the
+            module refused because another verb holds the walker says so.
+            Log line:
             `class party: <helpers> meet <leader> at <spawn> for <quest>`.
   form      write party-up, read its answer. FORMED goes on. A refusal that names
             a helper (HELPER) takes that helper's yes back, bars the helper from
@@ -41,9 +44,17 @@ THE FLOW, one task per party (the bridge's _run_class_party):
             one ask the ask is given up and its asker does not ask again for
             GIVE_UP_COOLDOWN_MINUTES.
   walk      write party-walk to the objective spawn (classquest.objective_spot).
+            A walk that ends without arriving keeps why on PartyRun.outcome.
+  hunt      the leader hunts the objective creature at the spawn
+            (`hunt-spawn`, classhunt.command) and the helpers fight what it
+            fights. The party-walk holds the leader on the spawn, and a held
+            bot only fights what comes to it, so a party that only stood there
+            ran out of time with no quest credit (#871). A hunt row that ends is
+            followed by another (PartyHunt); a refusal for good, or a
+            worldserver that does not hunt, leaves the party standing.
   watch     read the asker's quest log every WATCH_SECONDS: complete (or handed
-            in, or gone) ends it, so does its ask no longer being live or
-            PARTY_SECONDS passing.
+            in, or gone) ends it and its hunt row, so does its ask no longer
+            being live or PARTY_SECONDS passing.
   disband   write party-disband and mark the answerers' yes rows seated (or
             withdrawn when no party formed). The members are free again the
             moment the PartyRun leaves the Board.
@@ -55,11 +66,14 @@ the objective or stood too far from the leader, judge_meeting) or the invite
 bridge writes it on the ask's reason column (classask.stopped), and the
 members page names that step in place of "no party formed".
 
-THE HOLD. A member is held out of the dungeon passes and the guild jobs only
-while a PartyRun with its name is on the Board: from the pass that decides to
-form the party, through the meeting (PartyRun.meeting, at most MEET_SECONDS of
-walking), to its disband, and not a moment after a failed meeting or a
-refusal.
+THE HOLD. A member is held out of the dungeon passes and the guild jobs while a
+PartyRun with its name is on the Board: from the pass that decides to form the
+party, through the meeting (PartyRun.meeting, at most MEET_SECONDS of
+walking), to its disband. Before that the ask holds its asker and its helpers
+from the pass a yes stands on it (classask.gathering, #1001), so no dungeon ask
+or guild job holds one when the party walks. That hold ends with the ask, or
+for a helper with its yes taken back (lost at the meeting, refused at the
+invite).
 
 FAMILY MEMBERS are never touched: classask answerers come from the guild
 members free of every campaign (guildrun.why_not holds a family member), and the
@@ -77,6 +91,7 @@ import types
 from dataclasses import dataclass, field
 
 import classask
+import classhunt
 import classquest
 import guildroute
 import guildrun
@@ -87,10 +102,10 @@ UP, WALK, DISBAND = "party-up", "party-walk", "party-disband"
 MEET = "walk-to-spawn"
 MAX_HELPERS = 4
 
-# Seconds the leader and the helpers have to reach the objective. An answerer
-# stands at most classask.HELPER_REACH_YARDS from the asker: a walk of about
-# six minutes in a straight line, and roads and fights make it longer.
-MEET_SECONDS = 900.0
+# Seconds the leader and the helpers have to reach the objective. Their far
+# walk is followed for 2,100 seconds; one poll interval lets its final read
+# return before this outer meeting deadline cuts it off.
+MEET_SECONDS = guildroute.follow_seconds(guildroute.FAR_WALK_YARDS) + 10.0
 # Reads of the snapshot after the walks, and the seconds between them, before a
 # member that arrived and is not seen beside the leader counts as far: the
 # module refreshes the snapshot every few seconds.
@@ -111,6 +126,17 @@ ENDED_COOLDOWN_MINUTES = classask.ASK_COOLDOWN_MINUTES
 PARTY_SECONDS = 1680.0
 # Seconds between reads of the quest log while the party works.
 WATCH_SECONDS = 30.0
+# Seconds before the leader's next hunt row after one that killed nothing or
+# was refused for now (PartyHunt).
+HUNT_WAIT_SECONDS = classhunt.LATER_WAIT_SECONDS
+# Hunt answers that end the party's hunting (not the party): the module will
+# not hunt here, or this worldserver does not hunt at all.
+HUNT_STOPS = (
+    classhunt.NEVER,
+    classhunt.ELSEWHERE,
+    classhunt.UNSUPPORTED,
+    classhunt.UNREADABLE,
+)
 # An ask with some yes but not all waits this long from its post for the rest.
 PARTIAL_WAIT_MINUTES = 3.0
 
@@ -256,10 +282,30 @@ def _beside(at, lead) -> bool:
     )
 
 
+def walk_why(holder, said) -> str:
+    """Why a walk ended without arriving, without the walker's own name: the
+    module's reason after guildroute's "<holder> cannot walk to <goal>: ", or
+    the sentence with its leading holder dropped."""
+    said = str(said or "").strip()
+    head, sep, tail = said.partition(": ")
+    if sep and "cannot walk to " in head:
+        return tail
+    prefix = "%s " % holder
+    return said[len(prefix) :] if said.startswith(prefix) else said
+
+
+def _missed(run, name, where) -> str:
+    """One member that did not reach the objective, and why when its walk said
+    (PartyRun.walks): "character is held by another verb" names the verb
+    contest that kept it away (#1001)."""
+    why = run.walks.get(name)
+    return "%s did not reach %s%s" % (name, where, " (%s)" % why if why else "")
+
+
 def _lost_words(run, walked, far, stands) -> str:
     """Why each lost helper did not meet the leader, as the ask keeps it."""
     where = run.spot.name or "the objective"
-    words = ["%s did not reach %s" % (h, where) for h in walked]
+    words = [_missed(run, h, where) for h in walked]
     words += [
         ("%s stood too far from %s" if h in stands else "%s was not seen beside %s")
         % (h, run.leader)
@@ -281,7 +327,7 @@ def judge_meeting(run, arrived, stands) -> Meeting:
     walked = tuple(h for h in run.helpers if h not in arrived)
     where = run.spot.name or "the objective"
     if run.leader not in arrived:
-        return Meeting(False, walked, why="%s did not reach %s" % (run.leader, where))
+        return Meeting(False, walked, why=_missed(run, run.leader, where))
     lead = stands.get(run.leader)
     if lead is None:
         return Meeting(
@@ -320,6 +366,47 @@ def meet_command(spot, cap) -> str:
     return "%s creature:%d%s" % (MEET, int(spot.guid), guildroute.errand_cap_word(cap))
 
 
+def hunt_command(quest, spot, item_form=True) -> str:
+    """The leader's `hunt-spawn` row for the creature at the party's objective
+    spawn (classhunt.command), "" when there is no quest or no creature."""
+    if quest is None or spot is None:
+        return ""
+    return classhunt.command(quest, getattr(spot, "entry", 0), None, item_form)
+
+
+@dataclass
+class PartyHunt:
+    """The leader's hunt rows while the party stands at its objective (#871).
+
+    `command` is the row to write, "" once the party stops hunting. `row_id`
+    is the running row, 0 between rows. `next_at` is when the next row is due,
+    on the bridge's monotonic clock."""
+
+    command: str
+    row_id: int = 0
+    next_at: float = 0.0
+
+    def due(self, now) -> bool:
+        """True when a hunt row should be written now."""
+        return bool(self.command) and not self.row_id and now >= self.next_at
+
+    def ended(self, verdict, now) -> None:
+        """Take a hunt row that is no longer running (classhunt.judge): a row
+        that ran is followed by the next at once, one that killed nothing or
+        was refused for now after HUNT_WAIT_SECONDS, an old worldserver's
+        item key gives way to the plain row, and HUNT_STOPS stop the hunting."""
+        self.row_id = 0
+        if verdict.state in HUNT_STOPS:
+            self.command = ""
+        elif verdict.state == classhunt.ITEMLESS:
+            self.command = classhunt.plain_form(self.command)
+            self.next_at = now
+        elif verdict.state == classhunt.DONE:
+            self.next_at = now
+        else:
+            self.next_at = now + (verdict.wait or HUNT_WAIT_SECONDS)
+
+
 def meet_line(run) -> str:
     return "class party: %s meet %s at %s for %s" % (
         ", ".join(run.helpers),
@@ -339,7 +426,8 @@ class PartyRun:
     `answers` is member name -> the id of its yes row. `meeting` is True from
     the pass that decides the party until its members have met at the
     objective. `formed_at` and `deadline` are on the bridge's monotonic clock,
-    set when the module said formed."""
+    set when the module said formed. `walks` is member name -> why its meeting
+    walk ended without arriving (walk_why), for the meeting's words."""
 
     ask_id: int
     leader: str
@@ -352,6 +440,7 @@ class PartyRun:
     formed_at: float | None = None
     deadline: float | None = None
     outcome: str = ""
+    walks: dict = field(default_factory=dict)
 
     def names(self) -> tuple:
         return (self.leader,) + tuple(self.helpers)

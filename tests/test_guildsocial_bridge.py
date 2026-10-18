@@ -9,6 +9,7 @@ targeted at the tank), and says every line in guild chat from its speaker.
 import asyncio
 import contextlib
 import datetime
+import pathlib
 import sys
 import types
 import unittest
@@ -40,6 +41,77 @@ def _import_bridge():
 
 bridge = _import_bridge()
 bridge._COMPLETED_PASSES.add("guild_jobs")
+
+
+class BlackfathomRunLocation(unittest.TestCase):
+    def test_run_store_migrates_the_last_boss_clock(self):
+        source = pathlib.Path(bridge.__file__).read_text(encoding="utf-8")
+        self.assertIn("last_boss_at TIMESTAMP NULL DEFAULT NULL", source)
+        self.assertIn("ADD COLUMN last_boss_at TIMESTAMP NULL DEFAULT NULL", source)
+
+    def test_active_run_saves_its_room_before_the_party_leaves(self):
+        writes = []
+
+        class Cursor:
+            def execute(self, sql, args=()):
+                if sql.startswith("SELECT r.id, r.state"):
+                    self.rows = [
+                        {
+                            "id": 7,
+                            "state": "inside",
+                            "keyword": "blackfathom",
+                            "tank": "Tank",
+                            "members": "Tank:tank:warrior:25",
+                            "last_room": "",
+                            "status": "verifying",
+                            "stale": 0,
+                            "result": '{"phase":"inside","bosses_done":4}',
+                        }
+                    ]
+                elif "FROM overseer_snapshot" in sql:
+                    self.rows = [{"pos_x": 12, "pos_y": 34, "pos_z": -40}]
+                elif "FROM acore_world.instance_encounters" in sql:
+                    self.rows = [
+                        {
+                            "name": "Twilight Lord Kelris",
+                            "x": 13,
+                            "y": 35,
+                            "z": -40,
+                        }
+                    ]
+                else:
+                    writes.append((sql, args))
+                    self.rows = []
+
+            def fetchall(self):
+                return self.rows
+
+            def fetchone(self):
+                return self.rows[0] if self.rows else None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        with mock.patch.object(bridge, "_connect", Connection):
+            self.assertEqual(bridge._follow_guild_runs(), 1)
+        self.assertEqual(
+            writes[0][1][-2], "near Twilight Lord Kelris (x 12, y 34, z -40)"
+        )
+        self.assertIn("last_boss_at = CASE", writes[0][0])
+        self.assertEqual(writes[0][1][0], 4)
 
 
 def row(name, level, class_id, **kw):
@@ -299,6 +371,9 @@ class TheBridgeWrites(unittest.TestCase):
             def execute(self, sql, args=()):
                 if "information_schema.STATISTICS" in sql:
                     raise bridge.pymysql.err.MySQLError("db unavailable")
+
+            def fetchone(self):
+                return {"n": 1}
 
             def __enter__(self):
                 return self

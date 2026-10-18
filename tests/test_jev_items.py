@@ -451,6 +451,32 @@ class ShadowPassTest(unittest.TestCase):
         self.assertEqual([j.signature for j in first], [j.signature for j in second])
 
 
+class ShadowSummaryTest(unittest.TestCase):
+    def test_a_well_formed_answer_is_counted_as_answered(self):
+        judgments = run([chest()])
+        answered = [j for j in judgments if j.jev]
+        self.assertTrue(answered)
+        line = jev_items.shadow_summary(judgments, "Grog", 1)
+        self.assertIn("%d answered" % len(answered), line)
+        self.assertNotIn("unanswered", line)
+
+    def test_an_unanswered_question_logs_its_reason(self):
+        def failing(url, body, headers, timeout):
+            return 503, b"{}"
+
+        judgments = run([chest()], failing)
+        self.assertTrue(judgments)
+        self.assertFalse([j for j in judgments if j.jev])
+        line = jev_items.shadow_summary(judgments, "Grog", 0)
+        self.assertIn("0 answered", line)
+        self.assertIn("unanswered: error x%d (http 503)" % len(judgments), line)
+
+    def test_no_key_names_its_status_as_the_reason(self):
+        judgments = run([chest()], key="")
+        line = jev_items.shadow_summary(judgments, "Grog", 0)
+        self.assertIn("unanswered: %s x%d" % (jev.NO_KEY, len(judgments)), line)
+
+
 class DescriptionTest(unittest.TestCase):
     def test_the_card_drops_what_the_judgment_does_not_need(self):
         card = jev_items.item_card(

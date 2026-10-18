@@ -1297,8 +1297,11 @@ class TheMasterBanksTheGuildsGold(unittest.TestCase):
             self.plan(457_496, tabs=1),
         )
 
-    def test_zug_keeps_the_first_tabs_price(self):
-        self.assertEqual([], self.plan(963_168, tabs=0, master="Zug"))
+    def test_zug_banks_what_sits_above_its_float(self):
+        self.assertEqual(
+            [guildbank.Deposit("Zug", 963_168 - guildbank.FLOAT_COPPER)],
+            self.plan(963_168, tabs=0, master="Zug"),
+        )
 
     def test_zug_banks_only_above_the_tab_and_its_float(self):
         self.assertEqual(

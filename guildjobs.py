@@ -113,6 +113,7 @@ import re
 from dataclasses import dataclass, field, replace
 
 import campaignplan
+import classask
 import classic
 import classhunt
 import classquest
@@ -2735,10 +2736,12 @@ def plan(
             _offer_for(supply, m.name),
             _offer_for(pets, m.name),
         )
-        lines[m.name] = doing
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
         helps += asked
         ask_yields += yielded
+        if asked:
+            step, doing = None, asking_line(m, asked)
+        lines[m.name] = doing
         if note:
             notes.append(note)
         if gear_why:
@@ -3609,8 +3612,9 @@ def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
     (classquest.objective_spot). Realm-wide 1,721 such asks ran nowhere. A
     helpable move with no spot (classquest.no_party_spot) is not asked for:
     the member levels until its hunt's hold-off ends, then tries alone again.
-    A quest asked for CLASS_ASK_STREAK_MAX times in a row with no party is not
-    asked for either while its hold lasts (class_ask_streak).
+    A quest asked for CLASS_ASK_STREAK_MAX times in a row that did not get it
+    done (no party, or a party that went and failed) is not asked for either
+    while its hold lasts (class_ask_streak).
 
     A MEMBER IN COMBAT STILL NEEDS ITS HELP (#1001). Read in a fight, the help
     was dropped for the whole of this pass, and the social pass cancelled its
@@ -3640,6 +3644,26 @@ def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
     return helps, yields
 
 
+# A MEMBER ASKING FOR HELP IS GIVEN NO OTHER STEP (#1072). On 2026-10-16 a
+# warlock asked the guild for help with Surena Caledon 2 times in 2.6 hours
+# and drew no yes. The pass that listed its help for the social pass to ask for
+# also started an ordinary step for it (a mailbox walk, a sale, a farm), and the
+# bridge holds a member with a step in hand "on a guild job" until the step
+# ends, up to guildroute.GUILD_STEP_SECONDS: the social pass cancelled its live
+# ask and posted none while the hold lasted (classask._ended). The asks came 45
+# minutes or more apart, never reached classask.ESCALATE_AFTER_ASKS, so never
+# went to the server, and the hunt's hold-off ran out first. While the member
+# asks it does nothing else; the run of asks is bounded (class_ask_streak), and
+# a quest that yields to levelling is no longer asked for, so the member's other
+# steps come back with it.
+def asking_line(m, asked) -> str:
+    """What a member asking guild chat for help does this pass. It never names
+    classquest.MARK: class_held would read it as on a class quest, and the
+    social pass would hold it out of its own ask."""
+    titles = ", ".join(h.move.title for h in asked)
+    return "%s waits for help with %s" % (m.name, titles)
+
+
 def _no_party_yield(m, move, hunts, now) -> tuple:
     """(key, line) for a helpable quest no party can help with. The member
     tries alone again when its hunt's hold-off ends, else after
@@ -3657,7 +3681,8 @@ def _no_party_yield(m, move, hunts, now) -> tuple:
 
 def _streak_yield(m, move, left, count, yeses) -> tuple:
     line = (
-        "class ask: %s stops asking for %s after %d asks with no party (%d yes); "
+        "class ask: %s stops asking for %s after %d asks that did not get it done "
+        "(%d yes); "
         "it levels for %d minute(s)" % (m.name, move.title, count, yeses, left)
     )
     return (m.name, move.quest, "streak", count), line
@@ -3670,13 +3695,20 @@ def _streak_yield(m, move, left, count, yeses) -> tuple:
 # CLASS_STALL_HOLD_MINUTES counted from the newest of them, and the quest does
 # not hold it out of the dungeon groups meanwhile (class_owed). The count is
 # read from overseer_guild_ask, so a restart keeps it. A live ask is not counted
-# (it may yet fill), and an ask that ran ends the run. Asks older than
+# (it may yet fill), and an ask that ran and got the quest done ends the run.
+#
+# A PARTY THAT WENT AND FAILED COUNTS (#1028). On 2026-10-16 an asker had asked
+# the guild 22 times in 44 hours for Call of Fire, the last party not reaching
+# the objective: every party that went ended the run, so it never reached the
+# server's tries or the hold and the member asked again every quarter hour. An
+# ask whose party failed (its reason starts classask.FAILED) is one more in
+# the run, as one that never formed a party is. Asks older than
 # CLASS_ASK_STREAK_WINDOW_MINUTES are not read, so a hold that ran out and an
 # ask that failed once more yields again at once.
 #
 # THE LAST ASKS OF A RUN GO TO THE SERVER (#871). From
-# classask.ESCALATE_AFTER_ASKS asks with no party the ask is called in the
-# faction's public channel too and a random bot of the side may answer it, so
+# classask.ESCALATE_AFTER_ASKS asks that did not get it done the ask is called
+# in the faction's public channel too and a random bot of the side may answer it, so
 # the run is one longer than it was (3) to leave the server two tries. Four
 # asks a quarter of an hour apart end inside the first hour and a half.
 CLASS_ASK_STREAK_MAX = 4
@@ -3695,11 +3727,12 @@ class QuestAsk:
     state: str
     age_minutes: int
     yeses: int = 0
+    failed: bool = False
 
 
 def quest_asks_from_rows(rows) -> tuple:
     """QuestAsk rows from the job's ask read; a row whose target is not a
-    quest's is left out."""
+    quest's is left out. `failed` is an ask whose party went and failed."""
     out = []
     for row in rows or ():
         head, _, tail = str(row.get("target") or "").partition(":")
@@ -3712,6 +3745,7 @@ def quest_asks_from_rows(rows) -> tuple:
                 state=str(row.get("state") or ""),
                 age_minutes=_int(row.get("age"), 10**6),
                 yeses=_int(row.get("yeses"), 0),
+                failed=str(row.get("reason") or "").startswith(classask.FAILED),
             )
         )
     return tuple(out)
@@ -3719,8 +3753,8 @@ def quest_asks_from_rows(rows) -> tuple:
 
 def class_ask_streak(name, quest, asks) -> tuple:
     """(minutes left of the hold, asks in the run, yeses they drew) for one
-    member's quest: the closed asks for it since the newest that ran, newest
-    first, inside CLASS_ASK_STREAK_WINDOW_MINUTES. The hold is 0 while the run
+    member's quest: the closed asks for it since the newest whose party got
+    it done, newest first, inside CLASS_ASK_STREAK_WINDOW_MINUTES. The hold is 0 while the run
     is short of CLASS_ASK_STREAK_MAX or CLASS_STALL_HOLD_MINUTES have passed
     since its newest ask."""
     rows = sorted(
@@ -3732,13 +3766,13 @@ def class_ask_streak(name, quest, asks) -> tuple:
             and int(a.age_minutes) < CLASS_ASK_STREAK_WINDOW_MINUTES
         ),
         # age_minutes is minutes since the ask was posted, so ascending is
-        # newest first: the walk stops at the newest ask that ran, and run[0]
+        # newest first: the walk stops at the newest ask that got it done, and run[0]
         # is the newest closed ask the hold is counted from.
         key=lambda a: int(a.age_minutes),
     )
     run = []
     for a in rows:
-        if a.state == _ASK_RAN:
+        if a.state == _ASK_RAN and not a.failed:
             break
         if a.state not in _ASK_LIVE:
             run.append(a)

@@ -27,6 +27,11 @@ never written here:
                                      for HOLD_STUCK_SECONDS or more. Its
                                      first-seen time is the step's own.
 
+A MEMBER THAT ONLY FOLLOWS has neither record of its own. Near its leader it
+is stuck when the leader is, since the leader's hold began, and its blocker
+names that hold (`follows` is the leader); far behind or on another map it is
+stuck on being left there (follower_blocker).
+
 `since` is None when the blocker is known but nothing recorded when it began;
 the page says "since not measured" and never guesses.
 
@@ -104,7 +109,9 @@ BASIS = (
     "Stuck means one of two records the bridge keeps: a class quest it has "
     "asked the guild for help with in the last two hours (first seen at the "
     "first ask of that run), or a reason to wait it has logged for 30 minutes "
-    "or more (first seen when the reason was first logged). Ghost is a released "
+    "or more (first seen when the reason was first logged). A member that only "
+    "follows is stuck when its leader is (first seen when the leader's reason "
+    "was) or when it is left far behind. Ghost is a released "
     "spirit, read from the last minute's snapshot or, offline, the last save."
 )
 
@@ -325,6 +332,67 @@ def hold_blocker(now: dict, now_at: int) -> dict | None:
     }
 
 
+# A follower this close to its leader stands with him, so whatever holds the
+# leader holds it too (vendor_stall.FAMILY_COHESION_YARDS, the yards the
+# bridge's vendor trip reads as a family that follows).
+FOLLOW_NEAR_YARDS = 100
+
+
+def follower_blocker(leader: str, yards: str, lead: dict | None) -> dict | None:
+    """The stuck entry for a member the module reads as following `leader`.
+
+    A plain follower has no clock and no hold of its own (#1059): read alone,
+    "Following Zug (0 yards behind)" with "Waiting for Zug to move on" was
+    stuck the moment it was read, since not measured, beside a leader the list
+    did not name. So a follower near its leader is stuck exactly when the
+    leader is, since the leader's hold began, and its blocker names that hold
+    (`lead`, the leader's own stuck entry). A follower far behind, on another
+    map, or with its leader out of the world is not following in fact: it stays
+    stuck on that, since not measured, with the leader's hold named when he has
+    one.
+    """
+    near = yards.isdigit() and int(yards) <= FOLLOW_NEAR_YARDS
+    if near and lead is None:
+        return None
+    if near:
+        own = "Waiting for %s to move on." % leader
+    elif yards.isdigit():
+        own = "Left %s yards behind %s, read as following, not walking back." % (
+            yards,
+            leader,
+        )
+    elif yards == "another map":
+        own = "On another map than %s, read as following, not walking back." % leader
+    else:
+        own = "Waiting for %s, who is not in the world." % leader
+    if lead is not None:
+        own += " %s's own hold: %s" % (leader, lead["blocker"])
+    return {
+        "step": "",
+        "blocker": own,
+        "since": lead["since"] if near else None,
+        "kind": lead["kind"] if near else "hold",
+        "follows": leader,
+    }
+
+
+def _asking(entry: dict | None) -> bool:
+    """A class quest ask is the member's own blocker, follower or not."""
+    return entry is not None and entry["kind"] == "class quest"
+
+
+def _resolve_followers(members: list, found: dict, follows: dict) -> None:
+    """Each plain follower's stuck entry from its leader's (follower_blocker)."""
+    for m in members:
+        if m["name"] not in follows:
+            continue
+        leader, yards = follows[m["name"]]
+        entry = follower_blocker(leader, yards, found.get(leader))
+        if entry is not None:
+            entry["step"] = m["doing"]
+        found[m["name"]] = entry
+
+
 # -------------------------------------------------------------------- build --
 
 
@@ -429,7 +497,12 @@ def _with_stuck(m: dict, found: dict | None) -> dict:
     m["stuck"] = found is not None
     m["step"] = _step_of(m, found)
     found = found or {"blocker": "", "since": None, "kind": ""}
-    m.update(blocker=found["blocker"], since=found["since"], stuck_kind=found["kind"])
+    m.update(
+        blocker=found["blocker"],
+        since=found["since"],
+        stuck_kind=found["kind"],
+        follows=found.get("follows", ""),
+    )
     return m
 
 
@@ -463,13 +536,19 @@ def build(
     rows = _lookups(families, chars, snaps, facts, now_at, jobs, readings)
     guild_of = {r["name"]: r for r in guild or ()}
     streaks = ask_streaks(asks)
-    members = []
+    members, found, follows = [], {}, {}
     for name in _order(families, guild_of):
         if name not in rows["chars"] and name not in guild_of:
             continue
         m = _member(name, guild_of.get(name, {}), rows)
-        found = _stuck_entry(m, streaks.get(name, []), rows["now_at"])
-        members.append(_with_stuck(m, found))
+        found[name] = _stuck_entry(m, streaks.get(name, []), rows["now_at"])
+        followed = nowstatus.followed(rows["facts"].get(name), m)
+        if followed and not _asking(found[name]):
+            follows[name] = followed
+        members.append(m)
+    # Leaders first: a follower's reading is its leader's (follower_blocker).
+    _resolve_followers(members, found, follows)
+    members = [_with_stuck(m, found[m["name"]]) for m in members]
     return {
         "members": members,
         "families": {k: list(v) for k, v in families.items()},
@@ -490,6 +569,7 @@ def stuck_view(roster: dict) -> dict:
                 "blocker": m["blocker"],
                 "since": m["since"],
                 "kind": m["stuck_kind"],
+                "follows": m["follows"],
             }
             for m in stuck
         ],

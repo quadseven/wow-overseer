@@ -304,6 +304,7 @@ class Plan:
     letters: tuple = ()
     withdraw: int = 0
     notes: tuple = ()
+    shortfall: int = 0
 
     @property
     def total(self) -> int:
@@ -316,40 +317,43 @@ def daily_budget(bank) -> int:
 
 
 def _refunds(master, pool, book, paid, purse) -> tuple:
-    """(letters, notes, purse left): once each, up to the dues paid and what
-    the member is short of its reserve, while the purse holds it."""
+    """(letters, notes, purse left, shortfall): once each, up to the dues paid
+    and what the member is short of its reserve, while the purse holds it."""
     letters, notes = [], []
+    shortfall = 0
     for m in sorted(pool, key=lambda m: (m.money - m.reserve, m.name)):
         dues = _int(paid.get(m.name))
         if dues <= 0 or m.key in book.refunded or m.name in book.refunded:
             continue
-        copper = min(dues, m.reserve - m.money, purse)
+        needed = min(dues, m.reserve - m.money)
         if m.reserve <= m.money:
             notes.append(
                 "%s paid %s of dues and holds its %s reserve; no refund"
                 % (m.name, gold(dues), gold(m.reserve))
             )
-        elif purse < MIN_LETTER_COPPER:
-            notes.append(
-                "%s waits for a refund: the bank holds %s" % (m.name, gold(purse))
-            )
-        elif copper < MIN_LETTER_COPPER:
+        elif needed < MIN_LETTER_COPPER:
             notes.append(
                 "%s is %s short of its reserve, under the %s a letter is worth"
                 % (m.name, gold(m.reserve - m.money), gold(MIN_LETTER_COPPER))
             )
+        elif purse < MIN_LETTER_COPPER:
+            shortfall += needed
         else:
+            copper = min(needed, purse)
             purse -= copper
             letters.append(
                 Letter(master, m.name, copper, REFUND, dues, m.money, m.reserve, m.key)
             )
-    return letters, notes, purse
+            if copper < needed:
+                shortfall += needed - copper
+    return letters, notes, purse, shortfall
 
 
 def _training(master, pool, book, skip, budget) -> tuple:
-    """(letters, notes): the difference to the trainer's price, a day's limit
-    a member, the budget in all."""
+    """(letters, notes, shortfall): the difference to the trainer's price,
+    a day's limit a member, the budget in all."""
     letters, notes = [], []
+    shortfall = 0
     given = dict(book.given_today or {})
     for m in sorted(pool, key=lambda m: (m.training - m.money, -m.level, m.name)):
         short = m.training - m.money
@@ -361,18 +365,26 @@ def _training(master, pool, book, skip, budget) -> tuple:
         if m.name != m.key:
             used += given.get(m.name, 0)
         room = MEMBER_DAILY_COPPER - used
-        copper = min(short, room, budget)
         if room < MIN_LETTER_COPPER:
             notes.append(
                 "%s has had today's %s for training"
                 % (m.name, gold(MEMBER_DAILY_COPPER))
             )
-        elif copper >= MIN_LETTER_COPPER:
+            continue
+        needed = min(short, room)
+        if needed < MIN_LETTER_COPPER:
+            continue
+        if budget < MIN_LETTER_COPPER:
+            shortfall += needed
+        else:
+            copper = min(needed, budget)
             budget -= copper
             letters.append(
                 Letter(master, m.name, copper, TRAIN, 0, m.money, m.training, m.key)
             )
-    return letters, notes
+            if copper < needed:
+                shortfall += needed - copper
+    return letters, notes, shortfall
 
 
 def plan(master, members, bank, book, paid, roster=frozenset()) -> Plan:
@@ -386,17 +398,20 @@ def plan(master, members, bank, book, paid, roster=frozenset()) -> Plan:
     """
     roster = {str(n) for n in roster or ()}
     pool = [m for m in members or () if m.name != master and m.name not in roster]
-    refunds, notes, purse = _refunds(
+    refunds, notes, purse, refund_shortfall = _refunds(
         master, pool, book, paid, max(0, _int(bank)) + book.carried
     )
     budget = max(0, min(purse, daily_budget(purse) - book.spent_today))
-    training, more = _training(master, pool, book, {x.member for x in refunds}, budget)
+    training, more, train_shortfall = _training(
+        master, pool, book, {x.member for x in refunds}, budget
+    )
     letters = refunds + training
     total = sum(x.copper for x in letters)
     withdraw = min(max(0, total - book.carried), max(0, _int(bank)))
     if withdraw < MIN_WITHDRAW_COPPER:
         withdraw = 0
-    return Plan(tuple(letters), withdraw, tuple(notes + more))
+    shortfall = refund_shortfall + train_shortfall
+    return Plan(tuple(letters), withdraw, tuple(notes + more), shortfall)
 
 
 def postable(plan_, carried, limit=LETTERS_PER_PASS) -> tuple:
@@ -415,10 +430,15 @@ def postable(plan_, carried, limit=LETTERS_PER_PASS) -> tuple:
 def pass_line(guild, bank, carried, plan_, refunded) -> str:
     """The fund pass's one line for the log."""
     kinds = [x.kind for x in plan_.letters]
+    short = (
+        "; shortfall %s" % gold(plan_.shortfall)
+        if getattr(plan_, "shortfall", 0) > 0
+        else ""
+    )
     return (
         "%s %s: the bank holds %s, the master carries %s of it; %d refund(s) and "
         "%d training letter(s) planned for %s, %s to withdraw; %d member(s) "
-        "refunded so far"
+        "refunded so far%s"
         % (
             LOG_PREFIX,
             guild or "?",
@@ -429,6 +449,7 @@ def pass_line(guild, bank, carried, plan_, refunded) -> str:
             gold(plan_.total),
             gold(plan_.withdraw),
             len(refunded),
+            short,
         )
     )
 

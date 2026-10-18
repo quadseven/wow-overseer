@@ -457,8 +457,11 @@ def _walk_words(row: dict, creatures: dict | None = None) -> str:
     )
 
 
+# The member state the module writes for a member it is doing nothing else with:
+# it follows its leader (mod-overseer MemberStateWord's last answer).
+FOLLOWING = "following"
 _MEMBER_STATES = {
-    "following": ("Following {leader}", "{leader} to move on"),
+    FOLLOWING: ("Following {leader}", "{leader} to move on"),
     "on an errand of its own": ("On an errand of its own", "the errand to finish"),
     "walking back": ("Walking back to {leader}", "to catch up with {leader}"),
     "held too far to walk": (
@@ -685,6 +688,19 @@ def _from_member_state(state):
     if detail:
         doing += " (" + _detail_words(detail) + ")"
     return doing, said[1].format(leader=leader), None
+
+
+def followed(facts: dict | None, now: dict) -> tuple[str, str] | None:
+    """(leader, yards) when `now`, compose's answer, is the plain following
+    member state, else None. `yards` is the module's own word: a number, "another
+    map", or "unknown" when the leader is not in the world."""
+    state = (facts or {}).get("member")
+    if not state or state[1] != FOLLOWING or not state[0]:
+        return None
+    leader = state[0]
+    if now.get("waiting") != _MEMBER_STATES[FOLLOWING][1].format(leader=leader):
+        return None
+    return leader, state[2]
 
 
 def _from_job(roster: dict):

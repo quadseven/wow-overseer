@@ -1810,14 +1810,60 @@ def _progress(result: dict) -> dict:
     }
 
 
+def blackfathom_room(position: dict, bosses: list) -> str:
+    """The last known position, labelled by its closest encounter spawn."""
+    x, y, z = (float(position["pos_" + axis]) for axis in "xyz")
+    location = "x %.0f, y %.0f, z %.0f" % (x, y, z)
+    if not bosses:
+        return "map 48 (%s)" % location
+    boss = min(
+        bosses,
+        key=lambda b: (
+            (x - float(b["x"])) ** 2
+            + (y - float(b["y"])) ** 2
+            + (z - float(b["z"])) ** 2
+        ),
+    )
+    return "near %s (%s)" % (boss["name"], location)
+
+
+# A Blackfathom run that went this long without a boss falling stopped moving
+# (#1012: runs 1527 and 1531 sat 56 and 83 minutes on the underwater stretch
+# from Ghamoo-ra to Lady Sarevess); a shorter gap was still progressing when
+# the limit came (runs 1512 and 1514, 16 and 4 minutes after a kill).
+BLACKFATHOM_STALL_MINUTES = 30
+
+
+def _blackfathom_stop(row: dict, result: dict, why: str) -> str:
+    """Why a timed-out Blackfathom run stopped: stalled, or cut off mid-progress."""
+    done, total = _num(result, "bosses_done"), _num(result, "bosses_total")
+    if row.get("seconds_since_boss") is None or not done:
+        return why or "the run ran out of time"
+    minutes = round(_num(row, "seconds_since_boss") / 60)
+    cause = "stalled" if minutes >= BLACKFATHOM_STALL_MINUTES else "still progressing"
+    return (
+        "%s: the 2-hour limit ended the run at %d of %d bosses, %d minutes after the last boss"
+        % (
+            cause,
+            done,
+            total,
+            minutes,
+        )
+    )
+
+
 def _ended(row: dict, result: dict) -> dict:
     outcome = str(result.get("outcome") or "")
     notable = result.get("loot_notable") or []
     ilvl_start, ilvl_end = _num(result, "ilvl_start"), _num(result, "ilvl_end")
+    why = str(result.get("why") or row.get("detail") or "")
+    room = str(row.get("last_room") or "")
+    if outcome == "timed out" and row.get("keyword") == "blackfathom" and room:
+        why = "Last room: %s; %s" % (room, _blackfathom_stop(row, result, why))
     out = {
         "state": ENDED,
         "outcome": outcome if outcome in OUTCOMES else "lost",
-        "why": str(result.get("why") or row.get("detail") or "")[:255],
+        "why": why[:255],
         "loot_items": _num(result, "loot_items"),
         "loot_notable": ",".join(str(x) for x in notable if str(x).isdigit())[:200],
         "ilvl_gained": (ilvl_end - ilvl_start) if (ilvl_start and ilvl_end) else 0,

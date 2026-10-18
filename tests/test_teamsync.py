@@ -39,14 +39,14 @@ ORC_SHAMAN = {
     "name": "Randomorc",
     "class_id": 7,
     "race": 2,
-    "level": 3,
+    "level": 1,
     "account_type": RNDBOT,
 }
 TROLL_SHAMAN = {
     "name": "Randomtroll",
     "class_id": 7,
     "race": 8,
-    "level": 2,
+    "level": 1,
     "account_type": RNDBOT,
 }
 HIGH_ORC_SHAMAN = {
@@ -138,7 +138,7 @@ class RecruitsOnlyWhoTheRealmLogsIn(unittest.TestCase):
     low the others' levels: an AddClass or player-account character is never
     logged in by the realm, so it would hold the seat out of the world."""
 
-    def test_the_pool_and_an_alt_lose_to_a_rotating_bot_of_a_higher_level(self):
+    def test_the_pool_and_an_alt_lose_to_a_rotating_bot_of_the_same_level(self):
         acts = teamsync.plan(
             "Bonkers",
             _bonkers_with_room(),
@@ -249,9 +249,10 @@ class StalledOnRenames(unittest.TestCase):
     def test_the_live_cave_numbers(self):
         members = _cave_live()
         self.assertEqual(len(members), 71)
-        # The 6 raid seats and, since #927, the 5 questers'.
+        # The 6 raid seats and the 10 questers' (5 since #927, 5 more since
+        # every class got one).
         self.assertEqual(
-            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 11
+            len(teamsync.open_seats("Cave", [m["name"] for m in members])), 16
         )
         self.assertEqual(len(teamsync.recruits_in_guild("Cave", members)), 6)
 
@@ -270,7 +271,7 @@ class StalledOnRenames(unittest.TestCase):
     def test_a_full_guild_with_a_candidate_and_no_leaver_says_so(self):
         members = [m for m in _cave_live() if m["level"] != 1]
         members += [
-            {"name": "Filler%d" % i, "class_id": 1, "race": 1, "level": 5}
+            {"name": "Filler%d" % i, "class_id": 1, "race": 4, "level": 5}
             for i in range(teamsync.GUILD_SIZE - len(members))
         ]
         cand = [
@@ -284,12 +285,16 @@ class StalledOnRenames(unittest.TestCase):
         ]
         why = teamsync.stall_reason("Cave", members, cand, set(), True)
         self.assertIn(
-            "the guild is full (76) and the approved teams name no leaver", why
+            "the guild is full (81) and the approved teams name no leaver", why
         )
         self.assertIn(
-            "no candidate at level 10 or under on a rotating random-bot account "
-            "fits Fizzog, Fuggo, Gorrk, Haggo, Hrunt, Tharn, Mirra, Velo, Durga, "
-            "Fizzik",
+            "no candidate on a rotating random-bot account fits Fizzog (level 1 "
+            "or under), Fuggo (level 1 or under), Gorrk (level 1 or under), "
+            "Haggo (level 1 or under), Hrunt (level 1 or under), Tharn (level 60 "
+            "or under), Mirra (level 60 or under), Velo (level 60 or under), "
+            "Durga (level 60 or under), Fizzik (level 60 or under), Kellan (level "
+            "60 or under), Bromli (level 60 or under), Sylvi (level 60 or under), "
+            "Pindle (level 60 or under), Corvane (level 60 or under)",
             why,
         )
 
@@ -362,40 +367,44 @@ TROLL_ROGUE = {
 class Questers(unittest.TestCase):
     """The questing group (#927): recruited, renamed and reset to level 1."""
 
-    def test_the_ten_seats_of_922_five_per_guild(self):
+    def test_twenty_seats_every_race_and_class_of_each_faction(self):
+        # #922's five per guild, then five more so each class has one
+        # (operator, 2026-10-15): every race and every class of the faction.
         self.assertEqual(sorted(raidteams.QUESTERS), ["Bonkers", "Cave"])
-        for guild in raidteams.QUESTERS:
-            self.assertEqual(len(raidteams.QUESTERS[guild]), 5)
         everyone = [q for g in raidteams.QUESTERS.values() for q in g]
-        self.assertEqual(len({q.name for q in everyone}), 10)
-        self.assertEqual({q.class_id for q in everyone}, {2, 3, 4, 5, 7, 9, 11})
+        self.assertEqual(len({q.name for q in everyone}), 20)
+        alliance = raidteams.QUESTERS["Cave"]
+        horde = raidteams.QUESTERS["Bonkers"]
+        self.assertEqual(len(alliance), 10)
+        self.assertEqual(len(horde), 10)
         self.assertEqual(
-            [(q.name, q.race, q.zone) for q in raidteams.QUESTERS["Bonkers"]],
-            [
-                ("Saelis", "Blood Elf", "Sunstrider Isle"),
-                ("Morwick", "Undead", "Deathknell"),
-                ("Hoofa", "Tauren", "Camp Narache"),
-                ("Grakk", "Orc", "Valley of Trials"),
-                ("Zinja", "Troll", "Valley of Trials"),
-            ],
+            {q.race for q in alliance},
+            {"Human", "Dwarf", "Night Elf", "Gnome", "Draenei"},
         )
         self.assertEqual(
-            {q.zone for q in everyone},
-            {
-                "Shadowglen",
-                "Northshire Valley",
-                "Ammen Vale",
-                "Coldridge Valley",
-                "Sunstrider Isle",
-                "Deathknell",
-                "Camp Narache",
-                "Valley of Trials",
-            },
+            {q.race for q in horde},
+            {"Orc", "Undead", "Tauren", "Troll", "Blood Elf"},
         )
+        self.assertEqual(
+            {q.class_id for q in alliance}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 11}
+        )
+        self.assertEqual({q.class_id for q in horde}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 11})
+        self.assertEqual(
+            [(q.name, q.zone) for q in everyone if q.class_id == teamsync.DEATH_KNIGHT],
+            [("Corvane", "Acherus"), ("Saevor", "Acherus")],
+        )
+
+    def test_a_death_knight_quester_is_reset_to_55(self):
+        saevor = next(q for q in raidteams.QUESTERS["Bonkers"] if q.name == "Saevor")
+        grakk = next(q for q in raidteams.QUESTERS["Bonkers"] if q.name == "Grakk")
+        members = _bonkers_full_raid() + [_quester(saevor, level=58), _quester(grakk)]
+        acts = teamsync.plan("Bonkers", members, [], set(), True, reset_done=set())
+        resets = {a.target: a.command for a in acts if a.kind == "reset"}
+        self.assertEqual(resets, {"Grakk": "reset-level-1", "Saevor": "reset-level-55"})
 
     def test_the_guild_has_room_for_the_questers(self):
         self.assertEqual(len(_bonkers_full_raid()), 71)
-        self.assertEqual(teamsync.GUILD_SIZE, 76)
+        self.assertEqual(teamsync.GUILD_SIZE, 81)
 
     def test_a_random_bot_of_the_seat_race_and_class_is_invited(self):
         acts = teamsync.plan(
@@ -440,11 +449,26 @@ class Questers(unittest.TestCase):
 
     def test_a_raid_seat_is_recruited_before_a_quester_seat(self):
         members = [m for m in _bonkers_full_raid() if m["name"] != "Hungrygrunt"]
-        acts = teamsync.plan("Bonkers", members, [ORC_WARLOCK], set(), False)
+        lock = dict(ORC_WARLOCK, level=1)
+        acts = teamsync.plan("Bonkers", members, [lock], set(), False)
         self.assertEqual(
             [a.why for a in acts if a.kind == "invite"],
             ["recruit for Hungrygrunt's seat"],
         )
+
+    def test_a_raid_seat_takes_level_1_and_a_quester_seat_any_level(self):
+        # #1015: a raid recruit keeps its levels, so its seat takes level 1
+        # only; a quester is reset to level 1, so a bot of any level may fill
+        # one (a level-22 one here).
+        members = [m for m in _bonkers_full_raid() if m["name"] != "Hungrygrunt"]
+        lock = dict(ORC_WARLOCK, level=22)
+        acts = teamsync.plan("Bonkers", members, [lock], set(), False)
+        self.assertEqual(
+            [a.why for a in acts if a.kind == "invite"],
+            ["recruit for Grakk's seat"],
+        )
+        self.assertEqual(teamsync.RAID_RECRUIT_MAX_LEVEL, 1)
+        self.assertEqual(teamsync.QUESTER_RECRUIT_MAX_LEVEL, 60)
 
     def test_a_joined_recruit_takes_the_quester_name(self):
         members = _bonkers_full_raid() + [
@@ -531,3 +555,98 @@ class Questers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+REFUSED_BAND = (
+    '{"outcome":"refused","reason":"too far above the guild to be doing what it does",'
+    '"character":"Zug","request":"invite","guild":"Bonkers","candidate":"Randomlock"}'
+)
+
+
+def _refused(name, age, result=REFUSED_BAND, status="unchanged", detail=""):
+    return {
+        "target_arg": name,
+        "status": status,
+        "detail": detail,
+        "result": result,
+        "age": age,
+    }
+
+
+class Refusals(unittest.TestCase):
+    """#1015: a refused invite comes back `unchanged` with its reason in
+    `result`; the pass reads it and does not ask the same candidate again."""
+
+    def test_the_reason_is_read_from_result_on_an_unchanged_row(self):
+        self.assertEqual(
+            teamsync.refusal_reason("unchanged", "", REFUSED_BAND),
+            "too far above the guild to be doing what it does",
+        )
+
+    def test_an_error_row_says_it_in_detail(self):
+        self.assertEqual(teamsync.refusal_reason("error", "boom", None), "boom")
+        self.assertEqual(teamsync.refusal_reason("error", "", None), "no detail")
+
+    def test_an_answer_that_is_not_a_refusal_is_not_one(self):
+        self.assertEqual(
+            teamsync.refusal_reason("unchanged", "", '{"outcome":"invited"}'), ""
+        )
+        self.assertEqual(teamsync.refusal_reason("unchanged", "", "not json"), "")
+
+    def test_a_config_refusal_holds_an_hour(self):
+        self.assertEqual(
+            teamsync.refused_candidates([_refused("Randomlock", 59)]),
+            {"Randomlock": "too far above the guild to be doing what it does"},
+        )
+        self.assertEqual(teamsync.refused_candidates([_refused("Randomlock", 60)]), {})
+
+    def test_a_lasting_refusal_holds_six_hours(self):
+        lasting = (
+            '{"outcome":"refused","reason":"already in a guild, and this one '
+            'does not take other guilds members"}'
+        )
+        rows = [_refused("Randomlock", 300, result=lasting)]
+        self.assertIn("Randomlock", teamsync.refused_candidates(rows))
+        rows = [_refused("Randomlock", 360, result=lasting)]
+        self.assertEqual(teamsync.refused_candidates(rows), {})
+
+    def test_the_newest_refusal_decides_whatever_the_row_order(self):
+        lasting = '{"outcome":"refused","reason":"already in a guild"}'
+        # An older six-hour refusal, then a newer one-hour refusal that has
+        # expired: the newer one decides, so the candidate is free again.
+        rows = [_refused("Randomlock", 300, result=lasting), _refused("Randomlock", 70)]
+        self.assertEqual(teamsync.refused_candidates(rows), {})
+        self.assertEqual(teamsync.refused_candidates(rows[::-1]), {})
+        # An older expired refusal, then a newer one in its hold: held.
+        rows = [_refused("Randomlock", 90), _refused("Randomlock", 20)]
+        self.assertIn("Randomlock", teamsync.refused_candidates(rows))
+        self.assertIn("Randomlock", teamsync.refused_candidates(rows[::-1]))
+
+    def test_a_refused_candidate_is_not_invited_again_and_the_next_one_is(self):
+        second = dict(ORC_WARLOCK, name="Secondlock")
+        refused = teamsync.refused_candidates([_refused("Randomlock", 10)])
+        acts = teamsync.plan(
+            "Bonkers",
+            _bonkers_full_raid(),
+            [ORC_WARLOCK, second],
+            set(),
+            True,
+            refused=refused,
+        )
+        self.assertEqual([a.target for a in acts if a.kind == "invite"], ["Secondlock"])
+
+    def test_the_stall_line_names_the_module_reason(self):
+        rows = [_refused("Randomlock", 5), _refused("Randomrogue", 7)]
+        why = teamsync.stall_reason(
+            "Bonkers",
+            _bonkers_full_raid(),
+            [ORC_WARLOCK, TROLL_ROGUE],
+            set(),
+            True,
+            teamsync.refusal_counts(rows),
+            teamsync.refused_candidates(rows),
+        )
+        self.assertIn(
+            "the module refused: too far above the guild to be doing what it does x2",
+            why,
+        )

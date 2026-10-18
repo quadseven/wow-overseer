@@ -535,8 +535,8 @@ class TheYield(unittest.TestCase):
         left = guildjobs.CLASS_STALL_HOLD_MINUTES - 30
         self.assertEqual(
             line,
-            "class ask: Bigzug stops asking for Group Job after 4 asks with no "
-            "party (3 yes); it levels for %d minute(s)" % left,
+            "class ask: Bigzug stops asking for Group Job after 4 asks that did "
+            "not get it done (3 yes); it levels for %d minute(s)" % left,
         )
         # Without the streak the quest is owed as before.
         self.assertIn("Bigzug", class_plan([m], b=b).owed)
@@ -563,6 +563,35 @@ class TheYield(unittest.TestCase):
         asks.append(done_ask(10))
         asks.append(done_ask(5))
         self.assertEqual(guildjobs.class_helps(asker(), b, asks=asks), [])
+
+    def test_a_party_that_went_and_failed_does_not_reset_the_count(self):
+        # #1028: an asker asked the guild 22 times in 44 hours for Call of
+        # Fire, each party going and not reaching the objective: a party that
+        # ran and failed reset the run, so the ask was never called to the
+        # server and the member never yielded.
+        b = group_book()
+        rows = [
+            {
+                "asker": "Bigzug",
+                "target": "quest:2000",
+                "state": "ran",
+                "reason": "failed: party did not reach the objective: ",
+                "age": age,
+                "yeses": 1,
+            }
+            for age in (20, 40)
+        ]
+        asks = guildjobs.quest_asks_from_rows(rows)
+        (h,) = guildjobs.class_helps(asker(), b, asks=asks)
+        self.assertEqual(h.tries, 2)
+        self.assertTrue(classask.escalated(h))
+        rows += [dict(rows[0], age=age) for age in (60, 80)]
+        asks = guildjobs.quest_asks_from_rows(rows)
+        self.assertEqual(guildjobs.class_helps(asker(), b, asks=asks), [])
+        (line,) = [
+            line for _key, line in class_plan([asker()], b=b, asks=asks).ask_yields
+        ]
+        self.assertIn("after 4 asks that did not get it done (4 yes)", line)
 
     def test_another_members_or_quests_asks_do_not_count(self):
         b = group_book()
@@ -653,9 +682,13 @@ class TheHold(unittest.TestCase):
 class TheDungeonPasses(unittest.TestCase):
     """The class quest comes before the dungeon in every pass that forms one."""
 
-    def social(self, helps=(), asks=(), answers=()):
+    def social(self, helps=(), asks=(), answers=(), on_write=None, plans=()):
         this = _Self()
         this._class_helps = tuple(helps)
+        # (cohort, plan) for each job pass run before this social pass, in
+        # order: their helps replace `helps` (bridge._keep_class_plan).
+        for cohort, plan in plans:
+            bridge._keep_class_plan(this, cohort, plan)
         this._class_board = classparty.Board()
         this._class_book = None
         this.started = []
@@ -666,6 +699,8 @@ class TheDungeonPasses(unittest.TestCase):
         written = []
 
         def write(social):
+            if on_write is not None:
+                on_write(this, social)
             written.append(social)
             return 41 if social.form else 0
 
@@ -715,12 +750,55 @@ class TheDungeonPasses(unittest.TestCase):
         self.assertIn(3, out.withdraw)
         self.assertEqual([r.names() for r in this.started], [("Auren", "Zappy")])
 
+    def test_party_members_are_reserved_while_the_social_rows_are_written(self):
+        quest_ask = qask(50, "Auren", guild="Cave", roles_needed="dps")
+        answered = yes(60, 50, "Zappy", "dps", "help")
+
+        def during_write(this, _social):
+            self.assertTrue({"Auren", "Zappy"} <= this._guild_run_names)
+
+        self.social(
+            helps=[self.group_help()],
+            asks=[quest_ask],
+            answers=[answered],
+            on_write=during_write,
+        )
+
     def test_an_answered_ask_with_no_objective_to_walk_to_holds_nobody(self):
         quest_ask = qask(50, "Auren", guild="Cave", roles_needed="dps")
         answered = yes(60, 50, "Zappy", "dps", "help")
         out, this = self.social_with(asks=[quest_ask], answers=[answered])
         self.assertEqual(this.started, [])
         self.assertIsNotNone(out.form)
+
+    def job_plan(self, helps=(), lines=None):
+        return types.SimpleNamespace(helps=tuple(helps), lines=dict(lines or {}))
+
+    def test_an_ask_survives_the_next_cohorts_job_pass(self):
+        # #871: the guild jobs pass runs once per cohort. One guild's asker
+        # had its help listed by its own cohort's pass, the ask was posted,
+        # then the other cohort's pass replaced the helps and the next
+        # social pass cancelled the ask before anybody could answer it.
+        cave = self.job_plan(
+            [self.group_help("Zappy")], {"Zappy": "Zappy waits for help"}
+        )
+        other = self.job_plan(lines={"Hulk": "Hulk hunts for its " + classquest.MARK})
+        live = qask(50, "Zappy", guild="Cave", roles_needed="dps")
+        out, this = self.social_with(
+            asks=[live],
+            plans=[(None, cave), (types.SimpleNamespace(key="other"), other)],
+        )
+        self.assertNotIn(50, out.cancel)
+        self.assertEqual([h.member for h in this._class_helps], ["Zappy"])
+        self.assertEqual(this._classquest_held, {"Hulk"})
+
+    def test_a_cohorts_next_job_pass_replaces_only_its_own_helps(self):
+        this = _Self()
+        other = types.SimpleNamespace(key="other")
+        bridge._keep_class_plan(this, None, self.job_plan([self.group_help("Zappy")]))
+        bridge._keep_class_plan(this, other, self.job_plan([self.group_help("Hulk")]))
+        bridge._keep_class_plan(this, None, self.job_plan())
+        self.assertEqual([h.member for h in this._class_helps], ["Hulk"])
 
     def test_the_dungeon_ask_still_forms_with_no_quest_ask(self):
         self.assertIsNotNone(self.social().form)
@@ -780,13 +858,64 @@ class TheDungeonPasses(unittest.TestCase):
         self.assertGreaterEqual(seen["busy"], {"Zappy", "Locky", "Idle"})
 
 
+class TheSkippedCohort(unittest.TestCase):
+    """A cohort whose job pass returns before planning keeps no class quest
+    plan of its own (bridge._drop_class_plan)."""
+
+    OTHER = types.SimpleNamespace(key="other", names=("Hulk",))
+
+    def planned(self):
+        this = _Self()
+        this._class_owed_by = {}
+        for cohort, member in ((None, "Zappy"), (self.OTHER, "Hulk")):
+            plan = types.SimpleNamespace(
+                helps=(TheDungeonPasses().group_help(member),),
+                lines={member: "%s hunts for its %s" % (member, classquest.MARK)},
+            )
+            bridge._keep_class_plan(this, cohort, plan)
+            this._class_owed_by[bridge._cohort_key(cohort)] = {member: object()}
+        return this
+
+    def jobs_once(self, this, cohort, names, members=()):
+        with mock.patch.multiple(
+            bridge,
+            _names_of=lambda c: list(names),
+            _fetch_job_facts=lambda n: {"members": list(members)},
+        ):
+            asyncio.run(bridge.Bridge._guild_jobs_once(this, cohort))
+
+    def assert_only_zappy_left(self, this):
+        self.assertEqual([h.member for h in this._class_helps], ["Zappy"])
+        self.assertEqual(this._classquest_held, {"Zappy"})
+        self.assertEqual(bridge._class_owed_names(this), {"Zappy"})
+        self.assertNotIn("other", this._class_helps_by)
+        self.assertNotIn("other", this._classquest_held_by)
+        self.assertNotIn("other", this._class_owed_by)
+
+    def test_a_cohort_with_no_names_leaves_no_class_plan_behind(self):
+        this = self.planned()
+        self.jobs_once(this, self.OTHER, names=())
+        self.assert_only_zappy_left(this)
+
+    def test_a_cohort_with_no_placed_member_leaves_no_class_plan_behind(self):
+        this = self.planned()
+        self.jobs_once(this, self.OTHER, names=("Hulk",))
+        self.assert_only_zappy_left(this)
+
+    def test_a_bridge_with_no_plan_yet_drops_nothing(self):
+        this = _Self()
+        self.jobs_once(this, None, names=())
+        self.assertEqual(tuple(this._class_helps), ())
+        self.assertEqual(this._classquest_held, set())
+
+
 class TheWiring(unittest.TestCase):
     def test_the_image_carries_the_module(self):
         self.assertIn("classask.py", DOCKERFILE)
 
     def test_the_bridge_keeps_the_hunt_clock_and_hands_it_to_the_plan(self):
         self.assertIn("hunts=self._class_hunts, now=time.time()", BRIDGE)
-        self.assertIn("self._class_helps = plan.helps", BRIDGE)
+        self.assertIn("_keep_class_plan(self, cohort, plan)", BRIDGE)
 
     def test_the_dungeon_ask_pass_reads_only_dungeon_asks(self):
         self.assertIn("a.kind == guildsocial.KIND_DUNGEON", BRIDGE)

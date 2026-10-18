@@ -488,6 +488,42 @@ class TheVendorPassAsksBothHalvesTests(unittest.TestCase):
                 "vendor could help - which is infra#4190",
             )
 
+    def test_gear_that_survives_handoff_is_counted_before_trip_gate(self):
+        body = self._vendor_once().body
+        mode_at = next(
+            i
+            for i, node in enumerate(body)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "mode"
+                for target in node.targets
+            )
+        )
+        before_mode = ast.dump(ast.Module(body=body[:mode_at], type_ignores=[]))
+        self.assertIn("gear_candidates", before_mode)
+        self.assertIn("sellable_counts", before_mode)
+
+        filtered_sales = next(
+            node
+            for node in reversed(body[:mode_at])
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "gear_sales"
+                for target in node.targets
+            )
+        )
+        self.assertIn("_without_bank_keeps", ast.dump(filtered_sales.value))
+        counted = next(
+            node
+            for node in body[:mode_at]
+            if isinstance(node, ast.For)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "sale"
+            and isinstance(node.iter, ast.Name)
+            and node.iter.id == "gear_sales"
+        )
+        self.assertIn("sellable_counts", ast.dump(counted))
+
 
 class AVendorTripMustBeAbleToHelpTests(unittest.TestCase):
     """infra#4190: pressure nobody can answer starved the travel column.

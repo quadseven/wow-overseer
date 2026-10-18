@@ -31,6 +31,7 @@ on:
       - '.github/workflows/check.yml'
       - '.github/scripts/compile_check.py'
       - 'ruff.toml'
+      - 'tests/requirements.txt'
   pull_request:
     paths:
       - '**.py'
@@ -43,6 +44,7 @@ on:
       - '.github/workflows/check.yml'
       - '.github/scripts/compile_check.py'
       - 'ruff.toml'
+      - 'tests/requirements.txt'
   workflow_dispatch:
 
 permissions:
@@ -59,13 +61,16 @@ jobs:
       runner: ubuntu-latest
       working-directory: .
       submodules: true
-      install-cmd: "true" # stdlib-only suite (discord.py/pymysql are imported lazily inside adapters, never at module import time in a test)
+      # The suite is stdlib-only (discord.py/pymysql are imported lazily inside
+      # adapters, never at module import time in a test) except the SQL parse
+      # test (#1038), whose pinned sqlglot uv pulls ephemerally in test-cmd.
+      install-cmd: "true"
       ruff: false
       # The declared interpreter floor, same convention as infra
       # (check.python-units.yml / compile_check.py) - fails on the file and
       # line a `unittest discover` SyntaxError would otherwise blame on "a
       # broken test" rather than on an old interpreter.
-      test-cmd: "python3 .github/scripts/compile_check.py --min-python 3.12 && python3 -m unittest discover -s tests -p 'test_*.py' -v"
+      test-cmd: "python3 .github/scripts/compile_check.py --min-python 3.12 && uv run --no-project --python 3.12 --with-requirements tests/requirements.txt python3 -m unittest discover -s tests -p 'test_*.py' -v"
       timeout-minutes: 10
 
   lint:

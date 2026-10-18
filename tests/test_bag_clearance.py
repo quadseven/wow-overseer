@@ -98,9 +98,16 @@ class TheReserveYieldsOnlyToACampaign(unittest.TestCase):
         self.assertIn("q.status IN ('queued', 'active')", sql)
 
 
-def bag(name, slots, guid, used=0, entry=0, general=True, inside=0):
+def bag(name, slots, guid, used=0, entry=0, general=True, inside=0, position=0):
     return bag_upgrade.Bag(
-        name, slots, used=used, guid=guid, entry=entry, general=general, inside=inside
+        name,
+        slots,
+        used=used,
+        guid=guid,
+        entry=entry,
+        general=general,
+        inside=inside,
+        position=position,
     )
 
 
@@ -387,3 +394,201 @@ class AToolIsKeptForTheHolderWhoUsesIt(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ARefusedSwapSaysWhyOnce(unittest.TestCase):
+    """#1014: the bridge logged one bare line per pass for an hour."""
+
+    def test_a_spare_inside_the_bag_it_replaces_names_that_bag(self):
+        inner = bag_upgrade.Member(
+            "Grog",
+            4,
+            worn=GROG.worn,
+            carried=(bag("Large Sack", 10, 7, entry=2657, inside=368082),),
+        )
+        (note,) = bag_upgrade.self_equip_notes([inner])
+        self.assertIn("Grog cannot put on Large Sack from Small Green Pouch", note)
+        self.assertIn("inside the bag it would replace", note)
+
+    def test_a_spare_with_no_item_id_says_so(self):
+        member = bag_upgrade.Member(
+            "Og", 4, worn=GROG.worn, carried=(bag("Satchel", 12, 3),)
+        )
+        (note,) = bag_upgrade.self_equip_notes([member])
+        self.assertIn("Og cannot put on Satchel from the backpack", note)
+        self.assertIn("item id was not read", note)
+
+    def test_a_note_is_logged_once_until_it_changes(self):
+        first = ["Grog cannot put on A from B: x"]
+        self.assertEqual(bag_upgrade.unseen_notes(set(), first), first)
+        self.assertEqual(bag_upgrade.unseen_notes(set(first), first), [])
+        other = ["Grog cannot put on A from B: y"]
+        self.assertEqual(bag_upgrade.unseen_notes(set(first), other), other)
+
+
+RED = 874793
+SACK = bag("Large Brown Sack", 10, 5576001, entry=5576, inside=RED, position=3)
+
+
+def grog_at_the_floor(backpack_free=0, worn_room=0, sack=SACK):
+    """Grog as measured 2026-10-15: the Large Brown Sack inside the Red
+    Leather Bag, the smallest worn bag and the last position, so the one the
+    equip verb would replace."""
+    return bag_upgrade.Member(
+        "Grog",
+        4,
+        worn=(
+            bag("Green Leather Bag", 12, 1246251, used=12 - worn_room, position=19),
+            bag("Large Sack", 10, 1159012, used=10, position=20),
+            bag("Linen Bag", 10, 368082, used=10, position=21),
+            bag("Red Leather Bag", 8, RED, used=8, position=22),
+        ),
+        carried=(sack,),
+        backpack_free=backpack_free,
+    )
+
+
+class ABiggerBagInsideTheBagItReplacesIsMovedOutFirst(unittest.TestCase):
+    """#1014: the swap the core refuses is done the way a player does it."""
+
+    def test_the_sack_is_moved_out_to_a_free_backpack_slot(self):
+        (move,) = bag_upgrade.self_equips([grog_at_the_floor(backpack_free=1)])
+        self.assertEqual(move.command, "ue Hitem:5576:0")
+        self.assertEqual(
+            (move.bag, move.replaces), ("Large Brown Sack", "Red Leather Bag")
+        )
+        self.assertEqual(move.slots_gained, 0)
+        self.assertIn("moves Large Brown Sack out of Red Leather Bag", move.said)
+
+    def test_then_it_is_put_on_and_the_red_bags_items_move_into_it(self):
+        moved = bag("Large Brown Sack", 10, 5576001, entry=5576, position=30)
+        (move,) = bag_upgrade.self_equips(
+            [grog_at_the_floor(backpack_free=0, sack=moved)]
+        )
+        self.assertEqual(move.command, "e Hitem:5576:0")
+        self.assertEqual(
+            (move.bag, move.replaces), ("Large Brown Sack", "Red Leather Bag")
+        )
+        self.assertEqual(move.slots_gained, 2)
+        self.assertIn("puts on Large Brown Sack in place of Red Leather Bag", move.said)
+
+    def test_room_in_an_earlier_worn_bag_is_where_it_goes(self):
+        (move,) = bag_upgrade.self_equips([grog_at_the_floor(worn_room=1)])
+        self.assertEqual(move.command, "ue Hitem:5576:0")
+
+    def test_room_only_after_the_bag_it_sits_in_moves_nothing(self):
+        """The auto-store counts the sack's own slot as free and reaches it
+        before any later bag, so the move would leave it where it is."""
+        member = bag_upgrade.Member(
+            "Grog",
+            4,
+            worn=(
+                bag("Red Leather Bag", 8, RED, used=8, position=19),
+                bag("Green Leather Bag", 12, 1246251, used=11, position=20),
+                bag("Large Sack", 10, 1159012, used=10, position=21),
+                bag("Linen Bag", 10, 368082, used=10, position=22),
+            ),
+            carried=(SACK,),
+        )
+        self.assertEqual(bag_upgrade.self_equips([member]), [])
+
+    def test_a_worn_bag_of_the_same_item_is_never_taken_off_instead(self):
+        """`ue` names an entry and takes an equipped match first."""
+        member = grog_at_the_floor(backpack_free=1)
+        worn = member.worn[:1] + (
+            bag("Large Brown Sack", 10, 1159012, used=10, entry=5576, position=20),
+        )
+        member = bag_upgrade.Member(
+            "Grog",
+            4,
+            worn=worn + member.worn[2:],
+            carried=member.carried,
+            backpack_free=1,
+        )
+        self.assertEqual(bag_upgrade.self_equips([member]), [])
+        (note,) = bag_upgrade.self_equip_notes([member])
+        self.assertIn("a worn bag is the same item", note)
+
+    def test_no_room_anywhere_is_left_alone_and_says_why(self):
+        member = grog_at_the_floor()
+        self.assertEqual(bag_upgrade.self_equips([member]), [])
+        (note,) = bag_upgrade.self_equip_notes([member])
+        self.assertIn(
+            "Grog cannot put on Large Brown Sack from Red Leather Bag: it is "
+            "inside the bag it would replace",
+            note,
+        )
+        self.assertIn("no free slot", note)
+
+    def test_a_bag_being_moved_out_is_not_a_refusal(self):
+        self.assertEqual(
+            bag_upgrade.self_equip_notes([grog_at_the_floor(backpack_free=1)]), []
+        )
+
+    def test_the_backpack_room_is_read_from_rows(self):
+        rows = [_bag_row("Grog", 1, 0, 22), _bag_row("Grog", 2, 1, 3)]
+        (unknown,) = bag_upgrade.members_from_rows(rows, ["Grog"])
+        self.assertEqual(unknown.backpack_free, 0)
+        (read,) = bag_upgrade.members_from_rows(
+            rows, ["Grog"], backpack_used={"Grog": 15}
+        )
+        self.assertEqual(read.backpack_free, 1)
+        (empty,) = bag_upgrade.members_from_rows(rows, ["Grog"], backpack_used={})
+        self.assertEqual(empty.backpack_free, 16)
+
+    def test_a_bag_put_on_keeps_the_backpack_room(self):
+        (member,) = bag_upgrade.without_bags(
+            [grog_at_the_floor(backpack_free=3)], set()
+        )
+        self.assertEqual(member.backpack_free, 3)
+
+    def test_the_bridge_reads_the_backpack_for_the_plan(self):
+        body = _block("    async def _hand_bags_once(")
+        self.assertIn("_fetch_backpack_used, names", body)
+        self.assertIn("backpack_used=", body)
+        sql = _sql("_BACKPACK_USED_SQL")
+        self.assertIn("ci.bag = 0 AND ci.slot BETWEEN %d AND %d", sql)
+        self.assertIn("bag_upgrade.BACKPACK_POSITIONS[0]", _source())
+
+    def test_the_bridge_logs_what_the_move_says(self):
+        writer = _block("    async def _equip_own_bags(")
+        self.assertIn("move.said", writer)
+
+
+def _bag_row(holder, guid, bag_, slot):
+    return dict(
+        holder=holder, guid=guid, name="Bag", slots=8, bag=bag_, slot=slot, used=0
+    )
+
+
+class AStandingRefusalIsLoggedOncePerMember(unittest.TestCase):
+    """#1014 regression: one pass per family, and each pass forgot the last."""
+
+    def test_two_families_alternating_log_each_refusal_once(self):
+        grog = grog_at_the_floor()
+        zug = bag_upgrade.Member(
+            "Zug", 4, worn=GROG.worn, carried=(bag("Satchel", 12, 3),)
+        )
+        ledger = {}
+        logged = []
+        for _ in range(3):
+            for family in ([grog], [zug]):
+                notes = bag_upgrade.self_equip_notes(family)
+                fresh, ledger = bag_upgrade.note_once(ledger, family, notes)
+                logged.extend(fresh)
+        self.assertEqual(len(logged), 2)
+        self.assertTrue(logged[0].startswith("Grog cannot put on"))
+        self.assertTrue(logged[1].startswith("Zug cannot put on"))
+
+    def test_a_refusal_that_clears_and_returns_is_said_again(self):
+        family = [grog_at_the_floor()]
+        notes = bag_upgrade.self_equip_notes(family)
+        _, ledger = bag_upgrade.note_once({}, family, notes)
+        _, ledger = bag_upgrade.note_once(ledger, family, [])
+        fresh, _ = bag_upgrade.note_once(ledger, family, notes)
+        self.assertEqual(fresh, notes)
+
+    def test_the_bridge_keeps_the_ledger_per_family(self):
+        writer = _block("    async def _equip_own_bags(")
+        self.assertIn("bag_upgrade.note_once(", writer)
+        self.assertNotIn("self._equip_notes_seen = set(notes)", writer)

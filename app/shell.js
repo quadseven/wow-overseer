@@ -23,7 +23,7 @@ const guildLinks = (prefix) => guilds().map((g) => [g.name, prefix + g.slug]);
 const SUBS = {
   get now() { return [["Now", "#/now"], ...familyLinks(), ["World map", "#/now/map"], ["Server", "#/now/server"]]; },
   get guilds() { return guildLinks("#/guilds/"); },
-  members: [["Roster", "#/members"], ["Gear", "#/members/gear"]],
+  members: [["Roster", "#/members"], ["Gear", "#/members/gear"], ["Gear changes", "#/gear-changes"]],
   get raid() { return guildLinks("#/raid/mc/"); },
   economy: [["Bags and gold", "#/economy"], ["Auction house", "#/economy/auction"], ["Trades", "#/economy/trades"], ["Skill levels", "#/economy/professions"], ["Guild bank", "#/economy/bank"]],
 };
