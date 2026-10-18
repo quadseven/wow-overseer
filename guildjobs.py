@@ -3859,8 +3859,11 @@ def _streak_yield(m, move, left, count, yeses) -> tuple:
 # classask.ESCALATE_AFTER_ASKS asks that did not get it done the ask is called
 # in the faction's public channel too and a random bot of the side may answer it, so
 # the run is one longer than it was (3) to leave the server two tries. Four
-# asks a quarter of an hour apart end inside the first hour and a half.
+# asks a quarter of an hour apart end inside the first hour and a half. Three
+# parties that time out in a row yield sooner, after the first server try:
+# another identical party is not a useful next step while the member can level.
 CLASS_ASK_STREAK_MAX = 4
+CLASS_PARTY_TIMEOUT_STREAK_MAX = 3
 CLASS_ASK_STREAK_WINDOW_MINUTES = 12 * 60
 _ASK_RAN = "ran"
 _ASK_LIVE = frozenset({"open", "filled"})
@@ -3877,6 +3880,7 @@ class QuestAsk:
     age_minutes: int
     yeses: int = 0
     failed: bool = False
+    timed_out: bool = False
 
 
 def quest_asks_from_rows(rows) -> tuple:
@@ -3895,6 +3899,9 @@ def quest_asks_from_rows(rows) -> tuple:
                 age_minutes=_int(row.get("age"), 10**6),
                 yeses=_int(row.get("yeses"), 0),
                 failed=str(row.get("reason") or "").startswith(classask.FAILED),
+                timed_out=str(row.get("reason") or "").startswith(
+                    classask.FAILED + "party timed out"
+                ),
             )
         )
     return tuple(out)
@@ -3904,8 +3911,8 @@ def class_ask_streak(name, quest, asks) -> tuple:
     """(minutes left of the hold, asks in the run, yeses they drew) for one
     member's quest: the closed asks for it since the newest whose party got
     it done, newest first, inside CLASS_ASK_STREAK_WINDOW_MINUTES. The hold is 0 while the run
-    is short of CLASS_ASK_STREAK_MAX or CLASS_STALL_HOLD_MINUTES have passed
-    since its newest ask."""
+    is short of CLASS_ASK_STREAK_MAX without three consecutive party timeouts,
+    or CLASS_STALL_HOLD_MINUTES have passed since its newest ask."""
     rows = sorted(
         (
             a
@@ -3926,7 +3933,10 @@ def class_ask_streak(name, quest, asks) -> tuple:
         if a.state not in _ASK_LIVE:
             run.append(a)
     yeses = sum(int(a.yeses) for a in run)
-    if len(run) < CLASS_ASK_STREAK_MAX:
+    repeated_timeouts = len(run) >= CLASS_PARTY_TIMEOUT_STREAK_MAX and all(
+        a.timed_out for a in run[:CLASS_PARTY_TIMEOUT_STREAK_MAX]
+    )
+    if len(run) < CLASS_ASK_STREAK_MAX and not repeated_timeouts:
         return 0, len(run), yeses
     left = max(0, CLASS_STALL_HOLD_MINUTES - int(run[0].age_minutes))
     return left, len(run), yeses
