@@ -202,7 +202,7 @@ class EachFamilyIsItsOwnCard(unittest.TestCase):
             )
 
     def test_the_cards_follow_the_realms_family_order_and_link_to_their_family(self):
-        for fam, card in zip(self.families, self.cards):
+        for fam, card in zip(self.families, self.cards, strict=True):
             self.assertEqual(card.attrs.get("href"), "#/now/family/" + fam.lower())
             self.assertIn(fam + "'s family", card.all_text())
 
@@ -218,7 +218,7 @@ class EachFamilyIsItsOwnCard(unittest.TestCase):
             self.assertIn("last moved", card.children[-1].all_text())
 
     def test_only_the_stalled_family_says_stalled(self):
-        by_fam = dict(zip(self.families, self.cards))
+        by_fam = dict(zip(self.families, self.cards, strict=True))
         zug = by_fam["Zug"]
         self.assertIn("is-stalled", zug.classes)
         self.assertIn("STALLED", zug.all_text())
