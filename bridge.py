@@ -16955,6 +16955,21 @@ class Bridge(discord.Client):
                 "pass, so %d letter(s) stay uncollected unless a taker is "
                 "already at a mailbox", leader, post.aim, len(letters),
             )
+            # BUT NOT A SIX-SECOND WAIT FOR NOBODY (wow-overseer#1141). The
+            # fall-through exists for a taker already standing at the box, and
+            # the first read above already says whether there is one. When it
+            # puts no taker within reach, the settle read below would sleep
+            # SETTLE_SECONDS on most passes and write no row. So the pass ends
+            # here, and the settle read still runs whenever some taker is in
+            # reach. The cost, stated: a taker who reached the box after that
+            # first read waits one more cycle, which is lateness, never a wrong
+            # row. Nothing else is skipped: with `aimed` false,
+            # `_mail_urgency_spent` returns at its first line.
+            if not any(
+                    travel.spawn_in_reach(spawn, positions.get(t.character),
+                                          TOWN_COUNTER_YARDS)
+                    for t in mail_plan.takes):
+                return
 
         # THE ROW IS ONLY WRITTEN WHERE IT CAN WORK, AND THE TAKER IS WHO IT HAS
         # TO WORK FOR (infra#3830; the docstring has the reasoning and the
