@@ -540,6 +540,27 @@ class TheAdapter(unittest.TestCase):
         state = self.tick()
         self.assertEqual(te.IDLE, state.phase)
 
+    def test_a_town_run_no_errand_owns_is_given_back(self):
+        # #790: a restart forgets the errand, so the pass that finds none
+        # under way hands back the town run the errand wrote.
+        released = []
+        self.ns["_town_errand_release_orphans"] = lambda names: (
+            released.append(sorted(names)) or list(names)
+        )
+        self.fam._mid_run = lambda names: asyncio.sleep(0, result=True)
+        state = self.tick()
+        self.assertEqual(te.IDLE, state.phase)
+        self.assertEqual([["Bork", "Grug"]], released)
+
+    def test_an_errand_that_starts_keeps_its_town_run(self):
+        released = []
+        self.ns["_town_errand_release_orphans"] = lambda names: (
+            released.append(sorted(names)) or list(names)
+        )
+        state = self.tick()
+        self.assertEqual(te.GO, state.phase)
+        self.assertEqual([], released)
+
     def test_no_take_is_written_until_the_member_stands_at_the_mailbox(self):
         self.tick()
         self.positions = {"Grug": _at(101, 100), "Bork": _at(160, 100)}
