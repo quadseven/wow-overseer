@@ -18634,10 +18634,12 @@ class Bridge(discord.Client):
             present = await asyncio.to_thread(_in_world_of, holders)
             if present is not None and not present:
                 await asyncio.to_thread(_aim_traveller, 0)
+                # A count, not the names: the holder list is read from the
+                # protected-character set, which is not log material.
                 log.info("goal: quest %d stands down for %s - none of its "
-                         "holders (%s) is in the world on this realm, so the "
+                         "%d holder(s) is in the world on this realm, so the "
                          "family's aim is cleared", action.quest_id,
-                         action.beneficiary, ", ".join(sorted(holders)))
+                         action.beneficiary, len(holders))
                 return
         aimed = await asyncio.to_thread(_aim_traveller, action.quest_id)
         # Logged every time it is renewed, with the count of rows actually
