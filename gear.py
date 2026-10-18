@@ -324,8 +324,8 @@ _WEAPON_SKILLS = {
 _KNOWN_WEAPON_SUBCLASSES = _ALL_MELEE_AND_RANGED | {WEAPON_WAND}
 
 
-def wieldable_weapon(holding: Holding, character: CharacterState) -> bool:
-    """Can this character's class wield this weapon at all.
+def class_wields(holding: Holding, character: CharacterState) -> bool:
+    """Can this character's class wield this weapon at all, learned or not.
 
     Abstains - returns True - for anything that is not a weapon, for a
     subclass this table does not decide, for a class it does not list, and
@@ -341,6 +341,34 @@ def wieldable_weapon(holding: Holding, character: CharacterState) -> bool:
     if skills is None:
         return True
     return subclass in skills
+
+
+def weapon_trained(holding: Holding, character: CharacterState) -> bool:
+    """Has this character learned the weapon skill this piece needs.
+
+    THE CLASS SAYS WHAT CAN BE LEARNED, NOT WHAT IS (#393). Measured on
+    wow-dev 2026-09-28: Og, a level 35 mage, carried Silithid Ripper, a
+    one-hand sword, with no Swords skill (character_skills 43 absent). A
+    mage's class can wield a sword, so the sword was planned as Og's and the
+    equip pass asked three times; the core refuses to equip a weapon whose
+    skill is not learned, and Og stayed unarmed. `weapon_skills` is the
+    learned set, read from character_skills; None means it was not read, and
+    the answer abstains to True, which is the class-only judgement as before.
+    """
+    if character.weapon_skills is None:
+        return True
+    if int(holding.item_class) != ITEM_CLASS_WEAPON:
+        return True
+    subclass = int(holding.item_subclass)
+    if subclass not in _KNOWN_WEAPON_SUBCLASSES:
+        return True
+    return subclass in character.weapon_skills
+
+
+def wieldable_weapon(holding: Holding, character: CharacterState) -> bool:
+    """Can this character wield this weapon now: the class can, and, when the
+    learned skills were read, the skill is learned (#393)."""
+    return class_wields(holding, character) and weapon_trained(holding, character)
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +571,10 @@ class CharacterState:
     # empty off hand or one this row could not read. What decides whether a
     # shield is an upgrade for a tank whatever the item levels say.
     off_hand_kind: str = OFF_HAND_NONE
+    # The weapon subclasses (item_template.subclass) this character has
+    # learned the skill for, from character_skills, or None when that was
+    # not read. None keeps the class-only judgement (#393).
+    weapon_skills: frozenset | None = None
 
     def equipped_level(self, slot: str) -> int:
         return int(self.equipped.get(slot, 0))
@@ -653,8 +685,10 @@ def _cannot_wear(holding: Holding, character: CharacterState) -> str:
     # that stops mail reaching the priest - see _ARMOR_TRAINED_AT.
     if not wearable_armor(holding, character):
         return f"{cls} is not trained in that armour type"
-    if not wieldable_weapon(holding, character):
+    if not class_wields(holding, character):
         return f"{cls} cannot wield that weapon type"
+    if not weapon_trained(holding, character):
+        return f"{character.name or cls} has not learned that weapon skill"
     if character.level < holding.required_level:
         return f"requires level {holding.required_level}"
     if not _slot_for(holding):
@@ -1375,7 +1409,25 @@ def claimant(holding: Holding, characters) -> str:
             continue
         if is_upgrade_for(holding, character)[0]:
             return character.name
+    if _holder_would_train_for(holding, holder):
+        return holder.name
     return NOBODY
+
+
+def _holder_would_train_for(holding: Holding, holder: CharacterState) -> bool:
+    """Would the holder wear this weapon once a weapon master taught the skill.
+
+    A sibling who can wield it now was asked first and wins it. When none
+    can, the holder keeps it rather than see it sold: the weapon-master walk
+    (weaponskill, #399) trains the holder for a weapon they CARRY, so selling
+    it would take away the reason to walk (#393). `equips` still refuses to
+    put it on until the skill is learned.
+    """
+    if holder.weapon_skills is None or weapon_trained(holding, holder):
+        return False
+    if int(holding.item_subclass) not in weaponskill.WEAPON_SKILLS:
+        return False
+    return would_wear(holding, replace(holder, weapon_skills=None))[0]
 
 
 def claims(holdings, characters) -> dict:
@@ -1494,6 +1546,10 @@ def equips(holdings, characters) -> tuple:
         if character is None:
             continue
         if claimant(holding, characters) != holding.holder:
+            continue
+        if not weapon_trained(holding, character):
+            # Kept for the weapon-master walk, not worn: the core refuses
+            # a weapon whose skill is not learned (#393).
             continue
         if _hand_refusal(holding, character) or bot_wont_wear(holding, character):
             continue
@@ -2006,10 +2062,15 @@ def characters_from_rows(rows, names, roles=None) -> list:
 
     `roles` maps a name to ROLE_TANK, ROLE_HEALER or ROLE_DAMAGE; a name it
     does not mention, and every name when it is None, is ROLE_UNKNOWN.
+
+    A row may carry `weapon_skills`, the weapon subclasses the character has
+    learned (bridge reads them from character_skills, #393). A row without
+    the key, or with None, leaves the character's skills unread.
     """
     roles = dict(roles or {})
     seen = {}
     off_hands = {}
+    skills = {}
     for row in rows:
         try:
             name = str(row["name"])
@@ -2020,6 +2081,8 @@ def characters_from_rows(rows, names, roles=None) -> list:
         except (KeyError, TypeError, ValueError):
             continue
         equipped = seen.setdefault(name, (class_id, level, {}))[2]
+        if name not in skills:
+            skills[name] = weapon_skills_of(row)
         try:
             inventory_type = int(row["inventory_type"])
             item_level = int(row["item_level"])
@@ -2043,10 +2106,25 @@ def characters_from_rows(rows, names, roles=None) -> list:
             equipped=seen[name][2],
             role=str(roles.get(name, ROLE_UNKNOWN) or ROLE_UNKNOWN),
             off_hand_kind=off_hands.get(name, OFF_HAND_NONE),
+            weapon_skills=skills.get(name),
         )
         for name in names
         if name in seen
     ]
+
+
+def weapon_skills_of(row):
+    """The learned weapon subclasses a row carries, or None when unread."""
+    try:
+        held = row["weapon_skills"]
+    except (KeyError, TypeError):
+        return None
+    if held is None:
+        return None
+    try:
+        return frozenset(int(sub) for sub in held)
+    except (TypeError, ValueError):
+        return None
 
 
 def holdings_from_rows(rows) -> list:
