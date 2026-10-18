@@ -15850,6 +15850,10 @@ class Bridge(discord.Client):
         # The level step is a spawn walk too (guildlevel.py).
         leveling = (await asyncio.to_thread(_job_leveling, facts)
                     if spawn_walks else None)
+        # THE LEVEL CENSUS (#780): who stands where its quests ran out.
+        census = guildlevel.census(members, leveling)
+        if census:
+            log.info("guild jobs: %s", census)
         # THE PLAN RUNS ON THE EVENT LOOP (#833): it mutates the hunt clock and
         # the owing clock other tasks read, so it is not sent to a thread.
         # Every awaited input is read above, so this timer measures only the

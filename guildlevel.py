@@ -676,6 +676,82 @@ def outgrown(level, race, map_id, zone_id, bands, opens=None) -> str:
     return ""
 
 
+# THE LEVEL CENSUS (#780). Whether members still stand where their quests have
+# run out was counted by hand against the realm database: 13 of 46 members at
+# 20+ stood in a hub zone with fewer than MIN_OPEN open quests on 2026-10-10.
+# `census` puts that count in the pass log, per guild, off the open quests the
+# pass already reads. A member is counted from CENSUS_FROM, below the level
+# cap, off the family roster (levelroute walks those) and with its rewarded
+# quests read; at most CENSUS_NAMED of the dry ones are named.
+CENSUS_FROM = 20
+CENSUS_NAMED = 12
+
+
+def census(members, world) -> str:
+    """One line: per guild, how many counted members stand in a hub zone of
+    their side with fewer than MIN_OPEN quests open for them, and who. "" while
+    the world or its quests are unread."""
+    if world is None or getattr(world, "quests", None) is None:
+        return ""
+    counts: dict = {}
+    dry: list = []
+    unread = 0
+    for m in members:
+        level = int(m.level or 0)
+        if level < CENSUS_FROM or level >= LEVEL_CAP or m.name in world.roster:
+            continue
+        opens = member_opens(world, m.race, level, m.rewarded)
+        if opens is None:
+            unread += 1
+            continue
+        tally = counts.setdefault(str(m.guild), [0, 0])
+        tally[1] += 1
+        left = _dry_left(m, world, opens)
+        if left is not None:
+            tally[0] += 1
+            dry.append(
+                "%s %d in %s (%d)"
+                % (m.name, level, levelroute.zone_name(m.zone_id), left)
+            )
+    if not counts and not unread:
+        return ""
+    dry_total = sum(t[0] for t in counts.values())
+    total = sum(t[1] for t in counts.values())
+    line = (
+        "level census: %s; %d of %d members at %d+ off the family roster stand "
+        "in a hub zone with fewer than %d open quests"
+        % (
+            ", ".join(
+                "%s %d of %d" % (g, t[0], t[1]) for g, t in sorted(counts.items())
+            ),
+            dry_total,
+            total,
+            CENSUS_FROM,
+            MIN_OPEN,
+        )
+    )
+    if unread:
+        line += " (%d unread)" % unread
+    if dry:
+        named = sorted(dry)
+        line += ": " + ", ".join(named[:CENSUS_NAMED])
+        if len(named) > CENSUS_NAMED:
+            line += " and %d more" % (len(named) - CENSUS_NAMED)
+    return line
+
+
+def _dry_left(m, world, opens) -> int | None:
+    """The member's open quests where it stands when that is a hub zone of its
+    side on a classic continent with fewer than MIN_OPEN open, else None."""
+    zone = m.zone_id
+    if m.map_id is None or int(m.map_id) not in classic.CLASSIC_CONTINENTS or not zone:
+        return None
+    if int(zone) not in world.bands.get(side_of(m.race), {}):
+        return None
+    left = int(opens.get(int(zone), 0))
+    return left if left < MIN_OPEN else None
+
+
 def quests_word(n) -> str:
     """ "1 open quest", "4 open quests"."""
     return "%d open quest%s" % (int(n), "" if int(n) == 1 else "s")
