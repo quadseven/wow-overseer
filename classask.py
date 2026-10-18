@@ -23,7 +23,8 @@ is free. One open ask per member, MAX_OPEN_PER_GUILD in a guild, NEW_PER_PASS a
 pass, ASK_COOLDOWN_MINUTES before the same member asks again. A quest no party
 could walk to (a use that changed nothing) is never asked for, and one asked
 for guildjobs.CLASS_ASK_STREAK_MAX times in a row that did not get it done
-(no party, or a party that went and failed, #1028) is not asked for again
+(no party, or a party that went and failed, #1028), or whose last three parties
+timed out, is not asked for again
 until its hold runs out: both yield to levelling meanwhile
 (guildjobs.class_asking). While a member asks, the guild jobs give it no other
 step (guildjobs.asking_line, #1072): a step in hand holds it "on a guild job",
