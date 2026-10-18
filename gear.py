@@ -58,6 +58,7 @@ on the running server.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
@@ -1660,6 +1661,25 @@ def since_level_change(history, changed) -> list:
 # that the command was handed over; `applied` says the world put the item on.
 WORLD_REFUSALS = frozenset({"error", "unchanged"})
 
+# THE REFUSALS THAT NAME A PASSING STATE OF THE HOLDER (#869). mod-overseer
+# writes Player::CanEquipItem's answer as "<name or InventoryResult> <code>".
+# These codes say nothing about the piece or the bags, only what the holder is
+# doing that moment (Item.h InventoryResult; PlayerStorage.cpp CanEquipItem and
+# CanUseItem): stunned (37), dead or a ghost (38), casting or the weapon swap
+# timer (39), in combat (60), disarmed (61), in an arena match (78). The state
+# passes by itself, so a refusal on one of them waits the first step every
+# time and never the memory window: live, Durg (60) and Shinyhair (38) were
+# held a day on their third such refusal.
+_PASSING_REFUSALS = frozenset({37, 38, 39, 60, 61, 78})
+_REFUSAL_CODE = re.compile(r"\b(?:InventoryResult|EQUIP_ERR_[A-Z0-9_]+) (\d+)\b")
+
+
+def _passing_refusal(detail) -> bool:
+    """A refusal detail naming one of the _PASSING_REFUSALS codes."""
+    found = _REFUSAL_CODE.search(str(detail or ""))
+    return found is not None and int(found.group(1)) in _PASSING_REFUSALS
+
+
 # Equip.slot -> the bag 0 equipment slots a piece put on there would displace.
 # Both the item-level buckets and equipscore's groups, so a hold can see when
 # what is worn there has changed. A slot not here has no worn signature, and
@@ -1964,6 +1984,8 @@ def _world_holds(
         if hold.lifted:
             continue
         attempts = max(1, int((tries or {}).get(key, 1)))
+        if _passing_refusal(row.get("detail")):
+            attempts = 1
         wait = (15, 30, max(1, int(memory_hours)) * 60)[min(attempts, 3) - 1]
         if isinstance(created, datetime):
             if created.tzinfo is None:
@@ -2021,7 +2043,8 @@ def equips_to_queue(
 
     `tries` counts (holder, command) over the longer memory window. Repeated
     world refusals wait fifteen minutes, thirty minutes, then the full memory
-    window.
+    window, except a refusal on a passing state of the holder (dead, in
+    combat, stunned: _PASSING_REFUSALS), which always waits fifteen minutes.
     Other attempts are eligible again as soon as the short retry window ends.
 
     An `applied` answer ends this attempt. If another gear pass later puts

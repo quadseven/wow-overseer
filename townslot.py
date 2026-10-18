@@ -622,16 +622,36 @@ def other_cohorts(rows, own_names) -> tuple:
 
 
 def urgent_ground_release(
-    *, aim: str, pressure: bool, in_run: bool, errand_active: bool = False, ground
+    *,
+    aim: str,
+    pressure: bool,
+    in_run: bool,
+    errand_active: bool = False,
+    hold_released: bool = False,
+    ground,
 ) -> bool:
     """Whether bag pressure may interrupt a stale positional town aim.
 
     An active town errand owns its mailbox or counter aim. Releasing that aim
     lets the vendor pass immediately take the same travel column, which makes
     the errand reacquire it on its next tick and can keep the leader circling.
+
+    NOT ONCE THE BAG HOLD IS RELEASED (#872). `hold_released` is whether the
+    family's hold at the bag floor has timed out (bag_pressure.bag_hold_stuck):
+    no town pass made room in BAG_HOLD_STUCK_SECONDS, so the family was sent
+    questing. The same bags are then no reason to tear down the walk it was
+    sent on. Measured on the dev realm 2026-10-18: Grug's family was released
+    to quest at 18:23Z, the level pass won the leader's walk to Nijel's Point
+    six times in four hours, and five of those walks were released here under
+    bag pressure within six minutes, for a vendor trip that sold nothing.
     """
     return bool(
-        pressure and not in_run and not errand_active and str(aim or "") and ground(aim)
+        pressure
+        and not in_run
+        and not errand_active
+        and not hold_released
+        and str(aim or "")
+        and ground(aim)
     )
 
 
