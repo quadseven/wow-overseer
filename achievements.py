@@ -209,6 +209,21 @@ def in_run(run: dict, when: datetime, map_id: int, now: datetime) -> bool:
     return start <= when <= end
 
 
+def death_scope(run_rows: list[dict]) -> tuple:
+    """The part of overseer_death the run cards can use: (since, maps).
+
+    A death counts only inside a run, on its map and in its window (in_run),
+    so nothing older than the oldest run's start and nothing off the runs'
+    maps can reach a card. The read is bounded by that, not by the whole
+    history of the table (#795). No runs is (None, ()): no death can count,
+    and the caller reads none.
+    """
+    starts = [r["started_at"] for r in run_rows if r.get("started_at") is not None]
+    if not starts:
+        return None, ()
+    return min(starts), tuple(sorted({int(r["map_id"]) for r in run_rows}))
+
+
 def _duration(start: datetime, end: datetime) -> str:
     seconds = max(0, int((end - start).total_seconds()))
     hours, rest = divmod(seconds, 3600)

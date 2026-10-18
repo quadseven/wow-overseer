@@ -117,6 +117,7 @@ import kin
 import learnaim
 import levelroute
 import llmmode
+import llmpool
 import lockbox
 import lootcouncil
 # NOT `mailbox` - that is a Python standard library module, and this package is
@@ -4378,8 +4379,15 @@ _ACTIVITY_READS = (
     ("members", "SELECT name, level, class FROM characters WHERE name IN (%s)"),
     ("recipes",
      "SELECT name FROM overseer_roster WHERE craft_spell <> 0 AND name IN (%s)"),
+    # The family's newest death in the last day, by id: a mark that rises
+    # when anyone dies, read down the (character_name, created_at) key
+    # (jev_activity.DEATH_MARK_HOURS, #795). A COUNT over every death they
+    # ever had grew with the table; a windowed COUNT would fall as old deaths
+    # aged out, and one aging out as another arrived would hide the new one.
     ("deaths",
-     "SELECT COUNT(*) AS n FROM overseer_death WHERE character_name IN (%s)"),
+     "SELECT MAX(id) AS n FROM overseer_death WHERE character_name IN (%s) "
+     "AND created_at > NOW() - INTERVAL "
+     + str(int(jev_activity.DEATH_MARK_HOURS)) + " HOUR"),
     ("worn",
      "SELECT c.name, COUNT(*) AS worn FROM character_inventory ci "  # noqa: S608 - the slot list is jev_activity.GEAR_SLOTS, integer constants; names are bound
      "JOIN characters c ON c.guid = ci.guid WHERE ci.bag = 0 AND ci.slot IN ("
@@ -6861,7 +6869,7 @@ class Bridge(discord.Client):
             text=d.text,
         )
         try:
-            decision = voice.parse_decision(await asyncio.to_thread(_ask_llm, prompt))
+            decision = voice.parse_decision(await llmpool.call(_ask_llm, prompt))
         except Exception:
             log.exception("inner voice unreachable; relaying raw")
             row_id = await asyncio.to_thread(
@@ -7355,7 +7363,7 @@ class Bridge(discord.Client):
                 zone=GEO.zone_name(grounding["map_id"], grounding["pos_x"], grounding["pos_y"]),
                 personality=_persona_for(grounding), text=directive.text,
             )
-            return voice.parse_decision(await asyncio.to_thread(_ask_llm, prompt))
+            return voice.parse_decision(await llmpool.call(_ask_llm, prompt))
         except Exception:
             log.exception("overheard '%s' but %s's voice is unreachable",
                           directive.text[:60], name)
@@ -21689,7 +21697,7 @@ class Bridge(discord.Client):
             text=d.text,
         )
         try:
-            decision = voice.parse_decision(await asyncio.to_thread(_ask_llm, prompt))
+            decision = voice.parse_decision(await llmpool.call(_ask_llm, prompt))
         except Exception:
             # The single-character path relays raw words on an outage; a band
             # must not. Guessing an order for forty characters is worse than

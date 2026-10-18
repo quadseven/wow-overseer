@@ -296,6 +296,11 @@ def withheld(queued: bool, free_slots: dict) -> bool:
 # ---------------------------------------------------------------------------
 # WHEN TO ASK
 
+# How far back the death mark looks (#795): far longer than one cycle, so a
+# death between two cycles is always inside it, and short enough that the read
+# stays a day of the family's deaths, not their whole history.
+DEATH_MARK_HOURS = 24
+
 
 @dataclass(frozen=True)
 class Marks:
@@ -303,6 +308,8 @@ class Marks:
 
     runs_done: int | None
     levels: tuple
+    # The id of the family's newest death in the last DEATH_MARK_HOURS, or 0:
+    # it rises when someone dies, and only then.
     deaths: int
     withheld: bool
     at_town: bool
