@@ -184,9 +184,10 @@ class StandingTests(unittest.TestCase):
 
 
 class DataTests(unittest.TestCase):
-    def test_all_eighteen_specs_load_with_weights_and_both_lists(self):
+    def test_all_twenty_one_specs_load_with_weights_and_both_lists(self):
+        # Eighteen wowsims specs and three death knight approximations (#760).
         ids = gs.spec_ids()
-        self.assertEqual(len(ids), 18)
+        self.assertEqual(len(ids), 21)
         for spec in ids:
             d = gs.load_spec(spec)
             self.assertTrue(d["weights"]["values"], spec)
@@ -196,6 +197,42 @@ class DataTests(unittest.TestCase):
                 self.assertTrue(lst["slots"], spec)
                 for ids_ in lst["slots"].values():
                     self.assertTrue(all(isinstance(i, int) for i in ids_))
+
+    def test_a_death_knight_spec_borrows_plate_lists_and_two_handers(self):
+        # #760: classic has no death knight. Blood borrows the protection
+        # warrior's weights and armor lists, Frost and Unholy the fury
+        # warrior's; every tree wields the retribution paladin's two-handers
+        # and carries no shield, one-hander or ranged list.
+        for spec, base in (
+            ("deathknight-blood", "warrior-protection"),
+            ("deathknight-frost", "warrior-fury"),
+            ("deathknight-unholy", "warrior-fury"),
+        ):
+            d = gs.load_spec(spec)
+            b = gs.load_spec(base)
+            self.assertEqual(d["spec"], spec)
+            self.assertEqual(d["class"], "death knight")
+            self.assertEqual(d["role"], b["role"])
+            self.assertEqual(d["weights"], b["weights"])
+            self.assertIn("approximation", d["approximation"])
+            for phase in gs.PREFER_PHASES:
+                self.assertEqual(
+                    gs.slot_list(spec, phase, "head"), gs.slot_list(base, phase, "head")
+                )
+                self.assertEqual(
+                    gs.slot_list(spec, phase, "two_hand"),
+                    gs.slot_list("paladin-retribution", phase, "two_hand"),
+                )
+                for slot in ("main_hand", "off_hand", "ranged"):
+                    self.assertEqual(gs.slot_list(spec, phase, slot), [], (spec, slot))
+        self.assertEqual(gs.load_spec("deathknight-blood")["role"], "tank")
+
+    def test_a_death_knight_scores_ratings_as_a_warrior(self):
+        stats = {"strength": 10, "crit_rating": 14, "defense_rating": 10}
+        self.assertEqual(
+            gs.score(stats, "deathknight-blood", 60, "head"),
+            gs.score(stats, "warrior-protection", 60, "head"),
+        )
 
     def test_weights_keep_their_mit_attribution(self):
         notice = (gs.DATA_DIR / "NOTICE.txt").read_text(encoding="utf-8")
