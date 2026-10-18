@@ -627,10 +627,11 @@ class TheBridgeWritesIt(unittest.TestCase):
         inserts = []
         namespace["_fetch_worn_pieces"] = fetch
         namespace["_insert_equip"] = lambda equip: inserts.append(equip) or True
+        namespace["_fetch_free_slots"] = lambda _names: {}
         exec(  # noqa: S102 - bridge.py's own source
             textwrap.dedent(_block("    async def _write_equips(self")), namespace
         )
-        bridge = types.SimpleNamespace(_equip_worn={}, _equip_holds={})
+        bridge = types.SimpleNamespace(_equip_worn={}, _equip_holds={}, _equip_room={})
         wanted = equips([carried()], GROG)
         history = [
             dict(
@@ -704,6 +705,7 @@ class TheBridgeWritesIt(unittest.TestCase):
             "EQUIP_MEMORY_HOURS": 24,
             "_fetch_worn_pieces": fetch,
             "_insert_equip": lambda equip: inserts.append(equip) or True,
+            "_fetch_free_slots": lambda _names: {},
         }
         exec(  # noqa: S102 - bridge.py's own source
             textwrap.dedent(_block("    async def _write_equips(self")), namespace
@@ -711,6 +713,7 @@ class TheBridgeWritesIt(unittest.TestCase):
         bridge = types.SimpleNamespace(
             _equip_worn={"Grog": {4: (6000, "Sparkleshell Breastplate")}},
             _equip_holds={},
+            _equip_room={},
         )
         wanted = equips(
             [carried(), carried(holder="Bork", item_guid=8002)],
@@ -764,11 +767,12 @@ class TheBridgeWritesIt(unittest.TestCase):
             "EQUIP_MEMORY_HOURS": 24,
             "_fetch_worn_pieces": lambda _names: [],
             "_insert_equip": lambda equip: inserts.append(equip) or True,
+            "_fetch_free_slots": lambda _names: {},
         }
         exec(  # noqa: S102 - bridge.py's own source
             textwrap.dedent(_block("    async def _write_equips(self")), namespace
         )
-        bridge = types.SimpleNamespace(_equip_worn={}, _equip_holds={})
+        bridge = types.SimpleNamespace(_equip_worn={}, _equip_holds={}, _equip_room={})
         wanted = equips([carried()], GROG)
         self.assertEqual([e.holder for e in wanted], ["Grog"])
 
@@ -799,7 +803,7 @@ class TheBridgeWritesIt(unittest.TestCase):
         body = _block("    async def _guild_equip_once(self")
         self.assertIn("online=set(members)", body)
         body = _block("    async def _write_equips(self")
-        self.assertIn("online=online)", body)
+        self.assertIn("online=online,", body)
 
     def test_the_vendor_pass_equips_above_the_town_run_gate(self):
         body = _block("    async def _vendor_once(self")

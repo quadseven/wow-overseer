@@ -2726,6 +2726,7 @@ def plan(
     supply=None,
     pets=None,
     asks=(),
+    equip_room=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -2754,7 +2755,9 @@ def plan(
     -> the food and drink sold in reach of a member short of them
     (restsupply.py, supply_step); `pets` name -> the tameable beasts around a
     hunter that knows Tame Beast and has no pet (hunterpet.py, pet_step);
-    `asks` the QuestAsk rows of the class quest asks lately (class_ask_streak).
+    `asks` the QuestAsk rows of the class quest asks lately (class_ask_streak);
+    `equip_room` name -> (free slots needed, what for) for members too full to
+    put an upgrade on (gear.equip_room, equip_room_step).
     """
     masters = bank_masters(masters or {}, banks, unclaimed)
     crafters = without_unclaimed(crafters or {}, unclaimed)
@@ -2813,6 +2816,7 @@ def plan(
             int((still or {}).get(m.name, 0)),
             _offer_for(supply, m.name),
             _offer_for(pets, m.name),
+            (equip_room or {}).get(m.name),
         )
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
         helps += asked
@@ -3049,9 +3053,12 @@ def _member_step(
     still_for=0,
     supply=None,
     pet=None,
+    equip_room=None,
 ):
     """A class quest first, then a hunter's first pet, then a hearth out of a
-    spot it cannot leave, then food for a member with nothing to eat or drink,
+    spot it cannot leave, then room in the bags for an upgrade the world
+    cannot put on without it (equip_room_step, #1088), then food for a member
+    with nothing to eat or drink,
     then a sale for bags that leave loot on the corpse (loot_room_short), then
     the inn, then riding, gear and food in its purchase order (purse.py), then
     the trainer for a trade at its tier cap (_tier_cap_first, #1116), then
@@ -3093,6 +3100,12 @@ def _member_step(
     )
     if found is not None:
         return found
+    step, doing, room_note = equip_room_step(
+        m, equip_room, classes, recent, cap, kept, crafters, master
+    ) or (None, "", "")
+    if step is not None or doing:
+        return step, doing, quest_note, ""
+    quest_note = _join(quest_note, room_note)
     found, supply_note, gear_note = _upkeep_first(
         m, offer, supply, leveling, kept, recent, cap, quest_note
     )
@@ -4178,12 +4191,7 @@ def class_room_step(m, move, book, recent, cap, kept=None, crafters=None, master
     doing = "%s: %s" % (classquest.MARK, said)
     if _cooling(m, ROOM_ACTION, recent):
         return None, doing, ""
-    step = (
-        _room_sale(m, said, kept, book, cap)
-        or _room_mail(m, said, kept, crafters, master, cap)
-        or _room_material_sale(m, said, kept, book, cap, need)
-        or _room_destroy(m, said, kept, book)
-    )
+    step = _room_ladder(m, said, need, kept, book, cap, crafters, master)
     if step is None:
         return (
             None,
@@ -4192,6 +4200,57 @@ def class_room_step(m, move, book, recent, cap, kept=None, crafters=None, master
             "destroy" % m.name,
         )
     return step, doing, ""
+
+
+def _room_ladder(m, said, need, kept, book, cap, crafters, master):
+    """The first make-room step the member can take, or None: sell what it has
+    no use for, mail its materials to the guild, sell its lowest value priced
+    materials, then destroy a material no vendor buys (class_room_step has the
+    order's why)."""
+    return (
+        _room_sale(m, said, kept, book, cap)
+        or _room_mail(m, said, kept, crafters, master, cap)
+        or _room_material_sale(m, said, kept, book, cap, need)
+        or _room_destroy(m, said, kept, book)
+    )
+
+
+def equip_room_step(m, room, book, recent, cap, kept=None, crafters=None, master=""):
+    """None when the member has the room its upgrade needs, or none is asked,
+    else (step or None, what the member does, a note): the member makes room
+    for an upgrade the world cannot put on yet (#1088).
+
+    `room` is (free slots needed, "to put on <piece> over <worn>") from
+    gear.equip_room: a two-hander over a main hand and a shield moves two
+    pieces into the one bag slot it leaves, so with full bags the world
+    refuses it. Three members with full bags were held a day each on that
+    refusal. The make-room ladder is the class quest's (_room_ladder), with
+    its cooldown and allowance; the equip pass asks again the pass the room
+    is there. With nothing to part with, no step: the note says so plainly
+    and the upgrade stays in the bags.
+    """
+    if not room or m.free_slots is None or int(m.free_slots) >= int(room[0]):
+        return None
+    if not m.alive:
+        return None
+    need, words = int(room[0]), str(room[1])
+    said = "%s makes room in its bags (%d free, %d needed) %s" % (
+        m.name,
+        int(m.free_slots),
+        need,
+        words,
+    )
+    if _cooling(m, ROOM_ACTION, recent):
+        return None, said, ""
+    step = _room_ladder(m, said, need, kept, book, cap, crafters, master)
+    if step is None:
+        return (
+            None,
+            "",
+            "%s has no room %s and nothing it may sell, mail or destroy; the "
+            "upgrade stays in its bags" % (m.name, words),
+        )
+    return step, said, ""
 
 
 def _room_sale(m, said, kept, book, cap):
