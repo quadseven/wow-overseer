@@ -27,9 +27,13 @@ over the live world named these reward chains blocked, and nobody was sent:
 
 import unittest
 
+from test_classquest import class_plan, class_steps
+from test_classquest_use import carried, giver, qrow, spawn
+from test_guildsocial import mate
+
+import classask
 import classquest
 import guildjobs
-from test_classquest_use import carried, giver, qrow, spawn
 
 PALADIN, SHAMAN, WARRIOR, WARLOCK = 2, 7, 1, 9
 HUMAN, ORC = 1, 2
@@ -87,7 +91,7 @@ def tome_book(spawns, loot):
 
 
 def paladin(**over):
-    return member(
+    args = dict(
         name="Hokk",
         class_id=PALADIN,
         race=HUMAN,
@@ -97,8 +101,9 @@ def paladin(**over):
         y=-420.0,
         zone_id=12,
         quest_log={1644: 3},
-        **over,
     )
+    args.update(over)
+    return member(**args)
 
 
 LINEN_LOOT = [{"item": LINEN, "entry": 285}, {"item": LINEN, "entry": 99}]
@@ -119,6 +124,67 @@ class TheLinen(unittest.TestCase):
     def test_linen_only_an_elite_drops_is_still_a_group(self):
         quest = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}]).quests[1644]
         self.assertEqual(classquest.blocker_of(quest, paladin())[0], classquest.GROUP)
+
+    def test_overleveled_paladin_solos_instead_of_waiting_for_help(self):
+        # #1094: a member 10+ levels over the quest attempts it solo instead of
+        # waiting for guild help. The quest is min_level 12, the paladin is 22.
+        book = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}])
+        move, blocked = classquest.next_move(book, paladin(level=22))
+        self.assertEqual(move.kind, classquest.HUNT)
+        self.assertEqual(move.spot.entry, 99)
+
+    def test_nine_over_still_asks_for_help(self):
+        # The solo bypass needs 10+ levels over; 9 over keeps the GROUP block.
+        book = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}])
+        move, blocked = classquest.next_move(book, paladin(level=21))
+        self.assertIsNone(move)
+        self.assertTrue(any("group" in b.lower() for b in blocked))
+
+    def test_plan_sends_the_overleveled_member_to_hunt_solo(self):
+        # #1097 Grug review, criterion 1, exercised through plan() rather than
+        # only next_move: the paladin stands far enough from Morgaine the Sly
+        # to need a walk, and gets a hunt step to its pack, solo.
+        book = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}])
+        result = class_plan([paladin(level=22, x=-9000.0, y=-420.0)], b=book)
+        steps = class_steps(result)
+        self.assertEqual(len(steps), 1)
+        self.assertTrue(
+            steps[0].rows[0].command.startswith("walk-to-spawn creature:80001")
+        )
+
+    def test_plan_posts_no_help_for_the_overleveled_member(self):
+        # #1097 Grug review, criterion 3: the solo attempt comes before any
+        # ask, so nothing reaches the guild-chat ask pass.
+        book = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}])
+        result = class_plan([paladin(level=22)], b=book)
+        self.assertEqual(result.helps, ())
+        out = classask.plan_pass(list(result.helps), [], {}, [], [], 0.0)
+        self.assertEqual(out.posts, ())
+
+    def test_a_stalled_solo_hunt_asks_for_help(self):
+        # #1097 Grug review, criterion 2: the solo attempt has a timeout. With
+        # the only pack tried and no progress, the STALLED blocker (in
+        # HELPABLE) becomes a help ask posted to guild chat.
+        book = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}])
+        m = paladin(level=22)
+        spot = book.quests[1644].fields[0]
+        hunts = classquest.Hunts()
+        self.assertEqual(
+            hunts.observe("Hokk", 1644, 0, spot, 0.0, failed=True),
+            classquest.REROLL,
+        )
+        helps = guildjobs.class_helps(m, book, hunts=hunts, now=0.0, recent=())
+        self.assertEqual(len(helps), 1)
+        self.assertEqual(
+            (helps[0].move.blocker, helps[0].move.want), (classquest.STALLED, 1)
+        )
+        friends = [
+            mate("Hokk", 22, 2, guild="Bonkers"),
+            mate("Cave", 28, 2, guild="Bonkers"),
+        ]
+        out = classask.plan_pass(list(helps), friends, {}, [], [], 0.0)
+        self.assertEqual(len(out.posts), 1)
+        self.assertEqual(out.posts[0].target, "quest:1644")
 
     def test_an_elite_kill_is_still_a_group(self):
         row = qrow(9, "Kill the boss", npc1=99, npc_count1=1)
