@@ -2585,9 +2585,12 @@ def _note_town_pass(key: tuple, state, new, line: str, marks: dict) -> None:
         return
     if new.phase != townerrand.DONE:
         return
-    steps = state.steps
-    vendor_ahead = (state.phase != townerrand.STEPS
-                    or state.step < steps.index(townerrand.VENDOR))
+    # A step row with no vendor step says nothing about the vendor (#992).
+    try:
+        vendor = state.steps.index(townerrand.VENDOR)
+    except ValueError:
+        return
+    vendor_ahead = (state.phase != townerrand.STEPS or state.step < vendor)
     if vendor_ahead:
         _TOWN_PASS_NOTE[key] = ("the town errand ended before its vendor "
                                 "step (%s)" % line)
