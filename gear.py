@@ -1957,6 +1957,10 @@ def _world_holds(
             )
         elif hold.worn != worn_now or _room_made(hold, equip, worn, free_slots):
             hold.lifted = True
+        elif _room_short(equip, worn, free_slots):
+            # The first room read may have failed. Remember a shortage seen
+            # later so making room can still lift this refusal immediately.
+            hold.short = True
         if hold.lifted:
             continue
         attempts = max(1, int((tries or {}).get(key, 1)))

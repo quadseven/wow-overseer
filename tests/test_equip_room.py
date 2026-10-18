@@ -144,6 +144,16 @@ class AFullBackpack(unittest.TestCase):
         self.assertEqual(notes, ())
         self.assertEqual(gear.world_held((STAFF,), holds), 0)
 
+    def test_room_seen_after_an_unread_pass_lifts_the_old_hold(self):
+        holds = {}
+        queue_for(None, holds=holds)
+        queue, notes = queue_for({"Cronk": 0}, holds=holds)
+        self.assertEqual(queue, ())
+        self.assertFalse(any("tries again at" in note for note in notes))
+        queue, notes = queue_for({"Cronk": 1}, holds=holds)
+        self.assertEqual(queue, (STAFF,))
+        self.assertEqual(notes, ())
+
     def test_a_refusal_with_room_keeps_its_staged_hold(self):
         """Room was not why the world refused it, so the hold stands."""
         holds = {}
