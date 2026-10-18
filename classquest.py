@@ -2110,6 +2110,15 @@ class Hunts:
             return
         self._by[name] = replace(hunt, since=now)
 
+    def used(self, name, quest, now) -> None:
+        """Restart the stall clock of a hunt whose use the module answered as
+        done (classuse.DONE). A Binding's Runes of Summoning summon the demon at
+        the circle, but the quest counter moves only when the demon dies, so
+        the walk, the use and the fight would otherwise count as one stall and
+        a quest with one circle be called tried although the use worked. The
+        packs tried stay tried and a hold-off stays: only this target worked."""
+        self.pause(name, quest, now)
+
     def forget(self, name) -> None:
         self._by.pop(name, None)
 

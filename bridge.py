@@ -16185,6 +16185,10 @@ class Bridge(discord.Client):
             log.info("guild jobs: quest use row %d for %s (%s): %s", row_id,
                      step.holder, row.command, verdict.said)
             if verdict.state in classuse.DONE:
+                # A done use restarts the class hunt's stall clock (#1140): the
+                # counter moves only when what it summoned dies.
+                if step.action == classquest.ACTION:
+                    self._class_hunts.used(step.holder, int(step.key), time.time())
                 return True
             if verdict.state == classuse.UNSUPPORTED:
                 self._class_use_unsupported_until = (
