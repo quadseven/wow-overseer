@@ -423,6 +423,19 @@ class TheVendorStepSaysHowItEnded(unittest.TestCase):
         )
         self.assertNotIn(KEY, self.note)
 
+    def test_a_step_row_with_no_vendor_says_nothing(self):
+        # #992: an errand whose step row has no vendor step ends without a
+        # note and without raising out of the errand hook.
+        class NoVendor:
+            phase = townerrand.STEPS
+            step = 0
+            steps = (townerrand.BANK, townerrand.TIDY)
+            current_step = townerrand.BANK
+
+        done = townerrand.State(phase=townerrand.DONE)
+        self.ns["_note_town_pass"](KEY, NoVendor(), done, "bank done", {})
+        self.assertNotIn(KEY, self.note)
+
 
 class ABagRoomErrandMakesRoomFirst(unittest.TestCase):
     def test_selling_and_banking_come_first(self):
