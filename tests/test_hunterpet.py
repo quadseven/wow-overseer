@@ -166,7 +166,7 @@ class InThePass(unittest.TestCase):
         for needle in (
             "hunterpet.UNPETTED_SQL",
             "hunterpet.BEASTS_SQL",
-            "pets=await self._job_pet_offers(",
+            "pets = await self._job_pet_offers(",
         ):
             self.assertTrue(needle in source, needle)
 

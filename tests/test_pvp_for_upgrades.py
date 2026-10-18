@@ -530,7 +530,7 @@ class TheWiring(unittest.TestCase):
 
     def test_the_bridge_plans_says_and_holds(self):
         self.assertIn(
-            'pvp=await self._job_pvp_moves(members, facts["recent"], busy)', BRIDGE
+            'pvp = await self._job_pvp_moves(members, facts["recent"], busy)', BRIDGE
         )
         self.assertIn('await self._say_pvp_lines(plan, facts["recent"])', BRIDGE)
         self.assertIn("guildsocial.SOURCE))", BRIDGE)
