@@ -24,8 +24,17 @@ GIVE = "give"
 
 def _row(holder, guid, slot, slots=8):
     """One container on `holder`, at backpack-level `slot` (bag 0)."""
-    return dict(holder=holder, guid=guid, name="Bag %d" % guid, slots=slots,
-                bag=0, slot=slot, used=0, entry=4496, subclass=0)
+    return dict(
+        holder=holder,
+        guid=guid,
+        name="Bag %d" % guid,
+        slots=slots,
+        bag=0,
+        slot=slot,
+        used=0,
+        entry=4496,
+        subclass=0,
+    )
 
 
 # Grog wears four bags and carries a fifth in his backpack; Ugga wears none.

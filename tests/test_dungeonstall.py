@@ -289,35 +289,45 @@ class StoreCursor:
     def execute(self, sql, params=()):
         flat = " ".join(sql.split())
         self.store.calls.append((flat, params))
-        self.rows = []
         if self.store.fail_on and self.store.fail_on in flat:
             raise RuntimeError("the store refused: %s" % flat[:40])
+        self.rows = self._read(flat, params) if flat.startswith("SELECT") else []
+        if not flat.startswith("SELECT"):
+            self._write(flat, params)
+
+    def _read(self, flat, params):
+        store = self.store
         if flat.startswith("SELECT id, map_id, portal_keyword"):
-            self.rows = [dict(r) for r in self.store.runs]
-        elif "FROM overseer_dungeon_run_event" in flat:
-            self.rows = [dict(e) for e in self.store.events if e["run_id"] in params]
-        elif flat.startswith("SELECT id FROM overseer_dungeon_pace WHERE family"):
+            return [dict(r) for r in store.runs]
+        if "FROM overseer_dungeon_run_event" in flat:
+            return [dict(e) for e in store.events if e["run_id"] in params]
+        if flat.startswith("SELECT id FROM overseer_dungeon_pace WHERE family"):
             # _stall_held: a stall_left row for this family and door.
-            self.rows = [
+            want = tuple(params[:3])
+            return [
                 {"id": n}
-                for n, r in enumerate(self.store.records, 1)
-                if tuple(r[:3]) == tuple(params[:3])
+                for n, r in enumerate(store.records, 1)
+                if tuple(r[:3]) == want
             ]
-        elif flat.startswith("SELECT id, decision, door, target, queue_id"):
+        if flat.startswith("SELECT id, decision, door, target, queue_id"):
             # dungeonpace.OPEN_SQL: the family's open ladder row, if any.
-            self.rows = [
+            return [
                 dict(r)
-                for r in self.store.open_pace
-                if r["family"] == params[0] and r["id"] not in self.store.shut
+                for r in store.open_pace
+                if r["family"] == params[0] and r["id"] not in store.shut
             ]
-        elif "SET status = 'cancelled'" in flat:
-            self.store.world.cancel(params[0])
+        return []
+
+    def _write(self, flat, params):
+        store = self.store
+        if "SET status = 'cancelled'" in flat:
+            store.world.cancel(params[0])
         elif flat.startswith("INSERT INTO overseer_dungeon_pace"):
-            self.store.records.append(params)
-            self.lastrowid = len(self.store.records)
+            store.records.append(params)
+            self.lastrowid = len(store.records)
         elif flat.startswith("UPDATE overseer_dungeon_pace SET closed_at"):
-            self.store.closed.append(params)
-            self.store.shut.add(params[1])
+            store.closed.append(params)
+            store.shut.add(params[1])
 
     def fetchall(self):
         return list(self.rows)
@@ -517,9 +527,7 @@ class TheBreakerWritesInOrder(unittest.TestCase):
         lines = _pass(w)
         self.assertEqual(0, w.commits)
         self.assertEqual("active", w.queue[0]["status"])
-        self.assertFalse(
-            [j for j in w.jobs if j[1] == jobs.DEFAULT], (w.jobs, lines)
-        )
+        self.assertFalse([j for j in w.jobs if j[1] == jobs.DEFAULT], (w.jobs, lines))
         self.assertTrue([ln for ln in lines if "stall: the pass for" in ln], lines)
 
     def test_a_durable_cancel_puts_the_family_on_quest(self):
@@ -546,8 +554,14 @@ class TheBreakerWritesInOrder(unittest.TestCase):
     def test_a_cancelled_entry_closes_its_step_down_pace_row(self):
         w = self.world([_q(7, "shadowfang", 30, "active", 0)])
         w.open_pace = [
-            {"id": 41, "family": "Zug", "decision": "step_down",
-             "door": "shadowfang", "target": "deadmines", "queue_id": 7},
+            {
+                "id": 41,
+                "family": "Zug",
+                "decision": "step_down",
+                "door": "shadowfang",
+                "target": "deadmines",
+                "queue_id": 7,
+            },
         ]
         _pass(w)
         self.assertIn(("left", 41), w.closed)
