@@ -1194,11 +1194,49 @@ def _densest(member, spawns, avoid=()):
     ]
     if not here:
         return None
+    packs = _pack_sizes(here)
+    best = min(
+        range(len(here)),
+        key=lambda i: (-packs[i], _yards(member, here[i]), here[i].guid),
+    )
+    return here[best]
 
-    def pack(s):
-        return sum(1 for o in here if math.hypot(o.x - s.x, o.y - s.y) <= PACK_YARDS)
 
-    return min(here, key=lambda s: (-pack(s), _yards(member, s), s.guid))
+def _pack_sizes(here) -> list:
+    """For each spawn of `here`, how many spawns of `here` (itself included)
+    stand within PACK_YARDS of it.
+
+    Each spawn is measured only against the spawns of its own and the eight
+    neighbouring grid cells, not against every other spawn (#833, 2026-10-18:
+    after the first cut, the all-pairs count, run for each hunt move of each
+    member twice a pass, was still 85% of a synthetic guild job plan of 200
+    quests x 150 spawns x 142 members). A cell is a yard wider than
+    PACK_YARDS, so two spawns within PACK_YARDS are always in neighbouring
+    cells, float rounding at a cell edge included."""
+    if not all(math.isfinite(s.x) and math.isfinite(s.y) for s in here):
+        # No grid cell for a coordinate that is not a number: measure all pairs.
+        return [
+            sum(1 for o in here if math.hypot(o.x - s.x, o.y - s.y) <= PACK_YARDS)
+            for s in here
+        ]
+    cell = PACK_YARDS + 1.0
+    cells: dict = {}
+    keys = []
+    for i, s in enumerate(here):
+        key = (math.floor(s.x / cell), math.floor(s.y / cell))
+        keys.append(key)
+        cells.setdefault(key, []).append(i)
+    out = []
+    for s, (cx, cy) in zip(here, keys):
+        n = 0
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for j in cells.get((cx + dx, cy + dy), ()):
+                    o = here[j]
+                    if math.hypot(o.x - s.x, o.y - s.y) <= PACK_YARDS:
+                        n += 1
+        out.append(n)
+    return out
 
 
 # The two classic continents, by map id, for the crossing sentence.
