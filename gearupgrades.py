@@ -69,6 +69,10 @@ _BY_TREE = {
     ("warrior", "Arms"): "warrior-fury",
     ("warrior", "Fury"): "warrior-fury",
     ("warrior", "Protection"): "warrior-protection",
+    # Approximations built from the plate lists (gearscore.DERIVED_SPECS, #760).
+    ("death knight", "Blood"): "deathknight-blood",
+    ("death knight", "Frost"): "deathknight-frost",
+    ("death knight", "Unholy"): "deathknight-unholy",
 }
 _ONE_SPEC = {
     "hunter": "hunter-dps",
@@ -157,12 +161,20 @@ def choose_spec(class_name: str, tree: str | None) -> tuple[str | None, str]:
         note = ""
         if (cls, tree) == ("druid", "Feral Combat"):
             note = "Feral is scored as damage; the tree cannot tell cat from bear."
-        return spec, note
-    known = [s for s in gearscore.spec_ids() if s.startswith(cls + "-")]
+        return spec, _with_approximation(spec, note)
+    prefix = gearscore.class_prefix(cls)
+    known = [s for s in gearscore.spec_ids() if s.startswith(prefix)]
     if not known:
         return None, f"No gear lists for the {cls or 'unknown'} class yet."
     why = f"tree {tree!r} has no list" if tree else "no talent tree is known"
-    return known[0], f"Spec unknown ({why}); showing the class's first spec."
+    note = f"Spec unknown ({why}); showing the class's first spec."
+    return known[0], _with_approximation(known[0], note)
+
+
+def _with_approximation(spec: str, note: str) -> str:
+    """The note, with the spec's approximation line when it has one (#760)."""
+    extra = gearscore.load_spec(spec).get("approximation") or ""
+    return " ".join(p for p in (note, extra) if p)
 
 
 def where(entry: int) -> list[dict]:

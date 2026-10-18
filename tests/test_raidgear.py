@@ -63,6 +63,36 @@ def _member(name, level=60):
     return {"name": name, "level": level, "class_id": WARRIOR}
 
 
+class ADeathKnightSeatIsScored(unittest.TestCase):
+    """#760: a Blood death knight, the only level 60 in a lineup, read
+    "pre-raid gear not read" because no list existed for the class."""
+
+    def test_a_blood_death_knight_reads_a_share(self):
+        spec = "deathknight-blood"
+        import gearupgrades
+
+        rows = {i: _row(i, 80) for i in gearupgrades.all_list_ids(spec)}
+        worn = []
+        for key in BODY:
+            slot = armory.EQUIPPED_SLOTS.index(SLOT_OF.get(key, key))
+            worn.append(dict(_row(910000 + slot, 5), name="Dk", slot=slot))
+        blade = _row(38632, 5, inventory_type=17)
+        worn.append(
+            dict(blade, name="Dk", slot=armory.EQUIPPED_SLOTS.index("main hand"))
+        )
+        member = {
+            "name": "Dk",
+            "level": 60,
+            "class_id": raidlineup.DEATH_KNIGHT,
+            "spec": "Blood",
+        }
+        got = raidgear.readiness_by_name([member], worn, rows)
+        self.assertIsNotNone(got["Dk"])
+        reason = raidgear.short_reason(got["Dk"])
+        self.assertNotIn("not read", reason)
+        self.assertIn("%", raidgear.percent(got["Dk"]))
+
+
 class ReadinessIsTheShareOfSlotsAtPreRaidBest(unittest.TestCase):
     def test_a_member_in_pre_raid_best_is_fully_ready(self):
         got = raidgear.readiness_by_name(
