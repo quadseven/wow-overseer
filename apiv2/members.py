@@ -398,10 +398,12 @@ def _resolve_followers(members: list, found: dict, follows: dict) -> None:
 
 def _presence(reading: dict, snap: dict | None) -> dict:
     """What nowstatus.compose reads about a character's presence."""
+    life = reading["life"]
     return {
         "present": reading["online"],
-        "condition": "dead" if reading["life"] == "dead" else "ok",
+        "condition": "dead" if life in ("dead", "ghost") else "ok",
         "combat": bool(snap and snap.get("in_combat")),
+        "life": life,
     }
 
 

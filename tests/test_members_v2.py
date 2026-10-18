@@ -856,5 +856,24 @@ class TheMembersBadge(unittest.TestCase):
         self.assertIsNone(self.run_badge({"members": []})["got"])
 
 
+class AGhostIsOutOfPlay(unittest.TestCase):
+    """A released ghost reads as dead to nowstatus, so it shows Ghost, not
+    Idle. #1093"""
+
+    def test_a_ghost_reading_is_a_dead_condition_and_keeps_its_life(self):
+        got = members._presence({"online": True, "life": "ghost"}, None)
+        self.assertEqual("dead", got["condition"])
+        self.assertEqual("ghost", got["life"])
+
+    def test_an_online_ghost_composes_as_ghost_not_idle(self):
+        presence = members._presence({"online": True, "life": "ghost"}, None)
+        got = nowstatus.compose({"name": "Grumbles", **presence}, None)
+        self.assertEqual("Ghost", got["doing"])
+
+    def test_a_living_reading_stays_ok(self):
+        got = members._presence({"online": True, "life": "alive"}, None)
+        self.assertEqual("ok", got["condition"])
+
+
 if __name__ == "__main__":
     unittest.main()
