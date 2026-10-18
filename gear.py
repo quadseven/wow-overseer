@@ -61,6 +61,8 @@ import math
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
+import weaponskill
+
 # The stuck text names times the way the reader reads them: the operator's
 # clock, not UTC. Same convention as runtimeline's operator clock.
 try:
@@ -1469,6 +1471,15 @@ def _hand_refusal(holding: Holding, character: CharacterState) -> str:
     return ""
 
 
+def bot_wont_wear(holding: Holding, character: CharacterState) -> bool:
+    """The member's bot will not put this piece on, whatever the item levels
+    say (#830): a hunter and a melee weapon. Asked only where an `e` row is
+    built, so who may hold or receive the piece is unchanged."""
+    return weaponskill.bot_wont_wear(
+        character.class_id, holding.item_class, holding.inventory_type
+    )
+
+
 def equips(holdings, characters) -> tuple:
     """Every carried piece its holder should put on now, best per slot.
 
@@ -1484,7 +1495,7 @@ def equips(holdings, characters) -> tuple:
             continue
         if claimant(holding, characters) != holding.holder:
             continue
-        if _hand_refusal(holding, character):
+        if _hand_refusal(holding, character) or bot_wont_wear(holding, character):
             continue
         slot = _slot_for(holding)
         group = _WEAPON_GROUP.get(slot, slot)
@@ -1523,6 +1534,8 @@ def chosen_equip(holding: Holding, character: CharacterState, reason: str):
     """
     slot = _slot_for(holding)
     if not slot or character.name != holding.holder:
+        return None
+    if bot_wont_wear(holding, character):
         return None
     worn = worn_against(holding, character)
     return Equip(
