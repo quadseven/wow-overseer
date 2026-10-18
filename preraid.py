@@ -51,6 +51,7 @@ from pathlib import Path
 import bag_pressure
 import campaignplan
 import council
+import fireplan
 
 # --- the places ----------------------------------------------------------------
 
@@ -294,7 +295,7 @@ _ITEM_COLUMNS = (
     "it.entry, it.name, it.ItemLevel AS item_level, it.Quality AS quality, "
     "it.InventoryType AS inventory_type, it.class AS item_class, "
     "it.subclass, it.AllowableClass AS allowable_class, "
-    "it.RequiredLevel AS required_level, it.armor, it.block, "
+    "it.RequiredLevel AS required_level, it.armor, it.block, it.fire_res, "
     + ", ".join("it.stat_type%d, it.stat_value%d" % (i, i) for i in range(1, 11))
     + ", it.dmg_min1, it.dmg_max1, it.delay, "
     + ", ".join("it.spellid_%d, it.spelltrigger_%d" % (i, i) for i in range(1, 6))
@@ -510,6 +511,7 @@ class Item:
     armor: int = 0
     dps: float = 0.0
     sources: tuple = ()
+    fire: int = 0  # fire resistance (item_template.fire_res)
 
 
 def item(row: dict, texts: dict | None = None) -> Item:
@@ -544,6 +546,7 @@ def item(row: dict, texts: dict | None = None) -> Item:
         stats=tuple(sorted(stats.items())),
         armor=int(row.get("armor") or 0),
         dps=dps,
+        fire=int(row.get("fire_res") or 0),
     )
 
 
@@ -898,6 +901,11 @@ class Member:
         levels = [i.item_level for s, i in self.worn.items() if s not in (3, 18)]
         return round(sum(levels) / len(levels)) if levels else 0
 
+    @property
+    def fire(self) -> int:
+        """The fire resistance the member's worn items give."""
+        return sum(i.fire for i in self.worn.values())
+
 
 def members(member_rows: list, worn_rows: list, texts=None) -> list:
     """Members from MEMBERS_SQL and WORN_SQL rows, in the order given."""
@@ -1029,6 +1037,7 @@ class Upgrade:
     item: Item
     gain: float  # score points over what is worn
     levels: int  # item level over what is worn (may be negative)
+    fire: int = 0  # fire resistance over what is worn, for a fire piece
 
     @property
     def slot_name(self) -> str:
@@ -1036,6 +1045,12 @@ class Upgrade:
 
     @property
     def said(self) -> str:
+        if self.fire:
+            return "%s: %s (+%d fire resistance)" % (
+                self.slot_name,
+                self.item.name,
+                self.fire,
+            )
         return "%s: %s (item level %d, %+d)" % (
             self.slot_name,
             self.item.name,
@@ -1105,6 +1120,7 @@ class MemberPlan:
     member: Member
     slots: tuple
     upgrades: tuple  # every Upgrade, best gain first
+    fire: tuple = ()  # every planned fire resistance Upgrade, most fire first
 
     def next_up(self, reachable, limit: int = 5) -> tuple:
         """The biggest upgrades the family can go and get, best first: one a
@@ -1176,6 +1192,58 @@ def for_member(items: dict, member: Member) -> dict:
     return out
 
 
+# FIRE RESISTANCE FOR A TANK (#759). A family tank short of the main tank's
+# target counts a planned fire resistance piece (fireplan: its class's tank
+# fire set) that drops in a dungeon as an upgrade too, so the planner aims a
+# run at one. It is a second set, kept beside the spec gear, so it does not
+# compete with a spec upgrade for the same slot. FIRE_LEVELS_PER_POINT is
+# what one point of fire resistance is worth against one item level of spec
+# gear: a convention, so a 20 point cape weighs like a 20 item level upgrade.
+FIRE_LEVELS_PER_POINT = 1.0
+FIRE_TARGET = fireplan.FIRE_TARGET[fireplan.MAIN_TANK]
+
+
+def _worn_fire(member: Member, slot: int) -> int:
+    """The fire resistance a piece for `slot` is measured against: the weaker
+    of a pair of rings or trinkets."""
+    worn = member.worn
+    if slot in (10, 11, 12, 13):
+        pair = (10, 11) if slot in (10, 11) else (12, 13)
+        return min(worn[s].fire if s in worn else 0 for s in pair)
+    here = worn.get(slot)
+    return here.fire if here is not None else 0
+
+
+def fire_upgrades(member: Member, items: dict) -> tuple:
+    """The planned fire resistance pieces `member` would gain from, most
+    fire resistance first; () for a member who is no tank, or who already
+    wears the main tank's target."""
+    if member.role != TANK or member.fire >= FIRE_TARGET:
+        return ()
+    wanted = fireplan.planned_entries(fireplan.TANK, member.class_id)
+    worn_entries = {i.entry for i in member.worn.values()}
+    out = []
+    for entry, piece in items.items():
+        if entry not in wanted or piece.fire <= 0 or entry in worn_entries:
+            continue
+        best = None
+        for slot in slots_for(piece, member):
+            gain = piece.fire - _worn_fire(member, slot)
+            if gain > 0 and (best is None or gain > best.fire):
+                best = Upgrade(
+                    member.name,
+                    slot,
+                    piece,
+                    float(gain),
+                    round(gain * FIRE_LEVELS_PER_POINT),
+                    fire=gain,
+                )
+        if best is not None:
+            out.append(best)
+    out.sort(key=lambda u: (-u.fire, u.item.entry))
+    return tuple(out)
+
+
 def plan(member: Member, items: dict, reachable=()) -> MemberPlan:
     """`member`'s pre-raid plan over the catalog `items`.
 
@@ -1199,7 +1267,7 @@ def plan(member: Member, items: dict, reachable=()) -> MemberPlan:
                     near[i] if len(near) > i else None,
                 )
             )
-    return MemberPlan(member, tuple(slots), tuple(found))
+    return MemberPlan(member, tuple(slots), tuple(found), fire_upgrades(member, mine))
 
 
 # --- what a run gives ------------------------------------------------------------
@@ -1212,19 +1280,23 @@ class Gain:
     name: str
     upgrades: int  # distinct upgrade pieces that drop there
     drops: float  # expected upgrade pieces per run
-    levels: float  # expected item levels gained per run
+    levels: float  # expected item levels gained per run, fire included
     best: str  # the likeliest big upgrade, said
+    fire: float = 0.0  # expected fire resistance gained per run (#759)
+    fire_best: str = ""  # the likeliest planned fire resistance piece, said
 
     @property
     def line(self) -> str:
+        fire = "fire resistance %s" % self.fire_best if self.fire_best else ""
         if not self.upgrades:
-            return "%s: nothing" % self.name
-        return "%s: %d upgrade%s, %.2f a run, best %s" % (
+            return "%s: %s" % (self.name, fire or "nothing")
+        return "%s: %d upgrade%s, %.2f a run, best %s%s" % (
             self.name,
             self.upgrades,
             "" if self.upgrades == 1 else "s",
             self.drops,
             self.best,
+            "; " + fire if fire else "",
         )
 
 
@@ -1236,25 +1308,19 @@ def run_gains(plans: list) -> dict:
     there (SHARED_PLACES). A quest reward is not counted: it is had once, not
     every run. The item levels a run is worth are, per slot, the expected best
     upgrade that drops for it: two chests that each drop one run in five are
-    not worth two chests, because only one is worn.
+    not worth two chests, because only one is worn. A tank's planned fire
+    resistance pieces (`fire_upgrades`) are a second set, counted the same
+    way on their own and added, FIRE_LEVELS_PER_POINT to the point.
     """
     out: dict = {}
     for place in PLACES:
         gains = []
         for member_plan in plans:
-            pieces = []
-            for u in member_plan.upgrades:
-                p = min(
-                    sum(
-                        s.chance
-                        for s in u.item.sources
-                        if drops_at(s.place, place) and s.kind != QUEST
-                    )
-                    / 100.0,
-                    1.0,
-                )
-                if p > 0:
-                    pieces.append((u, p))
+            pieces = _dropping(member_plan.upgrades, place)
+            fire = _dropping(member_plan.fire, place)
+            fire_best = max(
+                fire, key=lambda up: (up[1] * up[0].fire, up[0].fire), default=None
+            )
             best = max(
                 pieces,
                 key=lambda up: (up[1] * max(up[0].levels, 1), up[0].gain),
@@ -1265,7 +1331,7 @@ def run_gains(plans: list) -> dict:
                     name=member_plan.member.name,
                     upgrades=len(pieces),
                     drops=round(sum(p for _u, p in pieces), 2),
-                    levels=_expected_levels(pieces),
+                    levels=round(_expected_levels(pieces) + _expected_levels(fire), 2),
                     best=""
                     if best is None
                     else "%s for %s (%+d item levels, %s)"
@@ -1275,9 +1341,37 @@ def run_gains(plans: list) -> dict:
                         best[0].levels,
                         _pct(best[1] * 100),
                     ),
+                    fire=round(_expected_levels(fire) / FIRE_LEVELS_PER_POINT, 2),
+                    fire_best=""
+                    if fire_best is None
+                    else "%s for %s (+%d, %s)"
+                    % (
+                        fire_best[0].item.name,
+                        fire_best[0].slot_name,
+                        fire_best[0].fire,
+                        _pct(fire_best[1] * 100),
+                    ),
                 )
             )
         out[place] = tuple(gains)
+    return out
+
+
+def _dropping(upgrades, place: str) -> list:
+    """(Upgrade, chance per run) for each of `upgrades` that drops at `place`."""
+    out = []
+    for u in upgrades:
+        p = min(
+            sum(
+                s.chance
+                for s in u.item.sources
+                if drops_at(s.place, place) and s.kind != QUEST
+            )
+            / 100.0,
+            1.0,
+        )
+        if p > 0:
+            out.append((u, p))
     return out
 
 

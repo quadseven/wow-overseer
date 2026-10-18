@@ -584,6 +584,33 @@ class TheYield(unittest.TestCase):
         ]
         self.assertIn("after 4 asks that did not get it done (4 yes)", line)
 
+    def test_three_parties_that_time_out_yield_after_server_try(self):
+        b = group_book()
+        rows = [
+            {
+                "asker": "Bigzug",
+                "target": "quest:2000",
+                "state": "ran",
+                "reason": "failed: party timed out before quest credit",
+                "age": age,
+                "yeses": 2,
+            }
+            for age in (20, 40)
+        ]
+        after_guild = guildjobs.class_helps(
+            asker(), b, asks=guildjobs.quest_asks_from_rows(rows)
+        )
+        self.assertEqual(len(after_guild), 1)
+        self.assertTrue(classask.escalated(after_guild[0]))
+        rows.insert(0, dict(rows[0], age=10))
+        asks = guildjobs.quest_asks_from_rows(rows)
+        self.assertEqual(guildjobs.class_helps(asker(), b, asks=asks), [])
+        result = class_plan([asker()], b=b, asks=asks)
+        self.assertEqual(result.helps, ())
+        self.assertNotIn("Bigzug", result.owed)
+        (line,) = [line for _key, line in result.ask_yields]
+        self.assertIn("after 3 asks that did not get it done (6 yes)", line)
+
     def test_another_members_or_quests_asks_do_not_count(self):
         b = group_book()
         asks = [done_ask(60, quest=1), done_ask(50, asker_="Chill"), done_ask(40)]
@@ -847,6 +874,57 @@ class TheDungeonPasses(unittest.TestCase):
         ):
             asyncio.run(bridge.Bridge._guild_run_once(this))
         self.assertGreaterEqual(seen["busy"], {"Zappy", "Locky", "Idle"})
+
+
+class TheSkippedCohort(unittest.TestCase):
+    """A cohort whose job pass returns before planning keeps no class quest
+    plan of its own (bridge._drop_class_plan)."""
+
+    OTHER = types.SimpleNamespace(key="other", names=("Hulk",))
+
+    def planned(self):
+        this = _Self()
+        this._class_owed_by = {}
+        for cohort, member in ((None, "Zappy"), (self.OTHER, "Hulk")):
+            plan = types.SimpleNamespace(
+                helps=(TheDungeonPasses().group_help(member),),
+                lines={member: "%s hunts for its %s" % (member, classquest.MARK)},
+            )
+            bridge._keep_class_plan(this, cohort, plan)
+            this._class_owed_by[bridge._cohort_key(cohort)] = {member: object()}
+        return this
+
+    def jobs_once(self, this, cohort, names, members=()):
+        with mock.patch.multiple(
+            bridge,
+            _names_of=lambda c: list(names),
+            _fetch_job_facts=lambda n: {"members": list(members)},
+        ):
+            asyncio.run(bridge.Bridge._guild_jobs_once(this, cohort))
+
+    def assert_only_zappy_left(self, this):
+        self.assertEqual([h.member for h in this._class_helps], ["Zappy"])
+        self.assertEqual(this._classquest_held, {"Zappy"})
+        self.assertEqual(bridge._class_owed_names(this), {"Zappy"})
+        self.assertNotIn("other", this._class_helps_by)
+        self.assertNotIn("other", this._classquest_held_by)
+        self.assertNotIn("other", this._class_owed_by)
+
+    def test_a_cohort_with_no_names_leaves_no_class_plan_behind(self):
+        this = self.planned()
+        self.jobs_once(this, self.OTHER, names=())
+        self.assert_only_zappy_left(this)
+
+    def test_a_cohort_with_no_placed_member_leaves_no_class_plan_behind(self):
+        this = self.planned()
+        self.jobs_once(this, self.OTHER, names=("Hulk",))
+        self.assert_only_zappy_left(this)
+
+    def test_a_bridge_with_no_plan_yet_drops_nothing(self):
+        this = _Self()
+        self.jobs_once(this, None, names=())
+        self.assertEqual(tuple(this._class_helps), ())
+        self.assertEqual(this._classquest_held, set())
 
 
 class TheWiring(unittest.TestCase):

@@ -1,7 +1,8 @@
 // One guild run: #/runs/<id>. Progress, seats and the timeline.
 //
-// The run comes from /api/guildruns (the groups out now and the recent ones
-// back). The timeline is the coordinator's own steps (formed, its lines, how
+// The run comes from /api/v2/run (the one run, with its gear, bosses and
+// wipes); the /api/guildruns row (the groups out now and the recent ones
+// back) stands in while that read is on its way. The timeline is the coordinator's own steps (formed, its lines, how
 // it came back) with what each seat said while the run lasted, from
 // /api/thoughts, read once per visit after the run itself is known.
 
@@ -20,6 +21,22 @@ const SHOWN = 40;
 function runPath(id) { return "/api/v2/run?id=" + encodeURIComponent(id); }
 
 function thoughtsPath(name) { return "/api/thoughts?name=" + encodeURIComponent(name) + "&limit=" + THOUGHTS; }
+
+// The run to draw. The one-run read (/api/v2/run) is the same run_view as the
+// /api/guildruns row plus its gear, bosses and wipes, so it wins once it has
+// answered; the list row stands in only while that read is on its way (or if
+// it failed), and is all an older run's page lacks until then.
+function theRun(ctx) {
+  const one = ctx.get(runPath(ctx.params.id));
+  return (one.data && one.data.run) || findRun(ctx.params.id) || null;
+}
+
+// True while the one-run read has neither answered nor failed: the gear the
+// list row lacks is still being read, not missing.
+function byIdPending(ctx) {
+  const one = ctx.get(runPath(ctx.params.id));
+  return one.data === undefined && !one.error;
+}
 
 function guildKey(r) {
   return guildSlug(r.guild) || firstGuild();
@@ -94,6 +111,10 @@ function gearRows(r) {
   return html`<div class="card g-list"><div class="g-list-head"><span class="g-card-title">Gear</span></div>${rows.length ? rows.map((g) => html`<div class="g-row g-r-gear"><span>${member({ name: g.member })}</span><span class="g-grow">${item({ entry: g.entry, name: g.name, quality: g.quality })}</span><span class="muted">${g.source}</span></div>`) : html`<div class="g-row muted">No gear recorded for this run.</div>`}</div>`;
 }
 
+function gearReading() {
+  return html`<div class="card g-list"><div class="g-list-head"><span class="g-card-title">Gear</span></div><div class="g-row muted">Reading the gear...</div></div>`;
+}
+
 // The dungeon's bosses as named segments: killed bosses in color, the rest
 // dim, each name readable on a phone.
 export function bossPips(r) {
@@ -124,8 +145,9 @@ export default {
     const wait = pendingRead(gr, 2);
     if (wait) return html`<header class="page-head"><h1>Run ${ctx.params.id}</h1></header>${wait}`;
     const one = ctx.get(runPath(ctx.params.id));
-    const r = findRun(ctx.params.id) || (one.data && one.data.run) || null;
-    if (!r && one.data === undefined && !one.error) {
+    const r = theRun(ctx);
+    const reading = byIdPending(ctx);
+    if (!r && reading) {
       return html`<header class="page-head"><h1>Run ${ctx.params.id}</h1></header>${pendingRead(one, 2)}`;
     }
     if (!r) {
@@ -145,13 +167,13 @@ ${cause(r) ? html`<span>${cause(r)}</span>` : ""}
 ${r.story ? html`<span class="muted">${r.story}</span>` : ""}
 <span class="muted">${extra}${r.band_line ? " | " + r.band_line : ""}</span></div>
 <div class="card g-list"><div class="g-list-head"><span class="g-card-title">Seats</span><span class="muted">${plural((r.members || []).length, "seat")}</span></div>${seatRows(r)}</div>
-${gearRows(r)}
+${reading ? gearReading() : gearRows(r)}
 </div>
 <div class="card g-r-timeline"><span class="g-card-title">Timeline</span><div id="g-r-timeline">${timeline(r)}</div></div>
 </div>`;
   },
   after(main, ctx) {
-    const r = findRun(ctx.params.id);
+    const r = theRun(ctx);
     if (!r) return;
     const box = main.querySelector("#g-r-timeline");
     // Read once per visit, and again when what is held is over a minute old.

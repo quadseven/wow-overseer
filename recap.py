@@ -166,6 +166,20 @@ def is_active(run: dict) -> bool:
     return run_state(run) == "active"
 
 
+def deaths_since(run_rows: list[dict]) -> datetime | None:
+    """Where the recap's death read starts, or None when it reads none.
+
+    The recap draws the deaths of ONE run, the newest open one (build_recap),
+    inside its own window (_run_deaths). So the read starts at that run's
+    start, and with no run open there is nothing to draw and nothing to read
+    (#795): unbounded, it read every death the family ever had.
+    """
+    active = [row for row in run_rows if is_active(row)]
+    if not active:
+        return None
+    return max(active, key=lambda r: r["started_at"])["started_at"]
+
+
 # --- time and place --------------------------------------------------------
 
 

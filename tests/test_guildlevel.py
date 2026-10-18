@@ -421,7 +421,9 @@ class TheWiring(unittest.TestCase):
         self.assertIn('zone_id=_row_int(r, "zone_id")', BRIDGE)
 
     def test_the_pass_hands_the_world_to_the_plan_from_levelroutes_reads(self):
-        self.assertIn("leveling=(await asyncio.to_thread(_job_leveling, facts)", BRIDGE)
+        self.assertIn(
+            "leveling = (await asyncio.to_thread(_job_leveling, facts)", BRIDGE
+        )
         body = BRIDGE[BRIDGE.index("def _job_leveling(") :][:600]
         self.assertIn("_level_world()", body)
         self.assertIn("guildlevel.world(", body)

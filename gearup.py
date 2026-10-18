@@ -57,6 +57,24 @@ def campaign_hold(
     return False
 
 
+def house_trip_shoppers(facts, empty_slots=6, min_purse=20000) -> tuple:
+    """The members worth a trip to an auction house beyond the town (#1170).
+
+    The campaign gate's own test: a gear gap `needs_gear_hold` holds a run
+    for, and at least `min_purse` of the member's own gold to spend when it
+    gets there. A member short of a slot or two waits for the next town.
+    """
+    return tuple(
+        sorted(
+            name
+            for name, character in (facts or {}).items()
+            if character
+            and int(character.get("purse") or 0) >= min_purse
+            and needs_gear_hold(character, empty_slots=empty_slots)
+        )
+    )
+
+
 def needs_gear_hold(character, empty_slots=6) -> bool:
     """Whether this member has a gear gap worth holding the next run for.
 

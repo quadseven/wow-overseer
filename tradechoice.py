@@ -674,3 +674,17 @@ def borrow_clock(
 def expired(since: Mapping[str, float], now: float, limit_seconds: float) -> frozenset:
     """The borrowers whose lead has run past `limit_seconds`."""
     return frozenset(n for n, t in since.items() if now - float(t) > limit_seconds)
+
+
+def borrow_clock_memo(since: Mapping[str, float], offset: float) -> dict:
+    """A family's borrow clock as JSON for the bridge memo store (#817).
+
+    `offset` is wall time minus monotonic time now: the monotonic clock starts
+    over with the process, so the memo holds each start as wall time.
+    """
+    return {str(n): float(t) + offset for n, t in since.items()}
+
+
+def borrow_clock_from_memo(value: Mapping, offset: float) -> dict:
+    """The borrow clock `borrow_clock_memo` stored, back in monotonic time."""
+    return {str(n): float(t) - offset for n, t in value.items()}

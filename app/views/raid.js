@@ -250,11 +250,12 @@ function fireCard(card, teams) {
   if (!s) return html`<div class="card raid-block"><span class="card-title">Fire resistance, tanks first</span>${notMeasured()}</div>`;
   const cls = (n) => ((teams && teams.members && teams.members[n]) || {}).class;
   const cols = s.fire_columns || [];
+  const shortAt = cols.indexOf("short") >= 0 ? cols.indexOf("short") : cols.length - 1;
   const cell = (r, i) => {
     const text = (r.cells || [])[i];
     if (i === 0) return member({ name: text, cls: cls(text) });
-    if (i === cols.length - 1) return html`<span class="num ${r.short ? "warn" : "ok"}">${text}</span>`;
-    return i >= 2 ? html`<span class="num">${text}</span>` : text;
+    if (i === shortAt) return html`<span class="num ${r.short ? "warn" : "ok"}">${text}</span>`;
+    return i >= 2 && i < shortAt ? html`<span class="num">${text}</span>` : text;
   };
   return html`<div class="card raid-block"><span class="card-title">Fire resistance, tanks first</span>${table(cols, s.fire || [], cell)}${s.fire_line ? html`<span class="small dim">${s.fire_line}</span>` : ""}</div>`;
 }

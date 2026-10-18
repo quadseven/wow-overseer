@@ -303,7 +303,7 @@ def _specs_by_kind(class_id) -> dict:
     if not name:
         return out
     for spec in gearscore.spec_ids():
-        if not spec.startswith(name + "-"):
+        if not spec.startswith(gearscore.class_prefix(name)):
             continue
         kind = _KIND_OF_SPEC_ROLE.get(gearscore.load_spec(spec).get("role"))
         if kind:

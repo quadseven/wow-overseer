@@ -209,7 +209,8 @@ class EveryTownPassAsksAtTheSameDoor(unittest.TestCase):
         "    async def _aim_at_reagent_vendor(": '"craft_supply", trip.traveller, trip.target',
         "    async def _settle_auction_errand(": None,
         "    async def _auction_once(": '"auction", leader, auction.AUCTIONEER_ROLE',
-        "    async def _vendor_once(": '"economy", leader, "vendor"',
+        # The vendor pass takes its aim in its own method (wow-overseer#977).
+        "    async def _take_vendor_aim(": '"economy", leader, "vendor"',
         "    async def _settle_bank_errand(": '"bank", leader, "banker"',
         "    async def _guild_bank_once(": '"guild bank", leader, vault.aim',
         "    async def _forge_once(": '"forge", leader, forge.aim',
@@ -265,7 +266,7 @@ class EveryTownPassAsksAtTheSameDoor(unittest.TestCase):
         """A log a person greps has to join up: `guild bank: ...` and `town
         slot: guild bank waits ...` are the same pass or the line is useless."""
         for name, signature in (
-            ("economy", "    async def _vendor_once("),
+            ("economy", "    async def _take_vendor_aim("),
             ("bank", "    async def _settle_bank_errand("),
             ("guild bank", "    async def _guild_bank_once("),
             ("auction", "    async def _auction_once("),
@@ -561,7 +562,7 @@ class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
         self.assertEqual(300.0, townslot.LEASE_SECONDS)
 
     def test_vendor_pass_marks_pressure_as_urgent(self):
-        body = _statements("    async def _vendor_once(")
+        body = _statements("    async def _take_vendor_aim(")
         call = body[body.index("self._claim_town_slot(") :]
         call = call[: call.index(")")]
         self.assertIn('"economy"', call)

@@ -29,6 +29,8 @@
 .qs-bar > span { display: block; height: 100%; }
 .qs-bar-ok { background: var(--ok); }
 .qs-bar-bad { background: var(--bad); }
+.qs-bar-taken { background: var(--color-accent-300); }
+.qs-bar-left { background: var(--color-neutral-500); }
 .qs-bar-none { background: var(--color-neutral-700); }
 .qs-zones summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 8px; font-weight: 500; }
 .qs-zone-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
@@ -66,4 +68,3 @@
 .qs-attempts { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 8px; }
 .qs-attempt { gap: 4px; }
 .qs-reason { margin: 0; font-size: var(--fs-2); color: var(--color-neutral-200); overflow-wrap: anywhere; }
-.qs-ticket { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; align-self: flex-start; }

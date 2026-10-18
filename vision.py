@@ -42,6 +42,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
+import llmpool
+
 log = logging.getLogger("wow-overseer.vision")
 
 FRAME_URL = "http://wow-map:8080/api/frame"
@@ -303,7 +305,7 @@ class Seer:
         self._busy.add(name)
         try:
             found = await asyncio.wait_for(
-                asyncio.to_thread(self._look_now, name, now), self.timeout + 5.0
+                llmpool.call(self._look_now, name, now), self.timeout + 5.0
             )
         except asyncio.TimeoutError:
             found = Look(name, FAILED, now)

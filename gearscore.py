@@ -42,6 +42,15 @@ tables in `items.json`; `add_stats` folds them into the template stats before
 `score`. Only a WORN item has an instance, so a list entry is scored bare.
 Equip procs and the temporary enchant (poisons, oils) are not folded in.
 
+DEATH KNIGHTS (#760). Classic has no death knight, so wowsims has no list for
+one and the realm's death knights could never be scored. `DERIVED_SPECS`
+builds three specs from the plate lists instead: Blood borrows the
+protection warrior's weights and armor lists, Frost and Unholy the fury
+warrior's. Every tree wields the retribution paladin's two-handers and has no
+shield, one-hander or ranged list (a death knight carries a sigil there).
+Ratings convert at the warrior's rates. Each says it is an approximation in
+`approximation`; change the table to borrow other lists.
+
 PURE MODULE: dicts in, numbers and dicts out. Callers read item_template.
 """
 
@@ -168,12 +177,59 @@ def load_ratings() -> dict:
     return _read("ratings-l60.json")["ratings"]
 
 
+# Spec id -> (class, base spec its weights and armor lists come from). The
+# two-hand lists come from _DERIVED_WEAPONS; _DERIVED_DROPPED slots have none.
+DERIVED_SPECS = {
+    "deathknight-blood": ("death knight", "warrior-protection"),
+    "deathknight-frost": ("death knight", "warrior-fury"),
+    "deathknight-unholy": ("death knight", "warrior-fury"),
+}
+_DERIVED_WEAPONS = "paladin-retribution"
+_DERIVED_DROPPED = ("main_hand", "off_hand", "ranged", "two_hand")
+
+
+def class_prefix(class_name: str) -> str:
+    """The spec id prefix of a class: "warrior-", "deathknight-"."""
+    return str(class_name or "").lower().replace(" ", "") + "-"
+
+
+def _derived(spec: str) -> dict:
+    cls, base_id = DERIVED_SPECS[spec]
+    base = load_spec(base_id)
+    weapons = load_spec(_DERIVED_WEAPONS)["lists"]
+    lists = {}
+    for phase, lst in base["lists"].items():
+        slots = {
+            k: list(v) for k, v in lst["slots"].items() if k not in _DERIVED_DROPPED
+        }
+        two = weapons.get(phase, {}).get("slots", {}).get("two_hand")
+        if two:
+            slots["two_hand"] = list(two)
+        lists[phase] = {**lst, "slots": slots}
+    tree = spec.split("-", 1)[1]
+    return {
+        **base,
+        "spec": spec,
+        "class": cls,
+        "rating_class": base["class"],
+        "spec_name": tree,
+        "lists": lists,
+        "approximation": (
+            "Classic has no death knight list, so this is an approximation: "
+            f"{base_id} weights and armor, {_DERIVED_WEAPONS} two-handers, "
+            "no shield or ranged slot."
+        ),
+    }
+
+
 @functools.lru_cache(maxsize=None)
 def load_spec(spec: str) -> dict:
     """One spec's weights and lists, e.g. `load_spec("mage-dps")`.
 
     Raises KeyError for a spec with no data file, so a typo is loud.
     """
+    if spec in DERIVED_SPECS:
+        return _derived(spec)
     path = DATA_DIR / f"{spec}.json"
     if not path.is_file() or spec in ("items", "situational", "ratings-l60"):
         raise KeyError(f"no gear data for spec {spec!r}")
@@ -183,13 +239,21 @@ def load_spec(spec: str) -> dict:
 def spec_ids() -> list:
     """Every spec that has a data file, sorted."""
     skip = {"items", "situational", "ratings-l60", "weights-wowsims"}
-    return sorted(p.stem for p in DATA_DIR.glob("*.json") if p.stem not in skip)
+    files = {p.stem for p in DATA_DIR.glob("*.json") if p.stem not in skip}
+    return sorted(files | set(DERIVED_SPECS))
 
 
 @functools.lru_cache(maxsize=None)
 def load_situational() -> dict:
     """Fire resistance, PvP honor and battleground sets (`situational.json`)."""
     return _read("situational.json")
+
+
+@functools.lru_cache(maxsize=None)
+def load_item_book() -> dict:
+    """item id (a string) -> name, fire resistance, required level, slot and
+    sources (`items.json`)."""
+    return _read("items.json").get("items", {})
 
 
 def slot_list(spec: str, phase: str, slot: str) -> list:
@@ -290,7 +354,7 @@ def score(item_stats: dict, spec: str, level: int = 60, slot: str = "") -> float
     """
     data = load_spec(spec)
     w = data["weights"]["values"]
-    cls = data["class"]
+    cls = data.get("rating_class") or data["class"]
     total = 0.0
 
     for stat, weight_name in _FLAT_WEIGHT.items():

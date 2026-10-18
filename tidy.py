@@ -81,6 +81,9 @@ class Member:
     name: str
     class_id: int
     level: int
+    # Learned weapon subclasses, or None when unread (gear.CharacterState's
+    # field of the same name, #393).
+    weapon_skills: frozenset | None = None
 
 
 @dataclass(frozen=True)
@@ -108,8 +111,28 @@ def members_from_rows(worn_rows) -> dict:
             name=name,
             class_id=int(row.get("class_id") or 0),
             level=int(row.get("level") or 0),
+            weapon_skills=gear.weapon_skills_of(row),
         )
     return out
+
+
+def untrained(row: dict, member: Member) -> bool:
+    """Would this member need a weapon master before wielding the piece.
+
+    The class can learn it, so `refusal` lets it through; the skill is not
+    learned, so a member who has it is the better home (#393). False when the
+    skills were not read.
+    """
+    holding = _holding(row)
+    if holding is None:
+        return False
+    state = gear.CharacterState(
+        name=member.name,
+        class_id=member.class_id,
+        level=member.level,
+        weapon_skills=member.weapon_skills,
+    )
+    return not gear.weapon_trained(holding, state)
 
 
 def _holding(row: dict):
@@ -171,9 +194,11 @@ def native(row: dict, member: Member) -> bool:
 def future_owner(row: dict, members: dict, horizon: int = FUTURE_LEVELS) -> tuple:
     """(member name or "", reason) for the member this piece is for.
 
-    Ranked by native armour type first, then by how soon they reach its
-    required level. The holder keeps it when they rank level with the best
-    on armour type, so a piece never moves between two members who suit it
+    Ranked by native armour type first, then by whether they have learned
+    the weapon skill (#393: a member who must first walk to a weapon master
+    is the worse home), then by how soon they reach its required level. The
+    holder keeps it when they rank level with the best on armour type and
+    weapon skill, so a piece never moves between two members who suit it
     equally well.
     """
     required = int(row.get("required_level") or 0)
@@ -184,18 +209,22 @@ def future_owner(row: dict, members: dict, horizon: int = FUTURE_LEVELS) -> tupl
         gap = max(0, required - member.level)
         if gap > horizon:
             continue
-        ranked.append((not native(row, member), gap, member.name))
+        ranked.append(
+            (not native(row, member), untrained(row, member), gap, member.name)
+        )
     if not ranked:
         return "", "nobody in the family can wear it within %d levels" % horizon
     ranked.sort()
-    best_foreign, best_gap, best = ranked[0]
+    best_foreign, best_untrained, best_gap, best = ranked[0]
     holder = row.get("holder", "")
-    for foreign, _gap, name in ranked:
-        if name == holder and foreign == best_foreign:
+    for foreign, unskilled, _gap, name in ranked:
+        if name == holder and (foreign, unskilled) == (best_foreign, best_untrained):
             return holder, "the holder suits it as well as anybody"
     member = members[best]
     when = "now" if best_gap == 0 else "at level %d" % required
     kind = "its armour type" if not best_foreign else "usable"
+    if best_untrained:
+        kind += " once a weapon master teaches the skill"
     return best, "%s (%s, level %d) wears it %s - %s" % (
         best,
         gear._CLASS_NAMES.get(member.class_id, "class %d" % member.class_id),

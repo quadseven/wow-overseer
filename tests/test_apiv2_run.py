@@ -44,13 +44,41 @@ ROW = {
 }
 
 
+# The Deadmines' kill-credit rows as acore_world.instance_encounters and
+# creature_template answer them: seven encounters, Sneed's Shredder not one.
+DEADMINES_WORLD = [
+    {"encounter": 161, "entry": 644, "name": "Rhahk'Zor"},
+    {"encounter": 162, "entry": 643, "name": "Sneed"},
+    {"encounter": 163, "entry": 1763, "name": "Gilnid"},
+    {"encounter": 164, "entry": 646, "name": "Mr. Smite"},
+    {"encounter": 165, "entry": 645, "name": "Cookie"},
+    {"encounter": 166, "entry": 647, "name": "Captain Greenskin"},
+    {"encounter": 167, "entry": 639, "name": "Edwin VanCleef"},
+]
+BLACKFATHOM_WORLD = [
+    {"encounter": 219, "entry": 4887, "name": "Ghamoo-ra"},
+    {"encounter": 220, "entry": 4831, "name": "Lady Sarevess"},
+    {"encounter": 221, "entry": 6243, "name": "Gelihast"},
+    {"encounter": 222, "entry": 12902, "name": "Lorgus Jett"},
+    {"encounter": 224, "entry": 4830, "name": "Old Serra'kis"},
+    {"encounter": 225, "entry": 4832, "name": "Twilight Lord Kelris"},
+    {"encounter": 226, "entry": 4829, "name": "Aku'mai"},
+]
+
+
 def _answer(rows):
     """`rows` as a list, or a schema gap code (an int) as it is."""
     return rows if isinstance(rows, int) else list(rows)
 
 
 def ask(
-    value, rows=(ROW,), event_rows=(), council_rows=(), boss_kill_rows=(), death_rows=()
+    value,
+    rows=(ROW,),
+    event_rows=(),
+    council_rows=(),
+    boss_kill_rows=(),
+    death_rows=(),
+    boss_list_rows=DEADMINES_WORLD,
 ):
     """The handler over a reader that knows the run read and the story's
     reads (deaths, bosses, their levels) and nothing else."""
@@ -64,6 +92,7 @@ def ask(
             run_api._COUNCIL_GEAR_SQL.format(names="%s, %s, %s"): _answer(council_rows),
             run_api._BOSS_KILLS_SQL.format(names="%s, %s, %s"): _answer(boss_kill_rows),
             run_api._BOSS_DEATHS_SQL.format(names="%s, %s, %s"): _answer(death_rows),
+            run_api._BOSS_LIST_SQL: _answer(boss_list_rows),
         }
     )
     code, payload = apiv2.handle(
@@ -76,6 +105,11 @@ def ask(
 
 def reads(rd, table):
     return [(sql, params) for sql, params in rd.asked if "FROM " + table in sql]
+
+
+def boss_list_reads(rd):
+    """The endpoint's own boss list reads (the story reads the table too)."""
+    return [(sql, params) for sql, params in rd.asked if "ie.entry IN" in sql]
 
 
 class OneRun(unittest.TestCase):
@@ -235,19 +269,19 @@ class TheBosses(unittest.TestCase):
             },
             {
                 "member": "Ugga",
-                "entry": 642,
-                "name": "Sneed's Shredder",
+                "entry": 643,
+                "name": "Sneed",
                 "at": "2026-10-08 10:28:00",
             },
         ]
-        code, payload, _rd = ask("398", boss_kill_rows=kills)
+        two_down = dict(ROW, outcome="wiped", bosses_done=2)
+        code, payload, _rd = ask("398", rows=(two_down,), boss_kill_rows=kills)
         self.assertEqual(code, 200)
         bosses = payload["run"]["bosses"]
         self.assertEqual(
             [b["name"] for b in bosses],
             [
                 "Rhahk'Zor",
-                "Sneed's Shredder",
                 "Sneed",
                 "Gilnid",
                 "Mr. Smite",
@@ -265,6 +299,66 @@ class TheBosses(unittest.TestCase):
             ],
         )
 
+    def test_the_list_is_the_dungeons_own_from_the_world_database(self):
+        # #1130: only the Deadmines had a boss list, so a Blackfathom run
+        # answered none.
+        bfd = dict(ROW, keyword="blackfathom", bosses_done=0, outcome="wiped")
+        code, payload, rd = ask("398", rows=(bfd,), boss_list_rows=BLACKFATHOM_WORLD)
+        self.assertEqual(code, 200)
+        self.assertEqual(
+            [b["name"] for b in payload["run"]["bosses"]],
+            [row["name"] for row in BLACKFATHOM_WORLD],
+        )
+        self.assertFalse(any(b["killed"] for b in payload["run"]["bosses"]))
+        ((_sql, params),) = boss_list_reads(rd)
+        self.assertEqual(params, tuple(range(219, 227)))
+
+    def test_a_cleared_run_without_kill_rows_does_not_say_every_boss_lived(self):
+        # #1130: a cleared 7 of 7 Deadmines run listed every boss killed=false,
+        # because nothing writes boss_kill rows yet.
+        code, payload, _rd = ask("398")
+        self.assertEqual(code, 200)
+        self.assertEqual(payload["run"]["bosses_done"], 7)
+        self.assertEqual(payload["run"]["bosses"], [])
+
+    def test_kill_rows_short_of_the_count_leave_the_list_empty(self):
+        kills = [
+            {
+                "member": "Grug",
+                "entry": 644,
+                "name": "Rhahk'Zor",
+                "at": "2026-10-08 10:12:00",
+            }
+        ]
+        code, payload, _rd = ask("398", boss_kill_rows=kills)
+        self.assertEqual(payload["run"]["bosses"], [])
+
+    def test_a_kill_row_without_a_time_is_still_a_kill(self):
+        kills = [{"member": "Grug", "entry": 644, "name": "Rhahk'Zor", "at": ""}]
+        one_down = dict(ROW, outcome="wiped", bosses_done=1)
+        code, payload, _rd = ask("398", rows=(one_down,), boss_kill_rows=kills)
+        self.assertEqual(code, 200)
+        first = payload["run"]["bosses"][0]
+        self.assertEqual(
+            (first["killed"], first["at"], first["by"]), (True, None, "Grug")
+        )
+
+    def test_a_world_without_the_tables_falls_back_to_the_frozen_list(self):
+        none_down = dict(ROW, outcome="wiped", bosses_done=0)
+        code, payload, _rd = ask(
+            "398", rows=(none_down,), boss_list_rows=realmread.MISSING_TABLE
+        )
+        self.assertEqual(
+            [b["entry"] for b in payload["run"]["bosses"]],
+            [entry for entry, _ in run_api.achievements.DUNGEONS[36]["bosses"]],
+        )
+
+    def test_a_wing_map_has_no_boss_list(self):
+        library = dict(ROW, keyword="scarlet-library", bosses_done=0)
+        code, payload, rd = ask("398", rows=(library,))
+        self.assertEqual(payload["run"]["bosses"], [])
+        self.assertEqual(boss_list_reads(rd), [])
+
     def test_a_kill_without_a_killer_name_is_still_a_kill(self):
         kills = [
             {
@@ -274,7 +368,8 @@ class TheBosses(unittest.TestCase):
                 "at": "2026-10-08 10:12:00",
             }
         ]
-        code, payload, _rd = ask("398", boss_kill_rows=kills)
+        one_down = dict(ROW, outcome="wiped", bosses_done=1)
+        code, payload, _rd = ask("398", rows=(one_down,), boss_kill_rows=kills)
         self.assertTrue(payload["run"]["bosses"][0]["killed"])
         self.assertEqual(payload["run"]["bosses"][0]["by"], "")
 

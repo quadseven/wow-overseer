@@ -120,6 +120,16 @@ class TheSetIsChosenByGearscore(unittest.TestCase):
             self.assertIn(column, bankpolicy.ITEMS_SQL)
 
 
+class ADeathKnightHasSpecsToScoreBy(unittest.TestCase):
+    def test_the_death_knight_specs_are_found_by_kind(self):
+        # #760: the class name has a space; its spec ids do not.
+        kinds = bankpolicy._specs_by_kind(6)
+        self.assertEqual(kinds.get("tank"), ["deathknight-blood"])
+        self.assertEqual(
+            kinds.get("damage"), ["deathknight-frost", "deathknight-unholy"]
+        )
+
+
 class NoSalePassSellsWhatThePolicyKeeps(unittest.TestCase):
     """guildjobs sells grey and outgrown white gear. A white fire resistance
     piece is both outgrown and a kept second set: the sale must skip it."""

@@ -14,6 +14,7 @@ each corpse run he pulled again at half health and mana. 119 of the two guilds'
 import unittest
 
 import guildjobs
+import member_rungs
 import restsupply
 
 FEMUR = dict(
@@ -192,7 +193,7 @@ class InThePass(unittest.TestCase):
             )
 
     def test_the_class_quest_still_comes_first(self):
-        source = guildjobs._member_step.__code__.co_names
+        source = member_rungs.names()
         self.assertLess(source.index("class_step"), source.index("_supply_first"))
         self.assertLess(source.index("_supply_first"), source.index("_gear_first"))
 
@@ -203,7 +204,7 @@ class InThePass(unittest.TestCase):
         for needle in (
             "_SUPPLY_VENDOR_SQL",
             "_JOB_SUPPLIES_SQL",
-            "supply=await self._job_supply_offers(",
+            "supply = await self._job_supply_offers(",
         ):
             self.assertTrue(needle in source, needle)
 
