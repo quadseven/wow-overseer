@@ -17418,6 +17418,13 @@ class Bridge(discord.Client):
                 state, names, leader, in_run, now, label)
             _TOWN_ERRANDS[key] = state
             if not state.active:
+                # NO ERRAND OWNS A TOWN RUN IT WROTE (#790). The errand lives
+                # in memory, so a bridge restart mid errand left the family on
+                # `town run` with nothing to end it. Looked up: the adapter
+                # tests load this method in isolation.
+                orphans = globals().get("_town_errand_release_orphans")
+                if orphans is not None:
+                    await asyncio.to_thread(orphans, names)
                 return
             slot.reserve(TOWN_ERRAND_CLAIMANT, now, "the family's town errand")
         positions = await self._settled_positions(names)
@@ -20584,7 +20591,8 @@ class Bridge(discord.Client):
         can_gather, can_train = await self._activity_can(names, reads["free"], own)
         job = str(leader.get("job") or "").strip().lower()
         now = time.monotonic()
-        if await self._activity_restore_job(key, job, now):
+        if await self._activity_restore_job(key, job, now, names,
+                                            str(leader.get("name") or "")):
             return
         marks = jev_activity.Marks(
             runs_done=runs,
@@ -20726,7 +20734,8 @@ class Bridge(discord.Client):
             log.exception("activity: the %s emote for %s was not written",
                           activity, leader)
 
-    async def _activity_restore_job(self, key: str, job: str, now: float) -> bool:
+    async def _activity_restore_job(self, key: str, job: str, now: float,
+                                    names=(), leader: str = "") -> bool:
         """Put a family back on the default job when its fishing break ends.
 
         Nothing else writes job=fish, so without this a family Jev sent
@@ -20734,7 +20743,22 @@ class Bridge(discord.Client):
         the leader is still on the job the break set: a queue or a person that
         has moved the family on since wins. True when it wrote the jobs, so
         the caller asks again next cycle rather than on a stale read.
+
+        A BREAK NO RESTORE OWNS ENDS NOW (#790). The restore lives in memory,
+        so a bridge restart mid break left the family on job=fish for good.
+        A leader on a break's job with no restore held, whose last job order
+        came from this choice, is adopted as a break that is already over; an
+        operator's own order stands.
         """
+        if key not in self._activity_restore and names and leader:
+            activity = next((a for a in jev_activity.RESTORE
+                             if job == jev_activity.JOB[a]), None)
+            if activity is not None and await asyncio.to_thread(
+                    _last_job_source, leader) == jev_activity.SOURCE:
+                log.info("activity: %s is on job=%s with no %s break in memory "
+                         "(a bridge restart forgets them); it ends now",
+                         campaignqueue._family(key), job, activity)
+                self._activity_restore[key] = (now, activity, list(names))
         held = self._activity_restore.get(key)
         if held is None or now < held[0]:
             return False
@@ -30394,6 +30418,28 @@ def _town_errand_release_jobs(names: list) -> str:
     for name in back:
         _insert_job(name, jobs.DEFAULT, TOWN_ERRAND_SOURCE)
     return "back to %s: %s" % (jobs.DEFAULT, ", ".join(back) or "nobody")
+
+
+def _town_errand_release_orphans(names: list) -> list:
+    """Give back a town run the errand wrote when no errand is under way.
+
+    Called by the errand pass for a family with no errand in memory. The
+    errand ends its own `town run`, but it lives in memory: after a bridge
+    restart mid errand nothing ended it, and with no campaign waiting the
+    family stood in town until somebody changed the job (#790). Only a town
+    run whose member's last job order came from the errand is taken, and a
+    waiting campaign is left to take the family back on its next queue pass,
+    as `_town_errand_release_jobs` does. Returns the names written.
+    """
+    orphaned = [n for n, job in _jobs_of(names).items()
+                if job == jobs.TOWN_RUN and _last_job_source(n) == TOWN_ERRAND_SOURCE]
+    if not orphaned or _campaign_waiting(names):
+        return []
+    for name in orphaned:
+        _insert_job(name, jobs.DEFAULT, TOWN_ERRAND_SOURCE)
+    log.info("town errand: no errand owns the town run of %s (a bridge restart "
+             "forgets errands); back to %s", ", ".join(orphaned), jobs.DEFAULT)
+    return orphaned
 
 
 def _mail_gear_holders(names: list) -> dict:
