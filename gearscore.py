@@ -192,6 +192,13 @@ def load_situational() -> dict:
     return _read("situational.json")
 
 
+@functools.lru_cache(maxsize=None)
+def load_item_book() -> dict:
+    """item id (a string) -> name, fire resistance, required level, slot and
+    sources (`items.json`)."""
+    return _read("items.json").get("items", {})
+
+
 def slot_list(spec: str, phase: str, slot: str) -> list:
     """The listed item ids for a slot, best first. Empty when the guide has none."""
     lists = load_spec(spec)["lists"]

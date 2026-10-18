@@ -648,6 +648,16 @@ class Option:
         return ", ".join(parts)
 
     @property
+    def fire(self) -> str:
+        """The planned fire resistance pieces a run drops for the family's
+        tanks (preraid.Gain.fire_best, #759), said; "" for none."""
+        return "; ".join(
+            "%s for %s" % (g.fire_best, g.name)
+            for g in self.gains
+            if getattr(g, "fire_best", "")
+        )
+
+    @property
     def value(self) -> float:
         """`expected`, halved for a run across a continent crossing."""
         worth = float(self.expected or 0.0)
@@ -920,10 +930,11 @@ def _heuristic_why(pick: Option) -> str:
     if pick.capped and pick.expected is not None:
         return (
             "%s gives the family the most expected upgrades of the dungeons "
-            "it can reach, %.1f item levels a run over every member's slots%s (%s)"
+            "it can reach, %.1f item levels a run over every member's slots%s%s (%s)"
             % (
                 pick.place,
                 pick.expected,
+                ", with fire resistance: %s" % pick.fire if pick.fire else "",
                 ", across a continent crossing" if pick.crossing else "",
                 pick.why,
             )
@@ -1011,6 +1022,8 @@ def planned_line(option: Option, reason: str, chooser: str) -> str:
     worth = ""
     if option.expected is not None:
         worth = "; %.1f expected item levels a run over every slot" % (option.expected)
+    if option.fire:
+        worth += "; fire resistance: %s" % option.fire
     if option.progress:
         worth += "; %s" % option.progress
     if option.fit:
