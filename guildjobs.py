@@ -1550,6 +1550,16 @@ GEAR_BUYS_PER_STEP = 6
 # members got 31 pieces while 119 stayed under guildrun's gear gate. No guild
 # group can run until the gate opens, so gear does not queue behind the rest.
 GEAR_STEPS_PER_GUILD = 6
+# A RANK WALK HAS ITS OWN ALLOWANCE TOO (#1116), for the reason gear has. Read
+# on wow-dev 2026-10-18, 18:22Z to 22:15Z, after the tier cap rung (eff63a7)
+# put the rank walk first among a member's own rungs: one rank walk in 15
+# passes, while 15 trades stood at 75/75 or 150/150 with the rank trainable.
+# A train step was counted against STEPS_PER_GUILD, so a guild of 66, planned
+# highest level first, spent its 4 on the posts, sales, mail runs and fields
+# of the members ahead, and the capped member's walk was refused "waits: 4
+# guild job steps per guild per pass" (a note past the 5 a pass logs). A rank
+# is bought once per tier, so a walk to buy it does not crowd the realm.
+TRAIN_STEPS_PER_GUILD = 6
 # A gear step that bought something may follow on the next pass; only a failed
 # one waits the full COOLDOWN_MINUTES["gear"].
 GEAR_SUCCESS_COOLDOWN_MINUTES = 15
@@ -2882,6 +2892,7 @@ def plan(
     counters = {
         "jobs": {},
         "gear": {},
+        "train": {},
         "pvp": {},
         "level": {},
         "classquest": {},
@@ -2994,7 +3005,7 @@ def _release_slots(name, far, hunts) -> None:
 def _allowance(step, counters, per_guild):
     """(the counter, the cap) a step is started against: STEPS_PER_GUILD for
     every job, GEAR_STEPS_PER_GUILD for gear and hearth steps,
-    PVP_STEPS_PER_GUILD for PvP queues and honor buys, and
+    TRAIN_STEPS_PER_GUILD for trainer walks, PVP_STEPS_PER_GUILD for PvP queues and honor buys, and
     guildlevel.STEPS_PER_GUILD for walks out of an outgrown zone."""
     if step.action == ROOM_ACTION:
         return counters["room"], ROOM_STEPS_PER_GUILD
@@ -3012,6 +3023,8 @@ def _allowance(step, counters, per_guild):
         return counters["level"], guildlevel.STEPS_PER_GUILD
     if step.action in ("gear", "hearth", WEAPON_ACTION):
         return counters["gear"], GEAR_STEPS_PER_GUILD
+    if step.action == "train":
+        return counters["train"], TRAIN_STEPS_PER_GUILD
     return counters["jobs"], per_guild
 
 
