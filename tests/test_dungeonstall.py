@@ -289,18 +289,45 @@ class StoreCursor:
     def execute(self, sql, params=()):
         flat = " ".join(sql.split())
         self.store.calls.append((flat, params))
-        self.rows = []
+        if self.store.fail_on and self.store.fail_on in flat:
+            raise RuntimeError("the store refused: %s" % flat[:40])
+        self.rows = self._read(flat, params) if flat.startswith("SELECT") else []
+        if not flat.startswith("SELECT"):
+            self._write(flat, params)
+
+    def _read(self, flat, params):
+        store = self.store
         if flat.startswith("SELECT id, map_id, portal_keyword"):
-            self.rows = [dict(r) for r in self.store.runs]
-        elif "FROM overseer_dungeon_run_event" in flat:
-            self.rows = [dict(e) for e in self.store.events if e["run_id"] in params]
-        elif "SET status = 'cancelled'" in flat:
-            self.store.world.cancel(params[0])
+            return [dict(r) for r in store.runs]
+        if "FROM overseer_dungeon_run_event" in flat:
+            return [dict(e) for e in store.events if e["run_id"] in params]
+        if flat.startswith("SELECT id FROM overseer_dungeon_pace WHERE family"):
+            # _stall_held: a stall_left row for this family and door.
+            want = tuple(params[:3])
+            return [
+                {"id": n}
+                for n, r in enumerate(store.records, 1)
+                if tuple(r[:3]) == want
+            ]
+        if flat.startswith("SELECT id, decision, door, target, queue_id"):
+            # dungeonpace.OPEN_SQL: the family's open ladder row, if any.
+            return [
+                dict(r)
+                for r in store.open_pace
+                if r["family"] == params[0] and r["id"] not in store.shut
+            ]
+        return []
+
+    def _write(self, flat, params):
+        store = self.store
+        if "SET status = 'cancelled'" in flat:
+            store.world.cancel(params[0])
         elif flat.startswith("INSERT INTO overseer_dungeon_pace"):
-            self.store.records.append(params)
-            self.lastrowid = len(self.store.records)
+            store.records.append(params)
+            self.lastrowid = len(store.records)
         elif flat.startswith("UPDATE overseer_dungeon_pace SET closed_at"):
-            self.store.closed.append(params)
+            store.closed.append(params)
+            store.shut.add(params[1])
 
     def fetchall(self):
         return list(self.rows)
@@ -343,6 +370,9 @@ class StallWorld(FakeWorld):
         self.calls = []
         self.records = []
         self.closed = []
+        self.shut = set()
+        self.open_pace = []
+        self.fail_on = ""
         self.commits = 0
         self.world = self
 
@@ -478,6 +508,64 @@ class TheCampaignDoesNotStartAThirdRun(unittest.TestCase):
         _pass(w)
         others = {r["name"] for r in w.roster if r["family"] != "Zug"}
         self.assertFalse([j for j in w.jobs if j[0] in others])
+
+
+class TheBreakerWritesInOrder(unittest.TestCase):
+    """The pre-ship review's smaller findings on the breaker (#1062)."""
+
+    world = TheCampaignDoesNotStartAThirdRun.world
+    zug_jobs = TheCampaignDoesNotStartAThirdRun.zug_jobs
+
+    def cancels(self, w):
+        return [c for c in w.calls if "SET status = 'cancelled'" in c[0]]
+
+    def test_a_failed_cancel_never_puts_the_family_on_quest(self):
+        """The job moves only after the cancel and its pace row are durable:
+        a write that fails leaves no quest job to flip back on the same pass."""
+        w = self.world([_q(7, "shadowfang", 30, "active", 0)])
+        w.fail_on = "SET status = 'cancelled'"
+        lines = _pass(w)
+        self.assertEqual(0, w.commits)
+        self.assertEqual("active", w.queue[0]["status"])
+        self.assertFalse([j for j in w.jobs if j[1] == jobs.DEFAULT], (w.jobs, lines))
+        self.assertTrue([ln for ln in lines if "stall: the pass for" in ln], lines)
+
+    def test_a_durable_cancel_puts_the_family_on_quest(self):
+        w = self.world([_q(7, "shadowfang", 30, "active", 0)])
+        _pass(w)
+        self.assertEqual(1, w.commits)
+        self.assertEqual({jobs.DEFAULT}, self.zug_jobs(w))
+
+    def test_a_requeued_stuck_door_is_cancelled_once_then_held(self):
+        """The 48h window still reads the two stalls, so every later pass sees
+        the door as stuck; the pace row it wrote holds it instead of cancelling
+        the re-queued entry again."""
+        w = self.world([_q(7, "shadowfang", 30, "active", 0)])
+        _pass(w)
+        self.assertEqual(1, len(self.cancels(w)))
+        w.queue.append(_q(9, "shadowfang", 30, "queued", 1))
+        for _ in range(3):
+            _pass(w)
+        self.assertEqual("queued", w.queue[1]["status"])
+        self.assertEqual(1, len(self.cancels(w)))
+        self.assertEqual(1, len(w.records))
+        self.assertFalse([j for j in w.jobs if j[1] == "dungeon:shadowfang"])
+
+    def test_a_cancelled_entry_closes_its_step_down_pace_row(self):
+        w = self.world([_q(7, "shadowfang", 30, "active", 0)])
+        w.open_pace = [
+            {
+                "id": 41,
+                "family": "Zug",
+                "decision": "step_down",
+                "door": "shadowfang",
+                "target": "deadmines",
+                "queue_id": 7,
+            },
+        ]
+        _pass(w)
+        self.assertIn(("left", 41), w.closed)
+        self.assertEqual(1, w.commits)
 
 
 BRIDGE = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
