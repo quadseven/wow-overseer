@@ -2889,6 +2889,79 @@ def _cohort_note(note: str, pvp) -> str:
     return note
 
 
+def _quest_first(
+    m,
+    classes,
+    pet,
+    leveling,
+    recent,
+    cap,
+    hunts,
+    now,
+    far,
+    kept,
+    crafters,
+    master,
+    level_room,
+    still_for,
+):
+    """(the member's step as _member_step returns it, or None; the quest
+    note): the rungs ahead of upkeep. A stalled class step's level walk, then
+    the class quest, then a hunter's first pet, then a hearth out of a spot it
+    has stood on too long (_member_step's docstring has the why). The pet's
+    note joins the quest note only once the pet asks nothing."""
+    first = stalled_level_first(m, leveling, recent, cap, level_room)
+    if first is not None:
+        return (*first, ""), ""
+    step, doing, quest_note = class_step(
+        m, classes, recent, cap, hunts, now, far, kept, crafters, master
+    )
+    if step is not None or doing:
+        return (step, doing, quest_note, ""), quest_note
+    step, doing, pet_note = _pet_first(m, pet, recent, cap)
+    if step is not None:
+        return (step, doing, quest_note, ""), quest_note
+    quest_note = _join(quest_note, pet_note)
+    step = stood_still_step(m, still_for, recent, leveling)
+    if step is not None:
+        return (step, step.said, quest_note, ""), quest_note
+    return None, quest_note
+
+
+def _upkeep_first(m, offer, supply, leveling, kept, recent, cap, quest_note):
+    """(the member's step as _member_step returns it, or None; the supply
+    note; the gear note): food for a member with nothing to eat or drink, then
+    a sale for full bags, then the inn, then riding, gear and food in their
+    purchase order (purse.py). A gear step carries no notes; the riding note
+    rides on the supply note."""
+    # FOOD FIRST ONLY FOR A MEMBER WITH NOTHING TO EAT OR DRINK (purse.py): it
+    # dies between pulls without. Otherwise the purchase order puts its class
+    # spells, riding and gear ahead of food.
+    hungry = restsupply.empty(m)
+    supply_note = ""
+    if hungry:
+        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
+        if step is not None:
+            return (step, doing, quest_note, ""), supply_note, ""
+    step = (
+        _full_bags_first(m, kept, recent, cap)
+        or _inn_first(m, leveling, recent, cap)[0]
+    )
+    if step is not None:
+        return (step, step.said, quest_note, ""), supply_note, ""
+    step, riding_note = riding_step(m, recent)
+    if step is not None:
+        return (step, step.said, quest_note, ""), supply_note, ""
+    step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
+    if step is not None:
+        return (step, doing, "", ""), supply_note, gear_note
+    if not hungry:
+        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
+        if step is not None:
+            return (step, doing, quest_note, ""), supply_note, gear_note
+    return None, _join(supply_note, riding_note), gear_note
+
+
 def _member_step(
     m,
     offer,
@@ -2938,47 +3011,29 @@ def _member_step(
     A member that has stood on one spot for standstill.STILL_MINUTES
     (`still_for`) with nothing asked of it hearths home before anything else
     is asked (stood_still_step)."""
-    first = stalled_level_first(m, leveling, recent, cap, level_room)
-    if first is not None:
-        return (*first, "")
-    step, doing, quest_note = class_step(
-        m, classes, recent, cap, hunts, now, far, kept, crafters, master
+    found, quest_note = _quest_first(
+        m,
+        classes,
+        pet,
+        leveling,
+        recent,
+        cap,
+        hunts,
+        now,
+        far,
+        kept,
+        crafters,
+        master,
+        level_room,
+        still_for,
     )
-    if step is not None or doing:
-        return step, doing, quest_note, ""
-    step, doing, pet_note = _pet_first(m, pet, recent, cap)
-    if step is not None:
-        return step, doing, quest_note, ""
-    quest_note = _join(quest_note, pet_note)
-    step = stood_still_step(m, still_for, recent, leveling)
-    if step is not None:
-        return step, step.said, quest_note, ""
-    # FOOD FIRST ONLY FOR A MEMBER WITH NOTHING TO EAT OR DRINK (purse.py): it
-    # dies between pulls without. Otherwise the purchase order puts its class
-    # spells, riding and gear ahead of food.
-    hungry = restsupply.empty(m)
-    supply_note = ""
-    if hungry:
-        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
-        if step is not None:
-            return step, doing, quest_note, ""
-    step = (
-        _full_bags_first(m, kept, recent, cap)
-        or _inn_first(m, leveling, recent, cap)[0]
+    if found is not None:
+        return found
+    found, supply_note, gear_note = _upkeep_first(
+        m, offer, supply, leveling, kept, recent, cap, quest_note
     )
-    if step is not None:
-        return step, step.said, quest_note, ""
-    step, riding_note = riding_step(m, recent)
-    if step is not None:
-        return step, step.said, quest_note, ""
-    step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
-    if step is not None:
-        return step, doing, "", ""
-    if not hungry:
-        step, doing, supply_note = _supply_first(m, supply, recent, cap, kept)
-        if step is not None:
-            return step, doing, quest_note, ""
-    supply_note = "; ".join(n for n in (supply_note, riding_note) if n)
+    if found is not None:
+        return found
     step, doing, held = _pvp_first(m, pvp, recent, cap, kept)
     if step is not None or held:
         return step, doing, supply_note, gear_note
