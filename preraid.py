@@ -1201,6 +1201,11 @@ def for_member(items: dict, member: Member) -> dict:
 # gear: a convention, so a 20 point cape weighs like a 20 item level upgrade.
 FIRE_LEVELS_PER_POINT = 1.0
 FIRE_TARGET = fireplan.FIRE_TARGET[fireplan.MAIN_TANK]
+# The level from which a levelling family's planner reads the tanks' fire
+# pieces (`fire_plan`): Blackrock Depths' band, where the tank sets' pieces
+# start to drop (they want level 52 to 58). Below the cap only the fire set
+# is read, not the spec gear, which the family still outlevels run by run.
+FIRE_FLOOR = 52
 
 
 def _worn_fire(member: Member, slot: int) -> int:
@@ -1268,6 +1273,13 @@ def plan(member: Member, items: dict, reachable=()) -> MemberPlan:
                 )
             )
     return MemberPlan(member, tuple(slots), tuple(found), fire_upgrades(member, mine))
+
+
+def fire_plan(member: Member, items: dict) -> MemberPlan:
+    """`member`'s fire resistance plan alone, for a family still levelling
+    (FIRE_FLOOR up to the cap): no spec upgrades, only the planned fire
+    pieces it can wear now (`fire_upgrades`)."""
+    return MemberPlan(member, (), (), fire_upgrades(member, for_member(items, member)))
 
 
 # --- what a run gives ------------------------------------------------------------

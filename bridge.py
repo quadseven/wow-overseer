@@ -4062,11 +4062,14 @@ def _planner_catalog(cur) -> dict | None:
 def _planner_preraid(names: list, level_rows: list) -> tuple:
     """(upgrades, progress) for campaignplan.Facts: what one run of each
     level 60 dungeon is worth to each member (#280), and the attunement and
-    key. (None, None) below the level cap, where gear does not choose the
-    dungeon, and for any read this realm cannot answer."""
+    key. A family levelling from preraid.FIRE_FLOOR gets its tanks' planned
+    fire resistance pieces alone (preraid.fire_plan, #759) and no progress.
+    (None, None) below that, where gear does not choose the dungeon, and for
+    any read this realm cannot answer."""
     levels = [int(r.get("level") or 0) for r in level_rows]
-    if not levels or min(levels) < campaignplan.LEVEL_CAP:
+    if not levels or min(levels) < preraid.FIRE_FLOOR:
         return None, None
+    capped = min(levels) >= campaignplan.LEVEL_CAP
     marks = preraid.holes(len(names))
     args = tuple(names)
     with _connect() as conn, conn.cursor() as cur:
@@ -4075,18 +4078,22 @@ def _planner_preraid(names: list, level_rows: list) -> tuple:
                                args, "the members' specs")
         worn = _planner_rows(cur, preraid.WORN_SQL.format(holes=marks), args,
                              "the members' worn items")
-        done = _planner_rows(
-            cur, preraid.PROGRESS_REWARDED_SQL.format(holes=marks), args,
-            "the attunement and key quests rewarded")
-        held_quests = _planner_rows(
-            cur, preraid.PROGRESS_LOG_SQL.format(holes=marks), args,
-            "the attunement and key quests held")
-        held = _planner_rows(
-            cur, preraid.PROGRESS_ITEMS_SQL.format(holes=marks), args,
-            "the attunement and key items")
+        if not capped:
+            done = held_quests = held = None
+        else:
+            done = _planner_rows(
+                cur, preraid.PROGRESS_REWARDED_SQL.format(holes=marks), args,
+                "the attunement and key quests rewarded")
+            held_quests = _planner_rows(
+                cur, preraid.PROGRESS_LOG_SQL.format(holes=marks), args,
+                "the attunement and key quests held")
+            held = _planner_rows(
+                cur, preraid.PROGRESS_ITEMS_SQL.format(holes=marks), args,
+                "the attunement and key items")
     upgrades = None
     if found is not None and people is not None and worn is not None:
-        plans = [preraid.plan(m, found) for m in preraid.members(people, worn)]
+        planner = preraid.plan if capped else preraid.fire_plan
+        plans = [planner(m, found) for m in preraid.members(people, worn)]
         upgrades = preraid.run_gains(plans)
     progress = None
     if done is not None and held_quests is not None and held is not None:
