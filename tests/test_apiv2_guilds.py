@@ -627,6 +627,7 @@ class TheChronicle(unittest.TestCase):
                 {"name": "Bonk", "level": 25, "guild_id": 23, "at": NOW}
             ],
             guildrun._RUN_SQL: [],
+            chronicle._MEMBERS_SQL: [{"name": "Bonk", "guild_id": 23}],
             chronicle._DEATHS_SQL: [],
         }
         code, body = chronicle.chronicle({}, Ctx(answers, Server))

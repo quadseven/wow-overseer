@@ -14,6 +14,7 @@ nothing in this file may call the database directly from an async handler.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import dataclasses
 import json
 import logging
@@ -86,6 +87,7 @@ import seatmeter
 import guildsocial
 import holdings
 import hunterpet
+import interview
 import itemsource
 import purse
 import pvpgear
@@ -116,6 +118,7 @@ import kin
 import learnaim
 import levelroute
 import llmmode
+import llmpool
 import lockbox
 import lootcouncil
 # NOT `mailbox` - that is a Python standard library module, and this package is
@@ -750,6 +753,12 @@ LEVEL_SKIP_SECONDS = 7200.0
 BAGS_CLAIMANT = "bags"
 # The gear errand's walk to an armour merchant (#365).
 GEAR_VENDOR_CLAIMANT = "gear vendor"
+# The gear errand's trip to an auction house beyond the town, for a family
+# whose home has none (#1170). A trip of thousands of yards, so it is held to
+# a lease derived from its own bound (auction.HOUSE_TRIP_MAX_YARDS) the way
+# the flight pass's is: a lease and not an exemption, for infra#3703's reason.
+GEAR_HOUSE_CLAIMANT = "gear house"
+TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS = flightlearn.lease_for(auction.HOUSE_TRIP_MAX_YARDS)
 
 # How far the flight-network pass will send somebody, and how long it may keep
 # the column while it does.
@@ -969,6 +978,71 @@ def _fetch_grounding(name: str) -> dict | None:
             (name,),
         )
         return cur.fetchone()
+
+
+def _interview_candidate(name: str) -> interview.InterviewExchange | None:
+    """One interview exchange with a shortlisted candidate, as data.
+
+    The bridge-side half of the interview step: a fresh `overseer_snapshot`
+    row proves the candidate is online - the same 60s freshness rule
+    `_fetch_grounding` enforces, widened with the vitals the chat prompt is
+    grounded in - the question goes out through the existing
+    inner-voice/chat machinery, and the exchange comes back as data for the
+    caller to record. None when the candidate is offline: the caller tries
+    the next shortlisted name rather than blocking.
+
+    NOT wired into any loop yet. The automatic loop that calls this is a
+    separate piece of work, and where the transcript is stored long-term is
+    another - so this writes nothing, it only returns the exchange.
+
+    Neither the LLM nor this function judges the candidate: the question is
+    deterministic, the model only answers it in character, and
+    `RecruitVerdictFor` stays the sole pass/fail gate.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT s.name, s.level, s.race, s.class, s.map_id, s.pos_x, s.pos_y, "
+            "       s.health, s.max_health, s.in_combat, p.personality "
+            "FROM overseer_snapshot s "
+            "LEFT JOIN characters c ON c.name = s.name "
+            "LEFT JOIN mod_ollama_chat_personality p ON p.guid = c.guid "
+            "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 60 SECOND",
+            (name,),
+        )
+        row = cur.fetchone()
+    plan = interview.plan(
+        name=name,
+        snapshot=None
+        if row is None
+        else {
+            "level": row["level"],
+            "race_name": RACE_NAMES.get(row["race"], "creature"),
+            "class_name": CLASS_NAMES.get(row["class"], "adventurer"),
+            "zone": GEO.zone_name(row["map_id"], row["pos_x"], row["pos_y"]),
+        },
+    )
+    if plan is None:
+        return None
+    prompt = chat.build_chat_prompt(
+        name=row["name"],
+        level=row["level"],
+        race_name=RACE_NAMES.get(row["race"], "creature"),
+        class_name=CLASS_NAMES.get(row["class"], "adventurer"),
+        zone=GEO.zone_name(row["map_id"], row["pos_x"], row["pos_y"]),
+        personality=_persona_for(row),
+        health=row["health"],
+        max_health=row["max_health"],
+        in_combat=bool(row["in_combat"]),
+        recent=[],
+        text=plan.question,
+    )
+    reply = chat.parse_reply(_ask_llm(prompt)).say
+    return interview.InterviewExchange(
+        candidate=plan.candidate,
+        question=plan.question,
+        reply=reply,
+        reason=plan.reason,
+    )
 
 
 def _ask_llm(prompt: str, system: str = "") -> str:
@@ -1384,6 +1458,39 @@ def _authored_lines(minutes: int = 30) -> set:
             (minutes,),
         )
         return {r["command"] for r in cur.fetchall()}
+
+
+# Upstream playerbots' own sentences, for the in-game ear (#347). They change
+# only when the realm's playerbots image does, so an hour is plenty fresh.
+_BOT_SPEECH_SECONDS = 3600.0
+_BOT_SPEECH = {"at": None, "lines": overhear.bot_speech(())}
+
+
+def _bot_speech() -> tuple:
+    """overhear.bot_speech() over acore_playerbots.ai_playerbot_texts, cached.
+
+    The table is what upstream's PlayerbotTextMgr says its formulaic lines
+    from, so a bot-flagged line matching one of them was generated rather
+    than typed. A realm without the table has upstream's in-code defaults
+    only (1146). Any other error keeps the last set read and is tried again
+    next tick: the ear still runs, it is just no better informed than before.
+    """
+    now = time.monotonic()
+    at = _BOT_SPEECH["at"]
+    if at is not None and now - at < _BOT_SPEECH_SECONDS:
+        return _BOT_SPEECH["lines"]
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT text FROM acore_playerbots.ai_playerbot_texts")
+            texts = [r["text"] for r in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in (1049, 1146)):
+            log.warning("ear: upstream's bot texts unreadable, keeping the last set: %s", exc)
+            return _BOT_SPEECH["lines"]
+        texts = []
+    _BOT_SPEECH["lines"] = overhear.bot_speech(texts)
+    _BOT_SPEECH["at"] = now
+    return _BOT_SPEECH["lines"]
 
 
 def _fetch_quest_progress(names: list) -> dict:
@@ -2583,9 +2690,12 @@ def _note_town_pass(key: tuple, state, new, line: str, marks: dict) -> None:
         return
     if new.phase != townerrand.DONE:
         return
-    steps = state.steps
-    vendor_ahead = (state.phase != townerrand.STEPS
-                    or state.step < steps.index(townerrand.VENDOR))
+    # A step row with no vendor step says nothing about the vendor (#992).
+    try:
+        vendor = state.steps.index(townerrand.VENDOR)
+    except ValueError:
+        return
+    vendor_ahead = (state.phase != townerrand.STEPS or state.step < vendor)
     if vendor_ahead:
         _TOWN_PASS_NOTE[key] = ("the town errand ended before its vendor "
                                 "step (%s)" % line)
@@ -2728,6 +2838,117 @@ class _PersistentOwing(classquest.Owing):
             _memo_delete("class_owed", name)
 
 
+# One writer thread for the clock memos below, so a write and the delete after
+# it reach the store in the order they were made, and the event loop never
+# waits on the database for one.
+_MEMO_WRITER = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="bridge-memo")
+
+
+def _memo_job(write, *args) -> None:
+    try:
+        write(*args)
+    except Exception:
+        # _memo_upsert and _memo_delete log a database failure themselves;
+        # this is anything else, which a pool thread would otherwise swallow.
+        log.exception("bridge memo: a clock memo write failed")
+
+
+class _ClockMemo(dict):
+    """A bridge clock that a restart does not start over (#817).
+
+    A plain dict to every pass that reads it. Assigning a subject a new value
+    stores it in the memo store and popping or deleting one removes it, so
+    each writer stays the one line it was. An unchanged value is not written
+    again: a trip that has stopped moving is the case that matters, and it
+    writes nothing while it waits. `restore` reads the store once at start and
+    says which clocks came back.
+
+    The clocks are monotonic, so `encode(value, offset)` and
+    `decode(value, offset)` convert to and from wall time, `offset` being wall
+    time minus monotonic time now; `clock(value)` is the monotonic start the
+    log line and the memo row's `since` report. A falsy value is deleted
+    rather than stored (an empty borrow clock is no clock at all).
+    """
+
+    _MISSING = object()
+
+    def __init__(self, kind: str, label: str, encode, decode, clock,
+                 keep_seconds: float):
+        super().__init__()
+        self.kind, self.label = kind, label
+        self._encode, self._decode, self._clock = encode, decode, clock
+        self.keep_seconds = keep_seconds
+
+    def __setitem__(self, subject, value) -> None:
+        unchanged = subject in self and dict.__getitem__(self, subject) == value
+        super().__setitem__(subject, value)
+        if unchanged:
+            return
+        if not value:
+            _MEMO_WRITER.submit(_memo_job, _memo_delete, self.kind, subject)
+            return
+        wall = time.time()
+        offset = wall - time.monotonic()
+        _MEMO_WRITER.submit(
+            _memo_job, _memo_upsert, self.kind, subject,
+            self._encode(value, offset), self._clock(value) + offset,
+            wall + self.keep_seconds)
+
+    def __delitem__(self, subject) -> None:
+        super().__delitem__(subject)
+        _MEMO_WRITER.submit(_memo_job, _memo_delete, self.kind, subject)
+
+    def pop(self, subject, default=_MISSING):
+        if subject not in self:
+            if default is _ClockMemo._MISSING:
+                raise KeyError(subject)
+            return default
+        value = super().pop(subject)
+        _MEMO_WRITER.submit(_memo_job, _memo_delete, self.kind, subject)
+        return value
+
+    def restore(self) -> None:
+        """Every clock the store still holds, and one log line for each.
+
+        A subject this process already observes is left as it is: on_ready
+        runs again on a gateway reconnect, and what memory holds then is at
+        least as fresh as the store."""
+        now = time.monotonic()
+        offset = time.time() - now
+        for subject, (value, _since) in _memo_read(self.kind).items():
+            if subject in self:
+                continue
+            try:
+                restored = self._decode(value, offset)
+                spent = now - self._clock(restored)
+            except (KeyError, TypeError, ValueError):
+                log.exception("bridge memo: invalid %s memo for %s", self.kind, subject)
+                continue
+            dict.__setitem__(self, subject, restored)
+            log.info("bridge memo: restored the %s clock for %s - %d seconds "
+                     "already spent, so the restart does not count it from zero",
+                     self.label, subject, int(spent))
+
+
+# How long a vendor or banker observation is kept without being written again.
+# Longer than every bound that reads one (the two-hour bag wait, the twenty
+# minute stall and split windows), so a trip still under way keeps its clock,
+# and a trip that ended without a release stops leaving a memo behind.
+TRIP_CLOCK_MEMO_SECONDS = 6 * 3600
+# A borrowed lead's clock lasts while its learn errand is outstanding, and a
+# borrower past ERRAND_LEAD_HOURS must stay skipped, so its memo is kept for a
+# week like the owed clock's; borrow_clock drops it once no errand is left.
+LEAD_CLOCK_MEMO_SECONDS = 7 * 24 * 3600
+
+
+def _trip_clock(movement) -> float:
+    """The start a vendor or banker observation reports: the split clock while
+    the family is split, otherwise the leader's steady clock."""
+    split = getattr(movement, "split_since", None)
+    return movement.steady_since if split is None else split
+
+
 def _bag_hold_stuck(names, free_slots: dict) -> tuple:
     """Members held at the floor once the hold is released (no town pass gave
     any of them a slot in bag_pressure.BAG_HOLD_STUCK_SECONDS); () while room
@@ -2767,6 +2988,39 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
         else:
             _BAG_HOLD_STUCK.pop(name, None)
     return result
+
+
+def _bag_hold_read(names) -> tuple:
+    """Read the bags of a family whose campaign a Jev interlude holds, so an
+    interlude does not end its bag hold (#872).
+
+    The campaign gate (`_drive_dungeon`) is the only reader of the hold it
+    judges, and the queue does not call it while an interlude holds the
+    order. A sell interlude runs eight to twelve minutes, longer than
+    bag_pressure.BAG_HOLD_GAP_SECONDS, so the first reading after it started
+    a new hold. Measured on the dev realm 2026-10-18: Grug's family was
+    withheld on "bags are near full" for over five hours while Jev chose a
+    sell interlude about every half hour, and every interlude of ten minutes
+    or more restarted the hold's clock. The hold never reached
+    BAG_HOLD_STUCK_SECONDS, so the family was never sent back to questing.
+
+    Only a hold the gate already started is read, under the gate's own key
+    (the members it sends, without anyone sitting out). A slot the interlude
+    sells for still restarts the clock, as any town pass does. Returns what
+    `_bag_hold_stuck` returns, or () when there is no hold to keep or the
+    read failed (logged; the next cycle reads again).
+    """
+    # Looked up: the queue tests load this function in isolation.
+    running = globals().get("_standin_running")
+    names = list(running(names) if running is not None else names)
+    if not names or tuple(sorted(names)) not in _BAG_HOLD:
+        return ()
+    try:
+        return _bag_hold_stuck(names, _fetch_free_slots(names))
+    except Exception:
+        log.exception("bag hold: the read for %s during an interlude failed; "
+                      "retrying next cycle", ", ".join(names))
+        return ()
 
 
 def _restore_bag_holds() -> None:
@@ -4266,8 +4520,15 @@ _ACTIVITY_READS = (
     ("members", "SELECT name, level, class FROM characters WHERE name IN (%s)"),
     ("recipes",
      "SELECT name FROM overseer_roster WHERE craft_spell <> 0 AND name IN (%s)"),
+    # The family's newest death in the last day, by id: a mark that rises
+    # when anyone dies, read down the (character_name, created_at) key
+    # (jev_activity.DEATH_MARK_HOURS, #795). A COUNT over every death they
+    # ever had grew with the table; a windowed COUNT would fall as old deaths
+    # aged out, and one aging out as another arrived would hide the new one.
     ("deaths",
-     "SELECT COUNT(*) AS n FROM overseer_death WHERE character_name IN (%s)"),
+     "SELECT MAX(id) AS n FROM overseer_death WHERE character_name IN (%s) "
+     "AND created_at > NOW() - INTERVAL "
+     + str(int(jev_activity.DEATH_MARK_HOURS)) + " HOUR"),
     ("worn",
      "SELECT c.name, COUNT(*) AS worn FROM character_inventory ci "  # noqa: S608 - the slot list is jev_activity.GEAR_SLOTS, integer constants; names are bound
      "JOIN characters c ON c.guid = ci.guid WHERE ci.bag = 0 AND ci.slot IN ("
@@ -4619,6 +4880,46 @@ def _holders_of(quest_id: int) -> set:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, (*names, int(quest_id)))
         return {row["name"] for row in cur.fetchall()}
+
+
+def _in_world_of(names) -> set | None:
+    """Which of `names` are in the world on THIS realm right now.
+
+    WHY A QUEST AIM NEEDS TO ASK (#56). A family can move to another realm and
+    leave its roster rows behind on this one, still `enabled = 1`, still
+    holding the quest. Nothing here notices: `_holders_of` reads
+    character_queststatus, which a logged-out character keeps forever, so the
+    quest goal went on writing `drive_quest` onto characters that had not
+    logged in for twelve days, every lease, logging an aim that no bot would
+    ever read. An aim only means something to a character that is here.
+
+    PRESENCE IS A FRESH `overseer_snapshot` ROW, NOT `characters.online`, the
+    rule this service keeps everywhere else (see _GUILD_ROSTER_SQL): the flag
+    reads 0 for bots that are in the world, and the snapshot is written only
+    for characters that are.
+
+    None MEANS "NOT READ", which is not the same as "nobody is here". A world
+    without the snapshot table or column says nothing about who is present, so
+    the caller carries on exactly as it did before it asked rather than
+    clearing a family's aims on a missing table.
+    """
+    names = sorted({str(n) for n in names or () if n})
+    if not names:
+        return set()
+    marks = ", ".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT name FROM overseer_snapshot "  # noqa: S608 - placeholders from a COUNT, values still bound
+                "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND" % marks,
+                names,
+            )
+        except pymysql.err.MySQLError as exc:
+            # 1054 ER_BAD_FIELD_ERROR, 1146 ER_NO_SUCH_TABLE.
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        return {str(row["name"]) for row in cur.fetchall()}
 
 
 
@@ -6319,6 +6620,7 @@ class Bridge(discord.Client):
                 LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                 ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                 "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+                GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,
             },
         )
         # A cut-off follower can make one self-contained vendor walk during a
@@ -6335,14 +6637,18 @@ class Bridge(discord.Client):
         # overseer tables ship in mod-overseer's db-import image and a new one
         # would not reach the realm with this change. A restart forgets the
         # streak and costs at most one repeated walk, which is cheaper than
-        # the walk being repeated for ever.
+        # the walk being repeated for ever. Left in memory on purpose (#817):
+        # a restart costs that one walk, and the aim it left behind is cleared
+        # by the sweep below (#816), so no flight aim outlives its count.
         self._flight_attempts: dict = {}
         # Whether this process has cleared a flight aim it cannot count (#816).
         self._flight_aims_swept = False
         # GUILD MAIL RUNS UNDER WAY (#185): holder -> monotonic start, and the
         # start times of the last day's runs. In memory for the town slot's
         # reason; the daily cap also reads the command log, which a restart
-        # does not forget (guildroute.runs_today).
+        # does not forget (guildroute.runs_today). Left in memory on purpose
+        # (#817): the log is read over the same day the starts are kept for,
+        # and every run that posted is in it.
         self._guild_mail_runs: dict = {}
         self._guild_mail_run_starts: list = []
         # A guild bot off the roster walks by the module's walk row (#185).
@@ -6381,23 +6687,37 @@ class Bridge(discord.Client):
         self._raid_supply_said: dict = {}
         # Leader snapshot history used only to detect a vendor aim that has
         # stopped moving. The decision itself lives in vendor_stall.py.
-        self._vendor_movement: dict[str, vendor_stall.Movement] = {}
+        # This and the two family observations below are kept in the memo
+        # store (#817): a deploy would otherwise count a trip stuck for most
+        # of its bound from zero, and with deploys closer together than the
+        # bound the give-up never fired.
+        self._vendor_movement: dict[str, vendor_stall.Movement] = _ClockMemo(
+            "vendor_move", "vendor trip stall", vendor_stall.movement_memo,
+            vendor_stall.movement_from_memo, _trip_clock, TRIP_CLOCK_MEMO_SECONDS)
         # The leader can keep moving while the family is split across maps or
         # far enough apart that nobody reaches one usable vendor counter.
         # vendor_stall owns the pure cohesion clock; this bridge only retains
         # its last observation between polls.
         # Keyed by leader since #150: each family walks to its own counter.
-        self._vendor_family_movement: dict[str, vendor_stall.FamilyMovement] = {}
+        self._vendor_family_movement: dict[str, vendor_stall.FamilyMovement] = _ClockMemo(
+            "vendor_family", "vendor trip family split", vendor_stall.family_memo,
+            vendor_stall.family_from_memo, _trip_clock, TRIP_CLOCK_MEMO_SECONDS)
         # A banker trip cannot finish while a member stays on another map.
         # Keep the same bounded family-cohesion observation as vendor trips.
-        self._bank_family_movement: dict[str, vendor_stall.FamilyMovement] = {}
+        self._bank_family_movement: dict[str, vendor_stall.FamilyMovement] = _ClockMemo(
+            "bank_family", "banker trip family split", vendor_stall.family_memo,
+            vendor_stall.family_from_memo, _trip_clock, TRIP_CLOCK_MEMO_SECONDS)
         # One town slot per OTHER family (#150), keyed by the roster's
         # `family` value. This bridge's own family keeps `self._town_slot`.
         self._cohort_town_slots: dict[str, townslot.Slot] = {}
         # When each other family's trainee first borrowed its lead for the
         # learn errand it still has (#211), keyed by the roster's `family`.
-        # In memory like the town slots; a restart restarts the bound.
-        self._family_lead_since: dict[str, dict] = {}
+        # Kept in the memo store (#817), so a deploy does not restart the
+        # ERRAND_LEAD_HOURS bound on a borrowed lead.
+        self._family_lead_since: dict[str, dict] = _ClockMemo(
+            "lead_borrow", "borrowed lead", tradechoice.borrow_clock_memo,
+            tradechoice.borrow_clock_from_memo, lambda since: min(since.values()),
+            LEAD_CLOCK_MEMO_SECONDS)
         # Equip rows whose outcome has already been logged, by row id, so each
         # answer is said once (#146).
         self._equip_reported: set = set()
@@ -6479,8 +6799,6 @@ class Bridge(discord.Client):
         # crafters are on a mailbox walk right now.
         self._crafter_routed: dict = {}
         self._crafter_said: dict = {}
-        # family -> the signature of the bank forecast last logged for it.
-        self._bank_forecast_said: dict = {}
         self._crafter_walks: dict = {}
         # THE GUILD'S OWN POST (#625): who is on a walk to take its letters
         # out, and when each grounded walker last used its hearthstone.
@@ -6590,6 +6908,14 @@ class Bridge(discord.Client):
         if owing is not None:
             await asyncio.to_thread(owing.restore)
         await asyncio.to_thread(_restore_bag_holds)
+        # The stall and borrow clocks a deploy must not restart (#817).
+        for name in ("_vendor_movement", "_vendor_family_movement",
+                     "_bank_family_movement", "_family_lead_since"):
+            # A _ClockMemo; anything else (a test's plain dict) has nothing
+            # to restore.
+            restore = getattr(self.__dict__.get(name), "restore", None)
+            if restore is not None:
+                await asyncio.to_thread(restore)
         try:
             self._guild_run_formed_at = await asyncio.to_thread(
                 _guild_run_last_formed_at)
@@ -6685,7 +7011,7 @@ class Bridge(discord.Client):
             text=d.text,
         )
         try:
-            decision = voice.parse_decision(await asyncio.to_thread(_ask_llm, prompt))
+            decision = voice.parse_decision(await llmpool.call(_ask_llm, prompt))
         except Exception:
             log.exception("inner voice unreachable; relaying raw")
             row_id = await asyncio.to_thread(
@@ -7067,6 +7393,7 @@ class Bridge(discord.Client):
         directive = overhear.hear(
             rows, family=bonds.FAMILY,
             authored=await asyncio.to_thread(_authored_lines),
+            bot_lines=await asyncio.to_thread(_bot_speech),
             last_at=self._last_overheard_at, now=time.monotonic(),
         )
         if directive is None:
@@ -7179,7 +7506,7 @@ class Bridge(discord.Client):
                 zone=GEO.zone_name(grounding["map_id"], grounding["pos_x"], grounding["pos_y"]),
                 personality=_persona_for(grounding), text=directive.text,
             )
-            return voice.parse_decision(await asyncio.to_thread(_ask_llm, prompt))
+            return voice.parse_decision(await llmpool.call(_ask_llm, prompt))
         except Exception:
             log.exception("overheard '%s' but %s's voice is unreachable",
                           directive.text[:60], name)
@@ -8252,6 +8579,7 @@ class Bridge(discord.Client):
                     LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                     ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                     "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+                    GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,
                 },
             )
             self._cohort_town_slots[key] = slot
@@ -9010,10 +9338,14 @@ class Bridge(discord.Client):
         if not leader_counter:
             free = {n: 19 - len(f["equipped"]) for n, f in facts.items()}
             if any(v >= 4 for v in free.values()) and step == bag_pressure.VENDOR_ERRAND_AIM:
-                await self._claim_town_slot(
-                    "gearup", leader, auction.AUCTIONEER_ROLE,
-                    cohort=_cohort_key(cohort),
-                )
+                trip = await self._gearup_house_trip(leader, facts)
+                if trip is None or trip.aim == auction.AUCTIONEER_ROLE:
+                    await self._claim_town_slot(
+                        "gearup", leader, auction.AUCTIONEER_ROLE,
+                        cohort=_cohort_key(cohort),
+                    )
+                else:
+                    await self._gearup_far_house(leader, trip, cohort)
             for n in sorted(facts):
                 log.info("gearup: %s nothing yet: not at an auctioneer", n)
             return {}, {}, None
@@ -9025,6 +9357,49 @@ class Bridge(discord.Client):
                 log.info("gearup: %s nothing: no reachable auction house", name)
             return {}, teams, None
         return short, teams, house
+
+    async def _gearup_far_house(self, leader, trip, cohort) -> bool:
+        """Send the leader to a house beyond the town, or say why not (#1170)."""
+        if not trip.aim:
+            log.info("gearup: no auction house trip for %s - %s",
+                     leader, trip.why_not)
+            return False
+        aimed = await self._claim_town_slot(
+            GEAR_HOUSE_CLAIMANT, leader, trip.aim,
+            cohort=_cohort_key(cohort),
+        )
+        log.info("gearup: no auction house within a town walk of %s; "
+                 "aimed at %s (%d yards) so the gear-short can buy "
+                 "there (aim taken=%s)", leader,
+                 trip.name or trip.aim, int(trip.yards), aimed)
+        return aimed
+
+    async def _gearup_house_trip(self, leader, facts):
+        """Where the leader walks for an auction house, or None when unread.
+
+        `auction.house_trip` decides; this reads. The keyword when a counter of
+        the leader's side stands within a town walk; the counter's entry when
+        the nearest is beyond it and a member passes the gear-short gate
+        (`gearup.house_trip_shoppers`), which is a home such as Ratchet that
+        has no auction house (#1170).
+        """
+        standing = bag_pressure.standing_from_rows(
+            await asyncio.to_thread(_fetch_bag_trip_facts, [leader]))
+        here = standing.get(leader)
+        if here is None or here.map_id is None:
+            return None
+        teams = await asyncio.to_thread(_fetch_teams, [leader])
+        rows = await asyncio.to_thread(_fetch_auctioneer_spawns, here)
+        if rows is None:
+            return None
+        shoppers = gearup.house_trip_shoppers(
+            facts, empty_slots=GEARUP_GATE_EMPTY_SLOTS,
+            min_purse=GEARUP_GATE_MIN_PURSE,
+        )
+        return auction.house_trip(
+            teams.get(leader, ""), rows, map_id=here.map_id,
+            far=bool(shoppers),
+        )
 
     async def _gearup_standing_members(self, facts, teams, names, house):
         planned = {}
@@ -9985,9 +10360,17 @@ class Bridge(discord.Client):
         here.
         """
         rows = await asyncio.to_thread(_fetch_bag_state, names)
+        # A BACKPACK READ ERROR IS A READ ERROR (#1062), not the end of the bag
+        # pass: unread, every backpack counts as full (members_from_rows), so
+        # no bag is moved out this pass, and the hand-over still runs.
+        try:
+            backpack_used = await asyncio.to_thread(_fetch_backpack_used, names)
+        except pymysql.err.MySQLError as exc:
+            log.warning("bags: the backpack read failed (%s); every backpack "
+                        "counts as full this pass", exc)
+            backpack_used = None
         members = bag_upgrade.members_from_rows(
-            rows, names,
-            backpack_used=await asyncio.to_thread(_fetch_backpack_used, names))
+            rows, names, backpack_used=backpack_used)
         # A BAG ITS OWN HOLDER CAN PUT ON GOES ON FIRST (#88), and it is not
         # also handed to a sibling in the same pass. The bag it displaces is
         # carried from the next save on, where the hand-over below or the
@@ -11278,8 +11661,7 @@ class Bridge(discord.Client):
         # rows and the two plans just made, and nothing waits on the answer.
         self._jev_keep_shadow(names, leader, rows, clear, locks, free_slots,
                               auction_open=True)
-        for sale in lock_sales + clear_sales:
-            sellable_counts[sale.holder] = sellable_counts.get(sale.holder, 0) + 1
+        _count_sales(sellable_counts, lock_sales + clear_sales)
         # WHAT A VENDOR CAN DO FOR EACH MEMBER AT THE FLOOR (#986), read the
         # way the sale itself is decided, for the bag hold to name. Looked up:
         # the economy tests load this pass in isolation.
@@ -11398,8 +11780,7 @@ class Bridge(discord.Client):
         )
         bank_keeps = await asyncio.to_thread(_bank_policy, names, True)
         gear_sales = _without_bank_keeps(gear_sales, bank_keeps, "economy")
-        for sale in gear_sales:
-            sellable_counts[sale.holder] = sellable_counts.get(sale.holder, 0) + 1
+        _count_sales(sellable_counts, gear_sales)
 
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
@@ -11469,11 +11850,9 @@ class Bridge(discord.Client):
             log.info("economy: no safe carried vendor goods")
             return
         # A sale is owned by the character carrying that item, so the ROWS are
-        # grouped by holder. The ERRAND is not, and that distinction is the
-        # whole of infra#3553 - see the aim written below the gate.
-        by_holder: dict[str, list] = {}
-        for candidate in candidates:
-            by_holder.setdefault(candidate.holder, []).append(candidate)
+        # grouped by holder (`_queue_vendor_sales`). The ERRAND is not, and
+        # that distinction is the whole of infra#3553 - see the aim written
+        # below the gate.
 
         # THE ROW IS ONLY WRITTEN WHERE IT CAN WORK (infra#3464).
         #
@@ -11585,122 +11964,49 @@ class Bridge(discord.Client):
         # makes the aim book erase its own state and read a standing errand as
         # a new one, releasing and re-taking the counter hold. The argument and
         # the measurements are on `bag_pressure.vendor_errand_step`.
-        aimed = False
-        if step == bag_pressure.VENDOR_ERRAND_AIM:
-            # THE RETURN VALUE IS READ. The economy guard in _write_trade_errand
-            # only retasks an IDLE traveller, so this write is a no-op while the
-            # town trip owns `travel_npc = 'repair'` - which is a legitimate
-            # outcome and the exact thing infra#3464 called silent. It was still
-            # silent afterwards: the caller hardcoded `aimed = True` and threw
-            # the answer away.
-            #
-            # AND IT GOES THROUGH THE TOWN SLOT (infra#3703), which is where
-            # "somebody else's errand" stopped being the end of the sentence:
-            # the slot says whose, for how long, and what ends it.
-            #
-            # A VENDOR IN THE SAME TOWN MAKES IT A SHORT STOP (townslot.
-            # STOP_CLAIMANTS), the one ask a staging campaign lets through. A
-            # far vendor passes no distance and stays an ordinary trip.
-            aimed = await self._claim_town_slot(
-                "economy", leader, "vendor", urgent=True,
-                cohort=getattr(cohort, "key", None),
-                distance=townslot.stop_yards("economy", await asyncio.to_thread(
-                    _nearest_vendor_yards, leader)),
-            )
-            if not aimed:
-                log.info(
-                    "economy: leader=%s is already on somebody else's errand, so "
-                    "no vendor aim was taken this pass", leader,
-                )
-
-        inserted = 0
-        considered = 0
-        holder_town = {}
-        leader_town = await asyncio.to_thread(_fetch_town, leader)
-        holder_town[leader] = leader_town
-        leader_at_counter = bool(leader_town.vendor)
-        for holder in sorted(by_holder):
-            town = await asyncio.to_thread(_fetch_town, holder)
-            holder_town[holder] = town
-        queue_holders = set(bag_pressure.vendor_holders_to_queue(
-            candidates,
-            leader=leader,
-            leader_at_counter=leader_at_counter,
-            holder_at_counter=lambda holder: bool(holder_town[holder].vendor),
-            # `aimed` is True only while the leader carries this pass's own
-            # vendor aim: taken or held this pass. Refused, it walks nowhere
-            # and its rows would answer `vendor not in range` (#297).
-            leader_walking=aimed,
-        ))
-        queue_holders = bag_pressure.counter_holders(
-            queue_holders, mode, leader_at_counter,
-            lambda holder: bool(holder_town[holder].vendor),
+        aimed = await self._take_vendor_aim(step, leader, cohort)
+        inserted = await _queue_vendor_sales(
+            candidates, leader, aimed, mode, attempts,
         )
-        for holder in sorted(by_holder):
-            holder_candidates = tuple(by_holder[holder])
-            town = holder_town[holder]
-            if not town.vendor:
-                if holder not in queue_holders:
-                    log.info(
-                        "economy: %d carried candidate(s) for %s but no vendor "
-                        "within reach - leader=%s aim taken=%s",
-                        len(holder_candidates), holder, leader, aimed,
-                    )
-                    continue
-            elif holder not in queue_holders:
-                log.info(
-                    "economy: %d carried candidate(s) for %s but no vendor "
-                    "within reach - leader=%s aim taken=%s",
-                    len(holder_candidates), holder, leader, aimed,
-                )
-                continue
-            # The world has already answered some of these. A sale that was
-            # delivered, or refused with a reason retrying cannot change, must
-            # not be proposed again: 819 of 822 `item not carried` refusals in
-            # one day were re-issues of an item that had already been sold
-            # (infra#3330).
-            #
-            # A HOLDER STANDING AT A VENDOR IS NOT HELD BACK FOR RANGE (#149).
-            # `town.vendor` is this holder's own reading, so a range refusal
-            # from somewhere else no longer describes where it stands.
-            plan = item_plan.plan(holder_candidates, attempts,
-                                  at_vendor=bool(town.vendor))
-            considered += len(holder_candidates)
-            for candidate in plan.write:
-                if await asyncio.to_thread(_insert_sell, candidate):
-                    inserted += 1
+        _report_vendor_claim(slot, aimed, inserted)
+
+    async def _take_vendor_aim(self, step: str, leader: str, cohort=None) -> bool:
+        """Take the leader's vendor aim when the errand step says AIM.
+
+        True only while the leader carries the aim this pass just took. HOLD,
+        RELEASE and a refused claim are all False, which is what the holder
+        gate in `_queue_vendor_sales` reads as "the leader is not walking to a
+        vendor for us" (#297). Lifted out of `_vendor_once` unchanged
+        (wow-overseer#977).
+        """
+        if step != bag_pressure.VENDOR_ERRAND_AIM:
+            return False
+        # THE RETURN VALUE IS READ. The economy guard in _write_trade_errand
+        # only retasks an IDLE traveller, so this write is a no-op while the
+        # town trip owns `travel_npc = 'repair'` - which is a legitimate
+        # outcome and the exact thing infra#3464 called silent. It was still
+        # silent afterwards: the caller hardcoded `aimed = True` and threw
+        # the answer away.
+        #
+        # AND IT GOES THROUGH THE TOWN SLOT (infra#3703), which is where
+        # "somebody else's errand" stopped being the end of the sentence:
+        # the slot says whose, for how long, and what ends it.
+        #
+        # A VENDOR IN THE SAME TOWN MAKES IT A SHORT STOP (townslot.
+        # STOP_CLAIMANTS), the one ask a staging campaign lets through. A
+        # far vendor passes no distance and stays an ordinary trip.
+        aimed = await self._claim_town_slot(
+            "economy", leader, "vendor", urgent=True,
+            cohort=getattr(cohort, "key", None),
+            distance=townslot.stop_yards("economy", await asyncio.to_thread(
+                _nearest_vendor_yards, leader)),
+        )
+        if not aimed:
             log.info(
-                "economy: holder=%s queued %d/%d vendor sale(s), held back %s",
-                holder, len(plan.write), len(holder_candidates),
-                item_plan.reasons(plan.skipped),
+                "economy: leader=%s is already on somebody else's errand, so "
+                "no vendor aim was taken this pass", leader,
             )
-        log.info("economy: queued %d/%d vendor sale(s) across %d holder(s), "
-                 "one errand on leader=%s (taken=%s)",
-                 inserted, considered, len(by_holder), leader, aimed)
-        # WHETHER THAT URGENT CLAIM WAS WORTH TAKING (infra#4191).
-        #
-        # This pass preempts everything on the strength of bag pressure, and
-        # `townslot` cannot see whether a sale came of it - only this loop
-        # knows that `inserted` is the number of sales actually written. So
-        # the pass reports its own outcome, and a run of fruitless ones costs
-        # it the right to preempt for a while.
-        #
-        # ONLY WHEN IT HELD THE COLUMN. `aimed` is False when some other pass
-        # had the traveller, and being refused a turn is an ordinary wait
-        # rather than a wasted one - counting it would back the pass off for
-        # somebody else's errand.
-        if aimed:
-            if inserted:
-                slot.productive("economy")
-            else:
-                until = slot.fruitless("economy", time.monotonic())
-                log.warning(
-                    "economy: took the travel column on bag pressure and wrote "
-                    "no sale; urgency suppressed for %.0fs so a pressure this "
-                    "pass cannot relieve stops outranking every other errand "
-                    "(infra#4191)",
-                    max(0.0, until - time.monotonic()),
-                )
+        return aimed
 
     async def _destroy_released(self, rows: list) -> None:
         """Queue a destroy for each released quest item no vendor will buy.
@@ -13409,8 +13715,7 @@ class Bridge(discord.Client):
         if not names or await self._mid_run(names):
             return
         bank_plan = await asyncio.to_thread(_plan_bank, names)
-        for note in bank_plan.notes:
-            log.info("bank: %s", note)
+        _log_changed("bank", bank_plan.notes, tuple(sorted(names)), capped=False)
         # `_head_now()` RATHER THAN bonds.head_of_family() (infra#3553, same
         # defect #3554 fixed in _vendor_once). The two differ exactly when it
         # matters: `_head_now` is what `_mark_party_leader` writes into
@@ -13540,7 +13845,7 @@ class Bridge(discord.Client):
             if await asyncio.to_thread(_insert_bank, move, step.command):
                 log.info("bank bags: %s (%s)%s", step.why, step.command,
                          _family_label(cohort))
-        _log_capped("bank bags", notes)
+        _log_changed("bank bags", notes, tuple(sorted(names)))
 
     async def _bank_passing_once(self, cohort=None) -> None:
         """The quick look: bank for whoever is at a banker, nothing else.
@@ -13946,8 +14251,9 @@ class Bridge(discord.Client):
     async def _say_bank_forecast(self, names: list, cohort=None) -> None:
         """Log the guild's bank forecast: a headline and one line per item.
 
-        Only when it differs from the last one logged for this family, so a
-        ten-minute cycle does not bury the log under the same seventy lines.
+        Only the lines that changed since this family's last forecast, with
+        the headline whenever any did (#1142): a whole forecast every ten
+        minutes for a handful of moved counts was a quarter of the log.
         A listing of a vault stack is withdrawn for the house by the guild
         bank pass (`_queue_guild_withdrawals`); a give or a vendor sale of a
         vault stack is still only the plan, and the line says so.
@@ -13955,11 +14261,9 @@ class Bridge(discord.Client):
         forecast = await asyncio.to_thread(_bank_forecast, names, True)
         lines = [line.summary for line in forecast.lines]
         lines += [d.line for d in forecast.decisions() if d.action == bankforecast.GIVE]
-        signature = hash(tuple(lines))
-        key = tuple(sorted(names))
-        if not lines or self._bank_forecast_said.get(key) == signature:
+        fresh, gone = _unsaid("bank forecast", tuple(sorted(names)), lines)
+        if not fresh and not gone:
             return
-        self._bank_forecast_said[key] = signature
         planned = [d for d in forecast.decisions()
                    if d.action in (bankforecast.GIVE, bankforecast.VENDOR)]
         log.info("bank forecast: %s%s%s", forecast.headline(),
@@ -13967,8 +14271,11 @@ class Bridge(discord.Client):
                  "and its listings are withdrawn for the house" % len(planned)
                  if planned else "",
                  _family_label(cohort))
-        for line in lines:
+        for line in fresh:
             log.info("bank forecast: %s", line)
+        if gone:
+            log.info("bank forecast: %d line(s) logged before no longer hold%s",
+                     gone, _family_label(cohort))
 
     async def _guild_bank_passing_once(self, cohort=None) -> None:
         """The quick look: deposit for whoever stands at a vault, nothing else.
@@ -15382,12 +15689,15 @@ class Bridge(discord.Client):
         """
         names = await asyncio.to_thread(_names_of, cohort)
         if not names:
+            # Nothing is planned, so no stale class quest plan is kept.
+            _drop_class_plan(self, cohort)
             return
         facts = await asyncio.to_thread(_fetch_job_facts, names)
         members = facts["members"]
         if not members:
             log.info("guild jobs: no family guild has a placed member yet%s",
                      _family_label(cohort))
+            _drop_class_plan(self, cohort)
             return
         await self._start_guild_job_pass(cohort, facts, members)
 
@@ -15505,23 +15815,30 @@ class Bridge(discord.Client):
             self._log_missing_campaign_summoner(members, campaign_door)
         # No class quest uses while this worldserver does not carry the verbs.
         facts = dict(facts, class_book=self._class_book_for_plan(facts))
+        gear = await self._job_gear_offers(members, facts["recent"])
+        # Food and drink for a member with none (restsupply.py).
+        supply = await self._job_supply_offers(members, facts["recent"])
+        # A hunter's first pet (hunterpet.py): the beasts around each hunter
+        # that knows Tame Beast and has none.
+        pets = await self._job_pet_offers(members, facts["recent"])
+        mail = await asyncio.to_thread(_job_mail_commands, members)
+        pvp = await self._job_pvp_moves(members, facts["recent"], busy)
+        # The level step is a spawn walk too (guildlevel.py).
+        leveling = (await asyncio.to_thread(_job_leveling, facts)
+                    if spawn_walks else None)
+        # THE PLAN RUNS ON THE EVENT LOOP (#833): it mutates the hunt clock and
+        # the owing clock other tasks read, so it is not sent to a thread.
+        # Every awaited input is read above, so this timer measures only the
+        # synchronous plan, the stretch that once blocked the gateway 40 s.
+        plan_started = time.perf_counter()
         plan = guildjobs.plan(
             members, masters=facts["masters"], crafters=facts["crafters"],
             fields=fields, doors=doors, pending=facts["pending"],
             kept=kept,
             recent=facts["recent"], busy=busy, cap=cap,
             unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"),
-            gear=await self._job_gear_offers(members, facts["recent"]),
-            # Food and drink for a member with none (restsupply.py).
-            supply=await self._job_supply_offers(members, facts["recent"]),
-            # A hunter's first pet (hunterpet.py): the beasts around each hunter
-            # that knows Tame Beast and has none.
-            pets=await self._job_pet_offers(members, facts["recent"]),
-            mail=await asyncio.to_thread(_job_mail_commands, members),
-            pvp=await self._job_pvp_moves(members, facts["recent"], busy),
-            # The level step is a spawn walk too (guildlevel.py).
-            leveling=(await asyncio.to_thread(_job_leveling, facts)
-                      if spawn_walks else None),
+            gear=gear, supply=supply, pets=pets, mail=mail, pvp=pvp,
+            leveling=leveling,
             focus=focus,
             # The class quest is a spawn walk and a quest row (classquest.py).
             classes=facts.get("class_book") if spawn_walks else None,
@@ -15535,6 +15852,9 @@ class Bridge(discord.Client):
             # The class quest asks lately: a run of them that did not get the
             # quest done stops the next (guildjobs.class_ask_streak).
             asks=facts.get("quest_asks", ()))
+        log.info("guild jobs: the plan took %.2f s on the event loop for %d "
+                 "member(s)%s", time.perf_counter() - plan_started, len(members),
+                 _family_label(cohort))
         # Members held on a class quest are kept out of every dungeon pass
         # (the guild's asks, its runs): _class_priority_names. The class
         # quests a guildmate could help with are asked in guild chat by the
@@ -16004,6 +16324,10 @@ class Bridge(discord.Client):
             log.info("guild jobs: quest use row %d for %s (%s): %s", row_id,
                      step.holder, row.command, verdict.said)
             if verdict.state in classuse.DONE:
+                # A done use restarts the class hunt's stall clock (#1140): the
+                # counter moves only when what it summoned dies.
+                if step.action == classquest.ACTION:
+                    self._class_hunts.used(step.holder, int(step.key), time.time())
                 return True
             if verdict.state == classuse.UNSUPPORTED:
                 self._class_use_unsupported_until = (
@@ -16359,8 +16683,67 @@ class Bridge(discord.Client):
         return await self._class_party_watch(run)
 
     async def _class_party_watch(self, run) -> bool:
-        """Read the asker's quest log until the objective is done, its ask is no
-        longer live or the party's time is up."""
+        """Hunt the objective creature with the party and read the asker's quest
+        log until the objective is done, its ask is no longer live or the
+        party's time is up; the leader's running hunt row ends with the watch."""
+        hunt = classparty.PartyHunt(self._class_party_hunt_command(run))
+        try:
+            return await self._class_party_watching(run, hunt)
+        finally:
+            if hunt.row_id:
+                await asyncio.to_thread(_end_hunt_row, hunt.row_id, _PARTY_HUNT_OVER)
+
+    def _class_party_hunt_command(self, run) -> str:
+        """The leader's hunt row for the party's creature, "" while this
+        worldserver is known not to hunt or the quest is not in the book."""
+        now = time.monotonic()
+        book = getattr(self, "_class_book", None)
+        if book is None or now < getattr(self, "_class_hunt_unsupported_until", 0.0):
+            return ""
+        return classparty.hunt_command(
+            book.quests.get(int(run.quest)), run.spot,
+            now >= getattr(self, "_class_hunt_itemless_until", 0.0))
+
+    async def _class_party_tend_hunt(self, run, hunt) -> None:
+        """Read the leader's running hunt row, and write the next one when it is
+        due (classparty.PartyHunt)."""
+        now = time.monotonic()
+        if hunt.row_id:
+            verdict = await self._class_party_hunt_read(run, hunt)
+            if verdict.state == classhunt.RUNNING:
+                return
+            log.info("class party: hunt row %d for %s's party: %s", hunt.row_id,
+                     run.leader, verdict.said)
+            self._class_party_hunt_marks(verdict, now)
+            hunt.ended(verdict, now)
+        if not hunt.due(now):
+            return
+        row = guildcorps.Row("job", hunt.command, "", classparty.SOURCE)
+        hunt.row_id = await asyncio.to_thread(_insert_corps_row, run.leader, row) or 0
+        if not hunt.row_id:
+            log.info("class party: no hunt row was written for %s's party", run.leader)
+            hunt.command = ""
+
+    async def _class_party_hunt_read(self, run, hunt):
+        """The classhunt.Answer of the leader's running hunt row."""
+        answer = await asyncio.to_thread(_command_answer, hunt.row_id)
+        if answer is None:
+            return classhunt.Answer(
+                classhunt.UNREADABLE, "hunt row %d is unreadable" % hunt.row_id)
+        return classhunt.judge(run.leader, answer.get("status"), answer.get("detail"),
+                               answer.get("result"), hunt.command)
+
+    def _class_party_hunt_marks(self, verdict, now) -> None:
+        """Keep what a party's hunt row said about this worldserver for every
+        hunt: it does not hunt, or it rejects the item key."""
+        if verdict.state == classhunt.UNSUPPORTED:
+            self._class_hunt_unsupported_until = now + guildroute.WALK_UNSUPPORTED_SECONDS
+        elif verdict.state == classhunt.ITEMLESS:
+            self._class_hunt_itemless_until = now + guildroute.WALK_UNSUPPORTED_SECONDS
+
+    async def _class_party_watching(self, run, hunt) -> bool:
+        """One read of the quest log, the ask and the clock every WATCH_SECONDS,
+        tending the hunt between them; True when the objective is done."""
         while True:
             state = await asyncio.to_thread(
                 _class_party_quest_state, run.leader, run.quest)
@@ -16378,6 +16761,7 @@ class Bridge(discord.Client):
                          run.title)
                 run.outcome = "party timed out before quest credit"
                 return False
+            await self._class_party_tend_hunt(run, hunt)
             await asyncio.sleep(min(classparty.WATCH_SECONDS, max(1.0, left)))
 
     async def _class_party_disband_row(self, run) -> None:
@@ -16714,6 +17098,21 @@ class Bridge(discord.Client):
                 "pass, so %d letter(s) stay uncollected unless a taker is "
                 "already at a mailbox", leader, post.aim, len(letters),
             )
+            # BUT NOT A SIX-SECOND WAIT FOR NOBODY (wow-overseer#1141). The
+            # fall-through exists for a taker already standing at the box, and
+            # the first read above already says whether there is one. When it
+            # puts no taker within reach, the settle read below would sleep
+            # SETTLE_SECONDS on most passes and write no row. So the pass ends
+            # here, and the settle read still runs whenever some taker is in
+            # reach. The cost, stated: a taker who reached the box after that
+            # first read waits one more cycle, which is lateness, never a wrong
+            # row. Nothing else is skipped: with `aimed` false,
+            # `_mail_urgency_spent` returns at its first line.
+            if not any(
+                    travel.spawn_in_reach(spawn, positions.get(t.character),
+                                          TOWN_COUNTER_YARDS)
+                    for t in mail_plan.takes):
+                return
 
         # THE ROW IS ONLY WRITTEN WHERE IT CAN WORK, AND THE TAKER IS WHO IT HAS
         # TO WORK FOR (infra#3830; the docstring has the reasoning and the
@@ -18520,6 +18919,24 @@ class Bridge(discord.Client):
                      "movement and cleared %d stale aim(s)",
                      action.quest_id, cleared)
             return
+        # AN AIM AT NOBODY WHO IS HERE IS NOT AN AIM (#56). When none of the
+        # quest's holders is in the world on this realm (the family moved to
+        # another realm and left its rows behind, or is simply logged off),
+        # writing drive_quest reaches no bot. Clear the family's aim instead,
+        # so the roster stops carrying a quest nobody here is working, and let
+        # the next lease aim it again once a holder is back in the world.
+        holders = await asyncio.to_thread(_holders_of, action.quest_id)
+        if holders:
+            present = await asyncio.to_thread(_in_world_of, holders)
+            if present is not None and not present:
+                await asyncio.to_thread(_aim_traveller, 0)
+                # Counts, not names: the holders and the beneficiary are read
+                # from the protected-character set, which is not log material.
+                log.info("goal: quest %d stands down - none of its %d "
+                         "holder(s) is in the world on this realm, so the "
+                         "family's aim is cleared", action.quest_id,
+                         len(holders))
+                return
         aimed = await asyncio.to_thread(_aim_traveller, action.quest_id)
         # Logged every time it is renewed, with the count of rows actually
         # written: this project has been burned repeatedly by "delivered"
@@ -18977,6 +19394,11 @@ class Bridge(discord.Client):
             log.info("queue: %s holds %s while the family's %s interlude runs; "
                      "the order stands", campaignqueue._family(key),
                      move.keyword, activity)
+            # The interlude does not end the family's bag hold (#872).
+            # Looked up: the queue tests load this method in isolation.
+            hold_read = globals().get("_bag_hold_read")
+            if hold_read is not None:
+                await asyncio.to_thread(hold_read, fam["names"])
             return
         try:
             said = await asyncio.to_thread(_apply_queue_move, move,
@@ -21412,7 +21834,7 @@ class Bridge(discord.Client):
             text=d.text,
         )
         try:
-            decision = voice.parse_decision(await asyncio.to_thread(_ask_llm, prompt))
+            decision = voice.parse_decision(await llmpool.call(_ask_llm, prompt))
         except Exception:
             # The single-character path relays raw words on an outage; a band
             # must not. Guessing an order for forty characters is worse than
@@ -22791,8 +23213,28 @@ def _fetch_family_equipped(names: list) -> list:
                     log.warning("equipped facts unavailable on this world image")
                     return []
                 raise
-            return [dict(row) for row in cur.fetchall()]
+            rows = [dict(row) for row in cur.fetchall()]
+            _attach_weapon_skills(cur, names, rows)
+            return rows
     return []
+
+
+def _attach_weapon_skills(cur, names: list, rows: list) -> None:
+    """Give each equipped row its member's learned weapon subclasses (#393),
+    so gear.characters_from_rows and tidy.members_from_rows judge a weapon by
+    the skill the core checks, not the class alone. A world image without
+    character_skills leaves the rows as they were: skills unread, the
+    class-only judgement as before."""
+    try:
+        held = _read_weapon_skills(cur, names)
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            log.warning("equipped facts: no character_skills on this world "
+                        "image; weapons are judged by class")
+            return
+        raise
+    for row in rows:
+        row["weapon_skills"] = tuple(sorted(held.get(row.get("name"), ())))
 
 
 # What each member wears, by slot, entry and name (#897): the slot a held
@@ -24224,14 +24666,41 @@ def _keep_class_plan(owner, cohort, plan) -> None:
     set the bridge's _class_helps and _classquest_held to those of every
     cohort's last pass."""
     key = _cohort_key(cohort)
+    helps_by, held_by = _class_plans_by(owner)
+    helps_by[key] = tuple(plan.helps)
+    held_by[key] = set(guildjobs.class_held(plan.lines))
+    _fold_class_plans(owner)
+
+
+# A COHORT WHOSE JOB PASS PLANS NOTHING KEEPS NO CLASS QUEST PLAN (#871). The
+# guild jobs pass returns before planning a cohort with no names or with no
+# placed member, so _keep_class_plan never replaced that cohort's last helps,
+# holds and owed members: its members stayed held out of every dungeon ask on
+# a class quest plan nobody refreshed.
+def _drop_class_plan(owner, cohort) -> None:
+    """Forget one cohort's class quest helps, holds and owed members, and set
+    the bridge's _class_helps and _classquest_held to the other cohorts'."""
+    key = _cohort_key(cohort)
+    for by in (*_class_plans_by(owner), getattr(owner, "_class_owed_by", {})):
+        by.pop(key, None)
+    _fold_class_plans(owner)
+
+
+def _class_plans_by(owner) -> tuple:
+    """(helps by cohort, holds by cohort) off the bridge, made empty on a
+    bridge that has kept none yet."""
     helps_by = getattr(owner, "_class_helps_by", None)
     if helps_by is None:
         helps_by = owner._class_helps_by = {}
     held_by = getattr(owner, "_classquest_held_by", None)
     if held_by is None:
         held_by = owner._classquest_held_by = {}
-    helps_by[key] = tuple(plan.helps)
-    held_by[key] = set(guildjobs.class_held(plan.lines))
+    return helps_by, held_by
+
+
+def _fold_class_plans(owner) -> None:
+    """Set _class_helps and _classquest_held to every kept cohort's."""
+    helps_by, held_by = _class_plans_by(owner)
     owner._class_helps = tuple(h for helps in helps_by.values() for h in helps)
     owner._classquest_held = {n for held in held_by.values() for n in held}
 
@@ -24924,6 +25393,127 @@ _SURPLUS_BAGS_SQL = (
 )
 
 
+def _count_sales(counts: dict, sales) -> None:
+    """Add one to `counts` per sale, under the sale's holder.
+
+    The vendor pass counts what a trip could sell (#88, #148, #145) twice, for
+    lockbox and clearance sales and then for gear. One loop, so the two counts
+    cannot be kept two different ways (wow-overseer#977).
+    """
+    for sale in sales:
+        counts[sale.holder] = counts.get(sale.holder, 0) + 1
+
+
+async def _queue_vendor_sales(
+    candidates, leader: str, aimed: bool, mode: str, attempts,
+) -> int:
+    """Write the sell rows each holder can execute from where it stands.
+
+    Returns how many rows were inserted, which `_report_vendor_claim` reads.
+
+    THE HOLDER GATE IS PER HOLDER (infra#3464): each seller's own DoSell
+    answers on its own range, so each holder's rows wait for that holder to be
+    standing at the counter, or for the leader it follows to be walking there
+    on this pass's aim (`aimed`). `bag_pressure.vendor_holders_to_queue` and
+    `bag_pressure.counter_holders` decide who; this reads where everybody is
+    and writes what `item_plan` lets through. Lifted out of `_vendor_once`
+    (wow-overseer#977); the two "no vendor within reach" branches it used to
+    carry logged the same line and both skipped the holder, so they are one.
+    """
+    by_holder: dict[str, list] = {}
+    for candidate in candidates:
+        by_holder.setdefault(candidate.holder, []).append(candidate)
+    inserted = 0
+    considered = 0
+    holder_town = {}
+    leader_town = await asyncio.to_thread(_fetch_town, leader)
+    holder_town[leader] = leader_town
+    leader_at_counter = bool(leader_town.vendor)
+    for holder in sorted(by_holder):
+        town = await asyncio.to_thread(_fetch_town, holder)
+        holder_town[holder] = town
+    queue_holders = set(bag_pressure.vendor_holders_to_queue(
+        candidates,
+        leader=leader,
+        leader_at_counter=leader_at_counter,
+        holder_at_counter=lambda holder: bool(holder_town[holder].vendor),
+        # `aimed` is True only while the leader carries this pass's own
+        # vendor aim: taken or held this pass. Refused, it walks nowhere
+        # and its rows would answer `vendor not in range` (#297).
+        leader_walking=aimed,
+    ))
+    queue_holders = bag_pressure.counter_holders(
+        queue_holders, mode, leader_at_counter,
+        lambda holder: bool(holder_town[holder].vendor),
+    )
+    for holder in sorted(by_holder):
+        holder_candidates = tuple(by_holder[holder])
+        town = holder_town[holder]
+        if holder not in queue_holders:
+            log.info(
+                "economy: %d carried candidate(s) for %s but no vendor "
+                "within reach - leader=%s aim taken=%s",
+                len(holder_candidates), holder, leader, aimed,
+            )
+            continue
+        # The world has already answered some of these. A sale that was
+        # delivered, or refused with a reason retrying cannot change, must
+        # not be proposed again: 819 of 822 `item not carried` refusals in
+        # one day were re-issues of an item that had already been sold
+        # (infra#3330).
+        #
+        # A HOLDER STANDING AT A VENDOR IS NOT HELD BACK FOR RANGE (#149).
+        # `town.vendor` is this holder's own reading, so a range refusal
+        # from somewhere else no longer describes where it stands.
+        plan = item_plan.plan(holder_candidates, attempts,
+                              at_vendor=bool(town.vendor))
+        considered += len(holder_candidates)
+        for candidate in plan.write:
+            if await asyncio.to_thread(_insert_sell, candidate):
+                inserted += 1
+        log.info(
+            "economy: holder=%s queued %d/%d vendor sale(s), held back %s",
+            holder, len(plan.write), len(holder_candidates),
+            item_plan.reasons(plan.skipped),
+        )
+    log.info("economy: queued %d/%d vendor sale(s) across %d holder(s), "
+             "one errand on leader=%s (taken=%s)",
+             inserted, considered, len(by_holder), leader, aimed)
+    return inserted
+
+
+def _report_vendor_claim(slot, aimed: bool, inserted: int) -> None:
+    """Tell the town slot whether the vendor pass's urgent claim paid off.
+
+    WHETHER THAT URGENT CLAIM WAS WORTH TAKING (infra#4191). The vendor pass
+    preempts everything on the strength of bag pressure, and `townslot` cannot
+    see whether a sale came of it - only `_queue_vendor_sales` knows how many
+    sales were actually written, which is `inserted`. So the pass reports its
+    own outcome, and a run of fruitless ones costs it the right to preempt for
+    a while.
+
+    ONLY WHEN IT HELD THE COLUMN. `aimed` is False when some other pass had
+    the traveller, and being refused a turn is an ordinary wait rather than a
+    wasted one - counting it would back the pass off for somebody else's
+    errand.
+
+    Lifted out of `_vendor_once` unchanged (wow-overseer#977).
+    """
+    if not aimed:
+        return
+    if inserted:
+        slot.productive("economy")
+        return
+    until = slot.fruitless("economy", time.monotonic())
+    log.warning(
+        "economy: took the travel column on bag pressure and wrote "
+        "no sale; urgency suppressed for %.0fs so a pressure this "
+        "pass cannot relieve stops outranking every other errand "
+        "(infra#4191)",
+        max(0.0, until - time.monotonic()),
+    )
+
+
 def _sellable_per_holder(rows: list, bag_rows: list,
                          equipped_bag_slots: dict, names: list) -> dict:
     """How many carried stacks a vendor would actually take, per holder.
@@ -25211,6 +25801,7 @@ _CRAFTER_RECIPES_SQL = (
     "SELECT c.name AS holder, ii.guid AS item_guid, ii.itemEntry AS entry, "
     "it.name AS name, it.RequiredSkill AS required_skill, "
     "it.RequiredSkillRank AS required_rank, it.spellid_2 AS recipe_spell, "
+    "it.RequiredSpell AS required_spell, "
     "CASE WHEN (ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
     "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22) "
@@ -25230,7 +25821,8 @@ _CRAFTER_GUILD_BANK_SQL = (
     "SELECT 'guild bank' AS holder, ii.guid AS item_guid, "
     "ii.itemEntry AS entry, it.name AS name, "
     "it.RequiredSkill AS required_skill, it.RequiredSkillRank AS required_rank, "
-    "it.spellid_2 AS recipe_spell, 'guild bank' AS location "
+    "it.spellid_2 AS recipe_spell, it.RequiredSpell AS required_spell, "
+    "'guild bank' AS location "
     "FROM guild_bank_item gbi "
     "JOIN item_instance ii ON ii.guid = gbi.item_guid "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -25365,9 +25957,12 @@ def _crafter_plan(names: list) -> CrafterPlan:
     people = _crafter_people(names, skills, roster, _fetch_assigned_trades(names))
     reg = crafters.register(people, crafters.per_trade(os.environ))
     recipes = _fetch_crafter_recipes(names)
+    # The specialization spells too: a recipe that needs one goes to a
+    # crafter shown to hold it first (crafters.Known.specialized, #1095).
     known = crafters.known_from_rows(
         _fetch_crafter_known([p.name for p in people],
-                             [r.spell for r in recipes]),
+                             [r.spell for r in recipes]
+                             + [r.spec for r in recipes]),
         _fetch_recipe_verdicts(),
     )
     gap = crafters.soon_gap(os.environ)
@@ -26234,6 +26829,54 @@ def _log_capped(prefix: str, notes) -> None:
         log.info("%s: and %d more like it", prefix, len(notes) - GUILD_ROUTE_NOTE_LINES)
 
 
+# THE LINES A PASS REPEATS UNCHANGED (#1142). Measured read-only on the dev
+# realm bridge 2026-10-18 03:00-06:00 UTC: the bank forecast logged about 250
+# lines a pass, six passes an hour, with 4 to 11 of them changed; the bank
+# policy and bank bags passes logged the same twelve and six lines every one to
+# three minutes. Between them about 3,000 of the bridge's 10,000 lines an hour,
+# nearly all of them a line the log already held. A note is logged at INFO the
+# first time it holds, and again only after it changed or LOG_RESAY_SECONDS
+# went by, so a reader who opens the log late still finds the standing state
+# inside that window. In memory: a restart logs everything once more.
+LOG_RESAY_SECONDS = float(os.environ.get("LOG_RESAY_SECONDS", str(6 * 3600)))
+_SAID: dict = {}
+
+
+def _unsaid(prefix: str, key, notes, now=None) -> tuple:
+    """(the notes not logged last time for (prefix, key), how many of those
+    logged last time no longer hold), and remember these notes as logged.
+
+    Past LOG_RESAY_SECONDS since the whole set was last logged, every note
+    counts as unsaid again.
+    """
+    notes = list(dict.fromkeys(notes or ()))
+    now = time.monotonic() if now is None else now
+    slot = (prefix, key)
+    said = _SAID.get(slot)
+    if said is None or now - said[0] >= LOG_RESAY_SECONDS:
+        _SAID[slot] = (now, frozenset(notes))
+        return notes, 0
+    _SAID[slot] = (said[0], frozenset(notes))
+    return [n for n in notes if n not in said[1]], len(said[1] - set(notes))
+
+
+def _log_changed(prefix: str, notes, key=(), capped: bool = True) -> None:
+    """`_log_capped` for the notes that changed since this (prefix, key) last
+    logged, a count of those that stopped holding, and the repeats at DEBUG."""
+    notes = list(notes or ())
+    fresh, gone = _unsaid(prefix, key, notes)
+    if capped:
+        _log_capped(prefix, fresh)
+    else:
+        for note in fresh:
+            log.info("%s: %s", prefix, note)
+    if gone:
+        log.info("%s: %d line(s) logged before no longer hold", prefix, gone)
+    if len(notes) > len(fresh):
+        log.debug("%s: %d line(s) unchanged since last logged",
+                  prefix, len(notes) - len(fresh))
+
+
 def _fetch_guild_held_gear(names: list) -> list:
     """Read guildmates' carried gear facts; guildroute decides everything."""
     if not names:
@@ -26983,15 +27626,19 @@ def _class_hunt_state(name: str, quest_id: int, items=()):
         return row["status"], row["progress"], held
 
 
-def _end_hunt_row(row_id: int) -> None:
+_HUNT_DONE = "the quest objective is complete; the bridge ended the hunt"
+# A class quest party's hunt row outlived by its party (classparty.PartyHunt).
+_PARTY_HUNT_OVER = "the quest party is over; the bridge ended the hunt"
+
+
+def _end_hunt_row(row_id: int, detail: str = _HUNT_DONE) -> None:
     """End a running hunt row: it leaves verifying, which the module reads as
     the bridge's word to stop (there is no cancel verb)."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE overseer_command SET status = 'applied', "
-            "detail = 'the quest objective is complete; the bridge ended the hunt' "
+            "UPDATE overseer_command SET status = 'applied', detail = %s "
             "WHERE id = %s AND status = 'verifying'",
-            (int(row_id),),
+            (detail, int(row_id)),
         )
 
 
@@ -29055,9 +29702,9 @@ def _bank_policy_read(names: list, fresh: bool = False) -> tuple:
             else:
                 raise
     _BANK_POLICY_CACHE[key] = (now, placed, spare)
-    _log_capped("bank policy", ["%s's %s -> %s: %s" % (p.holder, p.item, p.where, p.why)
-                                for p in placed.values()])
-    _log_capped("bank policy: spare copy", [str(g) for g in sorted(spare)])
+    _log_changed("bank policy", ["%s's %s -> %s: %s" % (p.holder, p.item, p.where, p.why)
+                                 for p in placed.values()], key)
+    _log_changed("bank policy: spare copy", [str(g) for g in sorted(spare)], key)
     return placed, spare
 
 
@@ -29122,7 +29769,10 @@ def _without_bank_keeps(candidates, placed: dict, what: str) -> list:
                 placed[int(guid)].where))
             continue
         out.append(candidate)
-    _log_capped("%s: bank policy" % what, kept)
+    # Keyed by the family whose policy this is: the pass runs for each family
+    # in turn, and one shared key would log both lists in full every pass.
+    _log_changed("%s: bank policy" % what, kept,
+                 tuple(sorted({p.holder for p in placed.values()})))
     return out
 
 
@@ -31546,6 +32196,38 @@ def _fetch_auctioneer_maps() -> set[int] | None:
             raise
 
 
+# THE AUCTIONEER SPAWNS ON THE LEADER'S MAP, one row per creature entry at its
+# nearest spawn, for auction.house_trip (#1170). Read from the world's spawn
+# table, never authored; the faction decides which side's house it is.
+_AUCTIONEER_SPAWNS_SQL = (
+    "SELECT cr.id AS entry, ct.name AS name, ct.faction AS faction, "
+    "cr.map AS map_id, "
+    "MIN(SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2))) AS yards "
+    "FROM acore_world.creature cr "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 "
+    "GROUP BY cr.id, ct.name, ct.faction, cr.map ORDER BY yards, entry"
+)
+
+
+def _fetch_auctioneer_spawns(here) -> list | None:
+    """Rows for auction.house_trip, measured from the leader's Standing, or
+    None when the world cannot be read (the caller then keeps the keyword)."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                _AUCTIONEER_SPAWNS_SQL,
+                (float(here.x), float(here.y), int(here.map_id),
+                 NPC_FLAG_AUCTIONEER),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("gearup: cannot read auctioneer spawns")
+                return None
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
 def _fetch_auctioneer(name: str) -> dict | None:
     """The auctioneer `name` is standing at, or None.
 
@@ -31660,6 +32342,30 @@ GEARUP_GATE_EMPTY_SLOTS = 6
 GEARUP_GATE_MIN_PURSE = 20000
 
 
+# character_skills.skill (SkillLine) -> the item_template.subclass it lets a
+# character wield. Read by gearup and by the family gear pass (#393).
+_WEAPON_SKILL_SUBCLASS = {44: 0, 172: 1, 45: 2, 46: 3, 54: 4, 160: 5,
+                          229: 6, 43: 7, 55: 8, 136: 10, 473: 13,
+                          173: 15, 176: 16, 226: 18, 228: 19, 356: 20}
+
+
+def _read_weapon_skills(cur, names: list) -> dict:
+    """name -> set of weapon subclasses learned, on an open cursor. A name
+    with no weapon skill row at all is absent; callers choose what that means."""
+    marks = ",".join(["%s"] * len(names))
+    cur.execute(
+        "SELECT c.name, cs.skill FROM characters c "
+        "JOIN character_skills cs ON cs.guid=c.guid "
+        "WHERE c.name IN (%s) AND cs.value>0" % marks, names,
+    )
+    held = {}
+    for row in cur.fetchall():
+        subclass = _WEAPON_SKILL_SUBCLASS.get(int(row["skill"]))
+        if subclass is not None:
+            held.setdefault(row["name"], set()).add(subclass)
+    return held
+
+
 def _fetch_gearup_facts(names: list) -> dict:
     if not names:
         return {}
@@ -31673,21 +32379,7 @@ def _fetch_gearup_facts(names: list) -> dict:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, names)
         rows = cur.fetchall()
-        marks = ",".join(["%s"] * len(names))
-        cur.execute(
-            "SELECT c.name, cs.skill FROM characters c "
-            "JOIN character_skills cs ON cs.guid=c.guid "
-            "WHERE c.name IN (%s) AND cs.value>0" % marks, names,
-        )
-        skill_rows = cur.fetchall()
-    weapon_skills = {44: 0, 172: 1, 45: 2, 46: 3, 54: 4, 160: 5,
-                     229: 6, 43: 7, 55: 8, 136: 10, 473: 13,
-                     173: 15, 176: 16, 226: 18, 228: 19, 356: 20}
-    held = {}
-    for row in skill_rows:
-        subclass = weapon_skills.get(int(row["skill"]))
-        if subclass is not None:
-            held.setdefault(row["name"], set()).add(subclass)
+        held = _read_weapon_skills(cur, names)
     result = {}
     for row in rows:
         name = row["name"]
@@ -32700,7 +33392,7 @@ def _persist_council_plan(plan, seen: dict | None = None) -> int | None:
         # target for a quest goal is always goals.QUEST_TARGET (0 objectives
         # left); the council's plan.target is objectives REMAINING right now,
         # which is an observation and not a destination. A dungeon goal's
-        # target IS a destination (council.DUNGEON_RUNS_WANTED runs done), so
+        # target IS a destination (council.dungeon_runs_wanted() runs done), so
         # it takes the same road as 'level'.
         target = goals.QUEST_TARGET if plan.kind == "quest" else int(plan.target)
         cur.execute(

@@ -408,6 +408,8 @@ def _bridge_self(world, clock, log):
             "_release_weapon_training_aim": lambda *_args: False,
             "TOWN_SLOT_GATHER_LEASE_SECONDS": townslot.GATHER_LEASE_SECONDS,
             "TOWN_SLOT_FLIGHT_LEASE_SECONDS": townslot.GATHER_LEASE_SECONDS,
+            "GEAR_HOUSE_CLAIMANT": "gear house",
+            "TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS": townslot.GATHER_LEASE_SECONDS,
             "_is_economy_aim": economy,
             "_retaskable_from": retaskable,
             "_cohort_of": lambda name: "Grug",
@@ -719,7 +721,10 @@ class TheWiring(unittest.TestCase):
 
     def test_the_sell_rows_follow_the_vendor_aim(self):
         body = ast.get_source_segment(BRIDGE, _function("_vendor_once"))
-        self.assertIn("leader_walking=aimed", body)
+        self.assertIn("_queue_vendor_sales(", body)
+        self.assertIn("candidates, leader, aimed, mode, attempts", body)
+        queue = ast.get_source_segment(BRIDGE, _function("_queue_vendor_sales"))
+        self.assertIn("leader_walking=aimed", queue)
 
     def test_the_own_familys_learn_writers_are_gated(self):
         for name in ("_reconcile_learn_aims", "_send_trade_errand"):

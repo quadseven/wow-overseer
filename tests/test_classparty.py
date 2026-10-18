@@ -8,6 +8,7 @@ words them.
 
 import asyncio
 import datetime
+import importlib.util
 import json
 import sys
 import types
@@ -17,6 +18,7 @@ from unittest import mock
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import classask  # noqa: E402
+import classhunt  # noqa: E402
 import classparty  # noqa: E402
 import classquest  # noqa: E402
 import guildroute  # noqa: E402
@@ -359,6 +361,64 @@ class ThePartiesToForm(unittest.TestCase):
         self.assertEqual(self.plan([qask(1, kind="dungeon")], self.FULL), ())
 
 
+class ThePlanCorners(unittest.TestCase):
+    """The plan's less common paths (#1118). classparty.plan is called with an
+    empty Pass, so no classask pass can end or fill an ask first."""
+
+    FULL = ThePartiesToForm.FULL
+
+    def plan(self, asks, answers, helps=None, board=None, quest_pass=None):
+        helps = helps if helps is not None else helps_of("Bigzug")
+        return classparty.plan(
+            asks,
+            answers,
+            quest_pass or gs.Pass(),
+            helps,
+            free_of(friends()),
+            board or classparty.Board(),
+            NOW,
+            0.0,
+        )
+
+    def test_a_result_already_read_as_a_dict_is_used_as_it_is(self):
+        got = classparty.judge_up("Bigzug", "applied", "", {"phase": "formed"})
+        self.assertEqual(got.state, classparty.FORMED)
+
+    def test_an_ask_with_no_creation_time_does_not_wait_for_the_rest(self):
+        one = [yes(1, 1, "Chill", "dps", "help")]
+        young = qask(1, created_at=NOW - datetime.timedelta(minutes=1))
+        self.assertEqual(self.plan([young], one), ((), ()))
+        (run,), notes = self.plan([qask(1, created_at=None)], one)
+        self.assertEqual((run.helpers, notes), (("Chill",), ()))
+
+    def test_an_asker_leading_another_asks_party_forms_no_second(self):
+        board = classparty.Board()
+        board.begin(classparty.PartyRun(7, "Bigzug", ("Ghoul",), 7, "x", SPOT))
+        self.assertEqual(self.plan([qask(1)], self.FULL, board=board), ((), ()))
+        starts, (note,) = self.plan([qask(1, state=gs.FILLED)], self.FULL, board=board)
+        self.assertEqual(starts, ())
+        self.assertIn("Bigzug is in another class quest party", note)
+
+    def test_an_open_ask_given_up_forms_nothing_and_leaves_no_note(self):
+        board = classparty.Board()
+        for _ in range(classparty.MAX_FAILURES):
+            board.fail(1)
+        self.assertEqual(self.plan([qask(1)], self.FULL, board=board), ((), ()))
+
+    def test_an_asker_with_no_help_or_another_quest_forms_nothing(self):
+        self.assertEqual(self.plan([qask(1)], self.FULL, helps=[]), ((), ()))
+        self.assertEqual(self.plan([qask(1, target="quest:77")], self.FULL), ((), ()))
+
+    def test_an_answer_that_is_not_a_yes_seats_nobody(self):
+        answers = [
+            yes(1, 1, "Chill", "dps", "help"),
+            yes(2, 1, "Dread", "dps", "help", state=gs.DECLINED),
+        ]
+        aged = qask(1, created_at=NOW - datetime.timedelta(minutes=5))
+        (run,), _notes = self.plan([aged], answers)
+        self.assertEqual(run.helpers, ("Chill",))
+
+
 class TheObjective(unittest.TestCase):
     def stalled_book(self):
         rows = [qrow(2000, "Hunt Job", reward=8121, npc1=3130, npc_count1=3)]
@@ -518,6 +578,11 @@ for _name in (
     "_class_party_form",
     "_class_party_work",
     "_class_party_watch",
+    "_class_party_watching",
+    "_class_party_hunt_command",
+    "_class_party_tend_hunt",
+    "_class_party_hunt_read",
+    "_class_party_hunt_marks",
     "_class_party_disband_row",
     "_class_party_close",
     "_begin_class_parties",
@@ -792,6 +857,132 @@ class TheBridgeFollowsTheParty(unittest.TestCase):
         self.assertEqual(this._class_party_tasks, set())
 
 
+# The party's quest: one Lizard (SPOT's entry 3130) to kill.
+QUEST = classquest.Quest(2000, "Group Job", 1, 10, 0, 0, 0, 0, 3, kills=((3130, 1),))
+HUNT = "hunt-spawn creature:3130 count:1 max:%d" % classhunt.MAX_SECONDS
+VERIFYING = {"status": "verifying", "detail": "", "result": "{}"}
+
+
+def hunt_answer(status, reason="", retry=""):
+    body = {"outcome": "refused" if status == "error" else "done"}
+    if reason:
+        body["reason"] = reason
+    if retry:
+        body["retry"] = retry
+    return {"status": status, "detail": reason, "result": json.dumps(body)}
+
+
+class ThePartyHunt(unittest.TestCase):
+    """A party at its objective hunts the creature there (#871): it stood held
+    on the spawn until its time ran out, with no quest credit."""
+
+    def test_the_leader_hunts_the_creature_at_the_spot(self):
+        self.assertEqual(classparty.hunt_command(QUEST, SPOT), HUNT)
+
+    def test_no_quest_or_no_creature_hunts_nothing(self):
+        self.assertEqual(classparty.hunt_command(None, SPOT), "")
+        self.assertEqual(classparty.hunt_command(QUEST, None), "")
+
+    def ended(self, state, wait=0.0, command=HUNT):
+        hunt = classparty.PartyHunt(command, row_id=7)
+        hunt.ended(classhunt.Answer(state, "", wait), 100.0)
+        return hunt
+
+    def test_a_row_that_ran_is_followed_by_the_next_at_once(self):
+        hunt = self.ended(classhunt.DONE)
+        self.assertEqual((hunt.row_id, hunt.command), (0, HUNT))
+        self.assertTrue(hunt.due(100.0))
+
+    def test_a_row_with_no_kill_or_refused_for_now_waits(self):
+        for state, wait in (
+            (classhunt.NOTHING, 0.0),
+            (classhunt.RESPAWNING, 0.0),
+            (classhunt.LATER, 60.0),
+        ):
+            hunt = self.ended(state, wait)
+            self.assertFalse(hunt.due(100.0), state)
+            self.assertTrue(hunt.due(100.0 + classparty.HUNT_WAIT_SECONDS), state)
+
+    def test_a_refusal_for_good_stops_the_hunt_not_the_party(self):
+        for state in classparty.HUNT_STOPS:
+            self.assertFalse(self.ended(state).due(10**6), state)
+
+    def test_an_old_worldserver_gets_the_plain_row(self):
+        hunt = self.ended(
+            classhunt.ITEMLESS, command="hunt-spawn creature:5 item:9 count:2 max:480"
+        )
+        self.assertEqual(hunt.command, "hunt-spawn creature:5 max:480")
+        self.assertTrue(hunt.due(100.0))
+
+
+class TheBridgeHuntsWithTheParty(unittest.TestCase):
+    def drive(self, states, hunts=(), **over):
+        this = _Bridge([FORMED, answer("applied", phase="ended")], states=states)
+        this._class_book = types.SimpleNamespace(quests={2000: QUEST})
+        for key, value in over.items():
+            setattr(this, key, value)
+        queue = list(hunts)
+        ended = []
+        drive(
+            this,
+            a_run(),
+            _command_answer=lambda row_id: queue.pop(0) if queue else VERIFYING,
+            _end_hunt_row=lambda row_id, detail=None: ended.append(row_id),
+        )
+        return this, ended
+
+    def commands(self, this):
+        return [r[2] for r in this.rows]
+
+    def test_the_party_hunts_its_creature_and_ends_the_hunt_on_credit(self):
+        this, ended = self.drive(
+            [classparty.INCOMPLETE, classparty.INCOMPLETE, classparty.COMPLETE]
+        )
+        self.assertEqual(
+            this.rows[2:],
+            [
+                ("Bigzug", "job", HUNT, "classask"),
+                ("Bigzug", "guild", "party-disband", "classask"),
+            ],
+        )
+        self.assertEqual(ended, [102])
+        self.assertEqual(this.settled, [(1, True, False)])
+
+    def test_a_hunt_row_that_ran_out_is_written_again(self):
+        this, ended = self.drive(
+            [classparty.INCOMPLETE] * 3 + [classparty.COMPLETE],
+            hunts=[hunt_answer("applied")],
+        )
+        self.assertEqual(self.commands(this).count(HUNT), 2)
+        self.assertEqual(ended, [103])
+
+    def test_a_worldserver_that_does_not_hunt_leaves_the_party_standing(self):
+        this, ended = self.drive(
+            [classparty.INCOMPLETE] * 3 + [classparty.COMPLETE],
+            hunts=[hunt_answer("error", classhunt.DISABLED)],
+        )
+        self.assertEqual(self.commands(this).count(HUNT), 1)
+        self.assertEqual(ended, [])
+        self.assertGreater(this._class_hunt_unsupported_until, 0.0)
+
+    def test_no_hunt_while_the_worldserver_is_known_not_to_hunt(self):
+        this, _ended = self.drive(
+            [classparty.INCOMPLETE, classparty.COMPLETE],
+            _class_hunt_unsupported_until=float("inf"),
+        )
+        self.assertNotIn(HUNT, self.commands(this))
+
+    def test_a_party_out_of_time_ends_its_hunt_row(self):
+        # Time for the walk and the first watch, then none.
+        left = iter([classparty.PARTY_SECONDS] * 2)
+        with mock.patch.object(
+            classparty.PartyRun, "left", lambda self, now: next(left, -1.0)
+        ):
+            this, ended = self.drive([classparty.INCOMPLETE])
+        self.assertEqual(self.commands(this).count(HUNT), 1)
+        self.assertEqual(ended, [102])
+
+
 LOST = guildroute.WalkAnswer(guildroute.ENDED, "cannot walk to Lizard: no path")
 
 
@@ -810,8 +1001,40 @@ def at(yards, map_id=1):
 class TheMeeting(unittest.TestCase):
     """classparty.judge_meeting: who met the leader at the objective."""
 
+    def test_a_walk_failure_keeps_the_module_reason_without_the_holder(self):
+        self.assertEqual(
+            classparty.walk_why(
+                "Bigzug", "Bigzug cannot walk to creature:9: another verb holds it"
+            ),
+            "another verb holds it",
+        )
+        self.assertEqual(
+            classparty.walk_why("Chill", "Chill is in combat"), "is in combat"
+        )
+        self.assertEqual(classparty.walk_why("Dread", ""), "")
+
     def test_far_meeting_walk_gets_the_far_walk_follow_window(self):
-        self.assertEqual(classparty.MEET_SECONDS, 2110.0)
+        self.assertEqual(
+            classparty.MEET_SECONDS,
+            guildroute.follow_seconds(guildroute.FAR_WALK_YARDS) + 10.0,
+        )
+
+    def test_the_meeting_clock_follows_a_changed_far_walk_window(self):
+        # A fresh copy of classparty, loaded under its own name so the module
+        # the bridge and the other tests hold is left alone, reads the far
+        # walk window it is loaded under: a literal clock would not move.
+        spec = importlib.util.spec_from_file_location(
+            "_classparty_meet_clock", classparty.__file__
+        )
+        fresh = importlib.util.module_from_spec(spec)
+        # dataclass reads its own module from sys.modules while it is built.
+        sys.modules[spec.name] = fresh
+        try:
+            with mock.patch.object(guildroute, "FAR_WALK_FOLLOW_SECONDS", 900.0):
+                spec.loader.exec_module(fresh)
+        finally:
+            sys.modules.pop(spec.name, None)
+        self.assertEqual(fresh.MEET_SECONDS, 910.0)
 
     def judge(self, arrived, stands):
         return classparty.judge_meeting(a_run(meeting=True), arrived, stands)

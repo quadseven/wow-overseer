@@ -180,7 +180,7 @@ class TheBankBagSlotIsBoughtOnlyAtABanker(unittest.TestCase):
                 ),
             }
         )
-        ns["_log_capped"] = lambda label, notes: None
+        ns["_log_changed"] = lambda label, notes, key=(), capped=True: None
         ns = _load(["_bank_bag_slots", *HELPERS], ns)
         asyncio.run(ns["_bank_bag_slots"](object(), ["Bork", "Grog"], set(seen)))
         return world, log

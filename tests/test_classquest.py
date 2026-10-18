@@ -19,6 +19,7 @@ import guildcorps
 import guildjobs
 import guildlevel
 import guildroute
+import member_rungs
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -395,7 +396,7 @@ class ThePriority(unittest.TestCase):
         self.assertNotEqual(step.action, guildlevel.ACTION)
 
     def test_it_comes_before_gear_the_post_and_the_farm(self):
-        source = guildjobs._member_step.__code__.co_names
+        source = member_rungs.names()
         order = [
             n
             for n in source

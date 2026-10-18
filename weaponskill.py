@@ -59,6 +59,26 @@ CLASS_WEAPONS = {
     11: {4, 5, 6, 10, 13, 15},  # druid
 }
 
+# WHAT THE BOT'S OWN EQUIP NEVER DOES (#830). Measured on the dev realm over
+# two days: `e` put on 0 of 11 melee weapons asked of hunters, though each held
+# the skill line and the piece was a clear upgrade; their bots keep the weapon
+# they were made with. Every path that would write that `e` row, or walk a
+# hunter to a weapon master for it, asks this one rule. A hunter's ranged
+# weapon (InventoryType 15, 25, 26) is never refused here.
+HUNTER = 3
+MELEE_INVENTORY_TYPES = frozenset({13, 17, 21, 22})
+
+
+def bot_wont_wear(class_id, item_class, inventory_type) -> bool:
+    """True when the member's bot will not put this piece on, whatever the
+    numbers say: today, a hunter and any melee weapon."""
+    try:
+        cls, item, inv = int(class_id), int(item_class), int(inventory_type)
+    except (TypeError, ValueError):
+        return False
+    return cls == HUNTER and item == ITEM_CLASS_WEAPON and inv in MELEE_INVENTORY_TYPES
+
+
 # InventoryType -> the slot the weapon goes in. Off-hand weapons are left to
 # the dual-wield rule in gearup; this is about the main hand and the ranged slot.
 WEAPON_SLOT = {13: "mainhand", 17: "mainhand", 21: "mainhand", 15: "ranged",
@@ -138,6 +158,9 @@ def _learnable(fact, row) -> bool:
     if sub not in CLASS_WEAPONS.get(cls_id, set()):
         return False
     if int(row.get("RequiredLevel") or 0) > int(fact.get("level") or 0):
+        return False
+    # The skill would buy nothing: the bot never wears the weapon (#830).
+    if bot_wont_wear(cls_id, ITEM_CLASS_WEAPON, row.get("InventoryType") or 0):
         return False
     allowed = int(row.get("AllowableClass") or 0)
     return allowed in (-1, 0) or bool(allowed & (1 << (cls_id - 1)))

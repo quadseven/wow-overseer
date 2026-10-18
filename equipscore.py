@@ -308,10 +308,11 @@ def _template_refusal(row: dict) -> str:
     return ""
 
 
-HUNTER = 3
+HUNTER = weaponskill.HUNTER
 # Weapon inventory types worn in a hand. A hunter's ranged weapon (bow, gun,
-# crossbow) is 15 or 26, and those are never refused here.
-MELEE_TYPES = frozenset({ONE_HAND, TWO_HAND, MAIN_HAND_ONLY, OFF_HAND_WEAPON})
+# crossbow) is 15 or 26, and those are never refused here. The one rule lives
+# in weaponskill.bot_wont_wear, which the trip planner and gear.py ask too.
+MELEE_TYPES = weaponskill.MELEE_INVENTORY_TYPES
 
 
 def _bot_refusal(row: dict, wearer: Wearer) -> str:
@@ -323,10 +324,8 @@ def _bot_refusal(row: dict, wearer: Wearer) -> str:
     three times and holding the piece back cost the guild the same hour each
     time, so the piece is not asked for at all.
     """
-    if (
-        wearer.class_id == HUNTER
-        and _int(row.get("item_class")) == ITEM_CLASS_WEAPON
-        and _int(row.get("inventory_type")) in MELEE_TYPES
+    if weaponskill.bot_wont_wear(
+        wearer.class_id, _int(row.get("item_class")), _int(row.get("inventory_type"))
     ):
         return "a hunter's bot does not wear a melee weapon"
     return ""

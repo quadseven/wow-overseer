@@ -63,7 +63,9 @@ jobs:
       submodules: true
       # The suite is stdlib-only (discord.py/pymysql are imported lazily inside
       # adapters, never at module import time in a test) except the SQL parse
-      # test (#1038), whose pinned sqlglot uv pulls ephemerally in test-cmd.
+      # test (#1038), whose pinned sqlglot uv pulls ephemerally in test-cmd,
+      # and the quest ledger's start-up test (#957), which raises PyMySQL's
+      # own exceptions (pinned to the Dockerfile's version) instead of a stub.
       install-cmd: "true"
       ruff: false
       # The declared interpreter floor, same convention as infra

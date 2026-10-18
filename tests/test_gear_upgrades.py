@@ -83,9 +83,25 @@ class TheSpecIsChosenFromTheTree(unittest.TestCase):
         self.assertIn("first spec", note)
 
     def test_a_class_with_no_lists_has_no_spec(self):
-        spec, note = gearupgrades.choose_spec("Death Knight", "Blood")
+        spec, note = gearupgrades.choose_spec("Monk", "Brewmaster")
         self.assertIsNone(spec)
         self.assertTrue(note)
+
+    def test_every_death_knight_tree_has_a_list_marked_as_an_approximation(self):
+        # #760: classic has no death knight, so wowsims has no list for one.
+        for tree, spec in (
+            ("Blood", "deathknight-blood"),
+            ("Frost", "deathknight-frost"),
+            ("Unholy", "deathknight-unholy"),
+        ):
+            got, note = gearupgrades.choose_spec("Death Knight", tree)
+            self.assertEqual(got, spec)
+            self.assertIn("approximation", note)
+
+    def test_a_death_knight_with_no_tree_falls_back_to_its_first_spec(self):
+        spec, note = gearupgrades.choose_spec("Death Knight", None)
+        self.assertEqual(spec, "deathknight-blood")
+        self.assertIn("first spec", note)
 
     def test_the_payload_flags_an_assumed_spec(self):
         no_tree = {**MAGE, "class": "Priest", "spec": {"primary": None}}
@@ -166,10 +182,77 @@ class ReadinessCountsSlotsAtOrNearPreRaidBest(unittest.TestCase):
         self.assertEqual(out["ready"]["pct"], 0.5)
 
     def test_a_class_without_data_has_no_readiness(self):
-        dk = {**MAGE, "class": "Death Knight", "spec": {"primary": "Blood"}}
-        out = build([], dk, {})
+        monk = {**MAGE, "class": "Monk", "spec": {"primary": "Brewmaster"}}
+        out = build([], monk, {})
         self.assertIsNone(out["ready"])
         self.assertEqual(out["slots"], [])
+
+
+STRENGTH = 4
+
+
+def strong(entry, strength, **extra):
+    out = {
+        "entry": entry,
+        "item_name": f"Item {entry}",
+        "stat_type1": STRENGTH,
+        "stat_value1": strength,
+    }
+    out.update(extra)
+    return out
+
+
+class ADeathKnightIsScoredAsAPlateTwoHander(unittest.TestCase):
+    """#760: a Blood death knight in the starter set, with a two-hander."""
+
+    SPEC = "deathknight-blood"
+    DK = {
+        "name": "Tank",
+        "class": "Death Knight",
+        "level": 60,
+        "spec": {"primary": "Blood"},
+    }
+
+    def setUp(self):
+        ids = gearupgrades.all_list_ids(self.SPEC)
+        self.rows = {i: strong(i, 40, inventory_type=17) for i in ids}
+        best_head = gearscore.slot_list(self.SPEC, "preraid", "head")[0]
+        best_two = gearscore.slot_list(self.SPEC, "preraid", "two_hand")[0]
+        head = dict(self.rows[best_head], slot=armory.EQUIPPED_SLOTS.index("head"))
+        blade = strong(38632, 10, inventory_type=17)
+        blade["slot"] = armory.EQUIPPED_SLOTS.index("main hand")
+        self.worn = [head, blade]
+        self.best_two = best_two
+
+    def test_readiness_reads_a_share_not_none(self):
+        out = gearupgrades.build(
+            self.DK, self.worn, self.rows, list(armory.EQUIPPED_SLOTS)
+        )
+        self.assertIsNotNone(out["ready"])
+        self.assertIsNotNone(out["ready"]["pct"])
+        self.assertEqual(out["spec"]["id"], self.SPEC)
+        self.assertTrue(out["spec"]["assumed"])
+        self.assertIn("approximation", out["spec"]["note"])
+        self.assertEqual(slot_of(out, "head")["state"], "best")
+
+    def test_the_main_hand_reads_the_two_hand_list(self):
+        out = gearupgrades.build(
+            self.DK, self.worn, self.rows, list(armory.EQUIPPED_SLOTS)
+        )
+        hand = slot_of(out, "main hand")
+        self.assertEqual(hand["list_key"], "two_hand")
+        self.assertTrue(hand["scored"])
+        self.assertEqual(hand["state"], "upgrade")
+        self.assertIn(self.best_two, [t["entry"] for t in hand["targets"]["preraid"]])
+
+    def test_no_shield_and_no_ranged_slot_is_held_against_it(self):
+        out = gearupgrades.build(
+            self.DK, self.worn, self.rows, list(armory.EQUIPPED_SLOTS)
+        )
+        for name in ("off hand", "ranged"):
+            row_ = slot_of(out, name)
+            self.assertFalse(row_["scored"], name)
+            self.assertEqual(row_["targets"]["preraid"], [], name)
 
 
 class FakeHandler(map_server.Handler):

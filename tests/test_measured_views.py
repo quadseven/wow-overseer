@@ -49,8 +49,25 @@ def learn(root):
     )
 
 
-def render(module, script, hash_="#/members"):
-    """Run `script` with the app copied to a module package; M is `module`."""
+def seeded(root, seed):
+    """The lines that answer each read in `seed` (path -> payload) through the
+    copied app's own api.js, as a fetch would, before the view is drawn."""
+    if not seed:
+        return ""
+    return (
+        "const SEED = %s;\n"
+        "globalThis.fetch = async (url) => {\n"
+        "  const text = JSON.stringify(SEED[url]);\n"
+        "  return {ok: true, status: 200, text: async () => text};\n"
+        "};\n"
+        "const API = await import(%s);\n"
+        "await Promise.all(Object.keys(SEED).map((p) => API.load(p)));\n"
+    ) % (json.dumps(seed), json.dumps((root / "api.js").as_uri()))
+
+
+def render(module, script, hash_="#/members", seed=None):
+    """Run `script` with the app copied to a module package; M is `module`.
+    `seed` (path -> payload) is what the app's fetch layer already holds."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp) / "app"
         shutil.copytree(APP, root)
@@ -58,6 +75,7 @@ def render(module, script, hash_="#/members"):
         code = (
             PRELUDE % json.dumps(hash_)
             + learn(root)
+            + seeded(root, seed)
             + "const M = await import(%s);\n" % json.dumps((root / module).as_uri())
             + script
         )
@@ -334,6 +352,61 @@ class TheRunPageTimeline(unittest.TestCase):
             "console.log(JSON.stringify(String(M.timeline(%s))));" % json.dumps(RUN),
         )
         self.assertIn("The group wiped on Sneed&#39;s Shredder; 3 deaths.", got)
+
+
+# The /api/guildruns row of RUN: the same run_view, without the gear, bosses
+# and wipes only the one-run read (/api/v2/run) carries.
+ROW = {k: v for k, v in RUN.items() if k not in ("gear", "bosses", "wipes")}
+GEAR = [
+    {
+        "member": "Grug",
+        "entry": 5191,
+        "name": "Cruel Barb",
+        "quality": 3,
+        "source": "looted",
+        "at": "2026-10-13 10:29:00",
+    }
+]
+
+
+def draw_run(by_id):
+    """Render #/runs/930 with RUN in /api/guildruns; `by_id` is what
+    /api/v2/run answered, or None while that read is on its way."""
+    reads = {"/api/v2/run?id=930": {"run": by_id}} if by_id is not None else {}
+    return render(
+        "views/run.js",
+        'console.log(JSON.stringify(String(M.default.render(ctx("run", {id: "930"}, %s)))));'
+        % json.dumps(reads),
+        hash_="#/runs/930",
+        seed={"/api/guildruns": {"active": [], "recent": [ROW]}},
+    )
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app's modules")
+class TheRunPageOfARecentRun(unittest.TestCase):
+    """#1127: a run /api/guildruns lists is drawn from /api/v2/run once that
+    read answers, so its gear, bosses and wipes are shown."""
+
+    def test_its_gear_rows_come_from_the_one_run_read(self):
+        got = draw_run(dict(RUN, gear=GEAR))
+        self.assertIn("Cruel Barb", got)
+        self.assertIn("looted Cruel Barb.", got)
+        self.assertNotIn("No gear recorded for this run.", got)
+
+    def test_its_boss_and_wipe_lines_come_from_the_one_run_read(self):
+        got = draw_run(dict(RUN, gear=GEAR))
+        self.assertIn("The group killed Rhahk&#39;Zor.", got)
+        self.assertIn("The group wiped on Sneed&#39;s Shredder; 3 deaths.", got)
+
+    def test_while_the_one_run_read_is_on_its_way_the_gear_is_being_read(self):
+        got = draw_run(None)
+        self.assertIn("The Deadmines", got)
+        self.assertIn("Reading the gear...", got)
+        self.assertNotIn("No gear recorded for this run.", got)
+
+    def test_a_run_with_no_gear_still_says_so(self):
+        got = draw_run(dict(RUN, gear=[]))
+        self.assertIn("No gear recorded for this run.", got)
 
 
 if __name__ == "__main__":

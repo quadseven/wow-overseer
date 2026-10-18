@@ -226,12 +226,15 @@ class TheQueueIsBounded(unittest.TestCase):
         )
         self.assertEqual((queue, notes), ((), ()))
 
-    def test_three_tries_expire_after_the_two_hour_try_window(self):
+    def test_three_tries_give_up_even_after_the_try_window(self):
+        # #869: after give_up tries the equip is not queued again, even
+        # outside the retry window. The old behavior retried forever.
         recent = {self.key}
         queue, _ = bag_pressure.equips_to_queue(self.wanted, recent, {self.key: 3})
         self.assertEqual(queue, ())
-        queue, _ = bag_pressure.equips_to_queue(self.wanted, set(), {self.key: 3})
-        self.assertEqual(queue, self.wanted)
+        queue, notes = bag_pressure.equips_to_queue(self.wanted, set(), {self.key: 3})
+        self.assertEqual(queue, ())
+        self.assertEqual(len(notes), 1)
 
     def test_second_refusal_is_retried_after_thirty_minutes(self):
         now = datetime(2026, 10, 16, 7, 0, tzinfo=timezone.utc)
@@ -337,6 +340,39 @@ class TheQueueIsBounded(unittest.TestCase):
         )
         self.assertEqual(queue, self.wanted)
         self.assertEqual(notes, ())
+
+    def test_refused_retry_starts_a_new_hold_on_the_same_answer_row(self):
+        """A refusal after retry reuses its row and starts a fresh hold."""
+        worn = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
+        answer = self.answer("error", "the game did not accept the equip")
+        answer[self.key]["created_at"] = datetime(2026, 10, 15, 1, 0)
+        holds = {}
+        queue, _ = bag_pressure.equips_to_queue(
+            self.wanted,
+            set(),
+            {self.key: 1},
+            answers=answer,
+            worn=worn,
+            holds=holds,
+            now=datetime(2026, 10, 15, 1, 20, tzinfo=timezone.utc),
+        )
+        self.assertEqual(queue, self.wanted)
+
+        # The world answers the retry by updating the existing command row.
+        answer[self.key]["created_at"] = datetime(2026, 10, 15, 1, 20)
+        queue, notes = bag_pressure.equips_to_queue(
+            self.wanted,
+            set(),
+            {self.key: 2},
+            answers=answer,
+            worn=worn,
+            holds=holds,
+            now=datetime(2026, 10, 15, 1, 21, tzinfo=timezone.utc),
+        )
+        self.assertEqual(queue, ())
+        self.assertEqual(len(notes), 1)
+        self.assertNotIn("01:15", notes[0])
+        self.assertIn("tries again at", notes[0])
 
     def answer(self, status="unchanged", detail="the bot kept its own pick", id=7):
         return {

@@ -87,8 +87,13 @@ def _gear(reader, view: dict) -> list:
     return sorted(items, key=lambda item: item["at"], reverse=True)
 
 
-# Boss kills for this run: the same overseer_event rows the progress count
-# already uses, narrowed to the run's map and window.
+# Boss kills for this run: overseer_event rows of kind 'boss_kill' (subject_id
+# the boss's creature entry, character_name who landed the killing blow),
+# narrowed to the run's map and window. NOTHING WRITES THIS KIND YET: the
+# module counts bosses_done off the instance script and never names a boss,
+# and the writer is part of quadseven/mod-overseer#971. Until it lands every
+# run reads no kill rows, which _bosses below answers as "not recorded"
+# rather than "alive" (#1130).
 _BOSS_KILLS_SQL = (
     "SELECT character_name AS member, subject_id AS entry, subject_name AS name, "
     "last_seen AS at FROM overseer_event "
@@ -96,6 +101,46 @@ _BOSS_KILLS_SQL = (
     "AND last_seen >= %s AND last_seen <= COALESCE(%s, NOW()) "
     "ORDER BY last_seen"
 )
+# The dungeon's bosses off the world database (#1130): the kill-credit rows of
+# instance_encounters, which are the encounters the module counts into
+# bosses_total, named by creature_template. `{ids}` is sized by ENCOUNTER_IDS.
+_BOSS_LIST_SQL = (
+    "SELECT ie.entry AS encounter, ie.creditEntry AS entry, ct.name AS name "
+    "FROM acore_world.instance_encounters ie "
+    "JOIN acore_world.creature_template ct ON ct.entry = ie.creditEntry "
+    "WHERE ie.creditType = 0 AND ie.entry IN ({ids}) ORDER BY ie.entry"
+)
+# WHICH ENCOUNTERS ARE WHICH DUNGEON'S, by map id. instance_encounters.entry is
+# a DungeonEncounter.dbc id and the map an encounter belongs to lives only in
+# that client file (acore_world.dungeonencounter_dbc is empty here, see
+# agenda.ENCOUNTERS), so the ids are frozen. They are the pinned core's own
+# instance_encounters rows for each map: each block runs up to the row whose
+# lastEncounterDungeon marks the dungeon's final boss, and every credit
+# creature in a block that has a spawn stands on that map. Sneed (162) and
+# Mutanus (592) are summoned, not spawned, which is why a join through
+# acore_world.creature cannot stand in for this table. The Deadmines' block is
+# the seven rows agenda.ENCOUNTERS measured on wow-dev.
+#
+# ONE DOOR PER MAP ONLY. Scarlet Monastery (189), Stratholme (329), Maraudon
+# (349), Dire Maul (429) and Blackrock Spire (229) are wings on one map, and a
+# wing run would be shown the other wings' bosses as not killed; they keep the
+# empty list until a run knows its wing's encounters.
+ENCOUNTER_IDS = {
+    36: tuple(range(161, 168)),  # The Deadmines
+    43: tuple(range(585, 593)),  # Wailing Caverns
+    389: tuple(range(430, 434)),  # Ragefire Chasm
+    33: tuple(range(464, 472)),  # Shadowfang Keep
+    34: tuple(range(536, 541)),  # The Stockade
+    48: tuple(range(219, 227)),  # Blackfathom Deeps
+    47: tuple(range(438, 444)) + (883,),  # Razorfen Kraul; 883 is Agathelos
+    129: tuple(range(434, 438)),  # Razorfen Downs
+    90: tuple(range(378, 383)),  # Gnomeregan
+    70: tuple(range(547, 555)),  # Uldaman
+    209: tuple(range(593, 601)),  # Zul'Farrak
+    109: tuple(range(485, 494)),  # Sunken Temple
+    230: tuple(range(227, 246)),  # Blackrock Depths
+    289: tuple(range(451, 464)),  # Scholomance
+}
 # Deaths inside the run, for spotting wipes on a boss.
 _BOSS_DEATHS_SQL = (
     "SELECT character_name, killer_name, killer_entry, created_at "
@@ -116,10 +161,34 @@ def _map_id(view: dict) -> int | None:
     return dungeonpath.PORTAL_MAPS.get(keyword.lower())
 
 
-def _boss_creatures(map_id: int) -> list[tuple[int, str]]:
-    """The ordered boss list for this dungeon, or [] when none is held."""
+def _frozen_bosses(map_id: int) -> list[tuple[int, str]]:
+    """achievements.DUNGEONS' (creature entry, name) pairs for this map, or []."""
     entry = achievements.DUNGEONS.get(map_id) or {}
     return list(entry.get("bosses", []))
+
+
+def _boss_creatures(reader, map_id: int) -> list[tuple[int, str]]:
+    """The dungeon's bosses as (creature entry, name), in encounter order.
+
+    Read from the world database for a map ENCOUNTER_IDS knows. A map it does
+    not know, or a world without the tables (the read answers no rows), falls
+    back to achievements.DUNGEONS, which is [] for most maps.
+    """
+    ids = ENCOUNTER_IDS.get(map_id)
+    if ids:
+        rows = reader.rows(
+            _BOSS_LIST_SQL.format(ids=", ".join(["%s"] * len(ids))),
+            tuple(ids),
+            what="instance_encounters",
+        )
+        found = [
+            (int(row["entry"]), str(row.get("name") or ""))
+            for row in rows
+            if row.get("entry")
+        ]
+        if found:
+            return found
+    return _frozen_bosses(map_id)
 
 
 def _parse_time(value) -> datetime.datetime | None:
@@ -193,8 +262,14 @@ def _wipe_clusters(deaths: list, boss_entries: set) -> list:
 def _wipes(
     reader, members: list, holes: str, view: dict, map_id: int, bosses: list
 ) -> list:
-    """One entry per cluster where the group wiped on a boss."""
+    """One entry per cluster where the group wiped on a boss.
+
+    A boss is any creature in the listed bosses or in achievements.DUNGEONS
+    for the map: Sneed's Shredder kills a party as Sneed's encounter and holds
+    no credit row of its own.
+    """
     boss_entries = {entry for entry, _ in bosses}
+    boss_entries |= {entry for entry, _ in _frozen_bosses(map_id)}
     deaths = _death_rows(reader, members, holes, view, map_id)
     clusters = _wipe_clusters(deaths, boss_entries)
     out = []
@@ -218,6 +293,13 @@ def _bosses(reader, view: dict) -> tuple[list, list]:
 
     Returns (bosses, wipes). Either list is empty when the dungeon has no
     known boss list, the run has no seats, or the keyword has no map.
+
+    THE LIST IS LEFT EMPTY WHEN THE KILL ROWS DO NOT ACCOUNT FOR THE RUN'S
+    COUNT (#1130). bosses_done is the module's own count; a boss it counted
+    that no kill row names was killed all the same, so listing it as not
+    killed would be false, and a cleared run read as every boss alive. An
+    empty list is what a realm missing the rows answers, and the page then
+    draws its counted bar. Wipes are told either way.
     """
     members = [member["name"] for member in view["members"]]
     if not members:
@@ -225,7 +307,7 @@ def _bosses(reader, view: dict) -> tuple[list, list]:
     map_id = _map_id(view)
     if map_id is None:
         return [], []
-    bosses = _boss_creatures(map_id)
+    bosses = _boss_creatures(reader, map_id)
     if not bosses:
         return [], []
     holes = ", ".join(["%s"] * len(members))
@@ -234,17 +316,20 @@ def _bosses(reader, view: dict) -> tuple[list, list]:
     out = []
     for entry, name in bosses:
         kill = kill_by_entry.get(entry)
+        at = kill["at"] if kill else None
         out.append(
             {
                 "entry": entry,
                 "name": name,
                 "killed": kill is not None,
-                "at": kill["at"].isoformat(sep=" ", timespec="seconds")
-                if kill
-                else None,
+                # A kill row whose time did not parse is still a kill.
+                "at": at.isoformat(sep=" ", timespec="seconds") if at else None,
                 "by": kill["by"] if kill else None,
             }
         )
+    killed = sum(1 for boss in out if boss["killed"])
+    if killed < int(view.get("bosses_done") or 0):
+        out = []
     # Wipes are only read for ended runs: a run still out has not wiped yet.
     if view.get("state") != "ended":
         return out, []

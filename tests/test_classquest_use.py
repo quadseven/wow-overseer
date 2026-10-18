@@ -898,5 +898,123 @@ class TheBridgeFollowsTheAnswer(unittest.TestCase):
         self.assertIn("INSERT INTO overseer_command", body)
 
 
+# --- a done use and the hunt's stall clock (#1140) ---------------------------------
+
+BINDING = 1471
+CIRCLE = guildjobs.Spot(
+    "gameobject", 37098, EASTERN, -9042.0, -1159.0, "Summoning Circle"
+)
+MIN = 60.0
+
+
+class ADoneUseRestartsTheStallClock(unittest.TestCase):
+    """Runes of Summoning summon the demon at the circle, but the quest counter
+    moves only when the demon dies: a done use is the hunt's progress."""
+
+    def test_a_use_25_minutes_in_is_not_rerolled_10_minutes_later(self):
+        hunts = classquest.Hunts()
+        self.assertEqual(hunts.observe("Zug", BINDING, 0, CIRCLE, 0.0), "")
+        hunts.used("Zug", BINDING, 25 * MIN)
+        self.assertEqual(hunts.observe("Zug", BINDING, 0, CIRCLE, 35 * MIN), "")
+        self.assertEqual(hunts.state("Zug", 35 * MIN), ({BINDING: ()}, frozenset()))
+
+    def test_without_the_use_the_same_hunt_is_rerolled(self):
+        hunts = classquest.Hunts()
+        hunts.observe("Zug", BINDING, 0, CIRCLE, 0.0)
+        self.assertEqual(
+            hunts.observe("Zug", BINDING, 0, CIRCLE, 35 * MIN), classquest.REROLL
+        )
+
+    def test_a_use_of_another_quest_or_a_held_off_one_moves_nothing(self):
+        hunts = classquest.Hunts()
+        hunts.observe("Zug", BINDING, 0, CIRCLE, 0.0)
+        hunts.used("Zug", 1598, 25 * MIN)
+        self.assertEqual(hunts.get("Zug").since, 0.0)
+        hunts.give_up("Zug", BINDING, 30 * MIN)
+        held = hunts.get("Zug")
+        hunts.used("Zug", BINDING, 31 * MIN)
+        self.assertEqual(hunts.get("Zug"), held)
+
+
+class TheBridgeRestartsTheClockOnADoneUse(unittest.TestCase):
+    """`Bridge._class_use_row` driven with the row writes and answers stubbed."""
+
+    ROW = guildjobs.guildcorps.Row(
+        "quest",
+        "use-item-on gameobject:37098 item:6284",
+        "",
+        "guildjobs:classquest:Zug",
+    )
+
+    def drive(self, answers, action=classquest.ACTION):
+        import asyncio
+        from unittest import mock
+
+        from test_guildsocial_bridge import bridge
+
+        step = guildjobs.guildcorps.Step(
+            "Zug", action, BINDING, "binds", rows=(self.ROW,), spot=CIRCLE
+        )
+        hunts = classquest.Hunts()
+        hunts.observe("Zug", BINDING, 0, CIRCLE, 0.0)
+        queue = list(answers)
+        asked = []
+
+        def insert(holder, row):
+            asked.append(row.command)
+            return len(asked)
+
+        async def answer(row_id, seconds):
+            return queue.pop(0) if queue else {}
+
+        async def nap(seconds):
+            return None
+
+        this = type(
+            "B",
+            (),
+            {
+                "_await_corps_answer": staticmethod(answer),
+                "_class_hunts": hunts,
+                "_class_use_unsupported_until": 0.0,
+            },
+        )()
+        with (
+            mock.patch.object(bridge, "_insert_corps_row", insert),
+            mock.patch.object(bridge.asyncio, "sleep", nap),
+            mock.patch.object(bridge.time, "time", lambda: 25 * MIN),
+        ):
+            went = asyncio.run(bridge.Bridge._class_use_row(this, step, self.ROW, 0.0))
+        return went, hunts.observe("Zug", BINDING, 0, CIRCLE, 35 * MIN)
+
+    def test_a_done_use_is_not_rerolled_10_minutes_later(self):
+        for outcome in ("progressed", "spent"):
+            with self.subTest(outcome=outcome):
+                went, verdict = self.drive(
+                    [{"status": "applied", "result": json.dumps({"outcome": outcome})}]
+                )
+                self.assertTrue(went)
+                self.assertEqual(verdict, "")
+
+    def test_a_use_refused_or_unanswered_leaves_the_clock(self):
+        for answers in (
+            [{"status": "unchanged", "detail": "nothing to use"}],
+            [{"status": "error", "detail": "no such item", "result": ""}],
+            [],
+        ):
+            with self.subTest(answers=answers):
+                went, verdict = self.drive(answers)
+                self.assertFalse(went)
+                self.assertEqual(verdict, classquest.REROLL)
+
+    def test_the_level_orb_use_is_no_class_hunt(self):
+        went, verdict = self.drive(
+            [{"status": "applied", "result": json.dumps({"outcome": "progressed"})}],
+            action="level",
+        )
+        self.assertTrue(went)
+        self.assertEqual(verdict, classquest.REROLL)
+
+
 if __name__ == "__main__":
     unittest.main()
