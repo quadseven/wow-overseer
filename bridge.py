@@ -4621,6 +4621,46 @@ def _holders_of(quest_id: int) -> set:
         return {row["name"] for row in cur.fetchall()}
 
 
+def _in_world_of(names) -> set | None:
+    """Which of `names` are in the world on THIS realm right now.
+
+    WHY A QUEST AIM NEEDS TO ASK (#56). A family can move to another realm and
+    leave its roster rows behind on this one, still `enabled = 1`, still
+    holding the quest. Nothing here notices: `_holders_of` reads
+    character_queststatus, which a logged-out character keeps forever, so the
+    quest goal went on writing `drive_quest` onto characters that had not
+    logged in for twelve days, every lease, logging an aim that no bot would
+    ever read. An aim only means something to a character that is here.
+
+    PRESENCE IS A FRESH `overseer_snapshot` ROW, NOT `characters.online`, the
+    rule this service keeps everywhere else (see _GUILD_ROSTER_SQL): the flag
+    reads 0 for bots that are in the world, and the snapshot is written only
+    for characters that are.
+
+    None MEANS "NOT READ", which is not the same as "nobody is here". A world
+    without the snapshot table or column says nothing about who is present, so
+    the caller carries on exactly as it did before it asked rather than
+    clearing a family's aims on a missing table.
+    """
+    names = sorted({str(n) for n in names or () if n})
+    if not names:
+        return set()
+    marks = ", ".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT name FROM overseer_snapshot "  # noqa: S608 - placeholders from a COUNT, values still bound
+                "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND" % marks,
+                names,
+            )
+        except pymysql.err.MySQLError as exc:
+            # 1054 ER_BAD_FIELD_ERROR, 1146 ER_NO_SUCH_TABLE.
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        return {str(row["name"]) for row in cur.fetchall()}
+
+
 
 def _aim_for_plea(caller: str, helpers: list, about: str = "") -> int:
     """Point the family at what the caller actually asked for.
@@ -18583,6 +18623,22 @@ class Bridge(discord.Client):
                      "movement and cleared %d stale aim(s)",
                      action.quest_id, cleared)
             return
+        # AN AIM AT NOBODY WHO IS HERE IS NOT AN AIM (#56). When none of the
+        # quest's holders is in the world on this realm (the family moved to
+        # another realm and left its rows behind, or is simply logged off),
+        # writing drive_quest reaches no bot. Clear the family's aim instead,
+        # so the roster stops carrying a quest nobody here is working, and let
+        # the next lease aim it again once a holder is back in the world.
+        holders = await asyncio.to_thread(_holders_of, action.quest_id)
+        if holders:
+            present = await asyncio.to_thread(_in_world_of, holders)
+            if present is not None and not present:
+                await asyncio.to_thread(_aim_traveller, 0)
+                log.info("goal: quest %d stands down for %s - none of its "
+                         "holders (%s) is in the world on this realm, so the "
+                         "family's aim is cleared", action.quest_id,
+                         action.beneficiary, ", ".join(sorted(holders)))
+                return
         aimed = await asyncio.to_thread(_aim_traveller, action.quest_id)
         # Logged every time it is renewed, with the count of rows actually
         # written: this project has been burned repeatedly by "delivered"
