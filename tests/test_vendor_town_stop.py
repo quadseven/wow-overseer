@@ -102,7 +102,8 @@ class OnlyAStopSaysHowFar(unittest.TestCase):
 
 class TheVendorPassSaysHowFar(unittest.TestCase):
     def test_the_vendor_claim_carries_the_nearest_vendor(self):
-        start = BRIDGE.index("    async def _vendor_once(")
+        # The vendor pass takes its aim in its own method (wow-overseer#977).
+        start = BRIDGE.index("    async def _take_vendor_aim(")
         body = BRIDGE[start : BRIDGE.index("\n    async def ", start + 1)]
         claim = body[body.index('"economy", leader, "vendor"') :]
         claim = claim[: claim.index(")\n")]

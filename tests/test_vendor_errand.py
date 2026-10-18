@@ -285,10 +285,23 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
     def _settle(self) -> str:
         return _statements("    async def _settle_vendor_errand(")
 
+    def _aim(self) -> str:
+        """The aim the pass takes, lifted into its own method (#977)."""
+        return _statements("    async def _take_vendor_aim(")
+
+    def _queue(self) -> str:
+        """The per-holder sell rows, lifted into their own function (#977)."""
+        return _statements("async def _queue_vendor_sales(")
+
     def test_the_step_decides_whether_an_aim_is_written(self):
         """The unconditional write on every cycle is what built the latch."""
         self.assertIn("bag_pressure.vendor_errand_step(", self._settle())
-        self.assertIn("if step == bag_pressure.VENDOR_ERRAND_AIM:", self._pass())
+        self.assertIn("self._take_vendor_aim(step, leader, cohort)", self._pass())
+        self.assertIn("if step != bag_pressure.VENDOR_ERRAND_AIM:", self._aim())
+        self.assertLess(
+            self._aim().index("if step != bag_pressure.VENDOR_ERRAND_AIM:"),
+            self._aim().index("_claim_town_slot"),
+        )
 
     def test_pressure_hold_logs_when_no_sell_row_is_in_flight(self):
         """A vendor arrival with zero outstanding rows must be diagnosable.
@@ -333,7 +346,11 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         """Unchanged from before, and for the same reason the bank pass gives:
         a queue written before the walk is a queue of refusals."""
         body = self._pass()
-        self.assertLess(body.index("_claim_town_slot"), body.index("_insert_sell"))
+        self.assertLess(
+            body.index("self._take_vendor_aim("), body.index("_queue_vendor_sales(")
+        )
+        self.assertIn("_claim_town_slot", self._aim())
+        self.assertIn("_insert_sell", self._queue())
 
     def test_the_errand_is_settled_above_every_early_return(self):
         """THE ORDERING BUG THIS FILE'S OWN SEQUENCE MODEL CAUGHT. The release
@@ -369,7 +386,8 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         rule is enforced rather than remembered. Still exactly one aim, and
         still onto `leader`."""
         body = _statements("    async def _vendor_once(")
-        self.assertEqual(body.count("_claim_town_slot"), 1)
+        self.assertEqual(body.count("_take_vendor_aim"), 1)
+        self.assertEqual(self._aim().count("_claim_town_slot"), 1)
         self.assertEqual(self._settle().count("_release_trade_errand"), 1)
         self.assertEqual(
             _statements("    async def _apply_vendor_stall_decision(").count(
@@ -378,8 +396,8 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
             1,
         )
         self.assertIn(
-            'self._claim_town_slot(\n                "economy", leader, "vendor", urgent=True,',
-            body,
+            'self._claim_town_slot(\n            "economy", leader, "vendor", urgent=True,',
+            self._aim(),
         )
 
     def test_the_release_names_the_same_keyword_it_aimed_with(self):
@@ -400,10 +418,10 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         any aim, or the family is walked to town on no pressure at all."""
         body = self._pass()
         self.assertLess(
-            body.index("family_town_run_needed"), body.index("_claim_town_slot")
+            body.index("family_town_run_needed"), body.index("_take_vendor_aim(")
         )
         self.assertLess(
-            body.index("family_town_run_needed"), body.index("_insert_sell")
+            body.index("family_town_run_needed"), body.index("_queue_vendor_sales(")
         )
 
 
@@ -417,7 +435,7 @@ class StrandedBagPressureErrandUsesExistingSalePath(unittest.TestCase):
         self.assertNotIn('"trigger:"', body)
 
     def test_vendor_sale_and_completion_remain_the_existing_holder_paths(self):
-        vendor = _statements("    async def _vendor_once(")
+        vendor = _statements("async def _queue_vendor_sales(")
         settle = _statements("    async def _release_stranded_vendor_errands(")
         self.assertIn("_fetch_town, holder", vendor)
         self.assertIn("_insert_sell", vendor)

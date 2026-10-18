@@ -585,7 +585,10 @@ class TheVendorPassRecordsTheFloor(unittest.TestCase):
     def test_the_vendor_pass_records_it(self):
         body = ast.get_source_segment(BRIDGE, _functions("_vendor_once")[0])
         record = body.index('globals().get("_note_bag_floor")')
-        self.assertLess(body.index("sellable_counts[sale.holder]"), record)
+        self.assertLess(
+            body.index("_count_sales(sellable_counts, lock_sales + clear_sales)"),
+            record,
+        )
         # Above every early return of the pass.
         self.assertLess(record, body.index("if mode == bag_pressure.VENDOR_MODE_NONE"))
 
