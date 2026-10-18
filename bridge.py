@@ -753,6 +753,12 @@ LEVEL_SKIP_SECONDS = 7200.0
 BAGS_CLAIMANT = "bags"
 # The gear errand's walk to an armour merchant (#365).
 GEAR_VENDOR_CLAIMANT = "gear vendor"
+# The gear errand's trip to an auction house beyond the town, for a family
+# whose home has none (#1170). A trip of thousands of yards, so it is held to
+# a lease derived from its own bound (auction.HOUSE_TRIP_MAX_YARDS) the way
+# the flight pass's is: a lease and not an exemption, for infra#3703's reason.
+GEAR_HOUSE_CLAIMANT = "gear house"
+TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS = flightlearn.lease_for(auction.HOUSE_TRIP_MAX_YARDS)
 
 # How far the flight-network pass will send somebody, and how long it may keep
 # the column while it does.
@@ -6614,6 +6620,7 @@ class Bridge(discord.Client):
                 LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                 ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                 "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+                GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,
             },
         )
         # A cut-off follower can make one self-contained vendor walk during a
@@ -8572,6 +8579,7 @@ class Bridge(discord.Client):
                     LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                     ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                     "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+                    GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,
                 },
             )
             self._cohort_town_slots[key] = slot
@@ -9330,10 +9338,14 @@ class Bridge(discord.Client):
         if not leader_counter:
             free = {n: 19 - len(f["equipped"]) for n, f in facts.items()}
             if any(v >= 4 for v in free.values()) and step == bag_pressure.VENDOR_ERRAND_AIM:
-                await self._claim_town_slot(
-                    "gearup", leader, auction.AUCTIONEER_ROLE,
-                    cohort=_cohort_key(cohort),
-                )
+                trip = await self._gearup_house_trip(leader, facts)
+                if trip is None or trip.aim == auction.AUCTIONEER_ROLE:
+                    await self._claim_town_slot(
+                        "gearup", leader, auction.AUCTIONEER_ROLE,
+                        cohort=_cohort_key(cohort),
+                    )
+                else:
+                    await self._gearup_far_house(leader, trip, cohort)
             for n in sorted(facts):
                 log.info("gearup: %s nothing yet: not at an auctioneer", n)
             return {}, {}, None
@@ -9345,6 +9357,49 @@ class Bridge(discord.Client):
                 log.info("gearup: %s nothing: no reachable auction house", name)
             return {}, teams, None
         return short, teams, house
+
+    async def _gearup_far_house(self, leader, trip, cohort) -> bool:
+        """Send the leader to a house beyond the town, or say why not (#1170)."""
+        if not trip.aim:
+            log.info("gearup: no auction house trip for %s - %s",
+                     leader, trip.why_not)
+            return False
+        aimed = await self._claim_town_slot(
+            GEAR_HOUSE_CLAIMANT, leader, trip.aim,
+            cohort=_cohort_key(cohort),
+        )
+        log.info("gearup: no auction house within a town walk of %s; "
+                 "aimed at %s (%d yards) so the gear-short can buy "
+                 "there (aim taken=%s)", leader,
+                 trip.name or trip.aim, int(trip.yards), aimed)
+        return aimed
+
+    async def _gearup_house_trip(self, leader, facts):
+        """Where the leader walks for an auction house, or None when unread.
+
+        `auction.house_trip` decides; this reads. The keyword when a counter of
+        the leader's side stands within a town walk; the counter's entry when
+        the nearest is beyond it and a member passes the gear-short gate
+        (`gearup.house_trip_shoppers`), which is a home such as Ratchet that
+        has no auction house (#1170).
+        """
+        standing = bag_pressure.standing_from_rows(
+            await asyncio.to_thread(_fetch_bag_trip_facts, [leader]))
+        here = standing.get(leader)
+        if here is None or here.map_id is None:
+            return None
+        teams = await asyncio.to_thread(_fetch_teams, [leader])
+        rows = await asyncio.to_thread(_fetch_auctioneer_spawns, here)
+        if rows is None:
+            return None
+        shoppers = gearup.house_trip_shoppers(
+            facts, empty_slots=GEARUP_GATE_EMPTY_SLOTS,
+            min_purse=GEARUP_GATE_MIN_PURSE,
+        )
+        return auction.house_trip(
+            teams.get(leader, ""), rows, map_id=here.map_id,
+            far=bool(shoppers),
+        )
 
     async def _gearup_standing_members(self, facts, teams, names, house):
         planned = {}
@@ -12131,7 +12186,17 @@ class Bridge(discord.Client):
             "equip: left %d piece(s) to the module's gear drive for %d roster member(s)",
             len(left_to_drive), len(roster_names),
         )
-        await self._write_equips(wanted, current, holders=names)
+        # NEVER AN EQUIP FOR A MEMBER WHO IS NOT IN THE WORLD (#869). The
+        # family's names are every protected character, logged in or not, and
+        # a command for one who is offline sits unanswered and piles up tries.
+        # None (no snapshot table) carries on as before; a database fault
+        # skips the pass, like the roster read above.
+        try:
+            online = await asyncio.to_thread(_in_world_of, names)
+        except (OSError, pymysql.err.MySQLError) as exc:
+            log.warning("equip: could not read who is in the world: %s", exc)
+            return
+        await self._write_equips(wanted, current, holders=names, online=online)
 
     async def _scored_equips(self, legacy, names, label: str, tanks=()) -> tuple:
         """`legacy` with every member equipscore can judge judged by its spec's
@@ -12164,7 +12229,7 @@ class Bridge(discord.Client):
         return plan.equips
 
     async def _write_equips(self, wanted, current: list, label: str = "",
-                            holders=()) -> None:
+                            holders=(), online=None) -> None:
         """Queue and log the `e` rows for `wanted`, inside the retry window.
 
         Shared by the family's pass and the guild's, so both keep one retry
@@ -12172,7 +12237,8 @@ class Bridge(discord.Client):
         each holder's last level change. A piece whose latest row the world
         refused with a reason is held on it (#897) until the holder's level,
         what is worn in that slot, or the bags change; `holders` are the
-        members this pass read.
+        members this pass read. `online`, when given, is who is in the world:
+        nothing is queued for anyone else (#869).
         """
         recent = {(row["target_name"], row["command"]) for row in current
                   if row["recent"]}
@@ -12212,7 +12278,7 @@ class Bridge(discord.Client):
         queue, notes = bag_pressure.equips_to_queue(
             wanted, recent, tries, answers=answers, worn=worn,
             holds=self._equip_holds, holders=set(holders) or None,
-            memory_hours=EQUIP_MEMORY_HOURS)
+            memory_hours=EQUIP_MEMORY_HOURS, online=online)
         for note in notes:
             log.info("equip: %s", note)
         log.info("equip: %d %spiece(s) held on the world's answer",
@@ -12267,7 +12333,8 @@ class Bridge(discord.Client):
                                           EQUIP_TRY_WINDOW_HOURS * 60)
         changed = await asyncio.to_thread(_level_changes, members)
         current = bag_pressure.since_level_change(history, changed)
-        await self._write_equips(wanted, current, label="guild ", holders=members)
+        await self._write_equips(wanted, current, label="guild ", holders=members,
+                                 online=set(members))
 
     async def _jev_items_plan(self, gear_rows: list, worn: list, names: list):
         """This family's Jev pass, and what it changes this cycle (#95).
@@ -32185,6 +32252,38 @@ def _fetch_auctioneer_maps() -> set[int] | None:
                 log.warning("auction: cannot read auctioneer spawns by map")
                 return None
             raise
+
+
+# THE AUCTIONEER SPAWNS ON THE LEADER'S MAP, one row per creature entry at its
+# nearest spawn, for auction.house_trip (#1170). Read from the world's spawn
+# table, never authored; the faction decides which side's house it is.
+_AUCTIONEER_SPAWNS_SQL = (
+    "SELECT cr.id AS entry, ct.name AS name, ct.faction AS faction, "
+    "cr.map AS map_id, "
+    "MIN(SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2))) AS yards "
+    "FROM acore_world.creature cr "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 "
+    "GROUP BY cr.id, ct.name, ct.faction, cr.map ORDER BY yards, entry"
+)
+
+
+def _fetch_auctioneer_spawns(here) -> list | None:
+    """Rows for auction.house_trip, measured from the leader's Standing, or
+    None when the world cannot be read (the caller then keeps the keyword)."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                _AUCTIONEER_SPAWNS_SQL,
+                (float(here.x), float(here.y), int(here.map_id),
+                 NPC_FLAG_AUCTIONEER),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("gearup: cannot read auctioneer spawns")
+                return None
+            raise
+        return [dict(row) for row in cur.fetchall()]
 
 
 def _fetch_auctioneer(name: str) -> dict | None:

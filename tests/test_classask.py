@@ -70,7 +70,18 @@ def three_packs():
 
 def group_book():
     """One quest the member holds that wants a group of 3."""
-    rows = [qrow(2000, "Group Job", reward=8121, grp=3, npc1=3130, npc_count1=1)]
+    rows = [
+        qrow(
+            2000,
+            "Group Job",
+            reward=8121,
+            grp=3,
+            npc1=3130,
+            npc_count1=1,
+            # 8 under the level 20 asker: inside the #1094 solo gap, so it asks
+            min_level=12,
+        )
+    ]
     return classquest.build(
         quest_rows=rows, giver_rows=givers(), spawn_rows=[LIZARD], loot_rows=[]
     )
@@ -217,7 +228,9 @@ class TheHelps(unittest.TestCase):
         self.assertEqual(class_plan([hunter()]).helps, ())
 
     def test_an_elite_objective_asks_for_two(self):
-        rows = [qrow(2001, "Elite Job", reward=8121, npc1=3130, npc_count1=1)]
+        rows = [
+            qrow(2001, "Elite Job", reward=8121, npc1=3130, npc_count1=1, min_level=12)
+        ]
         b = classquest.build(
             quest_rows=rows,
             giver_rows=givers(),
