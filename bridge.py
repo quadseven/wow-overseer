@@ -15845,6 +15845,8 @@ class Bridge(discord.Client):
         # A hunter's first pet (hunterpet.py): the beasts around each hunter
         # that knows Tame Beast and has none.
         pets = await self._job_pet_offers(members, facts["recent"])
+        # A carried weapon that waits on a weapon skill (#793).
+        weapons = await self._job_weapon_offers(members, facts["recent"])
         mail = await asyncio.to_thread(_job_mail_commands, members)
         pvp = await self._job_pvp_moves(members, facts["recent"], busy)
         # The level step is a spawn walk too (guildlevel.py).
@@ -15862,6 +15864,7 @@ class Bridge(discord.Client):
             recent=facts["recent"], busy=busy, cap=cap,
             unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"),
             gear=gear, supply=supply, pets=pets, mail=mail, pvp=pvp,
+            weapons=weapons,
             leveling=leveling,
             focus=focus,
             # The class quest is a spawn walk and a quest row (classquest.py).
@@ -16062,6 +16065,35 @@ class Bridge(discord.Client):
                      "beast spawn(s) of level %d to %d within %d yards",
                      m.name, len(offers[m.name]), hunterpet.lowest_level(m.level),
                      int(m.level), int(hunterpet.BEAST_YARDS))
+        return offers
+
+    async def _job_weapon_offers(self, members, recent) -> dict:
+        """name -> weaponskill.Offer for each guild member carrying a weapon it
+        has no skill for (#793): weaponskill decides the need, and the nearest
+        weapon master of its side on its map that teaches it is read here.
+
+        Only members guildjobs.weapon_candidate passes are read, and at most
+        GUILD_WEAPON_READS_PER_PASS weapon master reads, in turn.
+        """
+        wanted = [m for m in members if guildjobs.weapon_candidate(m, recent)]
+        if not wanted:
+            return {}
+        names = [m.name for m in wanted]
+        facts = await asyncio.to_thread(_fetch_gearup_facts, names)
+        needs = weaponskill.needs(
+            facts, await asyncio.to_thread(_fetch_bag_weapons, names))
+        need_of = {n.name: n for n in needs}
+        chosen, self._weapon_read_offset = guildjobs.rotate_reads(
+            sorted(need_of), getattr(self, "_weapon_read_offset", 0),
+            GUILD_WEAPON_READS_PER_PASS)
+        by_name = {m.name: m for m in wanted}
+        offers = {}
+        for name in chosen:
+            m, need = by_name[name], need_of[name]
+            at = {"map_id": m.map_id, "pos_x": m.x, "pos_y": m.y}
+            masters = await asyncio.to_thread(_fetch_weapon_masters, at, [need.spell])
+            offers[name] = weaponskill.offer(need, weaponskill.choose_master(
+                masters, {need.spell}, auction.team_of(m.race), int(m.map_id)))
         return offers
 
     def _log_stranded_knights(self, members, plan):
@@ -29208,6 +29240,10 @@ _SUPPLY_VENDOR_SQL = (
 # around one member each.
 GUILD_SUPPLY_READS_PER_PASS = 12
 
+# The guild weapon step's weapon master reads per pass (guildjobs.weapon_step,
+# #793): one spawn query on one member's map each.
+GUILD_WEAPON_READS_PER_PASS = 12
+
 
 def _fetch_supply_vendors(here, cap_yards) -> list:
     """Rows for restsupply.plan, measured from where the member stands."""
@@ -31705,16 +31741,20 @@ _BAG_WEAPONS_SQL = (
     "WHERE c.name IN (%s) AND it.class = 2 AND NOT (ci.bag = 0 AND ci.slot < 19)"
 )
 
+# The spawn guid and the spell's price ride along for the guild's walk to the
+# master (guildjobs.weapon_step, #793); nearest first, so a master with more
+# than one spawn is chosen at its nearest (weaponskill.choose_master).
 _WEAPON_MASTERS_SQL = (
-    "SELECT cr.id AS entry, ct.name AS name, ct.faction AS faction, "
+    "SELECT cr.id AS entry, cr.guid AS spawn, ct.name AS name, "
+    "ct.faction AS faction, "
     "cr.map AS map_id, cr.position_x AS x, cr.position_y AS y, "
     "SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2)) AS yards, "
-    "ts.SpellId AS spell "
+    "ts.SpellId AS spell, ts.MoneyCost AS cost "
     "FROM acore_world.creature cr "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "JOIN acore_world.creature_default_trainer cdt ON cdt.CreatureId = cr.id "
     "JOIN acore_world.trainer_spell ts ON ts.TrainerId = cdt.TrainerId "
-    "WHERE cr.map = %s AND ts.SpellId IN ({spells})"
+    "WHERE cr.map = %s AND ts.SpellId IN ({spells}) ORDER BY yards"
 )
 
 
