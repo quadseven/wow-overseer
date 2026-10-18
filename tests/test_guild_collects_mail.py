@@ -74,7 +74,7 @@ class AMemberOpensItsPost(unittest.TestCase):
     def test_the_bridge_reads_the_members_post(self):
         source = (ROOT / "bridge.py").read_text(encoding="utf-8")
         self.assertIn(
-            "mail=await asyncio.to_thread(_job_mail_commands, members)", source
+            "mail = await asyncio.to_thread(_job_mail_commands, members)", source
         )
         body = source[source.index("def _job_mail_commands(") :]
         body = body[: body.index("\ndef ")]

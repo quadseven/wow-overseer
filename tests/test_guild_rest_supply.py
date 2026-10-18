@@ -204,7 +204,7 @@ class InThePass(unittest.TestCase):
         for needle in (
             "_SUPPLY_VENDOR_SQL",
             "_JOB_SUPPLIES_SQL",
-            "supply=await self._job_supply_offers(",
+            "supply = await self._job_supply_offers(",
         ):
             self.assertTrue(needle in source, needle)
 

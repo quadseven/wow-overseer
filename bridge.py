@@ -15685,23 +15685,30 @@ class Bridge(discord.Client):
             self._log_missing_campaign_summoner(members, campaign_door)
         # No class quest uses while this worldserver does not carry the verbs.
         facts = dict(facts, class_book=self._class_book_for_plan(facts))
+        gear = await self._job_gear_offers(members, facts["recent"])
+        # Food and drink for a member with none (restsupply.py).
+        supply = await self._job_supply_offers(members, facts["recent"])
+        # A hunter's first pet (hunterpet.py): the beasts around each hunter
+        # that knows Tame Beast and has none.
+        pets = await self._job_pet_offers(members, facts["recent"])
+        mail = await asyncio.to_thread(_job_mail_commands, members)
+        pvp = await self._job_pvp_moves(members, facts["recent"], busy)
+        # The level step is a spawn walk too (guildlevel.py).
+        leveling = (await asyncio.to_thread(_job_leveling, facts)
+                    if spawn_walks else None)
+        # THE PLAN RUNS ON THE EVENT LOOP (#833): it mutates the hunt clock and
+        # the owing clock other tasks read, so it is not sent to a thread.
+        # Every awaited input is read above, so this timer measures only the
+        # synchronous plan, the stretch that once blocked the gateway 40 s.
+        plan_started = time.perf_counter()
         plan = guildjobs.plan(
             members, masters=facts["masters"], crafters=facts["crafters"],
             fields=fields, doors=doors, pending=facts["pending"],
             kept=kept,
             recent=facts["recent"], busy=busy, cap=cap,
             unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"),
-            gear=await self._job_gear_offers(members, facts["recent"]),
-            # Food and drink for a member with none (restsupply.py).
-            supply=await self._job_supply_offers(members, facts["recent"]),
-            # A hunter's first pet (hunterpet.py): the beasts around each hunter
-            # that knows Tame Beast and has none.
-            pets=await self._job_pet_offers(members, facts["recent"]),
-            mail=await asyncio.to_thread(_job_mail_commands, members),
-            pvp=await self._job_pvp_moves(members, facts["recent"], busy),
-            # The level step is a spawn walk too (guildlevel.py).
-            leveling=(await asyncio.to_thread(_job_leveling, facts)
-                      if spawn_walks else None),
+            gear=gear, supply=supply, pets=pets, mail=mail, pvp=pvp,
+            leveling=leveling,
             focus=focus,
             # The class quest is a spawn walk and a quest row (classquest.py).
             classes=facts.get("class_book") if spawn_walks else None,
@@ -15715,6 +15722,9 @@ class Bridge(discord.Client):
             # The class quest asks lately: a run of them that did not get the
             # quest done stops the next (guildjobs.class_ask_streak).
             asks=facts.get("quest_asks", ()))
+        log.info("guild jobs: the plan took %.2f s on the event loop for %d "
+                 "member(s)%s", time.perf_counter() - plan_started, len(members),
+                 _family_label(cohort))
         # Members held on a class quest are kept out of every dungeon pass
         # (the guild's asks, its runs): _class_priority_names. The class
         # quests a guildmate could help with are asked in guild chat by the
