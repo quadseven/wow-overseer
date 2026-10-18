@@ -260,7 +260,7 @@ function crafterHierarchy(t) {
   const others = holders.filter((h) => !assigned.has(h.who));
   const ordered = masters.concat(others);
   const chip = (h, isMaster) => html`<span class="eco-hier-chip">${member({ name: h.who })}${isMaster ? html` <span class="tag tag-accent">Master</span>` : ""}<span class="muted num">${h.value || 0}</span></span>`;
-  return html`<div class="eco-hierarchy"><span class="eco-meta">New recipes go to:</span> ${ordered.map((h) => chip(h, assigned.has(h.who)))}<span class="eco-meta muted">— first copy to the master, duplicates fan out.</span></div>`;
+  return html`<div class="eco-hierarchy"><span class="eco-meta">New recipes go to:</span> ${ordered.map((h) => chip(h, assigned.has(h.who)))}<span class="eco-meta muted">- first copy to the master, duplicates fan out.</span></div>`;
 }
 
 function needs(fam) {
