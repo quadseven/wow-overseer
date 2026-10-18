@@ -398,18 +398,20 @@ class ModelCallsHaveTheirOwnThreads(unittest.TestCase):
         gate = threading.Event()
         seen = []
 
-        def slow(url, body, headers, timeout):
-            seen.append(threading.current_thread().name)
-            gate.wait(10)
-            return 500, b""
-
         async def test(loop):
+            started = asyncio.Event()
+
+            def slow(url, body, headers, timeout):
+                seen.append(threading.current_thread().name)
+                loop.call_soon_threadsafe(started.set)
+                gate.wait(10)
+                return 500, b""
+
             client = jev.Client("k", transport=slow, timeout=10)
             asking = asyncio.ensure_future(
                 client.ask("x", "s", {"route": jev.choice("?", {"a": "a", "b": "b"})})
             )
-            while not seen:
-                await asyncio.sleep(0.01)
+            await asyncio.wait_for(started.wait(), 3)
             try:
                 read = await asyncio.wait_for(asyncio.to_thread(lambda: "row"), 3)
             finally:
