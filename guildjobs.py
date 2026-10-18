@@ -135,6 +135,7 @@ import restsupply
 import situation
 import standstill
 import vendorsale
+import weaponskill
 
 HERBALISM = guildcorps.HERBALISM
 MINING = guildcorps.MINING
@@ -419,6 +420,9 @@ COOLDOWN_MINUTES = {
     "sell": 120,
     # A walk to a riding trainer (riding_step): a rank is bought once.
     "riding": 180,
+    # A walk to a weapon master and its `train-weapon` (weapon_step): learned,
+    # the weapon is no longer a need; refused, the trip waits two hours.
+    "weapon": 120,
     # Making room for a class quest (class_room_step): the sale cooldown above
     # is overridden for it, and this is its own, long enough for the walk to a
     # vendor and the sales to be written.
@@ -1780,6 +1784,103 @@ def riding_step(m, recent):
     )
 
 
+WEAPON_ACTION = "weapon"
+# The walk ends this near the weapon master's spawn: the module's train-weapon
+# looks for a trainer it can talk to from where the member stands.
+WEAPON_MASTER_NEAR_YARDS = 3
+
+
+def weapon_candidate(m, recent) -> bool:
+    """Is this member worth a weapon skill read this pass: in the world, alive,
+    out of combat, placed, off the weapon cooldown, and carrying a weapon its
+    class could learn (weaponskill.may_need)."""
+    if not (m.online and m.alive and not m.in_combat):
+        return False
+    if m.map_id is None or m.x is None or m.y is None:
+        return False
+    if _cooling(m, WEAPON_ACTION, recent):
+        return False
+    return weaponskill.may_need(m.class_id, m.level, m.carried)
+
+
+def weapon_purse(m, need) -> int:
+    """Copper this member may spend on a weapon skill: what its purchase order
+    leaves for gear (purse.py), or its whole purse when the weapon fills an
+    empty slot, as an empty main hand is the family's critical weapon errand
+    (bridge._critical_weapon_intent_option): a member with nothing in the slot
+    fights without the weapon it already owns."""
+    if need.fills_empty:
+        return max(0, int(m.money))
+    return spendable(m, purse.GEAR, m.money)
+
+
+def weapon_step(m, offer, recent, cap):
+    """(step or None, a note): a guild member carrying a weapon it has no skill
+    for walks to a weapon master of its own side and buys the skill with its
+    own gold (`train-weapon`, quadseven/mod-overseer's DoTrainWeapon through
+    the core's Trainer::TeachSpell). The guild equip pass puts the weapon on
+    once the skill reads learned. `offer` is a weaponskill.Offer, None for a
+    member the bridge did not read."""
+    if offer is None or not m.online or not m.alive or m.in_combat:
+        return None, ""
+    if _cooling(m, WEAPON_ACTION, recent):
+        return None, ""
+    need = offer.need
+    if not offer.spawn:
+        return None, (
+            "%s carries %s (%s) and has no skill %d for it; no weapon master of "
+            "its side on this map teaches it"
+            % (m.name, need.item, need.why, need.skill)
+        )
+    if weapon_purse(m, need) < int(offer.cost):
+        return None, "%s saves for skill %d (%s) to wield %s; it may spend %s" % (
+            m.name,
+            need.skill,
+            purse.money(offer.cost),
+            need.item,
+            purse.money(weapon_purse(m, need)),
+        )
+    said = "%s walks to %s to buy skill %d for %s of its own, to wield %s (%s)" % (
+        m.name,
+        offer.master or "a weapon master",
+        need.skill,
+        purse.money(offer.cost),
+        need.item,
+        need.why,
+    )
+    spot = Spot(
+        "creature",
+        offer.spawn,
+        offer.map_id,
+        offer.x,
+        offer.y,
+        offer.master,
+        near=WEAPON_MASTER_NEAR_YARDS,
+    )
+    step = guildcorps.Step(
+        m.name,
+        WEAPON_ACTION,
+        int(need.skill),
+        said,
+        rows=(
+            guildcorps.Row(
+                "cast",
+                need.train_command,
+                str(int(need.entry)),
+                source_for(WEAPON_ACTION, m.name),
+            ),
+        ),
+        walk=guildcorps.Row(
+            "job",
+            spot.command + _cap_word(cap),
+            "",
+            source_for(WEAPON_ACTION + "-walk", m.name),
+        ),
+        goal=offer.master or "the weapon master",
+    )
+    return step, ""
+
+
 def gear_step(member, character, vendor_rows, cap, kept=None):
     """(step or None, why not) for one gear-short member.
 
@@ -2726,6 +2827,7 @@ def plan(
     supply=None,
     pets=None,
     asks=(),
+    weapons=None,
     equip_room=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
@@ -2756,6 +2858,8 @@ def plan(
     (restsupply.py, supply_step); `pets` name -> the tameable beasts around a
     hunter that knows Tame Beast and has no pet (hunterpet.py, pet_step);
     `asks` the QuestAsk rows of the class quest asks lately (class_ask_streak);
+    `weapons` name -> weaponskill.Offer for a member carrying a weapon it has
+    no skill for (weapon_step);
     `equip_room` name -> (free slots needed, what for) for members too full to
     put an upgrade on (gear.equip_room, equip_room_step).
     """
@@ -2816,6 +2920,7 @@ def plan(
             int((still or {}).get(m.name, 0)),
             _offer_for(supply, m.name),
             _offer_for(pets, m.name),
+            _offer_for(weapons, m.name),
             (equip_room or {}).get(m.name),
         )
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
@@ -2905,7 +3010,7 @@ def _allowance(step, counters, per_guild):
         return counters["pvp"], PVP_STEPS_PER_GUILD
     if step.action == guildlevel.ACTION:
         return counters["level"], guildlevel.STEPS_PER_GUILD
-    if step.action in ("gear", "hearth"):
+    if step.action in ("gear", "hearth", WEAPON_ACTION):
         return counters["gear"], GEAR_STEPS_PER_GUILD
     return counters["jobs"], per_guild
 
@@ -2995,12 +3100,15 @@ def _quest_first(
     return None, quest_note
 
 
-def _upkeep_first(m, offer, supply, leveling, kept, recent, cap, quest_note):
+def _upkeep_first(
+    m, offer, supply, leveling, kept, recent, cap, quest_note, weapon=None
+):
     """(the member's step as _member_step returns it, or None; the supply
     note; the gear note): food for a member with nothing to eat or drink, then
-    a sale for full bags, then the inn, then riding, gear and food in their
-    purchase order (purse.py). A gear step carries no notes; the riding note
-    rides on the supply note."""
+    a sale for full bags, then the inn, then riding, then the weapon master for
+    a carried weapon it has no skill for (weapon_step, #793), then gear and food
+    in their purchase order (purse.py). A gear step carries no notes; the
+    riding and weapon notes ride on the supply note."""
     # FOOD FIRST ONLY FOR A MEMBER WITH NOTHING TO EAT OR DRINK (purse.py): it
     # dies between pulls without. Otherwise the purchase order puts its class
     # spells, riding and gear ahead of food.
@@ -3019,6 +3127,10 @@ def _upkeep_first(m, offer, supply, leveling, kept, recent, cap, quest_note):
     step, riding_note = riding_step(m, recent)
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
+    step, weapon_note = weapon_step(m, weapon, recent, cap)
+    if step is not None:
+        return (step, step.said, quest_note, ""), supply_note, ""
+    riding_note = _join(riding_note, weapon_note)
     step, doing, gear_note = _gear_first(m, offer, recent, cap, kept)
     if step is not None:
         return (step, doing, "", ""), supply_note, gear_note
@@ -3053,6 +3165,7 @@ def _member_step(
     still_for=0,
     supply=None,
     pet=None,
+    weapon=None,
     equip_room=None,
 ):
     """A class quest first, then a hunter's first pet, then a hearth out of a
@@ -3060,7 +3173,9 @@ def _member_step(
     cannot put on without it (equip_room_step, #1088), then food for a member
     with nothing to eat or drink,
     then a sale for bags that leave loot on the corpse (loot_room_short), then
-    the inn, then riding, gear and food in its purchase order (purse.py), then
+    the inn, then riding, then the weapon master for a carried weapon it has no
+    skill for (`weapon`, a weaponskill.Offer), then gear and food in its
+    purchase order (purse.py), then
     the trainer for a trade at its tier cap (_tier_cap_first, #1116), then
     PvP for an upgrade, then the post, then a walk out of an outgrown zone,
     then the member's ordinary job (a craft-focus guild's trade work when
@@ -3107,7 +3222,7 @@ def _member_step(
         return step, doing, quest_note, ""
     quest_note = _join(quest_note, room_note)
     found, supply_note, gear_note = _upkeep_first(
-        m, offer, supply, leveling, kept, recent, cap, quest_note
+        m, offer, supply, leveling, kept, recent, cap, quest_note, weapon
     )
     if found is not None:
         return found

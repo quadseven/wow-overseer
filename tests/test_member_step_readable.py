@@ -99,6 +99,7 @@ class TheMemberStepStaysReadable(unittest.TestCase):
             "_full_bags_first",
             "_inn_first",
             "riding_step",
+            "weapon_step",
             "_gear_first",
             "_pvp_first",
             "_collect_first",
