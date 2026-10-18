@@ -346,10 +346,11 @@ class _Log:
     warning = exception = info
 
 
-def _queue_pass(world, holds=None, stuck=None, **hooks):
+def _queue_pass(world, holds=None, stuck=None, extra=None, **hooks):
     """One queue pass against `world`; the lines it logged. `holds` maps a
     family key to the Jev interlude holding its job (#216); `hooks` are more
-    of the bridge's optional hooks (`_family_lent_hold`, #784)."""
+    of the bridge's optional hooks (`_family_lent_hold`, #784); `extra` adds
+    module-level names the pass looks up (`_bag_hold_read`, #872)."""
     holds = holds or {}
     log = _Log()
     ns = _load(
@@ -382,6 +383,7 @@ def _queue_pass(world, holds=None, stuck=None, **hooks):
             # This fixture exercises queue advancement after dungeon pace has
             # already produced its first snapshot.
             "_pass_completed": lambda name: name.startswith("dungeon_pace:"),
+            **(extra or {}),
         },
     )
 
