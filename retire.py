@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import math
 
+import core
+
 SOURCE = "retire"
 COMMAND = "retire"
 ROWS_PER_PASS = 10
@@ -75,9 +77,11 @@ def eligible_params() -> tuple:
 
 
 # The retire rows this pass needs to know about: in flight (never asked again
-# while one runs), refused recently (asked again later), and done.
+# while one runs), refused recently (asked again later), and done. A row a
+# worldserver roll ended is none of these (#789): its read-back died with the
+# world, nothing refused it, and the name is asked again on the next pass.
 ROWS_SQL = (
-    "SELECT target_name, status, "
+    "SELECT target_name, status, detail, "
     "updated_at > NOW() - INTERVAL %s MINUTE AS recent "
     "FROM overseer_command WHERE kind = 'job' AND source = %s AND command = %s"
 )
@@ -100,6 +104,8 @@ def read_rows(rows) -> tuple:
             in_flight.add(name)
         elif status == "applied":
             done += 1
+        elif core.ended_by_restart(status, r.get("detail")):
+            continue
         elif status == "error" and r.get("recent"):
             refused.add(name)
     return in_flight, refused, done
