@@ -10272,9 +10272,17 @@ class Bridge(discord.Client):
         here.
         """
         rows = await asyncio.to_thread(_fetch_bag_state, names)
+        # A BACKPACK READ ERROR IS A READ ERROR (#1062), not the end of the bag
+        # pass: unread, every backpack counts as full (members_from_rows), so
+        # no bag is moved out this pass, and the hand-over still runs.
+        try:
+            backpack_used = await asyncio.to_thread(_fetch_backpack_used, names)
+        except pymysql.err.MySQLError as exc:
+            log.warning("bags: the backpack read failed (%s); every backpack "
+                        "counts as full this pass", exc)
+            backpack_used = None
         members = bag_upgrade.members_from_rows(
-            rows, names,
-            backpack_used=await asyncio.to_thread(_fetch_backpack_used, names))
+            rows, names, backpack_used=backpack_used)
         # A BAG ITS OWN HOLDER CAN PUT ON GOES ON FIRST (#88), and it is not
         # also handed to a sibling in the same pass. The bag it displaces is
         # carried from the next save on, where the hand-over below or the
