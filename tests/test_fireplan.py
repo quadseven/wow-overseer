@@ -10,6 +10,7 @@ that drops for a family tank. Every test runs on fake rows; none touches a
 database.
 """
 
+import contextlib
 import pathlib
 import unittest
 
@@ -18,6 +19,7 @@ import fireplan
 import gearscore
 import preraid
 import raidsupply as rs
+from test_campaign_queue import _load  # sets up the pymysql stub
 from test_preraid import ANCHORS, TEXTS, drop, item_row
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
@@ -298,6 +300,133 @@ class ThePlannerAimsAtAFirePiece(unittest.TestCase):
         self.assertIn("fire resistance: Emberplate Armguards for wrists", said)
         self.assertIn("for Grug", said)
         self.assertIn("Emberplate Armguards", campaignplan.heuristic_why(pick))
+
+
+# THE LEVELLING HALF (#759 box 2). Blackrock Depths' band starts at 52, eight
+# levels before the cap, and its fire pieces want level 52 to 58. A family
+# levelling through that band runs the dungeon it outgrows soonest; at 54 that
+# is the Sunken Temple. A planned fire piece for a family tank now pulls the
+# run to the dungeon that drops it, and the queued line names the piece.
+LEVELLING = 54
+
+
+def levelling_family(level=LEVELLING):
+    return [preraid.replace(m, level=level) for m in family()]
+
+
+def levelling_facts(upgrades, level=LEVELLING):
+    return preraid.replace(
+        facts(upgrades),
+        level_rows=tuple(dict(r, level=level) for r in facts(None).level_rows),
+    )
+
+
+class TheLevellingPlannerAimsAtAFirePiece(unittest.TestCase):
+    def setUp(self):
+        self.found = catalog()
+        self.plans = [preraid.fire_plan(m, self.found) for m in levelling_family()]
+        self.gains = preraid.run_gains(self.plans)
+
+    def test_a_fire_plan_counts_only_the_tanks_fire_pieces(self):
+        by = {p.member.name: p for p in self.plans}
+        self.assertEqual(by["Grug"].upgrades, ())
+        self.assertEqual(
+            [u.item.entry for u in by["Grug"].fire], [EMBERPLATE_ARMGUARDS]
+        )
+        self.assertEqual(by["Ugga"].fire, ())
+        self.assertEqual(by["Ugga"].upgrades, ())
+
+    def test_a_piece_above_the_tanks_level_is_not_planned_yet(self):
+        plans = [preraid.fire_plan(m, self.found) for m in levelling_family(51)]
+        self.assertEqual([p.fire for p in plans], [(), ()])
+
+    def test_without_the_fire_piece_the_soonest_outgrown_wins(self):
+        # The control: the same family, the fire plan unread.
+        pick = campaignplan.heuristic(campaignplan.options(levelling_facts(None)))
+        self.assertEqual(pick.keyword, "sunken-temple")
+
+    def test_the_levelling_planner_prefers_the_dungeon_with_the_fire_piece(self):
+        pick = campaignplan.heuristic(campaignplan.options(levelling_facts(self.gains)))
+        self.assertEqual(pick.keyword, "blackrock-depths")
+        said = campaignplan.planned_line(pick, "the queue ran dry", "the heuristic")
+        self.assertIn("fire resistance: Emberplate Armguards for wrists", said)
+        self.assertIn("for Grug", said)
+        self.assertIn("Emberplate Armguards", campaignplan.heuristic_why(pick))
+
+    def test_a_levelling_run_claims_no_expected_item_levels(self):
+        # Below the cap the spec gear is not read, so a run's worth in item
+        # levels is unknown; only the fire piece is said.
+        opts = campaignplan.options(levelling_facts(self.gains))
+        depths = next(o for o in opts if o.keyword == "blackrock-depths")
+        self.assertIsNone(depths.expected)
+        said = campaignplan.planned_line(depths, "the queue ran dry", "the heuristic")
+        self.assertNotIn("expected item levels", said)
+
+
+class _Rows:
+    """preraid's member and worn reads, by the label _planner_rows is given."""
+
+    def __init__(self, level):
+        self.level = level
+
+    def __call__(self, cur, sql, args, label):
+        if sql.startswith(preraid.MEMBERS_SQL.split("{")[0]):
+            return [
+                {
+                    "name": n,
+                    "class_id": c,
+                    "level": self.level,
+                    "race": 1,
+                    "map_id": EASTERN_KINGDOMS,
+                    "lead": int(n == "Grug"),
+                    "spec_tab": t,
+                }
+                for n, (c, t) in CLASSES.items()
+            ]
+        if sql.startswith(preraid.WORN_SQL.split("{")[0]):
+            return []
+        return []
+
+
+class TheBridgeReadsFireBelowTheCap(unittest.TestCase):
+    def preraid_for(self, level):
+        connects = []
+
+        @contextlib.contextmanager
+        def connect():
+            connects.append(1)
+            yield _Conn()
+
+        ns = _load(
+            ["_planner_preraid"],
+            {
+                "campaignplan": campaignplan,
+                "preraid": preraid,
+                "_connect": connect,
+                "_planner_catalog": lambda cur: catalog(),
+                "_planner_rows": _Rows(level),
+            },
+        )
+        rows = [{"name": n, "level": level} for n in CLASSES]
+        return ns["_planner_preraid"](list(CLASSES), rows), connects
+
+    def test_a_family_in_the_depths_band_reads_its_tanks_fire_pieces(self):
+        (upgrades, progress), _c = self.preraid_for(LEVELLING)
+        self.assertIsNotNone(upgrades)
+        grug = next(g for g in upgrades["blackrock-depths"] if g.name == "Grug")
+        self.assertIn("Emberplate Armguards for wrists", grug.fire_best)
+        self.assertEqual(grug.upgrades, 0)
+        self.assertIsNone(progress)
+
+    def test_below_the_band_nothing_is_read(self):
+        result, connects = self.preraid_for(preraid.FIRE_FLOOR - 1)
+        self.assertEqual(result, (None, None))
+        self.assertEqual(connects, [])
+
+
+class _Conn:
+    def cursor(self):
+        return contextlib.nullcontext(None)
 
 
 if __name__ == "__main__":
