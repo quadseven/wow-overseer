@@ -25636,6 +25636,7 @@ _CRAFTER_RECIPES_SQL = (
     "SELECT c.name AS holder, ii.guid AS item_guid, ii.itemEntry AS entry, "
     "it.name AS name, it.RequiredSkill AS required_skill, "
     "it.RequiredSkillRank AS required_rank, it.spellid_2 AS recipe_spell, "
+    "it.RequiredSpell AS required_spell, "
     "CASE WHEN (ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
     "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22) "
@@ -25655,7 +25656,8 @@ _CRAFTER_GUILD_BANK_SQL = (
     "SELECT 'guild bank' AS holder, ii.guid AS item_guid, "
     "ii.itemEntry AS entry, it.name AS name, "
     "it.RequiredSkill AS required_skill, it.RequiredSkillRank AS required_rank, "
-    "it.spellid_2 AS recipe_spell, 'guild bank' AS location "
+    "it.spellid_2 AS recipe_spell, it.RequiredSpell AS required_spell, "
+    "'guild bank' AS location "
     "FROM guild_bank_item gbi "
     "JOIN item_instance ii ON ii.guid = gbi.item_guid "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -25790,9 +25792,12 @@ def _crafter_plan(names: list) -> CrafterPlan:
     people = _crafter_people(names, skills, roster, _fetch_assigned_trades(names))
     reg = crafters.register(people, crafters.per_trade(os.environ))
     recipes = _fetch_crafter_recipes(names)
+    # The specialization spells too: a recipe that needs one goes to a
+    # crafter shown to hold it first (crafters.Known.specialized, #1095).
     known = crafters.known_from_rows(
         _fetch_crafter_known([p.name for p in people],
-                             [r.spell for r in recipes]),
+                             [r.spell for r in recipes]
+                             + [r.spec for r in recipes]),
         _fetch_recipe_verdicts(),
     )
     gap = crafters.soon_gap(os.environ)

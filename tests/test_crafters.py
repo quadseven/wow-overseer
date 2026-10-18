@@ -146,10 +146,12 @@ class UggasEightRecipes(unittest.TestCase):
                 16: ("Amilyn", "designated", "now"),
                 22: ("Aehuurn", "designated", "now"),
                 # Nobody learns these now or soon; Ugga holds alchemy without
-                # them, so she keeps them for later (the forever rule).
+                # it, so she keeps one copy for later (the forever rule). She
+                # can learn it once, so the second copy goes down the line to
+                # the closest alchemist who does not know it (#1095).
                 25: ("Ugga", "holder", "later"),
                 31: ("Annian", "designated", "now"),
-                33: ("Ugga", "holder", "later"),
+                33: ("Arehr", "guild", "later"),
                 38: ("Aehuurn", "designated", "now"),
                 45: ("Aehuurn", "designated", "now"),
             },
@@ -272,8 +274,8 @@ class UggasEightRecipes(unittest.TestCase):
     def test_the_summary_line_carries_the_log_prefix(self):
         line = crafters.summary(routes())
         self.assertTrue(line.startswith("crafter-route: 8 recipe(s)"))
-        self.assertIn("2 kept by a holder who learns them now or later", line)
-        self.assertIn("6 routed to a crafter, 0 nobody in the guild needs", line)
+        self.assertIn("1 kept by a holder who learns them now or later", line)
+        self.assertIn("7 routed to a crafter, 0 nobody in the guild needs", line)
 
 
 def stack(guid, name, skill, rank, holder="Ugga"):
