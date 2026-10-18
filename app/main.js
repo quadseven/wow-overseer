@@ -18,6 +18,7 @@ import { legacy, parse, resolve } from "./router.js";
 import { learn as learnRealm } from "./families.js";
 import { savedTheme, saveTheme, lastPage, saveLastPage, stampVisit, previousVisit } from "./store.js";
 import { html, ago, plural } from "./ui.js";
+import { stripPlaces, placeStrips } from "./tabstrip.js";
 import badgeProviders from "./badges.js";
 
 const root = document.getElementById("app");
@@ -107,9 +108,11 @@ function draw(keepPlace) {
   const h = api.health(current.reads);
   const pull = pulling ? html`<div class="refreshing" role="status"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>Refreshing. Data was ${h.at ? ago((Date.now() - h.at) / 1000) : "not read yet"}.</div>` : "";
   const hadSkeleton = !!main.querySelector(".skeleton");
+  const strips = keepPlace ? stripPlaces(main) : null;
   main.innerHTML = html`${pull}${banner(h)}${module.render(ctx)}`.s;
   if (hadSkeleton && !main.querySelector(".skeleton")) easeIn();
   if (module.after) module.after(main, ctx);
+  placeStrips(main, strips);
   // A view may widen its reads once its first data is in (a member page reads
   // the roster first, then that member's own reads), so they are asked again
   // after every draw and polling follows when they change.
