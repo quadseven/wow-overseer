@@ -1403,6 +1403,8 @@ RECIPES: dict = {
     # eleven, `FOCUS_AIMS` has no anvil walk, and the test below pins them as a
     # named, counted debt instead of eleven silent lies. Grog's Engineering
     # therefore still stops at skill 31, for a reason the table now states.
+    # `craft_errand` skips these rows (#53), so he is handed a secondary rung
+    # or nothing there, never a cast DriveCraft is refused on every poll.
     #
     # AND infra#3617'S HAMMER IS NOT WHY, WHICH IS THE EXPENSIVE PART OF THIS
     # NOTE. That issue parked the whole anvil question on a second blocker -
@@ -2580,8 +2582,12 @@ def craft_errand(name: str, skills: dict, primaries=None) -> int:
         if not value:
             continue  # not learned yet - professions.py's trainer errand owns this
         recipe = recipe_for(SKILL_IDS[skill_name], value)
-        if recipe:
+        if recipe and (not recipe.focus or recipe.focus in FOCUS_AIMS):
             return recipe.spell_id
+        # A rung that needs a focus nothing walks to (the eleven Anvil rows,
+        # #53) is no errand: DriveCraft casts in place and would be refused
+        # on every poll. Fall through to the next trade or a secondary, the
+        # same rule guildjobs' rung reader already holds for the crew.
     for skill_name in sorted(professions.SECONDARY):
         value = skills.get(skill_name, 0)
         if not value:
