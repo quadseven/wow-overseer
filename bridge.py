@@ -6744,6 +6744,10 @@ class Bridge(discord.Client):
         self._equip_holds: dict = {}
         # The last worn read per holder, which a failed read falls back on.
         self._equip_worn: dict = {}
+        # Members too full to put an upgrade on (#1088), holder -> (free slots
+        # needed, what for), from gear.equip_room: the guild jobs pass makes
+        # the room, and the equip pass asks again once it is there.
+        self._equip_room: dict = {}
         # JEV, IN SHADOW (#95). One client for the process, so its cache and
         # its in-flight limit are shared by every family. With no
         # TYPESAFE_API_KEY it answers every question with `no_key` and the
@@ -12302,7 +12306,9 @@ class Bridge(discord.Client):
         refused with a reason is held on it (#897) until the holder's level,
         what is worn in that slot, or the bags change; `holders` are the
         members this pass read. `online`, when given, is who is in the world:
-        nothing is queued for anyone else (#869).
+        nothing is queued for anyone else (#869). A piece its holder has no
+        bag room for is not queued either (#1088): the shortfall is kept in
+        `self._equip_room` for the guild jobs pass to make the room.
         """
         recent = {(row["target_name"], row["command"]) for row in current
                   if row["recent"]}
@@ -12337,12 +12343,26 @@ class Bridge(discord.Client):
         else:
             self._equip_worn.update({h: read.get(h, {}) for h in wearers})
         worn = {h: self._equip_worn[h] for h in wearers if h in self._equip_worn}
+        # Free bag slots, because a two-hander over a main hand and a shield
+        # needs one and the world refuses it without (#1088). An unread room
+        # is None, which judges and holds every piece as before.
+        try:
+            free_slots = await asyncio.to_thread(_fetch_free_slots, wearers)
+        except pymysql.err.MySQLError as exc:
+            log.warning("equip: bag room unreadable (%s); no piece is judged "
+                        "against it this pass", exc)
+            free_slots = None
+        passed = set(holders) | set(wearers)
+        self._equip_room = {h: need for h, need in self._equip_room.items()
+                            if h not in passed}
+        self._equip_room.update(bag_pressure.equip_room(wanted, worn, free_slots))
         # `holders` emptied by the deferral above falls back to the holders of
         # the filtered `wanted`, never to a deferred one.
         queue, notes = bag_pressure.equips_to_queue(
             wanted, recent, tries, answers=answers, worn=worn,
             holds=self._equip_holds, holders=set(holders) or None,
-            memory_hours=EQUIP_MEMORY_HOURS, online=online)
+            memory_hours=EQUIP_MEMORY_HOURS, online=online,
+            free_slots=free_slots)
         for note in notes:
             log.info("equip: %s", note)
         log.info("equip: %d %spiece(s) held on the world's answer",
@@ -15943,7 +15963,9 @@ class Bridge(discord.Client):
             still=standstill.all_minutes(self._guild_still, time.monotonic()),
             # The class quest asks lately: a run of them that did not get the
             # quest done stops the next (guildjobs.class_ask_streak).
-            asks=facts.get("quest_asks", ()))
+            asks=facts.get("quest_asks", ()),
+            # Members too full to put an upgrade on make room (#1088).
+            equip_room=self._equip_room)
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
                  _family_label(cohort))
