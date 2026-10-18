@@ -673,11 +673,14 @@ class ATrainerWalkThatKeepsFailing(unittest.TestCase):
         self.assertEqual(step.rows[0].command, "walk-to-trainer skill:%d" % TAILOR)
 
     def test_failed_herbalism_walk_does_not_block_first_aid(self):
+        # Mining short of its cap: a second trade AT its cap would now be
+        # walked first by the tier cap rung (#1116), and this test is about
+        # the herbalism cooldown leaving First Aid free.
         medic = bare(
             "Medic",
             level=10,
             money=500,
-            skills={H: (75, 75), M: (75, 75)},
+            skills={H: (75, 75), M: (40, 75)},
         )
         recent = guildjobs.recent_from_rows(
             (

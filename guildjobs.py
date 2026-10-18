@@ -1189,13 +1189,19 @@ def _recipe_cost_due(skill: int, value: int, money: int, known) -> int | None:
 # THE STEPS.
 
 
-def _train_step(member, trades, cap, recent=()):
-    """Buy the next rank of one of its trades, the cheapest first."""
+def _train_step(member, trades, cap, recent=(), held=None):
+    """Buy the next rank of one of its trades, the cheapest first.
+
+    `held` names the trades to ask about instead of the member's planned ones
+    (`trades`) and its held RANKED_CRAFTS: the tier cap rung passes the trades
+    standing at a ceiling (capped_trades).
+    """
     if member.level < TRAIN_MIN_LEVEL and trades.get(member.name):
         return None, "%s learns a trade from level %d" % (member.name, TRAIN_MIN_LEVEL)
     wants, cooling = [], []
-    held = tuple(trades.get(member.name, ()))
-    held += tuple(s for s in RANKED_CRAFTS if member.holds(s) and s not in held)
+    if held is None:
+        held = tuple(trades.get(member.name, ()))
+        held += tuple(s for s in RANKED_CRAFTS if member.holds(s) and s not in held)
     for skill in held:
         value, ceiling = member.skill(skill)
         rank = next_rank(skill, value, ceiling, member.level)
@@ -1242,6 +1248,63 @@ def _train_step(member, trades, cap, recent=()):
         ),
     )
     return step, ""
+
+
+def capped_trades(member) -> tuple:
+    """The held trades standing AT a tier ceiling a trainer sells past (#1116).
+
+    A trade at 75 of 75, 150 of 150 or 225 of 225 gains no point until its
+    next rank is bought: every gather or craft past the ceiling is refused.
+    Only a trade RANKS knows is asked about (Cooking and Fishing have no rows,
+    so they are never named), and never one at its top rank.
+    """
+    out = []
+    for skill in sorted(RANKS):
+        value, ceiling = member.skill(skill)
+        if ceiling <= 0 or value < ceiling:
+            continue
+        if any(rank.cap > ceiling for rank in RANKS[skill]):
+            out.append(skill)
+    return tuple(out)
+
+
+def _pvp_holds(m, pvp) -> bool:
+    """Whether PvP holds this member from every other job this pass: inside a
+    battleground or in its queue (_pvp_first's `held`), read without building
+    the PvP step."""
+    if not pvp or not m.eligible or not m.online:
+        return False
+    return bool(pvp[1].holds)
+
+
+def _tier_cap_first(m, pvp, pending, recent, cap):
+    """(the rank walk or None, a note): a member with a trade at its tier cap
+    walks to that trade's trainer before PvP, the post and the level walk.
+
+    MEASURED ON THE DEV REALM, 2026-10-18 (#1116): fifteen guild members stood
+    at exactly 75 of 75 in a gathering trade, fourteen of them with the level
+    and the purse for Journeyman. The rank walk was only ever the ordinary
+    job's first step (_maintenance_step), which a raider of a guild with no
+    craft focus never reaches and every other member reaches only after its
+    PvP, post and level rungs ask nothing. A capped trade waits on nothing
+    else, so its walk comes first. The trainer the module walks to is the
+    trade's own (`walk-to-trainer skill:<id>`), and once the rank is bought
+    the member's next pass resumes where it left off.
+
+    Never for a member held in a battleground or its queue, never for a
+    summoner a summon waits on (`pending`), never in a fight, never before
+    its natural restart (what it buys would be thrown away with
+    the restart), and a failed walk cools down per skill as the ordinary
+    train step does (_training_cooling).
+    """
+    if not m.eligible or not m.online or m.in_combat or _pvp_holds(m, pvp):
+        return None, ""
+    if m.name in (pending or ()):
+        return None, ""
+    capped = capped_trades(m)
+    if not capped:
+        return None, ""
+    return _train_step(m, {}, cap, recent, held=capped)
 
 
 # The crafting trades whose rungs above the auto-learned first are trainer
@@ -2991,6 +3054,7 @@ def _member_step(
     spot it cannot leave, then food for a member with nothing to eat or drink,
     then a sale for bags that leave loot on the corpse (loot_room_short), then
     the inn, then riding, gear and food in its purchase order (purse.py), then
+    the trainer for a trade at its tier cap (_tier_cap_first, #1116), then
     PvP for an upgrade, then the post, then a walk out of an outgrown zone,
     then the member's ordinary job (a craft-focus guild's trade work when
     `crafting`), keeping the notes.
@@ -3034,9 +3098,13 @@ def _member_step(
     )
     if found is not None:
         return found
+    step, cap_note = _tier_cap_first(m, pvp, pending, recent, cap)
+    if step is not None:
+        return step, step.said, supply_note, gear_note
     step, doing, held = _pvp_first(m, pvp, recent, cap, kept)
     if step is not None or held:
-        return step, doing, supply_note, gear_note
+        return step, doing, _join(supply_note, cap_note), gear_note
+    supply_note = _join(supply_note, cap_note)
     supply_note = _cohort_note(supply_note, pvp)
     step = _collect_first(m, mail, recent, cap)
     if step is not None:
@@ -3060,9 +3128,20 @@ def _member_step(
     return (
         step,
         doing,
-        "; ".join(n for n in (quest_note, supply_note, level_note, note) if n),
+        _join_once(quest_note, supply_note, level_note, note),
         gear_note,
     )
+
+
+def _join_once(*parts) -> str:
+    """`_join`, each clause once: a capped trade's purse note is said by the
+    tier cap rung and again by the ordinary job's train step."""
+    said = []
+    for part in parts:
+        for clause in str(part or "").split("; "):
+            if clause and clause not in said:
+                said.append(clause)
+    return "; ".join(said)
 
 
 def level_step(m, world, recent, cap):
