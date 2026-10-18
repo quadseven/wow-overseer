@@ -12186,7 +12186,17 @@ class Bridge(discord.Client):
             "equip: left %d piece(s) to the module's gear drive for %d roster member(s)",
             len(left_to_drive), len(roster_names),
         )
-        await self._write_equips(wanted, current, holders=names)
+        # NEVER AN EQUIP FOR A MEMBER WHO IS NOT IN THE WORLD (#869). The
+        # family's names are every protected character, logged in or not, and
+        # a command for one who is offline sits unanswered and piles up tries.
+        # None (no snapshot table) carries on as before; a database fault
+        # skips the pass, like the roster read above.
+        try:
+            online = await asyncio.to_thread(_in_world_of, names)
+        except (OSError, pymysql.err.MySQLError) as exc:
+            log.warning("equip: could not read who is in the world: %s", exc)
+            return
+        await self._write_equips(wanted, current, holders=names, online=online)
 
     async def _scored_equips(self, legacy, names, label: str, tanks=()) -> tuple:
         """`legacy` with every member equipscore can judge judged by its spec's
@@ -12219,7 +12229,7 @@ class Bridge(discord.Client):
         return plan.equips
 
     async def _write_equips(self, wanted, current: list, label: str = "",
-                            holders=()) -> None:
+                            holders=(), online=None) -> None:
         """Queue and log the `e` rows for `wanted`, inside the retry window.
 
         Shared by the family's pass and the guild's, so both keep one retry
@@ -12227,7 +12237,8 @@ class Bridge(discord.Client):
         each holder's last level change. A piece whose latest row the world
         refused with a reason is held on it (#897) until the holder's level,
         what is worn in that slot, or the bags change; `holders` are the
-        members this pass read.
+        members this pass read. `online`, when given, is who is in the world:
+        nothing is queued for anyone else (#869).
         """
         recent = {(row["target_name"], row["command"]) for row in current
                   if row["recent"]}
@@ -12267,7 +12278,7 @@ class Bridge(discord.Client):
         queue, notes = bag_pressure.equips_to_queue(
             wanted, recent, tries, answers=answers, worn=worn,
             holds=self._equip_holds, holders=set(holders) or None,
-            memory_hours=EQUIP_MEMORY_HOURS)
+            memory_hours=EQUIP_MEMORY_HOURS, online=online)
         for note in notes:
             log.info("equip: %s", note)
         log.info("equip: %d %spiece(s) held on the world's answer",
@@ -12322,7 +12333,8 @@ class Bridge(discord.Client):
                                           EQUIP_TRY_WINDOW_HOURS * 60)
         changed = await asyncio.to_thread(_level_changes, members)
         current = bag_pressure.since_level_change(history, changed)
-        await self._write_equips(wanted, current, label="guild ", holders=members)
+        await self._write_equips(wanted, current, label="guild ", holders=members,
+                                 online=set(members))
 
     async def _jev_items_plan(self, gear_rows: list, worn: list, names: list):
         """This family's Jev pass, and what it changes this cycle (#95).

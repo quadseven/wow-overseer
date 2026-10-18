@@ -745,6 +745,62 @@ class TheBridgeWritesIt(unittest.TestCase):
         )
         self.assertEqual([e.holder for e in inserts], ["Bork"])
 
+    def test_nothing_is_queued_for_a_holder_who_is_not_in_the_world(self):
+        """#869: Bonk was offline and still got equip commands. The pass is
+        told who is in the world and queues nothing for anyone else, then
+        queues the same piece once the holder is back."""
+        inserts = []
+        namespace = {
+            "asyncio": asyncio,
+            "bag_pressure": bag_pressure,
+            "item_plan": types.SimpleNamespace(OPEN_STATUSES={"pending"}),
+            "pymysql": types.SimpleNamespace(
+                err=types.SimpleNamespace(
+                    MySQLError=type("MySQLError", (Exception,), {})
+                )
+            ),
+            "log": Mock(),
+            "EQUIP_TRY_WINDOW_HOURS": 2,
+            "EQUIP_MEMORY_HOURS": 24,
+            "_fetch_worn_pieces": lambda _names: [],
+            "_insert_equip": lambda equip: inserts.append(equip) or True,
+        }
+        exec(  # noqa: S102 - bridge.py's own source
+            textwrap.dedent(_block("    async def _write_equips(self")), namespace
+        )
+        bridge = types.SimpleNamespace(_equip_worn={}, _equip_holds={})
+        wanted = equips([carried()], GROG)
+        self.assertEqual([e.holder for e in wanted], ["Grog"])
+
+        asyncio.run(
+            namespace["_write_equips"](
+                bridge, wanted, [], holders={"Grog"}, online={"Bork"}
+            )
+        )
+        self.assertEqual(inserts, [])
+
+        asyncio.run(
+            namespace["_write_equips"](
+                bridge, wanted, [], holders={"Grog"}, online={"Grog"}
+            )
+        )
+        self.assertEqual([e.holder for e in inserts], ["Grog"])
+
+    def test_both_passes_say_who_is_in_the_world(self):
+        """The family pass reads presence for its names before it writes, and
+        the guild pass hands over the members it already read as online."""
+        body = _block("    async def _equip_upgrades(self")
+        read = body.index("asyncio.to_thread(_in_world_of, names)")
+        write = body.index(
+            "await self._write_equips(wanted, current, holders=names, online=online)"
+        )
+        self.assertLess(read, write)
+        self.assertIn("except (OSError, pymysql.err.MySQLError)", body[read:write])
+        body = _block("    async def _guild_equip_once(self")
+        self.assertIn("online=set(members)", body)
+        body = _block("    async def _write_equips(self")
+        self.assertIn("online=online)", body)
+
     def test_the_vendor_pass_equips_above_the_town_run_gate(self):
         body = _block("    async def _vendor_once(self")
         equip = body.index(
@@ -770,7 +826,10 @@ class TheBridgeWritesIt(unittest.TestCase):
         self.assertIn("held on the world's answer", body)
         self.assertIn("answers=answers", body)
         body = _block("    async def _equip_upgrades(self")
-        self.assertIn("await self._write_equips(wanted, current, holders=names)", body)
+        self.assertIn(
+            "await self._write_equips(wanted, current, holders=names, online=online)",
+            body,
+        )
         self.assertIn('"equip: %s %r answered %s', body)
 
     def test_a_failed_worn_read_keeps_the_pass_and_the_last_read(self):
@@ -787,7 +846,9 @@ class TheBridgeWritesIt(unittest.TestCase):
     def test_family_equip_leaves_roster_members_to_the_gear_drive(self):
         body = _block("    async def _equip_upgrades(self")
         read = body.index("_fetch_enabled_roster_names")
-        write = body.index("await self._write_equips(wanted, current, holders=names)")
+        write = body.index(
+            "await self._write_equips(wanted, current, holders=names, online=online)"
+        )
         self.assertLess(read, write)
         self.assertIn("equip.holder not in roster_names", body)
         self.assertIn("len(left_to_drive), len(roster_names)", body)
