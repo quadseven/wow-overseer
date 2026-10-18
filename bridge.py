@@ -3001,6 +3001,14 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
     return result
 
 
+def _bag_hold_released(names) -> bool:
+    """Whether the hold at the bag floor has been released for any of these
+    members: no town pass made room in bag_pressure.BAG_HOLD_STUCK_SECONDS,
+    so the family quests until there is room (#872). Read from what the
+    campaign gate last recorded, with no query of its own."""
+    return any(_BAG_HOLD_STUCK.get(str(name)) for name in names or ())
+
+
 def _bag_hold_read(names) -> tuple:
     """Read the bags of a family whose campaign a Jev interlude holds, so an
     interlude does not end its bag hold (#872).
@@ -11741,6 +11749,10 @@ class Bridge(discord.Client):
         # as surely as one on a follower. Full bags are the urgent case: when
         # no dungeon run owns the party, hand that economy aim back so the next
         # arbitration cycle can claim a real vendor target.
+        # Not once the bag hold is released (#872): the family was sent
+        # questing, and its quest walk is a ground aim too. Looked up: the
+        # economy tests load this pass in isolation.
+        hold_released = globals().get("_bag_hold_released")
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
         if townslot.urgent_ground_release(
                 aim=current_aim,
@@ -11748,6 +11760,7 @@ class Bridge(discord.Client):
                     free_slots, sellable=sellable_counts),
                 in_run=in_run,
                 errand_active=_town_errand_active(names),
+                hold_released=bool(hold_released and hold_released(names)),
                 ground=travel.is_ground_aim):
             if await asyncio.to_thread(_release_trade_errand, leader, current_aim):
                 log.warning(
