@@ -1641,6 +1641,7 @@ class WorldHold:
     worn: tuple
     lifted: bool = False
     retry_at: object = None
+    refusal_at: object = None
 
 
 @dataclass
@@ -1817,15 +1818,19 @@ def _world_holds(
             continue
         worn_now = _worn_for(equip, worn)
         hold = holds.get(key)
+        created = row.get("created_at")
+        if hold is not None and hold.lifted and created != hold.refusal_at:
+            hold = None
         if hold is None:
-            hold = holds[key] = WorldHold(row_id=int(row.get("id", 0)), worn=worn_now)
+            hold = holds[key] = WorldHold(
+                row_id=int(row.get("id", 0)), worn=worn_now, refusal_at=created
+            )
         elif hold.worn != worn_now:
             hold.lifted = True
         if hold.lifted:
             continue
         attempts = max(1, int((tries or {}).get(key, 1)))
         wait = (15, 30, max(1, int(memory_hours)) * 60)[min(attempts, 3) - 1]
-        created = row.get("created_at")
         if isinstance(created, datetime):
             if created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)

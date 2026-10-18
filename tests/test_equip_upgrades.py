@@ -341,6 +341,39 @@ class TheQueueIsBounded(unittest.TestCase):
         self.assertEqual(queue, self.wanted)
         self.assertEqual(notes, ())
 
+    def test_refused_retry_starts_a_new_hold_on_the_same_answer_row(self):
+        """A refusal after retry reuses its row and starts a fresh hold."""
+        worn = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
+        answer = self.answer("error", "the game did not accept the equip")
+        answer[self.key]["created_at"] = datetime(2026, 10, 15, 1, 0)
+        holds = {}
+        queue, _ = bag_pressure.equips_to_queue(
+            self.wanted,
+            set(),
+            {self.key: 1},
+            answers=answer,
+            worn=worn,
+            holds=holds,
+            now=datetime(2026, 10, 15, 1, 20, tzinfo=timezone.utc),
+        )
+        self.assertEqual(queue, self.wanted)
+
+        # The world answers the retry by updating the existing command row.
+        answer[self.key]["created_at"] = datetime(2026, 10, 15, 1, 20)
+        queue, notes = bag_pressure.equips_to_queue(
+            self.wanted,
+            set(),
+            {self.key: 2},
+            answers=answer,
+            worn=worn,
+            holds=holds,
+            now=datetime(2026, 10, 15, 1, 21, tzinfo=timezone.utc),
+        )
+        self.assertEqual(queue, ())
+        self.assertEqual(len(notes), 1)
+        self.assertNotIn("01:15", notes[0])
+        self.assertIn("tries again at", notes[0])
+
     def answer(self, status="unchanged", detail="the bot kept its own pick", id=7):
         return {
             self.key: dict(
