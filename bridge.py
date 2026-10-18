@@ -12306,7 +12306,8 @@ class Bridge(discord.Client):
         the Alliance guild for this bridge's own family, the Horde guild
         through `_for_other_families`. Members outside the family only, and
         only those observed online, because a bot command for a member who
-        is not in the world would sit unanswered. Nothing is granted: each
+        is not in the world would sit unanswered. Never an enabled roster
+        member, whose gear the module's gear drive puts on. Nothing is granted: each
         row asks a member to wear a piece already in their own bags, the same
         `e Hitem:` command and retry window the family uses.
         """
@@ -12316,6 +12317,17 @@ class Bridge(discord.Client):
         roster = await asyncio.to_thread(_fetch_guild_roster, names)
         members = [str(m.name) for m in roster
                    if m.online and str(m.name) not in names]
+        # A ROSTER MEMBER'S GEAR IS THE MODULE'S GEAR DRIVE'S (#1089), the
+        # same rule the family pass keeps. Every roster member is outside the
+        # family on another family's turn, and an `e` row the drive does not
+        # agree with is refused and held for hours as a stuck equip. If the
+        # roster cannot be read, ownership is unknown, so skip this pass.
+        try:
+            roster_names = await asyncio.to_thread(_fetch_enabled_roster_names)
+        except (OSError, pymysql.err.MySQLError) as exc:
+            log.warning("guild equip: could not read the enabled roster: %s", exc)
+            return
+        members = [m for m in members if m not in roster_names]
         if not members:
             return
         gear_rows = await asyncio.to_thread(_fetch_surplus_gear, members)
