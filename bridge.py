@@ -23078,8 +23078,28 @@ def _fetch_family_equipped(names: list) -> list:
                     log.warning("equipped facts unavailable on this world image")
                     return []
                 raise
-            return [dict(row) for row in cur.fetchall()]
+            rows = [dict(row) for row in cur.fetchall()]
+            _attach_weapon_skills(cur, names, rows)
+            return rows
     return []
+
+
+def _attach_weapon_skills(cur, names: list, rows: list) -> None:
+    """Give each equipped row its member's learned weapon subclasses (#393),
+    so gear.characters_from_rows and tidy.members_from_rows judge a weapon by
+    the skill the core checks, not the class alone. A world image without
+    character_skills leaves the rows as they were: skills unread, the
+    class-only judgement as before."""
+    try:
+        held = _read_weapon_skills(cur, names)
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            log.warning("equipped facts: no character_skills on this world "
+                        "image; weapons are judged by class")
+            return
+        raise
+    for row in rows:
+        row["weapon_skills"] = tuple(sorted(held.get(row.get("name"), ())))
 
 
 # What each member wears, by slot, entry and name (#897): the slot a held
@@ -32155,6 +32175,30 @@ GEARUP_GATE_EMPTY_SLOTS = 6
 GEARUP_GATE_MIN_PURSE = 20000
 
 
+# character_skills.skill (SkillLine) -> the item_template.subclass it lets a
+# character wield. Read by gearup and by the family gear pass (#393).
+_WEAPON_SKILL_SUBCLASS = {44: 0, 172: 1, 45: 2, 46: 3, 54: 4, 160: 5,
+                          229: 6, 43: 7, 55: 8, 136: 10, 473: 13,
+                          173: 15, 176: 16, 226: 18, 228: 19, 356: 20}
+
+
+def _read_weapon_skills(cur, names: list) -> dict:
+    """name -> set of weapon subclasses learned, on an open cursor. A name
+    with no weapon skill row at all is absent; callers choose what that means."""
+    marks = ",".join(["%s"] * len(names))
+    cur.execute(
+        "SELECT c.name, cs.skill FROM characters c "
+        "JOIN character_skills cs ON cs.guid=c.guid "
+        "WHERE c.name IN (%s) AND cs.value>0" % marks, names,
+    )
+    held = {}
+    for row in cur.fetchall():
+        subclass = _WEAPON_SKILL_SUBCLASS.get(int(row["skill"]))
+        if subclass is not None:
+            held.setdefault(row["name"], set()).add(subclass)
+    return held
+
+
 def _fetch_gearup_facts(names: list) -> dict:
     if not names:
         return {}
@@ -32168,21 +32212,7 @@ def _fetch_gearup_facts(names: list) -> dict:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, names)
         rows = cur.fetchall()
-        marks = ",".join(["%s"] * len(names))
-        cur.execute(
-            "SELECT c.name, cs.skill FROM characters c "
-            "JOIN character_skills cs ON cs.guid=c.guid "
-            "WHERE c.name IN (%s) AND cs.value>0" % marks, names,
-        )
-        skill_rows = cur.fetchall()
-    weapon_skills = {44: 0, 172: 1, 45: 2, 46: 3, 54: 4, 160: 5,
-                     229: 6, 43: 7, 55: 8, 136: 10, 473: 13,
-                     173: 15, 176: 16, 226: 18, 228: 19, 356: 20}
-    held = {}
-    for row in skill_rows:
-        subclass = weapon_skills.get(int(row["skill"]))
-        if subclass is not None:
-            held.setdefault(row["name"], set()).add(subclass)
+        held = _read_weapon_skills(cur, names)
     result = {}
     for row in rows:
         name = row["name"]
