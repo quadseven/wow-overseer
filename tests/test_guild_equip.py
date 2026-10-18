@@ -9,9 +9,13 @@ bridge writes the same kind='bot' `e` row through `_insert_equip` for both the
 Alliance and the Horde guild, to members observed online.
 """
 
+import asyncio
 import pathlib
 import re
+import textwrap
+import types
 import unittest
+from unittest.mock import AsyncMock, Mock
 
 import bag_pressure
 
@@ -159,6 +163,76 @@ class TheBridgeRunsItForEveryGuild(unittest.TestCase):
         self.assertIn(
             '_for_other_families("guild equip", self._guild_equip_once)', body
         )
+
+
+def _guild_pass(roster):
+    """Run bridge._guild_equip_once against two online guildmates, Ezzo and
+    Blammo, each carrying an upgrade, with `roster` as the enabled roster read
+    (a Mock side effect when it is an exception). Returns the fake bridge, so a
+    test can read what `_write_equips` was asked to write, and the log."""
+    body = textwrap.dedent(_block("    async def _guild_equip_once(self"))
+    reader = Mock(side_effect=roster) if isinstance(roster, Exception) else None
+    namespace = {
+        "asyncio": asyncio,
+        "bag_pressure": bag_pressure,
+        "OWNER_KEEPS": (),
+        "EQUIP_MEMORY_HOURS": 24,
+        "EQUIP_TRY_WINDOW_HOURS": 2,
+        "_names_of": Mock(return_value=list(FAMILY)),
+        "_fetch_guild_roster": Mock(
+            return_value=[
+                types.SimpleNamespace(name="Ezzo", online=True),
+                types.SimpleNamespace(name="Blammo", online=True),
+            ]
+        ),
+        "_fetch_surplus_gear": Mock(
+            return_value=[carried("Ezzo", item_guid=9002), carried("Blammo")]
+        ),
+        "_fetch_family_equipped": Mock(
+            return_value=worn("Ezzo", PALADIN, 60, i5=41)
+            + worn("Blammo", PALADIN, 60, i5=41)
+        ),
+        "_fetch_shield_tanks": Mock(return_value=set()),
+        "_fetch_enabled_roster_names": reader or Mock(return_value=set(roster)),
+        "_equip_history": Mock(return_value=[]),
+        "_level_changes": Mock(return_value={}),
+        "pymysql": Mock(err=Mock(MySQLError=OSError)),
+        "log": Mock(),
+    }
+    # Compiles a slice of our own bridge.py source, never external input.
+    exec(body, namespace)  # noqa: S102
+    bridge = Mock(
+        _scored_equips=AsyncMock(side_effect=lambda wanted, *a, **k: tuple(wanted)),
+        _write_equips=AsyncMock(),
+    )
+    asyncio.run(namespace["_guild_equip_once"](bridge))
+    return bridge, namespace["log"]
+
+
+class TheModulesGearDriveOwnsTheRoster(unittest.TestCase):
+    """#1089: a roster member's gear is the module's gear drive's to put on
+    (#896). The family pass already left it there; the guild pass did not, so
+    another family's turn asked Ezzo to wear a staff the drive does not pick,
+    the world answered with a refusal, and the third one held Ezzo "trying to
+    wear" it for the whole 24 hour memory window."""
+
+    def test_a_roster_member_is_left_to_the_gear_drive(self):
+        bridge, _log = _guild_pass(roster={"Ezzo"})
+        bridge._write_equips.assert_awaited_once()
+        wanted = bridge._write_equips.await_args.args[0]
+        self.assertEqual([e.holder for e in wanted], ["Blammo"])
+        self.assertEqual(bridge._write_equips.await_args.kwargs["holders"], ["Blammo"])
+
+    def test_a_member_off_the_roster_is_still_asked(self):
+        bridge, _log = _guild_pass(roster=set())
+        wanted = bridge._write_equips.await_args.args[0]
+        self.assertEqual({e.holder for e in wanted}, {"Ezzo", "Blammo"})
+
+    def test_a_failed_roster_read_writes_nothing(self):
+        """Ownership unknown: nobody is asked, the same as the family pass."""
+        bridge, log = _guild_pass(roster=OSError("read failed"))
+        bridge._write_equips.assert_not_awaited()
+        log.warning.assert_called_once()
 
 
 if __name__ == "__main__":
