@@ -4,6 +4,7 @@ and a quest that stops progressing is broken with its reason."""
 import unittest
 
 import classquest
+import guildjobs
 import questers
 
 ELWYNN, NORTHSHIRE, WESTFALL, REDRIDGE = 12, 9, 40, 44
@@ -252,6 +253,93 @@ class EveryQuestInReach(unittest.TestCase):
         tried = [questers.Attempt("Mirra", "take quest:1", "applied", age_minutes=2)]
         p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0, tried=tried)
         self.assertNotEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
+
+
+# The module's answer to a crossing row, as the command log holds it.
+NO_TRANSPORT = (
+    "no transport the module knows sails from this map to that map for this faction"
+)
+AT_ONCE = "the realm already has as many crossings as it allows (Overseer.Cross.AtOnce)"
+
+
+def crossing_row(reason, retry, age, to_map=1, source="guildjobs:quester-cross:Mirra"):
+    """One crossing row of the command log, refused by the module with
+    `reason` (CrossResultJson's own shape), `age` minutes ago."""
+    result = '{"outcome":"refused","reason":"%s","retry":%s,"map":%d,"steps":0}' % (
+        reason,
+        "true" if retry else "false",
+        to_map,
+    )
+    return {
+        "id": 7,
+        "target_name": "Mirra",
+        "command": "cross-to-map map:%d" % to_map,
+        "source": source,
+        "status": "error",
+        "result": result,
+        "age": age,
+    }
+
+
+class OneCrossingAtATime(unittest.TestCase):
+    """A quester's crossing shares the guild's one crossing clock and walls
+    (guildjobs.CROSS_ACTIONS): asked once, not every pass (2026-10-18)."""
+
+    def setUp(self):
+        far = [quest(40, 148, 4, title="Darkshore Fish")]
+        self.cat = world(
+            extra_quests=far,
+            extra_givers=[
+                giver(40, "start", 1040, 140, 0, 0, map_id=1),
+                giver(40, "end", 1040, 140, 0, 0, map_id=1),
+            ],
+        )
+        self.member = mirra(level=5, quests_done=frozenset({1, 2, 3, 6, 20, 30}))
+
+    def plan(self, *rows):
+        crossings = guildjobs.recent_from_rows(rows)
+        return questers.plan(
+            self.cat, self.member, questers.Clock(), 0.0, crossings=crossings
+        )
+
+    def test_the_crossing_row_has_its_own_source_on_the_shared_clock(self):
+        p = self.plan()
+        step = questers.step_for(self.member, p.move, 0)
+        self.assertEqual([r.command for r in step.rows], ["cross-to-map map:1"])
+        self.assertEqual(step.rows[0].source, "guildjobs:quester-cross:Mirra")
+        self.assertIn(guildjobs.action_of(step.rows[0].source), guildjobs.CROSS_ACTIONS)
+        self.assertEqual(questers.CROSS_ACTION, questers.ACTION + "-cross")
+
+    def test_a_crossing_the_world_has_no_transport_for_is_not_asked_again(self):
+        p = self.plan(crossing_row(NO_TRANSPORT, False, age=60))
+        self.assertIsNone(p.move)
+        self.assertIn(NO_TRANSPORT, p.line)
+
+    def test_the_wall_lifts_after_cross_wall_minutes(self):
+        p = self.plan(
+            crossing_row(NO_TRANSPORT, False, age=classquest.CROSS_WALL_MINUTES)
+        )
+        self.assertEqual((p.move.kind, p.move.to_map), (classquest.CROSS, 1))
+
+    def test_a_crossing_refused_at_the_cap_waits_the_retry_minutes(self):
+        young = self.plan(crossing_row(AT_ONCE, True, age=2))
+        self.assertIsNone(young.move)
+        self.assertIn("waits on its last crossing", young.line)
+        due = self.plan(crossing_row(AT_ONCE, True, age=classquest.CROSS_RETRY_MINUTES))
+        self.assertEqual((due.move.kind, due.move.to_map), (classquest.CROSS, 1))
+
+    def test_a_class_quest_crossing_holds_the_questers_too(self):
+        row = crossing_row(
+            AT_ONCE, True, age=2, source="guildjobs:classquest-cross:Mirra"
+        )
+        self.assertIsNone(self.plan(row).move)
+
+
+class WallsOnMapZero(unittest.TestCase):
+    def test_a_crossing_to_map_zero_refused_for_good_is_walled(self):
+        rows = [crossing_row(NO_TRANSPORT, False, age=5, to_map=0)]
+        walls = guildjobs.class_walls("Mirra", guildjobs.recent_from_rows(rows))
+        self.assertEqual(walls, {0: NO_TRANSPORT})
 
 
 class Steps(unittest.TestCase):

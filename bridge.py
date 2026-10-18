@@ -14658,7 +14658,7 @@ class Bridge(discord.Client):
             log.info("questers: the world's quests are unread; no quester moves")
             return
         names = sorted(raidteams.quester_names())
-        members, tried, ledger, hunts_open = await asyncio.to_thread(
+        members, tried, ledger, hunts_open, crossings = await asyncio.to_thread(
             _fetch_quester_facts, names)
         if not members:
             log.info("questers: no quester is on the realm yet")
@@ -14676,7 +14676,7 @@ class Bridge(discord.Client):
             known = frozenset(held) | frozenset(
                 q for (who, q), state in ledger.items() if who == m.name and state == "broken")
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
-                                 self._quester_last.get(m.name, 0))
+                                 self._quester_last.get(m.name, 0), crossings)
             await self._quester_ledger(m, plan, held, ledger, mono)
             if self._quester_start(m, plan, cat, cap, mono, hunt_verb and hunts_left > 0):
                 hunts_left -= 1
@@ -31361,6 +31361,9 @@ def _team_actor(guild: str) -> str:
 _QUESTER_CATALOGUE = None
 # The source of every row the questers' steps write, walks included.
 QUESTER_SOURCE_LIKE = guildjobs.SOURCE + ":" + questers.ACTION + "%"
+# Every crossing row of a guild step (guildjobs.CROSS_ACTIONS, each spelled
+# "<step>-cross"): a quester's crossing shares their clock and walls.
+QUESTER_CROSSINGS_LIKE = guildjobs.SOURCE + ":%-cross:%"
 # The stall clock and the quests found broken, kept across restarts in the
 # bridge memo store. A month: a quest is broken for good, and a clock left
 # that long belongs to a quest long gone from the log.
@@ -31403,26 +31406,30 @@ def _quester_catalogue():
 
 def _fetch_quester_facts(names: list) -> tuple:
     """(questers.Member rows, questers.Attempt rows, ledger state by (name,
-    quest), the realm's open hunt rows or None) for the questers on the realm.
-    A ledger the realm does not have yet (#923) reads as empty."""
+    quest), the realm's open hunt rows or None, guildjobs.Recent crossing rows)
+    for the questers on the realm. A ledger the realm does not have yet (#923)
+    reads as empty."""
     if not names:
-        return [], (), {}, None
+        return [], (), {}, None, ()
     marks = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         rows = _job_read(cur, "questers", questers.MEMBERS_SQL.format(names=marks), list(names))
         if not rows:
-            return [], (), {}, None
+            return [], (), {}, None, ()
         guids = ",".join(str(int(r["guid"])) for r in rows)
         log_rows = _job_read(cur, "quester quest logs", questers.LOG_SQL.format(guids=guids))
         done_rows = _job_read(cur, "quester rewarded quests",
                               questers.REWARDED_SQL.format(guids=guids))
         recent = _job_read(cur, "quester rows", _JOB_RECENT_SQL, (QUESTER_SOURCE_LIKE,))
+        crossings = _job_read(cur, "quester crossings", _JOB_RECENT_SQL,
+                              (QUESTER_CROSSINGS_LIKE,))
         ledger = _job_read(cur, "quest ledger", questers.LEDGER_SQL.format(names=marks),
                            list(names))
         hunts = _hunts_open(cur)
     members = questers.members_from_rows(rows, log_rows, done_rows)
     states = {(str(r["name"]), int(r["quest"])): str(r.get("state") or "") for r in ledger}
-    return members, questers.attempts(recent), states, hunts
+    return (members, questers.attempts(recent), states, hunts,
+            guildjobs.recent_from_rows(crossings))
 
 
 def _share_quester_quests(names: set) -> None:

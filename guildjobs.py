@@ -3953,17 +3953,27 @@ def class_ask_held(name, asks) -> frozenset:
 # (guildlevel.CROSS_ACTION). Their rows share one clock (crossing_cooling) and
 # one set of walls (class_walls), since what the module says about carrying a
 # member to a map is a fact about the member and the map, not about the step.
-CROSS_ACTIONS = frozenset({classquest.CROSS_ACTION, guildlevel.CROSS_ACTION})
+#
+# The questers' crossing (questers.CROSS_ACTION) is the third. It is spelled
+# here because questers imports this module; questers takes it from here.
+QUESTER_CROSS_ACTION = "quester-cross"
+CROSS_ACTIONS = frozenset(
+    {classquest.CROSS_ACTION, guildlevel.CROSS_ACTION, QUESTER_CROSS_ACTION}
+)
 
 
 def class_walls(name, recent) -> dict:
     """map id -> the module's reason, for each map the module refused to cross
     this member to for good (classquest.CROSS_WALLS) in its newest crossing row
     to that map (CROSS_ACTIONS), inside classquest.CROSS_WALL_MINUTES. A later
-    row to the map that was not refused that way lifts the wall."""
+    row to the map that was not refused that way lifts the wall. Map 0 is a
+    map: a `cross-to-map map:0` row is a crossing by its verb, though its
+    destination reads 0 like a row with none."""
     newest: dict = {}
     for r in recent or ():
-        if r.name != name or r.action not in CROSS_ACTIONS or not r.dest:
+        if r.name != name or r.action not in CROSS_ACTIONS:
+            continue
+        if not r.dest and not classquest.is_cross_row(r.command):
             continue
         if r.dest not in newest or int(r.age_minutes) < int(newest[r.dest].age_minutes):
             newest[r.dest] = r
@@ -5533,14 +5543,15 @@ def _abandoned_of(command) -> int:
 def _refusal_of(row) -> dict:
     """The module's refusal in a row's `result` ({"outcome":"refused","reason":
     "...","retryable":true,...}), read from the text so a result cut short in
-    the read still gives its reason, which comes first."""
+    the read still gives its reason, which comes first. A crossing row says it
+    as `"retry":true` (CrossResultJson), which is read the same way."""
     result = str(row.get("result") or "")
     if '"outcome":"refused"' not in result:
         return {}
     found = re.search(r'"reason":"((?:[^"\\]|\\.)*)"', result)
     return {
         "refusal": found.group(1) if found else "",
-        "retryable": '"retryable":true' in result,
+        "retryable": '"retryable":true' in result or '"retry":true' in result,
     }
 
 
