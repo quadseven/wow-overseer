@@ -540,5 +540,59 @@ class TheBridge(unittest.TestCase):
         self.assertEqual(bridge._CLASS_SILENCES, {})
 
 
+class SayClassEscalationTest(unittest.TestCase):
+    """bridge._say_class_escalation writes and logs the server's part (#984):
+    the calls and the random bots' yes go to guildpug's writer as one PugPass
+    and one log line names each yes; a pass with neither writes nothing."""
+
+    CALL = guildpug.Call(7, "Bigzug", ("healer",), "LFM healer for Group Job")
+    JOIN = guildpug.Join(7, "Rando", "healer", "inv", "Bigzug", "Rando is coming")
+
+    def setUp(self):
+        bridge._CLASS_SILENCES.clear()
+        self.addCleanup(bridge._CLASS_SILENCES.clear)
+        self.writes = []
+        patcher = mock.patch.object(bridge, "_write_guild_pugs", self.writes.append)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_calls_and_joins_are_written_once_and_logged(self):
+        quiet = classask.Silence(8, "Bigzug", "Group Job", 2, 1, (), "x")
+        escalation = classask.Escalation(
+            calls=(self.CALL,), joins=(self.JOIN,), silences=(quiet,)
+        )
+        with self.assertLogs(bridge.log, "INFO") as seen:
+            asyncio.run(bridge._say_class_escalation(escalation))
+        self.assertEqual(
+            self.writes, [guildpug.PugPass(calls=(self.CALL,), joins=(self.JOIN,))]
+        )
+        self.assertIn(
+            "class ask: 1 call(s) to the server, 1 random bot(s) answered;"
+            " Rando for Bigzug's ask 7",
+            "\n".join(seen.output),
+        )
+        self.assertIn(quiet.line, "\n".join(seen.output))
+        self.assertEqual(bridge._CLASS_SILENCES, {8: quiet.line})
+
+    def test_a_call_alone_is_written(self):
+        escalation = classask.Escalation(calls=(self.CALL,))
+        with self.assertLogs(bridge.log, "INFO") as seen:
+            asyncio.run(bridge._say_class_escalation(escalation))
+        self.assertEqual(self.writes, [guildpug.PugPass(calls=(self.CALL,))])
+        self.assertIn(
+            "class ask: 1 call(s) to the server, 0 random bot(s) answered",
+            "\n".join(seen.output),
+        )
+
+    def test_no_calls_or_joins_writes_nothing_but_logs_the_silences(self):
+        quiet = classask.Silence(8, "Bigzug", "Group Job", 2, 1, (), "x")
+        with self.assertLogs(bridge.log, "INFO") as seen:
+            asyncio.run(
+                bridge._say_class_escalation(classask.Escalation(silences=(quiet,)))
+            )
+        self.assertEqual(self.writes, [])
+        self.assertEqual(seen.output, ["INFO:%s:%s" % (bridge.log.name, quiet.line)])
+
+
 if __name__ == "__main__":
     unittest.main()
