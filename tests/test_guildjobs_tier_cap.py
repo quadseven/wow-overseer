@@ -131,5 +131,38 @@ class AMemberAtATierCap(unittest.TestCase):
         self.assertEqual((H,), guildjobs.capped_trades(m))
 
 
+class TheRankWalkHasItsOwnAllowance(unittest.TestCase):
+    """Live on wow-dev 2026-10-18 after eff63a7: one rank walk in about 4 hours
+    while 15 trades sat at a tier cap. The members planned ahead of a capped
+    one used the guild's STEPS_PER_GUILD on their own jobs, and the rank walk,
+    counted against the same 4, was refused every pass."""
+
+    def ahead(self, count=guildjobs.STEPS_PER_GUILD):
+        # Planned before Funkymon (same role and guild, earlier names), each
+        # with post waiting at its mailbox: a job step against STEPS_PER_GUILD.
+        crew = [
+            member(name="Aa%d" % i, level=40, skills={FA: (40, 75)})
+            for i in range(count)
+        ]
+        mail = {m.name: ("take-item mail:1 item:2",) for m in crew}
+        return crew, mail
+
+    def test_the_jobs_ahead_do_not_use_up_the_rank_walk(self):
+        crew, mail = self.ahead()
+        result = guildjobs.plan(crew + [member()], mail=mail)
+        self.assertEqual(1, len(train_steps(result, "Funkymon")), result.notes)
+        collects = [s for s in result.steps if s.action == "collect"]
+        self.assertEqual(guildjobs.STEPS_PER_GUILD, len(collects))
+
+    def test_rank_walks_keep_a_cap_of_their_own(self):
+        capped = [
+            member(name="Cap%02d" % i)
+            for i in range(guildjobs.TRAIN_STEPS_PER_GUILD + 2)
+        ]
+        result = guildjobs.plan(capped)
+        trains = [s for s in result.steps if s.action == "train"]
+        self.assertEqual(guildjobs.TRAIN_STEPS_PER_GUILD, len(trains))
+
+
 if __name__ == "__main__":
     unittest.main()
