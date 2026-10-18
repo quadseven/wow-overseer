@@ -90,6 +90,19 @@ import questlog
 # The step's action word, in the command log's source (guildjobs.source_for).
 ACTION = "quester"
 WALK_ACTION = ACTION + "-walk"
+# A quester's crossing row has its own source action (quest takes, hand-ins
+# and hunts are ACTION), so it shares the one crossing clock and the walls of
+# the class quest's and the level step's crossings (guildjobs.CROSS_ACTIONS).
+#
+# ONE CROSSING ROW EVERY PASS (2026-10-18). Written under ACTION, a quester's
+# `cross-to-map` row was outside that clock, and the quester pass asks every
+# two minutes: of 4,252 crossing rows the dev realm took in a day, 3,717 were
+# seven questers', refused 1,286 times as having no transport (two death
+# knights in Acherus, map 609, and a Blood Elf on map 530 asking for Kalimdor),
+# 491 times as held by another job (the revived sickness hold after a death)
+# and 413 times at the realm's crossing cap. The module said each of these
+# once; the rest is the same question asked again.
+CROSS_ACTION = guildjobs.QUESTER_CROSS_ACTION
 
 # Two hours of play with no objective moving is a broken quest (#924).
 STALL_SECONDS = 2 * 60 * 60
@@ -1032,6 +1045,8 @@ def step_for(member, move, cap, quest=None, hunt=True, item_form=True):
         rows = (guildcorps.Row("job", row, "", source),) if row else ()
         if row and yards <= classhunt.HUNT_NEAR:
             walk = None
+    elif move.kind == classquest.CROSS:
+        rows = _move_rows(move, guildjobs.source_for(CROSS_ACTION, member.name))
     else:
         rows = _move_rows(move, source)
     goal = move.spot.name if move.spot is not None else member.name
@@ -1109,10 +1124,22 @@ def settled(member, tried):
 
 
 def plan(
-    cat: Catalogue, member, clock, now, broken=frozenset(), tried=(), last_quest=0
+    cat: Catalogue,
+    member,
+    clock,
+    now,
+    broken=frozenset(),
+    tried=(),
+    last_quest=0,
+    crossings=(),
 ) -> Plan:
     """One quester's Plan for this pass. Offline, dead or unplaced, it is
-    given no move, but the clock still reads its log (and counts no play)."""
+    given no move, but the clock still reads its log (and counts no play).
+
+    `crossings` is the realm's recent crossing rows (guildjobs.Recent of
+    guildjobs.CROSS_ACTIONS): a crossing is held while the member's last one is
+    young (guildjobs.crossing_cooling) or the module refused that map for good
+    (guildjobs.class_walls), as the class quest's and the level step's are."""
     member = settled(member, tried)
     found = failures(cat, member, clock, now, tried, last_quest)
     if not member.online:
@@ -1126,6 +1153,31 @@ def plan(
             member.name, None, tuple(found), "%s has no fresh position" % member.name
         )
     move, why, never_held = next_move(cat, member, broken, found, tried)
+    if move is not None and move.kind == classquest.CROSS:
+        held = crossing_held(member.name, move, crossings)
+        if held:
+            move, why = None, held
     return Plan(
         member.name, move, tuple(found) + tuple(never_held), move.said if move else why
     )
+
+
+def crossing_held(name, move, crossings) -> str:
+    """Why the quester's crossing `move` is not asked this pass, "" when it is:
+    the module refused that map for good inside classquest.CROSS_WALL_MINUTES
+    (guildjobs.class_walls), or the member's last crossing row is still young
+    (guildjobs.crossing_cooling)."""
+    continent = classquest.CONTINENTS.get(int(move.to_map), "map %d" % move.to_map)
+    wall = guildjobs.class_walls(name, crossings).get(int(move.to_map))
+    if wall:
+        return "%s would cross to %s, and the world refused it: %s" % (
+            name,
+            continent,
+            wall,
+        )
+    if guildjobs.crossing_cooling(name, crossings):
+        return "%s waits on its last crossing before it crosses to %s" % (
+            name,
+            continent,
+        )
+    return ""
