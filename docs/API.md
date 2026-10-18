@@ -236,6 +236,12 @@ Each entry: path, query parameters, what it answers, one example.
 - Answers: what a dungeon drops that beats what a family wears.
 - Example: `overseer get /api/v2/dungeonups family=grug`
 
+## `GET /api/v2/evidence`
+
+- Query: `name`, `map_id`, `since`, `limit`
+- Answers: fixed, named read-only questions an agent proves a ticket with.
+- Example: `overseer evidence dungeon_runs map_id=36 since=2026-10-01`
+
 ## `GET /api/v2/gear/changes`
 
 - Query: `since`, `member`, `guild`

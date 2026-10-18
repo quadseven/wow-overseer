@@ -39,6 +39,7 @@ ANSWERS = {
     "/api/realm": [200, {"build": "x"}],
     "/api/client/bags": [200, [{"bag": 1, "free": 4}, {"bag": 2, "free": 0}]],
     "/api/auras": [200, ["Grug", "Oden"]],
+    "/api/v2/evidence": [200, {"name": "dungeon_runs", "rows": [{"id": 4}]}],
 }
 
 
@@ -103,6 +104,23 @@ class CliTests(unittest.TestCase):
         code, out, _ = self.run_cli("runs", "--table")
         self.assertEqual((code, SEEN), (0, ["/api/guildruns"]))
         self.assertEqual(out.split(), ["id", "state", "3", "ended"])
+
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
+    def test_evidence_path_name_and_pairs(self):
+        code, out, _ = self.run_cli(
+            "evidence", "dungeon_runs", "map_id=36", "since=2026-10-01"
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            SEEN, ["/api/v2/evidence?name=dungeon_runs&map_id=36&since=2026-10-01"]
+        )
+        self.assertEqual(json.loads(out)["rows"], [{"id": 4}])
+
+    @unittest.skipUnless(sandbox_caps.LOCALHOST, sandbox_caps.NO_LOCALHOST)
+    def test_evidence_refuses_a_second_name(self):
+        code, _, err = self.run_cli("evidence", "dungeon_runs", "name=other")
+        self.assertEqual((code, SEEN), (1, []))
+        self.assertIn("first argument", err)
 
     def test_fake_routes_are_catalogued_routes(self):
         text = (HERE / "docs" / "API.md").read_text()
