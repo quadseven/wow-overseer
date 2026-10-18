@@ -33180,7 +33180,7 @@ def _persist_council_plan(plan, seen: dict | None = None) -> int | None:
         # target for a quest goal is always goals.QUEST_TARGET (0 objectives
         # left); the council's plan.target is objectives REMAINING right now,
         # which is an observation and not a destination. A dungeon goal's
-        # target IS a destination (council.DUNGEON_RUNS_WANTED runs done), so
+        # target IS a destination (council.dungeon_runs_wanted() runs done), so
         # it takes the same road as 'level'.
         target = goals.QUEST_TARGET if plan.kind == "quest" else int(plan.target)
         cur.execute(

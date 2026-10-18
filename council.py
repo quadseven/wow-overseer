@@ -41,6 +41,7 @@ from pathlib import Path
 
 import achievements
 import bonds
+import classic
 import crossing
 import dungeonprogression
 import jobs
@@ -632,7 +633,40 @@ SCARLET_WINGS = (
 # from anything below - it is a fact about how big a campaign this family runs
 # once it decides to go, and reusing the number the operator actually used is
 # more honest than inventing a formula for it.
+#
+# BUT ONLY AT THE LEVEL CAP (#472). 25 runs per wing is a gear farm: four
+# Scarlet Monastery wings at 25 runs of ~30 minutes is 50 hours in one
+# dungeon, long after the family has outlevelled it. While leveling a few
+# runs per stage is enough for the XP and the drops, so the campaign size
+# scales with the weakest member's level - see dungeon_runs_wanted().
 DUNGEON_RUNS_WANTED = 25
+
+# Runs per stage while leveling, by the level they apply from, lowest first.
+# Below 40 a family outlevels a stage within a handful of runs (the Scarlet
+# wings are 3-5 levels apart); from 40 the instances span wider bands and
+# their drops start to matter for pre-raid gear, so a couple more runs earn
+# their time. At classic.MAX_LEVEL the full DUNGEON_RUNS_WANTED applies.
+LEVELING_RUNS_WANTED = (
+    (0, 3),
+    (40, 5),
+)
+
+
+def dungeon_runs_wanted(level: int) -> int:
+    """Runs per campaign stage for a family whose weakest member is `level`.
+
+    DUNGEON_RUNS_WANTED (25, gear farming) at the level cap; the
+    LEVELING_RUNS_WANTED band for the level below it (#472).
+    """
+    level = int(level or 0)
+    if level >= classic.MAX_LEVEL:
+        return DUNGEON_RUNS_WANTED
+    wanted = LEVELING_RUNS_WANTED[0][1]
+    for floor, runs in LEVELING_RUNS_WANTED:
+        if level >= floor:
+            wanted = runs
+    return wanted
+
 
 # Levels short the family would go in on anyway. Two is one bad pull; four is
 # a wipe at the door, and the difference is what the gate exists to say.
@@ -1438,7 +1472,7 @@ def _campaign_keyword(
     if completed_runs is not None:
         ordered = dungeonprogression.next_stage(
             completed_runs,
-            DUNGEON_RUNS_WANTED,
+            dungeon_runs_wanted(level),
             stages=stages,
         )
         if ordered and dict(stages)[ordered] <= level + NEAR_ENOUGH:
@@ -1767,11 +1801,12 @@ def _dungeon_proposal(
         proposer=voice.name,
         kind="dungeon",
         beneficiary=voice.name,
-        # target is DUNGEON_RUNS_WANTED, not a level or a map id: it is the
+        # target is the campaign size, not a level or a map id: it is the
         # one number the persisted goal actually needs to drive a campaign,
         # the same way a quest proposal's target is objectives remaining
-        # rather than the quest's own id.
-        target=DUNGEON_RUNS_WANTED,
+        # rather than the quest's own id. Scaled by the weakest member's
+        # level (#472): a few runs while leveling, DUNGEON_RUNS_WANTED at 60.
+        target=dungeon_runs_wanted(level),
         # Above a half-finished quest (60): the whole family being gated on
         # one dungeon is a bigger fact than one character's errand, and it is
         # the fact the operator's own priority named. Below a laggard rescue, whose

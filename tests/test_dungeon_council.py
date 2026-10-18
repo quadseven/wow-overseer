@@ -157,10 +157,12 @@ class TheDungeonProposalFiresWhenReady(unittest.TestCase):
         self.assertEqual("Bork", proposal.proposer)
         self.assertEqual("Bork", proposal.beneficiary)
 
-    def test_it_carries_the_operators_own_campaign_size(self):
+    def test_it_carries_a_leveling_campaign_size_below_the_cap(self):
+        """#472: 25 runs per wing is a level 60 gear farm; at 41 the family
+        wants a handful of runs and then the next stage."""
         proposal = council._dungeon_proposal(self.members, self.rows, [])
-        self.assertEqual(25, proposal.target)
-        self.assertEqual(council.DUNGEON_RUNS_WANTED, proposal.target)
+        self.assertEqual(5, proposal.target)
+        self.assertEqual(council.dungeon_runs_wanted(41), proposal.target)
 
     def test_the_said_line_means_something_in_the_familys_voice(self):
         proposal = council._dungeon_proposal(self.members, self.rows, [])
@@ -258,7 +260,7 @@ class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
         proposal = council._dungeon_proposal(members, rows, [], done)
         self.assertIsNotNone(proposal)
         self.assertEqual("blackrock-depths", proposal.keyword)
-        self.assertEqual(council.DUNGEON_RUNS_WANTED, proposal.target)
+        self.assertEqual(council.dungeon_runs_wanted(52), proposal.target)
 
     def test_the_campaign_size_is_the_one_the_operator_set(self):
         proposal = council._dungeon_proposal(self.members, self.rows, [], None)
@@ -305,7 +307,8 @@ class TheProposalReachesHold(unittest.TestCase):
         # would win outright) so the dungeon proposal is free to carry.
         self.assertEqual("dungeon", held.plan.kind)
         self.assertEqual("scarlet-cathedral", held.plan.keyword)
-        self.assertEqual(25, held.plan.target)
+        # A leveling campaign size at 41, not the level 60 farm (#472).
+        self.assertEqual(council.dungeon_runs_wanted(41), held.plan.target)
 
     def test_a_laggard_still_outranks_the_dungeon(self):
         """Nobody left behind outranks anywhere the family could go next."""
@@ -484,6 +487,49 @@ class ADungeonWithoutAPortalIsNeverProposed(unittest.TestCase):
                 with self.subTest(race=race, level=level):
                     self.assertTrue(proposal.keyword)
                     self.assertIsNotNone(jobs.dungeon_job(proposal.keyword))
+
+
+class TheCampaignSizeScalesWithLevel(unittest.TestCase):
+    """#472: DUNGEON_RUNS_WANTED = 25 for every stage meant 100 Scarlet
+    Monastery runs (four wings x 25, ~50 hours) for a family that outlevels
+    the place in a fraction of that. A few runs per stage while leveling, the
+    operator's 25 only at the level cap."""
+
+    def test_a_few_runs_per_stage_while_leveling(self):
+        for level in (20, 28, 33, 39, 40, 52, 59):
+            with self.subTest(level=level):
+                self.assertGreaterEqual(council.dungeon_runs_wanted(level), 3)
+                self.assertLessEqual(council.dungeon_runs_wanted(level), 5)
+
+    def test_the_full_gear_farm_at_the_level_cap(self):
+        self.assertEqual(25, council.dungeon_runs_wanted(60))
+        self.assertEqual(council.DUNGEON_RUNS_WANTED, council.dungeon_runs_wanted(60))
+
+    def test_it_never_shrinks_as_the_family_levels(self):
+        sizes = [council.dungeon_runs_wanted(lv) for lv in range(1, 61)]
+        self.assertEqual(sorted(sizes), sizes)
+
+    def test_a_leveling_scarlet_campaign_is_not_fifty_hours(self):
+        total = sum(
+            council.dungeon_runs_wanted(wants) for _, wants in council.SCARLET_WINGS
+        )
+        self.assertLessEqual(total, 20)
+
+    def test_a_leveling_family_moves_on_after_a_few_runs(self):
+        """Three graveyard runs finish that wing for a level 35 family; the
+        ledger hands it the Library rather than 22 more graveyard runs."""
+        members, rows = _family(35, ALLIANCE_RACE)
+        done = {"scarlet": 3}
+        proposal = council._dungeon_proposal(members, rows, [], done)
+        self.assertIsNotNone(proposal)
+        self.assertEqual("scarlet-library", proposal.keyword)
+        self.assertEqual(council.dungeon_runs_wanted(35), proposal.target)
+
+    def test_a_sixty_proposal_carries_the_full_campaign(self):
+        members, rows = _family(60, ALLIANCE_RACE)
+        proposal = council._dungeon_proposal(members, rows, [], None)
+        self.assertIsNotNone(proposal)
+        self.assertEqual(council.DUNGEON_RUNS_WANTED, proposal.target)
 
 
 class TheLedgerCannotSendAFamilyAboveItsLevel(unittest.TestCase):
