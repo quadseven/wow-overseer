@@ -1454,6 +1454,39 @@ def _authored_lines(minutes: int = 30) -> set:
         return {r["command"] for r in cur.fetchall()}
 
 
+# Upstream playerbots' own sentences, for the in-game ear (#347). They change
+# only when the realm's playerbots image does, so an hour is plenty fresh.
+_BOT_SPEECH_SECONDS = 3600.0
+_BOT_SPEECH = {"at": None, "lines": overhear.bot_speech(())}
+
+
+def _bot_speech() -> tuple:
+    """overhear.bot_speech() over acore_playerbots.ai_playerbot_texts, cached.
+
+    The table is what upstream's PlayerbotTextMgr says its formulaic lines
+    from, so a bot-flagged line matching one of them was generated rather
+    than typed. A realm without the table has upstream's in-code defaults
+    only (1146). Any other error keeps the last set read and is tried again
+    next tick: the ear still runs, it is just no better informed than before.
+    """
+    now = time.monotonic()
+    at = _BOT_SPEECH["at"]
+    if at is not None and now - at < _BOT_SPEECH_SECONDS:
+        return _BOT_SPEECH["lines"]
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT text FROM acore_playerbots.ai_playerbot_texts")
+            texts = [r["text"] for r in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in (1049, 1146)):
+            log.warning("ear: upstream's bot texts unreadable, keeping the last set: %s", exc)
+            return _BOT_SPEECH["lines"]
+        texts = []
+    _BOT_SPEECH["lines"] = overhear.bot_speech(texts)
+    _BOT_SPEECH["at"] = now
+    return _BOT_SPEECH["lines"]
+
+
 def _fetch_quest_progress(names: list) -> dict:
     """name -> (sentence, objectives left, quest id) for their closest quest.
 
@@ -7320,6 +7353,7 @@ class Bridge(discord.Client):
         directive = overhear.hear(
             rows, family=bonds.FAMILY,
             authored=await asyncio.to_thread(_authored_lines),
+            bot_lines=await asyncio.to_thread(_bot_speech),
             last_at=self._last_overheard_at, now=time.monotonic(),
         )
         if directive is None:
