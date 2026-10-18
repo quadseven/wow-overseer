@@ -966,7 +966,7 @@ def choose_tailors(members) -> frozenset:
     return frozenset(out)
 
 
-def choose_alchemists(members, tailors=frozenset()) -> frozenset:
+def choose_alchemists(members, tailors=frozenset(), recent=()) -> frozenset:
     """The maintenance members that take Alchemy, per guild.
 
     One in ALCHEMIST_EVERY of a crew, rounded down as choose_tailors rounds
@@ -977,7 +977,21 @@ def choose_alchemists(members, tailors=frozenset()) -> frozenset:
     (the herbs it gathers are what it brews), then the members with the
     fewest primaries, by name. A member with both primary slots taken by
     other trades is never asked to drop one.
+
+    A pick stays picked until it learns the trade (#1139): a member with an
+    Alchemy trainer walk among `recent` (Recent rows, the bridge's last day of
+    them) comes straight after the holders, so a guildmate that learns
+    Herbalism first, or a change in the pick's primaries, does not hand the
+    post to someone else while the pick is on its way. A failed walk keeps it
+    too, as the pick retries well inside that day (TRAIN_BACKOFF_CAP_MINUTES).
+    The walk is the evidence, not a stored pick: before it nothing was spent,
+    so a change of mind costs nothing. A pick that can no longer take the
+    trade (a tailor now, both primary slots filled, out of the crew) is
+    replaced as before, by the filter below.
     """
+    picked = {
+        r.name for r in recent or () if r.action == "train" and r.skill_id == ALCHEMY
+    }
     crews = {}
     for m in members or ():
         if m.role == MAINTENANCE:
@@ -994,6 +1008,7 @@ def choose_alchemists(members, tailors=frozenset()) -> frozenset:
         room.sort(
             key=lambda m: (
                 not m.holds(ALCHEMY),
+                m.name not in picked,
                 not m.holds(HERBALISM),
                 len(m.primaries),
                 m.name,
@@ -2685,7 +2700,7 @@ def plan(
     busy = {str(n) for n in busy or ()}
     pending = {str(n) for n in pending or ()}
     tailors = choose_tailors(members)
-    alchemists = choose_alchemists(members, tailors)
+    alchemists = choose_alchemists(members, tailors, recent)
     trades = cloth_trades(
         split_trades(members, tailors, alchemists), tailors, alchemists
     )

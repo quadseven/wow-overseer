@@ -134,5 +134,112 @@ class TheCrewAlchemists(unittest.TestCase):
         self.assertIn(("Diggo", "alchemist"), [(p.name, p.role) for p in posts])
 
 
+def alchemy_walk(name, status="pending", age=30, skill=ALCH):
+    """The `walk-to-trainer skill:` row a pick's first Alchemy walk leaves,
+    read back the way the bridge reads overseer_command (recent_from_rows)."""
+    return guildjobs.recent_from_rows(
+        [
+            {
+                "id": 1,
+                "target_name": name,
+                "command": "walk-to-trainer skill:%d" % skill,
+                "source": guildjobs.source_for("train", name),
+                "status": status,
+                "result": "",
+                "age": age,
+            }
+        ]
+    )
+
+
+class ThePickStaysUntilItLearnsAlchemy(unittest.TestCase):
+    """#1139: the choice used to be recomputed from live member state on every
+    pass, so a guildmate that learned Herbalism before the pick learned
+    Alchemy took its place, and the dropped pick spent the slot it had kept
+    back on a gathering trade: the crew paid the walk and training twice."""
+
+    def crew(self, **zed):
+        # A crew of five has one alchemist; nobody holds anything yet, so
+        # the first pass picks by name: Abe.
+        crew = [crewman(n) for n in ("Abe", "Bo", "Cy", "Di")]
+        crew.append(crewman("Zed", **zed))
+        return crew
+
+    def test_the_first_pass_picks_by_name(self):
+        self.assertEqual(guildjobs.choose_alchemists(self.crew()), frozenset({"Abe"}))
+
+    def test_the_pick_stays_when_a_guildmate_gains_herbalism_first(self):
+        crew = self.crew(skills={FA: (40, 75), H: (1, 75)})
+        self.assertEqual(
+            guildjobs.choose_alchemists(crew, recent=alchemy_walk("Abe")),
+            frozenset({"Abe"}),
+        )
+
+    def test_a_failed_walk_keeps_the_pick_while_it_retries(self):
+        crew = self.crew(skills={FA: (40, 75), H: (1, 75)})
+        self.assertEqual(
+            guildjobs.choose_alchemists(
+                crew, recent=alchemy_walk("Abe", status="error")
+            ),
+            frozenset({"Abe"}),
+        )
+
+    def test_the_plan_keeps_its_pick_across_two_passes(self):
+        # Pass one: Abe is the crew's tailor, so Bo is the alchemist and walks
+        # to a trainer for Alchemy.
+        first = guildjobs.plan(self.crew(), masters={"Cave": "Grug"})
+        self.assertIn(ALCH, first.trades["Bo"])
+        walks = [r.command for s in first.steps if s.holder == "Bo" for r in s.rows]
+        self.assertIn("walk-to-trainer skill:%d" % ALCH, walks)
+        # Pass two: Zed learned Herbalism before Bo reached the trainer.
+        second = guildjobs.plan(
+            self.crew(skills={FA: (40, 75), H: (1, 75)}),
+            masters={"Cave": "Grug"},
+            recent=alchemy_walk("Bo"),
+        )
+        self.assertIn(ALCH, second.trades["Bo"])
+        self.assertNotIn(ALCH, second.trades["Zed"])
+
+    def test_a_walk_for_another_trade_is_no_pick(self):
+        crew = self.crew(skills={FA: (40, 75), H: (1, 75)})
+        self.assertEqual(
+            guildjobs.choose_alchemists(crew, recent=alchemy_walk("Abe", skill=M)),
+            frozenset({"Zed"}),
+        )
+
+    def test_a_pick_with_both_primaries_taken_is_replaced(self):
+        crew = self.crew(skills={FA: (40, 75), H: (1, 75)})
+        crew[0] = crewman("Abe", skills={FA: (40, 75), M: (1, 75), S: (1, 75)})
+        self.assertEqual(
+            guildjobs.choose_alchemists(crew, recent=alchemy_walk("Abe")),
+            frozenset({"Zed"}),
+        )
+
+    def test_a_pick_that_became_a_tailor_is_replaced(self):
+        crew = self.crew(skills={FA: (40, 75), H: (1, 75)})
+        self.assertEqual(
+            guildjobs.choose_alchemists(
+                crew, frozenset({"Abe"}), recent=alchemy_walk("Abe")
+            ),
+            frozenset({"Zed"}),
+        )
+
+    def test_a_pick_that_left_the_crew_is_replaced(self):
+        crew = self.crew(skills={FA: (40, 75), H: (1, 75)})
+        crew += [crewman("Ed")]
+        crew[0] = crewman("Abe", role=guildjobs.RAIDER)
+        self.assertEqual(
+            guildjobs.choose_alchemists(crew, recent=alchemy_walk("Abe")),
+            frozenset({"Zed"}),
+        )
+
+    def test_a_member_that_holds_alchemy_still_comes_first(self):
+        crew = self.crew(skills={FA: (40, 75), ALCH: (5, 75)})
+        self.assertEqual(
+            guildjobs.choose_alchemists(crew, recent=alchemy_walk("Abe")),
+            frozenset({"Zed"}),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
