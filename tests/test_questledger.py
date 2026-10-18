@@ -3,6 +3,7 @@ questers' quest status, and the bridge pass that writes it."""
 
 import datetime
 import pathlib
+import struct
 import sys
 import types
 import unittest
@@ -19,6 +20,28 @@ if not hasattr(sys.modules["pymysql"], "err"):
     sys.modules["pymysql"].err = types.SimpleNamespace(MySQLError=_MySQLError)
 
 import questledger as ql  # noqa: E402
+
+
+def _real_pymysql_err():
+    """The installed driver's own err module, loaded past any stub an earlier
+    suite put in sys.modules, or None where PyMySQL is not installed."""
+    if hasattr(sys.modules["pymysql"], "connect"):
+        return sys.modules["pymysql"].err
+    ours = [n for n in sys.modules if n == "pymysql" or n.startswith("pymysql.")]
+    stubs = {n: sys.modules.pop(n) for n in ours}
+    try:
+        import pymysql.err as real
+    except ImportError:
+        real = None
+    finally:
+        for n in [n for n in sys.modules if n == "pymysql" or n.startswith("pymysql.")]:
+            del sys.modules[n]
+        sys.modules.update(stubs)
+    return real
+
+
+REAL_ERR = _real_pymysql_err()
+NO_PYMYSQL = "needs PyMySQL (pip install -r tests/requirements.txt); CI installs it"
 
 NOW = datetime.datetime(2026, 10, 13, 12, 0, 0)
 EARLIER = datetime.datetime(2026, 10, 13, 9, 0, 0)
@@ -237,26 +260,17 @@ class TheBridgePass(unittest.TestCase):
         count, written = self.run_pass({"SELECT guid, name": []})
         self.assertEqual((count, written), (0, []))
 
+    @unittest.skipUnless(REAL_ERR, NO_PYMYSQL)
     def test_a_table_missing_at_start_up_is_created_by_the_next_pass(self):
-        # Match PyMySQL's exception hierarchy for missing tables and sockets.
-        MySQLError = self.bridge.pymysql.err.MySQLError
-
-        class ProgrammingError(MySQLError):
-            pass
-
-        class OperationalError(MySQLError):
-            pass
-
-        err = types.SimpleNamespace(
-            MySQLError=MySQLError,
-            ProgrammingError=ProgrammingError,
-            OperationalError=OperationalError,
-        )
-        failures = (
-            ProgrammingError(1146, "missing table"),
-            OperationalError("down"),
-        )
-        self.assertTrue(all(isinstance(failure, MySQLError) for failure in failures))
+        # The driver's own exceptions, not a hierarchy built here to agree
+        # with the handler (#957): a missing table raised through PyMySQL's
+        # errno map, and the connect failure its socket path raises.
+        err = REAL_ERR
+        missing = b"\xff" + struct.pack("<H", 1146) + b"#42S02Table missing"
+        with self.assertRaises(err.MySQLError) as raised:
+            err.raise_mysql_exception(missing)
+        failures = (raised.exception, err.OperationalError(2003, "Can't connect"))
+        self.assertIs(type(failures[0]), err.ProgrammingError)
         for failure in failures:
             with self.subTest(failure=type(failure).__name__):
                 self.bridge._quest_ledger_ready = False
