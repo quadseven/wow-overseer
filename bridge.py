@@ -14,6 +14,7 @@ nothing in this file may call the database directly from an async handler.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import dataclasses
 import json
 import logging
@@ -2726,6 +2727,117 @@ class _PersistentOwing(classquest.Owing):
         super().forget_unowed(seen, owing)
         for name in forgotten:
             _memo_delete("class_owed", name)
+
+
+# One writer thread for the clock memos below, so a write and the delete after
+# it reach the store in the order they were made, and the event loop never
+# waits on the database for one.
+_MEMO_WRITER = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="bridge-memo")
+
+
+def _memo_job(write, *args) -> None:
+    try:
+        write(*args)
+    except Exception:
+        # _memo_upsert and _memo_delete log a database failure themselves;
+        # this is anything else, which a pool thread would otherwise swallow.
+        log.exception("bridge memo: a clock memo write failed")
+
+
+class _ClockMemo(dict):
+    """A bridge clock that a restart does not start over (#817).
+
+    A plain dict to every pass that reads it. Assigning a subject a new value
+    stores it in the memo store and popping or deleting one removes it, so
+    each writer stays the one line it was. An unchanged value is not written
+    again: a trip that has stopped moving is the case that matters, and it
+    writes nothing while it waits. `restore` reads the store once at start and
+    says which clocks came back.
+
+    The clocks are monotonic, so `encode(value, offset)` and
+    `decode(value, offset)` convert to and from wall time, `offset` being wall
+    time minus monotonic time now; `clock(value)` is the monotonic start the
+    log line and the memo row's `since` report. A falsy value is deleted
+    rather than stored (an empty borrow clock is no clock at all).
+    """
+
+    _MISSING = object()
+
+    def __init__(self, kind: str, label: str, encode, decode, clock,
+                 keep_seconds: float):
+        super().__init__()
+        self.kind, self.label = kind, label
+        self._encode, self._decode, self._clock = encode, decode, clock
+        self.keep_seconds = keep_seconds
+
+    def __setitem__(self, subject, value) -> None:
+        unchanged = subject in self and dict.__getitem__(self, subject) == value
+        super().__setitem__(subject, value)
+        if unchanged:
+            return
+        if not value:
+            _MEMO_WRITER.submit(_memo_job, _memo_delete, self.kind, subject)
+            return
+        wall = time.time()
+        offset = wall - time.monotonic()
+        _MEMO_WRITER.submit(
+            _memo_job, _memo_upsert, self.kind, subject,
+            self._encode(value, offset), self._clock(value) + offset,
+            wall + self.keep_seconds)
+
+    def __delitem__(self, subject) -> None:
+        super().__delitem__(subject)
+        _MEMO_WRITER.submit(_memo_job, _memo_delete, self.kind, subject)
+
+    def pop(self, subject, default=_MISSING):
+        if subject not in self:
+            if default is _ClockMemo._MISSING:
+                raise KeyError(subject)
+            return default
+        value = super().pop(subject)
+        _MEMO_WRITER.submit(_memo_job, _memo_delete, self.kind, subject)
+        return value
+
+    def restore(self) -> None:
+        """Every clock the store still holds, and one log line for each.
+
+        A subject this process already observes is left as it is: on_ready
+        runs again on a gateway reconnect, and what memory holds then is at
+        least as fresh as the store."""
+        now = time.monotonic()
+        offset = time.time() - now
+        for subject, (value, _since) in _memo_read(self.kind).items():
+            if subject in self:
+                continue
+            try:
+                restored = self._decode(value, offset)
+                spent = now - self._clock(restored)
+            except (KeyError, TypeError, ValueError):
+                log.exception("bridge memo: invalid %s memo for %s", self.kind, subject)
+                continue
+            dict.__setitem__(self, subject, restored)
+            log.info("bridge memo: restored the %s clock for %s - %d seconds "
+                     "already spent, so the restart does not count it from zero",
+                     self.label, subject, int(spent))
+
+
+# How long a vendor or banker observation is kept without being written again.
+# Longer than every bound that reads one (the two-hour bag wait, the twenty
+# minute stall and split windows), so a trip still under way keeps its clock,
+# and a trip that ended without a release stops leaving a memo behind.
+TRIP_CLOCK_MEMO_SECONDS = 6 * 3600
+# A borrowed lead's clock lasts while its learn errand is outstanding, and a
+# borrower past ERRAND_LEAD_HOURS must stay skipped, so its memo is kept for a
+# week like the owed clock's; borrow_clock drops it once no errand is left.
+LEAD_CLOCK_MEMO_SECONDS = 7 * 24 * 3600
+
+
+def _trip_clock(movement) -> float:
+    """The start a vendor or banker observation reports: the split clock while
+    the family is split, otherwise the leader's steady clock."""
+    split = getattr(movement, "split_since", None)
+    return movement.steady_since if split is None else split
 
 
 def _bag_hold_stuck(names, free_slots: dict) -> tuple:
@@ -6375,14 +6487,18 @@ class Bridge(discord.Client):
         # overseer tables ship in mod-overseer's db-import image and a new one
         # would not reach the realm with this change. A restart forgets the
         # streak and costs at most one repeated walk, which is cheaper than
-        # the walk being repeated for ever.
+        # the walk being repeated for ever. Left in memory on purpose (#817):
+        # a restart costs that one walk, and the aim it left behind is cleared
+        # by the sweep below (#816), so no flight aim outlives its count.
         self._flight_attempts: dict = {}
         # Whether this process has cleared a flight aim it cannot count (#816).
         self._flight_aims_swept = False
         # GUILD MAIL RUNS UNDER WAY (#185): holder -> monotonic start, and the
         # start times of the last day's runs. In memory for the town slot's
         # reason; the daily cap also reads the command log, which a restart
-        # does not forget (guildroute.runs_today).
+        # does not forget (guildroute.runs_today). Left in memory on purpose
+        # (#817): the log is read over the same day the starts are kept for,
+        # and every run that posted is in it.
         self._guild_mail_runs: dict = {}
         self._guild_mail_run_starts: list = []
         # A guild bot off the roster walks by the module's walk row (#185).
@@ -6421,23 +6537,37 @@ class Bridge(discord.Client):
         self._raid_supply_said: dict = {}
         # Leader snapshot history used only to detect a vendor aim that has
         # stopped moving. The decision itself lives in vendor_stall.py.
-        self._vendor_movement: dict[str, vendor_stall.Movement] = {}
+        # This and the two family observations below are kept in the memo
+        # store (#817): a deploy would otherwise count a trip stuck for most
+        # of its bound from zero, and with deploys closer together than the
+        # bound the give-up never fired.
+        self._vendor_movement: dict[str, vendor_stall.Movement] = _ClockMemo(
+            "vendor_move", "vendor trip stall", vendor_stall.movement_memo,
+            vendor_stall.movement_from_memo, _trip_clock, TRIP_CLOCK_MEMO_SECONDS)
         # The leader can keep moving while the family is split across maps or
         # far enough apart that nobody reaches one usable vendor counter.
         # vendor_stall owns the pure cohesion clock; this bridge only retains
         # its last observation between polls.
         # Keyed by leader since #150: each family walks to its own counter.
-        self._vendor_family_movement: dict[str, vendor_stall.FamilyMovement] = {}
+        self._vendor_family_movement: dict[str, vendor_stall.FamilyMovement] = _ClockMemo(
+            "vendor_family", "vendor trip family split", vendor_stall.family_memo,
+            vendor_stall.family_from_memo, _trip_clock, TRIP_CLOCK_MEMO_SECONDS)
         # A banker trip cannot finish while a member stays on another map.
         # Keep the same bounded family-cohesion observation as vendor trips.
-        self._bank_family_movement: dict[str, vendor_stall.FamilyMovement] = {}
+        self._bank_family_movement: dict[str, vendor_stall.FamilyMovement] = _ClockMemo(
+            "bank_family", "banker trip family split", vendor_stall.family_memo,
+            vendor_stall.family_from_memo, _trip_clock, TRIP_CLOCK_MEMO_SECONDS)
         # One town slot per OTHER family (#150), keyed by the roster's
         # `family` value. This bridge's own family keeps `self._town_slot`.
         self._cohort_town_slots: dict[str, townslot.Slot] = {}
         # When each other family's trainee first borrowed its lead for the
         # learn errand it still has (#211), keyed by the roster's `family`.
-        # In memory like the town slots; a restart restarts the bound.
-        self._family_lead_since: dict[str, dict] = {}
+        # Kept in the memo store (#817), so a deploy does not restart the
+        # ERRAND_LEAD_HOURS bound on a borrowed lead.
+        self._family_lead_since: dict[str, dict] = _ClockMemo(
+            "lead_borrow", "borrowed lead", tradechoice.borrow_clock_memo,
+            tradechoice.borrow_clock_from_memo, lambda since: min(since.values()),
+            LEAD_CLOCK_MEMO_SECONDS)
         # Equip rows whose outcome has already been logged, by row id, so each
         # answer is said once (#146).
         self._equip_reported: set = set()
@@ -6630,6 +6760,14 @@ class Bridge(discord.Client):
         if owing is not None:
             await asyncio.to_thread(owing.restore)
         await asyncio.to_thread(_restore_bag_holds)
+        # The stall and borrow clocks a deploy must not restart (#817).
+        for name in ("_vendor_movement", "_vendor_family_movement",
+                     "_bank_family_movement", "_family_lead_since"):
+            # A _ClockMemo; anything else (a test's plain dict) has nothing
+            # to restore.
+            restore = getattr(self.__dict__.get(name), "restore", None)
+            if restore is not None:
+                await asyncio.to_thread(restore)
         try:
             self._guild_run_formed_at = await asyncio.to_thread(
                 _guild_run_last_formed_at)
