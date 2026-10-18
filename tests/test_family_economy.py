@@ -232,8 +232,17 @@ class TheBridgeRunsEveryFamily(unittest.TestCase):
         self.assertIn("names, leader = sorted(cohort.names), cohort.leader", body)
         self.assertIn("slot = self._cohort_town_slot(cohort)", body)
         self.assertIn('cohort=getattr(cohort, "key", None)', body)
-        self.assertIn('slot.productive("economy")', body)
+        # The aim and the report are their own functions (wow-overseer#977);
+        # the pass hands both of them this family's cohort and slot.
+        self.assertIn("self._take_vendor_aim(step, leader, cohort)", body)
+        self.assertIn("_report_vendor_claim(slot, aimed, inserted)", body)
+        aim = _statements("    async def _take_vendor_aim(")
+        self.assertIn('cohort=getattr(cohort, "key", None)', aim)
+        self.assertIn(
+            'slot.productive("economy")', _statements("def _report_vendor_claim(")
+        )
         self.assertNotIn("self._town_slot", body)
+        self.assertNotIn("self._town_slot", aim)
 
     def test_the_ground_sweep_never_reaches_another_family(self):
         body = _statements("    async def _release_stranded_ground_errands(")

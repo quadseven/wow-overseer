@@ -578,6 +578,11 @@ def _run_vendor_once(queued, at_vendor=True):
             "_vendor_pass_mode",
             "_sellable_per_holder",
             "_without_bank_keeps",
+            # The pieces `_vendor_once` was split into (wow-overseer#977).
+            "_take_vendor_aim",
+            "_count_sales",
+            "_queue_vendor_sales",
+            "_report_vendor_claim",
         ],
         {
             "_bank_policy": lambda names, fresh=False: {},
@@ -622,6 +627,7 @@ def _run_vendor_once(queued, at_vendor=True):
     )
     me = _FakeEconomySelf(world)
     me._vendor_pass_mode = lambda *a: ns["_vendor_pass_mode"](me, *a)
+    me._take_vendor_aim = lambda *a: ns["_take_vendor_aim"](me, *a)
     cohort = townslot.Cohort(key="Zug", leader="Zug", names=("Zug",))
     asyncio.run(ns["_vendor_once"](me, cohort))
     return world.sells, me.claims, log.lines

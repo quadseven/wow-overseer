@@ -196,7 +196,7 @@ class TheBridgeWiresIt(unittest.TestCase):
 
     def test_the_sales_count_toward_the_trip(self):
         body = _block("    async def _vendor_once(")
-        self.assertIn("for sale in lock_sales + clear_sales:", body)
+        self.assertIn("_count_sales(sellable_counts, lock_sales + clear_sales)", body)
 
     def test_hand_overs_ride_the_guild_gift_writer(self):
         body = _block("    async def _route_clearance(")

@@ -11465,8 +11465,7 @@ class Bridge(discord.Client):
         # rows and the two plans just made, and nothing waits on the answer.
         self._jev_keep_shadow(names, leader, rows, clear, locks, free_slots,
                               auction_open=True)
-        for sale in lock_sales + clear_sales:
-            sellable_counts[sale.holder] = sellable_counts.get(sale.holder, 0) + 1
+        _count_sales(sellable_counts, lock_sales + clear_sales)
         # WHAT A VENDOR CAN DO FOR EACH MEMBER AT THE FLOOR (#986), read the
         # way the sale itself is decided, for the bag hold to name. Looked up:
         # the economy tests load this pass in isolation.
@@ -11585,8 +11584,7 @@ class Bridge(discord.Client):
         )
         bank_keeps = await asyncio.to_thread(_bank_policy, names, True)
         gear_sales = _without_bank_keeps(gear_sales, bank_keeps, "economy")
-        for sale in gear_sales:
-            sellable_counts[sale.holder] = sellable_counts.get(sale.holder, 0) + 1
+        _count_sales(sellable_counts, gear_sales)
 
         # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
         # `_vendor_pass_mode`.
@@ -11656,11 +11654,9 @@ class Bridge(discord.Client):
             log.info("economy: no safe carried vendor goods")
             return
         # A sale is owned by the character carrying that item, so the ROWS are
-        # grouped by holder. The ERRAND is not, and that distinction is the
-        # whole of infra#3553 - see the aim written below the gate.
-        by_holder: dict[str, list] = {}
-        for candidate in candidates:
-            by_holder.setdefault(candidate.holder, []).append(candidate)
+        # grouped by holder (`_queue_vendor_sales`). The ERRAND is not, and
+        # that distinction is the whole of infra#3553 - see the aim written
+        # below the gate.
 
         # THE ROW IS ONLY WRITTEN WHERE IT CAN WORK (infra#3464).
         #
@@ -11772,122 +11768,49 @@ class Bridge(discord.Client):
         # makes the aim book erase its own state and read a standing errand as
         # a new one, releasing and re-taking the counter hold. The argument and
         # the measurements are on `bag_pressure.vendor_errand_step`.
-        aimed = False
-        if step == bag_pressure.VENDOR_ERRAND_AIM:
-            # THE RETURN VALUE IS READ. The economy guard in _write_trade_errand
-            # only retasks an IDLE traveller, so this write is a no-op while the
-            # town trip owns `travel_npc = 'repair'` - which is a legitimate
-            # outcome and the exact thing infra#3464 called silent. It was still
-            # silent afterwards: the caller hardcoded `aimed = True` and threw
-            # the answer away.
-            #
-            # AND IT GOES THROUGH THE TOWN SLOT (infra#3703), which is where
-            # "somebody else's errand" stopped being the end of the sentence:
-            # the slot says whose, for how long, and what ends it.
-            #
-            # A VENDOR IN THE SAME TOWN MAKES IT A SHORT STOP (townslot.
-            # STOP_CLAIMANTS), the one ask a staging campaign lets through. A
-            # far vendor passes no distance and stays an ordinary trip.
-            aimed = await self._claim_town_slot(
-                "economy", leader, "vendor", urgent=True,
-                cohort=getattr(cohort, "key", None),
-                distance=townslot.stop_yards("economy", await asyncio.to_thread(
-                    _nearest_vendor_yards, leader)),
-            )
-            if not aimed:
-                log.info(
-                    "economy: leader=%s is already on somebody else's errand, so "
-                    "no vendor aim was taken this pass", leader,
-                )
-
-        inserted = 0
-        considered = 0
-        holder_town = {}
-        leader_town = await asyncio.to_thread(_fetch_town, leader)
-        holder_town[leader] = leader_town
-        leader_at_counter = bool(leader_town.vendor)
-        for holder in sorted(by_holder):
-            town = await asyncio.to_thread(_fetch_town, holder)
-            holder_town[holder] = town
-        queue_holders = set(bag_pressure.vendor_holders_to_queue(
-            candidates,
-            leader=leader,
-            leader_at_counter=leader_at_counter,
-            holder_at_counter=lambda holder: bool(holder_town[holder].vendor),
-            # `aimed` is True only while the leader carries this pass's own
-            # vendor aim: taken or held this pass. Refused, it walks nowhere
-            # and its rows would answer `vendor not in range` (#297).
-            leader_walking=aimed,
-        ))
-        queue_holders = bag_pressure.counter_holders(
-            queue_holders, mode, leader_at_counter,
-            lambda holder: bool(holder_town[holder].vendor),
+        aimed = await self._take_vendor_aim(step, leader, cohort)
+        inserted = await _queue_vendor_sales(
+            candidates, leader, aimed, mode, attempts,
         )
-        for holder in sorted(by_holder):
-            holder_candidates = tuple(by_holder[holder])
-            town = holder_town[holder]
-            if not town.vendor:
-                if holder not in queue_holders:
-                    log.info(
-                        "economy: %d carried candidate(s) for %s but no vendor "
-                        "within reach - leader=%s aim taken=%s",
-                        len(holder_candidates), holder, leader, aimed,
-                    )
-                    continue
-            elif holder not in queue_holders:
-                log.info(
-                    "economy: %d carried candidate(s) for %s but no vendor "
-                    "within reach - leader=%s aim taken=%s",
-                    len(holder_candidates), holder, leader, aimed,
-                )
-                continue
-            # The world has already answered some of these. A sale that was
-            # delivered, or refused with a reason retrying cannot change, must
-            # not be proposed again: 819 of 822 `item not carried` refusals in
-            # one day were re-issues of an item that had already been sold
-            # (infra#3330).
-            #
-            # A HOLDER STANDING AT A VENDOR IS NOT HELD BACK FOR RANGE (#149).
-            # `town.vendor` is this holder's own reading, so a range refusal
-            # from somewhere else no longer describes where it stands.
-            plan = item_plan.plan(holder_candidates, attempts,
-                                  at_vendor=bool(town.vendor))
-            considered += len(holder_candidates)
-            for candidate in plan.write:
-                if await asyncio.to_thread(_insert_sell, candidate):
-                    inserted += 1
+        _report_vendor_claim(slot, aimed, inserted)
+
+    async def _take_vendor_aim(self, step: str, leader: str, cohort=None) -> bool:
+        """Take the leader's vendor aim when the errand step says AIM.
+
+        True only while the leader carries the aim this pass just took. HOLD,
+        RELEASE and a refused claim are all False, which is what the holder
+        gate in `_queue_vendor_sales` reads as "the leader is not walking to a
+        vendor for us" (#297). Lifted out of `_vendor_once` unchanged
+        (wow-overseer#977).
+        """
+        if step != bag_pressure.VENDOR_ERRAND_AIM:
+            return False
+        # THE RETURN VALUE IS READ. The economy guard in _write_trade_errand
+        # only retasks an IDLE traveller, so this write is a no-op while the
+        # town trip owns `travel_npc = 'repair'` - which is a legitimate
+        # outcome and the exact thing infra#3464 called silent. It was still
+        # silent afterwards: the caller hardcoded `aimed = True` and threw
+        # the answer away.
+        #
+        # AND IT GOES THROUGH THE TOWN SLOT (infra#3703), which is where
+        # "somebody else's errand" stopped being the end of the sentence:
+        # the slot says whose, for how long, and what ends it.
+        #
+        # A VENDOR IN THE SAME TOWN MAKES IT A SHORT STOP (townslot.
+        # STOP_CLAIMANTS), the one ask a staging campaign lets through. A
+        # far vendor passes no distance and stays an ordinary trip.
+        aimed = await self._claim_town_slot(
+            "economy", leader, "vendor", urgent=True,
+            cohort=getattr(cohort, "key", None),
+            distance=townslot.stop_yards("economy", await asyncio.to_thread(
+                _nearest_vendor_yards, leader)),
+        )
+        if not aimed:
             log.info(
-                "economy: holder=%s queued %d/%d vendor sale(s), held back %s",
-                holder, len(plan.write), len(holder_candidates),
-                item_plan.reasons(plan.skipped),
+                "economy: leader=%s is already on somebody else's errand, so "
+                "no vendor aim was taken this pass", leader,
             )
-        log.info("economy: queued %d/%d vendor sale(s) across %d holder(s), "
-                 "one errand on leader=%s (taken=%s)",
-                 inserted, considered, len(by_holder), leader, aimed)
-        # WHETHER THAT URGENT CLAIM WAS WORTH TAKING (infra#4191).
-        #
-        # This pass preempts everything on the strength of bag pressure, and
-        # `townslot` cannot see whether a sale came of it - only this loop
-        # knows that `inserted` is the number of sales actually written. So
-        # the pass reports its own outcome, and a run of fruitless ones costs
-        # it the right to preempt for a while.
-        #
-        # ONLY WHEN IT HELD THE COLUMN. `aimed` is False when some other pass
-        # had the traveller, and being refused a turn is an ordinary wait
-        # rather than a wasted one - counting it would back the pass off for
-        # somebody else's errand.
-        if aimed:
-            if inserted:
-                slot.productive("economy")
-            else:
-                until = slot.fruitless("economy", time.monotonic())
-                log.warning(
-                    "economy: took the travel column on bag pressure and wrote "
-                    "no sale; urgency suppressed for %.0fs so a pressure this "
-                    "pass cannot relieve stops outranking every other errand "
-                    "(infra#4191)",
-                    max(0.0, until - time.monotonic()),
-                )
+        return aimed
 
     async def _destroy_released(self, rows: list) -> None:
         """Queue a destroy for each released quest item no vendor will buy.
@@ -25237,6 +25160,127 @@ _SURPLUS_BAGS_SQL = (
     "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
 )
+
+
+def _count_sales(counts: dict, sales) -> None:
+    """Add one to `counts` per sale, under the sale's holder.
+
+    The vendor pass counts what a trip could sell (#88, #148, #145) twice, for
+    lockbox and clearance sales and then for gear. One loop, so the two counts
+    cannot be kept two different ways (wow-overseer#977).
+    """
+    for sale in sales:
+        counts[sale.holder] = counts.get(sale.holder, 0) + 1
+
+
+async def _queue_vendor_sales(
+    candidates, leader: str, aimed: bool, mode: str, attempts,
+) -> int:
+    """Write the sell rows each holder can execute from where it stands.
+
+    Returns how many rows were inserted, which `_report_vendor_claim` reads.
+
+    THE HOLDER GATE IS PER HOLDER (infra#3464): each seller's own DoSell
+    answers on its own range, so each holder's rows wait for that holder to be
+    standing at the counter, or for the leader it follows to be walking there
+    on this pass's aim (`aimed`). `bag_pressure.vendor_holders_to_queue` and
+    `bag_pressure.counter_holders` decide who; this reads where everybody is
+    and writes what `item_plan` lets through. Lifted out of `_vendor_once`
+    (wow-overseer#977); the two "no vendor within reach" branches it used to
+    carry logged the same line and both skipped the holder, so they are one.
+    """
+    by_holder: dict[str, list] = {}
+    for candidate in candidates:
+        by_holder.setdefault(candidate.holder, []).append(candidate)
+    inserted = 0
+    considered = 0
+    holder_town = {}
+    leader_town = await asyncio.to_thread(_fetch_town, leader)
+    holder_town[leader] = leader_town
+    leader_at_counter = bool(leader_town.vendor)
+    for holder in sorted(by_holder):
+        town = await asyncio.to_thread(_fetch_town, holder)
+        holder_town[holder] = town
+    queue_holders = set(bag_pressure.vendor_holders_to_queue(
+        candidates,
+        leader=leader,
+        leader_at_counter=leader_at_counter,
+        holder_at_counter=lambda holder: bool(holder_town[holder].vendor),
+        # `aimed` is True only while the leader carries this pass's own
+        # vendor aim: taken or held this pass. Refused, it walks nowhere
+        # and its rows would answer `vendor not in range` (#297).
+        leader_walking=aimed,
+    ))
+    queue_holders = bag_pressure.counter_holders(
+        queue_holders, mode, leader_at_counter,
+        lambda holder: bool(holder_town[holder].vendor),
+    )
+    for holder in sorted(by_holder):
+        holder_candidates = tuple(by_holder[holder])
+        town = holder_town[holder]
+        if holder not in queue_holders:
+            log.info(
+                "economy: %d carried candidate(s) for %s but no vendor "
+                "within reach - leader=%s aim taken=%s",
+                len(holder_candidates), holder, leader, aimed,
+            )
+            continue
+        # The world has already answered some of these. A sale that was
+        # delivered, or refused with a reason retrying cannot change, must
+        # not be proposed again: 819 of 822 `item not carried` refusals in
+        # one day were re-issues of an item that had already been sold
+        # (infra#3330).
+        #
+        # A HOLDER STANDING AT A VENDOR IS NOT HELD BACK FOR RANGE (#149).
+        # `town.vendor` is this holder's own reading, so a range refusal
+        # from somewhere else no longer describes where it stands.
+        plan = item_plan.plan(holder_candidates, attempts,
+                              at_vendor=bool(town.vendor))
+        considered += len(holder_candidates)
+        for candidate in plan.write:
+            if await asyncio.to_thread(_insert_sell, candidate):
+                inserted += 1
+        log.info(
+            "economy: holder=%s queued %d/%d vendor sale(s), held back %s",
+            holder, len(plan.write), len(holder_candidates),
+            item_plan.reasons(plan.skipped),
+        )
+    log.info("economy: queued %d/%d vendor sale(s) across %d holder(s), "
+             "one errand on leader=%s (taken=%s)",
+             inserted, considered, len(by_holder), leader, aimed)
+    return inserted
+
+
+def _report_vendor_claim(slot, aimed: bool, inserted: int) -> None:
+    """Tell the town slot whether the vendor pass's urgent claim paid off.
+
+    WHETHER THAT URGENT CLAIM WAS WORTH TAKING (infra#4191). The vendor pass
+    preempts everything on the strength of bag pressure, and `townslot` cannot
+    see whether a sale came of it - only `_queue_vendor_sales` knows how many
+    sales were actually written, which is `inserted`. So the pass reports its
+    own outcome, and a run of fruitless ones costs it the right to preempt for
+    a while.
+
+    ONLY WHEN IT HELD THE COLUMN. `aimed` is False when some other pass had
+    the traveller, and being refused a turn is an ordinary wait rather than a
+    wasted one - counting it would back the pass off for somebody else's
+    errand.
+
+    Lifted out of `_vendor_once` unchanged (wow-overseer#977).
+    """
+    if not aimed:
+        return
+    if inserted:
+        slot.productive("economy")
+        return
+    until = slot.fruitless("economy", time.monotonic())
+    log.warning(
+        "economy: took the travel column on bag pressure and wrote "
+        "no sale; urgency suppressed for %.0fs so a pressure this "
+        "pass cannot relieve stops outranking every other errand "
+        "(infra#4191)",
+        max(0.0, until - time.monotonic()),
+    )
 
 
 def _sellable_per_holder(rows: list, bag_rows: list,
