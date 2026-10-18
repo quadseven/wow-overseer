@@ -252,10 +252,13 @@ class GuildCharterDesign(unittest.TestCase):
     """Keep the charter alternative grounded in module behavior and a test plan."""
 
     def test_charter_document_records_blocker_and_verification_steps(self):
-        from pathlib import Path
-
-        document = Path("mod-overseer/docs/design/guild-charter-founding.md")
-        text = document.read_text()
+        # This repository's docs, resolved from the suite rather than the
+        # working directory, and NOT the mod-overseer submodule: the module
+        # repository has no docs/design tree, so a path into it could never
+        # exist on any checkout.
+        document = ROOT / "docs/design/guild-charter-founding.md"
+        self.assertTrue(document.is_file(), f"design doc missing: {document}")
+        text = document.read_text(encoding="utf-8")
         for required in (
             "UNIT_NPC_FLAG_PETITIONER",
             "CONFIG_MIN_PETITION_SIGNS",
