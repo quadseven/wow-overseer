@@ -930,3 +930,132 @@ def settled(first, second, still_yards=SETTLED_YARDS) -> dict:
         if dx * dx + dy * dy <= limit:
             out[name] = now
     return out
+
+
+# Ritual of Summoning: spell 698, learned at level 20, consumes a Soul Shard.
+# Mirrors guildjobs.RITUAL_OF_SUMMONING, guildjobs.RITUAL_LEVEL and
+# guildjobs.SOUL_SHARD so this decision can be tested without the guild pass.
+RITUAL_OF_SUMMONING = 698
+RITUAL_LEVEL = 20
+SOUL_SHARD = 6265
+WARLOCK_CLASS = 9
+
+
+def is_warlock(member) -> bool:
+    """Whether `member` is a warlock (class id 9)."""
+    try:
+        return int(member.get("class_id") or 0) == WARLOCK_CLASS
+    except (TypeError, ValueError):
+        return False
+
+
+def knows_ritual(member) -> bool:
+    """Whether `member` knows Ritual of Summoning (spell 698)."""
+    spells = member.get("spells") or ()
+    try:
+        return RITUAL_OF_SUMMONING in {int(s) for s in spells}
+    except (TypeError, ValueError):
+        return False
+
+
+def carries_soul_shard(member) -> bool:
+    """Whether `member` carries a Soul Shard (item 6265)."""
+    items = member.get("items") or ()
+    try:
+        return SOUL_SHARD in {int(i) for i in items}
+    except (TypeError, ValueError):
+        return False
+
+
+def eligible_warlocks(members) -> list:
+    """The warlocks who can cast the ritual: level 20+, know it, carry a shard."""
+    out = []
+    for m in members or ():
+        if not is_warlock(m):
+            continue
+        try:
+            if int(m.get("level") or 0) < RITUAL_LEVEL:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if not knows_ritual(m):
+            continue
+        if not carries_soul_shard(m):
+            continue
+        out.append(m)
+    return out
+
+
+def choose_summoners(eligible, count) -> tuple:
+    """Pick `count` warlocks (1 to 3) to take part, highest level first."""
+    if count < 1 or count > 3:
+        return ()
+    ordered = sorted(
+        eligible, key=lambda m: (-int(m.get("level") or 0), str(m.get("name") or ""))
+    )
+    return tuple(str(m.get("name")) for m in ordered[:count])
+
+
+def at_stone(member, stone, yards) -> bool:
+    """Whether `member` stands within `yards` of the meeting stone `stone`."""
+    return spawn_in_reach(stone, member, yards)
+
+
+def gathered_at(warlocks, stone, yards, positions) -> bool:
+    """Whether every warlock named stands within `yards` of the meeting stone."""
+    for name in warlocks:
+        standing = positions.get(name)
+        if not at_stone(standing, stone, yards):
+            return False
+    return True
+
+
+def target_arrived(target, stone, yards, before, after) -> bool:
+    """Whether `target` was not at the stone before and is at it after.
+
+    Arrival is a change of position: already standing at the stone is not an
+    arrival, and a target that never appears after cannot have arrived.
+    """
+    prior = before.get(target)
+    now = after.get(target)
+    if not now:
+        return False
+    if prior and at_stone(prior, stone, yards):
+        return False
+    return at_stone(now, stone, yards)
+
+
+@dataclass(frozen=True)
+class SummonPlan:
+    """A summon decision: who casts, the stone they gather at, the place."""
+
+    target: str
+    caster: str
+    assistants: tuple[str, ...]
+    stone: dict | None
+    place: str
+
+
+def plan_summon(target, members, stone, positions, count=1) -> SummonPlan | None:
+    """A summon plan: the caster and assistants, or None when it cannot be done.
+
+    The stone is supplied by the caller (the meeting stone nearest the dungeon
+    entrance); this only decides who casts and whether they can gather.
+    """
+    eligible = eligible_warlocks(members)
+    summoners = choose_summoners(eligible, count)
+    if not summoners:
+        return None
+    place = str(stone.get("name") or "a shared point") if stone else "a shared point"
+    return SummonPlan(
+        target=target,
+        caster=summoners[0],
+        assistants=summoners[1:],
+        stone=stone,
+        place=place,
+    )
+
+
+def summon_command(target, caster) -> str:
+    """The command row for the cast: kind 'summon', never a GM dot-command."""
+    return "summon %s" % target
