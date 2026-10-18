@@ -1857,6 +1857,7 @@ def equips_to_queue(
     holders=None,
     now=None,
     memory_hours=24,
+    online=None,
 ) -> tuple:
     """Which equips to write now, and a note for each one held back.
 
@@ -1899,6 +1900,14 @@ def equips_to_queue(
         if key in held:
             notes.append(held[key])
             continue
+        # Never queue an equip for an offline member (#869): the world
+        # cannot act on it, and it just piles up retries.
+        if online is not None and equip.holder not in online:
+            notes.append(
+                "%s is offline; equip of %s held until they are online"
+                % (equip.holder, equip.name)
+            )
+            continue
         # The bot keeps its own better-scored piece by choice: it is not a
         # refusal, it never earns a stuck reason, and it is not wanted again
         # until its slot's gear or the wanted piece changes. The reader-worded
@@ -1911,6 +1920,20 @@ def equips_to_queue(
         if (answers or {}).get(key, {}).get("status") == "applied":
             continue
         if key in recent:
+            continue
+        # Give up after repeated tries (#869): the world has refused this
+        # piece `give_up` times without a reason, so stop asking and say so.
+        # This is for SILENT failures (delivered but not worn, no detail).
+        # A refusal WITH a reason is handled by _world_holds above, not here.
+        attempts = int((tries or {}).get(key, 0))
+        answer = (answers or {}).get(key, {})
+        has_refusal = str(answer.get("status", "")) in WORLD_REFUSALS
+        if attempts >= give_up and not has_refusal:
+            notes.append(
+                "%s still carries %s after %d equip command(s); "
+                "held until the memory window passes"
+                % (equip.holder, equip.name, attempts)
+            )
             continue
         queue.append(equip)
     return tuple(queue), tuple(notes)
