@@ -6,20 +6,22 @@ operator decision (issue #1106). Nothing in the bridge or the module buys, signs
 This file records what the charter path would need, checked against the pinned core rather than recalled
 from memory, so that whoever picks it up does not start from guessed flags. Every core reference below is to
 the core pinned as `AC_CORE_SHA` in `UPSTREAM-PINS.env` (`47960183bb03`, the playerbots fork of AzerothCore).
-Re-check the line numbers when that pin moves.
+References name a file and a symbol, not a line number, so they survive edits that only move code; grep the
+symbol at the pinned SHA. When that pin moves, re-check the values in the table (item entry, flag bits,
+config defaults), which are what a builder would rely on.
 
 ## 1. What the core actually requires
 
 | Fact | Pinned core value | Where |
 |---|---|---|
-| Charter item | `GUILD_CHARTER = 5863` | `src/server/game/Petitions/PetitionMgr.h:31` |
-| NPC that sells it | `UNIT_NPC_FLAG_PETITIONER = 0x00040000` (the header notes guild petitioners carry `0xC0000`, i.e. petitioner plus `UNIT_NPC_FLAG_TABARDDESIGNER = 0x00080000`) | `src/server/game/Entities/Unit/UnitDefines.h:340-341` |
-| Buy check | `HandlePetitionBuyOpcode` calls `GetNPCIfCanInteractWith(guidNPC, UNIT_NPC_FLAG_PETITIONER)` | `src/server/game/Handlers/PetitionsHandler.cpp:66` |
-| Price | `CONFIG_CHARTER_COST_GUILD`, config `Guild.CharterCost`, default 1000 copper (10 silver) | `src/server/game/World/WorldConfig.cpp:218` |
-| Signatures needed | `CONFIG_MIN_PETITION_SIGNS`, config `MinPetitionSigns`, default 9, range 0-9, reloadable | `src/server/game/World/WorldConfig.cpp:276` |
-| How a signature arrives | `CMSG_PETITION_SIGN`, handled by `HandlePetitionSignOpcode` | `src/server/game/Handlers/PetitionsHandler.cpp:400` |
-| One signature per account | the sign handler refuses a second signer from an account already on the charter, then lets `OnPlayerbotCheckPetitionAccount` override that answer | `src/server/game/Handlers/PetitionsHandler.cpp:487-497` |
-| Turn-in | `CMSG_TURN_IN_PETITION`, `HandleTurnInPetitionOpcode`; refuses with `PETITION_TURN_NEED_MORE_SIGNATURES` below the configured count, else destroys the charter, calls `Guild::Create` for the owner and `Guild::AddMember` for each signer | `src/server/game/Handlers/PetitionsHandler.cpp:659`, `:747-785` |
+| Charter item | `GUILD_CHARTER = 5863` | `src/server/game/Petitions/PetitionMgr.h`, enum `CharterItemIDs`, entry `GUILD_CHARTER` |
+| NPC that sells it | `UNIT_NPC_FLAG_PETITIONER = 0x00040000` (the header notes guild petitioners carry `0xC0000`, i.e. petitioner plus `UNIT_NPC_FLAG_TABARDDESIGNER = 0x00080000`) | `src/server/game/Entities/Unit/UnitDefines.h`, enum `NPCFlags` |
+| Buy check | `HandlePetitionBuyOpcode` calls `GetNPCIfCanInteractWith(guidNPC, UNIT_NPC_FLAG_PETITIONER)` | `src/server/game/Handlers/PetitionsHandler.cpp`, `HandlePetitionBuyOpcode` |
+| Price | `CONFIG_CHARTER_COST_GUILD`, config `Guild.CharterCost`, default 1000 copper (10 silver) | `src/server/game/World/WorldConfig.cpp`, `SetConfigValue` for `CONFIG_CHARTER_COST_GUILD` |
+| Signatures needed | `CONFIG_MIN_PETITION_SIGNS`, config `MinPetitionSigns`, default 9, range 0-9, reloadable | `src/server/game/World/WorldConfig.cpp`, `SetConfigValue` for `CONFIG_MIN_PETITION_SIGNS` |
+| How a signature arrives | `CMSG_PETITION_SIGN`, handled by `HandlePetitionSignOpcode` | `src/server/game/Handlers/PetitionsHandler.cpp`, `HandlePetitionSignOpcode` |
+| One signature per account | the sign handler refuses a second signer from an account already on the charter, then lets `OnPlayerbotCheckPetitionAccount` override that answer | `src/server/game/Handlers/PetitionsHandler.cpp`, `HandlePetitionSignOpcode`, the loop over `signatureMap` before `OnPlayerbotCheckPetitionAccount` |
+| Turn-in | `CMSG_TURN_IN_PETITION`, `HandleTurnInPetitionOpcode`; refuses with `PETITION_TURN_NEED_MORE_SIGNATURES` below the configured count, else destroys the charter, calls `Guild::Create` for the owner and `Guild::AddMember` for each signer | `src/server/game/Handlers/PetitionsHandler.cpp`, `HandleTurnInPetitionOpcode` |
 
 Two consequences follow directly from the table:
 
