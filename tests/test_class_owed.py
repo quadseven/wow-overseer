@@ -100,7 +100,15 @@ class WhoOwes(unittest.TestCase):
     def test_a_group_quest_is_owed_and_asked_for(self):
         grp = book(
             quest_rows=[
-                qrow(2000, "Group Job", reward=8121, grp=3, npc1=3130, npc_count1=1)
+                qrow(
+                    2000,
+                    "Group Job",
+                    reward=8121,
+                    grp=3,
+                    npc1=3130,
+                    npc_count1=1,
+                    min_level=12,  # inside the #1094 solo gap of a level 20
+                )
             ]
         )
         owed = classquest.owed(grp, who(quest_log={2000: 3}))
@@ -207,7 +215,15 @@ class TheBound(unittest.TestCase):
     def test_the_release_keeps_the_ask_and_names_the_blocker(self):
         grp = book(
             quest_rows=[
-                qrow(2000, "Group Job", reward=8121, grp=3, npc1=3130, npc_count1=1)
+                qrow(
+                    2000,
+                    "Group Job",
+                    reward=8121,
+                    grp=3,
+                    npc1=3130,
+                    npc_count1=1,
+                    min_level=12,  # inside the #1094 solo gap of a level 20
+                )
             ]
         )
         owing = classquest.Owing()
