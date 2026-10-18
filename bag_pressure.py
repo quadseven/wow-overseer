@@ -1993,6 +1993,7 @@ ROLE_TANK, ROLE_DAMAGE, ROLE_UNKNOWN = (
     gear.ROLE_UNKNOWN,
 )
 equips_to_queue = gear.equips_to_queue
+equip_room = gear.equip_room
 latest_answers = gear.latest_answers
 worn_pieces = gear.worn_pieces
 world_held = gear.world_held

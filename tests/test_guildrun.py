@@ -775,10 +775,11 @@ class NoRunFormsForADoorTheClearCannotFinish(unittest.TestCase):
     member-hours each, because mod-dungeon-clear had no data for it: nothing
     lit the Fires of Aku'mai that open the door to its last bosses. The hold
     on Blackfathom lifted once mod-dungeon-clear 19 and 21 rolled onto the
-    worldserver (roll 48, 2026-10-10). Gnomeregan has no data yet (#807). A
-    run that cannot finish does not form."""
+    worldserver (roll 48, 2026-10-10). Gnomeregan was held too, until #807
+    found its route needs no new data. A run that cannot finish does not
+    form."""
 
-    HELD = {"gnomeregan"}
+    HELD: set = set()
 
     def offered(self, levels, faction):
         return {
@@ -812,11 +813,22 @@ class NoRunFormsForADoorTheClearCannotFinish(unittest.TestCase):
         self.assertIn("razorfen-kraul", self.offered([32] * 5, "Horde"))
         self.assertIn("razorfen-kraul", self.offered([32] * 5, "Alliance"))
 
+    def test_gnomeregan_is_offered_to_the_band_that_fits_it(self):
+        """#807: the route from the front entrance to Thermaplugg never meets
+        the Workshop Door, and The Final Chamber opens to a click, so a band
+        of 31 to 33 is offered Gnomeregan on both sides."""
+        door = next(d for d in guildrun.doors() if d.keyword == "gnomeregan")
+        for faction in ("Alliance", "Horde"):
+            self.assertIn("gnomeregan", self.offered([31, 32, 32, 32, 33], faction))
+            fits = guildrun.fitting_doors([32] * 5, [door], faction)
+            self.assertEqual(fits, [door], faction)
+
     def test_a_single_held_door_does_not_fit_a_member(self):
         """The pug and social paths ask fitting_doors about one door."""
         door = next(d for d in guildrun.doors() if d.keyword == "gnomeregan")
-        self.assertEqual(guildrun.fitting_doors([30] * 5, [door], "Alliance"), [])
-        self.assertEqual(guildrun.fitting_doors([30] * 5, [door], "Horde"), [])
+        with mock.patch.dict(guildrun.NO_CLEAR_DATA, {"gnomeregan": "a test hold"}):
+            self.assertEqual(guildrun.fitting_doors([32] * 5, [door], "Alliance"), [])
+            self.assertEqual(guildrun.fitting_doors([32] * 5, [door], "Horde"), [])
 
 
 class TheDoorsThatFit(unittest.TestCase):

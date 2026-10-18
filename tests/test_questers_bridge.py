@@ -7,10 +7,18 @@ import types
 import unittest
 from unittest import mock
 
+import guildjobs
 import questers
 import raidteams
 from test_guildsocial_bridge import bridge
-from test_questers import ELWYNN, world
+from test_questers import (
+    ELWYNN,
+    NO_TRANSPORT,
+    crossing_row,
+    giver,
+    quest,
+    world,
+)
 
 
 def quester(name="Mirra", **kw):
@@ -37,6 +45,7 @@ class Pass:
         self.ledger = dict(ledger or {})
         self.cat = cat or world()
         self.hunts_open = 0
+        self.crossings = ()
         self.started, self.recorded, self.shared, self.asked = [], [], [], []
         self.self = types.SimpleNamespace(
             _job_steps={},
@@ -57,7 +66,7 @@ class Pass:
 
     def _facts(self, names):
         self.asked.append(list(names))
-        return self.members, (), self.ledger, self.hunts_open
+        return self.members, (), self.ledger, self.hunts_open, self.crossings
 
     def run(self, now=0.0):
         with (
@@ -95,6 +104,28 @@ class TheQuesterPass(unittest.TestCase):
         self.assertEqual([r.command for r in left.started[0].rows], ["take quest:2"])
         done = Pass([quester(level=5, quests_done=frozenset({1, 2, 3, 6}))]).run()
         self.assertEqual([r.command for r in done.started[0].rows], ["take quest:20"])
+
+    def test_a_crossing_the_world_refused_for_good_is_not_written_every_pass(self):
+        # Two death knights in Acherus asked for Kalimdor 1,097 times in a day
+        # (2026-10-18); the quester pass reads the crossing rows and holds it.
+        member = quester(level=5, quests_done=frozenset({1, 2, 3, 6, 20, 30}))
+        cat = world(
+            extra_quests=[quest(40, 148, 4, title="Darkshore Fish")],
+            extra_givers=[
+                giver(40, "start", 1040, 140, 0, 0, map_id=1),
+                giver(40, "end", 1040, 140, 0, 0, map_id=1),
+            ],
+        )
+        first = Pass([member], cat=cat).run()
+        self.assertEqual(
+            [(r.command, r.source) for r in first.started[0].rows],
+            [("cross-to-map map:1", "guildjobs:quester-cross:Mirra")],
+        )
+        walled = Pass([member], cat=cat)
+        walled.crossings = guildjobs.recent_from_rows(
+            [crossing_row(NO_TRANSPORT, False, age=3)]
+        )
+        self.assertEqual(walled.run().started, [])
 
     def test_a_quester_already_on_a_step_is_given_no_other(self):
         run = Pass([quester()])

@@ -795,6 +795,16 @@ FLIGHT_LEARN_CYCLE_SECONDS = float(
 FLIGHT_LEARN_ATTEMPTS = int(os.environ.get("FLIGHT_LEARN_ATTEMPTS", "3"))
 
 
+STALE_CLAIMED_DETAIL = (
+    core.RESTART_DETAIL_PREFIX
+    + "no result from the worldserver; it MAY still have run, check before repeating it"
+)
+STALE_VERIFYING_DETAIL = (
+    core.RESTART_DETAIL_PREFIX
+    + "handed to the bot, but the worldserver never reported whether anything changed"
+)
+
+
 def _expire_stale_claims(seconds: int) -> int:
     """Move abandoned claims to a terminal state.
 
@@ -805,7 +815,10 @@ def _expire_stale_claims(seconds: int) -> int:
     as the bridge lives. Ending the row does two jobs: it bounds the poll, and
     it finally tells whoever gave the order that nothing came of it.
 
-    Never re-runs anything: the row goes straight to 'error'.
+    Never re-runs anything: the row goes straight to 'error'. Both details
+    start with core.RESTART_DETAIL_PREFIX (#789): only a worldserver that is
+    gone leaves a row here, so a pass reading the row asks again rather than
+    backing off it as a refusal.
 
     'verifying' (infra#2819) is swept the same way and for the same reason,
     with its own wording. That row HAS been handed to the bot - what was lost
@@ -827,19 +840,17 @@ def _expire_stale_claims(seconds: int) -> int:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE overseer_command SET status = 'error', "
-            "detail = 'no result from the worldserver; it MAY still have run, "
-            "check before repeating it' "
+            "detail = %s "
             "WHERE status = 'claimed' AND updated_at < NOW() - INTERVAL %s SECOND",
-            (seconds,),
+            (STALE_CLAIMED_DETAIL, seconds),
         )
         swept = cur.rowcount
         cur.execute(
             "UPDATE overseer_command SET status = 'error', "
-            "detail = 'handed to the bot, but the worldserver never reported "
-            "whether anything changed' "
+            "detail = %s "
             "WHERE status = 'verifying' AND updated_at < NOW() - INTERVAL %s SECOND "
             "AND NOT (kind = 'guild' AND command LIKE 'finder-run %%')",
-            (seconds,),
+            (STALE_VERIFYING_DETAIL, seconds),
         )
         return swept + cur.rowcount
 
@@ -4062,11 +4073,14 @@ def _planner_catalog(cur) -> dict | None:
 def _planner_preraid(names: list, level_rows: list) -> tuple:
     """(upgrades, progress) for campaignplan.Facts: what one run of each
     level 60 dungeon is worth to each member (#280), and the attunement and
-    key. (None, None) below the level cap, where gear does not choose the
-    dungeon, and for any read this realm cannot answer."""
+    key. A family levelling from preraid.FIRE_FLOOR gets its tanks' planned
+    fire resistance pieces alone (preraid.fire_plan, #759) and no progress.
+    (None, None) below that, where gear does not choose the dungeon, and for
+    any read this realm cannot answer."""
     levels = [int(r.get("level") or 0) for r in level_rows]
-    if not levels or min(levels) < campaignplan.LEVEL_CAP:
+    if not levels or min(levels) < preraid.FIRE_FLOOR:
         return None, None
+    capped = min(levels) >= campaignplan.LEVEL_CAP
     marks = preraid.holes(len(names))
     args = tuple(names)
     with _connect() as conn, conn.cursor() as cur:
@@ -4075,18 +4089,22 @@ def _planner_preraid(names: list, level_rows: list) -> tuple:
                                args, "the members' specs")
         worn = _planner_rows(cur, preraid.WORN_SQL.format(holes=marks), args,
                              "the members' worn items")
-        done = _planner_rows(
-            cur, preraid.PROGRESS_REWARDED_SQL.format(holes=marks), args,
-            "the attunement and key quests rewarded")
-        held_quests = _planner_rows(
-            cur, preraid.PROGRESS_LOG_SQL.format(holes=marks), args,
-            "the attunement and key quests held")
-        held = _planner_rows(
-            cur, preraid.PROGRESS_ITEMS_SQL.format(holes=marks), args,
-            "the attunement and key items")
+        if not capped:
+            done = held_quests = held = None
+        else:
+            done = _planner_rows(
+                cur, preraid.PROGRESS_REWARDED_SQL.format(holes=marks), args,
+                "the attunement and key quests rewarded")
+            held_quests = _planner_rows(
+                cur, preraid.PROGRESS_LOG_SQL.format(holes=marks), args,
+                "the attunement and key quests held")
+            held = _planner_rows(
+                cur, preraid.PROGRESS_ITEMS_SQL.format(holes=marks), args,
+                "the attunement and key items")
     upgrades = None
     if found is not None and people is not None and worn is not None:
-        plans = [preraid.plan(m, found) for m in preraid.members(people, worn)]
+        planner = preraid.plan if capped else preraid.fire_plan
+        plans = [planner(m, found) for m in preraid.members(people, worn)]
         upgrades = preraid.run_gains(plans)
     progress = None
     if done is not None and held_quests is not None and held is not None:
@@ -6726,6 +6744,10 @@ class Bridge(discord.Client):
         self._equip_holds: dict = {}
         # The last worn read per holder, which a failed read falls back on.
         self._equip_worn: dict = {}
+        # Members too full to put an upgrade on (#1088), holder -> (free slots
+        # needed, what for), from gear.equip_room: the guild jobs pass makes
+        # the room, and the equip pass asks again once it is there.
+        self._equip_room: dict = {}
         # JEV, IN SHADOW (#95). One client for the process, so its cache and
         # its in-flight limit are shared by every family. With no
         # TYPESAFE_API_KEY it answers every question with `no_key` and the
@@ -8275,6 +8297,17 @@ class Bridge(discord.Client):
             await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None)),
             exempt=_standin_out(),
         )
+        # ON job='fish' THE ONE THING TO BUY IS A POLE (mod-overseer#530). The
+        # fishing drive casts only with a pole in the bags, and upstream buys
+        # one for random bots alone, so nobody on the roster ever owned one.
+        if mode == craft_supply.FISH_MODE:
+            queued, trips = await self._buy_fishing_poles(names, cohort)
+            log.info(
+                "craft_supply: the family is on job=%s, so the only thing "
+                "bought is a Fishing Pole - queued %d buy errand(s), %d "
+                "member(s) still need a trip", mode, queued, trips,
+            )
+            return
         if mode not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER):
             log.info(
                 "craft_supply: the family is on job=%s rather than %s or %s, "
@@ -8622,6 +8655,41 @@ class Bridge(discord.Client):
             decision.release.character, decision.release.aim, claimant,
         )
         return False
+
+    async def _buy_fishing_poles(self, names: list, cohort=None) -> tuple:
+        """Queue a Fishing Pole for every member holding none (mod-overseer#530).
+
+        The same two halves `_craft_supply_once` runs for a reagent: a buy
+        row for whoever stands at a counter that stocks the pole, and a
+        `craft_supply.Need` for whoever does not, which `_walk_for_reagents`
+        turns into one walk on the leader. The decisions are
+        `craft_supply.pole_errand` / `pole_need`; this only reads the world
+        and writes their answers. Returns (rows queued, needs walked for).
+        """
+        holders = await asyncio.to_thread(_fetch_pole_holders, names)
+        purses = await asyncio.to_thread(_fetch_purses, names)
+        free_slots = await asyncio.to_thread(_fetch_free_slots, names)
+        queued = 0
+        needs: list = []
+        for name in sorted(names):
+            held = name in holders
+            town = await asyncio.to_thread(_fetch_town, name)
+            need = craft_supply.pole_need(name, held, town)
+            if need:
+                needs.append(need)
+            _level, money = purses.get(name, (0, 0))
+            errand, note = craft_supply.pole_errand(
+                name, held, money, free_slots.get(name, 0), town,
+            )
+            if note:
+                log.info("craft_supply: %s", note)
+                continue
+            if errand and await asyncio.to_thread(_insert_town_errand, errand):
+                queued += 1
+                log.info("craft_supply: %s %s - %s", name, errand.command, errand.why)
+        if needs:
+            await self._walk_for_reagents(needs, cohort)
+        return queued, len(needs)
 
     async def _walk_for_reagents(self, needs: list, cohort=None) -> None:
         """Walk to a reagent vendor, unless another family's queue owns its job.
@@ -12238,7 +12306,9 @@ class Bridge(discord.Client):
         refused with a reason is held on it (#897) until the holder's level,
         what is worn in that slot, or the bags change; `holders` are the
         members this pass read. `online`, when given, is who is in the world:
-        nothing is queued for anyone else (#869).
+        nothing is queued for anyone else (#869). A piece its holder has no
+        bag room for is not queued either (#1088): the shortfall is kept in
+        `self._equip_room` for the guild jobs pass to make the room.
         """
         recent = {(row["target_name"], row["command"]) for row in current
                   if row["recent"]}
@@ -12273,12 +12343,26 @@ class Bridge(discord.Client):
         else:
             self._equip_worn.update({h: read.get(h, {}) for h in wearers})
         worn = {h: self._equip_worn[h] for h in wearers if h in self._equip_worn}
+        # Free bag slots, because a two-hander over a main hand and a shield
+        # needs one and the world refuses it without (#1088). An unread room
+        # is None, which judges and holds every piece as before.
+        try:
+            free_slots = await asyncio.to_thread(_fetch_free_slots, wearers)
+        except pymysql.err.MySQLError as exc:
+            log.warning("equip: bag room unreadable (%s); no piece is judged "
+                        "against it this pass", exc)
+            free_slots = None
+        passed = set(holders) | set(wearers)
+        self._equip_room = {h: need for h, need in self._equip_room.items()
+                            if h not in passed}
+        self._equip_room.update(bag_pressure.equip_room(wanted, worn, free_slots))
         # `holders` emptied by the deferral above falls back to the holders of
         # the filtered `wanted`, never to a deferred one.
         queue, notes = bag_pressure.equips_to_queue(
             wanted, recent, tries, answers=answers, worn=worn,
             holds=self._equip_holds, holders=set(holders) or None,
-            memory_hours=EQUIP_MEMORY_HOURS, online=online)
+            memory_hours=EQUIP_MEMORY_HOURS, online=online,
+            free_slots=free_slots)
         for note in notes:
             log.info("equip: %s", note)
         log.info("equip: %d %spiece(s) held on the world's answer",
@@ -14594,7 +14678,7 @@ class Bridge(discord.Client):
             log.info("questers: the world's quests are unread; no quester moves")
             return
         names = sorted(raidteams.quester_names())
-        members, tried, ledger, hunts_open = await asyncio.to_thread(
+        members, tried, ledger, hunts_open, crossings = await asyncio.to_thread(
             _fetch_quester_facts, names)
         if not members:
             log.info("questers: no quester is on the realm yet")
@@ -14612,7 +14696,7 @@ class Bridge(discord.Client):
             known = frozenset(held) | frozenset(
                 q for (who, q), state in ledger.items() if who == m.name and state == "broken")
             plan = questers.plan(cat, m, self._quester_clock, now, known, tried,
-                                 self._quester_last.get(m.name, 0))
+                                 self._quester_last.get(m.name, 0), crossings)
             await self._quester_ledger(m, plan, held, ledger, mono)
             if self._quester_start(m, plan, cat, cap, mono, hunt_verb and hunts_left > 0):
                 hunts_left -= 1
@@ -15852,6 +15936,10 @@ class Bridge(discord.Client):
         # The level step is a spawn walk too (guildlevel.py).
         leveling = (await asyncio.to_thread(_job_leveling, facts)
                     if spawn_walks else None)
+        # THE LEVEL CENSUS (#780): who stands where its quests ran out.
+        census = guildlevel.census(members, leveling)
+        if census:
+            log.info("guild jobs: %s", census)
         # THE PLAN RUNS ON THE EVENT LOOP (#833): it mutates the hunt clock and
         # the owing clock other tasks read, so it is not sent to a thread.
         # Every awaited input is read above, so this timer measures only the
@@ -15878,7 +15966,9 @@ class Bridge(discord.Client):
             still=standstill.all_minutes(self._guild_still, time.monotonic()),
             # The class quest asks lately: a run of them that did not get the
             # quest done stops the next (guildjobs.class_ask_streak).
-            asks=facts.get("quest_asks", ()))
+            asks=facts.get("quest_asks", ()),
+            # Members too full to put an upgrade on make room (#1088).
+            equip_room=self._equip_room)
         log.info("guild jobs: the plan took %.2f s on the event loop for %d "
                  "member(s)%s", time.perf_counter() - plan_started, len(members),
                  _family_label(cohort))
@@ -31329,6 +31419,9 @@ def _team_actor(guild: str) -> str:
 _QUESTER_CATALOGUE = None
 # The source of every row the questers' steps write, walks included.
 QUESTER_SOURCE_LIKE = guildjobs.SOURCE + ":" + questers.ACTION + "%"
+# Every crossing row of a guild step (guildjobs.CROSS_ACTIONS, each spelled
+# "<step>-cross"): a quester's crossing shares their clock and walls.
+QUESTER_CROSSINGS_LIKE = guildjobs.SOURCE + ":%-cross:%"
 # The stall clock and the quests found broken, kept across restarts in the
 # bridge memo store. A month: a quest is broken for good, and a clock left
 # that long belongs to a quest long gone from the log.
@@ -31371,26 +31464,30 @@ def _quester_catalogue():
 
 def _fetch_quester_facts(names: list) -> tuple:
     """(questers.Member rows, questers.Attempt rows, ledger state by (name,
-    quest), the realm's open hunt rows or None) for the questers on the realm.
-    A ledger the realm does not have yet (#923) reads as empty."""
+    quest), the realm's open hunt rows or None, guildjobs.Recent crossing rows)
+    for the questers on the realm. A ledger the realm does not have yet (#923)
+    reads as empty."""
     if not names:
-        return [], (), {}, None
+        return [], (), {}, None, ()
     marks = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         rows = _job_read(cur, "questers", questers.MEMBERS_SQL.format(names=marks), list(names))
         if not rows:
-            return [], (), {}, None
+            return [], (), {}, None, ()
         guids = ",".join(str(int(r["guid"])) for r in rows)
         log_rows = _job_read(cur, "quester quest logs", questers.LOG_SQL.format(guids=guids))
         done_rows = _job_read(cur, "quester rewarded quests",
                               questers.REWARDED_SQL.format(guids=guids))
         recent = _job_read(cur, "quester rows", _JOB_RECENT_SQL, (QUESTER_SOURCE_LIKE,))
+        crossings = _job_read(cur, "quester crossings", _JOB_RECENT_SQL,
+                              (QUESTER_CROSSINGS_LIKE,))
         ledger = _job_read(cur, "quest ledger", questers.LEDGER_SQL.format(names=marks),
                            list(names))
         hunts = _hunts_open(cur)
     members = questers.members_from_rows(rows, log_rows, done_rows)
     states = {(str(r["name"]), int(r["quest"])): str(r.get("state") or "") for r in ledger}
-    return members, questers.attempts(recent), states, hunts
+    return (members, questers.attempts(recent), states, hunts,
+            guildjobs.recent_from_rows(crossings))
 
 
 def _share_quester_quests(names: set) -> None:
@@ -32110,6 +32207,35 @@ def _fetch_standing_crafts(names: list) -> dict:
             row["name"]: (row["craft_spell"], row["money"])
             for row in cur.fetchall()
         }
+
+
+def _fetch_pole_holders(names: list) -> set:
+    """The names among `names` that own any fishing pole, worn or in the bags.
+
+    Any pole, not entry 6256 alone: item_template files every one of them as
+    class 2 (weapon), subclass 20, so a character with a Strong Fishing Pole is
+    not sold the basic one (mod-overseer#530). The bank does not count - a
+    pole there is one the fishing AI cannot equip - so a row must sit in an
+    equipment, worn-bag or backpack slot (bag 0, slot below 39), or inside a
+    bag that is itself worn (bag 0, slots 19-22).
+    """
+    if not names:
+        return set()
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT c.name AS name "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "FROM characters c "
+            "JOIN character_inventory ci ON ci.guid = c.guid "
+            "JOIN item_instance ii ON ii.guid = ci.item "
+            "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+            f"WHERE c.name IN ({marks}) AND it.class = 2 AND it.subclass = 20 "
+            "AND ((ci.bag = 0 AND ci.slot < 39) OR ci.bag IN ("
+            "SELECT wb.item FROM character_inventory wb "
+            "WHERE wb.guid = c.guid AND wb.bag = 0 AND wb.slot BETWEEN 19 AND 22))",
+            names,
+        )
+        return {row["name"] for row in cur.fetchall()}
 
 
 def _fetch_item_counts(pairs: list) -> dict:

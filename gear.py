@@ -1689,8 +1689,10 @@ class WorldHold:
     """One answered equip row the queue is holding a piece on.
 
     `worn` is what sat in the piece's slot when the hold began; `lifted` says
-    the hold is over for this row (that slot changed, or the piece left the
-    bags), so the same answer never holds the piece a second time.
+    the hold is over for this row (that slot changed, the piece left the bags,
+    or the room it was short of is there), so the same answer never holds the
+    piece a second time. `short` says the holder had too few free bag slots
+    for the piece when the hold began (room_needed).
     """
 
     row_id: int
@@ -1698,6 +1700,7 @@ class WorldHold:
     lifted: bool = False
     retry_at: object = None
     refusal_at: object = None
+    short: bool = False
 
 
 @dataclass
@@ -1809,6 +1812,73 @@ def _worn_for(equip, worn) -> tuple:
     )
 
 
+def room_needed(equip, worn) -> int:
+    """The free bag slots `equip` needs before the world will put it on.
+
+    What a piece displaces goes into the bag slot the piece leaves, and that
+    holds one: a two-hander over a main hand and a shield moves two, so the
+    shield needs a free slot of its own. With none the world refuses
+    (InventoryResult 21, "items cannot be swapped") until the bags change,
+    and the staged retry held three members for a day on it (#1088).
+    """
+    return max(0, len(_worn_for(equip, worn)) - 1)
+
+
+def _room_short(equip, worn, free_slots) -> int:
+    """How many more free bag slots `equip` needs than its holder has: 0 when
+    it has room, or when its bags were not read."""
+    free = (free_slots or {}).get(equip.holder)
+    if free is None:
+        return 0
+    return max(0, room_needed(equip, worn) - int(free))
+
+
+def _over(equip, worn) -> str:
+    """What `equip` would be put on over, as the notes name it."""
+    return " and ".join(name for _slot, _entry, name in _worn_for(equip, worn))
+
+
+def equip_room(wanted, worn, free_slots) -> dict:
+    """holder -> (free slots needed, "to put on <piece> over <worn>") for each
+    holder in `wanted` with too few free bag slots to put a piece on.
+
+    The guild jobs pass makes the room (guildjobs.equip_room_step); the
+    equip is asked again the pass the room is there. A holder short for two
+    pieces is named for the one that needs the most.
+    """
+    out: dict = {}
+    for equip in sorted(wanted, key=lambda e: (e.holder, e.slot, e.guid)):
+        if not _room_short(equip, worn, free_slots):
+            continue
+        need = room_needed(equip, worn)
+        if need > out.get(equip.holder, (0, ""))[0]:
+            words = "to put on %s over %s" % (equip.name, _over(equip, worn))
+            out[equip.holder] = (need, words)
+    return out
+
+
+def _room_note(equip, worn, free_slots) -> str:
+    return (
+        "%s leaves %s in its bags: putting it on over %s needs %d free bag "
+        "slot(s) and it has %d"
+    ) % (
+        equip.holder,
+        equip.name,
+        _over(equip, worn),
+        room_needed(equip, worn),
+        int(free_slots[equip.holder]),
+    )
+
+
+def _room_made(hold, equip, worn, free_slots) -> bool:
+    """A hold that began short of room, now that the room is there."""
+    return (
+        hold.short
+        and (free_slots or {}).get(equip.holder) is not None
+        and not _room_short(equip, worn, free_slots)
+    )
+
+
 def _refused(row) -> bool:
     return (
         row is not None
@@ -1818,15 +1888,16 @@ def _refused(row) -> bool:
 
 
 def _world_holds(
-    wanted, answers, worn, holds, holders, tries, now, memory_hours
+    wanted, answers, worn, holds, holders, tries, now, memory_hours, free_slots=None
 ) -> dict:
     """(holder, command) -> note, for each piece held on the world's answer.
 
     `holds` is updated in place. A hold begins at the first pass that sees a
     refusal row, with what is worn in that slot then, and lifts when that
-    changes or when the piece is no longer wanted from one of `holders` (it
-    left the bags). A level change lifts it before this is reached, because
-    `since_level_change` has already dropped the rows it answered. A
+    changes, when the piece is no longer wanted from one of `holders` (it
+    left the bags), or when the hold began short of bag room and `free_slots`
+    now has the room (#1088). A level change lifts it before this is reached,
+    because `since_level_change` has already dropped the rows it answered. A
     bot-keeps answer is never a refusal: it is recorded as a BotKeep (a
     choice, not a stuck member) and stays out of the notes this returns.
     """
@@ -1879,10 +1950,17 @@ def _world_holds(
             hold = None
         if hold is None:
             hold = holds[key] = WorldHold(
-                row_id=int(row.get("id", 0)), worn=worn_now, refusal_at=created
+                row_id=int(row.get("id", 0)),
+                worn=worn_now,
+                refusal_at=created,
+                short=_room_short(equip, worn, free_slots) > 0,
             )
-        elif hold.worn != worn_now:
+        elif hold.worn != worn_now or _room_made(hold, equip, worn, free_slots):
             hold.lifted = True
+        elif _room_short(equip, worn, free_slots):
+            # The first room read may have failed. Remember a shortage seen
+            # later so making room can still lift this refusal immediately.
+            hold.short = True
         if hold.lifted:
             continue
         attempts = max(1, int((tries or {}).get(key, 1)))
@@ -1932,6 +2010,7 @@ def equips_to_queue(
     now=None,
     memory_hours=24,
     online=None,
+    free_slots=None,
 ) -> tuple:
     """Which equips to write now, and a note for each one held back.
 
@@ -1960,17 +2039,37 @@ def equips_to_queue(
     `holds` is the caller's dict of WorldHold, kept between passes and
     updated in place; `holders` are the members this pass read, by default
     the holders of `wanted`.
+
+    A PIECE ITS HOLDER HAS NO BAG ROOM FOR IS NOT ASKED (#1088). `free_slots`
+    is holder -> free bag slots, None or a missing holder when unread. An
+    equip that needs more free slots than its holder has (room_needed: a
+    two-hander over a main hand and a shield) is never written, because the
+    world can only refuse it; its note says so in plain words instead of a
+    retry time, and `equip_room` names the shortfall for the guild jobs pass
+    to make the room. A hold that began short of room lifts the pass the
+    room is there, so the piece is asked again at once.
     """
     holds = {} if holds is None else holds
     if holders is None:
         holders = {e.holder for e in wanted}
     now = now or datetime.now(timezone.utc)
     held = _world_holds(
-        wanted, answers or {}, worn, holds, set(holders), tries, now, memory_hours
+        wanted,
+        answers or {},
+        worn,
+        holds,
+        set(holders),
+        tries,
+        now,
+        memory_hours,
+        free_slots,
     )
     queue, notes = [], []
     for equip in wanted:
         key = (equip.holder, equip.command)
+        if _room_short(equip, worn, free_slots):
+            notes.append(_room_note(equip, worn, free_slots))
+            continue
         if key in held:
             notes.append(held[key])
             continue

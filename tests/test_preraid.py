@@ -524,7 +524,11 @@ class TheRaidTab(unittest.TestCase):
     def test_the_bridge_planner_reads_the_upgrades_at_the_cap(self):
         self.assertIn("upgrades=upgrades, progress=progress", BRIDGE)
         self.assertIn("preraid.run_gains(plans)", BRIDGE)
-        self.assertIn("min(levels) < campaignplan.LEVEL_CAP", BRIDGE)
+        # At the cap the whole plan; from Blackrock Depths' band up to it the
+        # tanks' fire pieces alone (#759, test_fireplan runs it on fakes).
+        self.assertIn("min(levels) < preraid.FIRE_FLOOR", BRIDGE)
+        self.assertIn("capped = min(levels) >= campaignplan.LEVEL_CAP", BRIDGE)
+        self.assertIn("preraid.plan if capped else preraid.fire_plan", BRIDGE)
 
 
 if __name__ == "__main__":
