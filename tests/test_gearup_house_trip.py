@@ -178,8 +178,10 @@ class TheBridgeSendsTheLeader(unittest.TestCase):
     def test_a_leader_not_at_a_counter_asks_where_the_house_is(self):
         body = ast.unparse(_method("_gearup_house"))
         self.assertIn("await self._gearup_house_trip(leader, facts)", body)
+        self.assertIn("await self._gearup_far_house(leader, trip, cohort)", body)
+        far = ast.unparse(_method("_gearup_far_house"))
         self.assertIn(
-            "self._claim_town_slot(GEAR_HOUSE_CLAIMANT, leader, trip.aim", body
+            "self._claim_town_slot(GEAR_HOUSE_CLAIMANT, leader, trip.aim", far
         )
 
     def test_the_trip_reads_the_leaders_standing_and_the_spawns(self):

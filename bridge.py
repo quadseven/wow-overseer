@@ -9311,18 +9311,8 @@ class Bridge(discord.Client):
                         "gearup", leader, auction.AUCTIONEER_ROLE,
                         cohort=_cohort_key(cohort),
                     )
-                elif trip.aim:
-                    aimed = await self._claim_town_slot(
-                        GEAR_HOUSE_CLAIMANT, leader, trip.aim,
-                        cohort=_cohort_key(cohort),
-                    )
-                    log.info("gearup: no auction house within a town walk of %s; "
-                             "aimed at %s (%d yards) so the gear-short can buy "
-                             "there (aim taken=%s)", leader,
-                             trip.name or trip.aim, int(trip.yards), aimed)
                 else:
-                    log.info("gearup: no auction house trip for %s - %s",
-                             leader, trip.why_not)
+                    await self._gearup_far_house(leader, trip, cohort)
             for n in sorted(facts):
                 log.info("gearup: %s nothing yet: not at an auctioneer", n)
             return {}, {}, None
@@ -9334,6 +9324,22 @@ class Bridge(discord.Client):
                 log.info("gearup: %s nothing: no reachable auction house", name)
             return {}, teams, None
         return short, teams, house
+
+    async def _gearup_far_house(self, leader, trip, cohort) -> bool:
+        """Send the leader to a house beyond the town, or say why not (#1170)."""
+        if not trip.aim:
+            log.info("gearup: no auction house trip for %s - %s",
+                     leader, trip.why_not)
+            return False
+        aimed = await self._claim_town_slot(
+            GEAR_HOUSE_CLAIMANT, leader, trip.aim,
+            cohort=_cohort_key(cohort),
+        )
+        log.info("gearup: no auction house within a town walk of %s; "
+                 "aimed at %s (%d yards) so the gear-short can buy "
+                 "there (aim taken=%s)", leader,
+                 trip.name or trip.aim, int(trip.yards), aimed)
+        return aimed
 
     async def _gearup_house_trip(self, leader, facts):
         """Where the leader walks for an auction house, or None when unread.
