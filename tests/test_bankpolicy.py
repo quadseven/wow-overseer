@@ -677,7 +677,7 @@ class TheSellPassesSkipWhatThePolicyKeeps(unittest.TestCase):
         self.assertIn("policy=_bank_policy(names)", body)
 
     def test_the_filter_drops_kept_guids_only(self):
-        ns = {"_log_capped": lambda prefix, notes: None}
+        ns = {"_log_changed": lambda prefix, notes, key=(), capped=True: None}
         start = self.SOURCE.index("def _without_bank_keeps(")
         end = self.SOURCE.index("\ndef ", start + 1)
         exec(compile(self.SOURCE[start:end], "bridge.py", "exec"), ns)  # noqa: S102

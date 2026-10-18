@@ -6649,8 +6649,6 @@ class Bridge(discord.Client):
         # crafters are on a mailbox walk right now.
         self._crafter_routed: dict = {}
         self._crafter_said: dict = {}
-        # family -> the signature of the bank forecast last logged for it.
-        self._bank_forecast_said: dict = {}
         self._crafter_walks: dict = {}
         # THE GUILD'S OWN POST (#625): who is on a walk to take its letters
         # out, and when each grounded walker last used its hearthstone.
@@ -13587,8 +13585,7 @@ class Bridge(discord.Client):
         if not names or await self._mid_run(names):
             return
         bank_plan = await asyncio.to_thread(_plan_bank, names)
-        for note in bank_plan.notes:
-            log.info("bank: %s", note)
+        _log_changed("bank", bank_plan.notes, tuple(sorted(names)), capped=False)
         # `_head_now()` RATHER THAN bonds.head_of_family() (infra#3553, same
         # defect #3554 fixed in _vendor_once). The two differ exactly when it
         # matters: `_head_now` is what `_mark_party_leader` writes into
@@ -13718,7 +13715,7 @@ class Bridge(discord.Client):
             if await asyncio.to_thread(_insert_bank, move, step.command):
                 log.info("bank bags: %s (%s)%s", step.why, step.command,
                          _family_label(cohort))
-        _log_capped("bank bags", notes)
+        _log_changed("bank bags", notes, tuple(sorted(names)))
 
     async def _bank_passing_once(self, cohort=None) -> None:
         """The quick look: bank for whoever is at a banker, nothing else.
@@ -14124,8 +14121,9 @@ class Bridge(discord.Client):
     async def _say_bank_forecast(self, names: list, cohort=None) -> None:
         """Log the guild's bank forecast: a headline and one line per item.
 
-        Only when it differs from the last one logged for this family, so a
-        ten-minute cycle does not bury the log under the same seventy lines.
+        Only the lines that changed since this family's last forecast, with
+        the headline whenever any did (#1142): a whole forecast every ten
+        minutes for a handful of moved counts was a quarter of the log.
         A listing of a vault stack is withdrawn for the house by the guild
         bank pass (`_queue_guild_withdrawals`); a give or a vendor sale of a
         vault stack is still only the plan, and the line says so.
@@ -14133,11 +14131,9 @@ class Bridge(discord.Client):
         forecast = await asyncio.to_thread(_bank_forecast, names, True)
         lines = [line.summary for line in forecast.lines]
         lines += [d.line for d in forecast.decisions() if d.action == bankforecast.GIVE]
-        signature = hash(tuple(lines))
-        key = tuple(sorted(names))
-        if not lines or self._bank_forecast_said.get(key) == signature:
+        fresh, gone = _unsaid("bank forecast", tuple(sorted(names)), lines)
+        if not fresh and not gone:
             return
-        self._bank_forecast_said[key] = signature
         planned = [d for d in forecast.decisions()
                    if d.action in (bankforecast.GIVE, bankforecast.VENDOR)]
         log.info("bank forecast: %s%s%s", forecast.headline(),
@@ -14145,8 +14141,11 @@ class Bridge(discord.Client):
                  "and its listings are withdrawn for the house" % len(planned)
                  if planned else "",
                  _family_label(cohort))
-        for line in lines:
+        for line in fresh:
             log.info("bank forecast: %s", line)
+        if gone:
+            log.info("bank forecast: %d line(s) logged before no longer hold%s",
+                     gone, _family_label(cohort))
 
     async def _guild_bank_passing_once(self, cohort=None) -> None:
         """The quick look: deposit for whoever stands at a vault, nothing else.
@@ -26539,6 +26538,54 @@ def _log_capped(prefix: str, notes) -> None:
         log.info("%s: and %d more like it", prefix, len(notes) - GUILD_ROUTE_NOTE_LINES)
 
 
+# THE LINES A PASS REPEATS UNCHANGED (#1142). Measured read-only on the dev
+# realm bridge 2026-10-18 03:00-06:00 UTC: the bank forecast logged about 250
+# lines a pass, six passes an hour, with 4 to 11 of them changed; the bank
+# policy and bank bags passes logged the same twelve and six lines every one to
+# three minutes. Between them about 3,000 of the bridge's 10,000 lines an hour,
+# nearly all of them a line the log already held. A note is logged at INFO the
+# first time it holds, and again only after it changed or LOG_RESAY_SECONDS
+# went by, so a reader who opens the log late still finds the standing state
+# inside that window. In memory: a restart logs everything once more.
+LOG_RESAY_SECONDS = float(os.environ.get("LOG_RESAY_SECONDS", str(6 * 3600)))
+_SAID: dict = {}
+
+
+def _unsaid(prefix: str, key, notes, now=None) -> tuple:
+    """(the notes not logged last time for (prefix, key), how many of those
+    logged last time no longer hold), and remember these notes as logged.
+
+    Past LOG_RESAY_SECONDS since the whole set was last logged, every note
+    counts as unsaid again.
+    """
+    notes = list(dict.fromkeys(notes or ()))
+    now = time.monotonic() if now is None else now
+    slot = (prefix, key)
+    said = _SAID.get(slot)
+    if said is None or now - said[0] >= LOG_RESAY_SECONDS:
+        _SAID[slot] = (now, frozenset(notes))
+        return notes, 0
+    _SAID[slot] = (said[0], frozenset(notes))
+    return [n for n in notes if n not in said[1]], len(said[1] - set(notes))
+
+
+def _log_changed(prefix: str, notes, key=(), capped: bool = True) -> None:
+    """`_log_capped` for the notes that changed since this (prefix, key) last
+    logged, a count of those that stopped holding, and the repeats at DEBUG."""
+    notes = list(notes or ())
+    fresh, gone = _unsaid(prefix, key, notes)
+    if capped:
+        _log_capped(prefix, fresh)
+    else:
+        for note in fresh:
+            log.info("%s: %s", prefix, note)
+    if gone:
+        log.info("%s: %d line(s) logged before no longer hold", prefix, gone)
+    if len(notes) > len(fresh):
+        log.debug("%s: %d line(s) unchanged since last logged",
+                  prefix, len(notes) - len(fresh))
+
+
 def _fetch_guild_held_gear(names: list) -> list:
     """Read guildmates' carried gear facts; guildroute decides everything."""
     if not names:
@@ -29364,9 +29411,9 @@ def _bank_policy_read(names: list, fresh: bool = False) -> tuple:
             else:
                 raise
     _BANK_POLICY_CACHE[key] = (now, placed, spare)
-    _log_capped("bank policy", ["%s's %s -> %s: %s" % (p.holder, p.item, p.where, p.why)
-                                for p in placed.values()])
-    _log_capped("bank policy: spare copy", [str(g) for g in sorted(spare)])
+    _log_changed("bank policy", ["%s's %s -> %s: %s" % (p.holder, p.item, p.where, p.why)
+                                 for p in placed.values()], key)
+    _log_changed("bank policy: spare copy", [str(g) for g in sorted(spare)], key)
     return placed, spare
 
 
@@ -29431,7 +29478,10 @@ def _without_bank_keeps(candidates, placed: dict, what: str) -> list:
                 placed[int(guid)].where))
             continue
         out.append(candidate)
-    _log_capped("%s: bank policy" % what, kept)
+    # Keyed by the family whose policy this is: the pass runs for each family
+    # in turn, and one shared key would log both lists in full every pass.
+    _log_changed("%s: bank policy" % what, kept,
+                 tuple(sorted({p.holder for p in placed.values()})))
     return out
 
 

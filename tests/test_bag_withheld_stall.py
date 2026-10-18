@@ -583,6 +583,7 @@ def _run_vendor_once(queued, at_vendor=True):
             "_bank_policy": lambda names, fresh=False: {},
             "_bank_spare": lambda names, fresh=False: frozenset(),
             "_log_capped": lambda prefix, notes: None,
+            "_log_changed": lambda prefix, notes, key=(), capped=True: None,
             "asyncio": types.SimpleNamespace(to_thread=_thread),
             "time": Clock(),
             "log": log,
