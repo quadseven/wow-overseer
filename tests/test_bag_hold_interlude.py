@@ -124,6 +124,20 @@ class TheHoldKeepsItsClockThroughAnInterlude(unittest.TestCase):
         self.assertEqual((), self.ns["_bag_hold_read"](list(NAMES)))
         self.assertEqual({}, self.ns["_BAG_HOLD"])
 
+    def test_a_failed_read_is_logged_and_keeps_the_hold(self):
+        self._gate(5)
+        before = dict(self.ns["_BAG_HOLD"])
+
+        def broken(names):
+            raise RuntimeError("database gone")
+
+        self.ns["_fetch_free_slots"] = broken
+        self.assertEqual((), self.ns["_bag_hold_read"](list(NAMES)))
+        self.assertEqual(before, self.ns["_BAG_HOLD"])
+        self.assertTrue(
+            any("during an interlude failed" in line for line in self.log.lines)
+        )
+
 
 class TheQueueReadsDuringAnInterlude(unittest.TestCase):
     def setUp(self):
@@ -146,17 +160,6 @@ class TheQueueReadsDuringAnInterlude(unittest.TestCase):
     def test_no_interlude_leaves_the_reading_to_the_gate(self):
         _queue_pass(self.world, extra={"_bag_hold_read": self._read})
         self.assertEqual([], self.reads)
-
-    def test_a_failed_read_still_holds_the_order(self):
-        def broken(names):
-            raise RuntimeError("database gone")
-
-        before = [dict(r) for r in self.world.queue]
-        lines = _queue_pass(
-            self.world, holds={"Zug": "sell"}, extra={"_bag_hold_read": broken}
-        )
-        self.assertEqual(before, self.world.queue)
-        self.assertTrue(any("bag hold read for" in line for line in lines))
 
 
 if __name__ == "__main__":

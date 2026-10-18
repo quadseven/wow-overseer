@@ -3001,14 +3001,20 @@ def _bag_hold_read(names) -> tuple:
     Only a hold the gate already started is read, under the gate's own key
     (the members it sends, without anyone sitting out). A slot the interlude
     sells for still restarts the clock, as any town pass does. Returns what
-    `_bag_hold_stuck` returns, or () when there is no hold to keep.
+    `_bag_hold_stuck` returns, or () when there is no hold to keep or the
+    read failed (logged; the next cycle reads again).
     """
     # Looked up: the queue tests load this function in isolation.
     running = globals().get("_standin_running")
     names = list(running(names) if running is not None else names)
     if not names or tuple(sorted(names)) not in _BAG_HOLD:
         return ()
-    return _bag_hold_stuck(names, _fetch_free_slots(names))
+    try:
+        return _bag_hold_stuck(names, _fetch_free_slots(names))
+    except Exception:
+        log.exception("bag hold: the read for %s during an interlude failed; "
+                      "retrying next cycle", ", ".join(names))
+        return ()
 
 
 def _restore_bag_holds() -> None:
@@ -19337,12 +19343,7 @@ class Bridge(discord.Client):
             # Looked up: the queue tests load this method in isolation.
             hold_read = globals().get("_bag_hold_read")
             if hold_read is not None:
-                try:
-                    await asyncio.to_thread(hold_read, fam["names"])
-                except Exception:
-                    log.exception("queue: the bag hold read for %s failed "
-                                  "during its interlude; retrying next cycle",
-                                  campaignqueue._family(key))
+                await asyncio.to_thread(hold_read, fam["names"])
             return
         try:
             said = await asyncio.to_thread(_apply_queue_move, move,
