@@ -14,8 +14,8 @@ runs counted are the ones since the queue entry last started, so a door the
 family comes back to starts with a clean record.
 
   * a door is UNCLEARABLE after `STREAK_WIPES` wipes in a row, after three
-    attempts in a row without a clear (`ATTEMPTED`: a fought run or a bag
-    evacuation — anything that got inside), or when at least `RATE_MIN_RUNS`
+    attempts in a row without a clear (`ATTEMPTED`: a fought run, a bag
+    evacuation, or a client lost during a run), or when at least `RATE_MIN_RUNS`
     fought runs hold a wipe rate of `RATE_LIMIT` or more
     (`viability`);
   * a door is NOT READY when the weakest member is below the level it wants
@@ -92,11 +92,12 @@ FOUGHT = frozenset({"wipe", "complete", "left", "emptied", "stalled"})
 # Outcomes of a run that got inside and counts as an attempt at the door for
 # the uncleared streak: every fought outcome, plus a bag evacuation (the
 # family was walked out of the dungeon with no bag room left — it was inside
-# and it did not clear). Staging, reset and split failures never got in and
-# count for nothing here (#1071: two emptied, one evacuated and two
+# and it did not clear). A lost client also leaves an uncleared run behind.
+# Staging, reset and split failures never got in and count for nothing here
+# (#1071: two emptied, one evacuated and two
 # staging_failed in a day read as "2 fought, 2 without a clear", held a door
 # the family could not clear, and filed a family-run-loop finding).
-ATTEMPTED = FOUGHT | {"evacuated"}
+ATTEMPTED = FOUGHT | {"evacuated", "client lost"}
 WIPE = "wipe"
 COMPLETE = "complete"
 

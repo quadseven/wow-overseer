@@ -203,6 +203,21 @@ class TheDecision(unittest.TestCase):
         self.assertEqual("wailing", decision.target)
         self.assertNotIn(pace.STAY, decision.offer)
 
+    def test_client_lost_counts_toward_blackfathom_step_down(self):
+        rows = [dict(r, level=26) for r in HORDE]
+        runs = [
+            run("complete", -10, map_id=43),
+            run("client lost", 0, map_id=48),
+            run("emptied", 10, map_id=48),
+            run("stalled", 20, map_id=48),
+        ]
+        decision = pace.decide(
+            facts(head("blackfathom"), members(rows), runs, level_rows=rows)
+        )
+        self.assertEqual(pace.STEP_DOWN, decision.kind)
+        self.assertEqual("wailing", decision.target)
+        self.assertNotIn(pace.STAY, decision.offer)
+
     def test_two_wipes_step_down_and_jev_may_not_keep_the_door(self):
         d = pace.decide(facts(head("scarlet-library"), members(ALLIANCE), self.WIPES))
         self.assertEqual(pace.STEP_DOWN, d.kind)
