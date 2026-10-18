@@ -739,14 +739,23 @@ BLOCKED_DOORS: dict = {}
 # Blackfathom Deeps is no longer held: mod-dungeon-clear 19 and 21 (the
 # Blackfathom route, the four fires, surfacing for breath, followers swimming)
 # rolled onto the worldserver in roll 48 on 2026-10-10.
-# Gnomeregan: Grubbis comes only with Blastmaster Emi Shortfuse's escort, and
-# the Workshop Door (gameobject 90858) takes the Workshop Key or lockpicking
-# (#807).
+# Gnomeregan is no longer held (#807). Its route needs no new data, read off
+# the realm's own map 90 navmesh and world data on 2026-10-18:
+# - The finder lands a group at the front entrance (-332, -2, -150). The
+#   Workshop Door (gameobject 90858, lock 92: the Workshop Key or lockpicking
+#   150) is the only way between the Train Depot side and the rest of the
+#   dungeon, and no boss is on that side. The route between the four derived
+#   bosses never comes within 150 yards of it.
+# - The Final Chamber (142207), in front of Mekgineer Thermaplugg, is lock 86:
+#   one Quick Open slot, no key, no skill, no GO_FLAG_LOCKED, and no script
+#   drives it. The tank opens it with a click, as it opens the Deadmines
+#   Heavy Doors on the same lock.
+# - Grubbis comes only with Blastmaster Emi Shortfuse's escort, but the
+#   finder's finish is Thermaplugg (instance_encounters.lastEncounterDungeon
+#   14), so a run ends cleared without him.
 # Razorfen Kraul is not here: its derived boss order ends at Charlga
 # Razorflank, the finder's finish, with no scripted door on the way.
-NO_CLEAR_DATA = {
-    "gnomeregan": "the dungeon clear has no data for Grubbis's escort or the Workshop Door",
-}
+NO_CLEAR_DATA: dict = {}
 # NO ITEM-LEVEL GATE BELOW 60, A COVERAGE GATE FOR THE TWO SEATS THAT CARRY A
 # GROUP (decided in #532, 2026-10-04). The old gate held a member out when its
 # worn gear averaged more than 6 item levels under its level: on wow-dev that
