@@ -15,6 +15,7 @@ import unittest
 
 import guildjobs
 import hunterpet
+import member_rungs
 
 GRUNTY = dict(
     name="Grunty",
@@ -156,7 +157,7 @@ class InThePass(unittest.TestCase):
         self.assertTrue([n for n in result.notes if "Tame Beast" in n])
 
     def test_the_class_quest_still_comes_first(self):
-        source = guildjobs._member_step.__code__.co_names
+        source = member_rungs.names()
         self.assertLess(source.index("class_step"), source.index("_pet_first"))
         self.assertLess(source.index("_pet_first"), source.index("_supply_first"))
 

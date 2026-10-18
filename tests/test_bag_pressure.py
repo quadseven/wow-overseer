@@ -513,16 +513,21 @@ class TheVendorPassAsksBothHalvesTests(unittest.TestCase):
             )
         )
         self.assertIn("_without_bank_keeps", ast.dump(filtered_sales.value))
+        # One counting helper since wow-overseer#977: `_count_sales(counts,
+        # sales)`, called with the filtered gear sales before `mode` is read.
         counted = next(
-            node
+            node.value
             for node in body[:mode_at]
-            if isinstance(node, ast.For)
-            and isinstance(node.target, ast.Name)
-            and node.target.id == "sale"
-            and isinstance(node.iter, ast.Name)
-            and node.iter.id == "gear_sales"
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "_count_sales"
+            and any(
+                isinstance(arg, ast.Name) and arg.id == "gear_sales"
+                for arg in node.value.args
+            )
         )
-        self.assertIn("sellable_counts", ast.dump(counted))
+        self.assertEqual("sellable_counts", counted.args[0].id)
 
 
 class AVendorTripMustBeAbleToHelpTests(unittest.TestCase):

@@ -613,6 +613,11 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         start = self.src.index("    async def _vendor_once(self")
         return self.src[start : self.src.index("    async def _vendor_loop(")]
 
+    def _queue(self):
+        """The per-holder rows, in their own function since wow-overseer#977."""
+        start = self.src.index("async def _queue_vendor_sales(")
+        return self.src[start : self.src.index("def _report_vendor_claim(")]
+
     def test_the_vendor_errand_is_written_once_and_to_the_leader(self):
         """infra#3553. One aim, on the character that carries `new rpg`.
 
@@ -637,9 +642,13 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         """
         block = self._vendor_pass()
         self.assertLess(
-            block.index("_write_trade_errand"),
-            block.index("for holder in sorted(by_holder):"),
+            block.index("self._take_vendor_aim("),
+            block.index("_queue_vendor_sales("),
         )
+        queue = self._queue()
+        self.assertIn("for holder in sorted(by_holder):", queue)
+        self.assertNotIn("_claim_town_slot", queue)
+        self.assertNotIn("_write_trade_errand", queue)
 
     def test_the_leader_is_the_one_that_carries_the_strategy(self):
         """`_head_now`, not bonds.head_of_family().
@@ -667,7 +676,7 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
     def test_the_sale_rows_are_still_grouped_by_holder(self):
         """The errand is the leader's; the ROWS stay the holder's, because
         DoSell answers on the range of whoever is selling (infra#3464)."""
-        block = self._vendor_pass()
+        block = self._queue()
         self.assertIn("by_holder.setdefault(candidate.holder, [])", block)
         self.assertIn("town = await asyncio.to_thread(_fetch_town, holder)", block)
 

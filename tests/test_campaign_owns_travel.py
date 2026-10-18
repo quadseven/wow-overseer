@@ -719,7 +719,10 @@ class TheWiring(unittest.TestCase):
 
     def test_the_sell_rows_follow_the_vendor_aim(self):
         body = ast.get_source_segment(BRIDGE, _function("_vendor_once"))
-        self.assertIn("leader_walking=aimed", body)
+        self.assertIn("_queue_vendor_sales(", body)
+        self.assertIn("candidates, leader, aimed, mode, attempts", body)
+        queue = ast.get_source_segment(BRIDGE, _function("_queue_vendor_sales"))
+        self.assertIn("leader_walking=aimed", queue)
 
     def test_the_own_familys_learn_writers_are_gated(self):
         for name in ("_reconcile_learn_aims", "_send_trade_errand"):
