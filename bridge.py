@@ -4402,7 +4402,9 @@ def _stall_held(key: str, door: str) -> dict | None:
         "AS left_s FROM overseer_dungeon_pace WHERE family = %s "
         "AND decision = %s AND door = %s "
         "AND created_at >= NOW() - INTERVAL %s HOUR "
-        "ORDER BY created_at DESC LIMIT 1"
+        # Newest leave first; id breaks a timestamp tie, so the same row (and
+        # so the same _STALL_HOLD_SAID marker) is read on every pass.
+        "ORDER BY created_at DESC, id DESC LIMIT 1"
     )
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, (dungeonpace.WINDOW_HOURS, key, dungeonstall.DECISION,
