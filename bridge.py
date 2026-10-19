@@ -11590,6 +11590,21 @@ class Bridge(discord.Client):
         """
         trip_worth = bag_pressure.family_town_run_needed(
             free_slots, sellable=sellable_counts)
+        # THE ROOM THE TRIP MAKES IS THE FAMILY'S (#1204). One walk to a
+        # counter sells every holder's stacks, so the slots it frees are the
+        # family's. The question above asks whether selling lifts ONE member
+        # past the trigger, and a family whose members at the floor each carry
+        # a few stacks a vendor will buy never clears that bar on anybody: the
+        # pass sat in counter mode, wrote no sale rows, and every holder with
+        # something to sell logged "no vendor within reach" on every pass.
+        # Measured on the dev realm 2026-10-19: Grog, Og and Ugga, held at
+        # the floor with Bork, whose 68 kept stacks no vendor will buy.
+        freed = bag_pressure.family_sale_slots(free_slots, sellable_counts)
+        if not trip_worth and freed >= bag_pressure.FAMILY_SALE_SLOTS:
+            trip_worth = True
+            log.info("economy: the family is at the floor and a vendor trip "
+                     "would free %d slot(s) between its members (sellable %s), "
+                     "so the trip goes", freed, sellable_counts)
         if not trip_worth and not in_run and any(sellable_counts.values()):
             waited = await asyncio.to_thread(_fetch_vendor_wait_seconds, names)
             if bag_pressure.vendor_wait_trip(waited, sellable_counts, in_run):
