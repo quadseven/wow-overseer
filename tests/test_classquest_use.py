@@ -20,6 +20,7 @@ from acore_world on the dev realm on 2026-10-06:
 import dataclasses
 import json
 import pathlib
+import sqlite3
 import unittest
 
 import classask
@@ -1034,6 +1035,160 @@ class TheBridgeRestartsTheClockOnADoneUse(unittest.TestCase):
         )
         self.assertTrue(went)
         self.assertEqual(verdict, classquest.REROLL)
+
+
+# --- the Symbol of Life (#781) ---------------------------------------------------
+#
+# Rows read from acore_world: the draenei paladin's Redemption (9600) hands over
+# the Symbol of Life (6866, StartItem) and asks for one Young Furbolg Shaman
+# (17542) credited. The item's spell 8593 names its creatures with "near
+# creature" conditions (type 29 on the caster, value1 the entry), not the
+# "object entry" condition (type 31) the Taming Rods use, and the furbolg's
+# smart script gives the credit on that spell's hit. The one furbolg spawn is
+# guid 63139 on map 530.
+SYMBOL, FURBOLG, DRAENEI, PALADIN, OUTLAND = 6866, 17542, 11, 2, 530
+DRAENEI_MASK = 1 << (DRAENEI - 1)
+
+
+def _world(conditions):
+    """An in-memory acore_world holding the item and its spell conditions."""
+    con = sqlite3.connect(":memory:")
+    con.execute("ATTACH DATABASE ':memory:' AS acore_world")
+    con.execute(
+        "CREATE TABLE acore_world.item_template "
+        "(entry INT, spellid_1 INT, spelltrigger_1 INT)"
+    )
+    con.execute(
+        "CREATE TABLE acore_world.conditions (SourceTypeOrReferenceId INT, "
+        "SourceEntry INT, ConditionTypeOrReference INT, ConditionTarget INT, "
+        "ConditionValue1 INT, ConditionValue2 INT, ConditionValue3 INT, "
+        "NegativeCondition INT)"
+    )
+    con.executemany(
+        "INSERT INTO acore_world.item_template VALUES (?, ?, ?)",
+        [(SYMBOL, 8593, 0), (ROD, 19548, 0)],
+    )
+    con.executemany(
+        "INSERT INTO acore_world.conditions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        conditions,
+    )
+    return con
+
+
+# conditions rows as (source type, spell, type, target, value1, value2,
+# value3, negative), as acore_world holds them.
+SYMBOL_CONDITIONS = [
+    (17, 8593, 29, 0, FURBOLG, 40, 0, 0),
+    (17, 8593, 29, 0, 6172, 40, 0, 0),
+    (17, 8593, 29, 0, 6177, 40, 0, 0),
+]
+ROD_CONDITIONS = [(17, 19548, 31, 1, 3, 3099, 0, 0)]
+
+
+def use_rows(conditions, items=(SYMBOL, ROD)):
+    con = _world(conditions)
+    con.row_factory = sqlite3.Row
+    sql = classquest.USE_ITEMS_SQL.format(items=",".join(str(i) for i in items))
+    return [dict(r) for r in con.execute(sql)]
+
+
+def redemption_book(rows):
+    return classquest.build(
+        quest_rows=[
+            qrow(
+                9598,
+                "Redemption",
+                sort=-141,
+                classes=2,
+                races=DRAENEI_MASK,
+                min_level=12,
+            ),
+            qrow(
+                9600,
+                "Redemption",
+                sort=-141,
+                classes=2,
+                races=DRAENEI_MASK,
+                min_level=12,
+                prev=9598,
+                reward=7328,
+                display=7329,
+                npc1=FURBOLG,
+                npc_count1=1,
+                provided0=SYMBOL,
+            ),
+        ],
+        giver_rows=[],
+        spawn_rows=[
+            spawn(
+                63139,
+                FURBOLG,
+                -2444.9,
+                -12205.1,
+                "Young Furbolg Shaman",
+                OUTLAND,
+            )
+        ],
+        loot_rows=[],
+        use_rows=rows,
+    )
+
+
+def paladin(**over):
+    base = dict(
+        name="Pally",
+        level=29,
+        class_id=PALADIN,
+        race=DRAENEI,
+        map_id=OUTLAND,
+        x=-2400.0,
+        y=-12100.0,
+        zone_id=3525,
+        quests_done=frozenset({9598}),
+        quest_log={9600: 3},
+        carried=carried((SYMBOL, 1)),
+    )
+    base.update(over)
+    return who(**base)
+
+
+class TheSymbolOfLife(unittest.TestCase):
+    def test_a_near_creature_condition_names_the_use_target(self):
+        rows = use_rows(SYMBOL_CONDITIONS + ROD_CONDITIONS)
+        self.assertEqual(
+            sorted((r["item"], r["target"]) for r in rows),
+            [(SYMBOL, 6172), (SYMBOL, 6177), (SYMBOL, FURBOLG), (ROD, 3099)],
+        )
+
+    def test_a_near_corpse_or_a_negated_condition_names_no_target(self):
+        rows = use_rows(
+            [
+                (17, 8593, 29, 0, FURBOLG, 40, 1, 0),
+                (17, 8593, 29, 0, 6172, 40, 0, 1),
+                (17, 8593, 29, 1, 6177, 40, 0, 0),
+            ]
+        )
+        self.assertEqual(rows, [])
+
+    def test_redemption_resurrects_the_furbolg_instead_of_hunting_it(self):
+        book = redemption_book(use_rows(SYMBOL_CONDITIONS))
+        move, blocked = classquest.next_move(book, paladin())
+        self.assertEqual(blocked, [])
+        self.assertEqual(move.kind, classquest.USE)
+        self.assertEqual(
+            classquest.use_command(move.use, move.spot),
+            "use-item-on creature:17542 item:6866",
+        )
+
+    def test_redemption_is_no_group_and_asks_nobody(self):
+        book = redemption_book(use_rows(SYMBOL_CONDITIONS))
+        quest = book.quests[9600]
+        self.assertEqual(classquest.blocker_of(quest, paladin()), ("", ""))
+
+    def test_a_lost_symbol_is_taken_again_not_asked_for(self):
+        book = redemption_book(use_rows(SYMBOL_CONDITIONS))
+        move, _blocked = classquest.next_move(book, paladin(carried=()))
+        self.assertEqual(move.kind, classquest.ABANDON)
 
 
 if __name__ == "__main__":

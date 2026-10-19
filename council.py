@@ -71,6 +71,11 @@ IDLE_LEVEL_STEP = 5
 # asked whether one character will turn out for a mood.
 FAMILY_AT_LARGE = ""
 
+# What deferring to a proposer adds to a member's backing, per point of
+# strength on the bond. A member who worships the proposer (bonds.WORSHIPS)
+# backs the idea about as hard as one who would turn out to help with it.
+DEFERENCE_SUPPORT = 10
+
 
 @dataclass(frozen=True)
 class Member:
@@ -311,10 +316,29 @@ def back(voter: str, proposal: Proposal, *, history: list) -> tuple:
     turn out for that one", which is exactly the question a proposal to help
     somebody asks, so the same rules are reused rather than restated - if Grug
     is sulking about Og and Ugga, that sulk shows up here too.
+
+    And who the voter looks up to: `bonds.deference` is the same field the
+    tabard debate reads, so a member who stands with his brother over the
+    tabard backs his brother's plan for the day as well. It adds to backing
+    and never overturns a refusal - deferring to somebody is not turning out
+    for a plea bonds has already said no to.
     """
     if voter == proposal.proposer:
         return 0, ""
+    support, line = _view(voter, proposal, history=history)
+    devotion = bonds.deference(voter, proposal.proposer)
+    if not support or not devotion:
+        return support, line
+    return (
+        support + DEFERENCE_SUPPORT * devotion,
+        line or f"If {proposal.proposer} say so, I say so.",
+    )
 
+
+def _view(voter: str, proposal: Proposal, *, history: list) -> tuple:
+    """`back` before deference: what the proposal itself is worth to `voter`.
+
+    Support 0 is a refusal; every other answer is some support."""
     if proposal.beneficiary == FAMILY_AT_LARGE:
         # Nothing to volunteer for. Agreeing to a quiet day is agreement, not
         # assistance.

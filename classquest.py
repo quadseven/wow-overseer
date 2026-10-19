@@ -245,6 +245,13 @@ FOCUS_ITEMS = {
     7766: 224,
     7768: 226,
     7767: 223,
+    # THE DRAENEI CALL OF WATER (#781, 2026-10-19). 9504 hands over an Empty
+    # Bota Bag (23749) and asks for the Filled Bota Bag (23750): its spell
+    # (30226, "fill with pure water from the fountain at the Wrathscale Lair")
+    # works beside the Wrathscale Fountain, gameobject 202275, a spell focus of
+    # type 223 whose own row names quest 9504 (Data4). Read without it, the bag
+    # had no use and 9504 read SOURCE for every draenei shaman.
+    23749: 223,
 }
 
 # GROUND A SCRIPT WATCHES (2026-10-10). Two class quest objectives appear only
@@ -592,17 +599,28 @@ LOOT_SQL = (
     "WHERE l.Item IN ({items})"
 )
 
-# The items whose on-use spell is bound to named creatures: the spell's target
-# condition (source type 17, "object entry", type 3 = a creature, applied to
-# the spell's target). A spell with no such row (a self cast, a spell focus, a
-# corpse nearby) is not a use-item-on.
+# The items whose on-use spell is bound to named creatures, in either of the
+# two ways a spell condition (source type 17) names them:
+#   type 31 "object entry", value1 3 = a creature, on the spell's target
+#     (value2 is the entry): the Taming Rods;
+#   type 29 "near creature", on the caster, value3 0 = a living creature
+#     (value1 is the entry): the Symbol of Life (6866, spell 8593), which may
+#     be cast only within 40 yards of a Young Furbolg Shaman (17542), Henze
+#     Faulk (6172) or Narm Faulk (6177), and whose spell hit is the credit
+#     (smart_scripts 17542: "On Spellhit 'Symbol of Life' - Quest Credit").
+# Read with type 31 only, the draenei Redemption (9600) had no use, and the
+# member hunted the furbolg it should resurrect until the hunt stalled and it
+# asked the guild for help (#781). A spell with no such row (a self cast, a
+# spell focus, a corpse nearby) is not a use-item-on.
 USE_ITEMS_SQL = (
-    "SELECT it.entry AS item, c.ConditionValue2 AS target "
+    "SELECT it.entry AS item, CASE c.ConditionTypeOrReference "
+    "WHEN 31 THEN c.ConditionValue2 ELSE c.ConditionValue1 END AS target "
     "FROM acore_world.item_template it "
     "JOIN acore_world.conditions c ON c.SourceTypeOrReferenceId = 17 "
-    "AND c.SourceEntry = it.spellid_1 AND c.ConditionTypeOrReference = 31 "
-    "AND c.ConditionValue1 = 3 AND c.ConditionTarget = 1 "
-    "AND c.NegativeCondition = 0 "
+    "AND c.SourceEntry = it.spellid_1 AND c.NegativeCondition = 0 "
+    "AND ((c.ConditionTypeOrReference = 31 AND c.ConditionValue1 = 3 "
+    "AND c.ConditionTarget = 1) OR (c.ConditionTypeOrReference = 29 "
+    "AND c.ConditionTarget = 0 AND c.ConditionValue3 = 0)) "
     "WHERE it.spelltrigger_1 = 0 AND it.entry IN ({items})"
 )
 

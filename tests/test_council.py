@@ -10,6 +10,8 @@ can act on rather than prose.
 """
 
 import unittest
+from dataclasses import replace
+from unittest import mock
 
 import bonds
 import council
@@ -366,3 +368,72 @@ class SharedWantTest(unittest.TestCase):
         members = [_m("Grug", 7), _m("Ugga", 7), _m("Og", 3), _m("Grog", 7)]
         lines = council.hold(members, history=[]).lines
         self.assertTrue(any("Og" in line for line in lines), lines)
+
+
+def _bork_defers_to(*deference):
+    """Rewrite Bork's row of the family table for the length of one test."""
+    members = bonds.house_of("Bork").members
+    return mock.patch.dict(
+        members, {"Bork": replace(members["Bork"], defers_to=deference)}
+    )
+
+
+def _own(proposer):
+    """`proposer` wanting a few more levels for themselves."""
+    return council.Proposal(
+        proposer=proposer,
+        kind="level",
+        beneficiary=proposer,
+        target=10,
+        weight=20,
+        said="I want more levels.",
+    )
+
+
+class DeferenceTest(unittest.TestCase):
+    """Who a member backs reflects who they look up to, read from the same
+    field on the bond the tabard debate reads - one answer, not two."""
+
+    def test_bork_backs_his_brother_harder_than_he_backs_anyone(self):
+        grog, _ = council.back("Bork", _own("Grog"), history=[])
+        og, _ = council.back("Bork", _own("Og"), history=[])
+        self.assertEqual(grog - og, council.DEFERENCE_SUPPORT * bonds.WORSHIPS)
+
+    def test_the_backing_moves_when_the_relationship_does(self):
+        with _bork_defers_to(bonds.Deference("Og", bonds.FOLLOWS)):
+            grog, _ = council.back("Bork", _own("Grog"), history=[])
+            og, _ = council.back("Bork", _own("Og"), history=[])
+        self.assertEqual(og - grog, council.DEFERENCE_SUPPORT * bonds.FOLLOWS)
+
+    def test_deference_does_not_override_a_refusal(self):
+        """Looking up to somebody is not the same as turning out for them
+        when bonds says no. Grug sulking about Ugga stays a sulk."""
+        history = [("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD
+        help_ugga = council.Proposal(
+            proposer="Og",
+            kind="level",
+            beneficiary="Ugga",
+            target=5,
+            weight=95,
+            said="Ugga is still 1.",
+        )
+        grug = bonds.house_of("Grug").members["Grug"]
+        backs_og = replace(grug, defers_to=(bonds.Deference("Og", bonds.WORSHIPS),))
+        with mock.patch.dict(bonds.house_of("Grug").members, {"Grug": backs_og}):
+            support, _ = council.back("Grug", help_ugga, history=history)
+        self.assertEqual(support, 0)
+
+    def test_the_plan_changes_when_the_relationship_does(self):
+        """Og's need for coin outweighs Grog's want of a trade on its own.
+        Bork's worship of his brother is what carries Grog's idea, so it is
+        Og's the moment Bork looks up to somebody else - or to nobody."""
+        members = [
+            _m("Grog", 16, trades=0),
+            _m("Og", 16, gold=0),
+            _m("Bork", 16),
+        ]
+        self.assertEqual(council.hold(members, history=[]).plan.beneficiary, "Grog")
+        with _bork_defers_to():
+            self.assertEqual(council.hold(members, history=[]).plan.beneficiary, "Og")
+        with _bork_defers_to(bonds.Deference("Og", bonds.WORSHIPS)):
+            self.assertEqual(council.hold(members, history=[]).plan.beneficiary, "Og")
