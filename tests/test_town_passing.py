@@ -467,5 +467,109 @@ class AFruitlessUrgentAuctionGrantBacksOff(unittest.TestCase):
             self.assertIn(cleared, body, name)
 
 
+class TheListingWalkIsTakenOnlyForWhatCanBeListed(unittest.TestCase):
+    """wow-overseer#478, measured on wow-dev on 2026-10-19: "aimed to list 2
+    surplus BoE item(s)" about three times an hour for a day, each grant
+    taking the travel column on bag pressure, and "listed 0 surplus BoE
+    item(s) at house 2" both times the leader reached the counter. Nobody is
+    walked to an auctioneer for candidates the counter would refuse."""
+
+    def run_pass(self, candidate, listings):
+        import auction
+
+        world, log = {"written": []}, _Log()
+        ns = _base(world)
+        ns.update(
+            {
+                "log": log,
+                "auction": auction,
+                "_fetch_surplus_gear": lambda names: [],
+                "_fetch_family_equipped": lambda names: [],
+                "bag_pressure": types.SimpleNamespace(
+                    family_fits=lambda gear, equipped, names: {},
+                    family_town_run_needed=lambda slots: True,
+                    VENDOR_ERRAND_AIM="aim",
+                ),
+                "tidy": types.SimpleNamespace(members_from_rows=lambda rows: []),
+                "_clearance_listings": lambda plan: [candidate],
+                "_bank_policy": lambda names, fresh: {},
+                "_fetch_free_slots": lambda names: {n: 0 for n in names},
+                "_fetch_teams": lambda names: {n: "alliance" for n in names},
+                "_fetch_auction_listings": lambda entries, house: (
+                    world.setdefault("priced", []).append((entries, house)) or listings
+                ),
+                "_log_changed": lambda prefix, notes, key=(), capped=True: (
+                    log.lines.extend("%s: %s" % (prefix, n) for n in notes)
+                ),
+            }
+        )
+        ns = _load(["_auction_sales_once", "_auction_listable_at_home", *HELPERS], ns)
+
+        class Me:
+            claims = []
+            spent = []
+
+            async def _clearance_plan(self, names, leader, auction_open):
+                return ()
+
+            async def _auction_holder_houses(self, candidates, names):
+                return {}
+
+            async def _claim_town_slot(self, *a, urgent=False, cohort=None):
+                self.claims.append((a, urgent, cohort))
+                return True
+
+            def _auction_urgency_spent(self, cohort, why, urgent):
+                self.spent.append((why, urgent))
+
+            async def _auction_listable_at_home(self, candidates, leader):
+                return await ns["_auction_listable_at_home"](self, candidates, leader)
+
+        me = Me()
+        me.claims, me.spent = [], []
+        asyncio.run(ns["_auction_sales_once"](me, ALLIANCE, "Grug", "aim", None))
+        return world, log, me
+
+    def candidate(self, quality=2):
+        return {
+            "holder": "Og",
+            "item_guid": 7,
+            "entry": 18665,
+            "quality": quality,
+            "binding": "boe",
+            "sell_price": 100,
+            "label": "Eye",
+        }
+
+    def test_an_empty_house_takes_no_walk_and_says_why(self):
+        world, log, me = self.run_pass(self.candidate(), [])
+        self.assertEqual([], me.claims)
+        self.assertEqual([], me.spent)
+        self.assertEqual([([18665], 2)], world["priced"])
+        self.assertTrue(
+            any("so nobody walks to an auctioneer" in ln for ln in log.lines),
+            log.lines,
+        )
+
+    def test_a_rare_takes_no_walk_even_with_a_market(self):
+        import auction
+
+        listing = auction.Listing(auction_id=1, entry=18665, buyout=5000)
+        _, _, me = self.run_pass(self.candidate(quality=4), [listing])
+        self.assertEqual([], me.claims)
+
+    def test_a_priced_candidate_still_walks_urgently(self):
+        import auction
+
+        listing = auction.Listing(auction_id=1, entry=18665, buyout=5000)
+        _, log, me = self.run_pass(self.candidate(), [listing])
+        self.assertEqual(1, len(me.claims))
+        self.assertTrue(me.claims[0][1])
+        self.assertEqual([("list", True)], me.spent)
+        self.assertIn(
+            "auction: leader=Grug aimed to list 1 surplus BoE item(s)", log.lines
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

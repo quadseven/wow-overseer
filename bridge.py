@@ -9752,17 +9752,32 @@ class Bridge(discord.Client):
         holder_house = await self._auction_holder_houses(candidates, names)
         by_house = auction.sales_by_house(candidates, holder_house)
         if not by_house:
+            if step != bag_pressure.VENDOR_ERRAND_AIM:
+                return
+            # ONLY A WALK THAT CAN LIST SOMETHING (wow-overseer#478). Priced
+            # against the house of the leader's team, the way the bag
+            # upgrade walk below plans before it arrives; `DoAuction` and
+            # the per-house plan at the counter still decide.
+            sales = await self._auction_listable_at_home(candidates, leader)
+            _log_changed("auction", [] if sales else [
+                "leader=%s carries %d surplus item(s) and none of them can be "
+                "listed at the house of its team (a rare, or no live listing "
+                "and no fair price), so nobody walks to an auctioneer for "
+                "them" % (leader, len(candidates))],
+                key=(leader,), capped=False)
+            if not sales:
+                return
             # A LISTING THAT FREES A FULL BAG IS AS URGENT AS A SALE (#148).
             # The vendor pass claims the traveller urgently on bag pressure;
             # without the same standing a listing waited behind every other
             # errand, measured as "could not be aimed at an auctioneer".
             pressure = bag_pressure.family_town_run_needed(
                 await asyncio.to_thread(_fetch_free_slots, names))
-            if step == bag_pressure.VENDOR_ERRAND_AIM and await self._claim_town_slot(
+            if await self._claim_town_slot(
                     "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure,
                     cohort=_cohort_key(cohort)):
                 log.info("auction: leader=%s aimed to list %d surplus BoE item(s)",
-                         leader, len(candidates))
+                         leader, len(sales))
                 self._auction_urgency_spent(cohort, "list", pressure)
             return
         seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
@@ -9773,6 +9788,21 @@ class Bridge(discord.Client):
         if queued:
             await self._keep_at_auctioneer(leader, cohort)
             self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
+
+    async def _auction_listable_at_home(self, candidates: list,
+                                        leader: str) -> tuple:
+        """The listings `candidates` would make at the house of `leader`'s team.
+
+        Empty when the team cannot be named, so no walk is taken for a house
+        this pass cannot price.
+        """
+        teams = await asyncio.to_thread(_fetch_teams, [leader])
+        house = auction.TEAM_HOUSE.get(teams.get(leader, ""), 0)
+        if not house:
+            return ()
+        entries = sorted({int(c["entry"]) for c in candidates})
+        listings = await asyncio.to_thread(_fetch_auction_listings, entries, house)
+        return auction.listable(candidates, listings)
 
     async def _auction_holder_houses(self, candidates: list, names: list) -> dict:
         """`{holder: house}` for each candidate holder at an auctioneer.
@@ -9808,10 +9838,7 @@ class Bridge(discord.Client):
         house_entries = sorted({int(c["entry"]) for c in house_candidates})
         listings = await asyncio.to_thread(
             _fetch_auction_listings, house_entries, house)
-        market = {}
-        for listing in listings:
-            market[listing.entry] = min(
-                market.get(listing.entry, listing.per_unit), listing.per_unit)
+        market = auction.lowest_asks(listings)
         # A HOUSE WITH NO LIVE LISTING OF THE ENTRY prices a clearance stack
         # at the price its route was judged at (auction.price_candidates).
         sales = auction.plan_sales(auction.price_candidates(house_candidates, market))
