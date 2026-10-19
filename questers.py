@@ -36,7 +36,9 @@ WHAT A QUESTER DOES NEXT (`next_move`), one move a pass, in this order:
      the module's `hunt-spawn` row, as a class hunt does (`step_for`);
   5. with nothing left in reach, go to the next zone (`next_zone`): the zone
      whose band (levelroute.bands, the catalogue's own levels) is lowest of the
-     zones holding a quest in reach for it, the most quests first on a tie.
+     zones holding a quest in reach for it whose giver it can go to (a quest
+     only an item or a gameobject starts takes no one anywhere), the most
+     quests first on a tie.
      The move is the take of that zone's nearest quest; a zone on the other
      continent is a `cross-to-map` row (classquest.CROSSING_VERB) first.
 
@@ -805,14 +807,36 @@ def _move(kind, member, quest, spot, said, to_map=-1) -> classquest.Move:
     )
 
 
-def next_zone(cat: Catalogue, member, broken=frozenset()):
+def _giver_to_go_to(cat: Catalogue, member, quest_id, gone=frozenset()) -> bool:
+    """Whether a creature that gives the quest stands where the quester can go
+    and take it: on the quester's own map or on a classic continent it can
+    cross to, and not one it leaves for now (`left_spawns`). A quest only an
+    item or a gameobject starts has none: no verb takes it, so it is no reason
+    to go to its zone."""
+    here = int(member.map_id) if member.placed else None
+    return any(
+        s.guid not in gone
+        and (int(s.map_id) == here or int(s.map_id) in classquest.CONTINENTS)
+        for s in cat.quest(quest_id).starters
+    )
+
+
+def next_zone(cat: Catalogue, member, broken=frozenset(), gone=frozenset()):
     """(zone, its open quest ids) of the zone the quester goes to next, or
     (0, []) when no zone holds a quest in reach for it: the lowest band of
-    its side among those zones, the most quests first on a tie."""
+    its side among those zones, the most quests first on a tie. A quest counts
+    only when a giver of it is one the quester can go to (`_giver_to_go_to`):
+    a zone whose open quests an item or a gameobject starts, or whose givers
+    are all gone or left, is passed over, not chosen and then found to have no
+    way there, pass after pass."""
     bands = cat.bands.get(side_of(member.race), {})
     best = None
     for zone in sorted({f.zone for f in cat.facts.values()} - {member.zone}):
-        opens = in_reach(cat, member, zone, broken)
+        opens = [
+            qid
+            for qid in in_reach(cat, member, zone, broken)
+            if _giver_to_go_to(cat, member, qid, gone)
+        ]
         if not opens:
             continue
         band = bands.get(zone, (0, 0, 0))
@@ -826,7 +850,7 @@ def _travel(cat: Catalogue, member, broken, gone):
     """The move that takes the quester to the next zone: the take of that
     zone's nearest quest on its map, or a crossing to the continent the zone's
     quests are on; (None, why) when there is no zone to go to."""
-    zone, opens = next_zone(cat, member, broken)
+    zone, opens = next_zone(cat, member, broken, gone)
     if not zone:
         return None, "%s has no quest in reach in any zone" % member.name
     name = levelroute.zone_name(zone)
@@ -848,7 +872,7 @@ def _travel(cat: Catalogue, member, broken, gone):
             int(s.map_id)
             for qid in opens
             for s in cat.quest(qid).starters
-            if int(s.map_id) in classquest.CONTINENTS
+            if int(s.map_id) in classquest.CONTINENTS and s.guid not in gone
         }
     )
     if maps and member.placed and int(member.map_id) not in maps:
