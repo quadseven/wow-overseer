@@ -2981,13 +2981,32 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
         _memo_delete("bag_hold", ",".join(key))
         result = ()
     else:
-        _BAG_HOLD[key] = progress
-        wall = time.time()
-        value = {"best": progress.best, "since": wall - (now - progress.since),
-                 "seen": wall - (now - progress.seen), "released": progress.released}
-        _memo_upsert("bag_hold", ",".join(key), value, value["since"],
-                     wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
-        result = bag_pressure.bag_hold_stuck(progress)
+        # 2-HOUR HARD TIMEOUT (#1203). A hold that has stood with no gain and
+        # no town pass made room is forgotten: the family is no longer held at
+        # the bag floor, the stuck list stops reporting it, and the family is
+        # free to take another route (banker, mailbox, or next town). This is
+        # the #872 bound - no banker/vendor wait longer than 2 hours.
+        if (progress.released
+                and now - progress.since >= bag_pressure.BAG_HOLD_FORGET_SECONDS):
+            hold_why = globals().get("_bag_hold_why")
+            reason = hold_why(names) if hold_why else ""
+            _BAG_HOLD.pop(key, None)
+            _memo_delete("bag_hold", ",".join(key))
+            log.warning(
+                "bag hold: %s at the bag floor timed out after %d minutes "
+                "with no room made (bag floor full of kept items, timeout "
+                "reached); %s, so the family is routed to another option",
+                ", ".join(name for name, _free in progress.best),
+                int(bag_pressure.BAG_HOLD_FORGET_SECONDS // 60), reason)
+            result = ()
+        else:
+            _BAG_HOLD[key] = progress
+            wall = time.time()
+            value = {"best": progress.best, "since": wall - (now - progress.since),
+                     "seen": wall - (now - progress.seen), "released": progress.released}
+            _memo_upsert("bag_hold", ",".join(key), value, value["since"],
+                         wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
+            result = bag_pressure.bag_hold_stuck(progress)
     say = globals().get("_say_bag_hold")
     if say is not None:
         say(key, names, progress, now)
@@ -4389,17 +4408,33 @@ def _stall_reads(names: list) -> dict:
         return _stuck_doors(cur, names)
 
 
-def _stall_held(key: str, door: str) -> bool:
-    """Whether this door was already left during its recent stall window."""
+def _stall_held(key: str, door: str) -> dict | None:
+    """This door's leave in its recent stall window, or None: the pace row's
+    id and the seconds its hold has left (`left_s`).
+
+    The seconds are counted by the database against its own NOW(), so the
+    hold end the log says is right however far the bridge pod's clock or
+    timezone is from the database's (see _db_now).
+    """
     sql = (
-        "SELECT id FROM overseer_dungeon_pace WHERE family = %s "
+        "SELECT id, TIMESTAMPDIFF(SECOND, NOW(), created_at + INTERVAL %s HOUR) "
+        "AS left_s FROM overseer_dungeon_pace WHERE family = %s "
         "AND decision = %s AND door = %s "
-        "AND created_at >= NOW() - INTERVAL %s HOUR LIMIT 1"
+        "AND created_at >= NOW() - INTERVAL %s HOUR "
+        # Newest leave first; id breaks a timestamp tie, so the same row (and
+        # so the same _STALL_HOLD_SAID marker) is read on every pass.
+        "ORDER BY created_at DESC, id DESC LIMIT 1"
     )
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(sql, (key, dungeonstall.DECISION, door,
-                          dungeonpace.WINDOW_HOURS))
-        return bool(cur.fetchall())
+        cur.execute(sql, (dungeonpace.WINDOW_HOURS, key, dungeonstall.DECISION,
+                          door, dungeonpace.WINDOW_HOURS))
+        rows = cur.fetchall()
+        return dict(rows[0]) if rows else None
+
+
+# (family key, door) -> the id of the pace row whose hold was last said, so
+# the held-door line is logged once per door per hold window (#1078).
+_STALL_HOLD_SAID: dict = {}
 
 
 def _stall_write(key: str, leave) -> None:
@@ -19786,8 +19821,9 @@ class Bridge(discord.Client):
         leave = dungeonstall.leave(rows, stuck)
         if leave is None:
             return False
-        if await asyncio.to_thread(_stall_held, key, leave.door):
-            return True
+        held = await asyncio.to_thread(_stall_held, key, leave.door)
+        if held is not None:
+            return self._stall_step_past(key, rows, leave, held)
         await asyncio.to_thread(_stall_write, key, leave)
         # The cancellation and its pace record are durable before the job
         # changes, so a failed write cannot leave the family on quest.
@@ -19795,6 +19831,31 @@ class Bridge(discord.Client):
             quest=True, why=leave.why), names, key)
         log.warning("stall: %s: %s", campaignqueue._family(key), said)
         return True
+
+    def _stall_step_past(self, key: str, rows: list, leave, held: dict) -> bool:
+        """The head door was already left in this window (#1078): step past it.
+
+        Its entries are dropped from this pass's `rows` (by leave.drop, the
+        same wing match the first leave cancelled by), not cancelled again,
+        so the ladder, the gear hold and the step see the next entry. Only
+        when nothing is left behind it does the queue hold (True). Either
+        way one line names the family, the door and when the hold ends.
+        """
+        rest = [r for r in rows if int(r["id"]) not in leave.drop]
+        marker = (key, leave.door)
+        if _STALL_HOLD_SAID.get(marker) != held["id"]:
+            _STALL_HOLD_SAID[marker] = held["id"]
+            ends = time.strftime(
+                "%Y-%m-%d %H:%M UTC",
+                time.gmtime(time.time() + max(0, int(held["left_s"] or 0))))
+            after = ("%s runs instead" % council.keyword_place(str(rest[0]["keyword"]))
+                     if rest else "nothing else is queued, so the queue waits")
+            log.info("stall: %s: %s is held until %s since the family left it; %s",
+                     campaignqueue._family(key), leave.door, ends, after)
+        if not rest:
+            return True
+        rows[:] = rest
+        return False
 
     async def _pace_facts(self, key: str, rows: list, fam: dict):
         """(dungeonpace.Facts, the reads) for one family, or (None, reads)

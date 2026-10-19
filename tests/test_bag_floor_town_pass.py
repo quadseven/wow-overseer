@@ -593,5 +593,32 @@ class TheVendorPassRecordsTheFloor(unittest.TestCase):
         self.assertLess(record, body.index("if mode == bag_pressure.VENDOR_MODE_NONE"))
 
 
+class TheBagFloorHoldForgetsAfterTwoHours(unittest.TestCase):
+    """The hold at the bag floor is forgotten after two hours with no gain,
+    so the family is routed to another option instead of held for ever."""
+
+    def setUp(self):
+        self.errand = Errand()
+        self.errand.ns["_note_bag_floor"](
+            NAMES, MEASURED, GROG_ROWS, {n: 0 for n in NAMES}
+        )
+
+    def test_the_hold_is_forgotten_after_two_hours(self):
+        # Run past the 2-hour timeout so the hold is forgotten.
+        self.errand.run(int(bag_pressure.BAG_HOLD_FORGET_SECONDS // 60) + 10)
+        # The hold is cleared: no longer withheld on the bag-floor reason.
+        self.assertNotIn("Grog at the bag floor", self.errand.withheld[0])
+        # The family is routed to another option (town run, in town).
+        self.assertEqual({jobs.TOWN_RUN}, set(self.errand.world.jobs.values()))
+        # The timeout reason is logged where the Unstuck loop can read it.
+        self.assertTrue(
+            any(
+                "timed out" in line and "timeout reached" in line
+                for line in self.errand.log.lines
+            ),
+            self.errand.log.lines,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
