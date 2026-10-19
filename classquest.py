@@ -245,6 +245,13 @@ FOCUS_ITEMS = {
     7766: 224,
     7768: 226,
     7767: 223,
+    # THE DRAENEI CALL OF WATER (#781, 2026-10-19). 9504 hands over an Empty
+    # Bota Bag (23749) and asks for the Filled Bota Bag (23750): its spell
+    # (30226, "fill with pure water from the fountain at the Wrathscale Lair")
+    # works beside the Wrathscale Fountain, gameobject 202275, a spell focus of
+    # type 223 whose own row names quest 9504 (Data4). Read without it, the bag
+    # had no use and 9504 read SOURCE for every draenei shaman.
+    23749: 223,
 }
 
 # GROUND A SCRIPT WATCHES (2026-10-10). Two class quest objectives appear only
