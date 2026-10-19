@@ -7,6 +7,7 @@ from bag_pressure import (
     ItemForSale,
     bag_candidates,
     bag_purchase_allowed,
+    family_sale_slots,
     family_town_run_needed,
     gear_candidates,
     item_binding,
@@ -578,3 +579,45 @@ class AVendorTripMustBeAbleToHelpTests(unittest.TestCase):
         # Every caller that only wants "is anyone low" is unchanged.
         self.assertTrue(family_town_run_needed({"Og": 0}))
         self.assertTrue(family_town_run_needed({"Og": 0}, sellable=None))
+
+
+class TheTripMakesTheFamilyRoomTests(unittest.TestCase):
+    """#1204: one walk to a counter sells every holder's stacks.
+
+    The trip's product is the family's room, and the question the vendor pass
+    asked was one member's. A family whose members at the floor each carry a
+    few stacks a vendor will buy - none of them enough to clear the trigger
+    of 3 free slots alone - therefore never cleared the bar on anybody, and
+    the pass sat in counter mode writing no sale while every holder with
+    something to sell logged "no vendor within reach" on every pass.
+    """
+
+    FAMILY = {"Bork": 0, "Grog": 0, "Ugga": 0, "Og": 10}
+
+    def test_the_slots_the_trip_frees_are_the_family_s(self):
+        # Bork carries 68 stacks no vendor will buy, so he frees nothing;
+        # Grog, Ugga and Og carry two, one and two between them.
+        self.assertEqual(
+            5,
+            family_sale_slots(
+                self.FAMILY,
+                {"Bork": 0, "Grog": 2, "Ugga": 1, "Og": 2},
+            ),
+        )
+
+    def test_a_family_with_room_frees_nothing(self):
+        self.assertEqual(0, family_sale_slots({"Bork": 11}, {"Bork": 40}))
+
+    def test_a_member_nobody_can_relieve_contributes_nothing(self):
+        # Bork alone: 68 kept stacks, and no vendor will buy one of them.
+        self.assertEqual(0, family_sale_slots({"Bork": 0}, {"Bork": 0}))
+
+    def test_an_unreadable_count_frees_nothing(self):
+        self.assertEqual(0, family_sale_slots({"Og": 0}, {"Og": None}))
+        self.assertEqual(0, family_sale_slots({"Og": 0}, {}))
+        self.assertEqual(0, family_sale_slots({"Og": 0}, {"Og": -5}))
+
+    def test_an_unknown_family_frees_nothing(self):
+        self.assertEqual(0, family_sale_slots({}, {"Og": 4}))
+        self.assertEqual(0, family_sale_slots({"Og": -1}, {"Og": 4}))
+        self.assertEqual(0, family_sale_slots({"Og": None}, {"Og": 4}))
