@@ -29,9 +29,10 @@ nothing to drink, buys food and drink from its whole purse as before
 deaths cost more than the food (restsupply.py, Femur's 57 deaths in a day).
 
 WHAT IS NOT IN THE ORDER. A mount. On this world a racial mount costs 1 gold at
-level 20 with Apprentice Riding, but a mount item teaches its spell only when
-it is used, and no module verb uses an item from the bags yet. Until one does,
-a mount bought would sit in the bags, so its gold stays in the purse.
+level 20 with Apprentice Riding. The mount walk (guildjobs.mount_step,
+mountbuy.py, #779) buys it from the purse above the class spells, the reserve
+riding spends above, and uses the item (the module's `use entry:` learn row).
+It is not a want here, so gear and food do not save for it.
 
 NATURAL ONLY. Nothing here grants anything: it decides what the member's own
 gold is kept for.

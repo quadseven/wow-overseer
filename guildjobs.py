@@ -128,9 +128,11 @@ import guildlevel
 import guildroute
 import hunterpet
 import keep
+import mountbuy
 import purse
 import pvpgear
 import raidroles
+import recipebook
 import restsupply
 import situation
 import standstill
@@ -420,6 +422,8 @@ COOLDOWN_MINUTES = {
     "sell": 120,
     # A walk to a riding trainer (riding_step): a rank is bought once.
     "riding": 180,
+    # A walk to the race's mount vendor, its buy and the use (mount_step).
+    mountbuy.ACTION: 180,
     # A walk to a weapon master and its `train-weapon` (weapon_step): learned,
     # the weapon is no longer a need; refused, the trip waits two hours.
     "weapon": 120,
@@ -1794,6 +1798,79 @@ def riding_step(m, recent):
     )
 
 
+def mount_step(m, facts, recent, cap):
+    """(step or None, a note): a member with Apprentice Riding and no mount
+    walks to its race's mount vendor, buys the cheapest mount it can ride with
+    its own gold above its class spell reserve, and uses the item to learn the
+    mount (mountbuy.decide, #779). A member carrying an unused mount item only
+    uses it. `facts` is a mountbuy.Facts, None for a member the bridge did not
+    read. Never while offline, dead or fighting, and once per
+    COOLDOWN_MINUTES[mountbuy.ACTION]."""
+    if facts is None:
+        return None, ""
+    order = m.purse
+    reserve = order.held_before(purse.RIDING) if order is not None else 0
+    decision = mountbuy.decide(
+        m.name,
+        m.level,
+        m.class_id,
+        m.race,
+        m.skill(purse.RIDING_SKILL),
+        m.money,
+        reserve,
+        m.map_id,
+        tuple((c.entry, c.item_class, c.subclass) for c in m.carried),
+        facts,
+    )
+    if not decision.kind:
+        return None, decision.why
+    if not m.online or not m.alive or m.in_combat:
+        return None, ""
+    if _cooling(m, mountbuy.ACTION, recent):
+        return None, ""
+    offer = decision.offer
+    use = guildcorps.Row(
+        "cast",
+        recipebook.use_command(entry=int(offer.entry)),
+        "",
+        source_for(mountbuy.ACTION, m.name),
+    )
+    if decision.kind == mountbuy.USE:
+        said = "%s learns the mount it carries (item %d)" % (m.name, offer.entry)
+        return guildcorps.Step(
+            m.name, mountbuy.ACTION, int(offer.entry), said, rows=(use,)
+        ), ""
+    said = "%s walks to its race's mount vendor to buy %s for %s of its own" % (
+        m.name,
+        offer.name or "item %d" % offer.entry,
+        purse.money(offer.price),
+    )
+    return (
+        guildcorps.Step(
+            m.name,
+            mountbuy.ACTION,
+            int(offer.entry),
+            said,
+            rows=(
+                guildcorps.Row(
+                    "buy",
+                    "entry:%d count:1 max:%d" % (offer.entry, offer.price),
+                    "",
+                    source_for(mountbuy.ACTION, m.name),
+                ),
+                use,
+            ),
+            walk=guildcorps.Row(
+                "buy",
+                "walk-to-vendor item:%d%s" % (offer.entry, _cap_word(cap)),
+                "",
+                source_for(mountbuy.ACTION + "-walk", m.name),
+            ),
+        ),
+        "",
+    )
+
+
 WEAPON_ACTION = "weapon"
 # The walk ends this near the weapon master's spawn: the module's train-weapon
 # looks for a trainer it can talk to from where the member stands.
@@ -2839,6 +2916,7 @@ def plan(
     asks=(),
     weapons=None,
     equip_room=None,
+    mounts=None,
 ) -> JobsPlan:
     """Every member's job this pass, and the steps to start.
 
@@ -2870,6 +2948,8 @@ def plan(
     `asks` the QuestAsk rows of the class quest asks lately (class_ask_streak);
     `weapons` name -> weaponskill.Offer for a member carrying a weapon it has
     no skill for (weapon_step);
+    `mounts` name -> mountbuy.Facts for a member with riding and no mount
+    (mount_step);
     `equip_room` name -> (free slots needed, what for) for members too full to
     put an upgrade on (gear.equip_room, equip_room_step).
     """
@@ -2933,6 +3013,7 @@ def plan(
             _offer_for(pets, m.name),
             _offer_for(weapons, m.name),
             (equip_room or {}).get(m.name),
+            _offer_for(mounts, m.name),
         )
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
         helps += asked
@@ -3114,11 +3195,12 @@ def _quest_first(
 
 
 def _upkeep_first(
-    m, offer, supply, leveling, kept, recent, cap, quest_note, weapon=None
+    m, offer, supply, leveling, kept, recent, cap, quest_note, weapon=None, mount=None
 ):
     """(the member's step as _member_step returns it, or None; the supply
     note; the gear note): food for a member with nothing to eat or drink, then
-    a sale for full bags, then the inn, then riding, then the weapon master for
+    a sale for full bags, then the inn, then riding, then a mount for a member
+    with riding and none (mount_step, #779), then the weapon master for
     a carried weapon it has no skill for (weapon_step, #793), then gear and food
     in their purchase order (purse.py). A gear step carries no notes; the
     riding and weapon notes ride on the supply note."""
@@ -3140,6 +3222,10 @@ def _upkeep_first(
     step, riding_note = riding_step(m, recent)
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
+    step, mount_note = mount_step(m, mount, recent, cap)
+    if step is not None:
+        return (step, step.said, quest_note, ""), supply_note, ""
+    riding_note = _join(riding_note, mount_note)
     step, weapon_note = weapon_step(m, weapon, recent, cap)
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
@@ -3180,13 +3266,15 @@ def _member_step(
     pet=None,
     weapon=None,
     equip_room=None,
+    mount=None,
 ):
     """A class quest first, then a hunter's first pet, then a hearth out of a
     spot it cannot leave, then room in the bags for an upgrade the world
     cannot put on without it (equip_room_step, #1088), then food for a member
     with nothing to eat or drink,
     then a sale for bags that leave loot on the corpse (loot_room_short), then
-    the inn, then riding, then the weapon master for a carried weapon it has no
+    the inn, then riding, then a mount (`mount`, a mountbuy.Facts), then the
+    weapon master for a carried weapon it has no
     skill for (`weapon`, a weaponskill.Offer), then gear and food in its
     purchase order (purse.py), then
     the trainer for a trade at its tier cap (_tier_cap_first, #1116), then
@@ -3235,7 +3323,7 @@ def _member_step(
         return step, doing, quest_note, ""
     quest_note = _join(quest_note, room_note)
     found, supply_note, gear_note = _upkeep_first(
-        m, offer, supply, leveling, kept, recent, cap, quest_note, weapon
+        m, offer, supply, leveling, kept, recent, cap, quest_note, weapon, mount
     )
     if found is not None:
         return found

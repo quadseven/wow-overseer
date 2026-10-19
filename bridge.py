@@ -125,6 +125,7 @@ import lootcouncil
 # imported with its own directory first on sys.path. See mailrun.py's docstring.
 import mailrun
 import materials
+import mountbuy
 import tidy
 import overhear
 import persona
@@ -15979,6 +15980,8 @@ class Bridge(discord.Client):
         pets = await self._job_pet_offers(members, facts["recent"])
         # A carried weapon that waits on a weapon skill (#793).
         weapons = await self._job_weapon_offers(members, facts["recent"])
+        # A mount for a member with riding and none (#779).
+        mounts = await asyncio.to_thread(_fetch_mount_facts, members)
         mail = await asyncio.to_thread(_job_mail_commands, members)
         pvp = await self._job_pvp_moves(members, facts["recent"], busy)
         # The level step is a spawn walk too (guildlevel.py).
@@ -16001,6 +16004,7 @@ class Bridge(discord.Client):
             unclaimed=facts.get("unclaimed", ()), banks=facts.get("banks"),
             gear=gear, supply=supply, pets=pets, mail=mail, pvp=pvp,
             weapons=weapons,
+            mounts=mounts,
             leveling=leveling,
             focus=focus,
             # The class quest is a spawn walk and a quest row (classquest.py).
@@ -31942,6 +31946,61 @@ def _fetch_bag_weapons(names: list) -> list:
                 return []
             raise
         return [dict(r) for r in cur.fetchall()]
+
+
+# THE MOUNTS THE RACES' VENDORS SELL (mountbuy.MOUNT_VENDORS), with each
+# item's price and the Riding it needs, and the spawns' maps: read from the
+# world, never written down (#779). `cr.id`, not `cr.id1`, for the reason
+# _VENDOR_SPAWN_SQL gives.
+_MOUNT_STOCK_SQL = (
+    "SELECT DISTINCT v.entry AS vendor, v.item AS entry, it.name, "
+    "it.BuyPrice AS price, it.RequiredSkillRank AS required_rank, cr.map AS map_id "
+    "FROM acore_world.npc_vendor v "
+    "JOIN acore_world.item_template it ON it.entry = v.item "
+    "JOIN acore_world.creature cr ON cr.id = v.entry "
+    "WHERE v.entry IN ({vendors}) AND it.class = %s AND it.subclass = %s "
+    "AND it.RequiredSkill = %s"
+)
+# The members that know a mount spell already: one a mount item teaches
+# (item_template.spellid_2 of a Riding item).
+_MOUNT_KNOWN_SQL = (
+    "SELECT DISTINCT c.name FROM characters c "
+    "JOIN character_spell cs ON cs.guid = c.guid "
+    "JOIN acore_world.item_template it ON it.spellid_2 = cs.spell "
+    "WHERE c.name IN ({names}) AND it.class = %s AND it.subclass = %s "
+    "AND it.RequiredSkill = %s"
+)
+
+
+def _fetch_mount_facts(members) -> dict:
+    """name -> mountbuy.Facts for each online member that rides and could
+    want a mount (mountbuy.wants_mount); empty when none or when this world's
+    schema cannot answer."""
+    wanted = [
+        m.name for m in members
+        if m.online and mountbuy.wants_mount(
+            m.level, m.class_id, m.skill(purse.RIDING_SKILL)[1])
+    ]
+    if not wanted:
+        return {}
+    kind = (mountbuy.MOUNT_CLASS, mountbuy.MOUNT_SUBCLASS, purse.RIDING_SKILL)
+    vendors = sorted(set(mountbuy.MOUNT_VENDORS.values()))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_MOUNT_STOCK_SQL.format(vendors=",".join(["%s"] * len(vendors))),
+                        (*vendors, *kind))
+            stock = tuple(mountbuy.offer_from_row(
+                dict(r, rank=r.get("required_rank"))) for r in cur.fetchall())
+            cur.execute(_MOUNT_KNOWN_SQL.format(names=",".join(["%s"] * len(wanted))),
+                        (*wanted, *kind))
+            known = {str(r["name"]) for r in cur.fetchall()}
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("guild jobs: mounts cannot be read on this world image: %s",
+                            exc.args[-1])
+                return {}
+            raise
+    return {n: mountbuy.Facts(n in known, stock) for n in wanted}
 
 
 def _fetch_weapon_masters(at: dict, spells: list) -> list:
