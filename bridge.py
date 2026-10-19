@@ -710,6 +710,22 @@ TOWN_SLOT_GATHER_LEASE_SECONDS = float(
                    townslot.GATHER_LEASE_SECONDS)
 )
 
+# THE REAGENT TRIP'S CLAIMANT AND ITS FIRM LEASE (wow-overseer#16). The
+# argument for 600 is on `townslot.REAGENT_TRIP_LEASE_SECONDS`: the wait for
+# the leader to be handed from the quest drive plus the walk, measured live.
+# Firm means an urgent ask does not zero it, so a trip under way finishes
+# before another errand takes the traveller; past it the trip is preempted
+# like any other. The claimant is a constant because `Slot.firm_leases` is
+# keyed on it, and a second spelling would silently drop the trip back to a
+# lease any urgent pass zeroes. The call in `_aim_at_reagent_vendor` keeps the
+# literal word, which the town-slot tests pin as the word it logs with, and
+# tests/test_townslot.py pins that the two agree.
+CRAFT_SUPPLY_CLAIMANT = "craft_supply"
+TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS = float(
+    os.environ.get("TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS",
+                   townslot.REAGENT_TRIP_LEASE_SECONDS)
+)
+
 # The claimant name the gathering pass asks the column under. A constant
 # because it is written in one place and READ in another - `Slot.long_leases`
 # is keyed on it - and two spellings of the same claimant would silently give
@@ -6684,6 +6700,9 @@ class Bridge(discord.Client):
                 "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                 GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,
             },
+            firm_leases={
+                CRAFT_SUPPLY_CLAIMANT: TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS,
+            },
         )
         # A cut-off follower can make one self-contained vendor walk during a
         # bag hold. It is not the family's leader travel slot, so record these
@@ -8658,6 +8677,9 @@ class Bridge(discord.Client):
                     "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                     GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,
                 },
+                firm_leases={
+                    CRAFT_SUPPLY_CLAIMANT: TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS,
+                },
             )
             self._cohort_town_slots[key] = slot
         return slot
@@ -9752,18 +9774,8 @@ class Bridge(discord.Client):
         holder_house = await self._auction_holder_houses(candidates, names)
         by_house = auction.sales_by_house(candidates, holder_house)
         if not by_house:
-            # A LISTING THAT FREES A FULL BAG IS AS URGENT AS A SALE (#148).
-            # The vendor pass claims the traveller urgently on bag pressure;
-            # without the same standing a listing waited behind every other
-            # errand, measured as "could not be aimed at an auctioneer".
-            pressure = bag_pressure.family_town_run_needed(
-                await asyncio.to_thread(_fetch_free_slots, names))
-            if step == bag_pressure.VENDOR_ERRAND_AIM and await self._claim_town_slot(
-                    "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure,
-                    cohort=_cohort_key(cohort)):
-                log.info("auction: leader=%s aimed to list %d surplus BoE item(s)",
-                         leader, len(candidates))
-                self._auction_urgency_spent(cohort, "list", pressure)
+            if step == bag_pressure.VENDOR_ERRAND_AIM:
+                await self._auction_list_walk(candidates, names, leader, cohort)
             return
         seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
         queued = 0
@@ -9773,6 +9785,52 @@ class Bridge(discord.Client):
         if queued:
             await self._keep_at_auctioneer(leader, cohort)
             self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
+
+    async def _auction_list_walk(self, candidates: list, names: list,
+                                 leader: str, cohort=None) -> None:
+        """Walk the leader to an auctioneer for what nobody is listing yet.
+
+        ONLY A WALK THAT CAN LIST SOMETHING (wow-overseer#478). Priced
+        against the house of the leader's team, the way the bag upgrade walk
+        plans before it arrives; `DoAuction` and the per-house plan at the
+        counter still decide.
+        """
+        sales = await self._auction_listable_at_home(candidates, leader)
+        _log_changed("auction", [] if sales else [
+            "leader=%s carries %d surplus item(s) and none of them can be "
+            "listed at the house of its team (a rare, or no live listing "
+            "and no fair price), so nobody walks to an auctioneer for "
+            "them" % (leader, len(candidates))],
+            key=(leader,), capped=False)
+        if not sales:
+            return
+        # A LISTING THAT FREES A FULL BAG IS AS URGENT AS A SALE (#148).
+        # The vendor pass claims the traveller urgently on bag pressure;
+        # without the same standing a listing waited behind every other
+        # errand, measured as "could not be aimed at an auctioneer".
+        pressure = bag_pressure.family_town_run_needed(
+            await asyncio.to_thread(_fetch_free_slots, names))
+        if await self._claim_town_slot(
+                "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure,
+                cohort=_cohort_key(cohort)):
+            log.info("auction: leader=%s aimed to list %d surplus BoE item(s)",
+                     leader, len(sales))
+            self._auction_urgency_spent(cohort, "list", pressure)
+
+    async def _auction_listable_at_home(self, candidates: list,
+                                        leader: str) -> tuple:
+        """The listings `candidates` would make at the house of `leader`'s team.
+
+        Empty when the team cannot be named, so no walk is taken for a house
+        this pass cannot price.
+        """
+        teams = await asyncio.to_thread(_fetch_teams, [leader])
+        house = auction.TEAM_HOUSE.get(teams.get(leader, ""), 0)
+        if not house:
+            return ()
+        entries = sorted({int(c["entry"]) for c in candidates})
+        listings = await asyncio.to_thread(_fetch_auction_listings, entries, house)
+        return auction.listable(candidates, listings)
 
     async def _auction_holder_houses(self, candidates: list, names: list) -> dict:
         """`{holder: house}` for each candidate holder at an auctioneer.
@@ -9808,10 +9866,7 @@ class Bridge(discord.Client):
         house_entries = sorted({int(c["entry"]) for c in house_candidates})
         listings = await asyncio.to_thread(
             _fetch_auction_listings, house_entries, house)
-        market = {}
-        for listing in listings:
-            market[listing.entry] = min(
-                market.get(listing.entry, listing.per_unit), listing.per_unit)
+        market = auction.lowest_asks(listings)
         # A HOUSE WITH NO LIVE LISTING OF THE ENTRY prices a clearance stack
         # at the price its route was judged at (auction.price_candidates).
         sales = auction.plan_sales(auction.price_candidates(house_candidates, market))
@@ -19695,10 +19750,11 @@ class Bridge(discord.Client):
 
     async def _standin_out_facts(self, key: str, leader: str, ordered: str,
                                  roster: tuple) -> tuple:
-        """(skills, known spells, out member, the others' levels, guild,
-        faction) for the member ordered to sit out. Reads only."""
+        """(skills, known spells, reagents, out member, the others' levels,
+        guild, faction) for the member ordered to sit out. Reads only."""
         skills = (await asyncio.to_thread(_fetch_trade_skills, [ordered])).get(ordered, {})
         known = await asyncio.to_thread(_fetch_standin_known, ordered)
+        reagents = await asyncio.to_thread(_fetch_standin_reagents, ordered)
         read = await asyncio.to_thread(_fetch_standin_members, list(roster))
         members = {n: guildrun.member_from_row(r) for n, r in read.items()}
         levels = tuple(m.level for n, m in sorted(members.items())
@@ -19706,23 +19762,25 @@ class Bridge(discord.Client):
         head = members.get(key) or members.get(leader)
         guild = head.guild if head is not None else ""
         faction = guildrun.faction_of([m for m in members.values() if m is not None])
-        return skills, known, members.get(ordered), levels, guild, faction
+        return skills, known, reagents, members.get(ordered), levels, guild, faction
 
     async def _standin_facts(self, key: str, ordered: str, current, rows: list,
                              fam, gfacts: dict, doors: dict, candidates: tuple):
         """standin.Facts for one family. Reads only."""
         roster = tuple(fam["names"]) if fam else ()
         leader = str(fam["leader"].get("name") or "") if fam else ""
-        skills, known, out_member, levels, guild, faction = {}, None, None, (), "", ""
+        skills, known, reagents = {}, None, None
+        out_member, levels, guild, faction = None, (), "", ""
         if ordered and ordered in roster:
-            (skills, known, out_member, levels, guild,
+            (skills, known, reagents, out_member, levels, guild,
              faction) = await self._standin_out_facts(key, leader, ordered, roster)
         door = _standin_door(rows, doors)
         mid_run = bool(roster and (current is not None or ordered in roster)
                        and await self._mid_run(list(roster)))
         return standin.Facts(
             family=key, leader=leader, ordered=ordered, roster=roster, skills=skills,
-            known=known, out_member=out_member, family_levels=levels, guild=guild,
+            known=known, reagents=reagents, out_member=out_member,
+            family_levels=levels, guild=guild,
             faction=faction,
             door=door, candidates=candidates, busy=frozenset(gfacts["busy"]),
             resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
@@ -24065,6 +24123,28 @@ def _fetch_standin_known(name: str):
                     "not judged this pass", name)
         return None
     return frozenset(int(r["spell"]) for r in rows if r.get("holder") == name)
+
+
+def _fetch_standin_reagents(name: str):
+    """Where the member ordered to sit out stands on the gathered reagents of
+    its standing craft errand (a craft_rhythm.Stand), or None unread.
+
+    For standin.starved (wow-overseer#47). The errand is the one the craft
+    pass wrote to overseer_roster.craft_spell; with none written the stand is
+    UNJUDGED, which standin does not judge. A failed read answers None, so
+    the row stands as it did.
+    """
+    try:
+        spells = _fetch_standing_crafts([name])
+        spell = int((spells.get(name) or (0, 0))[0] or 0)
+        counts = _fetch_item_counts(
+            [(name, reagent.entry) for reagent in craft_rhythm.feeds(spell)])
+    except pymysql.err.MySQLError:
+        log.warning("standin: %s's craft reagents could not be read; its "
+                    "stock is not judged this pass", name)
+        return None
+    held = {entry: count for (who, entry), count in counts.items() if who == name}
+    return craft_rhythm.stand(name, spell, held)
 
 
 def _standin_crafts(name: str, family: str) -> None:

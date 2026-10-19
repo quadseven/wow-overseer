@@ -73,6 +73,7 @@ from dataclasses import dataclass
 
 import classic
 import craft
+import craft_rhythm
 import goals
 import guildjobs
 import guildrun
@@ -184,6 +185,25 @@ def walled(skills: dict, known) -> str:
         recipe.name,
         recipe.spell_id,
     )
+
+
+def starved(reagents, sitting: bool) -> str:
+    """Why the member has too little to craft with to sit out ("Og holds 0
+    Wool Cloth against 3 per cast of spell 2964, ..."), or "" when it has
+    enough or is not judged (wow-overseer#47).
+
+    `reagents` is craft_rhythm.stand's verdict on its standing craft errand.
+    None (not read) and UNJUDGED (no gathered reagent to count) are not
+    judged. A new sit-out needs craft_rhythm's own bar, at least SHORT_CASTS
+    casts in hand; one already sitting out keeps its seat until it has no
+    cast left, so a member a cast or two short of the bar is not regrouped
+    with its family on every pass.
+    """
+    if reagents is None or reagents.verdict == craft_rhythm.UNJUDGED:
+        return ""
+    if sitting:
+        return reagents.why if int(reagents.casts) <= 0 else ""
+    return reagents.why if reagents.verdict == craft_rhythm.SHORT else ""
 
 
 def seat_of(member: guildrun.Member) -> str:
@@ -338,6 +358,10 @@ class Facts:
     # The spells the ordered member holds (character_spell), or None when the
     # spellbook was not read, which `walled` does not judge.
     known: frozenset | None = None
+    # Where the ordered member stands on the gathered reagents of its standing
+    # craft errand (a craft_rhythm.Stand), or None when it was not read, which
+    # `starved` does not judge.
+    reagents: craft_rhythm.Stand | None = None
     # The ordered member as a guildrun.Member (None when it could not be read).
     out_member: guildrun.Member | None = None
     # The levels of the members who run (the family without the ordered one).
@@ -392,6 +416,13 @@ def sits_out(facts: Facts) -> str:
         return (
             "%s's craft cannot move (%s), so it rejoins its family, whose "
             "training stop walks it to its trainer to buy it (#769)" % (name, wall)
+        )
+    sitting = facts.current is not None and facts.current.out_name == name
+    hunger = starved(facts.reagents, sitting)
+    if hunger:
+        return (
+            "%s has too little to craft with (%s), so it rejoins its family, "
+            "whose roaming and runs gather it" % (name, hunger)
         )
     return ""
 
