@@ -1219,6 +1219,8 @@ RECIPES: dict = {
     # with these DBC rows. On this WotLK realm Heavy Silk is trainer-taught;
     # the older Manual: Heavy Silk Bandage route is not required here.
     # https://www.wowhead.com/wotlk/spell=3277/wool-bandage
+    # https://www.wowhead.com/wotlk/spell=3278/heavy-wool-bandage
+    # https://www.wowhead.com/wotlk/spell=7928/silk-bandage
     # https://www.wowhead.com/wotlk/spell=7929/heavy-silk-bandage
     # Every one is RequiresSpellFocus 0, EquippedItemClass -1, and
     # AcquireMethod 0 for every class this realm's families play. FLOOR "t" is

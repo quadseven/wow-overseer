@@ -560,21 +560,25 @@ class ErrandTest(unittest.TestCase):
 
     def test_the_first_aid_ladder_reaches_heavy_silk_bandage(self):
         """Wool Bandage through Heavy Silk Bandage, as craft.py's DBC table
-        and the Wowhead WotLK spell pages it cites both give them."""
+        and the Wowhead WotLK spell pages it cites both give them: the floor,
+        the trainer row (ReqSkillRank, copper) and one cited page per spell."""
         ladder = {
             r.spell_id: (r.name, r.min_skill)
             for r in craft.RECIPES[goals.SKILL_IDS["first aid"]]
         }
-        for spell_id, rung in {
-            3277: ("Wool Bandage", 80),
-            3278: ("Heavy Wool Bandage", 115),
-            7928: ("Silk Bandage", 150),
-            7929: ("Heavy Silk Bandage", 180),
+        source = (pathlib.Path(__file__).resolve().parents[1] / "craft.py").read_text()
+        for spell_id, (name, floor, price, page) in {
+            3277: ("Wool Bandage", 80, 250, "wool-bandage"),
+            3278: ("Heavy Wool Bandage", 115, 1000, "heavy-wool-bandage"),
+            7928: ("Silk Bandage", 150, 5000, "silk-bandage"),
+            7929: ("Heavy Silk Bandage", 180, 5000, "heavy-silk-bandage"),
         }.items():
             with self.subTest(spell_id=spell_id):
-                self.assertEqual(ladder[spell_id], rung)
-        source = (pathlib.Path(__file__).resolve().parents[1] / "craft.py").read_text()
-        self.assertIn("wowhead.com/wotlk/spell=7929/heavy-silk-bandage", source)
+                self.assertEqual(ladder[spell_id], (name, floor))
+                self.assertEqual(craft.TRAINER_RECIPES[spell_id], (floor, price))
+                self.assertIn(
+                    "wowhead.com/wotlk/spell=%d/%s" % (spell_id, page), source
+                )
 
     def test_smoked_bear_meat_names_its_vendor_and_the_fire_gap(self):
         """The purchase dependency is recorded, and the fire gap is said aloud."""
@@ -696,6 +700,19 @@ class RecipePurchaseErrandTest(unittest.TestCase):
             _cook(), None, None, None, None, (), 100, "", None, None
         )
         self.assertEqual(guildjobs.RECIPE_BOOK_ACTION, found[0].action)
+
+    def test_the_module_parses_the_buy_and_use_rows_as_written(self):
+        """The upstream wall for the book, as UpstreamWallTest is for the
+        trainer: the `buy entry: count: max:` and `use entry:` grammars the
+        rows above are written in are the ones the pinned module parses."""
+        decisions = (
+            UpstreamWallTest.ROOT / "mod-overseer/src/overseer_decisions.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "malformed buy: want entry:<item_template.entry>[ count:<n>][ max:<copper>]",
+            decisions,
+        )
+        self.assertIn('LearnKeyed(words[1], "entry", key)', _strip_comments(decisions))
 
 
 class NoMagicTest(unittest.TestCase):
@@ -1238,6 +1255,26 @@ class SecondaryRankRefusalTest(unittest.TestCase):
                     }
                 ]
                 self.assertEqual(ranks_due(_RankCursor(facts), roster), {"Grug": due})
+
+    def test_the_first_aid_filter_keeps_a_due_primary_rank(self):
+        """The one-skill map the bridge builds drops only First Aid: a due
+        Alchemy rank in the same character's facts still reaches `Row.ranks`."""
+        alchemy = goals.SKILL_IDS["alchemy"]
+        facts = [
+            {
+                "name": "Grug",
+                "level": 20,
+                "money": 100000,
+                "skill": skill,
+                "value": value,
+                "max": 75,
+            }
+            for skill, value in ((129, 74), (alchemy, 75))
+        ]
+        roster = [{"name": "Grug", "professions": str(alchemy)}]
+        self.assertEqual(
+            _bridge_ranks_due()(_RankCursor(facts), roster), {"Grug": (alchemy,)}
+        )
 
     def test_the_secondary_rank_uses_the_single_rank_writer(self):
         """professions.secondary_rank_errand decides which First Aid ranks
