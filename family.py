@@ -68,7 +68,8 @@ GONE = "gone"
 # demo" this feature must not do. So this mirrors the convention that is
 # actually running, not the one in the newer source file, and says so here
 # rather than silently disagreeing with a file three directories away.
-_STREAM_PREFIX = os.environ.get("WOW_STREAM_PREFIX", "dev").strip().lower()
+# Each realm declares its own broadcasts. An unset or empty prefix means none.
+_STREAM_PREFIX = os.environ.get("WOW_STREAM_PREFIX", "").strip().lower()
 _STREAM_BASE = os.environ.get(
     "WOW_STREAM_BASE", "https://wow.stream.ts.ehumps.me"
 ).rstrip("/")
@@ -76,8 +77,8 @@ _STREAM_BASE = os.environ.get(
 # name that lands in a URL gets the same treatment frames._NAME_RE gives it.
 _BROADCAST_NAME_RE = re.compile(r"^[A-Za-z]{2,12}$")
 
-# WHO IS ACTUALLY STREAMED. Every character has a stream PATH, because the path
-# is a pure function of the name, but only some have anything publishing to it.
+# WHO IS ACTUALLY STREAMED. A realm with a declared prefix can build a path
+# for every character, but only some have anything publishing to it.
 # On a host that can render two game clients, the other eight characters are
 # headless bots: there is no picture to show, and drawing a video tile for each
 # put eight black rectangles beside the two that work. The operator asked for
@@ -113,15 +114,15 @@ def broadcast_path(character: str, prefix: str | None = None) -> str:
 
     Concatenated, not hyphenated - see the module docstring above for why
     this deliberately does not match video.py's stream_path(). An unusable
-    name or prefix returns "" rather than raising: a broadcast tile that
-    cannot resolve a path is drawn offline, not a 500 that takes the whole
-    Family tab down with it.
+    name or an empty or invalid prefix returns "" rather than raising. A tile
+    without a path is drawn offline instead of taking down the Family tab.
     """
     name = (character or "").strip()
     if not _BROADCAST_NAME_RE.match(name):
         return ""
-    label = (_STREAM_PREFIX if prefix is None else prefix).strip().lower()
-    if label and not _BROADCAST_PREFIX_RE.match(label):
+    label = (_STREAM_PREFIX if prefix is None else prefix) or ""
+    label = label.strip().lower()
+    if not label or not _BROADCAST_PREFIX_RE.match(label):
         return ""
     return f"{label}{name.lower()}"
 

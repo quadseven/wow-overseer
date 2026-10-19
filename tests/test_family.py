@@ -6,9 +6,12 @@ the cases that matter here are the ones that were invisible: dead, hurt, and
 missing, each of which must read as itself and not as the other two.
 """
 
+import importlib
+import os
 import re
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import family
 from transform import Geometry
@@ -160,6 +163,9 @@ class BroadcastPathTest(unittest.TestCase):
     actually live: devgrug, not dev-grug.
     """
 
+    def setUp(self):
+        self.enterContext(mock.patch.object(family, "_STREAM_PREFIX", "dev"))
+
     def test_matches_the_paths_verified_live_on_mediamtx(self):
         # http://127.0.0.1:9997/v3/paths/list on the gaming box, verified
         # while this feature was built, answered with exactly these five.
@@ -173,8 +179,8 @@ class BroadcastPathTest(unittest.TestCase):
     def test_case_and_whitespace_do_not_change_the_path(self):
         self.assertEqual(family.broadcast_path("  Grug  ", prefix="DEV"), "devgrug")
 
-    def test_empty_prefix_is_the_bare_name(self):
-        self.assertEqual(family.broadcast_path("Grug", prefix=""), "grug")
+    def test_empty_prefix_has_no_broadcast_path(self):
+        self.assertEqual(family.broadcast_path("Grug", prefix=""), "")
 
     def test_an_unusable_name_degrades_to_no_path_rather_than_raising(self):
         # A card that cannot resolve a path must still be drawable - this
@@ -208,6 +214,36 @@ class BroadcastPathTest(unittest.TestCase):
         self.assertTrue(card(p, "Grug")["broadcast_url"])
         self.assertTrue(card(p, "Bork")["broadcast_url"])  # not present at all
 
+    def test_a_realm_without_a_stream_prefix_cannot_inherit_dev_broadcasts(self):
+        import watchwall
+
+        for prefix in (None, ""):
+            with self.subTest(prefix=prefix):
+                with mock.patch.object(family, "_STREAM_PREFIX", prefix):
+                    self.assertIsNone(family.broadcast_url("Grug"))
+                    self.assertEqual(family.broadcast_renditions("Grug"), [])
+                    payload = family.build_family([row()], GEO)
+                    self.assertTrue(
+                        all(
+                            member["broadcast_url"] is None
+                            for member in payload["members"]
+                        )
+                    )
+                    self.assertEqual(
+                        watchwall.build_heads([("family", payload)])["members"], []
+                    )
+
+
+class RealmBroadcastDeclarationTest(unittest.TestCase):
+    def test_unset_prefix_declares_no_broadcasts(self):
+        try:
+            with mock.patch.dict(os.environ, {}, clear=True):
+                importlib.reload(family)
+                self.assertEqual(family._STREAM_PREFIX, "")
+                self.assertIsNone(family.broadcast_url("Grug"))
+        finally:
+            importlib.reload(family)
+
 
 class HeadlineTest(unittest.TestCase):
     def test_headline_counts_are_what_the_tab_shouts(self):
@@ -230,6 +266,9 @@ class TheQualityLadder(unittest.TestCase):
     """WebRTC has no ladder of its own and MediaMTX does not transcode, so a
     second quality exists only because the gaming box publishes a second
     stream. This is the page's only way to find out that it does."""
+
+    def setUp(self):
+        self.enterContext(mock.patch.object(family, "_STREAM_PREFIX", "dev"))
 
     def test_the_ladder_lists_every_rendition_best_first(self):
         got = family.broadcast_renditions("Grug", base="https://x", prefix="dev")
@@ -356,6 +395,8 @@ class TheRollbackLever(unittest.TestCase):
         import os
 
         self._before = os.environ.get("WOW_STREAM_LADDER")
+        self._prefix_before = os.environ.get("WOW_STREAM_PREFIX")
+        os.environ["WOW_STREAM_PREFIX"] = "dev"
 
     def tearDown(self):
         import importlib
@@ -365,6 +406,10 @@ class TheRollbackLever(unittest.TestCase):
             os.environ.pop("WOW_STREAM_LADDER", None)
         else:
             os.environ["WOW_STREAM_LADDER"] = self._before
+        if self._prefix_before is None:
+            os.environ.pop("WOW_STREAM_PREFIX", None)
+        else:
+            os.environ["WOW_STREAM_PREFIX"] = self._prefix_before
         importlib.reload(family)
 
     def _reloaded(self, value):
@@ -408,14 +453,16 @@ class OnlyStreamedCharactersHaveAVideo(unittest.TestCase):
     pure function of the name), so the page drew a video tile for all ten: eight
     black rectangles beside the two that work.
 
-    `WOW_STREAMED_CHARACTERS` names who is streamed. Unset or empty means
-    EVERYONE, which is what every deployment did before it existed, so nothing
-    changes anywhere that does not set it. A character not on it has no URL, and
-    `watchwall.playable` already means "a URL exists to try", so the wall and the
-    cards follow without a second rule.
+    `WOW_STREAMED_CHARACTERS` names who is streamed within a realm that has
+    declared a stream prefix. Unset or empty means everyone in that realm.
+    A character not on it has no URL, and `watchwall.playable` already means
+    "a URL exists to try", so the wall and the cards follow the same rule.
     """
 
     STREAMED = ("Grug", "Zug")
+
+    def setUp(self):
+        self.enterContext(mock.patch.object(family, "_STREAM_PREFIX", "dev"))
 
     def test_a_listed_character_is_streamed(self):
         self.assertTrue(family.is_streamed("Grug", self.STREAMED))
@@ -426,7 +473,7 @@ class OnlyStreamedCharactersHaveAVideo(unittest.TestCase):
             self.assertFalse(family.is_streamed(name, self.STREAMED), name)
 
     def test_unset_means_everyone(self):
-        """The floor. A deployment that never set this must not lose a picture."""
+        """An unset character list does not hide a declared realm's streams."""
         self.assertTrue(family.is_streamed("Bork", ()))
         from unittest import mock
 
