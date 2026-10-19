@@ -28225,7 +28225,8 @@ def _class_book_reads(cur) -> tuple:
     spells = {int(r[k]) for r in quests for k in ("reward", "display") if r.get(k)}
     trained = _class_rows(cur, "class quest spells trained", classquest.TRAINED_SQL,
                           "spells", spells)
-    use_rows, chest_rows, object_rows, focus_rows = _class_use_reads(cur, quests, items)
+    use_rows, chest_rows, object_rows, focus_rows, summon_rows, held_rows = (
+        _class_use_reads(cur, quests, items, entries))
     entries |= {int(r["target"]) for r in use_rows}
     # The spawns that mark ground a script watches (The Affray's grate, the
     # felhunter's summoning circle): classquest.SCRIPTED_KILLS, SCRIPTED_FOCI.
@@ -28233,14 +28234,16 @@ def _class_book_reads(cur) -> tuple:
     spawns = _class_rows(cur, "class quest spawns", classquest.SPAWNS_SQL, "entries", entries)
     started = _job_read(cur, "class quest other starters", classquest.STARTERS_SQL.format(
         quests=ids(r["id"] for r in quests)))
-    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows, focus_rows, started
+    return quests, givers, spawns, loot, trained, use_rows, chest_rows, object_rows, focus_rows, started, summon_rows, held_rows
 
 
-def _class_use_reads(cur, quests, items) -> tuple:
-    """(use item rows, chest rows, object spawn rows, focus rows) for what the quests have a
-    member use (classquest.USE_ITEMS_SQL): items bound to named creatures, chests
-    that hold a required item or an item a use needs that the take does not hand
-    over, gameobject objectives."""
+def _class_use_reads(cur, quests, items, objectives=()) -> tuple:
+    """(use item rows, chest rows, object spawn rows, focus rows, summoner rows, held rows)
+    for what the quests have a member use (classquest.USE_ITEMS_SQL): items bound to
+    named creatures, chests that hold a required item or an item a use needs that the
+    take does not hand over, gameobject objectives, the gameobjects whose use summons an
+    objective creature (classquest.SUMMONERS_SQL over `objectives`), and what the items
+    the takes hand over hold (classquest.HELD_SQL)."""
     # The take hands over the StartItem only; ItemDrop1-4 (source1-4) are the
     # quest's source items, never given, so a chest is read for them (2026-10-09).
     provided = {int(r["provided0"]) for r in quests if r.get("provided0")}
@@ -28254,13 +28257,18 @@ def _class_use_reads(cur, quests, items) -> tuple:
     foci = {focus for item, focus in classquest.FOCUS_ITEMS.items() if item in used}
     focus_rows = _class_rows(cur, "class quest focus objects",
                              classquest.FOCUS_OBJECTS_SQL, "focus", foci)
+    summon_rows = _class_rows(cur, "class quest summoners",
+                              classquest.SUMMONERS_SQL, "entries", objectives)
+    held_rows = _class_rows(cur, "class quest held items", classquest.HELD_SQL,
+                            "items", provided)
     objects = ({int(r["entry"]) for r in chest_rows}
                | {int(r["entry"]) for r in focus_rows}
+               | {int(r["entry"]) for r in summon_rows}
                | {-int(r[f"npc{i}"]) for r in quests for i in range(1, 5)
                   if (r.get(f"npc{i}") or 0) < 0})
     object_rows = _class_rows(cur, "class quest object spawns",
                               classquest.OBJECT_SPAWNS_SQL, "entries", objects)
-    return use_rows, chest_rows, object_rows, focus_rows
+    return use_rows, chest_rows, object_rows, focus_rows, summon_rows, held_rows
 
 
 def _class_rows(cur, what: str, sql: str, key: str, values) -> list:
@@ -28279,7 +28287,8 @@ def _class_book():
         reads = _class_book_reads(cur)
     if reads is None:
         return None
-    _CLASS_BOOK = classquest.build(*reads)
+    *world, summon_rows, held_rows = reads
+    _CLASS_BOOK = classquest.build(*world, summon_rows=summon_rows, held_rows=held_rows)
     log.info("class quests: read %d quest(s) in %d reward group(s) from the world database",
              len(_CLASS_BOOK.quests), len(_CLASS_BOOK.groups))
     return _CLASS_BOOK
