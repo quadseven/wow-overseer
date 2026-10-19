@@ -11,7 +11,9 @@ over the live world named these reward chains blocked, and nobody was sent:
            water spell focus (224 Quilboar Watering Hole, 226 Spring Well, 223
            Ruins of Stardust Fountain). 220 and 96, and Call of Fire 1524 and
            1527, require back only the item the take hands over: a delivery,
-           complete on the take. All six read SOURCE.
+           complete on the take. All six read SOURCE. The draenei Call of
+           Water 9504 (read 2026-10-19) hands over an Empty Bota Bag (23749)
+           that fills only at the Wrathscale Fountain (focus 223): SOURCE too.
   warrior  The Affray (1719) asks for Big Will (6238), whom Twiggy Flathead's
            script summons once a warrior holding the quest steps on the grate
            beside him (zone_the_barrens.cpp: x -1684 to -1674, y -4334 to
@@ -277,6 +279,101 @@ class TheWaterskins(unittest.TestCase):
         self.assertEqual((move.kind, move.to_map), (classquest.CROSS, EASTERN))
 
 
+OUTLAND = 530
+DRAENEI = 11
+# The realm's own rows (2026-10-19): Call of Water 9504 hands over the Empty
+# Bota Bag (23749) and asks for the Filled Bota Bag (23750). The bag fills only
+# beside the Wrathscale Fountain (gameobject 202275, spell focus 223, spawn
+# 1160 on Bloodmyst Isle); the Ruins of Stardust Fountain (107047) shares the
+# focus on Kalimdor.
+WRATHSCALE = spawn(1160, 202275, -2186.31, -12341.8, "Wrathscale Fountain", OUTLAND)
+EMPTY_BOTA, FILLED_BOTA = 23749, 23750
+WATER_GIVER = dict(spawn(3000, 17519, -2000.0, -12000.0, "Water giver", OUTLAND))
+WATER_FOCUS_ROWS = [
+    {"focus": 223, "entry": 202275},
+    {"focus": 223, "entry": 107047},
+]
+
+
+def bota_book(focus_rows=WATER_FOCUS_ROWS):
+    row = qrow(
+        9504,
+        "Call of Water",
+        sort=-82,
+        classes=64,
+        races=1024,
+        min_level=20,
+        # The chain's spell, as water_book carries it: one step stands alone.
+        reward=5396,
+        display=5394,
+        item1=FILLED_BOTA,
+        item_count1=1,
+        provided0=EMPTY_BOTA,
+    )
+    return classquest.build(
+        quest_rows=[row],
+        giver_rows=[giver(9504, "start", WATER_GIVER), giver(9504, "end", WATER_GIVER)],
+        spawn_rows=[],
+        loot_rows=[],
+        object_rows=[WRATHSCALE, STARDUST],
+        focus_rows=focus_rows,
+    )
+
+
+def draenei(**over):
+    base = dict(
+        name="Snipp",
+        race=DRAENEI,
+        level=28,
+        map_id=OUTLAND,
+        x=-2150.0,
+        y=-12300.0,
+        zone_id=3525,
+    )
+    base.update(over)
+    return shaman(**base)
+
+
+class TheBotaBag(unittest.TestCase):
+    def test_the_bota_bag_names_the_wrathscale_fountain(self):
+        self.assertEqual(classquest.FOCUS_ITEMS.get(EMPTY_BOTA), 223)
+
+    def test_the_bag_is_a_use_at_the_fountain_with_no_blocker(self):
+        quest = bota_book().quests[9504]
+        m = draenei(quest_log={9504: 3}, carried=carried((EMPTY_BOTA, 1)))
+        self.assertEqual(classquest.blocker_of(quest, m), ("", ""))
+        self.assertEqual(
+            [(u.verb, u.item, u.provided) for u in quest.uses],
+            [(classquest.USE_HERE, EMPTY_BOTA, True)],
+        )
+
+    def test_the_bag_is_filled_at_the_wrathscale_fountain(self):
+        m = draenei(quest_log={9504: 3}, carried=carried((EMPTY_BOTA, 1)))
+        move, blocked = classquest.next_move(bota_book(), m)
+        self.assertEqual(blocked, [])
+        self.assertEqual(
+            (move.kind, move.use.verb), (classquest.USE, classquest.USE_HERE)
+        )
+        # The fountain on the member's own map, not Ashenvale's.
+        self.assertEqual(move.spot.guid, 1160)
+        self.assertEqual(
+            classquest.use_command(move.use, move.spot), "use-item-here item:23749"
+        )
+
+    def test_a_filled_bag_is_handed_in(self):
+        m = draenei(
+            quest_log={9504: 1}, carried=carried((EMPTY_BOTA, 1), (FILLED_BOTA, 1))
+        )
+        move, _ = classquest.next_move(bota_book(), m)
+        self.assertEqual(move.kind, classquest.TURN_IN)
+
+    def test_without_the_fountain_read_the_bag_is_still_named(self):
+        # No spell focus read: nothing makes the filled bag, so it stays SOURCE.
+        quest = bota_book(focus_rows=[]).quests[9504]
+        m = draenei(quest_log={9504: 3}, carried=carried((EMPTY_BOTA, 1)))
+        self.assertEqual(classquest.blocker_of(quest, m)[0], classquest.SOURCE)
+
+
 def delivery_book(qid, title, item, sort=-82):
     row = qrow(
         qid,
@@ -312,6 +409,37 @@ class TheDeliveries(unittest.TestCase):
             )
             move, blocked = classquest.next_move(book, shaman())
             self.assertEqual((move.kind, blocked), (classquest.TAKE, []), qid)
+
+    def test_the_ember_step_hunts_its_dropper_with_the_torch_in_hand(self):
+        # The realm's 1526: the take hands the Torch of the Dormant Flame (6653)
+        # back over, and the Glowing Ember (6655) drops from the Minor
+        # Manifestation of Fire (5893), whose one spawn is 170. Neither is SOURCE.
+        row = qrow(
+            1526,
+            "Call of Fire",
+            sort=-82,
+            classes=64,
+            races=690,
+            min_level=10,
+            reward=2075,
+            item1=6653,
+            item_count1=1,
+            item2=6655,
+            item_count2=1,
+            provided0=6653,
+        )
+        book = classquest.build(
+            quest_rows=[row],
+            giver_rows=[giver(1526, "start", ISLEN), giver(1526, "end", ISLEN)],
+            spawn_rows=[spawn(170, 5893, -246.258, -4009.98, "Minor Manifestation")],
+            loot_rows=[{"item": 6655, "entry": 5893}],
+        )
+        m = shaman(level=12, quest_log={1526: 3}, carried=carried((6653, 1)))
+        self.assertEqual(classquest.blocker_of(book.quests[1526], m), ("", ""))
+        move, blocked = classquest.next_move(book, m)
+        self.assertEqual(
+            (move.kind, move.spot.guid, blocked), (classquest.HUNT, 170, [])
+        )
 
     def test_an_item_nothing_supplies_is_still_named(self):
         row = qrow(
