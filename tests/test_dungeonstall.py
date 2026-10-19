@@ -13,6 +13,7 @@ against a fake queue, roster and store.
 
 import asyncio
 import pathlib
+import time
 import types
 import unittest
 
@@ -20,6 +21,7 @@ from test_campaign_queue import FakeWorld, _load, _Log, _q  # sets up the pymysq
 
 import campaignplan  # noqa: E402
 import campaignqueue  # noqa: E402
+import council  # noqa: E402
 import crossing  # noqa: E402
 import dungeonpace  # noqa: E402
 import dungeonstall as stall  # noqa: E402
@@ -301,14 +303,19 @@ class StoreCursor:
             return [dict(r) for r in store.runs]
         if "FROM overseer_dungeon_run_event" in flat:
             return [dict(e) for e in store.events if e["run_id"] in params]
-        if flat.startswith("SELECT id FROM overseer_dungeon_pace WHERE family"):
-            # _stall_held: a stall_left row for this family and door.
-            want = tuple(params[:3])
+        if flat.startswith("SELECT id, TIMESTAMPDIFF(SECOND, NOW(), created_at"):
+            # _stall_held: the latest stall_left row for this family and door,
+            # and the seconds its hold has left (store.held_left, default the
+            # whole window).
+            want = tuple(params[1:4])
+            left = store.held_left
+            if left is None:
+                left = stall.WINDOW_HOURS * 3600
             return [
-                {"id": n}
-                for n, r in enumerate(store.records, 1)
+                {"id": n, "left_s": left}
+                for n, r in reversed(list(enumerate(store.records, 1)))
                 if tuple(r[:3]) == want
-            ]
+            ][:1]
         if flat.startswith("SELECT id, decision, door, target, queue_id"):
             # dungeonpace.OPEN_SQL: the family's open ladder row, if any.
             return [
@@ -374,6 +381,8 @@ class StallWorld(FakeWorld):
         self.open_pace = []
         self.fail_on = ""
         self.commits = 0
+        self.held_left = None
+        self.hold_said = {}
         self.world = self
 
     def cancel(self, qid):
@@ -393,6 +402,7 @@ def _pass(world):
             "_prune_bag_hold_stuck",
             "_queue_holds",
             "_stall_breaker",
+            "_stall_step_past",
             "_stall_reads",
             "_stall_held",
             "_stall_write",
@@ -403,6 +413,7 @@ def _pass(world):
             "asyncio": asyncio,
             "campaignqueue": campaignqueue,
             "campaignplan": campaignplan,
+            "council": council,
             "dungeonpace": dungeonpace,
             "dungeonstall": stall,
             "jobs": jobs,
@@ -422,6 +433,8 @@ def _pass(world):
             "_aim_family_quest": world.clear_family_quest,
             "_PACE_QUESTING": {},
             "_BAG_HOLD_STUCK": {},
+            "_STALL_HOLD_SAID": world.hold_said,
+            "time": time,
             "_pass_completed": lambda name: True,
         },
     )
@@ -438,7 +451,12 @@ def _pass(world):
         _leave_town_when_done=nothing,
         _plan_campaigns=no_plan,
     )
-    for name in ("_campaign_queue_family_once", "_queue_holds", "_stall_breaker"):
+    for name in (
+        "_campaign_queue_family_once",
+        "_queue_holds",
+        "_stall_breaker",
+        "_stall_step_past",
+    ):
         setattr(me, name, types.MethodType(ns[name], me))
     asyncio.run(ns["_campaign_queue_once"](me))
     return log.lines
@@ -550,6 +568,65 @@ class TheBreakerWritesInOrder(unittest.TestCase):
         self.assertEqual(1, len(self.cancels(w)))
         self.assertEqual(1, len(w.records))
         self.assertFalse([j for j in w.jobs if j[1] == "dungeon:shadowfang"])
+
+    def held_lines(self, lines):
+        return [ln for ln in lines if ln.startswith("stall: ") and " held " in ln]
+
+    def left_2h_ago(self, queue):
+        """A world whose shadowfang leave was recorded 2 hours ago (#1078)."""
+        w = self.world([_q(7, "shadowfang", 30, "active", 0)])
+        _pass(w)
+        w.queue.extend(queue)
+        w.held_left = (stall.WINDOW_HOURS - 2) * 3600
+        return w
+
+    def test_a_held_head_steps_the_next_entry(self):
+        """#1078: a reseeded held door at the head no longer holds the whole
+        queue; the next pending entry steps, and the held entry is left as it
+        is (not cancelled a second time)."""
+        w = self.left_2h_ago(
+            [_q(9, "shadowfang", 30, "queued", 1), _q(10, "deadmines", 10, "queued", 2)]
+        )
+        lines = _pass(w)
+        self.assertEqual(
+            ["cancelled", "queued", "active"], [r["status"] for r in w.queue]
+        )
+        self.assertEqual({"dungeon:deadmines"}, self.zug_jobs(w))
+        self.assertEqual(1, len(self.cancels(w)))
+        self.assertEqual(1, len(w.records))
+        self.assertTrue([ln for ln in lines if "starting" in ln], lines)
+
+    def test_the_held_line_names_family_door_and_end_once_per_window(self):
+        w = self.left_2h_ago(
+            [_q(9, "shadowfang", 30, "queued", 1), _q(10, "deadmines", 10, "queued", 2)]
+        )
+        before = time.time()
+        first = self.held_lines(_pass(w))
+        self.assertEqual(1, len(first), first)
+        self.assertIn("Zug", first[0])
+        self.assertIn("shadowfang", first[0])
+        ends = {
+            time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(before + w.held_left + d))
+            for d in (0, 60)
+        }
+        self.assertTrue([e for e in ends if e in first[0]], (ends, first))
+        for _ in range(3):
+            self.assertEqual([], self.held_lines(_pass(w)))
+        # A new hold window (a later leave of the door) says it again.
+        w.hold_said[("Zug", "shadowfang")] = -1
+        self.assertEqual(1, len(self.held_lines(_pass(w))))
+
+    def test_a_held_door_alone_in_the_queue_holds_it_and_says_so(self):
+        """The pre-ship review's case: nothing left behind the held door, so
+        the queue holds (no IndexError on an empty queue) and says why."""
+        w = self.left_2h_ago([_q(9, "shadowfang", 30, "queued", 1)])
+        lines = _pass(w)
+        self.assertFalse([ln for ln in lines if "failed" in ln], lines)
+        self.assertEqual("queued", w.queue[1]["status"])
+        self.assertFalse([j for j in w.jobs if j[1] == "dungeon:shadowfang"])
+        held = self.held_lines(lines)
+        self.assertEqual(1, len(held), lines)
+        self.assertIn("nothing else", held[0])
 
     def test_a_cancelled_entry_closes_its_step_down_pace_row(self):
         w = self.world([_q(7, "shadowfang", 30, "active", 0)])
