@@ -370,7 +370,9 @@ class Surfaces(unittest.TestCase):
                 return "somewhere"
 
         saved = family._STREAMED
+        saved_prefix = family._STREAM_PREFIX
         try:
+            family._STREAM_PREFIX = "dev"
             family._STREAMED = frozenset()
             self.assertEqual(family.build_observers([row], Geo(), (W,)), [])
             family._STREAMED = frozenset({"Grug", W})
@@ -387,6 +389,7 @@ class Surfaces(unittest.TestCase):
             self.assertEqual([m["name"] for m in wall["members"]], [W])
         finally:
             family._STREAMED = saved
+            family._STREAM_PREFIX = saved_prefix
 
     def test_http_door_is_closed_without_a_token_and_compares_in_constant_time(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

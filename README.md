@@ -89,6 +89,16 @@ the order and what the Watcher is doing.
 The character, its game account and the client that logs it in are the
 deployment's to provide.
 
+## Broadcast configuration
+
+Set `WOW_STREAM_PREFIX` separately for each realm. A realm with published
+broadcasts sets the prefix used by its encoder, for example
+`WOW_STREAM_PREFIX=dev`. A realm with no broadcasts sets
+`WOW_STREAM_PREFIX=`. If the variable is absent, the site also offers no
+videos. It never falls back to another realm's prefix. Family cards and the
+Watch wall use this same setting; `WOW_STREAMED_CHARACTERS` can further limit
+which characters have a video within a broadcasting realm.
+
 ## CI
 
 - `check.yml` - `python3 .github/scripts/compile_check.py --min-python 3.12`
