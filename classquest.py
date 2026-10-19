@@ -1350,6 +1350,8 @@ def _hunting(quest: Quest, member) -> bool:
     """True while the quest has creatures to hunt: a kill with a spawn, or a
     dropped item the member does not yet carry in full. A creature credited
     by using a quest item is a use target, not a kill target."""
+    # _pending_use runs only after hunting ends. Keep item-use objectives out
+    # of this set so a spawn does not make the item use unreachable.
     used = {
         entry for use in quest.uses if use.verb == USE_ITEM for entry in use.targets
     }
