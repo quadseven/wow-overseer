@@ -518,6 +518,13 @@ BAG_HOLD_STUCK_SECONDS = CAMPAIGN_RESUME_CEILING_SECONDS
 # the last town pass ended. The stuck list calls a hold stuck at 30 minutes.
 BAG_HOLD_REASON_SECONDS = 30 * 60
 
+# How long a hold at the bag floor may stand with no gain and no town pass
+# making room before it is forgotten: the family is no longer held at the
+# floor, the stuck list stops reporting it, and the family is free to take
+# another route (banker, mailbox, or next town). This is the #872 bound - no
+# banker/vendor wait longer than 2 hours.
+BAG_HOLD_FORGET_SECONDS = 2 * 3600
+
 # A reading this much older than the last one starts the hold again: the
 # queue reads the bags every minute while it holds, so a gap this long is a
 # hold that ended (a run, a restart of the queue) and not one still going.

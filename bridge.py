@@ -2981,13 +2981,32 @@ def _bag_hold_stuck(names, free_slots: dict) -> tuple:
         _memo_delete("bag_hold", ",".join(key))
         result = ()
     else:
-        _BAG_HOLD[key] = progress
-        wall = time.time()
-        value = {"best": progress.best, "since": wall - (now - progress.since),
-                 "seen": wall - (now - progress.seen), "released": progress.released}
-        _memo_upsert("bag_hold", ",".join(key), value, value["since"],
-                     wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
-        result = bag_pressure.bag_hold_stuck(progress)
+        # 2-HOUR HARD TIMEOUT (#1203). A hold that has stood with no gain and
+        # no town pass made room is forgotten: the family is no longer held at
+        # the bag floor, the stuck list stops reporting it, and the family is
+        # free to take another route (banker, mailbox, or next town). This is
+        # the #872 bound - no banker/vendor wait longer than 2 hours.
+        if (progress.released
+                and now - progress.since >= bag_pressure.BAG_HOLD_FORGET_SECONDS):
+            hold_why = globals().get("_bag_hold_why")
+            reason = hold_why(names) if hold_why else ""
+            _BAG_HOLD.pop(key, None)
+            _memo_delete("bag_hold", ",".join(key))
+            log.warning(
+                "bag hold: %s at the bag floor timed out after %d minutes "
+                "with no room made (bag floor full of kept items, timeout "
+                "reached); %s, so the family is routed to another option",
+                ", ".join(name for name, _free in progress.best),
+                int(bag_pressure.BAG_HOLD_FORGET_SECONDS // 60), reason)
+            result = ()
+        else:
+            _BAG_HOLD[key] = progress
+            wall = time.time()
+            value = {"best": progress.best, "since": wall - (now - progress.since),
+                     "seen": wall - (now - progress.seen), "released": progress.released}
+            _memo_upsert("bag_hold", ",".join(key), value, value["since"],
+                         wall + 2 * bag_pressure.BAG_HOLD_STUCK_SECONDS)
+            result = bag_pressure.bag_hold_stuck(progress)
     say = globals().get("_say_bag_hold")
     if say is not None:
         say(key, names, progress, now)
