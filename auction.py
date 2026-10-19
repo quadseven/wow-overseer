@@ -794,6 +794,32 @@ def price_candidates(candidates, market) -> list:
     return out
 
 
+def lowest_asks(listings) -> dict:
+    """`{entry: lowest per-unit buyout}` over one house's live listings."""
+    market: dict = {}
+    for listing in listings or ():
+        market[listing.entry] = min(
+            market.get(listing.entry, listing.per_unit), listing.per_unit
+        )
+    return market
+
+
+def listable(candidates, listings) -> tuple:
+    """The `plan_sales` rows these candidates would make against `listings`.
+
+    ASKED BEFORE THE WALK, NOT ONLY AT THE COUNTER (wow-overseer#478). The
+    listing walk used to count every candidate, and at the counter
+    `plan_sales` refused each one: a rare, or a piece the house had no live
+    listing of and no fair price for. Measured on wow-dev on 2026-10-19:
+    "aimed to list 2 surplus BoE item(s)" about three times an hour for a
+    day, each taking the family's travel column on bag pressure, and the two
+    times the leader reached the counter, "listed 0 surplus BoE item(s) at
+    house 2". A walk for candidates that cannot be listed cannot land, so it
+    is not taken.
+    """
+    return plan_sales(price_candidates(candidates, lowest_asks(listings)))
+
+
 def sales_by_house(candidates, holder_houses) -> dict:
     """Group sale candidates by the auction house each holder can reach.
 

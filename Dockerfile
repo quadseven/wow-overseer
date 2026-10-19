@@ -44,7 +44,7 @@ COPY core.py bridge.py voice.py transform.py \
      jev.py jev_items.py jev_choices.py jev_recovery.py jev_activity.py jev_keep.py jevview.py \
      lootcouncil.py statweights.py \
      bank.py bankpolicy.py bankforecast.py \
-     mailrun.py holdings.py hunterpet.py \
+     mailrun.py mountbuy.py holdings.py hunterpet.py \
      realm.py realmread.py basepath.py appbuild.py watchwall.py nowstatus.py realmnav.py classic.py \
      needs.py partystatus.py lootcard.py lootstory.py towntrip.py \
      townerrand.py townslot.py tradechoice.py \

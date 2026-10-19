@@ -78,6 +78,13 @@ BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 FAMILY = ("Og", "Bork", "Grog", "Grug", "Ugga")
 
 
+def guild_members(count=2):
+    return [
+        {"name": f"Member{i}", "level": 60, "is_bot": 1, "guild_id": 7}
+        for i in range(count)
+    ]
+
+
 def roster(overrides=None) -> list:
     """The five, all enabled, Og leading, everybody questing, 0 of 30 run."""
     overrides = overrides or {}
@@ -101,7 +108,7 @@ def roster(overrides=None) -> list:
 
 class WhichCardGivesTheOrder(unittest.TestCase):
     def test_a_section_nobody_has_heard_of_is_refused_and_not_guessed(self):
-        for body in ({"section": "muster"}, {"section": ""}, {}, {"section": 7}):
+        for body in ({"section": "unknown"}, {"section": ""}, {}, {"section": 7}):
             order = decree.plan_order(body, roster())
             self.assertEqual(order.refusal, decree.ORDER_REFUSALS["section"])
             self.assertEqual(order.rows, ())
@@ -118,7 +125,7 @@ class WhichCardGivesTheOrder(unittest.TestCase):
         """The one invariant every planner shares. An Order that carried both
         would have the adapter running writes it had already refused."""
         refused = (
-            {"section": "muster"},
+            {"section": "unknown"},
             {"section": decree.WILL},
             {"section": decree.JOB, "mode": "not a mode"},
             {"section": decree.JOB, "mode": "farm"},
@@ -148,6 +155,52 @@ class WhichCardGivesTheOrder(unittest.TestCase):
         self.assertEqual(
             [r.target_name for r in order.rows], ["Og", "Bork", "Grog", "Grug"]
         )
+
+
+class TheGuildMuster(unittest.TestCase):
+    def test_named_guild_sends_one_bot_order_to_each_live_member(self):
+        members = guild_members() + [
+            {"name": "Visitor", "level": 60, "is_bot": 1, "guild_id": 8},
+            {"name": "Offline", "level": 60, "is_bot": 0, "guild_id": 7},
+        ]
+        planned = decree.plan_order(
+            {"section": decree.MUSTER, "guild": "Example Guild", "command": "follow"},
+            roster(),
+            members,
+            {7: "Example Guild", 8: "Other Guild"},
+        )
+        self.assertEqual(planned.refusal, "")
+        self.assertEqual([r.target_name for r in planned.rows], ["Member0", "Member1"])
+        self.assertEqual(
+            {(r.command, r.kind) for r in planned.rows}, {("follow", "bot")}
+        )
+
+    def test_guild_over_cap_is_refused_as_a_whole(self):
+        planned = decree.plan_order(
+            {"section": decree.MUSTER, "guild": "Example Guild", "command": "follow"},
+            roster(),
+            guild_members(41),
+            {7: "Example Guild"},
+        )
+        self.assertEqual(
+            planned.refusal,
+            "Example Guild has 41 commandable members, above the muster limit of 40. No order was sent.",
+        )
+        self.assertEqual(planned.rows, ())
+
+    def test_request_supplied_members_cannot_change_the_muster(self):
+        planned = decree.plan_order(
+            {
+                "section": decree.MUSTER,
+                "guild": "Example Guild",
+                "command": "follow",
+                "members": ["Forged"],
+            },
+            roster(),
+            guild_members(1),
+            {7: "Example Guild"},
+        )
+        self.assertEqual([r.target_name for r in planned.rows], ["Member0"])
 
 
 class TheStandingJob(unittest.TestCase):
@@ -505,7 +558,11 @@ class TheAdapterRunsAndDoesNotDecide(unittest.TestCase):
 
     def test_the_handler_asks_the_module_and_runs_what_it_gets_back(self):
         handler = self.handler()
-        self.assertIn("decree.plan_order(request, _fetch_roster_rows())", handler)
+        self.assertIn("roster_rows = _fetch_roster_rows()", handler)
+        self.assertIn("_fetch_guild_members()", handler)
+        self.assertIn(
+            "decree.plan_order(request, roster_rows, members, guild_names)", handler
+        )
         self.assertIn("_apply_order(order)", handler)
         self.assertIn("decree.order_result(order, changed)", handler)
 
@@ -825,6 +882,23 @@ class TheWritesThatActuallyRun(unittest.TestCase):
         self.assertEqual(rows, [])
         self.assertTrue(conn.closed)
 
+    def test_guild_membership_is_read_from_the_guild_table_and_live_snapshot(self):
+        class GuildCursor(FakeCursor):
+            def fetchall(self):
+                if "FROM guild_member gm" in self.calls[-1][0]:
+                    return guild_members(1)
+                return [{"guildid": 7, "name": "Example Guild"}]
+
+        cursor = GuildCursor()
+        conn = FakeConn(cursor)
+        with mock.patch.object(map_server, "_connect", return_value=conn):
+            members, names = map_server._fetch_guild_members()
+        self.assertEqual(members, guild_members(1))
+        self.assertEqual(names, {7: "Example Guild"})
+        self.assertIn("JOIN characters c ON c.guid = gm.guid", cursor.calls[1][0])
+        self.assertIn("s.updated_at > NOW() - INTERVAL 60 SECOND", cursor.calls[1][0])
+        self.assertTrue(conn.closed)
+
     def test_a_roster_read_that_is_not_a_schema_problem_still_raises(self):
         cursor = FakeCursor(
             {"FROM overseer_roster": MYSQL_ERROR(2013, "lost connection")}
@@ -885,11 +959,19 @@ class TheEndpointFromTheOutside(unittest.TestCase):
     """POST /api/decree driven through do_POST, which is how the page hits it."""
 
     def setUp(self):
-        patches = {"_fetch_roster_rows": mock.DEFAULT, "_apply_order": mock.DEFAULT}
+        patches = {
+            "_fetch_roster_rows": mock.DEFAULT,
+            "_fetch_guild_members": mock.DEFAULT,
+            "_apply_order": mock.DEFAULT,
+        }
         self.patcher = mock.patch.multiple(map_server, **patches)
         self.mocks = self.patcher.start()
         self.addCleanup(self.patcher.stop)
         self.mocks["_fetch_roster_rows"].return_value = roster()
+        self.mocks["_fetch_guild_members"].return_value = (
+            guild_members(),
+            {7: "Example Guild"},
+        )
         self.mocks["_apply_order"].return_value = 5
 
     def test_the_route_is_reachable_and_a_good_order_is_a_200(self):
@@ -907,9 +989,31 @@ class TheEndpointFromTheOutside(unittest.TestCase):
         self.mocks["_apply_order"].assert_not_called()
 
     def test_an_unknown_section_is_refused_before_the_roster_is_even_read(self):
-        handler = order(section="muster")
+        handler = order(section="unknown")
         self.assertEqual(handler.code, 400)
         self.mocks["_apply_order"].assert_not_called()
+
+    def test_muster_uses_membership_fetched_for_each_request(self):
+        first = order(
+            section=decree.MUSTER,
+            guild="Example Guild",
+            command="follow",
+            members=["Forged"],
+        )
+        self.assertEqual(first.code, 200)
+        self.assertEqual(first.payload["asked"], 2)
+        self.mocks["_fetch_guild_members"].return_value = (
+            guild_members(1),
+            {7: "Example Guild"},
+        )
+        second = order(section=decree.MUSTER, guild="Example Guild", command="follow")
+        self.assertEqual(second.code, 200)
+        self.assertEqual(second.payload["asked"], 1)
+        self.assertEqual(self.mocks["_fetch_guild_members"].call_count, 2)
+        self.assertEqual(
+            [r.target_name for r in self.mocks["_apply_order"].call_args[0][0].rows],
+            ["Member0"],
+        )
 
     def test_a_body_that_is_not_json_is_refused_before_anything_else(self):
         handler = FakeHandler(b"section=job")

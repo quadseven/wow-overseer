@@ -266,7 +266,10 @@ def _write_pass(free_reads):
     # Compiles a slice of our own bridge.py source, never external input.
     exec(textwrap.dedent(_block("    async def _write_equips(self")), namespace)  # noqa: S102
     bridge = types.SimpleNamespace(_equip_worn={}, _equip_holds={}, _equip_room={})
-    history = [dict(refused()[KEY], recent=False)] * 3
+    # _write_equips judges the history against the real clock, so the refusals
+    # are stamped from it too; a pinned NOW aged them out 24 hours later.
+    refused_at = datetime.now(timezone.utc) - timedelta(minutes=2)
+    history = [dict(refused()[KEY], recent=False, created_at=refused_at)] * 3
     return bridge, inserts, namespace["_write_equips"], history
 
 
