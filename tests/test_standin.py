@@ -127,6 +127,23 @@ class ACraftThatCannotMoveIsNoReasonToSitOut(unittest.TestCase):
         )
         self.assertEqual(standin.CLEAR, step.action)
 
+    def test_a_guests_row_waits_for_the_run_to_end(self):
+        # Og climbs into a rung he does not hold while sitting out and his
+        # family is inside with Locky: deleting the row would pull Locky out
+        # of the run, so the row stands and Og rejoins between runs.
+        for current in (seated(), seated(in_name="")):
+            step = standin.step(
+                facts(
+                    skills=self.OG,
+                    known=frozenset({8776}),
+                    current=current,
+                    mid_run=True,
+                )
+            )
+            self.assertEqual(standin.KEEP, step.action, step.why)
+            self.assertIn("inside", step.why)
+            self.assertIn("2964", step.why)
+
     def test_no_row_is_written_while_the_craft_cannot_move(self):
         step = standin.step(facts(skills=self.OG, known=frozenset({8776})))
         self.assertEqual(standin.NONE, step.action)
@@ -196,6 +213,28 @@ class NothingToCraftWithIsNoReasonToSitOut(unittest.TestCase):
             step = standin.step(facts(reagents=stocked(0), current=current))
             self.assertEqual(standin.CLEAR, step.action, step.why)
             self.assertIn("rejoins its family", step.why)
+
+    def test_a_guests_row_waits_for_the_run_to_end(self):
+        # Og runs out of Wool Cloth while his family is inside with Locky:
+        # deleting the row would pull Locky out of the run mid-run.
+        for current in (seated(), seated(in_name="")):
+            step = standin.step(
+                facts(reagents=stocked(0), current=current, mid_run=True)
+            )
+            self.assertEqual(standin.KEEP, step.action, step.why)
+            self.assertIn("inside", step.why)
+            self.assertIn("too little to craft with", step.why)
+
+    def test_the_run_over_his_row_is_cleared(self):
+        step = standin.step(facts(reagents=stocked(0), current=seated(), mid_run=False))
+        self.assertEqual(standin.CLEAR, step.action)
+
+    def test_the_order_removed_or_the_goal_met_still_clears_mid_run(self):
+        for over in (dict(ordered=""), dict(skills={"tailoring": 300})):
+            step = standin.step(
+                facts(reagents=stocked(0), current=seated(), mid_run=True, **over)
+            )
+            self.assertEqual(standin.CLEAR, step.action, step.why)
 
     def test_a_new_sit_out_needs_craft_rhythms_bar(self):
         short = (craft_rhythm.SHORT_CASTS * 3) - 1  # one cloth under the bar
