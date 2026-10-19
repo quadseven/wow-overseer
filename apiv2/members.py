@@ -559,22 +559,100 @@ def build(
     }
 
 
+# Nobody stays stuck longer than this (#868): the digest counts who is past
+# it, so a tick reads the breach without doing the sum.
+STUCK_BOUND_SECONDS = 2 * 3600
+# A follower's blocker ends with its leader's: the leader's hold is the cause.
+LEADER_HOLD = "'s own hold: "
+_DIGITS = re.compile(r"\d+")
+
+
+def stuck_cause(row: dict) -> str:
+    """What a stuck row is held by, as one group of the digest.
+
+    A class quest is one cause, whatever the quest. A hold is its blocker (the
+    leader's own hold, for a follower) with every number made "#", so a retry
+    time, a yard count or an ask count does not split one cause in two."""
+    if row["kind"] == "class quest":
+        return "class quest"
+    blocker = row["blocker"]
+    if LEADER_HOLD in blocker:
+        blocker = blocker.split(LEADER_HOLD, 1)[1]
+    return "%s: %s" % (row["kind"], _DIGITS.sub("#", blocker))
+
+
+def _waited(row: dict, checked_at: int | None) -> int | None:
+    """Seconds a row has been stuck at `checked_at`, None when not measured."""
+    if row["since"] is None or not checked_at:
+        return None
+    return max(0, int(checked_at) - int(row["since"]))
+
+
+def stuck_digest(rows: list, checked_at: int | None) -> dict:
+    """The stuck list in the numbers a tick journals (#868): how many are
+    stuck, who has waited longest, how many are past STUCK_BOUND_SECONDS, and
+    the causes (stuck_cause) ranked by member-hours lost, the biggest first.
+
+    `rows` are the /api/v2/stuck members. A row whose start was not measured
+    is counted as stuck but adds no hours; `unmeasured` says how many."""
+    groups: dict = {}
+    longest = None
+    total = over = unmeasured = 0
+    for row in rows:
+        waited = _waited(row, checked_at)
+        group = groups.setdefault(
+            stuck_cause(row), {"members": [], "seconds": 0, "longest_s": None}
+        )
+        group["members"].append(row["name"])
+        if waited is None:
+            unmeasured += 1
+            continue
+        total += waited
+        over += waited > STUCK_BOUND_SECONDS
+        group["seconds"] += waited
+        group["longest_s"] = max(group["longest_s"] or 0, waited)
+        if longest is None or waited > longest["seconds"]:
+            longest = {"name": row["name"], "seconds": waited}
+    causes = [
+        {
+            "cause": cause,
+            "members": group["members"],
+            "member_hours": round(group["seconds"] / 3600, 2),
+            "longest_s": group["longest_s"],
+        }
+        for cause, group in groups.items()
+    ]
+    causes.sort(key=lambda c: (-c["member_hours"], -len(c["members"]), c["cause"]))
+    return {
+        "count": len(rows),
+        "longest": longest,
+        "member_hours": round(total / 3600, 2),
+        "bound_s": STUCK_BOUND_SECONDS,
+        "over_bound": over,
+        "unmeasured": unmeasured,
+        "causes": causes,
+    }
+
+
 def stuck_view(roster: dict) -> dict:
-    """The /api/v2/stuck shape: the stuck members only, longest first."""
+    """The /api/v2/stuck shape: the stuck members only, longest first, and
+    their digest (stuck_digest)."""
     stuck = [m for m in roster["members"] if m["stuck"]]
     stuck.sort(key=lambda m: (m["since"] is None, m["since"] or 0, m["name"]))
+    rows = [
+        {
+            "name": m["name"],
+            "step": m["step"],
+            "blocker": m["blocker"],
+            "since": m["since"],
+            "kind": m["stuck_kind"],
+            "follows": m["follows"],
+        }
+        for m in stuck
+    ]
     return {
-        "members": [
-            {
-                "name": m["name"],
-                "step": m["step"],
-                "blocker": m["blocker"],
-                "since": m["since"],
-                "kind": m["stuck_kind"],
-                "follows": m["follows"],
-            }
-            for m in stuck
-        ],
+        "members": rows,
+        "digest": stuck_digest(rows, roster["checked_at"]),
         "checked_at": roster["checked_at"],
         "basis": roster["basis"],
     }
@@ -614,7 +692,7 @@ def roster(_query: dict, ctx) -> tuple[int, dict]:
 
 
 def stuck(_query: dict, ctx) -> tuple[int, dict]:
-    """GET /api/v2/stuck: the stuck members only, longest stuck first."""
+    """GET /api/v2/stuck: the stuck members only, longest stuck first, and their digest."""
     return 200, stuck_view(_roster_payload(ctx))
 
 

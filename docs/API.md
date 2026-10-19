@@ -335,7 +335,7 @@ Each entry: path, query parameters, what it answers, one example.
 ## `GET /api/v2/stuck`
 
 - Query: none
-- Answers: the stuck members only, longest stuck first.
+- Answers: the stuck members only, longest stuck first, and their digest.
 - Example: `overseer get /api/v2/stuck`
 
 ## `GET /api/v2/training`
