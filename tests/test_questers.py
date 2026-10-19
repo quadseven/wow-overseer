@@ -255,6 +255,111 @@ class EveryQuestInReach(unittest.TestCase):
         self.assertNotEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
 
 
+# A zone whose band is lower than Westfall's (2026-10-19 on the dev realm:
+# Durotar for questers of 14 to 22, who had done or broken every quest a
+# creature there gives, and still held two that an item starts).
+DUROTAR = 14
+
+
+def item_started(qid, entry=4881):
+    return {"quest": qid, "kind": "item", "entry": entry}
+
+
+class NextZoneHasAGiverToGoTo(unittest.TestCase):
+    """A zone is gone to only for a quest whose giver the quester can walk to:
+    one only an item starts, or one whose givers it leaves for now, made the
+    quester pick that zone every pass and then say it 'has no way there'."""
+
+    def done_with_elwynn(self, **kw):
+        # Elwynn done, and Durotar's quest a creature gives (52) done too.
+        return mirra(level=5, quests_done=frozenset({1, 2, 3, 6, 52}), **kw)
+
+    def durotar(self, extra_quests=(), extra_givers=(), extra_starts=()):
+        """The world with a Durotar whose one creature-given quest (52) is
+        done, as the realm's quester had done or broken them all."""
+        return world(
+            extra_quests=[quest(52, DUROTAR, 2, title="Carry Your Weight")]
+            + list(extra_quests),
+            extra_givers=[
+                giver(52, "start", 1052, 152, 500, 0),
+                giver(52, "end", 1052, 152, 500, 0),
+            ]
+            + list(extra_givers),
+            extra_starts=list(extra_starts),
+        )
+
+    def test_a_zone_whose_open_quests_an_item_starts_is_passed_over(self):
+        cat = self.durotar(
+            extra_quests=[quest(50, DUROTAR, 2, title="The Admiral's Orders")],
+            extra_starts=[item_started(50)],
+        )
+        # The quest is in reach: race, level and chain allow it.
+        self.assertEqual(questers.in_reach(cat, self.done_with_elwynn(), DUROTAR), [50])
+        self.assertEqual(questers.next_zone(cat, self.done_with_elwynn())[0], WESTFALL)
+        p = questers.plan(cat, self.done_with_elwynn(), questers.Clock(), 0.0)
+        self.assertIsNotNone(p.move, p.line)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 20))
+        self.assertNotIn("has no way there", p.line)
+
+    def test_an_item_started_zone_on_the_other_continent_is_not_crossed_to(self):
+        cat = self.durotar(
+            extra_quests=[quest(50, DUROTAR, 2, title="The Admiral's Orders")],
+            extra_starts=[item_started(50)],
+        )
+        member = self.done_with_elwynn(map_id=1)
+        zone, _opens = questers.next_zone(cat, member)
+        self.assertNotEqual(zone, DUROTAR)
+
+    def test_a_zone_whose_only_giver_it_leaves_for_now_is_passed_over(self):
+        cat = world(
+            extra_quests=[quest(51, DUROTAR, 2, title="Vanquish the Betrayers")],
+            extra_givers=[
+                giver(51, "start", 1051, 151, 500, 0),
+                giver(51, "end", 1051, 151, 500, 0),
+            ],
+        )
+        member = self.done_with_elwynn()
+        self.assertEqual(questers.next_zone(cat, member)[0], DUROTAR)
+        other_side = "the way to the spawn crosses the other side's ground"
+        self.assertIn(other_side, classquest.SPAWN_REFUSALS)
+        tried = [
+            questers.Attempt(
+                "Mirra",
+                "walk-to",
+                "error",
+                reason=other_side,
+                spawn=1051,
+                age_minutes=5,
+            )
+        ]
+        p = questers.plan(cat, member, questers.Clock(), 0.0, tried=tried)
+        self.assertIsNotNone(p.move, p.line)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 20))
+        # Once the hold on that giver lapses, the zone is gone to again.
+        later = [
+            questers.Attempt(
+                **{**tried[0].__dict__, "age_minutes": classquest.SPAWN_REFUSED_MINUTES}
+            )
+        ]
+        p = questers.plan(cat, member, questers.Clock(), 0.0, tried=later)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 51))
+
+    def test_a_zone_with_a_giver_to_go_to_is_still_chosen_first(self):
+        cat = world(
+            extra_quests=[
+                quest(50, DUROTAR, 2, title="The Admiral's Orders"),
+                quest(51, DUROTAR, 2, title="Vanquish the Betrayers"),
+            ],
+            extra_givers=[
+                giver(51, "start", 1051, 151, 500, 0),
+                giver(51, "end", 1051, 151, 500, 0),
+            ],
+            extra_starts=[item_started(50)],
+        )
+        zone, opens = questers.next_zone(cat, self.done_with_elwynn())
+        self.assertEqual((zone, opens), (DUROTAR, [51]))
+
+
 # The module's answer to a crossing row, as the command log holds it.
 NO_TRANSPORT = (
     "no transport the module knows sails from this map to that map for this faction"
