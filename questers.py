@@ -40,7 +40,10 @@ WHAT A QUESTER DOES NEXT (`next_move`), one move a pass, in this order:
      only an item or a gameobject starts takes no one anywhere), the most
      quests first on a tie.
      The move is the take of that zone's nearest quest; a zone on the other
-     continent is a `cross-to-map` row (classquest.CROSSING_VERB) first.
+     continent is a `cross-to-map` row (classquest.CROSSING_VERB) first. While
+     its last crossing to a continent failed and the crossing clock holds it
+     (`failed_crossings`), a zone only across it is passed over for the best
+     zone it can reach without crossing, when there is one.
 
 The party works together through questshare (the bridge shares among the five
 as it does for the family), and every take, hand-in and drop is the module's
@@ -807,35 +810,75 @@ def _move(kind, member, quest, spot, said, to_map=-1) -> classquest.Move:
     )
 
 
-def _giver_to_go_to(cat: Catalogue, member, quest_id, gone=frozenset()) -> bool:
+def _giver_to_go_to(
+    cat: Catalogue, member, quest_id, gone=frozenset(), unsailed=frozenset()
+) -> bool:
     """Whether a creature that gives the quest stands where the quester can go
     and take it: on the quester's own map or on a classic continent it can
-    cross to, and not one it leaves for now (`left_spawns`). A quest only an
-    item or a gameobject starts has none: no verb takes it, so it is no reason
-    to go to its zone."""
+    cross to and has not just failed to cross to (`unsailed`), and not one it
+    leaves for now (`left_spawns`). A quest only an item or a gameobject starts
+    has none: no verb takes it, so it is no reason to go to its zone."""
     here = int(member.map_id) if member.placed else None
     return any(
         s.guid not in gone
-        and (int(s.map_id) == here or int(s.map_id) in classquest.CONTINENTS)
+        and (
+            int(s.map_id) == here
+            or (
+                int(s.map_id) in classquest.CONTINENTS and int(s.map_id) not in unsailed
+            )
+        )
         for s in cat.quest(quest_id).starters
     )
 
 
-def next_zone(cat: Catalogue, member, broken=frozenset(), gone=frozenset()):
+def failed_crossings(name, crossings) -> frozenset:
+    """The maps the quester is not sent across to for now: each map the module
+    refused for good (guildjobs.class_walls, classquest.CROSS_WALL_MINUTES),
+    and the map of its newest crossing row when the module refused that row
+    and the crossing clock still holds it (guildjobs.crossing_cooling,
+    classquest.CROSS_RETRY_MINUTES or CROSS_COOLDOWN_MINUTES). A crossing
+    still under way refused nothing and is not one of these.
+
+    A FAILED CROSSING CHOSE THE SAME ZONE AGAIN (2026-10-19). Alliance
+    questers of 15 and 16 in Dun Morogh had one quest left in reach in
+    Durotar, and its band was the lowest, so `next_zone` chose Durotar every
+    pass. The module's walk to the berth gave up on the ground, the crossing
+    clock held the quester where it stood ("waits on its last crossing"), and
+    when the clock lapsed it chose Durotar and failed again, for hours. While
+    the crossing is held, the quester goes on to the best zone it can reach
+    without it, and only with none is it held as before."""
+    out = set(guildjobs.class_walls(name, crossings))
+    rows = [
+        r
+        for r in crossings or ()
+        if r.name == name and r.action in guildjobs.CROSS_ACTIONS
+    ]
+    if rows and guildjobs.crossing_cooling(name, crossings):
+        newest = min(rows, key=lambda r: int(r.age_minutes))
+        if newest.refusal and (newest.dest or classquest.is_cross_row(newest.command)):
+            out.add(int(newest.dest))
+    return frozenset(out)
+
+
+def next_zone(
+    cat: Catalogue, member, broken=frozenset(), gone=frozenset(), unsailed=frozenset()
+):
     """(zone, its open quest ids) of the zone the quester goes to next, or
     (0, []) when no zone holds a quest in reach for it: the lowest band of
     its side among those zones, the most quests first on a tie. A quest counts
     only when a giver of it is one the quester can go to (`_giver_to_go_to`):
     a zone whose open quests an item or a gameobject starts, or whose givers
     are all gone or left, is passed over, not chosen and then found to have no
-    way there, pass after pass."""
+    way there, pass after pass. A giver on a continent in `unsailed` (the maps
+    its last crossings failed to reach for now, `failed_crossings`) counts only
+    when it stands on the quester's own map."""
     bands = cat.bands.get(side_of(member.race), {})
     best = None
     for zone in sorted({f.zone for f in cat.facts.values()} - {member.zone}):
         opens = [
             qid
             for qid in in_reach(cat, member, zone, broken)
-            if _giver_to_go_to(cat, member, qid, gone)
+            if _giver_to_go_to(cat, member, qid, gone, unsailed)
         ]
         if not opens:
             continue
@@ -846,11 +889,16 @@ def next_zone(cat: Catalogue, member, broken=frozenset(), gone=frozenset()):
     return (best[1], best[2]) if best else (0, [])
 
 
-def _travel(cat: Catalogue, member, broken, gone):
+def _travel(cat: Catalogue, member, broken, gone, unsailed=frozenset()):
     """The move that takes the quester to the next zone: the take of that
     zone's nearest quest on its map, or a crossing to the continent the zone's
-    quests are on; (None, why) when there is no zone to go to."""
-    zone, opens = next_zone(cat, member, broken, gone)
+    quests are on; (None, why) when there is no zone to go to. A zone across
+    a crossing that just failed (`unsailed`) is passed over while another zone
+    is left; with none, the zone is chosen as before and its crossing waits
+    on the crossing clock (`crossing_held`)."""
+    zone, opens = next_zone(cat, member, broken, gone, unsailed)
+    if not zone and unsailed:
+        zone, opens = next_zone(cat, member, broken, gone)
     if not zone:
         return None, "%s has no quest in reach in any zone" % member.name
     name = levelroute.zone_name(zone)
@@ -889,12 +937,15 @@ def _travel(cat: Catalogue, member, broken, gone):
     )
 
 
-def next_move(cat: Catalogue, member, broken=frozenset(), found=(), tried=()):
+def next_move(
+    cat: Catalogue, member, broken=frozenset(), found=(), tried=(), crossings=()
+):
     """(move or None, why there is none, quests found broken that it never
     held): the quester's next move toward every quest in reach.
 
     `broken` is the quest ids already found broken for this quester, `found`
-    this pass's Broken rows for the quests it holds (`failures`)."""
+    this pass's Broken rows for the quests it holds (`failures`), `crossings`
+    the realm's recent crossing rows (`failed_crossings`)."""
     left = left_spawns(member.name, tried)
     # Quests the module told this quester are complete: due a turn-in, never
     # a drop, even when their log row still says otherwise (#1085).
@@ -931,7 +982,8 @@ def next_move(cat: Catalogue, member, broken=frozenset(), found=(), tried=()):
             never_held,
         )
     # 5. Nothing left in reach here: the next zone.
-    move, why = _travel(cat, member, skip, left)
+    unsailed = failed_crossings(member.name, crossings)
+    move, why = _travel(cat, member, skip, left, unsailed)
     return move, why, never_held
 
 
@@ -1176,7 +1228,7 @@ def plan(
         return Plan(
             member.name, None, tuple(found), "%s has no fresh position" % member.name
         )
-    move, why, never_held = next_move(cat, member, broken, found, tried)
+    move, why, never_held = next_move(cat, member, broken, found, tried, crossings)
     if move is not None and move.kind == classquest.CROSS:
         held = crossing_held(member.name, move, crossings)
         if held:
