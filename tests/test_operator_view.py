@@ -250,7 +250,13 @@ class FormsPostWhereTheHandlersRead(unittest.TestCase):
                     self.assertIn('self.headers.get("%s")' % field["header"], src)
 
     def test_fixed_values_are_ones_the_server_takes(self):
-        sections = {decree.JOB, decree.CAMPAIGN, decree.QUEUE, decree.TRAVEL}
+        sections = {
+            decree.JOB,
+            decree.MUSTER,
+            decree.CAMPAIGN,
+            decree.QUEUE,
+            decree.TRAVEL,
+        }
         for aid, action in self.actions.items():
             fixed = action.get("fixed", {})
             if "section" in fixed:
