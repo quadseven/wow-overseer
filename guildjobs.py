@@ -2190,7 +2190,7 @@ def supply_step(member, vendor_rows, cap, kept=None):
     )
 
 
-def _pet_first(m, beasts, recent, cap):
+def _pet_first(m, beasts, recent, cap, far=None):
     """A hunter that knows Tame Beast and has no pet tames one before any other
     job but the class quest (hunterpet.py): a hunter without a pet fights every
     mob alone and died three times as often as a mage on 2026-10-10. `beasts`
@@ -2199,15 +2199,18 @@ def _pet_first(m, beasts, recent, cap):
         return None, "", ""
     if _cooling(m, hunterpet.ACTION, recent):
         return None, "", ""
-    return pet_step(m, beasts, recent, cap)
+    return pet_step(m, beasts, recent, cap, far)
 
 
-def pet_step(m, beasts, recent, cap):
+def pet_step(m, beasts, recent, cap, far=None):
     """(step or None, what it does, a note): the walk to the nearest beast the
-    hunter may tame (hunterpet.choose) and the `use-spell-on` row that casts Tame
-    Beast at it there. A beast walked to inside hunterpet.AVOID_MINUTES is left
-    for another; with none left the reason is the note."""
-    beast = hunterpet.choose(m, beasts, hunterpet.avoided(m.name, recent))
+    hunter may tame within the pass's reach (hunterpet.choose, hunterpet.reach)
+    and the `use-spell-on` row that casts Tame Beast at it there. A beast walked
+    to inside hunterpet.AVOID_MINUTES is left for another; with none left the
+    reason is the note. A beast past the near cap is a far walk, and it waits
+    for a realm far walk slot (`far`, classquest.FarSlots) as a class walk does."""
+    yards = hunterpet.reach(cap)
+    beast = hunterpet.choose(m, beasts, hunterpet.avoided(m.name, recent), yards)
     if beast is None:
         return (
             None,
@@ -2219,11 +2222,17 @@ def pet_step(m, beasts, recent, cap):
                     m.name,
                     hunterpet.lowest_level(m.level),
                     int(m.level),
-                    int(hunterpet.BEAST_YARDS),
+                    int(yards),
                 )
             ),
         )
     spot = Spot("creature", beast.guid, beast.map_id, beast.x, beast.y, beast.name)
+    if far is not None and _far_class_walk(m, spot, cap) and not far.take(m.name):
+        return (
+            None,
+            "",
+            "%s waits for a far walk slot on the realm to tame a beast" % m.name,
+        )
     said = "tames a %s (level %d) as its first pet" % (beast.name, beast.level)
     step = guildcorps.Step(
         m.name,
@@ -3273,7 +3282,7 @@ def _quest_first(
     )
     if step is not None or doing:
         return (step, doing, quest_note, ""), quest_note
-    step, doing, pet_note = _pet_first(m, pet, recent, cap)
+    step, doing, pet_note = _pet_first(m, pet, recent, cap, far)
     if step is not None:
         return (step, doing, quest_note, ""), quest_note
     quest_note = _join(quest_note, pet_note)
