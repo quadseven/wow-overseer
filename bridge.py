@@ -16260,10 +16260,11 @@ class Bridge(discord.Client):
 
     async def _job_pet_offers(self, members, recent) -> dict:
         """name -> the tameable beasts around it, for each hunter that knows
-        Tame Beast and has no pet (hunterpet.wants_pet), off the tame cooldown."""
+        Tame Beast and has no pet (hunterpet.wants_pet). Read inside the tame
+        cooldown too: guildjobs._pet_first waits it out, and guildjobs.pet_due
+        keeps the hunter out of a battleground queue meanwhile."""
         hunters = [m for m in members
-                   if int(m.class_id or 0) == hunterpet.HUNTER and m.online
-                   and not guildjobs._cooling(m, hunterpet.ACTION, recent)]
+                   if int(m.class_id or 0) == hunterpet.HUNTER and m.online]
         if not hunters:
             return {}
         unpetted = await asyncio.to_thread(_fetch_unpetted, [m.name for m in hunters])

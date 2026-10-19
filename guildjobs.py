@@ -2109,8 +2109,44 @@ def _pet_first(m, beasts, recent, cap, far=None):
     if beasts is None or not m.online or not m.alive or m.in_combat:
         return None, "", ""
     if _cooling(m, hunterpet.ACTION, recent):
+        if pet_due(m, beasts, recent, cap, far):
+            return (
+                None,
+                "",
+                "%s waits out its tame cooldown with a beast in reach, and its "
+                "first pet comes before PvP" % m.name,
+            )
         return None, "", ""
     return pet_step(m, beasts, recent, cap, far)
+
+
+# A PET BEFORE A BATTLEGROUND QUEUE (2026-10-19). The pet step is the rung ahead
+# of PvP, but it has a cooldown (hunterpet.COOLDOWN_MINUTES, 20) longer than a
+# guild jobs pass (about 15 minutes), so every other pass a hunter without a
+# pet fell through to the PvP rung. Read on the dev realm: Cowpoke (20) took
+# the pet step at 22:03 and 22:34 UTC ("60 tameable beast spawn(s) of level 16
+# to 20 within 5000 yards"), and at 22:49, inside its tame cooldown, it
+# "queues Warsong Gulch for honor toward Legionnaire's Sword (171 of 300)" and
+# the bg-queue row was delivered. A pet is a core class tool; honor is
+# optional. So while its tame cooldown runs and a beast is still in reach,
+# with a far walk slot free this pass when the beast is a far walk, a hunter
+# writes no PvP queue or honor buy (_pvp_first). With no beast in reach, or
+# no far slot free, PvP goes on as before.
+def pet_due(m, beasts, recent, cap, far=None) -> bool:
+    """Whether a hunter that knows Tame Beast and has no pet (`beasts` read by
+    the bridge, None otherwise) has a pet walk it could take: a beast in the
+    pass's reach it has not tried lately, and a far walk slot left this pass
+    when that beast is a far walk. Takes no slot."""
+    if beasts is None or not m.online or not m.alive:
+        return False
+    yards = hunterpet.reach(cap)
+    beast = hunterpet.choose(m, beasts, hunterpet.avoided(m.name, recent), yards)
+    if beast is None:
+        return False
+    spot = Spot("creature", beast.guid, beast.map_id, beast.x, beast.y, beast.name)
+    if far is None or far.free is None or not _far_class_walk(m, spot, cap):
+        return True
+    return far.free > 0 or m.name in far.holders
 
 
 def pet_step(m, beasts, recent, cap, far=None):
@@ -2144,7 +2180,11 @@ def pet_step(m, beasts, recent, cap, far=None):
             "",
             "%s waits for a far walk slot on the realm to tame a beast" % m.name,
         )
-    said = "tames a %s (level %d) as its first pet" % (beast.name, beast.level)
+    said = "%s tames a %s (level %d) as its first pet" % (
+        m.name,
+        beast.name,
+        beast.level,
+    )
     step = guildcorps.Step(
         m.name,
         hunterpet.ACTION,
@@ -3339,7 +3379,9 @@ def _member_step(
     step, cap_note = _tier_cap_first(m, pvp, pending, recent, cap)
     if step is not None:
         return step, step.said, supply_note, gear_note
-    step, doing, held = _pvp_first(m, pvp, recent, cap, kept)
+    step, doing, held = _pvp_first(
+        m, pvp, recent, cap, kept, pet_due(m, pet, recent, cap, far)
+    )
     if step is not None or held:
         return step, doing, _join(supply_note, cap_note), gear_note
     supply_note = _join(supply_note, cap_note)
@@ -5031,8 +5073,13 @@ def pvp_step(m, aim, move, cap, kept=None):
     return None
 
 
-def _pvp_first(m, pvp, recent, cap, kept=None):
+def _pvp_first(m, pvp, recent, cap, kept=None, pet_wanted=False):
     """(step, doing, held): a member playing PvP for an upgrade.
+
+    A hunter with a pet walk due (`pet_wanted`, pet_due) queues for no
+    battleground and buys nothing with honor: its first pet comes first. It
+    is not held, so it goes about its other jobs until the pet step's next
+    pass. Inside a battleground or a queue that has not lapsed it stays held.
 
     Inside a battleground or waiting in its queue the member is HELD: it does
     nothing else this pass. A queue accepted past WAITING_MINUTES is asked
@@ -5048,6 +5095,8 @@ def _pvp_first(m, pvp, recent, cap, kept=None):
     if move.kind in (pvpgear.INSIDE, pvpgear.WAITING):
         return None, aim.line + ": " + move.said, True
     if move.kind not in (pvpgear.QUEUE, pvpgear.BUY) or m.in_combat:
+        return None, "", False
+    if pet_wanted:
         return None, "", False
     if _cooling(m, pvpgear.ACTION, recent):
         return None, "", False
