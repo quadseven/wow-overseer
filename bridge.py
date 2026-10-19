@@ -19735,10 +19735,11 @@ class Bridge(discord.Client):
 
     async def _standin_out_facts(self, key: str, leader: str, ordered: str,
                                  roster: tuple) -> tuple:
-        """(skills, known spells, out member, the others' levels, guild,
-        faction) for the member ordered to sit out. Reads only."""
+        """(skills, known spells, reagents, out member, the others' levels,
+        guild, faction) for the member ordered to sit out. Reads only."""
         skills = (await asyncio.to_thread(_fetch_trade_skills, [ordered])).get(ordered, {})
         known = await asyncio.to_thread(_fetch_standin_known, ordered)
+        reagents = await asyncio.to_thread(_fetch_standin_reagents, ordered)
         read = await asyncio.to_thread(_fetch_standin_members, list(roster))
         members = {n: guildrun.member_from_row(r) for n, r in read.items()}
         levels = tuple(m.level for n, m in sorted(members.items())
@@ -19746,23 +19747,25 @@ class Bridge(discord.Client):
         head = members.get(key) or members.get(leader)
         guild = head.guild if head is not None else ""
         faction = guildrun.faction_of([m for m in members.values() if m is not None])
-        return skills, known, members.get(ordered), levels, guild, faction
+        return skills, known, reagents, members.get(ordered), levels, guild, faction
 
     async def _standin_facts(self, key: str, ordered: str, current, rows: list,
                              fam, gfacts: dict, doors: dict, candidates: tuple):
         """standin.Facts for one family. Reads only."""
         roster = tuple(fam["names"]) if fam else ()
         leader = str(fam["leader"].get("name") or "") if fam else ""
-        skills, known, out_member, levels, guild, faction = {}, None, None, (), "", ""
+        skills, known, reagents = {}, None, None
+        out_member, levels, guild, faction = None, (), "", ""
         if ordered and ordered in roster:
-            (skills, known, out_member, levels, guild,
+            (skills, known, reagents, out_member, levels, guild,
              faction) = await self._standin_out_facts(key, leader, ordered, roster)
         door = _standin_door(rows, doors)
         mid_run = bool(roster and (current is not None or ordered in roster)
                        and await self._mid_run(list(roster)))
         return standin.Facts(
             family=key, leader=leader, ordered=ordered, roster=roster, skills=skills,
-            known=known, out_member=out_member, family_levels=levels, guild=guild,
+            known=known, reagents=reagents, out_member=out_member,
+            family_levels=levels, guild=guild,
             faction=faction,
             door=door, candidates=candidates, busy=frozenset(gfacts["busy"]),
             resting=frozenset(gfacts["resting"]), benched=frozenset(gfacts["benched"]),
@@ -24105,6 +24108,28 @@ def _fetch_standin_known(name: str):
                     "not judged this pass", name)
         return None
     return frozenset(int(r["spell"]) for r in rows if r.get("holder") == name)
+
+
+def _fetch_standin_reagents(name: str):
+    """Where the member ordered to sit out stands on the gathered reagents of
+    its standing craft errand (a craft_rhythm.Stand), or None unread.
+
+    For standin.starved (wow-overseer#47). The errand is the one the craft
+    pass wrote to overseer_roster.craft_spell; with none written the stand is
+    UNJUDGED, which standin does not judge. A failed read answers None, so
+    the row stands as it did.
+    """
+    try:
+        spells = _fetch_standing_crafts([name])
+        spell = int((spells.get(name) or (0, 0))[0] or 0)
+        counts = _fetch_item_counts(
+            [(name, reagent.entry) for reagent in craft_rhythm.feeds(spell)])
+    except pymysql.err.MySQLError:
+        log.warning("standin: %s's craft reagents could not be read; its "
+                    "stock is not judged this pass", name)
+        return None
+    held = {entry: count for (who, entry), count in counts.items() if who == name}
+    return craft_rhythm.stand(name, spell, held)
 
 
 def _standin_crafts(name: str, family: str) -> None:

@@ -166,6 +166,71 @@ class ACraftThatCannotMoveIsNoReasonToSitOut(unittest.TestCase):
         self.assertIn("spellbook was not read", step.why)
 
 
+WOOLEN = 2964  # Bolt of Woolen Cloth: 3 Wool Cloth (2592) a cast
+
+
+def stocked(wool):
+    """Og's stand on Bolt of Woolen Cloth carrying `wool` Wool Cloth."""
+    return craft_rhythm.stand("Og", WOOLEN, {2592: wool})
+
+
+class NothingToCraftWithIsNoReasonToSitOut(unittest.TestCase):
+    """wow-overseer#47. wow-dev, 2026-10-17 to 2026-10-19: Og sat out Grug's
+    family's Uldaman runs on job='craft', which stands his quest drive down,
+    holding 0 of the 3 Wool Cloth his Bolt of Woolen Cloth (2964) takes on
+    every craft pass, while no auction house sold any. Sitting out made
+    nothing; the roaming and runs it stood down are what bring cloth in."""
+
+    def test_og_with_no_wool_does_not_sit_out(self):
+        why = standin.sits_out(facts(reagents=stocked(0)))
+        self.assertIn("too little to craft with", why)
+        self.assertIn("0 Wool Cloth", why)
+        self.assertIn("2964", why)
+
+    def test_no_row_is_written_while_he_is_starved(self):
+        step = standin.step(facts(reagents=stocked(0)))
+        self.assertEqual(standin.NONE, step.action)
+
+    def test_his_row_is_cleared_so_he_rejoins(self):
+        for current in (seated(), seated(in_name="")):
+            step = standin.step(facts(reagents=stocked(0), current=current))
+            self.assertEqual(standin.CLEAR, step.action, step.why)
+            self.assertIn("rejoins its family", step.why)
+
+    def test_a_new_sit_out_needs_craft_rhythms_bar(self):
+        short = (craft_rhythm.SHORT_CASTS * 3) - 1  # one cloth under the bar
+        self.assertIn("too little", standin.sits_out(facts(reagents=stocked(short))))
+        enough = craft_rhythm.SHORT_CASTS * 3
+        self.assertEqual("", standin.sits_out(facts(reagents=stocked(enough))))
+        self.assertEqual(
+            standin.SEAT, standin.step(facts(reagents=stocked(enough))).action
+        )
+
+    def test_one_already_out_keeps_the_seat_until_no_cast_is_left(self):
+        self.assertEqual(
+            "", standin.sits_out(facts(reagents=stocked(3), current=seated()))
+        )
+        self.assertNotEqual(
+            standin.CLEAR,
+            standin.step(facts(reagents=stocked(3), current=seated())).action,
+        )
+        self.assertIn(
+            "too little", standin.sits_out(facts(reagents=stocked(2), current=seated()))
+        )
+
+    def test_another_members_row_does_not_count_as_his_seat(self):
+        other = seated(out_name="Bork")
+        self.assertIn(
+            "too little", standin.sits_out(facts(reagents=stocked(3), current=other))
+        )
+
+    def test_unread_or_unjudged_reagents_are_not_judged(self):
+        self.assertEqual("", standin.sits_out(facts(reagents=None)))
+        unjudged = craft_rhythm.stand("Og", 0, {})
+        self.assertEqual(craft_rhythm.UNJUDGED, unjudged.verdict)
+        self.assertEqual("", standin.sits_out(facts(reagents=unjudged)))
+
+
 # --- who sits out and who stands in ----------------------------------------------
 
 
@@ -603,6 +668,7 @@ class TheBridgePass(unittest.TestCase):
         leader_job="dungeon:deadmines",
         guild_rows=None,
         known=frozenset({3757}),
+        reagents=None,
     ):
         written, jobs_told, lines = [], [], []
         gfacts = _guild_facts()
@@ -634,6 +700,7 @@ class TheBridgePass(unittest.TestCase):
                 _fetch_trade_skills=lambda names: {"Og": dict(SKILLS)},
                 # Woolen Bag (3757) is the rung SKILLS' Tailoring 120 names.
                 _fetch_standin_known=lambda name: known,
+                _fetch_standin_reagents=lambda name: reagents,
                 _fetch_standin_members=lambda names: {
                     n: members[n] for n in names if n in members
                 },
@@ -709,6 +776,43 @@ class TheBridgePass(unittest.TestCase):
             ),
             lines,
         )
+
+    def test_og_with_nothing_to_craft_with_rejoins_his_family(self):
+        fams, written, jobs_told, lines = self.run_pass(
+            rows={"Grug": seated(in_name="")}, og_job="craft", reagents=stocked(0)
+        )
+        self.assertEqual([("Grug", standin.CLEAR, None)], written)
+        self.assertIn("Og", fams["Grug"]["names"])
+        self.assertEqual([("Og", "dungeon:deadmines", standin.SOURCE)], jobs_told)
+        self.assertTrue(
+            any("Og rejoins" in line and "0 Wool Cloth" in line for line in lines),
+            lines,
+        )
+
+    def test_the_reagent_read_judges_the_written_errand(self):
+        asked = []
+
+        def counts(pairs):
+            asked.extend(pairs)
+            return {("Og", 2592): 4}
+
+        with mock.patch.multiple(
+            bridge,
+            _fetch_standing_crafts=lambda names: {"Og": (WOOLEN, 100)},
+            _fetch_item_counts=counts,
+        ):
+            got = bridge._fetch_standin_reagents("Og")
+        self.assertEqual([("Og", 2592)], asked)
+        self.assertEqual((craft_rhythm.SHORT, 1), (got.verdict, got.casts))
+
+    def test_no_written_errand_is_unjudged(self):
+        with mock.patch.multiple(
+            bridge,
+            _fetch_standing_crafts=lambda names: {},
+            _fetch_item_counts=lambda pairs: {},
+        ):
+            got = bridge._fetch_standin_reagents("Og")
+        self.assertEqual(craft_rhythm.UNJUDGED, got.verdict)
 
     def test_an_unread_spellbook_keeps_the_row(self):
         fams, written, jobs_told, _ = self.run_pass(
