@@ -16276,7 +16276,7 @@ class Bridge(discord.Client):
             log.info("guild jobs: %s knows Tame Beast and has no pet; %d tameable "
                      "beast spawn(s) of level %d to %d within %d yards",
                      m.name, len(offers[m.name]), hunterpet.lowest_level(m.level),
-                     int(m.level), int(hunterpet.BEAST_YARDS))
+                     int(m.level), int(hunterpet.FAR_BEAST_YARDS))
         return offers
 
     async def _job_weapon_offers(self, members, recent) -> dict:
@@ -29546,8 +29546,10 @@ def _fetch_unpetted(names) -> set:
 
 def _fetch_beasts(here) -> list:
     """Rows for hunterpet.beasts_from_rows: the tameable beasts around where
-    the hunter stands, of its level band (hunterpet.BEASTS_SQL)."""
-    x, y, box = float(here.x), float(here.y), float(hunterpet.BEAST_YARDS)
+    the hunter stands, of its level band (hunterpet.BEASTS_SQL), as far as a
+    far walk is sent for one (hunterpet.FAR_BEAST_YARDS); guildjobs.pet_step
+    keeps the pass's own reach (hunterpet.reach)."""
+    x, y, box = float(here.x), float(here.y), float(hunterpet.FAR_BEAST_YARDS)
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(

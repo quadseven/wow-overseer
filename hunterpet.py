@@ -16,7 +16,8 @@ own hunter strategy (mod-playerbots `call pet`, `mend pet`, `revive pet`).
 WHAT THIS DOES. For a hunter that knows Tame Beast and has no pet (no
 character_pet row), the nearest tameable beast (creature_template type 1, the
 tameable type flag, a pet family, rank 0, not an exotic family) whose top level
-is at or below the hunter's and at most LEVEL_BELOW under it: a walk to that
+is at or below the hunter's and at most LEVEL_BELOW under it, within reach of
+the pass's walk (BEAST_YARDS, or FAR_BEAST_YARDS on a far walk): a walk to that
 spawn, then `use-spell-on creature:<entry> spell:1515` (quadseven/mod-overseer,
 the cast a client sends at its target). The core tames it or does not. A beast
 this hunter was walked to lately is left for another (AVOID_MINUTES), so a beast
@@ -45,9 +46,17 @@ COOLDOWN_MINUTES = 20
 AVOID_MINUTES = 90
 # At most this many tame steps per guild per pass.
 STEPS_PER_GUILD = 4
-# How far a hunter is sent for a beast. The level walk keeps a hunter where
-# beasts of its level live, so one is rarely far.
+# How far a hunter is sent for a beast on a walk the module takes without a
+# far cap (its errand walks reach 1,000 yards).
 BEAST_YARDS = 800.0
+# How far a hunter is sent for a beast on a far walk, when the pass carries the
+# far cap: the next zone over. The level walk does not keep a hunter where
+# beasts of its level live. Read on the dev realm on 2026-10-19: Cowpoke (20)
+# stood in Mulgore and Pokka (16) in Darnassus, and each pass from 18:22 UTC
+# found "0 tameable beast spawn(s)" within 800 yards (104 and 97 passes), so
+# neither was ever sent to a beast. The bridge reads this far; the nearest
+# beast still wins.
+FAR_BEAST_YARDS = 5000.0
 # A beast at most this many levels under the hunter: a pet levels with its
 # master from where it is tamed, and a much lower one dies in the next fight.
 LEVEL_BELOW = 4
@@ -151,17 +160,26 @@ def avoided(name, recent) -> frozenset:
     )  # fmt: skip
 
 
-def choose(m, beasts, avoid=frozenset()):
-    """The beast the hunter tames: on its map, at or below its level and at
-    most LEVEL_BELOW under it, not avoided, the nearest; the higher level first
-    between two equally near. None when there is none."""
+def reach(cap) -> float:
+    """How far a hunter is sent for a beast on a pass whose walk rows carry
+    `cap`: BEAST_YARDS on a near walk, up to FAR_BEAST_YARDS on a far one."""
+    return min(FAR_BEAST_YARDS, max(BEAST_YARDS, float(cap)))
+
+
+def choose(m, beasts, avoid=frozenset(), yards=BEAST_YARDS):
+    """The beast the hunter tames: on its map, within `yards` (reach), at or
+    below its level and at most LEVEL_BELOW under it, not avoided, the nearest;
+    the higher level first between two equally near. None when there is none."""
     if m.map_id is None or m.x is None or m.y is None:
         return None
     top, low = int(m.level), lowest_level(m.level)
     fits = [
         b
         for b in beasts or ()
-        if b.map_id == int(m.map_id) and low <= b.level <= top and b.guid not in avoid
+        if b.map_id == int(m.map_id)
+        and low <= b.level <= top
+        and b.guid not in avoid
+        and math.hypot(b.x - float(m.x), b.y - float(m.y)) <= float(yards)
     ]
     if not fits:
         return None

@@ -14,6 +14,7 @@ import pathlib
 import unittest
 
 import guildjobs
+import guildroute
 import hunterpet
 import member_rungs
 
@@ -111,12 +112,13 @@ class WhoTames(unittest.TestCase):
         self.assertIn("ct.type = %d " % hunterpet.BEAST_TYPE, hunterpet.BEASTS_SQL)
 
 
-def plan(members, pets=None, recent=()):
+def plan(members, pets=None, recent=(), **over):
     return guildjobs.plan(
         members,
         masters={"Bonkers": "Zug"},
         pets=pets if pets is not None else {"Grunty": BEASTS},
         recent=tuple(recent),
+        **over,
     )
 
 
@@ -169,6 +171,58 @@ class InThePass(unittest.TestCase):
             "pets = await self._job_pet_offers(",
         ):
             self.assertTrue(needle in source, needle)
+
+
+# Grunty in Thunder Bluff, about 3,280 yards from the Barrens prowler. Read on the
+# dev realm on 2026-10-19: Cowpoke (20) in Mulgore and Pokka (16) in Darnassus
+# know Tame Beast and have no pet, and every pass from 18:22 UTC logged
+# "0 tameable beast spawn(s) ... within 800 yards" for each (104 and 97 passes):
+# a hunter away from beasts of its level was never sent to one.
+IN_TOWN = dict(x=-1280.0, y=100.0)
+FAR = guildroute.FAR_WALK_YARDS
+
+
+def pet_steps(result):
+    return [s for s in result.steps if s.action == hunterpet.ACTION]
+
+
+class FarFromItsBeasts(unittest.TestCase):
+    def test_the_reach_is_near_without_a_far_cap_and_wider_with_one(self):
+        self.assertEqual(
+            hunterpet.reach(guildroute.MAIL_RUN_YARDS), hunterpet.BEAST_YARDS
+        )
+        self.assertEqual(hunterpet.reach(FAR), hunterpet.FAR_BEAST_YARDS)
+        self.assertGreater(hunterpet.FAR_BEAST_YARDS, 3280.0)
+
+    def test_a_hunter_in_town_walks_far_to_its_beast(self):
+        steps = pet_steps(plan([member(**IN_TOWN)], cap=FAR))
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(
+            steps[0].walk.command, "walk-to-spawn creature:14193 max:%d" % int(FAR)
+        )
+
+    def test_without_the_far_cap_a_far_beast_is_not_walked_to(self):
+        result = plan([member(**IN_TOWN)])
+        self.assertFalse(pet_steps(result))
+        self.assertTrue(
+            [n for n in result.notes if "within %d yards" % hunterpet.BEAST_YARDS in n]
+        )
+
+    def test_a_beast_past_the_far_reach_is_left(self):
+        far_off = dict(x=-1250.0, y=-3180.0 + hunterpet.FAR_BEAST_YARDS + 100.0)
+        self.assertFalse(pet_steps(plan([member(**far_off)], cap=FAR)))
+
+    def test_the_far_walk_waits_for_a_realm_slot(self):
+        result = plan([member(**IN_TOWN)], cap=FAR, far_slots=0)
+        self.assertFalse(pet_steps(result))
+        self.assertTrue([n for n in result.notes if "far walk slot" in n])
+
+    def test_a_near_beast_takes_no_far_slot(self):
+        self.assertEqual(len(pet_steps(plan([member()], cap=FAR, far_slots=0))), 1)
+
+    def test_the_bridge_reads_as_far_as_a_far_walk_is_sent(self):
+        source = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
+        self.assertIn("float(hunterpet.FAR_BEAST_YARDS)", source)
 
 
 if __name__ == "__main__":
