@@ -1398,8 +1398,8 @@ RECIPES: dict = {
     # skill 40, Bear Meat reagent, and Cooking Fire requirement:
     # https://www.wowhead.com/wotlk/spell=8607/smoked-bear-meat
     # https://warcraft.wiki.gg/wiki/Smoked_Bear_Meat
-    # The purchase
-    # errand supplies the book; a future fire drive must make casting possible.
+    # Neither half is driven yet: mod-overseer has no walk-to-vendor purchase
+    # (see RECIPE_PURCHASES below) and no Cooking Fire for the craft drive.
     SKILL_IDS["cooking"]: (
         Recipe(
             8607,
@@ -2270,16 +2270,19 @@ RECIPES: dict = {
 }
 
 
-# spell -> (item, vendor creature entry). The exact vendor entry is part of
-# the errand: a generic vendor may not stock the book. This vendor is on map 0.
+# spell -> (item, vendor creature entry) for a recipe a vendor sells as a book
+# rather than a trainer teaching it. The exact vendor entry matters: a generic
+# vendor may not stock the book. Vendor 1465 is on map 0.
+#
+# THIS IS A DOCUMENTED GAP, NOT A DRIVE. Using a carried book already works
+# (mod-overseer's `use entry:<item>` cast command, #468). Walking to a named
+# vendor and buying one does not: at the pinned mod-overseer there is no roster
+# column that asks for it and no drive that serves one. Any purchase column has
+# to arrive in mod-overseer's migrations first, because enroll.ROSTER_COLUMNS
+# is held to them, and a bridge UPDATE naming a column the live table lacks
+# fails with 1054. professions.SECONDARY_BLOCKED["cooking"] says the same thing
+# to the goal reporter.
 RECIPE_PURCHASES = {8607: (6892, 1465)}
-
-
-def recipe_purchase(cooking: int, known: set[int]) -> tuple[int, int] | None:
-    """Return (item, vendor) for the next affordable-skill Cooking book."""
-    if cooking < 40 or 8607 in known:
-        return None
-    return RECIPE_PURCHASES[8607]
 
 
 # THE FAMILY'S OWN BAGS (#215), kept apart from RECIPES because a bag is not a

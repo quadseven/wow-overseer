@@ -47,7 +47,9 @@ import unittest
 
 import bonds
 import council
+import craft
 import goals
+import learnaim
 import professions
 import travel
 
@@ -552,31 +554,43 @@ class ErrandTest(unittest.TestCase):
             professions.secondary_rank_errand("Grug", {"first aid": (75, 150)})
         )
 
-    def test_recipe_purchase_has_a_roster_request_and_core_purchase(self):
+    def test_the_first_aid_ladder_reaches_heavy_silk_bandage(self):
+        """Wool Bandage through Heavy Silk Bandage, as craft.py's DBC table
+        and the Wowhead WotLK spell pages it cites both give them."""
+        ladder = {
+            r.spell_id: (r.name, r.min_skill)
+            for r in craft.RECIPES[goals.SKILL_IDS["first aid"]]
+        }
+        for spell_id, rung in {
+            3277: ("Wool Bandage", 80),
+            3278: ("Heavy Wool Bandage", 115),
+            7928: ("Silk Bandage", 150),
+            7929: ("Heavy Silk Bandage", 180),
+        }.items():
+            with self.subTest(spell_id=spell_id):
+                self.assertEqual(ladder[spell_id], rung)
+        source = (pathlib.Path(__file__).resolve().parents[1] / "craft.py").read_text()
+        self.assertIn("wowhead.com/wotlk/spell=7929/heavy-silk-bandage", source)
+
+    def test_smoked_bear_meat_names_its_vendor_and_the_missing_drive(self):
+        """The purchase dependency is recorded, and the gap is said aloud."""
+        recipe = craft.recipe_for(goals.SKILL_IDS["cooking"], 40)
+        self.assertEqual(recipe.spell_id, 8607)
+        self.assertEqual(craft.RECIPE_PURCHASES[8607], (6892, 1465))
+        said = professions.secondary_rank_refusal({"cooking": 40})
+        self.assertIn("vendor 1465", said)
+        self.assertIn("no vendor purchase drive", said)
+
+    def test_no_purchase_column_is_written_before_the_module_has_one(self):
+        """A bridge UPDATE naming a column the live roster lacks fails 1054,
+        and the trade errand writer returns False on 1054 - so naming one
+        early would stop every primary trade errand. When mod-overseer ships
+        a purchase column, this test is the one to replace with the drive's."""
         root = pathlib.Path(__file__).resolve().parents[1]
         module = (root / "mod-overseer/src/mod_overseer.cpp").read_text()
-        self.assertIn("buy_recipe_item", module)
-        self.assertIn("bool BuyRecipeOnArrival(", module)
-        self.assertIn("HandleBuyItemOpcode", module)
-        self.assertIn("HandleUseItemOpcode", module)
-        purchase = module.split("bool BuyRecipeOnArrival(", 1)[1].split("\n    }", 1)[0]
-        self.assertIn("bot->HasSpell(taught)", purchase)
-        self.assertIn("ClearRecipePurchase(name, itemEntry)", purchase)
-        self.assertIn("GetNPCIfCanInteractWith", purchase)
-        self.assertIn("vendor->GetVendorItems()", purchase)
-        self.assertIn("GetItemByEntry(itemEntry)", purchase)
-
-    def test_recipe_purchase_waits_for_a_clear_roster_row(self):
-        bridge = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
-        self.assertIn("def _write_recipe_purchase(", bridge)
-        self.assertIn("buy_recipe_item = 0 OR buy_recipe_item = %s", bridge)
-        self.assertIn("AND learn_skill = 0 AND unlearn_skill = 0", bridge)
-        self.assertIn("travel_npc = '' OR travel_npc = %s", bridge)
-
-    def test_recipe_buyer_borrows_the_family_lead(self):
-        bridge = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
-        head = bridge.split("def _head_now()", 1)[1].split("\ndef ", 1)[0]
-        self.assertIn("_recipe_purchase_traveller()", head)
+        bridge = (root / "bridge.py").read_text()
+        self.assertNotIn("buy_recipe_item", module)
+        self.assertNotIn("buy_recipe_item", bridge)
 
     def test_the_errand_names_the_character_and_the_skill(self):
         assignment = next(
@@ -1084,11 +1098,34 @@ class SecondaryRankRefusalTest(unittest.TestCase):
         )
 
     def test_the_secondary_rank_uses_the_single_rank_writer(self):
-        bridge = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
+        """professions.secondary_rank_errand decides which First Aid ranks
+        reach `Row.ranks`; learnaim.rank_errand is the one thing that writes
+        them, and only while no errand in the family is outstanding."""
+        root = pathlib.Path(__file__).resolve().parents[1]
+        bridge = (root / "bridge.py").read_text()
         ranks = bridge.split("def _ranks_due(", 1)[1].split("\ndef ", 1)[0]
         self.assertIn("professions.secondary_rank_errand(", ranks)
+        self.assertIn('ranks=ranks.get(row["name"], ())', bridge)
         self.assertNotIn("def _write_secondary_rank_errand(", bridge)
-        self.assertIn("learnaim.plan(rows)", bridge)
+        plan = (root / "learnaim.py").read_text().split("def plan(", 1)[1]
+        self.assertIn("learn=rank_errand(rows)", plan)
+
+        def row(name, learn_skill=0, ranks=()):
+            return learnaim.Row(
+                character=name,
+                learn_skill=learn_skill,
+                travel_npc="",
+                leads=False,
+                wanted=(),
+                traded=(),
+                settled=(),
+                ranks=ranks,
+            )
+
+        due = row("Grug", ranks=(129,))
+        self.assertEqual(learnaim.rank_errand([due]), ("Grug", 129))
+        busy = row("Ugga", learn_skill=goals.SKILL_IDS["alchemy"])
+        self.assertEqual(learnaim.rank_errand([due, busy]), ())
 
     def test_the_refusal_is_never_empty_and_names_the_real_blocker(self):
         """The goal reporter points to the rank path without adding a slot."""

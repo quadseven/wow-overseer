@@ -1039,7 +1039,9 @@ SECONDARY_BLOCKED = {
         "every Cooking recipe reachable below 75 requires RequiresSpellFocus 4 "
         "(a Cooking Fire) and nothing in this system lights one - the family "
         "holds the recipes and the reagents; Spice Bread (37836) is focus 4 "
-        "too, so it is not the exception it was taken for (infra#3614)"
+        "too, so it is not the exception it was taken for (infra#3614); at "
+        "40, Smoked Bear Meat (8607) is a book (item 6892) sold by "
+        "vendor 1465, and mod-overseer has no vendor purchase drive yet"
     ),
     "fishing": (
         "nobody owns a Fishing Pole (item 6256, 23 copper) and mod-overseer has "

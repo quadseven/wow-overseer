@@ -572,7 +572,6 @@ _CREATE = (
     "  travel_npc TEXT NOT NULL DEFAULT '',"
     "  professions TEXT NOT NULL DEFAULT '',"
     "  learn_skill INTEGER NOT NULL DEFAULT 0,"
-    "  buy_recipe_item INTEGER NOT NULL DEFAULT 0,"
     "  unlearn_skill INTEGER NOT NULL DEFAULT 0,"
     "  unlearn_max INTEGER NOT NULL DEFAULT 0,"
     "  job TEXT NOT NULL DEFAULT 'quest',"
@@ -600,7 +599,7 @@ _SEED = (
 # measurement rather than a claim about the columns somebody remembered.
 _COMPARED = (
     "name, enabled, note, `lead`, spec_tab, trained_level, drive_quest, "
-    "travel_npc, professions, learn_skill, buy_recipe_item, unlearn_skill, unlearn_max, job, "
+    "travel_npc, professions, learn_skill, unlearn_skill, unlearn_max, job, "
     "dungeon_runs_wanted, dungeon_runs_done, craft_spell, learn_fishing, family"
 )
 

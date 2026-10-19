@@ -70,8 +70,6 @@ DEFAULT_LIMIT = 8
 # default nobody chose (see ROSTER_COLUMNS).
 
 ROSTER_DEFAULTS: dict[str, object] = {
-    # Enrollment never orders a purchase; the cooking pass claims idle rows.
-    "buy_recipe_item": 0,
     # 1 IS THE POINT OF ENROLLING AT ALL. `enabled = 0` is how a row is parked
     # by hand, and every read on both sides of the wire is `WHERE enabled = 1`,
     # so a disabled row is a row the control plane cannot see - which fails the
@@ -188,7 +186,6 @@ ROSTER_COLUMNS: tuple[str, ...] = (
     "travel_npc",
     "professions",
     "learn_skill",
-    "buy_recipe_item",
     "unlearn_skill",
     "unlearn_max",
     "job",

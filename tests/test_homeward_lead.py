@@ -48,7 +48,7 @@ def _head_now_source() -> str:
     return rest[: nxt.start()] if nxt else rest
 
 
-def _resolve(train="", errand="", recipe="", derived=""):
+def _resolve(train="", errand="", derived=""):
     """Run _head_now's ACTUAL return expression with the borrowers stubbed.
 
     bridge.py opens a database connection at import time, so the module cannot
@@ -64,7 +64,6 @@ def _resolve(train="", errand="", recipe="", derived=""):
         {  # noqa: S307 - the source under test, not input
             "_train_traveller": lambda: train,
             "_errand_traveller": lambda: errand,
-            "_recipe_purchase_traveller": lambda: recipe,
             "_derived_errand_traveller": lambda: derived,
             "bonds": bonds,
         },
@@ -138,10 +137,6 @@ class ABorrowerStillOutranksSeniority(unittest.TestCase):
 
     def test_a_derived_errand_takes_the_lead(self):
         self.assertEqual(_resolve(derived="Og"), "Og")
-
-    def test_recipe_buyer_leads_after_a_primary_trade(self):
-        self.assertEqual(_resolve(recipe="Ugga"), "Ugga")
-        self.assertEqual(_resolve(errand="Grog", recipe="Ugga"), "Grog")
 
     def test_an_order_a_person_gave_outranks_a_plan_the_family_drifted_into(self):
         self.assertEqual(_resolve(train="Ugga", errand="Grog"), "Ugga")

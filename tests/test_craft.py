@@ -1100,8 +1100,7 @@ class FirstAidAndCookingTests(unittest.TestCase):
     def test_smoked_bear_meat_book_is_named_but_fire_is_still_missing(self):
         recipe = craft.recipe_for(goals.SKILL_IDS["cooking"], 40)
         self.assertEqual((recipe.spell_id, recipe.focus), (8607, 4))
-        self.assertEqual(craft.recipe_purchase(40, set()), (6892, 1465))
-        self.assertIsNone(craft.recipe_purchase(40, {8607}))
+        self.assertEqual(craft.RECIPE_PURCHASES[8607], (6892, 1465))
         self.assertEqual(craft.craft_errand("Grug", {"cooking": 40}, primaries=()), 0)
 
     def test_craft_errand_finds_first_aid_for_a_character_assigned_no_primary_with_recipe(

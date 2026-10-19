@@ -523,7 +523,6 @@ class TheBridgeReallyRunsIt(unittest.TestCase):
         self.assertIn("learnaim.traveller(_learn_aim_rows())", self.source)
         self.assertIn(
             "return (_train_traveller() or _errand_traveller()\n"
-            "            or _recipe_purchase_traveller()\n"
             "            or _derived_errand_traveller()\n"
             "            or bonds.head_of_family())",
             self.source,
