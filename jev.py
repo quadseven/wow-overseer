@@ -88,6 +88,8 @@ from collections import OrderedDict
 import dataclasses
 from dataclasses import dataclass
 
+import llmpool
+
 log = logging.getLogger("wow-overseer.jev")
 
 URL = "https://api.typesafe.ai/v1/systemone"
@@ -902,7 +904,7 @@ class Client:
         )
         self._in_flight += 1
         task = asyncio.ensure_future(
-            asyncio.to_thread(self._transport, url, body, headers, self.timeout)
+            llmpool.call(self._transport, url, body, headers, self.timeout)
         )
         # The slot is freed when the THREAD ends, not when this call gives up
         # on it, so an abandoned request still counts against the limit.

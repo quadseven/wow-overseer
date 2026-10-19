@@ -354,6 +354,13 @@ FAILED_WALKS = 2
 # out of combat on ground reaching three levels over it.
 OVERLEVEL_MAX = 3
 
+# A MEMBER THIS MANY LEVELS OVER A QUEST'S MIN LEVEL SOLOS IT INSTEAD OF
+# ASKING FOR HELP (#1094). A level 28 paladin on Redemption (min level 12)
+# waited 1h 22m for guild help that never came; at 16 over, the member should
+# attempt the quest alone. The solo attempt still goes through the normal
+# hunt: if it stalls, the STALLED blocker (in HELPABLE) asks for help.
+OVERLEVEL_SOLO_GAP = 10
+
 # A SPAWN THE MODULE REFUSED, OR THAT A WALK DID NOT REACH, IS NOT ASKED OF THE
 # SAME MEMBER AGAIN FOR THIS LONG: the member is sent to the next pack of the
 # objective instead (guildjobs.class_avoid). These are the module's refusals
@@ -1187,11 +1194,49 @@ def _densest(member, spawns, avoid=()):
     ]
     if not here:
         return None
+    packs = _pack_sizes(here)
+    best = min(
+        range(len(here)),
+        key=lambda i: (-packs[i], _yards(member, here[i]), here[i].guid),
+    )
+    return here[best]
 
-    def pack(s):
-        return sum(1 for o in here if math.hypot(o.x - s.x, o.y - s.y) <= PACK_YARDS)
 
-    return min(here, key=lambda s: (-pack(s), _yards(member, s), s.guid))
+def _pack_sizes(here) -> list:
+    """For each spawn of `here`, how many spawns of `here` (itself included)
+    stand within PACK_YARDS of it.
+
+    Each spawn is measured only against the spawns of its own and the eight
+    neighbouring grid cells, not against every other spawn (#833, 2026-10-18:
+    after the first cut, the all-pairs count, run for each hunt move of each
+    member twice a pass, was still 85% of a synthetic guild job plan of 200
+    quests x 150 spawns x 142 members). A cell is a yard wider than
+    PACK_YARDS, so two spawns within PACK_YARDS are always in neighbouring
+    cells, float rounding at a cell edge included."""
+    if not all(math.isfinite(s.x) and math.isfinite(s.y) for s in here):
+        # No grid cell for a coordinate that is not a number: measure all pairs.
+        return [
+            sum(1 for o in here if math.hypot(o.x - s.x, o.y - s.y) <= PACK_YARDS)
+            for s in here
+        ]
+    cell = PACK_YARDS + 1.0
+    cells: dict = {}
+    keys = []
+    for i, s in enumerate(here):
+        key = (math.floor(s.x / cell), math.floor(s.y / cell))
+        keys.append(key)
+        cells.setdefault(key, []).append(i)
+    out = []
+    for s, (cx, cy) in zip(here, keys, strict=True):
+        n = 0
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for j in cells.get((cx + dx, cy + dy), ()):
+                    o = here[j]
+                    if math.hypot(o.x - s.x, o.y - s.y) <= PACK_YARDS:
+                        n += 1
+        out.append(n)
+    return out
 
 
 # The two classic continents, by map id, for the crossing sentence.
@@ -1303,8 +1348,14 @@ def _unmet(quest: Quest) -> bool:
 
 def _hunting(quest: Quest, member) -> bool:
     """True while the quest has creatures to hunt: a kill with a spawn, or a
-    dropped item the member does not yet carry in full."""
-    kills = {e for e, _n in quest.kills}
+    dropped item the member does not yet carry in full. A creature credited
+    by using a quest item is a use target, not a kill target."""
+    # _pending_use runs only after hunting ends. Keep item-use objectives out
+    # of this set so a spawn does not make the item use unreachable.
+    used = {
+        entry for use in quest.uses if use.verb == USE_ITEM for entry in use.targets
+    }
+    kills = {e for e, _n in quest.kills if e not in used}
     if any(s.entry in kills for s in quest.fields):
         return True
     return any(member.count(i) < n for i, n in quest.items if i in quest.droppable)
@@ -1677,6 +1728,13 @@ def within_level(member, spawns) -> tuple:
     return tuple(s for s in spawns if int(s.level) <= top)
 
 
+def _outlevels_for_solo(member, quest) -> bool:
+    """True when the member is at least OVERLEVEL_SOLO_GAP levels over the
+    quest's minimum level (#1094): the member hunts the quest solo instead of
+    waiting for guild help."""
+    return int(member.level) - int(quest.min_level) >= OVERLEVEL_SOLO_GAP
+
+
 def _level_said(member, quest: Quest) -> str:
     lowest = min(int(s.level) for s in quest.fields)
     return (
@@ -1864,6 +1922,11 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
     lost = _lost_item_move(member, quest, using, block, why)
     if lost is not None:
         return lost
+    if block == GROUP and _outlevels_for_solo(member, quest):
+        # #1094: the member so far outlevels the quest that the group blocker
+        # is ignored and the quest is hunted solo. If the solo hunt stalls,
+        # the STALLED blocker below (in HELPABLE) asks for help.
+        block, said = "", ""
     if block:
         want = helpers_for(quest) if block == GROUP else 0
         spot = _densest(member, quest.fields) if block == GROUP else None
@@ -2109,6 +2172,15 @@ class Hunts:
         if hunt is None or hunt.quest != quest or hunt.until is not None:
             return
         self._by[name] = replace(hunt, since=now)
+
+    def used(self, name, quest, now) -> None:
+        """Restart the stall clock of a hunt whose use the module answered as
+        done (classuse.DONE). A Binding's Runes of Summoning summon the demon at
+        the circle, but the quest counter moves only when the demon dies, so
+        the walk, the use and the fight would otherwise count as one stall and
+        a quest with one circle be called tried although the use worked. The
+        packs tried stay tried and a hold-off stays: only this target worked."""
+        self.pause(name, quest, now)
 
     def forget(self, name) -> None:
         self._by.pop(name, None)

@@ -1672,6 +1672,17 @@ def _fetch_family_runs(rd, names, holes) -> list:
         return []
 
 
+# The deaths a run card can use, and no others (#795): from the oldest run's
+# start, on the runs' maps (achievements.death_scope). Unbounded, this read
+# every death the family ever had, past the table's (character_name,
+# created_at) key, and its LIMIT kept the OLDEST rows once a family passed it.
+_CHRONICLE_DEATHS = (
+    "SELECT character_name, map, zone, killer_name, killer_type, created_at "
+    "FROM overseer_death WHERE character_name IN ({holes}) AND created_at >= %s "
+    "AND map IN ({maps}) ORDER BY created_at ASC LIMIT 20000"
+)
+
+
 def _fetch_achievements(names=None) -> dict:
     """What the family has done: runs, events, deaths, and the world rows
     that name what they gained.
@@ -1718,12 +1729,12 @@ def _fetch_achievements(names=None) -> dict:
             "ORDER BY first_seen ASC LIMIT 20000",
             what="Chronicle event source fields",
         )
+        since, maps = achievements.death_scope(run_rows)
         try:
-            death_rows = rd.must(
-                "SELECT character_name, map, zone, killer_name, killer_type, "  # noqa: S608
-                f"created_at FROM overseer_death WHERE character_name IN ({holes}) "
-                "ORDER BY created_at ASC LIMIT 20000",
-                tuple(names),
+            death_rows = [] if since is None else rd.must(
+                _CHRONICLE_DEATHS.format(
+                    holes=holes, maps=", ".join(["%s"] * len(maps))),
+                (*names, since, *maps),
             )
         except realmread.Gap as gap:
             if gap.code != realmread.MISSING_TABLE:
@@ -3562,9 +3573,11 @@ _RECAP_EQUIPS = (
     "occurrences, first_seen, last_seen FROM overseer_event "
     "WHERE kind = 'item_equip' AND character_name IN ({holes})"
 )
+# The deaths of the open run the recap draws, from its start
+# (recap.deaths_since, #795); with no run open, none are read.
 _RECAP_DEATHS = (
     "SELECT character_name, map, zone, killer_name, killer_type, created_at "
-    "FROM overseer_death WHERE character_name IN ({holes})"
+    "FROM overseer_death WHERE character_name IN ({holes}) AND created_at >= %s"
 )
 _RECAP_SNAPSHOT = (
     "SELECT name, level, map_id, health, max_health, in_combat, updated_at "
@@ -3672,8 +3685,10 @@ def _fetch_recap(map_id: int | None, names: list[str] | None = None) -> dict:
         # the driver.
         equips = rd.rows(_RECAP_EQUIPS.format(holes=holes),  # noqa: S608
                          tuple(names), what="overseer_event")
-        deaths = rd.rows(_RECAP_DEATHS.format(holes=holes),  # noqa: S608
-                         tuple(names), what="overseer_death")
+        since = recap.deaths_since(runs)
+        deaths = [] if since is None else rd.rows(
+            _RECAP_DEATHS.format(holes=holes),  # noqa: S608
+            (*names, since), what="overseer_death")
         snaps = rd.rows(_RECAP_SNAPSHOT.format(holes=holes),  # noqa: S608
                         tuple(names), what="overseer_snapshot")
         instances = rd.rows(_RECAP_INSTANCE.format(holes=holes),  # noqa: S608
@@ -4375,6 +4390,19 @@ def _fetch_roster_rows() -> list:
         # order is planned against the families the page drew.
         rows = _with_levels(rd, rows)
         return _with_family(rd, rows)
+
+
+def _fetch_guild_members() -> tuple[list, dict]:
+    """Fresh commandable guild membership and guild names for one decree."""
+    with realmread.Session(_connect) as rd:
+        guilds = rd.must("SELECT guildid, name FROM guild")
+        members = rd.must(
+            "SELECT c.name, s.level, s.is_bot, gm.guildid AS guild_id "
+            "FROM guild_member gm JOIN characters c ON c.guid = gm.guid "
+            "JOIN overseer_snapshot s ON s.name = c.name "
+            "WHERE s.updated_at > NOW() - INTERVAL 60 SECOND"
+        )
+    return members, {int(row["guildid"]): row["name"] for row in guilds}
 
 
 def _apply_order(order) -> int:
@@ -5536,7 +5564,12 @@ class Handler(BaseHTTPRequestHandler):
             # ten seconds.
             with _DECREE_LOCK:
                 _note_module_crossing()
-                order = decree.plan_order(request, _fetch_roster_rows())
+                roster_rows = _fetch_roster_rows()
+                members, guild_names = (
+                    _fetch_guild_members() if request.get("section") == decree.MUSTER
+                    else ([], {})
+                )
+                order = decree.plan_order(request, roster_rows, members, guild_names)
                 changed = 0 if order.refusal else _apply_order(order)
             if order.refusal:
                 log.info("decree: refused section=%r", order.section)

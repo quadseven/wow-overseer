@@ -303,22 +303,31 @@ class TheSaleIsOnlyOfferedWhereItCanWork(unittest.TestCase):
     attempts an hour, issued from wherever the party happened to be standing.
     """
 
+    def _queue(self) -> str:
+        """The per-holder rows the pass writes, in their own function since
+        wow-overseer#977; the pass hands it the candidates and the aim."""
+        return _block("async def _queue_vendor_sales(")
+
     def test_the_pass_asks_where_the_leader_is_before_queueing(self):
-        body = _block("    async def _vendor_once(self")
+        body = self._queue()
         self.assertIn("_fetch_town", body)
         self.assertIn("town.vendor", body)
+        self.assertIn("_queue_vendor_sales(", _block("    async def _vendor_once(self"))
 
     def test_the_gate_sits_between_the_candidates_and_the_insert(self):
         """Above it the pass may plan; below it, it may write. A gate after
         the insert would be decoration."""
-        body = _block("    async def _vendor_once(self")
+        body = self._queue()
         self.assertLess(body.index("town.vendor"), body.index("_insert_sell"))
+        self.assertLess(
+            body.index("if holder not in queue_holders:"), body.index("_insert_sell")
+        )
 
     def test_the_gate_reads_the_vendor_and_not_the_stock(self):
         """A merchant with no npc_vendor rows still buys, so gating on stock
         would refuse exactly the vendors that would have taken the greens."""
-        body = _block("    async def _vendor_once(self")
-        self.assertIn("if not town.vendor:", body)
+        body = self._queue()
+        self.assertIn("bool(holder_town[holder].vendor)", body)
         # Comments may argue about `stocks`; no branch may read it.
         code = [line for line in body.splitlines() if not line.strip().startswith("#")]
         self.assertNotIn("town.stocks", " ".join(code))
@@ -337,8 +346,10 @@ class TheSaleIsOnlyOfferedWhereItCanWork(unittest.TestCase):
         """
         body = _block("    async def _vendor_once(self")
         self.assertLess(
-            body.index("_write_trade_errand"), body.index("_fetch_town, holder")
+            body.index("self._take_vendor_aim("), body.index("_queue_vendor_sales(")
         )
+        self.assertIn("_write_trade_errand", _block("    async def _take_vendor_aim("))
+        self.assertIn("_fetch_town, holder", self._queue())
 
     def test_an_aim_nobody_took_is_reported_rather_than_assumed(self):
         """The economy guard only retasks an IDLE traveller, so a vendor aim
@@ -357,7 +368,7 @@ class TheSaleIsOnlyOfferedWhereItCanWork(unittest.TestCase):
         have."""
         body = _block("    async def _vendor_once(self")
         self.assertLess(
-            body.index("self._hand_gear("), body.index("_fetch_town, holder")
+            body.index("self._hand_gear("), body.index("_queue_vendor_sales(")
         )
 
 

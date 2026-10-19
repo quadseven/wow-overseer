@@ -29,7 +29,7 @@ line and SUCCESS_STATUSES is narrower than core's on purpose: `applied` is the
 only status that has ever meant the character changed.
 
 THREE: WHAT THIS CONSOLE MAY ACTUALLY WRITE, and exactly what each order
-becomes. See SECTIONS for the four cards and `plan_order` for the rows and
+becomes. See SECTIONS for the console cards and `plan_order` for the rows and
 columns any one of them turns into. Three of them wrote nothing at all until
 infra#3345 and said so; they write now, and the same rule holds either way: a
 control either reaches the world or is drawn disabled with the reason printed
@@ -47,6 +47,7 @@ import bonds
 import campaignqueue
 import chat
 import core  # noqa: F401 - named by SUCCESS_STATUSES' comment, and by the suite
+import fanout
 import jobs
 import professions
 import travel
@@ -60,7 +61,7 @@ import travel
 # overseer_command row. That is how the will is spoken and it is the only
 # thing it can do.
 #
-# POST /api/decree carries the other three cards. A job, a travel aim and a
+# POST /api/decree carries the direct order cards. A job, a travel aim and a
 # campaign cap were all declared unreachable here for the whole of infra#2597,
 # because nothing but a hand on the database wrote them - the mechanism was
 # proved by an operator hand-writing those rows on a live realm, which is what
@@ -81,6 +82,7 @@ QUEUE_STORE = "queue"  # POST /api/decree, the bridge's campaign queue table
 NOWHERE = ""  # no write path from this page
 
 JOB = "job"
+MUSTER = "muster"
 CAMPAIGN = "campaign"
 QUEUE = "queue"
 TRAVEL = "travel"
@@ -121,6 +123,18 @@ SECTIONS = (
             "this job. Each one has to be in the world to pick the order "
             "up. The result below reads their job back afterwards and says "
             "whether the order took."
+        ),
+    ),
+    Section(
+        key=MUSTER,
+        title="Guild muster",
+        writes=COMMAND,
+        why_not="",
+        instead="",
+        does=(
+            "Sends one command to every commandable member of the named guild "
+            "who is in the world. If more than %d answer, no order is sent."
+            % fanout.MAX_FANOUT_TARGETS
         ),
     ),
     Section(
@@ -495,8 +509,8 @@ WILL_TARGETS = (
         "reachable": False,
         "needs_name": False,
         "why_not": (
-            "This page speaks to one character at a time. Speaking to a "
-            "whole guild at once is not something it can do."
+            "The will speaks through one character's inner voice at a time. "
+            "Guild muster gives a direct command instead."
         ),
         "what": "",
     },
@@ -506,9 +520,8 @@ WILL_TARGETS = (
         "reachable": False,
         "needs_name": False,
         "why_not": (
-            "Same reason as the guild, and louder: a faction order is "
-            "hundreds of characters, and the one surface that can widen an "
-            "order that far bounds it with its own cap."
+            "The will speaks through one character's inner voice at a time. "
+            "Faction orders are outside this console's guild-only muster."
         ),
         "what": "",
     },
@@ -1144,6 +1157,7 @@ ORDER_REFUSALS = {
         "per character, so each of them answers in their own words."
     ),
     "roster": "Nobody is on the roster, so there is nobody to order.",
+    "muster_command": "Say what the guild should do.",
     "family": (
         "Pick which family this is for. Each family has its own leader, job "
         "and run count, so one order cannot set both."
@@ -1249,6 +1263,40 @@ def _plan_job(request: dict, standing: dict) -> Order:
         rows=tuple(Row(name, mode, JOB_KIND) for name in names),
         updates=(),
         says=jobs.say(mode, _door(mode)),
+    )
+
+
+def _plan_muster(request: dict, members: list, guild_names: dict) -> Order:
+    """Plan a guild-only command against membership read for this request."""
+    raw_guild = request.get("guild")
+    guild = raw_guild.strip() if isinstance(raw_guild, str) else ""
+    raw_command = request.get("command")
+    command = raw_command.strip() if isinstance(raw_command, str) else ""
+    if not command:
+        return _refuse(MUSTER, ORDER_REFUSALS["muster_command"])
+    names, who = fanout.resolve_targets(f"guild {guild}", members, guild_names)
+    if not names:
+        return _refuse(MUSTER, who)
+    guild_id = next(
+        gid
+        for gid, name in sorted(guild_names.items())
+        if name.lower() == guild.lower()
+    )
+    count = sum(
+        bool(row.get("is_bot")) and row.get("guild_id") == guild_id for row in members
+    )
+    if count > fanout.MAX_FANOUT_TARGETS:
+        return _refuse(
+            MUSTER,
+            f"{guild_names[guild_id]} has {count} commandable members, above the "
+            f"muster limit of {fanout.MAX_FANOUT_TARGETS}. No order was sent.",
+        )
+    return Order(
+        MUSTER,
+        "",
+        tuple(Row(name, command, "bot") for name in names),
+        (),
+        f"The order went to {who}.",
     )
 
 
@@ -1402,21 +1450,30 @@ PLANNERS = {JOB: _plan_job, CAMPAIGN: _plan_campaign, TRAVEL: _plan_travel}
 FAMILY_WIDE = (JOB, CAMPAIGN, QUEUE)
 
 
-def plan_order(request: dict, roster_rows: list) -> Order:
+def plan_order(
+    request: dict,
+    roster_rows: list,
+    guild_members: list | None = None,
+    guild_names: dict | None = None,
+) -> Order:
     """One order from the console: a refusal with a reason, or what to write.
 
     request       the POST body, entirely untrusted
     roster_rows   overseer_roster, the same rows build_console is handed;
                   the queue card also reads each row's level, race and
                   map_id (map_server._with_levels)
+    guild_members and guild_names   live realm reads for guild muster
 
     THE ROSTER IS READ, NEVER TAKEN FROM THE REQUEST: a stale page carrying
     its own idea of the family would fan an order out over characters the
     worldserver no longer drives.
+    Guild membership follows the same rule and is read when the order arrives.
     """
     section = request.get("section") if isinstance(request.get("section"), str) else ""
     if section == WILL:
         return _refuse(WILL, ORDER_REFUSALS["will"])
+    if section == MUSTER:
+        return _plan_muster(request, guild_members or [], guild_names or {})
     planner = PLANNERS.get(section)
     if planner is None and section != QUEUE:
         return _refuse(section, ORDER_REFUSALS["section"])
@@ -1454,6 +1511,7 @@ ORDER_SOME = (
     "means the row already carried the value."
 )
 ORDER_NOTHING = {
+    MUSTER: "Nothing was sent. This realm did not accept the guild command rows.",
     JOB: (
         # overseer_command.kind has no 'job' value: the worldserver image
         # predates mod-overseer's SQL for it.

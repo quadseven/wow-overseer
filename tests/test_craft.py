@@ -1374,6 +1374,34 @@ class SpellFocusTests(unittest.TestCase):
         self.assertNotIn(1, craft.FOCUS_AIMS)  # Anvil
         self.assertNotIn(2, craft.FOCUS_AIMS)  # Loom
 
+    def test_craft_errand_never_hands_out_a_focus_nothing_walks_to(self):
+        """#53's first criterion, read where it bites: the stranded rows stay
+        in the table as a counted debt, but the family's errand must never be
+        one of them. Before this, Grog at Engineering 31 was handed Handful of
+        Copper Bolts (3922) and DriveCraft was refused for want of an Anvil on
+        every poll. Swept over every value of every crafting trade, so a new
+        stranded row is caught here as well as in the debt pin above."""
+        for skill_name in sorted(professions.CRAFTING):
+            for value in range(1, 451):
+                spell = craft.craft_errand("Grog", {skill_name: value}, (skill_name,))
+                focus = craft.focus_for(spell)
+                with self.subTest(skill=skill_name, value=value, spell=spell):
+                    self.assertTrue(
+                        focus == 0 or focus in craft.FOCUS_AIMS,
+                        f"craft_errand names {spell} at {skill_name} {value}, "
+                        f"which needs focus {focus} and nothing walks there",
+                    )
+
+    def test_a_stranded_rung_falls_through_to_the_secondary(self):
+        """Not a silent zero either: a character whose primary rung needs an
+        Anvil gets the free secondary skill-up instead of standing still."""
+        skills = {"mining": 40, "engineering": 31, "first aid": 1}
+        self.assertEqual(craft.recipe_for(goals.SKILL_IDS["engineering"], 31).focus, 1)
+        self.assertEqual(craft.craft_errand("Grog", skills), 3275)  # Linen Bandage
+        self.assertEqual(
+            craft.craft_errand("Grog", {"mining": 40, "engineering": 31}), 0
+        )
+
     def test_the_forge_aim_is_not_merely_claimed(self):
         # FOCUS_AIMS says something walks to focus 3. These are the two halves
         # of that claim: the pure aim builder, and the bridge pass that writes

@@ -61,12 +61,14 @@ equip command. Never a give, never a GM command.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 import auction
 import classic
+import fireplan
 import guildcorps
 import guildroute
 import jev
@@ -510,8 +512,9 @@ DROP_RECIPES = {
 # ---------------------------------------------------------------------------
 # FIRE RESISTANCE, PER ROLE. The Ragnaros tank first, as classic guilds asked
 # (raidgoals' own range tops out at the same 200); other tanks next, because
-# one of them takes over when the first dies; healers second.
-FIRE_TARGET = {MAIN_TANK: 200, TANK: 120, HEALER: 60}
+# one of them takes over when the first dies; healers second. The numbers live
+# in fireplan, which also plans the piece each seat gets next (#759).
+FIRE_TARGET = fireplan.FIRE_TARGET
 
 
 def fire_target(raider: Raider) -> int:
@@ -601,6 +604,22 @@ class FireLine:
     @property
     def short(self) -> int:
         return max(0, self.target - self.raider.fire)
+
+    @property
+    def seat(self) -> str:
+        return MAIN_TANK if self.raider.main_tank else self.raider.role
+
+    @functools.cached_property
+    def plan(self) -> fireplan.FirePlan:
+        """The seat's fire resistance plan (#759): the next piece out of its
+        class's tank set or the by-slot list, and where it comes from."""
+        r = self.raider
+        return fireplan.plan(r.name, self.seat, r.class_id, r.worn_fire)
+
+    @property
+    def next_said(self) -> str:
+        nxt = self.plan.next
+        return "" if nxt is None else nxt.said
 
 
 def standing_in(knowers, carriers=None) -> frozenset:
@@ -816,6 +835,7 @@ def question(guild, lines, fire, opts, budget_left):
                 "role": "main tank" if f.raider.main_tank else f.raider.role,
                 "worn": f.raider.fire,
                 "target": f.target,
+                "next_piece": f.next_said or "none planned",
             }
             for f in fire[:10]
         ],
@@ -828,7 +848,8 @@ def question(guild, lines, fire, opts, budget_left):
         "holds, and how each can be closed (make: a guild crafter knows the "
         "recipe; quest: a raider earns it from a quest; buy: only the auction "
         "house has it). `fire_resistance` is what "
-        "each tank and healer wears against the target for Ragnaros. Choose the "
+        "each tank and healer wears against the target for Ragnaros, and the "
+        "next piece its plan names. Choose the "
         "one thing the guild should make or buy next: what most raises the "
         "chance the raid succeeds, given what can actually be made and the "
         "auction budget."
@@ -1973,7 +1994,7 @@ def pace_lines(crafters, snapshots) -> list:
 # THE RAID TAB'S CARD.
 
 SUPPLY_COLUMNS = ("supply", "wanted", "held", "short", "how it closes")
-FIRE_COLUMNS = ("raider", "role", "target", "worn", "short")
+FIRE_COLUMNS = ("raider", "role", "target", "worn", "short", "next piece")
 
 
 def card(
@@ -2040,13 +2061,16 @@ def card(
                     str(f.target),
                     str(f.raider.fire),
                     str(f.short),
+                    f.next_said if f.short else "",
                 ],
             }
             for f in fire
         ],
         "fire_line": (
             "Targets: the Ragnaros tank %d, other tanks %d, healers %d, from "
-            "worn gear only. The guild makes %s; the rest comes from: %s."
+            "worn gear only. The next piece per seat is planned from the tank "
+            "fire sets (warrior and druid, pre-raid first) and the by-slot "
+            "list. The guild makes %s; the rest comes from: %s."
             % (
                 FIRE_TARGET[MAIN_TANK],
                 FIRE_TARGET[TANK],
@@ -2098,7 +2122,13 @@ def summary(plan) -> str:
         if line.short
     ]
     fire = [
-        "%s %d/%d" % (f.raider.name, f.raider.fire, f.target)
+        "%s %d/%d%s"
+        % (
+            f.raider.name,
+            f.raider.fire,
+            f.target,
+            " (next %s)" % f.next_said if f.next_said else "",
+        )
         for f in plan.fire
         if f.short
     ][:4]

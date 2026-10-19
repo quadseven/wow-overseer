@@ -59,6 +59,26 @@ CLASS_WEAPONS = {
     11: {4, 5, 6, 10, 13, 15},  # druid
 }
 
+# WHAT THE BOT'S OWN EQUIP NEVER DOES (#830). Measured on the dev realm over
+# two days: `e` put on 0 of 11 melee weapons asked of hunters, though each held
+# the skill line and the piece was a clear upgrade; their bots keep the weapon
+# they were made with. Every path that would write that `e` row, or walk a
+# hunter to a weapon master for it, asks this one rule. A hunter's ranged
+# weapon (InventoryType 15, 25, 26) is never refused here.
+HUNTER = 3
+MELEE_INVENTORY_TYPES = frozenset({13, 17, 21, 22})
+
+
+def bot_wont_wear(class_id, item_class, inventory_type) -> bool:
+    """True when the member's bot will not put this piece on, whatever the
+    numbers say: today, a hunter and any melee weapon."""
+    try:
+        cls, item, inv = int(class_id), int(item_class), int(inventory_type)
+    except (TypeError, ValueError):
+        return False
+    return cls == HUNTER and item == ITEM_CLASS_WEAPON and inv in MELEE_INVENTORY_TYPES
+
+
 # InventoryType -> the slot the weapon goes in. Off-hand weapons are left to
 # the dual-wield rule in gearup; this is about the main hand and the ranged slot.
 WEAPON_SLOT = {13: "mainhand", 17: "mainhand", 21: "mainhand", 15: "ranged",
@@ -97,6 +117,81 @@ class Need:
     @property
     def equip_command(self) -> str:
         return "e Hitem:%d:0" % self.entry
+
+    @property
+    def fills_empty(self) -> bool:
+        """The weapon would go in a slot that holds nothing now."""
+        return self.why == "its %s is empty" % self.slot
+
+
+# A GUILD MEMBER'S TRIP (#793). The family walks with its leader (above); a
+# guild member outside the family walks alone, as its own guild job: to the
+# weapon master's spawn, then `train-weapon`, then the guild equip pass puts the
+# weapon on once the skill reads learned. On the dev realm on 2026-10-18 each
+# guild's equip pass logged 10 to 11 carried weapon upgrades that "wait on a
+# weapon skill a weapon master teaches", pass after pass, because only the
+# family's pass ever walked anyone to one.
+
+
+@dataclass(frozen=True)
+class Offer:
+    """One guild member's weapon-master trip: the need, and the master's spawn
+    (0 when no master of its side on its map teaches the skill)."""
+
+    need: Need
+    spawn: int = 0
+    map_id: int = 0
+    x: float = 0.0
+    y: float = 0.0
+    master: str = ""
+    cost: int = 0
+
+
+def offer(need, master) -> Offer:
+    """The Offer for `need` at `master` (a choose_master row that carries the
+    spawn guid and the trainer's MoneyCost); a master-less Offer when `master`
+    is empty or names no spawn."""
+    try:
+        spawn = int((master or {}).get("spawn") or 0)
+        if not spawn:
+            return Offer(need)
+        return Offer(
+            need,
+            spawn,
+            int(master["map_id"]),
+            float(master["x"]),
+            float(master["y"]),
+            str(master.get("name") or ""),
+            int(master.get("cost") or 0),
+        )
+    except (KeyError, TypeError, ValueError):
+        return Offer(need)
+
+
+def may_need(class_id, level, carried) -> bool:
+    """Could one of `carried` (guildjobs.Carried) make a Need, before the
+    skills are read: a main hand or ranged weapon its class can learn, at its
+    level. Keeps the skill and bag reads to members who carry one."""
+    try:
+        cls, lvl = int(class_id), int(level)
+    except (TypeError, ValueError):
+        return False
+    learnable = CLASS_WEAPONS.get(cls, set())
+    for item in carried or ():
+        try:
+            if int(item.item_class) != ITEM_CLASS_WEAPON:
+                continue
+            if int(item.subclass) not in learnable:
+                continue
+            if int(item.inventory_type) not in WEAPON_SLOT:
+                continue
+            if int(item.required_level) > lvl:
+                continue
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if not bot_wont_wear(cls, ITEM_CLASS_WEAPON, item.inventory_type):
+            return True
+    return False
 
 
 def needs(facts: dict, bag_rows) -> list:
@@ -139,6 +234,9 @@ def _learnable(fact, row) -> bool:
         return False
     if int(row.get("RequiredLevel") or 0) > int(fact.get("level") or 0):
         return False
+    # The skill would buy nothing: the bot never wears the weapon (#830).
+    if bot_wont_wear(cls_id, ITEM_CLASS_WEAPON, row.get("InventoryType") or 0):
+        return False
     allowed = int(row.get("AllowableClass") or 0)
     return allowed in (-1, 0) or bool(allowed & (1 << (cls_id - 1)))
 
@@ -177,7 +275,9 @@ def choose_master(masters, wanted, team: str, map_id: int) -> dict:
     """The weapon master on `map_id`, of `team`'s side, that teaches the most
     of `wanted` (trainer spell ids), nearest first. {} when none.
 
-    `masters` rows: entry, name, faction, map_id, x, y, yards, spell.
+    `masters` rows: entry, name, faction, map_id, x, y, yards, spell, and
+    (bridge._WEAPON_MASTERS_SQL) the spawn guid and the spell's cost. Rows come
+    nearest first, so an entry keeps its nearest spawn.
     """
     by: dict = {}
     for row in masters or ():

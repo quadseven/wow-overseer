@@ -148,6 +148,39 @@ class TheEconomyView(unittest.TestCase):
             ["/api/client/guildbank?name=Grug", "/api/client/guildbank?name=Zug"],
         )
 
+    def test_each_trade_names_its_master_first_then_the_holders_by_skill(self):
+        # #1095: the recipe route gives a new recipe's first copy to the
+        # family's master of the trade and fans duplicates out. The trades page
+        # says so: the master first with a badge, the rest by skill.
+        trade = {
+            "skill": 197,
+            "name": "tailoring",
+            "held": True,
+            "holders": [
+                {"who": "Bork", "value": 40},
+                {"who": "Ugga", "value": 225},
+                {"who": "Og", "value": 150},
+            ],
+            "assigned": ["Og"],
+            "missing": [],
+            "missing_count": 0,
+            "trainer_line": "trained",
+        }
+        payload = {"family": "Grug", "line": "Grug", "trades": [trade]}
+        got = render(
+            "console.log(JSON.stringify(V.render(ctx('trades', {}, {'/api/trades': %s})).s));"
+            % json.dumps(payload)
+        )
+        start = got.index('class="eco-hierarchy"')
+        row = got[start : got.index("</div>", start)]
+        self.assertLess(row.index("Og"), row.index("Ugga"))
+        self.assertLess(row.index("Ugga"), row.index("Bork"))
+        self.assertEqual(row.count(">Master<"), 1)
+        self.assertLess(row.index(">Master<"), row.index("Ugga"))
+        self.assertIn("first copy to the master, duplicates fan out", row)
+        # The public repo's rule: what the page prints is plain ASCII.
+        self.assertTrue(row.isascii(), row)
+
     def test_the_guild_bank_picks_the_guild_in_the_url(self):
         cave = {
             "guild": "Cave",

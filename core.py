@@ -61,6 +61,23 @@ USAGE = "Speak like this: @CharacterName <playerbot command>  (one per line)"
 COMMAND_TERMINAL_STATUSES = ("delivered", "applied", "unchanged", "error")
 COMMAND_SUCCESS_STATUSES = ("delivered", "applied")
 
+# A ROW A WORLDSERVER ROLL ENDED SAYS SO (#789). The module holds its
+# read-backs (strategy, hearth, summon, conjure, cast, learn, quest use,
+# retire, hunt) in memory, so a roll loses them and the next worldserver ends
+# their rows as errors (mod-overseer ExpireAbandonedClaims); the bridge's own
+# stale sweep ends the ones it reaches first. Both write a detail that starts
+# with this word. Nothing refused the command: the world restarted. A pass
+# that backs off a refusal asks again instead.
+RESTART_DETAIL_PREFIX = "restart: "
+
+
+def ended_by_restart(status, detail) -> bool:
+    """True when an overseer_command row is an error a worldserver roll wrote,
+    not a refusal."""
+    return str(status or "") == "error" and str(detail or "").startswith(
+        RESTART_DETAIL_PREFIX
+    )
+
 
 @dataclass(frozen=True)
 class InsertCommand:

@@ -428,6 +428,60 @@ def family_town_run_needed(
     return False
 
 
+# THE ROOM A VENDOR TRIP MAKES IS THE FAMILY'S. One walk to a counter sells
+# every holder's stacks, so the slots it frees are the family's and not one
+# member's. The bar is the trigger's own width: a trip that frees fewer slots
+# than the floor is wide leaves the family where it was, and the ordinary sale
+# wait (vendor_wait_trip below) is the route for that.
+FAMILY_SALE_SLOTS = TOWN_RUN_FREE_SLOTS
+
+
+def family_sale_slots(free_slots: dict, sellable: dict) -> int:
+    """The free slots a vendor trip would free between the family's members.
+
+    ONE WALK TO A COUNTER SELLS EVERY HOLDER'S STACKS, so the slots it frees
+    are the family's. `family_town_run_needed` asks a different question -
+    whether selling lifts a member past the trigger, which is what the
+    campaign needs to open - and it asks it of one member at a time, so a
+    family whose members at the floor each carry a few stacks, none of them
+    enough to clear the trigger alone, never cleared the bar on anybody.
+
+    Measured on the dev realm 2026-10-19: Grog, Og and Ugga, each carrying
+    stacks a vendor would buy, and a family held at the floor by Bork, whose
+    68 stacks (34 uncommon or better, 24 profession stock, 5 a quest item and
+    5 with no vendor price) no vendor will buy at all. The vendor pass took
+    no trip, wrote no sale rows, and logged "no vendor within reach" for the
+    three of them on every pass, so the health endpoint read them as stuck
+    for 2.2 hours.
+
+    A family that is not at the floor frees nothing: there is nothing to
+    relieve then. A member nobody can relieve - one who carries nothing a
+    vendor will buy - contributes nothing, which is the half that kept the
+    vendor pass off a column it could not use (infra#4190).
+
+    THIS IS NOT THE CAMPAIGN'S QUESTION. Whether the run may open is
+    `campaign_resume_short`'s, per member and at the resume floor, and it is
+    unchanged: a family whose binding member cannot be lifted still cannot
+    run. What the trip buys here is the room the goods leave behind and the
+    goods themselves, and a member at the floor who carries things it cannot
+    sell is stuck on exactly that until a vendor takes them.
+    """
+    if not free_slots:
+        return 0
+    at_floor = any(
+        isinstance(free, int) and 0 <= free <= TOWN_RUN_FREE_SLOTS
+        for free in free_slots.values()
+    )
+    if not at_floor:
+        return 0
+    freed = 0
+    for name in free_slots:
+        offered = (sellable or {}).get(name, 0)
+        if isinstance(offered, int) and offered > 0:
+            freed += offered
+    return freed
+
+
 # TOWN FIRST, THEN THE DUNGEON (#265). A campaign that was withheld at
 # TOWN_RUN_FREE_SLOTS and let go again at TOWN_RUN_FREE_SLOTS + 1 flaps: one
 # sale lifts a member to four, the run opens, the first loot puts him back at
@@ -517,6 +571,13 @@ BAG_HOLD_STUCK_SECONDS = CAMPAIGN_RESUME_CEILING_SECONDS
 # what each member at the floor carries that a vendor will not buy, and how
 # the last town pass ended. The stuck list calls a hold stuck at 30 minutes.
 BAG_HOLD_REASON_SECONDS = 30 * 60
+
+# How long a hold at the bag floor may stand with no gain and no town pass
+# making room before it is forgotten: the family is no longer held at the
+# floor, the stuck list stops reporting it, and the family is free to take
+# another route (banker, mailbox, or next town). This is the #872 bound - no
+# banker/vendor wait longer than 2 hours.
+BAG_HOLD_FORGET_SECONDS = 2 * 3600
 
 # A reading this much older than the last one starts the hold again: the
 # queue reads the bags every minute while it holds, so a gap this long is a
@@ -1993,6 +2054,7 @@ ROLE_TANK, ROLE_DAMAGE, ROLE_UNKNOWN = (
     gear.ROLE_UNKNOWN,
 )
 equips_to_queue = gear.equips_to_queue
+equip_room = gear.equip_room
 latest_answers = gear.latest_answers
 worn_pieces = gear.worn_pieces
 world_held = gear.world_held

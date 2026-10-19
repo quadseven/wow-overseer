@@ -413,6 +413,10 @@ def _bridge_self(world, clock, log):
             "_release_weapon_training_aim": lambda *_args: False,
             "TOWN_SLOT_GATHER_LEASE_SECONDS": townslot.GATHER_LEASE_SECONDS,
             "TOWN_SLOT_FLIGHT_LEASE_SECONDS": townslot.GATHER_LEASE_SECONDS,
+            "GEAR_HOUSE_CLAIMANT": "gear house",
+            "TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS": townslot.GATHER_LEASE_SECONDS,
+            "CRAFT_SUPPLY_CLAIMANT": "craft_supply",
+            "TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS": townslot.REAGENT_TRIP_LEASE_SECONDS,
             "_is_economy_aim": economy,
             "_retaskable_from": retaskable,
             "_cohort_leader": lambda key: "Zug",
@@ -578,11 +582,17 @@ def _run_vendor_once(queued, at_vendor=True):
             "_vendor_pass_mode",
             "_sellable_per_holder",
             "_without_bank_keeps",
+            # The pieces `_vendor_once` was split into (wow-overseer#977).
+            "_take_vendor_aim",
+            "_count_sales",
+            "_queue_vendor_sales",
+            "_report_vendor_claim",
         ],
         {
             "_bank_policy": lambda names, fresh=False: {},
             "_bank_spare": lambda names, fresh=False: frozenset(),
             "_log_capped": lambda prefix, notes: None,
+            "_log_changed": lambda prefix, notes, key=(), capped=True: None,
             "asyncio": types.SimpleNamespace(to_thread=_thread),
             "time": Clock(),
             "log": log,
@@ -621,6 +631,7 @@ def _run_vendor_once(queued, at_vendor=True):
     )
     me = _FakeEconomySelf(world)
     me._vendor_pass_mode = lambda *a: ns["_vendor_pass_mode"](me, *a)
+    me._take_vendor_aim = lambda *a: ns["_take_vendor_aim"](me, *a)
     cohort = townslot.Cohort(key="Zug", leader="Zug", names=("Zug",))
     asyncio.run(ns["_vendor_once"](me, cohort))
     return world.sells, me.claims, log.lines

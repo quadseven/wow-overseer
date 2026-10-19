@@ -43,12 +43,20 @@ _LEVELS_SQL = (
     "WHERE guild_id IN ({holes}) AND created_at >= NOW() - INTERVAL %s DAY "
     "ORDER BY created_at DESC LIMIT %s"
 )
+# The guilds' members by name, so the death read below runs down the death
+# table's (character_name, created_at) key (#795). Joined to guild_member by
+# guid, it had no key to use: the plan walked the primary key backward from
+# the newest death and, with fewer dungeon deaths in the week than MAX_ROWS,
+# read every row the table holds.
+_MEMBERS_SQL = (
+    "SELECT c.name, gm.guildid AS guild_id FROM guild_member gm "
+    "JOIN characters c ON c.guid = gm.guid WHERE gm.guildid IN ({holes})"
+)
 _DEATHS_SQL = (
-    "SELECT d.character_name AS name, d.map, d.killer_name AS killer, "
-    "gm.guildid AS guild_id, UNIX_TIMESTAMP(d.created_at) AS at "
-    "FROM overseer_death d JOIN guild_member gm ON gm.guid = d.character_guid "
-    "WHERE gm.guildid IN ({holes}) AND d.created_at >= NOW() - INTERVAL %s DAY "
-    "AND d.map NOT IN ({continents}) ORDER BY d.id DESC LIMIT %s"
+    "SELECT character_name AS name, map, killer_name AS killer, "
+    "UNIX_TIMESTAMP(created_at) AS at FROM overseer_death "
+    "WHERE character_name IN ({names}) AND created_at >= NOW() - INTERVAL %s DAY "
+    "AND map NOT IN ({continents}) ORDER BY id DESC LIMIT %s"
 )
 
 
@@ -170,6 +178,25 @@ def _holes(n: int) -> str:
     return ", ".join(["%s"] * n)
 
 
+def _deaths(rd, ids: list, ih: str, conts: str) -> list:
+    """The guilds' deaths off the continents this week, each with its guild."""
+    members = rd.must(_MEMBERS_SQL.format(holes=ih), tuple(ids))
+    guild_by_name = {str(m["name"]).lower(): int(m["guild_id"]) for m in members}
+    if not guild_by_name:
+        return []
+    names = sorted({str(m["name"]) for m in members})
+    rows = rd.must(
+        _DEATHS_SQL.format(names=_holes(len(names)), continents=conts),
+        (*names, DAYS, MAX_ROWS),
+    )
+    out = []
+    for r in rows:
+        guild_id = guild_by_name.get(str(r["name"]).lower())
+        if guild_id is not None:
+            out.append(dict(r, guild_id=guild_id))
+    return out
+
+
 def build(rd, guilds: list, maps: dict) -> dict:
     found = rd.must(_GUILDS_SQL.format(holes=_holes(len(guilds))), tuple(guilds))
     guild_of = {int(r["guildid"]): r["name"] for r in found}
@@ -184,14 +211,7 @@ def build(rd, guilds: list, maps: dict) -> dict:
         )
         came_back = guildrun.came_back(rd, names, DAYS, MAX_ROWS)
         items += run_items([dict(r, at=r["ended_unix"]) for r in came_back])
-        items += death_items(
-            rd.must(
-                _DEATHS_SQL.format(holes=ih, continents=conts),
-                (*ids, DAYS, MAX_ROWS),
-            ),
-            guild_of,
-            maps,
-        )
+        items += death_items(_deaths(rd, ids, ih, conts), guild_of, maps)
     items.sort(key=lambda i: (-i["at"], i["kind"], i["text"]))
     return {"guilds": sorted(names), "days": DAYS, "items": items[:LIMIT]}
 

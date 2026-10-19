@@ -502,6 +502,101 @@ class AFollowerIsHeldByItsLeader(unittest.TestCase):
         self.assertEqual((oz["since"], oz["follows"]), (NOW - 7200, ""))
 
 
+def stuck_row(name, since, blocker, kind="hold", follows=""):
+    return {
+        "name": name,
+        "step": "",
+        "blocker": blocker,
+        "since": since,
+        "kind": kind,
+        "follows": follows,
+    }
+
+
+BAG_FLOOR = "Waiting for Bork, Grog at the bag floor and no town pass has made room."
+VENDOR = "Waiting for a vendor within reach."
+
+
+class TheStuckDigestRanksTheCauses(unittest.TestCase):
+    # #868: each tick journals the stuck count and the longest stuck time and
+    # works the biggest cause first. The stuck read of 2026-10-19 held eleven:
+    # five at the bag floor for 4.17h, five waiting on a vendor for 0.56h, and
+    # one class quest for 0.91h. The list gave no count, no longest and no
+    # grouping, so every tick summed them by hand.
+
+    def setUp(self):
+        bag = NOW - 15012
+        vendor = NOW - 2016
+        rows = [stuck_row(n, bag, BAG_FLOOR) for n in ("Bork", "Grog", "Grug")]
+        rows += [stuck_row(n, vendor, VENDOR) for n in ("Oz", "Uzza", "Zork")]
+        rows.append(
+            stuck_row(
+                "Ezzo",
+                NOW - 3276,
+                "Cannot finish Call of Water alone: asked the guild for help 3 "
+                "times, 6 said yes.",
+                kind="class quest",
+            )
+        )
+        rows.append(stuck_row("Zrog", None, "On another map than Zug."))
+        self.digest = members.stuck_digest(rows, NOW)
+
+    def test_the_count_and_the_longest_wait_are_read_off(self):
+        d = self.digest
+        self.assertEqual(d["count"], 8)
+        self.assertEqual(d["longest"], {"name": "Bork", "seconds": 15012})
+        self.assertEqual((d["over_bound"], d["bound_s"]), (3, 7200))
+        self.assertEqual(d["unmeasured"], 1)
+
+    def test_the_biggest_cause_by_member_hours_comes_first(self):
+        got = [
+            (c["cause"], c["members"], c["member_hours"]) for c in self.digest["causes"]
+        ]
+        self.assertEqual(
+            got,
+            [
+                ("hold: " + BAG_FLOOR, ["Bork", "Grog", "Grug"], 12.51),
+                ("hold: " + VENDOR, ["Oz", "Uzza", "Zork"], 1.68),
+                ("class quest", ["Ezzo"], 0.91),
+                ("hold: On another map than Zug.", ["Zrog"], 0.0),
+            ],
+        )
+
+    def test_a_followers_leader_hold_and_a_retry_time_do_not_split_a_cause(self):
+        rows = [
+            stuck_row(
+                "Cronk", NOW - 600, "Waiting for the game (tries again at 21:50)."
+            ),
+            stuck_row(
+                "Bonk", NOW - 900, "Waiting for the game (tries again at 22:21)."
+            ),
+            stuck_row(
+                "Grog",
+                NOW - 900,
+                "Waiting for Bonk to move on. "
+                "Bonk's own hold: Waiting for the game (tries again at 22:21).",
+                follows="Bonk",
+            ),
+        ]
+        causes = members.stuck_digest(rows, NOW)["causes"]
+        self.assertEqual(len(causes), 1)
+        self.assertEqual(
+            causes[0]["cause"], "hold: Waiting for the game (tries again at #:#)."
+        )
+        self.assertEqual(causes[0]["longest_s"], 900)
+
+    def test_the_stuck_read_carries_its_digest(self):
+        stuck = members.stuck_view(family_roster())
+        d = stuck["digest"]
+        self.assertEqual(d["count"], len(stuck["members"]))
+        self.assertEqual(d["longest"], {"name": "Grog", "seconds": 3 * 3600})
+        self.assertEqual(d["causes"][0]["members"], ["Grog", "Grug", "Og"])
+
+    def test_an_empty_list_digests_to_nobody(self):
+        d = members.stuck_digest([], NOW)
+        self.assertEqual((d["count"], d["longest"], d["causes"]), (0, None, []))
+
+
 def gain(slot, delta, entry, ilvl=30, boss="Boss"):
     return {
         "slot": slot,
@@ -854,6 +949,25 @@ class TheMembersBadge(unittest.TestCase):
 
     def test_nobody_stuck_is_no_badge(self):
         self.assertIsNone(self.run_badge({"members": []})["got"])
+
+
+class AGhostIsOutOfPlay(unittest.TestCase):
+    """A released ghost reads as dead to nowstatus, so it shows Ghost, not
+    Idle. #1093"""
+
+    def test_a_ghost_reading_is_a_dead_condition_and_keeps_its_life(self):
+        got = members._presence({"online": True, "life": "ghost"}, None)
+        self.assertEqual("dead", got["condition"])
+        self.assertEqual("ghost", got["life"])
+
+    def test_an_online_ghost_composes_as_ghost_not_idle(self):
+        presence = members._presence({"online": True, "life": "ghost"}, None)
+        got = nowstatus.compose({"name": "Grumbles", **presence}, None)
+        self.assertEqual("Ghost", got["doing"])
+
+    def test_a_living_reading_stays_ok(self):
+        got = members._presence({"online": True, "life": "alive"}, None)
+        self.assertEqual("ok", got["condition"])
 
 
 if __name__ == "__main__":

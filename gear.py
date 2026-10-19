@@ -58,8 +58,11 @@ on the running server.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+
+import weaponskill
 
 # The stuck text names times the way the reader reads them: the operator's
 # clock, not UTC. Same convention as runtimeline's operator clock.
@@ -322,8 +325,8 @@ _WEAPON_SKILLS = {
 _KNOWN_WEAPON_SUBCLASSES = _ALL_MELEE_AND_RANGED | {WEAPON_WAND}
 
 
-def wieldable_weapon(holding: Holding, character: CharacterState) -> bool:
-    """Can this character's class wield this weapon at all.
+def class_wields(holding: Holding, character: CharacterState) -> bool:
+    """Can this character's class wield this weapon at all, learned or not.
 
     Abstains - returns True - for anything that is not a weapon, for a
     subclass this table does not decide, for a class it does not list, and
@@ -339,6 +342,34 @@ def wieldable_weapon(holding: Holding, character: CharacterState) -> bool:
     if skills is None:
         return True
     return subclass in skills
+
+
+def weapon_trained(holding: Holding, character: CharacterState) -> bool:
+    """Has this character learned the weapon skill this piece needs.
+
+    THE CLASS SAYS WHAT CAN BE LEARNED, NOT WHAT IS (#393). Measured on
+    wow-dev 2026-09-28: Og, a level 35 mage, carried Silithid Ripper, a
+    one-hand sword, with no Swords skill (character_skills 43 absent). A
+    mage's class can wield a sword, so the sword was planned as Og's and the
+    equip pass asked three times; the core refuses to equip a weapon whose
+    skill is not learned, and Og stayed unarmed. `weapon_skills` is the
+    learned set, read from character_skills; None means it was not read, and
+    the answer abstains to True, which is the class-only judgement as before.
+    """
+    if character.weapon_skills is None:
+        return True
+    if int(holding.item_class) != ITEM_CLASS_WEAPON:
+        return True
+    subclass = int(holding.item_subclass)
+    if subclass not in _KNOWN_WEAPON_SUBCLASSES:
+        return True
+    return subclass in character.weapon_skills
+
+
+def wieldable_weapon(holding: Holding, character: CharacterState) -> bool:
+    """Can this character wield this weapon now: the class can, and, when the
+    learned skills were read, the skill is learned (#393)."""
+    return class_wields(holding, character) and weapon_trained(holding, character)
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +572,10 @@ class CharacterState:
     # empty off hand or one this row could not read. What decides whether a
     # shield is an upgrade for a tank whatever the item levels say.
     off_hand_kind: str = OFF_HAND_NONE
+    # The weapon subclasses (item_template.subclass) this character has
+    # learned the skill for, from character_skills, or None when that was
+    # not read. None keeps the class-only judgement (#393).
+    weapon_skills: frozenset | None = None
 
     def equipped_level(self, slot: str) -> int:
         return int(self.equipped.get(slot, 0))
@@ -651,8 +686,10 @@ def _cannot_wear(holding: Holding, character: CharacterState) -> str:
     # that stops mail reaching the priest - see _ARMOR_TRAINED_AT.
     if not wearable_armor(holding, character):
         return f"{cls} is not trained in that armour type"
-    if not wieldable_weapon(holding, character):
+    if not class_wields(holding, character):
         return f"{cls} cannot wield that weapon type"
+    if not weapon_trained(holding, character):
+        return f"{character.name or cls} has not learned that weapon skill"
     if character.level < holding.required_level:
         return f"requires level {holding.required_level}"
     if not _slot_for(holding):
@@ -1373,7 +1410,25 @@ def claimant(holding: Holding, characters) -> str:
             continue
         if is_upgrade_for(holding, character)[0]:
             return character.name
+    if _holder_would_train_for(holding, holder):
+        return holder.name
     return NOBODY
+
+
+def _holder_would_train_for(holding: Holding, holder: CharacterState) -> bool:
+    """Would the holder wear this weapon once a weapon master taught the skill.
+
+    A sibling who can wield it now was asked first and wins it. When none
+    can, the holder keeps it rather than see it sold: the weapon-master walk
+    (weaponskill, #399) trains the holder for a weapon they CARRY, so selling
+    it would take away the reason to walk (#393). `equips` still refuses to
+    put it on until the skill is learned.
+    """
+    if holder.weapon_skills is None or weapon_trained(holding, holder):
+        return False
+    if int(holding.item_subclass) not in weaponskill.WEAPON_SKILLS:
+        return False
+    return would_wear(holding, replace(holder, weapon_skills=None))[0]
 
 
 def claims(holdings, characters) -> dict:
@@ -1469,6 +1524,15 @@ def _hand_refusal(holding: Holding, character: CharacterState) -> str:
     return ""
 
 
+def bot_wont_wear(holding: Holding, character: CharacterState) -> bool:
+    """The member's bot will not put this piece on, whatever the item levels
+    say (#830): a hunter and a melee weapon. Asked only where an `e` row is
+    built, so who may hold or receive the piece is unchanged."""
+    return weaponskill.bot_wont_wear(
+        character.class_id, holding.item_class, holding.inventory_type
+    )
+
+
 def equips(holdings, characters) -> tuple:
     """Every carried piece its holder should put on now, best per slot.
 
@@ -1484,7 +1548,11 @@ def equips(holdings, characters) -> tuple:
             continue
         if claimant(holding, characters) != holding.holder:
             continue
-        if _hand_refusal(holding, character):
+        if not weapon_trained(holding, character):
+            # Kept for the weapon-master walk, not worn: the core refuses
+            # a weapon whose skill is not learned (#393).
+            continue
+        if _hand_refusal(holding, character) or bot_wont_wear(holding, character):
             continue
         slot = _slot_for(holding)
         group = _WEAPON_GROUP.get(slot, slot)
@@ -1523,6 +1591,8 @@ def chosen_equip(holding: Holding, character: CharacterState, reason: str):
     """
     slot = _slot_for(holding)
     if not slot or character.name != holding.holder:
+        return None
+    if bot_wont_wear(holding, character):
         return None
     worn = worn_against(holding, character)
     return Equip(
@@ -1591,6 +1661,25 @@ def since_level_change(history, changed) -> list:
 # that the command was handed over; `applied` says the world put the item on.
 WORLD_REFUSALS = frozenset({"error", "unchanged"})
 
+# THE REFUSALS THAT NAME A PASSING STATE OF THE HOLDER (#869). mod-overseer
+# writes Player::CanEquipItem's answer as "<name or InventoryResult> <code>".
+# These codes say nothing about the piece or the bags, only what the holder is
+# doing that moment (Item.h InventoryResult; PlayerStorage.cpp CanEquipItem and
+# CanUseItem): stunned (37), dead or a ghost (38), casting or the weapon swap
+# timer (39), in combat (60), disarmed (61), in an arena match (78). The state
+# passes by itself, so a refusal on one of them waits the first step every
+# time and never the memory window: live, Durg (60) and Shinyhair (38) were
+# held a day on their third such refusal.
+_PASSING_REFUSALS = frozenset({37, 38, 39, 60, 61, 78})
+_REFUSAL_CODE = re.compile(r"\b(?:InventoryResult|EQUIP_ERR_[A-Z0-9_]+) (\d+)\b")
+
+
+def _passing_refusal(detail) -> bool:
+    """A refusal detail naming one of the _PASSING_REFUSALS codes."""
+    found = _REFUSAL_CODE.search(str(detail or ""))
+    return found is not None and int(found.group(1)) in _PASSING_REFUSALS
+
+
 # Equip.slot -> the bag 0 equipment slots a piece put on there would displace.
 # Both the item-level buckets and equipscore's groups, so a hold can see when
 # what is worn there has changed. A slot not here has no worn signature, and
@@ -1620,14 +1709,18 @@ class WorldHold:
     """One answered equip row the queue is holding a piece on.
 
     `worn` is what sat in the piece's slot when the hold began; `lifted` says
-    the hold is over for this row (that slot changed, or the piece left the
-    bags), so the same answer never holds the piece a second time.
+    the hold is over for this row (that slot changed, the piece left the bags,
+    or the room it was short of is there), so the same answer never holds the
+    piece a second time. `short` says the holder had too few free bag slots
+    for the piece when the hold began (room_needed).
     """
 
     row_id: int
     worn: tuple
     lifted: bool = False
     retry_at: object = None
+    refusal_at: object = None
+    short: bool = False
 
 
 @dataclass
@@ -1739,6 +1832,73 @@ def _worn_for(equip, worn) -> tuple:
     )
 
 
+def room_needed(equip, worn) -> int:
+    """The free bag slots `equip` needs before the world will put it on.
+
+    What a piece displaces goes into the bag slot the piece leaves, and that
+    holds one: a two-hander over a main hand and a shield moves two, so the
+    shield needs a free slot of its own. With none the world refuses
+    (InventoryResult 21, "items cannot be swapped") until the bags change,
+    and the staged retry held three members for a day on it (#1088).
+    """
+    return max(0, len(_worn_for(equip, worn)) - 1)
+
+
+def _room_short(equip, worn, free_slots) -> int:
+    """How many more free bag slots `equip` needs than its holder has: 0 when
+    it has room, or when its bags were not read."""
+    free = (free_slots or {}).get(equip.holder)
+    if free is None:
+        return 0
+    return max(0, room_needed(equip, worn) - int(free))
+
+
+def _over(equip, worn) -> str:
+    """What `equip` would be put on over, as the notes name it."""
+    return " and ".join(name for _slot, _entry, name in _worn_for(equip, worn))
+
+
+def equip_room(wanted, worn, free_slots) -> dict:
+    """holder -> (free slots needed, "to put on <piece> over <worn>") for each
+    holder in `wanted` with too few free bag slots to put a piece on.
+
+    The guild jobs pass makes the room (guildjobs.equip_room_step); the
+    equip is asked again the pass the room is there. A holder short for two
+    pieces is named for the one that needs the most.
+    """
+    out: dict = {}
+    for equip in sorted(wanted, key=lambda e: (e.holder, e.slot, e.guid)):
+        if not _room_short(equip, worn, free_slots):
+            continue
+        need = room_needed(equip, worn)
+        if need > out.get(equip.holder, (0, ""))[0]:
+            words = "to put on %s over %s" % (equip.name, _over(equip, worn))
+            out[equip.holder] = (need, words)
+    return out
+
+
+def _room_note(equip, worn, free_slots) -> str:
+    return (
+        "%s leaves %s in its bags: putting it on over %s needs %d free bag "
+        "slot(s) and it has %d"
+    ) % (
+        equip.holder,
+        equip.name,
+        _over(equip, worn),
+        room_needed(equip, worn),
+        int(free_slots[equip.holder]),
+    )
+
+
+def _room_made(hold, equip, worn, free_slots) -> bool:
+    """A hold that began short of room, now that the room is there."""
+    return (
+        hold.short
+        and (free_slots or {}).get(equip.holder) is not None
+        and not _room_short(equip, worn, free_slots)
+    )
+
+
 def _refused(row) -> bool:
     return (
         row is not None
@@ -1748,15 +1908,16 @@ def _refused(row) -> bool:
 
 
 def _world_holds(
-    wanted, answers, worn, holds, holders, tries, now, memory_hours
+    wanted, answers, worn, holds, holders, tries, now, memory_hours, free_slots=None
 ) -> dict:
     """(holder, command) -> note, for each piece held on the world's answer.
 
     `holds` is updated in place. A hold begins at the first pass that sees a
     refusal row, with what is worn in that slot then, and lifts when that
-    changes or when the piece is no longer wanted from one of `holders` (it
-    left the bags). A level change lifts it before this is reached, because
-    `since_level_change` has already dropped the rows it answered. A
+    changes, when the piece is no longer wanted from one of `holders` (it
+    left the bags), or when the hold began short of bag room and `free_slots`
+    now has the room (#1088). A level change lifts it before this is reached,
+    because `since_level_change` has already dropped the rows it answered. A
     bot-keeps answer is never a refusal: it is recorded as a BotKeep (a
     choice, not a stuck member) and stays out of the notes this returns.
     """
@@ -1804,15 +1965,28 @@ def _world_holds(
             continue
         worn_now = _worn_for(equip, worn)
         hold = holds.get(key)
+        created = row.get("created_at")
+        if hold is not None and hold.lifted and created != hold.refusal_at:
+            hold = None
         if hold is None:
-            hold = holds[key] = WorldHold(row_id=int(row.get("id", 0)), worn=worn_now)
-        elif hold.worn != worn_now:
+            hold = holds[key] = WorldHold(
+                row_id=int(row.get("id", 0)),
+                worn=worn_now,
+                refusal_at=created,
+                short=_room_short(equip, worn, free_slots) > 0,
+            )
+        elif hold.worn != worn_now or _room_made(hold, equip, worn, free_slots):
             hold.lifted = True
+        elif _room_short(equip, worn, free_slots):
+            # The first room read may have failed. Remember a shortage seen
+            # later so making room can still lift this refusal immediately.
+            hold.short = True
         if hold.lifted:
             continue
         attempts = max(1, int((tries or {}).get(key, 1)))
+        if _passing_refusal(row.get("detail")):
+            attempts = 1
         wait = (15, 30, max(1, int(memory_hours)) * 60)[min(attempts, 3) - 1]
-        created = row.get("created_at")
         if isinstance(created, datetime):
             if created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)
@@ -1857,6 +2031,8 @@ def equips_to_queue(
     holders=None,
     now=None,
     memory_hours=24,
+    online=None,
+    free_slots=None,
 ) -> tuple:
     """Which equips to write now, and a note for each one held back.
 
@@ -1867,7 +2043,8 @@ def equips_to_queue(
 
     `tries` counts (holder, command) over the longer memory window. Repeated
     world refusals wait fifteen minutes, thirty minutes, then the full memory
-    window.
+    window, except a refusal on a passing state of the holder (dead, in
+    combat, stunned: _PASSING_REFUSALS), which always waits fifteen minutes.
     Other attempts are eligible again as soon as the short retry window ends.
 
     An `applied` answer ends this attempt. If another gear pass later puts
@@ -1885,19 +2062,47 @@ def equips_to_queue(
     `holds` is the caller's dict of WorldHold, kept between passes and
     updated in place; `holders` are the members this pass read, by default
     the holders of `wanted`.
+
+    A PIECE ITS HOLDER HAS NO BAG ROOM FOR IS NOT ASKED (#1088). `free_slots`
+    is holder -> free bag slots, None or a missing holder when unread. An
+    equip that needs more free slots than its holder has (room_needed: a
+    two-hander over a main hand and a shield) is never written, because the
+    world can only refuse it; its note says so in plain words instead of a
+    retry time, and `equip_room` names the shortfall for the guild jobs pass
+    to make the room. A hold that began short of room lifts the pass the
+    room is there, so the piece is asked again at once.
     """
     holds = {} if holds is None else holds
     if holders is None:
         holders = {e.holder for e in wanted}
     now = now or datetime.now(timezone.utc)
     held = _world_holds(
-        wanted, answers or {}, worn, holds, set(holders), tries, now, memory_hours
+        wanted,
+        answers or {},
+        worn,
+        holds,
+        set(holders),
+        tries,
+        now,
+        memory_hours,
+        free_slots,
     )
     queue, notes = [], []
     for equip in wanted:
         key = (equip.holder, equip.command)
+        if _room_short(equip, worn, free_slots):
+            notes.append(_room_note(equip, worn, free_slots))
+            continue
         if key in held:
             notes.append(held[key])
+            continue
+        # Never queue an equip for an offline member (#869): the world
+        # cannot act on it, and it just piles up retries.
+        if online is not None and equip.holder not in online:
+            notes.append(
+                "%s is offline; equip of %s held until they are online"
+                % (equip.holder, equip.name)
+            )
             continue
         # The bot keeps its own better-scored piece by choice: it is not a
         # refusal, it never earns a stuck reason, and it is not wanted again
@@ -1911,6 +2116,20 @@ def equips_to_queue(
         if (answers or {}).get(key, {}).get("status") == "applied":
             continue
         if key in recent:
+            continue
+        # Give up after repeated tries (#869): the world has refused this
+        # piece `give_up` times without a reason, so stop asking and say so.
+        # This is for SILENT failures (delivered but not worn, no detail).
+        # A refusal WITH a reason is handled by _world_holds above, not here.
+        attempts = int((tries or {}).get(key, 0))
+        answer = (answers or {}).get(key, {})
+        has_refusal = str(answer.get("status", "")) in WORLD_REFUSALS
+        if attempts >= give_up and not has_refusal:
+            notes.append(
+                "%s still carries %s after %d equip command(s); "
+                "held until the memory window passes"
+                % (equip.holder, equip.name, attempts)
+            )
             continue
         queue.append(equip)
     return tuple(queue), tuple(notes)
@@ -1965,10 +2184,15 @@ def characters_from_rows(rows, names, roles=None) -> list:
 
     `roles` maps a name to ROLE_TANK, ROLE_HEALER or ROLE_DAMAGE; a name it
     does not mention, and every name when it is None, is ROLE_UNKNOWN.
+
+    A row may carry `weapon_skills`, the weapon subclasses the character has
+    learned (bridge reads them from character_skills, #393). A row without
+    the key, or with None, leaves the character's skills unread.
     """
     roles = dict(roles or {})
     seen = {}
     off_hands = {}
+    skills = {}
     for row in rows:
         try:
             name = str(row["name"])
@@ -1979,6 +2203,8 @@ def characters_from_rows(rows, names, roles=None) -> list:
         except (KeyError, TypeError, ValueError):
             continue
         equipped = seen.setdefault(name, (class_id, level, {}))[2]
+        if name not in skills:
+            skills[name] = weapon_skills_of(row)
         try:
             inventory_type = int(row["inventory_type"])
             item_level = int(row["item_level"])
@@ -2002,10 +2228,25 @@ def characters_from_rows(rows, names, roles=None) -> list:
             equipped=seen[name][2],
             role=str(roles.get(name, ROLE_UNKNOWN) or ROLE_UNKNOWN),
             off_hand_kind=off_hands.get(name, OFF_HAND_NONE),
+            weapon_skills=skills.get(name),
         )
         for name in names
         if name in seen
     ]
+
+
+def weapon_skills_of(row):
+    """The learned weapon subclasses a row carries, or None when unread."""
+    try:
+        held = row["weapon_skills"]
+    except (KeyError, TypeError):
+        return None
+    if held is None:
+        return None
+    try:
+        return frozenset(int(sub) for sub in held)
+    except (TypeError, ValueError):
+        return None
 
 
 def holdings_from_rows(rows) -> list:

@@ -16,6 +16,7 @@ A read-only operations app for the realm: plain HTML, CSS and ES modules served 
 | `models/<payload>.js` | One read model per payload the views share: `roster.js` (/api/v2/roster), `guildruns.js` (/api/guildruns), `wall.js` (/api/wall), `guild.js` (/api/v2/guild), `goal.js` (/api/v2/goal). Each turns a read into named accessors, and answers null (not measured) until the read is ready. Tested under node in `tests/test_app_models.py`. |
 | `tooltip.js` | The one item tooltip, for any element with `data-item="<entry>"`. It reads `/api/item`. |
 | `search.js` | The search dialog and `addProvider(fn)`. |
+| `tabstrip.js` | A view's tab strip on a phone: a new page scrolls its lit tab into view, and a redraw keeps where the reader scrolled the strip. |
 | `shell.js` | The sidebar, phone header and tab bar, data age, `setBadge`, and `setThumb` (the guild switch on phone). |
 | `families.js` | The realm's families and family guilds from `/api/realm`: the routes, the nav and the views draw these, never names written into the app. |
 | `badges.js` | Nav badge providers. |

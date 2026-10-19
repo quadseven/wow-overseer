@@ -673,11 +673,14 @@ class ATrainerWalkThatKeepsFailing(unittest.TestCase):
         self.assertEqual(step.rows[0].command, "walk-to-trainer skill:%d" % TAILOR)
 
     def test_failed_herbalism_walk_does_not_block_first_aid(self):
+        # Mining short of its cap: a second trade AT its cap would now be
+        # walked first by the tier cap rung (#1116), and this test is about
+        # the herbalism cooldown leaving First Aid free.
         medic = bare(
             "Medic",
             level=10,
             money=500,
-            skills={H: (75, 75), M: (75, 75)},
+            skills={H: (75, 75), M: (40, 75)},
         )
         recent = guildjobs.recent_from_rows(
             (
@@ -1110,8 +1113,12 @@ class NaturallyEarnedOnly(unittest.TestCase):
 
 class TheBudget(unittest.TestCase):
     def test_a_guild_starts_at_most_its_steps_per_pass(self):
-        crew = [member("M%02d" % i, level=5) for i in range(10)]
-        result = plan(crew)
+        # Post to open, not a trade to learn: a trainer walk has its own
+        # allowance (TRAIN_STEPS_PER_GUILD, #1116).
+        held = {H: (1, 75), M: (1, 75)}
+        crew = [member("M%02d" % i, level=5, skills=dict(held)) for i in range(10)]
+        mail = {m.name: ("take-item mail:1 item:2",) for m in crew}
+        result = plan(crew, mail=mail)
         self.assertEqual(len(result.steps), guildjobs.STEPS_PER_GUILD)
         self.assertEqual(
             sum("guild job steps per guild per pass" in n for n in result.notes), 6

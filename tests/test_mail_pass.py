@@ -492,7 +492,11 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
         The per-taker gate (`_mail_takes_in_reach`) already ensures a row is
         only written where it can work. A lost slot must fall through to it,
         not return: a taker who happens to be standing at a mailbox (the town
-        errand's hub, a walk past) still gets their takes queued."""
+        errand's hub, a walk past) still gets their takes queued.
+
+        wow-overseer#1141: the branch MAY end the pass, but only when the first
+        position read puts no taker within reach, so the return must sit behind
+        the per-taker reach check (test_mail_settle_skip runs both cases)."""
         code = _statements("    async def _mail_once(")
         # The gate that decides which rows are written is the per-taker one.
         marker = "_mail_takes_in_reach("
@@ -504,6 +508,10 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
         lost_slot = code.index(marker)
         branch = code[lost_slot:gate_idx]
         self.assertNotIn("\n            return", branch)
+        if "return" in branch:
+            reach = "travel.spawn_in_reach(spawn, positions.get(t.character),"
+            self.assertIn(reach, branch)
+            self.assertLess(branch.index(reach), branch.index("return"))
 
 
 class TheModuleShips(unittest.TestCase):

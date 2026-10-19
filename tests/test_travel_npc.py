@@ -175,12 +175,25 @@ def _patch_added() -> str:
     )
 
 
+_CPP_ROLE = re.compile(
+    r'\{"([^"]+)",\s*(UNIT_NPC_FLAG_[A-Z_]+(?:\s*\|\s*UNIT_NPC_FLAG_[A-Z_]+)*)\s*\}'
+)
+
+
+def _cpp_role_body() -> str:
+    return _code(_function("static std::vector<TravelRole> const& TravelRoles()"))
+
+
 def _cpp_roles() -> dict:
-    """The module's own keyword -> NPC flag table."""
-    body = _function("static std::vector<TravelRole> const& TravelRoles()")
+    """The module's own keyword -> NPC flag table.
+
+    A role may name more than one flag, OR-ed (mod-overseer#544: `guild
+    petitioner` is PETITIONER | TABARDDESIGNER), and the value is normalised to
+    "A | B" so the Python side can spell it the same way.
+    """
     return {
-        m.group(1): m.group(2)
-        for m in re.finditer(r'\{"([^"]+)",\s*(UNIT_NPC_FLAG_[A-Z_]+)\}', body)
+        m.group(1): re.sub(r"\s*\|\s*", " | ", m.group(2))
+        for m in _CPP_ROLE.finditer(_cpp_role_body())
     }
 
 
@@ -194,6 +207,16 @@ class TheVocabularyIsSharedBetweenPythonAndTheModule(unittest.TestCase):
 
     def test_the_module_has_a_role_table_at_all(self):
         self.assertTrue(_cpp_roles(), "TravelRoles() parsed as empty")
+
+    def test_every_module_entry_is_parsed(self):
+        """An entry the pattern cannot read is one the mirror silently skips.
+
+        The pattern once read a single flag per entry, so a two-flag role
+        would have dropped out of both directions of the comparison without a
+        word (mod-overseer#544). Count the keywords instead of trusting it.
+        """
+        entries = re.findall(r'\{"([^"]+)",', _cpp_role_body())
+        self.assertEqual(sorted(entries), sorted(_cpp_roles()))
 
     def test_every_python_keyword_is_one_the_module_accepts(self):
         missing = sorted(set(travel.ROLES) - set(_cpp_roles()))

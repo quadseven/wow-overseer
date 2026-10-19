@@ -768,6 +768,48 @@ class SalePlannerTest(unittest.TestCase):
         self.assertEqual((sale.bid, sale.buyout), (400, 500))
 
 
+class ListableBeforeTheWalkTest(unittest.TestCase):
+    """Only candidates `plan_sales` would list are worth a walk (#478)."""
+
+    def _candidate(self, quality=2, entry=100, guid=1, **extra):
+        return dict(
+            holder="Og",
+            item_guid=guid,
+            entry=entry,
+            quality=quality,
+            binding="boe",
+            sell_price=100,
+            **extra,
+        )
+
+    def test_an_empty_house_lists_no_gear(self):
+        self.assertEqual(auction.listable([self._candidate()], []), ())
+
+    def test_a_rare_is_not_listable_whatever_the_market(self):
+        listings = [auction.Listing(auction_id=1, entry=100, buyout=900)]
+        self.assertEqual(auction.listable([self._candidate(quality=3)], listings), ())
+
+    def test_a_live_listing_prices_the_candidate(self):
+        listings = [
+            auction.Listing(auction_id=1, entry=100, buyout=900),
+            auction.Listing(auction_id=2, entry=100, count=2, buyout=1000),
+        ]
+        (sale,) = auction.listable([self._candidate()], listings)
+        self.assertEqual(sale.buyout, 500)
+
+    def test_a_fair_price_lists_on_an_empty_house(self):
+        (sale,) = auction.listable([self._candidate(fair_price=700)], [])
+        self.assertEqual(sale.buyout, 700)
+
+    def test_lowest_asks_is_per_unit_and_lowest(self):
+        listings = [
+            auction.Listing(auction_id=1, entry=100, buyout=900),
+            auction.Listing(auction_id=2, entry=100, count=3, buyout=900),
+            auction.Listing(auction_id=3, entry=200, buyout=50),
+        ]
+        self.assertEqual(auction.lowest_asks(listings), {100: 300, 200: 50})
+
+
 class SalesByHouseTest(unittest.TestCase):
     """Sale candidates are grouped by the house EACH HOLDER can reach.
 

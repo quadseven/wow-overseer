@@ -254,3 +254,62 @@ def decide(
     if family_stalled and not leader_stalled:
         return Decision(RELEASE, "family split beyond the bounded stall window")
     return Decision(RELEASE, "vendor travel stalled beyond the bounded window")
+
+
+# THE CLOCKS ACROSS A BRIDGE RESTART (#817). The bridge keeps the last
+# Movement and FamilyMovement per leader in its memo store so a deploy does not
+# count a stuck trip from zero. Their clocks are monotonic, and the monotonic
+# clock means nothing to the next process, so the memo holds them as wall time:
+# `offset` is wall time minus monotonic time at the moment of the call. The
+# time the bridge was down is time the trip spent too, exactly as if it had
+# kept running. A memo that does not decode raises KeyError, TypeError or
+# ValueError; the caller drops it, which is the old cold start.
+
+
+def movement_memo(movement: Movement, offset: float) -> dict:
+    """A Movement as JSON for the memo store, its clock in wall time."""
+    return {
+        "map_id": int(movement.map_id),
+        "x": float(movement.x),
+        "y": float(movement.y),
+        "z": float(movement.z),
+        "steady_since": float(movement.steady_since) + offset,
+    }
+
+
+def movement_from_memo(value: Mapping, offset: float) -> Movement:
+    """The Movement `movement_memo` stored, its clock back in monotonic time."""
+    return Movement(
+        int(value["map_id"]),
+        float(value["x"]),
+        float(value["y"]),
+        float(value["z"]),
+        float(value["steady_since"]) - offset,
+    )
+
+
+def family_memo(movement: FamilyMovement, offset: float) -> dict:
+    """A FamilyMovement as JSON for the memo store, its clocks in wall time."""
+    split = movement.split_since
+    return {
+        "positions": [list(row) for row in movement.positions],
+        "steady_since": float(movement.steady_since) + offset,
+        "split_since": None if split is None else float(split) + offset,
+    }
+
+
+def family_from_memo(value: Mapping, offset: float) -> FamilyMovement:
+    """The FamilyMovement `family_memo` stored, back in monotonic time.
+
+    JSON reads every tuple back as a list, and `family_progress` compares the
+    rows it is given with the rows it computes, so they are tuples again here.
+    """
+    split = value["split_since"]
+    return FamilyMovement(
+        tuple(
+            (str(name), int(map_id), float(x), float(y))
+            for name, map_id, x, y in value["positions"]
+        ),
+        float(value["steady_since"]) - offset,
+        None if split is None else float(split) - offset,
+    )

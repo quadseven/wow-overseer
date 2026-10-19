@@ -406,6 +406,129 @@ def auctioneer_map_available(
 
 
 # ---------------------------------------------------------------------------
+# A HOUSE BEYOND THE TOWN (#1170). A family bound in Ratchet has no auctioneer
+# at home: the `auctioneer` keyword is a town-service walk, and mod-overseer
+# refuses one past TOWN_COUNTER_MAX_WALK_YARDS (1500), so the gear errand
+# re-armed a walk the world would never take and logged `not at an
+# auctioneer` forty times a day. A player walks or flies to a house of their
+# own side instead, and so does this.
+
+# The side each faction auctioneer serves, read from every creature_template
+# on this world with the auctioneer npcflag (the same spawns the neutral set
+# above was read from): Stormwind 12, Ironforge 55, Darnassus 80 and the
+# Exodar 1638 for the Alliance; Orgrimmar 29, the Undercity 68, Thunder Bluff
+# 104 and Silvermoon 1604 for the Horde. A faction in neither set nor in
+# NEUTRAL_AUCTIONEER_FACTIONS is a counter this module cannot place, and it is
+# never walked to.
+SIDE_AUCTIONEER_FACTIONS = {
+    HOUSE_ALLIANCE: frozenset({12, 55, 80, 1638}),
+    HOUSE_HORDE: frozenset({29, 68, 104, 1604}),
+}
+
+# mod-overseer's TOWN_COUNTER_MAX_WALK_YARDS: the furthest counter the
+# `auctioneer` keyword will walk to. Within it the keyword is the aim, as it
+# always was, so the module still picks the counter itself.
+TOWN_COUNTER_WALK_YARDS = 1500.0
+
+# The longest trip to a house beyond the town. Inside the 8320 yards that
+# mod-overseer's own 20 minute backstop allows at its measured long-walk rate
+# (flightlearn.REACH_YARDS states that ceiling), and past Ratchet to Gadgetzan,
+# measured at 6191 yards from the Ratchet bind point on wow-dev on 2026-10-18.
+HOUSE_TRIP_MAX_YARDS = 7500.0
+
+
+def counter_house(team: str, auctioneer_faction: int) -> int:
+    """The house a character of `team` shops in at this auctioneer, or 0 when
+    the counter is the other side's or cannot be placed.
+
+    `reachable_house` assumes the counter is one the character may use; this
+    is the question asked before walking to one.
+    """
+    faction = int(auctioneer_faction)
+    if faction in NEUTRAL_AUCTIONEER_FACTIONS:
+        return HOUSE_NEUTRAL
+    house = TEAM_HOUSE.get(str(team or "").lower(), 0)
+    if house and faction in SIDE_AUCTIONEER_FACTIONS[house]:
+        return house
+    return 0
+
+
+@dataclass(frozen=True)
+class HouseTrip:
+    """Where to send the leader so the family can shop at an auction house.
+
+    `aim` is what `travel_npc` carries: the `auctioneer` keyword when a counter
+    of the family's side stands within a town walk, the counter's creature
+    entry when the nearest one is further, and "" when there is none to go to.
+    """
+
+    aim: str = ""
+    entry: int = 0
+    name: str = ""
+    yards: float = 0.0
+    house: int = 0
+    why_not: str = ""
+
+
+def house_trip(
+    team: str,
+    rows,
+    *,
+    map_id,
+    far: bool = True,
+    town_yards: float = TOWN_COUNTER_WALK_YARDS,
+    max_yards: float = HOUSE_TRIP_MAX_YARDS,
+) -> HouseTrip:
+    """The auction house of `team`'s side to walk the family to. Pure.
+
+    `rows` are the auctioneer spawns on the leader's map, measured from the
+    leader (`entry`, `name`, `faction`, `map_id`, `yards`). The nearest
+    counter this side may use wins. Within `town_yards` the aim is the
+    keyword. Beyond it, and only when `far` (a member passes the gear-short
+    gate), the aim is that counter's creature entry: a bare entry is not a
+    town-service walk, so the module walks it, and still refuses a counter
+    that will not deal with the character.
+    """
+    if map_id is None or classic.is_expansion_map(map_id):
+        return HouseTrip(
+            why_not="the classic ruleset sends nobody to an auctioneer here"
+        )
+    usable = []
+    for row in rows or ():
+        try:
+            entry = int(row["entry"])
+            yards = float(row["yards"])
+            faction = int(row.get("faction") or 0)
+            on_map = int(row["map_id"]) == int(map_id)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+        house = counter_house(team, faction)
+        if entry > 0 and on_map and house:
+            usable.append((yards, entry, str(row.get("name") or ""), house))
+    if not usable:
+        return HouseTrip(why_not="no auction house of this side on this map")
+    yards, entry, name, house = min(usable)
+    if yards <= town_yards:
+        return HouseTrip(AUCTIONEER_ROLE, entry, name, yards, house)
+    if not far:
+        why = (
+            "the nearest auction house is %d yards away, and no member is "
+            "short enough of gear to make the trip" % int(yards)
+        )
+        return HouseTrip("", entry, name, yards, house, why)
+    if yards > max_yards:
+        why = (
+            "the nearest auction house is %d yards away, beyond the %d-yard trip limit"
+            % (
+                int(yards),
+                int(max_yards),
+            )
+        )
+        return HouseTrip("", entry, name, yards, house, why)
+    return HouseTrip(str(entry), entry, name, yards, house)
+
+
+# ---------------------------------------------------------------------------
 # WHAT EACH RECIPE CONSUMES THAT NOBODY SELLS - AND IT IS `craft_rhythm`'s
 # TABLE, NOT A SECOND ONE.
 #
@@ -669,6 +792,32 @@ def price_candidates(candidates, market) -> list:
         fair = int(candidate.get("fair_price", 0) or 0)
         out.append(dict(candidate, market_price=live or fair))
     return out
+
+
+def lowest_asks(listings) -> dict:
+    """`{entry: lowest per-unit buyout}` over one house's live listings."""
+    market: dict = {}
+    for listing in listings or ():
+        market[listing.entry] = min(
+            market.get(listing.entry, listing.per_unit), listing.per_unit
+        )
+    return market
+
+
+def listable(candidates, listings) -> tuple:
+    """The `plan_sales` rows these candidates would make against `listings`.
+
+    ASKED BEFORE THE WALK, NOT ONLY AT THE COUNTER (wow-overseer#478). The
+    listing walk used to count every candidate, and at the counter
+    `plan_sales` refused each one: a rare, or a piece the house had no live
+    listing of and no fair price for. Measured on wow-dev on 2026-10-19:
+    "aimed to list 2 surplus BoE item(s)" about three times an hour for a
+    day, each taking the family's travel column on bag pressure, and the two
+    times the leader reached the counter, "listed 0 surplus BoE item(s) at
+    house 2". A walk for candidates that cannot be listed cannot land, so it
+    is not taken.
+    """
+    return plan_sales(price_candidates(candidates, lowest_asks(listings)))
 
 
 def sales_by_house(candidates, holder_houses) -> dict:

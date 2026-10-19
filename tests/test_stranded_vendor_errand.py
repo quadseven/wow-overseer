@@ -390,11 +390,14 @@ class TheSweepIsActuallyReached(unittest.TestCase):
         body = self._pass()
         self.assertLess(
             body.index("_release_stranded_vendor_errands"),
-            body.index("_claim_town_slot"),
+            body.index("_take_vendor_aim"),
         )
-        self.assertEqual(body.count("_claim_town_slot"), 1)
-        self.assertIn("self._claim_town_slot(", body)
-        self.assertIn('"economy", leader, "vendor", urgent=True', body)
+        self.assertEqual(body.count("_take_vendor_aim"), 1)
+        # The aim itself lives in its own method since wow-overseer#977.
+        aim = _statements("    async def _take_vendor_aim(")
+        self.assertEqual(aim.count("_claim_town_slot"), 1)
+        self.assertIn("self._claim_town_slot(", aim)
+        self.assertIn('"economy", leader, "vendor", urgent=True', aim)
 
 
 class TheStrandingIsActuallyBroken(unittest.TestCase):

@@ -19,6 +19,7 @@ import guildcorps
 import guildjobs
 import guildlevel
 import guildroute
+import member_rungs
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -283,6 +284,7 @@ class TheBlockers(unittest.TestCase):
             [qrow(2000, "Group Job", reward=8121, grp=3, npc1=3130, npc_count1=1)],
             spawns=[LIZARD],
             quest_log={2000: 3},
+            level=15,  # 5 over the quest's min_level 10: under the #1094 solo gap
         )
         self.assertIsNone(move)
         self.assertIn("group of 3", blocked[0])
@@ -293,6 +295,7 @@ class TheBlockers(unittest.TestCase):
             [qrow(2001, "Elite Job", reward=8121, npc1=3130, npc_count1=1)],
             spawns=[elite],
             quest_log={2001: 3},
+            level=15,  # 5 over the quest's min_level 10: under the #1094 solo gap
         )
         self.assertIsNone(move)
         self.assertIn("elite", blocked[0])
@@ -395,7 +398,7 @@ class ThePriority(unittest.TestCase):
         self.assertNotEqual(step.action, guildlevel.ACTION)
 
     def test_it_comes_before_gear_the_post_and_the_farm(self):
-        source = guildjobs._member_step.__code__.co_names
+        source = member_rungs.names()
         order = [
             n
             for n in source

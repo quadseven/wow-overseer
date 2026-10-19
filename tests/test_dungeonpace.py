@@ -203,6 +203,29 @@ class TheDecision(unittest.TestCase):
         self.assertEqual("wailing", decision.target)
         self.assertNotIn(pace.STAY, decision.offer)
 
+    def test_client_lost_counts_toward_blackfathom_step_down(self):
+        rows = [dict(r, level=26) for r in HORDE]
+        runs = [
+            run("complete", -10, map_id=43),
+            # The value mod-overseer writes to overseer_dungeon_run.outcome.
+            run("client_lost", 0, map_id=48),
+            run("emptied", 10, map_id=48),
+            run("stalled", 20, map_id=48),
+        ]
+        decision = pace.decide(
+            facts(head("blackfathom"), members(rows), runs, level_rows=rows)
+        )
+        self.assertEqual(pace.STEP_DOWN, decision.kind)
+        self.assertEqual("wailing", decision.target)
+        self.assertNotIn(pace.STAY, decision.offer)
+
+    def test_the_modules_client_lost_spelling_is_an_attempt(self):
+        # mod-overseer ends a run whose leader client dropped with the outcome
+        # `client_lost`; the dev realm's overseer_dungeon_run holds it with an
+        # underscore and never with a space.
+        self.assertIn("client_lost", pace.ATTEMPTED)
+        self.assertNotIn("client_lost", pace.FOUGHT)
+
     def test_two_wipes_step_down_and_jev_may_not_keep_the_door(self):
         d = pace.decide(facts(head("scarlet-library"), members(ALLIANCE), self.WIPES))
         self.assertEqual(pace.STEP_DOWN, d.kind)

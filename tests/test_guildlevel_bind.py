@@ -19,6 +19,7 @@ import unittest
 import guildjobs
 import guildlevel
 import guildroute
+import member_rungs
 from test_guildlevel import (
     ALL_HUBS,
     DRAENEI,
@@ -198,7 +199,7 @@ class WhoBinds(unittest.TestCase):
         self.assertEqual(len(bind_steps(plan([at("westfall")], recent=(old,)))), 1)
 
     def test_the_class_quest_still_comes_first(self):
-        source = guildjobs._member_step.__code__.co_names
+        source = member_rungs.names()
         self.assertLess(source.index("class_step"), source.index("_inn_first"))
 
 

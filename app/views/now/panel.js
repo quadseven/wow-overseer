@@ -9,6 +9,11 @@
 // (economy.js), each reading what that page reads. Social is drawn here, from
 // /api/v2/social, because no page draws it. A link inside the panel to one of
 // these frames switches the panel; any other link leaves the page as usual.
+//
+// The Character panel's Compare control (#371) splits it into two panes, each
+// with its own character picker and close button (now/compare.js). Closing
+// one pane leaves the other as the Character panel; switching to another
+// frame ends the comparison.
 
 import { load, peek, onChange } from "../../api.js";
 import { html, classVar, memberHref, notMeasured, plural, pendingRead, statusColor } from "../../ui.js";
@@ -19,6 +24,7 @@ import { bindTrees } from "../_members.js";
 import { roster as rosterModel } from "../../models/roster.js";
 import { mountModels } from "../_model.js";
 import { ACTIONS } from "./streams.js";
+import * as compare from "./compare.js";
 
 const POLL_MS = 30000;
 const DISMISS_PX = 110;
@@ -35,7 +41,7 @@ export const PANELS = {
   quests: { reads: (n) => member.readsFor(n, "quests"), draw: (c, m) => member.questsTab(c, m), page: (n) => memberHref(n, "quests") },
 };
 
-let open = null; // {name, kind, query, back, scrim, sheet, body, timer, off}
+let open = null; // {name, kind, query, pair, back, scrim, sheet, body, timer, off}
 
 // ---- Social ------------------------------------------------------------------
 const cap = (s) => String(s || "").charAt(0).toUpperCase() + String(s || "").slice(1);
@@ -76,7 +82,21 @@ function who(name) {
   return rosterModel(peek("/api/v2/roster")).member(name) || { name, class: open && open.cls };
 }
 
-function readsOf(o) { return PANELS[o.kind].reads(o.name); }
+// While comparing, the pair's two armory reads are all the panel needs.
+function readsOf(o) {
+  return o.pair ? [compare.armoryRead(o.pair.a), compare.armoryRead(o.pair.b)] : PANELS[o.kind].reads(o.name);
+}
+
+// The names each picker lists: the roster, in its own order.
+function rosterNames() {
+  return rosterModel(peek("/api/v2/roster")).members.map((m) => m.name);
+}
+
+// The class a name is coloured by: the open member's falls back to its tile.
+function classOf(name) {
+  if (open && name === open.name) return who(name)["class"];
+  return (rosterModel(peek("/api/v2/roster")).member(name) || {})["class"];
+}
 
 function ctxOf(o) {
   return { get: peek, params: { name: o.name, tab: o.kind }, query: o.query, isPhone: () => window.matchMedia("(max-width: 759.98px)").matches };
@@ -85,9 +105,13 @@ function ctxOf(o) {
 function label(kind) { return (ACTIONS.find((a) => a[0] === kind) || [kind, kind])[1]; }
 
 function headHtml(o, m) {
+  const cmp = o.kind === "gear" ? html`<button type="button" class="np-page np-cmp" data-compare aria-pressed="${o.pair ? "true" : "false"}"><i class="ph ph-columns" aria-hidden="true"></i><span>Compare</span></button>` : "";
+  const title = o.pair
+    ? html`<span class="np-kind">Compare</span> <span style="color:${classVar(m["class"])}">${o.pair.a}</span> <span class="np-kind">and</span> <span style="color:${classVar(classOf(o.pair.b))}">${o.pair.b}</span>`
+    : html`<span style="color:${classVar(m["class"])}">${o.name}</span> <span class="np-kind">${label(o.kind)}</span>`;
   const tabsRow = ACTIONS.map(([key, text, icon]) => html`<button type="button" class="np-tab" data-kind="${key}"${key === o.kind ? html` aria-current="true"` : ""}><i class="${"ph " + icon}" aria-hidden="true"></i>${text}</button>`);
   return html`<div class="np-top" data-drag><span class="grab" aria-hidden="true"></span>
-<div class="np-head"><h2 class="np-title" id="np-title"><span style="color:${classVar(m["class"])}">${o.name}</span> <span class="np-kind">${label(o.kind)}</span></h2>
+<div class="np-head"><h2 class="np-title" id="np-title">${title}</h2>${cmp}
 <a class="np-page" href="${PANELS[o.kind].page(o.name)}"><span>Full page</span><i class="ph ph-arrow-square-out" aria-hidden="true"></i></a>
 <button type="button" class="np-close" data-close aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button></div>
 <div class="np-tabs" role="group" aria-label="${o.name + "'s frames"}">${tabsRow}</div></div>`;
@@ -110,9 +134,10 @@ function drawBody() {
   if (!open) return;
   const o = open, m = who(o.name);
   const focusAt = focusIndex(o.body);
-  o.body.innerHTML = html`<div class="np-content">${PANELS[o.kind].draw(ctxOf(o), m)}</div>`.s;
+  const inner = o.pair ? compare.compareHtml(o.pair, peek, rosterNames(), classOf) : PANELS[o.kind].draw(ctxOf(o), m);
+  o.body.innerHTML = html`<div class="np-content">${inner}</div>`.s;
   bindTrees(o.body);
-  if (o.kind === "gear") mountModels(o.body);
+  if (o.kind === "gear" && !o.pair) mountModels(o.body);
   restoreFocus(o.body, focusAt);
 }
 
@@ -140,10 +165,15 @@ function fetchAll() {
 
 // ---- open and close -----------------------------------------------------------
 function build() {
-  const scrim = document.createElement("div");
-  scrim.className = "scrim np-scrim";
-  scrim.innerHTML = '<div class="np-sheet" role="dialog" aria-modal="true" aria-labelledby="np-title" tabindex="-1"><div class="np-headbox"></div><div class="np-body"></div></div>';
-  return { scrim, sheet: scrim.firstChild, head: scrim.querySelector(".np-headbox"), body: scrim.querySelector(".np-body") };
+  const make = (cls) => { const n = document.createElement("div"); n.className = cls; return n; };
+  const scrim = make("scrim np-scrim"), sheet = make("np-sheet"), head = make("np-headbox"), body = make("np-body");
+  sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-modal", "true");
+  sheet.setAttribute("aria-labelledby", "np-title");
+  sheet.setAttribute("tabindex", "-1");
+  sheet.append(head, body);
+  scrim.appendChild(sheet);
+  return { scrim, sheet, head, body };
 }
 
 const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -158,7 +188,7 @@ export function openPanel(name, kind, back) {
   const parts = build();
   const tile = back && back.closest ? back.closest(".st") : null;
   open = Object.assign(parts, {
-    name, kind, query: {},
+    name, kind, query: {}, pair: null,
     cls: tile ? tile.getAttribute("data-class") || "" : "",
     backKey: back && back.getAttribute ? back.getAttribute("data-focus") || "" : "",
   });
@@ -177,6 +207,7 @@ export function openPanel(name, kind, back) {
 
 export function switchTo(kind, query) {
   if (!open || !PANELS[kind]) return;
+  if (open.pair && kind !== "gear") setPair(null);
   open.kind = kind;
   open.query = query || {};
   open.body.scrollTop = 0;
@@ -209,6 +240,53 @@ export function closePanel(quiet) {
 
 export function isOpen() { return !!open; }
 
+// ---- comparing -----------------------------------------------------------------
+// The pair being compared, {a, b}, or null.
+export function pairOf() { return open && open.pair ? Object.assign({}, open.pair) : null; }
+
+function setPair(pair) {
+  open.pair = pair;
+  if (pair) open.name = pair.a;
+  if (pair) open.sheet.setAttribute("data-compare", ""); else open.sheet.removeAttribute("data-compare");
+}
+
+function redraw() {
+  open.body.scrollTop = 0;
+  drawHead();
+  drawBody();
+  fetchAll();
+  pressed();
+}
+
+// The Compare control: on, it opens the second pane; off, it closes it.
+export function toggleCompare() {
+  if (!open || open.kind !== "gear") return;
+  setPair(open.pair ? null : compare.startPair(open.name, rosterNames()));
+  redraw();
+  const b = open.head.querySelector("[data-compare]");
+  if (b) b.focus({ preventScroll: true });
+}
+
+// One pane's picker chose `name`; the other pane is left as it was.
+export function pickPane(side, name) {
+  if (!open || !open.pair) return;
+  setPair(compare.pick(open.pair, side, name));
+  redraw();
+  const sel = open.body.querySelector('[data-pick="' + side + '"]');
+  if (sel) sel.focus({ preventScroll: true });
+}
+
+// One pane's close button: the other pane stays, as the Character panel.
+export function closePaneOf(side) {
+  if (!open || !open.pair) return;
+  const left = compare.closePane(open.pair, side);
+  setPair(null);
+  open.name = left;
+  redraw();
+  const b = open.head.querySelector("[data-compare]");
+  if (b) b.focus({ preventScroll: true });
+}
+
 // The page behind is out of reach while the panel is up.
 function setInert(on) {
   document.querySelectorAll("body > #app, body > .skip").forEach((n) => {
@@ -238,6 +316,9 @@ function onClick(e) {
   const o = open;
   if (!o) return;
   if (e.target === o.scrim || e.target.closest("[data-close]")) { e.preventDefault(); closePanel(); return; }
+  const pane = e.target.closest("[data-unpane]");
+  if (pane) { e.preventDefault(); closePaneOf(pane.getAttribute("data-unpane")); return; }
+  if (e.target.closest("[data-compare]")) { e.preventDefault(); toggleCompare(); return; }
   const tab = e.target.closest("[data-kind]");
   if (tab) { switchTo(tab.getAttribute("data-kind"), {}); return; }
   if (e.target.closest('[data-action="retry"]')) { fetchAll(); return; }
@@ -250,6 +331,11 @@ function onClick(e) {
 function itemTipShowing() {
   const tip = document.getElementById("item-tip");
   return !!(tip && !tip.hidden);
+}
+
+function onPick(e) {
+  const sel = open && e.target.closest ? e.target.closest("[data-pick]") : null;
+  if (sel) pickPane(sel.getAttribute("data-pick"), sel.value);
 }
 
 function onKey(e) {
@@ -276,6 +362,7 @@ function onKey(e) {
 function wire(o) {
   o.scrim.addEventListener("click", onClick);
   o.scrim.addEventListener("keydown", onKey);
+  o.scrim.addEventListener("change", onPick);
   let y0 = 0, t0 = 0, dy = 0, drag = false;
   o.sheet.addEventListener("touchstart", (e) => {
     if (e.touches.length !== 1 || !window.matchMedia("(max-width: 759.98px)").matches) { drag = false; return; }

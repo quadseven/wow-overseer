@@ -798,9 +798,9 @@ def already_working(
             for row in active
         )
     if kind == "dungeon":
-        # EVERY dungeon goal shares the same target (DUNGEON_RUNS_WANTED), so
-        # comparing targets here has the identical failure the quest branch
-        # above already fixed once: "already working" would read true for
+        # Dungeon goals at the same level share the same target
+        # (council.dungeon_runs_wanted), so comparing targets here has the
+        # identical failure the quest branch above already fixed once: "already working" would read true for
         # ANY dungeon at all, and a council that moved on from the graveyard
         # to the cathedral would find its new decision silently swallowed by
         # the old one. skill_name carries the keyword (see
@@ -1151,7 +1151,7 @@ def _reconcile_dungeon(row: Mapping, observed: int) -> list:
     """One supervision cycle for a kind='dungeon' goal.
 
     `observed` is dungeon_runs_done, read the same direction as a level: it
-    rises toward `target` (DUNGEON_RUNS_WANTED, council.py), so the
+    rises toward `target` (council.dungeon_runs_wanted), so the
     completion and milestone tests below need no negation the way a quest's
     do.
 

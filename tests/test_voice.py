@@ -151,6 +151,23 @@ class GateTest(unittest.TestCase):
         )
         self.assertEqual(d.command, "co +grind,-loot")
 
+    def test_nc_is_a_raw_starter(self):
+        """`nc` is the engine that holds grind/loot/stay, so it must be typable.
+
+        "nc +grind" itself is a vocabulary entry and would pass on that alone,
+        so the forms that are NOT verbatim entries ("nc +stay", the
+        parameterized "nc +grind,-loot") are what pin `nc` in RAW_STARTERS.
+        Dropping it there turns these red (quadseven/wow-overseer#130).
+        """
+        self.assertIn("nc", voice.RAW_STARTERS)
+        for raw in ("nc +grind", "nc +stay", "nc +grind,-loot"):
+            self.assertTrue(voice.is_raw_command(raw), raw)
+
+    def test_nc_strategy_commands_parse_verbatim(self):
+        for command in ("nc +grind", "nc +grind,-loot"):
+            d = voice.parse_decision(json.dumps({"command": command, "say": "ok"}))
+            self.assertEqual(d.command, command)
+
     def test_well_formed_but_unknown_command_is_rejected(self):
         # Charset-clean, yet no vocabulary entry and no known raw token:
         # the model may not invent commands the vocabulary never sanctioned.

@@ -70,7 +70,18 @@ def three_packs():
 
 def group_book():
     """One quest the member holds that wants a group of 3."""
-    rows = [qrow(2000, "Group Job", reward=8121, grp=3, npc1=3130, npc_count1=1)]
+    rows = [
+        qrow(
+            2000,
+            "Group Job",
+            reward=8121,
+            grp=3,
+            npc1=3130,
+            npc_count1=1,
+            # 8 under the level 20 asker: inside the #1094 solo gap, so it asks
+            min_level=12,
+        )
+    ]
     return classquest.build(
         quest_rows=rows, giver_rows=givers(), spawn_rows=[LIZARD], loot_rows=[]
     )
@@ -217,7 +228,9 @@ class TheHelps(unittest.TestCase):
         self.assertEqual(class_plan([hunter()]).helps, ())
 
     def test_an_elite_objective_asks_for_two(self):
-        rows = [qrow(2001, "Elite Job", reward=8121, npc1=3130, npc_count1=1)]
+        rows = [
+            qrow(2001, "Elite Job", reward=8121, npc1=3130, npc_count1=1, min_level=12)
+        ]
         b = classquest.build(
             quest_rows=rows,
             giver_rows=givers(),
@@ -583,6 +596,33 @@ class TheYield(unittest.TestCase):
             line for _key, line in class_plan([asker()], b=b, asks=asks).ask_yields
         ]
         self.assertIn("after 4 asks that did not get it done (4 yes)", line)
+
+    def test_three_parties_that_time_out_yield_after_server_try(self):
+        b = group_book()
+        rows = [
+            {
+                "asker": "Bigzug",
+                "target": "quest:2000",
+                "state": "ran",
+                "reason": "failed: party timed out before quest credit",
+                "age": age,
+                "yeses": 2,
+            }
+            for age in (20, 40)
+        ]
+        after_guild = guildjobs.class_helps(
+            asker(), b, asks=guildjobs.quest_asks_from_rows(rows)
+        )
+        self.assertEqual(len(after_guild), 1)
+        self.assertTrue(classask.escalated(after_guild[0]))
+        rows.insert(0, dict(rows[0], age=10))
+        asks = guildjobs.quest_asks_from_rows(rows)
+        self.assertEqual(guildjobs.class_helps(asker(), b, asks=asks), [])
+        result = class_plan([asker()], b=b, asks=asks)
+        self.assertEqual(result.helps, ())
+        self.assertNotIn("Bigzug", result.owed)
+        (line,) = [line for _key, line in result.ask_yields]
+        self.assertIn("after 3 asks that did not get it done (6 yes)", line)
 
     def test_another_members_or_quests_asks_do_not_count(self):
         b = group_book()

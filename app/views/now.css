@@ -218,6 +218,35 @@
   .np-body { padding-bottom: 24px; }
 }
 
+/* Compare (now/compare.js): two Character panes. Side by side from 760px,
+   where the sheet widens and every slot row has one fixed height so the rows
+   line up; stacked below, so nothing scrolls sideways on a phone. */
+.np-cmp[aria-pressed="true"] { color: var(--color-accent-200); background: color-mix(in srgb, var(--color-accent) 24%, transparent); }
+.cmp { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.cmp-pane { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 10px; background: var(--color-surface); border-radius: 12px; }
+.cmp-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cmp-pick { flex: 1; min-width: 0; font-weight: 500; }
+.cmp-sum { margin: 0; font-size: var(--fs-1); overflow-wrap: anywhere; }
+.cmp-slots { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.cmp-row {
+  display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; grid-template-rows: repeat(2, minmax(0, 1fr)); column-gap: 10px; align-items: center;
+  height: 60px; padding: 0 8px; border-radius: 8px; box-shadow: inset 3px 0 0 transparent;
+}
+.cmp-row > .icell { grid-row: 1 / 3; }
+.cmp-id { grid-row: 1 / 3; display: flex; flex-direction: column; min-width: 0; }
+.cmp-slot { font-size: var(--fs-0); color: var(--color-neutral-400); }
+.cmp-item { font-size: var(--fs-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmp-lv { grid-column: 3; grid-row: 1; align-self: end; font-size: var(--fs-1); color: var(--color-neutral-300); text-align: right; }
+.cmp-mark { grid-column: 3; grid-row: 2; align-self: start; font-size: var(--fs-1); font-weight: 500; text-align: right; white-space: nowrap; }
+.cmp-more, .cmp-filled { background: color-mix(in srgb, var(--ok) 12%, transparent); box-shadow: inset 3px 0 0 var(--ok); }
+.cmp-more .cmp-mark, .cmp-filled .cmp-mark { color: var(--ok); }
+.cmp-less, .cmp-empty { background: color-mix(in srgb, var(--warn) 12%, transparent); box-shadow: inset 3px 0 0 var(--warn); }
+.cmp-less .cmp-mark, .cmp-empty .cmp-mark { color: var(--warn); }
+@media (min-width: 760px) {
+  .np-sheet[data-compare] { max-width: 960px; }
+  .cmp { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+}
+
 /* Social, drawn by the panel itself. */
 .np-group { display: flex; flex-direction: column; background: var(--color-surface); border-radius: 12px; padding-bottom: 4px; }
 .np-ghead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 14px 6px; }

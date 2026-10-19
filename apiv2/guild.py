@@ -76,12 +76,27 @@ _KILLERS_SQL = (
     "WHERE character_name IN ({holes}) AND created_at >= NOW() - INTERVAL 1 DAY "
     "GROUP BY killer_name ORDER BY n DESC LIMIT %s"
 )
+# Each ghost's newest death: one row per ghost, read backward down the
+# (character_name, created_at) key (#795). `id IN (SELECT MAX(id) ... GROUP BY)`
+# scanned the whole table for the outer rows and every death each ghost ever
+# had for the inner ones.
+#
+# _LAST_DEATH_SQL is one ghost's read; _LAST_DEATHS is the template of the
+# statement for any number of them (realmread.Memory matches it by its fields).
 _LAST_DEATH_SQL = (
-    "SELECT character_name AS name, killer_name AS killer, map, zone, "
-    "UNIX_TIMESTAMP(created_at) AS at FROM overseer_death WHERE id IN ("
-    "SELECT MAX(id) FROM overseer_death WHERE character_name IN ({holes}) "
-    "GROUP BY character_name)"
+    "(SELECT character_name AS name, killer_name AS killer, map, zone, "
+    "UNIX_TIMESTAMP(created_at) AS at FROM overseer_death "
+    "WHERE character_name = %s ORDER BY created_at DESC, id DESC LIMIT 1)"
 )
+_LAST_DEATHS = _LAST_DEATH_SQL + "{more}"
+
+
+def _last_death_sql(n: int) -> str:
+    """One _LAST_DEATH_SQL per ghost, as one statement."""
+    more = "".join(" UNION ALL " + _LAST_DEATH_SQL for _ in range(n - 1))
+    return _LAST_DEATHS.format(more=more)
+
+
 _CLASS_QUEST = "(a.AllowableClasses IN ({masks}) OR q.QuestSortID IN ({sorts}))".format(
     masks=", ".join(str(m) for m in classquest.SINGLE_CLASS_MASKS),
     sorts=", ".join(str(s) for s in sorted(classquest.CLASS_OF_SORT)),
@@ -336,9 +351,7 @@ def _deaths(rd, names: list, ghosts: list, zones: dict, maps: dict) -> dict:
     killers = rd.must(_KILLERS_SQL.format(holes=holes), (*names, TOP_KILLERS))
     last = {}
     if ghosts:
-        found = rd.must(
-            _LAST_DEATH_SQL.format(holes=_holes(len(ghosts))), tuple(ghosts)
-        )
+        found = rd.must(_last_death_sql(len(ghosts)), tuple(ghosts))
         last = {r["name"]: r for r in found}
     return {
         "total": int(total["n"] or 0),

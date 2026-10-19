@@ -73,6 +73,42 @@ class WhatIsInFlight(unittest.TestCase):
         self.assertEqual(refused, {"Ff"}, "an old refusal is asked again")
         self.assertEqual(done, 2)
 
+    def test_a_row_a_roll_ended_is_not_a_refusal(self):
+        # #789: the module's read-back died with the worldserver and the next
+        # one (or the bridge's stale sweep) ended the row. Nothing refused it,
+        # so the name is asked again on the next pass, not held 30 minutes.
+        rows = [
+            {
+                "target_name": "Hh",
+                "status": "error",
+                "detail": "restart: claim expired: the run holding it is gone",
+                "recent": 1,
+            },
+            {
+                "target_name": "Ii",
+                "status": "error",
+                "detail": "restart: handed to the bot, but the worldserver never "
+                "reported whether anything changed",
+                "recent": 1,
+            },
+            {
+                "target_name": "Jj",
+                "status": "error",
+                "detail": "not a retirable bot",
+                "recent": 1,
+            },
+        ]
+        in_flight, refused, done = retire.read_rows(rows)
+        self.assertEqual(in_flight, set())
+        self.assertEqual(refused, {"Jj"}, "a real refusal still waits")
+        self.assertEqual(done, 0)
+        self.assertEqual(
+            retire.plan(["Hh", "Ii", "Jj"], in_flight, refused, 10), ["Hh", "Ii"]
+        )
+
+    def test_the_rows_read_carries_the_detail(self):
+        self.assertIn("SELECT target_name, status, detail, ", retire.ROWS_SQL)
+
 
 class ThePlan(unittest.TestCase):
     def test_a_few_per_pass_in_order(self):

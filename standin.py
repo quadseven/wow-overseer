@@ -51,9 +51,13 @@ WHAT THIS DECIDES, one family at a time (`step`):
                  dead, inside another instance, gone from the guild or out of
                  the door's band). Grouped or in a fight is not a reason: the
                  guest is grouped with the family. A row with no guest ends
-                 only with the order or the goal.
+                 only with the order, the goal, or a release below.
+  a release      the member's craft cannot move (`walled`) or it has too
+                 little to craft with (`starved`, wow-overseer#47): it rejoins
+                 its family, between runs only (`waits_for_the_run`).
 
-Never mid-run: while the family is inside a dungeon the row stands as it is.
+Never mid-run: while the family is inside a dungeon the row stands as it is,
+save for the order removed or changed, or the goal met.
 
 THE CONTRACT with the worldserver module is the table `overseer_family_standin`
 (`TABLE_SQL`), one row per family. The bridge writes and deletes rows; the
@@ -73,6 +77,7 @@ from dataclasses import dataclass
 
 import classic
 import craft
+import craft_rhythm
 import goals
 import guildjobs
 import guildrun
@@ -184,6 +189,25 @@ def walled(skills: dict, known) -> str:
         recipe.name,
         recipe.spell_id,
     )
+
+
+def starved(reagents, sitting: bool) -> str:
+    """Why the member has too little to craft with to sit out ("Og holds 0
+    Wool Cloth against 3 per cast of spell 2964, ..."), or "" when it has
+    enough or is not judged (wow-overseer#47).
+
+    `reagents` is craft_rhythm.stand's verdict on its standing craft errand.
+    None (not read) and UNJUDGED (no gathered reagent to count) are not
+    judged. A new sit-out needs craft_rhythm's own bar, at least SHORT_CASTS
+    casts in hand; one already sitting out keeps its seat until it has no
+    cast left, so a member a cast or two short of the bar is not regrouped
+    with its family on every pass.
+    """
+    if reagents is None or reagents.verdict == craft_rhythm.UNJUDGED:
+        return ""
+    if sitting:
+        return reagents.why if int(reagents.casts) <= 0 else ""
+    return reagents.why if reagents.verdict == craft_rhythm.SHORT else ""
 
 
 def seat_of(member: guildrun.Member) -> str:
@@ -338,6 +362,10 @@ class Facts:
     # The spells the ordered member holds (character_spell), or None when the
     # spellbook was not read, which `walled` does not judge.
     known: frozenset | None = None
+    # Where the ordered member stands on the gathered reagents of its standing
+    # craft errand (a craft_rhythm.Stand), or None when it was not read, which
+    # `starved` does not judge.
+    reagents: craft_rhythm.Stand | None = None
     # The ordered member as a guildrun.Member (None when it could not be read).
     out_member: guildrun.Member | None = None
     # The levels of the members who run (the family without the ordered one).
@@ -367,6 +395,12 @@ class Facts:
 
 def sits_out(facts: Facts) -> str:
     """Why the ordered member does not sit out now, or "" when it does."""
+    return _held_in(facts) or released(facts)
+
+
+def _held_in(facts: Facts) -> str:
+    """Why the ordered member cannot sit out at all (no order, the head, off
+    the roster, no crafting goal, an unread spellbook with no row), or ""."""
     name = facts.ordered
     if not name:
         return "no %s order names this family" % ENV
@@ -387,11 +421,28 @@ def sits_out(facts: Facts) -> str:
             "%s's spellbook was not read this pass, so no new sit-out row is written"
             % name
         )
+    return ""
+
+
+def released(facts: Facts) -> str:
+    """Why sitting out makes nothing now, so the member rejoins its family:
+    its craft cannot move (`walled`) or it has too little to craft with
+    (`starved`). "" when neither. Unlike the order or the goal, either can
+    turn while the family is inside, as the member crafts on alone, so
+    `step` holds the row until the run ends (`waits_for_the_run`)."""
+    name = facts.ordered
     wall = walled(facts.skills, facts.known)
     if wall:
         return (
             "%s's craft cannot move (%s), so it rejoins its family, whose "
             "training stop walks it to its trainer to buy it (#769)" % (name, wall)
+        )
+    sitting = facts.current is not None and facts.current.out_name == name
+    hunger = starved(facts.reagents, sitting)
+    if hunger:
+        return (
+            "%s has too little to craft with (%s), so it rejoins its family, "
+            "whose roaming and runs gather it" % (name, hunger)
         )
     return ""
 
@@ -399,7 +450,8 @@ def sits_out(facts: Facts) -> str:
 def step(facts: Facts) -> Step:
     """What to do with this family's stand-in row this pass."""
     current = facts.current
-    why = sits_out(facts)
+    held = _held_in(facts)
+    why = held or released(facts)
     if current is not None and current.out_name != facts.ordered and facts.ordered:
         why = why or "the order now names %s, not %s" % (
             facts.ordered,
@@ -411,6 +463,8 @@ def step(facts: Facts) -> Step:
             return Step(NONE, why)
         if not facts.ordered:
             why = "the %s order is removed" % ENV
+        elif not held and facts.mid_run:
+            return waits_for_the_run(current, why)
         return Step(CLEAR, why)
     if facts.out_member is None:
         if current is not None:
@@ -434,6 +488,17 @@ def step(facts: Facts) -> Step:
     if not found:
         return _no_guest(facts, seat)
     return _seat_guest(facts, seat, found[0])
+
+
+def waits_for_the_run(current: Seat, why: str) -> Step:
+    """A release (`released`) that comes while the family is inside a dungeon
+    keeps the row as it is: deleting it would pull a guest out of the run, and
+    the member rejoins its family's next idle pass instead (Never mid-run)."""
+    return Step(
+        KEEP,
+        "the family is inside; %s keeps the seat until the run ends, then %s "
+        "rejoins: %s" % (current.guest_word, current.out_name, why),
+    )
 
 
 def _found(facts: Facts, seat: str, free) -> list:

@@ -42,6 +42,27 @@ THE ROUTE for one recipe. The first tier with a candidate wins:
        it. Only a recipe nobody in the guild still needs goes to the auction
        house (clearance.py).
 
+A SECOND COPY GOES DOWN THE LINE (operator, 2026-10-17, #1095: "first copy
+goes to the master, second copy goes to guild for others to learn"). One
+character learns a recipe once, so within one pass a person given one copy of
+a recipe (the same spell, or the same item when the spell is unread) is not
+given another: the copies are routed in item-guid order, and each one goes to
+the best candidate who has not already been given a copy. A holder with two
+copies keeps one and passes the other on. A copy left over once every
+candidate has one is the one nobody in the guild needs.
+
+A SPECIALIZATION RECIPE GOES TO A SPECIALIST (#1095: master first, then the
+specialized crafters for the recipes of their specialization, then the
+others). A recipe item whose `RequiredSpell` names a specialization
+(Dragonscale or Tribal leatherworking, Armorsmith or Weaponsmith, tradespec.py)
+can be learned only by a crafter who holds it. A candidate whose
+`character_spell` rows show that specialization is ranked by the tiers above;
+every other candidate comes after all of them, as LATER and in the same seat
+order, so a master who holds the specialization is still first and a master
+who does not is passed over for one who does. A missing row is not proof the
+specialization is missing (the same caveat as recipes), which is why the
+others still rank rather than drop out.
+
 Learning now outranks family-soon because the rule asks for the recipe to be
 learned promptly. Within a tier the candidate who benefits most wins: the
 smallest distance between their skill and the recipe's rank, because a recipe
@@ -261,6 +282,17 @@ class Recipe:
     rank: int
     spell: int = 0
     where: str = "bags"
+    # The specialization spell the recipe needs (item_template.RequiredSpell),
+    # 0 for a recipe any holder of the trade can learn.
+    spec: int = 0
+
+    @property
+    def key(self) -> tuple:
+        """What makes two copies the same recipe: the spell it teaches, else
+        the item when the spell is unread."""
+        if int(self.spell) > 0:
+            return ("spell", int(self.skill), int(self.spell))
+        return ("entry", int(self.skill), int(self.entry))
 
 
 def recipe_from_row(row) -> Recipe | None:
@@ -275,6 +307,7 @@ def recipe_from_row(row) -> Recipe | None:
             rank=int(row.get("required_rank") or 0),
             spell=int(row.get("recipe_spell") or 0),
             where=str(row.get("location") or "bags"),
+            spec=_int(row.get("required_spell")),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -295,6 +328,11 @@ class Known:
             name,
             int(recipe.entry),
         ) in self.entries
+
+    def specialized(self, name: str, recipe: Recipe) -> bool:
+        """True when the recipe needs no specialization, or `character_spell`
+        shows this person holds the one it needs."""
+        return int(recipe.spec) <= 0 or (name, int(recipe.spec)) in self.spells
 
 
 def known_from_rows(spell_rows=(), verdict_rows=()) -> Known:
@@ -383,6 +421,9 @@ SEAT_TIERS = {
 }
 # Tier 6 of the docstring, after every tier above, in the same seat order.
 LATER_TIERS = {MASTER: 7, FAMILY: 8, DESIGNATED: 9, GUILD: 10}
+# A candidate without the specialization a recipe needs comes after every
+# candidate with it: LATER, in the same seat order, from this tier on.
+UNSPECIALIZED_TIER = 20
 
 
 def _why(recipe: Recipe, name: str, have: int, seat: str) -> str:
@@ -401,18 +442,33 @@ def _why(recipe: Recipe, name: str, have: int, seat: str) -> str:
     return why + (", %s crafter" % seat if seat != GUILD else "")
 
 
-def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> list:
+def _spec_label(spell: int) -> str:
+    """The specialization's name from tradespec's catalogue, else its spell."""
+    import tradespec  # the catalogue module; imported here to stay light
+
+    for spec in tradespec.SPECS:
+        if int(spec.spell) == int(spell):
+            return spec.label
+    return "spell %d" % int(spell)
+
+
+def candidates(
+    recipe: Recipe, reg: dict, people, known: Known, gap: int, taken=frozenset()
+) -> list:
     """Every person who could take this recipe, best first, as Pick values.
 
     See the module docstring for the tiers. A person who has learned it, or
     who is further than `gap` below its rank, is not a candidate. Only the
     register's own members are considered for the "soon" tiers; any
-    guildmate who can learn it now is the last tier.
+    guildmate who can learn it now is the last tier. A name in `taken` has
+    already been given a copy of this recipe this pass and is skipped. For a
+    recipe that needs a specialization, a person not shown to hold it comes
+    after every person who is (UNSPECIALIZED_TIER).
     """
     seats = _seats_by_name(reg, recipe.skill)
     ranked = []
     for person in people:
-        if known.has(person.name, recipe):
+        if person.name in taken or known.has(person.name, recipe):
             continue
         have = person.rank(recipe.skill)
         if have <= 0:
@@ -422,13 +478,20 @@ def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> lis
         order, seat = seats.get(person.name, (len(seats), GUILD))
         if person.family:
             seat = MASTER if int(recipe.skill) in person.assigned else FAMILY
-        if now or (soon and seat != GUILD):
+        specialized = known.specialized(person.name, recipe)
+        if not specialized:
+            tier, when = UNSPECIALIZED_TIER + LATER_TIERS[seat], LATER
+        elif now or (soon and seat != GUILD):
             tier, when = SEAT_TIERS[(seat, now)], NOW if now else SOON
         else:
             tier, when = LATER_TIERS[seat], LATER
         benefit = abs(have - recipe.rank)
         online = bool(person.online or person.family)
         why = _why(recipe, person.name, have, seat)
+        if not specialized:
+            why += ", without the specialization it needs (%s)" % _spec_label(
+                recipe.spec
+            )
         if person.name == recipe.holder:
             seat = HOLDER
         ranked.append(
@@ -441,8 +504,13 @@ def candidates(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> lis
     return [pick for _, pick in ranked]
 
 
-def choose(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> Pick:
-    """The one route for this recipe; a Pick with no taker when nobody fits."""
+def choose(
+    recipe: Recipe, reg: dict, people, known: Known, gap: int, taken=frozenset()
+) -> Pick:
+    """The one route for this recipe; a Pick with no taker when nobody fits.
+
+    `taken` names who already has a copy of this recipe this pass.
+    """
     if not classic.skill_ok(recipe.rank):
         return Pick(
             recipe,
@@ -454,9 +522,16 @@ def choose(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> Pick:
                 classic.MAX_PROFESSION_SKILL,
             ),
         )
-    found = candidates(recipe, reg, people, known, gap)
+    found = candidates(recipe, reg, people, known, gap, taken)
     if found:
         return found[0]
+    if taken:
+        return Pick(
+            recipe,
+            why="everyone in the guild who holds %s without knowing %s (%d) has "
+            "a copy this pass, so nobody in the guild needs it"
+            % (TRADES.get(recipe.skill, "skill"), recipe.name, recipe.rank),
+        )
     return Pick(
         recipe,
         why="nobody in the family or guild holds %s without already knowing %s "
@@ -470,9 +545,21 @@ def choose(recipe: Recipe, reg: dict, people, known: Known, gap: int) -> Pick:
 
 
 def route(recipes, reg: dict, people, known: Known, gap: int) -> dict:
-    """item guid -> Pick for every recipe."""
+    """item guid -> Pick for every recipe.
+
+    Copies of one recipe are routed in item-guid order, and each goes to the
+    best candidate not already given a copy this pass (the module docstring's
+    "a second copy goes down the line").
+    """
     people = list(people)
-    return {int(r.guid): choose(r, reg, people, known, gap) for r in recipes}
+    given: dict = {}
+    out = {}
+    for r in sorted(recipes, key=lambda r: int(r.guid)):
+        pick = choose(r, reg, people, known, gap, frozenset(given.get(r.key, ())))
+        if pick.taker:
+            given.setdefault(r.key, set()).add(pick.taker)
+        out[int(r.guid)] = pick
+    return out
 
 
 def summary(picks: dict) -> str:

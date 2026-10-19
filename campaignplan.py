@@ -46,10 +46,13 @@ HOW MANY RUNS (`target`). Not a fixed fifty:
 WHICH ONE (`heuristic`). A ready run before one the family would be carried
 through, and a run the family has not died its way out of (`Option.troubled`:
 never completed, with TROUBLE_WIPES wipes or TROUBLE_DEATHS deaths on its map
-in DEATH_HOURS) before one it has. Then, for a levelling family, the run they
-will outgrow soonest, because a group levelling through a band uses a dungeon
-before it loses it; then the one with the least of its target done; then path
-order.
+in DEATH_HOURS) before one it has. Then, for a levelling family, a run that
+drops a planned fire resistance piece for one of its tanks (from
+preraid.FIRE_FLOOR, Blackrock Depths' band: preraid.fire_plan, #759), because
+the tanks reach the cap short of Molten Core's fire resistance otherwise;
+then the run they will outgrow soonest, because a group levelling through a
+band uses a dungeon before it loses it; then the one with the least of its
+target done; then path order.
 
 AT THE LEVEL CAP THE GEAR DECIDES, the way a raid guild gears for Molten
 Core (#280). preraid.py reads every level 60 dungeon's loot tables against
@@ -648,6 +651,16 @@ class Option:
         return ", ".join(parts)
 
     @property
+    def fire(self) -> str:
+        """The planned fire resistance pieces a run drops for the family's
+        tanks (preraid.Gain.fire_best, #759), said; "" for none."""
+        return "; ".join(
+            "%s for %s" % (g.fire_best, g.name)
+            for g in self.gains
+            if getattr(g, "fire_best", "")
+        )
+
+    @property
     def value(self) -> float:
         """`expected`, halved for a run across a continent crossing."""
         worth = float(self.expected or 0.0)
@@ -770,12 +783,18 @@ def refusals(facts: Facts) -> dict:
 
 
 def _gear_facts(facts: Facts, run: Run) -> dict:
-    """The preraid fields of one run's Option, from the facts."""
+    """The preraid fields of one run's Option, from the facts.
+
+    Below the level cap the upgrades are the tanks' fire pieces alone
+    (preraid.fire_plan, #759): the gains say them, but they are no measure of
+    the item levels a run is worth, so `expected` stays unknown.
+    """
     out: dict = {}
     if facts.upgrades is not None:
         gains = tuple(facts.upgrades.get(run.keyword, ()))
         out["gains"] = gains
-        out["expected"] = round(sum(float(g.levels) for g in gains), 2)
+        if facts.weakest[1] >= LEVEL_CAP:
+            out["expected"] = round(sum(float(g.levels) for g in gains), 2)
     moved = (facts.progress or {}).get(run.keyword)
     if moved is not None and moved.needed:
         out["progress"] = moved.line
@@ -890,6 +909,7 @@ def rank(option: Option) -> tuple:
     return (
         not option.ready,
         option.troubled,
+        not option.fire,
         option.ceiling,
         option.done / max(option.target, 1),
         _order(option),
@@ -920,11 +940,23 @@ def _heuristic_why(pick: Option) -> str:
     if pick.capped and pick.expected is not None:
         return (
             "%s gives the family the most expected upgrades of the dungeons "
-            "it can reach, %.1f item levels a run over every member's slots%s (%s)"
+            "it can reach, %.1f item levels a run over every member's slots%s%s (%s)"
             % (
                 pick.place,
                 pick.expected,
+                ", with fire resistance: %s" % pick.fire if pick.fire else "",
                 ", across a continent crossing" if pick.crossing else "",
+                pick.why,
+            )
+        )
+    if pick.fire:
+        return (
+            "%s drops a planned fire resistance piece for a tank: %s, and the "
+            "weakest member %s (%s)"
+            % (
+                pick.place,
+                pick.fire,
+                "is ready for it" if pick.ready else "would be carried through",
                 pick.why,
             )
         )
@@ -1011,6 +1043,8 @@ def planned_line(option: Option, reason: str, chooser: str) -> str:
     worth = ""
     if option.expected is not None:
         worth = "; %.1f expected item levels a run over every slot" % (option.expected)
+    if option.fire:
+        worth += "; fire resistance: %s" % option.fire
     if option.progress:
         worth += "; %s" % option.progress
     if option.fit:

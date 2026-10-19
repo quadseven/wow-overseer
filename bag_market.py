@@ -36,7 +36,8 @@ THE SPENDING RULE, IN FOUR PARTS.
   2. A repair reserve. Each buyer keeps `UPGRADE_RESERVE_PER_LEVEL` copper per
      level in the purse after the purchase.
   3. A price per slot. A bag costing more than `MAX_COPPER_PER_SLOT` for each
-     slot it adds is refused however rich the family is.
+     slot it adds is refused however rich the family is, except a vendor's
+     bag for a member at the bag floor (`cap_yields`).
   4. Only the buyer's own purse. The guild bank is never drawn on: the only
      guild-money verb this bridge uses is a deposit (`guildbank.py`), and
      mod-overseer's withdraw verb needs a rank-permission read this bridge
@@ -79,6 +80,38 @@ MAX_COPPER_PER_SLOT = 2500
 
 # A bag that adds fewer slots than this is not worth the swap.
 MIN_UPGRADE_GAIN = 2
+
+
+# THE SLOT CAP GIVES WAY AT THE BAG FLOOR, FOR A VENDOR'S BAG ONLY.
+#
+# Measured on the dev realm, 2026-10-19: a family was held more than four
+# hours on "Bork, Grog at the bag floor and no town pass has made room". Grog
+# had 3 free slots, wore an 8-slot bag as its smallest, and carried 12.8 gold
+# at level 43; the family carried about 80 gold between them. Every vendor
+# bag that beats an 8-slot one costs more than the cap: the Heavy Brown Bag
+# (10 slots, 20,000 copper) is 10,000 a slot added and the Huge Brown Sack
+# (12 slots, 100,000 copper) is 25,000. So no vendor upgrade was ever bought
+# for a member already wearing 8-slot bags, however long the hold lasted.
+#
+# The cap is a value judgement for a member with room to spare, where the
+# house's cheaper 12-slot bags are worth waiting for. At the floor the wait
+# is the hold itself, so a vendor's bag the reserve and the family share
+# allow is bought there and then. An auction listing keeps the cap: it
+# arrives by mail, and a member at the floor may have no room to collect it.
+
+
+def cap_yields(free_slots) -> bool:
+    """Does the per-slot cap give way for this member (see above)?
+
+    Yes when the member's free bag slots are a real reading at or below
+    `bag_pressure.TOWN_RUN_FREE_SLOTS`, the line the family is held on.
+    An unknown reading (None, negative, not an int) fails closed.
+    """
+    return (
+        isinstance(free_slots, int)
+        and not isinstance(free_slots, bool)
+        and 0 <= free_slots <= bag_pressure.TOWN_RUN_FREE_SLOTS
+    )
 
 
 @dataclass(frozen=True)
@@ -202,6 +235,7 @@ class _Shopper:
     allowance: int
     room: int
     reach: frozenset | None
+    at_floor: bool = False
 
 
 def _offered(listing: Listing, who: _Shopper, taken: set, rule: Rule) -> bool:
@@ -220,9 +254,17 @@ def _offered(listing: Listing, who: _Shopper, taken: set, rule: Rule) -> bool:
     return who.room >= 1
 
 
+def _slot_cap_applies(listing: Listing, who: _Shopper) -> bool:
+    return not (listing.source == VENDOR and who.at_floor)
+
+
 def _affordable(listing: Listing, who: _Shopper, rule: Rule) -> bool:
+    if listing.price > who.allowance:
+        return False
+    if not _slot_cap_applies(listing, who):
+        return True
     gain = listing.slots - who.size
-    return listing.price <= min(who.allowance, gain * rule.max_per_slot)
+    return listing.price <= gain * rule.max_per_slot
 
 
 def _best(listings, who: _Shopper, taken: set, rule: Rule):
@@ -238,7 +280,7 @@ def _refusal(who: _Shopper, purse: Purse, budget: int, rule: Rule) -> str:
     return (
         "%s cannot buy a bag bigger than its %d-slot one: %d copper may be "
         "spent (%d in the purse, %d kept back at level %d, %d left of the "
-        "family's share), at most %d a slot"
+        "family's share), at most %d a slot%s"
         % (
             who.name,
             who.size,
@@ -248,6 +290,7 @@ def _refusal(who: _Shopper, purse: Purse, budget: int, rule: Rule) -> str:
             purse.level,
             budget,
             rule.max_per_slot,
+            " (no cap on a vendor's bag at the bag floor)" if who.at_floor else "",
         )
     )
 
@@ -261,6 +304,7 @@ def _shopper(member: Member, purse: Purse, budget: int, reach, free_slots, rule)
         allowance=min(spendable(purse, rule.reserve_per_level), budget),
         room=int((free_slots or {}).get(member.name, 0)),
         reach=None if reach is None else frozenset(reach.get(member.name, ())),
+        at_floor=cap_yields((free_slots or {}).get(member.name)),
     )
 
 
@@ -285,7 +329,8 @@ def plan_upgrades(
     `reach` maps a buyer to the entries its vendors stock; a vendor listing
     is only offered to a buyer who can reach it. `free_slots` maps a buyer to
     its free bag slots, and a vendor purchase needs one to land in; an
-    auction purchase goes to the mail and does not.
+    auction purchase goes to the mail and does not. A buyer at the bag floor
+    (`cap_yields`) is not held to the per-slot cap for a vendor's bag.
     """
     mailed = mailed or {}
     budget = family_budget(purses, rule.share)
@@ -318,8 +363,17 @@ def plan_upgrades(
                 replaces=who.size,
                 gain=listing.slots - who.size,
                 why="%s (%d slots) replaces a %d-slot bag for %d copper of %d "
-                "spendable"
-                % (listing.name, listing.slots, who.size, listing.price, who.allowance),
+                "spendable%s"
+                % (
+                    listing.name,
+                    listing.slots,
+                    who.size,
+                    listing.price,
+                    who.allowance,
+                    "; the slot cap gives way at the bag floor (%d free)" % who.room
+                    if not _slot_cap_applies(listing, who)
+                    else "",
+                ),
             )
         )
     return tuple(upgrades), tuple(notes)

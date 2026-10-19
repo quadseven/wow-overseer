@@ -38,6 +38,10 @@ STATIC = {
     "/icon-512.png": "the app's 512px icon",
     "/healthz": "liveness: 200 while the server is up",
 }
+# Routes whose first parameter's placeholder would read wrong.
+EXAMPLES = {
+    "/api/v2/evidence": "overseer evidence dungeon_runs map_id=36 since=2026-10-01",
+}
 PLACEHOLDER = {
     "name": "Grug",
     "guild": "cave",
@@ -99,6 +103,8 @@ def entries() -> list[dict]:
 
 
 def example(entry: dict) -> str:
+    if entry["path"] in EXAMPLES:
+        return EXAMPLES[entry["path"]]
     args = " ".join(f"{p}={PLACEHOLDER.get(p, 'X')}" for p in entry["params"][:1])
     return f"overseer get {entry['path']} {args}".rstrip()
 

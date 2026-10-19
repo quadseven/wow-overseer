@@ -162,6 +162,39 @@ ORPHAN_LEASE_SECONDS = 1200.0
 # finish still must not hold the column for ever.
 GATHER_LEASE_SECONDS = 450.0
 
+# THE SAME, FOR A REAGENT TRIP, AND THIS ONE IS FIRM (wow-overseer#16).
+#
+# craft_supply aims the leader at a named vendor that stocks a craft reagent.
+# Measured on wow-dev 2026-10-19, it won the column once in 18 hours and lost
+# it 228 seconds later, before the leader had taken a step:
+#
+#     17:49:24  craft_supply takes the traveller Grug for '4225'
+#     17:49:25  leader intent 'Grug' stays quest; errand '4225' waits - 'quest'
+#               is inside its minimum dwell
+#     17:53:12  mail takes the traveller Grug from craft_supply: '4225' has
+#               held the column for 228s, past its 0s lease
+#
+# "0s" is not a typo. `Slot.want` zeroes every lease for an urgent ask, and
+# the mail pass is urgent whenever a take was refused for range. So any urgent
+# pass could end the reagent trip at once, and one always came round first.
+#
+# THE LENGTH IS THE TRIP, MEASURED IN TWO PARTS. The leader is not free the
+# moment the column is written: mod-overseer's leader intent hands it from
+# the quest drive to the errand only once the quest has had its turn, and the
+# errand that took the column from this trip got the leader 302 seconds into
+# the quest. The walk to the vendor was measured at up to 523 yards, which at
+# the 112 yards a minute mod-overseer's backstop measures for a walking bot is
+# 280 seconds. 302 + 280 is 582, inside the 600 second cycle the craft_supply
+# pass runs on (CRAFT_SUPPLY_CYCLE_SECONDS) - and that cycle is the natural
+# ceiling, because the pass's next run is the one that queues the buy at the
+# counter or re-aims.
+#
+# FIRM MEANS AN URGENT ASK DOES NOT ZERO IT, AND NOTHING MORE. It is still a
+# lease and not an exemption: past it the trip is preempted like any other
+# errand, urgent or not, which is this module's first rule. A short town stop is
+# already protected from urgency the same way (TOWN_STOP_SECONDS).
+REAGENT_TRIP_LEASE_SECONDS = 600.0
+
 # HOW LONG A WANT COUNTS AS LIVE WITHOUT BEING RENEWED.
 #
 # A want is registered by a pass that ran and was refused, so a living loop
@@ -466,6 +499,23 @@ def lease_for(
     return lease
 
 
+def leases_for_ask(long_leases, firm_leases, urgent: bool) -> dict:
+    """The {claimant: seconds} map one ask is decided against (#16).
+
+    An urgent ask zeroes every lease (`Slot.want`), so it sees only the FIRM
+    ones: a holder named in `firm_leases` keeps its lease against it, and
+    every other holder has none. An ordinary ask sees every long lease, with
+    a firm entry winning where a claimant is named in both, so a firm lease is
+    never shorter for a calm ask than for an urgent one.
+    """
+    firm = dict(firm_leases or {})
+    if urgent:
+        return firm
+    merged = dict(long_leases or {})
+    merged.update(firm)
+    return merged
+
+
 def fresh_wants(wants, now: float, want_fresh: float = WANT_FRESH_SECONDS) -> list:
     """The wants still being renewed, oldest wait first.
 
@@ -622,16 +672,36 @@ def other_cohorts(rows, own_names) -> tuple:
 
 
 def urgent_ground_release(
-    *, aim: str, pressure: bool, in_run: bool, errand_active: bool = False, ground
+    *,
+    aim: str,
+    pressure: bool,
+    in_run: bool,
+    errand_active: bool = False,
+    hold_released: bool = False,
+    ground,
 ) -> bool:
     """Whether bag pressure may interrupt a stale positional town aim.
 
     An active town errand owns its mailbox or counter aim. Releasing that aim
     lets the vendor pass immediately take the same travel column, which makes
     the errand reacquire it on its next tick and can keep the leader circling.
+
+    NOT ONCE THE BAG HOLD IS RELEASED (#872). `hold_released` is whether the
+    family's hold at the bag floor has timed out (bag_pressure.bag_hold_stuck):
+    no town pass made room in BAG_HOLD_STUCK_SECONDS, so the family was sent
+    questing. The same bags are then no reason to tear down the walk it was
+    sent on. Measured on the dev realm 2026-10-18: Grug's family was released
+    to quest at 18:23Z, the level pass won the leader's walk to Nijel's Point
+    six times in four hours, and five of those walks were released here under
+    bag pressure within six minutes, for a vendor trip that sold nothing.
     """
     return bool(
-        pressure and not in_run and not errand_active and str(aim or "") and ground(aim)
+        pressure
+        and not in_run
+        and not errand_active
+        and not hold_released
+        and str(aim or "")
+        and ground(aim)
     )
 
 
@@ -1233,6 +1303,7 @@ class Slot:
         want_fresh: float = WANT_FRESH_SECONDS,
         releasable=None,
         long_leases=None,
+        firm_leases=None,
     ) -> None:
         self.lease = float(lease)
         self.orphan_lease = float(orphan_lease)
@@ -1242,6 +1313,10 @@ class Slot:
         # Empty by default, so a caller that names none behaves exactly as it
         # did before this existed.
         self.long_leases = dict(long_leases or {})
+        # {claimant: seconds} for a trip an urgent ask may not cut short
+        # (#16, REAGENT_TRIP_LEASE_SECONDS). Empty by default for the same
+        # reason as `long_leases`.
+        self.firm_leases = dict(firm_leases or {})
         self.holder: Holder | None = None
         self._wants: dict = {}
         self._served: dict = {}
@@ -1590,7 +1665,11 @@ class Slot:
         # on this column, so the one thing that must still cut through it is a
         # full bag blocking loot. Leaving it out here would make the longer
         # lease an exemption rather than a lease.
-        long_leases = {} if urgent else self.long_leases
+        #
+        # EXCEPT A FIRM ONE (#16). A reagent trip spends most of its lease
+        # waiting for the leader to be handed over and then walking, so an
+        # urgent ask that zeroed it ended every trip before it began.
+        long_leases = leases_for_ask(self.long_leases, self.firm_leases, urgent)
         releasable = self.releasable
         if claimant == "weapon master" and trainer_route:
             # An empty main hand with a learnable weapon is the one gear gap
@@ -1748,7 +1827,7 @@ class Slot:
             now=now,
             lease=self.lease,
             orphan_lease=self.orphan_lease,
-            long_leases=self.long_leases,
+            long_leases=leases_for_ask(self.long_leases, self.firm_leases, False),
             want_fresh=self.want_fresh,
             releasable=self.releasable,
         )

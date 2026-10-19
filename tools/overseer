@@ -9,6 +9,7 @@ Standard library only. The server is OVERSEER_URL (its base URL).
     overseer member <name>                one armory member
     overseer runs                         guild runs
     overseer run <id>                     one guild run
+    overseer evidence <name> [key=value]  one named read-only evidence query
 
 --table prints a plain table when the answer holds a list of records.
 An HTTP error prints the status and the error body and exits 1.
@@ -144,6 +145,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("runs", help="guild runs")
     r = sub.add_parser("run", help="one guild run")
     r.add_argument("id")
+    e = sub.add_parser("evidence", help="one named read-only evidence query")
+    e.add_argument("name")
+    e.add_argument("pairs", nargs="*", metavar="key=value")
     return p
 
 
@@ -157,6 +161,11 @@ def dispatch(args) -> tuple:
         return "/api/armory/member", {"name": args.name}
     if args.cmd == "runs":
         return "/api/guildruns", {}
+    if args.cmd == "evidence":
+        pairs = parse_pairs(args.pairs)
+        if "name" in pairs:
+            raise Failure("give the query name as the first argument, not name=")
+        return "/api/v2/evidence", {"name": args.name, **pairs}
     return "/api/v2/run", {"id": args.id}
 
 

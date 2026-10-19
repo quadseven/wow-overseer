@@ -423,6 +423,19 @@ class TheVendorStepSaysHowItEnded(unittest.TestCase):
         )
         self.assertNotIn(KEY, self.note)
 
+    def test_a_step_row_with_no_vendor_says_nothing(self):
+        # #992: an errand whose step row has no vendor step ends without a
+        # note and without raising out of the errand hook.
+        class NoVendor:
+            phase = townerrand.STEPS
+            step = 0
+            steps = (townerrand.BANK, townerrand.TIDY)
+            current_step = townerrand.BANK
+
+        done = townerrand.State(phase=townerrand.DONE)
+        self.ns["_note_town_pass"](KEY, NoVendor(), done, "bank done", {})
+        self.assertNotIn(KEY, self.note)
+
 
 class ABagRoomErrandMakesRoomFirst(unittest.TestCase):
     def test_selling_and_banking_come_first(self):
@@ -572,9 +585,39 @@ class TheVendorPassRecordsTheFloor(unittest.TestCase):
     def test_the_vendor_pass_records_it(self):
         body = ast.get_source_segment(BRIDGE, _functions("_vendor_once")[0])
         record = body.index('globals().get("_note_bag_floor")')
-        self.assertLess(body.index("sellable_counts[sale.holder]"), record)
+        self.assertLess(
+            body.index("_count_sales(sellable_counts, lock_sales + clear_sales)"),
+            record,
+        )
         # Above every early return of the pass.
         self.assertLess(record, body.index("if mode == bag_pressure.VENDOR_MODE_NONE"))
+
+
+class TheBagFloorHoldForgetsAfterTwoHours(unittest.TestCase):
+    """The hold at the bag floor is forgotten after two hours with no gain,
+    so the family is routed to another option instead of held for ever."""
+
+    def setUp(self):
+        self.errand = Errand()
+        self.errand.ns["_note_bag_floor"](
+            NAMES, MEASURED, GROG_ROWS, {n: 0 for n in NAMES}
+        )
+
+    def test_the_hold_is_forgotten_after_two_hours(self):
+        # Run past the 2-hour timeout so the hold is forgotten.
+        self.errand.run(int(bag_pressure.BAG_HOLD_FORGET_SECONDS // 60) + 10)
+        # The hold is cleared: no longer withheld on the bag-floor reason.
+        self.assertNotIn("Grog at the bag floor", self.errand.withheld[0])
+        # The family is routed to another option (town run, in town).
+        self.assertEqual({jobs.TOWN_RUN}, set(self.errand.world.jobs.values()))
+        # The timeout reason is logged where the Unstuck loop can read it.
+        self.assertTrue(
+            any(
+                "timed out" in line and "timeout reached" in line
+                for line in self.errand.log.lines
+            ),
+            self.errand.log.lines,
+        )
 
 
 if __name__ == "__main__":

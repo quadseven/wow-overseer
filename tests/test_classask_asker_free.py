@@ -25,7 +25,15 @@ MAIL = {"Bigzug": ("take-money mail:42",)}
 def group_book():
     return book(
         quest_rows=[
-            qrow(GROUP_JOB, "Group Job", reward=8121, grp=3, npc1=3130, npc_count1=1)
+            qrow(
+                GROUP_JOB,
+                "Group Job",
+                reward=8121,
+                grp=3,
+                npc1=3130,
+                npc_count1=1,
+                min_level=12,  # inside the #1094 solo gap of the level 20 asker
+            )
         ]
     )
 
