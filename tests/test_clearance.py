@@ -210,7 +210,8 @@ class TheBridgeWiresIt(unittest.TestCase):
     def test_the_auction_lists_what_nobody_can_use_and_is_urgent_under_pressure(self):
         body = _block("    async def _auction_sales_once(")
         self.assertIn("candidates = _clearance_listings(", body)
-        self.assertIn("urgent=pressure", body)
+        self.assertIn("await self._auction_list_walk(", body)
+        self.assertIn("urgent=pressure", _block("    async def _auction_list_walk("))
 
     def test_a_recipe_is_kept_only_for_this_family(self):
         body = _block("def _clearance_kept(")

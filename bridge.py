@@ -9752,33 +9752,8 @@ class Bridge(discord.Client):
         holder_house = await self._auction_holder_houses(candidates, names)
         by_house = auction.sales_by_house(candidates, holder_house)
         if not by_house:
-            if step != bag_pressure.VENDOR_ERRAND_AIM:
-                return
-            # ONLY A WALK THAT CAN LIST SOMETHING (wow-overseer#478). Priced
-            # against the house of the leader's team, the way the bag
-            # upgrade walk below plans before it arrives; `DoAuction` and
-            # the per-house plan at the counter still decide.
-            sales = await self._auction_listable_at_home(candidates, leader)
-            _log_changed("auction", [] if sales else [
-                "leader=%s carries %d surplus item(s) and none of them can be "
-                "listed at the house of its team (a rare, or no live listing "
-                "and no fair price), so nobody walks to an auctioneer for "
-                "them" % (leader, len(candidates))],
-                key=(leader,), capped=False)
-            if not sales:
-                return
-            # A LISTING THAT FREES A FULL BAG IS AS URGENT AS A SALE (#148).
-            # The vendor pass claims the traveller urgently on bag pressure;
-            # without the same standing a listing waited behind every other
-            # errand, measured as "could not be aimed at an auctioneer".
-            pressure = bag_pressure.family_town_run_needed(
-                await asyncio.to_thread(_fetch_free_slots, names))
-            if await self._claim_town_slot(
-                    "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure,
-                    cohort=_cohort_key(cohort)):
-                log.info("auction: leader=%s aimed to list %d surplus BoE item(s)",
-                         leader, len(sales))
-                self._auction_urgency_spent(cohort, "list", pressure)
+            if step == bag_pressure.VENDOR_ERRAND_AIM:
+                await self._auction_list_walk(candidates, names, leader, cohort)
             return
         seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
         queued = 0
@@ -9788,6 +9763,37 @@ class Bridge(discord.Client):
         if queued:
             await self._keep_at_auctioneer(leader, cohort)
             self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
+
+    async def _auction_list_walk(self, candidates: list, names: list,
+                                 leader: str, cohort=None) -> None:
+        """Walk the leader to an auctioneer for what nobody is listing yet.
+
+        ONLY A WALK THAT CAN LIST SOMETHING (wow-overseer#478). Priced
+        against the house of the leader's team, the way the bag upgrade walk
+        plans before it arrives; `DoAuction` and the per-house plan at the
+        counter still decide.
+        """
+        sales = await self._auction_listable_at_home(candidates, leader)
+        _log_changed("auction", [] if sales else [
+            "leader=%s carries %d surplus item(s) and none of them can be "
+            "listed at the house of its team (a rare, or no live listing "
+            "and no fair price), so nobody walks to an auctioneer for "
+            "them" % (leader, len(candidates))],
+            key=(leader,), capped=False)
+        if not sales:
+            return
+        # A LISTING THAT FREES A FULL BAG IS AS URGENT AS A SALE (#148).
+        # The vendor pass claims the traveller urgently on bag pressure;
+        # without the same standing a listing waited behind every other
+        # errand, measured as "could not be aimed at an auctioneer".
+        pressure = bag_pressure.family_town_run_needed(
+            await asyncio.to_thread(_fetch_free_slots, names))
+        if await self._claim_town_slot(
+                "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure,
+                cohort=_cohort_key(cohort)):
+            log.info("auction: leader=%s aimed to list %d surplus BoE item(s)",
+                     leader, len(sales))
+            self._auction_urgency_spent(cohort, "list", pressure)
 
     async def _auction_listable_at_home(self, candidates: list,
                                         leader: str) -> tuple:

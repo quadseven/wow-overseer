@@ -451,8 +451,13 @@ class AFruitlessUrgentAuctionGrantBacksOff(unittest.TestCase):
     def test_both_urgent_walks_report_and_a_listing_or_a_bag_clears_it(self):
         for name, spent, cleared in (
             (
-                "_auction_sales_once",
+                "_auction_list_walk",
                 '_auction_urgency_spent(cohort, "list", pressure)',
+                None,
+            ),
+            (
+                "_auction_sales_once",
+                "await self._auction_list_walk(",
                 'productive("auction")',
             ),
             (
@@ -464,7 +469,8 @@ class AFruitlessUrgentAuctionGrantBacksOff(unittest.TestCase):
             start = BRIDGE.index("    async def %s(" % name)
             body = BRIDGE[start : BRIDGE.index("\n    async def ", start + 1)]
             self.assertIn(spent, body, name)
-            self.assertIn(cleared, body, name)
+            if cleared:
+                self.assertIn(cleared, body, name)
 
 
 class TheListingWalkIsTakenOnlyForWhatCanBeListed(unittest.TestCase):
@@ -503,7 +509,15 @@ class TheListingWalkIsTakenOnlyForWhatCanBeListed(unittest.TestCase):
                 ),
             }
         )
-        ns = _load(["_auction_sales_once", "_auction_listable_at_home", *HELPERS], ns)
+        ns = _load(
+            [
+                "_auction_sales_once",
+                "_auction_list_walk",
+                "_auction_listable_at_home",
+                *HELPERS,
+            ],
+            ns,
+        )
 
         class Me:
             claims = []
@@ -524,6 +538,11 @@ class TheListingWalkIsTakenOnlyForWhatCanBeListed(unittest.TestCase):
 
             async def _auction_listable_at_home(self, candidates, leader):
                 return await ns["_auction_listable_at_home"](self, candidates, leader)
+
+            async def _auction_list_walk(self, candidates, names, leader, cohort):
+                return await ns["_auction_list_walk"](
+                    self, candidates, names, leader, cohort
+                )
 
         me = Me()
         me.claims, me.spent = [], []
