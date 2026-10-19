@@ -217,6 +217,7 @@ class EveryEconomyLoopServesEveryFamily(unittest.TestCase):
             "_guild_bank_once",
             "_auction_once",
             "_auction_sales_once",
+            "_auction_list_walk",
             "_auction_bag_upgrades",
             "_settle_bank_errand",
             "_settle_town_errand",
