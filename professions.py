@@ -1041,7 +1041,8 @@ SECONDARY_BLOCKED = {
         "holds the recipes and the reagents; Spice Bread (37836) is focus 4 "
         "too, so it is not the exception it was taken for (infra#3614); at "
         "40, Smoked Bear Meat (8607) is a book (item 6892) sold by "
-        "vendor 1465, and mod-overseer has no vendor purchase drive yet"
+        "vendor 1465 that a guild member walks to buy and use, and the "
+        "recipe it teaches still needs that fire"
     ),
     "fishing": (
         "nobody owns a Fishing Pole (item 6256, 23 copper) and mod-overseer has "

@@ -40,17 +40,21 @@ write path to a skill anywhere in it, and an assignment is only ever recorded
 as settled once the world is observed to already agree.
 """
 
+import ast
 import inspect
 import pathlib
 import re
+import types
 import unittest
 
 import bonds
 import council
 import craft
 import goals
+import guildjobs
 import learnaim
 import professions
+import trainjob
 import travel
 
 SOURCE = pathlib.Path(professions.__file__).read_text(encoding="utf-8")
@@ -572,20 +576,20 @@ class ErrandTest(unittest.TestCase):
         source = (pathlib.Path(__file__).resolve().parents[1] / "craft.py").read_text()
         self.assertIn("wowhead.com/wotlk/spell=7929/heavy-silk-bandage", source)
 
-    def test_smoked_bear_meat_names_its_vendor_and_the_missing_drive(self):
-        """The purchase dependency is recorded, and the gap is said aloud."""
+    def test_smoked_bear_meat_names_its_vendor_and_the_fire_gap(self):
+        """The purchase dependency is recorded, and the fire gap is said aloud."""
         recipe = craft.recipe_for(goals.SKILL_IDS["cooking"], 40)
         self.assertEqual(recipe.spell_id, 8607)
-        self.assertEqual(craft.RECIPE_PURCHASES[8607], (6892, 1465))
+        self.assertEqual(craft.RECIPE_PURCHASES[8607].item, 6892)
         said = professions.secondary_rank_refusal({"cooking": 40})
         self.assertIn("vendor 1465", said)
-        self.assertIn("no vendor purchase drive", said)
+        self.assertIn("still needs that fire", said)
 
     def test_no_purchase_column_is_written_before_the_module_has_one(self):
         """A bridge UPDATE naming a column the live roster lacks fails 1054,
         and the trade errand writer returns False on 1054 - so naming one
-        early would stop every primary trade errand. When mod-overseer ships
-        a purchase column, this test is the one to replace with the drive's."""
+        would stop every primary trade errand. The book is bought through the
+        existing buy and learn rows instead (RecipePurchaseErrandTest)."""
         root = pathlib.Path(__file__).resolve().parents[1]
         module = (root / "mod-overseer/src/mod_overseer.cpp").read_text()
         bridge = (root / "bridge.py").read_text()
@@ -610,6 +614,88 @@ class ErrandTest(unittest.TestCase):
             self.assertEqual(sep, ": ", line)
             self.assertIsNotNone(bonds.member(speaker), speaker)
             self.assertTrue(said.strip())
+
+
+def _cook(**over):
+    """A guild member with Cooking at Smoked Bear Meat's 40, who does not know
+    it, carries no book and can pay for one."""
+    base = dict(
+        name="Grug",
+        guild="Cave",
+        role=guildjobs.RAIDER,
+        level=20,
+        online=True,
+        map_id=0,
+        x=-5380.0,
+        y=-2930.0,
+        money=5000,
+        skills={goals.SKILL_IDS["cooking"]: (40, 75)},
+    )
+    base.update(over)
+    return guildjobs.Member(**base)
+
+
+class RecipePurchaseErrandTest(unittest.TestCase):
+    """The vendor-book errand, pinned the way ErrandTest pins the trainer
+    one: when it fires, what it writes, and every case that writes nothing."""
+
+    BOOK = craft.RECIPE_PURCHASES[8607]
+
+    def test_the_book_is_walked_to_bought_and_used(self):
+        step, note = guildjobs.recipe_book_step(_cook(), (), 100)
+        self.assertEqual("", note)
+        self.assertEqual(guildjobs.RECIPE_BOOK_ACTION, step.action)
+        self.assertEqual("buy", step.walk.kind)
+        self.assertTrue(step.walk.command.startswith("walk-to-vendor item:6892"))
+        self.assertEqual(
+            [("buy", "entry:6892 count:1 max:250"), ("cast", "use entry:6892")],
+            [(r.kind, r.command) for r in step.rows],
+        )
+
+    def test_the_book_record_names_its_item_vendor_and_price(self):
+        self.assertEqual(
+            (self.BOOK.skill, self.BOOK.item, self.BOOK.vendor, self.BOOK.price),
+            (goals.SKILL_IDS["cooking"], 6892, 1465, 250),
+        )
+
+    def test_below_the_recipe_skill_nothing_is_bought(self):
+        m = _cook(skills={goals.SKILL_IDS["cooking"]: (39, 75)})
+        self.assertEqual((None, ""), guildjobs.recipe_book_step(m, (), 100))
+
+    def test_an_unheld_skill_buys_nothing(self):
+        self.assertEqual(
+            (None, ""), guildjobs.recipe_book_step(_cook(skills={}), (), 100)
+        )
+
+    def test_a_known_recipe_buys_nothing(self):
+        m = _cook(known=frozenset({8607}))
+        self.assertEqual((None, ""), guildjobs.recipe_book_step(m, (), 100))
+
+    def test_a_carried_book_is_only_used(self):
+        held = guildjobs.Carried(9001, 6892, 1, 9, 5)
+        step, _ = guildjobs.recipe_book_step(_cook(carried=(held,)), (), 100)
+        self.assertIsNone(step.walk)
+        self.assertEqual(["use entry:6892"], [r.command for r in step.rows])
+
+    def test_a_short_purse_saves_and_says_so(self):
+        step, note = guildjobs.recipe_book_step(_cook(money=249), (), 100)
+        self.assertIsNone(step)
+        self.assertIn("saves", note)
+
+    def test_not_while_offline_fighting_or_cooling(self):
+        for m in (_cook(online=False), _cook(in_combat=True), _cook(alive=False)):
+            with self.subTest(m=m):
+                self.assertIsNone(guildjobs.recipe_book_step(m, (), 100)[0])
+        recent = (guildjobs.Recent("Grug", guildjobs.RECIPE_BOOK_ACTION, 30),)
+        self.assertIsNone(guildjobs.recipe_book_step(_cook(), recent, 100)[0])
+
+    def test_the_upkeep_rungs_reach_the_book(self):
+        """The member step itself writes the book errand, not only
+        recipe_book_step."""
+        found, _, _ = guildjobs._upkeep_first(
+            _cook(), None, None, None, None, (), 100, "", None, None
+        )
+        self.assertEqual(guildjobs.RECIPE_BOOK_ACTION, found[0].action)
 
 
 class NoMagicTest(unittest.TestCase):
@@ -1085,6 +1171,42 @@ class BridgeContractTest(unittest.TestCase):
         self._holds("professions.settled")
 
 
+def _bridge_ranks_due():
+    """bridge._ranks_due and _rank_facts, run as written, over stand-ins for
+    the cursor and pymysql (bridge.py is not importable in a unit test)."""
+    tree = ast.parse(
+        (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text()
+    )
+    wanted = {"_rank_facts", "_ranks_due"}
+    body = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
+    err = types.SimpleNamespace(MySQLError=type("MySQLError", (Exception,), {}))
+    namespace = {
+        "_RANK_FACTS_SQL": "facts %s",
+        "_RECIPES_KNOWN_SQL": "known %s",
+        "pymysql": types.SimpleNamespace(err=err),
+        "goals": goals,
+        "guildjobs": guildjobs,
+        "professions": professions,
+        "trainjob": trainjob,
+    }
+    module = ast.Module(body=body, type_ignores=[])
+    exec(compile(module, "bridge.py", "exec"), namespace)  # noqa: S102
+    return namespace["_ranks_due"]
+
+
+class _RankCursor:
+    """Answers the rank facts read, then the known recipes read (none)."""
+
+    def __init__(self, facts):
+        self.answers = [list(facts), []]
+
+    def execute(self, sql, params=()):
+        pass
+
+    def fetchall(self):
+        return self.answers.pop(0)
+
+
 class SecondaryRankRefusalTest(unittest.TestCase):
     """A secondary rank claim must preserve primary profession ownership."""
 
@@ -1096,6 +1218,26 @@ class SecondaryRankRefusalTest(unittest.TestCase):
             ).learn_skill,
             129,
         )
+
+    def test_the_bridge_passes_first_aid_only_at_its_observed_cap(self):
+        """bridge._ranks_due hands professions.secondary_rank_errand the
+        (value, max) it read for skill 129, so First Aid reaches `Row.ranks`
+        at 75/75 and not at 74/75 - run, not read off the source."""
+        ranks_due = _bridge_ranks_due()
+        roster = [{"name": "Grug", "professions": ""}]
+        for value, due in ((74, ()), (75, (129,))):
+            with self.subTest(value=value):
+                facts = [
+                    {
+                        "name": "Grug",
+                        "level": 20,
+                        "money": 100000,
+                        "skill": 129,
+                        "value": value,
+                        "max": 75,
+                    }
+                ]
+                self.assertEqual(ranks_due(_RankCursor(facts), roster), {"Grug": due})
 
     def test_the_secondary_rank_uses_the_single_rank_writer(self):
         """professions.secondary_rank_errand decides which First Aid ranks

@@ -412,6 +412,10 @@ LOOT_ROOM_SHARE = (1, 4)
 
 # HOW OFTEN EACH KIND OF STEP MAY BE ASKED OF ONE MEMBER, in minutes, counted
 # from the command log so a restart forgets nothing.
+# A recipe a vendor sells as a book (craft.RECIPE_PURCHASES), walked to,
+# bought and used by recipe_book_step.
+RECIPE_BOOK_ACTION = "recipe-book"
+
 COOLDOWN_MINUTES = {
     "gear": 60,
     "collect": 60,
@@ -424,6 +428,9 @@ COOLDOWN_MINUTES = {
     "riding": 180,
     # A walk to the race's mount vendor, its buy and the use (mount_step).
     mountbuy.ACTION: 180,
+    # A walk to a vendor for a recipe book, its buy and the use
+    # (recipe_book_step): a book is bought once.
+    RECIPE_BOOK_ACTION: 180,
     # A walk to a weapon master and its `train-weapon` (weapon_step): learned,
     # the weapon is no longer a need; refused, the trip waits two hours.
     "weapon": 120,
@@ -1877,6 +1884,88 @@ WEAPON_ACTION = "weapon"
 WEAPON_MASTER_NEAR_YARDS = 3
 
 
+def recipe_book_due(m):
+    """(spell, craft.RecipeBook) for the first book-taught recipe this member's
+    held skill has reached and does not know, or None."""
+    for spell, book in sorted(craft.RECIPE_PURCHASES.items()):
+        value, ceiling = m.skill(book.skill)
+        if ceiling <= 0 or int(spell) in m.known:
+            continue
+        recipe = next(
+            (r for r in craft.RECIPES.get(book.skill, ()) if r.spell_id == spell),
+            None,
+        )
+        if recipe is not None and value >= recipe.min_skill:
+            return spell, book
+    return None
+
+
+def recipe_book_step(m, recent, cap):
+    """(step or None, a note): a member whose skill has reached a recipe a
+    vendor sells as a book (craft.RECIPE_PURCHASES) walks to a vendor that
+    stocks it, buys it with its own gold and uses it to learn the recipe. A
+    member already carrying the book only uses it. Never while offline, dead
+    or fighting, and once per COOLDOWN_MINUTES[RECIPE_BOOK_ACTION]."""
+    due = recipe_book_due(m)
+    if due is None:
+        return None, ""
+    spell, book = due
+    if not m.online or not m.alive or m.in_combat:
+        return None, ""
+    if _cooling(m, RECIPE_BOOK_ACTION, recent):
+        return None, ""
+    use = guildcorps.Row(
+        "cast",
+        recipebook.use_command(entry=int(book.item)),
+        "",
+        source_for(RECIPE_BOOK_ACTION, m.name),
+    )
+    if m.carries(book.item):
+        said = "%s learns recipe %d from the book it carries (item %d)" % (
+            m.name,
+            spell,
+            book.item,
+        )
+        return guildcorps.Step(
+            m.name, RECIPE_BOOK_ACTION, int(book.item), said, rows=(use,)
+        ), ""
+    if int(m.money or 0) < book.price:
+        return None, "%s saves %s for the book that teaches recipe %d" % (
+            m.name,
+            purse.money(book.price),
+            spell,
+        )
+    said = "%s walks to a vendor to buy the book for recipe %d (item %d)" % (
+        m.name,
+        spell,
+        book.item,
+    )
+    return (
+        guildcorps.Step(
+            m.name,
+            RECIPE_BOOK_ACTION,
+            int(book.item),
+            said,
+            rows=(
+                guildcorps.Row(
+                    "buy",
+                    "entry:%d count:1 max:%d" % (book.item, book.price),
+                    "",
+                    source_for(RECIPE_BOOK_ACTION, m.name),
+                ),
+                use,
+            ),
+            walk=guildcorps.Row(
+                "buy",
+                "walk-to-vendor item:%d%s" % (book.item, _cap_word(cap)),
+                "",
+                source_for(RECIPE_BOOK_ACTION + "-walk", m.name),
+            ),
+        ),
+        "",
+    )
+
+
 def weapon_candidate(m, recent) -> bool:
     """Is this member worth a weapon skill read this pass: in the world, alive,
     out of combat, placed, off the weapon cooldown, and carrying a weapon its
@@ -3200,10 +3289,11 @@ def _upkeep_first(
     """(the member's step as _member_step returns it, or None; the supply
     note; the gear note): food for a member with nothing to eat or drink, then
     a sale for full bags, then the inn, then riding, then a mount for a member
-    with riding and none (mount_step, #779), then the weapon master for
+    with riding and none (mount_step, #779), then a vendor's recipe book its
+    skill has reached (recipe_book_step, #1108), then the weapon master for
     a carried weapon it has no skill for (weapon_step, #793), then gear and food
     in their purchase order (purse.py). A gear step carries no notes; the
-    riding and weapon notes ride on the supply note."""
+    riding, book and weapon notes ride on the supply note."""
     # FOOD FIRST ONLY FOR A MEMBER WITH NOTHING TO EAT OR DRINK (purse.py): it
     # dies between pulls without. Otherwise the purchase order puts its class
     # spells, riding and gear ahead of food.
@@ -3226,6 +3316,10 @@ def _upkeep_first(
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
     riding_note = _join(riding_note, mount_note)
+    step, book_note = recipe_book_step(m, recent, cap)
+    if step is not None:
+        return (step, step.said, quest_note, ""), supply_note, ""
+    riding_note = _join(riding_note, book_note)
     step, weapon_note = weapon_step(m, weapon, recent, cap)
     if step is not None:
         return (step, step.said, quest_note, ""), supply_note, ""
@@ -3273,7 +3367,8 @@ def _member_step(
     cannot put on without it (equip_room_step, #1088), then food for a member
     with nothing to eat or drink,
     then a sale for bags that leave loot on the corpse (loot_room_short), then
-    the inn, then riding, then a mount (`mount`, a mountbuy.Facts), then the
+    the inn, then riding, then a mount (`mount`, a mountbuy.Facts), then a
+    vendor's recipe book (recipe_book_step), then the
     weapon master for a carried weapon it has no
     skill for (`weapon`, a weaponskill.Offer), then gear and food in its
     purchase order (purse.py), then

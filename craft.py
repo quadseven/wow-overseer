@@ -1398,8 +1398,8 @@ RECIPES: dict = {
     # skill 40, Bear Meat reagent, and Cooking Fire requirement:
     # https://www.wowhead.com/wotlk/spell=8607/smoked-bear-meat
     # https://warcraft.wiki.gg/wiki/Smoked_Bear_Meat
-    # Neither half is driven yet: mod-overseer has no walk-to-vendor purchase
-    # (see RECIPE_PURCHASES below) and no Cooking Fire for the craft drive.
+    # The book is bought by guildjobs.recipe_book_step (see RECIPE_PURCHASES
+    # below); the craft drive still has no Cooking Fire to cast it at.
     SKILL_IDS["cooking"]: (
         Recipe(
             8607,
@@ -2270,19 +2270,37 @@ RECIPES: dict = {
 }
 
 
-# spell -> (item, vendor creature entry) for a recipe a vendor sells as a book
-# rather than a trainer teaching it. The exact vendor entry matters: a generic
-# vendor may not stock the book. Vendor 1465 is on map 0.
+@dataclass(frozen=True)
+class RecipeBook:
+    """A recipe a vendor sells as a book rather than a trainer teaching it.
+
+    `skill` is the skill line the recipe sits on and `vendor` the creature
+    entry checked to stock `item`. `price` is the vendor's undiscounted price
+    in copper, used only as the buy row's `max:` cap: a reputation discount
+    can only lower it.
+    """
+
+    skill: int
+    item: int
+    vendor: int
+    price: int
+
+
+# spell -> RecipeBook. guildjobs.recipe_book_step walks a guild member whose
+# skill has reached the recipe to a vendor that stocks the book, buys it and
+# uses it (`walk-to-vendor item:`, `buy`, then the `use entry:` learn row) -
+# the same three rows mountbuy's walk writes, so no roster column is needed.
+# The walk names the item, not the creature: mod-overseer picks a vendor that
+# stocks it, which also covers the other faction's seller. Vendor 1465 (Drac
+# Roughcut, Loch Modan, map 0) is the one recorded here.
 #
-# THIS IS A DOCUMENTED GAP, NOT A DRIVE. Using a carried book already works
-# (mod-overseer's `use entry:<item>` cast command, #468). Walking to a named
-# vendor and buying one does not: at the pinned mod-overseer there is no roster
-# column that asks for it and no drive that serves one. Any purchase column has
-# to arrive in mod-overseer's migrations first, because enroll.ROSTER_COLUMNS
-# is held to them, and a bridge UPDATE naming a column the live table lacks
-# fails with 1054. professions.SECONDARY_BLOCKED["cooking"] says the same thing
-# to the goal reporter.
-RECIPE_PURCHASES = {8607: (6892, 1465)}
+# Smoked Bear Meat's book is 250 copper (Warcraft Wiki, "Recipe: Smoked Bear
+# Meat"; https://warcraft.wiki.gg/wiki/Recipe:_Smoked_Bear_Meat). Learning it
+# does not make it castable: the Cooking Fire gap above still stands, and
+# professions.SECONDARY_BLOCKED["cooking"] says so to the goal reporter.
+RECIPE_PURCHASES = {
+    8607: RecipeBook(SKILL_IDS["cooking"], 6892, 1465, 250),
+}
 
 
 # THE FAMILY'S OWN BAGS (#215), kept apart from RECIPES because a bag is not a

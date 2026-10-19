@@ -1100,7 +1100,8 @@ class FirstAidAndCookingTests(unittest.TestCase):
     def test_smoked_bear_meat_book_is_named_but_fire_is_still_missing(self):
         recipe = craft.recipe_for(goals.SKILL_IDS["cooking"], 40)
         self.assertEqual((recipe.spell_id, recipe.focus), (8607, 4))
-        self.assertEqual(craft.RECIPE_PURCHASES[8607], (6892, 1465))
+        book = craft.RECIPE_PURCHASES[8607]
+        self.assertEqual((book.item, book.vendor), (6892, 1465))
         self.assertEqual(craft.craft_errand("Grug", {"cooking": 40}, primaries=()), 0)
 
     def test_craft_errand_finds_first_aid_for_a_character_assigned_no_primary_with_recipe(
@@ -1501,7 +1502,9 @@ class SpellFocusTests(unittest.TestCase):
         self.assertEqual(craft.focus_for(999999), 0)  # a spell this table lost
 
     def test_no_cooking_recipe_needs_a_fire(self):
-        """The sibling of the smelt refusal, for focus 4 (infra#3614).
+        """The sibling of the smelt refusal, for focus 4 (infra#3614). The one
+        exception is a vendor book (craft.RECIPE_PURCHASES) that declares its
+        focus 4, which the craft drive then refuses to cast.
 
         WHY THIS EXISTS SEPARATELY FROM `test_no_recipe_requires_a_spell_focus`
         ABOVE, and it is the hole that let an inert recipe ship. That test
@@ -1548,19 +1551,28 @@ class SpellFocusTests(unittest.TestCase):
             7752: "Slitherskin Mackerel",
             37836: "Spice Bread",
         }
-        named = {
-            recipe.spell_id for recipes in craft.RECIPES.values() for recipe in recipes
+        declared = {
+            recipe.spell_id: recipe.focus
+            for recipes in craft.RECIPES.values()
+            for recipe in recipes
         }
-        clash = named & set(fire_spells)
-        self.assertEqual(
-            clash,
-            {8607},
+        # A fire recipe may be named only as a vendor book with its focus 4
+        # declared: the book is worth buying, and the declared focus is what
+        # keeps the craft drive from casting it where no fire stands.
+        stray = {
+            spell
+            for spell in set(declared) & set(fire_spells)
+            if declared[spell] != 4 or spell not in craft.RECIPE_PURCHASES
+        }
+        self.assertFalse(
+            stray,
             "RECIPES names %s, which require a Cooking Fire "
-            "(RequiresSpellFocus = 4, SpellFocusObject.dbc id 4). Nothing in "
-            "this system lights one. See craft.py's COOKING comment for the "
+            "(RequiresSpellFocus = 4, SpellFocusObject.dbc id 4), without "
+            "declaring focus 4 and a RECIPE_PURCHASES book. Nothing in this "
+            "system lights one. See craft.py's COOKING comment for the "
             "single cast (spell 818, gameobject 29784, ten-yard radius) that "
             "would."
-            % sorted("%d (%s)" % (spell, fire_spells[spell]) for spell in clash),
+            % sorted("%d (%s)" % (spell, fire_spells[spell]) for spell in stray),
         )
 
     def test_the_module_records_the_forge_finding(self):
