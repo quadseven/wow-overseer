@@ -57,6 +57,20 @@ JEALOUSY_THRESHOLD = 3
 # Bork is exempt; see the docstring.
 FATIGUE_THRESHOLD = 5
 
+# How strongly one member defers to another. A strength counts as that many
+# voices behind the one deferred to: a member who follows backs like one more
+# member wanting the same, a member who worships backs like two.
+FOLLOWS = 1
+WORSHIPS = 2
+
+
+@dataclass(frozen=True)
+class Deference:
+    """One member giving way to another: who, and how strongly."""
+
+    to: str
+    strength: int
+
 
 @dataclass(frozen=True)
 class Bond:
@@ -99,6 +113,12 @@ class Bond:
     # is shared, so this is what stops five characters saying one sentence -
     # which is exactly what happened when the personas differed only in role.
     persona: str = ""
+    # Who this member gives way to in an argument, and how strongly. DATA and
+    # not a line of persona, because the persona only colours how a member
+    # speaks: "Worships Grog" sat in Bork's for as long as the tabard debate
+    # has existed and never once changed what he backed. `deference` is the
+    # one reader, and the tabard and the council both go through it.
+    defers_to: tuple[Deference, ...] = ()
 
 
 # THE FAMILY, AS THE LIVE WORLD KNOWS IT. `FAMILY` below is this table put
@@ -180,6 +200,7 @@ _LIVE_FAMILY: dict[str, Bond] = {
             "about both. Asks for help without a shred of embarrassment. "
             "Worships Grog and shows it by pestering him."
         ),
+        defers_to=(Deference("Grog", WORSHIPS),),
     ),
     "Og": Bond(
         role="neighbour",
@@ -280,6 +301,7 @@ _HORDE_FAMILY: dict[str, Bond] = {
             "when Zug calls. Friends with Zork, because both of them hear the "
             "land."
         ),
+        defers_to=(Deference("Zug", FOLLOWS),),
     ),
     "Uzza": Bond(
         role="elder blood brother",
@@ -351,10 +373,17 @@ def family_for(which: str | None = None) -> dict[str, Bond]:
     "Watches Og around Ugga" under a dev name would be a biography of somebody
     who is not in that world - and would hand live family names to the model
     that voices the dev characters, which is the leak cast.py exists to stop.
+    So is every name a member defers to: a dev Bork deferring to a live Grog
+    would defer to nobody at the table, and the dev debate would take a
+    branch the live one never takes.
     """
     return {
         cast.rename(name, which): replace(
-            bond, persona=cast.retext(bond.persona, which)
+            bond,
+            persona=cast.retext(bond.persona, which),
+            defers_to=tuple(
+                replace(d, to=cast.rename(d.to, which)) for d in bond.defers_to
+            ),
         )
         for name, bond in _LIVE_FAMILY.items()
     }
@@ -564,6 +593,22 @@ def family_of(name: str) -> dict[str, Bond] | None:
     """Every member of `name`'s family, or None for anyone outside them all."""
     house = house_of(name)
     return house.members if house else None
+
+
+def deference(follower: str, leader: str) -> int:
+    """How strongly `follower` defers to `leader`; 0 when not at all.
+
+    THE ONE ANSWER TO WHO BACKS WHOM BEYOND WHAT THEY WANT. The tabard debate
+    and the council both ask it, so a member who stands with his brother over
+    the tabard stands with him over the day's plan too. Read from the bond,
+    for any family, and one way only: Bork worshipping Grog says nothing
+    about what Grog thinks of Bork.
+    """
+    bond = bond_of(follower)
+    leader = canon_of(leader)
+    if bond is None or leader is None:
+        return 0
+    return next((d.strength for d in bond.defers_to if d.to == leader), 0)
 
 
 def head_of_family() -> str:

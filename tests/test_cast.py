@@ -189,6 +189,20 @@ class SameShapeTest(unittest.TestCase):
                 f"{dev_name} is not {live_name} under another name",
             )
 
+    def test_the_dev_family_defers_the_same_way(self):
+        # A deference left under a live name would point at nobody at the dev
+        # table, and the dev tabard and council would take branches live does
+        # not. Same pairs, same strengths, renamed.
+        for live_name, dev_name in cast.DEV_NAMES.items():
+            self.assertEqual(
+                [
+                    (cast.rename(d.to, cast.DEV), d.strength)
+                    for d in self.live[live_name].defers_to
+                ],
+                [(d.to, d.strength) for d in self.dev[dev_name].defers_to],
+                f"{dev_name} does not defer as {live_name} does",
+            )
+
     def test_the_dev_family_leads_the_same_role(self):
         self.assertEqual(
             self.dev[cast.rename(bonds.head_of_family(), cast.DEV)].role,

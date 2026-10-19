@@ -14,6 +14,8 @@ is the #2807 restaging bug wearing a new hat.
 import pathlib
 import re
 import unittest
+from dataclasses import replace
+from unittest import mock
 
 import bonds
 import tabard
@@ -204,6 +206,60 @@ class WhoCanActuallyApplyIt(unittest.TestCase):
         self.assertEqual(len(parts), 1 + len(tabard.FIELDS))
         for raw in parts[1:]:
             int(raw)
+
+
+def _bork_defers_to(*deference):
+    """Rewrite Bork's row of the family table for the length of one test."""
+    members = bonds.house_of("Bork").members
+    return mock.patch.dict(
+        members, {"Bork": replace(members["Bork"], defers_to=deference)}
+    )
+
+
+class WhoDefersToWhom(unittest.TestCase):
+    """Bork worships Grog. That used to be a sentence in his persona and
+    nothing else, so it could colour how he spoke and never what he backed.
+    It is a field on the bond now, and the argument reads it."""
+
+    def test_deference_is_data_on_the_bond_not_a_line_of_persona(self):
+        bork = bonds.member("Bork")
+        self.assertIn(bonds.Deference("Grog", bonds.WORSHIPS), bork.defers_to)
+        self.assertEqual(bonds.deference("Bork", "Grog"), bonds.WORSHIPS)
+
+    def test_deference_runs_one_way(self):
+        self.assertEqual(bonds.deference("Grog", "Bork"), 0)
+
+    def test_the_outcome_follows_who_bork_defers_to(self):
+        """Bork does not care about the colour of the mark - he wants what
+        the family wants on average - so there he stands with whoever he
+        looks up to, and that one wins it."""
+        self.assertEqual(tabard.debate(FAMILY).design.won_by["EmblemColor"], "Grog")
+        with _bork_defers_to():
+            self.assertEqual(tabard.debate(FAMILY).design.won_by["EmblemColor"], "Og")
+        with _bork_defers_to(bonds.Deference("Ugga", bonds.WORSHIPS)):
+            self.assertEqual(tabard.debate(FAMILY).design.won_by["EmblemColor"], "Ugga")
+
+    def test_worship_does_not_cost_bork_the_fields_he_cares_about(self):
+        """Deference that won every field would hand the family Grog's
+        tabard. Where Bork feels more strongly than Grog he argues for his
+        own."""
+        self.assertEqual(tabard.debate(FAMILY).design.won_by["EmblemStyle"], "Bork")
+
+    def test_the_transcript_says_who_stood_with_whom(self):
+        lines = tabard.debate(FAMILY).lines
+        self.assertTrue(
+            any(
+                line.startswith("Grog:") and "Bork stand with Grog" in line
+                for line in lines
+            ),
+            lines,
+        )
+
+    def test_a_changed_relationship_still_concludes_the_same_way_twice(self):
+        with _bork_defers_to(bonds.Deference("Og", bonds.FOLLOWS)):
+            first = tabard.debate(FAMILY)
+            second = tabard.debate(list(reversed(FAMILY)))
+        self.assertEqual(first.design.fields, second.design.fields)
 
 
 if __name__ == "__main__":
