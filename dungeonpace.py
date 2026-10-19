@@ -97,7 +97,11 @@ FOUGHT = frozenset({"wipe", "complete", "left", "emptied", "stalled"})
 # (#1071: two emptied, one evacuated and two
 # staging_failed in a day read as "2 fought, 2 without a clear", held a door
 # the family could not clear, and filed a family-run-loop finding).
-ATTEMPTED = FOUGHT | {"evacuated", "client lost"}
+# The module writes a lost client as `client_lost`, with an underscore, like
+# its other multi-word outcomes (staging_failed, reset_failed, split_failed).
+# A spelling with a space matched no row, so a lost client never counted.
+CLIENT_LOST = "client_lost"
+ATTEMPTED = FOUGHT | {"evacuated", CLIENT_LOST}
 WIPE = "wipe"
 COMPLETE = "complete"
 
