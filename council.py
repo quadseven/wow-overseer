@@ -326,14 +326,24 @@ def back(voter: str, proposal: Proposal, *, history: list) -> tuple:
         verdict = bonds.decide(voter, plea, history=history)
         if not verdict.will_answer:
             return 0, f"{verdict.reason}"
-        return 30, f"I will help {proposal.beneficiary}."
-
-    if proposal.beneficiary == voter:
+        support = 30
+        line = f"I will help {proposal.beneficiary}."
+    elif proposal.beneficiary == voter:
         # Being volunteered for. Accepting is not automatic - a character with
         # its own idea says so - but it is the common case.
-        return 20, "Aye, that is what I need."
+        support = 20
+        line = "Aye, that is what I need."
+    else:
+        support = 10
+        line = ""
 
-    return 10, ""
+    # Relational deference: a voter backs the one they defer to. council and
+    # tabard read the same bonds.Bond.defers_to field, so there is one answer
+    # to who backs whom rather than two.
+    voter_bond = bonds.member(voter)
+    if voter_bond is not None:
+        support += voter_bond.defers_to.get(proposal.proposer, 0)
+    return support, line
 
 
 @dataclass(frozen=True)

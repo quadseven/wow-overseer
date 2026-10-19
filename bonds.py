@@ -44,7 +44,7 @@ here is a character choosing not to go, never a scoping bug wearing a story.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 import cast
 import kin
@@ -99,6 +99,12 @@ class Bond:
     # is shared, so this is what stops five characters saying one sentence -
     # which is exactly what happened when the personas differed only in role.
     persona: str = ""
+    # Who this member defers to, and how strongly: name -> strength.
+    # Structured data about the family's real dynamics, read by tabard._weight
+    # and council.back() so a member's backing reflects who defers to whom.
+    # The persona stays prose; this field is the data, and nothing parses the
+    # persona to recover it.
+    defers_to: dict[str, int] = field(default_factory=dict)
 
 
 # THE FAMILY, AS THE LIVE WORLD KNOWS IT. `FAMILY` below is this table put
@@ -180,6 +186,9 @@ _LIVE_FAMILY: dict[str, Bond] = {
             "about both. Asks for help without a shred of embarrassment. "
             "Worships Grog and shows it by pestering him."
         ),
+        # Bork defers to Grog: the structured form of "worships Grog". Grog
+        # carries him, and the tabard and council back that up.
+        defers_to={"Grog": 1},
     ),
     "Og": Bond(
         role="neighbour",

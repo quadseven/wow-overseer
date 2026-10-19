@@ -271,9 +271,19 @@ def _weight(name: str, field: Field, claims: list) -> tuple:
     agreeing = sum(
         1 for other, value in wants.items() if other != name and value == mine
     )
+    # Relational deference is part of backing: a member backs the one they
+    # defer to, whatever that one wants in this field. bonds.Bond.defers_to is
+    # the structured source (name -> strength); the persona is never parsed.
+    deference = sum(
+        other_bond.defers_to.get(name, 0)
+        for other in wants
+        if other != name
+        for other_bond in (bonds.member(other),)
+        if other_bond is not None
+    )
     feeling = abs(mine - _median(list(wants.values())))
     bond = bonds.member(name)
-    return (agreeing, feeling, bond.seniority if bond else 0)
+    return (agreeing + deference, feeling, bond.seniority if bond else 0)
 
 
 def debate(kin: list) -> Debate:

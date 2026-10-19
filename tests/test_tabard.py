@@ -14,6 +14,7 @@ is the #2807 restaging bug wearing a new hat.
 import pathlib
 import re
 import unittest
+from dataclasses import replace
 
 import bonds
 import tabard
@@ -334,3 +335,42 @@ class TheSceneIsNotStagedToAnEmptyRoom(unittest.TestCase):
         the is_bot rule. A second copy would be a second answer to who is in
         the world, and they would drift."""
         self.assertIn("_bot_held_names, [k.name for k in kin]", BRIDGE)
+
+
+class DeferenceTest(unittest.TestCase):
+    """Relational deference is structured data on the bond, and it changes
+    who backs whom in the tabard debate."""
+
+    def setUp(self):
+        self._original_bork = bonds.FAMILY["Bork"]
+
+    def tearDown(self):
+        bonds.FAMILY["Bork"] = self._original_bork
+
+    def test_deference_is_structured_data_on_the_bond(self):
+        """The field is data, not a string match against the persona."""
+        bond = bonds.FAMILY["Bork"]
+        self.assertIsInstance(bond.defers_to, dict)
+        self.assertEqual(bond.defers_to, {"Grog": 1})
+
+    def test_deference_raises_the_deferred_to_members_backing(self):
+        """Bork deferring to Grog adds to Grog's backing in _weight."""
+        claims = [tabard.claim(k) for k in FAMILY]
+        field = tabard.FIELDS[0]
+        bonds.FAMILY["Bork"] = replace(self._original_bork, defers_to={})
+        without = tabard._weight("Grog", field, claims)
+        bonds.FAMILY["Bork"] = replace(self._original_bork, defers_to={"Grog": 1})
+        with_ = tabard._weight("Grog", field, claims)
+        self.assertEqual(with_[0], without[0] + 1)
+
+    def test_deference_changes_the_tabard_outcome(self):
+        """Changing the relationship changes who wins each field."""
+        bonds.FAMILY["Bork"] = replace(self._original_bork, defers_to={})
+        without = tabard.debate(FAMILY)
+        bonds.FAMILY["Bork"] = replace(self._original_bork, defers_to={"Grog": 1})
+        with_ = tabard.debate(FAMILY)
+        self.assertNotEqual(
+            without.design.won_by,
+            with_.design.won_by,
+            "changing the relationship must change who wins each field",
+        )

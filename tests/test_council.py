@@ -366,3 +366,56 @@ class SharedWantTest(unittest.TestCase):
         members = [_m("Grug", 7), _m("Ugga", 7), _m("Og", 3), _m("Grog", 7)]
         lines = council.hold(members, history=[]).lines
         self.assertTrue(any("Og" in line for line in lines), lines)
+
+
+class DeferenceTest(unittest.TestCase):
+    """council.back() reads the same bonds.Bond.defers_to field as
+    tabard._weight, so there is one answer to who backs whom rather than two."""
+
+    def setUp(self):
+        self._original_bork = bonds.FAMILY["Bork"]
+
+    def tearDown(self):
+        bonds.FAMILY["Bork"] = self._original_bork
+
+    def test_back_reads_the_relationship_field(self):
+        import inspect
+
+        self.assertIn("defers_to", inspect.getsource(council.back))
+
+    def test_deference_adds_to_backing(self):
+        from dataclasses import replace
+
+        proposal = council.Proposal(
+            proposer="Grog",
+            kind="level",
+            beneficiary="Bork",
+            target=10,
+            weight=5,
+            said="x",
+        )
+        bonds.FAMILY["Bork"] = replace(self._original_bork, defers_to={"Grog": 1})
+        try:
+            support, _ = council.back("Bork", proposal, history=[])
+        finally:
+            bonds.FAMILY["Bork"] = self._original_bork
+        # 20 for being volunteered for, plus 1 for deferring to proposer Grog.
+        self.assertEqual(support, 21)
+
+    def test_without_deference_backing_is_unchanged(self):
+        from dataclasses import replace
+
+        proposal = council.Proposal(
+            proposer="Grog",
+            kind="level",
+            beneficiary="Bork",
+            target=10,
+            weight=5,
+            said="x",
+        )
+        bonds.FAMILY["Bork"] = replace(self._original_bork, defers_to={})
+        try:
+            support, _ = council.back("Bork", proposal, history=[])
+        finally:
+            bonds.FAMILY["Bork"] = self._original_bork
+        self.assertEqual(support, 20)
