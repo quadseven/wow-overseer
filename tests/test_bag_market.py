@@ -212,6 +212,83 @@ class TheSpendingRule(unittest.TestCase):
         self.assertEqual(upgrades, ())
 
 
+# The held member as read on 2026-10-19: 3 free slots, an 8-slot bag as its
+# smallest, 12 gold 81 silver 14 copper at level 43. The rest of the family's
+# purses as read the same hour, so the family share is the measured one.
+HELD = Member("Grog", 4, worn=worn(8, 10, 10, 12))
+HELD_PURSES = {
+    "Bork": Purse(41, 90181),
+    "Grog": Purse(43, 128114),
+    "Grug": Purse(45, 108148),
+    "Og": Purse(39, 329311),
+    "Ugga": Purse(42, 150433),
+}
+
+
+def _held(free, listings=VENDOR_STOCK, purses=HELD_PURSES):
+    return bag_market.plan_upgrades(
+        [HELD],
+        purses,
+        listings,
+        reach={"Grog": EVERY_STOCK},
+        free_slots={"Grog": free},
+    )
+
+
+class TheBagFloor(unittest.TestCase):
+    """A member at the bag floor buys the vendor's biggest bag it can afford."""
+
+    def test_the_held_member_buys_the_vendors_12_slot_bag(self):
+        upgrades, notes = _held(3)
+        self.assertEqual(notes, ())
+        self.assertEqual(
+            [(u.buyer, u.listing.name, u.gain, u.price) for u in upgrades],
+            [("Grog", "Huge Brown Sack", 4, 100000)],
+        )
+        self.assertIn("slot cap gives way at the bag floor (3 free)", upgrades[0].why)
+        self.assertEqual(upgrades[0].command, "entry:4499 count:1 max:100000")
+        self.assertEqual(upgrades[0].equip_command, "e Hitem:4499:0")
+
+    def test_one_slot_above_the_floor_the_cap_still_refuses(self):
+        upgrades, notes = _held(4)
+        self.assertEqual(upgrades, ())
+        self.assertIn("at most 2500 a slot", notes[0])
+        self.assertNotIn("bag floor", notes[0])
+
+    def test_the_reserve_still_binds_at_the_floor(self):
+        # 100,000 for the sack plus 12,900 kept back at level 43, one short:
+        # the 10-slot bag is the most it can afford.
+        purses = dict(HELD_PURSES, Grog=Purse(43, 112899))
+        upgrades, _ = _held(3, purses=purses)
+        self.assertEqual([u.listing.name for u in upgrades], ["Heavy Brown Bag"])
+        # One copper short of the 10-slot bag too: nothing, and the note says
+        # the cap was not what refused it.
+        purses = dict(HELD_PURSES, Grog=Purse(43, 12900 + 19999))
+        upgrades, notes = _held(3, purses=purses)
+        self.assertEqual(upgrades, ())
+        self.assertIn("no cap on a vendor's bag at the bag floor", notes[0])
+
+    def test_the_family_share_still_binds_at_the_floor(self):
+        # The held member alone: a quarter of 128,114 is 32,028.
+        upgrades, _ = _held(3, purses={"Grog": HELD_PURSES["Grog"]})
+        self.assertEqual([u.listing.name for u in upgrades], ["Heavy Brown Bag"])
+
+    def test_an_auction_listing_keeps_the_cap_at_the_floor(self):
+        sacks = [x for x in ALLIANCE_HOUSE if x.entry == 4499]
+        upgrades, _ = _held(3, listings=sacks)
+        self.assertEqual(upgrades, ())
+
+    def test_a_full_member_still_has_nowhere_to_land_a_bag(self):
+        upgrades, _ = _held(0)
+        self.assertEqual(upgrades, ())
+
+    def test_cap_yields_reads_only_a_real_floor(self):
+        self.assertTrue(bag_market.cap_yields(0))
+        self.assertTrue(bag_market.cap_yields(3))
+        for free in (4, -1, None, "2", True):
+            self.assertFalse(bag_market.cap_yields(free), free)
+
+
 class WhoIsOffered(unittest.TestCase):
     def test_an_empty_position_is_left_to_the_open_position_purchase(self):
         member = Member("Bork", 4, worn=worn(10, 16, 16))
@@ -276,12 +353,13 @@ class WhoIsOffered(unittest.TestCase):
                 ugga, purses, VENDOR_STOCK, reach=reach, free_slots=free
             )
             self.assertEqual(upgrades, ())
+        # 4 free is one above the bag floor, so the slot cap still binds.
         upgrades, _ = bag_market.plan_upgrades(
             ugga,
             purses,
             VENDOR_STOCK,
             reach={"Ugga": EVERY_STOCK},
-            free_slots={"Ugga": 1},
+            free_slots={"Ugga": 4},
         )
         self.assertEqual(upgrades[0].listing.name, "Brown Leather Satchel")
 
