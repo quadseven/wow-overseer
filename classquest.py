@@ -72,8 +72,25 @@ a row. They are read from the world, never typed in:
   gameobject          a required item no creature drops that a chest holds
                       (gameobject_loot_template through a type 3
                       gameobject_template), a use's item that a chest holds
-                      and the take does not hand over (Use.fetch), and a
-                      negative RequiredNpcOrGo.
+                      and the take does not hand over (Use.fetch), a
+                      negative RequiredNpcOrGo, and the summoner of an
+                      objective creature no spawn row holds (SUMMONERS_SQL).
+
+THE TARGET IS SUMMONED (#781, 2026-10-19). A creature an objective kills, or
+whose loot is a required item, may have no spawn row because using a
+gameobject summons it. The world data says which: a goober (gameobject type 10)
+whose event (Data2) has an event_scripts row that summons the creature
+(command 10), or whose smart script summons it (action 12) when it is used
+(event 70, loot state 2: activated), directly or through a timed action list
+(action 80). The draenei Call of Fire (9467) asks for Hauteur's Ashes, which
+Hauteur (17206) drops; the Wickerman Effigy (181672) runs event 10626, which
+summons him. The draenei Call of Water (9508) asks for the Head of Tel'athion
+(17359), whom the Barrel of Filth (181699) summons with event 10685. Ulag the
+Cleaver (6390, quest 1819) comes from the Mausoleum Trigger's (104593) action
+list 10459300. Such an objective is a `use-gameobject` at the summoner's
+spawn, as a chest is, and the member's own fight and loot do the rest; it is a
+group's only when the summoned creature is elite. A summoner no data names (a
+core script, a spell, a gossip) leaves the objective SOURCE.
 
 THE TAKE HANDS OVER StartItem AND NOTHING ELSE (2026-10-09). The core gives a
 quest's StartItem on accept (Player::AddQuest -> GiveQuestSourceItem).
@@ -88,7 +105,8 @@ request: want take quest:...` (classuse.py); the bridge then plans from
 Book.plain(), the same book with no uses, and every use quest is named as it
 was before. What the verbs do NOT cover stays blocked and named: an item cast
 at nothing in particular, at a spell focus (the warlock's Summoning Circle, a
-water source) or on a corpse nearby, and a creature a script summons.
+water source) or on a corpse nearby, and a creature a script summons that
+no gameobject's use names (THE TARGET IS SUMMONED).
 
 WHAT A MEMBER OWES (OWED_*). The operator's rule of 2026-10-06 is that every
 class quest is mandatory and comes before anything else, so a member with an
@@ -191,7 +209,7 @@ USE_STALLED = "usestalled"
 # The blockers a guildmate can help with: the rest are the module's to fix.
 HELPABLE = frozenset({GROUP, STALLED, USE_STALLED})
 # THE BLOCKERS NO WORK OF THE MODULE CAN LIFT TODAY: a creature no spawn row
-# names (a script summons it), a gameobject no verb uses, a quest item the
+# names and no summoner's use brings, a gameobject no verb uses, a quest item the
 # member no longer carries. A member whose every way to a reward ends in one of
 # these is not held from the dungeons: nothing it could do would clear them. The
 # rest are not permanent: a group or a stalled hunt is asked for in guild chat, a
@@ -630,6 +648,43 @@ FOCUS_OBJECTS_SQL = (
     "WHERE g.type = 8 AND g.Data0 IN ({focus})"
 )
 
+# The goobers (gameobject type 10) whose use summons an objective creature, with
+# the creature's rank (THE TARGET IS SUMMONED): the goober's event (Data2) runs
+# an event_scripts row that summons it (command 10, datalong the entry), or its
+# smart script does when the goober is activated (source type 1, event 70 with
+# loot state 2), by a summon (action 12) or a timed action list (action 80,
+# source type 9) holding one. GameObject::Use runs both for a CMSG_GAMEOBJ_USE,
+# the packet `use-gameobject` sends.
+SUMMONERS_SQL = (
+    "SELECT e.datalong AS creature, g.entry AS entry, ct.`rank` AS `rank` "
+    "FROM acore_world.event_scripts e "
+    "JOIN acore_world.gameobject_template g ON g.type = 10 AND g.Data2 = e.id "
+    "JOIN acore_world.creature_template ct ON ct.entry = e.datalong "
+    "WHERE e.command = 10 AND e.datalong IN ({entries}) "
+    "UNION "
+    "SELECT s.action_param1, g.entry, ct.`rank` FROM acore_world.smart_scripts s "
+    "JOIN acore_world.gameobject_template g ON g.type = 10 AND g.entry = s.entryorguid "
+    "JOIN acore_world.creature_template ct ON ct.entry = s.action_param1 "
+    "WHERE s.source_type = 1 AND s.event_type = 70 AND s.event_param1 = 2 "
+    "AND s.action_type = 12 AND s.action_param1 IN ({entries}) "
+    "UNION "
+    "SELECT a.action_param1, g.entry, ct.`rank` FROM acore_world.smart_scripts s "
+    "JOIN acore_world.gameobject_template g ON g.type = 10 AND g.entry = s.entryorguid "
+    "JOIN acore_world.smart_scripts a ON a.source_type = 9 "
+    "AND a.entryorguid = s.action_param1 AND a.action_type = 12 "
+    "JOIN acore_world.creature_template ct ON ct.entry = a.action_param1 "
+    "WHERE s.source_type = 1 AND s.event_type = 70 AND s.event_param1 = 2 "
+    "AND s.action_type = 80 AND a.action_param1 IN ({entries})"
+)
+
+# What an item the take hands over holds when the member opens it
+# (item_loot_template): the draenei Call of Fire (9467) hands over a Fireproof
+# Satchel (24336) that holds the Ritual Torch (23682) the quest asks back.
+HELD_SQL = (
+    "SELECT l.Entry AS container, l.Item AS item "
+    "FROM acore_world.item_loot_template l WHERE l.Entry IN ({items})"
+)
+
 # The chests (gameobject type 3) whose loot holds a required item, or an item a
 # use needs that the take does not hand over (a source item, a FOCUS_ITEMS item).
 CHEST_SQL = (
@@ -712,7 +767,10 @@ class Use:
     spawns of the targets. `provided` is True for an item the quest hands over
     when it is taken (its StartItem, nothing else). `fetch` is the USE_OBJECT
     that gets `item` first, from the chests that hold it, for an item the take
-    does not hand over; None when no chest holds it or the take hands it over."""
+    does not hand over; None when no chest holds it or the take hands it over.
+    `summons` are the objective creatures the gameobjects of `targets` summon
+    (THE TARGET IS SUMMONED), and `elite` is True when every one of them is
+    elite (a group's fight)."""
 
     verb: str
     item: int = 0
@@ -721,6 +779,8 @@ class Use:
     spots: tuple = ()
     provided: bool = False
     fetch: Use | None = None
+    summons: tuple = ()
+    elite: bool = False
 
 
 @dataclass(frozen=True)
@@ -759,6 +819,8 @@ class Quest:
     # The quest's source items (ItemDrop1-4): what it uses and takes back when it
     # is abandoned. The take does NOT hand them over.
     sources: tuple = ()
+    # The items the item the take hands over holds, opened (HELD_SQL): given too.
+    held: tuple = ()
 
     @property
     def spells(self) -> frozenset:
@@ -957,6 +1019,38 @@ def _focus_targets(rows) -> dict:
     }
 
 
+def _summoners(rows) -> dict:
+    """creature entry -> (the sorted goober entries that summon it, its rank),
+    from SUMMONERS_SQL's rows."""
+    by_creature: dict = {}
+    ranks: dict = {}
+    for r in rows or ():
+        creature, entry = _int(r.get("creature")), _int(r.get("entry"))
+        if creature and entry:
+            by_creature.setdefault(creature, set()).add(entry)
+            ranks[creature] = _int(r.get("rank"))
+    return {c: (tuple(sorted(g)), ranks[c]) for c, g in by_creature.items()}
+
+
+def _held(rows) -> dict:
+    """container item -> the sorted items it holds, from HELD_SQL's rows."""
+    return _targets(rows, "container", "item")
+
+
+def _summoned(creatures, aims):
+    """The USE_OBJECT at the gameobjects that summon `creatures` (those with no
+    spawn row), None when none of them has a summoner the data names."""
+    _item_aims, _chests, creature_spawns, object_spawns = aims[:4]
+    summoners = aims[5] if len(aims) > 5 else {}
+    named = [c for c in creatures if c in summoners and not creature_spawns.get(c)]
+    if not named:
+        return None
+    targets = tuple(sorted({g for c in named for g in summoners[c][0]}))
+    spots = tuple(s for g in targets for s in object_spawns.get(g, ()))
+    elite = all(summoners[c][1] >= ELITE_RANK for c in named)
+    return Use(USE_OBJECT, 0, 1, targets, spots, summons=tuple(named), elite=elite)
+
+
 def _provided(r) -> tuple:
     """The item the quest hands over when it is taken: its StartItem, or ()."""
     entry = _int(r.get("provided0"))
@@ -1024,7 +1118,8 @@ def _uses(r, items, provided, droppers, aims) -> tuple:
 
     `aims` is (item -> creature entries, item -> chest entries, spawns by
     creature entry, spawns by gameobject entry, item -> spell-focus
-    gameobject entries)."""
+    gameobject entries, creature -> its summoners and rank). `provided` holds
+    what the take hands over and what that holds (HELD_SQL)."""
     _item_aims, chests, creature_spawns, object_spawns = aims[:4]
     out = []
     required = [i for i, _n in items]
@@ -1041,13 +1136,25 @@ def _uses(r, items, provided, droppers, aims) -> tuple:
         if found:
             spots = tuple(s for g in found for s in object_spawns.get(g, ()))
             out.append(Use(USE_OBJECT, item, count, found, spots))
+            continue
+        # A dropper no spawn row holds that a gameobject summons: the item is
+        # counted carried once the summoned creature is looted.
+        use = _summoned(sorted(droppers.get(item, ())), aims)
+        if use is not None:
+            out.append(replace(use, item=item, count=count))
+    for entry, count in _pairs(r, "npc", "npc_count", 4, True):
+        use = _summoned((entry,), aims)
+        if use is not None:
+            out.append(replace(use, count=count))
     for entry, count in _pairs(r, "npc", "npc_count", 4, False):
         spots = tuple(object_spawns.get(entry, ()))
         out.append(Use(USE_OBJECT, 0, count, (entry,), spots))
     return tuple(out)
 
 
-def _quest(r, klass, starts, ends, by_entry, droppers, aims, others=None) -> Quest:
+def _quest(
+    r, klass, starts, ends, by_entry, droppers, aims, others=None, held=None
+) -> Quest:
     kills = _pairs(r, "npc", "npc_count", 4, True)
     items = _pairs(r, "item", "item_count", 6)
     entries = {e for e, _n in kills}
@@ -1055,6 +1162,7 @@ def _quest(r, klass, starts, ends, by_entry, droppers, aims, others=None) -> Que
         entries |= droppers.get(item, set())
     qid = _int(r.get("id"))
     provided = _provided(r)
+    inside = tuple(i for p in provided for i in (held or {}).get(p, ()))
     return Quest(
         qid,
         str(r.get("title") or ""),
@@ -1071,7 +1179,7 @@ def _quest(r, klass, starts, ends, by_entry, droppers, aims, others=None) -> Que
         tuple(starts.get(qid, ())),
         tuple(ends.get(qid, ())),
         tuple(s for e in sorted(entries) for s in by_entry.get(e, ())),
-        _uses(r, items, provided, droppers, aims),
+        _uses(r, items, provided + inside, droppers, aims),
         provided,
         frozenset(
             i for i, _n in items if any(by_entry.get(e) for e in droppers.get(i, ()))
@@ -1085,6 +1193,7 @@ def _quest(r, klass, starts, ends, by_entry, droppers, aims, others=None) -> Que
         tuple((others or {}).get(qid, ())),
         max(0, _int(r.get("exclusive"))),
         _sources(r),
+        inside,
     )
 
 
@@ -1120,6 +1229,8 @@ def build(
     focus_rows=(),
     start_rows=None,
     every=False,
+    summon_rows=(),
+    held_rows=(),
 ) -> Book:
     """The Book from the world's rows.
 
@@ -1129,7 +1240,9 @@ def build(
     USE_ITEMS_SQL's, `chest_rows` CHEST_SQL's and `object_rows`
     OBJECT_SPAWNS_SQL's: with none of them no quest has a use, as on a world
     read before the verbs existed. `start_rows` are STARTERS_SQL's: the quests a
-    gameobject or an item starts.
+    gameobject or an item starts. `summon_rows` are SUMMONERS_SQL's over the
+    objective creatures, and `held_rows` HELD_SQL's over the items the takes
+    hand over.
     """
     starts, ends = _givers(giver_rows)
     others = _other_starts(start_rows)
@@ -1141,12 +1254,16 @@ def build(
         by_entry,
         _spawns_by_entry(object_rows),
         _focus_targets(focus_rows),
+        _summoners(summon_rows),
     )
+    held = _held(held_rows)
     quests = {}
     for r in quest_rows or ():
         klass = klass_of(r)
         if klass or every:
-            quest = _quest(r, klass, starts, ends, by_entry, droppers, aims, others)
+            quest = _quest(
+                r, klass, starts, ends, by_entry, droppers, aims, others, held
+            )
             # With the other starters read (start_rows given), a quest nothing
             # starts is not a class quest anyone can have.
             if start_rows is not None and _orphan(quest):
@@ -1347,10 +1464,13 @@ def _source_blocker(quest: Quest) -> tuple:
 def _unmet(quest: Quest) -> bool:
     """True when something the quest requires has no source at all: an item
     no creature drops, no chest holds and the quest does not hand over, or a
-    kill with no spawn that no item use credits."""
+    kill with no spawn that no item use credits. A summoned creature (a
+    gameobject's use) is spawned, and an item what the take hands over holds
+    is given."""
     spawned = {s.entry for s in quest.fields}
+    spawned.update(e for u in quest.uses for e in u.summons)
     chested = {u.item for u in quest.uses if u.verb == USE_OBJECT and u.item}
-    given = set(quest.provided)
+    given = set(quest.provided) | set(quest.held)
     # A kill is credited by an item used on a creature, or by the creature an
     # item used beside a spell focus summons there (a warlock's Binding).
     fed = any(u.verb in (USE_ITEM, USE_HERE) for u in quest.uses)
@@ -1466,7 +1586,8 @@ def _all_elite(spawns) -> bool:
 def _elite_only(quest: Quest) -> bool:
     """True when some objective can be met only at an elite: every spawn of a
     creature it kills, of every creature that drops an item it needs, or of
-    every creature an item is used on is elite (or rare).
+    every creature an item is used on is elite (or rare), or every creature a
+    gameobject's use summons for it is (Use.elite).
 
     ONE ELITE AMONG THE DROPPERS IS NO GROUP (2026-10-10). The Tome of Divinity
     (1644, 1648) needs 10 Linen Cloth, which 10,501 spawns drop; 875 of them are
@@ -1479,6 +1600,8 @@ def _elite_only(quest: Quest) -> bool:
         droppers = {e for i, e in quest.drops if i == item}
         if droppers and _all_elite(s for s in quest.fields if s.entry in droppers):
             return True
+    if any(u.elite for u in quest.uses):
+        return True
     return any(u.verb == USE_ITEM and _all_elite(u.spots) for u in quest.uses)
 
 
