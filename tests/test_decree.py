@@ -356,6 +356,7 @@ class WhatThisConsoleMayWrite(unittest.TestCase):
             roads,
             {
                 decree.JOB: decree.COMMAND,
+                decree.MUSTER: decree.COMMAND,
                 decree.CAMPAIGN: decree.ROSTER,
                 decree.QUEUE: decree.QUEUE_STORE,
                 decree.TRAVEL: decree.ROSTER,
