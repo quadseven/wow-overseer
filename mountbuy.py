@@ -149,6 +149,40 @@ def cheapest(race, riding_value, offers) -> Offer | None:
     return min(usable, key=lambda o: (o.price, o.entry))
 
 
+def _carried_mount(carried, offers, riding_value) -> Offer | None:
+    """The mount item the member carries and can use, None when none. An item
+    the stock does not list still counts (a gift or a drop); its rank is
+    unknown, so the module's learn row is left to judge it."""
+    by_entry = {o.entry: o for o in offers}
+    for entry, item_class, subclass in carried:
+        if _int(item_class) != MOUNT_CLASS or _int(subclass) != MOUNT_SUBCLASS:
+            continue
+        held = by_entry.get(_int(entry)) or Offer(0, _int(entry), 0, 0, -1)
+        if held.rank <= _int(riding_value):
+            return held
+    return None
+
+
+def _no_offer(name, race, riding_value) -> Decision:
+    """Why the race's vendor has nothing for the member."""
+    if _int(race) not in MOUNT_VENDORS:
+        return Decision(why="no mount vendor is known for %s's race" % name)
+    return Decision(
+        why="%s's mount vendor sells nothing its Riding %d can ride"
+        % (name, _int(riding_value))
+    )
+
+
+def _on_map(offer, offers, map_id) -> bool:
+    """Whether a spawn of the offer's vendor stands on the member's map."""
+    if map_id is None:
+        return False
+    return any(
+        o.entry == offer.entry and o.vendor == offer.vendor and o.map_id == _int(map_id)
+        for o in offers
+    )
+
+
 def decide(
     name,
     level,
@@ -168,27 +202,18 @@ def decide(
     (entry, item class, subclass) of what it carries; `facts` a Facts.
     """
     value, ceiling = (tuple(riding) + (0, 0))[:2]
-    if facts is None or not wants_mount(level, class_id, ceiling):
+    if facts is None or facts.knows_mount:
         return Decision()
-    if facts.knows_mount:
+    if not wants_mount(level, class_id, ceiling):
         return Decision()
     offers = tuple(facts.offers)
-    by_entry = {o.entry: o for o in offers}
-    for entry, item_class, subclass in carried:
-        if _int(item_class) == MOUNT_CLASS and _int(subclass) == MOUNT_SUBCLASS:
-            held = by_entry.get(_int(entry)) or Offer(0, _int(entry), 0, 0, -1)
-            if held.rank <= _int(value):
-                return Decision(USE, held)
+    held = _carried_mount(carried, offers, value)
+    if held is not None:
+        return Decision(USE, held)
     offer = cheapest(race, value, offers)
     if offer is None:
-        if _int(race) not in MOUNT_VENDORS:
-            return Decision(why="no mount vendor is known for %s's race" % name)
-        return Decision(
-            why="%s's mount vendor sells nothing its Riding %d can ride"
-            % (name, _int(value))
-        )
-    need = offer.price + max(0, _int(reserve))
-    if _int(money) < need:
+        return _no_offer(name, race, value)
+    if _int(money) < offer.price + max(0, _int(reserve)):
         return Decision(
             offer=offer,
             why="%s saves for a mount (%s, after %s kept for its class spells; "
@@ -200,8 +225,7 @@ def decide(
                 purse.money(money),
             ),
         )
-    on_map = [o for o in offers if o.entry == offer.entry and o.vendor == offer.vendor]
-    if map_id is None or all(o.map_id != _int(map_id) for o in on_map):
+    if not _on_map(offer, offers, map_id):
         return Decision(
             offer=offer,
             why="%s can buy a mount for %s and its race's mount vendor stands on "
