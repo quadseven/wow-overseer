@@ -4392,6 +4392,19 @@ def _fetch_roster_rows() -> list:
         return _with_family(rd, rows)
 
 
+def _fetch_guild_members() -> tuple[list, dict]:
+    """Fresh commandable guild membership and guild names for one decree."""
+    with realmread.Session(_connect) as rd:
+        guilds = rd.must("SELECT guildid, name FROM guild")
+        members = rd.must(
+            "SELECT c.name, s.level, s.is_bot, gm.guildid AS guild_id "
+            "FROM guild_member gm JOIN characters c ON c.guid = gm.guid "
+            "JOIN overseer_snapshot s ON s.name = c.name "
+            "WHERE s.updated_at > NOW() - INTERVAL 60 SECOND"
+        )
+    return members, {int(row["guildid"]): row["name"] for row in guilds}
+
+
 def _apply_order(order) -> int:
     """Run one planned order and report how many writes CHANGED a row.
 
@@ -5551,7 +5564,12 @@ class Handler(BaseHTTPRequestHandler):
             # ten seconds.
             with _DECREE_LOCK:
                 _note_module_crossing()
-                order = decree.plan_order(request, _fetch_roster_rows())
+                roster_rows = _fetch_roster_rows()
+                members, guild_names = (
+                    _fetch_guild_members() if request.get("section") == decree.MUSTER
+                    else ([], {})
+                )
+                order = decree.plan_order(request, roster_rows, members, guild_names)
                 changed = 0 if order.refusal else _apply_order(order)
             if order.refusal:
                 log.info("decree: refused section=%r", order.section)

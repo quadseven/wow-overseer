@@ -35,6 +35,11 @@ export const ACTIONS = {
     path: "/api/decree", fixed: { section: "job" }, submit: "Set the family's job",
     fields: [FAMILY, { name: "mode", label: "Job mode", choices: "modes", typed: "a job mode" }],
   },
+  muster: {
+    path: "/api/decree", fixed: { section: "muster" }, submit: "Send to the guild",
+    fields: [{ name: "guild", label: "Guild name", typed: "a guild name" },
+      { name: "command", label: "Order", kind: "textarea" }],
+  },
   cap: {
     path: "/api/decree", fixed: { section: "campaign" }, submit: "Set the run cap",
     fields: [FAMILY, { name: "wanted", label: "Runs wanted", kind: "number", hint: "0 stops the campaign outright." }],
@@ -307,6 +312,7 @@ function lockCard(op) {
 
 const LOCKED_CARDS = [
   { key: "job", title: "Standing job", send: "Set the family's job" },
+  { key: "muster", title: "Guild muster", send: "Send to the guild" },
   { key: "campaign", title: "Campaign counter", send: "Set the run cap" },
   { key: "queue", title: "Dungeon queue", send: "Set the queue" },
 ];
@@ -336,6 +342,7 @@ function onView(dec, dirRead) {
 <section class="op-sec" aria-labelledby="op-h-decree">${sectionHead("01", html`<span id="op-h-decree">Decree console</span>`)}${consoleState(dec)}
 <div class="op-grid">
 <div class="card op-card">${formOf("job", "Standing job", sectionDoes(d, "job"), d)}</div>
+<div class="card op-card">${formOf("muster", "Guild muster", sectionDoes(d, "muster"), d)}</div>
 <div class="card op-card">${formOf("cap", "Campaign counter", sectionDoes(d, "campaign"), d)}${formOf("restart", "Start the count again", "Sets the runs done back to the start on every member of the family.", d)}</div>
 <div class="card op-card">${formOf("queue", "Dungeon queue", sectionDoes(d, "queue"), d)}${formOf("unqueue", "Clear the queue", "", d)}</div>
 <div class="card op-card">${formOf("aim", "Travel", (d && d.travel && d.travel.caveat) || sectionDoes(d, "travel"), d)}${formOf("standdown", "Stand them down", "", d)}</div>
