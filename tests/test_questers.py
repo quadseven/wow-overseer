@@ -447,6 +447,97 @@ class WallsOnMapZero(unittest.TestCase):
         self.assertEqual(walls, {0: NO_TRANSPORT})
 
 
+# Dun Morogh and Loch Modan, and the module's answer when the walk to the
+# berth fails (2026-10-19 on the dev realm: three Alliance questers of 15 and
+# 16 in Dun Morogh, sent to Durotar for its one quest in reach every pass).
+DUN_MOROGH, LOCH_MODAN = 1, 38
+DWARF = 3
+BERTH = "the walk to the berth gave up on the ground"
+
+
+def under_way_row(age, to_map=1):
+    """A crossing row the module took and has not answered yet."""
+    return {
+        "id": 8,
+        "target_name": "Mirra",
+        "command": "cross-to-map map:%d" % to_map,
+        "source": "guildjobs:quester-cross:Mirra",
+        "status": "delivered",
+        "result": "",
+        "age": age,
+    }
+
+
+class AFailedCrossingPassesTheZoneOver(unittest.TestCase):
+    """While its last crossing failed and the crossing clock holds it, a
+    quester goes to the best zone on its own continent instead of choosing the
+    zone across the sea and standing still until the clock lapses."""
+
+    def setUp(self):
+        self.cat = world(
+            extra_quests=[
+                quest(834, DUROTAR, 9, min_level=7, title="Winds in the Desert"),
+                quest(60, LOCH_MODAN, 14, min_level=10, title="Stormpike's Order"),
+            ],
+            extra_givers=[
+                giver(834, "start", 3293, 3293, 300, -4700, map_id=1, name="Rezlak"),
+                giver(834, "end", 3293, 3293, 300, -4700, map_id=1, name="Rezlak"),
+                giver(60, "start", 1060, 160, -5300, -2900, name="Mountaineer"),
+                giver(60, "end", 1060, 160, -5300, -2900, name="Mountaineer"),
+            ],
+        )
+        self.member = mirra(
+            level=15,
+            race=DWARF,
+            zone_id=DUN_MOROGH,
+            x=-5600.0,
+            y=-500.0,
+            quests_done=frozenset({1, 2, 3, 6, 7, 20, 21, 30, 31}),
+        )
+
+    def plan(self, *rows):
+        crossings = guildjobs.recent_from_rows(rows)
+        return questers.plan(
+            self.cat, self.member, questers.Clock(), 0.0, crossings=crossings
+        )
+
+    def test_with_no_failed_crossing_it_still_crosses_for_the_lowest_band(self):
+        self.assertEqual(questers.next_zone(self.cat, self.member)[0], DUROTAR)
+        p = self.plan()
+        self.assertEqual((p.move.kind, p.move.to_map), (classquest.CROSS, 1))
+
+    def test_after_the_berth_walk_fails_it_goes_to_a_zone_on_its_own_map(self):
+        p = self.plan(crossing_row(BERTH, True, age=2))
+        self.assertIsNotNone(p.move, p.line)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 60))
+        self.assertNotIn("waits on its last crossing", p.line)
+        self.assertEqual(
+            questers.next_zone(self.cat, self.member, unsailed=frozenset({1})),
+            (LOCH_MODAN, [60]),
+        )
+
+    def test_once_the_crossing_clock_lapses_the_zone_is_chosen_again(self):
+        young = self.plan(crossing_row(BERTH, True, age=2))
+        self.assertEqual((young.move.kind, young.move.quest), (classquest.TAKE, 60))
+        due = self.plan(crossing_row(BERTH, True, age=classquest.CROSS_RETRY_MINUTES))
+        self.assertEqual((due.move.kind, due.move.to_map), (classquest.CROSS, 1))
+
+    def test_a_crossing_still_under_way_is_waited_on(self):
+        p = self.plan(under_way_row(age=5))
+        self.assertIsNone(p.move)
+        self.assertIn("waits on its last crossing", p.line)
+        self.assertEqual(
+            questers.failed_crossings(
+                "Mirra", guildjobs.recent_from_rows([under_way_row(age=5)])
+            ),
+            frozenset(),
+        )
+
+    def test_a_crossing_refused_for_good_passes_the_zone_over_too(self):
+        p = self.plan(crossing_row(NO_TRANSPORT, False, age=60))
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 60))
+
+
 class Steps(unittest.TestCase):
     def test_a_take_is_a_walk_to_the_giver_and_the_take(self):
         p = questers.plan(world(), mirra(x=0.0), questers.Clock(), 0.0)
