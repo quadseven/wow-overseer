@@ -592,17 +592,28 @@ LOOT_SQL = (
     "WHERE l.Item IN ({items})"
 )
 
-# The items whose on-use spell is bound to named creatures: the spell's target
-# condition (source type 17, "object entry", type 3 = a creature, applied to
-# the spell's target). A spell with no such row (a self cast, a spell focus, a
-# corpse nearby) is not a use-item-on.
+# The items whose on-use spell is bound to named creatures, in either of the
+# two ways a spell condition (source type 17) names them:
+#   type 31 "object entry", value1 3 = a creature, on the spell's target
+#     (value2 is the entry): the Taming Rods;
+#   type 29 "near creature", on the caster, value3 0 = a living creature
+#     (value1 is the entry): the Symbol of Life (6866, spell 8593), which may
+#     be cast only within 40 yards of a Young Furbolg Shaman (17542), Henze
+#     Faulk (6172) or Narm Faulk (6177), and whose spell hit is the credit
+#     (smart_scripts 17542: "On Spellhit 'Symbol of Life' - Quest Credit").
+# Read with type 31 only, the draenei Redemption (9600) had no use, and the
+# member hunted the furbolg it should resurrect until the hunt stalled and it
+# asked the guild for help (#781). A spell with no such row (a self cast, a
+# spell focus, a corpse nearby) is not a use-item-on.
 USE_ITEMS_SQL = (
-    "SELECT it.entry AS item, c.ConditionValue2 AS target "
+    "SELECT it.entry AS item, CASE c.ConditionTypeOrReference "
+    "WHEN 31 THEN c.ConditionValue2 ELSE c.ConditionValue1 END AS target "
     "FROM acore_world.item_template it "
     "JOIN acore_world.conditions c ON c.SourceTypeOrReferenceId = 17 "
-    "AND c.SourceEntry = it.spellid_1 AND c.ConditionTypeOrReference = 31 "
-    "AND c.ConditionValue1 = 3 AND c.ConditionTarget = 1 "
-    "AND c.NegativeCondition = 0 "
+    "AND c.SourceEntry = it.spellid_1 AND c.NegativeCondition = 0 "
+    "AND ((c.ConditionTypeOrReference = 31 AND c.ConditionValue1 = 3 "
+    "AND c.ConditionTarget = 1) OR (c.ConditionTypeOrReference = 29 "
+    "AND c.ConditionTarget = 0 AND c.ConditionValue3 = 0)) "
     "WHERE it.spelltrigger_1 = 0 AND it.entry IN ({items})"
 )
 
