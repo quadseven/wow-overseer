@@ -343,6 +343,26 @@ class TheUseMove(unittest.TestCase):
     def move(self, m, b=None):
         return classquest.next_move(b or taming(), m)
 
+    def test_an_item_used_on_the_objective_is_used_instead_of_hunting_it(self):
+        target = 3099
+        quest = qrow(
+            6062,
+            "Rescue Job",
+            npc1=target,
+            npc_count1=1,
+            provided0=ROD,
+            reward=9001,
+        )
+        book = taming(quest_rows=[quest], spawn_rows=[BOARS[0]])
+        member = who(quest_log={6062: 3}, carried=carried((ROD, 1)))
+        move, blocked = self.move(member, book)
+        self.assertEqual(blocked, [])
+        self.assertEqual(move.kind, classquest.USE)
+        self.assertEqual(
+            classquest.use_command(move.use, move.spot),
+            "use-item-on creature:3099 item:15917",
+        )
+
     def test_a_held_taming_quest_walks_to_the_nearest_boar_and_uses_the_rod(self):
         m = who(quest_log={6062: 3}, carried=carried((ROD, 1)))
         move, blocked = self.move(m)
