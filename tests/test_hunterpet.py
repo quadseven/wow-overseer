@@ -174,10 +174,10 @@ class InThePass(unittest.TestCase):
 
 
 # Grunty in Thunder Bluff, about 3,280 yards from the Barrens prowler. Read on the
-# dev realm on 2026-10-19: Cowpoke (20) in Mulgore and Pokka (16) in Darnassus
-# know Tame Beast and have no pet, and every pass from 18:22 UTC logged
-# "0 tameable beast spawn(s) ... within 800 yards" for each (104 and 97 passes):
-# a hunter away from beasts of its level was never sent to one.
+# dev realm from 2026-10-18 18:30 to 2026-10-19 20:19 UTC: Cowpoke (20) in
+# Mulgore and Pokka (16) in Darnassus know Tame Beast and have no pet, and 104
+# and 97 passes logged "0 tameable beast spawn(s) ... within 800 yards": a
+# hunter away from beasts of its level was not sent to one.
 IN_TOWN = dict(x=-1280.0, y=100.0)
 FAR = guildroute.FAR_WALK_YARDS
 

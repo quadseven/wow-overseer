@@ -51,11 +51,11 @@ STEPS_PER_GUILD = 4
 BEAST_YARDS = 800.0
 # How far a hunter is sent for a beast on a far walk, when the pass carries the
 # far cap: the next zone over. The level walk does not keep a hunter where
-# beasts of its level live. Read on the dev realm on 2026-10-19: Cowpoke (20)
-# stood in Mulgore and Pokka (16) in Darnassus, and each pass from 18:22 UTC
-# found "0 tameable beast spawn(s)" within 800 yards (104 and 97 passes), so
-# neither was ever sent to a beast. The bridge reads this far; the nearest
-# beast still wins.
+# beasts of its level live. Read on the dev realm from 2026-10-18 18:30 to
+# 2026-10-19 20:19 UTC: Cowpoke (20) stood in Mulgore and Pokka (16) in
+# Darnassus, and 104 and 97 passes found "0 tameable beast spawn(s)" within
+# 800 yards, so neither was sent to a beast. The bridge reads this far; the
+# nearest beast still wins.
 FAR_BEAST_YARDS = 5000.0
 # A beast at most this many levels under the hunter: a pet levels with its
 # master from where it is tamed, and a much lower one dies in the next fight.
