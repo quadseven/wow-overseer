@@ -1740,6 +1740,164 @@ class ALongerLeaseIsStillALease(unittest.TestCase):
         self.assertEqual(townslot.SLOT_CLEAR, cleared.verdict)
 
 
+class AReagentTripIsNotCutShortByAnUrgentAsk(unittest.TestCase):
+    """wow-overseer#16, measured on wow-dev 2026-10-19:
+
+        17:49:24  craft_supply takes the traveller Grug for '4225'
+        17:53:12  mail takes the traveller Grug from craft_supply: '4225' has
+                  held the family's one travel column for 228s, past its 0s
+                  lease
+
+    The mail pass was urgent, `Slot.want` zeroed every lease for it, and the
+    reagent trip lost the leader before the leader had been handed over from
+    the quest drive. A firm lease is one an urgent ask cannot zero. It is
+    still a lease: past it the trip is preempted like any other errand."""
+
+    AIM = "4225"
+
+    def _slot(self):
+        return townslot.Slot(
+            releasable=economy,
+            long_leases={"gather": townslot.GATHER_LEASE_SECONDS},
+            firm_leases={"craft_supply": townslot.REAGENT_TRIP_LEASE_SECONDS},
+        )
+
+    def _take(self, slot):
+        taken = slot.want(
+            claimant="craft_supply",
+            character="Grug",
+            aim=self.AIM,
+            leader="Grug",
+            column="",
+            retaskable=("", self.AIM),
+            now=0.0,
+        )
+        self.assertEqual(townslot.SLOT_TAKE, taken.verdict)
+        slot.settle(taken, True, 0.0)
+
+    def _mail(self, slot, now, urgent=True):
+        return slot.want(
+            claimant="mail",
+            character="Grug",
+            aim="at:1:9734.6,2253.1,1327.3",
+            leader="Grug",
+            column=self.AIM,
+            retaskable=("", "at:1:9734.6,2253.1,1327.3"),
+            now=now,
+            urgent=urgent,
+        )
+
+    def test_the_measured_urgent_mail_ask_at_228s_waits(self):
+        slot = self._slot()
+        self._take(slot)
+        mail = self._mail(slot, 228.0)
+        self.assertEqual(townslot.SLOT_WAIT, mail.verdict, mail.reason)
+        self.assertIsNone(mail.release)
+        self.assertIn("600s lease", mail.reason)
+
+    def test_an_ordinary_ask_past_the_town_lease_waits_too(self):
+        slot = self._slot()
+        self._take(slot)
+        waiting = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="guild banker",
+            leader="Grug",
+            column=self.AIM,
+            retaskable=("", "guild banker"),
+            now=townslot.LEASE_SECONDS + 1.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, waiting.verdict, waiting.reason)
+
+    def test_it_is_still_a_lease_and_an_urgent_ask_takes_it_once_it_runs_out(self):
+        slot = self._slot()
+        self._take(slot)
+        mail = self._mail(slot, townslot.REAGENT_TRIP_LEASE_SECONDS + 1.0)
+        self.assertEqual(townslot.SLOT_PREEMPT, mail.verdict, mail.reason)
+        self.assertEqual(self.AIM, mail.release.aim)
+
+    def test_an_idle_drive_honours_it_and_clears_it_once_it_runs_out(self):
+        slot = self._slot()
+        self._take(slot)
+        held = slot.want_idle(
+            claimant="craft_rhythm",
+            character="Grug",
+            leader="Grug",
+            column=self.AIM,
+            now=townslot.LEASE_SECONDS + 1.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, held.verdict)
+        cleared = slot.want_idle(
+            claimant="craft_rhythm",
+            character="Grug",
+            leader="Grug",
+            column=self.AIM,
+            now=townslot.REAGENT_TRIP_LEASE_SECONDS + 1.0,
+        )
+        self.assertEqual(townslot.SLOT_CLEAR, cleared.verdict)
+
+    def test_an_urgent_ask_still_zeroes_every_lease_that_is_not_firm(self):
+        """The full-bag rule `ALongerLeaseIsStillALease` pins is unchanged for everybody
+        else: a gathering walk is still taken at once by an urgent ask."""
+        slot = self._slot()
+        taken = slot.want(
+            claimant="gather",
+            character="Grug",
+            aim="at:1:100,200,30",
+            leader="Grug",
+            column="",
+            retaskable=("", "at:1:100,200,30"),
+            now=0.0,
+        )
+        slot.settle(taken, True, 0.0)
+        urgent = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="at:1:100,200,30",
+            retaskable=("", "vendor"),
+            now=1.0,
+            urgent=True,
+        )
+        self.assertEqual(townslot.SLOT_PREEMPT, urgent.verdict)
+
+    def test_the_lease_covers_the_measured_handover_and_walk(self):
+        """302 seconds for the leader intent to hand the leader from the quest
+        drive, plus 523 yards at 112 yards a minute."""
+        self.assertGreaterEqual(
+            townslot.REAGENT_TRIP_LEASE_SECONDS, 302.0 + 523.0 / 112.0 * 60.0
+        )
+
+    def test_leases_for_ask(self):
+        long_leases = {"gather": 450.0, "craft_supply": 10.0}
+        firm = {"craft_supply": 600.0}
+        self.assertEqual(
+            {"craft_supply": 600.0},
+            townslot.leases_for_ask(long_leases, firm, True),
+        )
+        self.assertEqual(
+            {"gather": 450.0, "craft_supply": 600.0},
+            townslot.leases_for_ask(long_leases, firm, False),
+        )
+        self.assertEqual({}, townslot.leases_for_ask(long_leases, None, True))
+        self.assertEqual({}, townslot.leases_for_ask(None, None, False))
+
+    def test_the_bridge_asks_under_the_claimant_the_firm_lease_is_keyed_on(self):
+        source = (pathlib.Path(__file__).resolve().parents[1] / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('CRAFT_SUPPLY_CLAIMANT = "craft_supply"', source)
+        self.assertEqual(
+            2,
+            source.count("CRAFT_SUPPLY_CLAIMANT: TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS"),
+            "both the family's own slot and every cohort slot carry the lease",
+        )
+        walk = source[source.index("async def _aim_at_reagent_vendor(") :]
+        walk = walk[: walk.index("async def _craft_supply_loop(")]
+        self.assertIn('"craft_supply", trip.traveller', walk)
+
+
 class AnUrgentPassThatAchievesNothingStopsOutrankingEverything(unittest.TestCase):
     """infra#4191. `Slot.want` zeroes every lease for an urgent caller and lets
     it skip the queue, which is right - a full bag blocks loot. What was
