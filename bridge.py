@@ -717,7 +717,9 @@ TOWN_SLOT_GATHER_LEASE_SECONDS = float(
 # before another errand takes the traveller; past it the trip is preempted
 # like any other. The claimant is a constant because `Slot.firm_leases` is
 # keyed on it, and a second spelling would silently drop the trip back to a
-# lease any urgent pass zeroes.
+# lease any urgent pass zeroes. The call in `_aim_at_reagent_vendor` keeps the
+# literal word, which the town-slot tests pin as the word it logs with, and
+# tests/test_townslot.py pins that the two agree.
 CRAFT_SUPPLY_CLAIMANT = "craft_supply"
 TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS = float(
     os.environ.get("TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS",
@@ -8884,7 +8886,7 @@ class Bridge(discord.Client):
         # grants it while the sell pass holds the column - it would be inert
         # otherwise - and only a genuinely different errand makes it wait.
         aimed = await self._claim_town_slot(
-            CRAFT_SUPPLY_CLAIMANT, trip.traveller, trip.target,
+            "craft_supply", trip.traveller, trip.target,
             cohort=getattr(cohort, "key", None))
         log.info("craft_supply: %s (aim taken=%s)", craft_supply.report(trip), aimed)
         if not aimed:
