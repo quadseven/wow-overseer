@@ -710,6 +710,20 @@ TOWN_SLOT_GATHER_LEASE_SECONDS = float(
                    townslot.GATHER_LEASE_SECONDS)
 )
 
+# THE REAGENT TRIP'S CLAIMANT AND ITS FIRM LEASE (wow-overseer#16). The
+# argument for 600 is on `townslot.REAGENT_TRIP_LEASE_SECONDS`: the wait for
+# the leader to be handed from the quest drive plus the walk, measured live.
+# Firm means an urgent ask does not zero it, so a trip under way finishes
+# before another errand takes the traveller; past it the trip is preempted
+# like any other. The claimant is a constant because `Slot.firm_leases` is
+# keyed on it, and a second spelling would silently drop the trip back to a
+# lease any urgent pass zeroes.
+CRAFT_SUPPLY_CLAIMANT = "craft_supply"
+TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS = float(
+    os.environ.get("TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS",
+                   townslot.REAGENT_TRIP_LEASE_SECONDS)
+)
+
 # The claimant name the gathering pass asks the column under. A constant
 # because it is written in one place and READ in another - `Slot.long_leases`
 # is keyed on it - and two spellings of the same claimant would silently give
@@ -6684,6 +6698,9 @@ class Bridge(discord.Client):
                 "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                 GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,
             },
+            firm_leases={
+                CRAFT_SUPPLY_CLAIMANT: TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS,
+            },
         )
         # A cut-off follower can make one self-contained vendor walk during a
         # bag hold. It is not the family's leader travel slot, so record these
@@ -8658,6 +8675,9 @@ class Bridge(discord.Client):
                     "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                     GEAR_HOUSE_CLAIMANT: TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS,
                 },
+                firm_leases={
+                    CRAFT_SUPPLY_CLAIMANT: TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS,
+                },
             )
             self._cohort_town_slots[key] = slot
         return slot
@@ -8864,7 +8884,7 @@ class Bridge(discord.Client):
         # grants it while the sell pass holds the column - it would be inert
         # otherwise - and only a genuinely different errand makes it wait.
         aimed = await self._claim_town_slot(
-            "craft_supply", trip.traveller, trip.target,
+            CRAFT_SUPPLY_CLAIMANT, trip.traveller, trip.target,
             cohort=getattr(cohort, "key", None))
         log.info("craft_supply: %s (aim taken=%s)", craft_supply.report(trip), aimed)
         if not aimed:

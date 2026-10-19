@@ -415,6 +415,8 @@ def _bridge_self(world, clock, log):
             "TOWN_SLOT_FLIGHT_LEASE_SECONDS": townslot.GATHER_LEASE_SECONDS,
             "GEAR_HOUSE_CLAIMANT": "gear house",
             "TOWN_SLOT_GEAR_HOUSE_LEASE_SECONDS": townslot.GATHER_LEASE_SECONDS,
+            "CRAFT_SUPPLY_CLAIMANT": "craft_supply",
+            "TOWN_SLOT_REAGENT_TRIP_LEASE_SECONDS": townslot.REAGENT_TRIP_LEASE_SECONDS,
             "_is_economy_aim": economy,
             "_retaskable_from": retaskable,
             "_cohort_leader": lambda key: "Zug",
