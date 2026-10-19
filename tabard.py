@@ -244,6 +244,31 @@ def _median(values: list) -> int:
     return (ordered[middle - 1] + ordered[middle]) // 2
 
 
+def _support(name: str, field: Field, claims: list) -> tuple[list, list]:
+    """Who stands behind `name` in one field: (agreeing, deferring).
+
+    AGREEING want the same value, which on this family is mostly shared race
+    or class. DEFERRING want something else and back `name` anyway, because
+    the bond says they give way to `name` (`bonds.deference`) - but only in a
+    field they care about LESS than `name` does. Deference that ignored
+    feeling would hand every field to whoever is looked up to: Bork worships
+    Grog, and Bork is also the one member unusual in almost every field, so
+    the gnome would never get a word in and the family would wear Grog.
+    """
+    wants = {c.member: c.wants[field.name] for c in claims}
+    mine = wants[name]
+    middle = _median(list(wants.values()))
+    agreeing, deferring = [], []
+    for other, value in wants.items():
+        if other == name:
+            continue
+        if value == mine:
+            agreeing.append(other)
+        elif bonds.deference(other, name) and abs(value - middle) < abs(mine - middle):
+            deferring.append(other)
+    return agreeing, deferring
+
+
 def _weight(name: str, field: Field, claims: list) -> tuple:
     """How hard `name` pushes for its own value in one field. Highest wins.
 
@@ -251,7 +276,9 @@ def _weight(name: str, field: Field, claims: list) -> tuple:
 
     1. BACKING. A value somebody else also wants is an idea with support
        behind it, the same rule `council._tally` applies when it folds
-       duplicate proposals into one. It is first because agreement should
+       duplicate proposals into one. So is a value somebody backs because
+       they defer to whoever wants it, counted at the strength the bond
+       gives (`_support` says who). It is first because agreement should
        beat feeling, or the family never converges on anything.
     2. HOW STRONGLY THEY FEEL, measured as distance from what the family
        wants on average in this field. The member whose identity is most
@@ -267,13 +294,11 @@ def _weight(name: str, field: Field, claims: list) -> tuple:
     is that failure, kept.
     """
     wants = {c.member: c.wants[field.name] for c in claims}
-    mine = wants[name]
-    agreeing = sum(
-        1 for other, value in wants.items() if other != name and value == mine
-    )
-    feeling = abs(mine - _median(list(wants.values())))
+    agreeing, deferring = _support(name, field, claims)
+    backing = len(agreeing) + sum(bonds.deference(d, name) for d in deferring)
+    feeling = abs(wants[name] - _median(list(wants.values())))
     bond = bonds.member(name)
-    return (agreeing, feeling, bond.seniority if bond else 0)
+    return (backing, feeling, bond.seniority if bond else 0)
 
 
 def debate(kin: list) -> Debate:
@@ -284,7 +309,9 @@ def debate(kin: list) -> Debate:
     `_fetch_reflections` round trip per cycle to build an argument that was
     thrown away. Nothing here refuses to back anybody, so there is nothing for
     a history to change; when that stops being true the parameter comes back
-    with a caller that reads it.
+    with a caller that reads it. Who defers to whom is not history: it is
+    written on the bonds, so the debate stays a pure function of the family
+    table.
     """
     claims = [c for c in (claim(k) for k in kin) if c is not None]
     # NOBODY TO ARGUE IS AN ANSWER, NOT A CRASH. `claim` returns None for
@@ -311,10 +338,16 @@ def debate(kin: list) -> Debate:
     lines = [f"{c.member}: {c.said}" for c in claims]
     for field in FIELDS:
         winner = won_by[field.name]
-        backing, feeling, _ = _weight(winner, field, claims)
-        if backing:
+        agreeing, deferring = _support(winner, field, claims)
+        _, feeling, _ = _weight(winner, field, claims)
+        if deferring:
             lines.append(
-                f"{winner}: {backing + 1} of us want same for "
+                f"{winner}: {' and '.join(deferring)} stand with {winner} on "
+                f"{field.spoken}. That settled."
+            )
+        elif agreeing:
+            lines.append(
+                f"{winner}: {len(agreeing) + 1} of us want same for "
                 f"{field.spoken}. That settled."
             )
         elif feeling:
