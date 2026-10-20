@@ -638,11 +638,22 @@ class Broken(unittest.TestCase):
 
     def test_a_turn_in_npc_not_in_the_world_breaks_the_quest_at_once(self):
         cat = world(drop={1003})  # Goldshire's marshal is not spawned
-        p = questers.plan(cat, mirra(quest_log={3: 1}), questers.Clock(), 0.0)
+        p = questers.plan(cat, mirra(quest_log={3: 3}), questers.Clock(), 0.0)
         self.assertEqual(
             [(b.quest, b.reason) for b in p.broken], [(3, questers.ENDER_MISSING)]
         )
         self.assertEqual(p.move.kind, classquest.ABANDON)
+
+    def test_a_complete_quest_with_no_turn_in_npc_is_recorded_not_abandoned(self):
+        # The module refuses to abandon a complete quest ("it is complete;
+        # hand it in"), so the bridge never asks (#1085): the quest is
+        # recorded broken with its reason and the quester moves on.
+        cat = world(drop={1003})
+        p = questers.plan(cat, mirra(quest_log={3: 1}), questers.Clock(), 0.0)
+        self.assertEqual(
+            [(b.quest, b.reason) for b in p.broken], [(3, questers.ENDER_MISSING)]
+        )
+        self.assertNotEqual(p.move.kind, classquest.ABANDON)
 
     def test_a_quest_giver_not_in_the_world_is_recorded_and_not_taken(self):
         cat = world(drop={1002})
@@ -746,6 +757,81 @@ class Broken(unittest.TestCase):
             world(), mirra(quest_log={1: 1}), questers.Clock(), 0.0, tried=tried
         )
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 1))
+
+    def test_a_complete_quest_the_ledger_holds_broken_is_handed_in_not_dropped(self):
+        # Live, 2026-10-19 23:29Z: Bromli's Bitter Rivals (310) was in the
+        # ledger as broken from before #1085, complete in the log, and the
+        # day-old abandon refusal had aged out of the rows the pass reads, so
+        # the bridge sent `abandon quest:310` again and the module refused it
+        # as complete. A complete quest is never dropped: it is handed in.
+        p = questers.plan(
+            world(),
+            mirra(quest_log={1: questers.STATUS_COMPLETE}),
+            questers.Clock(),
+            0.0,
+            broken=frozenset({1}),
+        )
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 1))
+
+    def test_a_complete_quest_whose_hand_in_keeps_failing_is_not_abandoned(self):
+        # Live, 2026-10-19 23:22Z: Kellan's The Killing Fields (9) was complete,
+        # its hand-in refused three times ("no taker of that quest in reach"),
+        # and the bridge sent `abandon quest:9`, which the module refused as
+        # complete. The quest is recorded broken with the world's words, it is
+        # not dropped, and the quester gets on with the rest of its zone.
+        tried = [
+            questers.Attempt(
+                "Mirra",
+                "turnin quest:1",
+                "error",
+                reason="no taker of that quest in reach",
+                age_minutes=m,
+            )
+            for m in (30, 20, 10)
+        ]
+        p = questers.plan(
+            world(),
+            mirra(quest_log={1: questers.STATUS_COMPLETE}),
+            questers.Clock(),
+            0.0,
+            tried=tried,
+        )
+        self.assertEqual(
+            [b.reason for b in p.broken],
+            [questers.REFUSED_TURN_IN + ": no taker of that quest in reach"],
+        )
+        self.assertIsNotNone(p.move)
+        self.assertNotEqual(p.move.kind, classquest.ABANDON)
+        self.assertNotEqual(p.move.quest, 1)
+
+    def test_no_pass_ever_sends_an_abandon_for_a_complete_quest(self):
+        # Every way a held quest can be broken, with the quest complete in the
+        # log, over four hours of passes: none of them is a drop (#1085).
+        refused = tuple(
+            questers.Attempt(
+                "Mirra", "turnin quest:1", "error", reason="nope", age_minutes=m
+            )
+            for m in (30, 20, 10)
+        )
+        cases = [
+            (world(drop={1003}), {3: 1}, frozenset(), ()),
+            (world(), {1: 1}, frozenset({1}), ()),
+            (world(), {1: 1}, frozenset(), refused),
+            (world(), {1: 1, 2: 1}, frozenset({1, 2}), refused),
+        ]
+        for cat, log, broken, tried in cases:
+            clock = questers.Clock()
+            for minute in range(0, 241, 5):
+                p = questers.plan(
+                    cat,
+                    mirra(quest_log=log),
+                    clock,
+                    minute * 60.0,
+                    broken=broken,
+                    tried=tried,
+                )
+                kind = p.move.kind if p.move is not None else None
+                self.assertNotEqual(kind, classquest.ABANDON, (log, broken, minute))
 
     def test_a_quest_already_broken_is_dropped_and_never_taken_again(self):
         p = questers.plan(
