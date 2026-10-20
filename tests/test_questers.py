@@ -522,6 +522,42 @@ class AFailedCrossingPassesTheZoneOver(unittest.TestCase):
         due = self.plan(crossing_row(BERTH, True, age=classquest.CROSS_RETRY_MINUTES))
         self.assertEqual((due.move.kind, due.move.to_map), (classquest.CROSS, 1))
 
+    def test_a_second_berth_walk_that_gives_up_holds_the_crossing_for_hours(self):
+        # 2026-10-18 to 2026-10-20 on the dev realm: three Alliance questers
+        # of 15 were sent to the Menethil berth for Durotar every ten minutes
+        # for 44 hours, one of them 256 times, and every walk gave up on the
+        # ground, because the road there crosses ground far above its level.
+        twice = (
+            crossing_row(BERTH, True, age=classquest.CROSS_RETRY_MINUTES),
+            crossing_row(BERTH, True, age=2 * classquest.CROSS_RETRY_MINUTES + 1),
+        )
+        crossings = guildjobs.recent_from_rows(twice)
+        self.assertTrue(guildjobs.crossing_cooling("Mirra", crossings))
+        p = self.plan(*twice)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 60))
+        late = (
+            crossing_row(BERTH, True, age=classquest.CROSS_GROUND_HOLD_MINUTES - 1),
+            crossing_row(BERTH, True, age=classquest.CROSS_GROUND_HOLD_MINUTES + 9),
+        )
+        self.assertTrue(
+            guildjobs.crossing_cooling("Mirra", guildjobs.recent_from_rows(late))
+        )
+
+    def test_the_berth_hold_lapses_and_counts_only_that_map(self):
+        lapsed = (
+            crossing_row(BERTH, True, age=classquest.CROSS_GROUND_HOLD_MINUTES),
+            crossing_row(BERTH, True, age=classquest.CROSS_GROUND_HOLD_MINUTES + 10),
+        )
+        due = self.plan(*lapsed)
+        self.assertEqual((due.move.kind, due.move.to_map), (classquest.CROSS, 1))
+        other_map = (
+            crossing_row(BERTH, True, age=classquest.CROSS_RETRY_MINUTES),
+            crossing_row(BERTH, True, age=30, to_map=0),
+        )
+        self.assertFalse(
+            guildjobs.crossing_cooling("Mirra", guildjobs.recent_from_rows(other_map))
+        )
+
     def test_a_crossing_still_under_way_is_waited_on(self):
         p = self.plan(under_way_row(age=5))
         self.assertIsNone(p.move)

@@ -4287,7 +4287,10 @@ def crossing_cooling(name, recent) -> bool:
     crossing is in flight per member. A refusal the module calls retryable is
     asked again after classquest.CROSS_RETRY_MINUTES, any other row after
     classquest.CROSS_COOLDOWN_MINUTES (over the module's own 30 minute backstop,
-    so a row still crossing is always inside it)."""
+    so a row still crossing is always inside it). A walk to the berth that
+    gave up on the ground classquest.CROSS_GROUND_ATTEMPTS times to the same map,
+    inside classquest.CROSS_GROUND_HOLD_MINUTES of the last, holds it that long
+    after the last."""
     rows = [r for r in recent or () if r.name == name and r.action in CROSS_ACTIONS]
     if not rows:
         return False
@@ -4297,6 +4300,17 @@ def crossing_cooling(name, recent) -> bool:
         if newest.refusal and newest.retryable
         else classquest.CROSS_COOLDOWN_MINUTES
     )
+    if newest.refusal == classquest.CROSS_GROUND_GAVE_UP:
+        gave_up = [
+            r
+            for r in rows
+            if r.refusal == classquest.CROSS_GROUND_GAVE_UP
+            and r.dest == newest.dest
+            and int(r.age_minutes) - int(newest.age_minutes)
+            < classquest.CROSS_GROUND_HOLD_MINUTES
+        ]
+        if len(gave_up) >= classquest.CROSS_GROUND_ATTEMPTS:
+            minutes = classquest.CROSS_GROUND_HOLD_MINUTES
     return int(newest.age_minutes) < minutes
 
 
