@@ -1878,6 +1878,35 @@ def _names_of(cohort=None) -> list:
     return sorted(cohort.names)
 
 
+def _bank_bag_wait_note(step) -> str:
+    """Why a bank bag step is not written this pass (#872).
+
+    A member sitting out to craft is not carried by its family's banker trip,
+    so its note says so instead of waiting on a trip that will not come.
+    """
+    if step.name in _standin_out():
+        return ("%s; it waits for a banker - %s is sitting out to craft, so "
+                "the family's banker trip does not carry it; the step is "
+                "written at any banker it stands at or on its next family "
+                "turn" % (step.why, step.name))
+    return "%s; it waits for a banker" % step.why
+
+
+def _bank_trip_wanted(names, unasked, bag_steps) -> bool:
+    """Whether a member who follows the leader still needs the banker (#872).
+
+    THE TRIP IS FOR THE MEMBERS WHO FOLLOW THE LEADER TO THE COUNTER. A member
+    sitting out to craft does not, so its row is never written from this trip:
+    counted here, its step walked the leader to a banker for nothing and then
+    held the aim there for good, because the step stays unasked while the
+    member is elsewhere. Its step rides along at any banker it stands at
+    (`_bank_passing_once`) or on its next family turn.
+    """
+    travelling = set(_standin_running(names))
+    return (any(m.character in travelling for m in unasked)
+            or any(s.name in travelling for s in bag_steps))
+
+
 def _family_of(cohort=None) -> tuple:
     """(names, leader) for a family: this bridge's own for None (#246).
 
@@ -13806,11 +13835,18 @@ class Bridge(discord.Client):
     async def _bank_family_progress(
         self, names: list, leader: str,
     ) -> vendor_stall.FamilyProgress:
-        """Track whether the family has stayed split across bank polls."""
+        """Track whether the family has stayed split across bank polls.
+
+        A MEMBER SITTING OUT TO CRAFT IS NOT THE FAMILY SPLITTING (#872). It
+        stands wherever it crafts and the banker trip is not for it, so it is
+        left out the way every family-wide gate leaves it out. Counted, it
+        read Grug's family as split for 26015 seconds and deferred every
+        banker trip for as long as Og crafted.
+        """
         progress = vendor_stall.family_progress(
             self._bank_family_movement.get(leader),
             await asyncio.to_thread(_fetch_positions, names),
-            tuple(names),
+            tuple(_standin_running(names)),
             time.monotonic(),
         )
         if progress.current is not None:
@@ -14068,7 +14104,8 @@ class Bridge(discord.Client):
         bag_facts, bag_steps = await self._bank_bag_pending(names, seen,
                                                             watched)
         await self._settle_bank_errand(names, leader,
-                                       bool(unasked + bag_steps),
+                                       _bank_trip_wanted(names, unasked,
+                                                         bag_steps),
                                        cohort=_cohort_key(cohort))
         # Below the settling, so the aim still precedes the row, and above the
         # `no moves` return, so a family that walked here for a bag step alone
@@ -14177,7 +14214,7 @@ class Bridge(discord.Client):
                 continue
             town = await asyncio.to_thread(_fetch_town, step.name)
             if not town.banker:
-                notes.append("%s; it waits for a banker" % step.why)
+                notes.append(_bank_bag_wait_note(step))
                 continue
             move = bank.Move(step.name, step.command.split(" ")[0], 0,
                              "bank bag slot", 1, step.why)
