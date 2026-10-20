@@ -19,14 +19,18 @@ pieces for a guild member.
 THE RULE HERE. One opinion, the one the upgrade tracker and the guild's loot
 board already use: `gearscore.score` for the member's spec (its played talent
 tree, else the raid plan's, `gearupgrades.choose_spec`), with the item
-instance's random suffix and enchant folded in. Where the spec values nothing
-on either piece (a level 25 mage's spec weighs stamina and spirit at 0, so a
-Runic Stave and a Walking Stick both score 0), the role weights of
-statweights.py decide, the module's own scorer that the loot council shows.
-A piece is worn when it beats the worn one by MIN_GAIN of its score, the same
-ten percent the guild loot board asks (guildsocial.MIN_GAIN_SHARE) and the
-margin mod-playerbots' own equip test applies, so the two do not fight over a
-sidegrade.
+instance's random suffix and enchant folded in, and the stats of its equip
+spells: the pinned world writes most classic bonuses as an equip spell, not a
+stat row (`preraid.spell_stats`), and mod-playerbots' own scorer counts them.
+A caster's robe whose 7 spell power is a spell read as two white stats, so the
+pass asked for a +12 stamina apron over it and the bot kept the robe. Where
+the spec values nothing on either piece (a level 25 mage's spec weighs stamina
+and spirit at 0, so a Runic Stave and a Walking Stick both score 0), the role
+weights of statweights.py decide, the module's own scorer that the loot
+council shows. A piece is worn when it beats the worn one by MIN_GAIN of its
+score, the same ten percent the guild loot board asks
+(guildsocial.MIN_GAIN_SHARE) and the margin mod-playerbots' own equip test
+applies, so the two do not fight over a sidegrade.
 
 WHAT IT JUDGES THAT THE OLD PASS DID NOT.
   * Necks, rings and trinkets. A pair (two rings, two trinkets) keeps its two
@@ -55,6 +59,7 @@ import bag_pressure
 import gearscore
 import gearupgrades
 import guildrun
+import preraid
 import recap
 import statweights
 import weaponskill
@@ -225,10 +230,50 @@ def wearer_from_row(row: dict, tanks=()) -> Wearer | None:
 # --- what a piece is worth ---------------------------------------------------
 
 
+# preraid.spell_stats name -> the item_template stat type it would be on a stat
+# row, so gearscore.add_stats folds an equip spell in like a stat. Armour
+# penetration and the one-school powers are left out: gearscore scores neither.
+_SPELL_STAT_TYPE = {
+    "sp": 45,
+    "ap": 38,
+    "rap": 39,
+    "crit": 32,
+    "hit": 31,
+    "haste": 36,
+    "expertise": 37,
+    "def": 12,
+    "dodge": 13,
+    "parry": 14,
+    "block": 15,
+    "block_value": 48,
+    "mp5": 43,
+}
+
+
+def equip_spell_stats(row: dict, book=None) -> dict:
+    """{item_template stat type: amount} from the piece's equip spells
+    (spellid_1..5 with spelltrigger SPELL_ON_EQUIP), read off their text in
+    the book's spells, else spells.json. A spell it cannot read adds nothing."""
+    texts = getattr(book, "spells", None)
+    out: dict = {}
+    for n in range(1, 6):
+        spell = _int(row.get(f"spellid_{n}"))
+        if spell <= 0 or _int(row.get(f"spelltrigger_{n}")) != preraid.SPELL_ON_EQUIP:
+            continue
+        for name, amount in preraid.spell_stats(spell, texts).items():
+            kind = _SPELL_STAT_TYPE.get(name)
+            if kind:
+                out[kind] = out.get(kind, 0) + amount
+    return out
+
+
 def stats_of(row: dict, book=None) -> dict:
-    """The piece's normalized stats: its template, plus its instance's random
-    suffix and enchants when an item book is given (armory.instance_stats)."""
-    stats = gearscore.stats_from_row(row)
+    """The piece's normalized stats: its template and its equip spells
+    (equip_spell_stats), plus its instance's random suffix and enchants when
+    an item book is given (armory.instance_stats)."""
+    stats = gearscore.add_stats(
+        gearscore.stats_from_row(row), equip_spell_stats(row, book)
+    )
     if book is not None and (row.get("random_property_id") or row.get("enchantments")):
         try:
             extra, _names = armory.instance_stats(row, book)

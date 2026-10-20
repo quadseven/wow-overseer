@@ -23495,7 +23495,8 @@ def _fetch_equip_candidate_gear(names: list) -> list:
 
 # WHAT THE EQUIP PASS SCORES (equipscore.py): every weapon and armour piece a
 # member wears or carries in its bags, of any quality, with the template stats
-# gearscore.stats_from_row reads, the instance's random suffix and enchants,
+# gearscore.stats_from_row reads, the equip spells equipscore.equip_spell_stats
+# reads (most classic bonuses), the instance's random suffix and enchants,
 # and the columns that say whether the member can put it on now. Necks, rings,
 # trinkets and relics are in, which the item-level judge never read. Worn rows
 # carry `equipment_slot` (bag 0, slot 0..18); carried rows carry NULL there.
@@ -23516,6 +23517,8 @@ _SCORED_GEAR_SQL = (
     "it.armor, it.block, it.fire_res, it.frost_res, it.nature_res, "
     "it.shadow_res, it.arcane_res, it.dmg_min1, it.dmg_max1, it.delay, "
     + ", ".join("it.stat_type%d, it.stat_value%d" % (n, n) for n in range(1, 11))
+    + ", "
+    + ", ".join(f"it.spellid_{n}, it.spelltrigger_{n}" for n in range(1, 6))
     + " FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "

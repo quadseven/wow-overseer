@@ -615,3 +615,105 @@ class AHuntersBotNeverWearsAMeleeWeapon(unittest.TestCase):
     def test_a_warrior_still_wears_the_same_sword(self):
         w = es.wearer_from_row(member("Durg", 1, 25, skills=WARRIOR_SKILLS))
         self.assertEqual(es.refusal(self.gladius(), w), "")
+
+
+class AnEquipSpellIsScoredLikeAStat(unittest.TestCase):
+    """The pinned world writes most classic bonuses as an equip spell, not a
+    stat row: a cloth robe of +6 spirit and +6 stamina carries its 7 spell
+    power as spell 9397 ("Increases spell power by 7."). Measured on the dev
+    realm on 2026-10-19 and 20: the guild's carried-upgrade count held at 18
+    to 22 for 468 passes, and nearly every one was a caster asked to swap
+    such a robe, belt, pants or staff for a piece without spell power. The
+    scorer read the worn piece as its two white stats, so a +12 stamina
+    apron beat it; the bot's own scorer counts the spell and kept the robe."""
+
+    WARLOCK = 9
+    SPELL_POWER_7, SPELL_POWER_8 = 9397, 9398
+    # Arcane spell power: a school power, which gearscore never scores.
+    ARCANE_7 = 13594
+
+    def fabulosa(self):
+        return es.wearer_from_row(
+            member("Fabulosa", self.WARLOCK, 31, skills=CASTER_SKILLS)
+        )
+
+    def robe(self, spell=SPELL_POWER_7, trigger=1):
+        return piece(
+            "Moccasin Robe",
+            5,
+            level=22,
+            req=17,
+            stats=((SPI, 6), (STA, 6)),
+            armor=40,
+            spellid_1=spell,
+            spelltrigger_1=trigger,
+            slot=4,
+            holder="Fabulosa",
+        )
+
+    def apron(self):
+        return piece(
+            "Bloody Apron",
+            5,
+            level=23,
+            req=18,
+            stats=((STA, 12),),
+            armor=41,
+            holder="Fabulosa",
+        )
+
+    def test_the_equip_spell_adds_its_spell_power(self):
+        self.assertEqual(es.stats_of(self.robe())["spell_power"], 7)
+
+    def test_a_worn_robe_whose_spell_power_is_a_spell_is_kept(self):
+        self.assertEqual(es.choose(self.fabulosa(), [self.robe()], [self.apron()]), ())
+
+    def test_a_carried_piece_whose_spell_power_is_a_spell_is_put_on(self):
+        worn = [
+            piece(
+                "Plain Sash",
+                6,
+                level=20,
+                req=15,
+                stats=((STA, 4), (INT, 4)),
+                slot=5,
+                holder="Fabulosa",
+            )
+        ]
+        bind = piece(
+            "Ghamoo-ra's Bind",
+            6,
+            level=25,
+            req=20,
+            stats=((STA, 4), (INT, 4)),
+            spellid_1=self.SPELL_POWER_8,
+            spelltrigger_1=1,
+            holder="Fabulosa",
+        )
+        got = es.choose(self.fabulosa(), worn, [bind])
+        self.assertEqual([e.name for e in got], ["Ghamoo-ra's Bind"])
+        self.assertIn("gear score", got[0].reason)
+
+    def test_only_an_equip_trigger_counts(self):
+        # Trigger 0 is a use spell, 2 a chance on hit: neither is worn power.
+        for trigger in (0, 2):
+            stats = es.stats_of(self.robe(trigger=trigger))
+            self.assertNotIn("spell_power", stats)
+
+    def test_a_school_power_and_an_unknown_spell_add_nothing(self):
+        for spell in (self.ARCANE_7, 999999999):
+            stats = es.stats_of(self.robe(spell))
+            self.assertNotIn("spell_power", stats)
+            self.assertEqual(stats["spirit"], 6)
+
+    def test_the_book_given_reads_the_spell_text(self):
+        class Book:
+            spells = {self.SPELL_POWER_7: "Increases spell power by 30."}
+
+        self.assertEqual(es.stats_of(self.robe(), Book())["spell_power"], 30)
+
+    def test_the_scored_read_carries_the_equip_spells(self):
+        src = BRIDGE.read_text()
+        sql = src[src.index("_SCORED_GEAR_SQL = (") : src.index("_WEARERS_SQL = (")]
+        self.assertIn("it.spellid_{n}, it.spelltrigger_{n}", sql)
+        self.assertIn("range(1, 6)", sql)
