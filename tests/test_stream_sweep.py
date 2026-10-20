@@ -123,6 +123,26 @@ class TheTimer(unittest.TestCase):
         thread.join(5)
         self.assertFalse(thread.is_alive())
 
+    def test_orphan_expires_on_timer_without_a_watch_page(self):
+        store = FakeStore([row("Grug", stream.STALE_AFTER_SECONDS + 1)])
+        expired = threading.Event()
+
+        def sweep():
+            with mock.patch.object(map_server, "_connect", store.connect):
+                if map_server.sweep_quiet_streams(clock=lambda: NOW):
+                    expired.set()
+
+        thread = map_server.start_stream_sweeper(
+            every=0.01, sweep=sweep, stop=self.stop
+        )
+        self.assertTrue(expired.wait(5), "stale stream was not expired by timer")
+        self.stop.set()
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        writes = store.writes()
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0][1], ("Grug",))
+
     def test_a_failed_sweep_is_logged_and_the_next_one_still_runs(self):
         calls = []
         again = threading.Event()
