@@ -76,6 +76,11 @@ one: the module refuses to abandon a complete quest ("it is complete; hand it
 in"), so it is handed in when it can be and otherwise left in the log (#1085). The bridge writes
 each into the quest ledger (questledger.py, #923) with its reason.
 
+A HAND-IN THE WORLD KEEPS REFUSING IS HELD (`turn_in_held`). A complete quest
+whose hand-in was refused FAILS_BEFORE_BROKEN times is not handed in again
+until TURN_IN_RETRY_MINUTES have passed since the last refusal, the hold
+doubling with each refusal past those; then it is tried once more.
+
 PURE MODULE: rows in, moves and verdicts out. No MySQL; the clock is passed in.
 """
 
@@ -163,6 +168,10 @@ GONE = "no such spawn in the world"
 COMPLETE_HAND_IN = "it is complete; hand it in"
 # A take or a hand-in the world refused this many times in a day is broken.
 FAILS_BEFORE_BROKEN = 3
+# A hand-in the world refused FAILS_BEFORE_BROKEN times is held this long after
+# its last refusal before it is tried once more, the hold doubling with each
+# refusal past those (`turn_in_held`).
+TURN_IN_RETRY_MINUTES = 6 * 60
 # The quest ledger's reason column.
 REASON_WIDTH = 255
 
@@ -588,6 +597,38 @@ def _module_complete(name, tried) -> frozenset:
     )
 
 
+def turn_in_held(name, tried) -> frozenset:
+    """The quest ids whose hand-in this quester leaves for now: the world
+    refused it FAILS_BEFORE_BROKEN times or more, and its last refusal is
+    newer than TURN_IN_RETRY_MINUTES, doubled for each refusal past those.
+
+    A REFUSED HAND-IN WAS ASKED EVERY PASS FOREVER (2026-10-20). A complete
+    quest whose hand-in was refused three times was found broken and its
+    abandon was refused as complete (#1085); the module-complete quest then
+    came back as the nearest hand-in every pass, past the broken skip. Kellan
+    walked to Farmer Saldean and handed in The Killing Fields 216 times in
+    42 hours, Pindle Return to Bellowfiz 511 times, each refused for the same
+    lasting reason ("no taker of that quest in reach"). Asked again only after
+    the hold, the quester gets on with the rest of its zone meanwhile."""
+    count: dict = {}
+    newest: dict = {}
+    for a in tried or ():
+        if a.name != name or not a.failed:
+            continue
+        found = _CHAIN_ROW.match(a.command)
+        if not found or found.group(1) != "turnin":
+            continue
+        qid = int(found.group(2))
+        count[qid] = count.get(qid, 0) + 1
+        newest[qid] = min(newest.get(qid, a.age_minutes), a.age_minutes)
+    return frozenset(
+        qid
+        for qid, times in count.items()
+        if times >= FAILS_BEFORE_BROKEN
+        and newest[qid] < TURN_IN_RETRY_MINUTES * 2 ** (times - FAILS_BEFORE_BROKEN)
+    )
+
+
 class Clock:
     """Play time with no objective moving, per quester and quest.
 
@@ -967,9 +1008,12 @@ def next_move(
         return move, "", []
     skip = set(broken) | {b.quest for b in found}
     # 2. A complete quest, the nearest turn-in NPC first. One only the ledger
-    # holds broken is still handed in; one this pass found broken (its turn-in
-    # NPC missing, its hand-in refused FAILS_BEFORE_BROKEN times) is left.
-    hand_skip = (set(broken) - logged_complete) | {b.quest for b in found}
+    # holds broken is still handed in; one whose turn-in NPC this pass found
+    # missing is left, and so is one whose hand-in the world keeps refusing,
+    # until its hold is over (`turn_in_held`), the module-complete ones too.
+    hand_skip = turn_in_held(member.name, tried) | {
+        b.quest for b in found if b.reason == ENDER_MISSING
+    }
     move = _hand_in(cat, member, hand_skip, left, complete)
     if move is not None:
         return move, "", []
@@ -1041,9 +1085,9 @@ def _held(cat: Catalogue, member, status, skip):
 def _hand_in(cat: Catalogue, member, skip, left, complete=frozenset()):
     """The hand-in of the complete quest whose turn-in NPC is nearest, or
     None. A quest the module called complete is handed in even when its log
-    row still says otherwise (#1085)."""
+    row still says otherwise (#1085); `skip` leaves it as it leaves any other."""
     due = {qid for qid, _quest in _held(cat, member, STATUS_COMPLETE, skip)}
-    due |= {qid for qid in complete if qid in member.quest_log}
+    due |= {qid for qid in complete if qid in member.quest_log and qid not in skip}
     ready = []
     for qid in due:
         quest = cat.quest(qid)
