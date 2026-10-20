@@ -23,19 +23,18 @@ import re
 import unittest
 
 import questshare
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
-MIGRATION = (
-    ROOT / "mod-overseer/data/sql/characters/base" / "2026_08_24_03_overseer_share.sql"
-)
+MODULE = modsource.MODULE
+MIGRATION = modsource.SQL_DIR / "2026_08_24_03_overseer_share.sql"
 BRIDGE = ROOT / "bridge.py"
 
 BANNER = "// --------------------------------------------------------------- share --"
 
 
 def _source() -> str:
-    return MODULE.read_text(encoding="utf-8")
+    return modsource.read(MODULE, encoding="utf-8")
 
 
 def _share_source() -> str:
@@ -276,7 +275,7 @@ class TheEnumNeedsAnAlter(unittest.TestCase):
     cannot add an ENUM value. This trap has bitten the codebase twice."""
 
     def _sql(self) -> str:
-        return MIGRATION.read_text(encoding="utf-8")
+        return modsource.read(MIGRATION, encoding="utf-8")
 
     def _statements(self) -> str:
         """The SQL with its `--` commentary removed.
@@ -443,8 +442,9 @@ class TheShareRetryLogic(unittest.TestCase):
         a five-minute read of kind + status + updated_at range would walk
         every answered row the table ever held. The migration's key must
         match the predicate, columns in that order."""
-        sql = (MIGRATION.parent / "2026_09_02_00_overseer_share_backoff.sql").read_text(
-            encoding="utf-8"
+        sql = modsource.read(
+            MIGRATION.parent / "2026_09_02_00_overseer_share_backoff.sql",
+            encoding="utf-8",
         )
         self.assertIn(
             "ADD KEY `idx_kind_status_updated` (`kind`, `status`, `updated_at`)", sql
@@ -458,6 +458,10 @@ class TheShareRetryLogic(unittest.TestCase):
         ships the bridge's read without its index. The two must name the
         same commit, and that commit must carry the migration."""
         import subprocess
+
+        # `git -C` below runs inside the submodule; without it, git would
+        # answer for this repository instead.
+        modsource.require()
 
         pins = (ROOT / "UPSTREAM-PINS.env").read_text(encoding="utf-8")
         pinned = re.search(r"^AC_OVERSEER_SHA=([0-9a-f]{40})$", pins, re.MULTILINE)
@@ -480,7 +484,9 @@ class TheShareRetryLogic(unittest.TestCase):
             checked_out, gitlink[1], "the submodule checkout is not at the gitlink"
         )
         self.assertTrue(
-            (MIGRATION.parent / "2026_09_02_00_overseer_share_backoff.sql").is_file()
+            modsource.exists(
+                MIGRATION.parent / "2026_09_02_00_overseer_share_backoff.sql"
+            )
         )
 
     def test_the_constants_are_environment_overridable(self):

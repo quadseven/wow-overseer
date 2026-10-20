@@ -48,9 +48,10 @@ import re
 import unittest
 
 import goals
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+MODULE = modsource.MODULE
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
 
@@ -60,7 +61,7 @@ def _divert_strategies() -> frozenset:
     Parsed rather than copied. The initializer is a plain brace list of string
     literals, so the strings between the braces ARE the set.
     """
-    src = MODULE.read_text(encoding="utf-8")
+    src = modsource.read(MODULE, encoding="utf-8")
     start = src.index("ESCORT_DIVERT_STRATEGIES[] = {")
     end = src.index("};", start)
     return frozenset(re.findall(r'"([^"]+)"', src[start:end]))
@@ -92,7 +93,7 @@ class TheDivertListIsReadNotRemembered(unittest.TestCase):
     def test_the_module_source_is_actually_vendored(self):
         """A missing submodule would make every assertion below vacuous."""
         self.assertTrue(
-            MODULE.exists(),
+            modsource.exists(MODULE),
             "mod-overseer is not checked out at %s - run "
             "`git submodule update --init` from the repository root. CI does "
             "this for exactly this directory (check.python-units.yml)" % MODULE,

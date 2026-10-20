@@ -49,9 +49,10 @@ from core import (
     COMMAND_TERMINAL_STATUSES,
     report_outcomes,
 )
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+MODULE = modsource.MODULE
 MIGRATION = (
     ROOT
     / "mod-overseer/data/sql/characters/base"
@@ -69,7 +70,7 @@ VERDICT = 'holds ? "applied" : "unchanged"'
 
 
 def _source() -> str:
-    return MODULE.read_text(encoding="utf-8")
+    return modsource.read(MODULE, encoding="utf-8")
 
 
 def _outcome_source() -> str:
@@ -224,15 +225,15 @@ class TheEnumNeedsAnAppendingAlter(unittest.TestCase):
     written."""
 
     def test_the_migration_exists(self):
-        self.assertTrue(MIGRATION.is_file(), str(MIGRATION))
+        self.assertTrue(modsource.exists(MIGRATION), str(MIGRATION))
 
     def test_it_alters_rather_than_creating(self):
-        sql = MIGRATION.read_text(encoding="utf-8")
+        sql = modsource.read(MIGRATION, encoding="utf-8")
         self.assertIn("ALTER TABLE `overseer_command`", sql)
         self.assertIn("MODIFY COLUMN `status`", sql)
 
     def test_the_existing_values_keep_their_ordinals(self):
-        sql = MIGRATION.read_text(encoding="utf-8")
+        sql = modsource.read(MIGRATION, encoding="utf-8")
         enum = re.search(r"MODIFY COLUMN `status`\s+ENUM\(([^)]*)\)", sql, re.S)
         self.assertIsNotNone(enum, "no status ENUM in the migration")
         values = re.findall(r"'([a-z]+)'", enum.group(1))
@@ -244,7 +245,7 @@ class TheEnumNeedsAnAppendingAlter(unittest.TestCase):
         self.assertEqual(values[4:], ["verifying", "applied", "unchanged"])
 
     def test_the_default_is_still_pending(self):
-        sql = MIGRATION.read_text(encoding="utf-8")
+        sql = modsource.read(MIGRATION, encoding="utf-8")
         self.assertIn("DEFAULT 'pending'", sql)
 
 

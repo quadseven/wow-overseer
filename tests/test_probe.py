@@ -18,6 +18,7 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
 
 import probe  # noqa: E402
+import modsource
 
 
 class FakeCursor:
@@ -126,14 +127,12 @@ class PlaceholdersCarryNoData(unittest.TestCase):
             probe.placeholders(0)
 
 
-MODULE = (
-    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
-)
+MODULE = modsource.MODULE
 
 
 def _probe_source() -> str:
     """Everything from the first probe function to the end of DoProbe."""
-    src = MODULE.read_text(encoding="utf-8")
+    src = modsource.read(MODULE, encoding="utf-8")
     start = src.index("static std::string ProbeState(")
     end = src.index("// Run a dot-command through the character's OWN session")
     assert end > start
@@ -176,13 +175,13 @@ class ProbesAreReadOnly(unittest.TestCase):
 
     def test_the_probe_path_is_reachable_from_the_command_loop(self):
         """DoProbe nobody dispatches to is an instrument that never reads."""
-        src = MODULE.read_text(encoding="utf-8")
+        src = modsource.read(MODULE, encoding="utf-8")
         self.assertIn('kind == "probe"', src)
         self.assertIn("DoProbe(player, command, status, rowResult)", src)
 
     def test_the_result_is_actually_written_back(self):
         """A probe whose answer never reaches the row answers nobody."""
-        src = MODULE.read_text(encoding="utf-8")
+        src = modsource.read(MODULE, encoding="utf-8")
         self.assertIn("result = '{}'", src)
         self.assertIn("EscLong(rowResult)", src)
 

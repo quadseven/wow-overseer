@@ -38,11 +38,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import auction  # noqa: E402
 import recipebook  # noqa: E402
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
-DECISIONS_H = ROOT / "mod-overseer/src/overseer_decisions.h"
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+DECISIONS = modsource.DECISIONS
+DECISIONS_H = modsource.DECISIONS_H
+MODULE = modsource.MODULE
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 DOCKERFILE = ROOT / "Dockerfile"
 
@@ -226,7 +227,7 @@ class TheParserOnTheOtherSideAcceptsIt(unittest.TestCase):
     """Read off the deployed parser's own source, never remembered."""
 
     def test_the_verb_is_the_word_the_dispatch_routes_on(self):
-        source = DECISIONS.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(DECISIONS, encoding="utf-8", errors="ignore")
         _has(
             self,
             'return !words.empty() && words[0] == "use";',
@@ -240,12 +241,12 @@ class TheParserOnTheOtherSideAcceptsIt(unittest.TestCase):
             self.assertTrue(rendered.startswith("use "))
 
     def test_the_two_keys_are_the_two_this_module_renders(self):
-        source = DECISIONS.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(DECISIONS, encoding="utf-8", errors="ignore")
         _has(self, 'LearnKeyed(words[1], "guid", key)', source, "the guid key")
         _has(self, 'LearnKeyed(words[1], "entry", key)', source, "the entry key")
 
     def test_a_third_word_is_refused_so_nothing_may_be_appended(self):
-        source = DECISIONS.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(DECISIONS, encoding="utf-8", errors="ignore")
         _has(
             self,
             "request.error = LearnRefusal::TooManyWords;",
@@ -263,7 +264,7 @@ class TheParserOnTheOtherSideAcceptsIt(unittest.TestCase):
         in mod-overseer's data/sql that reaches a world only when db-import
         runs."""
         self.assertEqual(recipebook.LEARN_KIND, "cast")
-        source = MODULE.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(MODULE, encoding="utf-8", errors="ignore")
         _has(
             self,
             'else if (kind == "cast" && OverseerDecisions::IsLearnRow(command))',
@@ -276,7 +277,7 @@ class TheSettledDetailsAreTheExecutorsOwnWords(unittest.TestCase):
     """If these drift, the pass re-asks a settled row for ever."""
 
     def test_both_literals_exist_in_the_deployed_refusal_table(self):
-        source = DECISIONS_H.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(DECISIONS_H, encoding="utf-8", errors="ignore")
         _has(
             self,
             'constexpr char const* AlreadyKnown = "%s";' % recipebook.ALREADY_KNOWN,
@@ -294,7 +295,7 @@ class TheSettledDetailsAreTheExecutorsOwnWords(unittest.TestCase):
         """It is the refusal that saves the item, so it has to be upstream of
         the packet. Spell::TakeCastItem destroys a recipe item on use whether or
         not anything was learned."""
-        source = MODULE.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(MODULE, encoding="utf-8", errors="ignore")
         body = _slice(
             self,
             source,
@@ -312,7 +313,7 @@ class TheSettledDetailsAreTheExecutorsOwnWords(unittest.TestCase):
         """Asserted on the code with the comments stripped, because the comment
         right above the read names character_spell in order to say it must not
         be used - and a bare substring search would reward deleting it."""
-        source = MODULE.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(MODULE, encoding="utf-8", errors="ignore")
         body = _cpp_code(
             _slice(
                 self,
@@ -844,7 +845,7 @@ class TheExecutorContractThisPassDependsOn(unittest.TestCase):
         """Which is why the buy half can never feed the learn half in one pass.
         If this stops being true the design gets simpler, and this test is what
         should say so."""
-        source = MODULE.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(MODULE, encoding="utf-8", errors="ignore")
         _has(
             self,
             'describe("bought", "", "the item arrives by mail',
@@ -855,7 +856,7 @@ class TheExecutorContractThisPassDependsOn(unittest.TestCase):
     def test_the_use_row_is_never_reported_as_delivered(self):
         """Spell 483 is a 3000ms cast, so a `delivered` would be a postmark and
         not a delivery."""
-        source = MODULE.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(MODULE, encoding="utf-8", errors="ignore")
         body = _slice(
             self,
             source,

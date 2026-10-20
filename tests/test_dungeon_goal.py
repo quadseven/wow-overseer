@@ -13,6 +13,7 @@ import unittest
 
 import council
 import goals
+import modsource
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
@@ -265,9 +266,7 @@ class TheBridgeCanActuallyDriveADungeonGoal(unittest.TestCase):
 # --- an unknown keyword never reaches the roster (#86) ----------------------
 
 
-MODULE = (
-    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
-)
+MODULE = modsource.MODULE
 
 
 def _load_drive_dungeon(inserted: list, updated: list, warnings: list):
@@ -375,7 +374,7 @@ class TheKeywordVocabularyIsTheCoordinators(unittest.TestCase):
 
         import jobs
 
-        text = MODULE.read_text(encoding="utf-8")
+        text = modsource.read(MODULE, encoding="utf-8")
         start = text.index("DungeonPortals()\n")
         body = text[start : text.index("};", start)]
         in_cpp = set(re.findall(r'^\s*\{"([a-z-]+)",', body, re.M))

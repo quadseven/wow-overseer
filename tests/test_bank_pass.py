@@ -14,6 +14,7 @@ import sys
 import types
 import unittest
 from unittest import mock
+import modsource
 
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
@@ -24,9 +25,7 @@ import towntrip  # noqa: E402
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
 DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
-MOD_OVERSEER = (
-    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
-)
+MOD_OVERSEER = modsource.MODULE
 
 
 def _source() -> str:
@@ -389,9 +388,8 @@ class ABankRowIsAnsweredWhereTheCharacterStandsTests(unittest.TestCase):
     """
 
     def setUp(self):
-        if not MOD_OVERSEER.exists():
-            self.skipTest("mod-overseer submodule not checked out")
-        cpp = MOD_OVERSEER.read_text(encoding="utf-8")
+        modsource.require()
+        cpp = modsource.read(MOD_OVERSEER, encoding="utf-8")
         self.cpp = cpp
         start = cpp.index("static char const* DoBank(")
         self.bank = cpp[start : cpp.index("static char const*", start + 10)]
