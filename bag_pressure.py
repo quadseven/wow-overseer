@@ -460,6 +460,17 @@ def family_sale_slots(free_slots: dict, sellable: dict) -> int:
     vendor will buy - contributes nothing, which is the half that kept the
     vendor pass off a column it could not use (infra#4190).
 
+    A member the vendor cannot lift past the trigger contributes nothing
+    either: selling his stacks leaves him at the floor, so the trip frees the
+    floor for nobody. Only stacks that take a member past
+    `TOWN_RUN_FREE_SLOTS` count, the same test `family_town_run_needed`
+    applies per member. A family held at the floor by a member who carries
+    only what it keeps, while its questing members loot a few vendor stacks
+    between them, used to re-arm the trip on every pass: the trip took the
+    leader's walk, sold those stacks, left the floor where it was, and the
+    bag-room hold never ended. Zug's family read "waits for bag room" for
+    2.2 hours on exactly that (2026-10-20).
+
     ONLY THE FLOOR'S STACKS COUNT (#1243). A slot freed in the bags of a
     member with room is not a slot in anybody's at the floor. Counting them
     re-armed the trip for a family held there by a member who carries only
@@ -479,8 +490,13 @@ def family_sale_slots(free_slots: dict, sellable: dict) -> int:
         if not (isinstance(free, int) and 0 <= free <= TOWN_RUN_FREE_SLOTS):
             continue
         offered = (sellable or {}).get(name, 0)
-        if isinstance(offered, int) and offered > 0:
-            freed += offered
+        if not isinstance(offered, int) or offered <= 0:
+            continue
+        if free + offered <= TOWN_RUN_FREE_SLOTS:
+            # Selling this member's stacks leaves him at the floor: the trip
+            # does not make room for him, so it frees the floor for nobody.
+            continue
+        freed += offered
     return freed
 
 
