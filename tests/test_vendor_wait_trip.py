@@ -100,3 +100,47 @@ class TheTripMakesTheFamilyRoom(unittest.TestCase):
             )
         )
         self.assertEqual(bag_pressure.VENDOR_MODE_COUNTER, mode)
+
+
+class NoTripForAFloorItCannotLift(unittest.TestCase):
+    """#1243: the family-room trip of #1204 counts only the floor's stacks.
+
+    Bork sits at the floor on stacks no vendor will buy, and the members with
+    room have looted five vendor stacks between them. Selling those frees
+    slots in bags that were not full; the trip that took the leader's walk
+    for it left Bork where he was, re-armed on the next pass, and kept the
+    family in the bag-room hold.
+    """
+
+    def test_the_trip_does_not_go_for_stacks_of_members_with_room(self):
+        namespace = _vendor_pass_mode({"_fetch_vendor_wait_seconds": lambda names: 0})
+        mode = asyncio.run(
+            namespace["_vendor_pass_mode"](
+                None,
+                ["Bork", "Grog", "Ugga", "Og"],
+                {"Bork": 0, "Grog": 12, "Ugga": 9, "Og": 10},
+                {"Bork": 0, "Grog": 2, "Ugga": 1, "Og": 2},
+                False,
+            )
+        )
+        self.assertEqual(bag_pressure.VENDOR_MODE_COUNTER, mode)
+
+    def test_the_pass_records_the_counts_its_trip_decision_used(self):
+        # The dungeon quest hold reads these to ask whether the trip it waits
+        # on would make room; a pass that did not record them would leave it
+        # waiting as before.
+        recorded = {}
+        namespace = _vendor_pass_mode(
+            {
+                "_fetch_vendor_wait_seconds": lambda names: 0,
+                "_note_vendor_sellable": lambda names, sellable: recorded.update(
+                    sellable
+                ),
+            }
+        )
+        asyncio.run(
+            namespace["_vendor_pass_mode"](
+                None, ["Bork", "Og"], {"Bork": 0, "Og": 10}, {"Bork": 0, "Og": 2}, False
+            )
+        )
+        self.assertEqual({"Bork": 0, "Og": 2}, recorded)
