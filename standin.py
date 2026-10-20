@@ -563,8 +563,16 @@ def step(facts: Facts) -> Step:
     """What to do with this family's stand-in row this pass."""
     current = facts.current
     held = _held_in(facts)
-    # A turn that is over ends the row like a release: between runs only.
-    why = held or released(facts) or turn_over(facts) or family_turn(facts)
+    # A crafting turn that is over ends the row like a release, between runs
+    # only; with no row of his it says nothing (a stale record never keeps a
+    # member from sitting out). A family turn keeps a new row from being made.
+    mine = current is not None and current.out_name == facts.ordered
+    why = (
+        held
+        or released(facts)
+        or (turn_over(facts) if mine else "")
+        or family_turn(facts)
+    )
     if current is not None and current.out_name != facts.ordered and facts.ordered:
         why = why or "the order now names %s, not %s" % (
             facts.ordered,

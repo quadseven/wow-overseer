@@ -505,6 +505,17 @@ class SittingOutTakesTurnsWithTheFamily(unittest.TestCase):
         )
         self.assertEqual(standin.SEAT, step.action)
 
+    def test_a_stale_crafting_turn_with_no_row_never_keeps_og_in(self):
+        # The row went (deleted outside this pass) while a crafting turn was
+        # recorded: he sits out again and a new crafting turn begins.
+        f = facts(turn=turn(standin.CRAFT, 0), now=3 * standin.CRAFT_TURN_SECONDS)
+        step = standin.step(f)
+        self.assertEqual(standin.SEAT, step.action)
+        self.assertEqual(
+            turn(standin.CRAFT, 3 * standin.CRAFT_TURN_SECONDS),
+            standin.next_turn(f, step),
+        )
+
     def test_another_members_turn_is_not_ogs(self):
         step = standin.step(
             facts(turn=turn(standin.FAMILY, 0, out_name="Bork"), now=60)
