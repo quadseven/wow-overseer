@@ -1,5 +1,5 @@
-// Operator actions. Talking to a character, decrees, starting and stopping
-// streams and pointing the Watcher queue commands the realm acts on, so they
+// Operator actions. Talking to a character, decrees and pointing the Watcher
+// queue commands the realm acts on, so they
 // live here, apart from the read-only app.
 //
 // LOCKED UNLESS THE SERVER SAYS OTHERWISE. Nothing on this route draws a form
@@ -18,12 +18,6 @@
 
 import { html, raw, esc, pageHead, sectionHead, state, skeletons, plural } from "../ui.js";
 import { post, refreshNow } from "../api.js";
-
-// Watch modes, stream.MODES. A pov or cam client is kept alive by a heartbeat
-// every stream.HEARTBEAT_SECONDS; shot and record need none.
-export const WATCH_MODES = ["cam", "pov", "shot", "record"];
-export const NEEDS_A_VIEWER = ["cam", "pov"];
-export const BEAT_MS = 10000;
 
 // What each action sends. `fixed` is merged into every body; `fields` are the
 // inputs, named exactly as the handler reads them. `header` sends one field as
@@ -76,14 +70,6 @@ export const ACTIONS = {
     path: "/api/chat", fanout: true, submit: "Let the family overhear it",
     fields: [{ name: "text", label: "The decree", kind: "textarea" }],
   },
-  watchStart: {
-    path: "/api/watch", fixed: { action: "start" }, submit: "Start the stream",
-    fields: [{ name: "name", label: "Character", choices: "who", typed: "a character name" }, { name: "mode", label: "Mode", choices: "watchModes", initial: "cam" }],
-  },
-  watchStop: {
-    path: "/api/watch", fixed: { action: "stop" }, submit: "Stop the stream",
-    fields: [{ name: "name", label: "Character", choices: "who", typed: "a character name" }],
-  },
   director: {
     path: "/api/director", submit: "Point the Watcher",
     fields: [
@@ -109,7 +95,6 @@ function form(id) {
 let lastCtx = null;
 let lastOn = false;
 let bound = false;
-const beat = { name: "", mode: "", timer: null, note: "" };
 
 // ---- what the forms are given to choose from ------------------------------------
 
@@ -119,7 +104,6 @@ function choices(key, dec) {
   if (key === "modes") return ((d.job && d.job.chips) || []).map((c) => ({ value: c.mode, label: c.sendable ? c.mode : c.mode + " (not built)" }));
   if (key === "who") return ((d.travel && d.travel.who) || []).map((n) => ({ value: n, label: n }));
   if (key === "roles") return ((d.travel && d.travel.chips) || []).map((c) => ({ value: c.role, label: c.role }));
-  if (key === "watchModes") return WATCH_MODES.map((m) => ({ value: m, label: m }));
   return [];
 }
 
@@ -221,7 +205,6 @@ function successOf(id, res) {
     const mins = Math.round((Number(b.expires_in) || 0) / 60);
     return { kind: "ok", text: b.spec ? "The Watcher's order is now: " + b.spec + (mins ? ", for " + plural(mins, "minute") + "." : ".") : "The Watcher's order is cleared." };
   }
-  if (id === "watchStart") return { kind: "ok", text: "The server took it" + (b.state ? ": the stream is " + b.state + "." : ".") };
   return { kind: "ok", text: "The server took it." };
 }
 
@@ -327,12 +310,6 @@ function lockedView(op, dec) {
   return html`${pageHead("Operator actions")}${lockCard(op)}${dec.error && dec.data ? state("stale", "Showing the last answer", "The decree read failed; the cards below are from earlier.") : ""}${cards}`;
 }
 
-function beatLine() {
-  if (!beat.timer && !beat.note) return "";
-  if (!beat.timer) return html`<p class="op-hint" role="status">${beat.note}</p>`;
-  return html`<p class="op-hint" role="status">Holding ${beat.name}'s ${beat.mode} stream open: this page tells the server it is still watching every ${BEAT_MS / 1000} seconds. Leave this page or stop the stream to end it.</p>`;
-}
-
 function onView(dec, dirRead) {
   const d = dec.data;
   const dir = dirRead.data;
@@ -349,8 +326,7 @@ function onView(dec, dirRead) {
 <div class="card op-card">${willReady ? formOf("will", "Speak to the family", "Every one of them hears it and answers in their own words, oldest first.", d) : html`<div class="op-form-title">Speak to the family</div>${state("unmeasured", "Waiting for the console", "Who hears the decree comes from the decree console read, which has not answered.")}`}</div>
 </div></section>
 <section class="op-sec" aria-labelledby="op-h-chat">${sectionHead("02", html`<span id="op-h-chat">Talk to a character</span>`)}<div class="op-grid"><div class="card op-card">${formOf("chat", "One character", "Your words are kept even if the character does not answer.", d)}</div></div></section>
-<section class="op-sec" aria-labelledby="op-h-streams">${sectionHead("03", html`<span id="op-h-streams">Streams</span>`)}<div class="op-grid"><div class="card op-card">${formOf("watchStart", "Start a stream", "cam and pov need a viewer and end after a minute of silence; shot takes one picture; record runs unattended.", d)}${beatLine()}</div><div class="card op-card">${formOf("watchStop", "Stop a stream", "", d)}</div></div></section>
-<section class="op-sec" aria-labelledby="op-h-watcher">${sectionHead("04", html`<span id="op-h-watcher">The Watcher</span>`)}${watcherState(dirRead)}<div class="op-grid"><div class="card op-card">${formOf("director", "Point the Watcher", "", d, dir)}</div></div></section>
+<section class="op-sec" aria-labelledby="op-h-watcher">${sectionHead("03", html`<span id="op-h-watcher">The Watcher</span>`)}${watcherState(dirRead)}<div class="op-grid"><div class="card op-card">${formOf("director", "Point the Watcher", "", d, dir)}</div></div></section>
 <p class="op-hint op-foot">The stream agent's picture upload (POST /api/frame) is not an operator action and has no form here.</p>`;
 }
 
@@ -377,8 +353,6 @@ async function sendOne(id, st) {
   if (res.ok) {
     const s = successOf(id, res);
     st.answer = { kind: s.kind, text: s.text };
-    if (id === "watchStart" && NEEDS_A_VIEWER.includes(st.body.mode)) startBeat(st.body.name, st.body.mode);
-    if (id === "watchStop" && st.body.name === beat.name) stopBeat("");
   } else {
     st.answer = { kind: "refused", text: refusalOf(res) };
   }
@@ -406,25 +380,6 @@ async function confirmed(id) {
   focusIn(id, ".op-answer, button[type=submit]");
   // What the realm says now belongs to the reads, not to this answer.
   refreshNow();
-}
-
-// ---- the heartbeat for a stream started here -------------------------------------
-
-function startBeat(name, mode) {
-  stopBeat("");
-  beat.name = name; beat.mode = mode;
-  beat.timer = window.setInterval(async () => {
-    if (!String(location.hash || "").startsWith("#/operator") || !lastOn) { stopBeat("Stopped holding " + name + "'s stream open: this page was left."); return; }
-    const res = await post("/api/watch", { name, action: "beat", mode }, {});
-    if (!res.ok) stopBeat("Stopped holding " + name + "'s stream open: " + refusalOf(res));
-  }, BEAT_MS);
-}
-
-function stopBeat(note) {
-  if (beat.timer) window.clearInterval(beat.timer);
-  beat.timer = null;
-  beat.note = note;
-  if (note) redrawForm("watchStart");
 }
 
 function bind(main) {

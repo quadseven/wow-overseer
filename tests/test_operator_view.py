@@ -24,7 +24,6 @@ sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 
 import decree  # noqa: E402
 import map_server  # noqa: E402
-import stream  # noqa: E402
 import travel  # noqa: E402
 
 APP = HERE / "app"
@@ -214,11 +213,12 @@ class FormsPostWhereTheHandlersRead(unittest.TestCase):
         cls.actions = run("console.log(JSON.stringify(M.ACTIONS));")
         cls.html = render_with(on_reads())["html"]
 
-    def test_every_operator_route_has_a_form_and_no_form_invents_one(self):
+    def test_every_operator_action_has_a_form_and_no_form_invents_one(self):
         routes = set(map_server.Handler.POST_ROUTES)
         used = {a["path"] for a in self.actions.values()}
-        # /api/frame is the stream agent's picture upload, not an action.
-        self.assertEqual(used, routes - {"/api/frame"})
+        # Frame uploads come from the stream agent, and watch lifecycle calls
+        # remain available to clients outside this operator page.
+        self.assertEqual(used, routes - {"/api/frame", "/api/watch"})
         self.assertIn("/api/frame", self.html)
 
     def test_each_form_posts_its_own_path_with_its_own_names(self):
@@ -267,13 +267,18 @@ class FormsPostWhereTheHandlersRead(unittest.TestCase):
         self.assertIs(self.actions["unqueue"]["fixed"]["clear"], True)
         self.assertEqual(self.actions["standdown"]["fixed"]["role"], travel.NONE)
 
-    def test_watch_modes_and_heartbeat_are_streams_own(self):
-        got = run(
-            "console.log(JSON.stringify([M.WATCH_MODES, M.NEEDS_A_VIEWER, M.BEAT_MS]));"
-        )
-        self.assertEqual(sorted(got[0]), sorted(stream.MODES))
-        self.assertEqual(sorted(got[1]), sorted(stream.NEEDS_A_VIEWER))
-        self.assertEqual(got[2], stream.HEARTBEAT_SECONDS * 1000)
+    def test_on_demand_stream_controls_are_not_in_the_operator_view(self):
+        source = (APP / "views" / "operator.js").read_text()
+        for phrase in (
+            "watchStart",
+            "watchStop",
+            "Start a stream",
+            "Stop a stream",
+            "STARTUP_SECONDS",
+            "UNCLAIMED_AFTER_SECONDS",
+            "MAX_CHANNELS",
+        ):
+            self.assertNotIn(phrase, source)
 
     def test_a_cap_goes_as_a_number_and_the_token_as_a_header(self):
         got = run(
