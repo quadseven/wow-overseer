@@ -14061,8 +14061,19 @@ class Bridge(discord.Client):
         unasked = [move for move, command in planned
                    if (move.character, command) not in seen
                    and move.character in watched]
-        await self._settle_bank_errand(names, leader, bool(unasked),
+        # A BANK BAG STEP IS A REASON TO WALK TOO (#625). Only a banker buys a
+        # slot or takes a bag, and the quick look never claims the column, so
+        # a member that could afford a slot logged "it waits for a banker"
+        # every pass and was never walked to one.
+        bag_facts, bag_steps = await self._bank_bag_pending(names, seen,
+                                                            watched)
+        await self._settle_bank_errand(names, leader,
+                                       bool(unasked + bag_steps),
                                        cohort=_cohort_key(cohort))
+        # Below the settling, so the aim still precedes the row, and above the
+        # `no moves` return, so a family that walked here for a bag step alone
+        # has it written on the cycle it arrives.
+        await self._bank_bag_slots(names, seen, cohort, facts=bag_facts)
 
         if not bank_plan.moves:
             log.info("bank: nothing to put down and nothing to fetch back")
@@ -14129,14 +14140,32 @@ class Bridge(discord.Client):
                 fresh.append(move)
         return fresh, walking
 
-    async def _bank_bag_slots(self, names: list, seen: set, cohort=None) -> None:
+    async def _bank_bag_pending(self, names: list, seen: set,
+                                watched) -> tuple:
+        """(facts, steps): the bank bag read, and the steps a banker trip is for.
+
+        A step already asked inside the retry window is not, and neither is
+        one whose holder the world cannot see: the same two filters
+        `_bank_once` puts on the item moves.
+        """
+        facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+        steps = [
+            s for s in bankbags.pending_steps(facts, bankbags.family_floor(facts))
+            if (s.name, s.command) not in seen and s.name in watched
+        ]
+        return facts, steps
+
+    async def _bank_bag_slots(self, names: list, seen: set, cohort=None,
+                              facts=None) -> None:
         """Buy a bank bag slot, or put a spare bag in one, at a banker (#625).
 
         bankbags.step decides one step per character; the row is written only
         for a character standing at a banker now, the same gate the item moves
-        use, and never twice inside the retry window.
+        use, and never twice inside the retry window. `facts` is the bank
+        pass's own read when it has one, so the pass reads the bags once.
         """
-        facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+        if facts is None:
+            facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
         floor = bankbags.family_floor(facts)
         notes = []
         for f in facts:

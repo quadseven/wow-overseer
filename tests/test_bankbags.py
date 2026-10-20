@@ -78,6 +78,25 @@ class ASpareBagFillsTheSlot(unittest.TestCase):
         )
 
 
+class TheFamilysPendingSteps(unittest.TestCase):
+    """The bank pass walks the family to a banker for these (#625)."""
+
+    def test_pending_steps_lists_every_character_with_a_step(self):
+        family = [
+            facts(name="Og", money=5000, worn=(6, 6, 6, 6)),
+            facts(name="Grug", money=3999, worn=(6, 6, 6, 6)),
+            facts(name="Ugga", bought=1, worn=(6, 6, 6, 6), spare=(bb.Bag(9, 805, 6),)),
+            facts(name="Zug", bought=1, worn=(6, 6, 6, 6)),
+        ]
+        steps = bb.pending_steps(family, bb.family_floor(family))
+        self.assertEqual(
+            [(s.name, s.command) for s in steps],
+            [("Og", "buy slot"), ("Ugga", "place-bag guid:9")],
+            "a poor member and one with no spare bag have nothing to ask for",
+        )
+        self.assertEqual(bb.pending_steps([]), [])
+
+
 class TheRowsReadAsFacts(unittest.TestCase):
     def test_worn_carried_inside_a_worn_bag_and_banked(self):
         people = [{"name": "Grog", "money": 5000, "bank_slots": 2}]

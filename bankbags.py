@@ -146,6 +146,16 @@ def step(facts: Facts, floor=None):
     ), ""
 
 
+def pending_steps(family, floor=None) -> list:
+    """Every character's step this visit, for the characters that have one.
+
+    The bank pass walks the family to a banker while this is not empty, the
+    way it does for bank.plan's item moves; a step is written only at the
+    counter.
+    """
+    return [s for s in (step(f, floor)[0] for f in family or ()) if s is not None]
+
+
 def _worn_guids(bag_rows) -> dict:
     """holder -> the item guids of the bags it wears."""
     out: dict = {}
