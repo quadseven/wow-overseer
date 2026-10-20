@@ -1892,6 +1892,21 @@ def _bank_bag_wait_note(step) -> str:
     return "%s; it waits for a banker" % step.why
 
 
+def _bank_trip_wanted(names, unasked, bag_steps) -> bool:
+    """Whether a member who follows the leader still needs the banker (#872).
+
+    THE TRIP IS FOR THE MEMBERS WHO FOLLOW THE LEADER TO THE COUNTER. A member
+    sitting out to craft does not, so its row is never written from this trip:
+    counted here, its step walked the leader to a banker for nothing and then
+    held the aim there for good, because the step stays unasked while the
+    member is elsewhere. Its step rides along at any banker it stands at
+    (`_bank_passing_once`) or on its next family turn.
+    """
+    travelling = set(_standin_running(names))
+    return (any(m.character in travelling for m in unasked)
+            or any(s.name in travelling for s in bag_steps))
+
+
 def _family_of(cohort=None) -> tuple:
     """(names, leader) for a family: this bridge's own for None (#246).
 
@@ -14088,19 +14103,9 @@ class Bridge(discord.Client):
         # every pass and was never walked to one.
         bag_facts, bag_steps = await self._bank_bag_pending(names, seen,
                                                             watched)
-        # THE TRIP IS FOR THE MEMBERS WHO FOLLOW THE LEADER TO THE COUNTER
-        # (#872). A member sitting out to craft does not, so its row is never
-        # written from this trip: counted here, its step walked the leader to
-        # a banker for nothing and then held the aim there for good, because
-        # the step stays unasked while the member is elsewhere. Its step rides
-        # along at any banker it stands at (`_bank_passing_once`) or on its
-        # next family turn.
-        travelling = set(_standin_running(names))
         await self._settle_bank_errand(names, leader,
-                                       any(m.character in travelling
-                                           for m in unasked)
-                                       or any(s.name in travelling
-                                              for s in bag_steps),
+                                       _bank_trip_wanted(names, unasked,
+                                                         bag_steps),
                                        cohort=_cohort_key(cohort))
         # Below the settling, so the aim still precedes the row, and above the
         # `no moves` return, so a family that walked here for a bag step alone
