@@ -13598,11 +13598,12 @@ class Bridge(discord.Client):
         says is ahead. mod-overseer walks the leader there, holds it at the
         counter, and releases the column; `_buy_bags_once` buys on the next
         cycle because the buyers now stand at a counter that stocks a bag.
+        Past the empty-position trip, `_aim_upgrade_trip` walks full-position
+        buyers at the floor to a bigger bag (#1218): looked up and not named,
+        so the queue tests that load this function in isolation keep their
+        empty-position trip with no bag-state reads of their own.
         """
         slot = self._cohort_town_slot(cohort)
-        if not needy:
-            slot.unreserve(BAGS_CLAIMANT)
-            return
         if cohort is None:
             leader = await asyncio.to_thread(_head_now)
         else:
@@ -13616,7 +13617,13 @@ class Bridge(discord.Client):
             vendors = bag_pressure.bag_vendors_from_rows(
                 await asyncio.to_thread(_fetch_bag_vendors, here))
         trip = bag_pressure.bag_vendor_trip(
-            needy, vendors, leader=leader, standing=standing, in_run=in_run)
+            needy or (), vendors, leader=leader, standing=standing,
+            in_run=in_run)
+        if not trip.target:
+            upgrade = getattr(self, "_aim_upgrade_trip", None)
+            if upgrade is not None:
+                trip = await upgrade(names, leader, standing, vendors,
+                                     in_run) or trip
         # ONE OWNER OF THE AIM WHILE THE CAMPAIGN IS WITHHELD (#225). Measured
         # on wow-dev 2026-09-23: clearance took the leader 17 yards short of
         # the bag vendor to post guild letters, and the campaign stayed
@@ -13632,7 +13639,8 @@ class Bridge(discord.Client):
         else:
             slot.unreserve(BAGS_CLAIMANT)
         if not trip.target:
-            log.info("bags: no bag vendor trip - %s", trip.why_not)
+            if needy:
+                log.info("bags: no bag vendor trip - %s", trip.why_not)
             return
         # URGENT ONLY WHILE THE RESERVATION IS LIVE, so a trip that cannot
         # land falls back to its ordinary turn once the hold runs out.
@@ -13643,6 +13651,43 @@ class Bridge(discord.Client):
         )
         log.info("bags: %s (aim taken=%s)",
                  bag_pressure.bag_trip_report(trip, leader), aimed)
+
+    async def _aim_upgrade_trip(self, names, leader, standing, vendors,
+                                in_run=False):
+        """Walk full-position buyers at the floor to a bigger bag (#1218).
+
+        `_buy_bags_once` buys an upgrade only where the family stands and the
+        empty-position trip above walks only empty positions, so without this
+        a member whose positions are all full never reaches the counter its
+        upgrade is sold at. Runs only past the empty-position trip (the
+        caller), and only when a member sits at the floor: one small
+        free-slots read a cycle otherwise. A failure is logged and the empty
+        trip's answer stands.
+        """
+        try:
+            free_slots = await asyncio.to_thread(_fetch_free_slots, names)
+            if not any(
+                bag_market.cap_yields(free) for free in free_slots.values()
+            ):
+                return None
+            members = bag_upgrade.members_from_rows(
+                await asyncio.to_thread(_fetch_bag_state, names), names)
+            trip = bag_market.upgrade_vendor_trip(
+                members,
+                await self._bag_purses(names),
+                vendors,
+                free_slots=free_slots,
+                mailed=await asyncio.to_thread(_fetch_mailed_bags, names),
+                leader=leader,
+                standing=standing,
+                in_run=in_run,
+            )
+        except Exception:
+            log.exception("bags: the upgrade trip failed; retrying next cycle")
+            return None
+        if not trip.target:
+            log.info("bags: no bag upgrade trip - %s", trip.why_not)
+        return trip
 
     async def _bank_exit_route(self, names: list, leader: str,
                                position: dict | None, has_banker: bool, step: str,
