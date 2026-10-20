@@ -18,6 +18,7 @@ import pathlib
 import unittest
 
 import bonds
+import modsource
 
 
 # (class, tabpage) -> what that combination actually is in game. Written out
@@ -126,9 +127,7 @@ class FamilyRoles(unittest.TestCase):
             bonds.FAMILY.update(original)
 
 
-MODULE = (
-    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
-)
+MODULE = modsource.MODULE
 
 # PlayerbotFactory methods that re-roll a character. The roster exists to keep
 # these five OFF the random-bot treadmill; a training pass that called any of
@@ -139,7 +138,7 @@ DESTRUCTIVE = ["Randomize", "ClearEverything", "RandomTeleport", "DestroyEquippe
 
 def _train_roster_source() -> str:
     """The body of TrainRoster, by brace matching rather than by line count."""
-    src = MODULE.read_text(encoding="utf-8")
+    src = modsource.read(MODULE, encoding="utf-8")
     start = src.index("void TrainRoster()")
     depth = 0
     for i in range(src.index("{", start), len(src)):

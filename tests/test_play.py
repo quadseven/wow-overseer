@@ -20,6 +20,7 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import voice  # noqa: E402
+import modsource
 
 # SellAction::Execute compares the argument against exactly these, in this
 # order, before falling through to parseItems().
@@ -50,9 +51,7 @@ class TheSellCommandIsOneThatExists(unittest.TestCase):
         self.assertNotIn("sell junk", voice.VOCABULARY)
 
 
-MODULE = (
-    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
-)
+MODULE = modsource.MODULE
 
 
 def _live_source() -> str:
@@ -64,7 +63,7 @@ def _live_source() -> str:
     only reason this function exists.
     """
     out = []
-    for line in MODULE.read_text(encoding="utf-8").splitlines():
+    for line in modsource.read(MODULE, encoding="utf-8").splitlines():
         stripped = line.split("//", 1)[0]
         out.append(stripped)
     return "\n".join(out)
@@ -86,7 +85,7 @@ def _function_from(src: str, name: str) -> str:
 def _drive_quests() -> str:
     # mod-overseer#552 split DriveQuests into a census and dispatch plus the
     # per-family body it always had. The drive this file describes is both.
-    src = MODULE.read_text(encoding="utf-8")
+    src = modsource.read(MODULE, encoding="utf-8")
     return _function_from(src, "void DriveQuests()") + _function_from(
         src, "void DriveFamilyQuests("
     )

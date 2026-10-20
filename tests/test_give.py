@@ -24,16 +24,15 @@ like it worked:
 import pathlib
 import re
 import unittest
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
-MIGRATION = (
-    ROOT / "mod-overseer/data/sql/characters/base" / "2026_08_24_00_overseer_give.sql"
-)
+MODULE = modsource.MODULE
+MIGRATION = modsource.SQL_DIR / "2026_08_24_00_overseer_give.sql"
 
 
 def _source() -> str:
-    return MODULE.read_text(encoding="utf-8")
+    return modsource.read(MODULE, encoding="utf-8")
 
 
 def _give_source() -> str:
@@ -218,19 +217,19 @@ class TheEnumIsWidenedByAnExplicitAlter(unittest.TestCase):
         """CREATE TABLE IF NOT EXISTS is a no-op against an existing table, so
         an ENUM value added there never reaches a live database. This trap is
         already documented for overseer_goal.kind."""
-        sql = MIGRATION.read_text(encoding="utf-8")
+        sql = modsource.read(MIGRATION, encoding="utf-8")
         self.assertIn("ALTER TABLE `overseer_command`", sql)
         self.assertIn("MODIFY COLUMN `kind`", sql)
         self.assertIn("'give'", sql)
 
     def test_it_keeps_every_kind_that_already_existed(self):
         """A MODIFY COLUMN that drops a value silently rewrites existing rows."""
-        sql = MIGRATION.read_text(encoding="utf-8")
+        sql = modsource.read(MIGRATION, encoding="utf-8")
         for kind in ("'bot'", "'chat'", "'gm'", "'probe'"):
             self.assertIn(kind, sql)
 
     def test_the_default_is_unchanged(self):
-        sql = MIGRATION.read_text(encoding="utf-8")
+        sql = modsource.read(MIGRATION, encoding="utf-8")
         self.assertIn("NOT NULL DEFAULT 'bot'", sql)
 
 

@@ -48,10 +48,11 @@ import pathlib
 import re
 import sys
 import unittest
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
-DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
+MODULE = modsource.MODULE
+DECISIONS = modsource.DECISIONS
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -198,13 +199,9 @@ class TheArrivalToleranceIsMirroredFromTheModule(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if not MODULE.exists():
-            raise unittest.SkipTest(
-                "mod-overseer submodule is not initialised; run "
-                "`git submodule update --init` (CI does)"
-            )
-        cls.module = MODULE.read_text(encoding="utf-8", errors="replace")
-        cls.decisions = DECISIONS.read_text(encoding="utf-8", errors="replace")
+        modsource.require()
+        cls.module = modsource.read(MODULE, encoding="utf-8", errors="replace")
+        cls.decisions = modsource.read(DECISIONS, encoding="utf-8", errors="replace")
 
     def test_it_equals_the_constant_the_travel_drive_actually_uses(self):
         found = re.search(
@@ -264,9 +261,7 @@ class TheArrivalToleranceIsMirroredFromTheModule(unittest.TestCase):
         )
         self.assertIn(
             "None,      // not a counter: a trainer, an innkeeper, an `at:`, a portal",
-            (ROOT / "mod-overseer/src" / "overseer_decisions.h").read_text(
-                encoding="utf-8", errors="replace"
-            ),
+            modsource.read(modsource.DECISIONS_H, encoding="utf-8", errors="replace"),
         )
 
     def test_only_the_leader_can_be_aimed(self):

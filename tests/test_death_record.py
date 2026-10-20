@@ -19,20 +19,21 @@ efe123fab543c5faf3c477674ec17a18fd59f09f) rather than asserted from memory.
 import pathlib
 import re
 import unittest
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+MODULE = modsource.MODULE
 MIGRATION = (
     ROOT / "mod-overseer/data/sql/characters/base/2026_08_26_02_overseer_death.sql"
 )
 
 
 def _source() -> str:
-    return MODULE.read_text(encoding="utf-8")
+    return modsource.read(MODULE, encoding="utf-8")
 
 
 def _migration() -> str:
-    return MIGRATION.read_text(encoding="utf-8")
+    return modsource.read(MIGRATION, encoding="utf-8")
 
 
 def _migrations() -> str:
@@ -45,7 +46,7 @@ def _migrations() -> str:
     next migration is covered without editing this test."""
     return chr(10).join(
         path.read_text(encoding="utf-8")
-        for path in sorted(MIGRATION.parent.glob("*overseer_death*.sql"))
+        for path in sorted(modsource.glob(MIGRATION.parent, "*overseer_death*.sql"))
     )
 
 
@@ -327,7 +328,7 @@ class TheMigrationMatchesWhatTheCodeWrites(unittest.TestCase):
     )
 
     def test_migration_file_exists(self):
-        self.assertTrue(MIGRATION.exists(), MIGRATION)
+        self.assertTrue(modsource.exists(MIGRATION), MIGRATION)
 
     def test_the_insert_names_exactly_these_columns_in_order(self):
         # The INSERT is built from several adjacent C++ string literals

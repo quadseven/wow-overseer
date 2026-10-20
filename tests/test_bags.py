@@ -41,9 +41,10 @@ from, because nothing here can remove an item from a bag.
 import pathlib
 import re
 import unittest
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+MODULE = modsource.MODULE
 PATCHES = ROOT / "patches/mod-playerbots"
 PINS = ROOT / "UPSTREAM-PINS.env"
 LOOT_PATCH = PATCHES / "0004-loot-needs-a-free-bag-slot.patch"
@@ -100,7 +101,7 @@ class TheModuleDoesNotHandOutBags(unittest.TestCase):
     """
 
     def test_the_module_never_conjures_a_bag(self):
-        src = _strip_comments(MODULE.read_text(encoding="utf-8"))
+        src = _strip_comments(modsource.read(MODULE, encoding="utf-8"))
         for call in BAG_HANDOUT:
             self.assertNotIn(
                 call,
@@ -114,7 +115,7 @@ class TheModuleDoesNotHandOutBags(unittest.TestCase):
         """The bags hold live quest items that are quality-1 whites and look
         exactly like junk, so there is no exclusion list that could be got
         right. The guarantee is that no disposal call exists at all."""
-        src = _strip_comments(MODULE.read_text(encoding="utf-8"))
+        src = _strip_comments(modsource.read(MODULE, encoding="utf-8"))
         for call in DISPOSAL:
             self.assertNotIn(
                 call,

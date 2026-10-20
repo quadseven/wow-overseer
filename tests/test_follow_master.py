@@ -46,17 +46,15 @@ Neither is vendored here. Every line number above and below was read from those
 two trees at those SHAs.
 """
 
-import pathlib
 import unittest
+import modsource
 
-MODULE = (
-    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
-)
+MODULE = modsource.MODULE
 
 
 def _function(name: str) -> str:
     """The whole of a member function, braces balanced."""
-    src = MODULE.read_text(encoding="utf-8")
+    src = modsource.read(MODULE, encoding="utf-8")
     start = src.index(name)
     depth = 0
     for i in range(src.index("{", start), len(src)):
@@ -93,7 +91,9 @@ class SomebodyIsActuallyAssignedAMaster(unittest.TestCase):
     """The whole bug in one sentence: nothing ever called SetMaster."""
 
     def test_the_pass_exists(self):
-        self.assertIn("void KeepRosterFollowing(", MODULE.read_text(encoding="utf-8"))
+        self.assertIn(
+            "void KeepRosterFollowing(", modsource.read(MODULE, encoding="utf-8")
+        )
 
     def test_it_sets_a_master(self):
         """SetMaster is public - PlayerbotAI.h:571, inside the `public:` block
@@ -247,7 +247,9 @@ class AMasterNobodyWalksTowardIsNotCohesion(unittest.TestCase):
     def test_the_module_never_resets_strategies(self):
         """A reset would discard every other strategy the bridge has applied and
         rebuild from class defaults. Only the master was missing."""
-        self.assertNotIn("ResetStrategies", _code(MODULE.read_text(encoding="utf-8")))
+        self.assertNotIn(
+            "ResetStrategies", _code(modsource.read(MODULE, encoding="utf-8"))
+        )
 
     def test_a_character_a_human_is_driving_is_left_entirely_alone(self):
         """Master AND strategies. The client-master guard has to come before
@@ -295,7 +297,7 @@ class NoDanglingMaster(unittest.TestCase):
     def test_no_player_pointer_is_stored_across_polls(self):
         """A cached master would outlive the guarantee that clears the real
         one."""
-        src = MODULE.read_text(encoding="utf-8")
+        src = modsource.read(MODULE, encoding="utf-8")
         self.assertNotIn("Player* _", src)
         self.assertNotIn("std::vector<Player*> _", src)
 
@@ -303,7 +305,7 @@ class NoDanglingMaster(unittest.TestCase):
         """This is the one claim a reader cannot re-derive from the module, and
         the one whose failure mode is a crashed worldserver rather than a wrong
         answer. It has to be cited where the SetMaster lives, not in a PR."""
-        prose = MODULE.read_text(encoding="utf-8")
+        prose = modsource.read(MODULE, encoding="utf-8")
         head = prose.index("Give the followers somebody to follow")
         tail = prose.index("void KeepRosterFollowing(")
         block = prose[head:tail]

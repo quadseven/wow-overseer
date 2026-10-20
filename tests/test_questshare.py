@@ -34,6 +34,7 @@ import unittest
 
 import questbook
 import questshare
+import modsource
 
 
 ELWYNN = 12
@@ -762,13 +763,9 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
         its gates in. Read the mod source (the submodule the gate command
         initialises) and compare the describe() literals, in order, with
         adjacent C++ string literals joined."""
-        import pathlib
         import re
 
-        src = (
-            pathlib.Path(__file__).resolve().parents[1]
-            / "mod-overseer/src/mod_overseer.cpp"
-        ).read_text(encoding="utf-8")
+        src = modsource.read(modsource.MODULE, encoding="utf-8")
         body = src[
             src.index("static char const* DoShare(") : src.index("void WriteSnapshot()")
         ]

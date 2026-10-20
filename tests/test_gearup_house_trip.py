@@ -19,10 +19,11 @@ import unittest
 import auction
 import flightlearn
 import gearup
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / "bridge.py"
-DECISIONS_H = ROOT / "mod-overseer" / "src" / "overseer_decisions.h"
+DECISIONS_H = modsource.DECISIONS_H
 
 KALIMDOR = 1
 
@@ -212,11 +213,11 @@ class TheBridgeSendsTheLeader(unittest.TestCase):
 
 
 def _module_walk_limit():
-    if not DECISIONS_H.exists():
+    if not modsource.exists(DECISIONS_H):
         return None
     found = re.search(
         r"constexpr float TOWN_COUNTER_MAX_WALK_YARDS = ([0-9.]+)f;",
-        DECISIONS_H.read_text(encoding="utf-8", errors="replace"),
+        modsource.read(DECISIONS_H, encoding="utf-8", errors="replace"),
     )
     return float(found.group(1)) if found else None
 

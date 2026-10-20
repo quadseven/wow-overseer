@@ -21,6 +21,7 @@ of those windows silently becomes part of a contract about something else.
 import pathlib
 import re
 import unittest
+import modsource
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 
@@ -195,7 +196,9 @@ class TheTwoSidesAgreeOnTheStrings(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = (
-            MODULE_SRC.read_text(encoding="utf-8") if MODULE_SRC.exists() else ""
+            modsource.read(MODULE_SRC, encoding="utf-8")
+            if modsource.exists(MODULE_SRC)
+            else ""
         )
         cls.has_feature = "REALM_PRODUCTION" in cls.source
 

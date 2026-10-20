@@ -23,10 +23,9 @@ Neither is vendored here. Every line number below was read from those two.
 import pathlib
 import re
 import unittest
+import modsource
 
-MODULE = (
-    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
-)
+MODULE = modsource.MODULE
 MIGRATION = (
     pathlib.Path(__file__).resolve().parents[1]
     / "mod-overseer/data/sql/characters/base"
@@ -36,7 +35,7 @@ MIGRATION = (
 
 def _function(name: str) -> str:
     """The whole of a member function, braces balanced."""
-    src = MODULE.read_text(encoding="utf-8")
+    src = modsource.read(MODULE, encoding="utf-8")
     start = src.index(name)
     depth = 0
     for i in range(src.index("{", start), len(src)):
@@ -133,7 +132,7 @@ class TheColumnIsActuallyRead(unittest.TestCase):
         _walks_before_the_leader_gate_are_leader_only(body)
 
     def test_the_column_the_module_reads_is_the_one_the_migration_adds(self):
-        sql = MIGRATION.read_text(encoding="utf-8")
+        sql = modsource.read(MIGRATION, encoding="utf-8")
         self.assertIn("ADD COLUMN `drive_quest`", sql)
         self.assertIn("overseer_roster", _code(_drive()))
 
@@ -203,7 +202,7 @@ class TheLeaseIsReasserted(unittest.TestCase):
         """std::get_if needs <variant>. NewRpgInfo.h uses std::variant without
         including it, so relying on the transitive include is how this breaks
         on a header reshuffle we do not control."""
-        self.assertIn("#include <variant>", MODULE.read_text(encoding="utf-8"))
+        self.assertIn("#include <variant>", modsource.read(MODULE, encoding="utf-8"))
 
 
 class TheLeaderMustHoldTheQuest(unittest.TestCase):
@@ -284,7 +283,7 @@ class NoPathIsSilent(unittest.TestCase):
 
 
 def _backstop_comment() -> str:
-    src = MODULE.read_text(encoding="utf-8")
+    src = modsource.read(MODULE, encoding="utf-8")
     start = src.index("constexpr uint32 QUEST_POLL_MS")
     return src[start : src.index("DRIVE_AIM_BACKSTOP_SECONDS = ") + 80]
 
@@ -329,7 +328,7 @@ class TheAimIsReleasedOnItsOwnQuestsReward(unittest.TestCase):
         self.assertIn("opportunistic turn-in", body)
 
     def test_the_backstop_exists_and_is_a_backstop_not_the_release(self):
-        src = MODULE.read_text(encoding="utf-8")
+        src = modsource.read(MODULE, encoding="utf-8")
         self.assertIn("DRIVE_AIM_BACKSTOP_SECONDS", _code(src))
         body = _code(_drive())
         self.assertLess(
@@ -342,7 +341,7 @@ class TheAimIsReleasedOnItsOwnQuestsReward(unittest.TestCase):
         """Release an aim merely because RPG_DO_QUEST lapsed and you have built
         the 30-minute re-roll back in by hand. Re-assertion handles that; the
         backstop is for an aim that can never land at all."""
-        src = _code(MODULE.read_text(encoding="utf-8"))
+        src = _code(modsource.read(MODULE, encoding="utf-8"))
         match = re.search(r"DRIVE_AIM_BACKSTOP_SECONDS = ([^;]+);", src)
         self.assertIsNotNone(match)
         seconds = eval(match.group(1), {"__builtins__": {}}, {})  # noqa: S307
@@ -435,7 +434,7 @@ class EveryMemberUsedWasVerifiedAgainstThePinnedSources(unittest.TestCase):
 
 class NothingElseWasQuietlyChanged(unittest.TestCase):
     def test_the_driver_is_still_on_the_quest_poll(self):
-        src = _code(MODULE.read_text(encoding="utf-8"))
+        src = _code(modsource.read(MODULE, encoding="utf-8"))
         self.assertIn("DriveQuests();", src)
         self.assertIn("QUEST_POLL_MS", src)
 
@@ -448,7 +447,7 @@ class NothingElseWasQuietlyChanged(unittest.TestCase):
     def test_the_remembered_aim_is_the_only_state_kept(self):
         """The roster row stays the memory. This map exists to keep the log
         readable and nothing reads a decision out of it."""
-        src = MODULE.read_text(encoding="utf-8")
+        src = modsource.read(MODULE, encoding="utf-8")
         self.assertIn("std::map<std::string, AimState> _lastAim;", src)
 
 
