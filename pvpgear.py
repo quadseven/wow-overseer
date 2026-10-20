@@ -609,6 +609,11 @@ def queue_command(aim: Aim) -> str:
     return "bg-queue %s" % aim.battleground.key
 
 
+def is_queue_row(command: str) -> bool:
+    """Whether a guild row is a battleground queue (queue_command)."""
+    return command.startswith("bg-queue ")
+
+
 def leave_command(aim: Aim) -> str:
     """Never written: mod-overseer has no `bg-leave` verb (#967), and
     guildcorps.MODULE_GUILD_VERBS leaves it out so a test fails if a guild
