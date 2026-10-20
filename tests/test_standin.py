@@ -499,6 +499,14 @@ class SittingOutTakesTurnsWithTheFamily(unittest.TestCase):
         self.assertIn("runs with its family", step.why)
         self.assertIn("before its next crafting turn", step.why)
 
+    def test_the_family_turn_reason_is_the_same_every_pass(self):
+        # The pass runs every minute; a countdown in the reason was a new log
+        # line every minute of the turn.
+        early = standin.step(facts(turn=turn(standin.FAMILY, 0), now=60))
+        late = standin.step(facts(turn=turn(standin.FAMILY, 0), now=1800))
+        self.assertEqual(early.why, late.why)
+        self.assertIn("until 01:00 UTC", early.why)
+
     def test_after_the_family_turn_og_sits_out_again(self):
         step = standin.step(
             facts(turn=turn(standin.FAMILY, 0), now=standin.FAMILY_TURN_SECONDS)
@@ -873,6 +881,7 @@ class TheBridgePass(unittest.TestCase):
         turns=None,
         fetch_turns=None,
         note_turn=None,
+        said=None,
     ):
         written, jobs_told, lines = [], [], []
         self.noted = []
@@ -916,6 +925,7 @@ class TheBridgePass(unittest.TestCase):
                 _insert_job=lambda name, mode, source: jobs_told.append(
                     (name, mode, source)
                 ),
+                _STANDIN_SAID=said if said is not None else {},
                 _fetch_standin_turns=fetch_turns or (lambda: dict(turns or {})),
                 _note_standin_turn=note_turn
                 or (
@@ -1089,6 +1099,21 @@ class TheBridgePass(unittest.TestCase):
         self.assertIn("Og", fams["Grug"]["names"])
         self.assertEqual([], jobs_told)
         self.assertEqual([], self.noted)
+
+    def test_a_hold_reason_is_logged_once_while_it_stands(self):
+        just_back = {"Grug": standin.Turn("Og", standin.FAMILY, time.time() - 60)}
+        said = {}
+        _, _, _, first = self.run_pass(turns=just_back, said=said)
+        _, _, _, second = self.run_pass(turns=just_back, said=said)
+        held = [line for line in first if "runs with its family until" in line]
+        self.assertEqual(1, len(held), first)
+        self.assertEqual([], [line for line in second if "standin: Grug" in line])
+
+    def test_a_changed_hold_reason_is_logged_again(self):
+        said = {"Grug": "an older reason"}
+        just_back = {"Grug": standin.Turn("Og", standin.FAMILY, time.time() - 60)}
+        _, _, _, lines = self.run_pass(turns=just_back, said=said)
+        self.assertTrue(any("runs with its family until" in line for line in lines))
 
     def test_a_new_sit_out_begins_his_crafting_turn(self):
         self.run_pass()

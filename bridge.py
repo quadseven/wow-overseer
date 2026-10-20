@@ -3160,6 +3160,9 @@ def _bag_errand_needed(names, free_slots: dict, campaign_waiting: bool) -> bool:
 # family-wide job write and campaign gate; a guest never gets a job.
 _STANDIN_OUT: frozenset = frozenset()
 _STANDIN_GUESTS: frozenset = frozenset()
+# family -> the hold or keep reason last logged; the pass runs every minute,
+# so a reason that has not changed is not logged again.
+_STANDIN_SAID: dict = {}
 
 
 def _standin_door(rows: list, doors: dict):
@@ -19801,8 +19804,9 @@ class Bridge(discord.Client):
                          step.why)
                 await asyncio.to_thread(_standin_rejoin, key, gone.out_name,
                                         fams.get(key))
-            else:
+            elif _STANDIN_SAID.get(key) != step.why:
                 log.info("standin: %s: %s", campaignqueue._family(key), step.why)
+            _STANDIN_SAID[key] = step.why
             if key in seated and not facts.mid_run:
                 await asyncio.to_thread(_standin_crafts, seated[key].out_name, key)
         return seated
