@@ -2675,6 +2675,10 @@ _BAG_FLOOR_WHY: dict[str, str] = {}
 _TOWN_PASS_NOTE: dict[tuple, str] = {}
 # The hold (its `since`) the reason was last logged for, per family key.
 _BAG_HOLD_SAID: dict[tuple, float] = {}
+# WHAT THE VENDOR PASS LAST READ FOR SALE, per member (#1243): the counts its
+# own trip decision used, so the dungeon quest hold waits on a vendor trip
+# only when that trip would make room.
+_VENDOR_SELLABLE: dict[str, int] = {}
 
 
 def _prune_bag_hold_stuck(families: dict) -> None:
@@ -2685,6 +2689,9 @@ def _prune_bag_hold_stuck(families: dict) -> None:
     floor_why = globals().get("_BAG_FLOOR_WHY", {})
     for name in floor_why.keys() - active:
         del floor_why[name]
+    sellable = globals().get("_VENDOR_SELLABLE", {})
+    for name in sellable.keys() - active:
+        del sellable[name]
 
 
 def _note_bag_floor(names, free_slots: dict, rows: list, sellable: dict) -> None:
@@ -2697,6 +2704,29 @@ def _note_bag_floor(names, free_slots: dict, rows: list, sellable: dict) -> None
                 keep_names=OWNER_KEEPS)
         else:
             _BAG_FLOOR_WHY.pop(name, None)
+
+
+def _note_vendor_sellable(names, sellable: dict) -> None:
+    """Record the stacks a vendor would buy from each member, as the vendor
+    pass counted them for its trip decision."""
+    for name in names:
+        _VENDOR_SELLABLE[str(name)] = int((sellable or {}).get(name, 0))
+
+
+def _vendor_trip_makes_room(names, free_slots: dict) -> bool:
+    """Whether the family's bag-room hold is waiting on a vendor trip that
+    would make room (#1243).
+
+    A member at the floor the vendor pass has not read yet (the first cycle
+    after a restart) keeps the hold, as it stood before this was asked.
+    """
+    at_floor = [name for name in names
+                if isinstance(free_slots.get(name), int)
+                and 0 <= free_slots[name] <= bag_pressure.TOWN_RUN_FREE_SLOTS]
+    if any(name not in _VENDOR_SELLABLE for name in at_floor):
+        return True
+    return bag_pressure.vendor_trip_makes_room(
+        free_slots, {name: _VENDOR_SELLABLE.get(name, 0) for name in names})
 
 
 def _note_town_pass(key: tuple, state, new, line: str, marks: dict) -> None:
@@ -3160,6 +3190,9 @@ def _bag_errand_needed(names, free_slots: dict, campaign_waiting: bool) -> bool:
 # family-wide job write and campaign gate; a guest never gets a job.
 _STANDIN_OUT: frozenset = frozenset()
 _STANDIN_GUESTS: frozenset = frozenset()
+# family -> the hold or keep reason last logged; the pass runs every minute,
+# so a reason that has not changed is not logged again.
+_STANDIN_SAID: dict = {}
 
 
 def _standin_door(rows: list, doors: dict):
@@ -11643,6 +11676,10 @@ class Bridge(discord.Client):
         wow-dev. While the campaign is withheld, the bag trip owns the aim and
         this pass sells for whoever stands at a vendor.
         """
+        # Looked up: the economy tests load this pass in isolation.
+        note_sellable = globals().get("_note_vendor_sellable")
+        if note_sellable is not None:
+            note_sellable(names, sellable_counts)
         trip_worth = bag_pressure.family_town_run_needed(
             free_slots, sellable=sellable_counts)
         # THE ROOM THE TRIP MAKES IS THE FAMILY'S (#1204). One walk to a
@@ -11654,12 +11691,14 @@ class Bridge(discord.Client):
         # something to sell logged "no vendor within reach" on every pass.
         # Measured on the dev realm 2026-10-19: Grog, Og and Ugga, held at
         # the floor with Bork, whose 68 kept stacks no vendor will buy.
+        # Only the stacks of the members at the floor count (#1243): a slot
+        # freed in a bag with room is no slot at the floor.
         freed = bag_pressure.family_sale_slots(free_slots, sellable_counts)
         if not trip_worth and freed >= bag_pressure.FAMILY_SALE_SLOTS:
             trip_worth = True
             log.info("economy: the family is at the floor and a vendor trip "
-                     "would free %d slot(s) between its members (sellable %s), "
-                     "so the trip goes", freed, sellable_counts)
+                     "would free %d slot(s) between its members at the floor "
+                     "(sellable %s), so the trip goes", freed, sellable_counts)
         if not trip_worth and not in_run and any(sellable_counts.values()):
             waited = await asyncio.to_thread(_fetch_vendor_wait_seconds, names)
             if bag_pressure.vendor_wait_trip(waited, sellable_counts, in_run):
@@ -16539,6 +16578,18 @@ class Bridge(discord.Client):
                 # sword at 16:43, settled 300 s on the deck, and was let go
                 # before a full cycle brought the Runeforge step.
                 self._note_follow_up()
+            if step.action == pvpgear.ACTION and any(
+                pvpgear.is_queue_row(r.command) for r in step.rows
+            ):
+                # A QUEUE THAT WENT THROUGH HOLDS THE MEMBER FROM NOW (#913),
+                # not from the next PvP pass's read of it: on 2026-10-20 the
+                # social pass between the two asked Hoofhearted, 3 minutes
+                # into an Arathi Basin queue, to Shadowfang Keep and the run
+                # was refused. The next PvP pass reads the queue and keeps
+                # the hold or lets it go (_job_pvp_moves).
+                if getattr(self, "_pvp_held", None) is None:
+                    self._pvp_held = {}
+                self._pvp_held[step.holder] = True
         except pymysql.err.MySQLError:
             log.exception("guild jobs: step for %s failed", step.holder)
         finally:
@@ -19801,8 +19852,9 @@ class Bridge(discord.Client):
                          step.why)
                 await asyncio.to_thread(_standin_rejoin, key, gone.out_name,
                                         fams.get(key))
-            else:
+            elif _STANDIN_SAID.get(key) != step.why:
                 log.info("standin: %s: %s", campaignqueue._family(key), step.why)
+            _STANDIN_SAID[key] = step.why
             if key in seated and not facts.mid_run:
                 await asyncio.to_thread(_standin_crafts, seated[key].out_name, key)
         return seated
@@ -20311,8 +20363,14 @@ class Bridge(discord.Client):
         # every minute from the vendor trip that would give it the room: Zug's
         # family walked toward a giver two thousand yards off, and held the
         # queue, while its mage stood at zero free slots (wow-dev, 2026-09-29).
+        # ONLY WHILE THAT TRIP WOULD MAKE ROOM (#1243). A member at the floor
+        # on stacks no vendor buys is lifted by no sale, and the hold waited
+        # on a trip that never ended it: Zug's family read "waits for bag
+        # room" for 70 minutes on the dev realm 2026-10-20. The walk goes
+        # then, and a quest turned in frees its items.
         free = await asyncio.to_thread(_fetch_free_slots, list(fam["names"]))
-        if jev_activity.withheld(True, free):
+        if (jev_activity.withheld(True, free)
+                and _vendor_trip_makes_room(list(fam["names"]), free)):
             log.info("dungeon quests: %s waits for bag room; the vendor trip "
                      "keeps the travel column", campaignqueue._family(key))
             return False
