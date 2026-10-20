@@ -609,11 +609,23 @@ def _out_of_play(member: dict, f: dict):
     return None
 
 
-def _stored_reason(fresh: list, doing: str, waiting: str, since):
+def _stored_reason(fresh: list, doing: str, waiting: str, since, intent: dict | None = None):
     """A reason from a stored step beats a guess from the intent book, when it
-    is still being repeated: the bridge writes the step again on every pass."""
+    is still being repeated: the bridge writes the step again on every pass.
+
+    For a fetch intent, the leader is walking to get a held member. The
+    family-scope bag floor hold step describes what the HELD member waits for,
+    not what the leader waits for. Don't override the fetch intent's waiting
+    ("to get there") with the family step's waiting.
+    """
     held = [s for s in fresh if s.get("waiting")]
     if not held:
+        return doing, waiting, since
+    if intent and str(intent.get("current_kind") or "") == "fetch":
+        character_held = [s for s in held if s.get("scope") == "character"]
+        if character_held:
+            top = character_held[0]
+            return (doing or reword(top["doing"])), reword(top["waiting"]), int(top["first_at"])
         return doing, waiting, since
     top = held[0]
     return (doing or reword(top["doing"])), reword(top["waiting"]), int(top["first_at"])
@@ -638,7 +650,7 @@ def compose(member: dict, facts: dict | None, now_at: int | None = None) -> dict
         doing, waiting = stopped
     else:
         doing, waiting, since = _live(member, f, _main(fresh), now_at)
-        doing, waiting, since = _stored_reason(_main(fresh), doing, waiting, since)
+        doing, waiting, since = _stored_reason(_main(fresh), doing, waiting, since, f.get("intent"))
         if not doing:
             side = [s for s in fresh if s.get("kind") in SPEAKS_ALONE]
             if side:

@@ -320,6 +320,34 @@ class TheSentenceNamesTheWork(unittest.TestCase):
         self.assertIn("Doing: Following Grug (9 yards behind).", follower["line"])
         self.assertIn("bag room", follower["line"])
 
+    def test_a_fetch_intent_ignores_family_bag_floor_step(self):
+        """Leader with fetch intent keeps 'to get there' waiting, not the family bag floor hold."""
+        fetch_intent = {
+            "leader_name": "Grug",
+            "family": "Grug",
+            "current_kind": "fetch",
+            "current_owner": "module",
+            "current_target": "Bork",
+            "current_for": 7200,
+            "module_age": 60,
+            "members_state": "Bork|held too far to walk|900",
+        }
+        bag_floor_step = step(
+            "Grug",
+            "Waiting for Bork, Grog, Ugga at the bag floor and no town pass has made room",
+            "Waiting for Bork, Grog, Ugga at the bag floor and no town pass has made room",
+            scope="family",
+            kind="bag_room",
+            times=1,
+            first=300,
+            last=10,
+        )
+        fs = nowstatus.build_facts(["Grug", "Bork"], ROSTER, [fetch_intent], [bag_floor_step], NOW)
+        got = nowstatus.compose({"name": "Grug", "present": True}, fs["Grug"])
+        self.assertEqual(got["doing"], "Walking back for a member held far away")
+        self.assertEqual(got["waiting"], "to get there")
+        self.assertNotIn("bag floor", got["waiting"])
+
     def test_a_follower_waits_for_its_leader(self):
         self.assertEqual(
             line_of("Oz")["line"],
