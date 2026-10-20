@@ -34,7 +34,7 @@ class CampaignLeaderDoesNotGrind(unittest.TestCase):
         got = goals.life_strategies(leads=True, campaign=True)
         self.assertNotIn(LEVEL_GRIND, got)
         self.assertIn(goals.GRIND_OFF, got)
-        self.assertIn(goals.FLEE_STRATEGY, got)
+        self.assertIn(goals.RETREAT_STRATEGY, got)
 
     def test_an_errand_still_walks_the_campaign_leader(self):
         self.assertEqual(

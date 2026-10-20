@@ -75,13 +75,13 @@ class NobodyWandersInTown(unittest.TestCase):
         got = goals.life_strategies(leads=True, in_town=True)
         self.assertNotIn(goals.LIFE_STRATEGY, got)
         self.assertIn("nc -new rpg", got)
-        self.assertIn(goals.FLEE_STRATEGY, got)
+        self.assertIn(goals.RETREAT_STRATEGY, got)
 
     def test_an_aimed_follower_is_not_handed_it_either(self):
         """drive_quest stays on the rows through the wait and is inert under
         the town job; `aimed` must not turn it back into a traveller."""
         got = goals.life_strategies(leads=False, aimed=True, in_town=True)
-        self.assertEqual(["nc -new rpg", "nc +follow", goals.FLEE_STRATEGY], got)
+        self.assertEqual(["nc -new rpg", "nc +follow", goals.RETREAT_STRATEGY], got)
 
     def test_an_errand_still_walks_the_leader(self):
         self.assertEqual(
