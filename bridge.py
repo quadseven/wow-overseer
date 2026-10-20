@@ -16902,28 +16902,46 @@ class Bridge(discord.Client):
         stand together there (classparty.judge_meeting); True when the party
         may be formed. A helper that did not meet the leader has its yes taken
         back and is barred from this ask, and the party forms with the rest; a
-        failed meeting counts as one failure of the ask. The members stay held
-        on the board all the while."""
+        failed meeting counts as one failure of the ask. A meeting the
+        worldserver stops only because another verb holds a member walks again
+        after classparty.MEET_HELD_WAIT_SECONDS instead: the hold is transient
+        (classquest backs the same refusal off), so failing the ask for it only
+        makes the asker ask again (#1275). The members stay held on the board
+        all the while."""
         board = self._class_board
         log.info(classparty.meet_line(run))
-        arrived = await self._class_party_meet_walks(run)
-        meeting = await self._class_party_meet_seen(run, arrived)
-        for name in meeting.lost:
-            board.refuse(run.ask_id, name)
-            await asyncio.to_thread(_class_party_withdraw, run.answers.get(name))
-        if meeting.lost:
-            log.info("class party: %s did not meet %s at %s; their yes is taken "
-                     "back", ", ".join(meeting.lost), run.leader,
-                     run.spot.name or "the objective")
-        run.drop(meeting.lost)
-        if not meeting.met:
-            run.outcome = "the meeting failed: " + meeting.why
-            board.fail(run.ask_id)
-            log.info("class party: the meeting for %s's %s fails: %s", run.leader,
-                     run.title, meeting.why)
-            return False
-        run.met()
-        return True
+        held_rounds = 0
+        while True:
+            run.walks.clear()
+            arrived = await self._class_party_meet_walks(run)
+            meeting = await self._class_party_meet_seen(run, arrived)
+            held = classparty.meeting_held(run)
+            if (not meeting.met and held
+                    and held_rounds < classparty.MEET_HELD_RETRIES):
+                held_rounds += 1
+                log.info("class party: the meeting for %s's %s waits out %s "
+                         "(%s): walk %d of %d", run.leader, run.title,
+                         ", ".join(held),
+                         "; ".join(run.walks.get(n, "") for n in held),
+                         held_rounds, classparty.MEET_HELD_RETRIES)
+                await asyncio.sleep(classparty.MEET_HELD_WAIT_SECONDS)
+                continue
+            for name in meeting.lost:
+                board.refuse(run.ask_id, name)
+                await asyncio.to_thread(_class_party_withdraw, run.answers.get(name))
+            if meeting.lost:
+                log.info("class party: %s did not meet %s at %s; their yes is taken "
+                         "back", ", ".join(meeting.lost), run.leader,
+                         run.spot.name or "the objective")
+            run.drop(meeting.lost)
+            if not meeting.met:
+                run.outcome = "the meeting failed: " + meeting.why
+                board.fail(run.ask_id)
+                log.info("class party: the meeting for %s's %s fails: %s", run.leader,
+                         run.title, meeting.why)
+                return False
+            run.met()
+            return True
 
     async def _class_party_meet_walks(self, run) -> set:
         """The names of the leader and the helpers whose walk to the objective
