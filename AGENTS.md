@@ -222,3 +222,22 @@ which to catch it.
 
 The one thing that did get easier: the decision to publish is made, so it is
 no longer a project hanging over every change.
+
+## Running the tests
+
+Run `scripts/check-locally.sh` from any checkout or `git worktree add`. It
+runs the same command CI's unittest job runs, read straight out of
+`.github/workflows/check.yml`: a compile check against the Python 3.12
+floor, then `unittest discover` under uv's Python 3.12 with
+`tests/requirements.txt`. It takes about five minutes and needs `uv` and a
+`python3` of at least 3.12 on PATH.
+
+The suite reads the `mod-overseer` submodule's sources as text, and a new
+worktree has no submodule. The script runs
+`git submodule update --init mod-overseer` when it is missing and warns when
+the checked-out commit is not the pinned one. A bare `python3 -m unittest`
+without the submodule and the pinned requirements reports hundreds of
+failures and skips that CI never sees, so do not judge a change by it.
+
+`scripts/check-locally.sh lint` runs the lint job's pinned ruff
+(`ruff check` and `ruff format --check`), and `all` runs both.
