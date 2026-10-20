@@ -104,8 +104,8 @@ class ParallelRunnerTest(unittest.TestCase):
             result = run_parallel(tests)
         output = result.stdout + result.stderr
         self.assertNotEqual(result.returncode, 0, output)
-        self.assertIn("===== test_two =====", output)
-        self.assertIn("test_broken", output)
+        self.assertRegex(output, r"(?m)^FAILED in: .*\btest_two\b")
+        self.assertIn("FAIL: test_broken (test_two.", output)
         self.assertEqual(parallel_total(output), (5, 3))
 
     def test_a_module_with_no_tests_passes(self):
