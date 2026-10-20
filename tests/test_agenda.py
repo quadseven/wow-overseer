@@ -469,6 +469,60 @@ class TheStallSentence(unittest.TestCase):
         self.assertEqual(build()["stall_line"], "")
 
 
+def stalled_with(leader_now):
+    """Og's family still for 22 minutes, with the leader's reading handed in."""
+    return agenda.build_agenda(
+        roster(),
+        [],
+        [],
+        [],
+        [],
+        [{"kind": "quest_accept", "last_seen": NOW - timedelta(minutes=22)}],
+        {},
+        now=NOW,
+        leader_now=leader_now,
+    )
+
+
+class AStalledFamilyNamesItsBlocker(unittest.TestCase):
+    """The operator, 2026-10-20: the Now page said Grug's family was STALLED
+    ("no quest, level or gear change for 22 minutes") while its realm report
+    said "No current blocker recorded". A stall names what holds it."""
+
+    def test_the_line_ends_with_the_leaders_hold(self):
+        out = stalled_with(
+            {"doing": "Holding the next dungeon run back", "waiting": "bag room"}
+        )
+        self.assertTrue(out["stalled"])
+        self.assertEqual(
+            out["stall_line"],
+            "STALLED: no quest, level or gear change for 22 minutes. "
+            "Og: Holding the next dungeon run back, waiting for bag room.",
+        )
+        self.assertEqual(
+            out["stall_blocker"],
+            "Og: Holding the next dungeon run back, waiting for bag room.",
+        )
+
+    def test_an_idle_leader_is_said_plainly_and_never_blank(self):
+        out = stalled_with({"doing": "Idle", "waiting": "no errand and no hold found"})
+        self.assertIn("Nothing the bridge recorded says why", out["stall_blocker"])
+        self.assertIn("Og has no errand and no hold", out["stall_line"])
+
+    def test_a_reading_that_failed_is_said_too(self):
+        out = stalled_with(None)
+        self.assertIn("could not be taken", out["stall_blocker"])
+
+    def test_a_doing_with_no_wait_says_none_is_recorded(self):
+        out = stalled_with({"doing": "Questing", "waiting": ""})
+        self.assertEqual(
+            out["stall_blocker"], "Og: Questing, with no reason to wait recorded."
+        )
+
+    def test_a_busy_family_names_no_blocker(self):
+        self.assertEqual(build()["stall_blocker"], "")
+
+
 class TheRunProgressColumnIsNotAProgressSignal(unittest.TestCase):
     """The single most important thing this module gets right.
 

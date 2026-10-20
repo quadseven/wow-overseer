@@ -399,10 +399,70 @@ class TheRosterAndStuckReads(unittest.TestCase):
         self.assertEqual(log, [])
 
 
+# ---- a stalled family is stuck on its leader ------------------------------------------
+
+
+class AStalledFamilyIsStuck(unittest.TestCase):
+    """The operator, 2026-10-20: STALLED on the Now page beside "Top blocker:
+    No current blocker recorded". A family with no quest, level or gear change
+    for 20 minutes is a stuck record on its leader, named by his reading."""
+
+    def stuck(self, moved):
+        view = members.stuck_view(family_roster(moved=moved))
+        return {m["name"]: m for m in view["members"]}, view
+
+    def test_a_still_family_puts_its_leader_on_the_stuck_list(self):
+        by, _ = self.stuck({"Zug": NOW - 1500, "Oz": NOW - 1320})
+        zug = by["Zug"]
+        self.assertEqual((zug["kind"], zug["since"]), ("stall", NOW - 1320))
+        self.assertEqual(
+            zug["blocker"],
+            "No quest, level or gear change for the family for 22 minutes. "
+            "Nothing the bridge recorded says why: Zug has no errand and no hold.",
+        )
+
+    def test_its_followers_are_held_by_the_stall(self):
+        by, _ = self.stuck({"Zug": NOW - 1500})
+        for name in ("Oz", "Uzza", "Zork"):
+            self.assertEqual(("stall", "Zug"), (by[name]["kind"], by[name]["follows"]))
+            self.assertIn("No quest, level or gear change", by[name]["blocker"])
+
+    def test_the_digest_names_the_stall_as_a_cause(self):
+        _, view = self.stuck({"Zug": NOW - 1500})
+        self.assertTrue(
+            any(c["cause"].startswith("stall: ") for c in view["digest"]["causes"])
+        )
+
+    def test_a_family_that_moved_lately_is_not_stuck(self):
+        by, _ = self.stuck({"Zug": NOW - 600})
+        self.assertNotIn("Zug", by)
+
+    def test_a_leader_already_held_keeps_his_own_record(self):
+        by, _ = self.stuck({"Grug": NOW - 5000})
+        self.assertEqual("hold", by["Grug"]["kind"])
+        self.assertEqual(NOW - 3 * 3600, by["Grug"]["since"])
+
+    def test_no_movement_record_is_not_a_stall(self):
+        by, _ = self.stuck({})
+        self.assertNotIn("Zug", by)
+
+    def test_the_read_carries_the_last_movement(self):
+        rules = roster_rules() + [
+            (("FROM overseer_event",), [{"name": "Grug", "at": NOW - 3600}])
+        ]
+        ctx, log = ctx_for(rules, server())
+        code, payload = members.stuck({}, ctx)
+        self.assertEqual(200, code)
+        grug = {m["name"]: m for m in payload["members"]}["Grug"]
+        self.assertEqual(("stall", NOW - 3600), (grug["kind"], grug["since"]))
+        sql = next(q for q, _ in log if "FROM overseer_event" in q)
+        self.assertNotIn("death", str([p for q, p in log if q == sql]))
+
+
 # ---- upgrades now --------------------------------------------------------------------
 
 
-def family_roster(asks=()):
+def family_roster(asks=(), moved=None):
     """Two families as the stuck read of 2026-10-16 02:59Z saw them (#1059):
     Zug's four followers by a leader holding nothing, three at 0 yards and one
     on another map, and Grug held on a vendor with Grog at his side and Og
@@ -449,7 +509,9 @@ def family_roster(asks=()):
     facts = nowstatus.build_facts(names, roster, intents, steps, NOW)
     chars = [{"name": n, "level": 30, "class_id": 1, "race": 2} for n in names]
     readings = {n: {"online": True, "life": "alive", "fresh_at": NOW} for n in names}
-    return members.build(fams, [], chars, [], asks, facts, NOW, readings=readings)
+    return members.build(
+        fams, [], chars, [], asks, facts, NOW, readings=readings, moved=moved
+    )
 
 
 class AFollowerIsHeldByItsLeader(unittest.TestCase):
