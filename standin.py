@@ -89,6 +89,7 @@ PURE: facts in, a Step out. The bridge reads, writes and logs.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 
 import classic
@@ -465,12 +466,14 @@ def family_turn(facts: Facts) -> str:
     turn = _turn(facts)
     if turn is None or turn.phase != FAMILY:
         return ""
-    left = FAMILY_TURN_SECONDS - (facts.now - turn.since)
-    if left <= 0:
+    ends = turn.since + FAMILY_TURN_SECONDS
+    if ends <= facts.now:
         return ""
-    return "%s runs with its family for %s more before its next crafting turn" % (
+    # The end time, not the minutes left: the reason is the same every pass of
+    # the turn, so the pass logs it once.
+    return "%s runs with its family until %s UTC before its next crafting turn" % (
         facts.ordered,
-        _minutes(left + 59),
+        time.strftime("%H:%M", time.gmtime(ends)),
     )
 
 
