@@ -17,7 +17,7 @@ for a leader in the first place, so they are not written only to be refused.
 
 THE SAME RULES AS THE MODULE'S `LeaderCommandRefusal`: `follow`, `stay`,
 `reset ai` / `reset botai`, and any `nc` list that puts `new rpg`, `follow` or
-`stay` on or off. Everything else passes, including `co +flee` and the
+`stay` on or off. Everything else passes, including `co +retreat from danger` and the
 level strategies. A follower is never filtered.
 
 Pure: strings in, strings out.

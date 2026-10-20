@@ -34,7 +34,7 @@ class MovesTheLeader(unittest.TestCase):
 
     def test_survival_and_levelling_do_not(self):
         for command in (
-            "co +flee",
+            "co +retreat from danger",
             "nc +grind",
             "nc +loot",
             "nc +gather",
@@ -45,18 +45,18 @@ class MovesTheLeader(unittest.TestCase):
             self.assertFalse(leadcmd.moves_the_leader(command), command)
 
     def test_a_follower_keeps_everything(self):
-        cmds = ["nc -new rpg", "nc +follow", "co +flee"]
+        cmds = ["nc -new rpg", "nc +follow", "co +retreat from danger"]
         self.assertEqual(cmds, leadcmd.for_character(cmds, is_leader=False))
 
-    def test_the_leader_keeps_flee_and_his_level_strategy(self):
+    def test_the_leader_keeps_his_retreat_and_his_level_strategy(self):
         cmds = goals.life_strategies(leads=True, travelling=True)
         kept = leadcmd.for_character(cmds, is_leader=True)
         self.assertFalse(any(leadcmd.moves_the_leader(c) for c in kept))
-        self.assertIn(goals.FLEE_STRATEGY, kept)
+        self.assertIn(goals.RETREAT_STRATEGY, kept)
         town = leadcmd.for_character(
             goals.life_strategies(leads=True, in_town=True), True
         )
-        self.assertEqual([goals.GRIND_OFF, goals.FLEE_STRATEGY], town)
+        self.assertEqual([goals.GRIND_OFF, goals.RETREAT_STRATEGY], town)
 
 
 class TheBridgeUsesIt(unittest.TestCase):

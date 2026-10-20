@@ -49,7 +49,10 @@ _ENTRY_ITEM_HEADS = ("walk-to-vendor", "hunt-spawn", "use-item-on")
 # playerbots strategy sets: `co` in combat, `nc` out of it; "+" on, "-" off.
 _STRATEGY_SETS = {"co": "In combat", "nc": "Out of combat"}
 _STRATEGIES = {
+    # `flee` stays so the activity log still reads commands sent before #1298;
+    # the pinned build has no such strategy any more.
     "flee": "fleeing when hurt",
+    "retreat from danger": "retreating when nearly dead",
     "follow": "following the leader",
     "grind": "grinding nearby mobs",
     "new rpg": "wandering on its own",

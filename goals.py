@@ -491,16 +491,26 @@ def strategy_for(goal: Mapping) -> str:
 # Bork had both and was the only character in the family with a quest log.
 LIFE_STRATEGY = "nc +new rpg"
 
-# Self-preservation. FleeStrategy gives `panic` and `critical health`, neither
-# of which any of them had - AiFactory adds `flee` for nobody, random bot or
-# not, so it is opt-in through a command or it does not exist.
+# Self-preservation in combat. This was `co +flee` until #1298, and from roll
+# 65 on that command did nothing: upstream #2825 ("Clean up fleeing v1")
+# deleted FleeStrategy and its `flee` name, Engine::addStrategy finds no
+# creator for an unknown name and silently adds nothing, and the module's
+# read-back logged "CHANGED NOTHING" for every family member every ten minutes
+# from 13:49Z on 2026-10-20 (161 times in four hours, 0 applied).
 #
-# Do not expect miracles: `outnumbered` is an upstream no-op (GenericTriggers
-# assigns foePower inside the attacker loop instead of accumulating it, so only
-# the last attacker counts), and FleeAction backs up FleeDistance yards rather
-# than escaping. It is still the difference between dying at 20 percent and
-# dying at 0.
-FLEE_STRATEGY = "co +flee"
+# `retreat from danger` is the deploy repo's patch 0007: one `critical health`
+# trigger at relevance 100 (so it survives the minimal-activity tick gate)
+# running RetreatFromDangerAction, which asks FleeManager for a destination
+# and needs no combat target. AiFactory loads it on the NON-combat engine for
+# every bot; nothing loads it on the combat engine, which is the engine a bot
+# is on when it is losing a fight. So it stays opt-in there through this
+# command. Upstream's old `panic` and `outnumbered` triggers are not coming
+# back: upstream removed them as inoperative.
+#
+# tests/test_strategy_names.py checks this and every other name the bridge
+# sends against the pinned build's strategy list, so the next rename fails CI
+# instead of failing quietly in game.
+RETREAT_STRATEGY = "co +retreat from danger"
 
 # Taken off, not merely withheld, because a granted strategy outlives the
 # pass that granted it: the leader keeps `grind` until something removes it
@@ -640,8 +650,8 @@ def life_strategies(
 
     ONLY THE TASK STRATEGY IS WITHHELD, and that is the whole of the change.
     `new rpg` and `follow` are how the errand travels at all and the module
-    deliberately never touches either; `flee` is how it survives what finds it
-    on the way. Withholding the whole set instead would be a worse bug than
+    deliberately never touches either; `retreat from danger` is how it
+    survives what finds it on the way. Withholding the whole set instead would be a worse bug than
     the one it fixes: the module restores ONLY what it stood down, and it
     never stands down - and never grants - those three. They exist solely
     because this loop grants them, and ResetStrategies takes them away on
@@ -681,7 +691,7 @@ def _campaign_leader_strategies() -> list:
     level strategy is the one thing this loop would otherwise add, and
     `grind` is what kept him in combat far from the door (see GRIND_OFF).
     """
-    return [LIFE_STRATEGY, GRIND_OFF, FLEE_STRATEGY]
+    return [LIFE_STRATEGY, GRIND_OFF, RETREAT_STRATEGY]
 
 
 def _in_town_strategies(leads: bool) -> list:
@@ -700,11 +710,12 @@ def _in_town_strategies(leads: bool) -> list:
 
     A follower keeps `follow`, as in the unaimed branch: aimed or not, it
     has nowhere of its own to be while the family waits. Everybody keeps
-    `flee`. The leader is not handed `follow`; it is its own master.
+    `retreat from danger`. The leader is not handed `follow`; it is its own
+    master.
     """
     if leads:
-        return ["nc -new rpg", GRIND_OFF, FLEE_STRATEGY]
-    return ["nc -new rpg", "nc +follow", FLEE_STRATEGY]
+        return ["nc -new rpg", GRIND_OFF, RETREAT_STRATEGY]
+    return ["nc -new rpg", "nc +follow", RETREAT_STRATEGY]
 
 
 def _with_gathering(base: list, gathering: bool) -> list:
@@ -747,8 +758,8 @@ def _life_strategies(*, leads: bool, aimed: bool, travelling: bool) -> list:
         if travelling:
             # The errand is the task. Everything else the leader branch hands
             # out is life support, and stays.
-            return [LIFE_STRATEGY, FLEE_STRATEGY]
-        return [LIFE_STRATEGY, strategy_for({"kind": "level"}), FLEE_STRATEGY]
+            return [LIFE_STRATEGY, RETREAT_STRATEGY]
+        return [LIFE_STRATEGY, strategy_for({"kind": "level"}), RETREAT_STRATEGY]
     if aimed:
         # THE AIM HAS TO CARRY THE STRATEGY THAT READS IT. `rpgInfo` is
         # consumed only by NewRpgDoQuestAction, which is reachable only through
@@ -768,10 +779,10 @@ def _life_strategies(*, leads: bool, aimed: bool, travelling: bool) -> list:
         # free-roams its own quest log: that is the 937-yard scatter. An AIMED
         # one walks to a destination it shares with everyone else aimed at the
         # same quest, measured in the dev world at a 253-yard spread.
-        return [LIFE_STRATEGY, "nc +follow", FLEE_STRATEGY]
+        return [LIFE_STRATEGY, "nc +follow", RETREAT_STRATEGY]
     # Order matters: drop the wander before asking them to follow, so there is
     # no tick where both are set and the follower drifts off again.
-    return ["nc -new rpg", "nc +follow", FLEE_STRATEGY]
+    return ["nc -new rpg", "nc +follow", RETREAT_STRATEGY]
 
 
 def already_working(
