@@ -137,6 +137,21 @@ class TheRule(unittest.TestCase):
             townslot.campaign_owns_traveller("", "dungeon:ragefire", False)
         )
 
+    def test_a_bag_withhold_does_not_take_back_a_staging_leader(self):
+        """#1104: the withhold stops a run opening, not one being staged."""
+        self.assertTrue(
+            townslot.campaign_owns_traveller(
+                "dungeon:scarlet", "dungeon:scarlet", True, staging=True
+            )
+        )
+
+    def test_staging_does_not_own_a_leader_off_the_job(self):
+        self.assertFalse(
+            townslot.campaign_owns_traveller(
+                "dungeon:scarlet", "quest", True, staging=True
+            )
+        )
+
 
 def _held_by_clearance(now=0.0):
     slot = townslot.Slot(releasable=economy)
@@ -317,6 +332,10 @@ class FakeWorld:
         self.column = {"Zug": column}
         self.free = dict(FREE if free is None else free)
         self.job = job
+        # `bridge._staging_phase`: the staging phase on the leader's run
+        # timeline, "" when the coordinator is not staging.
+        self.phase = ""
+        self.phase_reads = []
         self.releases = []
         self.learn_releases = []
         # `bridge._TOWN_FIRST_SINCE`: when the queue first held this family.
@@ -355,6 +374,10 @@ class FakeWorld:
             return False
         self.column[name] = ""
         return True
+
+    def staging_phase(self, leader):
+        self.phase_reads.append(leader)
+        return self.phase
 
     def town_first_hold(self, names):
         """`_town_first_hold`: a campaign waits and nobody carries its job."""
@@ -422,6 +445,7 @@ def _bridge_self(world, clock, log):
             "_release_trade_errand": world.release,
             "_release_learn_aim": world.release_learn,
             "_fetch_free_slots": lambda names: dict(world.free),
+            "_staging_phase": world.staging_phase,
         },
     )
     me = types.SimpleNamespace(
@@ -527,6 +551,99 @@ class TheLiveSequence(unittest.TestCase):
         self.clock.now = 900.0
         self.assertFalse(self.clearance(726.0))
         self.assertEqual("", self.world.column["Zug"])
+
+
+class AStagingLeaderThroughABagWithhold(unittest.TestCase):
+    """#1104: a bag withhold mid-staging no longer hands the leader to town.
+
+    Measured on the dev realm 2026-10-16 to 10-17: Grug's family ran Scarlet
+    Monastery 4, then 5, times running and every one closed staging_failed,
+    "GATHERING held for more than 12 minutes and never opened - Grug (10857y
+    out ...), and its staging errand had ended and been taken back 2 times,
+    so it was not walking for some of this". The module restarts that clock
+    on every 100 yards gained, so 12 minutes is a leader who stopped walking;
+    nothing inside the run takes a staging aim back, and the bridge handed
+    the leader's travel column to its town passes the moment a member fell
+    to the bag floor, with the run already staging.
+    """
+
+    def setUp(self):
+        self.world = FakeWorld(column="")
+        self.clock, self.log = Clock(), _Log()
+        self.me = _bridge_self(self.world, self.clock, self.log)
+        _queue_pass(self.me, self.world)
+        self.assertTrue(self.me._cohort_town_slot("Zug").campaign)
+
+    def clearance(self):
+        return asyncio.run(
+            self.me._claim_town_slot(
+                "clearance", "Zug", MAILBOX, cohort="Zug", distance=726.0
+            )
+        )
+
+    def test_a_member_at_the_floor_mid_gathering_leaves_the_leader_walking(self):
+        self.world.free = dict(FULL)
+        self.world.phase = "GATHERING"
+        self.clock.now = 60.0
+        _queue_pass(self.me, self.world)
+        slot = self.me._cohort_town_slot("Zug")
+        self.assertIn("GATHERING", slot.campaign)
+        self.assertFalse(self.clearance())
+        self.assertEqual("", self.world.column["Zug"])
+        said = "\n".join(self.log.lines)
+        self.assertIn("staging in GATHERING through a bag withhold", said)
+
+    def test_the_town_errands_come_back_once_the_attempt_ends(self):
+        self.world.free = dict(FULL)
+        self.world.phase = "GATHERING"
+        _queue_pass(self.me, self.world)
+        self.world.phase = ""
+        self.clock.now = 60.0
+        _queue_pass(self.me, self.world)
+        self.assertEqual("", self.me._cohort_town_slot("Zug").campaign)
+        self.assertTrue(self.clearance())
+
+    def test_room_enough_reads_no_timeline(self):
+        self.clock.now = 60.0
+        _queue_pass(self.me, self.world)
+        self.assertEqual([], self.world.phase_reads)
+
+
+class TheStagingPhaseRead(unittest.TestCase):
+    def phase(self, cursor):
+        ns = _constants("_STAGING_PHASE_SQL", "STAGING_PHASE_FRESH_SECONDS")
+        ns.update(
+            townslot=townslot,
+            pymysql=types.SimpleNamespace(
+                err=types.SimpleNamespace(MySQLError=RuntimeError)
+            ),
+            _connect=lambda: _Conn(cursor),
+        )
+        _load(["_staging_phase"], ns)
+        return ns["_staging_phase"]("Grug")
+
+    def test_the_newest_phase_row_of_the_leader_is_read(self):
+        cursor = _Cursor([dict(phase="GATHERING")])
+        self.assertEqual("GATHERING", self.phase(cursor))
+        sql, params = cursor.calls[0]
+        self.assertIn("leader_name = %s", sql)
+        self.assertIn("kind = 'phase'", sql)
+        self.assertIn("ORDER BY id DESC", sql)
+        self.assertEqual("Grug", params[0])
+
+    def test_a_phase_outside_staging_is_not_staging(self):
+        for phase in ("IDLE", "CLEARING", "RECOVERING"):
+            self.assertEqual("", self.phase(_Cursor([dict(phase=phase)])))
+
+    def test_no_recent_row_is_not_staging(self):
+        self.assertEqual("", self.phase(_Cursor([])))
+
+    def test_a_world_without_the_timeline_is_not_staging(self):
+        class Missing(_Cursor):
+            def execute(self, sql, params=()):
+                raise RuntimeError(1146, "no such table")
+
+        self.assertEqual("", self.phase(Missing()))
 
 
 # The Horde family on 2026-09-24 at 03:55 UTC: Ragefire held "town first", the
