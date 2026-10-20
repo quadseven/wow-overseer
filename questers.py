@@ -542,7 +542,8 @@ def gone_spawns(name, tried) -> frozenset:
 def left_spawns(name, tried) -> frozenset:
     """The spawn ids this quester leaves for now: the gone ones, and those a
     walk was refused for a lasting reason (classquest.SPAWN_REFUSALS: a drop on
-    the way, the other side's ground) inside classquest.SPAWN_REFUSED_MINUTES,
+    the way, the other side's ground, a road through ground far above its
+    level) inside classquest.SPAWN_REFUSED_MINUTES,
     or for a short one (stopped getting nearer, died on the way) inside
     classquest.SPAWN_SHORT_MINUTES. Only the gone ones say the quest is broken:
     the rest say the way there is, for now."""
@@ -559,6 +560,39 @@ def left_spawns(name, tried) -> frozenset:
         if a.age_minutes < hold:
             out.add(a.spawn)
     return frozenset(out)
+
+
+# THE FAR WALK WALLS A QUESTER WAITS OUT (#1295). The module refuses a far walk
+# while the realm has as many under way as it allows, once the bot has started
+# as many this hour as one may, and while another verb holds the character
+# (classquest.REALM_FULL_REASON, BOT_BUDGET_REASON, HELD_REASON). None of these
+# says the giver or the way to it is the trouble, and each lifts on its own
+# clock, so the quester waits the class quest's time for it
+# (classquest.BACKOFF_MINUTES) instead of asking the same walk every pass:
+# from 2026-10-18 to 2026-10-20 the twenty questers' walks were refused 2,276
+# times for the budget and 2,453 times as held, about every two minutes.
+WALK_WALLS = (
+    classquest.REALM_FULL_REASON,
+    classquest.BOT_BUDGET_REASON,
+    classquest.HELD_REASON,
+)
+
+
+def walk_wall(name, tried) -> tuple:
+    """(the wall's words, minutes still to wait) when this quester's newest row
+    was refused for a far walk wall (WALK_WALLS) younger than its
+    classquest.BACKOFF_MINUTES; ("", 0) otherwise. A row of the same minute
+    that was not refused for a wall lifts it."""
+    mine = [a for a in tried or () if a.name == name]
+    if not mine:
+        return "", 0
+    age = min(a.age_minutes for a in mine)
+    newest = [a for a in mine if a.age_minutes == age]
+    if not all(a.failed and a.reason in WALK_WALLS for a in newest):
+        return "", 0
+    reason = newest[0].reason
+    wait = classquest.BACKOFF_MINUTES[reason] - age
+    return (reason, wait) if wait > 0 else ("", 0)
 
 
 def refusals(name, tried) -> dict:
@@ -1230,7 +1264,9 @@ def plan(
     `crossings` is the realm's recent crossing rows (guildjobs.Recent of
     guildjobs.CROSS_ACTIONS): a crossing is held while the member's last one is
     young (guildjobs.crossing_cooling) or the module refused that map for good
-    (guildjobs.class_walls), as the class quest's and the level step's are."""
+    (guildjobs.class_walls), as the class quest's and the level step's are.
+    A move that walks waits while the quester's newest row was refused for a
+    far walk wall (`walk_wall`)."""
     member = settled(member, tried)
     found = failures(cat, member, clock, now, tried, last_quest)
     if not member.online:
@@ -1248,6 +1284,20 @@ def plan(
         held = crossing_held(member.name, move, crossings)
         if held:
             move, why = None, held
+    if move is not None and move.spot is not None:
+        # A move that walks waits out a far walk wall; a drop does not walk.
+        wall, wait = walk_wall(member.name, tried)
+        if wall:
+            move, why = (
+                None,
+                "%s waits %d more minute%s to walk: %s"
+                % (
+                    member.name,
+                    wait,
+                    "" if wait == 1 else "s",
+                    wall,
+                ),
+            )
     return Plan(
         member.name, move, tuple(found) + tuple(never_held), move.said if move else why
     )

@@ -360,6 +360,123 @@ class NextZoneHasAGiverToGoTo(unittest.TestCase):
         self.assertEqual((zone, opens), (DUROTAR, [51]))
 
 
+def walk_row(reason, age, spawn=1003, status="error", name="Mirra"):
+    """One quester walk row of the command log, ended by the module with
+    `reason` (a refusal when the status failed), `age` minutes ago."""
+    outcome = "refused" if status == "error" else "arrived"
+    return {
+        "id": 9,
+        "target_name": name,
+        "command": "walk-to-spawn creature:%d map:0 x:400 y:0" % spawn,
+        "source": guildjobs.source_for(questers.WALK_ACTION, name),
+        "status": status,
+        "result": '{"outcome":"%s","reason":"%s","retryable":true}' % (outcome, reason),
+        "age": age,
+    }
+
+
+# The module's far walk walls, in its own words (FarWalkRefusal, and the hold
+# another verb places on a character).
+WALLS = (
+    "this character has started as many far walks this hour as one may",
+    "the realm has as many far walks under way as it allows",
+    "character is held by another verb",
+)
+LETHAL_ROAD = "the road to the spawn crosses ground far above its level"
+
+
+class FarWalkWallsWait(unittest.TestCase):
+    """A quester whose walk the realm refused for a far walk wall waits the
+    wall's own time (classquest.BACKOFF_MINUTES) before it walks again
+    (2026-10-18 to 2026-10-20 on the dev realm: the twenty questers' walks
+    were refused 2,276 times for the bot's far walk budget and 2,453 times as
+    held by another verb, because the same walk was asked every pass, about
+    every two minutes)."""
+
+    def member(self, **kw):
+        # Northshire done but for Report to Goldshire, its giver 390 yards off.
+        return mirra(level=5, quests_done=frozenset({1, 2, 6}), **kw)
+
+    def plan(self, *rows, member=None):
+        tried = questers.attempts(rows)
+        return questers.plan(
+            world(), member or self.member(), questers.Clock(), 0.0, tried=tried
+        )
+
+    def test_with_no_refused_walk_it_walks(self):
+        p = self.plan()
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 3))
+
+    def test_a_walk_refused_for_a_wall_holds_the_quester_the_wall_s_time(self):
+        for wall in WALLS:
+            with self.subTest(wall=wall):
+                self.assertIn(wall, classquest.BACKOFF_MINUTES)
+                wait = classquest.BACKOFF_MINUTES[wall]
+                p = self.plan(walk_row(wall, 5))
+                self.assertIsNone(p.move, p.line)
+                self.assertIn("waits", p.line)
+                self.assertIn(wall, p.line)
+                self.assertIn("%d more minute" % (wait - 5), p.line)
+                due = self.plan(walk_row(wall, wait))
+                self.assertIsNotNone(due.move, due.line)
+                self.assertEqual((due.move.kind, due.move.quest), (classquest.TAKE, 3))
+
+    def test_only_the_newest_row_decides(self):
+        budget = WALLS[0]
+        p = self.plan(walk_row(budget, 10), walk_row("", 3, status="done"))
+        self.assertIsNotNone(p.move, p.line)
+        p = self.plan(walk_row("", 10, status="done"), walk_row(budget, 3))
+        self.assertIsNone(p.move, p.line)
+
+    def test_another_quester_s_refusal_does_not_hold_it(self):
+        p = self.plan(walk_row(WALLS[0], 5, name="Durga"))
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 3))
+
+    def test_a_drop_needs_no_walk_and_is_not_held(self):
+        member = self.member(quest_log={2: questers.STATUS_INCOMPLETE})
+        tried = questers.attempts([walk_row(WALLS[0], 5)])
+        p = questers.plan(
+            world(), member, questers.Clock(), 0.0, frozenset({2}), tried=tried
+        )
+        self.assertIsNotNone(p.move, p.line)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.ABANDON, 2))
+
+
+class ALethalRoadPassesTheGiverOver(unittest.TestCase):
+    """A walk the module refused because the road to the spawn crosses ground
+    far above the quester's level (SpawnWalkRefusal) leaves that spawn for
+    classquest.SPAWN_REFUSED_MINUTES, as a drop on the way does: the road will
+    be as deadly on the next pass (2026-10-20: Pindle's walk to Deputy Willem
+    was refused so five times in a row, one pass after another)."""
+
+    def test_the_lethal_road_is_a_lasting_spawn_refusal(self):
+        self.assertIn(LETHAL_ROAD, classquest.SPAWN_REFUSALS)
+        self.assertNotIn(LETHAL_ROAD, classquest.SPAWN_SHORT_REFUSALS)
+
+    def test_the_zone_of_a_giver_behind_a_lethal_road_is_passed_over(self):
+        cat = world(
+            extra_quests=[quest(51, DUROTAR, 2, title="Vanquish the Betrayers")],
+            extra_givers=[
+                giver(51, "start", 1051, 151, 500, 0),
+                giver(51, "end", 1051, 151, 500, 0),
+            ],
+        )
+        member = mirra(level=5, quests_done=frozenset({1, 2, 3, 6, 52}))
+        p = questers.plan(cat, member, questers.Clock(), 0.0)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 51))
+        tried = questers.attempts([walk_row(LETHAL_ROAD, 5, spawn=1051)])
+        self.assertEqual(questers.left_spawns("Mirra", tried), frozenset({1051}))
+        p = questers.plan(cat, member, questers.Clock(), 0.0, tried=tried)
+        self.assertIsNotNone(p.move, p.line)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 20))
+        self.assertNotIn("waits", p.line)
+        later = questers.attempts(
+            [walk_row(LETHAL_ROAD, classquest.SPAWN_REFUSED_MINUTES, spawn=1051)]
+        )
+        p = questers.plan(cat, member, questers.Clock(), 0.0, tried=later)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 51))
+
+
 # The module's answer to a crossing row, as the command log holds it.
 NO_TRANSPORT = (
     "no transport the module knows sails from this map to that map for this faction"
