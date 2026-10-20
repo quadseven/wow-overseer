@@ -14062,17 +14062,13 @@ class Bridge(discord.Client):
                    if (move.character, command) not in seen
                    and move.character in watched]
         # A BANK BAG STEP IS A REASON TO WALK TOO (#625). Only a banker buys a
-        # slot or takes a bag, and the quick look below never claims the
-        # column, so Og decided "buys bank bag slot 1 ... it waits for a
-        # banker" every pass for days and was never walked to one.
-        bag_facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
-        bag_steps = [
-            s for s in bankbags.pending_steps(bag_facts,
-                                              bankbags.family_floor(bag_facts))
-            if (s.name, s.command) not in seen and s.name in watched
-        ]
+        # slot or takes a bag, and the quick look never claims the column, so
+        # a member that could afford a slot logged "it waits for a banker"
+        # every pass and was never walked to one.
+        bag_facts, bag_steps = await self._bank_bag_pending(names, seen,
+                                                            watched)
         await self._settle_bank_errand(names, leader,
-                                       bool(unasked) or bool(bag_steps),
+                                       bool(unasked + bag_steps),
                                        cohort=_cohort_key(cohort))
         # Below the settling, so the aim still precedes the row, and above the
         # `no moves` return, so a family that walked here for a bag step alone
@@ -14143,6 +14139,21 @@ class Bridge(discord.Client):
             if await asyncio.to_thread(_insert_bank, move, command):
                 fresh.append(move)
         return fresh, walking
+
+    async def _bank_bag_pending(self, names: list, seen: set,
+                                watched) -> tuple:
+        """(facts, steps): the bank bag read, and the steps a banker trip is for.
+
+        A step already asked inside the retry window is not, and neither is
+        one whose holder the world cannot see: the same two filters
+        `_bank_once` puts on the item moves.
+        """
+        facts = await asyncio.to_thread(_fetch_bank_bag_facts, names)
+        steps = [
+            s for s in bankbags.pending_steps(facts, bankbags.family_floor(facts))
+            if (s.name, s.command) not in seen and s.name in watched
+        ]
+        return facts, steps
 
     async def _bank_bag_slots(self, names: list, seen: set, cohort=None,
                               facts=None) -> None:

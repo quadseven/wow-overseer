@@ -83,7 +83,7 @@ class TheFamilysPendingSteps(unittest.TestCase):
 
     def test_pending_steps_lists_every_character_with_a_step(self):
         family = [
-            facts(name="Og", money=362608, worn=(6, 6, 6, 6)),
+            facts(name="Og", money=5000, worn=(6, 6, 6, 6)),
             facts(name="Grug", money=3999, worn=(6, 6, 6, 6)),
             facts(name="Ugga", bought=1, worn=(6, 6, 6, 6), spare=(bb.Bag(9, 805, 6),)),
             facts(name="Zug", bought=1, worn=(6, 6, 6, 6)),

@@ -604,9 +604,8 @@ bridge = _import_bridge()
 class ABankBagStepTakesTheFamilyToABanker(unittest.TestCase):
     """A buy or place-bag step walks the family to a banker (#625).
 
-    Measured on the dev realm 2026-10-18: "Og buys bank bag slot 1 ...; it
-    waits for a banker" 192 times in four hours, and Og was never walked to
-    one. Only bank.plan's item moves aimed the `banker` errand, and the bag
+    A member that could afford a slot logged "it waits for a banker" every
+    pass and was never walked to one. Only bank.plan's item moves aimed the `banker` errand, and the bag
     step was asked only by the quick look, which never claims the column.
     These drive the real `_bank_once` and `_settle_bank_errand` with every
     read stubbed: no item moves, and Og holds enough for slot 1.
@@ -650,7 +649,7 @@ class ABankBagStepTakesTheFamilyToABanker(unittest.TestCase):
         )
         bag_facts = [
             bankbags.Facts(name="Grug", money=0, worn=(6, 6, 6, 6)),
-            bankbags.Facts(name="Og", money=362608, worn=(6, 6, 6, 6)),
+            bankbags.Facts(name="Og", money=5000, worn=(6, 6, 6, 6)),
             bankbags.Facts(name="Ugga", money=0, bought=1, worn=(6, 6, 6, 6)),
         ]
         with mock.patch.multiple(
