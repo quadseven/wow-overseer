@@ -111,6 +111,16 @@ def paladin(**over):
 LINEN_LOOT = [{"item": LINEN, "entry": 285}, {"item": LINEN, "entry": 99}]
 
 
+def stalled_hunt(book, when, stalls=1):
+    """Hokk's hunt of The Tome of Divinity, stalled `stalls` times at `when`:
+    one stall leaves its only pack tried, MAX_REROLLS + 1 give it up."""
+    spot = book.quests[1644].fields[0]
+    hunts = classquest.Hunts()
+    for _ in range(stalls):
+        hunts.observe("Hokk", 1644, 0, spot, when, failed=True)
+    return hunts
+
+
 class TheLinen(unittest.TestCase):
     def test_an_elite_among_the_droppers_is_no_group(self):
         quest = tome_book(MURLOCS + [MORGAINE], LINEN_LOOT).quests[1644]
@@ -187,6 +197,58 @@ class TheLinen(unittest.TestCase):
         out = classask.plan_pass(list(helps), friends, {}, [], [], 0.0)
         self.assertEqual(len(out.posts), 1)
         self.assertEqual(out.posts[0].target, "quest:1644")
+
+    def test_an_overleveled_member_waits_at_most_half_an_hour_for_help(self):
+        # #1094 criterion 3: on 2026-10-19 a level 29 paladin, 17 over
+        # Redemption, asked the guild for it for an hour and more after its
+        # solo hunt stalled. Half an hour after the stall the quest yields to
+        # levelling: no help is asked for and the member is not held for it.
+        book = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}])
+        m = paladin(level=22)
+        hunts = stalled_hunt(book, 0.0)
+        wait = classquest.OVERLEVEL_HELP_WAIT_MINUTES * 60.0
+        helps, yields = guildjobs.class_asking(m, book, hunts, wait - 60.0)
+        self.assertEqual((len(helps), yields), (1, []))
+        self.assertIsNotNone(guildjobs.class_owed(m, book, (), hunts, wait - 60.0))
+        helps, yields = guildjobs.class_asking(m, book, hunts, wait)
+        self.assertEqual(helps, [])
+        self.assertEqual(len(yields), 1)
+        self.assertIn("Hokk stops asking for The Tome of Divinity", yields[0][1])
+        self.assertIn("then tries alone again", yields[0][1])
+        self.assertIsNone(guildjobs.class_owed(m, book, (), hunts, wait))
+
+    def test_the_plan_posts_no_help_after_the_overleveled_wait(self):
+        book = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}])
+        hunts = stalled_hunt(book, 0.0)
+        now = classquest.OVERLEVEL_HELP_WAIT_MINUTES * 60.0
+        result = class_plan([paladin(level=22)], b=book, hunts=hunts, now=now)
+        self.assertEqual(result.helps, ())
+        self.assertEqual(len(result.ask_yields), 1)
+
+    def test_a_given_up_hunt_levels_until_its_hold_off_then_solos_again(self):
+        # The hunt gave up after its last pack (GIVE_UP_MINUTES hold-off): the
+        # member levels for the rest of the hold-off, then hunts alone again.
+        book = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}])
+        m = paladin(level=22)
+        hunts = stalled_hunt(book, 0.0, stalls=classquest.MAX_REROLLS + 1)
+        wait = classquest.OVERLEVEL_HELP_WAIT_MINUTES
+        _helps, yields = guildjobs.class_asking(m, book, hunts, wait * 60.0)
+        left = classquest.GIVE_UP_MINUTES - wait
+        self.assertIn("it levels for %d minute(s)" % left, yields[0][1])
+        hold_off = classquest.GIVE_UP_MINUTES * 60.0
+        self.assertEqual(guildjobs.class_asking(m, book, hunts, hold_off), ([], []))
+        move, _blocked = classquest.next_move(book, m, *hunts.state("Hokk", hold_off))
+        self.assertEqual(move.kind, classquest.HUNT)
+
+    def test_nine_over_keeps_asking_past_half_an_hour(self):
+        # The bound is for a member OVERLEVEL_SOLO_GAP over the quest: one 9
+        # over is still a group's quest and keeps its ask.
+        book = tome_book([MORGAINE], [{"item": LINEN, "entry": 99}])
+        m = paladin(level=21)
+        hunts = stalled_hunt(book, 0.0)
+        later = 2 * classquest.OVERLEVEL_HELP_WAIT_MINUTES * 60.0
+        helps, yields = guildjobs.class_asking(m, book, hunts, later)
+        self.assertEqual((len(helps), yields), (1, []))
 
     def test_an_elite_kill_is_still_a_group(self):
         row = qrow(9, "Kill the boss", npc1=99, npc_count1=1)
