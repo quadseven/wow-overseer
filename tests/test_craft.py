@@ -1223,6 +1223,23 @@ class RecipeTableDisciplineTests(unittest.TestCase):
                 self.assertLess(a.max_skill, b.min_skill)
 
 
+class MeasuredCraftBands(unittest.TestCase):
+    def test_recipe_brackets_stay_inside_measured_skill_bands(self):
+        recipes = {
+            recipe.spell_id: recipe
+            for skill_recipes in craft.RECIPES.values()
+            for recipe in skill_recipes
+        }
+        self.assertEqual(set(recipes), set(MEASURED_BANDS))
+        for spell_id, recipe in recipes.items():
+            learn_floor, yellow, grey = MEASURED_BANDS[spell_id]
+            with self.subTest(spell_id=spell_id):
+                self.assertGreaterEqual(recipe.min_skill, learn_floor)
+                self.assertLess(recipe.max_skill, grey)
+                self.assertLessEqual(recipe.min_skill, grey)
+                self.assertLessEqual(yellow, grey)
+
+
 class TheModeConstant(unittest.TestCase):
     def test_it_matches_the_vocabulary(self):
         import jobs
