@@ -430,9 +430,9 @@ OVERLEVEL_HELP_WAIT_MINUTES = 30
 # objective instead (guildjobs.class_avoid). These are the module's refusals
 # that say the spawn or the way to it is the trouble, in its own words
 # (SpawnWalkRefusal): the first step goes over a drop, the way crosses the
-# other side's ground, the ground does not hold, the walk stopped getting
-# nearer, ran out of time or ended in the member's death, and the spawn is not
-# in the world, on this map or in season. The words that name the member's
+# other side's ground or ground far above the member's level, the ground does
+# not hold, the walk stopped getting nearer, ran out of time or ended in the
+# member's death, and the spawn is not in the world, on this map or in season. The words that name the member's
 # state (dead, in combat, held, in flight, a far walk wall) are not here: they
 # say nothing about the spawn. The time is GIVE_UP_MINUTES, the hold a hunt
 # gets when it stalled through every pack, so a refused spawn and a stalled
@@ -451,6 +451,11 @@ SPAWN_REFUSALS = frozenset(
         "no such spawn in the world",
         "the spawn is on another map than the character",
         "the spawn belongs to a world event that is not running",
+        # The module's far walk will not walk a road through ground far above
+        # the walker's level (SpawnLethalRoad). It is the road that is the
+        # trouble, and it is the same road on the next pass: questers were
+        # sent to one such giver every 2 minutes all day (2026-10-20).
+        "the road to the spawn crosses ground far above its level",
     }
 )
 # A stall or a death on the way is a pack to leave for a short while, not two

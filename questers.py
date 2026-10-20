@@ -542,7 +542,8 @@ def gone_spawns(name, tried) -> frozenset:
 def left_spawns(name, tried) -> frozenset:
     """The spawn ids this quester leaves for now: the gone ones, and those a
     walk was refused for a lasting reason (classquest.SPAWN_REFUSALS: a drop on
-    the way, the other side's ground) inside classquest.SPAWN_REFUSED_MINUTES,
+    the way, the other side's ground, a road through ground far above its
+    level) inside classquest.SPAWN_REFUSED_MINUTES,
     or for a short one (stopped getting nearer, died on the way) inside
     classquest.SPAWN_SHORT_MINUTES. Only the gone ones say the quest is broken:
     the rest say the way there is, for now."""
@@ -559,6 +560,30 @@ def left_spawns(name, tried) -> frozenset:
         if a.age_minutes < hold:
             out.add(a.spawn)
     return frozenset(out)
+
+
+def walk_backoff(name, tried) -> tuple:
+    """(minutes left, the realm's words) while this quester's newest walk row
+    was refused for a far walk wall (classquest.BACKOFF_MINUTES: its far walks
+    this hour, the realm's, another verb's hold) and the wall has not had its
+    time; (0, "") otherwise. The quester's own reading of
+    guildjobs.class_walk_backoff, over its walk rows (those naming a spawn):
+    a hunt row's ending is no wall on the walk on.
+
+    A WALL ASKED AGAIN EVERY PASS IS REFUSED EVERY PASS (2026-10-20). Questers
+    of 15 and 16 were sent on to the next zone every 2 minutes all day, and the
+    module refused one of them 374 times for its far walks that hour; the
+    class quest walks wait out the same wall."""
+    rows = sorted(
+        (a for a in tried or () if a.name == name and a.spawn),
+        key=lambda a: a.age_minutes,
+    )
+    if not rows:
+        return 0, ""
+    newest = rows[0]
+    wait = classquest.BACKOFF_MINUTES.get(newest.reason, 0)
+    left = wait - int(newest.age_minutes)
+    return (left, newest.reason) if left > 0 else (0, "")
 
 
 def refusals(name, tried) -> dict:
@@ -995,7 +1020,16 @@ def next_move(
             % (member.name, len(member.quest_log), LOG_SLOTS),
             never_held,
         )
-    # 5. Nothing left in reach here: the next zone.
+    # 5. Nothing left in reach here: the next zone, once a far walk wall the
+    # realm refused its last walk for has had its time (walk_backoff).
+    wait, wall = walk_backoff(member.name, tried)
+    if wait:
+        return (
+            None,
+            "%s waits %d more minute(s) before it walks on to the next zone: %s"
+            % (member.name, wait, wall),
+            never_held,
+        )
     unsailed = failed_crossings(member.name, crossings)
     move, why = _travel(cat, member, skip, left, unsailed)
     return move, why, never_held

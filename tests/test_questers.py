@@ -360,6 +360,108 @@ class NextZoneHasAGiverToGoTo(unittest.TestCase):
         self.assertEqual((zone, opens), (DUROTAR, [51]))
 
 
+# The module's ending for a spawn walk whose road crosses ground far above the
+# walker (SpawnWalkRefusal::SpawnLethalRoad).
+LETHAL_ROAD = "the road to the spawn crosses ground far above its level"
+
+
+def walk_row(reason, age, outcome="abandoned", spawn=1051):
+    """One quester walk row of the command log that the module ended with
+    `reason`, `age` minutes ago."""
+    return {
+        "id": 9,
+        "target_name": "Mirra",
+        "command": "walk-to-spawn creature:%d max:3000" % spawn,
+        "source": guildjobs.source_for(questers.WALK_ACTION, "Mirra"),
+        "status": "error",
+        "result": '{"outcome":"%s","reason":"%s"}' % (outcome, reason),
+        "age": age,
+    }
+
+
+class ARefusedWalkOnIsNotAskedEveryPass(unittest.TestCase):
+    """2026-10-20 on the dev realm: Durga and Mirra, level 15 all day, were
+    sent every 2 minutes to the same giver in the next zone. The module ended
+    each walk because its road crosses ground far above their level (Durga
+    292 times, Mirra 137), or refused it because they had started as many far
+    walks that hour as one may (270 and 374 times)."""
+
+    def setUp(self):
+        self.cat = world(
+            extra_quests=[quest(51, DUROTAR, 2, title="Vanquish the Betrayers")],
+            extra_givers=[
+                giver(51, "start", 1051, 151, 500, 0),
+                giver(51, "end", 1051, 151, 500, 0),
+            ],
+        )
+        self.member = mirra(level=5, quests_done=frozenset({1, 2, 3, 6}))
+
+    def plan(self, *rows, member=None):
+        return questers.plan(
+            self.cat,
+            member or self.member,
+            questers.Clock(),
+            0.0,
+            tried=questers.attempts(rows),
+        )
+
+    def test_a_giver_whose_road_is_lethal_is_left_for_the_next_zone(self):
+        self.assertEqual(
+            (self.plan().move.kind, self.plan().move.quest), (classquest.TAKE, 51)
+        )
+        self.assertIn(LETHAL_ROAD, classquest.SPAWN_REFUSALS)
+        rows = (walk_row(LETHAL_ROAD, age=2),)
+        self.assertEqual(
+            questers.left_spawns("Mirra", questers.attempts(rows)), frozenset({1051})
+        )
+        p = self.plan(*rows)
+        self.assertIsNotNone(p.move, p.line)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 20))
+        # The road is a lasting refusal: once its hold lapses, it is tried again.
+        lapsed = self.plan(walk_row(LETHAL_ROAD, age=classquest.SPAWN_REFUSED_MINUTES))
+        self.assertEqual((lapsed.move.kind, lapsed.move.quest), (classquest.TAKE, 51))
+
+    def test_a_far_walk_budget_refusal_holds_the_next_zone_for_its_backoff(self):
+        budget = classquest.BOT_BUDGET_REASON
+        p = self.plan(walk_row(budget, age=2, outcome="refused"))
+        self.assertIsNone(p.move, p.line)
+        self.assertIn("Mirra waits", p.line)
+        self.assertIn(budget, p.line)
+        due = self.plan(
+            walk_row(
+                budget, age=classquest.BOT_BUDGET_BACKOFF_MINUTES, outcome="refused"
+            )
+        )
+        self.assertEqual((due.move.kind, due.move.quest), (classquest.TAKE, 51))
+
+    def test_each_far_walk_wall_holds_for_its_own_time(self):
+        for reason, minutes in (
+            (classquest.REALM_FULL_REASON, classquest.REALM_FULL_BACKOFF_MINUTES),
+            (classquest.HELD_REASON, classquest.HELD_BACKOFF_MINUTES),
+        ):
+            held = self.plan(walk_row(reason, age=minutes - 1, outcome="refused"))
+            self.assertIsNone(held.move, reason)
+            due = self.plan(walk_row(reason, age=minutes, outcome="refused"))
+            self.assertIsNotNone(due.move, reason)
+
+    def test_a_newer_walk_that_went_lifts_the_hold(self):
+        went = dict(walk_row("", age=1, spawn=1003), status="applied", result="")
+        p = self.plan(
+            walk_row(classquest.BOT_BUDGET_REASON, age=4, outcome="refused"), went
+        )
+        self.assertIsNotNone(p.move, p.line)
+
+    def test_the_hold_leaves_a_quest_in_reach_here_to_be_taken(self):
+        # Elwynn's own quest 1 is still open: the budget hold is on the walk on
+        # to the next zone only.
+        p = self.plan(
+            walk_row(classquest.BOT_BUDGET_REASON, age=2, outcome="refused"),
+            member=mirra(level=5),
+        )
+        self.assertIsNotNone(p.move, p.line)
+        self.assertEqual((p.move.kind, p.move.quest), (classquest.TAKE, 1))
+
+
 # The module's answer to a crossing row, as the command log holds it.
 NO_TRANSPORT = (
     "no transport the module knows sails from this map to that map for this faction"
