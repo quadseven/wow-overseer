@@ -435,7 +435,11 @@ def _bridge_self(world, clock, log):
     async def mid_run(names):
         return False
 
+    async def no_upgrade_trip(*_args):
+        return None
+
     me._mid_run = mid_run
+    me._aim_upgrade_trip = no_upgrade_trip
     for name in ("_claim_town_slot", "_aim_at_bag_vendor", "_cohort_town_slot"):
         fn = ns[name]
         setattr(me, name, lambda *a, _fn=fn, **k: _fn(me, *a, **k))

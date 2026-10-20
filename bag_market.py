@@ -456,20 +456,36 @@ def _standing_map(standing: dict, name: str) -> int | None:
         return None
 
 
-def _upgrade_walkers(members, free_slots) -> tuple:
+def _upgrade_walkers(members, free_slots, pending=()) -> tuple:
     """Full-position members at the floor with room for a bag to land in, by
     name. An empty position belongs to `bag_pressure.bag_purchases` and its
     walk; a member with no free slot has nowhere for a vendor's bag to land
-    in, so neither trip is for it."""
+    in, so neither trip is for it; a member in `pending` has a bag on the way
+    and `_vendor_bag_upgrades` would sell it nothing at the counter."""
     walkers = []
     for member in sorted(members or (), key=lambda m: m.name):
-        if smallest_worn(member) is None:
+        if smallest_worn(member) is None or member.name in pending:
             continue
         free = (free_slots or {}).get(member.name)
         if not cap_yields(free) or int(free) < 1:
             continue
         walkers.append(member)
     return tuple(walkers)
+
+
+def _vendor_listings(vendor) -> list:
+    """What `vendor` stocks, as the listings `plan_upgrades` weighs."""
+    return [
+        Listing(
+            source=VENDOR,
+            key=int(o.entry),
+            entry=int(o.entry),
+            name=o.name,
+            slots=int(o.slots),
+            price=int(o.price),
+        )
+        for o in vendor.offers
+    ]
 
 
 def _upgrade_vendors(vendors, map_id: int, max_yards: float) -> list:
@@ -491,6 +507,7 @@ def upgrade_vendor_trip(
     *,
     free_slots=None,
     mailed=None,
+    pending=(),
     leader: str,
     standing: dict,
     in_run: bool = False,
@@ -499,7 +516,8 @@ def upgrade_vendor_trip(
     """Where to walk the family so a full member can buy a bigger bag.
 
     `members` wear every position full or not; only the full ones at the bag
-    floor (`cap_yields`) with a free slot for the purchase to land in walk.
+    floor (`cap_yields`) with a free slot for the purchase to land in walk,
+    except a name in `pending`, whose auction bag is still on the way.
     `vendors` are `bag_pressure.BagVendor` measured from the leader. The
     nearest vendor within `max_yards` on the leader's map at which
     `plan_upgrades` serves at least one walker, judged against what that
@@ -512,7 +530,7 @@ def upgrade_vendor_trip(
     map_id = int(standing[leader].map_id)
     walkers = [
         w
-        for w in _upgrade_walkers(members, free_slots)
+        for w in _upgrade_walkers(members, free_slots, pending)
         if _standing_map(standing, w.name) == map_id
     ]
     if not walkers:
@@ -528,22 +546,11 @@ def upgrade_vendor_trip(
         )
     for vendor in usable:
         entries = frozenset(int(o.entry) for o in vendor.offers)
-        listings = [
-            Listing(
-                source=VENDOR,
-                key=int(o.entry),
-                entry=int(o.entry),
-                name=o.name,
-                slots=int(o.slots),
-                price=int(o.price),
-            )
-            for o in vendor.offers
-        ]
         reach = {w.name: entries for w in walkers}
         upgrades, _notes = plan_upgrades(
             walkers,
             purses or {},
-            listings,
+            _vendor_listings(vendor),
             mailed=mailed,
             reach=reach,
             free_slots=free_slots,

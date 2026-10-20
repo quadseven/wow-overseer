@@ -499,6 +499,13 @@ class TheUpgradeWalk(unittest.TestCase):
         self.assertEqual(trip.target, "")
         self.assertEqual(trip.buyers, ())
 
+    def test_a_member_with_a_bag_bought_in_the_window_is_not_walked(self):
+        # `_vendor_bag_upgrades` sells nothing to a member whose auction bag
+        # is still on the way, so a walk for it would end at a closed counter.
+        trip = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 3}, pending={"Grog"})
+        self.assertEqual(trip.target, "")
+        self.assertEqual(trip.buyers, ())
+
     def test_a_broke_member_is_not_walked(self):
         purses = dict(HELD_PURSES, Grog=Purse(43, 12900 + 19999))
         trip = _upgrade_trip([HELD], purses, {"Grog": 3})
@@ -557,6 +564,7 @@ class TheUpgradeWalkWiring(unittest.TestCase):
         self.assertIn("bag_market.upgrade_vendor_trip(", body)
         self.assertIn("_fetch_bag_state", body)
         self.assertIn("_bag_purses", body)
+        self.assertIn("_recent_bag_buys", body)
 
 
 class TheBridgeWiring(unittest.TestCase):

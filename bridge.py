@@ -13509,9 +13509,8 @@ class Bridge(discord.Client):
         The vendor half of `bag_market`, and the half every family gets: the
         auction half needs the mail pass, which runs for this bridge's own
         family only. A buyer must stand at a vendor that stocks the bag,
-        because DoBuy refuses on the buyer's range, and no walk is taken for
-        an upgrade (`_aim_at_bag_vendor` walks for an empty position only).
-        The bag lands in the buyer's bags, and the `e` row right behind it
+        because DoBuy refuses on the buyer's range; the walk to that vendor is
+        `_aim_upgrade_trip`'s (#1218). The bag lands in the buyer's bags, and the `e` row right behind it
         puts it on in place of the smallest worn bag. A member with a bag
         bought at the auction house in the window, or one in the mail, is
         not sold a second one here.
@@ -13599,9 +13598,7 @@ class Bridge(discord.Client):
         counter, and releases the column; `_buy_bags_once` buys on the next
         cycle because the buyers now stand at a counter that stocks a bag.
         Past the empty-position trip, `_aim_upgrade_trip` walks full-position
-        buyers at the floor to a bigger bag (#1218): looked up and not named,
-        so the queue tests that load this function in isolation keep their
-        empty-position trip with no bag-state reads of their own.
+        buyers at the floor to a bigger bag (#1218).
         """
         slot = self._cohort_town_slot(cohort)
         if cohort is None:
@@ -13620,10 +13617,8 @@ class Bridge(discord.Client):
             needy or (), vendors, leader=leader, standing=standing,
             in_run=in_run)
         if not trip.target:
-            upgrade = getattr(self, "_aim_upgrade_trip", None)
-            if upgrade is not None:
-                trip = await upgrade(names, leader, standing, vendors,
-                                     in_run) or trip
+            trip = await self._aim_upgrade_trip(
+                names, leader, standing, vendors, in_run) or trip
         # ONE OWNER OF THE AIM WHILE THE CAMPAIGN IS WITHHELD (#225). Measured
         # on wow-dev 2026-09-23: clearance took the leader 17 yards short of
         # the bag vendor to post guild letters, and the campaign stayed
@@ -13661,8 +13656,10 @@ class Bridge(discord.Client):
         a member whose positions are all full never reaches the counter its
         upgrade is sold at. Runs only past the empty-position trip (the
         caller), and only when a member sits at the floor: one small
-        free-slots read a cycle otherwise. A failure is logged and the empty
-        trip's answer stands.
+        free-slots read a cycle otherwise. A member with an auction bag
+        bought in the window is not walked, as `_vendor_bag_upgrades` would
+        sell it nothing. A failure is logged and the empty trip's answer
+        stands.
         """
         try:
             free_slots = await asyncio.to_thread(_fetch_free_slots, names)
@@ -13678,6 +13675,8 @@ class Bridge(discord.Client):
                 vendors,
                 free_slots=free_slots,
                 mailed=await asyncio.to_thread(_fetch_mailed_bags, names),
+                pending=await asyncio.to_thread(
+                    _recent_bag_buys, GIVE_RETRY_MINUTES),
                 leader=leader,
                 standing=standing,
                 in_run=in_run,
