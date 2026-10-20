@@ -13636,8 +13636,10 @@ class Bridge(discord.Client):
         says is ahead. mod-overseer walks the leader there, holds it at the
         counter, and releases the column; `_buy_bags_once` buys on the next
         cycle because the buyers now stand at a counter that stocks a bag.
-        Past the empty-position trip, `_aim_upgrade_trip` walks full-position
-        buyers at the floor to a bigger bag (#1218).
+        `_aim_upgrade_trip` walks full-position buyers at the floor to a bigger
+        bag (#1218); both trips are attempted and the upgrade trip takes
+        priority when both have a target, because full-position members cannot
+        buy any bag without walking to a vendor.
         """
         slot = self._cohort_town_slot(cohort)
         if cohort is None:
@@ -13655,9 +13657,13 @@ class Bridge(discord.Client):
         trip = bag_pressure.bag_vendor_trip(
             needy or (), vendors, leader=leader, standing=standing,
             in_run=in_run)
-        if not trip.target:
-            trip = await self._aim_upgrade_trip(
-                names, leader, standing, vendors, in_run) or trip
+        upgrade_trip = await self._aim_upgrade_trip(
+            names, leader, standing, vendors, in_run)
+        if upgrade_trip and upgrade_trip.target:
+            if not trip.target:
+                trip = upgrade_trip
+            else:
+                trip = upgrade_trip
         # ONE OWNER OF THE AIM WHILE THE CAMPAIGN IS WITHHELD (#225). Measured
         # on wow-dev 2026-09-23: clearance took the leader 17 yards short of
         # the bag vendor to post guild letters, and the campaign stayed
