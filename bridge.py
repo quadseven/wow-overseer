@@ -20455,7 +20455,9 @@ class Bridge(discord.Client):
         wait, the learn trips stand down, and whatever a bridge pass left on
         the leader is handed back here by the bridge, its owner. A family
         whose campaign is withheld, interrupted by a Jev interlude, or done
-        gets its town errands back on this same pass.
+        gets its town errands back on this same pass; one withheld for bag
+        room while its run is staging gets them back when the attempt ends
+        (#1104, `_staging_campaign`).
         """
         own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
         owning: set = set()
@@ -20468,11 +20470,12 @@ class Bridge(discord.Client):
                     in_town.add(id(slot))
                 continue
             owning.add(id(slot))
-            if not slot.campaign:
+            owns = "%s on %s" % (active, name)
+            if slot.campaign != owns:
                 log.info("town slot: %s's campaign owns the traveller %s (%s) - "
-                         "town errands wait until it is withheld or done",
+                         "town errands wait until it lets go",
                          campaignqueue._family(key), name, active)
-            slot.yield_to_campaign("%s on %s" % (active, name))
+            slot.yield_to_campaign(owns)
             await self._hand_back_for_campaign(slot, name)
         for slot in (self._town_slot, *self._cohort_town_slots.values()):
             if id(slot) not in owning and slot.campaign:
@@ -20530,7 +20533,9 @@ class Bridge(discord.Client):
         """(leader, dungeon job) when this family's campaign owns its leader.
 
         ("", "") otherwise: no active entry, the job is not on the leader, or
-        the campaign is withheld for bag space (#227).
+        the campaign is withheld for bag space (#227) before its run began
+        staging. A withhold that comes while the coordinator is staging keeps
+        the leader with the run (#1104), and the label it returns says so.
         """
         if fam is None or not rows:
             return "", ""
@@ -20542,9 +20547,12 @@ class Bridge(discord.Client):
         if not name or not townslot.campaign_owns_traveller(active, job, False):
             return "", ""
         free = await asyncio.to_thread(_fetch_free_slots, list(fam["names"]))
-        if not townslot.campaign_owns_traveller(
-                active, job, jev_activity.withheld(True, free)):
+        withheld = jev_activity.withheld(True, free)
+        phase = await asyncio.to_thread(_staging_phase, name) if withheld else ""
+        if not townslot.campaign_owns_traveller(active, job, withheld, bool(phase)):
             return "", ""
+        if phase:
+            return name, "%s, staging in %s through a bag withhold" % (active, phase)
         return name, active
 
     async def _hand_back_for_campaign(self, slot, leader: str) -> None:
@@ -27101,6 +27109,39 @@ def _active_dungeon_run() -> dict | None:
             if exc.args and exc.args[0] in (1054, 1146):
                 return None
             raise
+
+
+# WHETHER THE COORDINATOR IS STAGING, off its run timeline (#1104). No run row
+# exists before somebody stands on the instance map, so `_active_dungeon_run`
+# cannot see RESET, GATHERING or BARRIER; the timeline's phase rows can, and
+# each carries the phase it changed to. A row older than the window is a
+# coordinator a restart lost rather than a walk to a door: 11,800 yards, the
+# Stormwind to Scarlet Monastery walk, is 28 minutes at the 416 yards a minute
+# flightlearn.WALK_YARDS_PER_MINUTE measures.
+STAGING_PHASE_FRESH_SECONDS = 3600
+_STAGING_PHASE_SQL = (
+    "SELECT phase FROM overseer_dungeon_run_event WHERE leader_name = %s "
+    "AND kind = 'phase' AND created_at > NOW() - INTERVAL %s SECOND "
+    "ORDER BY id DESC LIMIT 1"
+)
+
+
+def _staging_phase(leader: str) -> str:
+    """The townslot.STAGING_PHASES phase `leader`'s run is in, or "".
+
+    A world without the timeline table reads as not staging, the answer the
+    bag withhold gave before the timeline was asked.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_STAGING_PHASE_SQL, (leader, STAGING_PHASE_FRESH_SECONDS))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return ""
+            raise
+        row = cur.fetchone()
+    phase = str((row or {}).get("phase") or "")
+    return phase if phase in townslot.STAGING_PHASES else ""
 
 
 def _fetch_live_maps(names: list) -> dict[str, int] | None:
