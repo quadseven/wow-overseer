@@ -210,6 +210,42 @@ def split_on(rows: list[dict], field: str, blank=None) -> dict | None:
     }
 
 
+def sitting_out(rows: list[dict], standin_rows: list[dict] | None) -> dict:
+    """name -> {"name", "guest", "seat"} for each enabled member a stand-in row
+    sits out of its family's runs (standin.py) and that is on its own job,
+    not the leader's. A row naming somebody off this roster, or a member that
+    is back on the family's job, sits nobody out here."""
+    leader = _leader(rows)
+    family_job = _mode(leader) if leader is not None else jobs.DEFAULT
+    by_name = {str(r["name"]): r for r in rows}
+    out = {}
+    for row in standin_rows or ():
+        name = str(row.get("out_name") or "")
+        member = by_name.get(name)
+        if member is None or member is leader or _mode(member) == family_job:
+            continue
+        out[name] = {
+            "name": name,
+            "guest": str(row.get("in_name") or ""),
+            "seat": str(row.get("seat") or ""),
+        }
+    return out
+
+
+def sitting_line(entry: dict, family_size: int) -> str:
+    """ "Og sits out the runs to craft; Pogg takes his dps seat." """
+    if entry["guest"]:
+        return "%s sits out the runs to craft; %s takes the %s seat." % (
+            entry["name"],
+            entry["guest"],
+            entry["seat"] or "empty",
+        )
+    return (
+        "%s sits out the runs to craft; nobody takes the seat, so the family "
+        "runs %d-handed." % (entry["name"], max(family_size - 1, 0))
+    )
+
+
 def job_split(rows: list[dict]) -> dict | None:
     """The job disagreement, computed off the same default the module uses."""
     return split_on([{"name": r["name"], "job": _mode(r)} for r in rows], "job")
@@ -693,7 +729,7 @@ def stalled(moved_at: datetime | None, now: datetime) -> bool:
 # --- the whole banner --------------------------------------------------------
 
 
-def _span(seconds: int) -> str:
+def span(seconds: int) -> str:
     """A duration in the largest whole unit: "25 minutes", "13 hours"."""
     for size, unit in ((86400, "day"), (3600, "hour"), (60, "minute")):
         if seconds >= size:
@@ -712,9 +748,48 @@ def stall_line(moved_at: datetime | None, now: datetime) -> str:
     """
     if moved_at is None:
         return ""
-    return "STALLED: no quest, level or gear change for %s." % _span(
+    return "STALLED: no quest, level or gear change for %s." % span(
         max(0, int((now - moved_at).total_seconds()))
     )
+
+
+# build_agenda's `leader_now` when the caller did not read the leader at all.
+NOT_READ = object()
+
+
+def _stall_text(moved_at, now, counter, leader_now) -> str:
+    """The STALLED line, with the hold that explains it when the leader was read."""
+    line = stall_line(moved_at, now)
+    if leader_now is NOT_READ:
+        return line
+    return "%s %s" % (line, stall_blocker(counter["recorded_by"] or "", leader_now))
+
+
+def stall_blocker(leader: str, now: dict | None) -> str:
+    """What a stalled family is held by, as one sentence, never blank.
+
+    STALLED said only that nothing had happened, and the realm report beside it
+    said "No current blocker recorded", so the page contradicted itself about
+    the one family it was warning about. The leader's own reading names the
+    hold (nowstatus.compose: what he is doing and what he waits for, the same
+    sentence the wall prints), since the family follows him. When nothing the
+    bridge recorded explains it, that is said plainly rather than left blank.
+
+    `now` is compose's answer for the leader ({"doing", "waiting"}), or None
+    when it could not be read.
+    """
+    if now is None:
+        return "%s's reading could not be taken, so nothing names the hold." % leader
+    doing = str(now.get("doing") or "").strip()
+    waiting = str(now.get("waiting") or "").strip()
+    if not doing or doing == "Idle":
+        return (
+            "Nothing the bridge recorded says why: %s has no errand and no hold."
+            % leader
+        )
+    if waiting:
+        return "%s: %s, waiting for %s." % (leader, doing.rstrip("."), waiting)
+    return "%s: %s, with no reason to wait recorded." % (leader, doing.rstrip("."))
 
 
 def build_agenda(
@@ -728,6 +803,8 @@ def build_agenda(
     now: datetime | None = None,
     members: list[str] | None = None,
     creatures: dict | None = None,
+    leader_now=NOT_READ,
+    standin_rows: list[dict] | None = None,
 ) -> dict:
     """Rows in, the current-goal banner's JSON out.
 
@@ -741,6 +818,12 @@ def build_agenda(
     now           the clock, injectable so the suite can stand still
     creatures     creature entry -> a name or naming row, from
                   acore_world.creature_template, for numeric travel aims
+    leader_now    nowstatus.compose's reading of the leader ({"doing",
+                  "waiting"}), or None when it could not be read; a stalled
+                  family's line names its hold from it (stall_blocker). Left
+                  out, the line says only how long the family has been still.
+    standin_rows  overseer_family_standin: who sits out the family's runs to
+                  craft and who takes the seat (standin.py, sitting_out)
 
     EVERY ONE OF THOSE MAY BE EMPTY. A realm whose worldserver predates a table
     hands in [] for it and gets a thinner sentence, never an exception. The
@@ -771,8 +854,15 @@ def build_agenda(
     err = errand(rows, trade_rows, creatures)
     order = orders(goal_rows, quest_titles, err)
     moved_at = last_movement(event_rows)
-    jsplit = job_split(rows)
-    qsplit = split_on(rows, "drive_quest", blank=0)
+    # A MEMBER SITTING OUT TO CRAFT IS NOT A SPLIT. The stand-in order sits it
+    # out of the family's runs on its own job on purpose; counted into the
+    # split, the headline read "The family is split: 4 on Scarlet Monastery
+    # runs, 1 on craft" for days (wow-dev, 2026-10-20). It is said as what it
+    # is instead, below.
+    sitting = sitting_out(rows, standin_rows)
+    driven = [r for r in rows if str(r["name"]) not in sitting]
+    jsplit = job_split(driven)
+    qsplit = split_on(driven, "drive_quest", blank=0)
     is_stalled = stalled(moved_at, now)
 
     activity, headline, detail, changed_at = _decide(
@@ -789,6 +879,9 @@ def build_agenda(
         order,
         is_stalled,
     )
+    detail = list(detail) + [
+        sitting_line(sitting[n], len(rows)) for n in sorted(sitting)
+    ]
 
     return {
         "generated_at": _iso(now),
@@ -807,7 +900,14 @@ def build_agenda(
         "moved_seconds": _seconds(moved_at, now),
         "stalled": is_stalled,
         "stall_after_seconds": int(STALL_AFTER.total_seconds()),
-        "stall_line": stall_line(moved_at, now) if is_stalled else "",
+        "stall_line": _stall_text(moved_at, now, counter, leader_now)
+        if is_stalled
+        else "",
+        # The hold a stalled family is named by, on its own; "" when the
+        # family is not stalled or nobody asked the leader's reading.
+        "stall_blocker": stall_blocker(counter["recorded_by"] or "", leader_now)
+        if is_stalled and leader_now is not NOT_READ
+        else "",
         "orders": _public(order),
         # WHO SET WHAT THE HEADLINE SAYS, or "" when no order produced it.
         # Only when the headline is about the order: a council goal for one
@@ -818,6 +918,7 @@ def build_agenda(
         "quest_split": qsplit,
         "campaign": counter,
         "leader": counter["recorded_by"],
+        "sitting_out": [sitting[n] for n in sorted(sitting)],
     }
 
 

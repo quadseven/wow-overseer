@@ -3792,6 +3792,30 @@ _INSTANCE_SQL = (
 )
 
 
+def _leader_now(name: str | None):
+    """nowstatus.compose's reading of one character, the sentence the wall and
+    /api/v2/roster print for it; None when it cannot be read."""
+    if not name:
+        return None
+    try:
+        facts = _fetch_now_facts([name])
+        if facts is False:
+            return None
+        with realmread.Session(_connect) as rd:
+            reading = v2_presence.of(rd, [name]).get(name) or {}
+    except Exception:
+        log.exception("agenda: %s's reading could not be taken", name)
+        return None
+    life = reading.get("life")
+    member = {
+        "present": bool(reading.get("online")),
+        "condition": "dead" if life in ("dead", "ghost") else "ok",
+        "combat": False,
+        "life": life,
+    }
+    return nowstatus.compose(member, (facts or {}).get(name), None)
+
+
 def _fetch_agenda(names=None) -> dict:
     """Everything the current-goal banner reads, in one connection.
 
@@ -3833,6 +3857,11 @@ def _fetch_agenda(names=None) -> dict:
             tuple(names), what="overseer_event")
         instance_rows = rd.rows(_INSTANCE_SQL % holes, tuple(names),
                                 what="instance")
+        # Who sits out the runs to craft (standin.py), so the banner says so
+        # instead of calling the family split.
+        standin_rows = rd.rows(
+            "SELECT family, out_name, in_name, seat FROM overseer_family_standin",
+            (), what="overseer_family_standin")
         # The quests anything is aimed at, named. Looked up after the rows
         # are in hand rather than joined, because acore_world is a second
         # schema and the ids are a handful.
@@ -3859,7 +3888,8 @@ def _fetch_agenda(names=None) -> dict:
     return {"roster_rows": roster_rows, "run_rows": run_rows,
             "instance_rows": instance_rows, "goal_rows": goal_rows,
             "trade_rows": trade_rows, "event_rows": event_rows,
-            "quest_titles": quest_titles, "creatures": creatures}
+            "quest_titles": quest_titles, "creatures": creatures,
+            "standin_rows": standin_rows}
 
 
 def _fetch_streams() -> list:
@@ -5356,7 +5386,13 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             names, chosen, known = self._family_scope(query)
-            payload = agenda.build_agenda(**_fetch_agenda(names), members=names)
+            rows = _fetch_agenda(names)
+            payload = agenda.build_agenda(**rows, members=names)
+            if payload["stalled"]:
+                # A STALLED family names its hold: the leader's own reading,
+                # the sentence the wall prints for him (agenda.stall_blocker).
+                payload = agenda.build_agenda(
+                    **rows, members=names, leader_now=_leader_now(payload["leader"]))
             payload["family"] = chosen
             payload["families"] = known
             # THE FAMILY'S CAMPAIGN QUEUE (#209), first under the headline:
