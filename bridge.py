@@ -16542,6 +16542,18 @@ class Bridge(discord.Client):
                 # sword at 16:43, settled 300 s on the deck, and was let go
                 # before a full cycle brought the Runeforge step.
                 self._note_follow_up()
+            if step.action == pvpgear.ACTION and any(
+                pvpgear.is_queue_row(r.command) for r in step.rows
+            ):
+                # A QUEUE THAT WENT THROUGH HOLDS THE MEMBER FROM NOW (#913),
+                # not from the next PvP pass's read of it: on 2026-10-20 the
+                # social pass between the two asked Hoofhearted, 3 minutes
+                # into an Arathi Basin queue, to Shadowfang Keep and the run
+                # was refused. The next PvP pass reads the queue and keeps
+                # the hold or lets it go (_job_pvp_moves).
+                if getattr(self, "_pvp_held", None) is None:
+                    self._pvp_held = {}
+                self._pvp_held[step.holder] = True
         except pymysql.err.MySQLError:
             log.exception("guild jobs: step for %s failed", step.holder)
         finally:
