@@ -3857,6 +3857,11 @@ def _fetch_agenda(names=None) -> dict:
             tuple(names), what="overseer_event")
         instance_rows = rd.rows(_INSTANCE_SQL % holes, tuple(names),
                                 what="instance")
+        # Who sits out the runs to craft (standin.py), so the banner says so
+        # instead of calling the family split.
+        standin_rows = rd.rows(
+            "SELECT family, out_name, in_name, seat FROM overseer_family_standin",
+            (), what="overseer_family_standin")
         # The quests anything is aimed at, named. Looked up after the rows
         # are in hand rather than joined, because acore_world is a second
         # schema and the ids are a handful.
@@ -3883,7 +3888,8 @@ def _fetch_agenda(names=None) -> dict:
     return {"roster_rows": roster_rows, "run_rows": run_rows,
             "instance_rows": instance_rows, "goal_rows": goal_rows,
             "trade_rows": trade_rows, "event_rows": event_rows,
-            "quest_titles": quest_titles, "creatures": creatures}
+            "quest_titles": quest_titles, "creatures": creatures,
+            "standin_rows": standin_rows}
 
 
 def _fetch_streams() -> list:

@@ -118,6 +118,71 @@ class TheOrdinaryCase(unittest.TestCase):
         self.assertNotIn("Ugga", out["roster"])
 
 
+def sitting(in_name="Pogg", out_name="Ugga"):
+    return [{"family": "Og", "out_name": out_name, "in_name": in_name, "seat": "dps"}]
+
+
+def on_runs(**sit):
+    """Og's family on a dungeon job, Ugga on craft, and the stand-in rows."""
+    rows = roster(
+        {n: {"job": "dungeon:scarlet-cathedral"} for n in FAMILY if n != "Ugga"}
+    )
+    rows = [dict(r, job="craft") if r["name"] == "Ugga" else r for r in rows]
+    return agenda.build_agenda(
+        rows,
+        [],
+        [],
+        [],
+        [],
+        [{"kind": "quest_accept", "last_seen": NOW - timedelta(minutes=1)}],
+        {},
+        now=NOW,
+        **sit,
+    )
+
+
+class ASitOutIsNotASplit(unittest.TestCase):
+    """The operator, 2026-10-20: "The family is split: 4 on Scarlet Monastery
+    (the Cathedral) runs, 1 on craft" read like a fault, for days. Og was sat
+    out of his family's runs to craft on purpose (standin.py)."""
+
+    def test_a_member_sitting_out_to_craft_is_said_as_such(self):
+        out = on_runs(standin_rows=sitting())
+        self.assertNotEqual(agenda.SPLIT, out["activity"])
+        self.assertIsNone(out["job_split"])
+        self.assertIn(
+            "Ugga sits out the runs to craft; Pogg takes the dps seat.", out["detail"]
+        )
+        self.assertEqual(
+            [{"name": "Ugga", "guest": "Pogg", "seat": "dps"}], out["sitting_out"]
+        )
+
+    def test_with_no_guest_the_family_runs_short_handed(self):
+        out = on_runs(standin_rows=sitting(in_name=""))
+        self.assertIn(
+            "Ugga sits out the runs to craft; nobody takes the seat, so the "
+            "family runs 4-handed.",
+            out["detail"],
+        )
+
+    def test_without_a_row_it_is_still_a_split(self):
+        out = on_runs()
+        self.assertEqual(agenda.SPLIT, out["activity"])
+        self.assertEqual([], out["sitting_out"])
+
+    def test_a_member_back_on_the_family_job_sits_nobody_out(self):
+        rows = roster({n: {"job": "dungeon:scarlet-cathedral"} for n in FAMILY})
+        out = agenda.build_agenda(
+            rows, [], [], [], [], [], {}, now=NOW, standin_rows=sitting()
+        )
+        self.assertEqual([], out["sitting_out"])
+
+    def test_the_leader_is_never_counted_as_sitting_out(self):
+        out = on_runs(standin_rows=sitting(out_name="Og"))
+        self.assertEqual([], out["sitting_out"])
+        self.assertEqual(agenda.SPLIT, out["activity"])
+
+
 class ASplitPartyIsNeverAveraged(unittest.TestCase):
     """The failure the operator keeps catching by eye, and the one rule this page must
     not break: four against one is reported as four against one."""

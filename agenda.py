@@ -210,6 +210,42 @@ def split_on(rows: list[dict], field: str, blank=None) -> dict | None:
     }
 
 
+def sitting_out(rows: list[dict], standin_rows: list[dict] | None) -> dict:
+    """name -> {"name", "guest", "seat"} for each enabled member a stand-in row
+    sits out of its family's runs (standin.py) and that is on its own job,
+    not the leader's. A row naming somebody off this roster, or a member that
+    is back on the family's job, sits nobody out here."""
+    leader = _leader(rows)
+    family_job = _mode(leader) if leader is not None else jobs.DEFAULT
+    by_name = {str(r["name"]): r for r in rows}
+    out = {}
+    for row in standin_rows or ():
+        name = str(row.get("out_name") or "")
+        member = by_name.get(name)
+        if member is None or member is leader or _mode(member) == family_job:
+            continue
+        out[name] = {
+            "name": name,
+            "guest": str(row.get("in_name") or ""),
+            "seat": str(row.get("seat") or ""),
+        }
+    return out
+
+
+def sitting_line(entry: dict, family_size: int) -> str:
+    """ "Og sits out the runs to craft; Pogg takes his dps seat." """
+    if entry["guest"]:
+        return "%s sits out the runs to craft; %s takes the %s seat." % (
+            entry["name"],
+            entry["guest"],
+            entry["seat"] or "empty",
+        )
+    return (
+        "%s sits out the runs to craft; nobody takes the seat, so the family "
+        "runs %d-handed." % (entry["name"], max(family_size - 1, 0))
+    )
+
+
 def job_split(rows: list[dict]) -> dict | None:
     """The job disagreement, computed off the same default the module uses."""
     return split_on([{"name": r["name"], "job": _mode(r)} for r in rows], "job")
@@ -768,6 +804,7 @@ def build_agenda(
     members: list[str] | None = None,
     creatures: dict | None = None,
     leader_now=NOT_READ,
+    standin_rows: list[dict] | None = None,
 ) -> dict:
     """Rows in, the current-goal banner's JSON out.
 
@@ -785,6 +822,8 @@ def build_agenda(
                   "waiting"}), or None when it could not be read; a stalled
                   family's line names its hold from it (stall_blocker). Left
                   out, the line says only how long the family has been still.
+    standin_rows  overseer_family_standin: who sits out the family's runs to
+                  craft and who takes the seat (standin.py, sitting_out)
 
     EVERY ONE OF THOSE MAY BE EMPTY. A realm whose worldserver predates a table
     hands in [] for it and gets a thinner sentence, never an exception. The
@@ -815,8 +854,15 @@ def build_agenda(
     err = errand(rows, trade_rows, creatures)
     order = orders(goal_rows, quest_titles, err)
     moved_at = last_movement(event_rows)
-    jsplit = job_split(rows)
-    qsplit = split_on(rows, "drive_quest", blank=0)
+    # A MEMBER SITTING OUT TO CRAFT IS NOT A SPLIT. The stand-in order sits it
+    # out of the family's runs on its own job on purpose; counted into the
+    # split, the headline read "The family is split: 4 on Scarlet Monastery
+    # runs, 1 on craft" for days (wow-dev, 2026-10-20). It is said as what it
+    # is instead, below.
+    sitting = sitting_out(rows, standin_rows)
+    driven = [r for r in rows if str(r["name"]) not in sitting]
+    jsplit = job_split(driven)
+    qsplit = split_on(driven, "drive_quest", blank=0)
     is_stalled = stalled(moved_at, now)
 
     activity, headline, detail, changed_at = _decide(
@@ -833,6 +879,9 @@ def build_agenda(
         order,
         is_stalled,
     )
+    detail = list(detail) + [
+        sitting_line(sitting[n], len(rows)) for n in sorted(sitting)
+    ]
 
     return {
         "generated_at": _iso(now),
@@ -869,6 +918,7 @@ def build_agenda(
         "quest_split": qsplit,
         "campaign": counter,
         "leader": counter["recorded_by"],
+        "sitting_out": [sitting[n] for n in sorted(sitting)],
     }
 
 
