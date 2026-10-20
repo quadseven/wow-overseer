@@ -1276,13 +1276,12 @@ def capped_trades(member) -> tuple:
     return tuple(out)
 
 
-def _pvp_holds(m, pvp) -> bool:
-    """Whether PvP holds this member from every other job this pass: inside a
-    battleground or in its queue (_pvp_first's `held`), read without building
-    the PvP step."""
+def _pvp_inside(m, pvp) -> bool:
+    """Whether this member plays inside a battleground this pass, read without
+    building the PvP step. A member only waiting in a queue is not inside."""
     if not pvp or not m.eligible or not m.online:
         return False
-    return bool(pvp[1].holds)
+    return pvp[1].kind == pvpgear.INSIDE
 
 
 def _tier_cap_first(m, pvp, pending, recent, cap):
@@ -1299,13 +1298,23 @@ def _tier_cap_first(m, pvp, pending, recent, cap):
     trade's own (`walk-to-trainer skill:<id>`), and once the rank is bought
     the member's next pass resumes where it left off.
 
-    Never for a member held in a battleground or its queue, never for a
-    summoner a summon waits on (`pending`), never in a fight, never before
-    its natural restart (what it buys would be thrown away with
-    the restart), and a failed walk cools down per skill as the ordinary
-    train step does (_training_cooling).
+    Never for a member inside a battleground, never for a summoner a summon
+    waits on (`pending`), never in a fight, never before its natural restart
+    (what it buys would be thrown away with the restart), and a failed walk
+    cools down per skill as the ordinary train step does (_training_cooling).
+
+    A MEMBER WAITING IN A QUEUE WALKS (2026-10-20, #1116). Read on the dev
+    realm 2026-10-19 12:00 to 2026-10-20 14:40: Flintt (Herbalism 75/75, in
+    the Arathi Basin queue to fill a cohort) and Funkymon (Herbalism and
+    Skinning 75/75, in the Warsong Gulch queue) were named in a queue that
+    never popped on nearly every one of about 107 passes, and neither got a
+    rank walk: each re-ask past pvpgear.WAITING_MINUTES holds the member
+    again, so the queue hold kept the walk off them for good. The module does
+    not refuse a walk for a queued member, and the class quest, food, riding
+    and gear rungs above already walk one. A walk that fails because the
+    queue popped cools down per skill like any failed walk.
     """
-    if not m.eligible or not m.online or m.in_combat or _pvp_holds(m, pvp):
+    if not m.eligible or not m.online or m.in_combat or _pvp_inside(m, pvp):
         return None, ""
     if m.name in (pending or ()):
         return None, ""
