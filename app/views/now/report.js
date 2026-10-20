@@ -1,3 +1,8 @@
+// Guild progress at the foot of Now: each guild's dungeon ladder, its top
+// blocker and its level 60 projection, read from /api/v2/guild,
+// /api/v2/series and /api/v2/stuck. Nothing here is guessed: a value the
+// realm does not report is said quietly as not measured.
+
 import { html, notMeasured, plural } from "../../ui.js";
 import { ageOf } from "../../models/time.js";
 
@@ -44,8 +49,87 @@ export function reportFacts({ guild, series, stuck, now = Date.now() / 1000 }) {
   };
 }
 
+// ---- the ladder ---------------------------------------------------------------
+// Every dungeon in level order, each one "cleared" (at least one clear),
+// "tried" (attempts but no clear) or "open" (never tried), and the frontier:
+// the lowest dungeon above the highest one cleared that is not cleared yet,
+// the one already tried when two share a floor. With nothing cleared, the
+// frontier is the lowest dungeon; with everything cleared, there is none.
+// `dungeons` are reportFacts' rows (attempts, cleared, floor), in any order.
+export function ladder(dungeons) {
+  const floorOf = (d) => (d.floor === null || d.floor === undefined || !Number.isFinite(Number(d.floor)) ? Infinity : Number(d.floor));
+  const steps = (dungeons || []).map((d) => {
+    const attempts = Number(d.attempts ?? d.runs ?? 0) || 0;
+    const cleared = Number(d.cleared || 0) || 0;
+    return {
+      place: d.place || d.keyword || "",
+      floor: d.floor ?? null,
+      ceiling: d.ceiling ?? null,
+      attempts,
+      cleared,
+      rate: attempts ? cleared / attempts : null,
+      inside: d.inside === true,
+      state: cleared > 0 ? "cleared" : attempts > 0 ? "tried" : "open",
+      frontier: false,
+    };
+  }).sort((a, b) => floorOf(a) - floorOf(b));
+  let top = -1;
+  steps.forEach((s, i) => { if (s.state === "cleared") top = i; });
+  const above = steps.slice(top + 1);
+  let frontier = null;
+  if (above.length) {
+    const low = floorOf(above[0]);
+    const tie = above.filter((s) => floorOf(s) === low);
+    frontier = tie.find((s) => s.state === "tried") || tie[0];
+    frontier.frontier = true;
+  }
+  const count = (st) => steps.filter((s) => s.state === st).length;
+  return {
+    steps,
+    total: steps.length,
+    cleared: count("cleared"),
+    tried: count("tried"),
+    open: count("open"),
+    frontier,
+    reached: steps.filter((s) => s.state !== "open"),
+    unreached: steps.filter((s) => s.state === "open"),
+  };
+}
+
+function levels(s) {
+  if (s.floor === null) return "L?";
+  return "L" + s.floor + (s.ceiling ? "-" + s.ceiling : "");
+}
+
+function pct(rate) {
+  return rate === null ? "" : Math.round(rate * 100) + "%";
+}
+
+function ladderHtml(lad, slug) {
+  if (!lad.total) return html`<p class="muted">Dungeon ladder not measured.</p>`;
+  const f = lad.frontier;
+  const next = f
+    ? html`<p class="lad-next"><span class="dim">Next up</span> <span class="b">${f.place}</span> <span class="dim">${levels(f)}${f.attempts ? ", " + plural(f.attempts, "attempt") + ", no clear yet" : ", not tried yet"}</span></p>`
+    : html`<p class="lad-next"><span class="b">Every dungeon on the ladder has a clear.</span></p>`;
+  const first = lad.steps[0], last = lad.steps[lad.steps.length - 1];
+  const bar = html`<div class="lad-bar" aria-hidden="true">${lad.steps.map((s) => html`<span class="lad-step" data-state="${s.state}"${s.frontier ? html` data-frontier=""` : ""}${s.inside ? html` data-inside=""` : ""} title="${s.place + " " + levels(s) + ": " + s.cleared + " of " + s.attempts + " cleared"}"></span>`)}</div>
+<div class="lad-axis" aria-hidden="true"><span>${levels(first).split("-")[0]}</span><span class="lad-key"><span><i data-state="cleared"></i>Cleared</span><span><i data-state="tried"></i>Tried</span><span><i data-state="open"></i>Not tried</span></span><span>L${last.ceiling ?? last.floor ?? "?"}</span></div>`;
+  const rows = lad.reached.map((s) => html`<li class="lad-row${s.frontier ? " is-frontier" : ""}"><span class="lad-place">${s.inside ? html`<i class="ph-fill ph-door-open lad-in" aria-hidden="true"></i><span class="sr-only">Inside now: </span>` : ""}${s.place}</span><span class="lad-lv dim">${levels(s)}</span><span class="lad-n num">${s.cleared}<span class="dim"> / ${s.attempts}</span></span><span class="lad-rate num${s.state === "tried" ? " warn" : ""}">${pct(s.rate)}</span></li>`);
+  const rest = lad.unreached.length
+    ? html`<details class="lad-more"><summary>${plural(lad.unreached.length, "dungeon")} not tried yet</summary><ul>${lad.unreached.map((s) => html`<li${s.frontier ? html` class="is-frontier"` : ""}><span>${s.place}</span><span class="dim">${levels(s)}</span></li>`)}</ul></details>`
+    : "";
+  return html`<div class="lad">
+<p class="lad-sum"><span class="lad-big num">${lad.cleared}</span><span> of ${lad.total} dungeons cleared</span><span class="dim">${lad.tried ? " | " + lad.tried + " tried without a clear" : ""}</span></p>
+${bar}
+${next}
+${lad.reached.length ? html`<div class="lad-head dim" aria-hidden="true"><span>Tried, in level order</span><span>clears / attempts</span><span>rate</span></div><ol class="lad-list" aria-label="Dungeons tried, in level order: clears of attempts and clear rate">${rows}</ol>` : ""}
+${rest}
+<a class="lad-path" href="${"#/guilds/" + slug + "/runs"}">The full path and every run<i class="ph ph-caret-right" aria-hidden="true"></i></a>
+</div>`;
+}
+
 function projectionLabel(at) {
-  return at ? new Date(at * 1000).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "not measured";
+  return new Date(at * 1000).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }
 
 function guildCard(ctx, guild) {
@@ -57,23 +141,17 @@ function guildCard(ctx, guild) {
   if (!g || !s) return html`<article class="card nr-guild"><h3>${guild.name}</h3><p class="muted">Guild metrics are not measured yet.</p></article>`;
   const facts = reportFacts({ guild: g, series: s, stuck: ctx.get("/api/v2/stuck")?.data, now: g.now });
   const delta = facts.levelDelta === null ? notMeasured("level change not measured") : (facts.levelDelta > 0 ? "+" : "") + facts.levelDelta.toFixed(1) + " median levels / 7d";
-  const ladder = facts.dungeons.length ? html`<ol class="nr-ladder">${facts.dungeons.map((d) => html`<li><span class="nr-dungeon"><span>${d.place}</span><span class="dim">L${d.floor ?? "?"}${d.ceiling ? "-" + d.ceiling : ""}</span></span><span class="nr-clears">${d.cleared} clear${d.cleared === 1 ? "" : "s"}</span><span class="dim">${d.attempts} attempts${d.clearsPerAttempt === null ? "" : " | " + Math.round(d.clearsPerAttempt * 100) + "% clears / attempt"}</span></li>`)}</ol>` : html`<p class="muted">Dungeon ladder not measured.</p>`;
-  const blocker = facts.topBlocker ? `${facts.topBlocker.reason} | ${facts.topBlocker.memberHours.toFixed(1)} member-hours across ${plural(facts.topBlocker.members, "member")}` : "No current blocker recorded.";
-  return html`<article class="card nr-guild"><div class="nr-head"><h3>${guild.name}</h3><span class="nr-delta">${delta}</span></div><div><span class="kicker">Cleared dungeons | level order</span>${ladder}</div><p class="nr-blocker"><span class="kicker">Top blocker</span><span>${blocker}</span></p><p class="nr-projection"><span class="kicker">Level 60 projection</span><span>${projectionLabel(facts.projectedAt)}${facts.measuredMembers ? " | estimate from each member's measured 24h XP rate" : " | complete member XP rates not measured"}</span></p></article>`;
+  const blocker = facts.topBlocker
+    ? html`<div><dt>Top blocker</dt><dd>${facts.topBlocker.reason} <span class="dim">| ${facts.topBlocker.memberHours.toFixed(1)} member-hours across ${plural(facts.topBlocker.members, "member")}</span></dd></div>`
+    : html`<div><dt>Top blocker</dt><dd class="dim">None recorded.</dd></div>`;
+  const projection = facts.projectedAt
+    ? html`<div><dt>Level 60</dt><dd>${projectionLabel(facts.projectedAt)} <span class="dim">| estimate from each member's measured 24h XP rate</span></dd></div>`
+    : html`<div><dt>Level 60</dt><dd>${notMeasured("Projection not measured: complete member XP rates are not measured.")}</dd></div>`;
+  return html`<article class="card nr-guild"><div class="nr-head"><h3>${guild.name}</h3><span class="nr-delta">${delta}</span></div>
+${ladderHtml(ladder(facts.dungeons), slug)}
+<dl class="nr-facts">${blocker}${projection}</dl></article>`;
 }
 
-export function reportSection(ctx, guilds, agendas, roll) {
-  const stuck = ctx.get("/api/v2/stuck");
-  const shipped = roll && roll.data && roll.data.shipped;
-  const shippedText = shipped && shipped.length ? shipped.join(" | ") : "Shipped changes and verification are not measured.";
-  const next = agendas.flatMap((read) => {
-    const queue = read && read.data && read.data.queue;
-    if (!queue) return [];
-    const entries = queue.entries || [];
-    const active = entries.findIndex((entry) => entry && entry.status === "active");
-    const following = active >= 0 ? entries[active + 1] : null;
-    return [following && (following.place || following.title || following.name), queue.line].filter(Boolean);
-  }).slice(0, 3);
-  const blocker = stuck && stuck.data && stuck.data.members && stuck.data.members.length ? plural(stuck.data.members.length, "member", "members") + " waiting; details are grouped in each guild report." : "No blocker currently recorded.";
-  return html`<section class="nr" aria-labelledby="nr-title"><div class="nr-title"><div><span class="kicker">Realm report</span><h2 id="nr-title">Progress at a glance</h2></div><span class="dim small">Refreshes every 30 seconds</span></div><div class="nr-grid">${guilds.map((guild) => guildCard(ctx, guild))}</div><div class="card nr-summary"><div><span class="kicker">Shipped and verified</span><p>${shippedText}</p></div><div><span class="kicker">Next actions</span><p>${next.length ? next.join(" | ") : "No next action recorded."}</p></div><div><span class="kicker">Current blockers</span><p>${blocker}</p></div></div></section>`;
+export function reportSection(ctx, guilds) {
+  return html`<section class="nr" aria-labelledby="nr-title"><div class="sec-row"><h2 class="kicker" id="nr-title">Guild progress</h2></div><div class="nr-grid">${guilds.map((guild) => guildCard(ctx, guild))}</div></section>`;
 }
