@@ -13,6 +13,7 @@ import pathlib
 import unittest
 
 import bag_market
+import bag_pressure
 from bag_market import AUCTION, VENDOR, Listing, Purse
 from bag_upgrade import Bag, Member
 
@@ -424,6 +425,146 @@ class TheSellPathBeforeADiscoveryWalk(unittest.TestCase):
 def _body(source, start, end):
     begin = source.index(start)
     return source[begin : source.index(end, begin + len(start))]
+
+
+# One row per (vendor, bag), shaped like bridge._BAG_VENDOR_SQL's answer: the
+# bag vendor forty yards from where Grug's family stands, stocking the Heavy
+# Brown Bag (10 slots, 20,000 copper) Grog's purse allows.
+UPGRADE_VENDOR_ROWS = [
+    dict(
+        entry=3487,
+        name="Kalyimah Stormcloud",
+        faction=126,
+        map_id=1,
+        yards=40.0,
+        item=4497,
+        item_name="Heavy Brown Bag",
+        slots=10,
+        price=20000,
+    ),
+]
+
+
+def _standing(*names, at=(1, 0.0, 0.0)):
+    return {
+        n: bag_pressure.Standing(
+            name=n, map_id=at[0], x=at[1], y=at[2], in_combat=False, job="quest"
+        )
+        for n in names
+    }
+
+
+def _upgrade_trip(members, purses, free, rows=None, leader="Grug", **kw):
+    vendors = bag_pressure.bag_vendors_from_rows(
+        UPGRADE_VENDOR_ROWS if rows is None else rows
+    )
+    names = [m.name for m in members] + [leader]
+    kw.setdefault("standing", _standing(*names))
+    kw.setdefault("leader", leader)
+    return bag_market.upgrade_vendor_trip(
+        members, purses, vendors, free_slots=dict(free), **kw
+    )
+
+
+class TheUpgradeWalk(unittest.TestCase):
+    """#1218: a member with full positions but small bags is walked to a bag
+    vendor for an upgrade.
+
+    The health endpoint read Bork and Ugga stuck following Grug for 4.3 hours
+    on "Bork, Grog at the bag floor and no town pass has made room". Grog, one
+    of the two members the hold names, held 3 free slots, wore an 8-slot bag
+    as its smallest and carried 12.8 gold at level 43: past the slot cap since
+    #1220, an upgrade it can afford, yet no town pass ever walked it to the
+    bag vendor forty yards off. `_vendor_bag_upgrades` buys only for a member
+    already standing at a vendor that stocks bags, and `bag_vendor_trip`
+    walks only members with an empty bag position, so a full-position member
+    at the floor never reaches the counter its upgrade is sold at.
+    """
+
+    def test_the_held_member_is_walked_to_the_bag_vendor(self):
+        trip = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 3})
+        self.assertEqual(trip.target, "3487")
+        self.assertEqual(trip.vendor.name, "Kalyimah Stormcloud")
+        self.assertEqual(trip.buyers, ("Grog",))
+        self.assertEqual(trip.why_not, "")
+
+    def test_a_member_with_an_empty_position_is_left_to_the_bag_walk(self):
+        member = Member("Bork", 4, worn=worn(10, 16, 16))
+        trip = _upgrade_trip([member], HELD_PURSES, {"Bork": 2}, leader="Grug")
+        self.assertEqual(trip.target, "")
+        self.assertEqual(trip.buyers, ())
+
+    def test_a_member_with_no_free_slot_has_nowhere_to_land_a_bag(self):
+        trip = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 0})
+        self.assertEqual(trip.target, "")
+        self.assertEqual(trip.buyers, ())
+
+    def test_a_member_with_a_bag_bought_in_the_window_is_not_walked(self):
+        # `_vendor_bag_upgrades` sells nothing to a member whose auction bag
+        # is still on the way, so a walk for it would end at a closed counter.
+        trip = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 3}, pending={"Grog"})
+        self.assertEqual(trip.target, "")
+        self.assertEqual(trip.buyers, ())
+
+    def test_a_broke_member_is_not_walked(self):
+        purses = dict(HELD_PURSES, Grog=Purse(43, 12900 + 19999))
+        trip = _upgrade_trip([HELD], purses, {"Grog": 3})
+        self.assertEqual(trip.target, "")
+        self.assertEqual(trip.buyers, ())
+
+    def test_the_slot_cap_yields_only_at_the_floor(self):
+        # The Heavy Brown Bag costs 10,000 copper a slot added, past the
+        # 2,500 cap: at the floor the walk goes, one slot above it does not.
+        trip = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 4})
+        self.assertEqual(trip.target, "")
+        self.assertEqual(trip.buyers, ())
+
+    def test_no_vendor_within_five_hundred_yards_is_no_trip(self):
+        far = [dict(UPGRADE_VENDOR_ROWS[0], yards=501.0)]
+        trip = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 3}, rows=far)
+        self.assertEqual(trip.target, "")
+        self.assertEqual(trip.buyers, ())
+
+    def test_no_trip_mid_run(self):
+        trip = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 3}, in_run=True)
+        self.assertEqual(trip.target, "")
+        self.assertEqual(trip.buyers, ())
+        self.assertIn("dungeon run", trip.why_not)
+
+    def test_a_vendor_already_stood_at_is_no_walk(self):
+        here = [dict(UPGRADE_VENDOR_ROWS[0], yards=5.0)]
+        trip = _upgrade_trip([HELD], HELD_PURSES, {"Grog": 3}, rows=here)
+        self.assertEqual(trip.target, "")
+        self.assertEqual(trip.buyers, ("Grog",))
+        self.assertEqual(trip.vendor.name, "Kalyimah Stormcloud")
+
+
+class TheUpgradeWalkWiring(unittest.TestCase):
+    """#1218: the bag walk falls back to an upgrade trip for full members."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.source = BRIDGE.read_text(encoding="utf-8")
+
+    def test_the_bag_walk_falls_back_to_an_upgrade_trip(self):
+        body = _body(
+            self.source,
+            "    async def _aim_at_bag_vendor(",
+            "    async def _bank_exit_route(",
+        )
+        self.assertIn("bag_pressure.bag_vendor_trip(", body)
+        self.assertIn("_aim_upgrade_trip(", body)
+
+    def test_the_upgrade_trip_plans_a_bigger_bag_per_vendor(self):
+        body = _body(
+            self.source,
+            "    async def _aim_upgrade_trip(",
+            "    async def _bank_exit_route(",
+        )
+        self.assertIn("bag_market.upgrade_vendor_trip(", body)
+        self.assertIn("_fetch_bag_state", body)
+        self.assertIn("_bag_purses", body)
+        self.assertIn("_recent_bag_buys", body)
 
 
 class TheBridgeWiring(unittest.TestCase):

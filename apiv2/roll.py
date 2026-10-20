@@ -8,16 +8,18 @@ build, never one taken from its own configuration.
 
 What the realm can and cannot tell:
 
-- build    overseer_build's module version and AzerothCore's own revision
+- build    the module's commit (the deployment's declaration, which
+           mod-overseer#1071 reports; the version, 0.1.0 since the first release,
+           when this worldserver does not) and AzerothCore's own revision
            (acore_world.version when the module has not reported), through the
            realm banner's own reader, so the two never disagree.
 - when     the time the worldserver wrote that report, which it does once at
            every start. A roll restarts the worldserver, so this is when the
            running build took over; a restart without a roll moves it too.
-- channel  null. The roller's channel and release names live in the
-           deployment's own files, and the realm does not record them.
-- shipped  null, for the same reason: what a release changed is written in its
-           release file, not in the realm.
+- channel  null. Rolls are shipped through the deploy repo, and the realm
+           records no channel name; the reason says so.
+- shipped  null, for the same reason: the list of what a roll changed is in
+           the deploy repo's commit for that ship, not in the realm.
 
 Beside those, `uptime_seconds` is the worldserver's uptime from
 acore_auth.uptime, which the Now strip shows next to the build. Any field that
@@ -38,19 +40,33 @@ UPTIME_SQL = "SELECT UNIX_TIMESTAMP() - MAX(starttime) AS up FROM acore_auth.upt
 WHY = {
     "build": "The realm has reported neither its module version nor its core revision.",
     "when": "The worldserver has not written its build report (overseer_build).",
-    "channel": "The realm does not record which roller channel it runs; that "
-    "lives in the deployment's channel file.",
-    "shipped": "The realm does not record what a roll changed; that lives in "
-    "the deployment's release files.",
+    "channel": "Not recorded by the realm: rolls are shipped through the deploy "
+    "repo, and the worldserver writes no channel name into its build report.",
+    "shipped": "Not recorded by the realm: what a roll changed is listed only in "
+    "the deploy repo's commit for that ship, which this site does not read.",
+    "module_commit": "This worldserver does not report its module commit, only "
+    "the module version, which is not raised per change; a worldserver built "
+    "with mod-overseer#1071 reports the commit its deployment declares.",
     "uptime_seconds": "The worldserver's uptime table (acore_auth.uptime) has no row.",
 }
+
+
+def _module_commit(banner: dict) -> str | None:
+    """The module commit the realm reported, unless its pins are stale."""
+    commit = banner.get("module_commit") or ""
+    if not commit or banner.get("pins") == realm.PINS_STALE:
+        return None
+    return commit
 
 
 def _build(banner: dict) -> str | None:
     parts = []
     if banner.get("core_revision"):
         parts.append("core " + banner["core_revision"])
-    if banner.get("module_version"):
+    commit = _module_commit(banner)
+    if commit:
+        parts.append("module " + commit[:12])
+    elif banner.get("module_version"):
         parts.append("module " + banner["module_version"])
     return ", ".join(parts) or None
 
@@ -81,6 +97,7 @@ def build_roll(
         "shipped": None,
         "uptime_seconds": _uptime(uptime_rows),
         "module_version": banner["module_version"] or None,
+        "module_commit": _module_commit(banner),
         "core_revision": banner["core_revision"] or None,
     }
     payload["unmeasured"] = {k: why for k, why in WHY.items() if payload[k] is None}

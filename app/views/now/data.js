@@ -14,14 +14,36 @@ export function agendaPath(fam) { return "/api/agenda?family=" + encodeURICompon
 // A read that answered with data the server meant (not an error body).
 export { ready as ok };
 
-// /api/v2/stuck: {members: [{name, step, blocker, since}]}; `since` is unix
-// seconds, or null when the first sighting was not recorded. `longest` is
-// how long the earliest of them has waited by `now` (unix seconds).
+// /api/v2/stuck: {members: [{name, step, blocker, since, kind}]}; `since` is
+// unix seconds, or null when the first sighting was not recorded. `longest`
+// is how long the earliest of them has waited by `now` (unix seconds).
+// `stalls` is how many of them are a stalled family's leader (kind "stall",
+// #1257): they are stuck members like the rest, so the count the Now page
+// says is the Members badge's and the stuck filter's, and the stalls are
+// said beside it rather than left out of it.
 export function stuck(read, now) {
   if (!ready(read) || !Array.isArray(read.data.members)) return null;
   const list = read.data.members;
   const ages = list.map((m) => ageOf(m.since, now)).filter((a) => a !== null);
-  return { list, longest: ages.length ? Math.max(...ages) : null };
+  const stalls = list.filter((m) => m && m.kind === "stall").length;
+  return { list, longest: ages.length ? Math.max(...ages) : null, stalls };
+}
+
+// A stalled family's sentence under its STALLED tag. The agenda's stall_line
+// opens with "STALLED:" itself, so beside the tag the card said it twice; the
+// word is dropped here only when the line starts with it. The line ends with
+// the hold that explains the stall (stall_blocker) when the bridge read the
+// leader; a blocker the line does not carry is added after it.
+export function stallText(agenda) {
+  let line = String((agenda && agenda.stall_line) || "").trim();
+  const lead = /^STALLED:\s*/.exec(line);
+  if (lead) {
+    line = line.slice(lead[0].length);
+    line = line.charAt(0).toUpperCase() + line.slice(1);
+  }
+  const blocker = String((agenda && agenda.stall_blocker) || "").trim();
+  if (blocker && !line.includes(blocker)) line = line ? line + " " + blocker : blocker;
+  return line || "No progress since the walk began.";
 }
 
 // A family's campaign from its queue: the entry being worked and the next.

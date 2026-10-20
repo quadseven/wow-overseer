@@ -1,7 +1,8 @@
-// Now: what needs the operator, the realm, the two families, who is live,
-// where they are, and (folded on phone) runs, attention, campaigns and the
-// last roll. Read-only: the live tiles watch broadcasts that are already
-// running and start nothing.
+// Now: the realm in one line, what needs the operator, then each family as
+// one unit (its status card, its live picture and where it is on the map),
+// then (folded on phone) runs, attention, campaigns and the last roll, and
+// at the foot each guild's dungeon ladder. Read-only: the live tiles watch
+// broadcasts that are already running and start nothing.
 
 import { html, raw, ago, duration, plural, notMeasured, state, skeletons, STATUS, readState } from "../ui.js";
 import * as D from "./now/data.js";
@@ -34,62 +35,77 @@ function saveLayout(v) {
 }
 
 // ---- status chips -----------------------------------------------------------
-function chip(kind, label, href) {
+// `n` is the count the chip says (0 draws it quiet: nothing needs the
+// operator there), or null when it is not measured.
+function chip(kind, label, href, n) {
   const s = STATUS[kind];
-  return html`<a class="nchip" href="${href}" data-tone="${kind}"><i class="${s[1]}" style="color:${s[2]}" aria-hidden="true"></i>${label}</a>`;
+  const quiet = n === 0;
+  return html`<a class="nchip" href="${href}" data-tone="${kind}"${quiet ? html` data-quiet=""` : ""}><i class="${s[1]}" style="${quiet ? "" : "color:" + s[2]}" aria-hidden="true"></i>${label}</a>`;
 }
 
 function stalledChip(agendas) {
-  if (!agendas.every(D.ok)) return chip("stalled", "Stalled families not measured", "#/now/family/" + firstFamily());
+  if (!agendas.every(D.ok)) return chip("stalled", "Stalled families not measured", "#/now/family/" + firstFamily(), null);
   const stalled = agendas.filter((a) => a.data.stalled);
   const href = "#/now/family/" + (stalled.length ? String(stalled[0].data.family).toLowerCase() : firstFamily());
-  return chip("stalled", plural(stalled.length, "family", "families") + " stalled", href);
+  return chip("stalled", plural(stalled.length, "family", "families") + " stalled", href, stalled.length);
 }
 
 function stuckChip(st) {
-  if (!st) return chip("stuck", "Stuck not measured", "#/members?stuck=1");
+  if (!st) return chip("stuck", "Stuck not measured", "#/members?stuck=1", null);
   const longest = st.list.length ? (st.longest === null ? ", since not measured" : ", longest " + duration(st.longest)) : "";
-  return chip("stuck", st.list.length + " stuck" + longest, "#/members?stuck=1");
+  return chip("stuck", st.list.length + " stuck" + longest, "#/members?stuck=1", st.list.length);
 }
 
 function ghostChip(gh) {
-  return chip("ghost", gh ? plural(gh.length, "ghost") : "Ghosts not measured", "#/members?ghost=1");
+  return chip("ghost", gh ? plural(gh.length, "ghost") : "Ghosts not measured", "#/members?ghost=1", gh ? gh.length : null);
 }
 
-function chips(ctx, agendas) {
+// What needs the operator, read once per draw: the chips and the Attention
+// list say the same counts because they are handed the same values. Both
+// come from one /api/v2/stuck read and one /api/v2/roster read of the api.js
+// cache, and a draw replaces the whole page, so no timer can refresh one of
+// them without the other.
+function needs(ctx) {
+  return {
+    stuck: D.stuck(ctx.get("/api/v2/stuck")),
+    ghosts: rosterModel(ctx.get("/api/v2/roster")).ghosts(),
+  };
+}
+
+function chips(ctx, agendas, need) {
   const gr = guildRuns(ctx.get("/api/guildruns"));
   const runs = gr.insideNow();
   const runsHref = "#/guilds/" + firstGuild() + "/runs";
   const fresh = gr.newSince(fromClock(ctx.previousVisit));
   const list = [
     stalledChip(agendas),
-    stuckChip(D.stuck(ctx.get("/api/v2/stuck"))),
-    ghostChip(rosterModel(ctx.get("/api/v2/roster")).ghosts()),
-    runs ? chip("inside", plural(runs.length, "run") + " inside", runs.length ? "#/runs/" + runs[0].id : runsHref)
-      : chip("inside", "Runs inside not measured", runsHref),
+    stuckChip(need.stuck),
+    ghostChip(need.ghosts),
+    runs ? chip("inside", plural(runs.length, "run") + " inside", runs.length ? "#/runs/" + runs[0].id : runsHref, runs.length)
+      : chip("inside", "Runs inside not measured", runsHref, null),
   ];
-  if (fresh) list.push(chip("new", plural(fresh, "run") + " new since your last visit", runsHref));
+  if (fresh) list.push(chip("new", plural(fresh, "run") + " new since your last visit", runsHref, fresh));
   return html`<div class="nchips" role="group" aria-label="What needs you">${list}</div>`;
 }
 
-// ---- realm strip --------------------------------------------------------------
-function strip(ctx) {
+// ---- the realm, one line in the page head ------------------------------------------
+function realmLine(ctx) {
   const eye = ctx.get("/api/eye");
   const roll = ctx.get("/api/v2/roll");
   const tier = D.ok(eye) ? (eye.data.tiers || []).find((t) => t.tier === "REALM") : null;
   const inWorld = D.ok(eye) ? (eye.data.strip || []).find((s) => s.label === "IN WORLD") : null;
   const up = tier ? tier.state === "ON" : null;
   const ws = tier
-    ? html`<span class="rv"><span class="rdot" style="background:${up ? "var(--ok)" : "var(--bad)"}" aria-hidden="true"></span>${up ? "Up" : "Not answering"}</span>`
+    ? html`<span class="rv${up ? "" : " bad"}"><span class="rdot" style="background:${up ? "var(--ok)" : "var(--bad)"}" aria-hidden="true"></span>${up ? "Up" : "Not answering"}</span>`
     : html`<span class="rv">${notMeasured()}</span>`;
-  const cell = (k, v) => html`<div class="rcell"><span class="rk">${k}</span>${v}</div>`;
+  const cell = (k, v, cls) => html`<span class="${"rcell" + (cls ? " " + cls : "")}"><span class="rk">${k}</span>${v}</span>`;
   const r = D.ok(roll) ? roll.data : {};
-  return html`<div class="card rstrip">
+  return html`<a class="realm" href="#/now/server" title="The server's tiers">
 ${cell("Worldserver", ws)}
 ${cell("Online", html`<span class="rv num">${inWorld ? inWorld.value : notMeasured()}</span>`)}
-${cell("Uptime", html`<span class="rv">${r.uptime_seconds === undefined || r.uptime_seconds === null ? notMeasured() : duration(r.uptime_seconds)}</span>`)}
-${cell("Build", html`<span class="rv num">${r.build || notMeasured()}</span>`)}
-</div>`;
+${cell("Uptime", html`<span class="rv num">${r.uptime_seconds === undefined || r.uptime_seconds === null ? notMeasured() : duration(r.uptime_seconds)}</span>`)}
+${cell("Build", html`<span class="rv num">${r.build || notMeasured()}</span>`, "rcell-build")}
+</a>`;
 }
 
 // ---- family agendas -------------------------------------------------------------
@@ -103,42 +119,44 @@ function agendaCard(fam, read) {
   const detail = D.detailLines(a);
   const moved = a.moved_seconds === null || a.moved_seconds === undefined ? "not measured" : ago(a.moved_seconds);
   return html`<a class="agenda${a.stalled ? " is-stalled" : ""}" href="${href}">
-<span class="agenda-label">${fam}'s family</span>
+<span class="agenda-label"><span class="agenda-fam">${fam}'s family</span>${a.stalled ? html`<span class="tag tag-warn agenda-tag">STALLED</span>` : ""}</span>
 <span class="agenda-head">${a.headline || "No headline reported"}</span>
 ${a.queue && a.queue.line ? html`<span class="agenda-line">${a.queue.line}</span>` : ""}
 ${detail.length ? html`<span class="agenda-line">${detail.join(" ")}</span>` : ""}
-<span class="agenda-foot">${a.stalled ? html`<span class="tag tag-warn agenda-tag">STALLED</span><span class="warn">${a.stall_line || "No progress since the walk began."}</span>` : ""}<span class="muted">last moved ${moved}</span></span>
+<span class="agenda-foot">${a.stalled ? html`<span class="warn">${D.stallText(a)}</span>` : ""}<span class="muted">last moved ${moved}</span></span>
 </a>`;
 }
 
-// ---- live -----------------------------------------------------------------------
+// ---- the families: status, live picture and map, one unit each -------------------
 function heads(ctx) {
   return wallModel(ctx.get("/api/wall")).heads(D.familyKeys());
 }
 
-function live(ctx) {
+function familyLive(fam, w, wall) {
+  if (!w.ready) {
+    return readState(wall) === "loading" ? html`<div class="st-wait skeleton" role="status" aria-busy="true" aria-label="Loading"></div>` : state("error", "The stream did not answer", "The wall read failed, so no tile can be drawn.");
+  }
+  const m = w.head(fam);
+  return m ? streams.tileHtml(m, w.tile(m.name)) : state("unmeasured", fam + "'s family is not on the wall", "No member of this family has a stream tile.");
+}
+
+function miniMap(fam) {
+  return html`<a class="minimap" data-minimap="${fam}" href="#/now/map"><span class="minimap-l">Where ${fam}'s family is</span><div class="wm wm-compact" data-map-box="${fam}"><div class="wm-wait">Unrolling the map...</div></div></a>`;
+}
+
+function familiesSection(ctx, agendas) {
   const wall = ctx.get("/api/wall");
   const w = wallModel(wall);
   const hs = heads(ctx);
   const layout = readLayout();
   const seg = html`<div class="seg live-seg" role="radiogroup" aria-label="Stream layout">${[["side", "Side by side"], ["stacked", "Stacked"]].map(([k, label]) => html`<button type="button" role="radio" aria-checked="${String(layout === k)}" data-layout="${k}">${label}</button>`)}</div>`;
-  let body;
-  if (!hs) {
-    body = readState(wall) === "loading" ? skeletons(2) : state("error", "The streams did not answer", "The wall read failed, so no tile can be drawn.");
-  } else {
-    body = html`<div class="live-tiles" data-wall="${layout}">${hs.map((m) => streams.tileHtml(m, w.tile(m.name)))}</div>`;
-  }
   const streamed = hs ? hs.filter((m) => (w.tile(m.name) || {}).url || m.broadcast_url).length : null;
-  return html`<div class="live-head"><h2 class="kicker">Live</h2><span class="dim small">${streamed === null ? "" : streamed + " of " + hs.length + " streamed"}</span>${seg}</div>
-${body}
-<div class="watcher"><i class="ph ph-video-camera" aria-hidden="true"></i><div><span class="watcher-t">Watcher <span class="tag tag-neutral">Coming soon</span></span><span class="muted">The spectator camera gets a tile here once its stream is published.</span></div></div>`;
+  return html`<section class="fams" aria-labelledby="fams-title"><div class="sec-row"><h2 class="kicker" id="fams-title">Families, live</h2><span class="dim small">${streamed === null ? "" : streamed + " of " + hs.length + " streamed"}</span>${seg}</div>
+<div class="families" data-wall="${layout}">${D.familyKeys().map((f, i) => html`<div class="fam" data-family="${f}">${agendaCard(f, agendas[i])}<div class="fam-live">${familyLive(f, w, wall)}</div>${miniMap(f)}</div>`)}</div>
+</section>`;
 }
 
 // ---- mini maps ---------------------------------------------------------------------
-function miniMaps(ctx) {
-  return html`<div class="minimaps">${D.familyKeys().map((f) => html`<a class="minimap" data-minimap="${f}" href="#/now/map"><span class="kicker">Where ${f}'s family is</span><div class="wm wm-compact" data-map-box="${f}"><div class="wm-wait">Unrolling the map...</div></div></a>`)}</div>`;
-}
-
 function drawMiniMaps(main, ctx) {
   const shapes = ctx.get("/shapes.json"), map = ctx.get("/api/map"), wall = ctx.get("/api/wall");
   if (!D.ok(shapes) || !D.ok(map) || !D.ok(wall)) {
@@ -195,10 +213,14 @@ function runsBlock(ctx) {
   return html`<div class="fold-col"><h2 class="kicker">Guild runs inside</h2>${body}</div>`;
 }
 
-function attention(ctx) {
-  const st = D.stuck(ctx.get("/api/v2/stuck"));
-  const gh = rosterModel(ctx.get("/api/v2/roster")).ghosts();
-  const stuckText = st ? plural(st.list.length, "member") + " stuck" : html`Stuck ${notMeasured()}`;
+function attention(need) {
+  const st = need.stuck;
+  const gh = need.ghosts;
+  // A stalled family's leader is on the stuck list (kind "stall"): counted
+  // with the rest, and said, so "1 family stalled" above and "3 members
+  // stuck" here are read as one leader, not two problems.
+  const stalls = st && st.stalls ? " (" + (st.stalls === 1 ? "1 leads a stalled family" : st.stalls + " lead stalled families") + ")" : "";
+  const stuckText = st ? plural(st.list.length, "member") + " stuck" + stalls : html`Stuck ${notMeasured()}`;
   const longest = st && st.list.length ? (st.longest === null ? "since not measured" : "longest " + duration(st.longest)) : "";
   const ghostText = gh ? plural(gh.length, "ghost") + (gh.length ? ": " + gh.map((g) => g.name).join(", ") : "") : html`Ghosts ${notMeasured()}`;
   return html`<h2 class="kicker">Attention</h2><div class="card rows">
@@ -228,16 +250,17 @@ function lastRoll(ctx) {
     const when = r.when_seconds === null || r.when_seconds === undefined ? notMeasured() : ago(r.when_seconds);
     const shipped = Array.isArray(r.shipped) && r.shipped.length
       ? html`<ul class="shipped">${r.shipped.map((s) => html`<li>${s}</li>`)}</ul>`
-      : html`<span class="muted">What shipped: ${notMeasured()}</span>`;
-    card = html`<div class="card roll"><span class="b num">${r.build || notMeasured()}</span><span class="muted small">Running since ${when}. Channel: ${r.channel || notMeasured()}</span>${shipped}</div>`;
+      : "";
+    const unrecorded = [r.channel ? "" : "channel", shipped ? "" : "change list"].filter(Boolean);
+    card = html`<div class="card roll"><span class="b num">${r.build || notMeasured()}</span><span class="muted small">Running since ${when}.${r.channel ? " Channel: " + r.channel + "." : ""}</span>${shipped}${unrecorded.length ? html`<span class="small">${notMeasured("The realm does not record the " + unrecorded.join(" or the ") + ".")}</span>` : ""}</div>`;
   }
   return html`<div class="fold-col"><h2 class="kicker">Last roll</h2>${card}<div class="fold-btns"><a href="#/now/map" class="btn btn-secondary"><i class="ph ph-map-trifold" aria-hidden="true"></i>World map</a><a href="#/now/server" class="btn btn-secondary"><i class="ph ph-gauge" aria-hidden="true"></i>Server</a></div></div>`;
 }
 
-function fold(ctx, agendas) {
+function fold(ctx, agendas, need) {
   const open = foldOpen === null ? !ctx.isPhone : foldOpen;
   return html`<details class="nfold"${open ? raw(" open") : ""}><summary><i class="ph ph-caret-down" aria-hidden="true"></i>Runs, attention, campaigns, last roll</summary>
-<div class="fold-grid">${runsBlock(ctx)}<div class="fold-col">${attention(ctx)}${campaigns(agendas)}</div>${lastRoll(ctx)}</div>
+<div class="fold-grid">${runsBlock(ctx)}<div class="fold-col">${attention(need)}${campaigns(agendas)}</div>${lastRoll(ctx)}</div>
 </details>`;
 }
 
@@ -250,14 +273,12 @@ export default {
   title: () => "Now",
   render(ctx) {
     const agendas = D.familyKeys().map((f) => ctx.get(D.agendaPath(f)));
-    return html`<header class="page-head"><h1>Now</h1></header>
-${reportSection(ctx, allGuilds(), agendas, ctx.get("/api/v2/roll"))}
-${chips(ctx, agendas)}
-${strip(ctx)}
-<div class="agendas">${D.familyKeys().map((f, i) => agendaCard(f, agendas[i]))}</div>
-${live(ctx)}
-${miniMaps(ctx)}
-${fold(ctx, agendas)}`;
+    const need = needs(ctx);
+    return html`<header class="page-head now-head"><h1>Now</h1>${realmLine(ctx)}</header>
+${chips(ctx, agendas, need)}
+${familiesSection(ctx, agendas)}
+${fold(ctx, agendas, need)}
+${reportSection(ctx, allGuilds())}`;
   },
   after(main, ctx) {
     const w = wallModel(ctx.get("/api/wall"));
@@ -273,7 +294,7 @@ ${fold(ctx, agendas)}`;
     announce(ctx.get("/api/v2/achievements"), ctx.previousVisit);
     main.querySelectorAll("button[data-layout]").forEach((b) => b.addEventListener("click", () => {
       saveLayout(b.getAttribute("data-layout"));
-      const tilesEl = main.querySelector(".live-tiles");
+      const tilesEl = main.querySelector(".families");
       if (tilesEl) tilesEl.setAttribute("data-wall", readLayout());
       main.querySelectorAll("button[data-layout]").forEach((x) => {
         const on = x.getAttribute("data-layout") === readLayout();

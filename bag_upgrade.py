@@ -383,6 +383,15 @@ class SelfEquip:
 # finds the item in any bag and hands it to the core's auto-store with no bag
 # named, which puts it in the first free slot.
 # https://github.com/mod-playerbots/mod-playerbots/blob/master/src/Ai/Base/Actions/UnequipAction.cpp
+#
+# WHICH COPY IT MOVES. The verb names an entry, and UnequipAction searches
+# with InventoryAction's IterateItems: the backpack slots, the keyring, the
+# contents of each worn bag in position order, then the equipment slots 0-18.
+# It prefers a match in those equipment slots. The bag positions 19-22 are in
+# neither range, so a WORN bag of the same entry is never found and never
+# taken off (#1014: Grog wears a Large Brown Sack and carries another).
+# What can take the move instead is another CARRIED copy found first.
+# https://github.com/mod-playerbots/mod-playerbots/blob/master/src/Ai/Base/Actions/InventoryAction.cpp
 MOVE_OUT_VERB = "ue"
 
 
@@ -441,6 +450,32 @@ def _room_ahead_of(member, target):
     )
 
 
+def _search_order(member, bag):
+    """Where the move-out verb's item search reaches the carried `bag`.
+
+    IterateItemsInBags: the backpack first, then the contents of each worn
+    bag in position order, slot by slot.
+    """
+    if not bag.inside:
+        return (0, 0, bag.position)
+    container = next((worn for worn in member.worn if worn.guid == bag.inside), None)
+    return (1, container.position if container else 0, bag.position)
+
+
+def _found_before(member, spare):
+    """Another carried copy of `spare` the verb would find first, or None."""
+    return next(
+        (
+            bag
+            for bag in member.carried
+            if bag.entry == spare.entry
+            and bag.guid != spare.guid
+            and _search_order(member, bag) < _search_order(member, spare)
+        ),
+        None,
+    )
+
+
 def move_out_spare(member):
     """(spare, bag it sits in) for a bigger spare to move out first, or None.
 
@@ -448,23 +483,22 @@ def move_out_spare(member):
     the equip verb would replace, and the move-out verb has a free slot to
     put it in. Once out, `self_equips` swaps it in on the next pass.
 
-    NOT WHEN A WORN BAG IS THE SAME ITEM. The verb names an entry, and
-    UnequipAction takes an equipped match before a carried one, so it would
-    take that worn bag off instead.
+    NOT WHEN ANOTHER CARRIED COPY IS FOUND FIRST: the verb names an entry
+    and would move that copy instead. A worn bag of the same entry does not
+    matter, because the verb never reaches the bag positions (MOVE_OUT_VERB).
     """
     if member.positions - len(member.worn) > 0 or not member.worn:
         return None
     size, target = _smallest_worn(member.worn)
     if not _room_ahead_of(member, target):
         return None
-    worn_entries = {bag.entry for bag in member.worn}
     spare = next(
         (
             bag
             for bag in _nameable_spares(member)
             if bag.slots > size
             and bag.inside == target.guid
-            and bag.entry not in worn_entries
+            and _found_before(member, bag) is None
         ),
         None,
     )
@@ -475,10 +509,10 @@ def _refusal_reason(member, bag, target):
     """Why the equip verb cannot put `bag` on in place of `target`."""
     if not (bag.inside and bag.inside == target.guid):
         return "its item id was not read"
-    if any(worn.entry == bag.entry for worn in member.worn):
+    if _room_ahead_of(member, target) and _found_before(member, bag):
         return (
-            "it is inside the bag it would replace, and a worn bag is the same "
-            "item, so moving it out would take that one off"
+            "it is inside the bag it would replace, and another carried %s is "
+            "found first, so moving it out would move that one" % bag.name
         )
     return (
         "it is inside the bag it would replace, and no free slot comes "

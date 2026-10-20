@@ -5,7 +5,8 @@
     /api/v2/series?guild=cave    -> {guild, members, measured, level,
                                      xp_per_hour, by_member,
                                      xp_to_level_60_by_member,
-                                     level_60_total_xp, basis}
+                                     level_60_total_xp,
+                                     level_60_projection, basis}
 
 `level` is [[ts, level]] over the last 7 days and `xp_per_hour` is [[ts, n]],
 one point per hour over the last 24. Every ts is a Unix time in seconds, read
@@ -218,6 +219,65 @@ def member_series(char: dict, events: list, table: dict, now: float) -> dict:
     }
 
 
+def projection(chars: list, by_member: dict, remaining: dict, now: float) -> dict:
+    """When the guild reaches level 60 at its members' measured rates, or why
+    that is not measured: {"at", "remaining_xp", "xp_per_hour", "members",
+    "unmeasured": {name: why}, "why"}.
+
+    The arithmetic the Now page did for itself (all the experience the members
+    still need over the sum of their 24-hour rates), with two answers it could
+    not give. A member already at level 60 needs no rate: it was counted as
+    not measured, so one member at the cap (Brug, on the dev realm 2026-10-20)
+    left Cave's projection "not measured" for good. And a member that cannot be
+    measured is named with the reason, so "not measured" says who and why.
+    """
+    unmeasured, need, hourly, counted = {}, 0, 0, 0
+    for char in chars:
+        name = char["name"]
+        left = remaining.get(name)
+        if left is None:
+            unmeasured[name] = "the core's experience table lacks a level below 60"
+            continue
+        if left <= 0:
+            continue
+        rate_now = (by_member.get(name) or {}).get("xp_per_hour_24h")
+        if rate_now is None:
+            unmeasured[name] = (
+                "no level change on record in the last %d days, and one instant "
+                "is not a rate" % (LOOKBACK // DAY)
+            )
+            continue
+        need += int(left)
+        hourly += int(rate_now)
+        counted += 1
+    out = {
+        "at": None,
+        "remaining_xp": need,
+        "xp_per_hour": hourly,
+        "members": counted,
+        "unmeasured": unmeasured,
+        "why": "",
+    }
+    if unmeasured:
+        names = sorted(unmeasured)
+        out["why"] = "Not measured: %d member%s with no rate (%s)." % (
+            len(names),
+            "" if len(names) == 1 else "s",
+            "; ".join("%s: %s" % (n, unmeasured[n]) for n in names),
+        )
+    elif need == 0:
+        out["at"] = int(now)
+        out["why"] = "Every member is at level 60."
+    elif hourly <= 0:
+        out["why"] = (
+            "Not measured: the members below 60 gained no experience in the "
+            "last %d hours, so no date follows." % XP_HOURS
+        )
+    else:
+        out["at"] = int(now + need / hourly * HOUR)
+    return out
+
+
 def _sum_hours(per_member: list) -> list:
     if not per_member:
         return []
@@ -263,6 +323,7 @@ def guild_series(name: str, chars: list, events: list, table: dict, now: float) 
         # history, and the core XP table read above; they do not write realm state.
         "xp_to_level_60_by_member": remaining,
         "level_60_total_xp": total_xp(60, 0, table),
+        "level_60_projection": projection(chars, by_member, remaining, now),
         "basis": BASIS,
     }
 
