@@ -18439,6 +18439,24 @@ class Bridge(discord.Client):
         claims = bag_pressure.family_claimants(gear_rows, worn_rows, names)
         worn = await asyncio.to_thread(_fetch_worn_entries, names)
         tries = tidy.try_ons(gear_rows, members, worn)
+        # A ROSTER MEMBER'S GEAR IS THE MODULE'S GEAR DRIVE'S (#896), the same
+        # rule the family equip pass keeps: a try-on for one is put back by
+        # the drive in the same second. If the roster cannot be read,
+        # ownership is unknown, so nothing is tried on; hand-ons still run.
+        try:
+            roster_names = await asyncio.to_thread(_fetch_enabled_roster_names)
+        except (OSError, pymysql.err.MySQLError) as exc:
+            log.warning("tidy: could not read the enabled roster: %s", exc)
+            tries = []
+        else:
+            left_to_drive = [t for t in tries if t.holder in roster_names]
+            tries = [t for t in tries if t.holder not in roster_names]
+            if left_to_drive:
+                log.info(
+                    "tidy: left %d try-on(s) to the module's gear drive for %d "
+                    "roster member(s)",
+                    len(left_to_drive), len({t.holder for t in left_to_drive}),
+                )
         seen = await asyncio.to_thread(_recent_tidy_keys, TIDY_RETRY_HOURS)
         wrote_tries = 0
         for tryon in tries:
