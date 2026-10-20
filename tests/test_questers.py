@@ -770,17 +770,9 @@ class Broken(unittest.TestCase):
 
     def test_an_abandon_the_world_refused_as_complete_hands_the_quest_in(self):
         # The module refused the drop with its complete words (#1085): the
-        # quest goes to turn-in at once and is never abandoned again.
+        # quest goes to turn-in at once, even while its log row still says
+        # incomplete, and is never abandoned again.
         tried = [
-            questers.Attempt(
-                "Mirra",
-                "turnin quest:1",
-                "error",
-                reason="not ready",
-                age_minutes=m,
-            )
-            for m in (30, 20, 10)
-        ] + [
             questers.Attempt(
                 "Mirra",
                 "abandon quest:1",
@@ -790,7 +782,11 @@ class Broken(unittest.TestCase):
             )
         ]
         p = questers.plan(
-            world(), mirra(quest_log={1: 1}), questers.Clock(), 0.0, tried=tried
+            world(),
+            mirra(quest_log={1: questers.STATUS_INCOMPLETE}),
+            questers.Clock(),
+            0.0,
+            tried=tried,
         )
         self.assertEqual((p.move.kind, p.move.quest), (classquest.TURN_IN, 1))
 
@@ -839,6 +835,83 @@ class Broken(unittest.TestCase):
         self.assertIsNotNone(p.move)
         self.assertNotEqual(p.move.kind, classquest.ABANDON)
         self.assertNotEqual(p.move.quest, 1)
+
+    @staticmethod
+    def _refused_hand_ins(ages, words="no taker of that quest in reach"):
+        """Refused `turnin quest:1` rows at these ages, and the abandon the
+        module refused as complete five minutes after the first three."""
+        rows = [
+            questers.Attempt(
+                "Mirra", "turnin quest:1", "error", reason=words, age_minutes=m
+            )
+            for m in ages
+        ]
+        rows.append(
+            questers.Attempt(
+                "Mirra",
+                "abandon quest:1",
+                "error",
+                reason=questers.COMPLETE_HAND_IN,
+                age_minutes=max(ages[2] - 5, 0),
+            )
+        )
+        return rows
+
+    def _move_with(self, tried):
+        p = questers.plan(
+            world(),
+            mirra(quest_log={1: questers.STATUS_COMPLETE}),
+            questers.Clock(),
+            0.0,
+            tried=tried,
+        )
+        return (p.move.kind, p.move.quest) if p.move is not None else None
+
+    def test_a_refused_hand_in_the_module_calls_complete_is_held_not_looped(self):
+        # Live, 2026-10-18 to 2026-10-20: Kellan's The Killing Fields (9) had
+        # its hand-in refused three times ("no taker of that quest in reach"),
+        # its abandon refused as complete, and then the quester walked to the
+        # ender and handed it in again every two minutes for 42 hours (216
+        # refusals; Pindle's Return to Bellowfiz 511). The hand-in the world
+        # keeps refusing is held for TURN_IN_RETRY_MINUTES after the last
+        # refusal; the quester gets on with the rest of its zone meanwhile.
+        hold = questers.TURN_IN_RETRY_MINUTES
+        for shift in (0, 60, hold - 11):
+            move = self._move_with(
+                self._refused_hand_ins((30 + shift, 20 + shift, 10 + shift))
+            )
+            self.assertIsNotNone(move, shift)
+            self.assertIn(
+                move[0], (classquest.TAKE, classquest.HUNT, classquest.CROSS), shift
+            )
+            self.assertNotEqual(move[1], 1, shift)
+        # Past the hold it is handed in once more ...
+        late = self._refused_hand_ins((hold + 30, hold + 20, hold + 10))
+        self.assertEqual(self._move_with(late), (classquest.TURN_IN, 1))
+        # ... and that hand-in refused again holds it once more.
+        again = late + [
+            questers.Attempt(
+                "Mirra",
+                "turnin quest:1",
+                "error",
+                reason="no taker of that quest in reach",
+                age_minutes=1,
+            )
+        ]
+        self.assertNotEqual(self._move_with(again), (classquest.TURN_IN, 1))
+        self.assertNotEqual(self._move_with(again)[0], classquest.ABANDON)
+
+    def test_each_further_refused_hand_in_doubles_the_hold(self):
+        hold = questers.TURN_IN_RETRY_MINUTES
+        four = (1000, 990, 980)
+        held = self._refused_hand_ins(four + (hold + 30,))
+        self.assertNotEqual(self._move_with(held), (classquest.TURN_IN, 1))
+        due = self._refused_hand_ins(four + (2 * hold + 1,))
+        self.assertEqual(self._move_with(due), (classquest.TURN_IN, 1))
+
+    def test_a_hand_in_refused_less_than_three_times_is_tried_again_at_once(self):
+        tried = self._refused_hand_ins((30, 20, 10))[1:]
+        self.assertEqual(self._move_with(tried), (classquest.TURN_IN, 1))
 
     def test_no_pass_ever_sends_an_abandon_for_a_complete_quest(self):
         # Every way a held quest can be broken, with the quest complete in the
