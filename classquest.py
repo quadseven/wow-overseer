@@ -28,7 +28,8 @@ time (QUESTS_SQL and its companions), never typed in: a quest is a class quest
 when quest_template_addon.AllowableClasses names one class or its QuestSortID
 is a class sort, and a reward quest when it grants a spell (RewardSpell or
 RewardDisplaySpell). Its chain is the PrevQuestID links back to the first
-quest. A member has a reward when it knows the spell or has been rewarded any
+quest, and a quest no PrevQuestID opens waits on any one of the quests whose
+NextQuestID names it (THE CORE READS NextQuestID TOO). A member has a reward when it knows the spell or has been rewarded any
 quest of the same class and reward.
 
 WHAT IT REFUSES, WITH A NAMED BLOCKER (a member never waits in silence):
@@ -107,6 +108,17 @@ was before. What the verbs do NOT cover stays blocked and named: an item cast
 at nothing in particular, at a spell focus (the warlock's Summoning Circle, a
 water source) or on a corpse nearby, and a creature a script summons that
 no gameobject's use names (THE TARGET IS SUMMONED).
+
+THE CORE READS NextQuestID TOO (#781, 2026-10-20). A quest's NextQuestID adds
+the quest to its next quest's previous quests (ObjectMgr::LoadQuests), and the
+next quest is offered once any one of them is rewarded
+(Player::SatisfyQuestPreviousQuest). The Tome of Divinity a dwarf paladin takes
+from Tiza Battleforge (1647) has no PrevQuestID, yet 1646, 2997, 2999 and 3000
+name it as their next quest, so the world refused every `take quest:1647`
+("not eligible"), and every human's `take quest:1643` alike: no dwarf or human
+paladin reached Redemption. A chain whose first quest such openers hold
+(Quest.after) and the member has rewarded none of starts at the opener the
+member can work, the one in its log first, then the nearest a creature gives.
 
 WHAT A MEMBER OWES (OWED_*). The operator's rule of 2026-10-06 is that every
 class quest is mandatory and comes before anything else, so a member with an
@@ -581,6 +593,7 @@ QUESTS_SQL = (  # noqa: S608
     "q.MinLevel AS min_level, q.AllowableRaces AS races, "
     "COALESCE(a.AllowableClasses, 0) AS classes, "
     "COALESCE(a.PrevQuestID, 0) AS prev, "
+    "COALESCE(a.NextQuestID, 0) AS next, "
     "COALESCE(a.ExclusiveGroup, 0) AS exclusive, q.RewardSpell AS reward, "
     "q.RewardDisplaySpell AS display, q.SuggestedGroupNum AS grp, "
     + _NPCS
@@ -848,6 +861,10 @@ class Quest:
     sources: tuple = ()
     # The items the item the take hands over holds, opened (HELD_SQL): given too.
     held: tuple = ()
+    # The quests whose NextQuestID names this one, sorted: with no PrevQuestID,
+    # it is offered only once one of them is rewarded (THE CORE READS
+    # NextQuestID TOO).
+    after: tuple = ()
 
     @property
     def spells(self) -> frozenset:
@@ -1296,12 +1313,27 @@ def build(
             if start_rows is not None and _orphan(quest):
                 continue
             quests[_int(r.get("id"))] = quest
+    quests = _with_openers(quests, quest_rows)
     groups = {}
     for q in quests.values():
         if q.rewards:
             groups.setdefault((q.klass, tuple(sorted(q.spells))), []).append(q.id)
     trained = frozenset(_int(r.get("spell")) for r in trained_rows or ())
     return Book(quests, {k: sorted(v) for k, v in groups.items()}, trained)
+
+
+def _with_openers(quests, quest_rows) -> dict:
+    """`quests` with each one's Quest.after: the book's quests whose NextQuestID
+    names it."""
+    after: dict = {}
+    for r in quest_rows or ():
+        qid, nxt = _int(r.get("id")), _int(r.get("next"))
+        if qid in quests and nxt in quests and nxt != qid:
+            after.setdefault(nxt, set()).add(qid)
+    return {
+        i: replace(q, after=tuple(sorted(after[i]))) if i in after else q
+        for i, q in quests.items()
+    }
 
 
 def chain(book: Book, quest_id: int) -> list:
@@ -1692,9 +1724,10 @@ def _closed_by_sibling(book: Book, member, path) -> bool:
     return False
 
 
-def _variant_move(book: Book, member, reward_id: int):
+def _variant_move(book: Book, member, reward_id: int, seen=frozenset()):
     """The next move along one reward quest's chain, or None when it is not
-    open to this member (race, level)."""
+    open to this member (race, level). A first quest no opener of the member's
+    has opened yet is reached through one (_opener_move)."""
     path = chain(book, reward_id)
     done = member.quests_done
     todo = [q for q in path if q not in done]
@@ -1712,11 +1745,47 @@ def _variant_move(book: Book, member, reward_id: int):
     if _closed_by_sibling(book, member, path):
         return None
     status = _status(member, quest.id)
+    if not status and _unopened(quest, done):
+        return _opener_move(book, member, quest, reward_id, seen)
     if status == STATUS_COMPLETE:
         return TURN_IN, quest, _nearest(member, quest.enders), reward_id
     if status == STATUS_INCOMPLETE:
         return HUNT, quest, None, reward_id
     return TAKE, quest, _nearest(member, quest.starters), reward_id
+
+
+def _unopened(quest: Quest, done) -> bool:
+    """True when the core does not offer `quest` yet: it has no PrevQuestID,
+    other quests' NextQuestID open it (Quest.after), and the member has
+    rewarded none of them."""
+    return not quest.prev and bool(quest.after) and not done.intersection(quest.after)
+
+
+def _opener_move(book: Book, member, quest: Quest, reward_id: int, seen):
+    """The next move toward one of the quests that open `quest`, as
+    _variant_move returns it for the reward `reward_id`, or None when no opener
+    is open to the member. The opener in the log first, then one a creature on
+    the member's map gives (the nearest), then one a creature gives anywhere (a
+    crossing), then the rest (an item start, which no verb takes)."""
+    if quest.id in seen:
+        return None
+    seen = seen | {quest.id}
+    options = [
+        o for o in (_variant_move(book, member, q, seen) for q in quest.after) if o
+    ]
+    if not options:
+        return None
+    kind, opener, spot, _reward = min(
+        options,
+        key=lambda o: (
+            _status(member, o[1].id) == 0,
+            o[2] is None,
+            not o[1].starters,
+            _yards(member, o[2]) if o[2] else 1e12,
+            o[1].id,
+        ),
+    )
+    return kind, opener, spot, reward_id
 
 
 def helpers_for(quest: Quest) -> int:
