@@ -324,10 +324,10 @@ class ThePassWritesWhatTidyDecides(unittest.TestCase):
 class ARosterMembersRingsAreTheGearDrives(unittest.TestCase):
     """The module's gear drive owns an enabled roster member's gear (#896).
 
-    Measured on the dev realm on 2026-10-20: a few seconds after each
-    "tidy: Grug tries on ..." line, the try-on and the drive's own pick went
-    on in the same second, and the drive's pick stayed. The family equip pass
-    already leaves these members to the drive; the try-on does too now.
+    A few seconds after each "tidy: <name> tries on ..." line, the try-on and
+    the drive's own pick went on in the same second, and the drive's pick
+    stayed. The family equip pass already leaves these members to the
+    drive; the try-on does too now.
     """
 
     def test_tidy_try_on_leaves_roster_members_to_the_gear_drive(self):
