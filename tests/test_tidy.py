@@ -9,6 +9,7 @@ loaded out of bridge.py and run on fakes; nothing touches a database.
 """
 
 import asyncio
+import sys
 import unittest
 
 from test_family_economy_parity import (  # noqa: F401 - also sets up the pymysql stub
@@ -233,8 +234,14 @@ class _Self:
         return None
 
 
-def _run_pass(world, standing_together=True):
+def _run_pass(world, standing_together=True, roster=frozenset()):
     log = _Log()
+
+    def enabled_roster():
+        if isinstance(roster, Exception):
+            raise roster
+        return set(roster)
+
     ns = _base(world)
     worn_rows = [
         {"name": m.name, "class_id": m.class_id, "level": m.level}
@@ -254,6 +261,8 @@ def _run_pass(world, standing_together=True):
             "TIDY_FUTURE_LEVELS": 25,
             "TIDY_RETRY_HOURS": 24,
             "_fetch_surplus_gear": lambda names: [KILT, HYDRALICK, IDOL, MEADOW],
+            "_fetch_enabled_roster_names": enabled_roster,
+            "pymysql": sys.modules["pymysql"],
             "_fetch_family_equipped": lambda names: worn_rows,
             "_fetch_worn_entries": lambda names: {"Grug": {10: 1076, 11: 4998}},
             "_equip_history": lambda hours, minutes: [],
@@ -310,6 +319,36 @@ class ThePassWritesWhatTidyDecides(unittest.TestCase):
         world, log = _run_pass({}, standing_together=False)
         self.assertNotIn("hands", world)
         self.assertTrue(any("waiting" in line for line in log.lines))
+
+
+class ARosterMembersRingsAreTheGearDrives(unittest.TestCase):
+    """The module's gear drive owns an enabled roster member's gear (#896).
+
+    Measured on the dev realm on 2026-10-20: a few seconds after each
+    "tidy: Grug tries on ..." line, the try-on and the drive's own pick went
+    on in the same second, and the drive's pick stayed. The family equip pass
+    already leaves these members to the drive; the try-on does too now.
+    """
+
+    def test_tidy_try_on_leaves_roster_members_to_the_gear_drive(self):
+        world, log = _run_pass({}, roster={"Grug"})
+        self.assertNotIn("tries", world)
+        self.assertIn(
+            "tidy: left 1 try-on(s) to the module's gear drive for 1 roster member(s)",
+            log.lines,
+        )
+
+    def test_a_member_off_the_roster_still_tries_on(self):
+        world, _ = _run_pass({}, roster={"Zork"})
+        self.assertEqual(["e Hitem:12006:0"], world["tries"])
+
+    def test_a_failed_roster_read_tries_nothing_on_but_still_hands_on(self):
+        world, log = _run_pass({}, roster=OSError("read failed"))
+        self.assertNotIn("tries", world)
+        self.assertEqual(1, len(world["hands"]))
+        self.assertTrue(
+            any("could not read the enabled roster" in line for line in log.lines)
+        )
 
 
 class TheLoopServesEveryFamily(unittest.TestCase):
