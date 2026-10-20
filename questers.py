@@ -71,7 +71,9 @@ BROKEN (`Broken`, `failures`). A quest is broken when:
     FAILS_BEFORE_BROKEN times in a day, with its own words appended.
 
 A broken quest the quester holds is dropped (the move in 1 above); one it
-never held (a giver that is not there) is only recorded. The bridge writes
+never held (a giver that is not there) is only recorded, and so is a complete
+one: the module refuses to abandon a complete quest ("it is complete; hand it
+in"), so it is handed in when it can be and otherwise left in the log (#1085). The bridge writes
 each into the quest ledger (questledger.py, #923) with its reason.
 
 PURE MODULE: rows in, moves and verdicts out. No MySQL; the clock is passed in.
@@ -950,13 +952,25 @@ def next_move(
     # Quests the module told this quester are complete: due a turn-in, never
     # a drop, even when their log row still says otherwise (#1085).
     complete = _module_complete(member.name, tried)
+    # The quests its log holds complete. The module refuses to abandon any of
+    # them ("it is complete; hand it in"), so none is ever dropped, whatever
+    # broke it: a stall the ledger kept from before #1085, a turn-in NPC that
+    # is not there, a hand-in the world keeps refusing (#1085).
+    logged_complete = {
+        qid
+        for qid, status in member.quest_log.items()
+        if int(status) == STATUS_COMPLETE
+    }
     # 1. A broken quest it holds is dropped.
-    move = _drop(cat, member, broken, found, complete)
+    move = _drop(cat, member, broken, found, complete | logged_complete)
     if move is not None:
         return move, "", []
     skip = set(broken) | {b.quest for b in found}
-    # 2. A complete quest, the nearest turn-in NPC first.
-    move = _hand_in(cat, member, skip, left, complete)
+    # 2. A complete quest, the nearest turn-in NPC first. One only the ledger
+    # holds broken is still handed in; one this pass found broken (its turn-in
+    # NPC missing, its hand-in refused FAILS_BEFORE_BROKEN times) is left.
+    hand_skip = (set(broken) - logged_complete) | {b.quest for b in found}
+    move = _hand_in(cat, member, hand_skip, left, complete)
     if move is not None:
         return move, "", []
     # 3. A quest in reach in its zone, the nearest giver first, while the log
@@ -995,7 +1009,8 @@ def _by_yards(option):
 
 def _drop(cat: Catalogue, member, broken, found, complete=frozenset()):
     """The drop of the first broken quest the quester holds, or None. A quest
-    the module called complete is never dropped (#1085)."""
+    in `complete` (the module called it complete, or the log holds it
+    complete) is never dropped: the module refuses that abandon (#1085)."""
     held_broken = [b for b in found if b.held and b.quest not in complete] + [
         Broken(member.name, q, cat.quest(q).title if cat.quest(q) else "", "", True)
         for q in sorted(member.quest_log)
