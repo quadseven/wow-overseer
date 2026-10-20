@@ -18,10 +18,11 @@ as text.
 import pathlib
 import re
 import unittest
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / "bridge.py"
-DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
+DECISIONS = modsource.DECISIONS
 
 # Keywords the bridge guards as economy errands that the C++ gives no counter
 # role, each with the decision that keeps it one-sided.
@@ -50,7 +51,7 @@ def _python_keywords() -> set:
 
 
 def _cpp_keywords() -> set:
-    source = DECISIONS.read_text(encoding="utf-8", errors="replace")
+    source = modsource.read(DECISIONS, encoding="utf-8", errors="replace")
     start = source.index("CounterRole CounterRoleForAim(std::string const& aim)")
     end = source.index("\n}", start)
     body = "\n".join(line.split("//", 1)[0] for line in source[start:end].splitlines())
@@ -60,11 +61,7 @@ def _cpp_keywords() -> set:
 class EconomyErrandsMatchCounterRoleForAim(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if not DECISIONS.exists():
-            raise unittest.SkipTest(
-                "mod-overseer submodule not checked out; "
-                "check.yml passes submodules: true for this dir"
-            )
+        modsource.require()
 
     def test_the_cpp_side_is_read_at_all(self):
         """A parse that finds nothing would make both comparisons below pass

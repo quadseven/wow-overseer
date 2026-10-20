@@ -14,9 +14,10 @@ import unittest
 import classic
 import dungeonpath
 import jobs
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DECISIONS_H = ROOT / "mod-overseer" / "src" / "overseer_decisions.h"
+DECISIONS_H = modsource.DECISIONS_H
 
 
 class TheNumbers(unittest.TestCase):
@@ -104,7 +105,7 @@ MODULE_CLASSIC_SHA = "5b99ee24e12255548ef2699109680e3abd96b443"
 
 def _module_block():
     """The Classic block of the PINNED module, or None when the pin predates it."""
-    text = DECISIONS_H.read_text(encoding="utf-8")
+    text = modsource.read(DECISIONS_H, encoding="utf-8")
     match = re.search(
         r"namespace Classic\s*\{(.*?)\}\s*// namespace Classic", text, re.S
     )

@@ -26,10 +26,11 @@ import unittest
 import goals
 import jobs
 import townslot
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+MODULE = modsource.MODULE
 
 
 def _code(name):
@@ -64,9 +65,8 @@ class TownRunIsAMode(unittest.TestCase):
         writes would come back 'unknown job mode'. The drive behind it is
         pinned in mod-overseer's own tests/test_town_hold.cpp, because the
         submodule here predates it."""
-        if not MODULE.exists():
-            self.skipTest("mod-overseer submodule not checked out")
-        source = MODULE.read_text(encoding="utf-8", errors="replace")
+        modsource.require()
+        source = modsource.read(MODULE, encoding="utf-8", errors="replace")
         self.assertIn('"town run", "train", "raid prep"', source)
 
 

@@ -43,10 +43,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import auction  # noqa: E402
 import craft_rhythm  # noqa: E402
 import travel  # noqa: E402
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+DECISIONS = modsource.DECISIONS
+MODULE = modsource.MODULE
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
 
@@ -109,7 +110,7 @@ class CommandGrammarTest(unittest.TestCase):
         keywords: two copies of a vocabulary that must agree, compared by a
         test rather than by a comment asking somebody to remember.
         """
-        source = DECISIONS.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(DECISIONS, encoding="utf-8", errors="ignore")
         self.assertIn('words[0] == "buy"', source)
         # `auction:` is the key a buy carries, and it is accepted for every
         # verb that is not List.
@@ -117,7 +118,7 @@ class CommandGrammarTest(unittest.TestCase):
 
     def test_a_buy_needs_exactly_the_auction_key_and_no_other(self):
         """`complete` for Buy is `sawAuction` alone - no bid, no buyout."""
-        source = DECISIONS.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(DECISIONS, encoding="utf-8", errors="ignore")
         # The Buy and Cancel arms share a completeness rule of `sawAuction`.
         self.assertRegex(
             source,
@@ -150,7 +151,7 @@ class HouseTest(unittest.TestCase):
     def test_the_module_iterates_the_same_three_houses(self):
         # mod_overseer.cpp's own WrongHouse sweep names all three, which is
         # the C++ side of the same vocabulary.
-        source = MODULE.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(MODULE, encoding="utf-8", errors="ignore")
         self.assertIn(
             "{AuctionHouseId::Alliance, AuctionHouseId::Horde, "
             "AuctionHouseId::Neutral}",
@@ -970,7 +971,7 @@ class VocabularyTest(unittest.TestCase):
         it is still there, because it is what takes the counter hold that keeps
         a character at the auctioneer while the rows run.
         """
-        source = DECISIONS.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(DECISIONS, encoding="utf-8", errors="ignore")
         self.assertRegex(
             source,
             r'if \(aim == "auctioneer"\)\s*\n\s*return CounterRole::Auctioneer;',
@@ -989,7 +990,7 @@ class ExecutorContractTest(unittest.TestCase):
         If this note ever stops being true the collection half stops being
         necessary, and this test is what would say so.
         """
-        source = MODULE.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(MODULE, encoding="utf-8", errors="ignore")
         self.assertIn('describe("bought", "", "the item arrives by mail', source)
 
     def test_the_executor_enforces_no_price_ceiling_of_its_own(self):
@@ -999,7 +1000,7 @@ class ExecutorContractTest(unittest.TestCase):
         budget is ever added on the C++ side this test should be revisited
         rather than deleted.
         """
-        source = MODULE.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(MODULE, encoding="utf-8", errors="ignore")
         start = source.index("static char const* DoAuction(")
         # To the end of the function, found by its own closing log line rather
         # than by a character count that silently truncates past the buy
@@ -1027,7 +1028,7 @@ class ExecutorContractTest(unittest.TestCase):
         evidence at all about whether its auction id was in a reachable pool.
         Reading it as evidence is how the house mapping gets inverted.
         """
-        source = MODULE.read_text(encoding="utf-8", errors="ignore")
+        source = modsource.read(MODULE, encoding="utf-8", errors="ignore")
         not_in_range = source.index("refuse(R::NotInRange)")
         picks_house = source.index("GetAuctionsMap(auctioneer->GetFaction())")
         wrong_house = source.index("refuse(R::WrongHouse)")

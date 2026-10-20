@@ -17,9 +17,10 @@ import pathlib
 import re
 import sys
 import unittest
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+MODULE = modsource.MODULE
 MIGRATION = (
     ROOT
     / "mod-overseer/data/sql/characters/base"
@@ -31,7 +32,7 @@ import jobs  # noqa: E402
 
 
 def _source() -> str:
-    return MODULE.read_text(encoding="utf-8")
+    return modsource.read(MODULE, encoding="utf-8")
 
 
 def _function(signature: str) -> str:
@@ -152,7 +153,7 @@ class TheCommandKindIsDispatchedNotForwarded(unittest.TestCase):
 
 class TheMigrationMatchesWhatTheModuleReads(unittest.TestCase):
     def test_the_migration_exists(self):
-        self.assertTrue(MIGRATION.exists(), MIGRATION)
+        self.assertTrue(modsource.exists(MIGRATION), MIGRATION)
 
     def test_it_adds_the_column_the_module_selects(self):
         # infra#2981 then infra#2983: a redaction-only comment edit changed
@@ -165,21 +166,21 @@ class TheMigrationMatchesWhatTheModuleReads(unittest.TestCase):
         # now the version-independent INFORMATION_SCHEMA + PREPARE/EXECUTE
         # idiom instead, and this asserts the unconditional ALTER text is
         # still in there (inside the dynamic-SQL string), not gone missing.
-        text = MIGRATION.read_text(encoding="utf-8")
+        text = modsource.read(MIGRATION, encoding="utf-8")
         self.assertIn("INFORMATION_SCHEMA.COLUMNS", text)
         self.assertIn("PREPARE add_job_column_stmt FROM", text)
         self.assertIn("ALTER TABLE `overseer_roster` ADD COLUMN `job`", text)
 
     def test_the_default_matches_the_python_side(self):
-        text = MIGRATION.read_text(encoding="utf-8")
+        text = modsource.read(MIGRATION, encoding="utf-8")
         self.assertIn(f"DEFAULT '{jobs.DEFAULT}'", text)
 
     def test_the_width_matches_the_python_side(self):
-        text = MIGRATION.read_text(encoding="utf-8")
+        text = modsource.read(MIGRATION, encoding="utf-8")
         self.assertIn(f"VARCHAR({jobs.COLUMN_WIDTH})", text)
 
     def test_it_alters_rather_than_recreating_the_table(self):
-        text = MIGRATION.read_text(encoding="utf-8")
+        text = modsource.read(MIGRATION, encoding="utf-8")
         self.assertTrue(text.strip().upper().startswith("--"))
         self.assertIn("ALTER TABLE `overseer_roster`", text)
 

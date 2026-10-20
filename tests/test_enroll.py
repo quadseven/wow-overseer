@@ -49,13 +49,14 @@ import re
 import sqlite3
 import sys
 import unittest
+import modsource
 
 HERE = pathlib.Path(__file__).resolve().parent
 # HERE is already the tests directory, so this is one hop to the repo root,
 # where the mod-overseer submodule is checked out.
 ROOT = HERE.parents[0]
-SQL_DIR = ROOT / "mod-overseer" / "data" / "sql" / "characters" / "base"
-MODULE = ROOT / "mod-overseer" / "src" / "mod_overseer.cpp"
+SQL_DIR = modsource.SQL_DIR
+MODULE = modsource.MODULE
 
 sys.path.insert(0, str(HERE.parents[0]))
 import enroll  # noqa: E402
@@ -106,7 +107,7 @@ def _sql_text() -> str:
     real DEFAULT in this directory sits behind one.
     """
     out = []
-    for path in sorted(SQL_DIR.glob("*.sql")):
+    for path in sorted(modsource.glob(SQL_DIR, "*.sql")):
         for line in path.read_text(encoding="utf-8").splitlines():
             out.append(line.split("--", 1)[0])
     return "\n".join(out)
@@ -410,7 +411,7 @@ class TheModuleReadsTheRosterPerFamily(unittest.TestCase):
     """
 
     def setUp(self):
-        self.code = _code(MODULE.read_text(encoding="utf-8"))
+        self.code = _code(modsource.read(MODULE, encoding="utf-8"))
         self.queries = [
             q for q in _LITERAL_RE.findall(self.code) if "overseer_roster" in q
         ]

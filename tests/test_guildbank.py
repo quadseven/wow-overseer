@@ -15,12 +15,11 @@ import unittest
 
 import guildbank
 import travel
+import modsource
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 TRAVEL = pathlib.Path(__file__).resolve().parents[1] / "travel.py"
-MOD_OVERSEER = (
-    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
-)
+MOD_OVERSEER = modsource.MODULE
 
 
 class ReserveDocumentationMatchesPinnedCore(unittest.TestCase):
@@ -261,9 +260,8 @@ class GuildBankTravelAimUsesTheRealKeywordTests(unittest.TestCase):
     rather than trusting a comment in bridge.py to still be true."""
 
     def setUp(self):
-        if not MOD_OVERSEER.exists():
-            self.skipTest("mod-overseer submodule not checked out")
-        self.cpp = MOD_OVERSEER.read_text(encoding="utf-8")
+        modsource.require()
+        self.cpp = modsource.read(MOD_OVERSEER, encoding="utf-8")
 
     def test_the_real_keyword_is_guild_banker_not_guild_bank(self):
         self.assertIn('{"guild banker",', self.cpp)
@@ -685,9 +683,8 @@ class TabPurchaseVerbIsAvailableInThePinnedModuleTests(unittest.TestCase):
     """
 
     def setUp(self):
-        if not MOD_OVERSEER.exists():
-            self.skipTest("mod-overseer submodule not checked out")
-        self.cpp = MOD_OVERSEER.read_text(encoding="utf-8")
+        modsource.require()
+        self.cpp = modsource.read(MOD_OVERSEER, encoding="utf-8")
 
     def test_the_module_can_buy_a_tab(self):
         self.assertIn("HandleBuyBankTab", self.cpp)
@@ -729,9 +726,8 @@ class ADepositIsAnsweredWhereTheCharacterStandsTests(unittest.TestCase):
     puts the row back to `pending`."""
 
     def setUp(self):
-        if not MOD_OVERSEER.exists():
-            self.skipTest("mod-overseer submodule not checked out")
-        cpp = MOD_OVERSEER.read_text(encoding="utf-8")
+        modsource.require()
+        cpp = modsource.read(MOD_OVERSEER, encoding="utf-8")
         start = cpp.index(
             "if (request.verb == GuildVerb::Bank || request.verb == GuildVerb::BankWithdraw)"
         )

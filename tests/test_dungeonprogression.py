@@ -10,9 +10,10 @@ import pathlib
 import unittest
 
 import dungeonprogression
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+MODULE = modsource.MODULE
 
 
 class SuccessfulRuns(unittest.TestCase):
@@ -184,12 +185,8 @@ class ThePortalKeywordsTheWorldserverActuallyKnows(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if not MODULE.exists():
-            raise unittest.SkipTest(
-                "mod-overseer submodule is not checked out: "
-                "git submodule update --init mod-overseer"
-            )
-        cls.source = MODULE.read_text(encoding="utf-8", errors="replace")
+        modsource.require()
+        cls.source = modsource.read(MODULE, encoding="utf-8", errors="replace")
 
     def _has_portal_row(self, keyword: str) -> bool:
         return '{"%s", ' % keyword in self.source

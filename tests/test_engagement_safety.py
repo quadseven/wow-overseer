@@ -16,13 +16,14 @@ established.
 
 import pathlib
 import unittest
+import modsource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+MODULE = modsource.MODULE
 
 
 def _source() -> str:
-    return MODULE.read_text(encoding="utf-8")
+    return modsource.read(MODULE, encoding="utf-8")
 
 
 def _function(signature: str) -> str:
