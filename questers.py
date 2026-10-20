@@ -76,6 +76,11 @@ one: the module refuses to abandon a complete quest ("it is complete; hand it
 in"), so it is handed in when it can be and otherwise left in the log (#1085). The bridge writes
 each into the quest ledger (questledger.py, #923) with its reason.
 
+A HAND-IN THE WORLD KEEPS REFUSING IS HELD (`turn_in_held`). A complete quest
+whose hand-in was refused FAILS_BEFORE_BROKEN times is not handed in again
+until TURN_IN_RETRY_MINUTES have passed since the last refusal, the hold
+doubling with each refusal past those; then it is tried once more.
+
 PURE MODULE: rows in, moves and verdicts out. No MySQL; the clock is passed in.
 """
 
@@ -163,6 +168,10 @@ GONE = "no such spawn in the world"
 COMPLETE_HAND_IN = "it is complete; hand it in"
 # A take or a hand-in the world refused this many times in a day is broken.
 FAILS_BEFORE_BROKEN = 3
+# A hand-in the world refused FAILS_BEFORE_BROKEN times is held this long after
+# its last refusal before it is tried once more, the hold doubling with each
+# refusal past those (`turn_in_held`).
+TURN_IN_RETRY_MINUTES = 6 * 60
 # The quest ledger's reason column.
 REASON_WIDTH = 255
 
@@ -542,7 +551,8 @@ def gone_spawns(name, tried) -> frozenset:
 def left_spawns(name, tried) -> frozenset:
     """The spawn ids this quester leaves for now: the gone ones, and those a
     walk was refused for a lasting reason (classquest.SPAWN_REFUSALS: a drop on
-    the way, the other side's ground) inside classquest.SPAWN_REFUSED_MINUTES,
+    the way, the other side's ground, a road through ground far above its
+    level) inside classquest.SPAWN_REFUSED_MINUTES,
     or for a short one (stopped getting nearer, died on the way) inside
     classquest.SPAWN_SHORT_MINUTES. Only the gone ones say the quest is broken:
     the rest say the way there is, for now."""
@@ -559,6 +569,39 @@ def left_spawns(name, tried) -> frozenset:
         if a.age_minutes < hold:
             out.add(a.spawn)
     return frozenset(out)
+
+
+# THE FAR WALK WALLS A QUESTER WAITS OUT (#1295). The module refuses a far walk
+# while the realm has as many under way as it allows, once the bot has started
+# as many this hour as one may, and while another verb holds the character
+# (classquest.REALM_FULL_REASON, BOT_BUDGET_REASON, HELD_REASON). None of these
+# says the giver or the way to it is the trouble, and each lifts on its own
+# clock, so the quester waits the class quest's time for it
+# (classquest.BACKOFF_MINUTES) instead of asking the same walk every pass:
+# from 2026-10-18 to 2026-10-20 the twenty questers' walks were refused 2,276
+# times for the budget and 2,453 times as held, about every two minutes.
+WALK_WALLS = (
+    classquest.REALM_FULL_REASON,
+    classquest.BOT_BUDGET_REASON,
+    classquest.HELD_REASON,
+)
+
+
+def walk_wall(name, tried) -> tuple:
+    """(the wall's words, minutes still to wait) when this quester's newest row
+    was refused for a far walk wall (WALK_WALLS) younger than its
+    classquest.BACKOFF_MINUTES; ("", 0) otherwise. A row of the same minute
+    that was not refused for a wall lifts it."""
+    mine = [a for a in tried or () if a.name == name]
+    if not mine:
+        return "", 0
+    age = min(a.age_minutes for a in mine)
+    newest = [a for a in mine if a.age_minutes == age]
+    if not all(a.failed and a.reason in WALK_WALLS for a in newest):
+        return "", 0
+    reason = newest[0].reason
+    wait = classquest.BACKOFF_MINUTES[reason] - age
+    return (reason, wait) if wait > 0 else ("", 0)
 
 
 def refusals(name, tried) -> dict:
@@ -585,6 +628,38 @@ def _module_complete(name, tried) -> frozenset:
         qid
         for (verb, qid), (_count, words) in refusals(name, tried).items()
         if verb == "abandon" and COMPLETE_HAND_IN in (words or "")
+    )
+
+
+def turn_in_held(name, tried) -> frozenset:
+    """The quest ids whose hand-in this quester leaves for now: the world
+    refused it FAILS_BEFORE_BROKEN times or more, and its last refusal is
+    newer than TURN_IN_RETRY_MINUTES, doubled for each refusal past those.
+
+    A REFUSED HAND-IN WAS ASKED EVERY PASS FOREVER (2026-10-20). A complete
+    quest whose hand-in was refused three times was found broken and its
+    abandon was refused as complete (#1085); the module-complete quest then
+    came back as the nearest hand-in every pass, past the broken skip. Kellan
+    walked to Farmer Saldean and handed in The Killing Fields 216 times in
+    42 hours, Pindle Return to Bellowfiz 511 times, each refused for the same
+    lasting reason ("no taker of that quest in reach"). Asked again only after
+    the hold, the quester gets on with the rest of its zone meanwhile."""
+    count: dict = {}
+    newest: dict = {}
+    for a in tried or ():
+        if a.name != name or not a.failed:
+            continue
+        found = _CHAIN_ROW.match(a.command)
+        if not found or found.group(1) != "turnin":
+            continue
+        qid = int(found.group(2))
+        count[qid] = count.get(qid, 0) + 1
+        newest[qid] = min(newest.get(qid, a.age_minutes), a.age_minutes)
+    return frozenset(
+        qid
+        for qid, times in count.items()
+        if times >= FAILS_BEFORE_BROKEN
+        and newest[qid] < TURN_IN_RETRY_MINUTES * 2 ** (times - FAILS_BEFORE_BROKEN)
     )
 
 
@@ -967,9 +1042,12 @@ def next_move(
         return move, "", []
     skip = set(broken) | {b.quest for b in found}
     # 2. A complete quest, the nearest turn-in NPC first. One only the ledger
-    # holds broken is still handed in; one this pass found broken (its turn-in
-    # NPC missing, its hand-in refused FAILS_BEFORE_BROKEN times) is left.
-    hand_skip = (set(broken) - logged_complete) | {b.quest for b in found}
+    # holds broken is still handed in; one whose turn-in NPC this pass found
+    # missing is left, and so is one whose hand-in the world keeps refusing,
+    # until its hold is over (`turn_in_held`), the module-complete ones too.
+    hand_skip = turn_in_held(member.name, tried) | {
+        b.quest for b in found if b.reason == ENDER_MISSING
+    }
     move = _hand_in(cat, member, hand_skip, left, complete)
     if move is not None:
         return move, "", []
@@ -1041,9 +1119,9 @@ def _held(cat: Catalogue, member, status, skip):
 def _hand_in(cat: Catalogue, member, skip, left, complete=frozenset()):
     """The hand-in of the complete quest whose turn-in NPC is nearest, or
     None. A quest the module called complete is handed in even when its log
-    row still says otherwise (#1085)."""
+    row still says otherwise (#1085); `skip` leaves it as it leaves any other."""
     due = {qid for qid, _quest in _held(cat, member, STATUS_COMPLETE, skip)}
-    due |= {qid for qid in complete if qid in member.quest_log}
+    due |= {qid for qid in complete if qid in member.quest_log and qid not in skip}
     ready = []
     for qid in due:
         quest = cat.quest(qid)
@@ -1230,7 +1308,9 @@ def plan(
     `crossings` is the realm's recent crossing rows (guildjobs.Recent of
     guildjobs.CROSS_ACTIONS): a crossing is held while the member's last one is
     young (guildjobs.crossing_cooling) or the module refused that map for good
-    (guildjobs.class_walls), as the class quest's and the level step's are."""
+    (guildjobs.class_walls), as the class quest's and the level step's are.
+    A move that walks waits while the quester's newest row was refused for a
+    far walk wall (`walk_wall`)."""
     member = settled(member, tried)
     found = failures(cat, member, clock, now, tried, last_quest)
     if not member.online:
@@ -1248,6 +1328,20 @@ def plan(
         held = crossing_held(member.name, move, crossings)
         if held:
             move, why = None, held
+    if move is not None and move.spot is not None:
+        # A move that walks waits out a far walk wall; a drop does not walk.
+        wall, wait = walk_wall(member.name, tried)
+        if wall:
+            move, why = (
+                None,
+                "%s waits %d more minute%s to walk: %s"
+                % (
+                    member.name,
+                    wait,
+                    "" if wait == 1 else "s",
+                    wall,
+                ),
+            )
     return Plan(
         member.name, move, tuple(found) + tuple(never_held), move.said if move else why
     )

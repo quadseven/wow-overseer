@@ -30,6 +30,7 @@ on:
       - '.dockerignore'
       - '.github/workflows/check.yml'
       - '.github/scripts/compile_check.py'
+      - '.github/scripts/unittest_parallel.py'
       - 'ruff.toml'
       - 'tests/requirements.txt'
   pull_request:
@@ -43,6 +44,7 @@ on:
       - '.dockerignore'
       - '.github/workflows/check.yml'
       - '.github/scripts/compile_check.py'
+      - '.github/scripts/unittest_parallel.py'
       - 'ruff.toml'
       - 'tests/requirements.txt'
   workflow_dispatch:
@@ -72,7 +74,10 @@ jobs:
       # (check.python-units.yml / compile_check.py) - fails on the file and
       # line a `unittest discover` SyntaxError would otherwise blame on "a
       # broken test" rather than on an old interpreter.
-      test-cmd: "python3 .github/scripts/compile_check.py --min-python 3.12 && uv run --no-project --python 3.12 --with-requirements tests/requirements.txt python3 -m unittest discover -s tests -p 'test_*.py' -v"
+      # unittest_parallel.py (#1290) runs each tests/test_*.py module in its own
+      # process across the runner's cores: discover ran the ~12,600 tests on
+      # one core for about nine minutes. Locally, discover still works as is.
+      test-cmd: "python3 .github/scripts/compile_check.py --min-python 3.12 && uv run --no-project --python 3.12 --with-requirements tests/requirements.txt python3 .github/scripts/unittest_parallel.py"
       timeout-minutes: 10
 
   lint:
