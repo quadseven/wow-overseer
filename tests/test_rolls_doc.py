@@ -41,6 +41,21 @@ class RollsDocTest(unittest.TestCase):
             with self.subTest(kept=kept):
                 self.assertTrue(kept in self.text, f"ROLLS.md lost: {kept!r}")
 
+    def test_the_ship_and_proof_helpers_are_named(self):
+        # #1288: the deploy repo has helpers for the ship (repin and PR body),
+        # the proof (when a merge went live, a windowed log report) and the
+        # module patch drift guard. An agent with no memory only uses what this
+        # file names, so the hand copy-paste path must not come back.
+        for helper in ("wow_bridge_ship.py", "live_since.py", "realm-logs.sh report"):
+            with self.subTest(helper=helper):
+                self.assertTrue(
+                    helper in self.text, f"ROLLS.md does not name: {helper!r}"
+                )
+        bridge_ship = self.text.split("### 1a.", 1)[1].split("### 1b.", 1)[0]
+        for kept in ("build.yml", "Pre-roll adversarial review"):
+            with self.subTest(kept=kept):
+                self.assertTrue(kept in bridge_ship, f"ROLLS.md 1a lost: {kept!r}")
+
 
 if __name__ == "__main__":
     unittest.main()
