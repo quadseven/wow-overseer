@@ -339,6 +339,20 @@ CROSS_COOLDOWN_MINUTES = 35
 # A refusal the module calls retryable (the realm's crossing cap, a fight, a
 # dead character) is asked again sooner.
 CROSS_RETRY_MINUTES = 10
+# A WALK TO THE BERTH THAT GIVES UP TWICE IS NOT ASKED EVERY TEN MINUTES
+# (#870). The module calls its ground give-up retryable, and it is when a
+# fight or a stuck step ended the walk; but when the road to the berth crosses
+# ground far above the member's level, it gives up the same way every time.
+# Three Alliance questers of level 15 were sent to the Menethil berth for
+# Durotar every ten minutes for 44 hours (2026-10-18 to 2026-10-20), one of
+# them 256 times, and each try took one of the realm's crossings at once. After
+# this many such give-ups to one map, each inside CROSS_GROUND_HOLD_MINUTES of
+# the last, the member is not asked to cross there again until that long after
+# the last one: the module's own campaign crossing hands a dungeon back on the
+# same count and for the same two hours (CrossingAttemptLimits).
+CROSS_GROUND_GAVE_UP = "the walk to the berth gave up on the ground"
+CROSS_GROUND_ATTEMPTS = 2
+CROSS_GROUND_HOLD_MINUTES = 2 * 60
 # The module's refusals that say no crossing will come of asking, in its own
 # words (overseer_decisions.h, CrossRefusal): the verb is switched off, or no
 # transport serves the member's faction between the two maps. The destination
