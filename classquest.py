@@ -441,6 +441,14 @@ SPAWN_REFUSED_MINUTES = 120
 # ONLY WORDS THAT SAY THE SPAWN OR THE WAY TO IT IS THE TROUBLE ARE HERE. A walk
 # that ran out of time is not (it says the walk was slow, not that the spawn is
 # out of reach), nor is anything that names the member's state.
+#
+# A ROAD THROUGH GROUND FAR ABOVE THE WALKER IS AS DEADLY ON THE NEXT PASS
+# (mod-overseer's FarWalkRoadLimits, SpawnLethalRoad). It was in no list, so a
+# quester was sent down the same road every pass: on 2026-10-20 one quester's
+# walk to Deputy Willem was refused so five times in a row, and over two days
+# the twenty questers' walks were refused 938 times in these words (#1295). It
+# holds until the member has levelled, so it is a lasting refusal.
+LETHAL_ROAD_REASON = "the road to the spawn crosses ground far above its level"
 SPAWN_REFUSALS = frozenset(
     {
         "the first step toward the creature goes over a drop",
@@ -451,6 +459,7 @@ SPAWN_REFUSALS = frozenset(
         "no such spawn in the world",
         "the spawn is on another map than the character",
         "the spawn belongs to a world event that is not running",
+        LETHAL_ROAD_REASON,
     }
 )
 # A stall or a death on the way is a pack to leave for a short while, not two
