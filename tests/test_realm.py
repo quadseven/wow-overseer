@@ -122,6 +122,26 @@ class ARealmThatHasSaidWhatItIs(unittest.TestCase):
             self.assertIn(component, line)
             self.assertIn(sha[:12], line)
 
+    def test_the_module_commit_names_the_module_and_is_not_an_upstream(self):
+        commit = "dbf7a87e8f897ebc6f377f870a12fcf1baac9889"
+        rows = build_rows() + [
+            {
+                "name": "mod-overseer",
+                "value": commit,
+                "source": "declared",
+                "reported_at": NOW,
+            }
+        ]
+        out = build(rows)
+        self.assertEqual(out["module_commit"], commit)
+        self.assertIn("module dbf7a87e8f89 (0.1.0)", out["build_line"])
+        self.assertNotIn("mod-overseer", [u["name"] for u in out["upstreams"]])
+
+    def test_without_a_module_commit_the_version_stands_alone(self):
+        out = build()
+        self.assertEqual(out["module_commit"], "")
+        self.assertIn("module 0.1.0  |", out["build_line"])
+
     def test_the_upstreams_come_back_in_a_fixed_order(self):
         """The rows arrive from a table with no ordering worth trusting, and a
         list that reshuffles between polls is unreadable."""

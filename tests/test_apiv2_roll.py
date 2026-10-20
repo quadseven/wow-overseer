@@ -95,6 +95,52 @@ class TheRoll(unittest.TestCase):
         self.assertEqual(out["core_revision"], "7f12e89ee5f4")
         self.assertEqual(out["module_version"], "0.1.0")
 
+    def test_the_module_is_named_by_its_commit_when_the_realm_reports_it(self):
+        # The Now page, 2026-10-20: "Build core 7f12e89ee5f4, module 0.1.0".
+        # 0.1.0 is the VERSION file, the same for every build.
+        rows = build_rows() + [
+            {
+                "name": "mod-overseer",
+                "value": "dbf7a87e8f897ebc6f377f870a12fcf1baac9889",
+                "source": "declared",
+                "reported_at": NOW,
+            }
+        ]
+        out = v2roll.build_roll(rows, [{"core_version": CORE}], [{"up": 60}], now=NOW)
+        self.assertEqual(out["build"], "core 7f12e89ee5f4, module dbf7a87e8f89")
+        self.assertEqual(
+            out["module_commit"], "dbf7a87e8f897ebc6f377f870a12fcf1baac9889"
+        )
+        self.assertNotIn("module_commit", out["unmeasured"])
+
+    def test_without_the_commit_the_reason_says_why(self):
+        out = v2roll.build_roll(build_rows(), [{"core_version": CORE}], [], now=NOW)
+        self.assertEqual(out["build"], "core 7f12e89ee5f4, module 0.1.0")
+        self.assertIsNone(out["module_commit"])
+        self.assertIn(
+            "does not report its module commit", out["unmeasured"]["module_commit"]
+        )
+
+    def test_a_stale_declaration_is_not_shown_as_the_commit(self):
+        rows = [
+            r if r["name"] != "pins" else dict(r, value="stale") for r in build_rows()
+        ] + [
+            {
+                "name": "mod-overseer",
+                "value": "a" * 40,
+                "source": "declared",
+                "reported_at": NOW,
+            }
+        ]
+        out = v2roll.build_roll(rows, [{"core_version": CORE}], [], now=NOW)
+        self.assertIsNone(out["module_commit"])
+        self.assertIn("module 0.1.0", out["build"])
+
+    def test_channel_and_shipped_say_where_the_record_is(self):
+        out = v2roll.build_roll(build_rows(), [], [], now=NOW)
+        self.assertIn("deploy repo", out["unmeasured"]["channel"])
+        self.assertIn("deploy repo", out["unmeasured"]["shipped"])
+
     def test_channel_and_shipped_are_never_invented(self):
         out = v2roll.build_roll(build_rows(), [], [{"up": 60}], now=NOW)
         self.assertIsNone(out["channel"])
