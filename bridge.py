@@ -19719,7 +19719,12 @@ class Bridge(discord.Client):
         # THE TURNS (standin.Turn), from the memo store so a restart does not
         # begin a crafting turn again; the clock is wall time for the same
         # reason.
-        turns = await asyncio.to_thread(_fetch_standin_turns)
+        try:
+            turns = await asyncio.to_thread(_fetch_standin_turns)
+        except Exception:
+            # No turns read is a pass with no turn judged, never a lost pass.
+            log.exception("standin: the turns could not be read; none is judged this pass")
+            turns = {}
         now = time.time()
         for key in sorted(set(asked) | set(rows)):
             # In a guild run, or the guest of another family (this pass's
@@ -19735,9 +19740,7 @@ class Bridge(discord.Client):
                 await asyncio.to_thread(_write_standin, key, step)
                 turn = standin.next_turn(facts, step)
                 if turn is not None:
-                    await asyncio.to_thread(_note_standin_turn, key, turn)
-                    log.info("standin: %s: %s's %s turn begins", campaignqueue._family(key),
-                             turn.out_name, turn.phase)
+                    await self._note_turn(key, turn)
             except Exception:
                 log.exception("standin: the pass for %s failed; its row stands",
                               campaignqueue._family(key))
@@ -19759,6 +19762,19 @@ class Bridge(discord.Client):
             if key in seated and not facts.mid_run:
                 await asyncio.to_thread(_standin_crafts, seated[key].out_name, key)
         return seated
+
+    async def _note_turn(self, key: str, turn) -> None:
+        """Record a family's new turn. A failed write is logged and the pass
+        goes on: the row is already written, and the next pass judges by the
+        turn last recorded."""
+        try:
+            await asyncio.to_thread(_note_standin_turn, key, turn)
+        except Exception:
+            log.exception("standin: %s's %s turn could not be recorded",
+                          turn.out_name, turn.phase)
+            return
+        log.info("standin: %s: %s's %s turn begins", campaignqueue._family(key),
+                 turn.out_name, turn.phase)
 
     async def _standin_out_facts(self, key: str, leader: str, ordered: str,
                                  roster: tuple) -> tuple:

@@ -479,8 +479,11 @@ def next_turn(facts: Facts, step: "Step") -> Turn | None:
 
     A sit-out that begins (SEAT with no row before it) begins a crafting turn;
     a new guest in a standing row keeps the turn it has. A row that ends
-    (CLEAR) begins the member's family turn, whatever ended it. A standing row
-    with no turn recorded (one written before turns) starts its turn now.
+    (CLEAR) begins the member's family turn, whatever ended it, crafting turn
+    over or not: a release or a removed order ends the crafting turn too. Only
+    a family turn still running is kept, so a row cleared on a stale one
+    (its record from an earlier turn) begins a full family turn. A standing
+    row with no turn recorded (one written before turns) starts its turn now.
     """
     if facts.now is None:
         return None
@@ -491,9 +494,14 @@ def next_turn(facts: Facts, step: "Step") -> Turn | None:
             return None
         return Turn(step.seat.out_name, CRAFT, facts.now)
     if step.action == CLEAR and current is not None:
-        if facts.turn is not None and facts.turn.out_name == current.out_name:
-            if facts.turn.phase == FAMILY:
-                return None
+        held = facts.turn
+        if (
+            held is not None
+            and held.out_name == current.out_name
+            and held.phase == FAMILY
+            and facts.now - held.since < FAMILY_TURN_SECONDS
+        ):
+            return None
         return Turn(current.out_name, FAMILY, facts.now)
     if (
         step.action == KEEP

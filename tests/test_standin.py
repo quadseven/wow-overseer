@@ -505,6 +505,27 @@ class SittingOutTakesTurnsWithTheFamily(unittest.TestCase):
         )
         self.assertEqual(standin.SEAT, step.action)
 
+    def test_a_new_guest_in_a_standing_row_keeps_the_crafting_turn(self):
+        f = facts(current=seated(in_name=""), turn=turn(standin.CRAFT, 5), now=100)
+        step = standin.step(f)
+        self.assertEqual(standin.SEAT, step.action, "Locky takes the empty seat")
+        self.assertIsNone(standin.next_turn(f, step))
+
+    def test_a_row_cleared_in_a_live_family_turn_keeps_it(self):
+        f = facts(current=seated(), turn=turn(standin.FAMILY, 0), now=60)
+        step = standin.step(f)
+        self.assertEqual(standin.CLEAR, step.action)
+        self.assertIsNone(standin.next_turn(f, step))
+
+    def test_a_row_cleared_on_a_stale_family_turn_begins_a_full_one(self):
+        now = standin.FAMILY_TURN_SECONDS + 10
+        f = facts(
+            current=seated(), reagents=stocked(0), turn=turn(standin.FAMILY, 0), now=now
+        )
+        step = standin.step(f)
+        self.assertEqual(standin.CLEAR, step.action)
+        self.assertEqual(turn(standin.FAMILY, now), standin.next_turn(f, step))
+
     def test_a_stale_crafting_turn_with_no_row_never_keeps_og_in(self):
         # The row went (deleted outside this pass) while a crafting turn was
         # recorded: he sits out again and a new crafting turn begins.
@@ -850,6 +871,8 @@ class TheBridgePass(unittest.TestCase):
         known=frozenset({3757}),
         reagents=None,
         turns=None,
+        fetch_turns=None,
+        note_turn=None,
     ):
         written, jobs_told, lines = [], [], []
         self.noted = []
@@ -893,9 +916,12 @@ class TheBridgePass(unittest.TestCase):
                 _insert_job=lambda name, mode, source: jobs_told.append(
                     (name, mode, source)
                 ),
-                _fetch_standin_turns=lambda: dict(turns or {}),
-                _note_standin_turn=lambda family, turn: self.noted.append(
-                    (family, turn.out_name, turn.phase)
+                _fetch_standin_turns=fetch_turns or (lambda: dict(turns or {})),
+                _note_standin_turn=note_turn
+                or (
+                    lambda family, turn: self.noted.append(
+                        (family, turn.out_name, turn.phase)
+                    )
                 ),
             ),
         ):
@@ -1079,6 +1105,18 @@ class TheBridgePass(unittest.TestCase):
         )
         self.assertNotIn("Og", fams["Grug"]["names"])
         self.assertEqual([], jobs_told)
+
+    def test_a_turn_store_that_fails_costs_no_pass(self):
+        def boom(*a):
+            raise RuntimeError("memo store gone")
+
+        fams, written, jobs_told, lines = self.run_pass(
+            fetch_turns=boom, note_turn=boom
+        )
+        self.assertEqual(standin.SEAT, written[0][1], "the row is still written")
+        self.assertEqual([("Og", "craft", standin.SOURCE)], jobs_told)
+        self.assertTrue(any("turns could not be read" in line for line in lines), lines)
+        self.assertTrue(any("could not be recorded" in line for line in lines), lines)
 
     def test_the_turns_read_from_the_memo_store(self):
         memo = {
