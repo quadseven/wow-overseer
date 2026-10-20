@@ -1245,7 +1245,15 @@ def _reconcile(
     return Holder(claimant="", character=leader, aim=column, since=now)
 
 
-def campaign_owns_traveller(active_job: str, leader_job: str, withheld: bool) -> bool:
+# The coordinator phases mod-overseer's staging clock runs over (RESETTING,
+# GATHERING and BARRIER), as its run timeline names them: the stretch in which
+# the module walks the leader to the door on an aim of its own.
+STAGING_PHASES = frozenset({"RESET", "GATHERING", "BARRIER"})
+
+
+def campaign_owns_traveller(
+    active_job: str, leader_job: str, withheld: bool, staging: bool = False
+) -> bool:
     """Whether a family's campaign wants its leader for staging right now (#227).
 
     `active_job` is the dungeon job of the family's active queue entry ("" when
@@ -1255,9 +1263,19 @@ def campaign_owns_traveller(active_job: str, leader_job: str, withheld: bool) ->
     interlude takes it off again, so a leader carrying the head's job is a
     leader the coordinator is about to stage. Town errands resume the moment
     any of the three says otherwise.
+
+    EXCEPT A BAG WITHHOLD WHILE THE RUN IS ALREADY STAGING (#1104). `staging`
+    is the coordinator in one of STAGING_PHASES. The withhold keeps a run from
+    opening; it does not stop one, because nothing takes the job off a staging
+    leader, so handing his column to the town passes left two owners writing
+    it. Measured on the dev realm 2026-10-16: Grug's family's Scarlet
+    Monastery runs closed staging_failed four times running, the leader 10857
+    yards out with his staging errand "ended and taken back 2 times". The town
+    errands come back when the attempt ends.
     """
     job = str(active_job or "").strip().lower()
-    return bool(job) and str(leader_job or "").strip().lower() == job and not withheld
+    on_job = bool(job) and str(leader_job or "").strip().lower() == job
+    return on_job and (staging or not withheld)
 
 
 def stalled(best: float, best_at: float, distance: float, now: float) -> bool:
