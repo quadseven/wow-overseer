@@ -1231,13 +1231,26 @@ class MeasuredCraftBands(unittest.TestCase):
             for recipe in skill_recipes
         }
         self.assertEqual(set(recipes), set(MEASURED_BANDS))
-        for spell_id, recipe in recipes.items():
-            learn_floor, yellow, grey = MEASURED_BANDS[spell_id]
-            with self.subTest(spell_id=spell_id):
-                self.assertGreaterEqual(recipe.min_skill, learn_floor)
-                self.assertLess(recipe.max_skill, grey)
-                self.assertLessEqual(recipe.min_skill, grey)
-                self.assertLessEqual(yellow, grey)
+        # These are routing ranges. The DBC bands overlap, so the next route
+        # can end a recipe before its own grey cutoff. The five gaps below are
+        # intentional places where no castable recipe covers the intervening
+        # values.
+        gap_starts = {12585: 175, 19791: 261, 3337: 125, 9918: 200, 16641: 250}
+        for skill_recipes in craft.RECIPES.values():
+            for index, recipe in enumerate(skill_recipes):
+                learn_floor, yellow, grey = MEASURED_BANDS[recipe.spell_id]
+                next_min = (
+                    skill_recipes[index + 1].min_skill
+                    if index + 1 < len(skill_recipes)
+                    else 301
+                )
+                previous_end = skill_recipes[index - 1].max_skill if index else 0
+                expected_min = gap_starts.get(recipe.spell_id, previous_end + 1)
+                with self.subTest(spell_id=recipe.spell_id):
+                    self.assertEqual(recipe.min_skill, expected_min)
+                    self.assertEqual(recipe.max_skill, min(grey - 1, next_min - 1, 300))
+                    self.assertGreaterEqual(recipe.min_skill, learn_floor)
+                    self.assertLessEqual(yellow, grey)
 
 
 class TheModeConstant(unittest.TestCase):
