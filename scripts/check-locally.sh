@@ -4,8 +4,9 @@
 #
 # CI's unittest job (.github/workflows/check.yml) checks out WITH the
 # mod-overseer submodule and hands the job's `test-cmd` to a shell: a compile
-# check against the 3.12 floor, then unittest discover under uv's Python 3.12
-# with tests/requirements.txt (the pinned sqlglot and PyMySQL). A bare
+# check against the 3.12 floor, then the whole suite under uv's Python 3.12
+# with tests/requirements.txt (the pinned sqlglot and PyMySQL), one process
+# per test module (.github/scripts/unittest_parallel.py). A bare
 # `python3 -m unittest` on whatever interpreter is at hand, on a checkout
 # without the submodule (every fresh `git worktree add`), reports hundreds of
 # failures and skips that CI never sees. This script closes that gap:
@@ -17,7 +18,7 @@
 #   - sets CI=true as the runner does, so a test gated on CI fails instead of
 #     skipping when its dependency is missing.
 #
-# Usage: scripts/check-locally.sh            (the unittest job, ~5 min)
+# Usage: scripts/check-locally.sh            (the unittest job, a few minutes)
 #        scripts/check-locally.sh lint       (the lint job: pinned ruff)
 #        scripts/check-locally.sh all        (both)
 #        scripts/check-locally.sh print      (print what would run, run nothing)

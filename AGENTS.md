@@ -228,9 +228,10 @@ no longer a project hanging over every change.
 Run `scripts/check-locally.sh` from any checkout or `git worktree add`. It
 runs the same command CI's unittest job runs, read straight out of
 `.github/workflows/check.yml`: a compile check against the Python 3.12
-floor, then `unittest discover` under uv's Python 3.12 with
-`tests/requirements.txt`. It takes about five minutes and needs `uv` and a
-`python3` of at least 3.12 on PATH.
+floor, then the whole suite under uv's Python 3.12 with
+`tests/requirements.txt`, one process per test module
+(`.github/scripts/unittest_parallel.py`). It takes a few minutes and needs
+`uv` and a `python3` of at least 3.12 on PATH.
 
 The suite reads the `mod-overseer` submodule's sources as text, and a new
 worktree has no submodule. The script runs
