@@ -405,6 +405,13 @@ OVERLEVEL_MAX = 3
 # attempt the quest alone. The solo attempt still goes through the normal
 # hunt: if it stalls, the STALLED blocker (in HELPABLE) asks for help.
 OVERLEVEL_SOLO_GAP = 10
+# AND WAITS FOR THAT HELP AT MOST THIS LONG (#1094). On 2026-10-19 the same
+# paladin, level 29 and 17 over Redemption, asked the guild for it for an hour
+# and more five times in a day after its solo hunt stalled: the stall's
+# hold-off (GIVE_UP_MINUTES) and the run of asks (guildjobs.class_ask_streak)
+# were the only bounds. From this long after the stall the quest yields to
+# levelling until the member may hunt it alone again (guildjobs.outlevel_waits).
+OVERLEVEL_HELP_WAIT_MINUTES = 30
 
 # A SPAWN THE MODULE REFUSED, OR THAT A WALK DID NOT REACH, IS NOT ASKED OF THE
 # SAME MEMBER AGAIN FOR THIS LONG: the member is sent to the next pack of the
@@ -1901,7 +1908,7 @@ def within_level(member, spawns) -> tuple:
     return tuple(s for s in spawns if int(s.level) <= top)
 
 
-def _outlevels_for_solo(member, quest) -> bool:
+def outlevels_for_solo(member, quest) -> bool:
     """True when the member is at least OVERLEVEL_SOLO_GAP levels over the
     quest's minimum level (#1094): the member hunts the quest solo instead of
     waiting for guild help."""
@@ -2095,7 +2102,7 @@ def _hunt_move(member, quest: Quest, why: str, tried, held_off) -> Move:
     lost = _lost_item_move(member, quest, using, block, why)
     if lost is not None:
         return lost
-    if block == GROUP and _outlevels_for_solo(member, quest):
+    if block == GROUP and outlevels_for_solo(member, quest):
         # #1094: the member so far outlevels the quest that the group blocker
         # is ignored and the quest is hunted solo. If the solo hunt stalls,
         # the STALLED blocker below (in HELPABLE) asks for help.

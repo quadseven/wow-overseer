@@ -3731,7 +3731,8 @@ def class_owed(m, book, recent=(), hunts=None, now=0.0, asks=()):
         )
     probe = with_walls(probe, recent)
     avoid, off = class_avoid(m, book, recent, hunts, now)
-    return classquest.owed(book, probe, avoid, off, class_ask_held(m.name, asks))
+    yielded = class_ask_held(m.name, asks) | outlevel_waits(m, book, hunts, now)
+    return classquest.owed(book, probe, avoid, off, yielded)
 
 
 def owed_members(
@@ -4054,7 +4055,8 @@ def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
     the member levels until its hunt's hold-off ends, then tries alone again.
     A quest asked for CLASS_ASK_STREAK_MAX times in a row that did not get it
     done (no party, or a party that went and failed) is not asked for either
-    while its hold lasts (class_ask_streak).
+    while its hold lasts (class_ask_streak), nor one the member outlevels and
+    has waited classquest.OVERLEVEL_HELP_WAIT_MINUTES for (outlevel_waits).
 
     A MEMBER IN COMBAT STILL NEEDS ITS HELP (#1001). Read in a fight, the help
     was dropped for the whole of this pass, and the social pass cancelled its
@@ -4070,9 +4072,13 @@ def class_asking(m, book, hunts=None, now=0.0, recent=(), asks=()) -> tuple:
     if move is not None:
         return [], []
     helps, yields = [], []
+    waited = outlevel_waits(m, book, hunts, now)
     for h in classquest.helps(book, m, avoid, off):
         if classquest.no_party_spot(book, h, m):
             yields.append(_no_party_yield(m, h, hunts, now))
+            continue
+        if int(h.quest) in waited:
+            yields.append(_outlevel_yield(m, h, book, hunts, now))
             continue
         left, count, yeses = class_ask_streak(m.name, h.quest, asks)
         if left:
@@ -4104,19 +4110,70 @@ def asking_line(m, asked) -> str:
     return "%s waits for help with %s" % (m.name, titles)
 
 
+def _alone_again_minutes(m, move, hunts, now) -> int:
+    """Minutes until the member tries `move`'s quest alone again: when its
+    hunt's hold-off ends, else after classquest.SPAWN_RETRY_MINUTES (the
+    rolling retry of a tried target)."""
+    hunt = hunts.get(m.name) if hunts is not None else None
+    if hunt is not None and hunt.quest == move.quest and hunt.until is not None:
+        return max(1, math.ceil((hunt.until - now) / 60.0))
+    return classquest.SPAWN_RETRY_MINUTES
+
+
 def _no_party_yield(m, move, hunts, now) -> tuple:
     """(key, line) for a helpable quest no party can help with. The member
-    tries alone again when its hunt's hold-off ends, else after
-    classquest.SPAWN_RETRY_MINUTES (the rolling retry of a tried target)."""
-    hunt = hunts.get(m.name) if hunts is not None else None
-    left = classquest.SPAWN_RETRY_MINUTES
-    if hunt is not None and hunt.quest == move.quest and hunt.until is not None:
-        left = max(1, math.ceil((hunt.until - now) / 60.0))
+    tries alone again when its hunt's hold-off ends (_alone_again_minutes)."""
+    left = _alone_again_minutes(m, move, hunts, now)
     line = (
         "class ask: %s does not ask for %s: %s; it levels for %d minute(s), then "
         "tries alone again" % (m.name, move.title, classquest.no_party_why(move), left)
     )
     return (m.name, move.quest, "nospot", move.blocker), line
+
+
+# AN OVERLEVELLED MEMBER WAITS FOR HELP AT MOST HALF AN HOUR (#1094). A member
+# classquest.OVERLEVEL_SOLO_GAP levels over a quest hunts it alone and asks for
+# help only once that hunt stalls; from classquest.OVERLEVEL_HELP_WAIT_MINUTES
+# after the stall the quest is not asked for and yields to levelling, as one no
+# party can help with does, until the member tries it alone again
+# (_alone_again_minutes). A party already up keeps its own clock
+# (classask._ended). The wait is read from the hunt's clock (classquest.Hunts,
+# which notes when a hunt last stalled or was given up); a restart forgets it,
+# and the member hunts alone first again.
+def outlevel_waits(m, book, hunts, now) -> frozenset:
+    """The quest ids this member outlevels (classquest.outlevels_for_solo) and
+    has waited classquest.OVERLEVEL_HELP_WAIT_MINUTES for since its hunt of it
+    stalled: at most the quest of its one hunt."""
+    hunt = hunts.get(m.name) if hunts is not None else None
+    if hunt is None or book is None:
+        return frozenset()
+    quest = book.quests.get(int(hunt.quest))
+    if quest is None or not classquest.outlevels_for_solo(m, quest):
+        return frozenset()
+    if now - hunt.since < classquest.OVERLEVEL_HELP_WAIT_MINUTES * 60:
+        return frozenset()
+    return frozenset({quest.id})
+
+
+def _outlevel_yield(m, move, book, hunts, now) -> tuple:
+    """(key, line) for a quest the member outlevels and has waited for long
+    enough (outlevel_waits): how far over it is, how long it waited since its
+    hunt stalled, and when it tries alone again."""
+    over = int(m.level) - int(book.quests[int(move.quest)].min_level)
+    waited = int((now - hunts.get(m.name).since) // 60)
+    line = (
+        "class ask: %s stops asking for %s: it is %d levels over the quest and "
+        "has waited %d minute(s) for help; it levels for %d minute(s), then "
+        "tries alone again"
+        % (
+            m.name,
+            move.title,
+            over,
+            waited,
+            _alone_again_minutes(m, move, hunts, now),
+        )
+    )
+    return (m.name, move.quest, "outlevel", move.blocker), line
 
 
 def _streak_yield(m, move, left, count, yeses) -> tuple:
