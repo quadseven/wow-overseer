@@ -185,6 +185,8 @@
 .nr-facts > div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 10px; }
 .nr-facts dt { color: var(--color-neutral-500); }
 .nr-facts dd { margin: 0; color: var(--color-neutral-200); overflow-wrap: anywhere; }
+/* The level 60 projection: one quiet line at the card's foot. */
+.nr-foot { margin: 0; font-size: var(--fs-1); overflow-wrap: anywhere; }
 
 .lad { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .lad-sum { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 4px; }

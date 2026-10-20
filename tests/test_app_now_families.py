@@ -257,6 +257,51 @@ class EachFamilyIsItsOwnCard(unittest.TestCase):
             self.assertNotIn("STALLED", by_fam[fam].all_text())
 
 
+# The agenda's stall line as the bridge sends it since #1257: it opens with
+# "STALLED:" and ends with the leader's own reading, which is also sent alone
+# as stall_blocker.
+BLOCKER = "Zug: walking to Razorfen Kraul, waiting for the mage to catch up."
+STALL_LINE = "STALLED: no quest, level or gear change for 2 hours. " + BLOCKER
+
+
+def stalled_card(**fields):
+    """Zug's card, stalled, with these agenda fields over the fixture's."""
+    zug = dict(agenda("Zug", stalled=True), **fields)
+    tree = Tree(render(["Zug"], {"Zug": zug}))
+    (card,) = [n for n in tree.root.walk() if "agenda" in n.classes]
+    return card
+
+
+@needs_node
+class AStalledFamilySaysWhyOnce(unittest.TestCase):
+    def test_stalled_is_said_once_by_the_tag(self):
+        card = stalled_card(stall_line=STALL_LINE, stall_blocker=BLOCKER)
+        self.assertEqual(card.all_text().count("STALLED"), 1)
+        (tag,) = [n for n in card.walk() if "agenda-tag" in n.classes]
+        self.assertEqual(tag.all_text(), "STALLED")
+
+    def test_the_sentence_keeps_the_rest_of_the_line_and_names_the_blocker(self):
+        card = stalled_card(stall_line=STALL_LINE, stall_blocker=BLOCKER)
+        (warn,) = [n for n in card.walk() if "warn" in n.classes]
+        self.assertEqual(
+            warn.all_text(),
+            "No quest, level or gear change for 2 hours. " + BLOCKER,
+        )
+
+    def test_a_blocker_the_line_does_not_carry_is_added(self):
+        card = stalled_card(
+            stall_line="STALLED: no quest, level or gear change for 2 hours.",
+            stall_blocker=BLOCKER,
+        )
+        (warn,) = [n for n in card.walk() if "warn" in n.classes]
+        self.assertTrue(warn.all_text().endswith(BLOCKER), warn.all_text())
+
+    def test_a_line_that_does_not_open_with_the_word_is_left_as_it_is(self):
+        card = stalled_card(stall_line="Held: STALLED: odd, but the realm's words.")
+        (warn,) = [n for n in card.walk() if "warn" in n.classes]
+        self.assertEqual(warn.all_text(), "Held: STALLED: odd, but the realm's words.")
+
+
 @needs_node
 class CardsStaySiblingsInEveryState(unittest.TestCase):
     def test_a_family_still_loading_is_a_sibling_too(self):

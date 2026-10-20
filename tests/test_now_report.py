@@ -1,7 +1,9 @@
 """The Now report is assembled from read-only guild and status reads."""
 
 import json
+import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -23,7 +25,7 @@ class NowReport(unittest.TestCase):
             script = """
 const M = await import(%s);
 const now = 200000;
-const got = M.reportFacts({guild: {count: 1, members: [{name: "MemberA"}], dungeons: [{place: "Wailing Caverns", floor: 22, ceiling: 32, runs: 3, cleared: 1}, {place: "Deadmines", floor: 17, ceiling: 26, runs: 4, cleared: 2, wiped: 2}]}, series: {level: [[1, 20], [86401, 21]], xp_to_level_60_by_member: {MemberA: 360000}, by_member: {MemberA: {xp_per_hour_24h: 10000, xp_hours_measured: 24}}}, stuck: {members: [{name: "MemberA", blocker: "bag room", since: now - 7200}]}, now});
+const got = M.reportFacts({guild: {count: 1, members: [{name: "MemberA"}], dungeons: [{place: "Wailing Caverns", floor: 22, ceiling: 32, runs: 3, cleared: 1}, {place: "Deadmines", floor: 17, ceiling: 26, runs: 4, cleared: 2, wiped: 2}]}, series: {level: [[1, 20], [86401, 21]], xp_to_level_60_by_member: {MemberA: 360000}, by_member: {MemberA: {xp_per_hour_24h: 10000, xp_hours_measured: 24}}, level_60_projection: {at: now + 36 * 3600, why: ""}}, stuck: {members: [{name: "MemberA", blocker: "bag room", since: now - 7200}]}, now});
 const unknownCount = M.reportFacts({guild: {members: [{name: "MemberA"}]}, series: {xp_to_level_60_by_member: {MemberA: 360000}, by_member: {MemberA: {xp_per_hour_24h: 10000, xp_hours_measured: 24}}}, now});
 console.log(JSON.stringify({got, unknownCount}));
 """ % json.dumps((app / "views/now/report.js").as_uri())
@@ -43,8 +45,102 @@ console.log(JSON.stringify({got, unknownCount}));
         )
         self.assertEqual(data["got"]["dungeons"][0]["clearsPerAttempt"], 0.5)
         self.assertEqual(data["got"]["topBlocker"]["memberHours"], 2)
-        self.assertIsNotNone(data["got"]["projectedAt"])
-        self.assertIsNone(data["unknownCount"]["projectedAt"])
+        # The projection is the series' own (level_60_projection, #1256),
+        # not a sum the page does: a bridge without the field gives none.
+        self.assertEqual(
+            data["got"]["projection"], {"at": 200000 + 36 * 3600, "why": ""}
+        )
+        self.assertIsNone(data["unknownCount"]["projection"])
+        self.assertNotIn("projectedAt", data["got"])
+
+
+def guild_report(series):
+    """report.js reportSection() for one guild whose series read is `series`,
+    under node, as markup. The clock is UTC so a date reads the same anywhere."""
+    with tempfile.TemporaryDirectory() as tmp:
+        app = pathlib.Path(tmp) / "app"
+        shutil.copytree(APP, app)
+        (app / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+        script = """
+const M = await import(%s);
+const reads = {
+  "/api/v2/guild?guild=cave": {data: {count: 1, now: 1790000000, members: [{name: "MemberA"}], dungeons: []}},
+  "/api/v2/series?guild=cave": {data: %s},
+  "/api/v2/stuck": {data: {members: []}},
+};
+const ctx = {get: (path) => reads[path] || {data: undefined, loading: true}};
+const out = M.reportSection(ctx, [{name: "Cave", slug: "cave"}]);
+console.log(JSON.stringify(String(out.s !== undefined ? out.s : out)));
+""" % (json.dumps((app / "views/now/report.js").as_uri()), json.dumps(series))
+        result = subprocess.run(
+            [shutil.which("node"), "--input-type=module", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={"PATH": os.environ.get("PATH", ""), "TZ": "UTC"},
+        )
+    if result.returncode != 0:
+        raise AssertionError(result.stderr)
+    return json.loads(result.stdout)
+
+
+def foot(markup):
+    """The text of the card's foot line, or None when the card has none."""
+    m = re.search(r'<p class="nr-foot muted">(.*?)</p>', markup, re.S)
+    return None if m is None else m.group(1)
+
+
+SERIES = {
+    "level": [[1, 20], [86401, 21]],
+    "xp_to_level_60_by_member": {"MemberA": 360000},
+    "by_member": {"MemberA": {"xp_per_hour_24h": 10000, "xp_hours_measured": 24}},
+}
+# 2026-11-02 12:00 UTC.
+NOV_2 = 1793620800
+
+
+@unittest.skipUnless(shutil.which("node"), "node is needed to run the app modules")
+class LevelSixtyFoot(unittest.TestCase):
+    """The Guild progress card ends with the series' level 60 projection
+    (/api/v2/series level_60_projection, #1256) as one muted line."""
+
+    def test_a_date_when_the_series_gives_one(self):
+        got = guild_report(dict(SERIES, level_60_projection={"at": NOV_2, "why": ""}))
+        self.assertEqual(foot(got), "Level 60 by Nov 2, 2026")
+
+    def test_the_why_when_there_is_no_date(self):
+        why = (
+            "Not measured: 1 member with no rate (MemberA: no level change on "
+            "record in the last 7 days, and one instant is not a rate)."
+        )
+        got = guild_report(dict(SERIES, level_60_projection={"at": None, "why": why}))
+        self.assertEqual(foot(got), "Level 60 | " + why)
+
+    def test_a_date_and_its_note_when_everyone_is_at_60(self):
+        got = guild_report(
+            dict(
+                SERIES,
+                level_60_projection={
+                    "at": NOV_2,
+                    "why": "Every member is at level 60.",
+                },
+            )
+        )
+        self.assertEqual(
+            foot(got), "Level 60 by Nov 2, 2026 | Every member is at level 60."
+        )
+
+    def test_an_older_bridge_without_the_field_shows_nothing(self):
+        got = guild_report(SERIES)
+        self.assertIsNone(foot(got))
+        self.assertNotIn("Level 60", got)
+        self.assertNotIn("Projection not measured", got)
+
+    def test_the_why_stays_text(self):
+        got = guild_report(
+            dict(SERIES, level_60_projection={"at": None, "why": "<b>x</b>"})
+        )
+        self.assertIn("&lt;b&gt;x&lt;/b&gt;", foot(got))
 
 
 def ladder(dungeons):
