@@ -3474,7 +3474,7 @@ def level_step(m, world, recent, cap):
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
     if choice.orb is not None:
         return level_orb_step(m, choice, why, recent, cap)
-    if choice.cross_to is not None or choice.ride_to is not None:
+    if choice.crosses:
         return level_cross_step(m, choice, why, recent)
     master = choice.master
     if guildlevel.there(m.map_id, m.x, m.y, master):

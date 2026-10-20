@@ -402,6 +402,12 @@ class Choice:
     ride_to: tuple | None = None
 
     @property
+    def crosses(self) -> bool:
+        """The member first takes a boat, zeppelin or orb (`cross_to`) or a
+        same-map ride (`ride_to`) on its way to `hub`."""
+        return self.cross_to is not None or self.ride_to is not None
+
+    @property
     def place(self) -> str:
         if self.hub is None:
             return ""
