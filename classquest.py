@@ -328,6 +328,12 @@ OWED_HOURS = 6
 # answers a refusal in the row's result: the bridge keeps no catalogue of its
 # own. Overseer.Cross.Enable (default 0) and Overseer.Cross.AtOnce bound it.
 CROSSING_VERB = "cross-to-map"
+# The same-map ride (the Undercity to Grom'gol zeppelin never leaves map 0, so
+# `cross-to-map` has nothing to name): `ride-to-stop map:<id> x:<x> y:<y>`, any
+# point of the stop to reach. The module walks to the berth nearest the member,
+# rides, and walks off at the stop nearest the point, as a crossing does, and
+# answers in the same result.
+RIDE_VERB = "ride-to-stop"
 # The source action of a crossing row (guildjobs.source_for), apart from the
 # class quest's walks so that none of their clocks read it.
 CROSS_ACTION = ACTION + "-cross"
@@ -1416,11 +1422,23 @@ def _across(member, spawns) -> str:
 
 
 def is_cross_row(command) -> bool:
-    return str(command or "").split(" ", 1)[0] == CROSSING_VERB
+    return str(command or "").split(" ", 1)[0] in (CROSSING_VERB, RIDE_VERB)
 
 
 def cross_command(map_id) -> str:
     return "%s map:%d" % (CROSSING_VERB, int(map_id))
+
+
+def ride_command(map_id, x, y) -> str:
+    """The `ride-to-stop` row to the stop nearest (x, y) on `map_id`. The module
+    takes a plain decimal of at most nine characters (no exponent, no trailing
+    dot), so each coordinate is written to a tenth of a yard."""
+    return "%s map:%d x:%s y:%s" % (RIDE_VERB, int(map_id), _tenth(x), _tenth(y))
+
+
+def _tenth(value) -> str:
+    # + 0.0 turns a rounded -0.0 into 0.0.
+    return "%.1f" % (round(float(value), 1) + 0.0)
 
 
 def _block_spawns(quest: Quest, member) -> list:

@@ -726,7 +726,8 @@ class Recent:
     entry: int = 0
     kills: int = 0
     loot: int = 0
-    # For a `cross-to-map map:<id>` row, the map id it asked for (0 otherwise).
+    # For a `cross-to-map map:<id>` or `ride-to-stop map:<id> ...` row, the map
+    # id it asked for (0 otherwise).
     dest: int = 0
     # Original command text, needed to distinguish an accepted battleground
     # queue from other PvP work.
@@ -3473,7 +3474,7 @@ def level_step(m, world, recent, cap):
         return None, "", guildlevel.refused_note(m.name, m.level, why, choice)
     if choice.orb is not None:
         return level_orb_step(m, choice, why, recent, cap)
-    if choice.cross_to is not None:
+    if choice.crosses:
         return level_cross_step(m, choice, why, recent)
     master = choice.master
     if guildlevel.there(m.map_id, m.x, m.y, master):
@@ -3601,12 +3602,22 @@ def level_cross_step(m, choice, why, recent):
     across the water, from map 530 or from the other continent
     (guildlevel.Choice.cross_to): one `cross-to-map map:<id>` row, no walk
     (the module walks to the berth, rides the boat or zeppelin and walks off at
-    the landing). While the member's last crossing
+    the landing). A hub past the other side's ground on the member's own map
+    (guildlevel.Choice.ride_to) is one `ride-to-stop` row instead, held and
+    walled by its map the same way. While the member's last crossing
     is young (crossing_cooling) it is held with no row, saying where it goes,
     so no other job is written over the crossing; a crossing the module
     refused for good (class_walls) is named in the notes and not asked again
     until classquest.CROSS_WALL_MINUTES have passed."""
-    wall = class_walls(m.name, recent).get(int(choice.cross_to))
+    if choice.ride_to is not None:
+        to_map = int(choice.ride_to[0])
+        command = classquest.ride_command(*choice.ride_to)
+        goal = choice.place
+    else:
+        to_map = int(choice.cross_to)
+        command = classquest.cross_command(to_map)
+        goal = classquest.CONTINENTS.get(to_map, "")
+    wall = class_walls(m.name, recent).get(to_map)
     if wall:
         return None, "", guildlevel.walled_note(m.name, m.level, why, choice, wall)
     said = guildlevel.crossing_said(m.name, m.level, why, choice)
@@ -3615,17 +3626,17 @@ def level_cross_step(m, choice, why, recent):
     step = guildcorps.Step(
         m.name,
         guildlevel.ACTION,
-        int(choice.cross_to),
+        to_map,
         said,
         rows=(
             guildcorps.Row(
                 "job",
-                classquest.cross_command(choice.cross_to),
+                command,
                 "",
                 source_for(guildlevel.CROSS_ACTION, m.name),
             ),
         ),
-        goal=classquest.CONTINENTS.get(int(choice.cross_to), ""),
+        goal=goal,
     )
     return step, said, ""
 
@@ -5916,9 +5927,12 @@ def _spawn_of(command) -> int:
 
 
 def _cross_dest_of(command) -> int:
-    """The map id of a `cross-to-map map:<id>` command, else 0."""
-    found = re.match(r"cross-to-map map:(\d+)\s*$", str(command or ""))
-    return int(found.group(1)) if found else 0
+    """The map id of a `cross-to-map map:<id>` or `ride-to-stop map:<id> ...`
+    command, else 0."""
+    found = re.match(
+        r"(?:cross-to-map map:(\d+)\s*$|ride-to-stop map:(\d+) )", str(command or "")
+    )
+    return int(found.group(1) or found.group(2)) if found else 0
 
 
 def _trainer_skill_id(command) -> int | None:
