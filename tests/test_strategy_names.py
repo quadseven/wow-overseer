@@ -64,7 +64,7 @@ def _bridge_commands() -> set:
     commands.update((goals.LIFE_STRATEGY, goals.GRIND_OFF, goals.RETREAT_STRATEGY))
     flags = ("leads", "aimed", "travelling", "gathering", "in_town", "campaign")
     for values in itertools.product((False, True), repeat=len(flags)):
-        commands.update(goals.life_strategies(**dict(zip(flags, values))))
+        commands.update(goals.life_strategies(**dict(zip(flags, values, strict=True))))
     # The vocabulary the inner voice may pick verbatim is sent as-is too.
     commands.update(c for c in voice.VOCABULARY if c.partition(" ")[0] in ENGINES)
     return commands
