@@ -177,6 +177,63 @@ class TheSeries(unittest.TestCase):
             out["by_member"]["B"], {"xp_per_hour_24h": None, "xp_hours_measured": 0}
         )
 
+    # The Now page, 2026-10-20: "Level 60 projection: not measured | complete
+    # member XP rates not measured" on both guilds. Cave's only gap was a
+    # member already at 60; Bonkers' two had no level change on record.
+    def _two_measured_and(self, *extra):
+        chars = [
+            {"guid": 1, "name": "A", "level": 11, "xp": 200},
+            {"guid": 3, "name": "C", "level": 11, "xp": 200},
+            *extra,
+        ]
+        events = [
+            {"guid": g, "old_level": 9, "new_level": 10, "at": NOW - 30 * H}
+            for g in (1, 3)
+        ] + [
+            {"guid": g, "old_level": 10, "new_level": 11, "at": NOW - 5 * H}
+            for g in (1, 3)
+        ]
+        return series.guild_series("Cave", chars, events, self.TABLE, NOW)
+
+    def test_a_member_at_60_needs_no_rate_for_the_projection(self):
+        out = self._two_measured_and({"guid": 2, "name": "B", "level": 60, "xp": 0})
+        self.assertIsNone(out["by_member"]["B"]["xp_per_hour_24h"])
+        got = out["level_60_projection"]
+        # A and C: 59000 - 10200 left each, at 40 an hour each.
+        self.assertEqual((got["remaining_xp"], got["xp_per_hour"]), (97600, 80))
+        self.assertEqual(got["at"], int(NOW + 97600 / 80 * H))
+        self.assertEqual((got["members"], got["unmeasured"], got["why"]), (2, {}, ""))
+
+    def test_a_member_with_no_rate_is_named_with_why(self):
+        out = self._two_measured_and(
+            {"guid": 4, "name": "Selfie", "level": 12, "xp": 0}
+        )
+        got = out["level_60_projection"]
+        self.assertIsNone(got["at"])
+        self.assertEqual(["Selfie"], list(got["unmeasured"]))
+        self.assertIn("no level change on record in the last 8 days", got["why"])
+        self.assertTrue(got["why"].startswith("Not measured: 1 member with no rate"))
+
+    def test_every_member_at_60_is_said(self):
+        out = series.guild_series(
+            "Cave",
+            [{"guid": 2, "name": "B", "level": 60, "xp": 0}],
+            [],
+            self.TABLE,
+            NOW,
+        )
+        got = out["level_60_projection"]
+        self.assertEqual((got["at"], got["why"]), (NOW, "Every member is at level 60."))
+
+    def test_no_experience_gained_gives_no_date(self):
+        chars = [{"guid": 1, "name": "A", "level": 11, "xp": 0}]
+        events = [{"guid": 1, "old_level": 10, "new_level": 11, "at": NOW - 30 * H}]
+        got = series.guild_series("Cave", chars, events, self.TABLE, NOW)[
+            "level_60_projection"
+        ]
+        self.assertIsNone(got["at"])
+        self.assertIn("gained no experience", got["why"])
+
     def _answers(self):
         return {
             series._NOW_SQL: [{"now": NOW}],

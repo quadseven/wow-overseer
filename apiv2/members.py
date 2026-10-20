@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import re
 
+import agenda
 import nowstatus
 import raidteams
 import situation
@@ -97,6 +98,13 @@ JOBS_SQL = (
     "AND created_at > NOW() - INTERVAL %s MINUTE ORDER BY id DESC"
 )
 JOB_MINUTES = 30
+# When each family member last made progress: the Now page's STALLED reading
+# (agenda.MOVEMENT_KINDS, a quest, level or gear change; deaths are not).
+MOVED_SQL = (
+    "SELECT character_name AS name, UNIX_TIMESTAMP(MAX(last_seen)) AS at "
+    "FROM overseer_event WHERE character_name IN ({holes}) "
+    "AND kind IN ({kinds}) GROUP BY character_name"
+)
 ASKS_SQL = (
     "SELECT asker, target, target_label, reason, state, UNIX_TIMESTAMP(created_at) AS at, "
     "(SELECT COUNT(*) FROM overseer_guild_answer an "
@@ -109,7 +117,10 @@ BASIS = (
     "Stuck means one of two records the bridge keeps: a class quest it has "
     "asked the guild for help with in the last two hours (first seen at the "
     "first ask of that run), or a reason to wait it has logged for 30 minutes "
-    "or more (first seen when the reason was first logged). A member that only "
+    "or more (first seen when the reason was first logged). A family's leader "
+    "is also stuck when the family is STALLED on the Now page (no quest, level "
+    "or gear change for 20 minutes; first seen when it last made one), named by "
+    "what the leader is doing and waiting for. A member that only "
     "follows is stuck when its leader is (first seen when the leader's reason "
     "was) or when it is left far behind. Ghost is a released "
     "spirit, read from the last minute's snapshot or, offline, the last save."
@@ -131,6 +142,7 @@ def fetch(ctx) -> dict:
         "snaps": [],
         "asks": [],
         "jobs": [],
+        "moved": {},
         "now_at": 0,
     }
     if names:
@@ -172,6 +184,12 @@ def _read(ctx, names: list) -> dict:
         (*everyone, JOB_MINUTES),
         what="overseer_command",
     )
+    kinds = sorted(agenda.MOVEMENT_KINDS)
+    moved = rd.rows(
+        MOVED_SQL.format(holes=holes(len(names)), kinds=holes(len(kinds))),
+        (*names, *kinds),
+        what="overseer_event",
+    )
     clock = rd.must("SELECT UNIX_TIMESTAMP() AS now_at")
     now_at = int(clock[0]["now_at"]) if clock else 0
     return {
@@ -181,6 +199,7 @@ def _read(ctx, names: list) -> dict:
         "snaps": snaps,
         "asks": asks,
         "jobs": jobs,
+        "moved": {r["name"]: int(r["at"]) for r in moved or () if r.get("at")},
         "now_at": now_at,
     }
 
@@ -508,6 +527,43 @@ def _with_stuck(m: dict, found: dict | None) -> dict:
     return m
 
 
+def stall_entry(leader: dict, moved_at: int | None, now_at: int) -> dict | None:
+    """The stuck entry for a family that is STALLED (agenda.stalled: no quest,
+    level or gear change for agenda.STALL_AFTER), on its leader, or None.
+
+    The Now page called Grug's family STALLED while its realm report said "No
+    current blocker recorded": a stall was not a stuck record, and a hold had
+    to stand 30 minutes before it was one. So the stall is its own record,
+    since the family last moved, named by the leader's own reading
+    (agenda.stall_blocker), the same sentence the agenda's STALLED line ends
+    with. A dead or released leader is not stuck, as for every other record.
+    """
+    if not moved_at or not now_at or leader["life"] in ("dead", "ghost"):
+        return None
+    still = now_at - int(moved_at)
+    if still <= agenda.STALL_AFTER.total_seconds():
+        return None
+    return {
+        "step": leader["doing"],
+        "blocker": "No quest, level or gear change for the family for %s. %s"
+        % (agenda.span(still), agenda.stall_blocker(leader["name"], leader)),
+        "since": int(moved_at),
+        "kind": "stall",
+    }
+
+
+def _stalled_leaders(families, members, found, moved: dict, now_at: int) -> None:
+    """A stalled family's leader is stuck on the stall, unless a record of
+    its own already holds it (a class quest ask or a long hold)."""
+    by_name = {m["name"]: m for m in members}
+    for names in (families or {}).values():
+        leader = by_name.get(names[0]) if names else None
+        if leader is None or found.get(leader["name"]) is not None:
+            continue
+        moved_at = max((moved.get(n) or 0 for n in names), default=0)
+        found[leader["name"]] = stall_entry(leader, moved_at or None, now_at)
+
+
 def _order(families: dict, guild_of: dict) -> list:
     """The families first, lead first, then the guilds by name."""
     names = [n for group in families.values() for n in group]
@@ -528,12 +584,22 @@ def _lookups(families, chars, snaps, facts, now_at, jobs, readings) -> dict:
 
 
 def build(
-    families, guild, chars, snaps, asks, facts, now_at, jobs=(), readings=None
+    families,
+    guild,
+    chars,
+    snaps,
+    asks,
+    facts,
+    now_at,
+    jobs=(),
+    readings=None,
+    moved=None,
 ) -> dict:
     """The roster: one row per member, family first, with its stuck reading.
 
     `readings` is presence.of's answer for every member; `snaps` is where the
-    online ones stand."""
+    online ones stand; `moved` is name -> when it last made progress (Unix
+    seconds), for a stalled family (stall_entry)."""
     families = families or {}
     rows = _lookups(families, chars, snaps, facts, now_at, jobs, readings)
     guild_of = {r["name"]: r for r in guild or ()}
@@ -548,6 +614,7 @@ def build(
         if followed and not _asking(found[name]):
             follows[name] = followed
         members.append(m)
+    _stalled_leaders(families, members, found, moved or {}, rows["now_at"])
     # Leaders first: a follower's reading is its leader's (follower_blocker).
     _resolve_followers(members, found, follows)
     members = [_with_stuck(m, found[m["name"]]) for m in members]
@@ -683,6 +750,7 @@ def _build_roster(ctx) -> dict:
         f["now_at"],
         f["jobs"],
         f["readings"],
+        f.get("moved"),
     )
 
 

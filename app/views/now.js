@@ -60,15 +60,27 @@ function ghostChip(gh) {
   return chip("ghost", gh ? plural(gh.length, "ghost") : "Ghosts not measured", "#/members?ghost=1", gh ? gh.length : null);
 }
 
-function chips(ctx, agendas) {
+// What needs the operator, read once per draw: the chips and the Attention
+// list say the same counts because they are handed the same values. Both
+// come from one /api/v2/stuck read and one /api/v2/roster read of the api.js
+// cache, and a draw replaces the whole page, so no timer can refresh one of
+// them without the other.
+function needs(ctx) {
+  return {
+    stuck: D.stuck(ctx.get("/api/v2/stuck")),
+    ghosts: rosterModel(ctx.get("/api/v2/roster")).ghosts(),
+  };
+}
+
+function chips(ctx, agendas, need) {
   const gr = guildRuns(ctx.get("/api/guildruns"));
   const runs = gr.insideNow();
   const runsHref = "#/guilds/" + firstGuild() + "/runs";
   const fresh = gr.newSince(fromClock(ctx.previousVisit));
   const list = [
     stalledChip(agendas),
-    stuckChip(D.stuck(ctx.get("/api/v2/stuck"))),
-    ghostChip(rosterModel(ctx.get("/api/v2/roster")).ghosts()),
+    stuckChip(need.stuck),
+    ghostChip(need.ghosts),
     runs ? chip("inside", plural(runs.length, "run") + " inside", runs.length ? "#/runs/" + runs[0].id : runsHref, runs.length)
       : chip("inside", "Runs inside not measured", runsHref, null),
   ];
@@ -111,7 +123,7 @@ function agendaCard(fam, read) {
 <span class="agenda-head">${a.headline || "No headline reported"}</span>
 ${a.queue && a.queue.line ? html`<span class="agenda-line">${a.queue.line}</span>` : ""}
 ${detail.length ? html`<span class="agenda-line">${detail.join(" ")}</span>` : ""}
-<span class="agenda-foot">${a.stalled ? html`<span class="warn">${a.stall_line || "No progress since the walk began."}</span>` : ""}<span class="muted">last moved ${moved}</span></span>
+<span class="agenda-foot">${a.stalled ? html`<span class="warn">${D.stallText(a)}</span>` : ""}<span class="muted">last moved ${moved}</span></span>
 </a>`;
 }
 
@@ -201,10 +213,14 @@ function runsBlock(ctx) {
   return html`<div class="fold-col"><h2 class="kicker">Guild runs inside</h2>${body}</div>`;
 }
 
-function attention(ctx) {
-  const st = D.stuck(ctx.get("/api/v2/stuck"));
-  const gh = rosterModel(ctx.get("/api/v2/roster")).ghosts();
-  const stuckText = st ? plural(st.list.length, "member") + " stuck" : html`Stuck ${notMeasured()}`;
+function attention(need) {
+  const st = need.stuck;
+  const gh = need.ghosts;
+  // A stalled family's leader is on the stuck list (kind "stall"): counted
+  // with the rest, and said, so "1 family stalled" above and "3 members
+  // stuck" here are read as one leader, not two problems.
+  const stalls = st && st.stalls ? " (" + (st.stalls === 1 ? "1 leads a stalled family" : st.stalls + " lead stalled families") + ")" : "";
+  const stuckText = st ? plural(st.list.length, "member") + " stuck" + stalls : html`Stuck ${notMeasured()}`;
   const longest = st && st.list.length ? (st.longest === null ? "since not measured" : "longest " + duration(st.longest)) : "";
   const ghostText = gh ? plural(gh.length, "ghost") + (gh.length ? ": " + gh.map((g) => g.name).join(", ") : "") : html`Ghosts ${notMeasured()}`;
   return html`<h2 class="kicker">Attention</h2><div class="card rows">
@@ -241,10 +257,10 @@ function lastRoll(ctx) {
   return html`<div class="fold-col"><h2 class="kicker">Last roll</h2>${card}<div class="fold-btns"><a href="#/now/map" class="btn btn-secondary"><i class="ph ph-map-trifold" aria-hidden="true"></i>World map</a><a href="#/now/server" class="btn btn-secondary"><i class="ph ph-gauge" aria-hidden="true"></i>Server</a></div></div>`;
 }
 
-function fold(ctx, agendas) {
+function fold(ctx, agendas, need) {
   const open = foldOpen === null ? !ctx.isPhone : foldOpen;
   return html`<details class="nfold"${open ? raw(" open") : ""}><summary><i class="ph ph-caret-down" aria-hidden="true"></i>Runs, attention, campaigns, last roll</summary>
-<div class="fold-grid">${runsBlock(ctx)}<div class="fold-col">${attention(ctx)}${campaigns(agendas)}</div>${lastRoll(ctx)}</div>
+<div class="fold-grid">${runsBlock(ctx)}<div class="fold-col">${attention(need)}${campaigns(agendas)}</div>${lastRoll(ctx)}</div>
 </details>`;
 }
 
@@ -257,10 +273,11 @@ export default {
   title: () => "Now",
   render(ctx) {
     const agendas = D.familyKeys().map((f) => ctx.get(D.agendaPath(f)));
+    const need = needs(ctx);
     return html`<header class="page-head now-head"><h1>Now</h1>${realmLine(ctx)}</header>
-${chips(ctx, agendas)}
+${chips(ctx, agendas, need)}
 ${familiesSection(ctx, agendas)}
-${fold(ctx, agendas)}
+${fold(ctx, agendas, need)}
 ${reportSection(ctx, allGuilds())}`;
   },
   after(main, ctx) {

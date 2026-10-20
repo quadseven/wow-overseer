@@ -46,15 +46,31 @@ WHAT THIS DECIDES, one family at a time (`step`):
                  his family, its training stop walks him to his trainer to buy
                  the recipe (guildjobs.recipes_due writes that learn errand,
                  #769), and he sits out again the pass the recipe is held.
-  when it ends   the order is removed, the crafting goal is met, or, between
-                 runs, the guest is no longer free (offline, in a guild run,
-                 dead, inside another instance, gone from the guild or out of
-                 the door's band). Grouped or in a fight is not a reason: the
-                 guest is grouped with the family. A row with no guest ends
-                 only with the order, the goal, or a release below.
+  when it ends   the order is removed, the crafting goal is met, a release
+                 below, or the crafting turn is over (`turn_over`).
+  a guest lost   between runs, a guest that is no longer free (offline, in a
+                 guild run, dead, inside another instance, gone from the guild
+                 or out of the door's band) gives the seat back and the row
+                 stays with no guest (`_guest_lost`): the member keeps sitting
+                 out and the family runs short-handed until another guildmate
+                 can take the seat. Grouped or in a fight is not a reason: the
+                 guest is grouped with the family. Ending the row there sent
+                 the member back to its family for one pass and out again on
+                 the next: on wow-dev, 2026-10-18 to 2026-10-20, Og "rejoined"
+                 Grug's family 19 times and 16 of those lasted one minute.
   a release      the member's craft cannot move (`walled`) or it has too
                  little to craft with (`starved`, wow-overseer#47): it rejoins
                  its family, between runs only (`waits_for_the_run`).
+  turns          sitting out is bounded and alternates with the family's runs
+                 (`Turn`): a crafting turn lasts CRAFT_TURN_SECONDS, then the
+                 member rejoins its family (between runs only) for a family
+                 turn of FAMILY_TURN_SECONDS, in which it is not sat out again,
+                 whatever ends the row. Before this, the only end was the
+                 crafting goal (tailoring 300), so on wow-dev Og sat out Grug's
+                 family's runs from 2026-10-05 on: 32 of the 34 hours the log
+                 archive holds (2026-10-18 to 2026-10-20) on job='craft', for
+                 tailoring 125 to 128. The operator, 2026-10-20: a member
+                 should go between dungeons and crafting.
 
 Never mid-run: while the family is inside a dungeon the row stands as it is,
 save for the order removed or changed, or the goal met.
@@ -119,6 +135,25 @@ DELETE_SQL = "DELETE FROM overseer_family_standin WHERE family = %s"
 
 # Actions a Step carries.
 NONE, KEEP, SEAT, CLEAR = "none", "keep", "seat", "clear"
+
+# THE TURNS. A crafting turn is about one dungeon run long, so the member
+# sits out about one run and runs the next; the family turn is as long, so it
+# is a real run with the family and not a pass. Both are wall time, kept by
+# the bridge across restarts (its memo store), because a turn that a restart
+# began again is the unbounded sit-out this replaces.
+CRAFT, FAMILY = "craft", "family"
+CRAFT_TURN_SECONDS = 60 * 60
+FAMILY_TURN_SECONDS = 60 * 60
+
+
+@dataclass(frozen=True)
+class Turn:
+    """Whose turn it is in one family: `out_name` crafting (CRAFT) or back
+    with its family (FAMILY), since `since` (Unix seconds)."""
+
+    out_name: str
+    phase: str
+    since: float
 
 
 def orders(environ=None) -> dict:
@@ -391,6 +426,91 @@ class Facts:
     mid_run: bool = False
     # The family's current row, or None.
     current: Seat | None = None
+    # The family's turn as the bridge last recorded it, or None, and the clock
+    # it is read against (Unix seconds). With no clock turns are not judged.
+    turn: Turn | None = None
+    now: float | None = None
+
+
+def _minutes(seconds: float) -> str:
+    return "%d minute(s)" % max(0, int(seconds // 60))
+
+
+def _turn(facts: Facts) -> Turn | None:
+    """The recorded turn when it is the ordered member's and a clock is given."""
+    turn = facts.turn
+    if facts.now is None or turn is None or turn.out_name != facts.ordered:
+        return None
+    return turn
+
+
+def turn_over(facts: Facts) -> str:
+    """Why the ordered member's crafting turn is over, or "" while it lasts."""
+    turn = _turn(facts)
+    if turn is None or turn.phase != CRAFT:
+        return ""
+    spent = facts.now - turn.since
+    if spent < CRAFT_TURN_SECONDS:
+        return ""
+    return (
+        "%s has sat out to craft for %s, so it runs with its family for the "
+        "next %s before it crafts again"
+        % (facts.ordered, _minutes(spent), _minutes(FAMILY_TURN_SECONDS))
+    )
+
+
+def family_turn(facts: Facts) -> str:
+    """Why the ordered member stays with its family now (its family turn has
+    not run out), or ""."""
+    turn = _turn(facts)
+    if turn is None or turn.phase != FAMILY:
+        return ""
+    left = FAMILY_TURN_SECONDS - (facts.now - turn.since)
+    if left <= 0:
+        return ""
+    return "%s runs with its family for %s more before its next crafting turn" % (
+        facts.ordered,
+        _minutes(left + 59),
+    )
+
+
+def next_turn(facts: Facts, step: "Step") -> Turn | None:
+    """The turn to record after `step`, or None to leave the record as it is.
+
+    A sit-out that begins (SEAT with no row before it) begins a crafting turn;
+    a new guest in a standing row keeps the turn it has. A row that ends
+    (CLEAR) begins the member's family turn, whatever ended it, crafting turn
+    over or not: a release or a removed order ends the crafting turn too. Only
+    a family turn still running is kept, so a row cleared on a stale one
+    (its record from an earlier turn) begins a full family turn. A standing
+    row with no turn recorded (one written before turns) starts its turn now.
+    """
+    if facts.now is None:
+        return None
+    turn = _turn(facts)
+    current = facts.current
+    if step.action == SEAT and step.seat is not None:
+        if current is not None and turn is not None and turn.phase == CRAFT:
+            return None
+        return Turn(step.seat.out_name, CRAFT, facts.now)
+    if step.action == CLEAR and current is not None:
+        held = facts.turn
+        if (
+            held is not None
+            and held.out_name == current.out_name
+            and held.phase == FAMILY
+            and facts.now - held.since < FAMILY_TURN_SECONDS
+        ):
+            return None
+        return Turn(current.out_name, FAMILY, facts.now)
+    if (
+        step.action == KEEP
+        and current is not None
+        and current.out_name == facts.ordered
+        and turn is None
+    ):
+        return Turn(facts.ordered, CRAFT, facts.now)
+    return None
 
 
 def sits_out(facts: Facts) -> str:
@@ -451,7 +571,16 @@ def step(facts: Facts) -> Step:
     """What to do with this family's stand-in row this pass."""
     current = facts.current
     held = _held_in(facts)
-    why = held or released(facts)
+    # A crafting turn that is over ends the row like a release, between runs
+    # only; with no row of his it says nothing (a stale record never keeps a
+    # member from sitting out). A family turn keeps a new row from being made.
+    mine = current is not None and current.out_name == facts.ordered
+    why = (
+        held
+        or released(facts)
+        or (turn_over(facts) if mine else "")
+        or family_turn(facts)
+    )
     if current is not None and current.out_name != facts.ordered and facts.ordered:
         why = why or "the order now names %s, not %s" % (
             facts.ordered,
@@ -588,14 +717,35 @@ def _fill_or_keep(facts: Facts, current: Seat, seat: str) -> Step:
     return Step(KEEP, "%s sits out with no guest" % current.out_name)
 
 
+def _guest_lost(facts: Facts, current: Seat, why: str) -> Step:
+    """The guest gives the seat back and the member keeps sitting out with no
+    guest (the operator's no-guest rule, 2026-10-05); `_fill_or_keep` seats
+    another guildmate between runs once one can take it. The row is not
+    cleared: that sent the member back to its family for one pass and out
+    again on the next, writing two job orders for nothing."""
+    reason = (
+        short_handed_reason(facts)
+        if facts.door is not None
+        else "%s sits out with no guest" % current.out_name
+    )
+    return Step(
+        SEAT,
+        "%s, so %s sits out with no guest until another guildmate can take the "
+        "%s seat" % (why, current.out_name, current.seat),
+        Seat(current.family, current.out_name, "", current.seat, reason),
+    )
+
+
 def _keep_or_clear(facts: Facts, current: Seat, seat: str) -> Step:
-    """The seated guest stays unless, between runs, it is no longer free."""
+    """The seated guest stays unless, between runs, it is no longer free; then
+    the seat is emptied (`_guest_lost`)."""
     if facts.mid_run:
         return Step(KEEP, "the family is inside; %s keeps the seat" % current.in_name)
     guest = next((m for m in facts.candidates if m.name == current.in_name), None)
     if guest is None:
-        return Step(
-            CLEAR,
+        return _guest_lost(
+            facts,
+            current,
             "%s is no longer in the world with %s"
             % (current.in_name, facts.guild or "the guild"),
         )
@@ -608,7 +758,9 @@ def _keep_or_clear(facts: Facts, current: Seat, seat: str) -> Step:
         facts.owed,
     )
     if why not in KEEPS_SEAT:
-        return Step(CLEAR, "%s is no longer free: %s" % (current.in_name, why))
+        return _guest_lost(
+            facts, current, "%s is no longer free: %s" % (current.in_name, why)
+        )
     if facts.door is not None:
         why = unfit(
             guest,
@@ -619,5 +771,7 @@ def _keep_or_clear(facts: Facts, current: Seat, seat: str) -> Step:
             facts.guild,
         )
         if why:
-            return Step(CLEAR, "%s no longer fits: %s" % (current.in_name, why))
+            return _guest_lost(
+                facts, current, "%s no longer fits: %s" % (current.in_name, why)
+            )
     return Step(KEEP, "%s keeps the %s seat" % (current.in_name, current.seat))

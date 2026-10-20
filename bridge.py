@@ -19760,6 +19760,16 @@ class Bridge(discord.Client):
         doors = {d.keyword: d for d in guildrun.doors(gfacts["finder_floors"])}
         candidates = tuple(m for m in map(guildrun.member_from_row, gfacts["rows"]) if m)
         seated = dict(rows)
+        # THE TURNS (standin.Turn), from the memo store so a restart does not
+        # begin a crafting turn again; the clock is wall time for the same
+        # reason.
+        try:
+            turns = await asyncio.to_thread(_fetch_standin_turns)
+        except Exception:
+            # No turns read is a pass with no turn judged, never a lost pass.
+            log.exception("standin: the turns could not be read; none is judged this pass")
+            turns = {}
+        now = time.time()
         for key in sorted(set(asked) | set(rows)):
             # In a guild run, or the guest of another family (this pass's
             # seats included); never busy by its own family's row.
@@ -19769,8 +19779,12 @@ class Bridge(discord.Client):
                 facts = await self._standin_facts(
                     key, asked.get(key, ""), rows.get(key), pending.get(key) or [],
                     fams.get(key), dict(gfacts, busy=busy), doors, candidates)
+                facts = dataclasses.replace(facts, turn=turns.get(key), now=now)
                 step = standin.step(facts)
                 await asyncio.to_thread(_write_standin, key, step)
+                turn = standin.next_turn(facts, step)
+                if turn is not None:
+                    await self._note_turn(key, turn)
             except Exception:
                 log.exception("standin: the pass for %s failed; its row stands",
                               campaignqueue._family(key))
@@ -19792,6 +19806,19 @@ class Bridge(discord.Client):
             if key in seated and not facts.mid_run:
                 await asyncio.to_thread(_standin_crafts, seated[key].out_name, key)
         return seated
+
+    async def _note_turn(self, key: str, turn) -> None:
+        """Record a family's new turn. A failed write is logged and the pass
+        goes on: the row is already written, and the next pass judges by the
+        turn last recorded."""
+        try:
+            await asyncio.to_thread(_note_standin_turn, key, turn)
+        except Exception:
+            log.exception("standin: %s's %s turn could not be recorded",
+                          turn.out_name, turn.phase)
+            return
+        log.info("standin: %s: %s's %s turn begins", campaignqueue._family(key),
+                 turn.out_name, turn.phase)
 
     async def _standin_out_facts(self, key: str, leader: str, ordered: str,
                                  roster: tuple) -> tuple:
@@ -24102,6 +24129,31 @@ def _write_standin(family: str, step) -> None:
         cur.execute(standin.DELETE_SQL, (family[:standin.NAME_WIDTH],))
         if step.action == standin.SEAT:
             cur.execute(standin.INSERT_SQL, step.seat.args())
+
+
+# THE STAND-IN TURNS (standin.Turn), one memo per family: whose turn it is and
+# since when, in wall time, so a restart neither begins a crafting turn again
+# nor forgets a family turn. A week outlives any turn; the next turn rewrites it.
+STANDIN_TURN_MEMO = "standin_turn"
+STANDIN_TURN_MEMO_SECONDS = 7 * 24 * 3600
+
+
+def _fetch_standin_turns() -> dict:
+    """family -> standin.Turn, from the memo store; {} when none is readable."""
+    turns = {}
+    for family, (value, since) in _memo_read(STANDIN_TURN_MEMO).items():
+        if not isinstance(value, dict):
+            continue
+        out_name, phase = str(value.get("out") or ""), str(value.get("phase") or "")
+        if out_name and phase in (standin.CRAFT, standin.FAMILY):
+            turns[family] = standin.Turn(out_name, phase, float(since))
+    return turns
+
+
+def _note_standin_turn(family: str, turn) -> None:
+    """Record `turn` as `family`'s current turn."""
+    _memo_upsert(STANDIN_TURN_MEMO, family, {"out": turn.out_name, "phase": turn.phase},
+                 turn.since, turn.since + STANDIN_TURN_MEMO_SECONDS)
 
 
 # name -> when the stand-in pass last wrote its craft job or its rejoin, so a

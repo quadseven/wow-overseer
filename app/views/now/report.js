@@ -1,27 +1,29 @@
 // Guild progress at the foot of Now: each guild's dungeon ladder, its top
-// blocker and its level 60 projection, read from /api/v2/guild,
+// blocker and, in the card's foot, its level 60 projection, read from /api/v2/guild,
 // /api/v2/series and /api/v2/stuck. Nothing here is guessed: a value the
 // realm does not report is said quietly as not measured.
 
 import { html, notMeasured, plural } from "../../ui.js";
 import { ageOf } from "../../models/time.js";
 
+// The guild series' own level 60 answer (/api/v2/series level_60_projection,
+// #1256): {at} the date at the members' measured rates (unix seconds), or
+// {why} naming each member with no rate. The page used to do this sum itself
+// and could only say "not measured"; the series now does it and says who and
+// why. null when the bridge predates the field, so the card says nothing.
+export function projection(series) {
+  const p = series && series.level_60_projection;
+  if (!p || typeof p !== "object") return null;
+  const at = p.at === null || p.at === undefined || !Number.isFinite(Number(p.at)) ? null : Number(p.at);
+  const why = typeof p.why === "string" ? p.why.trim() : "";
+  if (at === null && !why) return null;
+  return { at, why };
+}
+
 export function reportFacts({ guild, series, stuck, now = Date.now() / 1000 }) {
   const levels = series && series.level || [];
   const first = levels.length ? Number(levels[0][1]) : null;
   const last = levels.length ? Number(levels[levels.length - 1][1]) : null;
-  const xp = series && series.xp_to_level_60_by_member || {};
-  const names = Object.keys(xp);
-  const byMember = series && series.by_member || {};
-  const remaining = names.map((name) => xp[name]);
-  const rates = names.map((name) => byMember[name] || {});
-  const memberCount = Number(guild && guild.count);
-  const complete = Number.isFinite(memberCount) && memberCount > 0 && names.length === memberCount
-    && remaining.every(Number.isFinite)
-    && rates.every((rate) => Number(rate.xp_hours_measured || 0) > 0 && Number.isFinite(Number(rate.xp_per_hour_24h)));
-  const remainingXp = complete ? remaining.reduce((a, b) => a + b, 0) : null;
-  const hourly = complete ? rates.reduce((sum, rate) => sum + Number(rate.xp_per_hour_24h), 0) : null;
-  const projectedAt = remainingXp !== null && hourly > 0 ? now + remainingXp / hourly * 3600 : null;
   const dungeons = (guild && guild.dungeons || []).map((d) => {
     const attempts = Number(d.runs || 0);
     const cleared = Number(d.cleared || 0);
@@ -44,8 +46,7 @@ export function reportFacts({ guild, series, stuck, now = Date.now() / 1000 }) {
     levelDelta: first === null || last === null ? null : last - first,
     dungeons,
     topBlocker,
-    projectedAt,
-    measuredMembers: complete ? names.length : 0,
+    projection: projection(series),
   };
 }
 
@@ -132,6 +133,14 @@ function projectionLabel(at) {
   return new Date(at * 1000).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }
 
+// The card's foot: one quiet line, the date when the series gives one, else
+// its reason; nothing at all from a bridge that does not send it.
+function projectionFoot(p) {
+  if (!p) return "";
+  const said = [p.at !== null ? "Level 60 by " + projectionLabel(p.at) : "Level 60", p.why].filter(Boolean).join(" | ");
+  return html`<p class="nr-foot muted">${said}</p>`;
+}
+
 function guildCard(ctx, guild) {
   const slug = guild.slug;
   const state = ctx.get("/api/v2/guild?guild=" + slug);
@@ -144,12 +153,9 @@ function guildCard(ctx, guild) {
   const blocker = facts.topBlocker
     ? html`<div><dt>Top blocker</dt><dd>${facts.topBlocker.reason} <span class="dim">| ${facts.topBlocker.memberHours.toFixed(1)} member-hours across ${plural(facts.topBlocker.members, "member")}</span></dd></div>`
     : html`<div><dt>Top blocker</dt><dd class="dim">None recorded.</dd></div>`;
-  const projection = facts.projectedAt
-    ? html`<div><dt>Level 60</dt><dd>${projectionLabel(facts.projectedAt)} <span class="dim">| estimate from each member's measured 24h XP rate</span></dd></div>`
-    : html`<div><dt>Level 60</dt><dd>${notMeasured("Projection not measured: complete member XP rates are not measured.")}</dd></div>`;
   return html`<article class="card nr-guild"><div class="nr-head"><h3>${guild.name}</h3><span class="nr-delta">${delta}</span></div>
 ${ladderHtml(ladder(facts.dungeons), slug)}
-<dl class="nr-facts">${blocker}${projection}</dl></article>`;
+<dl class="nr-facts">${blocker}</dl>${projectionFoot(facts.projection)}</article>`;
 }
 
 export function reportSection(ctx, guilds) {

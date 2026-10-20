@@ -415,9 +415,11 @@ class TheFamilyStandIn(unittest.TestCase):
         seat = standin.Seat("Grug", "Og", "Locky", "dps", "Og crafts")
         kept = standin.step(standin_facts(current=seat))
         self.assertEqual(kept.action, standin.KEEP)
-        cleared = standin.step(standin_facts(current=seat, owed=frozenset({"Locky"})))
-        self.assertEqual(cleared.action, standin.CLEAR)
-        self.assertIn(guildrun.OWES_CLASS_QUEST, cleared.why)
+        released = standin.step(standin_facts(current=seat, owed=frozenset({"Locky"})))
+        # The guest gives the seat back; Og keeps sitting out with no guest.
+        self.assertEqual(released.action, standin.SEAT)
+        self.assertEqual(("Og", ""), (released.seat.out_name, released.seat.in_name))
+        self.assertIn(guildrun.OWES_CLASS_QUEST, released.why)
 
     def test_the_bridge_reads_the_owed_into_the_facts(self):
         this = types.SimpleNamespace(_class_owed_by={None: {"Locky": 1}}, _mid_run=None)
