@@ -3855,6 +3855,16 @@ def _fetch_agenda(names=None) -> dict:
             f"FROM overseer_event WHERE character_name IN ({holes}) "
             "GROUP BY kind",
             tuple(names), what="overseer_event")
+        # THE NEWEST BOSS CREDIT, fed in as one more event row (agenda.BOSS_KIND).
+        # A campaign repeating one dungeon writes no quest, level or equip, and
+        # the encounter credit in the run's event log is its only progress. Only
+        # `boss` rows are read, so phase changes and dc_on cannot reset a stall.
+        # created_at is compared with `now` the way last_seen above is.
+        event_rows = [*event_rows, *rd.rows(
+            "SELECT kind, created_at AS last_seen, detail "  # noqa: S608
+            f"FROM overseer_dungeon_run_event WHERE leader_name IN ({holes}) "
+            "AND kind = 'boss' ORDER BY id DESC LIMIT 1",
+            tuple(names), what="overseer_dungeon_run_event")]
         instance_rows = rd.rows(_INSTANCE_SQL % holes, tuple(names),
                                 what="instance")
         # Who sits out the runs to craft (standin.py), so the banner says so
