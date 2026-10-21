@@ -228,6 +228,28 @@ _RULES = (
             "the game to accept it (" + m["n"] + " tries)",
         ),
     ),
+    # An upgrade left in the bags for want of room (gear._room_note, #1088),
+    # while the room may still be made: at most gear.ROOM_WAIT_MINUTES, then
+    # the upgrade is settled with a plain reason ("waits for bag room"), which
+    # is no stuck reason. Without this the member carried it unworn for days
+    # and no reader saw it: Bonk and Cronk 4.8 days, Gorvash and Blingz.
+    (
+        re.compile(
+            r"^equip: (?P<s>\w+) leaves (?P<item>.+?) in its bags: putting it on"
+            r"(?: over .+)? needs (?P<n>\d+) free bag slot\(s\) and it has "
+            r"(?P<free>\d+)$"
+        ),
+        "character",
+        "equip_held",
+        lambda m: (
+            "Trying to wear " + m["item"],
+            "room in its bags ("
+            + m["n"]
+            + " free slot(s) needed, "
+            + m["free"]
+            + " free)",
+        ),
+    ),
     (
         re.compile(
             r"^economy: (?P<n>\d+) carried candidate\(s\) for (?P<s>\w+) but no "

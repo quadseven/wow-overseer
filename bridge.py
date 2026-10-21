@@ -6833,13 +6833,17 @@ class Bridge(discord.Client):
         # answer is said once (#146).
         self._equip_reported: set = set()
         # Pieces held on the world's own refusal (#897), (holder, command) ->
-        # gear.WorldHold. In memory: a restart asks each of them once more.
+        # gear.WorldHold, gear.RoomWait, gear.EquipDropped or gear.BotKeep. In
+        # memory: a restart rebuilds the settled ones from their answer rows
+        # (_equip_last_answers, once per holder: `_equip_answers_read`).
         self._equip_holds: dict = {}
+        self._equip_answers_read: set = set()
         # The last worn read per holder, which a failed read falls back on.
         self._equip_worn: dict = {}
         # Members too full to put an upgrade on (#1088), holder -> (free slots
-        # needed, what for), from gear.equip_room: the guild jobs pass makes
-        # the room, and the equip pass asks again once it is there.
+        # needed, what for, minutes the bags have stood at that count), from
+        # gear.equip_room: the guild jobs pass makes the room, and the equip
+        # pass asks again once it is there.
         self._equip_room: dict = {}
         # JEV, IN SHADOW (#95). One client for the process, so its cache and
         # its in-flight limit are shared by every family. With no
@@ -12466,14 +12470,32 @@ class Bridge(discord.Client):
         bag room for is not queued either (#1088): the shortfall is kept in
         `self._equip_room` for the guild jobs pass to make the room.
         """
-        recent = {(row["target_name"], row["command"]) for row in current
-                  if row["recent"]}
+        # A refused row put nothing on, so it never blocks the retry its hold
+        # allows (#1088): only unanswered and accepted asks are recent.
+        recent = bag_pressure.recent_asks(current)
         tries: dict = {}
         for row in current:
             key = (row["target_name"], row["command"])
             tries[key] = tries.get(key, 0) + 1
+        retries = bag_pressure.retry_answers(current)
         answers = bag_pressure.latest_answers(current, item_plan.OPEN_STATUSES)
         wearers = sorted({e.holder for e in wanted})
+        # A SETTLED UPGRADE OUTLIVES A RESTART (#1088). Once per holder per
+        # process, the newest refusal older than the memory window rebuilds
+        # what the pass settled before it started; a failed read asks again.
+        fresh = [h for h in wearers if h not in self._equip_answers_read]
+        if fresh:
+            try:
+                older = await asyncio.to_thread(_equip_last_answers, fresh)
+                changed = await asyncio.to_thread(_level_changes, fresh)
+            except (OSError, pymysql.err.MySQLError) as exc:
+                log.warning("equip: older answers unreadable (%s)", exc)
+            else:
+                older = bag_pressure.since_level_change(older, changed)
+                for key, row in bag_pressure.latest_answers(
+                        older, item_plan.OPEN_STATUSES).items():
+                    answers.setdefault(key, row)
+                self._equip_answers_read.update(fresh)
         # One bounded read per pass, only for holders with a piece to put on
         # (none at all when `wanted` is empty), and every MySQLError it can
         # raise, the connect included, is caught here.
@@ -12508,17 +12530,34 @@ class Bridge(discord.Client):
             log.warning("equip: bag room unreadable (%s); no piece is judged "
                         "against it this pass", exc)
             free_slots = None
-        passed = set(holders) | set(wearers)
-        self._equip_room = {h: need for h, need in self._equip_room.items()
-                            if h not in passed}
-        self._equip_room.update(bag_pressure.equip_room(wanted, worn, free_slots))
+        # What the world would refuse for a reason the holder cannot clear now
+        # (level, skill rank, Dual Wield, unique-equipped) is never asked, and
+        # a settled upgrade reopens on a level or skill change (#1088). An
+        # unread read judges nothing against them, as before.
+        try:
+            facts = await asyncio.to_thread(
+                _fetch_equip_facts, wearers, sorted({int(e.entry) for e in wanted}))
+        except pymysql.err.MySQLError as exc:
+            log.warning("equip: levels, skills and item requirements unreadable "
+                        "(%s); no piece is judged against them this pass", exc)
+            facts = None
         # `holders` emptied by the deferral above falls back to the holders of
         # the filtered `wanted`, never to a deferred one.
         queue, notes = bag_pressure.equips_to_queue(
             wanted, recent, tries, answers=answers, worn=worn,
             holds=self._equip_holds, holders=set(holders) or None,
             memory_hours=EQUIP_MEMORY_HOURS, online=online,
-            free_slots=free_slots)
+            free_slots=free_slots,
+            wearers=None if facts is None else bag_pressure.wearers_from_rows(facts[0]),
+            items=None if facts is None else bag_pressure.items_from_rows(facts[1]),
+            retries=retries)
+        # After the holds, so a refusal the world gave for bag room this pass
+        # names its shortfall for the make-room step at once (#1088).
+        passed = set(holders) | set(wearers)
+        self._equip_room = {h: need for h, need in self._equip_room.items()
+                            if h not in passed}
+        self._equip_room.update(bag_pressure.equip_room(
+            wanted, worn, free_slots, self._equip_holds))
         for note in notes:
             log.info("equip: %s", note)
         log.info("equip: %d %spiece(s) held on the world's answer",
@@ -22415,7 +22454,11 @@ class Bridge(discord.Client):
         await self.wait_until_ready()
         while not self.is_closed():
             try:
-                names = await asyncio.to_thread(_family_names)
+                names = await asyncio.to_thread(
+                    holdings.subjects,
+                    await asyncio.to_thread(_roster_cohort_rows),
+                    await asyncio.to_thread(_family_names),
+                )
                 written = await asyncio.to_thread(_take_sample, names)
                 pruned = await asyncio.to_thread(_prune_samples)
                 log.info("sample cycle: characters=%d written=%d pruned=%d",
@@ -23253,38 +23296,42 @@ def _fetch_free_slots(names: list) -> dict:
     return {name: free for name, (free, _slots) in _fetch_bag_room(names).items()}
 
 
+# The backpack, then each worn bag with its kind and the items in it, for
+# bag_pressure.general_bag_room: only the backpack and general bags are room
+# (#1088). A quiver's or a soul bag's free slots are no room for a shield, a
+# loot drop or a letter, and an item in a bank bag (bag <> 0, but no worn bag)
+# is in no carried slot at all.
+_BAG_ROOM_SQL = (
+    "SELECT c.name AS name, 0 AS bag_slot, 16 AS size, 1 AS bag_class, "
+    "0 AS bag_subclass, "
+    "(SELECT COUNT(*) FROM character_inventory ci WHERE ci.guid = c.guid "
+    "AND ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) AS used "
+    "FROM characters c WHERE c.name IN ({marks}) "
+    "UNION ALL "
+    "SELECT c.name AS name, b.slot AS bag_slot, "
+    "COALESCE(it.ContainerSlots, 0) AS size, it.class AS bag_class, "
+    "it.subclass AS bag_subclass, "
+    "(SELECT COUNT(*) FROM character_inventory ci WHERE ci.guid = c.guid "
+    "AND ci.bag = b.item) AS used "
+    "FROM characters c "
+    "JOIN character_inventory b ON b.guid = c.guid AND b.bag = 0 "
+    "AND b.slot BETWEEN 19 AND 22 "
+    "LEFT JOIN item_instance ii ON ii.guid = b.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN ({marks})"
+)
+
+
 def _fetch_bag_room(names: list) -> dict:
-    """name -> (free bag slots, all bag slots): the backpack's 16 and the worn
-    bags' sizes, less the slots in use."""
+    """name -> (free bag slots, all bag slots): the backpack's 16 and the
+    worn general bags' sizes, less the slots in use
+    (bag_pressure.general_bag_room)."""
     if not names:
         return {}
-    sql = (
-        "SELECT c.name, "
-        "SUM(CASE WHEN ci.bag = 0 AND ci.slot BETWEEN 23 AND 38 "
-        "         THEN 1 ELSE 0 END) AS backpack_used, "
-        "SUM(CASE WHEN ci.bag <> 0 THEN 1 ELSE 0 END) AS bag_used, "
-        "SUM(CASE WHEN ci.bag = 0 AND ci.slot BETWEEN 19 AND 22 "
-        "         THEN COALESCE(it.ContainerSlots, 0) ELSE 0 END) AS bag_slots "
-        "FROM character_inventory ci "
-        "JOIN characters c ON c.guid = ci.guid "
-        "LEFT JOIN item_instance ii ON ii.guid = ci.item "
-        "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
-        "WHERE c.name IN (%s) GROUP BY c.name"
-    ) % ",".join(["%s"] * len(names))
+    marks = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(sql, names)
-        return {
-            row["name"]: (
-                max(
-                    0,
-                    16 + int(row["bag_slots"] or 0)
-                    - int(row["backpack_used"] or 0)
-                    - int(row["bag_used"] or 0),
-                ),
-                16 + int(row["bag_slots"] or 0),
-            )
-            for row in cur.fetchall()
-        }
+        cur.execute(_BAG_ROOM_SQL.format(marks=marks), list(names) + list(names))
+        return bag_pressure.general_bag_room(cur.fetchall())
 
 
 # How long a give command is remembered before the pass is allowed to propose
@@ -29206,6 +29253,80 @@ def _equip_history(hours: int, recent_minutes: int) -> list:
             "created_at": row.get("created_at"),
             "recent": bool(row["recent"]),
         } for row in cur.fetchall()]
+
+
+def _equip_last_answers(names: list) -> list:
+    """The newest answered equip row per (holder, command) for `names`, at any
+    age, when that answer was a refusal (#1088).
+
+    Read once per holder per process, to rebuild the upgrades the equip pass
+    settled before a restart: a settle reopens on a change, never a timer, so
+    one whose answer is older than the memory window must not be asked again
+    only because the process started. A newer answer of any other status
+    leaves the key out. [] on a world without the table or column."""
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    open_marks = ",".join(["%s"] * len(item_plan.OPEN_STATUSES))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT o.id, o.target_name, o.command, o.status, o.detail, "
+                "o.created_at FROM overseer_command o JOIN ("
+                "SELECT MAX(id) AS id FROM overseer_command "
+                "WHERE source = %s AND target_name IN (" + marks + ") "
+                "AND status NOT IN (" + open_marks + ") "
+                "GROUP BY target_name, command) l ON l.id = o.id "
+                "WHERE o.status IN ('error', 'unchanged') ORDER BY o.id",
+                [EQUIP_SOURCE, *names, *sorted(item_plan.OPEN_STATUSES)],
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [{
+            "id": int(row["id"]),
+            "target_name": str(row["target_name"] or ""),
+            "command": str(row["command"] or ""),
+            "status": str(row["status"] or ""),
+            "detail": str(row["detail"] or ""),
+            "created_at": row.get("created_at"),
+            "recent": False,
+        } for row in cur.fetchall()]
+
+
+def _fetch_equip_facts(names: list, entries: list) -> tuple:
+    """(holder rows, item rows) for the equip pass's judgment before it asks
+    (#1088): each holder's level and skills ("<skill>:<value>,..."), and each
+    wanted entry's requirements, for bag_pressure.wearers_from_rows and
+    items_from_rows."""
+    if not names:
+        return [], []
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.name AS name, c.level AS level, "
+            "(SELECT GROUP_CONCAT(CONCAT(k.skill, ':', k.value)) "
+            "FROM character_skills k WHERE k.guid = c.guid) AS skills "
+            "FROM characters c WHERE c.name IN (" + marks + ")",
+            list(names),
+        )
+        holders = [dict(row) for row in cur.fetchall()]
+        items = []
+        if entries:
+            cur.execute(
+                "SELECT entry, RequiredLevel AS required_level, "
+                "RequiredSkill AS required_skill, "
+                "RequiredSkillRank AS required_skill_rank, "
+                "RequiredReputationFaction AS required_reputation, "
+                "requiredspell AS required_spell, MaxCount AS max_count, "
+                "Flags AS flags, InventoryType AS inventory_type "
+                "FROM acore_world.item_template WHERE entry IN ("
+                + ",".join(["%s"] * len(entries)) + ")",
+                [int(e) for e in entries],
+            )
+            items = [dict(row) for row in cur.fetchall()]
+        return holders, items
 
 
 def _level_changes(names: list) -> dict:

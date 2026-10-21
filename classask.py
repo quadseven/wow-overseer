@@ -88,7 +88,7 @@ PURE: rows in, a guildsocial.Pass out.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import guildpug
 import guildrun
@@ -830,6 +830,8 @@ def plan_escalation(
         need, asker = by_member.get(ask.asker), by_name.get(ask.asker)
         if need is None or asker is None or need.move.quest != quest_of(ask):
             continue
+        if ask.reason.startswith(STOPPED):
+            need = replace(need, tries=max(int(need.tries), ESCALATE_AFTER_ASKS))
         call, made, silence = _escalate(ask, need, asker, ctx, yeses, mates, held)
         if call is not None:
             new_calls.append(call)
