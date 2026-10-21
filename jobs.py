@@ -549,9 +549,9 @@ def say(mode: str, place: str | None = None) -> str:
     if is_raid_job(mode):
         where = place or "the raid"
         return (
-            "The raid forms, walks to %s and goes in, rests at the entrance "
-            "and then clears it. Only the head is walked to the door: a raider "
-            "who is not near it is not brought there." % where
+            "The raid forms, walks to %s and goes in. It does not clear: "
+            "inside, the raid holds at the entrance. Only the head is walked "
+            "to the door: a raider who is not near it is not brought there." % where
         )
     if is_dungeon_job(mode):
         text = SAYS["dungeon"]
@@ -573,9 +573,9 @@ def describe(mode: str) -> str:
     if is_raid_job(mode):
         return (
             f"job set to {mode} - mod-overseer's raid run forms the raid from "
-            "overseer_raid_seat, walks it to the door and in (mod-overseer#634), "
-            "holds it at the entrance until it is rested and then clears it, "
-            "recovering from a wipe (mod-overseer#640); only the head is "
+            "overseer_raid_seat, walks it to the door and in, then holds at "
+            "the entrance; it does not clear until a clearing order arms the "
+            "dungeon brain on map 409; only the head is "
             "walked to the door."
         )
     what = MODES.get(mode, "")
