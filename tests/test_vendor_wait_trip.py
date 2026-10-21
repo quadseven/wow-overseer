@@ -81,14 +81,18 @@ class TheTripMakesTheFamilyRoom(unittest.TestCase):
 
     def test_the_trip_goes_when_the_family_frees_room_between_its_members(self):
         # No sustained wait either: the family has not been waiting for a
-        # vendor, its sale is simply spread over three members.
+        # vendor, its sale is simply spread over three members. No single
+        # member's sale clears the trigger of three free slots (Grog 0 + 2 =
+        # 2, Ugga 0 + 1 = 1), so the trip frees the floor for nobody and Bork
+        # stays pinned at the floor: the pass does not take a trip that cannot
+        # lift the binding member, and the family is not held for it.
         namespace = _vendor_pass_mode({"_fetch_vendor_wait_seconds": lambda names: 0})
         mode = asyncio.run(
             namespace["_vendor_pass_mode"](
                 None, self.NAMES, self.FREE, self.SELLABLE, False
             )
         )
-        self.assertEqual(bag_pressure.VENDOR_MODE_TRIP, mode)
+        self.assertEqual(bag_pressure.VENDOR_MODE_COUNTER, mode)
 
     def test_no_trip_when_the_family_carries_nothing_a_vendor_would_buy(self):
         # Bork alone at the floor, with 68 kept stacks: the trip cannot help
