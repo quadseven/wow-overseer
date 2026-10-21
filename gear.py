@@ -2433,32 +2433,42 @@ def _refusal_note(equip, row, kind, p) -> str:
     )
 
 
-def _on_refusal(equip, row, rec, p):
-    """Act on a refusal row nothing has acted on yet: settle it, start a room
-    wait, or hold it a short while. The note when the piece is not asked this
-    pass, else None (a lifted hold, or a room wait the room step judges)."""
-    key = (equip.holder, equip.command)
-    kind = refusal_kind(row.get("detail"))
-    tried = (p.retries if p.retries is not None else p.tries or {}).get(key, 1)
-    if kind in (REFUSAL_FINAL, REFUSAL_GONE) or (
-        kind == REFUSAL_RETRY and int(tried) >= RETRY_ANSWERS
-    ):
-        return _settle(equip, row, kind, _refusal_note(equip, row, kind, p), p)
-    created = row.get("created_at")
-    if isinstance(created, datetime) and created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
-    if kind == REFUSAL_ROOM:
-        free = p.free(equip.holder)
-        p.holds[key] = RoomWait(
-            row_id=_row_id(row),
-            worn=_worn_for(equip, p.worn),
-            wanted=equip.name,
-            need=max(room_needed(equip, p.worn), 1 if free is None else free + 1),
-            free_at=free,
-            since=created if isinstance(created, datetime) else p.now,
-            at=row.get("created_at"),
-        )
-        return None
+def _settles_now(equip, kind, p) -> bool:
+    """A refusal of `kind` the member cannot clear now: a final or gone
+    answer, or the RETRY_ANSWERS-th answer nobody named."""
+    if kind in (REFUSAL_FINAL, REFUSAL_GONE):
+        return True
+    tried = (p.retries if p.retries is not None else p.tries or {}).get(
+        (equip.holder, equip.command), 1
+    )
+    return kind == REFUSAL_RETRY and int(tried) >= RETRY_ANSWERS
+
+
+def _utc(at):
+    """`at` with a UTC zone when it is a naive datetime, else as given."""
+    if isinstance(at, datetime) and at.tzinfo is None:
+        return at.replace(tzinfo=timezone.utc)
+    return at
+
+
+def _start_room_wait(equip, row, created, p) -> None:
+    """A room refusal: wait for the bag slots the world asked for."""
+    free = p.free(equip.holder)
+    p.holds[(equip.holder, equip.command)] = RoomWait(
+        row_id=_row_id(row),
+        worn=_worn_for(equip, p.worn),
+        wanted=equip.name,
+        need=max(room_needed(equip, p.worn), 1 if free is None else free + 1),
+        free_at=free,
+        since=created if isinstance(created, datetime) else p.now,
+        at=row.get("created_at"),
+    )
+
+
+def _short_hold(equip, row, rec, kind, created, p):
+    """A passing refusal, or the first one nobody named: hold the piece
+    REFUSAL_WAIT_MINUTES from the answer. The note while it holds, else None
+    (lifted: the wait is over, or what is worn there changed)."""
     hold = (
         rec
         if isinstance(rec, WorldHold)
@@ -2469,7 +2479,7 @@ def _on_refusal(equip, row, rec, p):
     )
     worn_now = _worn_for(equip, p.worn)
     if hold is None:
-        hold = p.holds[key] = WorldHold(
+        hold = p.holds[(equip.holder, equip.command)] = WorldHold(
             row_id=_row_id(row),
             worn=worn_now,
             refusal_at=row.get("created_at"),
@@ -2491,6 +2501,20 @@ def _on_refusal(equip, row, rec, p):
         str(row.get("detail")).strip(),
         _reader_due(hold.retry_at),
     )
+
+
+def _on_refusal(equip, row, rec, p):
+    """Act on a refusal row nothing has acted on yet: settle it, start a room
+    wait, or hold it a short while. The note when the piece is not asked this
+    pass, else None (a lifted hold, or a room wait the room step judges)."""
+    kind = refusal_kind(row.get("detail"))
+    if _settles_now(equip, kind, p):
+        return _settle(equip, row, kind, _refusal_note(equip, row, kind, p), p)
+    created = _utc(row.get("created_at"))
+    if kind == REFUSAL_ROOM:
+        _start_room_wait(equip, row, created, p)
+        return None
+    return _short_hold(equip, row, rec, kind, created, p)
 
 
 def _on_room(equip, row, rec, p):
@@ -2577,16 +2601,10 @@ def _on_bot_keep(equip, row, rec, p) -> bool:
     return True
 
 
-def _judge(equip, p) -> tuple:
-    """(ask it now, the note when not or "") for one wanted piece."""
-    key = (equip.holder, equip.command)
-    row, rec = p.answers.get(key), p.holds.get(key)
-    # The bot keeps its own better-scored piece by choice: not a refusal, no
-    # stuck reason, not wanted again until its slot's gear or the piece
-    # changes (#994). The reader-worded line is in `member_gear_notes`.
-    keeps = _bot_keep(row) is not None
-    if keeps and _on_bot_keep(equip, row, rec, p):
-        return False, ""
+def _held_note(equip, row, rec, keeps, p):
+    """The note when `equip` is held back before the world is asked: a piece
+    its holder cannot wear, a settled upgrade nothing has reopened, a refusal
+    being acted on, or a wait for bag room. None when nothing holds it."""
     why = wear_refusal(
         equip,
         (p.items or {}).get(int(equip.entry)),
@@ -2594,22 +2612,25 @@ def _judge(equip, p) -> tuple:
         p.worn,
     )
     if why:
-        return False, "%s cannot wear %s: %s; not asked until that changes" % (
+        return "%s cannot wear %s: %s; not asked until that changes" % (
             equip.holder,
             equip.name,
             why,
         )
     if isinstance(rec, EquipDropped) and not rec.lifted:
         if not _reopened(rec, equip, p):
-            return False, rec.note
+            return rec.note
         rec.lifted = True
     if not keeps and _refused(row) and not _handled(rec, row):
         note = _on_refusal(equip, row, rec, p)
         if note:
-            return False, note
-    note = _on_room(equip, row, p.holds.get(key), p)
-    if note:
-        return False, note
+            return note
+    return _on_room(equip, row, p.holds.get((equip.holder, equip.command)), p) or None
+
+
+def _ask_now(equip, row, p) -> tuple:
+    """(ask it now, the note when not or "") for a piece nothing holds back."""
+    key = (equip.holder, equip.command)
     # Never queue an equip for an offline member (#869): the world cannot act
     # on it, and it just piles up retries.
     if p.online is not None and equip.holder not in p.online:
@@ -2637,6 +2658,22 @@ def _judge(equip, p) -> tuple:
             p,
         )
     return True, ""
+
+
+def _judge(equip, p) -> tuple:
+    """(ask it now, the note when not or "") for one wanted piece."""
+    key = (equip.holder, equip.command)
+    row, rec = p.answers.get(key), p.holds.get(key)
+    # The bot keeps its own better-scored piece by choice: not a refusal, no
+    # stuck reason, not wanted again until its slot's gear or the piece
+    # changes (#994). The reader-worded line is in `member_gear_notes`.
+    keeps = _bot_keep(row) is not None
+    if keeps and _on_bot_keep(equip, row, rec, p):
+        return False, ""
+    note = _held_note(equip, row, rec, keeps, p)
+    if note is not None:
+        return False, note
+    return _ask_now(equip, row, p)
 
 
 def world_held(wanted, holds) -> int:

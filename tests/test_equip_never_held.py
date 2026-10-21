@@ -573,6 +573,42 @@ def room_row(name, age):
     return guildjobs.Recent(name, guildjobs.ROOM_ACTION, age, "applied")
 
 
+class AKeptPieceThatThenWaitsOnRoom(unittest.TestCase):
+    """The bot kept its own piece, then what is worn there changed and the
+    upgrade waited on bag room. The keep answer is acted on: it is not read
+    as a fresh keep on the next pass, so the room wait stands until the slot
+    frees."""
+
+    KEEPS = "the bot keeps Large Round Shield: Rhahk'Zor's Hammer scores 40 against 44"
+
+    def test_the_room_wait_outlives_the_keep_it_replaced(self):
+        holds = {}
+        keeps = answer(self.KEEPS, status="unchanged")
+        queued, notes = judge(answers=keeps, free={"Bonk": 0}, holds=holds)
+        self.assertEqual((queued, notes), ((), ()))
+        self.assertIsInstance(holds[KEY], gear.BotKeep)
+        # A new shield is put on: the keep lifts, and the hammer needs a slot.
+        worn = {"Bonk": {15: (1, "Fist of Argus"), 16: (3, "Brackwater Shield")}}
+        queued, notes = judge(answers=keeps, free={"Bonk": 0}, holds=holds, worn=worn)
+        self.assertEqual(queued, ())
+        self.assertIn("leaves Rhahk'Zor's Hammer in its bags", notes[0])
+        self.assertIsInstance(holds[KEY], gear.RoomWait)
+        # The next pass reads the same keep row: still the room wait, not a
+        # new keep that would hide the upgrade with no reason.
+        later = NOW + timedelta(minutes=5)
+        queued, notes = judge(
+            answers=keeps, free={"Bonk": 0}, holds=holds, worn=worn, now=later
+        )
+        self.assertEqual(queued, ())
+        self.assertIn("leaves Rhahk'Zor's Hammer in its bags", notes[0])
+        self.assertIsInstance(holds[KEY], gear.RoomWait)
+        # A slot frees: the hammer is asked.
+        queued, notes = judge(
+            answers=keeps, free={"Bonk": 1}, holds=holds, worn=worn, now=later
+        )
+        self.assertEqual((queued, notes), ((HAMMER,), ()))
+
+
 class TheWayOutComesFirstAndNoPassIsLost(unittest.TestCase):
     def test_a_member_stood_still_hearths_before_it_makes_room(self):
         m = bonk(quests_done=frozenset({1505}), carried=(grey(1),))
