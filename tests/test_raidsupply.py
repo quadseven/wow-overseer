@@ -888,6 +888,27 @@ class TheRaidTab(unittest.TestCase):
         self.assertIn("804 gold", card["budget_line"])
         self.assertIn("80 gold a day", card["budget_line"])
 
+    def test_the_supply_section_names_the_field_repair_bot_as_unobtainable(self):
+        # #774: Schematic 18235 has no trainer, vendor, loot or quest source.
+        group = {"guild": "Cave", "family": "Grug", "family_names": ["Grug"]}
+        group["rows"] = [{"name": "Grug", "level": 60, "class_id": 1}]
+        chars = [{"name": "Grug", "level": 60, "class": 1}]
+        supply = {"have": {}, "knowers": {}, "bank": 0}
+        card = raidready.build_guild(group, chars, [], [], 55, {}, supply=supply)
+        lines = card["supply"]["unobtainable"]
+        self.assertTrue(
+            any(
+                "Field Repair Bot 74A is unobtainable on this realm" in line
+                and "Schematic 18235" in line
+                for line in lines
+            ),
+            lines,
+        )
+
+    def test_the_page_draws_the_unobtainable_lines(self):
+        raid = (HERE / "app" / "views" / "raid.js").read_text(encoding="utf-8")
+        self.assertIn("s.unobtainable", raid)
+
     def test_the_readiness_card_carries_the_supply_section(self):
         group = {
             "guild": "Cave",

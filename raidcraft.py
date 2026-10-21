@@ -731,15 +731,22 @@ MISNAMED: dict[str, str] = {
 }
 
 
+# Raid crafts whose recipe this realm verifiably does not teach (#774): craft
+# spell -> (product, why). The raid supply card names each one.
 UNOBTAINABLE_RECIPES = {
-    22704: "Field Repair Bot 74A: Schematic 18235 has no trainer, vendor, "
-    "loot or quest source on this realm",
+    22704: (
+        "Field Repair Bot 74A",
+        "Schematic 18235 has no trainer, vendor, loot or quest source",
+    ),
 }
 
 
-def unobtainable(spell_id: int) -> str | None:
-    """Why a raid craft spell cannot be learned here, if verified absent."""
-    return UNOBTAINABLE_RECIPES.get(int(spell_id or 0))
+def unobtainable_lines() -> list[str]:
+    """One sentence per raid craft this realm cannot teach."""
+    return [
+        "%s is unobtainable on this realm: %s." % (product, why)
+        for product, why in UNOBTAINABLE_RECIPES.values()
+    ]
 
 
 def by_spell(spell_id: int):

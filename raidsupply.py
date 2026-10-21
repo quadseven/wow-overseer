@@ -2005,6 +2005,7 @@ def card(
     bank_copper=None,
     crafters=(),
     snapshots=(),
+    unobtainable=(),
 ) -> dict:
     """The supply section of one guild's readiness card; the page decides nothing.
 
@@ -2012,6 +2013,7 @@ def card(
     the corps pass counts bags and letters, which is what it can move.
     `crafters` are the guild's family names and `snapshots` the metric
     watcher's records of the last week, for the alchemists' pace.
+    `unobtainable` are sentences naming raid crafts this realm cannot teach.
     """
     lines = supply_lines(raiders, have, knowers, carriers)
     fire = fire_lines(raiders)
@@ -2035,6 +2037,7 @@ def card(
         "budget_line": budget,
         "pace": pace_lines(crafters, snapshots),
         "level_60_line": level_60_line(snapshots),
+        "unobtainable": list(unobtainable),
         "supply_columns": list(SUPPLY_COLUMNS),
         "supplies": [
             {

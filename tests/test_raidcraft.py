@@ -293,7 +293,8 @@ class TheBriefsListWasCheckedAndNineOfItWasWrong(unittest.TestCase):
     as a list that had confirmed all of them. Both refusals are data."""
 
     def test_field_repair_bot_has_no_recipe_source_on_this_realm(self):
-        reason = raidcraft.unobtainable(22704)
+        product, reason = raidcraft.UNOBTAINABLE_RECIPES[22704]
+        self.assertEqual("Field Repair Bot 74A", product)
         self.assertIn("Schematic 18235", reason)
         self.assertIn("no trainer, vendor, loot or quest", reason)
 
