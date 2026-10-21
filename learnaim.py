@@ -138,23 +138,22 @@ class Row:
     `settled` is the subset that reached 'learned'. Two facts and not one,
     because they answer different questions - see `derived` and `finished`.
 
-    `ranks` is every held trade whose next trainer rank is due now, cheapest
-    first: guildjobs.ranks_due's answer, the guild crew's own rank rule. It is
-    a decision made by the caller from the skill ceilings, not a held-skill
-    set this module reads (mod-overseer#74, `ThereIsNoHoldsRule`). After the
-    ranks come the trades whose next trainer RECIPE is due
-    (guildjobs.recipes_due, #769): the same errand, since TrainOnArrival buys
-    a trade's recipes when the trainer has no rank to sell (mod-overseer#862).
+    `ranks` names held trades with a rank due. `recipes` carries (skill,
+    spell) pairs for exact trainer recipes due. Both are decisions made by
+    the caller from the skill ceilings and spellbook; neither is a held-skill
+    set this module reads.
     """
 
     character: str
     learn_skill: int = 0
+    learn_spell: int = 0
     travel_npc: str = ""
     leads: bool = False
     wanted: tuple = ()
     traded: tuple = ()
     settled: tuple = ()
     ranks: tuple = ()
+    recipes: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -163,6 +162,7 @@ class Stale:
 
     character: str
     skill: int
+    spell: int
     why: str
 
 
@@ -180,9 +180,10 @@ class Plan:
     clear: tuple = ()
     aim: str = ""
     skill: int = 0
+    spell: int = 0
     waiting: tuple = ()
-    # (character, skill) of a rank errand to write onto an empty
-    # `learn_skill`, or () for none. See `rank_errand`.
+    # (character, skill) for a rank, or (character, skill, spell) for a
+    # recipe, written onto an empty learn errand; () means none.
     learn: tuple = ()
 
 
@@ -205,7 +206,9 @@ def finished(row) -> str:
     # reads 'learned' once Apprentice was bought), and a First Aid rank is a
     # secondary; neither says the rank errand standing now was carried out.
     # TrainOnArrival clears the column once the rank is bought.
-    if skill in tuple(getattr(row, "ranks", ()) or ()):
+    if skill in tuple(getattr(row, "ranks", ()) or ()) or any(
+        skill == trade for trade, _spell in getattr(row, "recipes", ()) or ()
+    ):
         return ""
 
     # BEFORE THE SETTLED TEST, because it is unconditional. A secondary errand
@@ -266,8 +269,11 @@ def derived(row) -> bool:
     provably deployed on the realm the row is on.
     """
     skill = int(getattr(row, "learn_skill", 0) or 0)
-    if skill and skill in tuple(getattr(row, "ranks", ()) or ()):
-        # A RANK ERRAND IS DERIVED TOO: `rank_errand` writes it with no trade
+    if skill and (
+        skill in tuple(getattr(row, "ranks", ()) or ())
+        or any(skill == trade for trade, _spell in getattr(row, "recipes", ()) or ())
+    ):
+        # A RANK OR RECIPE ERRAND IS DERIVED TOO: `rank_errand` writes it with no trade
         # row of its own, and a held trade's 'learn' row is the first learn,
         # not this one.
         return True
@@ -296,13 +302,21 @@ def rank_errand(rows: Sequence) -> tuple:
         (
             r
             for r in rows
-            if not int(r.learn_skill or 0) and tuple(getattr(r, "ranks", ()) or ())
+            if not int(r.learn_skill or 0)
+            and (
+                tuple(getattr(r, "ranks", ()) or ())
+                or tuple(getattr(r, "recipes", ()) or ())
+            )
         ),
         key=lambda r: (not r.leads, r.character),
     )
     if not ready:
         return ()
-    return (str(ready[0].character), int(ready[0].ranks[0]))
+    chosen = ready[0]
+    if chosen.ranks:
+        return (str(chosen.character), int(chosen.ranks[0]))
+    skill, spell = chosen.recipes[0]
+    return (str(chosen.character), int(skill), int(spell))
 
 
 def traveller(rows: Sequence) -> str:
@@ -341,6 +355,7 @@ def plan(rows: Sequence) -> Plan:
                 Stale(
                     character=str(r.character),
                     skill=int(r.learn_skill or 0),
+                    spell=int(getattr(r, "learn_spell", 0) or 0),
                     why=finished(r),
                 )
                 for r in rows
@@ -377,6 +392,7 @@ def plan(rows: Sequence) -> Plan:
         clear=clear,
         aim=chosen.character,
         skill=int(chosen.learn_skill or 0),
+        spell=int(getattr(chosen, "learn_spell", 0) or 0),
         waiting=tuple(r.character for r in unwalked if r is not chosen),
     )
 
@@ -402,9 +418,9 @@ def statements(learn_plan) -> list:
     """
     out = [
         (
-            "UPDATE overseer_roster SET learn_skill = 0 "
-            "WHERE name = %s AND learn_skill = %s",
-            (row.character, int(row.skill)),
+            "UPDATE overseer_roster SET learn_skill = 0, learn_spell = 0 "
+            "WHERE name = %s AND learn_skill = %s AND learn_spell = %s",
+            (row.character, int(row.skill), int(row.spell)),
         )
         for row in getattr(learn_plan, "clear", ()) or ()
     ]
@@ -414,17 +430,32 @@ def statements(learn_plan) -> list:
         # learn mod-overseer's AimLearnAt wrote in between keeps its errand.
         out.append(
             (
-                "UPDATE overseer_roster SET learn_skill = %s "
-                "WHERE name = %s AND learn_skill = 0 AND unlearn_skill = 0",
-                (int(learn[1]), str(learn[0])),
+                (
+                    "UPDATE overseer_roster SET learn_skill = %s, learn_spell = %s "
+                    "WHERE name = %s AND learn_skill = 0 AND unlearn_skill = 0"
+                    if len(learn) == 3
+                    else "UPDATE overseer_roster SET learn_skill = %s, learn_spell = 0 "
+                    "WHERE name = %s AND learn_skill = 0 AND unlearn_skill = 0"
+                ),
+                (
+                    (int(learn[1]), int(learn[2]), str(learn[0]))
+                    if len(learn) == 3
+                    else (int(learn[1]), str(learn[0]))
+                ),
             )
         )
     if getattr(learn_plan, "aim", ""):
         out.append(
             (
                 "UPDATE overseer_roster SET travel_npc = %s "
-                "WHERE name = %s AND learn_skill = %s AND travel_npc = ''",
-                (TRAINER_ROLE, learn_plan.aim, int(learn_plan.skill)),
+                "WHERE name = %s AND learn_skill = %s AND learn_spell = %s "
+                "AND travel_npc = ''",
+                (
+                    TRAINER_ROLE,
+                    learn_plan.aim,
+                    int(learn_plan.skill),
+                    int(learn_plan.spell),
+                ),
             )
         )
     return out

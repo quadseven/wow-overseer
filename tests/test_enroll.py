@@ -259,6 +259,7 @@ class TheRowIsComplete(unittest.TestCase):
         self.assertEqual(row["lead"], 0)
         self.assertEqual(row["professions"], "")
         self.assertEqual(row["learn_skill"], 0)
+        self.assertEqual(row["learn_spell"], 0)
         self.assertEqual(row["enabled"], 1)
         self.assertEqual(row["family"], "Bonkers")
 
@@ -573,6 +574,7 @@ _CREATE = (
     "  travel_npc TEXT NOT NULL DEFAULT '',"
     "  professions TEXT NOT NULL DEFAULT '',"
     "  learn_skill INTEGER NOT NULL DEFAULT 0,"
+    "  learn_spell INTEGER NOT NULL DEFAULT 0,"
     "  unlearn_skill INTEGER NOT NULL DEFAULT 0,"
     "  unlearn_max INTEGER NOT NULL DEFAULT 0,"
     "  job TEXT NOT NULL DEFAULT 'quest',"
@@ -600,7 +602,7 @@ _SEED = (
 # measurement rather than a claim about the columns somebody remembered.
 _COMPARED = (
     "name, enabled, note, `lead`, spec_tab, trained_level, drive_quest, "
-    "travel_npc, professions, learn_skill, unlearn_skill, unlearn_max, job, "
+    "travel_npc, professions, learn_skill, learn_spell, unlearn_skill, unlearn_max, job, "
     "dungeon_runs_wanted, dungeon_runs_done, craft_spell, learn_fishing, family"
 )
 

@@ -6218,8 +6218,9 @@ def _rank_facts(rows) -> dict:
 
 
 def _ranks_due(cur, roster) -> dict:
-    """name -> the held trades whose next rank or trainer recipe is due now
-    (learnaim.Row.ranks): the ranks first, then the recipes (#769).
+    """name -> (due rank skills, due (skill, recipe spell) pairs).
+
+    The pair feeds learnaim.Row.ranks and Row.recipes for one learn errand.
 
     `roster` is the overseer_roster rows already read, whose `professions`
     column is the permission a primary rank needs. On a realm missing a table
@@ -6248,9 +6249,9 @@ def _ranks_due(cur, roster) -> dict:
     due: dict = {}
     for name, (level, money, skills) in facts.items():
         ranks = guildjobs.ranks_due(level, money, skills, wanted.get(name, ()))
-        recipes = guildjobs.recipes_due(
+        recipes = guildjobs.recipe_spells_due(
             level, money, skills, known.get(name, ()), wanted.get(name, ()))
-        due[name] = ranks + tuple(s for s in recipes if s not in ranks)
+        due[name] = (ranks, tuple(pair for pair in recipes if pair[0] not in ranks))
     return due
 
 
@@ -6300,7 +6301,7 @@ def _learn_aim_rows() -> list:
             cur.execute(
                 # `lead` BACKTICKED: reserved word in MySQL 8, the same trap
                 # _mark_party_leader's own comment records.
-                "SELECT name, `lead`, professions, travel_npc, learn_skill "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                "SELECT name, `lead`, professions, travel_npc, learn_skill, learn_spell "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
                 "FROM overseer_roster WHERE enabled = 1" + scope,
                 scope_args,
             )
@@ -6343,12 +6344,14 @@ def _learn_aim_rows() -> list:
         learnaim.Row(
             character=row["name"],
             learn_skill=int(row["learn_skill"] or 0),
+            learn_spell=int(row["learn_spell"] or 0),
             travel_npc=row["travel_npc"] or "",
             leads=bool(int(row["lead"] or 0)),
             wanted=trainjob.parse_wanted(row["professions"]),
             traded=tuple(sorted(set(traded.get(row["name"], ())))),
             settled=tuple(sorted(set(settled.get(row["name"], ())))),
-            ranks=ranks.get(row["name"], ()),
+            ranks=ranks.get(row["name"], ((), ()))[0],
+            recipes=ranks.get(row["name"], ((), ()))[1],
         )
         for row in roster
     ]
@@ -13401,7 +13404,8 @@ class Bridge(discord.Client):
         The lead is borrowed for at most ERRAND_LEAD_HOURS per errand.
         """
         rows = tradechoice.learn_rows(state["roster"], state["trades"], declared,
-                                      ranks=state.get("ranks"))
+                                      ranks=state.get("ranks"),
+                                      recipes=state.get("recipes"))
         if not rows:
             return
         slot = self._cohort_town_slot(cohort.key)
@@ -29588,7 +29592,7 @@ def _cohort_leader(key: str) -> str:
 
 # One other family's roster rows, for its professions and learn errands (#211).
 _FAMILY_TRADE_ROSTER_SQL = (
-    "SELECT name, `lead`, professions, travel_npc, learn_skill "
+    "SELECT name, `lead`, professions, travel_npc, learn_skill, learn_spell "
     "FROM overseer_roster WHERE enabled = 1 AND family = %s"
 )
 _FAMILY_TRADE_CLASS_SQL = "SELECT name, class, level FROM characters WHERE name IN (%s)"
@@ -29630,7 +29634,9 @@ def _family_trade_state(family: str) -> dict | None:
                 return None
             raise
     return {"roster": roster, "characters": characters, "trades": trades,
-            "skills": _fetch_trade_skills(names), "ranks": ranks}
+            "skills": _fetch_trade_skills(names),
+            "ranks": {name: due[0] for name, due in ranks.items()},
+            "recipes": {name: due[1] for name, due in ranks.items()}}
 
 
 def _record_family_choice(decision) -> None:

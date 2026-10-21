@@ -1159,8 +1159,8 @@ def recipes_due(level: int, money: int, skills, known, wanted=()) -> tuple:
     The recipe sibling of `ranks_due`, for a roster family member, whose
     recipes are bought on arrival at its trade's trainer through the same
     learn errand (`overseer_roster.learn_skill`, learnaim.py): mod-overseer's
-    TrainOnArrival buys the trade's recipes when no rank is on offer
-    (mod-overseer#862). Without this the column was written only for a rank,
+    TrainOnArrival buys the exact recipe carried alongside the trade in
+    `learn_spell`. Without this the column was written only for a rank,
     and every family crafter stopped at its first bought rung (#769).
 
     A trade is due when a rung it casts now or within RANK_UP_MARGIN
@@ -1170,6 +1170,14 @@ def recipes_due(level: int, money: int, skills, known, wanted=()) -> tuple:
     RECIPE_PURSE_FLOOR. `skills` is {skill id: (value, max)}; only a held
     primary the roster names in `wanted` is asked, cheapest first.
     """
+    return tuple(
+        skill
+        for skill, _spell in recipe_spells_due(level, money, skills, known, wanted)
+    )
+
+
+def recipe_spells_due(level: int, money: int, skills, known, wanted=()) -> tuple:
+    """(skill, spell) for each affordable trainer recipe due, cheapest first."""
     known = frozenset(int(s) for s in known or ())
     wanted = tuple(int(s) for s in wanted or ())
     due = []
@@ -1177,20 +1185,21 @@ def recipes_due(level: int, money: int, skills, known, wanted=()) -> tuple:
         skill, value, ceiling = int(skill), int(value or 0), int(ceiling or 0)
         if ceiling <= 0 or skill not in wanted:
             continue
-        cost = _recipe_cost_due(skill, value, int(money or 0), known)
-        if cost is not None:
-            due.append((cost, skill))
-    return tuple(skill for _cost, skill in sorted(due))
+        purchase = _recipe_cost_due(skill, value, int(money or 0), known)
+        if purchase is not None:
+            cost, spell = purchase
+            due.append((cost, skill, spell))
+    return tuple((skill, spell) for _cost, skill, spell in sorted(due))
 
 
-def _recipe_cost_due(skill: int, value: int, money: int, known) -> int | None:
-    """The price of the first unheld rung ahead that this visit can buy, or None."""
+def _recipe_cost_due(skill: int, value: int, money: int, known) -> tuple | None:
+    """The price and spell of the first unheld rung this visit can buy."""
     for recipe in _rungs_ahead(skill, value):
         if craft.holds(recipe.spell_id, known):
             continue
         rank, cost = craft.TRAINER_RECIPES[recipe.spell_id]
         if value >= rank and money >= cost + RECIPE_PURSE_FLOOR:
-            return cost
+            return cost, recipe.spell_id
     return None
 
 

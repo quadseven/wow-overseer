@@ -941,7 +941,7 @@ class TheErrandIsBounded(unittest.TestCase):
         # unchanged: a target that resolves to nothing releases the errand
         # instead of pinning it.
         self.assertIn(
-            "!ResolveTravelTarget(bot, target, entry, pos, wantSkill, &said)", code
+            "!ResolveTravelTarget(bot, target, entry, pos, wantSkill, &said,", code
         )
 
     def test_the_clear_escapes_the_name(self):
@@ -1264,7 +1264,7 @@ class TheResolvedSpawnIsPinnedForTheLifeOfTheErrand(unittest.TestCase):
         self.assertLess(
             code.index("state.pinned"),
             code.index(
-                "!ResolveTravelTarget(bot, target, entry, pos, wantSkill, &said)"
+                "!ResolveTravelTarget(bot, target, entry, pos, wantSkill, &said,"
             ),
         )
 

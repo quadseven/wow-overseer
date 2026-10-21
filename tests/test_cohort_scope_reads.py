@@ -94,7 +94,7 @@ HISTORIC_RAIDPREP_MEMBERS = (
 )
 
 HISTORIC_LEARN_AIM_ROWS = (
-    "SELECT name, `lead`, professions, travel_npc, learn_skill "
+    "SELECT name, `lead`, professions, travel_npc, learn_skill, learn_spell "
     "FROM overseer_roster WHERE enabled = 1"
 )
 
@@ -213,6 +213,7 @@ def _roster(rows=None) -> sqlite3.Connection:
         "  job TEXT NOT NULL DEFAULT '',"
         "  professions TEXT NOT NULL DEFAULT '',"
         "  learn_skill INTEGER NOT NULL DEFAULT 0,"
+        "  learn_spell INTEGER NOT NULL DEFAULT 0,"
         "  level INTEGER NOT NULL DEFAULT 0,"
         "  travel_npc TEXT NOT NULL DEFAULT '',"
         # NOT NULL DEFAULT 'Grug', exactly as mod-overseer#506 declares it.
