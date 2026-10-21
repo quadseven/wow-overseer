@@ -10633,7 +10633,9 @@ class Bridge(discord.Client):
         """
         run = await asyncio.to_thread(_active_dungeon_run)
         live_maps = await asyncio.to_thread(_fetch_live_maps, names)
-        dungeon_maps = set(dungeonpath.PORTAL_MAPS.values())
+        dungeon_maps = set(dungeonpath.PORTAL_MAPS.values()) | {
+            raidrun.MOLTEN_CORE_MAP
+        }
         inside = next(
             (
                 int(map_id)
