@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir discord.py==2.4.0 PyMySQL==1.1.1
 
 WORKDIR /app
 
-COPY core.py bridge.py voice.py transform.py \
+COPY core.py death_dismiss.py bridge.py voice.py transform.py \
      map_core.py map_server.py events.py \
      panel.py family.py families.py goals.py protect.py fanout.py chat.py \
      kin.py keep.py cast.py bonds.py council.py persona.py \
