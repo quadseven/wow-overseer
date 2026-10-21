@@ -340,5 +340,69 @@ class TheRowFitsAPhone(unittest.TestCase):
         self.assertIn("flex-wrap: wrap", self.rule(".agenda-foot"))
 
 
+# Side by side, the two family columns share one set of rows, so every band
+# (card, video, name, Doing, Hear, actions, map) starts at the same height in
+# both columns. These rules pin that layout; they fail without the change.
+class TheFamilyColumnsShareRows(unittest.TestCase):
+    def rule(self, selector):
+        m = re.search(r"(?m)^\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", NOW_CSS)
+        self.assertIsNotNone(m, selector + " has no rule in now.css")
+        return m.group(1)
+
+    def test_side_by_side_defines_seven_shared_rows(self):
+        body = self.rule('.families[data-wall="side"]')
+        self.assertIn("grid-template-rows", body)
+        self.assertIn("repeat(7,auto)", body.replace(" ", ""))
+        self.assertIn("gap:8px20px", body.replace(" ", ""))
+
+    def test_each_family_is_a_subgrid_spanning_the_rows(self):
+        body = self.rule('.families[data-wall="side"] .fam')
+        self.assertIn("display: grid", body)
+        self.assertIn("grid-template-rows: subgrid", body)
+        self.assertIn("grid-row: span 7", body)
+
+    def test_the_card_video_and_map_each_own_a_row(self):
+        self.assertIn(
+            "grid-row: 1", self.rule('.families[data-wall="side"] .fam > .agenda')
+        )
+        self.assertIn(
+            "grid-row: 2 / span 5",
+            self.rule('.families[data-wall="side"] .fam > .fam-live'),
+        )
+        self.assertIn(
+            "grid-row: 7", self.rule('.families[data-wall="side"] .fam > .minimap')
+        )
+
+    def test_the_caption_bands_share_rows_between_columns(self):
+        self.assertIn(
+            "grid-template-rows: subgrid",
+            self.rule('.families[data-wall="side"] .fam-live > .st'),
+        )
+        self.assertIn(
+            "grid-row: 1",
+            self.rule('.families[data-wall="side"] .fam-live > .st > .st-slot'),
+        )
+        self.assertIn(
+            "grid-row: 2 / span 4",
+            self.rule('.families[data-wall="side"] .fam-live > .st > .st-cap'),
+        )
+        self.assertIn(
+            "grid-template-rows: subgrid",
+            self.rule('.families[data-wall="side"] .fam-live > .st > .st-cap'),
+        )
+        self.assertIn(
+            "grid-row: 1", self.rule('.families[data-wall="side"] .st-cap > .st-head')
+        )
+        self.assertIn(
+            "grid-row: 2", self.rule('.families[data-wall="side"] .st-cap > .st-doing')
+        )
+        self.assertIn(
+            "grid-row: 3", self.rule('.families[data-wall="side"] .st-cap > .st-bar')
+        )
+        self.assertIn(
+            "grid-row: 4", self.rule('.families[data-wall="side"] .st-cap > .st-acts')
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
