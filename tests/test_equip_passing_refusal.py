@@ -13,8 +13,9 @@ What is pinned here:
 - A refusal on one of those codes waits the first step (15 minutes) however
   many times it has been refused, then the piece is asked again.
 - No other refusal waits the memory window either (#1088): bags too full for
-  the swap (InventoryResult 21) wait at most 30 minutes, and a named skill
-  refusal drops the upgrade with its reason (test_equip_refusal_kinds).
+  the swap (InventoryResult 21) wait for the room at most 30 minutes, and a
+  named skill refusal drops the upgrade with its reason
+  (test_equip_refusal_kinds).
 """
 
 import unittest
@@ -97,9 +98,12 @@ class AnyOtherRefusal(unittest.TestCase):
         (queued, notes), holds = queue("InventoryResult 21", minutes_ago=16)
         self.assertEqual(queued, ())
         self.assertEqual(len(notes), 1)
-        self.assertEqual(
-            holds[KEY].retry_at, NOW - timedelta(minutes=16) + timedelta(minutes=30)
-        )
+        self.assertIsInstance(holds[KEY], gear.RoomWait)
+        self.assertEqual(holds[KEY].since, NOW - timedelta(minutes=16))
+        (queued, notes), holds = queue("InventoryResult 21", minutes_ago=31)
+        self.assertEqual(queued, ())
+        self.assertIsInstance(holds[KEY], gear.EquipDropped)
+        self.assertIn("waits for bag room", notes[0])
 
     def test_a_named_skill_refusal_drops_the_upgrade_with_its_reason(self):
         (queued, notes), holds = queue("EQUIP_ERR_CANT_EQUIP_SKILL 2", minutes_ago=16)

@@ -21,11 +21,14 @@ The live record, read 2026-10-16 to 2026-10-21 on the dev realm:
 What is pinned here, by what the member can do about the world's answer:
 
 - ROOM (21, 4, 50, 53, 56, 62): the member makes the room. The answer is
-  asked again the pass a slot frees, and otherwise after at most 30 minutes,
-  never the memory window; the shortfall the world revealed goes to the
-  make-room step even when the bag read said there was room.
-- PASSING (stunned, dead, busy, in combat, disarmed, item locked, arena) and
-  GONE (the piece is not carried, or not found): 15 minutes, every time.
+  asked again the pass a slot frees; with none freed in 30 minutes the
+  upgrade is settled with a plain reason until one is, never the memory
+  window and never a doomed row every 30 minutes; the shortfall the world
+  revealed goes to the make-room step even when the bag read said there was
+  room.
+- PASSING (stunned, dead, busy, in combat, disarmed, item locked, arena):
+  15 minutes, every time. GONE (the piece is not carried, or not found):
+  never held, asked again when the bags change.
 - FINAL (level, skill, proficiency, unique-equipped, rank, reputation, ...):
   the upgrade is dropped at once with a plain reason, never held and never a
   "Waiting for the game to accept it" note. An unknown answer, or the bot not
@@ -48,7 +51,7 @@ import gear
 import nowstatus
 from test_classquest import class_plan, who
 from test_classquest_room import grey, room_steps
-from test_equip_upgrades import _block
+from test_equip_upgrades import EQUIP_READS, _block
 
 NOW = datetime(2026, 10, 21, 18, 0, tzinfo=timezone.utc)
 
@@ -145,8 +148,15 @@ class ARoomRefusal(unittest.TestCase):
         """The red test: on main the third 21 waited the 24 hour window."""
         (queued, notes), holds = queue("InventoryResult 21", tries=3, free={"Cronk": 1})
         self.assertEqual(queued, ())
-        self.assertLessEqual(waited(holds), 30)
-        self.assertIn("tries again at", notes[0])
+        self.assertIsInstance(holds[KEY], gear.RoomWait)
+        self.assertIn("needs 2 free bag slot(s) and it has 1", notes[0])
+        (queued, notes), holds = queue(
+            "InventoryResult 21", minutes_ago=31, tries=3, free={"Cronk": 1}
+        )
+        self.assertEqual(queued, ())
+        self.assertIsInstance(holds[KEY], gear.EquipDropped)
+        self.assertIn("Cronk waits for bag room to wear Odo's Ley Staff", notes[0])
+        self.assertEqual(nowstatus.classify("equip: " + notes[0]), [])
 
     def test_every_bag_full_code_is_a_room_refusal(self):
         for code in (4, 21, 50, 53, 56, 62):
@@ -154,18 +164,24 @@ class ARoomRefusal(unittest.TestCase):
                 detail = "InventoryResult %d" % code
                 (queued, _notes), holds = queue(detail, tries=6, free={"Cronk": 1})
                 self.assertEqual(queued, ())
-                self.assertLessEqual(waited(holds), 30)
-                (queued, _notes), _holds = queue(
-                    detail, minutes_ago=31, tries=6, free={"Cronk": 1}
+                self.assertIsInstance(holds[KEY], gear.RoomWait)
+                holds = {}
+                (queued, notes), _ = queue(
+                    detail, minutes_ago=31, tries=6, free={"Cronk": 1}, holds=holds
                 )
-                self.assertEqual(queued, (STAFF,))
+                self.assertEqual(queued, ())
+                self.assertIn("waits for bag room", notes[0])
+                (queued, notes), _ = queue(
+                    detail, minutes_ago=31, tries=6, free={"Cronk": 2}, holds=holds
+                )
+                self.assertEqual((queued, notes), ((STAFF,), ()))
 
     def test_a_named_inventory_full_is_read_too(self):
         (queued, _), holds = queue(
             "EQUIP_ERR_INVENTORY_FULL 50", tries=4, free={"Cronk": 1}
         )
         self.assertEqual(queued, ())
-        self.assertLessEqual(waited(holds), 30)
+        self.assertIsInstance(holds[KEY], gear.RoomWait)
 
     def test_the_world_reveals_the_shortfall_the_bag_read_missed(self):
         """The read said one slot was free (a quiver's, say); the world
@@ -197,7 +213,7 @@ class ARoomRefusal(unittest.TestCase):
         self.assertIn("needs 1 free bag slot(s) and it has 0", notes[0])
         self.assertEqual(
             gear.equip_room((STAFF,), worn, {"Cronk": 0}),
-            {"Cronk": (1, "to put on Odo's Ley Staff over War Paint Shield")},
+            {"Cronk": (1, "to put on Odo's Ley Staff over War Paint Shield", 0)},
         )
 
 
@@ -209,20 +225,36 @@ class APassingOrGoneAnswer(unittest.TestCase):
                 self.assertEqual(queued, ())
                 self.assertEqual(waited(holds), 15)
 
-    def test_a_piece_not_carried_is_read_again_in_fifteen_minutes(self):
+    def test_a_piece_not_carried_is_never_held(self):
         """The bags lag the world's save by up to fifteen minutes: the next
-        read says whether the piece is gone. On main: the 24 hour park."""
+        read says whether the piece is gone, and a piece that is gone leaves
+        `wanted`. So the answer is never a hold or a stuck reason: the equip
+        is forgotten until the bags change. On main: the 24 hour park."""
         for detail in (
             "not carried",
             "InventoryResult 23",
             "EQUIP_ERR_ITEM_NOT_FOUND 23",
+            "InventoryResult 32",
+            "InventoryResult 54",
         ):
             with self.subTest(detail=detail):
-                (queued, _), holds = queue(detail, tries=3)
+                holds = {}
+                (queued, notes), _ = queue(
+                    detail, tries=3, free={"Cronk": 3}, holds=holds
+                )
                 self.assertEqual(queued, ())
-                self.assertEqual(waited(holds), 15)
-                (queued, _), _ = queue(detail, minutes_ago=16, tries=3)
-                self.assertEqual(queued, (STAFF,))
+                self.assertEqual(gear.world_held((STAFF,), holds), 0)
+                self.assertNotIn("tries again at", notes[0])
+                self.assertEqual(nowstatus.classify("equip: " + notes[0]), [])
+                later = NOW + timedelta(hours=10)
+                (queued, _), _ = queue(
+                    detail, tries=3, free={"Cronk": 3}, holds=holds, now=later
+                )
+                self.assertEqual(queued, ())
+                (queued, notes), _ = queue(
+                    detail, tries=3, free={"Cronk": 4}, holds=holds, now=later
+                )
+                self.assertEqual((queued, notes), ((STAFF,), ()))
 
 
 class AnAnswerNobodyCanClear(unittest.TestCase):
@@ -308,10 +340,13 @@ def _write_pass(history, free):
         ],
         "_fetch_free_slots": lambda _names: dict(free),
         "_insert_equip": lambda equip: inserts.append(equip) or True,
+        **EQUIP_READS,
     }
     # Compiles a slice of our own bridge.py source, never external input.
     exec(textwrap.dedent(_block("    async def _write_equips(self")), namespace)  # noqa: S102
-    bridge = types.SimpleNamespace(_equip_worn={}, _equip_holds={}, _equip_room={})
+    bridge = types.SimpleNamespace(
+        _equip_worn={}, _equip_holds={}, _equip_room={}, _equip_answers_read=set()
+    )
     asyncio.run(
         namespace["_write_equips"](bridge, (STAFF,), history, holders={"Cronk"})
     )

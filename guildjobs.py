@@ -3071,7 +3071,11 @@ def plan(
             _offer_for(supply, m.name),
             _offer_for(pets, m.name),
             _offer_for(weapons, m.name),
-            (equip_room or {}).get(m.name),
+            # A guild whose make-room steps are used up this pass asks none:
+            # its member takes its class quest instead of no step at all.
+            (equip_room or {}).get(m.name)
+            if counters["room"].get(m.guild, 0) < ROOM_STEPS_PER_GUILD
+            else None,
             _offer_for(mounts, m.name),
         )
         asked, yielded = class_asking(m, classes, hunts, now, recent, asks)
@@ -3299,6 +3303,40 @@ def _upkeep_first(
     return None, _join(supply_note, riding_note), gear_note
 
 
+def _room_first(
+    m, room, leveling, recent, cap, level_room, still_for, book, kept, crafters, master
+):
+    """(the member's step as _member_step returns it, or None; the room note)
+    for a member whose upgrade waits on room in its bags (`room`, from
+    gear.equip_room, #1088), ahead of the class quest.
+
+    ROOM FOR AN UPGRADE COMES BEFORE THE CLASS QUEST. It is one sale, post or
+    destroy, on its own cooldown and allowance (ROOM_ACTION), and a member
+    that cannot put an upgrade on without it is otherwise never given it:
+    behind the class quest, Bonk and Cronk carried a two-hander they could not
+    wear for 4.8 days and no "makes room ... to put on" step ran in four hours
+    of guild passes (2026-10-21), every one of them a class quest's. Only the
+    two ways out of a spot the member cannot work from come first (a stalled
+    class step's level walk, the stood-still hearth), because a vendor walk
+    from there never finishes either. A room step cooling down, used up for
+    these bags (ROOM_STEPS_PER_STATE) or with nothing to part with takes no
+    pass: the class quest runs, and the note says why."""
+    if not room:
+        return None, ""
+    first = stalled_level_first(m, leveling, recent, cap, level_room)
+    if first is not None:
+        return (*first, ""), ""
+    step = stood_still_step(m, still_for, recent, leveling)
+    if step is not None:
+        return (step, step.said, "", ""), ""
+    step, _doing, note = equip_room_step(
+        m, room, book, recent, cap, kept, crafters, master
+    ) or (None, "", "")
+    if step is not None:
+        return (step, step.said, "", ""), ""
+    return None, note
+
+
 def _member_step(
     m,
     offer,
@@ -3327,10 +3365,11 @@ def _member_step(
     equip_room=None,
     mount=None,
 ):
-    """Room in the bags for an upgrade the world cannot put on without it
-    (equip_room_step, #1088), then a class quest, then a hunter's first pet,
-    then a hearth out of a spot it cannot leave, then food for a member
-    with nothing to eat or drink,
+    """For a member whose upgrade waits on room in its bags, the way out of a
+    spot it cannot work from and then the make-room step (_room_first,
+    #1088); then a class quest, then a hunter's first pet, then a hearth out
+    of a spot it cannot leave, then food for a member with nothing to eat or
+    drink,
     then a sale for bags that leave loot on the corpse (loot_room_short), then
     the inn, then riding, then a mount (`mount`, a mountbuy.Facts), then the
     weapon master for a carried weapon it has no
@@ -3358,18 +3397,21 @@ def _member_step(
     A member that has stood on one spot for standstill.STILL_MINUTES
     (`still_for`) with nothing asked of it hearths home before anything else
     is asked (stood_still_step)."""
-    # ROOM FOR AN UPGRADE COMES FIRST (#1088). It is one sale, post or
-    # destroy, on its own cooldown and allowance (ROOM_ACTION), and a member
-    # that cannot put an upgrade on without it is otherwise never given it:
-    # behind the class quest, Bonk and Cronk carried a two-hander they could
-    # not wear for 4.8 days and no "makes room ... to put on" step ran in four
-    # hours of guild passes (2026-10-21), every one of them a class quest's.
-    # With nothing to part with there is no step and the class quest runs.
-    step, doing, room_note = equip_room_step(
-        m, equip_room, classes, recent, cap, kept, crafters, master
-    ) or (None, "", "")
-    if step is not None or doing:
-        return step, doing, "", ""
+    found, room_note = _room_first(
+        m,
+        equip_room,
+        leveling,
+        recent,
+        cap,
+        level_room,
+        still_for,
+        classes,
+        kept,
+        crafters,
+        master,
+    )
+    if found is not None:
+        return found
     found, quest_note = _quest_first(
         m,
         classes,
@@ -4592,19 +4634,42 @@ def _room_ladder(m, said, need, kept, book, cap, crafters, master):
     )
 
 
+# The make-room steps one upgrade is given while its holder's bags stand at
+# one count of free slots (#1088). A step that frees a slot starts the count
+# again; three that free none mean the vendor walk cannot finish from where the
+# member is, and the steps stop until the bags change.
+ROOM_STEPS_PER_STATE = 3
+
+
+def _room_steps_since(m, recent, minutes) -> int:
+    """The make-room steps written for `m` in the last `minutes` (rows of one
+    step share their age)."""
+    return len(
+        {
+            int(r.age_minutes)
+            for r in recent or ()
+            if r.name == m.name
+            and r.action == ROOM_ACTION
+            and int(r.age_minutes) <= int(minutes)
+        }
+    )
+
+
 def equip_room_step(m, room, book, recent, cap, kept=None, crafters=None, master=""):
     """None when the member has the room its upgrade needs, or none is asked,
     else (step or None, what the member does, a note): the member makes room
     for an upgrade the world cannot put on yet (#1088).
 
-    `room` is (free slots needed, "to put on <piece> over <worn>") from
-    gear.equip_room: a two-hander over a main hand and a shield moves two
-    pieces into the one bag slot it leaves, so with full bags the world
-    refuses it. Three members with full bags were held a day each on that
-    refusal. The make-room ladder is the class quest's (_room_ladder), with
-    its cooldown and allowance; the equip pass asks again the pass the room
-    is there. With nothing to part with, no step: the note says so plainly
-    and the upgrade stays in the bags.
+    `room` is (free slots needed, "to put on <piece> over <worn>", minutes the
+    bags have stood at this count) from gear.equip_room: a two-hander over a
+    worn off hand moves the off hand into a bag slot of its own, so with full
+    bags the world refuses it. Three members with full bags were held a day
+    each on that refusal. The make-room ladder is the class quest's
+    (_room_ladder), with its cooldown and allowance; the equip pass asks again
+    the pass the room is there, and settles the upgrade with a plain reason
+    when no slot frees in gear.ROOM_WAIT_MINUTES, so a member with nothing to
+    part with is never held. With nothing to part with, or ROOM_STEPS_PER_STATE
+    steps already taken for these bags, no step: the note says so plainly.
     """
     if not room or m.free_slots is None or int(m.free_slots) >= int(room[0]):
         return None
@@ -4619,7 +4684,19 @@ def equip_room_step(m, room, book, recent, cap, kept=None, crafters=None, master
     )
     if _cooling(m, ROOM_ACTION, recent):
         return None, said, ""
-    step = _room_ladder(m, said, need, kept, book, cap, crafters, master)
+    stood = int(room[2]) if len(room) > 2 else None
+    if (
+        stood is not None
+        and _room_steps_since(m, recent, stood) >= ROOM_STEPS_PER_STATE
+    ):
+        return (
+            None,
+            "",
+            "%s made room %d time(s) %s and its bags have not gained a slot; no "
+            "more until they change" % (m.name, ROOM_STEPS_PER_STATE, words),
+        )
+    short = need - int(m.free_slots)
+    step = _room_ladder(m, said, short, kept, book, cap, crafters, master)
     if step is None:
         return (
             None,
