@@ -235,6 +235,35 @@ class FamilyLoops(unittest.TestCase):
         runs = [family_run(i, leader="Nobody") for i in (1, 2, 3)]
         self.assertEqual({}, health.family_streaks(runs, ZUG))
 
+    def test_three_razorfens_downs_with_hearth_reason_is_a_finding(self):
+        """Razorfen Downs (map 129) with the 'hearth' ended_reason and no encounters.
+        This is the exact scenario from the issue: 3 runs, ended_reason contains
+        'failed exit recovered by hearth; every member is outside', and no boss
+        encounters credited. The finding should appear with the correct dungeon name.
+        """
+        hearth_reason = "failed exit recovered by hearth; every member is outside"
+        runs = [
+            family_run(1, map_id=129, outcome="left", ago=3 * HOUR, leader="Zug"),
+            family_run(2, map_id=129, outcome="stalled", ago=2 * HOUR, leader="Zug"),
+            family_run(3, map_id=129, outcome="left", ago=1 * HOUR, leader="Zug"),
+        ]
+        for r in runs:
+            r["ended_reason"] = hearth_reason
+        streaks = health.family_streaks(runs, ZUG)
+        events = []  # no boss encounters credited
+        (f,) = health.family_loop_findings(streaks, events, NOW)
+        self.assertEqual("family-run-loop:Zug:129", f["key"])
+        self.assertEqual(
+            "Zug's family ran Razorfen Downs 3 times without a clear", f["title"]
+        )
+        # 3 runs x 0.5 hours each = 1.5 lost hours; impact = 3 * 1.5 = 4.5
+        self.assertEqual((3, 3.0, 4.5), (f["affected"], f["hours"], f["impact"]))
+        # Outcomes sorted alphabetically: "left" before "stalled"
+        self.assertIn("2 left, 1 stalled", f["evidence"])
+        self.assertIn('"failed exit recovered by hearth; every member is outside"', f["evidence"])
+        self.assertIn("no encounter credited", f["evidence"])
+        self.assertEqual("dungeons", f["area"])
+
 
 class Questers(unittest.TestCase):
     QUESTERS = {
