@@ -22415,7 +22415,11 @@ class Bridge(discord.Client):
         await self.wait_until_ready()
         while not self.is_closed():
             try:
-                names = await asyncio.to_thread(_family_names)
+                names = await asyncio.to_thread(
+                    holdings.subjects,
+                    await asyncio.to_thread(_roster_cohort_rows),
+                    await asyncio.to_thread(_family_names),
+                )
                 written = await asyncio.to_thread(_take_sample, names)
                 pruned = await asyncio.to_thread(_prune_samples)
                 log.info("sample cycle: characters=%d written=%d pruned=%d",
