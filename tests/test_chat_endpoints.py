@@ -336,8 +336,15 @@ class PartyEndpointTest(unittest.TestCase):
         _, fetch = self.get("/api/chat/party?family=Zug&after=17", cursor=17)
         fetch.assert_called_once_with(["Zug", "Oz"], 17)
 
-    def test_an_unknown_family_reads_the_default_one(self):
-        _, fetch = self.get("/api/chat/party?family=Nobody&after=1", cursor=1)
+    def test_an_unknown_family_is_refused_before_any_query(self):
+        # Falling back to the default family would read its lines aloud to a
+        # page that asked for another, and twice where it polls both.
+        handler, fetch = self.get("/api/chat/party?family=Nobody&after=1", cursor=1)
+        self.assertEqual(handler.code, 400)
+        fetch.assert_not_called()
+
+    def test_no_family_reads_the_default_one(self):
+        _, fetch = self.get("/api/chat/party?after=1", cursor=1)
         fetch.assert_called_once_with(["Grug", "Ugga"], 1)
 
     def test_no_cursor_asks_for_the_newest_row(self):

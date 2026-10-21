@@ -14,6 +14,7 @@ Discord relay: the page keeps its own cursor, the row id.
 from __future__ import annotations
 
 import hashlib
+import logging
 
 import bonds
 import cast
@@ -53,6 +54,8 @@ _VOICES = {cast.rename(name): pr for name, pr in _LIVE_VOICES.items()}
 _UNKNOWN_PITCH = (0.85, 1.25)
 _UNKNOWN_RATE = (0.90, 1.15)
 
+log = logging.getLogger(__name__)
+
 
 def voice_for(name: str) -> dict:
     """{engine_voice_hint, pitch, rate} for `name`, the same on every call.
@@ -87,12 +90,25 @@ def feed(rows: list[dict], cursor: int) -> dict:
     The cursor moves past every raw row read, the hearers' copies and the
     addon rows included. Moving it only to the last line spoken would read
     the dropped copies again on the next poll, where they would collapse to
-    one row and be spoken a second time.
+    one row and be spoken a second time. A row without a whole id or age
+    is logged and left out: it cannot move the cursor or be timed.
     """
+    rows = [row for row in rows if _well_formed(row)]
     top = max([cursor, *(int(row["id"]) for row in rows)])
     kept, _copies = relay.collapse_hearers(rows)
     spoken, _addon = relay.partition_addon(kept)
     return {"rows": [_line(row) for row in spoken], "cursor": top}
+
+
+def _well_formed(row: dict) -> bool:
+    """True when the row's id and age (if any) read as whole numbers."""
+    try:
+        int(row["id"])
+        int(row.get("age_s") or 0)
+    except (KeyError, TypeError, ValueError):
+        log.warning("party chat row skipped, no whole id or age: %r", row)
+        return False
+    return True
 
 
 def _line(row: dict) -> dict:

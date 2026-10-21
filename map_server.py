@@ -5107,8 +5107,13 @@ class Handler(BaseHTTPRequestHandler):
 
         One row per utterance (partyvoice.feed), each with its speaker's
         voice, and the cursor the page sends back as `after` next time.
+        A family key the roster does not hold is a 400, not the default
+        family: the page would read the wrong family's lines aloud.
         """
-        names, _chosen, _known = self._family_scope(query)
+        names, _chosen, known = self._family_scope(query)
+        if query.get("family", [""])[0] not in ["", *known]:
+            self._send(400, "application/json", b'{"error": "no such family"}')
+            return
         raw_after = query.get("after", [""])[0]
         if raw_after and not raw_after.isdigit():
             self._send(400, "application/json", b'{"error": "bad cursor"}')

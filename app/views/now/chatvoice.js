@@ -147,9 +147,16 @@ export function makeReader(deps) {
     try { speak(line, finished, deps.engine); } catch (e) { finished(e); }
   }
 
+  // A row without a speaker or words is logged and skipped, not said; a row
+  // without a voice or an age is said in the engine's own voice, as new.
   function hear(rows, at) {
     for (const r of rows || []) {
-      queue.offer({ sender: r.sender, text: r.text, voice: r.voice, at: at - (r.age_s || 0) * 1000 }, at);
+      if (!r || typeof r.sender !== "string" || typeof r.text !== "string") {
+        console.warn("read chat aloud: a row with no speaker or words was skipped", r);
+        continue;
+      }
+      const age = typeof r.age_s === "number" ? r.age_s : 0;
+      queue.offer({ sender: r.sender, text: r.text, voice: r.voice || {}, at: at - age * 1000 }, at);
     }
   }
 
@@ -161,15 +168,19 @@ export function makeReader(deps) {
   }
 
   // One poll at a time: a slow answer overlapping the next tick would send
-  // the same cursor twice.
+  // the same cursor twice. The guard is lifted however the poll ends, so one
+  // that throws is reported to its caller and the next tick still polls.
   async function poll() {
     if (polling) return;
     polling = true;
-    const reads = deps.families().map((f) => pollOne(f).catch((e) => {
-      console.warn("read chat aloud: the " + f + " feed did not answer", e);
-    }));
-    await Promise.all(reads);
-    polling = false;
+    try {
+      const reads = deps.families().map((f) => pollOne(f).catch((e) => {
+        console.warn("read chat aloud: the " + f + " feed did not answer", e);
+      }));
+      await Promise.all(reads);
+    } finally {
+      polling = false;
+    }
     if (on) next();
   }
 

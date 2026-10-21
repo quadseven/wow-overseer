@@ -267,6 +267,28 @@ class TheReader(unittest.TestCase):
         )
         self.assertEqual(got, [False, "1"])
 
+    def test_a_malformed_row_is_skipped_and_logged_and_the_rest_said(self):
+        got = run(
+            "const warned = []; console.warn = (...a) => warned.push(String(a[0]));"
+            "feeds = [{rows: [], cursor: 0}, {rows: [null, {sender: 'Grug'},"
+            " {sender: 'Grug', text: 'no voice'}, line(1, 'Aye.')], cursor: 4}];"
+            "await reader.start(); await reader.poll(); end();"
+            + show("[said.map((u) => [u.text, u.pitch]), warned.length]")
+        )
+        self.assertEqual(got, [[["no voice", 1], ["Aye.", 0.7]], 2])
+
+    def test_a_poll_that_throws_does_not_stop_the_next_one(self):
+        got = run(
+            "let broken = true;"
+            "const r = M.makeReader({families: () => { if (broken) throw new Error('x'); return ['Grug']; },"
+            " fetchFeed: async (f, after) => { asked.push([f, after]); return {rows: [], cursor: 0}; },"
+            " audible: () => null, engine, store, now: () => clock,"
+            " every: () => 1, cancel: () => {}});"
+            "let thrown = false; try { await r.start(); } catch (e) { thrown = true; }"
+            "broken = false; await r.poll();" + show("[thrown, asked]")
+        )
+        self.assertEqual(got, [True, [["Grug", None]]])
+
     def test_a_feed_that_fails_is_logged_and_the_reader_keeps_going(self):
         got = run(
             "const r = M.makeReader({families: () => ['Grug'],"

@@ -159,6 +159,18 @@ class FeedTest(unittest.TestCase):
             ],
         )
 
+    def test_a_row_without_a_whole_id_or_age_is_dropped_and_logged(self):
+        broken = [
+            {"sender_name": "Grug", "text": "no id"},
+            row("x"),
+            row(4, age="soon"),
+        ]
+        with self.assertLogs("partyvoice", level="WARNING") as logs:
+            out = partyvoice.feed([*broken, row(5, text="Aye.")], 3)
+        self.assertEqual([line["id"] for line in out["rows"]], [5])
+        self.assertEqual(out["cursor"], 5)
+        self.assertEqual(len(logs.records), 3)
+
     def test_the_same_words_said_again_later_are_two_lines(self):
         # The moment is part of the key: only the hearers' copies collapse.
         out = partyvoice.feed(
