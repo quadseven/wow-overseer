@@ -223,13 +223,9 @@ class HardBlockers(unittest.TestCase):
         self.assertIn("Nothing clears Molten Core yet", hard[0])
         self.assertIn("holds at the entrance", hard[0])
 
-    def test_the_shipped_answer_is_that_it_clears_but_does_not_gather(self):
-        """Unpatched, the card states today's truth: the run clears
-        (mod-overseer#640, in the deployed module since 2026-09-24), and only
-        the head is walked to the door. This fails the moment raidrun claims
-        a gather it has not got, or drops the clear the module has."""
+    def test_the_run_holds_and_does_not_gather(self):
         self.assertIn(raidready.RAID_PORTAL, raidready.jobs.RAID_KEYWORDS)
-        self.assertTrue(raidready.raidrun.CLEARS)
+        self.assertFalse(raidready.raidrun.CLEARS)
         self.assertFalse(raidready.raidrun.GATHERS)
 
     def test_a_run_that_does_not_gather_is_a_hard_blocker_said_plainly(self):
@@ -478,9 +474,9 @@ class EachRaiderIsReadyOrSaysWhyNot(unittest.TestCase):
         head = next(r for r in card["raiders"] if r["name"] == self.head)
         self.assertTrue(head["ready"], head["short"])
         self.assertEqual("yes", head["cells"][-1])
-        self.assertEqual("200 of 200", head["cells"][5])
-        self.assertEqual("14 of 14", head["cells"][8])
-        self.assertEqual("100%", head["cells"][4])
+        self.assertEqual("200 of 200", head["cells"][6])
+        self.assertEqual("14 of 14", head["cells"][9])
+        self.assertEqual("100%", head["cells"][5])
         self.assertIn("1 ready for the core", card["raiders_line"])
 
     def test_a_big_stack_does_not_stand_in_for_a_missing_flask(self):
@@ -531,7 +527,7 @@ class EachRaiderIsReported(unittest.TestCase):
                 }
             )
         # Two pre-raid pieces of nine body slots; fire resistance 17 in all.
-        self.worn = _geared(self.head, 2, fire_res=0)
+        self.worn = _geared(self.head, 2, fire_res=0, item_level=65)
         self.worn[1]["fire_res"], self.worn[2]["fire_res"] = 10, 7
         self.card = _card(
             self.rows,
@@ -540,6 +536,7 @@ class EachRaiderIsReported(unittest.TestCase):
             worn=self.worn,
             item_rows=ITEM_ROWS,
             attuned=[self.head],
+            clears=False,
             gathers=False,
         )
         self.by_name = {r["name"]: r for r in self.card["raiders"]}
@@ -556,6 +553,7 @@ class EachRaiderIsReported(unittest.TestCase):
         self.assertEqual(1, head["group"])
         self.assertEqual("tank", head["role"])
         self.assertEqual(60, head["level"])
+        self.assertEqual(65.0, head["item_level"])
         self.assertLess(head["gear"], raidready.GEAR_CONVENTION)
         self.assertEqual(17, head["fire_res"])
         self.assertTrue(head["attuned"])
@@ -566,6 +564,7 @@ class EachRaiderIsReported(unittest.TestCase):
                 self.head,
                 "main tank, Protection",
                 "60",
+                "65.0",
                 "22%",
                 "17 of 200",
                 "yes",
@@ -583,7 +582,7 @@ class EachRaiderIsReported(unittest.TestCase):
     def test_unread_gear_and_other_continents_are_said_not_guessed(self):
         others = [r for r in self.card["raiders"] if r["name"] != self.head]
         self.assertTrue(all(r["gear"] is None for r in others))
-        self.assertTrue(all(r["cells"][4] == "not read" for r in others))
+        self.assertTrue(all(r["cells"][5] == "not read" for r in others))
         self.assertIn("Outland", {r["where"] for r in others})
         self.assertTrue(any(r["where"].endswith(", offline") for r in others))
 
@@ -593,12 +592,12 @@ class EachRaiderIsReported(unittest.TestCase):
         self.assertIn("1 wearing any fire resistance (17 in all)", line)
         self.assertIn("0 fire protection potions carried", line)
 
-    def test_the_card_says_what_the_run_does_and_that_it_clears(self):
+    def test_the_card_says_the_run_holds_until_clearing_is_ordered(self):
         self.assertIn("moltencore 1", self.card["run_line"])
-        self.assertNotIn("does not clear", self.card["run_line"])
-        self.assertIn("clears it with the dungeon brain", self.card["run_line"])
-        self.assertIn("none of it has been validated live", self.card["clearing_line"])
-        self.assertIn("until the raid run reaches CLEAR", self.card["clearing_line"])
+        self.assertIn("does not clear", self.card["run_line"])
+        self.assertIn("holds at the entrance", self.card["run_line"])
+        self.assertIn("map 409", self.card["clearing_line"])
+        self.assertIn("until a clearing order arms it", self.card["clearing_line"])
 
     def test_the_attunement_path_is_on_the_card(self):
         att = self.card["attunement"]
