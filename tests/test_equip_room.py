@@ -33,7 +33,7 @@ import bag_pressure
 import gear
 from test_classquest import class_plan, who
 from test_classquest_room import grey, room_steps
-from test_equip_upgrades import _block
+from test_equip_upgrades import EQUIP_READS, _block
 
 NOW = datetime(2026, 10, 18, 6, 1, tzinfo=timezone.utc)
 
@@ -101,6 +101,7 @@ class TheRoomAnEquipNeeds(unittest.TestCase):
                     1,
                     "to put on Odo's Ley Staff over Cookie's Tenderizer "
                     "and War Paint Shield",
+                    0,
                 )
             },
         )
@@ -136,7 +137,7 @@ class AFullBackpack(unittest.TestCase):
 
     def test_the_freed_slot_asks_again_at_once(self):
         """The room the guild pass made lifts the hold the refusal began, the
-        same pass, though its staged retry is 24 hours away."""
+        same pass, though its retry time is still ahead."""
         holds = {}
         queue_for({"Cronk": 0}, holds=holds)
         queue, notes = queue_for({"Cronk": 1}, holds=holds)
@@ -154,20 +155,24 @@ class AFullBackpack(unittest.TestCase):
         self.assertEqual(queue, (STAFF,))
         self.assertEqual(notes, ())
 
-    def test_a_refusal_with_room_keeps_its_staged_hold(self):
-        """Room was not why the world refused it, so the hold stands."""
+    def test_a_room_refusal_with_room_read_waits_for_one_more_slot(self):
+        """The read said there was room and the world said 21 anyway (#1088):
+        the wait stands while the bags stay as they were, and lifts the pass
+        one more slot is free, never a day later."""
         holds = {}
         queue, notes = queue_for({"Cronk": 1}, holds=holds)
         self.assertEqual(queue, ())
-        self.assertIn("tries again at", notes[0])
-        queue, notes = queue_for({"Cronk": 2}, holds=holds)
+        self.assertIn("needs 2 free bag slot(s) and it has 1", notes[0])
+        queue, notes = queue_for({"Cronk": 1}, holds=holds)
         self.assertEqual(queue, ())
-        self.assertIn("tries again at", notes[0])
+        self.assertIn("needs 2 free bag slot(s) and it has 1", notes[0])
+        queue, notes = queue_for({"Cronk": 2}, holds=holds)
+        self.assertEqual((queue, notes), ((STAFF,), ()))
 
-    def test_unread_bags_keep_the_old_hold(self):
+    def test_unread_bags_wait_on_the_refusal(self):
         queue, notes = queue_for(None)
         self.assertEqual(queue, ())
-        self.assertIn("tries again at", notes[0])
+        self.assertIn("its bags were not read", notes[0])
 
     def test_a_one_for_one_swap_is_queued_with_full_bags(self):
         chest = gear.Equip("Cronk", 7002, 6000, "Vest", "chest", 30, 20, "upgrade")
@@ -262,10 +267,13 @@ def _write_pass(free_reads):
         ],
         "_fetch_free_slots": free,
         "_insert_equip": lambda equip: inserts.append(equip) or True,
+        **EQUIP_READS,
     }
     # Compiles a slice of our own bridge.py source, never external input.
     exec(textwrap.dedent(_block("    async def _write_equips(self")), namespace)  # noqa: S102
-    bridge = types.SimpleNamespace(_equip_worn={}, _equip_holds={}, _equip_room={})
+    bridge = types.SimpleNamespace(
+        _equip_worn={}, _equip_holds={}, _equip_room={}, _equip_answers_read=set()
+    )
     # _write_equips judges the history against the real clock, so the refusals
     # are stamped from it too; a pinned NOW aged them out 24 hours later.
     refused_at = datetime.now(timezone.utc) - timedelta(minutes=2)
