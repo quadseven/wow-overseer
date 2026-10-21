@@ -176,6 +176,13 @@ class TheVoice(unittest.TestCase):
         )
         self.assertEqual(got, ["Aye.", 0.7, 0.85, "Daniel"])
 
+    def test_speak_completes_only_once_when_engine_fires_multiple_callbacks(self):
+        got = run(
+            "let calls = 0; M.speak(line(1, 'Aye.'), () => { calls += 1; }, engine);"
+            "said[0].onend(); said[0].onerror({error: 'late'});" + show("calls")
+        )
+        self.assertEqual(got, 1)
+
     def test_no_speech_engine_is_reported_not_swallowed(self):
         got = run(
             "let err = null; M.speak(line(1, 'Aye.'), (e) => { err = e; }, {});"
@@ -239,6 +246,15 @@ class TheReader(unittest.TestCase):
             "await reader.start(); await reader.poll();" + show("video.volume")
         )
         self.assertEqual(got, 0.8)
+
+    def test_late_engine_error_does_not_restore_the_next_lines_duck(self):
+        got = run(
+            "feeds = [{rows: [], cursor: 0}, {rows: [line(1, 'one'), line(2, 'two')], cursor: 2}];"
+            "await reader.start(); await reader.poll();"
+            "const first = said[0]; first.onend(); first.onerror({error: 'late'});"
+            + show("[said.length, video.volume]")
+        )
+        self.assertEqual(got, [2, 0.25])
 
     def test_a_line_that_waited_too_long_is_not_said(self):
         got = run(

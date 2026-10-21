@@ -99,8 +99,14 @@ export function speak(line, done, engine = globalThis) {
   utter.rate = v.rate || 1;
   const system = pickVoice(synth.getVoices(), v.engine_voice_hint);
   if (system) utter.voice = system;
-  utter.onend = () => done(null);
-  utter.onerror = (e) => done(e.error ? new Error("speech failed: " + e.error) : new Error("speech failed"));
+  let settled = false;
+  const finish = (error) => {
+    if (settled) return;
+    settled = true;
+    done(error);
+  };
+  utter.onend = () => finish(null);
+  utter.onerror = (e) => finish(e.error ? new Error("speech failed: " + e.error) : new Error("speech failed"));
   synth.speak(utter);
 }
 
@@ -132,9 +138,12 @@ export function makeReader(deps) {
   let restore = null;
   let polling = false;
 
-  function finished(err) {
+  function finished(err, lineRestore, settle) {
+    if (settle.done) return;
+    settle.done = true;
     if (err && on) console.warn("read chat aloud: a line was not said", err);
-    if (restore) { restore(); restore = null; }
+    lineRestore();
+    if (restore === lineRestore) restore = null;
     queue.done();
     if (on) next();
   }
@@ -142,9 +151,12 @@ export function makeReader(deps) {
   function next() {
     const line = queue.take(deps.now());
     if (!line) return;
-    restore = duck(deps.audible());
+    const lineRestore = duck(deps.audible());
+    restore = lineRestore;
+    const settle = { done: false };
     // An engine that throws instead of firing onerror still lifts the duck.
-    try { speak(line, finished, deps.engine); } catch (e) { finished(e); }
+    try { speak(line, (err) => finished(err, lineRestore, settle), deps.engine); }
+    catch (e) { finished(e, lineRestore, settle); }
   }
 
   // A row without a speaker or words is logged and skipped, not said; a row
