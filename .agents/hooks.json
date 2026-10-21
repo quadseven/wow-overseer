@@ -1,0 +1,15 @@
+{
+  "test-hook": {
+    "PreToolUse": [
+      {
+        "matcher": "read_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'hook ran' > /Users/loom/lanes/quadseven.wow-overseer-1093-r12/hook_output.txt"
+          }
+        ]
+      }
+    ]
+  }
+}
