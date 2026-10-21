@@ -464,6 +464,11 @@ def candidates(
     already been given a copy of this recipe this pass and is skipped. For a
     recipe that needs a specialization, a person not shown to hold it comes
     after every person who is (UNSPECIALIZED_TIER).
+
+    NEW: Family members at or above recipe rank get no skill benefit (recipe
+    is grey). They fall to LATER tier so lower-skilled family members who
+    can still level up get priority. This distributes crafting XP across
+    the family.
     """
     seats = _seats_by_name(reg, recipe.skill)
     ranked = []
@@ -481,11 +486,16 @@ def candidates(
         specialized = known.specialized(person.name, recipe)
         if not specialized:
             tier, when = UNSPECIALIZED_TIER + LATER_TIERS[seat], LATER
+        elif person.family and have > recipe.rank + int(gap):
+            tier, when = LATER_TIERS[seat], LATER
         elif now or (soon and seat != GUILD):
             tier, when = SEAT_TIERS[(seat, now)], NOW if now else SOON
         else:
             tier, when = LATER_TIERS[seat], LATER
-        benefit = abs(have - recipe.rank)
+        if have >= recipe.rank:
+            benefit = 1000 + (have - recipe.rank)
+        else:
+            benefit = recipe.rank - have
         online = bool(person.online or person.family)
         why = _why(recipe, person.name, have, seat)
         if not specialized:

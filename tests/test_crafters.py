@@ -510,6 +510,96 @@ class TheCrafterTakesTheLetterOutAndLearnsIt(unittest.TestCase):
         self.assertIn("walk row", crafters.walk_refusal("Og", roster))
 
 
+class CraftingDistribution(unittest.TestCase):
+    """New behavior: distribute crafting XP across family members.
+
+    Old behavior: master crafter does everything.
+    New behavior: lower-skilled family members get assignments to level up.
+    Acceptance: no single member does >50% of family's crafting in 24h window.
+    """
+
+    def test_distributes_crafting_across_family_members(self):
+        """When multiple family members can learn a trade, assignments should
+        be distributed so lower-skilled members level up, not funneled to the
+        master. Uses multiple recipes at different ranks so different members
+        are optimal for different recipes.
+        """
+        # Family: Master (250), App1 (120), App2 (80), App3 (40), Novice (10)
+        master = person("Master", {ALCHEMY: 250}, family=True)
+        app1 = person("App1", {ALCHEMY: 120}, family=True)
+        app2 = person("App2", {ALCHEMY: 80}, family=True)
+        app3 = person("App3", {ALCHEMY: 40}, family=True)
+        novice = person("Novice", {ALCHEMY: 10}, family=True)
+
+        # Guild has high-level alchemists for "now" assignments
+        guild = [
+            person("GuildAlch1", {ALCHEMY: 300}),
+            person("GuildAlch2", {ALCHEMY: 300}),
+        ]
+        people = [master, app1, app2, app3, novice, *guild]
+
+        # Multiple recipes at different ranks - each family member is optimal
+        # for a different rank range
+        recipes = [
+            crafters.Recipe("Ugga", 1, 1, "Rank 30 Recipe", ALCHEMY, 30, 1001),
+            crafters.Recipe("Ugga", 2, 2, "Rank 50 Recipe", ALCHEMY, 50, 1002),
+            crafters.Recipe("Ugga", 3, 3, "Rank 70 Recipe", ALCHEMY, 70, 1003),
+            crafters.Recipe("Ugga", 4, 4, "Rank 90 Recipe", ALCHEMY, 90, 1004),
+            crafters.Recipe("Ugga", 5, 5, "Rank 110 Recipe", ALCHEMY, 110, 1005),
+            crafters.Recipe("Ugga", 6, 6, "Rank 130 Recipe", ALCHEMY, 130, 1006),
+        ]
+
+        # Simulate multiple recipe assignments (like a day's worth)
+        # Track who gets assigned
+        assignments = {}
+        for recipe in recipes:
+            reg = register(people)
+            pick = crafters.choose(recipe, reg, people, KNOWN, 25)
+            if pick.taker and pick.seat in ("family", "master"):
+                assignments[pick.taker] = assignments.get(pick.taker, 0) + 1
+
+        # At least 3 family members should receive assignments
+        family_names = {"Master", "App1", "App2", "App3", "Novice"}
+        family_assignees = [name for name in assignments if name in family_names]
+        self.assertGreaterEqual(
+            len(family_assignees),
+            3,
+            f"Expected at least 3 family members to receive crafting assignments, got {family_assignees}",
+        )
+
+        # No single family member should do >50% of family's crafting
+        total_family = sum(assignments.get(n, 0) for n in family_names)
+        if total_family > 0:
+            for name in family_names:
+                share = assignments.get(name, 0) / total_family
+                self.assertLessEqual(
+                    share,
+                    0.5,
+                    f"{name} did {share:.0%} of family crafting, expected <= 50%",
+                )
+
+    def test_lower_skilled_members_get_soon_assignments_when_close_to_rank(self):
+        """A family member close to recipe rank should get 'soon' assignments
+        even if master is much higher, so they can level up efficiently.
+        """
+        master = person("Master", {ALCHEMY: 250}, family=True)
+        app = person("App", {ALCHEMY: 45}, family=True)  # Close to rank 50
+        # Guild member without alchemy skill - not a designated crafter
+        guild = [person("GuildMember", {FIRST_AID: 300})]
+        people = [master, app, *guild]
+
+        # Rank 50 recipe - App is at 45 (5 away), Master at 250 (200 away)
+        recipe = UGGA_RECIPES[-1]  # rank 50
+
+        reg = register(people)
+        pick = crafters.choose(recipe, reg, people, KNOWN, 25)
+
+        # App should get it "soon" because they're close and can learn efficiently
+        # Master is way past the rank and gets no benefit (falls to LATER)
+        self.assertEqual(pick.taker, "App")
+        self.assertEqual(pick.when, "soon")
+
+
 class TheBridgeWiring(unittest.TestCase):
     tree = ast.parse(BRIDGE)
 
