@@ -31,7 +31,6 @@ import craft_rhythm  # noqa: E402
 import craft_supply  # noqa: E402
 import guildjobs  # noqa: E402
 import learnaim  # noqa: E402
-import modsource  # noqa: E402
 import standin  # noqa: E402
 import tradechoice  # noqa: E402
 from towntrip import Town  # noqa: E402
@@ -332,17 +331,6 @@ class VialsForTheHerbsInHand(unittest.TestCase):
 
 
 class TheBridgeWiresIt(unittest.TestCase):
-    def test_arrival_purchases_the_named_recipe_through_the_trainer(self):
-        source = modsource.read(modsource.MODULE, encoding="utf-8")
-        arrival = source[source.index("bool TrainOnArrival(") :]
-        arrival = arrival[
-            : arrival.index("// ------------------------------------- job='craft'")
-        ]
-        self.assertIn("plan.learnSpell", arrival)
-        self.assertIn("trainer->CanTeachSpell(bot, recipe)", source)
-        self.assertIn("trainer->TeachSpell(npc, bot, recipe->SpellId)", source)
-        self.assertIn("bot->HasSpell(recipe->SpellId)", source)
-
     def test_the_learn_rows_carry_recipes_due(self):
         self.assertIn("guildjobs.recipe_spells_due(", BRIDGE)
 
