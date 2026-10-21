@@ -136,7 +136,7 @@ class AFullBackpack(unittest.TestCase):
 
     def test_the_freed_slot_asks_again_at_once(self):
         """The room the guild pass made lifts the hold the refusal began, the
-        same pass, though its staged retry is 24 hours away."""
+        same pass, though its retry time is still ahead."""
         holds = {}
         queue_for({"Cronk": 0}, holds=holds)
         queue, notes = queue_for({"Cronk": 1}, holds=holds)
@@ -154,15 +154,19 @@ class AFullBackpack(unittest.TestCase):
         self.assertEqual(queue, (STAFF,))
         self.assertEqual(notes, ())
 
-    def test_a_refusal_with_room_keeps_its_staged_hold(self):
-        """Room was not why the world refused it, so the hold stands."""
+    def test_a_room_refusal_with_room_read_waits_for_one_more_slot(self):
+        """The read said there was room and the world said 21 anyway (#1088):
+        the hold stands while the bags stay as they were, and lifts the pass
+        one more slot is free, never a day later."""
         holds = {}
         queue, notes = queue_for({"Cronk": 1}, holds=holds)
         self.assertEqual(queue, ())
         self.assertIn("tries again at", notes[0])
-        queue, notes = queue_for({"Cronk": 2}, holds=holds)
+        queue, notes = queue_for({"Cronk": 1}, holds=holds)
         self.assertEqual(queue, ())
         self.assertIn("tries again at", notes[0])
+        queue, notes = queue_for({"Cronk": 2}, holds=holds)
+        self.assertEqual((queue, notes), ((STAFF,), ()))
 
     def test_unread_bags_keep_the_old_hold(self):
         queue, notes = queue_for(None)

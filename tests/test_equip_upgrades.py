@@ -236,9 +236,9 @@ class TheQueueIsBounded(unittest.TestCase):
         self.assertEqual(queue, ())
         self.assertEqual(len(notes), 1)
 
-    def test_second_refusal_is_retried_after_thirty_minutes(self):
+    def test_a_room_refusal_is_retried_after_thirty_minutes(self):
         now = datetime(2026, 10, 16, 7, 0, tzinfo=timezone.utc)
-        answer = self.answer("error", "the game did not accept the equip")
+        answer = self.answer("error", "InventoryResult 21")
         answer[self.key]["created_at"] = now - timedelta(minutes=31)
         queue, notes = bag_pressure.equips_to_queue(
             self.wanted,
@@ -252,37 +252,42 @@ class TheQueueIsBounded(unittest.TestCase):
         self.assertEqual(queue, self.wanted)
         self.assertEqual(notes, ())
 
-    def test_refusal_holds_escalate_from_fifteen_to_thirty_to_memory_minutes(self):
+    def test_no_refusal_waits_the_memory_window_however_often_refused(self):
+        """#1088: the staged wait parked every third refusal for 24 hours. A
+        passing state or a piece not carried waits 15 minutes, bags too full
+        for the swap 30, at any try count."""
         now = datetime(2026, 10, 14, 20, tzinfo=timezone.utc)
         worn = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
-        for attempts, wait in ((1, 15), (2, 30), (3, 24 * 60)):
-            answer = self.answer()
-            answer[self.key]["created_at"] = now - timedelta(minutes=1)
-            queue, notes = bag_pressure.equips_to_queue(
-                self.wanted,
-                set(),
-                {self.key: attempts},
-                answers=answer,
-                worn=worn,
-                holds={},
-                now=now,
-            )
-            if wait > 1:
+        for detail, wait in (
+            ("InventoryResult 38", 15),
+            ("not carried", 15),
+            ("InventoryResult 21", 30),
+        ):
+            for attempts in (1, 2, 3, 7):
+                answer = self.answer("error", detail)
+                answer[self.key]["created_at"] = now - timedelta(minutes=1)
+                queue, notes = bag_pressure.equips_to_queue(
+                    self.wanted,
+                    set(),
+                    {self.key: attempts},
+                    answers=answer,
+                    worn=worn,
+                    holds={},
+                    now=now,
+                )
                 self.assertEqual(queue, ())
                 self.assertIn("tries again at", notes[0])
-            else:
-                self.assertEqual(queue, self.wanted)
-            answer[self.key]["created_at"] = now - timedelta(minutes=wait)
-            queue, _ = bag_pressure.equips_to_queue(
-                self.wanted,
-                set(),
-                {self.key: attempts},
-                answers=answer,
-                worn=worn,
-                holds={},
-                now=now,
-            )
-            self.assertEqual(queue, self.wanted)
+                answer[self.key]["created_at"] = now - timedelta(minutes=wait)
+                queue, _ = bag_pressure.equips_to_queue(
+                    self.wanted,
+                    set(),
+                    {self.key: attempts},
+                    answers=answer,
+                    worn=worn,
+                    holds={},
+                    now=now,
+                )
+                self.assertEqual(queue, self.wanted, (detail, attempts))
 
     def test_hold_note_names_the_retry_time_in_the_readers_clock(self):
         """The stuck text names refusal + wait in the reader's time (#1005).
@@ -344,7 +349,7 @@ class TheQueueIsBounded(unittest.TestCase):
     def test_refused_retry_starts_a_new_hold_on_the_same_answer_row(self):
         """A refusal after retry reuses its row and starts a fresh hold."""
         worn = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
-        answer = self.answer("error", "the game did not accept the equip")
+        answer = self.answer("error", "InventoryResult 60")
         answer[self.key]["created_at"] = datetime(2026, 10, 15, 1, 0)
         holds = {}
         queue, _ = bag_pressure.equips_to_queue(
@@ -432,37 +437,58 @@ class TheQueueIsBounded(unittest.TestCase):
             },
         )
 
-    def test_a_real_refusal_still_holds_and_retries(self):
-        """Any other refused detail holds and retries at 15 then 30 minutes."""
+    def test_an_unknown_refusal_is_asked_once_more_then_dropped(self):
+        """An answer nobody can read holds 15 minutes once, then the upgrade
+        is dropped with that answer as its reason (#1088), never parked."""
         now = datetime(2026, 10, 14, 20, tzinfo=timezone.utc)
         worn = {"Grog": {4: (6000, "Sparkleshell Breastplate")}}
-        for attempts, wait in ((1, 15), (2, 30)):
-            answer = self.answer("unchanged", "the world said the piece is cursed")
-            answer[self.key]["created_at"] = now - timedelta(minutes=1)
-            holds = {}
-            queue, notes = bag_pressure.equips_to_queue(
-                self.wanted,
-                set(),
-                {self.key: attempts},
-                answers=answer,
-                worn=worn,
-                holds=holds,
-                now=now,
-            )
-            self.assertEqual(queue, ())
-            self.assertIn("tries again at", notes[0])
-            self.assertEqual(gear.world_held(self.wanted, holds), 1)
-            answer[self.key]["created_at"] = now - timedelta(minutes=wait)
-            queue, _ = bag_pressure.equips_to_queue(
-                self.wanted,
-                set(),
-                {self.key: attempts},
-                answers=answer,
-                worn=worn,
-                holds=holds,
-                now=now,
-            )
-            self.assertEqual(queue, self.wanted)
+        answer = self.answer("unchanged", "the world said the piece is cursed")
+        answer[self.key]["created_at"] = now - timedelta(minutes=1)
+        holds = {}
+        queue, notes = bag_pressure.equips_to_queue(
+            self.wanted,
+            set(),
+            {self.key: 1},
+            answers=answer,
+            worn=worn,
+            holds=holds,
+            now=now,
+        )
+        self.assertEqual(queue, ())
+        self.assertIn("tries again at", notes[0])
+        self.assertEqual(gear.world_held(self.wanted, holds), 1)
+        answer[self.key]["created_at"] = now - timedelta(minutes=15)
+        queue, _ = bag_pressure.equips_to_queue(
+            self.wanted,
+            set(),
+            {self.key: 1},
+            answers=answer,
+            worn=worn,
+            holds=holds,
+            now=now,
+        )
+        self.assertEqual(queue, self.wanted)
+        answer = self.answer("unchanged", "the world said the piece is cursed", id=8)
+        answer[self.key]["created_at"] = now - timedelta(minutes=1)
+        queue, notes = bag_pressure.equips_to_queue(
+            self.wanted,
+            set(),
+            {self.key: 2},
+            answers=answer,
+            worn=worn,
+            holds=holds,
+            now=now,
+        )
+        self.assertEqual(queue, ())
+        self.assertEqual(
+            notes,
+            (
+                "Grog cannot wear Cabalist Chestpiece: the world said the piece "
+                "is cursed; it stays in its bags until its level or what it "
+                "wears there changes",
+            ),
+        )
+        self.assertEqual(gear.world_held(self.wanted, holds), 0)
 
     def test_a_kept_choice_is_not_wanted_until_gear_or_piece_changes(self):
         """A bot-kept piece stays unwantable, then frees when gear changes."""

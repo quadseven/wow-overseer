@@ -12466,8 +12466,9 @@ class Bridge(discord.Client):
         bag room for is not queued either (#1088): the shortfall is kept in
         `self._equip_room` for the guild jobs pass to make the room.
         """
-        recent = {(row["target_name"], row["command"]) for row in current
-                  if row["recent"]}
+        # A refused row put nothing on, so it never blocks the retry its hold
+        # allows (#1088): only unanswered and accepted asks are recent.
+        recent = bag_pressure.recent_asks(current)
         tries: dict = {}
         for row in current:
             key = (row["target_name"], row["command"])
@@ -12508,10 +12509,6 @@ class Bridge(discord.Client):
             log.warning("equip: bag room unreadable (%s); no piece is judged "
                         "against it this pass", exc)
             free_slots = None
-        passed = set(holders) | set(wearers)
-        self._equip_room = {h: need for h, need in self._equip_room.items()
-                            if h not in passed}
-        self._equip_room.update(bag_pressure.equip_room(wanted, worn, free_slots))
         # `holders` emptied by the deferral above falls back to the holders of
         # the filtered `wanted`, never to a deferred one.
         queue, notes = bag_pressure.equips_to_queue(
@@ -12519,6 +12516,13 @@ class Bridge(discord.Client):
             holds=self._equip_holds, holders=set(holders) or None,
             memory_hours=EQUIP_MEMORY_HOURS, online=online,
             free_slots=free_slots)
+        # After the holds, so a refusal the world gave for bag room this pass
+        # names its shortfall for the make-room step at once (#1088).
+        passed = set(holders) | set(wearers)
+        self._equip_room = {h: need for h, need in self._equip_room.items()
+                            if h not in passed}
+        self._equip_room.update(bag_pressure.equip_room(
+            wanted, worn, free_slots, self._equip_holds))
         for note in notes:
             log.info("equip: %s", note)
         log.info("equip: %d %spiece(s) held on the world's answer",

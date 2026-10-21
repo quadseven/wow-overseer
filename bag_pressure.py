@@ -2089,6 +2089,7 @@ ROLE_TANK, ROLE_DAMAGE, ROLE_UNKNOWN = (
 equips_to_queue = gear.equips_to_queue
 equip_room = gear.equip_room
 latest_answers = gear.latest_answers
+recent_asks = gear.recent_asks
 worn_pieces = gear.worn_pieces
 world_held = gear.world_held
 equip_entry = gear.equip_entry

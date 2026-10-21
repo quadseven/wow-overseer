@@ -3327,9 +3327,9 @@ def _member_step(
     equip_room=None,
     mount=None,
 ):
-    """A class quest first, then a hunter's first pet, then a hearth out of a
-    spot it cannot leave, then room in the bags for an upgrade the world
-    cannot put on without it (equip_room_step, #1088), then food for a member
+    """Room in the bags for an upgrade the world cannot put on without it
+    (equip_room_step, #1088), then a class quest, then a hunter's first pet,
+    then a hearth out of a spot it cannot leave, then food for a member
     with nothing to eat or drink,
     then a sale for bags that leave loot on the corpse (loot_room_short), then
     the inn, then riding, then a mount (`mount`, a mountbuy.Facts), then the
@@ -3342,7 +3342,8 @@ def _member_step(
     `crafting`), keeping the notes.
 
     THE CLASS QUEST COMES FIRST (the operator, 2026-10-06: the highest-priority
-    job in the guild). It is the first rung here, ahead of gear, PvP, post, the
+    job in the guild). It is the first rung of work here, behind only the one
+    make-room step an upgrade waits on, ahead of gear, PvP, post, the
     level walk and every ordinary job, and it has its own allowance per guild
     (CLASSQUEST_STEPS_PER_GUILD), so no other kind of step can use up the
     passes it needs. A member held on a class quest is also kept out of the
@@ -3357,6 +3358,18 @@ def _member_step(
     A member that has stood on one spot for standstill.STILL_MINUTES
     (`still_for`) with nothing asked of it hearths home before anything else
     is asked (stood_still_step)."""
+    # ROOM FOR AN UPGRADE COMES FIRST (#1088). It is one sale, post or
+    # destroy, on its own cooldown and allowance (ROOM_ACTION), and a member
+    # that cannot put an upgrade on without it is otherwise never given it:
+    # behind the class quest, Bonk and Cronk carried a two-hander they could
+    # not wear for 4.8 days and no "makes room ... to put on" step ran in four
+    # hours of guild passes (2026-10-21), every one of them a class quest's.
+    # With nothing to part with there is no step and the class quest runs.
+    step, doing, room_note = equip_room_step(
+        m, equip_room, classes, recent, cap, kept, crafters, master
+    ) or (None, "", "")
+    if step is not None or doing:
+        return step, doing, "", ""
     found, quest_note = _quest_first(
         m,
         classes,
@@ -3374,12 +3387,8 @@ def _member_step(
         still_for,
     )
     if found is not None:
-        return found
-    step, doing, room_note = equip_room_step(
-        m, equip_room, classes, recent, cap, kept, crafters, master
-    ) or (None, "", "")
-    if step is not None or doing:
-        return step, doing, quest_note, ""
+        step, doing, note, gear_why = found
+        return step, doing, _join(note, room_note), gear_why
     quest_note = _join(quest_note, room_note)
     found, supply_note, gear_note = _upkeep_first(
         m, offer, supply, leveling, kept, recent, cap, quest_note, weapon, mount

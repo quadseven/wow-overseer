@@ -12,8 +12,9 @@ that had long passed.
 What is pinned here:
 - A refusal on one of those codes waits the first step (15 minutes) however
   many times it has been refused, then the piece is asked again.
-- A refusal on anything else (InventoryResult 21, a named skill refusal) keeps
-  the staged wait up to the memory window.
+- No other refusal waits the memory window either (#1088): bags too full for
+  the swap (InventoryResult 21) wait at most 30 minutes, and a named skill
+  refusal drops the upgrade with its reason (test_equip_refusal_kinds).
 """
 
 import unittest
@@ -92,18 +93,21 @@ class APassingStateRefusal(unittest.TestCase):
 
 
 class AnyOtherRefusal(unittest.TestCase):
-    def test_items_cannot_be_swapped_still_waits_the_memory_window(self):
+    def test_items_cannot_be_swapped_waits_thirty_minutes_not_a_day(self):
         (queued, notes), holds = queue("InventoryResult 21", minutes_ago=16)
         self.assertEqual(queued, ())
         self.assertEqual(len(notes), 1)
         self.assertEqual(
-            holds[KEY].retry_at, NOW - timedelta(minutes=16) + timedelta(hours=24)
+            holds[KEY].retry_at, NOW - timedelta(minutes=16) + timedelta(minutes=30)
         )
 
-    def test_a_named_skill_refusal_still_waits_the_memory_window(self):
-        (queued, _notes), holds = queue("EQUIP_ERR_CANT_EQUIP_SKILL 2", minutes_ago=16)
+    def test_a_named_skill_refusal_drops_the_upgrade_with_its_reason(self):
+        (queued, notes), holds = queue("EQUIP_ERR_CANT_EQUIP_SKILL 2", minutes_ago=16)
         self.assertEqual(queued, ())
-        self.assertFalse(holds[KEY].lifted)
+        self.assertIsInstance(holds[KEY], gear.EquipDropped)
+        self.assertIn(
+            "Durg cannot wear Raider's Legguards: it lacks the skill", notes[0]
+        )
 
     def test_a_code_number_alone_inside_other_words_is_not_read(self):
         (queued, _notes), _holds = queue("not carried 38 times", minutes_ago=16)

@@ -1661,23 +1661,102 @@ def since_level_change(history, changed) -> list:
 # that the command was handed over; `applied` says the world put the item on.
 WORLD_REFUSALS = frozenset({"error", "unchanged"})
 
-# THE REFUSALS THAT NAME A PASSING STATE OF THE HOLDER (#869). mod-overseer
-# writes Player::CanEquipItem's answer as "<name or InventoryResult> <code>".
-# These codes say nothing about the piece or the bags, only what the holder is
-# doing that moment (Item.h InventoryResult; PlayerStorage.cpp CanEquipItem and
-# CanUseItem): stunned (37), dead or a ghost (38), casting or the weapon swap
-# timer (39), in combat (60), disarmed (61), in an arena match (78). The state
-# passes by itself, so a refusal on one of them waits the first step every
-# time and never the memory window: live, Durg (60) and Shinyhair (38) were
-# held a day on their third such refusal.
-_PASSING_REFUSALS = frozenset({37, 38, 39, 60, 61, 78})
+# EVERY ANSWER IS READ BY WHAT THE MEMBER CAN DO ABOUT IT (#1088). mod-overseer
+# writes Player::CanEquipItem's answer as "<name or InventoryResult> <code>"
+# (Item.h InventoryResult), "not carried" when the piece is not in the bags,
+# and "the bot did not put the item on" when the core would take it and the
+# bot did not. The staged wait this replaces, (15, 30, memory window) by try,
+# parked every third refusal for 24 hours whatever it said: Cronk 10.8 hours
+# on 21, Bonk 10.3 on 38/21/39, Ezzo 8.6 on 21, Durg 8 on 60, on 2026-10-18.
+# So the answer, not the try count, decides, and no kind waits a day:
+#
+#   PASSING  a state of the holder that passes by itself (#869): stunned (37),
+#            dead (38), casting or the swap timer (39), in combat (60),
+#            disarmed (61), in an arena (78), the item locked (36) or the
+#            holder busy (58). Asked again after REFUSAL_WAIT_MINUTES.
+#   ROOM     the bags are too full for what the equip moves: items cannot be
+#            swapped (21, the two-hander over a shield), bag or inventory full
+#            (4, 50, 53, 56, 62). The member makes the room (equip_room, the
+#            guild pass's make-room step); asked again the pass a slot frees,
+#            else after ROOM_WAIT_MINUTES.
+#   GONE     the piece is not carried or not found (23, 32, 54, "not
+#            carried"): the bags lag the world's save by up to fifteen
+#            minutes, so the next read settles it. REFUSAL_WAIT_MINUTES.
+#   FINAL    nothing the member does clears it: level, skill, proficiency,
+#            the slot, a class that can never use it, a two-hander or dual
+#            wield in the way, rank, reputation, unique-equipped, arena
+#            rating. Dropped at once with a plain reason (EquipDropped).
+#   RETRY    anything else, the bot's own read-back among it: asked once more,
+#            then dropped like FINAL.
+REFUSAL_PASSING = "passing"
+REFUSAL_ROOM = "room"
+REFUSAL_GONE = "gone"
+REFUSAL_FINAL = "final"
+REFUSAL_RETRY = "retry"
+REFUSAL_WAIT_MINUTES = 15
+ROOM_WAIT_MINUTES = 30
+# The answers a RETRY gets before its upgrade is dropped.
+RETRY_ANSWERS = 2
+_PASSING_REFUSALS = frozenset({36, 37, 38, 39, 58, 60, 61, 78})
+_ROOM_REFUSALS = frozenset({4, 21, 50, 53, 56, 62})
+_GONE_REFUSALS = frozenset({23, 32, 54})
+# code -> why the member cannot wear it, in the reader's words.
+_FINAL_REFUSALS = {
+    1: "its level is too low",
+    2: "it lacks the skill",
+    3: "the piece does not go in that slot",
+    8: "it lacks the proficiency",
+    9: "it has no slot free for it",
+    10: "it can never use that item",
+    11: "it can never use that item",
+    12: "it has no slot free for it",
+    13: "a two-hander is worn",
+    14: "it cannot dual wield",
+    18: "it has no slot free for it",
+    20: "the piece cannot be equipped",
+    63: "its rank is too low",
+    64: "its reputation is too low",
+    67: "it is unique-equipped and one is already worn",
+    75: "it already wears the most of that socketed gem",
+    76: "it is unique-equipped and one is already worn",
+    80: "its arena rating is too low",
+}
 _REFUSAL_CODE = re.compile(r"\b(?:InventoryResult|EQUIP_ERR_[A-Z0-9_]+) (\d+)\b")
+_NOT_CARRIED = "not carried"
+
+
+def _refusal_code(detail):
+    """The InventoryResult a refusal detail names, or None."""
+    found = _REFUSAL_CODE.search(str(detail or ""))
+    return int(found.group(1)) if found is not None else None
+
+
+def refusal_kind(detail) -> str:
+    """What the member can do about a refusal detail: one REFUSAL_ kind."""
+    if str(detail or "").strip().lower() == _NOT_CARRIED:
+        return REFUSAL_GONE
+    code = _refusal_code(detail)
+    if code in _PASSING_REFUSALS:
+        return REFUSAL_PASSING
+    if code in _ROOM_REFUSALS:
+        return REFUSAL_ROOM
+    if code in _GONE_REFUSALS:
+        return REFUSAL_GONE
+    if code in _FINAL_REFUSALS:
+        return REFUSAL_FINAL
+    return REFUSAL_RETRY
 
 
 def _passing_refusal(detail) -> bool:
     """A refusal detail naming one of the _PASSING_REFUSALS codes."""
-    found = _REFUSAL_CODE.search(str(detail or ""))
-    return found is not None and int(found.group(1)) in _PASSING_REFUSALS
+    return refusal_kind(detail) == REFUSAL_PASSING
+
+
+def _drop_words(detail) -> str:
+    """Why an upgrade is dropped, for its note."""
+    words = _FINAL_REFUSALS.get(_refusal_code(detail))
+    detail = str(detail or "").strip()
+    return "%s (%s)" % (words, detail) if words else detail
 
 
 # Equip.slot -> the bag 0 equipment slots a piece put on there would displace.
@@ -1721,6 +1800,28 @@ class WorldHold:
     retry_at: object = None
     refusal_at: object = None
     short: bool = False
+    # The refusal's REFUSAL_ kind, and for a ROOM refusal the free bag slots
+    # the holder had when it was refused (None when unread): the world said
+    # that was too few, so one more is what the make-room step makes.
+    kind: str = REFUSAL_RETRY
+    free_at: object = None
+
+
+@dataclass
+class EquipDropped:
+    """An upgrade the world refused for a reason the member cannot clear.
+
+    Never a hold and never a stuck reason (#1088): the piece is simply not
+    wanted, with `note` saying why in plain words, until what is worn in its
+    slot (`worn`) or the wanted piece (`wanted`) changes. A level change drops
+    the answer row itself (`since_level_change`), and so this record.
+    """
+
+    row_id: int
+    worn: tuple
+    wanted: str
+    note: str
+    lifted: bool = False
 
 
 @dataclass
@@ -1788,7 +1889,7 @@ def member_gear_notes(holds) -> dict:
             holder = str(key[0])
         except (TypeError, IndexError):
             continue
-        if isinstance(rec, BotKeep) and not rec.lifted:
+        if isinstance(rec, (BotKeep, EquipDropped)) and not rec.lifted:
             out.setdefault(holder, []).append(rec.note)
     return {holder: tuple(lines) for holder, lines in out.items()}
 
@@ -1835,13 +1936,21 @@ def _worn_for(equip, worn) -> tuple:
 def room_needed(equip, worn) -> int:
     """The free bag slots `equip` needs before the world will put it on.
 
-    What a piece displaces goes into the bag slot the piece leaves, and that
-    holds one: a two-hander over a main hand and a shield moves two, so the
-    shield needs a free slot of its own. With none the world refuses
-    (InventoryResult 21, "items cannot be swapped") until the bags change,
-    and the staged retry held three members for a day on it (#1088).
+    What a piece displaces goes into the bag slot the piece leaves, so a
+    one-for-one swap needs none. That includes a ring or a trinket over two
+    worn ones: it goes into one of the two slots and displaces one piece
+    (Blingz's Viridian Band was held back on that miscount, #1088).
+
+    A two-hander over a worn off hand is the one equip that needs a slot of
+    its own: Player::CanEquipItem stores the off hand before the swap, while
+    the two-hander still sits in its bag slot, and with no free slot refuses
+    InventoryResult 21, "items cannot be swapped", whatever the main hand
+    holds. Three members with full bags were held a day each on it.
     """
-    return max(0, len(_worn_for(equip, worn)) - 1)
+    pieces = (worn or {}).get(equip.holder, {})
+    if equip.slot == _TWO_HAND and _EQUIPMENT_SLOT_OFF_HAND in pieces:
+        return 1
+    return 0
 
 
 def _room_short(equip, worn, free_slots) -> int:
@@ -1858,21 +1967,42 @@ def _over(equip, worn) -> str:
     return " and ".join(name for _slot, _entry, name in _worn_for(equip, worn))
 
 
-def equip_room(wanted, worn, free_slots) -> dict:
+def _room_refused(hold) -> bool:
+    """A ROOM refusal still standing: the world said the bags were too full."""
+    return (
+        isinstance(hold, WorldHold)
+        and not hold.lifted
+        and hold.kind == REFUSAL_ROOM
+        and hold.free_at is not None
+    )
+
+
+def equip_room(wanted, worn, free_slots, holds=None) -> dict:
     """holder -> (free slots needed, "to put on <piece> over <worn>") for each
     holder in `wanted` with too few free bag slots to put a piece on.
 
+    Two ways to be short: `room_needed` says so before anything is asked, or
+    the world refused the equip for room (a ROOM refusal in `holds`) with the
+    free slots the holder had then, which is one too few whatever the bag read
+    said (a quiver's or a soul bag's slots read as room for a shield, say).
     The guild jobs pass makes the room (guildjobs.equip_room_step); the
     equip is asked again the pass the room is there. A holder short for two
     pieces is named for the one that needs the most.
     """
     out: dict = {}
     for equip in sorted(wanted, key=lambda e: (e.holder, e.slot, e.guid)):
-        if not _room_short(equip, worn, free_slots):
+        free = (free_slots or {}).get(equip.holder)
+        if free is None:
             continue
         need = room_needed(equip, worn)
+        hold = (holds or {}).get((equip.holder, equip.command))
+        if _room_refused(hold):
+            need = max(need, int(hold.free_at) + 1)
+        if need <= int(free):
+            continue
         if need > out.get(equip.holder, (0, ""))[0]:
-            words = "to put on %s over %s" % (equip.name, _over(equip, worn))
+            over = _over(equip, worn)
+            words = "to put on %s" % equip.name + (" over %s" % over if over else "")
             out[equip.holder] = (need, words)
     return out
 
@@ -1891,12 +2021,14 @@ def _room_note(equip, worn, free_slots) -> str:
 
 
 def _room_made(hold, equip, worn, free_slots) -> bool:
-    """A hold that began short of room, now that the room is there."""
-    return (
-        hold.short
-        and (free_slots or {}).get(equip.holder) is not None
-        and not _room_short(equip, worn, free_slots)
-    )
+    """A hold whose room is there now: one that began short of room by
+    `room_needed`, or a ROOM refusal now that a slot more than it had is free."""
+    free = (free_slots or {}).get(equip.holder)
+    if free is None:
+        return False
+    if hold.short and not _room_short(equip, worn, free_slots):
+        return True
+    return _room_refused(hold) and int(free) > int(hold.free_at)
 
 
 def _refused(row) -> bool:
@@ -1904,6 +2036,75 @@ def _refused(row) -> bool:
         row is not None
         and str(row.get("status", "")) in WORLD_REFUSALS
         and bool(str(row.get("detail") or "").strip())
+    )
+
+
+def recent_asks(rows) -> set:
+    """(holder, command) asked inside the retry window and not refused since.
+
+    The retry window is there because a piece put on a minute ago still reads
+    as carried until the world saves. A refused row put nothing on, so it
+    never blocks a retry: its hold (_world_holds) says when to ask again, and
+    the window held a 15 minute hold for two hours (Shinyhair's 38s,
+    2026-10-19, at 01:52, 03:54 and 05:56). `rows` carry target_name,
+    command, status, detail and `recent`.
+    """
+    return {
+        (str(row.get("target_name", "")), str(row.get("command", "")))
+        for row in rows or ()
+        if row.get("recent") and not _refused(row)
+    }
+
+
+def _dropped_note(equip, detail) -> str:
+    return (
+        "%s cannot wear %s: %s; it stays in its bags until its level or what "
+        "it wears there changes" % (equip.holder, equip.name, _drop_words(detail))
+    )
+
+
+def _choice_record(equip, row, worn, holds, key) -> bool | None:
+    """The bot-keeps or dropped record for `row`, kept or made: True when it
+    settles the piece this pass (no hold, no stuck reason), False when it has
+    just let go of it (the piece is asked again), None when `row` is neither.
+
+    A record on the same answer row stays until what is worn in the slot or
+    the wanted piece changes. A dropped record is then lifted, so the same
+    answer never drops the piece twice.
+    """
+    info = _bot_keep(row)
+    rec = holds.get(key)
+    row_id = int(row.get("id", 0)) if row is not None else 0
+    worn_now = _worn_for(equip, worn)
+    if isinstance(rec, (BotKeep, EquipDropped)) and rec.row_id == row_id:
+        if rec.lifted:
+            return False
+        if rec.worn != worn_now or rec.wanted != equip.name:
+            if isinstance(rec, BotKeep):
+                del holds[key]
+            else:
+                rec.lifted = True
+            return False
+        return True
+    if info is None:
+        return None
+    holds.pop(key, None)
+    kept, challenger, challenger_score, kept_score = info
+    holds[key] = BotKeep(
+        row_id=row_id,
+        worn=worn_now,
+        wanted=equip.name,
+        note=f"keeps {kept}: it scores {kept_score} to {challenger}'s {challenger_score}",
+    )
+    return True
+
+
+def _drop(equip, row, worn, holds, key) -> None:
+    holds[key] = EquipDropped(
+        row_id=int(row.get("id", 0)),
+        worn=_worn_for(equip, worn),
+        wanted=equip.name,
+        note=_dropped_note(equip, row.get("detail")),
     )
 
 
@@ -1915,21 +2116,26 @@ def _world_holds(
     `holds` is updated in place. A hold begins at the first pass that sees a
     refusal row, with what is worn in that slot then, and lifts when that
     changes, when the piece is no longer wanted from one of `holders` (it
-    left the bags), or when the hold began short of bag room and `free_slots`
-    now has the room (#1088). A level change lifts it before this is reached,
-    because `since_level_change` has already dropped the rows it answered. A
-    bot-keeps answer is never a refusal: it is recorded as a BotKeep (a
-    choice, not a stuck member) and stays out of the notes this returns.
+    left the bags), when its room is there (_room_made), or at its retry
+    time, which `refusal_kind` sets and which is never more than
+    ROOM_WAIT_MINUTES after the refusal (#1088). A level change lifts it
+    before this is reached, because `since_level_change` has already dropped
+    the rows it answered. A bot-keeps answer is never a refusal: it is
+    recorded as a BotKeep (a choice, not a stuck member). A FINAL answer, or a
+    RETRY one past RETRY_ANSWERS, drops the upgrade (EquipDropped). Neither
+    is in the notes this returns. `memory_hours` is kept for the callers; no
+    refusal waits for it any longer.
     """
+    del memory_hours
     keys = {(e.holder, e.command) for e in wanted}
     for key in list(holds):
         row = answers.get(key)
         if row is None or int(row.get("id", 0)) != holds[key].row_id:
             del holds[key]
         elif key not in keys and key[0] in holders:
-            if isinstance(holds[key], BotKeep):
-                # A kept piece that is no longer wanted is forgotten outright:
-                # nothing is held back, so there is nothing to keep lifting.
+            if isinstance(holds[key], (BotKeep, EquipDropped)):
+                # A settled piece that is no longer wanted is forgotten
+                # outright: nothing is held back, so nothing to keep lifting.
                 del holds[key]
             else:
                 holds[key].lifted = True
@@ -1937,35 +2143,24 @@ def _world_holds(
     for equip in wanted:
         key = (equip.holder, equip.command)
         row = answers.get(key)
-        info = _bot_keep(row)
-        if info is not None:
-            # The bot's own choice, not a refusal: record it, never hold on
-            # it, and never give it a stuck reason. The piece is not wanted
-            # again until what is worn in its slot or the wanted piece
-            # changes; a lifted keep on the same answer does not re-record.
-            worn_now = _worn_for(equip, worn)
-            rec = holds.get(key)
-            if isinstance(rec, BotKeep) and rec.row_id == int(row.get("id", 0)):
-                if rec.worn != worn_now or rec.wanted != equip.name:
-                    del holds[key]
-                continue
-            if rec is not None:
-                del holds[key]
-            kept, challenger, challenger_score, kept_score = info
-            holds[key] = BotKeep(
-                row_id=int(row.get("id", 0)),
-                worn=worn_now,
-                wanted=equip.name,
-                note=f"keeps {kept}: it scores {kept_score} "
-                f"to {challenger}'s {challenger_score}",
-            )
+        if _choice_record(equip, row, worn, holds, key) is not None:
             continue
+        rec = holds.get(key)
         if not _refused(row):
             holds.pop(key, None)
             continue
+        detail = str(row.get("detail")).strip()
+        kind = refusal_kind(detail)
+        attempts = max(1, int((tries or {}).get(key, 1)))
+        if kind == REFUSAL_FINAL or (
+            kind == REFUSAL_RETRY and attempts >= RETRY_ANSWERS
+        ):
+            _drop(equip, row, worn, holds, key)
+            continue
         worn_now = _worn_for(equip, worn)
-        hold = holds.get(key)
+        hold = rec
         created = row.get("created_at")
+        free = (free_slots or {}).get(equip.holder)
         if hold is not None and hold.lifted and created != hold.refusal_at:
             hold = None
         if hold is None:
@@ -1974,19 +2169,21 @@ def _world_holds(
                 worn=worn_now,
                 refusal_at=created,
                 short=_room_short(equip, worn, free_slots) > 0,
+                kind=kind,
+                free_at=free if kind == REFUSAL_ROOM else None,
             )
         elif hold.worn != worn_now or _room_made(hold, equip, worn, free_slots):
             hold.lifted = True
-        elif _room_short(equip, worn, free_slots):
-            # The first room read may have failed. Remember a shortage seen
-            # later so making room can still lift this refusal immediately.
-            hold.short = True
+        else:
+            if _room_short(equip, worn, free_slots):
+                # The first room read may have failed. Remember a shortage seen
+                # later so making room can still lift this refusal immediately.
+                hold.short = True
+            if hold.kind == REFUSAL_ROOM and hold.free_at is None:
+                hold.free_at = free
         if hold.lifted:
             continue
-        attempts = max(1, int((tries or {}).get(key, 1)))
-        if _passing_refusal(row.get("detail")):
-            attempts = 1
-        wait = (15, 30, max(1, int(memory_hours)) * 60)[min(attempts, 3) - 1]
+        wait = ROOM_WAIT_MINUTES if kind == REFUSAL_ROOM else REFUSAL_WAIT_MINUTES
         if isinstance(created, datetime):
             if created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)
@@ -1999,7 +2196,7 @@ def _world_holds(
             equip.holder,
             " and ".join(name for _slot, _entry, name in worn_now) or "nothing",
             equip.name,
-            str(row.get("detail")).strip(),
+            detail,
             due,
         )
     return out
@@ -2041,11 +2238,16 @@ def equips_to_queue(
     (PlayerSaveInterval), so a piece put on a minute ago still reads as
     carried, and asking again inside the window would be the duplicate.
 
-    `tries` counts (holder, command) over the longer memory window. Repeated
-    world refusals wait fifteen minutes, thirty minutes, then the full memory
-    window, except a refusal on a passing state of the holder (dead, in
-    combat, stunned: _PASSING_REFUSALS), which always waits fifteen minutes.
-    Other attempts are eligible again as soon as the short retry window ends.
+    `recent` (recent_asks) leaves out the rows the world refused: a refusal
+    put nothing on, and its hold says when to ask again.
+
+    `tries` counts (holder, command) over the longer memory window. A world
+    refusal waits by what the member can do about it (refusal_kind, #1088),
+    never the memory window: fifteen minutes for a passing state of the
+    holder or a piece the bags may no longer hold, until the room is made or
+    thirty minutes for bags too full, and a refusal nothing the member does
+    can clear drops the upgrade with its reason (EquipDropped), as an unknown
+    one does on its RETRY_ANSWERS-th answer.
 
     An `applied` answer ends this attempt. If another gear pass later puts
     the old piece back, the bag read alone cannot turn that success into a
@@ -2054,8 +2256,8 @@ def equips_to_queue(
     A PIECE THE WORLD REFUSED WITH A REASON IS HELD ON THAT REASON (#897).
     `answers` is the newest answered row per (holder, command), from
     `latest_answers`; one that ended `error` or `unchanged` with a `detail`
-    holds the piece until its staged retry time, or until the holder's level,
-    what is worn in that slot (`worn`, from `worn_pieces`) or the bags change.
+    holds the piece until its retry time, or until the holder's level, what
+    is worn in that slot (`worn`, from `worn_pieces`) or the bags change.
     An `unchanged` answer whose detail is the bot's own scoring verdict ("the
     bot keeps ...") is the bot's choice, not a refusal: it is recorded as a
     BotKeep instead (#994), never held on and never given a stuck reason.
@@ -2066,7 +2268,7 @@ def equips_to_queue(
     A PIECE ITS HOLDER HAS NO BAG ROOM FOR IS NOT ASKED (#1088). `free_slots`
     is holder -> free bag slots, None or a missing holder when unread. An
     equip that needs more free slots than its holder has (room_needed: a
-    two-hander over a main hand and a shield) is never written, because the
+    two-hander over a worn off hand) is never written, because the
     world can only refuse it; its note says so in plain words instead of a
     retry time, and `equip_room` names the shortfall for the guild jobs pass
     to make the room. A hold that began short of room lifts the pass the
@@ -2090,6 +2292,18 @@ def equips_to_queue(
     queue, notes = [], []
     for equip in wanted:
         key = (equip.holder, equip.command)
+        # The bot keeps its own better-scored piece by choice: it is not a
+        # refusal, it never earns a stuck reason, and it is not wanted again
+        # until its slot's gear or the wanted piece changes. The reader-worded
+        # line for the member's gear notes comes from `member_gear_notes`.
+        settled = (holds or {}).get(key)
+        if isinstance(settled, BotKeep):
+            continue
+        # An upgrade the member cannot wear, for a reason it cannot clear:
+        # dropped with that reason, never held (#1088).
+        if isinstance(settled, EquipDropped) and not settled.lifted:
+            notes.append(settled.note)
+            continue
         if _room_short(equip, worn, free_slots):
             notes.append(_room_note(equip, worn, free_slots))
             continue
@@ -2103,12 +2317,6 @@ def equips_to_queue(
                 "%s is offline; equip of %s held until they are online"
                 % (equip.holder, equip.name)
             )
-            continue
-        # The bot keeps its own better-scored piece by choice: it is not a
-        # refusal, it never earns a stuck reason, and it is not wanted again
-        # until its slot's gear or the wanted piece changes. The reader-worded
-        # line for the member's gear notes comes from `member_gear_notes`.
-        if isinstance((holds or {}).get(key), BotKeep):
             continue
         # The world already put this entry on. A later bag snapshot can show
         # it carried again after another gear pass replaces it; repeating the
