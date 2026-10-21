@@ -40,9 +40,10 @@ WHAT HAPPENS (`decide`).
               it runs `STEP_DOWN_RUNS` more rather than send the family back
               into a door it wiped in with nothing changed.
   QUEST       no easier door can be cleared (the Horde family is already in
-              Ragefire Chasm, the lowest rung): the family quests at its level
-              until a named change and readiness bring it back. The queue
-              entry stays active; only the job changes.
+              Ragefire Chasm, the lowest rung) and no door above is ready
+              either: the family quests at its level until a named change and
+              readiness bring it back, or a door opens. The queue entry stays
+              active; only the job changes.
   RELEASE     the questing fallback ends the same way a step-up does.
   ADVANCE     the step-down entry reached its count and the door is MASTERED
               (`Viability.mastered`: `MASTERY_CLEARS` clears, no wipe in a
@@ -51,6 +52,14 @@ WHAT HAPPENS (`decide`).
               `STEP_DOWN_RUNS` runs, town errands between runs as any campaign
               has. A wipe there is the ordinary step-down: the ladder prefers
               the door the family mastered (`ladder`). Any family, no names.
+              The same entry goes ahead when a door must be left and no easier
+              door can be cleared, but one above is ready (#1074): the family
+              runs a door it can learn from rather than quest and come back to
+              the one that beat it.
+
+A RETURN ENDS AT ITS FIRST FAILURE. A family back at a door after a step up or
+a release (`returned`) steps away again at its first attempt there without a
+clear, and Jev is not offered the door to keep.
 
 WHICH EASIER DOOR (`candidates`, `ladder`). Every Run below the failing one in
 campaignplan.RUNS (lowest band first), that council.door_refusal allows, whose
@@ -726,14 +735,36 @@ def _stretch_age(row: dict | None) -> int:
         return 0
 
 
+def _no_easier_door(f: Facts, why: str) -> Decision:
+    """No easier door can be cleared: on to the first door above the family is
+    ready for (`ascend`), else the questing fallback.
+
+    A DOOR ABOVE BEFORE QUESTING (#1074). The run-loop finding counted the
+    Horde family's Blackfathom Deeps runs at 4 in 6.2 hours with 2.5 of them
+    inside: three failures, a questing stretch, and a release back into the
+    same door. From 28 on Kalimdor every door below it is outgrown or across
+    the sea, so questing was the only way off it; from 30 Razorfen Kraul is a
+    door the family can run instead.
+    """
+    if f.ahead:
+        nxt = f.ahead[0]
+        return Decision(
+            ADVANCE, nxt.keyword, "%s; no easier door, so on to %s" % (why, nxt.said())
+        )
+    return Decision(QUEST, "", why + "; no easier door can be cleared", (LEVEL,))
+
+
 def _while_questing(f: Facts, place: str) -> Decision:
-    """The questing fallback: step down if a door opened, else wait for a change."""
+    """The questing fallback: step down if a door opened, on if one above is
+    ready, else wait for a change."""
     if f.cands:
         return _down_to(
             STEP_DOWN,
             f.cands,
             "an easier door opened while questing: %s" % ladder(f.cands).place,
         )
+    if f.ahead:
+        return _no_easier_door(f, "questing for %s" % place)
     blockers = step_up_blockers(f.members)
     if blockers and _stretch_age(f.open) >= QUEST_GEAR_CEILING_SECONDS:
         blockers = ()
@@ -791,7 +822,7 @@ def _while_stepped_down(f: Facts, place: str) -> Decision:
         why = "%s is not clearable either (%s)" % (place, f.record.line())
         if f.cands:
             return _down_to(FURTHER, f.cands, why)
-        return Decision(QUEST, "", why + " and no easier door is", (LEVEL,))
+        return _no_easier_door(f, why)
     return _grown_or_farming(f, place)
 
 
@@ -800,10 +831,13 @@ def _at_the_door(f: Facts, place: str) -> Decision:
     active = str(f.head.get("status") or "") == "active"
     if active and not f.record.clearable:
         why = "%s is not clearable: %s" % (place, f.record.line())
-    elif active and f.returned and f.record.wipes:
+    elif active and f.returned and (f.record.wipes or f.record.uncleared_streak):
         # BACK DOWN AT ONCE (2026-09-28). The door already beat this family
         # once; a wipe on the way back in is the same answer, not bad luck,
         # and waiting for a second one costs five corpse runs to learn it.
+        # So is any attempt that did not clear (#1074): the record restarts at
+        # the return, and a stall, an empty run or a lost client there held
+        # Blackfathom Deeps for two more tries after a release.
         why = "%s beat the family again on its way back: %s" % (
             place,
             f.record.line(),
@@ -813,11 +847,12 @@ def _at_the_door(f: Facts, place: str) -> Decision:
     else:
         return Decision(NOTHING, "", "%s holds (%s)" % (place, f.record.line()))
     if not f.cands:
-        return Decision(QUEST, "", why + "; no easier door can be cleared", (LEVEL,))
+        return _no_easier_door(f, why)
     d = _down_to(STEP_DOWN, f.cands, why)
     # A high wipe rate without a hard streak or a gate is a judgment call:
-    # Jev may keep the door. Repeated failure without a clear is not.
-    if not f.record.hard and not f.gates:
+    # Jev may keep the door. Repeated failure without a clear is not, and
+    # neither is failing it again on the way back.
+    if not f.record.hard and not f.gates and not f.returned:
         d = replace(d, offer=d.offer + (STAY,))
     return d
 
@@ -1063,7 +1098,7 @@ def line(family: str, d: Decision, by: str) -> str:
         STEP_DOWN: "steps down to %s" % target,
         FURTHER: "steps further down to %s" % target,
         STEP_UP: "steps back up to %s" % target,
-        ADVANCE: "has mastered its step-down door and advances to %s" % target,
+        ADVANCE: "advances to %s" % target,
         EXTEND: "farms %s %d more runs" % (target, STEP_DOWN_RUNS),
         QUEST: "quests at its level",
         RELEASE: "stops questing and goes back to its queue",
