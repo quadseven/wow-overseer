@@ -57,10 +57,45 @@
 .families[data-wall="stacked"] { grid-template-columns: minmax(0, 1fr); }
 .fam { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .fam-live { min-width: 0; }
-/* Side by side, the units share their rows, so a longer status card on one
-   side never pushes that family's picture lower than the other's. */
+/* Side by side: the two family columns share one set of rows, so every band
+   (card, video, name, Doing, Hear, actions, map) starts at the same height in
+   both columns and a longer card never pushes a band lower. */
 @supports (grid-template-rows: subgrid) {
-  .families[data-wall="side"] .fam { display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: 8px; }
+  .families[data-wall="side"] {
+    grid-template-rows: repeat(7, auto);
+    gap: 8px 20px;
+  }
+  .families[data-wall="side"] .fam {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: span 7;
+    row-gap: 8px;
+  }
+  .families[data-wall="side"] .fam > .agenda { grid-row: 1; }
+  .families[data-wall="side"] .fam > .fam-live {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: 2 / span 5;
+    row-gap: 8px;
+  }
+  .families[data-wall="side"] .fam > .minimap { grid-row: 7; }
+  .families[data-wall="side"] .fam-live > .st {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: span 5;
+    row-gap: 8px;
+  }
+  .families[data-wall="side"] .fam-live > .st > .st-slot { grid-row: 1; }
+  .families[data-wall="side"] .fam-live > .st > .st-cap {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: 2 / span 4;
+    row-gap: 8px;
+  }
+  .families[data-wall="side"] .st-cap > .st-head { grid-row: 1; }
+  .families[data-wall="side"] .st-cap > .st-doing { grid-row: 2; }
+  .families[data-wall="side"] .st-cap > .st-bar { grid-row: 3; }
+  .families[data-wall="side"] .st-cap > .st-acts { grid-row: 4; }
 }
 .st-wait { height: auto; aspect-ratio: 16 / 9; border-radius: 12px; }
 /* Stacked on a wide screen: the picture leads, the status and the map sit
