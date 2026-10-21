@@ -436,6 +436,25 @@ class TheAnswer(unittest.TestCase):
         )
         self.assertEqual(out.posts, ())
 
+    def test_a_failed_meeting_escalates_the_live_ask_to_the_server(self):
+        help_ = helps_of("Bigzug")[0]
+        ask_ = qask(1, reason=classask.STOPPED + "the meeting failed")
+        crowd = friends()[:1]
+        plan = pass_([help_], crowd, asks=[ask_])
+        result = classask.plan_escalation(
+            plan,
+            [help_],
+            crowd,
+            {},
+            [ask_],
+            [],
+            NOW,
+            pugs_on=False,
+        )
+        self.assertTrue(
+            any("pick-up groups are off" in s.server for s in result.silences)
+        )
+
     def test_a_yes_from_a_member_no_longer_free_is_withdrawn(self):
         answers = [yes(1, 1, "Chill", "dps", "help")]
         out = pass_(
