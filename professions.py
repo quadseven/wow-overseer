@@ -1160,6 +1160,34 @@ def secondary_rank_refusal(skills: Mapping[str, int]) -> str:
     )
 
 
+def secondary_rank_errand(character: str, skills: Mapping[str, int]) -> Errand | None:
+    """An errand to take a secondary skill past its Apprentice ceiling, or None.
+
+    A secondary at 75/75 has reached the top of the rank every character can
+    raise without a trainer (First Aid's Linen Bandage runs to 59; above it
+    every bandage is a trainer purchase). The errand walks the character to a
+    profession trainer for the next rank - Journeyman First Aid at 75, for
+    example. It costs no primary slot, so it never makes room for anything
+    and never gives anything up: `learn_skill` is the secondary skill and
+    there is no unlearn.
+
+    It is deliberately never combined with a primary-trade errand: the caller
+    must not ask for this for a character that already has an in-flight
+    primary-trade errand, so a rank-up never races or clobbers a
+    `learn_skill`/`unlearn_skill` swap for the same character.
+
+    Returns None when no secondary this character holds is at its ceiling.
+    """
+    for name in sorted(SECONDARY):
+        if int(skills.get(name, 0)) >= 75:
+            return Errand(
+                character=character,
+                learn_skill=skill_id(name),
+                travel_npc=TRAINER_ROLE,
+            )
+    return None
+
+
 def traveller(errand) -> str:
     """Who must become the family's one traveller for this errand, or ''.
 

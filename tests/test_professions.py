@@ -1036,18 +1036,22 @@ class BridgeContractTest(unittest.TestCase):
 
 
 class SecondaryRankRefusalTest(unittest.TestCase):
-    """infra#3701. There is no secondary rank errand and there must not be one.
-
-    `secondary_rank_errand` and `SECONDARY_RANK_CEILING` were removed rather
-    than wired: the deployed worldserver refuses a secondary training errand in
-    two places Python cannot reach, and a `learn_skill` nothing can clear
-    fences a character out of ALL travel (infra#3686). These tests pin the
-    removal, so that a future pass reintroducing the errand has to delete a
-    test that says why first.
+    """infra#3701. `secondary_rank_errand` is now produced and coordinated so it
+    never clobbers a primary-trade errand, but the deployed worldserver still
+    refuses to fulfill a secondary training errand in two places Python cannot
+    reach, and a `learn_skill` nothing can clear fences a character out of ALL
+    travel (infra#3686). `SECONDARY_RANK_CEILING` was removed rather than
+    reintroduced: the trainer threshold was never 75 (Journeyman First Aid is
+    ReqSkillRank 50), so a ceiling table is the wrong shape. These tests pin the
+    refusal and the errand's existence, so a future pass changing either has to
+    delete a test that says why first.
     """
 
-    def test_the_errand_is_gone_and_stays_gone(self):
-        self.assertFalse(hasattr(professions, "secondary_rank_errand"))
+    def test_the_errand_exists_and_the_ceiling_table_does_not(self):
+        """`secondary_rank_errand` is wired (the ask) but `SECONDARY_RANK_CEILING`
+        is not (the wrong threshold - Journeyman First Aid is ReqSkillRank 50,
+        not 75, so a ceiling table is the wrong shape)."""
+        self.assertTrue(hasattr(professions, "secondary_rank_errand"))
         self.assertFalse(hasattr(professions, "SECONDARY_RANK_CEILING"))
 
     def test_the_refusal_is_never_empty_and_names_the_real_blocker(self):
@@ -1144,6 +1148,65 @@ class SecondaryRankRefusalTest(unittest.TestCase):
             set(professions.SECONDARY), set(professions.SECONDARY_HEADROOM)
         )
         self.assertEqual(set(professions.SECONDARY), set(professions.SECONDARY_BLOCKED))
+
+
+class SecondaryRankErrandTest(unittest.TestCase):
+    """The coordinated secondary rank errand, the way the trainer errand is
+    covered above.
+
+    `secondary_rank_errand` builds the ASK: walk a character whose secondary
+    is at its Apprentice ceiling (First Aid 75/75) to a profession trainer for
+    the next rank. It costs no primary slot (no unlearn), and it is never
+    folded into a primary-trade errand, so a rank-up never races or clobbers a
+    `learn_skill`/`unlearn_skill` swap for the same character.
+    """
+
+    def test_secondary_rank_errand_walks_a_first_aid_75_character_to_a_trainer(
+        self,
+    ):
+        errand = professions.secondary_rank_errand("Grug", {"first aid": 75})
+        self.assertIsNotNone(errand)
+        self.assertEqual(errand.character, "Grug")
+        self.assertEqual(errand.learn_skill, professions.skill_id("first aid"))
+        self.assertEqual(errand.travel_npc, "profession trainer")
+        self.assertEqual(errand.unlearn_skill, 0)
+        self.assertEqual(errand.unlearn_max, 0)
+
+    def test_secondary_rank_errand_is_none_below_the_ceiling(self):
+        self.assertIsNone(professions.secondary_rank_errand("Grug", {"first aid": 74}))
+        self.assertIsNone(professions.secondary_rank_errand("Grug", {"cooking": 1}))
+        self.assertIsNone(professions.secondary_rank_errand("Grug", {"fishing": 1}))
+        self.assertIsNone(professions.secondary_rank_errand("Grug", {}))
+
+    def test_secondary_rank_errand_does_not_clobber_a_primary_trade_errand(self):
+        family = [
+            professions.Member(
+                "Og", "mage", {"alchemy": 1, "herbalism": 15, "first aid": 75}
+            ),
+            professions.Member("Ugga", "priest", {"alchemy": 1, "herbalism": 47}),
+            professions.Member("Grug", "warrior", {"alchemy": 1, "herbalism": 41}),
+            professions.Member("Bork", "rogue", {"alchemy": 1, "herbalism": 15}),
+            professions.Member("Grog", "paladin", {"alchemy": 1, "herbalism": 33}),
+        ]
+        skills = {m.name: dict(m.skills) for m in family}
+        plan = professions.plan(family)
+        errand = professions.to_errand(plan, skills)
+
+        # Og's next trade is the primary swap (drop alchemy, take tailoring);
+        # that learn_skill/unlearn_skill is what gets written, not a first-aid
+        # rank-up. The two errands are distinct and the primary wins.
+        self.assertEqual(errand.character, "Og")
+        self.assertEqual(errand.learn_skill, professions.skill_id("tailoring"))
+        self.assertEqual(errand.unlearn_skill, professions.skill_id("alchemy"))
+        self.assertNotEqual(errand.learn_skill, professions.skill_id("first aid"))
+
+        # The secondary errand exists for Og independently, and is a separate,
+        # later concern - never folded into the primary swap above.
+        secondary = professions.secondary_rank_errand("Og", skills["Og"])
+        self.assertIsNotNone(secondary)
+        self.assertEqual(secondary.learn_skill, professions.skill_id("first aid"))
+        self.assertEqual(secondary.travel_npc, "profession trainer")
+        self.assertEqual(secondary.unlearn_skill, 0)
 
 
 class TheProfessionsColumnCarriesPrimariesOnly(unittest.TestCase):

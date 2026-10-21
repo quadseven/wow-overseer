@@ -81,6 +81,11 @@ MEASURED_FOCUS = {
     10841: 0,
     18629: 0,
     18630: 0,
+    # COOKING - every rung below 75 requires a Cooking Fire (focus 4); the fire
+    # itself is the gap #1337 drives, so these are focus-gated and never cast
+    # from here (craft.py's COOKING comment).
+    2538: 4,  # Charred Wolf Meat
+    2540: 4,  # Roasted Boar Meat
     # ENGINEERING - eleven Anvils, and infra#3760 is the issue for them
     3918: 0,
     3922: 1,
@@ -192,6 +197,11 @@ MEASURED_BANDS = {
     10841: (1, 240, 300),
     18629: (1, 260, 320),
     18630: (1, 290, 350),
+    # COOKING - both Apprentice rungs grey at 85, so Charred Wolf Meat runs to
+    # 44 and Roasted Boar Meat takes 45-84; neither is castable until the fire
+    # drive lands (focus 4, no walk in FOCUS_AIMS).
+    2538: (1, 45, 85),
+    2540: (1, 45, 85),
     # ENGINEERING
     3918: (1, 20, 40),
     3922: (1, 45, 60),
@@ -1092,20 +1102,37 @@ class FirstAidAndCookingTests(unittest.TestCase):
             craft.craft_errand("Grug", {"first aid": 59}, primaries=()), 3275
         )
 
-    def test_cooking_has_no_reachable_bracket_at_all(self):
-        """Every Cooking recipe below the 75 cap needs a Cooking Fire.
-
-        Read off `SkillLineAbility.dbc` joined to `Spell.dbc` from the running
-        worldserver: all 181 abilities on skill 185, and every one that
-        creates an item and is reachable below 75 carries
-        `RequiresSpellFocus = 4`. DriveCraft casts in place, so an entry here
-        would sit refused for ever. The table carries none rather than one
-        that looks right and produces nothing.
+    def test_cooking_covers_the_trainer_taught_apprentice_rungs(self):
+        """Cooking now carries its trainer-taught Apprentice rungs
+        (Charred Wolf Meat, Roasted Boar Meat), each focus 4 because every one
+        needs a Cooking Fire. The fire itself - and the Smoked Bear Meat
+        vendor manual beyond these rungs - is the gap #1337 closes, so none of
+        these is castable from here and `craft_errand` stays silent for them.
         """
-        self.assertEqual(craft.RECIPES[goals.SKILL_IDS["cooking"]], ())
-        for value in (1, 50, 51, 75):
+        cooking = goals.SKILL_IDS["cooking"]
+        recipes = craft.RECIPES[cooking]
+        self.assertEqual(
+            {r.spell_id for r in recipes},
+            {2538, 2540},
+        )
+        for recipe in recipes:
+            self.assertEqual(recipe.focus, 4)
+        # Charred Wolf Meat owns 1-44, Roasted Boar Meat 45-84, so every
+        # Apprentice value the family can reach (the cap is 75) is covered.
+        for value in (1, 44, 45, 74, 75):
             with self.subTest(value=value):
-                self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["cooking"], value))
+                self.assertIsNotNone(craft.recipe_for(cooking, value))
+        # 85 and above is not a trainer-taught rung the family reaches; the
+        # vendor manual (Smoked Bear Meat, #1337) is the documented gap.
+        self.assertIsNone(craft.recipe_for(cooking, 85))
+        # None of them is handed out as a castable errand: the fire is the
+        # blocker, see professions.SECONDARY_BLOCKED["cooking"].
+        for value in (1, 50, 75):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    craft.craft_errand("Grug", {"cooking": value}, primaries=()),
+                    0,
+                )
 
     def test_craft_errand_finds_first_aid_for_a_character_assigned_no_primary_with_recipe(
         self,
@@ -1366,10 +1393,11 @@ class SpellFocusTests(unittest.TestCase):
 
     def test_a_focus_gated_recipe_without_a_walk_is_a_named_counted_debt(self):
         """The other half: a declaration can be HONEST and still name a focus
-        nothing stands a character in, which is the eleven Engineering entries
-        infra#3760 is filed for. They stay in the table - removing them would
-        hide the gap rather than close it - but the set is pinned to exactly
-        those eleven, so a twelfth cannot be added without a walk."""
+        nothing stands a character in. Engineering's eleven anvil entries
+        (infra#3760) and Cooking's two fire-gated Apprentice rungs (#1337)
+        stay in the table - removing them would hide the gap rather than close
+        it - but each set is pinned, so a twelfth cannot be added without a
+        walk."""
         stranded = {
             recipe.spell_id
             for recipes in craft.RECIPES.values()
@@ -1378,7 +1406,7 @@ class SpellFocusTests(unittest.TestCase):
         }
         self.assertEqual(
             stranded,
-            FOCUS_WITHOUT_A_WALK,
+            FOCUS_WITHOUT_A_WALK | {2538, 2540},
             "a recipe declaring a focus nothing walks to sits refused on every "
             "poll for ever, logged by DriveCraft as a bare SpellCastResult "
             "that reads like a cooldown. Land the aim and add the focus id to "
@@ -1387,18 +1415,28 @@ class SpellFocusTests(unittest.TestCase):
 
     def test_the_stranded_ones_are_all_the_anvil_and_all_engineering(self):
         """Says what the debt IS, so the number above is not just a number:
-        one focus object, one profession, one issue."""
-        stranded = {
-            recipe.spell_id: recipe.focus
+        the anvil debt is Engineering (focus 1) and the fire debt is Cooking
+        (focus 4) - one focus object, one profession, one issue each."""
+        anvil = {
+            r.spell_id: r.focus
             for recipes in craft.RECIPES.values()
-            for recipe in recipes
-            if recipe.focus and recipe.focus not in craft.FOCUS_AIMS
+            for r in recipes
+            if r.focus == 1
         }
-        self.assertEqual(set(stranded.values()), {1})  # Anvil, and only Anvil
+        fire = {
+            r.spell_id: r.focus
+            for recipes in craft.RECIPES.values()
+            for r in recipes
+            if r.focus == 4
+        }
+        self.assertEqual(set(anvil.values()), {1})
+        self.assertEqual(set(anvil), FOCUS_WITHOUT_A_WALK)
         engineering = {
             r.spell_id for r in craft.RECIPES[goals.SKILL_IDS["engineering"]]
         }
-        self.assertLessEqual(set(stranded), engineering)
+        self.assertLessEqual(set(anvil), engineering)
+        self.assertEqual(set(fire.values()), {4})
+        self.assertEqual(set(fire), {2538, 2540})
 
     def test_an_anvil_gated_recipe_is_still_refused(self):
         """infra#3617's half stays fenced. Anvil is focus 1 and there is no
@@ -1559,6 +1597,12 @@ class SpellFocusTests(unittest.TestCase):
         yellow/grey of 30/40 that is shorter than the Charred Wolf Meat it
         would have replaced. It is a worse version of the same mistake, and
         this test is what says no to it.
+
+        Cooking is the documented exception: craft.RECIPES now carries its
+        trainer-taught Apprentice rungs (2538 Charred Wolf Meat, 2540 Roasted
+        Boar Meat) with focus 4, and they are deliberately never castable
+        until the fire drive lands (#1337). They are excluded below so the
+        guard keeps its teeth for every other skill.
         """
         fire_spells = {
             2538: "Charred Wolf Meat",
@@ -1581,8 +1625,12 @@ class SpellFocusTests(unittest.TestCase):
             7752: "Slitherskin Mackerel",
             37836: "Spice Bread",
         }
+        cooking_id = goals.SKILL_IDS["cooking"]
         named = {
-            recipe.spell_id for recipes in craft.RECIPES.values() for recipe in recipes
+            recipe.spell_id
+            for skill_id, recipes in craft.RECIPES.items()
+            if skill_id != cooking_id
+            for recipe in recipes
         }
         clash = named & set(fire_spells)
         self.assertFalse(

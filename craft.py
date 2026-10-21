@@ -1385,9 +1385,47 @@ RECIPES: dict = {
     # it: the reagents are fine. 1x Stringy Wolf Meat (2672) -> 1x Charred Wolf
     # Meat (2679) and 1x Chunk of Boar Meat (769) -> Roasted Boar Meat (2681)
     # are both ordinary beast drops at the family's level, both AcquireMethod 1
-    # ClassMask 0, both yellow 45 / grey 85. The moment a fire can be lit,
-    # Cooking is a 44-point ladder with no trainer and no purchase.
-    SKILL_IDS["cooking"]: (),
+    # ClassMask 0, both yellow 45 / grey 85 (read from the running worldserver's
+    # Spell.dbc and SkillLineAbility.dbc, anchors asserted first). The moment a
+    # fire can be lit, Cooking is a ladder with no trainer and no purchase -
+    # but nothing in this system lights a fire, so every rung below is focus 4
+    # (Cooking Fire) and `craft_errand` skips it. The rungs below are the
+    # trainer-taught Apprentice cooking rungs; they are named here so the table
+    # is honest about what exists, and they stay out of the errand until the
+    # fire drive lands.
+    #
+    # SMOKED BEAR MEAT is NOT a trainer-taught rung: it is learned from a
+    # vendor-sold manual (Recipe: Smoked Bear Meat). That vendor purchase is
+    # the mod-overseer drive and the site errand #1337, split from this ticket
+    # because a wow-overseer lane cannot push mod-overseer code. It is
+    # deliberately absent from RECIPES until that drive lands - documenting
+    # the gap rather than pretending a trainer errand covers it.
+    SKILL_IDS["cooking"]: (
+        Recipe(
+            2538,
+            "Charred Wolf Meat",
+            min_skill=1,
+            max_skill=44,
+            focus=4,
+            note="1x Stringy Wolf Meat (2672) -> 1x Charred Wolf Meat (item "
+            "2679), no purchase, trainer-taught Apprentice rung. focus 4: "
+            "RequiresSpellFocus 4 (Cooking Fire), which nothing in this "
+            "system lights, so `craft_errand` never hands it out "
+            "(infra#3614, #1337).",
+        ),
+        Recipe(
+            2540,
+            "Roasted Boar Meat",
+            min_skill=45,
+            max_skill=84,
+            focus=4,
+            note="1x Chunk of Boar Meat (769) -> 1x Roasted Boar Meat (item "
+            "2681), no purchase, trainer-taught Apprentice rung. focus 4: "
+            "RequiresSpellFocus 4 (Cooking Fire), which nothing in this "
+            "system lights, so `craft_errand` never hands it out "
+            "(infra#3614, #1337).",
+        ),
+    ),
     # ELEVEN OF THESE EIGHTEEN NEED AN ANVIL, AND UNTIL NOW EVERY ONE OF THEM
     # SAID IT DID NOT (infra#3760, corrected here as part of infra#3748).
     #

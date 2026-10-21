@@ -8173,7 +8173,37 @@ class Bridge(discord.Client):
         for note in plan.notes:
             log.info("trades: %s", note)
         if not plan.assignments:
-            log.info("trades: nothing to decide")
+            # No primary trade is outstanding. A secondary rank-up (First Aid
+            # Apprentice -> Journeyman) still needs a trainer, so write one
+            # secondary errand at a time. With no primary trade in flight, no
+            # `learn_skill`/`unlearn_skill` swap can be clobbered for the same
+            # character - a rank-up never races an in-flight primary-trade
+            # errand.
+            for member in sorted(family, key=lambda m: m.name):
+                candidate = professions.secondary_rank_errand(
+                    member.name, skills.get(member.name, {})
+                )
+                if candidate is None:
+                    continue
+                await asyncio.to_thread(_write_trade_errand, candidate)
+                if candidate.travel_npc:
+                    self._town_slot.adopt(
+                        claimant="trades",
+                        character=candidate.character,
+                        aim=candidate.travel_npc,
+                        now=time.monotonic(),
+                    )
+                log.info(
+                    "trades: secondary rank errand on the roster - %s learn=%s "
+                    "travel=%r; traveller=%s",
+                    candidate.character,
+                    candidate.learn_skill,
+                    candidate.travel_npc,
+                    professions.traveller(candidate) or "nobody has to move",
+                )
+                break
+            else:
+                log.info("trades: nothing to decide")
             return
 
         await asyncio.to_thread(_activate_training)
