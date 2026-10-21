@@ -88,8 +88,20 @@ STALL_AFTER = timedelta(minutes=20)
 # precise state this must still call stalled. `death` is therefore excluded on
 # purpose - a stall detector that reset on a corpse run would have said the
 # family was fine all the way through #171.
+#
+# `boss` is the one kind that does not come from overseer_event: it is the
+# encounter credit the worldserver writes to overseer_dungeon_run_event when a
+# boss falls (detail like "1 encounter credited, 2 in all (mask 1 -> 3)"), fed
+# in beside the event rows by map_server._fetch_agenda. A campaign that repeats
+# one dungeon gives no new quest, no level and rarely an equip, so without it a
+# family on its ninth Blackfathom run was called stuck while its bosses fell.
+# The same table's phase changes, `death` and `dc_on` rows stay out: a party
+# wiping, reconnecting or standing still inside writes those without getting
+# anywhere.
+BOSS_KIND = "boss"
 MOVEMENT_KINDS = frozenset(
     {
+        BOSS_KIND,
         "quest_accept",
         "quest_complete",
         "quest_reward",
@@ -703,7 +715,11 @@ def last_movement(event_rows: list[dict]) -> datetime | None:
 
     Deaths are excluded (see MOVEMENT_KINDS): a party wiping in a loop writes
     a row every few minutes forever, and counting those would make this agree
-    that a stuck family was busy.
+    that a stuck family was busy. Phase changes and `dc_on` rows are left out
+    for the same reason: they are written by a party that is only waiting.
+
+    A boss credit (BOSS_KIND) is the one dungeon-run row that counts, since a
+    boss falling is progress that a repeated clear gives no other event for.
     """
     stamps = [
         row["last_seen"]
@@ -712,6 +728,21 @@ def last_movement(event_rows: list[dict]) -> datetime | None:
         and row.get("last_seen") is not None
     ]
     return max(stamps) if stamps else None
+
+
+def last_boss_credit(event_rows: list[dict], moved_at: datetime | None) -> str:
+    """The newest boss credit's detail when it is the newest movement, else "".
+
+    The stall line names it only then: a credit older than a quest says
+    nothing about why the family is quiet now. The module's "(mask 1 -> 3)"
+    tail is bookkeeping for the run timeline and is dropped.
+    """
+    if moved_at is None:
+        return ""
+    for row in event_rows:
+        if str(row.get("kind") or "") == BOSS_KIND and row.get("last_seen") == moved_at:
+            return str(row.get("detail") or "").split(" (mask")[0].strip()
+    return ""
 
 
 def stalled(moved_at: datetime | None, now: datetime) -> bool:
@@ -738,28 +769,36 @@ def span(seconds: int) -> str:
     return "%d seconds" % seconds
 
 
-def stall_line(moved_at: datetime | None, now: datetime) -> str:
+def stall_line(moved_at: datetime | None, now: datetime, credit: str = "") -> str:
     """What STALLED means here, with the real gap in it.
 
     The banner printed "nothing has happened in over 20 minutes" for a family
     that had been still for thirteen hours, under a headline about somebody
     walking. What is measured is narrower, and is said as such: no quest,
     level or gear change (MOVEMENT_KINDS).
+
+    `credit` is last_boss_credit's answer. When the newest movement is a boss
+    falling, the line says what the family last did instead of implying it did
+    nothing, and the measure widens to name boss credits too.
     """
     if moved_at is None:
         return ""
-    return "STALLED: no quest, level or gear change for %s." % span(
-        max(0, int((now - moved_at).total_seconds()))
-    )
+    gap = span(max(0, int((now - moved_at).total_seconds())))
+    if credit:
+        return (
+            "STALLED: no quest, level, gear change or boss credit for %s"
+            " (last boss credit: %s)." % (gap, credit)
+        )
+    return "STALLED: no quest, level or gear change for %s." % gap
 
 
 # build_agenda's `leader_now` when the caller did not read the leader at all.
 NOT_READ = object()
 
 
-def _stall_text(moved_at, now, counter, leader_now) -> str:
+def _stall_text(moved_at, now, counter, leader_now, credit="") -> str:
     """The STALLED line, with the hold that explains it when the leader was read."""
-    line = stall_line(moved_at, now)
+    line = stall_line(moved_at, now, credit)
     if leader_now is NOT_READ:
         return line
     return "%s %s" % (line, stall_blocker(counter["recorded_by"] or "", leader_now))
@@ -900,7 +939,9 @@ def build_agenda(
         "moved_seconds": _seconds(moved_at, now),
         "stalled": is_stalled,
         "stall_after_seconds": int(STALL_AFTER.total_seconds()),
-        "stall_line": _stall_text(moved_at, now, counter, leader_now)
+        "stall_line": _stall_text(
+            moved_at, now, counter, leader_now, last_boss_credit(event_rows, moved_at)
+        )
         if is_stalled
         else "",
         # The hold a stalled family is named by, on its own; "" when the
