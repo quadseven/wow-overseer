@@ -264,12 +264,12 @@ FOCUS_AIMS = {
 # nodes (gameobject_loot_template: 5% off Tin Vein/Silver Vein) and mob
 # loot, the same GATHERED shape as Blacksmithing's mining-byproduct stones,
 # not a buyable one. Adding Standard Scope here would create exactly the
-# "recipe that can never complete" trap the 151-174 gap below was already
+# "recipe that can never complete" trap the 145-174 gap below was already
 # left empty to avoid - no drive in this codebase aims a character at a
 # specific gem drop, so it stays deferred rather than shipped broken. See
 # craft_supply.py's own module docstring for the full verification.
 #
-#   151-174 (Whirring Bronze Gizmo, Bronze Framework, Explosive Sheep) -
+#   145-174 (Whirring Bronze Gizmo, Bronze Framework, Explosive Sheep) -
 #   verified real, but they collide with Heavy Blasting Powder for the SAME
 #   skill window instead of sitting in their own like the Mithril/Thorium
 #   chains below do (Whirring Bronze Gizmo's own trainer-verified skill floor
@@ -1527,7 +1527,7 @@ RECIPES: dict = {
             "135 - also the reagent Hi-Explosive Bomb needs later. "
             "max_skill was 150, past its own grey of 145",
         ),
-        # 151-174 deliberately empty - Whirring Bronze Gizmo / Bronze
+        # 145-174 deliberately empty - Whirring Bronze Gizmo / Bronze
         # Framework / Explosive Sheep, see the module-level comment above.
         Recipe(
             12585,
@@ -1602,11 +1602,11 @@ RECIPES: dict = {
         Recipe(
             19791,
             "Thorium Widget",
-            min_skill=261,
+            min_skill=260,
             max_skill=285,
             focus=1,
             note="3x Thorium Bar, 1x Runecloth (item 14047) -> 1x Thorium "
-            "Widget (item 15994)",
+            "Widget (item 15994); trainer rank 260, grey 300",
         ),
         Recipe(
             19795,
