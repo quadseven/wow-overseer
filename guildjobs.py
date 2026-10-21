@@ -296,7 +296,7 @@ SKILL_NAMES[ENCHANTING] = "Enchanting"
 
 # The crafting trades whose rank a member buys once it holds them, beside the
 # gathering trades `split_trades` hands out. A trade is never started here.
-RANKED_CRAFTS = (LEATHERWORKING, ALCHEMY)
+RANKED_CRAFTS = (LEATHERWORKING, ALCHEMY, BLACKSMITHING, ENGINEERING, ENCHANTING)
 
 # One maintenance member in this many is a tailor: a crew of ten gives three.
 TAILOR_EVERY = 3

@@ -707,6 +707,15 @@ NOT_CRAFTED: dict[int, str] = {
     23123: "Blessed Wizard Oil: NOT Enchanting and not crafted at all. No "
     "create spell; 2 npc_vendor rows. In 3.3.5a it is an Argent Dawn "
     "purchase, which is a reputation errand rather than a trade",
+    # FIELD REPAIR BOT 74A (operator, 2026-10-21). Schematic 18235 teaches
+    # spell 22704 (Engineering 300). No vendor sells it, no creature loots
+    # it, no quest rewards it. The only source on this realm is a world drop
+    # from junkboxes (pickpocket) which is not farmable. Recorded as
+    # unobtainable so raidgoals does not plan for it.
+    18235: "Schematic: Field Repair Bot 74A (item 18235) teaches spell 22704 "
+    "(Engineering 300). 0 npc_vendor, 0 creature_loot, 0 quest_reward rows "
+    "on this realm. Only source is junkbox world drop (not farmable). "
+    "Unobtainable for maintenance crafting.",
 }
 
 # ---------------------------------------------------------------------------

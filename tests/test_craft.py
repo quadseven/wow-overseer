@@ -130,6 +130,17 @@ MEASURED_FOCUS = {
     3337: 0,
     9918: 0,
     16641: 0,
+    # BLACKSMITHING ANVIL ROUTE (operator, 2026-10-21) - all focus 1
+    2666: 1,
+    14379: 1,
+    3506: 1,
+    7223: 1,
+    9935: 1,
+    9964: 1,
+    16643: 1,
+    16649: 1,
+    # ENGINEERING
+    3953: 0,  # Bronze Framework, no focus
     # LEATHERWORKING
     2881: 0,
     2152: 0,
@@ -202,6 +213,8 @@ MEASURED_BANDS = {
     3973: (1, 110, 140),
     3938: (1, 105, 155),
     3945: (1, 125, 145),
+    # Bronze Framework (3953) - taught at 145, grey 195, no focus
+    3953: (1, 145, 195),
     12585: (1, 175, 195),
     12590: (1, 175, 215),
     12589: (1, 195, 235),
@@ -234,6 +247,16 @@ MEASURED_BANDS = {
     3337: (1, 125, 150),
     9918: (1, 200, 210),
     16641: (1, 255, 260),
+    # BLACKSMITHING ANVIL ROUTE (operator, 2026-10-21) - from Spell.dbc/
+    # SkillLineAbility.dbc (md5-verified). MinSkillLineRank = trainer floor.
+    2666: (80, 110, 150),  # Runed Copper Belt
+    14379: (1, 155, 160),  # Golden Rod
+    3506: (180, 205, 210),  # Green Iron Leggings
+    7223: (210, 235, 235),  # Golden Scale Bracers (grey = yellow per DBC)
+    9935: (235, 255, 255),  # Steel Plate Helm (grey = yellow per DBC)
+    9964: (255, 275, 275),  # Mithril Spurs (grey = yellow per DBC)
+    16643: (270, 290, 290),  # Thorium Belt (grey = yellow per DBC)
+    16649: (290, 310, 310),  # Imperial Plate Bracers (grey = yellow per DBC)
     # LEATHERWORKING
     2881: (1, 20, 40),
     2152: (1, 30, 60),
@@ -272,6 +295,15 @@ FOCUS_WITHOUT_A_WALK = {
     12619,
     19791,
     19795,
+    # BLACKSMITHING ANVIL ROUTE (operator, 2026-10-21)
+    2666,
+    14379,
+    3506,
+    7223,
+    9935,
+    9964,
+    16643,
+    16649,
 }
 
 
@@ -422,11 +454,10 @@ class RecipeForTests(unittest.TestCase):
         self.assertEqual(recipe.spell_id, 2660)
 
     def test_blacksmithing_returns_none_in_an_anvil_gated_gap(self):
-        # 100-124 is real skill range with real recipes (Runed Copper Belt,
-        # Silver Rod, Rough Bronze Leggings) - all require an Anvil nothing
-        # walks a smith to, so this must stay None rather than falling back to
-        # a stone recipe past its own grey, which would grant no skill-up.
-        for value in (100, 124, 150, 199, 210, 249, 260, 300):
+        # Actual gaps where no Anvil recipe's trainer floor <= gap start:
+        # 150-154 (no recipe with floor <= 150)
+        # 160-179 (no recipe with floor <= 160)
+        for value in (150, 154, 160, 179):
             with self.subTest(value=value):
                 self.assertIsNone(
                     craft.recipe_for(goals.SKILL_IDS["blacksmithing"], value)
@@ -445,21 +476,28 @@ class RecipeForTests(unittest.TestCase):
                 self.assertEqual(craft.recipe_for(blacksmithing, value).spell_id, 3337)
 
     def test_blacksmithing_finds_the_top_bracket(self):
-        # Dense Sharpening Stone, 250-259 - the highest verified entry. It
-        # ends at 259 and not 260 because 260 is its own grey value, where
-        # the core rolls no skill-up at all.
-        recipe = craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 259)
+        # Imperial Plate Bracers, 290-300 - the highest verified entry.
+        recipe = craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 299)
         self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, 16641)
+        self.assertEqual(recipe.spell_id, 16649)
 
     def test_blacksmithing_stops_at_dense_sharpening_stones_grey(self):
-        """260 IS THE GREY VALUE, not a bracket the table gave up on. Casting
-        there produces the item and never the point - see craft.py's COLOUR
-        BANDS block for the other nine edges that had the same fault."""
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 260))
+        """260 IS THE GREY VALUE of Dense Sharpening Stone, not a bracket the
+        table gave up on. Casting there produces the item and never the point
+        - see craft.py's COLOUR BANDS block for the other nine edges that had
+        the same fault. Mithril Spurs (260-274) now starts at 260."""
+        # Dense Sharpening Stone ends at 259, Mithril Spurs starts at 260
+        self.assertEqual(
+            craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 259).spell_id,
+            16641,
+        )
+        self.assertEqual(
+            craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 260).spell_id,
+            9964,
+        )
 
     def test_blacksmithing_returns_none_past_the_last_verified_bracket(self):
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 261))
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 301))
 
     def test_blacksmithing_never_aims_below_a_recipes_learn_floor(self):
         """THE 65-74 WALL THAT STOPPED GRUG. Coarse Sharpening Stone's
@@ -807,11 +845,12 @@ class EngineeringRecipeForTests(unittest.TestCase):
         self.assertEqual(recipe.spell_id, 3945)  # Heavy Blasting Powder
 
     def test_the_explosive_sheep_chain_gap_answers_none(self):
-        # 151-174: Whirring Bronze Gizmo / Bronze Framework / Explosive Sheep
-        # collide with Heavy Blasting Powder's own skill window and cannot
-        # all be stocked by this module's one-recipe-per-bracket model - see
-        # craft.py's module-level comment.
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["engineering"], 160))
+        # 151-174 was a gap: Whirring Bronze Gizmo / Bronze Framework /
+        # Explosive Sheep collide with Heavy Blasting Powder's skill window.
+        # Bronze Framework (3953, 145-195) now fills it (no focus, needs Bronze Bar).
+        # Remaining gap at 260: Dense Blasting Powder greys at 260; Thorium Widget at 261.
+        self.assertIsNotNone(craft.recipe_for(goals.SKILL_IDS["engineering"], 160))
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["engineering"], 260))
 
 
 class ToolRecipeTests(unittest.TestCase):
@@ -1235,7 +1274,16 @@ class MeasuredCraftBands(unittest.TestCase):
         # can end a recipe before its own grey cutoff. The five gaps below are
         # intentional places where no castable recipe covers the intervening
         # values.
-        gap_starts = {12585: 175, 19791: 261, 3337: 125, 9918: 200, 16641: 250}
+        gap_starts = {
+            12585: 175,
+            19791: 261,
+            3337: 125,
+            9918: 200,
+            16641: 250,
+            # BLACKSMITHING ANVIL ROUTE (operator, 2026-10-21)
+            14379: 155,  # Golden Rod: gap 150-154 after Heavy Grinding Stone (149)
+            3506: 180,  # Green Iron Leggings: gap 160-179 after Golden Rod (159)
+        }
         for skill_recipes in craft.RECIPES.values():
             for index, recipe in enumerate(skill_recipes):
                 learn_floor, yellow, grey = MEASURED_BANDS[recipe.spell_id]
@@ -1387,7 +1435,8 @@ class SpellFocusTests(unittest.TestCase):
 
     def test_the_stranded_ones_are_all_the_anvil_and_all_engineering(self):
         """Says what the debt IS, so the number above is not just a number:
-        one focus object, one profession, one issue."""
+        one focus object (Anvil), two professions (Blacksmithing Anvil route,
+        Engineering), one issue."""
         stranded = {
             recipe.spell_id: recipe.focus
             for recipes in craft.RECIPES.values()
@@ -1395,10 +1444,14 @@ class SpellFocusTests(unittest.TestCase):
             if recipe.focus and recipe.focus not in craft.FOCUS_AIMS
         }
         self.assertEqual(set(stranded.values()), {1})  # Anvil, and only Anvil
+        blacksmithing = {
+            r.spell_id for r in craft.RECIPES[goals.SKILL_IDS["blacksmithing"]]
+        }
         engineering = {
             r.spell_id for r in craft.RECIPES[goals.SKILL_IDS["engineering"]]
         }
-        self.assertLessEqual(set(stranded), engineering)
+        allowed = blacksmithing | engineering
+        self.assertLessEqual(set(stranded), allowed)
 
     def test_an_anvil_gated_recipe_is_still_refused(self):
         """infra#3617's half stays fenced. Anvil is focus 1 and there is no

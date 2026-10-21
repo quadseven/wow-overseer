@@ -86,20 +86,20 @@ class TheLadderGapsAreNamed(unittest.TestCase):
 
     GAPS = {
         # The stones (no focus) grey at 100, 150, 210 and 260.
+        # ANVIL route recipes now fill most gaps (operator, 2026-10-21).
+        # Every rung needs an Anvil (focus 1) and trainer-taught smelts;
+        # only Smelt Copper exists today. The rest wait on Smelt
+        # Bronze/Iron/Gold/Mithril/Thorium (quadseven/mod-overseer#160).
+        # Remaining gaps where no recipe's trainer floor <= gap start:
         BLACKSMITHING: {
-            (100, 124): ANVIL,
-            (150, 199): ANVIL,
-            (210, 249): ANVIL,
-            (260, 300): ANVIL,
+            (150, 154): "no Anvil recipe with trainer floor <= 150",
+            (160, 179): "no Anvil recipe with trainer floor <= 160",
         },
         ENGINEERING: {
-            # Bronze Framework (3953, taught at 145, grey 195) needs no focus
-            # but eats two Bronze Bars, and nothing smelts bronze yet.
-            (145, 174): "Bronze Framework eats Bronze Bars, which nothing smelts",
-            (
-                260,
-                260,
-            ): "Dense Blasting Powder greys at 260; the next rung is taught at 261",
+            # Bronze Framework (3953) now fills 145-174 (no focus, needs Bronze Bar).
+            # 260 remains a single-point gap: Dense Blasting Powder greys at 260;
+            # Thorium Widget taught at 261.
+            (260, 260): "Dense Blasting Powder greys at 260; next rung taught at 261",
         },
     }
 

@@ -1527,8 +1527,18 @@ RECIPES: dict = {
             "135 - also the reagent Hi-Explosive Bomb needs later. "
             "max_skill was 150, past its own grey of 145",
         ),
-        # 151-174 deliberately empty - Whirring Bronze Gizmo / Bronze
-        # Framework / Explosive Sheep, see the module-level comment above.
+        # 145-174: Bronze Framework (3953) fills the gap. It needs no
+        # focus but eats 2x Bronze Bar, and nothing smelts bronze yet
+        # (Smelt Bronze is trainer-taught, not yet added). Grey 195.
+        Recipe(
+            3953,
+            "Bronze Framework",
+            min_skill=145,
+            max_skill=174,
+            note="2x Bronze Bar -> Bronze Framework (item 4379); trainer "
+            "floor 145, grey 195. No focus needed. Bronze Bar needs "
+            "Smelt Bronze (trainer-taught, not yet added).",
+        ),
         Recipe(
             12585,
             "Solid Blasting Powder",
@@ -1873,6 +1883,8 @@ RECIPES: dict = {
     # anvil walk; the rest also wait on the trainer-taught smelts. The stone
     # rungs below now reach their own grey instead, which leaves 100-124,
     # 150-199, 210-249 and 260-300 empty on purpose.
+    # RECIPES ARE SORTED BY min_skill ASCENDING - test_recipe_brackets_stay_inside_measured_skill_bands
+    # assumes this order when computing next_min / previous_end.
     SKILL_IDS["blacksmithing"]: (
         Recipe(
             2660,
@@ -1911,6 +1923,24 @@ RECIPES: dict = {
             note="2x Coarse Stone -> 1x Coarse Grinding Stone, no focus "
             "needed; MinSkillLineRank 1, grey 100",
         ),
+        # BLACKSMITHING ANVIL ROUTE (operator, 2026-10-21). Every row below
+        # requires an Anvil (focus 1). FOCUS_AIMS has no anvil walk, so each
+        # joins FOCUS_WITHOUT_A_WALK in tests/test_craft.py. Reagents are
+        # trainer-taught smelts; only Smelt Copper exists today. The rest wait
+        # on Smelt Bronze/Iron/Gold/Mithril/Thorium (quadseven/mod-overseer#160).
+        # Ranges are non-overlapping and respect each recipe's trainer floor
+        # (MEASURED_BANDS req). Gaps remain where no recipe's floor <= gap start.
+        Recipe(
+            2666,
+            "Runed Copper Belt",
+            min_skill=100,
+            max_skill=124,
+            focus=1,
+            note="10x Copper Bar -> Runed Copper Belt; trainer floor 80, "
+            "grey 150. Fills 100-124 gap left by Coarse Grinding Stone "
+            "(grey 100) and Heavy Grinding Stone (min 125). Only Anvil "
+            "recipe whose reagent (Copper Bar) is craftable today.",
+        ),
         Recipe(
             3337,
             "Heavy Grinding Stone",
@@ -1918,6 +1948,31 @@ RECIPES: dict = {
             max_skill=149,
             note="3x Heavy Stone -> 1x Heavy Grinding Stone, no focus "
             "needed; yellow 125, grey 150",
+        ),
+        # Golden Rod (14379) fills 155-159 (trainer floor 1, grey 160).
+        # Gold Bar needs Smelt Gold (not yet added).
+        Recipe(
+            14379,
+            "Golden Rod",
+            min_skill=155,
+            max_skill=159,
+            focus=1,
+            note="1x Gold Bar -> Golden Rod; trainer floor 1, grey 160. "
+            "Fills 155-159; Gold Bar needs Smelt Gold.",
+        ),
+        # Green Iron Leggings (3506) fills 180-199 (trainer floor 180, grey 205).
+        # Stops at 199 to not overlap Solid Sharpening Stone (200-209).
+        # Iron Bar needs Smelt Iron.
+        Recipe(
+            3506,
+            "Green Iron Leggings",
+            min_skill=180,
+            max_skill=199,
+            focus=1,
+            note="8x Iron Bar + Heavy Silken Thread + Green Dye -> Green "
+            "Iron Leggings; trainer floor 180, grey 205. Fills 180-199; "
+            "Iron Bar needs Smelt Iron. Stops at 199 to not overlap "
+            "Solid Sharpening Stone (200-209).",
         ),
         # SOLID SHARPENING STONE REPLACED SOLID GRINDING STONE HERE, and the
         # two are one word apart in every leveling guide. A SHARPENING stone
@@ -1941,6 +1996,30 @@ RECIPES: dict = {
             "value. NOT 9920 Solid Grinding Stone, which held this "
             "bracket and ate 4x Solid Stone for an armour reagent",
         ),
+        # Golden Scale Bracers (7223) fills 210-234 (trainer floor 210, grey 235).
+        # Steel Bar needs Smelt Steel.
+        Recipe(
+            7223,
+            "Golden Scale Bracers",
+            min_skill=210,
+            max_skill=234,
+            focus=1,
+            note="5x Steel Bar -> Golden Scale Bracers; trainer floor 210, "
+            "grey 235. Fills 210-234; Steel Bar needs Smelt Steel.",
+        ),
+        # Steel Plate Helm (9935) fills 235-249 (trainer floor 235, grey 255).
+        # Stops at 249 to not overlap Dense Sharpening Stone (250-259).
+        # Steel Bar needs Smelt Steel.
+        Recipe(
+            9935,
+            "Steel Plate Helm",
+            min_skill=235,
+            max_skill=249,
+            focus=1,
+            note="14x Steel Bar -> Steel Plate Helm; trainer floor 235, "
+            "grey 255. Fills 235-249; Steel Bar needs Smelt Steel. "
+            "Stops at 249 to not overlap Dense Sharpening Stone (250-259).",
+        ),
         Recipe(
             16641,
             "Dense Sharpening Stone",
@@ -1948,6 +2027,42 @@ RECIPES: dict = {
             max_skill=259,
             note="1x Dense Stone -> 1x Dense Sharpening Stone, no focus "
             "needed; max_skill was 260, its own grey value",
+        ),
+        # Mithril Spurs (9964) fills 260-274 (trainer floor 255, grey 275).
+        # Starts at 260 (Dense Sharpening Stone ends at 259).
+        # Mithril Bar needs Smelt Mithril.
+        Recipe(
+            9964,
+            "Mithril Spurs",
+            min_skill=260,
+            max_skill=274,
+            focus=1,
+            note="4x Mithril Bar -> Mithril Spurs; trainer floor 255, "
+            "grey 275. Fills 260-274; Mithril Bar needs Smelt Mithril.",
+        ),
+        # Thorium Belt (16643) fills 275-289 (trainer floor 270, grey 290).
+        # Starts at 275 to not overlap Mithril Spurs (260-274).
+        # Thorium Bar needs Smelt Thorium.
+        Recipe(
+            16643,
+            "Thorium Belt",
+            min_skill=275,
+            max_skill=289,
+            focus=1,
+            note="8x Thorium Bar -> Thorium Belt; trainer floor 270, "
+            "grey 290. Fills 275-289; Thorium Bar needs Smelt Thorium. "
+            "Starts at 275 to not overlap Mithril Spurs (260-274).",
+        ),
+        # Imperial Plate Bracers (16649) fills 290-300 (trainer floor 290, grey 310).
+        # Thorium Bar needs Smelt Thorium.
+        Recipe(
+            16649,
+            "Imperial Plate Bracers",
+            min_skill=290,
+            max_skill=300,
+            focus=1,
+            note="12x Thorium Bar -> Imperial Plate Bracers; trainer floor "
+            "290, grey 310. Fills 290-300; Thorium Bar needs Smelt Thorium.",
         ),
     ),
     # LEATHERWORKING'S THREAD/DYE BRACKETS (infra#3611) - the fifteen
