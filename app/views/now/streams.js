@@ -18,6 +18,8 @@ import { html, memberHref, duration, classVar } from "../../ui.js";
 import { makePlayer, hasSound } from "./whep.js";
 import { darkSampler, darkReason } from "./dark.js";
 import { u } from "../../api.js";
+import { familyKeys } from "../../families.js";
+import { makeReader, remembered } from "./chatvoice.js";
 
 const tiles = new Map(); // name -> tile
 let heard = null;        // the one tile heard; off on every load (autoplay policy)
@@ -134,7 +136,7 @@ export function mount(root) {
 
 export function stopAll() {
   if (fullscreenElement(document)) exitFullscreen(document);
-  stopChatVoice();
+  chat.stop(false);
   tiles.forEach((t) => {
     t.player.stop();
     t.started = false;
@@ -239,122 +241,42 @@ export function toggleHear(name) {
   applyAudio();
 }
 
-// ---- read chat aloud --------------------------------------------------
-// One line at a time, one voice per character, never on load.
-const CHAT_KEY = "overseer.chatVoice";
-const CHAT_DUCK = 0.25;
-const CHAT_POLL_MS = 6000;
-const CHAT_REPEAT_MS = 60000;
-const CHAT_QUEUE_CAP = 20;
-let chatOn = false;
-let chatStarted = false;
-let chatAfter = null;
-let chatQueue = [];
-let chatSpeaking = false;
-let chatUtter = null;
-let chatSpoken = {};
-let chatTimer = null;
-
-export function chatVoiceEnabled() {
-  return chatOn;
-}
-
-function chatLoad() {
-  try { chatOn = window.localStorage.getItem(CHAT_KEY) === "1"; } catch (e) { chatOn = false; }
-}
-
-function chatSave() {
-  try { window.localStorage.setItem(CHAT_KEY, chatOn ? "1" : "0"); } catch (e) {}
-}
-
-// Duck the heard tile's stream while a line is spoken, restore on end/error.
-function duckChat(on) {
-  const t = heard && tiles.get(heard);
-  if (!t || !t.video) return;
-  t.video.volume = on ? CHAT_DUCK : 1.0;
-}
-
-function pumpChat() {
-  if (chatSpeaking || !chatOn || !chatStarted) return;
-  const item = chatQueue.shift();
-  if (!item) return;
-  if (typeof window.speechSynthesis === "undefined") {
-    chatSpeaking = false;
-    pumpChat();
-    return;
-  }
-  chatSpeaking = true;
-  duckChat(true);
-  const u = new SpeechSynthesisUtterance(item.text);
-  const v = item.voice || {};
-  u.pitch = typeof v.pitch === "number" ? v.pitch : 1.0;
-  u.rate = typeof v.rate === "number" ? v.rate : 1.0;
-  u.onend = () => { duckChat(false); chatSpeaking = false; pumpChat(); };
-  u.onerror = () => { duckChat(false); chatSpeaking = false; pumpChat(); };
-  chatUtter = u;
-  window.speechSynthesis.speak(u);
-}
-
-export function speakChat(text, voice, sender) {
-  if (!chatOn || !chatStarted) return;
-  const key = (sender || "") + "\n" + text;
-  const now = Date.now();
-  const last = chatSpoken[key];
-  if (last !== undefined && now - last < CHAT_REPEAT_MS) return;
-  chatSpoken[key] = now;
-  chatQueue.push({ text, voice });
-  if (chatQueue.length > CHAT_QUEUE_CAP) chatQueue.shift();
-  if (chatSpeaking) return;
-  pumpChat();
-}
-
-export function toggleChatVoice() {
-  chatOn = !chatOn;
-  chatSave();
-  if (chatOn) {
-    chatStarted = true;
-    pollChat();
-  } else if (chatUtter) {
-    window.speechSynthesis.cancel();
-    duckChat(false);
-    chatSpeaking = false;
-    chatUtter = null;
-  }
-}
-
-async function pollChat() {
-  if (!chatOn || !chatStarted) return;
-  try {
-    const res = await fetch(u("/api/chat/party?family=&after=" + (chatAfter || "")));
-    if (!res.ok) { scheduleChat(); return; }
-    const json = await res.json();
-    const rows = json.rows || [];
-    for (const row of rows) {
-      speakChat(row.text, row.voice, row.sender_name);
-      chatAfter = row.id;
-    }
-  } catch (e) { /* keep polling */ }
-  scheduleChat();
-}
-
-function scheduleChat() {
-  if (chatTimer) clearTimeout(chatTimer);
-  chatTimer = setTimeout(pollChat, CHAT_POLL_MS);
-}
-
-window.addEventListener("visibilitychange", () => {
-  if (document.hidden) {
-    if (chatTimer) { clearTimeout(chatTimer); chatTimer = null; }
-  } else if (chatOn && chatStarted) {
-    scheduleChat();
-  }
+// ---- read chat aloud ----------------------------------------------------
+// Party and raid chat said in each character's voice (chatvoice.js), with the
+// heard tile's stream lowered while a line is said.
+// Read through on each use: touching window.localStorage itself throws where
+// storage is blocked, and chatvoice.js catches that only inside its own calls.
+const chatStore = {
+  getItem: (k) => window.localStorage.getItem(k),
+  setItem: (k, v) => window.localStorage.setItem(k, v),
+};
+const chat = makeReader({
+  families: familyKeys,
+  fetchFeed: chatFeed,
+  audible: () => { const t = heard && tiles.get(heard); return t ? t.video : null; },
+  engine: window,
+  store: chatStore,
+  now: () => Date.now(),
+  every: (fn, ms) => window.setInterval(fn, ms),
+  cancel: (h) => window.clearInterval(h),
 });
 
-export function stopChatVoice() {
-  if (chatTimer) { clearTimeout(chatTimer); chatTimer = null; }
-  if (chatUtter) { window.speechSynthesis.cancel(); duckChat(false); chatSpeaking = false; chatUtter = null; }
-  chatStarted = false;
+function chatFeed(family, after) {
+  const q = "family=" + encodeURIComponent(family) + (after === undefined ? "" : "&after=" + after);
+  return fetch(u("/api/chat/party?" + q)).then((r) => {
+    if (!r.ok) throw new Error("/api/chat/party answered " + r.status);
+    return r.json();
+  });
 }
+
+export function chatVoiceOn() { return chat.isOn(); }
+
+// Whether this viewer had reading on last time, so the toggle can offer to
+// resume. It never starts reading by itself.
+export function chatVoiceRemembered() { return remembered(chatStore); }
+
+// Called from a click, which is what speechSynthesis waits for.
+export function toggleChatVoice() { chat.toggle(); }
 
 // ---- frame age ------------------------------------------------------------
 function ageText(t) {
@@ -428,4 +350,3 @@ export function bind(root, openPanel) {
   });
 }
 
-chatLoad();

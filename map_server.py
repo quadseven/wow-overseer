@@ -4066,47 +4066,43 @@ def _fetch_thoughts(name: str, before: int | None, limit: int) -> tuple[list[dic
         conn.close()
 
 
-# A party or raid line is stored once per listener, so the same utterance
-# reaches here with several heard_by copies. collapse_hearers dedupes on
-# (speaker, channel, text, moment) and partition_addon drops addon traffic;
-# the page never speaks either a duplicate or a machine payload.
-_CHAT_PARTY_CHANNELS = ("party", "raid")
-_CHAT_PARTY_PAGE = 20
+def _fetch_chat_party(names: list[str], after: int | None) -> tuple[list[dict], int]:
+    """(party and raid rows `names` said after the cursor, the cursor).
 
-
-def _fetch_chat_party(names: list[str], after: int | None) -> list[dict]:
-    """Party and raid chat rows for `names` newer than `after`, id order.
-
-    The roster names come from the database, never the request. `after` is a
-    cursor the page polls with; unset it reads from the oldest row.
-    Guards a missing overseer_chat table (a realm whose module predates it)
-    with no rows rather than a 503.
+    The roster comes from the database, never the request. With no cursor
+    the feed starts at the newest row and returns nothing: a page that just
+    switched reading on hears what is said from then on, not three hours of
+    retained chat. Only bot-sent lines: a line the operator typed is an order
+    (overhear.py), never something to read back. A realm whose module
+    predates overseer_chat reads as an empty feed rather than a 503.
     """
-    if not names:
-        return []
-    cursor = 0 if after is None else after
-    holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
         with conn.cursor() as cur:
             try:
+                if after is None:
+                    cur.execute("SELECT COALESCE(MAX(id), 0) AS top FROM overseer_chat")
+                    return [], int(cur.fetchone()["top"])
+                if not names:
+                    return [], after
+                holes = ", ".join(["%s"] * len(names))
                 # S608: `holes` is a run of placeholders sized by the roster;
                 # every value is bound by the driver.
                 cur.execute(
-                    "SELECT id, sender_name, channel, text, created_at "
+                    "SELECT id, sender_name, channel, text, created_at, "  # noqa: S608
+                    "TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_s "
                     "FROM overseer_chat "
-                    "WHERE channel IN (%s, %s) "
+                    "WHERE id > %s AND sender_is_bot = 1 "
+                    "AND channel IN (%s, %s) "
                     f"AND sender_name IN ({holes}) "
-                    "AND id > %s "
-                    "ORDER BY id ASC "
-                    "LIMIT %s",
-                    _CHAT_PARTY_CHANNELS + (*names, cursor, _CHAT_PARTY_PAGE),
+                    "ORDER BY id LIMIT %s",
+                    (after, *partyvoice.CHANNELS, *names, partyvoice.PAGE),
                 )
-                return list(cur.fetchall())
+                return list(cur.fetchall()), after
             except pymysql.err.MySQLError as exc:
                 if exc.args and exc.args[0] == 1146:
-                    log.info("overseer_chat absent; chat feed reads as empty")
-                    return []
+                    log.info("overseer_chat absent; the party chat feed is empty")
+                    return [], after or 0
                 raise
     finally:
         conn.close()
@@ -5107,38 +5103,24 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, "application/json", json.dumps(payload).encode())
 
     def _chat_party(self, query: dict) -> None:
-        """GET /api/chat/party?family=<key>&after=<id>.
+        """GET /api/chat/party?family=<key>&after=<id> - party and raid lines to read aloud.
 
-        Deduplicated party and raid chat rows for the requested family's
-        roster, newer than the cursor `after`, capped at one page. Each row
-        carries the voice its sender is spoken with. The page polls this and
-        speaks each row once through browser speechSynthesis.
+        One row per utterance (partyvoice.feed), each with its speaker's
+        voice, and the cursor the page sends back as `after` next time.
         """
         names, _chosen, _known = self._family_scope(query)
         raw_after = query.get("after", [""])[0]
         if raw_after and not raw_after.isdigit():
             self._send(400, "application/json", b'{"error": "bad cursor"}')
             return
-        after = int(raw_after) if raw_after else None
         try:
-            rows = _fetch_chat_party(names, after)
+            rows, cursor = _fetch_chat_party(names, int(raw_after) if raw_after else None)
         except Exception:
-            log.exception("chat party query failed")
+            log.exception("party chat feed failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
             return
-        shaped, _dropped = partyvoice.shape(rows)
-        out = []
-        for row in shaped:
-            out.append({
-                "id": int(row["id"]),
-                "sender_name": str(row.get("sender_name", "")),
-                "channel": str(row.get("channel", "")),
-                "text": str(row.get("text", "")),
-                "created_at": str(row.get("created_at", "")),
-                "voice": partyvoice.voice_for(row.get("sender_name", "")),
-            })
-        self._send(200, "application/json",
-                   json.dumps({"rows": out}).encode())
+        payload = partyvoice.feed(rows, cursor)
+        self._send(200, "application/json", json.dumps(payload).encode())
 
     def _trade_crafts(self, query: dict) -> None:
         """GET /api/trades?skill=<id>[&family=<key>] - one profession's crafts.

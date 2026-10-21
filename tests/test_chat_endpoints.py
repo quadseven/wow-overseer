@@ -293,81 +293,132 @@ class ChatEndpointTest(unittest.TestCase):
         )
 
 
+def said(i, sender="Grug", text="Aye.", at="2026-08-23 12:00:00", ch="party"):
+    return {
+        "id": i,
+        "sender_name": sender,
+        "channel": ch,
+        "text": text,
+        "created_at": at,
+        "age_s": 3,
+    }
+
+
 class PartyEndpointTest(unittest.TestCase):
     """GET /api/chat/party?family=<key>&after=<id>."""
 
     def setUp(self):
-        self.patcher = mock.patch.object(
-            map_server.FAMILIES, "families", return_value={"": ["Grug", "Ugga"]}
-        )
-        self.patcher.start()
-        self.addCleanup(self.patcher.stop)
+        rosters = {"Grug": ["Grug", "Ugga"], "Zug": ["Zug", "Oz"]}
+        for name, value in (("families", rosters), ("default", "Grug")):
+            patcher = mock.patch.object(map_server.FAMILIES, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
-    def get(self, path):
+    def get(self, path, rows=(), cursor=0):
         handler = FakeHandler(path)
-        handler.do_GET()
-        return handler
-
-    def test_rows_are_deduplicated_and_voiced(self):
-        rows = [
-            {
-                "id": 1,
-                "sender_name": "Grug",
-                "channel": "party",
-                "text": "Aye.",
-                "created_at": "2026-08-23 12:00:00",
-            },
-            {
-                "id": 2,
-                "sender_name": "Grug",
-                "channel": "party",
-                "text": "Aye.",
-                "created_at": "2026-08-23 12:00:00",
-            },
-            {
-                "id": 3,
-                "sender_name": "Ugga",
-                "channel": "raid",
-                "text": "Ready.",
-                "created_at": "2026-08-23 12:00:01",
-            },
-        ]
         with mock.patch.object(
-            map_server, "_fetch_chat_party", return_value=rows
+            map_server, "_fetch_chat_party", return_value=(list(rows), cursor)
         ) as fetch:
-            handler = self.get("/api/chat/party?family=&after=")
+            handler.do_GET()
+        return handler, fetch
+
+    def test_a_line_heard_by_three_is_one_voiced_line(self):
+        rows = [said(1), said(2), said(3), said(4, sender="Ugga", ch="raid")]
+        handler, _ = self.get("/api/chat/party?family=Grug&after=0", rows)
         self.assertEqual(handler.code, 200)
-        ids = [r["id"] for r in handler.payload["rows"]]
-        self.assertEqual(ids, [1, 3])
-        self.assertEqual(sorted(fetch.call_args[0][0]), ["Grug", "Ugga"])
-        by_id = {r["id"]: r for r in handler.payload["rows"]}
-        self.assertEqual(by_id[1]["voice"]["pitch"], 0.8)
-        self.assertEqual(by_id[3]["voice"]["pitch"], 1.0)
+        lines = handler.payload["rows"]
+        self.assertEqual([line["id"] for line in lines], [1, 4])
+        self.assertEqual(lines[0]["voice"]["pitch"], 0.70)
+        self.assertEqual(lines[1]["voice"]["engine_voice_hint"]["gender"], "female")
+        self.assertEqual(handler.payload["cursor"], 4)
+
+    def test_the_requested_familys_roster_and_cursor_reach_the_read(self):
+        _, fetch = self.get("/api/chat/party?family=Zug&after=17", cursor=17)
+        fetch.assert_called_once_with(["Zug", "Oz"], 17)
+
+    def test_an_unknown_family_reads_the_default_one(self):
+        _, fetch = self.get("/api/chat/party?family=Nobody&after=1", cursor=1)
+        fetch.assert_called_once_with(["Grug", "Ugga"], 1)
+
+    def test_no_cursor_asks_for_the_newest_row(self):
+        handler, fetch = self.get("/api/chat/party?family=Grug", cursor=90)
+        fetch.assert_called_once_with(["Grug", "Ugga"], None)
+        self.assertEqual(handler.payload, {"rows": [], "cursor": 90})
 
     def test_a_bad_cursor_is_refused_before_any_query(self):
-        with mock.patch.object(map_server, "_fetch_chat_party") as fetch:
-            handler = self.get("/api/chat/party?family=&after=abc")
+        handler, fetch = self.get("/api/chat/party?family=Grug&after=-1")
         self.assertEqual(handler.code, 400)
         fetch.assert_not_called()
 
-    def test_rows_are_capped_at_one_page(self):
-        rows = [
-            {
-                "id": i,
-                "sender_name": "Grug",
-                "channel": "party",
-                "text": "line %d" % i,
-                "created_at": "t",
-            }
-            for i in range(1, 30)
-        ]
+    def test_a_database_outage_is_a_503(self):
+        handler = FakeHandler("/api/chat/party?family=Grug&after=1")
         with mock.patch.object(
-            map_server, "_fetch_chat_party", side_effect=lambda names, after: rows[:20]
-        ) as fetch:
-            handler = self.get("/api/chat/party?family=&after=")
-        self.assertEqual(handler.code, 200)
-        self.assertEqual(len(handler.payload["rows"]), 20)
-        self.assertEqual(sorted(fetch.call_args[0][0]), ["Grug", "Ugga"])
+            map_server, "_fetch_chat_party", side_effect=OSError("down")
+        ):
+            handler.do_GET()
+        self.assertEqual(handler.code, 503)
+
+
+class ChatReadCursor:
+    def __init__(self, rows=(), top=0):
+        self.rows = list(rows)
+        self.top = top
+        self.calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=()):
+        self.calls.append((sql, params))
+
+    def fetchone(self):
+        return {"top": self.top}
+
+    def fetchall(self):
+        return self.rows
+
+
+class ChatReadConn:
+    def __init__(self, cur):
+        self.cur = cur
+
+    def cursor(self):
+        return self.cur
+
+    def close(self):
+        pass
+
+
+class PartyReadTest(unittest.TestCase):
+    """_fetch_chat_party: what it asks overseer_chat for."""
+
+    def fetch(self, names, after, cur):
+        with mock.patch.object(map_server, "_connect", return_value=ChatReadConn(cur)):
+            return map_server._fetch_chat_party(names, after)
+
+    def test_party_and_raid_bot_lines_from_the_roster_after_the_cursor(self):
+        cur = ChatReadCursor([said(8)])
+        rows, cursor = self.fetch(["Grug", "Ugga"], 7, cur)
+        self.assertEqual((rows, cursor), ([said(8)], 7))
+        ((sql, params),) = cur.calls
+        self.assertIn("channel IN (%s, %s)", sql)
+        self.assertIn("sender_is_bot = 1", sql)
+        self.assertIn("ORDER BY id LIMIT %s", sql)
+        self.assertEqual(params, (7, "party", "raid", "Grug", "Ugga", 20))
+
+    def test_no_cursor_starts_at_the_newest_row_and_reads_no_lines(self):
+        cur = ChatReadCursor([said(8)], top=55)
+        self.assertEqual(self.fetch(["Grug"], None, cur), ([], 55))
+        ((sql, _params),) = cur.calls
+        self.assertIn("MAX(id)", sql)
+
+    def test_an_empty_roster_reads_nothing(self):
+        cur = ChatReadCursor([said(8)])
+        self.assertEqual(self.fetch([], 3, cur), ([], 3))
+        self.assertEqual(cur.calls, [])
 
 
 class ParseGateTest(unittest.TestCase):

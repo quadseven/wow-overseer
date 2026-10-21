@@ -108,9 +108,23 @@ ${cell("Build", html`<span class="rv num">${r.build || notMeasured()}</span>`, "
 </a>`;
 }
 
+// Read party and raid chat aloud (streams.js, chatvoice.js). Off on every
+// load; a viewer who had it on last time is offered a resume, never started.
+function chatLabel() {
+  if (streams.chatVoiceOn()) return "Reading chat aloud";
+  return streams.chatVoiceRemembered() ? "Resume reading chat aloud" : "Read chat aloud";
+}
+
 function chatToggle() {
-  const on = streams.chatVoiceEnabled();
-  return html`<button type="button" class="nchip" data-toggle="chatvoice" aria-pressed="${String(on)}" aria-label="${on ? "Stop reading chat aloud" : "Read party and raid chat aloud"}"><i class="ph ${on ? "ph-fill" : "ph"} ph-volume-2" aria-hidden="true"></i><span>${on ? "Reading chat aloud" : "Read chat aloud"}</span></button>`;
+  const on = streams.chatVoiceOn();
+  return html`<button type="button" class="nchip" data-toggle="chatvoice" aria-pressed="${String(on)}" title="Party and raid chat, each character in their own voice"><i class="${on ? "ph-fill ph-chat-circle-text" : "ph ph-chat-circle"}" aria-hidden="true"></i><span>${chatLabel()}</span></button>`;
+}
+
+function pressChatToggle(b) {
+  streams.toggleChatVoice();
+  b.setAttribute("aria-pressed", String(streams.chatVoiceOn()));
+  b.querySelector("i").className = streams.chatVoiceOn() ? "ph-fill ph-chat-circle-text" : "ph ph-chat-circle";
+  b.querySelector("span").textContent = chatLabel();
 }
 
 // ---- family agendas -------------------------------------------------------------
@@ -156,7 +170,7 @@ function familiesSection(ctx, agendas) {
   const layout = readLayout();
   const seg = html`<div class="seg live-seg" role="radiogroup" aria-label="Stream layout">${[["side", "Side by side"], ["stacked", "Stacked"]].map(([k, label]) => html`<button type="button" role="radio" aria-checked="${String(layout === k)}" data-layout="${k}">${label}</button>`)}</div>`;
   const streamed = hs ? hs.filter((m) => (w.tile(m.name) || {}).url || m.broadcast_url).length : null;
-  return html`<section class="fams" aria-labelledby="fams-title"><div class="sec-row"><h2 class="kicker" id="fams-title">Families, live</h2><span class="dim small">${streamed === null ? "" : streamed + " of " + hs.length + " streamed"}</span>${seg}</div>
+  return html`<section class="fams" aria-labelledby="fams-title"><div class="sec-row"><h2 class="kicker" id="fams-title">Families, live</h2><span class="dim small">${streamed === null ? "" : streamed + " of " + hs.length + " streamed"}</span>${chatToggle()}${seg}</div>
 <div class="families" data-wall="${layout}">${D.familyKeys().map((f, i) => html`<div class="fam" data-family="${f}">${agendaCard(f, agendas[i])}<div class="fam-live">${familyLive(f, w, wall)}</div>${miniMap(f)}</div>`)}</div>
 </section>`;
 }
@@ -279,7 +293,7 @@ export default {
   render(ctx) {
     const agendas = D.familyKeys().map((f) => ctx.get(D.agendaPath(f)));
     const need = needs(ctx);
-    return html`<header class="page-head now-head"><h1>Now</h1>${realmLine(ctx)}${chatToggle()}</header>
+    return html`<header class="page-head now-head"><h1>Now</h1>${realmLine(ctx)}</header>
 ${chips(ctx, agendas, need)}
 ${familiesSection(ctx, agendas)}
 ${fold(ctx, agendas, need)}
@@ -295,7 +309,7 @@ ${reportSection(ctx, allGuilds())}`;
     streams.bind(main, openPanel);
     pressed();
     main.querySelectorAll("[data-toggle=chatvoice]").forEach((b) => {
-      b.addEventListener("click", () => { streams.toggleChatVoice(); b.setAttribute("aria-pressed", String(streams.chatVoiceEnabled())); });
+      b.addEventListener("click", () => pressChatToggle(b));
     });
     drawMiniMaps(main, ctx);
     // A new achievement since the last visit: a brief toast, once per device.
