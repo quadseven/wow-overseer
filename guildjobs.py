@@ -6041,3 +6041,64 @@ def spots_from_rows(rows, kind="gameobject") -> tuple:
         except (KeyError, TypeError, ValueError):
             continue
     return tuple(out)
+
+
+# ALWAYS-ONLINE GUILD WATCH (#874). A member of an always-online guild holds a
+# permanent lease, yet eight of them logged out between 14:18 and 14:25 on
+# 2026-10-12 and nothing named why: the bridge only noticed afterwards, as "waits
+# for gear: it is offline". The watch reads the characters table and logs one
+# line per departure. The cause is a PROBABLE one: the bridge sees rows, not the
+# worldserver's logout call, so the line names what the rows show.
+
+# How far back a logout still counts as new: a few watch cycles.
+LEAVE_LOOKBACK_SECONDS = 300
+
+
+def new_departures(rows, seen, now):
+    """(rows that left the world within LEAVE_LOOKBACK_SECONDS and are not in
+    `seen`, the grown `seen`). A departure is keyed by guid and logout time, so
+    a member that leaves twice is reported twice and a standing one once."""
+    found = []
+    grown = set(seen)
+    for row in rows:
+        key = (row["guid"], row["logout_time"])
+        if row["online"] or key in grown:
+            continue
+        if now - int(row["logout_time"]) > LEAVE_LOOKBACK_SECONDS:
+            continue
+        grown.add(key)
+        found.append(row)
+    return found, grown
+
+
+def leave_line(row, departed, online_on_account):
+    """One log line naming the probable cause of `row`'s logout.
+
+    `departed` is every departure of this pass; `online_on_account` maps an
+    account to how many of its characters are online now.
+    """
+    who = "guild member %s (%s) left the world" % (row["name"], row["guild"])
+    mates = [
+        d["name"]
+        for d in departed
+        if d["name"] != row["name"] and d["logout_time"] == row["logout_time"]
+    ]
+    if mates:
+        return (
+            "%s: same second as %s, so a server-side pass logged them out together"
+            % (
+                who,
+                ", ".join(mates),
+            )
+        )
+    others = online_on_account.get(row["account"], 0)
+    if others:
+        return (
+            "%s: %d other characters on its account are online, so a login or the "
+            "bot rotation on that account may have replaced this session"
+            % (who, others)
+        )
+    return (
+        "%s: no other session on its account and no batch, so the cause is not in the rows"
+        % who
+    )
