@@ -27,11 +27,15 @@ leader, overwriting its errand on the way - so there is no such thing as sending
 Grug to copper and Ugga to herbs. A destination has to be somewhere the WEAKEST
 gatherer can work, or it is a long walk for somebody.
 
-WHY DENSITY AND NOT DISTANCE. `_nearest_forge` wants the closest forge because
-one smelt needs one forge. Gathering wants a field, not a node: walking twenty
-minutes to a single Copper Vein and then standing in an empty zone raises
-nothing. So zones are ranked by how many reachable nodes they hold, and only
-then by how far away they are.
+WHY DISTANCE NOW OUTWEIGHS DENSITY. `_nearest_forge` wants the closest forge
+because one smelt needs one forge. Gathering wants a field, not a node, but the
+family travels as one on a single travel column that the gather lease holds for
+`GATHER_LEASE_SECONDS` (450s). A distant dense field consumes most of that lease
+just getting there, and a starved pass can take the column back mid-walk. For a
+character that will stand at the field for a long stretch, node density buys
+almost nothing, while every yard of walk consumes the lease directly. So fields
+are ranked by distance from the leader first, densest only as a tiebreak, and
+nothing beyond what the lease can walk is ever a candidate.
 
 SKINNING IS NOT HERE AND CANNOT BE. Skinning comes off creature corpses, not
 `gameobject` spawns, so `gatherband` has no lock for it and this module can
@@ -234,7 +238,11 @@ def yards(spawn, origin) -> float:
 
 def near_fields(spawns, skills, standing_on, origin, max_yards=MAX_YARDS):
     """Fields some gatherer can open within `max_yards` of `origin`, nearest
-    first in thousand-yard steps and densest within a step (#170).
+    first and densest only as a tiebreak.
+
+    `max_yards` is the gather lease expressed in yards, so a farther denser
+    field never beats a nearer one and nothing beyond the lease is ever a
+    candidate (#170).
 
     Returns (in_range, nearest_out_of_range_yards). The second value is None
     when there was nothing out of range either, and is what the refusal names.
@@ -248,9 +256,7 @@ def near_fields(spawns, skills, standing_on, origin, max_yards=MAX_YARDS):
         if far > float(max_yards):
             beyond = far if beyond is None else min(beyond, far)
             continue
-        inside.append(
-            (int(far // 1000), -field.nodes, field.zone_id, field.skill_name, field)
-        )
+        inside.append((far, -field.nodes, field.zone_id, field.skill_name, field))
     inside.sort(key=lambda row: row[:4])
     return [row[4] for row in inside], beyond
 
