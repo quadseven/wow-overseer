@@ -223,6 +223,6 @@ export function makeReader(deps) {
     stop,
     poll,
     isOn: () => on,
-    toggle() { if (on) stop(); else start(); },
+    toggle() { if (on) { stop(); return Promise.resolve(); } return start(); },
   };
 }

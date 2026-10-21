@@ -93,7 +93,7 @@ def feed(rows: list[dict], cursor: int) -> dict:
     one row and be spoken a second time. A row without a whole id or age
     is logged and left out: it cannot move the cursor or be timed.
     """
-    rows = [row for row in rows if _well_formed(row)]
+    rows = [row for row in rows if _well_formed(row)][:PAGE]
     top = max([cursor, *(int(row["id"]) for row in rows)])
     kept, _copies = relay.collapse_hearers(rows)
     spoken, _addon = relay.partition_addon(kept)

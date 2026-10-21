@@ -210,6 +210,14 @@ class TheReader(unittest.TestCase):
         self.assertEqual(got[1], ["Aye."])
         self.assertEqual(got[2], {"overseer.chatVoice": "1"})
 
+    def test_toggle_waits_for_the_initial_poll(self):
+        got = run(
+            "feeds = [{rows: [], cursor: 40}];"
+            "const pending = reader.toggle();"
+            + show("[typeof pending.then, reader.isOn(), asked]")
+        )
+        self.assertEqual(got, ["function", True, [["Grug", None]]])
+
     def test_a_line_read_twice_across_polls_is_said_once(self):
         got = run(
             "feeds = [{rows: [], cursor: 0}, {rows: [line(1, 'Aye.')], cursor: 1},"

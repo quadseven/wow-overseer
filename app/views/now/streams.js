@@ -276,7 +276,7 @@ export function chatVoiceOn() { return chat.isOn(); }
 export function chatVoiceRemembered() { return remembered(chatStore); }
 
 // Called from a click, which is what speechSynthesis waits for.
-export function toggleChatVoice() { chat.toggle(); }
+export async function toggleChatVoice() { await chat.toggle(); }
 
 // ---- frame age ------------------------------------------------------------
 function ageText(t) {

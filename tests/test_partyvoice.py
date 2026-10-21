@@ -131,6 +131,12 @@ class FeedTest(unittest.TestCase):
         out = partyvoice.feed([row(i) for i in range(1, 6)], 0)
         self.assertEqual(out["cursor"], 5)
 
+    def test_feed_caps_raw_rows_and_cursor_at_the_last_row_in_the_page(self):
+        rows = [row(i) for i in range(1, partyvoice.PAGE + 6)]
+        out = partyvoice.feed(rows, 0)
+        self.assertEqual(out["cursor"], partyvoice.PAGE)
+        self.assertEqual([line["id"] for line in out["rows"]], [1])
+
     def test_the_cursor_moves_past_addon_rows(self):
         out = partyvoice.feed([row(7, text="help me"), row(8, text="MBOT\tPING~1")], 6)
         self.assertEqual([line["id"] for line in out["rows"]], [7])
