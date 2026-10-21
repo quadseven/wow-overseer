@@ -293,6 +293,83 @@ class ChatEndpointTest(unittest.TestCase):
         )
 
 
+class PartyEndpointTest(unittest.TestCase):
+    """GET /api/chat/party?family=<key>&after=<id>."""
+
+    def setUp(self):
+        self.patcher = mock.patch.object(
+            map_server.FAMILIES, "families", return_value={"": ["Grug", "Ugga"]}
+        )
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+
+    def get(self, path):
+        handler = FakeHandler(path)
+        handler.do_GET()
+        return handler
+
+    def test_rows_are_deduplicated_and_voiced(self):
+        rows = [
+            {
+                "id": 1,
+                "sender_name": "Grug",
+                "channel": "party",
+                "text": "Aye.",
+                "created_at": "2026-08-23 12:00:00",
+            },
+            {
+                "id": 2,
+                "sender_name": "Grug",
+                "channel": "party",
+                "text": "Aye.",
+                "created_at": "2026-08-23 12:00:00",
+            },
+            {
+                "id": 3,
+                "sender_name": "Ugga",
+                "channel": "raid",
+                "text": "Ready.",
+                "created_at": "2026-08-23 12:00:01",
+            },
+        ]
+        with mock.patch.object(
+            map_server, "_fetch_chat_party", return_value=rows
+        ) as fetch:
+            handler = self.get("/api/chat/party?family=&after=")
+        self.assertEqual(handler.code, 200)
+        ids = [r["id"] for r in handler.payload["rows"]]
+        self.assertEqual(ids, [1, 3])
+        self.assertEqual(sorted(fetch.call_args[0][0]), ["Grug", "Ugga"])
+        by_id = {r["id"]: r for r in handler.payload["rows"]}
+        self.assertEqual(by_id[1]["voice"]["pitch"], 0.8)
+        self.assertEqual(by_id[3]["voice"]["pitch"], 1.0)
+
+    def test_a_bad_cursor_is_refused_before_any_query(self):
+        with mock.patch.object(map_server, "_fetch_chat_party") as fetch:
+            handler = self.get("/api/chat/party?family=&after=abc")
+        self.assertEqual(handler.code, 400)
+        fetch.assert_not_called()
+
+    def test_rows_are_capped_at_one_page(self):
+        rows = [
+            {
+                "id": i,
+                "sender_name": "Grug",
+                "channel": "party",
+                "text": "line %d" % i,
+                "created_at": "t",
+            }
+            for i in range(1, 30)
+        ]
+        with mock.patch.object(
+            map_server, "_fetch_chat_party", side_effect=lambda names, after: rows[:20]
+        ) as fetch:
+            handler = self.get("/api/chat/party?family=&after=")
+        self.assertEqual(handler.code, 200)
+        self.assertEqual(len(handler.payload["rows"]), 20)
+        self.assertEqual(sorted(fetch.call_args[0][0]), ["Grug", "Ugga"])
+
+
 class ParseGateTest(unittest.TestCase):
     def test_the_endpoint_and_the_bridge_share_one_command_gate(self):
         # Not a duplicate of the chat.py suite: this pins that the web

@@ -108,6 +108,11 @@ ${cell("Build", html`<span class="rv num">${r.build || notMeasured()}</span>`, "
 </a>`;
 }
 
+function chatToggle() {
+  const on = streams.chatVoiceEnabled();
+  return html`<button type="button" class="nchip" data-toggle="chatvoice" aria-pressed="${String(on)}" aria-label="${on ? "Stop reading chat aloud" : "Read party and raid chat aloud"}"><i class="ph ${on ? "ph-fill" : "ph"} ph-volume-2" aria-hidden="true"></i><span>${on ? "Reading chat aloud" : "Read chat aloud"}</span></button>`;
+}
+
 // ---- family agendas -------------------------------------------------------------
 function agendaCard(fam, read) {
   const href = "#/now/family/" + fam.toLowerCase();
@@ -274,7 +279,7 @@ export default {
   render(ctx) {
     const agendas = D.familyKeys().map((f) => ctx.get(D.agendaPath(f)));
     const need = needs(ctx);
-    return html`<header class="page-head now-head"><h1>Now</h1>${realmLine(ctx)}</header>
+    return html`<header class="page-head now-head"><h1>Now</h1>${realmLine(ctx)}${chatToggle()}</header>
 ${chips(ctx, agendas, need)}
 ${familiesSection(ctx, agendas)}
 ${fold(ctx, agendas, need)}
@@ -289,6 +294,9 @@ ${reportSection(ctx, allGuilds())}`;
     streams.mount(main);
     streams.bind(main, openPanel);
     pressed();
+    main.querySelectorAll("[data-toggle=chatvoice]").forEach((b) => {
+      b.addEventListener("click", () => { streams.toggleChatVoice(); b.setAttribute("aria-pressed", String(streams.chatVoiceEnabled())); });
+    });
     drawMiniMaps(main, ctx);
     // A new achievement since the last visit: a brief toast, once per device.
     announce(ctx.get("/api/v2/achievements"), ctx.previousVisit);
