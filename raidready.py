@@ -601,6 +601,7 @@ RAIDER_COLUMNS = (
     "raider",
     "role",
     "level",
+    "average item level",
     "pre-raid ready",
     "fire resistance",
     "attuned",
@@ -642,6 +643,7 @@ def _cells(row: dict) -> list:
         row["name"],
         row.get("label") or row["role"],
         "?" if row["level"] is None else str(row["level"]),
+        "not read" if row["item_level"] is None else "%.1f" % row["item_level"],
         raidgear.percent(row["gear"]),
         (
             "%d of %d" % (row["fire_res"], row["fire_target"])
@@ -662,6 +664,20 @@ def _where(member: dict) -> str:
         return "position not read"
     place = CONTINENTS.get(int(map_id), "inside " + places.map_name(map_id))
     return place if member.get("online") else "%s, offline" % place
+
+
+def _average_item_levels(worn_rows: list) -> dict:
+    """Average the readable worn item levels for each character."""
+    levels = {}
+    for row in worn_rows or ():
+        value = row.get("item_level")
+        if value is not None:
+            levels.setdefault(row.get("name"), []).append(int(value))
+    return {
+        name: sum(values) / len(values)
+        for name, values in levels.items()
+        if name and values
+    }
 
 
 def _supplies(raider, held: dict) -> tuple:
@@ -691,6 +707,7 @@ def raider_rows(
     attuned: set,
     potions: dict,
     *,
+    item_levels: dict | None = None,
     supply_raiders: list = (),
     held: dict | None = None,
 ) -> list:
@@ -707,6 +724,7 @@ def raider_rows(
     by_name = {m["name"]: m for m in members}
     supply_by_name = {r.name: r for r in supply_raiders or ()}
     held = held or {}
+    item_levels = item_levels or {}
     rows = []
     for group in lineup["groups"]:
         for member in group["members"]:
@@ -723,6 +741,7 @@ def raider_rows(
                     # raidlineup's; the cell prints it over the bare role.
                     "label": member.get("label", ""),
                     "level": member.get("level"),
+                    "item_level": item_levels.get(name),
                     "gear": gear.get(name),
                     "fire_res": fire.get(name, 0),
                     "attuned": name in attuned,
@@ -831,6 +850,7 @@ def build_guild(
         fire_resistance(worn_rows),
         attuned,
         carried(holding_rows, names, FIRE_PROTECTION),
+        item_levels=_average_item_levels(worn_rows),
         supply_raiders=raidsupply.raiders_from_lineup(
             lineup, classes, worn_rows, group["family_names"]
         ),
