@@ -6638,6 +6638,7 @@ PASSES = (
     _Pass("_guild_post_loop"),
     _Pass("_guild_corps_loop"),
     _Pass("_guild_jobs_loop"),
+    _Pass("_guild_logout_watch_loop"),
     _Pass("_mail_loop"),
     _Pass("_town_passing_loop"),
     _Pass("_tidy_loop"),
@@ -17261,6 +17262,18 @@ class Bridge(discord.Client):
                 log.exception("guild jobs pass failed; retrying next cycle")
             await self._for_other_families("guild jobs", self._guild_jobs_once)
             await self._sleep_until_next_pass(cycle)
+
+    async def _guild_logout_watch_loop(self) -> None:
+        """Log why a member of an always-online guild left the world (#874)."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("GUILD_LOGOUT_WATCH_SECONDS", "60"))
+        seen: set = set()
+        while not self.is_closed():
+            try:
+                seen = await asyncio.to_thread(_guild_logout_watch_once, seen)
+            except Exception:
+                log.exception("guild logout watch failed; retrying next cycle")
+            await asyncio.sleep(cycle)
 
     def _follow_up_event(self) -> asyncio.Event:
         """Set by a step whose class chain row went through (a take, an abandon,
@@ -34167,6 +34180,51 @@ def _complete_goal(goal_id: int) -> None:
             "WHERE id = %s",
             (goal_id,),
         )
+
+
+def _always_online_guilds() -> list[str]:
+    """The guilds the realm keeps online (ALWAYS_ONLINE_GUILDS, comma-separated,
+    the same list as the realm's AlwaysOnlineGuild setting); empty means off."""
+    raw = os.environ.get("ALWAYS_ONLINE_GUILDS", "")
+    return [n.strip() for n in raw.split(",") if n.strip()]
+
+
+def _guild_logout_watch_once(seen: set) -> set:
+    """One pass: log the probable cause of each new logout, return the grown
+    `seen` set. Static SQL; the guild names only fill placeholders."""
+    guilds = _always_online_guilds()
+    if not guilds:
+        return seen
+    marks = ", ".join(["%s"] * len(guilds))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.guid, c.name, c.account, presence.name IS NOT NULL AS online, "
+            "c.logout_time, g.name AS guild "
+            "FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
+            "JOIN guild g ON g.guildid = gm.guildid "
+            + v2_presence.snapshot_join()
+            + "WHERE g.name IN ("
+            + marks
+            + ")",
+            tuple(guilds),
+        )
+        rows = list(cur.fetchall())
+        departed, seen = guildjobs.new_departures(rows, seen, int(time.time()))
+        accounts = sorted({int(d["account"]) for d in departed})
+        busy: dict[int, int] = {}
+        if accounts:
+            cur.execute(
+                "SELECT c.account, COUNT(*) AS n FROM characters c "
+                + v2_presence.snapshot_join()
+                + "WHERE presence.name IS NOT NULL AND c.account IN ("
+                + ", ".join(["%s"] * len(accounts))
+                + ") GROUP BY c.account",
+                tuple(accounts),
+            )
+            busy = {int(r["account"]): int(r["n"]) for r in cur.fetchall()}
+    for row in departed:
+        log.warning("%s", guildjobs.leave_line(row, departed, busy))
+    return seen
 
 
 def _fetch_guild_names() -> dict[int, str]:
