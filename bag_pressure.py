@@ -727,11 +727,15 @@ VENDOR_WAIT_TRIP_SECONDS = 30 * 60
 def vendor_wait_trip(
     wait_seconds: int, sellable_counts: dict[str, int], in_run: bool
 ) -> bool:
-    """Take an ordinary vendor turn after a repeated, actionable range wait."""
-    return (
-        not in_run
-        and wait_seconds >= VENDOR_WAIT_TRIP_SECONDS
-        and any(count > 0 for count in sellable_counts.values())
+    """Take an ordinary vendor turn after a repeated, actionable range wait.
+
+    The wait is not gated on `in_run`: a member walking to a dungeon door does
+    not stop the family's sellers in town from getting their ordinary sale trip
+    once the range wait has sustained for VENDOR_WAIT_TRIP_SECONDS. The banker
+    wait (#872) is not gated this way, and neither is the vendor wait.
+    """
+    return wait_seconds >= VENDOR_WAIT_TRIP_SECONDS and any(
+        count > 0 for count in sellable_counts.values()
     )
 
 
