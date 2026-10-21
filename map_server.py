@@ -61,6 +61,7 @@ import lootstory
 import modelviewer
 import needs
 import partystatus
+import partyvoice
 import questlog
 import raidgoals
 import holdings
@@ -4065,6 +4066,52 @@ def _fetch_thoughts(name: str, before: int | None, limit: int) -> tuple[list[dic
         conn.close()
 
 
+# A party or raid line is stored once per listener, so the same utterance
+# reaches here with several heard_by copies. collapse_hearers dedupes on
+# (speaker, channel, text, moment) and partition_addon drops addon traffic;
+# the page never speaks either a duplicate or a machine payload.
+_CHAT_PARTY_CHANNELS = ("party", "raid")
+_CHAT_PARTY_PAGE = 20
+
+
+def _fetch_chat_party(names: list[str], after: int | None) -> list[dict]:
+    """Party and raid chat rows for `names` newer than `after`, id order.
+
+    The roster names come from the database, never the request. `after` is a
+    cursor the page polls with; unset it reads from the oldest row.
+    Guards a missing overseer_chat table (a realm whose module predates it)
+    with no rows rather than a 503.
+    """
+    if not names:
+        return []
+    cursor = 0 if after is None else after
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            try:
+                # S608: `holes` is a run of placeholders sized by the roster;
+                # every value is bound by the driver.
+                cur.execute(
+                    "SELECT id, sender_name, channel, text, created_at "
+                    "FROM overseer_chat "
+                    "WHERE channel IN (%s, %s) "
+                    f"AND sender_name IN ({holes}) "
+                    "AND id > %s "
+                    "ORDER BY id ASC "
+                    "LIMIT %s",
+                    _CHAT_PARTY_CHANNELS + (*names, cursor, _CHAT_PARTY_PAGE),
+                )
+                return list(cur.fetchall())
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] == 1146:
+                    log.info("overseer_chat absent; chat feed reads as empty")
+                    return []
+                raise
+    finally:
+        conn.close()
+
+
 def _fetch_chat_grounding(name: str) -> dict | None:
     """Snapshot + personality + recent thoughts, or None if no such character.
 
@@ -5058,6 +5105,40 @@ class Handler(BaseHTTPRequestHandler):
         rows, db_now = fetched
         payload = chat.build_timeline(name, rows, db_now, limit)
         self._send(200, "application/json", json.dumps(payload).encode())
+
+    def _chat_party(self, query: dict) -> None:
+        """GET /api/chat/party?family=<key>&after=<id>.
+
+        Deduplicated party and raid chat rows for the requested family's
+        roster, newer than the cursor `after`, capped at one page. Each row
+        carries the voice its sender is spoken with. The page polls this and
+        speaks each row once through browser speechSynthesis.
+        """
+        names, _chosen, _known = self._family_scope(query)
+        raw_after = query.get("after", [""])[0]
+        if raw_after and not raw_after.isdigit():
+            self._send(400, "application/json", b'{"error": "bad cursor"}')
+            return
+        after = int(raw_after) if raw_after else None
+        try:
+            rows = _fetch_chat_party(names, after)
+        except Exception:
+            log.exception("chat party query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            return
+        shaped, _dropped = partyvoice.shape(rows)
+        out = []
+        for row in shaped:
+            out.append({
+                "id": int(row["id"]),
+                "sender_name": str(row.get("sender_name", "")),
+                "channel": str(row.get("channel", "")),
+                "text": str(row.get("text", "")),
+                "created_at": str(row.get("created_at", "")),
+                "voice": partyvoice.voice_for(row.get("sender_name", "")),
+            })
+        self._send(200, "application/json",
+                   json.dumps({"rows": out}).encode())
 
     def _trade_crafts(self, query: dict) -> None:
         """GET /api/trades?skill=<id>[&family=<key>] - one profession's crafts.
@@ -6233,6 +6314,7 @@ class Handler(BaseHTTPRequestHandler):
         # First, because it is the question every other row here answers
         # inside of (quadseven/mod-overseer#184).
         "/api/realm": _realm,
+        "/api/chat/party": _chat_party,
         "/api/map": _map,
         "/api/family": _family,
         "/api/wall": _wall,
