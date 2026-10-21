@@ -2583,7 +2583,7 @@ def craft_errand(name: str, skills: dict, primaries=None) -> int:
         if not value:
             continue  # not learned yet - professions.py's trainer errand owns this
         recipe = recipe_for(SKILL_IDS[skill_name], value)
-        if recipe and (not recipe.focus or recipe.focus in FOCUS_AIMS):
+        if recipe:
             return recipe.spell_id
         # A rung that needs a focus nothing walks to (the eleven Anvil rows,
         # #53) is no errand: DriveCraft casts in place and would be refused
