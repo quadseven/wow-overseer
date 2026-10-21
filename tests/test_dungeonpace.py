@@ -589,6 +589,96 @@ class TheMasteredDoor(unittest.TestCase):
         self.assertIn(pace.ADVANCE, pace.OPENS)
 
 
+class NoEasierDoor(unittest.TestCase):
+    """A family with no easier door it can clear goes on to a door it is ready
+    for, and a return to the door that beat it ends at its first failure (#1074).
+
+    The fixture is the Horde family on Kalimdor at 30 and 31: Ragefire Chasm
+    and the Wailing Caverns are outgrown and Shadowfang Keep and the Deadmines
+    stand across the sea, so Blackfathom Deeps has nothing below it. The runs
+    are the finding's outcomes (emptied, stalled, client lost). Before this the
+    ladder sent the family questing, and a release put it back into the same
+    door with a fresh record that only a wipe could end.
+    """
+
+    BFD = pace.campaignplan.BY_KEYWORD["blackfathom"].map_id
+    LEVELS = [
+        {"name": "Zug", "level": 31, "race": 2, "map_id": 1},
+        {"name": "Oz", "level": 30, "race": 8, "map_id": 1},
+        {"name": "Uzza", "level": 30, "race": 8, "map_id": 1},
+        {"name": "Zork", "level": 31, "race": 6, "map_id": 1},
+        {"name": "Zrog", "level": 30, "race": 2, "map_id": 1},
+    ]
+    FAILED = [
+        run("emptied", 0, BFD),
+        run("stalled", 40, BFD),
+        run("client_lost", 80, BFD),
+    ]
+
+    def _at_bfd(self, runs, levels=None, open_=None, changed="", returned=False):
+        levels = levels or self.LEVELS
+        rows = members(levels, worn=14)
+        f = facts(
+            head("blackfathom"),
+            rows,
+            runs,
+            open_=open_,
+            changed=changed,
+            level_rows=levels,
+        )
+        ahead = tuple(
+            pace.ascend(
+                "blackfathom",
+                levels,
+                frozenset(),
+                list(runs),
+                rows,
+                avoid={"blackfathom"},
+            )
+        )
+        return pace.decide(pace.replace(f, ahead=ahead, returned=returned))
+
+    def test_three_failures_with_nothing_below_go_on_to_a_ready_door(self):
+        d = self._at_bfd(self.FAILED)
+        self.assertEqual(pace.ADVANCE, d.kind)
+        self.assertEqual("razorfen-kraul", d.target)
+        self.assertIn("no easier door", d.why)
+
+    def test_a_questing_family_goes_on_to_a_ready_door(self):
+        opened = {"id": 1, "decision": pace.QUEST, "baseline": ""}
+        d = self._at_bfd(self.FAILED, open_=opened)
+        self.assertEqual((pace.ADVANCE, "razorfen-kraul"), (d.kind, d.target))
+
+    def test_with_nothing_above_either_the_family_still_quests(self):
+        low = [dict(r, level=29) for r in self.LEVELS]
+        self.assertEqual(pace.QUEST, self._at_bfd(self.FAILED, levels=low).kind)
+
+    def test_a_stall_on_the_way_back_in_steps_away_at_once(self):
+        """After the release the record restarts, so a stall, an empty run or
+        a lost client on the return held the door for two more tries."""
+        for outcome in ("stalled", "emptied", "client_lost"):
+            d = self._at_bfd([run(outcome, 200, self.BFD)], returned=True)
+            self.assertEqual(pace.ADVANCE, d.kind, outcome)
+            self.assertIn("beat the family again", d.why)
+            self.assertNotIn(pace.STAY, d.offer)
+
+    def test_a_clear_on_the_way_back_in_holds(self):
+        runs = [run("complete", 200, self.BFD)]
+        self.assertFalse(self._at_bfd(runs, returned=True).acts)
+
+    def test_a_return_with_an_easier_door_steps_down_and_jev_may_not_keep_it(self):
+        rows = [dict(r, level=26) for r in HORDE]
+        f = facts(
+            head("blackfathom"),
+            members(rows),
+            [run("stalled", 0, self.BFD)],
+            level_rows=rows,
+        )
+        d = pace.decide(pace.replace(f, returned=True))
+        self.assertEqual((pace.STEP_DOWN, "wailing"), (d.kind, d.target))
+        self.assertNotIn(pace.STAY, d.offer)
+
+
 class NamedChange(unittest.TestCase):
     def test_level_slot_and_item_levels(self):
         before = pace.baseline(members(ALLIANCE[:1], worn=10, total=250.0))
