@@ -14,23 +14,13 @@ import overhear
 
 FAMILY = bonds.FAMILY
 
-# What the bridge itself caused them to say. Anything else from the family in a
-# shared channel is somebody at a keyboard.
+# What the bridge itself caused them to say: its own echo, never an order.
 AUTHORED = {
     "Aye.",
     "Then it is settled.",
     "Og is still 4. We should not leave them behind.",
 }
 
-
-# A few of upstream's own templates, as acore_playerbots.ai_playerbot_texts
-# holds them, plus whatever bot_speech() adds from upstream's in-code defaults.
-TEMPLATES = (
-    "Need help with %quest_link?",
-    "Taking on %quest_link in %zone_name. Let\u2019s go!",
-    "Using %item",
-)
-BOT = overhear.bot_speech(TEMPLATES)
 
 # Measured on the dev realm, 2026-09-26 02:07-02:10 UTC (#347). The voice read
 # this as an order and queued `follow` for Grug and `reset ai` for Og and Bork.
@@ -66,13 +56,14 @@ class AddressedTest(unittest.TestCase):
             )
         )
 
-    def test_selfbot_does_not_silence_evan(self):
-        """The bug this replaced. With SelfBotLevel 3 the AI attaches to his
-        character on login, so everything he types comes back flagged as bot
-        speech - the live row read sender_is_bot=1 while he was sitting there
-        typing it. Authorship is the test now, and the flag is not consulted."""
+    def test_a_bot_flagged_line_is_not_an_order_even_from_the_head(self):
+        """The trade #347 makes. With SelfBotLevel 3 the AI attaches to the
+        operator's character on login, so his typed lines come back flagged
+        too, and the row cannot tell them from the family's playerbots speech.
+        A missed order he can say again; a `reset ai` nobody gave he cannot
+        take back. So the flag refuses the line."""
         row = _row(sender_is_bot=1, text="everyone go sell your junk and repair")
-        self.assertTrue(overhear.is_addressed(row, family=FAMILY, authored=AUTHORED))
+        self.assertFalse(overhear.is_addressed(row, family=FAMILY, authored=AUTHORED))
 
     def test_a_stranger_is_not_giving_evans_orders(self):
         self.assertFalse(
@@ -102,74 +93,51 @@ class AddressedTest(unittest.TestCase):
             )
 
 
-class BotSpeechTest(unittest.TestCase):
-    """#347. Upstream playerbots speaks in party too, and the bridge did not
-    author those lines either, so authorship alone read them as orders."""
+class BotFlagTest(unittest.TestCase):
+    """#347. A bot-flagged line is never an order. Upstream playerbots speaks
+    in party too, the bridge did not author those lines, and only some of
+    them are upstream's formulaic templates: a reply nobody templated read as
+    the operator typing and queued `reset ai`, `follow` and `stay`."""
 
     def test_the_measured_ugga_line_yields_no_directive(self):
-        """Upstream's in-code default alone is enough: the table may lack the
-        row, and the reagent notice is exactly the line that was obeyed."""
         d = overhear.hear(
-            [dict(UGGA)],
-            family=FAMILY,
-            authored=AUTHORED,
-            bot_lines=overhear.bot_speech(()),
-            last_at=None,
-            now=100.0,
+            [dict(UGGA)], family=FAMILY, authored=AUTHORED, last_at=None, now=100.0
         )
         self.assertIsNone(d)
 
-    def test_a_template_from_the_table_is_not_an_order(self):
-        row = _row(
-            sender_name="Og",
-            sender_is_bot=1,
-            text="Need help with |cffffff00|Hquest:40:10|h[A Fishy Peril]|h|r?",
-        )
-        self.assertFalse(
-            overhear.is_addressed(row, family=FAMILY, authored=AUTHORED, bot_lines=BOT)
-        )
+    def test_untemplated_bot_speech_yields_no_directive(self):
+        """The half the template match missed: a free-form bot reply (an
+        ollama line, an acknowledgement upstream hard-codes) is no template
+        of upstream's, and it was still read as an order."""
+        for text in (
+            "Aye, I will follow you wherever the road goes.",
+            "Reset my thinking, I am standing here and waiting for you.",
+            "Stay close, the murlocs are thick along this shore.",
+        ):
+            row = _row(sender_name="Og", sender_is_bot=1, text=text)
+            with self.subTest(text=text):
+                self.assertIsNone(
+                    overhear.hear(
+                        [row], family=FAMILY, authored=AUTHORED, last_at=None, now=100.0
+                    )
+                )
 
-    def test_case_spacing_and_apostrophes_do_not_hide_it(self):
-        row = _row(
-            sender_is_bot=1,
-            text="taking on  The Defias Brotherhood in Westfall. Let's go!",
-        )
-        self.assertFalse(
-            overhear.is_addressed(row, family=FAMILY, authored=AUTHORED, bot_lines=BOT)
-        )
-
-    def test_the_operator_under_selfbot_is_still_heard(self):
-        """The selfbot case is why the flag is not the test. A typed order is
-        not one of upstream's sentences, so it still gets through."""
-        row = _row(sender_is_bot=1, text="everyone go sell your junk and repair")
-        self.assertTrue(
-            overhear.is_addressed(row, family=FAMILY, authored=AUTHORED, bot_lines=BOT)
-        )
-
-    def test_a_thin_template_does_not_swallow_an_order(self):
-        """ "Using %item" has one word of its own. Matching on it would mute
-        the operator saying "using the healing potions now"."""
-        row = _row(sender_is_bot=1, text="using the healing potions now")
-        self.assertTrue(
-            overhear.is_addressed(row, family=FAMILY, authored=AUTHORED, bot_lines=BOT)
-        )
+    def test_no_family_member_is_heard_through_the_bot_flag(self):
+        for name in FAMILY:
+            row = _row(sender_name=name, sender_is_bot=1, text="everyone follow me now")
+            with self.subTest(name=name):
+                self.assertFalse(
+                    overhear.is_addressed(row, family=FAMILY, authored=AUTHORED)
+                )
 
     def test_a_line_with_no_ai_behind_it_was_typed(self):
-        """Only a bot-flagged row can be upstream's speech."""
-        row = _row(sender_is_bot=0, text=UGGA["text"])
-        self.assertTrue(
-            overhear.is_addressed(row, family=FAMILY, authored=AUTHORED, bot_lines=BOT)
-        )
+        row = _row(sender_is_bot=0, text="everyone go sell your junk and repair")
+        self.assertTrue(overhear.is_addressed(row, family=FAMILY, authored=AUTHORED))
 
-    def test_the_order_after_the_notice_is_still_the_one_obeyed(self):
+    def test_the_order_before_the_bot_notice_is_still_the_one_obeyed(self):
         rows = [_row(text="go to town and sell"), dict(UGGA)]
         d = overhear.hear(
-            rows,
-            family=FAMILY,
-            authored=AUTHORED,
-            bot_lines=BOT,
-            last_at=None,
-            now=100.0,
+            rows, family=FAMILY, authored=AUTHORED, last_at=None, now=100.0
         )
         self.assertEqual(d.text, "go to town and sell")
 
@@ -186,7 +154,6 @@ class HearTest(unittest.TestCase):
             rows,
             family=FAMILY,
             authored=AUTHORED,
-            bot_lines=BOT,
             last_at=None,
             now=100.0,
         )
@@ -198,7 +165,6 @@ class HearTest(unittest.TestCase):
             rows,
             family=FAMILY,
             authored=AUTHORED,
-            bot_lines=BOT,
             last_at=None,
             now=100.0,
         )
@@ -211,7 +177,6 @@ class HearTest(unittest.TestCase):
                 rows,
                 family=FAMILY,
                 authored=AUTHORED,
-                bot_lines=BOT,
                 last_at=None,
                 now=100.0,
             )
@@ -226,7 +191,6 @@ class HearTest(unittest.TestCase):
                 rows,
                 family=FAMILY,
                 authored=AUTHORED,
-                bot_lines=BOT,
                 last_at=100.0,
                 now=100.0 + 1,
             )
@@ -238,7 +202,6 @@ class HearTest(unittest.TestCase):
             rows,
             family=FAMILY,
             authored=AUTHORED,
-            bot_lines=BOT,
             last_at=100.0,
             now=100.0 + overhear.COOLDOWN_SECONDS + 1,
         )
@@ -285,6 +248,12 @@ class WiringTest(unittest.TestCase):
             n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)
         }
 
+    def test_the_bridge_no_longer_reads_upstreams_texts(self):
+        """The template match is gone with the bot flag deciding (#347): no
+        caller passes bot_lines, and nothing reads ai_playerbot_texts."""
+        self.assertNotIn("bot_lines", self.src)
+        self.assertNotIn("ai_playerbot_texts", self.src)
+
     def test_the_relay_listens(self):
         self.assertIn("_obey_evan_in_game", self._names("_relay_chat"))
 
@@ -315,21 +284,6 @@ class WiringTest(unittest.TestCase):
             "authored= does not read what the bridge said, so the "
             "family's own speech will be obeyed as orders",
         )
-
-    def test_the_bridge_supplies_upstreams_speech(self):
-        """bot_lines=() would put every reagent notice back in as an order
-        (#347), so the argument has to reach for the reader."""
-        import ast
-
-        fn = self._fn("_obey_once")
-        call = next(
-            n
-            for n in ast.walk(fn)
-            if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "hear"
-        )
-        bot_lines = next(k.value for k in call.keywords if k.arg == "bot_lines")
-        inner = {n.id for n in ast.walk(bot_lines) if isinstance(n, ast.Name)}
-        self.assertIn("_bot_speech", inner)
 
     def test_it_hears_and_it_acts(self):
         names = self._names("_obey_once")
