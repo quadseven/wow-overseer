@@ -893,6 +893,12 @@ def secondary_rank_errand(
 ) -> Errand | None:
     """Ask a trainer to raise First Aid when its observed cap is exhausted."""
     value, maximum = skills.get("first aid", (0, 0))
+    # Only trigger at exactly 75/75 for Apprentice First Aid.
+    # - value == 75: character has hit the Apprentice cap (75 is the first point
+    #   where the current rank prevents further progress).
+    # - maximum == 75: character is still Apprentice (Journeyman raises cap to 150).
+    # A character at 74/75 can still gain one more skill point; at 75/150 they
+    # already have Journeyman. Both are correctly excluded.
     if value != 75 or maximum != 75:
         return None
     return Errand(character, learn_skill=skill_id("first aid"), travel_npc=TRAINER_ROLE)

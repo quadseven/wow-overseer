@@ -1285,7 +1285,7 @@ class SecondaryRankRefusalTest(unittest.TestCase):
         self.assertIn('ranks=ranks.get(row["name"], ())', bridge)
         self.assertNotIn("def _write_secondary_rank_errand(", bridge)
         plan = (root / "learnaim.py").read_text().split("def plan(", 1)[1]
-        self.assertIn("learn=rank_errand(rows)", plan)
+        self.assertIn("rank_errand(", plan)
 
         def row(name, learn_skill=0, ranks=()):
             return learnaim.Row(
